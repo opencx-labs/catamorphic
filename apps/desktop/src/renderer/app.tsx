@@ -843,24 +843,6 @@ export function App({
     }
   }, [projectId, onProjectResolved]);
 
-  const startWithAgent = async (): Promise<void> => {
-    if (projectId) {
-      if (hasAgents) addChat("tab");
-      else
-        openTab({ kind: "agent-setup", name: "setup", label: "Set up agent" });
-      return;
-    }
-    const project = await desktopApi.createDefaultProject();
-    if (activeProfile) {
-      // This entry point explicitly asks for the Cmd+N-style modal. Prevent
-      // the agent-less-profile effect from opening its setup tab underneath.
-      setupDismissedRef.current.add(activeProfile.id);
-    }
-    await projectsQuery.refetch();
-    selectProject(project.id);
-    setWizardModalOpen(true);
-  };
-
   // Project policy (ADR 0062): the committed manifest may disable
   // incognito sessions for this project's members.
   const [incognitoAllowed, setIncognitoAllowed] = useState(false);
@@ -2404,6 +2386,7 @@ export function App({
       projectsLoading ||
       projectsLoadError ||
       agentsData === null ||
+      !projectId ||
       (projectId && (!remoteSurfaceResolved || !workspaceReady || hasAgents)) ||
       setupDismissedRef.current.has(activeProfileId)
     )
@@ -3855,6 +3838,72 @@ export function App({
     void desktopApi.setPrefs({ lastProjectId: id });
   };
 
+  // A new profile starts with a real workspace instead of a "No projects" shell.
+  // Keep any page handed to the window during startup in that same workspace.
+  const initialProjects = useRef(new Set<string>());
+  const [initialProjectError, setInitialProjectError] = useState<string | null>(
+    null,
+  );
+  const projectSelectionRef = useRef(selectProject);
+  projectSelectionRef.current = selectProject;
+  useEffect(() => {
+    const profileId = activeProfile?.id;
+    if (
+      !profileId ||
+      runtimeProjectId ||
+      projectsLoading ||
+      projectsLoadError ||
+      initialProjectError !== null ||
+      projects.length > 0 ||
+      initialProjects.current.has(profileId)
+    )
+      return;
+    initialProjects.current.add(profileId);
+    setInitialProjectError(null);
+    void desktopApi
+      .ensureDefaultProject()
+      .then(async (project) => {
+        if (onboardingProfileRef.current !== profileId) return;
+        setWorkspaces((current) => {
+          const utilityKey = `profile:${profileId}:utility`;
+          const initial = current[utilityKey] ?? emptyUtilityWorkspace();
+          const tutorial: WorkspaceTab = {
+            kind: "onboarding",
+            name: "welcome",
+            label: "Onboarding",
+            step: 0,
+          };
+          const workspace =
+            orderedTabKeys(initial).length > 0
+              ? initial
+              : {
+                  ...initial,
+                  tabs: [tutorial],
+                  activeTabKey: tabKey(tutorial),
+                };
+          const { [utilityKey]: _utility, ...retained } = current;
+          return { ...retained, [project.id]: workspace };
+        });
+        await queryClient.invalidateQueries({ queryKey: ["cat", "projects"] });
+        if (onboardingProfileRef.current === profileId)
+          projectSelectionRef.current(project.id);
+      })
+      .catch((cause: unknown) => {
+        if (onboardingProfileRef.current !== profileId) return;
+        setInitialProjectError(
+          cause instanceof Error ? cause.message : String(cause),
+        );
+      });
+  }, [
+    activeProfile?.id,
+    runtimeProjectId,
+    projectsLoading,
+    projectsLoadError,
+    projects.length,
+    queryClient,
+    initialProjectError,
+  ]);
+
   const onProjectDeleted = (deletedId: string) => {
     setDeletingProject(null);
     setWorkspaces(({ [deletedId]: _removed, ...rest }) => rest);
@@ -3867,7 +3916,10 @@ export function App({
     profilesData !== null &&
     agentsData !== null &&
     sidebarConfig !== null &&
-    !projectsLoading;
+    !projectsLoading &&
+    (projectsLoadError ||
+      initialProjectError !== null ||
+      (Boolean(projectId) && workspaceReady));
   useEffect(() => {
     if (bootRevealed) return;
     if (bootReady) {
@@ -5192,7 +5244,7 @@ export function App({
     if (activeProfile) setupDismissedRef.current.add(activeProfile.id);
     void (async () => {
       const targetId =
-        projectId ?? (await desktopApi.createDefaultProject()).id;
+        projectId ?? (await desktopApi.ensureDefaultProject()).id;
       setSidebarCustomization({ projectId: targetId, side });
       if (!projectId) {
         await projectsQuery.refetch();
@@ -5298,7 +5350,7 @@ export function App({
       tutorial?.kind === "onboarding" ? (tutorial.step ?? 1) : undefined;
     void (async () => {
       const targetId =
-        projectId ?? (await desktopApi.createDefaultProject()).id;
+        projectId ?? (await desktopApi.ensureDefaultProject()).id;
       if (onboardingProfileRef.current !== profileId) return;
       setThemeCustomization({ projectId: targetId, profileId, step });
       if (!projectId) {
@@ -5390,16 +5442,15 @@ export function App({
         }))
       }
       onChooseTheme={() => setThemePicker({ open: true })}
-      onStartWithAgent={startWithAgent}
-      onNewProject={() => setProjectModalOpen(true)}
-      onConnectRemote={() => setRemoteConnect({ open: true, link: null })}
+      onConfigureAgent={() => setWizardModalOpen(true)}
+      canConfigureAgent={Boolean(projectId)}
       onFinish={() => {
         closeTab(tabKey(tab));
         openPaletteTab();
       }}
       profileId={activeProfile?.id}
       importCompleted={Boolean(activeProfile?.browserImportCompletedAt)}
-      hasProject={Boolean(projectId)}
+      hasAgents={hasAgents && !wizardModalOpen}
     />
   );
 
@@ -6701,9 +6752,14 @@ export function App({
         ) : (
           <EmptyState
             loading={projectsLoading}
-            loadError={projectsLoadError}
+            loadError={projectsLoadError || initialProjectError !== null}
             retrying={projectsFetching}
-            onRetry={() => void projectsQuery.refetch()}
+            onRetry={() => {
+              if (activeProfileId)
+                initialProjects.current.delete(activeProfileId);
+              setInitialProjectError(null);
+              void projectsQuery.refetch();
+            }}
           />
         )}
       </main>

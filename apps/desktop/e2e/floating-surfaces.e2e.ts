@@ -5,7 +5,7 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import {
   type AppHandle,
   launchApp,
-  openOnboardingStep,
+  openProjectSwitcher,
   setReactValueJs,
 } from "./harness.js";
 
@@ -46,12 +46,12 @@ beforeAll(async () => {
     throw new Error("No fixture port");
   origin = `http://127.0.0.1:${address.port}`;
   app = await launchApp();
-  await openOnboardingStep(app, "Get started");
+  await openProjectSwitcher(app);
   await app.waitFor(
-    "[...document.querySelectorAll('button')].some(b=>b.textContent.trim()==='Create or import project')",
+    "[...document.querySelectorAll('button')].some(b=>b.textContent.trim()==='New project')",
   );
   await run(
-    "[...document.querySelectorAll('button')].find(b=>b.textContent.trim()==='Create or import project').click()",
+    "[...document.querySelectorAll('button')].find(b=>b.textContent.trim()==='New project').click()",
   );
   await app.waitFor(
     "!!document.querySelector('[data-testid=project-name-input]')",

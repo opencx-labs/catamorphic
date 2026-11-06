@@ -17,12 +17,19 @@ project load errors retaining their retry surface. Closing it skips automatic
 presentation for that profile in the current session. The palette reopens it via
 Onboarding, Tutorial, Welcome, Tour, Getting started, Learn, Guide, and Help.
 
-Begin with Welcome, Theme, and Palette, followed by one Browser setup step for
-import and default browser, then the existing starting choices. Use actual presentational
+Begin with Welcome, Theme, AI agents, The dock, Keyboard shortcuts, Palette,
+and Browser setup for import and default browser. Agent configuration opens the
+existing wizard as a modal and retains the tutorial; its action shows completion
+when configured. The dock starts collapsed on the right, and its tutorial uses
+the real bubble strip with an animated cursor. Project creation and server
+connections remain in the project switcher. Use actual presentational
 components with inert example data, no images, and the existing motion contract.
 Keep the step on the tab, including when changing to a customization chat.
 Done closes onboarding and opens an ordinary New Tab palette, preserving other tabs.
-A first launch opens maximized with both sidebars collapsed. Later launches
+A first launch opens maximized in a real Default Project with onboarding selected,
+both sidebars collapsed, and the dock already visible and collapsed on the right.
+The default-project operation reuses the profile's project and coalesces concurrent
+startup requests, with the boot veil waiting for its workspace. Later launches
 restore saved placement and sidebar choices.
 
 Theme selection uses one modal from onboarding, Settings, and the palette. Keep

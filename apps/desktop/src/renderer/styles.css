@@ -314,12 +314,98 @@
   width: 80px;
   height: 80px;
 }
-.onboarding-start-actions {
-  display: flex;
-  flex-direction: column;
-  width: min(100%, 260px);
-  gap: 8px;
-  margin-top: 24px;
+.onboarding-inline-icon {
+  display: inline-block;
+  width: 14px;
+  height: 14px;
+  vertical-align: -2px;
+  color: var(--color-fg);
+}
+.onboarding-dock-preview {
+  position: relative;
+  width: min(100%, 420px);
+  height: 180px;
+}
+.onboarding-demo-cursor {
+  position: absolute;
+  right: 47px;
+  bottom: 22px;
+  z-index: 50;
+  display: none;
+  width: 25px;
+  height: 25px;
+  filter: drop-shadow(
+    0 2px 3px color-mix(in srgb, var(--color-fg) 20%, transparent)
+  );
+}
+.onboarding-dock-preview[data-animated="true"] .onboarding-demo-cursor {
+  display: block;
+  animation: onboarding-dock-cursor 7200ms var(--ease-standard) infinite;
+}
+.onboarding-demo-click {
+  position: absolute;
+  top: -9px;
+  left: -9px;
+  width: 20px;
+  height: 20px;
+  border: 1px solid var(--color-accent);
+  border-radius: 50%;
+  opacity: 0;
+  animation: onboarding-dock-click 7200ms var(--ease-standard) infinite;
+}
+@keyframes onboarding-dock-cursor {
+  0%,
+  100% {
+    opacity: 0;
+    transform: translate(54px, -64px);
+  }
+  12%,
+  62% {
+    opacity: 1;
+    transform: translate(0, 0);
+  }
+  18%,
+  65% {
+    transform: translate(0, 0) scale(0.86);
+  }
+  21%,
+  68%,
+  80% {
+    opacity: 1;
+    transform: translate(0, 0);
+  }
+  35%,
+  52% {
+    transform: translate(-42px, 0);
+  }
+  92% {
+    opacity: 0;
+    transform: translate(54px, -64px);
+  }
+}
+@keyframes onboarding-dock-click {
+  0%,
+  17%,
+  62%,
+  100% {
+    opacity: 0;
+    transform: scale(0.5);
+  }
+  19%,
+  65% {
+    opacity: 0.6;
+    transform: scale(1);
+  }
+  25%,
+  71% {
+    opacity: 0;
+    transform: scale(1.8);
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .onboarding-dock-preview[data-animated="true"] .onboarding-demo-cursor {
+    display: none;
+  }
 }
 .onboarding-browser-actions {
   display: flex;
@@ -331,11 +417,6 @@
 }
 .onboarding-browser-actions > [data-setting-id] {
   max-width: 260px;
-}
-.onboarding-copy .onboarding-error {
-  min-height: 20px;
-  color: var(--color-danger);
-  font-size: 12px;
 }
 .theme-agent-link {
   display: flex;

@@ -2,7 +2,7 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import {
   type AppHandle,
   launchApp,
-  openOnboardingStep,
+  openProjectSwitcher,
   setReactValueJs,
 } from "./harness.js";
 
@@ -18,7 +18,7 @@ let app: AppHandle;
 
 beforeAll(async () => {
   app = await launchApp();
-  await openOnboardingStep(app, "Get started");
+  await openProjectSwitcher(app);
 });
 
 afterAll(async () => {
@@ -127,13 +127,11 @@ const paletteEscape = `
 
 describe("agents and profiles", () => {
   it("boots into a project workspace", async () => {
-    await runWait(`return !!byText('button', 'Create or import project');`, {
+    await runWait(`return !!byText('button', 'New project');`, {
       timeoutMs: 60_000,
       label: "empty state",
     });
-    await run(
-      `byText('button', 'Create or import project').click(); return true;`,
-    );
+    await run(`byText('button', 'New project').click(); return true;`);
     await runWait(`return !!$('[data-testid="project-name-input"]');`);
     await run(`
       setReactValue($('[data-testid="project-name-input"]'), 'e2e-agents');

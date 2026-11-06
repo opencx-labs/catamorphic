@@ -275,13 +275,13 @@ describe("shared browser import and personal history", () => {
     await app.waitFor(`${input}?.placeholder === 'Search history…'`);
     await app.insertText("Deep archive needle");
     await app.waitFor(
-      `document.querySelector('[role="option"]')?.textContent.includes('Deep archive needle')`,
+      `(${input})?.closest('[role="dialog"]')?.querySelector('[role="option"]')?.textContent.includes('Deep archive needle')`,
     );
     await app.press("Escape");
     await palette();
     await app.insertText("History");
     await app.waitFor(
-      `[...document.querySelectorAll('[role="option"]')].some(el=>el.textContent.includes("Pages and work you've opened"))`,
+      `[...((${input})?.closest('[role="dialog"]')?.querySelectorAll('[role="option"]') ?? [])].some(el=>el.textContent.includes("Pages and work you've opened"))`,
     );
     await app.press("Enter");
     await app.waitFor(
@@ -296,7 +296,7 @@ describe("shared browser import and personal history", () => {
     await palette();
     await app.insertText("Settings");
     await app.waitFor(
-      `[...document.querySelectorAll('[role="option"]')].some(el=>el.textContent.trim().startsWith('Settings'))`,
+      `[...((${input})?.closest('[role="dialog"]')?.querySelectorAll('[role="option"]') ?? [])].some(el=>el.textContent.trim().startsWith('Settings'))`,
     );
     await app.press("Enter");
     await app.waitFor(`!${input}`);
@@ -372,7 +372,7 @@ describe("shared browser import and personal history", () => {
     await app.waitFor(`${input}?.placeholder==='Search history…'`);
     await app.insertText("field-notes.md");
     await app.waitFor(
-      `[...document.querySelectorAll('[role="option"]')].some(el=>el.textContent.includes('field-notes.md') && el.textContent.includes('History documents'))`,
+      `[...((${input})?.closest('[role="dialog"]')?.querySelectorAll('[role="option"]') ?? [])].some(el=>el.textContent.includes('field-notes.md') && el.textContent.includes('History documents'))`,
     );
     await app.press("Enter");
     await app.waitFor(

@@ -4,7 +4,7 @@ import { describe, expect, it } from "vitest";
 import {
   type FrameHandle,
   launchApp,
-  openOnboardingStep,
+  openProjectSwitcher,
   setReactValueJs,
 } from "./harness.js";
 
@@ -103,7 +103,7 @@ describeIf("agent build eval (real model)", () => {
           : { OPENAI_API_KEY: openaiKey }),
       },
     });
-    await openOnboardingStep(app, "Get started");
+    await openProjectSwitcher(app);
     const run = <T>(body: string) =>
       app.eval<T>(`(async () => { ${helpers}\n${body} })()`);
     const runWait = <T>(
@@ -114,13 +114,11 @@ describeIf("agent build eval (real model)", () => {
     let frame: FrameHandle | undefined;
     try {
       // --- 1. Create a project ---
-      await runWait(`return !!byText('button', 'Create or import project');`, {
+      await runWait(`return !!byText('button', 'New project');`, {
         timeoutMs: 60_000,
-        label: "empty-state Create or import project button",
+        label: "empty-state New project button",
       });
-      await run(
-        `byText('button', 'Create or import project').click(); return true;`,
-      );
+      await run(`byText('button', 'New project').click(); return true;`);
       await runWait(`return !!$('[data-testid="project-name-input"]');`);
       await run(`
           setReactValue($('[data-testid="project-name-input"]'), '${PROJECT_NAME}');

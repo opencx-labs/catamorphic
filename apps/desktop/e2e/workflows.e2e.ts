@@ -2,7 +2,7 @@ import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
 import {
   type AppHandle,
   launchApp,
-  openOnboardingStep,
+  openProjectSwitcher,
   setReactValueJs,
 } from "./harness.js";
 import {
@@ -14,7 +14,7 @@ let app: AppHandle;
 let projectId: string;
 beforeAll(async () => {
   app = await launchApp();
-  await openOnboardingStep(app, "Get started");
+  await openProjectSwitcher(app);
 });
 afterAll(async () => {
   await app?.stop();
@@ -49,11 +49,11 @@ afterEach(async (context) => {
 describe("workflow authoring", { retry: 0 }, () => {
   it("opens a readable host inspector and can always reach code", async () => {
     await wait(
-      `return !!$$('button').find(el => el.textContent.trim() === 'Create or import project');`,
+      `return !!$$('button').find(el => el.textContent.trim() === 'New project');`,
       "empty workspace",
     );
     await run(
-      `$$('button').find(el => el.textContent.trim() === 'Create or import project').click(); return true;`,
+      `$$('button').find(el => el.textContent.trim() === 'New project').click(); return true;`,
     );
     await wait(
       `return !!$('[data-testid="project-name-input"]');`,

@@ -129,8 +129,12 @@ Whole-operation errors are retryable and cancellation never marks import complet
 
 ## Onboarding
 
-The welcome experience is a normal Onboarding tab, automatically offered for an
-empty profile or an agent-less project once project and remote state resolve.
+A new profile opens in a real Default Project, with the normal Onboarding tab
+already selected and the dock visible, collapsed on the right. Startup waits
+behind the boot veil for the project and workspace to be ready. The default
+project operation reuses the profile's project and coalesces simultaneous startup
+requests; creating a new project remains an explicit project-switcher action.
+Agent-less projects also offer onboarding once project and remote state resolve.
 An external page opened at startup retains focus instead of being replaced by
 the empty-profile welcome.
 Loading and project-load errors remain separate, with retry on failure. Closing
@@ -139,8 +143,13 @@ again using onboarding, tutorial, welcome, tour, getting started, learn, guide,
 or help. Reopening resets the same tab to Welcome rather than creating a duplicate.
 Project tabs persist their current step across relaunches.
 
-The tutorial introduces themes and the palette, then offers browser import and
-default-browser setup together, followed by the existing starting choices. Done
+The tutorial introduces themes, agent setup, the dock, keyboard shortcuts, the
+palette, and combined browser import/default-browser setup. The agent step opens
+the existing wizard as a modal, retains the tutorial and its step, and shows a
+completed action once configured. The dock is already visible before setup; its walkthrough uses the real bubble strip and an animated
+cursor, with a static illustration under reduced motion. The palette and dock
+steps show effective shortcuts and the plus icon. Project creation and server
+connections stay in the normal project switcher. Done
 closes the tutorial and opens an ordinary New Tab palette, keeping other tabs.
 An empty workspace retains its New tab control. Each action reuses its
 normal implementation. Component previews are inert and use local example data.

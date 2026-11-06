@@ -2,7 +2,7 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import {
   type AppHandle,
   launchApp,
-  openOnboardingStep,
+  openProjectSwitcher,
   setReactValueJs,
 } from "./harness.js";
 
@@ -17,7 +17,7 @@ let app: AppHandle;
 
 beforeAll(async () => {
   app = await launchApp();
-  await openOnboardingStep(app, "Get started");
+  await openProjectSwitcher(app);
 });
 
 afterAll(async () => {
@@ -137,15 +137,13 @@ const settleAnimationFrame = () =>
 
 describe("first launch", () => {
   it("boots to the empty state with no projects", async () => {
-    await runWait(`return !!byText('button', 'Create or import project');`, {
-      label: "empty-state Create or import project button",
+    await runWait(`return !!byText('button', 'New project');`, {
+      label: "empty-state New project button",
     });
   });
 
   it("creates a project and lands on a palette New Tab", async () => {
-    await run(
-      `byText('button', 'Create or import project').click(); return true;`,
-    );
+    await run(`byText('button', 'New project').click(); return true;`);
     await runWait(`return !!$('[data-testid="project-name-input"]');`);
     // Point the location at a temp folder (bypasses the native folder picker).
     await run(`

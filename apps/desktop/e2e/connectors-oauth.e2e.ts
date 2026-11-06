@@ -4,7 +4,7 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import {
   type AppHandle,
   launchApp,
-  openOnboardingStep,
+  openProjectSwitcher,
   setReactValueJs,
 } from "./harness.js";
 
@@ -42,7 +42,7 @@ beforeAll(async () => {
     fake.once("exit", () => reject(new Error("fake OAuth server exited")));
   });
   app = await launchApp();
-  await openOnboardingStep(app, "Get started");
+  await openProjectSwitcher(app);
 }, 180_000);
 
 afterAll(async () => {
@@ -75,13 +75,11 @@ const runWait = <T>(
 
 describe("connector OAuth", () => {
   it("boots, creates a project, and adds a connection to the protected server", async () => {
-    await runWait(`return !!byText('button', 'Create or import project');`, {
+    await runWait(`return !!byText('button', 'New project');`, {
       timeoutMs: 120_000,
       label: "onboarding",
     });
-    await run(
-      `byText('button', 'Create or import project').click(); return true;`,
-    );
+    await run(`byText('button', 'New project').click(); return true;`);
     await runWait(
       `const input = $('[data-testid="project-name-input"]');
        if (!input) return false; setReactValue(input, 'oauth-e2e'); return true;`,

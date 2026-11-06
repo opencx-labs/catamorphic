@@ -5,7 +5,9 @@ import {
   ChevronDown,
   Folder,
   Globe,
+  Keyboard,
   MessageSquare,
+  MousePointer2,
   PanelLeft,
   PanelRight,
   Plus,
@@ -14,12 +16,20 @@ import {
   Sparkles,
   Star,
 } from "lucide-react";
-import { type ReactNode, useLayoutEffect, useRef, useState } from "react";
+import {
+  type ReactNode,
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useRef,
+  useState,
+} from "react";
 import { BrowserImportDialog } from "../components/browser-import.js";
 import {
   ChatTimeline,
   type ChatTimelineMessage,
 } from "../components/catamorphic/chat-timeline.js";
+import { ChatBubbles } from "../components/chat-bubbles.js";
 import { ChatGlyph } from "../components/chat-icon.js";
 import { ComposerInput } from "../components/composer-input.js";
 import { DefaultBrowserButton } from "../components/default-browser.js";
@@ -36,55 +46,42 @@ import { formatBinding, useKeybindings } from "../lib/keybindings.js";
 export const ONBOARDING_STEPS = [
   "Welcome",
   "Theme",
+  "AI agents",
+  "The dock",
+  "Keyboard shortcuts",
   "Palette",
   "Browser setup",
-  "Get started",
 ];
 
 export function OnboardingScreen({
   step,
   onStepChange,
   onChooseTheme,
-  onStartWithAgent,
-  onNewProject,
-  onConnectRemote,
+  onConfigureAgent,
+  canConfigureAgent,
   onFinish,
   profileId,
   importCompleted,
-  hasProject,
+  hasAgents,
 }: {
   step: number;
   onStepChange: (step: number) => void;
   onChooseTheme: () => void;
-  onStartWithAgent: () => Promise<void>;
-  onNewProject: () => void;
-  onConnectRemote: () => void;
+  onConfigureAgent: () => void;
+  canConfigureAgent: boolean;
   onFinish: () => void;
   profileId?: string;
   importCompleted: boolean;
-  hasProject: boolean;
+  hasAgents: boolean;
 }) {
   const current = Math.max(0, Math.min(step, ONBOARDING_STEPS.length - 1));
   const [previous, setPrevious] = useState<number | null>(null);
   const [importOpen, setImportOpen] = useState(false);
   const [justImported, setJustImported] = useState(false);
-  const [starting, setStarting] = useState(false);
-  const [error, setError] = useState("");
   const bindings = useKeybindings();
   const navigate = (next: number) => {
     setPrevious(current);
     onStepChange(next);
-  };
-  const start = async () => {
-    setStarting(true);
-    setError("");
-    try {
-      await onStartWithAgent();
-    } catch (cause) {
-      setError(cause instanceof Error ? cause.message : String(cause));
-    } finally {
-      setStarting(false);
-    }
   };
   const pages: ReactNode[] = [
     <div key="welcome" className="onboarding-welcome">
@@ -118,15 +115,72 @@ export function OnboardingScreen({
       </button>
     </Step>,
     <Step
+      key="agents"
+      heading="Work is where AI agents can do wonders"
+      description="Configure your agents in Work, and let them do the heavy lifting. Once configured, your agents will be able to fully customize the workspace for you; all you need to do is ask."
+    >
+      <div className="onboarding-browser-mark">
+        <Sparkles strokeWidth={1} />
+      </div>
+      <PendingButton
+        type="button"
+        pending={false}
+        pendingLabel="Opening agent setup…"
+        done={hasAgents}
+        doneLabel={
+          <span className="inline-flex items-center gap-2">
+            <Check className="size-3.5" />
+            Agent configured
+          </span>
+        }
+        onClick={onConfigureAgent}
+        disabled={!canConfigureAgent}
+        data-disabled-reason="Preparing your workspace"
+        className="button-primary mt-6"
+        data-testid="onboarding-setup-agent"
+      >
+        Configure an agent
+      </PendingButton>
+    </Step>,
+    <Step
+      key="dock"
+      heading="Keep your chats handy"
+      description={
+        <>
+          The dock is where you keep AI conversations for quick access. Expand
+          the dock and click the <PlusIcon /> button to create a new chat with
+          your agent
+          {bindings["new-floating-chat"] && (
+            <>
+              , or press{" "}
+              <kbd>{formatBinding(bindings["new-floating-chat"])}</kbd>
+            </>
+          )}
+          .
+        </>
+      }
+    >
+      <DockPreview />
+    </Step>,
+    <Step
+      key="shortcuts"
+      heading="Move at the speed of thought"
+      description="Work allows you to fully customize keyboard shortcuts. You can hover on buttons to see what shortcut can do the same action, or ask your agent to set a key binding. You can see all bindings in Settings."
+    >
+      <div className="onboarding-browser-mark">
+        <Keyboard strokeWidth={1} />
+      </div>
+    </Step>,
+    <Step
       key="palette"
       heading="The way to find everything"
       description={
         <>
-          Open the palette by opening a new tab
+          Open the palette by opening a new tab using the <PlusIcon /> icon
           {bindings["new-tab"] && (
             <>
               {" "}
-              with <kbd>{formatBinding(bindings["new-tab"])}</kbd>
+              or <kbd>{formatBinding(bindings["new-tab"])}</kbd>
             </>
           )}
           , or
@@ -177,49 +231,6 @@ export function OnboardingScreen({
         </PendingButton>
         <DefaultBrowserButton showAvailabilityReason={false} />
       </div>
-    </Step>,
-    <Step
-      key="start"
-      heading="What would you like to make?"
-      description="Start with an idea. An agent can help you take it from there."
-      hint="You can explore at your own pace. Nothing to set up all at once."
-    >
-      <div className="onboarding-browser-mark">
-        <Sparkles strokeWidth={1} />
-      </div>
-      <div className="onboarding-start-actions">
-        <PendingButton
-          type="button"
-          pending={starting}
-          onClick={() => void start()}
-          className="button-primary"
-          data-testid="empty-start-agent"
-        >
-          Start with an agent
-        </PendingButton>
-        {!hasProject && (
-          <>
-            <button
-              type="button"
-              className="button-secondary"
-              onClick={onNewProject}
-            >
-              Create or import project
-            </button>
-            <button
-              type="button"
-              className="button-ghost"
-              onClick={onConnectRemote}
-              data-testid="empty-connect-remote"
-            >
-              Connect to a server
-            </button>
-          </>
-        )}
-      </div>
-      <p className="onboarding-error" role={error ? "alert" : undefined}>
-        {error}
-      </p>
     </Step>,
   ];
   return (
@@ -310,7 +321,7 @@ function Step({
 }: {
   heading: string;
   description: ReactNode;
-  hint: string;
+  hint?: string;
   children: ReactNode;
 }) {
   const items = Array.isArray(children) ? children : [children];
@@ -321,7 +332,97 @@ function Step({
         <h1>{heading}</h1>
         <p>{description}</p>
         {items.slice(1)}
-        <small>{hint}</small>
+        {hint && <small>{hint}</small>}
+      </div>
+    </div>
+  );
+}
+
+function PlusIcon() {
+  return (
+    <Plus className="onboarding-inline-icon" role="img" aria-label="plus" />
+  );
+}
+
+/** The real dock, driven by a local demonstration instead of workspace state. */
+function DockPreview() {
+  const [playing, setPlaying] = useState(false);
+  const [expanded, setExpanded] = useState(false);
+  const timers = useRef<ReturnType<typeof setTimeout>[]>([]);
+  const clear = useCallback(() => {
+    timers.current.forEach(clearTimeout);
+    timers.current = [];
+  }, []);
+  const cycle = () => {
+    clear();
+    setExpanded(false);
+    timers.current = [
+      setTimeout(() => setExpanded(true), 1400),
+      setTimeout(() => setExpanded(false), 4800),
+    ];
+  };
+  useEffect(() => {
+    const media = window.matchMedia("(prefers-reduced-motion: reduce)");
+    const update = () => {
+      clear();
+      const animate = !media.matches && !document.hidden;
+      setPlaying(animate);
+      setExpanded(!animate);
+    };
+    update();
+    media.addEventListener("change", update);
+    document.addEventListener("visibilitychange", update);
+    return () => {
+      clear();
+      media.removeEventListener("change", update);
+      document.removeEventListener("visibilitychange", update);
+    };
+  }, [clear]);
+  return (
+    <div
+      className="onboarding-dock-preview"
+      data-animated={playing}
+      role="img"
+      aria-label="A cursor expands the dock to reveal conversations and the new chat button, then collapses it"
+    >
+      <div className="absolute inset-0" inert aria-hidden="true">
+        <ChatBubbles
+          entries={[
+            { localId: "ideas", mode: "min" },
+            { localId: "plans", mode: "min" },
+            { localId: "notes", mode: "min" },
+          ]}
+          labels={{
+            ideas: "A new idea",
+            plans: "Weekend plans",
+            notes: "My notes",
+          }}
+          icons={{ ideas: "sparkles", plans: "calendar", notes: "book" }}
+          forks={{}}
+          signals={{}}
+          unread={{}}
+          attention={{}}
+          menus={{}}
+          side="right"
+          placement="right"
+          autoCollapse={!expanded}
+          onToggle={noop}
+          onClose={noop}
+          onMenuAction={noop}
+          onNewChat={noop}
+        />
+        <span
+          className="onboarding-demo-cursor"
+          onAnimationStart={(event) => {
+            if (event.target === event.currentTarget) cycle();
+          }}
+          onAnimationIteration={(event) => {
+            if (event.target === event.currentTarget) cycle();
+          }}
+        >
+          <MousePointer2 fill="var(--color-fg)" stroke="var(--color-bg)" />
+          <span className="onboarding-demo-click" />
+        </span>
       </div>
     </div>
   );

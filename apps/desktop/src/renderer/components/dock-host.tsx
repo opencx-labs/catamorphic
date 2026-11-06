@@ -78,7 +78,7 @@ export function DockHost({
   >(null);
   const positionRevision = useRef(0);
   const [positionError, setPositionError] = useState<string | null>(null);
-  const [collapsed, setCollapsed] = useState(false);
+  const [collapsed, setCollapsed] = useState(true);
   const [dialogOpen, setDialogOpen] = useState(false);
   const [region, setRegion] = useState<CSSProperties>({ inset: 0 });
   const actions = useRef(

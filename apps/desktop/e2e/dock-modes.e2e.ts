@@ -2,7 +2,7 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import {
   type AppHandle,
   launchApp,
-  openOnboardingStep,
+  openProjectSwitcher,
   setReactValueJs,
 } from "./harness.js";
 
@@ -24,7 +24,7 @@ beforeAll(async () => {
   app = await launchApp({
     env: { CATAMORPHIC_E2E_AUTH_HEALTH: "expired" },
   });
-  await openOnboardingStep(app, "Get started");
+  await openProjectSwitcher(app);
 }, 180_000);
 
 afterAll(async () => {
@@ -107,13 +107,11 @@ const hoverChip = async (selector: string) => {
 
 describe("dock modes", () => {
   it("boots into a project and opens a floating chat", async () => {
-    await runWait(`return !!byText('button', 'Create or import project');`, {
+    await runWait(`return !!byText('button', 'New project');`, {
       timeoutMs: 120_000,
       label: "onboarding",
     });
-    await run(
-      `byText('button', 'Create or import project').click(); return true;`,
-    );
+    await run(`byText('button', 'New project').click(); return true;`);
     await runWait(
       `const input = $('[data-testid="project-name-input"]');
        if (!input) return false; setReactValue(input, 'dock-e2e'); return true;`,

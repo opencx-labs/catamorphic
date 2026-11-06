@@ -1716,12 +1716,24 @@ export function registerIpcHandlers(
     },
   );
 
-  // The empty-state fast path: still a normal user-visible project, with a
-  // collision-safe folder and the same core creation path as the full modal.
-  ipcMain.handle("catamorphic:project-create-default", async (event) => {
+  // A profile's initial workspace is a real project. All entry points share
+  // one in-flight operation so simultaneous windows cannot create duplicates.
+  const defaultProjects = new Map<
+    string,
+    Promise<{ id: string; name: string }>
+  >();
+  const ensureDefaultProject = async ({ profileId }: { profileId: string }) => {
     const server = state.current;
     if (!server) throw new Error("Server not running");
-    const profileId = windows.profileFor(event.sender);
+    const profile = profiles.get(profileId);
+    const existingId = profile?.defaultProjectId ?? profile?.projectIds[0];
+    if (existingId) {
+      const project = await server.catamorphic.core.projects.get(
+        identity,
+        existingId,
+      );
+      return { id: project.id, name: project.name };
+    }
     const initialized = await createReservedProject({
       parentDir: defaultProjectsDir(),
       slug: "default-project",
@@ -1768,6 +1780,16 @@ export function registerIpcHandlers(
     });
     state.broadcast("catamorphic:profiles-changed", profiles.list());
     return { id: initialized.project.id, name: initialized.project.name };
+  };
+  ipcMain.handle("catamorphic:project-ensure-default", (event) => {
+    const profileId = windows.profileFor(event.sender);
+    const pending = defaultProjects.get(profileId);
+    if (pending) return pending;
+    const operation = ensureDefaultProject({ profileId }).finally(() => {
+      defaultProjects.delete(profileId);
+    });
+    defaultProjects.set(profileId, operation);
+    return operation;
   });
 
   // --- remote projects (ADR 0055) ---

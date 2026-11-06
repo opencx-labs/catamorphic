@@ -390,8 +390,8 @@ const api = {
     importExisting?: boolean;
   }): Promise<{ id: string; name: string }> =>
     invoke("catamorphic:project-create", input),
-  createDefaultProject: (): Promise<{ id: string; name: string }> =>
-    invoke("catamorphic:project-create-default"),
+  ensureDefaultProject: (): Promise<{ id: string; name: string }> =>
+    invoke("catamorphic:project-ensure-default"),
   deleteProject: (input: {
     projectId: string;
     trashFolder?: boolean;

@@ -4,7 +4,7 @@ import { DEFAULT_THEME_FONTS } from "../src/shared/theme-fonts.js";
 import {
   type AppHandle,
   launchApp,
-  openOnboardingStep,
+  openProjectSwitcher,
   setReactValueJs,
 } from "./harness.js";
 
@@ -12,11 +12,11 @@ let app: AppHandle;
 
 beforeAll(async () => {
   app = await launchApp();
-  await openOnboardingStep(app, "Get started");
+  await openProjectSwitcher(app);
   await app.waitFor(`!![...document.querySelectorAll('button')].find(
-    el => el.textContent.trim() === 'Create or import project')`);
+    el => el.textContent.trim() === 'New project')`);
   await app.eval(`[...document.querySelectorAll('button')].find(
-    el => el.textContent.trim() === 'Create or import project').click()`);
+    el => el.textContent.trim() === 'New project').click()`);
   await app.waitFor(
     `!!document.querySelector('[data-testid="project-name-input"]')`,
   );

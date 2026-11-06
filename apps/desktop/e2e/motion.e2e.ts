@@ -5,7 +5,7 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import {
   type AppHandle,
   launchApp,
-  openOnboardingStep,
+  openProjectSwitcher,
   setReactValueJs,
 } from "./harness.js";
 
@@ -57,7 +57,7 @@ beforeAll(async () => {
       CATAMORPHIC_PWA_DIST: pairingDist,
     },
   });
-  await openOnboardingStep(app, "Get started");
+  await openProjectSwitcher(app);
 });
 
 afterAll(async () => {
@@ -145,10 +145,8 @@ const collectAnimationRules = () =>
 
 describe("setup", () => {
   it("creates a project workspace", async () => {
-    await runWait(`return !!byText('button', 'Create or import project');`);
-    await run(
-      `byText('button', 'Create or import project').click(); return true;`,
-    );
+    await runWait(`return !!byText('button', 'New project');`);
+    await run(`byText('button', 'New project').click(); return true;`);
     await runWait(`return !!$('[data-testid="project-name-input"]');`);
     await run(`
       setReactValue($('[data-testid="project-name-input"]'), 'motion-project');

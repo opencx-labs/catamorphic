@@ -64,7 +64,7 @@ describe("project loading and update access", () => {
     );
     expect(
       await app.eval(
-        `!!document.querySelector('[data-testid="empty-start-agent"]')`,
+        `!!document.querySelector('[data-testid="onboarding-setup-agent"]')`,
       ),
     ).toBe(false);
     await checkFromPalette();
@@ -84,7 +84,7 @@ describe("project loading and update access", () => {
     });
     expect(
       await app.eval(
-        `!!document.querySelector('[data-testid="empty-start-agent"]')`,
+        `!!document.querySelector('[data-testid="onboarding-setup-agent"]')`,
       ),
     ).toBe(false);
   });

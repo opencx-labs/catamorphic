@@ -357,7 +357,7 @@ export function ChatBubbles({
   // autoCollapse. Re-arms (back to null) whenever autoCollapse turns on, so
   // focusing a chat tab folds the strip again even after a manual expand.
   const [collapseOverride, setCollapseOverride] = useState<boolean | null>(
-    null,
+    entries.some((entry) => entry.mode === "partial") ? null : true,
   );
   const prevAutoRef = useRef(autoCollapse);
   if (prevAutoRef.current !== autoCollapse) {

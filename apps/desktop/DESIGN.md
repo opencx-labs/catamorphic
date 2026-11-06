@@ -1057,8 +1057,8 @@ sends the dock to the display's edge.
 
 ### 2026-11-06: A welcome you can come back to
 
-Onboarding is an ordinary tab (ADR 0155), with Welcome, Theme, Palette, Browser
-setup, and Get started steps. Import and default-browser actions share one step.
+Onboarding is an ordinary tab (ADR 0155), with Welcome, Theme, AI agents, The dock,
+Keyboard shortcuts, Palette, and Browser setup steps. Import and default-browser actions share one step.
 Done closes the tutorial and opens a normal New Tab palette. It opens under the former welcome
 and automatic setup conditions. The palette finds it as onboarding, tutorial,
 welcome, tour, getting started, learn, guide, or help. The track slides left as
@@ -1078,3 +1078,16 @@ A first launch fills the display's work area with both sidebars collapsed. This
 initial profile choice is written only when neither saved window state nor profile
 preferences exist. Later launches restore the person's window placement and sidebar
 choices; onboarding never forces those choices again.
+
+The agent step opens the existing wizard as a modal and keeps the tutorial in
+place. Its action becomes complete
+when an agent is configured. The dock starts collapsed in the right corner;
+opening a conversation expands it. Its tutorial hero reuses the real bubble strip
+with an animated cursor, pausing while hidden and settling under reduced motion.
+Keyboard shortcuts and palette steps have no extra actions; their shortcut labels
+follow the effective bindings. Project creation remains in the project switcher.
+
+New profiles start in Default Project with onboarding selected and the dock
+visible before agent setup. Initialization reuses one profile-owned project even
+when windows start together; the boot veil waits for that workspace. Existing
+profiles restore their selected project. The dock remains collapsed at startup.

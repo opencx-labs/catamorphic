@@ -2,7 +2,7 @@ import fs from "node:fs";
 import http from "node:http";
 import path from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { type AppHandle, launchApp, openOnboardingStep } from "./harness.js";
+import { type AppHandle, launchApp, openProjectSwitcher } from "./harness.js";
 
 /**
  * Remote projects end to end (ADR 0055): a member pastes a connect link,
@@ -322,7 +322,7 @@ describe("remote projects (ADR 0055)", () => {
   beforeAll(async () => {
     await startFakeServer();
     app = await launchApp();
-    await openOnboardingStep(app, "Get started");
+    await openProjectSwitcher(app);
   }, 120_000);
 
   afterAll(async () => {
@@ -331,13 +331,13 @@ describe("remote projects (ADR 0055)", () => {
   });
 
   it("connects from a pasted link and materializes the scoped tree", async () => {
-    // The empty state offers connecting to a server beside "Create or import project".
-    await runWait(`return !!$('[data-testid="empty-connect-remote"]');`, {
+    // The empty state offers connecting to a server beside "New project".
+    await runWait(`return !!$('[data-testid="switcher-connect-remote"]');`, {
       timeoutMs: 60_000,
       label: "empty-state connect button",
     });
     await run(
-      `$('[data-testid="empty-connect-remote"]').click(); return true;`,
+      `$('[data-testid="switcher-connect-remote"]').click(); return true;`,
     );
     await runWait(`return !!$('[data-testid="remote-link-input"]');`, {
       label: "connect modal",

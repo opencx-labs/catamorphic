@@ -67,6 +67,14 @@ describe("the Work tutorial", () => {
         `document.querySelector('[data-workspace-content]').getBoundingClientRect().width === window.innerWidth`,
       ),
     ).toBe(true);
+    await app.waitFor(
+      `document.querySelector('[aria-label="Switch project"]')?.textContent.includes('Default Project') && document.querySelector('[data-dock-host] [data-dock-rail]')?.dataset.dockCollapsed === 'true'`,
+    );
+    expect(
+      await app.eval(
+        `document.querySelector('[data-dock-host]')?.dataset.dockSide`,
+      ),
+    ).toBe("right");
     expect(
       await app.eval(
         `document.querySelector('[data-testid="onboarding"] h1')?.textContent`,
@@ -193,7 +201,7 @@ describe("the Work tutorial", () => {
   });
 
   it("shows the actual shortcuts and keeps the palette step free of extra actions", async () => {
-    await click('[data-testid="onboarding-next"]');
+    await openOnboardingStep(app, "Palette");
     await settled();
     expect(
       await app.eval(
@@ -205,6 +213,11 @@ describe("the Work tutorial", () => {
         `document.querySelectorAll('.onboarding-page:not([inert]) .onboarding-copy button').length`,
       ),
     ).toBe(0);
+    expect(
+      await app.eval(
+        `document.querySelector('.onboarding-copy')?.textContent.includes('using the') && !!document.querySelector('.onboarding-copy svg[aria-label="plus"]')`,
+      ),
+    ).toBe(true);
     const original = await app.eval<Record<string, string>>(
       `window.catamorphicDesktop.getKeybindings()`,
     );
@@ -231,8 +244,8 @@ describe("the Work tutorial", () => {
     }
   });
 
-  it("finishes an empty profile into a normal New Tab with the add-tab control", async () => {
-    await openOnboardingStep(app, "Get started");
+  it("finishes into a normal New Tab with the add-tab control", async () => {
+    await openOnboardingStep(app, "Browser setup");
     await click('[data-testid="onboarding-next"]');
     await app.waitFor(
       `!document.querySelector('[data-testid="onboarding"]') && document.activeElement?.matches('textarea[aria-label="Search commands, pages, and more"]')`,
@@ -269,6 +282,118 @@ describe("the Work tutorial", () => {
     await app.cdp("Emulation.setEmulatedMedia", { features: [] });
   });
 
+  it("demonstrates the dock, uses the effective chat shortcut, and explains keyboard bindings", async () => {
+    await openOnboardingStep(app, "The dock");
+    const demo = ".onboarding-dock-preview";
+    expect(
+      await app.eval(
+        `document.querySelector('.onboarding-copy h1')?.textContent`,
+      ),
+    ).toBe("Keep your chats handy");
+    expect(
+      await app.eval(
+        `document.querySelector('.onboarding-copy button') === null`,
+      ),
+    ).toBe(true);
+    await app.waitFor(
+      `document.querySelector('${demo} [data-dock-rail]')?.dataset.dockCollapsed === 'false'`,
+    );
+    await app.waitFor(
+      `document.querySelector('${demo} [data-dock-rail]')?.dataset.dockCollapsed === 'true'`,
+    );
+    const original = await app.eval<Record<string, string>>(
+      `window.catamorphicDesktop.getKeybindings()`,
+    );
+    await app.eval(
+      `window.catamorphicDesktop.setKeybindings({...${JSON.stringify(original)},'new-floating-chat':'Cmd+Shift+J'})`,
+    );
+    const label = process.platform === "darwin" ? "⌘⇧J" : "Ctrl+Shift+J";
+    await app.waitFor(
+      `document.querySelector('.onboarding-copy')?.textContent.includes(${JSON.stringify(label)})`,
+    );
+    await app.eval(
+      `window.catamorphicDesktop.setKeybindings(${JSON.stringify(original)})`,
+    );
+    await app.cdp("Emulation.setEmulatedMedia", {
+      features: [{ name: "prefers-reduced-motion", value: "reduce" }],
+    });
+    await app.waitFor(
+      `document.querySelector('${demo}')?.dataset.animated === 'false'`,
+    );
+    await settled();
+    expect(
+      await app.eval(
+        `document.querySelector('${demo}').getAnimations({subtree:true}).some(animation => animation.playState === 'running')`,
+      ),
+    ).toBe(false);
+    await app.cdp("Emulation.setEmulatedMedia", { features: [] });
+    await openOnboardingStep(app, "Keyboard shortcuts");
+    expect(
+      await app.eval(
+        `document.querySelector('.onboarding-copy h1')?.textContent`,
+      ),
+    ).toBe("Move at the speed of thought");
+    expect(
+      await app.eval(
+        `document.querySelector('.onboarding-copy button') === null`,
+      ),
+    ).toBe(true);
+  });
+
+  it("configures an agent in a modal, keeps the step, and reveals the collapsed dock on the right", async () => {
+    await app.eval(
+      `window.catamorphicDesktop.agentsList().then(data => Promise.all(data.agents.map(agent => window.catamorphicDesktop.agentsRemove(agent.id))))`,
+    );
+    await openOnboardingStep(app, "AI agents");
+    expect(
+      await app.eval(
+        `!!document.querySelector('[data-dock-host] [data-dock-rail]')`,
+      ),
+    ).toBe(true);
+    expect(
+      await app.eval(
+        `document.querySelector('.onboarding-copy h1')?.textContent`,
+      ),
+    ).toBe("Work is where AI agents can do wonders");
+    await click('[data-testid="onboarding-setup-agent"]');
+    await app.waitFor(
+      `!!document.querySelector('[role="dialog"] [data-testid="agent-wizard-free"]')`,
+    );
+    expect(
+      await app.eval(
+        `document.querySelector('[data-testid="onboarding"]')?.dataset.onboardingStep`,
+      ),
+    ).toBe("2");
+    expect(
+      await app.eval(
+        `!document.querySelector('[data-point-key^="agent-setup:"]')`,
+      ),
+    ).toBe(true);
+    await click('[role="dialog"] [data-testid="agent-wizard-free"]');
+    await app.waitFor(
+      `document.querySelector('[data-testid="onboarding-setup-agent"]')?.textContent.includes('Agent configured') && !document.querySelector('[role="dialog"] [data-testid="agent-wizard-free"]')`,
+    );
+    await app.waitFor(
+      `document.querySelector('[data-dock-host] [data-dock-rail]')?.dataset.dockCollapsed === 'true'`,
+    );
+    expect(
+      await app.eval(
+        `document.querySelector('[data-dock-host]')?.dataset.dockSide`,
+      ),
+    ).toBe("right");
+    await click('[data-dock-host] button[aria-label="Expand chat bubbles"]');
+    await app.waitFor(
+      `document.querySelector('[data-dock-host] [data-dock-rail]')?.dataset.dockCollapsed === 'false'`,
+    );
+    await click('[data-dock-host] button[aria-label="New chat"]');
+    await app.waitFor(
+      `!![...document.querySelectorAll('[data-composer-input]')].find(el => !el.closest('[inert]') && !el.closest('[data-testid="onboarding"]'))`,
+    );
+    await app.press("m", mod);
+    await settled();
+    await openOnboardingStep(app, "Theme");
+  });
+
   it("keeps the tutorial while theme customization sets up an agent in another tab", async () => {
     await app.eval(
       `window.catamorphicDesktop.agentsList().then(data => Promise.all(data.agents.map(agent => window.catamorphicDesktop.agentsRemove(agent.id))))`,
@@ -300,7 +425,7 @@ describe("the Work tutorial", () => {
       `[...document.querySelectorAll('[data-point-key^="chat:"]')].filter(element => !element.closest('[data-testid="onboarding"]')).map(element => element.dataset.pointKey)`,
     );
     expect(chatKeys.length).toBeGreaterThan(0);
-    await openOnboardingStep(app, "Get started");
+    await openOnboardingStep(app, "Browser setup");
     await click('[data-testid="onboarding-next"]');
     await app.waitFor(
       `!document.querySelector('[data-testid="onboarding"]') && document.activeElement?.matches('textarea[aria-label="Search commands, pages, and more"]')`,

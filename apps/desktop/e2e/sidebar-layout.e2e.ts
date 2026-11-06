@@ -2,7 +2,7 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import {
   type AppHandle,
   launchApp,
-  openOnboardingStep,
+  openProjectSwitcher,
   setReactValueJs,
 } from "./harness.js";
 
@@ -14,14 +14,14 @@ const run = <T>(body: string) =>
 
 beforeAll(async () => {
   app = await launchApp();
-  await openOnboardingStep(app, "Get started");
+  await openProjectSwitcher(app);
   await app.eval(
     "window.__sidebarErrors = []; window.addEventListener('error', event => window.__sidebarErrors.push(event.message + ' ' + event.error?.stack)); window.addEventListener('unhandledrejection', event => window.__sidebarErrors.push(String(event.reason)))",
   );
   await app.waitFor(
-    "[...document.querySelectorAll('button')].some(b => b.textContent.trim() === 'Create or import project')",
+    "[...document.querySelectorAll('button')].some(b => b.textContent.trim() === 'New project')",
   );
-  await run("button('Create or import project').click()");
+  await run("button('New project').click()");
   await app.waitFor(
     "!!document.querySelector('[data-testid=project-name-input]')",
   );

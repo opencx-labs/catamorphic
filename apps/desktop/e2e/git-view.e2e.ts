@@ -6,7 +6,7 @@ import { afterAll, beforeAll, expect, it } from "vitest";
 import {
   type AppHandle,
   launchApp,
-  openOnboardingStep,
+  openProjectSwitcher,
   setReactValueJs,
 } from "./harness.js";
 
@@ -57,9 +57,9 @@ beforeAll(async () => {
       CATAMORPHIC_E2E_PICK_FOLDER: root,
     },
   });
-  await openOnboardingStep(app, "Get started");
-  await wait(`return !!byText('button','Create or import project');`);
-  await run(`byText('button','Create or import project').click();return true;`);
+  await openProjectSwitcher(app);
+  await wait(`return !!byText('button','New project');`);
+  await run(`byText('button','New project').click();return true;`);
   await wait(`return !!byText('button','Import folder');`);
   await run(`byText('button','Import folder').click();return true;`);
   await wait(`return !!$('[data-testid="import-folder-picker"]');`);

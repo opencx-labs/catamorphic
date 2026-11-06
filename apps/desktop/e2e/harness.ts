@@ -564,6 +564,7 @@ async function createClient(ws: WebSocket, opts: { page?: boolean } = {}) {
 export type KeyName = keyof typeof KEY_CODES;
 
 const KEY_CODES = {
+  m: { windowsVirtualKeyCode: 77, code: "KeyM" },
   p: { windowsVirtualKeyCode: 80, code: "KeyP" },
   Space: { key: " ", windowsVirtualKeyCode: 32, code: "Space", text: " " },
   a: { windowsVirtualKeyCode: 65, code: "KeyA" },
@@ -638,5 +639,21 @@ export async function openOnboardingStep(app: AppHandle, label: string) {
   );
   await app.waitFor(
     `document.querySelector('.onboarding-progress button[aria-current="step"]')?.getAttribute('aria-label') === ${JSON.stringify(label)} && document.querySelector('.onboarding-track')?.getAnimations().every(animation => animation.playState !== 'running')`,
+  );
+}
+
+/** Project creation and server connections live in the normal project switcher. */
+export async function openProjectSwitcher(app: AppHandle) {
+  await app.waitFor(
+    `!!document.querySelector('[aria-label="Switch project"]')`,
+  );
+  await app.eval(
+    `document.querySelector('button[aria-label="Expand sidebar"]')?.click()`,
+  );
+  await app.eval(
+    `document.querySelector('button[aria-label="Switch project"]').click()`,
+  );
+  await app.waitFor(
+    `!!document.querySelector('[data-testid="switcher-connect-remote"]:not([inert] *)')`,
   );
 }
