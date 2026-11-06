@@ -489,6 +489,7 @@ describe("ChatTimeline inputs that are not the person's (ADR 0217)", () => {
       root.render(
         <ChatTimeline
           timeline={turns}
+          workDisplay={{ live: "all", settled: "keep" }}
           onLinkClick={(url) => {
             opened.push(url);
           }}

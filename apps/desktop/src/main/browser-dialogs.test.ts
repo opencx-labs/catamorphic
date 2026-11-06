@@ -65,6 +65,8 @@ class Page extends EventEmitter {
     return {
       origin: this.top.origin,
       parent: null,
+      frameToken: this.top.frameToken,
+      processId: this.top.processId,
       framesInSubtree: this.frames,
     };
   }
@@ -113,8 +115,29 @@ const ask = (
 };
 /** Main refused without asking: the frame stops asking for good. */
 const refusedForGood = { refused: "document" };
-const invoke = (channel: string, sender: Window, input: unknown) =>
-  electron.handlers.get(channel)?.({ sender }, input);
+const invoke = (channel: string, sender: Window, input: unknown) => {
+  const payload =
+    channel.startsWith("catamorphic:browser-close-") &&
+    typeof input === "object" &&
+    input !== null
+      ? { requestId: "close-check", preserve: true, ...input }
+      : input;
+  const result = electron.handlers.get(channel)?.({ sender }, payload);
+  if (
+    channel === "catamorphic:browser-close-ask" &&
+    page.send.mock.calls.some(
+      ([name]) => name === "catamorphic:page-close-prepare",
+    )
+  )
+    ready();
+  return result;
+};
+const ready = (requestId = "close-check", target = page) =>
+  ipcMain.emit(
+    "catamorphic:page-close-ready",
+    { sender: target, senderFrame: target.top },
+    requestId,
+  );
 const flush = () => new Promise((resolve) => setImmediate(resolve));
 const shown = (page: Page): PageDialog => {
   const dialog = pageDialogs()?.current(page.id);
@@ -596,6 +619,7 @@ describe("Leave site?", () => {
       invoke("catamorphic:browser-close-ask", window, { guestId: 7 }),
     ).resolves.toBe("close");
     expect(page.close).not.toHaveBeenCalled();
+    await invoke("catamorphic:browser-close-cancel", window, { guestId: 7 });
 
     page.emit("input-event", {}, { type: "mouseDown" });
     await expect(
@@ -617,7 +641,7 @@ describe("Leave site?", () => {
     await flush();
     expect(window.send).toHaveBeenCalledWith(
       "catamorphic:browser-close-answer",
-      { guestId: 7, leave: true },
+      { guestId: 7, requestId: "close-check", leave: true },
     );
     // Leaving with its tab, it opens nothing until it is gone.
     expect(pageClosing(7)).toBe(true);
@@ -626,19 +650,24 @@ describe("Leave site?", () => {
     expect(pageClosing(7)).toBe(false);
   });
 
-  it("does not query the renderer and immediately reports a page without beforeunload closing", async () => {
+  it("prepares a plain page before the native check and retains it on approval", async () => {
     page.close.mockImplementation(() => {
-      page.emit("close");
-      page.destroyed = true;
-      page.emit("destroyed");
+      expect(page.send).toHaveBeenCalledWith(
+        "catamorphic:page-close-prepare",
+        "close-check",
+      );
+      const event = { preventDefault: vi.fn() };
+      page.emit("-before-unload-fired", event, true);
+      expect(event.preventDefault).toHaveBeenCalled();
     });
     await expect(
       invoke("catamorphic:browser-close-ask", window, { guestId: 7 }),
     ).resolves.toBe("asking");
     expect(page.executeJavaScriptInIsolatedWorld).not.toHaveBeenCalled();
+    expect(page.destroyed).toBe(false);
     expect(window.send).toHaveBeenCalledWith(
       "catamorphic:browser-close-answer",
-      { guestId: 7, leave: true },
+      { guestId: 7, requestId: "close-check", leave: true },
     );
   });
 
@@ -655,6 +684,7 @@ describe("Leave site?", () => {
       invoke("catamorphic:browser-close-ask", window, { guestId: 7 }),
     ).resolves.toBe("close");
     expect(page.close).not.toHaveBeenCalled();
+    await invoke("catamorphic:browser-close-cancel", window, { guestId: 7 });
     const frame = embed(page, "https://embedded.test");
     ipcMain.emit("catamorphic:page-activated", {
       sender: page,
@@ -677,6 +707,7 @@ describe("Leave site?", () => {
     try {
       now.mockReturnValue(10_000);
       await invoke("catamorphic:browser-close-ask", window, { guestId: 7 });
+      page.emit("-before-unload-fired", { preventDefault: vi.fn() }, false);
       page.emit("will-prevent-unload", { preventDefault: vi.fn() });
       now.mockReturnValue(11_000);
       invoke("catamorphic:page-dialog-answer", window, {
@@ -686,7 +717,7 @@ describe("Leave site?", () => {
       await flush();
       expect(window.send).toHaveBeenCalledWith(
         "catamorphic:browser-close-answer",
-        { guestId: 7, leave: false },
+        { guestId: 7, requestId: "close-check", leave: false },
       );
       // Stayed, but still holding the activation the close granted.
       expect(pageClosing(7)).toBe(true);
@@ -719,25 +750,148 @@ describe("Leave site?", () => {
       "catamorphic:browser-close-answer",
       expect.anything(),
     );
+    await invoke("catamorphic:browser-close-cancel", window, { guestId: 7 });
+    await invoke("catamorphic:browser-close-ask", window, { guestId: 7 });
     // Let go: still not unloaded here; the tab leaves with its own exit.
     const letGo = { preventDefault: vi.fn() };
     page.emit("-before-unload-fired", letGo, true);
     expect(letGo.preventDefault).toHaveBeenCalled();
     expect(window.send).toHaveBeenCalledWith(
       "catamorphic:browser-close-answer",
-      { guestId: 7, leave: true },
+      { guestId: 7, requestId: "close-check", leave: true },
     );
-    // A page not being closed is left to Electron.
+    // A page not being checked is left to Electron.
     const navigating = { preventDefault: vi.fn() };
     page.emit("-before-unload-fired", navigating, false);
     expect(navigating.preventDefault).not.toHaveBeenCalled();
   });
+
+  it.each(["dialog", "native"])(
+    "releases a %s close approval when the wider close is cancelled, preserving finite activation",
+    async (method) => {
+      const now = vi.spyOn(Date, "now");
+      try {
+        now.mockReturnValue(10_000);
+        await invoke("catamorphic:browser-close-ask", window, { guestId: 7 });
+        if (method === "dialog") {
+          page.emit("will-prevent-unload", { preventDefault: vi.fn() });
+          invoke("catamorphic:page-dialog-answer", window, {
+            id: shown(page).id,
+            accept: true,
+          });
+          await flush();
+        } else
+          page.emit("-before-unload-fired", { preventDefault: vi.fn() }, true);
+        expect(pageClosing(7)).toBe(true);
+        // Another window cannot release this page's approval.
+        await invoke("catamorphic:browser-close-cancel", new Window(), {
+          guestId: 7,
+        });
+        now.mockReturnValue(20_000);
+        expect(pageClosing(7)).toBe(true);
+        now.mockReturnValue(11_000);
+        await invoke("catamorphic:browser-close-cancel", window, {
+          guestId: 7,
+        });
+        now.mockReturnValue(14_999);
+        expect(pageClosing(7)).toBe(true);
+        now.mockReturnValue(15_000);
+        expect(pageClosing(7)).toBe(false);
+      } finally {
+        now.mockRestore();
+      }
+    },
+  );
 
   it("lets a page waiting on its own dialog close at once", async () => {
     ask(page, { kind: "alert", message: "Hi" });
     await expect(
       invoke("catamorphic:browser-close-ask", window, { guestId: 7 }),
     ).resolves.toBe("close");
+  });
+
+  it("cancels preparation without letting a delayed ready start a native check", async () => {
+    electron.handlers.get("catamorphic:browser-close-ask")?.(
+      { sender: window },
+      { guestId: 7, requestId: "old", preserve: true },
+    );
+    await invoke("catamorphic:browser-close-cancel", window, {
+      guestId: 7,
+      requestId: "old",
+    });
+    ready("old");
+    expect(page.close).not.toHaveBeenCalled();
+    expect(page.send).toHaveBeenCalledWith(
+      "catamorphic:page-close-release",
+      "old",
+    );
+    await expect(
+      invoke("catamorphic:browser-close-approved", window, {
+        guestId: 7,
+        requestId: "old",
+      }),
+    ).toBe(false);
+  });
+
+  it.each([true, false])(
+    "vetoes a delayed native answer (%s) after cancellation, then permits a fresh check",
+    async (proceed) => {
+      await invoke("catamorphic:browser-close-ask", window, { guestId: 7 });
+      await invoke("catamorphic:browser-close-cancel", window, { guestId: 7 });
+      await expect(
+        invoke("catamorphic:browser-close-ask", window, {
+          guestId: 7,
+          requestId: "new",
+        }),
+      ).resolves.toBe("cancel");
+      page.emit("will-prevent-unload", { preventDefault: vi.fn() });
+      expect(pageDialogs()?.list(7)).toEqual([]);
+      const event = { preventDefault: vi.fn() };
+      page.emit("-before-unload-fired", event, proceed);
+      expect(event.preventDefault).toHaveBeenCalled();
+      expect(window.send).not.toHaveBeenCalledWith(
+        "catamorphic:browser-close-answer",
+        expect.objectContaining({ leave: true }),
+      );
+      await expect(
+        invoke("catamorphic:browser-close-ask", window, {
+          guestId: 7,
+          requestId: "new",
+        }),
+      ).resolves.toBe("asking");
+      ready("new");
+      page.emit("-before-unload-fired", { preventDefault: vi.fn() }, true);
+      expect(
+        invoke("catamorphic:browser-close-approved", window, {
+          guestId: 7,
+          requestId: "new",
+        }),
+      ).toBe(true);
+      // An old rollback cannot revoke the new approval.
+      await invoke("catamorphic:browser-close-cancel", window, { guestId: 7 });
+      expect(
+        invoke("catamorphic:browser-close-approved", window, {
+          guestId: 7,
+          requestId: "new",
+        }),
+      ).toBe(true);
+    },
+  );
+
+  it("invalidates an approved document when it navigates", async () => {
+    await invoke("catamorphic:browser-close-ask", window, { guestId: 7 });
+    page.emit("-before-unload-fired", { preventDefault: vi.fn() }, true);
+    expect(
+      invoke("catamorphic:browser-close-approved", window, { guestId: 7 }),
+    ).toBe(true);
+    page.emit("did-start-navigation", {
+      isMainFrame: true,
+      isSameDocument: false,
+      url: "https://next.test/",
+    });
+    expect(
+      invoke("catamorphic:browser-close-approved", window, { guestId: 7 }),
+    ).toBe(false);
   });
 });
 

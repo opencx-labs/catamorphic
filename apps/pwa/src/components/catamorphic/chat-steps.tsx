@@ -642,7 +642,9 @@ export function turnStepsOf(
   const reports = new Map<string, { step: TurnStep; count: number }>();
   for (const source of sources) {
     if (source.kind === "note") {
-      steps.push(noteStep(source.item));
+      const step = noteStep(source.item);
+      if (source.item.id === context.focusMessageId) step.focused = true;
+      steps.push(step);
       continue;
     }
     if (source.item.parentItemId) continue;

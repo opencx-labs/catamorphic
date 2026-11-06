@@ -56,7 +56,18 @@ export interface BrowserDialogsHost {
 }
 
 /** What closing a tab finds: go now, or wait while the page is asked. */
-export type CloseAsk = "close" | "asking";
+export type CloseAsk = "close" | "asking" | "cancel";
+
+interface CloseCheck {
+  requestId: string;
+  preserve: boolean;
+  frameToken: string;
+  processId: number;
+  nativePending: boolean;
+  prepared: boolean;
+  approved: boolean;
+  cancelled: boolean;
+}
 
 /** What Leave does: the browser's attempt again, or the page's own. */
 type HeldAction = { kind: "browser"; intent: UnloadIntent } | { kind: "page" };
@@ -189,7 +200,11 @@ export function registerBrowserDialogs(host: BrowserDialogsHost): () => void {
    */
   const held = new Map<number, HeldAction | null>();
   /** Tabs being closed, waiting on the page's beforeunload. */
-  const closing = new Set<number>();
+  const closeChecks = new Map<number, CloseCheck>();
+  const checking = (id: number) => {
+    const check = closeChecks.get(id);
+    return check && !check.cancelled && !check.approved;
+  };
   /** Native input and the isolated preload report interaction as it happens. */
   const touched = new Set<number>();
   /**
@@ -201,11 +216,12 @@ export function registerBrowserDialogs(host: BrowserDialogsHost): () => void {
     goings.set(guestId, (goings.get(guestId) ?? 0) + 1);
   /**
    * Until when a page whose tab was closed holds the activation the close
-   * granted it: the activation's own lifespan, or for good once it leaves.
+   * granted it: the activation's own finite lifespan.
    */
   const activated = new Map<number, number>();
   closeGuard = (guestId) =>
-    closing.has(guestId) || (activated.get(guestId) ?? 0) > Date.now();
+    (closeChecks.has(guestId) && !closeChecks.get(guestId)?.cancelled) ||
+    (activated.get(guestId) ?? 0) > Date.now();
   noteIntent = (guestId, intent) => {
     intents.set(guestId, { intent, at: Date.now() });
     went(guestId);
@@ -318,6 +334,62 @@ export function registerBrowserDialogs(host: BrowserDialogsHost): () => void {
         candidate.frameToken === frame.frameToken &&
         candidate.processId === frame.processId,
     );
+  const releaseClose = (guest: WebContents, check: CloseCheck) => {
+    if (!guest.isDestroyed())
+      guest.send("catamorphic:page-close-release", check.requestId);
+  };
+  const closeAnswer = (
+    guest: WebContents,
+    check: CloseCheck,
+    leave: boolean,
+  ) => {
+    if (closeChecks.get(guest.id) !== check || check.cancelled) return;
+    check.approved = leave;
+    releaseClose(guest, check);
+    if (!leave && !check.nativePending) closeChecks.delete(guest.id);
+    const owner = guest.hostWebContents;
+    if (owner && !owner.isDestroyed())
+      owner.send("catamorphic:browser-close-answer", {
+        guestId: guest.id,
+        requestId: check.requestId,
+        leave,
+      });
+  };
+  const cancelClose = (guest: WebContents, check: CloseCheck) => {
+    if (closeChecks.get(guest.id) !== check) return;
+    check.cancelled = true;
+    check.approved = false;
+    held.delete(guest.id);
+    dialogs.cancel(guest.id, (dialog) => dialog.kind === "beforeunload");
+    releaseClose(guest, check);
+    // A late native reply must still be vetoed. No new native check may
+    // overlap it: Electron's reply does not carry our request identity.
+    if (!check.nativePending) closeChecks.delete(guest.id);
+  };
+  const onCloseReady = (event: Electron.IpcMainEvent, requestId: unknown) => {
+    const guest = event.sender;
+    const check = closeChecks.get(guest.id);
+    const frame = event.senderFrame;
+    if (
+      !check ||
+      check.cancelled ||
+      check.prepared ||
+      !check.preserve ||
+      check.requestId !== requestId ||
+      !frame ||
+      !hostOf(guest) ||
+      frame.parent !== null ||
+      frame.frameToken !== check.frameToken ||
+      frame.processId !== check.processId ||
+      !inPage(guest, frame)
+    )
+      return;
+    check.prepared = true;
+    check.nativePending = true;
+    activated.set(guest.id, Date.now() + ACTIVATION_MS);
+    guest.close({ waitForBeforeUnload: true });
+  };
+  ipcMain.on("catamorphic:page-close-ready", onCloseReady);
   const onPageActivated = (event: Electron.IpcMainEvent) => {
     if (
       event.senderFrame &&
@@ -405,21 +477,66 @@ export function registerBrowserDialogs(host: BrowserDialogsHost): () => void {
   // dialog, just goes.
   shellIpcMain.handle(
     "catamorphic:browser-close-ask",
-    async (event, input: { guestId?: unknown }): Promise<CloseAsk> => {
+    async (
+      event,
+      input: { guestId?: unknown; requestId?: unknown; preserve?: unknown },
+    ): Promise<CloseAsk> => {
       const guest = hostedGuest(event.sender, input?.guestId);
       if (!guest || guest.isCrashed() || !hostOf(guest)) return "close";
-      if (dialogs.has(guest.id)) return "close";
-      // Never query a busy renderer to decide whether to ask it. Chromium
-      // alone decides whether this interacted page has changes to protect.
-      if (!touched.has(guest.id)) return "close";
-      closing.add(guest.id);
-      activated.set(guest.id, Date.now() + ACTIVATION_MS);
-      // The page's beforeunload runs; "-before-unload-fired" keeps the page
-      // either way: one that let go leaves with its tab's own exit, one
-      // that holds on asks "Leave site?". A page with no handler closes at
-      // once (the webview's `close`), still showing.
-      guest.close({ waitForBeforeUnload: true });
+      if (
+        typeof input.requestId !== "string" ||
+        !input.requestId ||
+        closeChecks.has(guest.id)
+      )
+        return "cancel";
+      const frame = guest.mainFrame;
+      const check: CloseCheck = {
+        requestId: input.requestId,
+        preserve: input.preserve === true,
+        frameToken: frame.frameToken,
+        processId: frame.processId,
+        nativePending: false,
+        prepared: false,
+        approved: !touched.has(guest.id) || dialogs.has(guest.id),
+        cancelled: false,
+      };
+      closeChecks.set(guest.id, check);
+      if (check.approved) return "close";
+      if (!check.preserve) {
+        check.nativePending = true;
+        activated.set(guest.id, Date.now() + ACTIVATION_MS);
+        guest.close({ waitForBeforeUnload: true });
+        return "asking";
+      }
+      // Prepare in the isolated preload, without querying site code or
+      // making every normal navigation wait on a permanent listener.
+      guest.send("catamorphic:page-close-prepare", check.requestId);
       return "asking";
+    },
+  );
+  shellIpcMain.handle(
+    "catamorphic:browser-close-cancel",
+    (event, input: { guestId?: unknown; requestId?: unknown }) => {
+      const guest = hostedGuest(event.sender, input?.guestId);
+      const check = guest && closeChecks.get(guest.id);
+      if (guest && check && check.requestId === input.requestId)
+        cancelClose(guest, check);
+    },
+  );
+  shellIpcMain.handle(
+    "catamorphic:browser-close-approved",
+    (event, input: { guestId?: unknown; requestId?: unknown }) => {
+      const guest = hostedGuest(event.sender, input?.guestId);
+      if (!guest) return false;
+      const check = closeChecks.get(guest.id);
+      return (
+        !!check &&
+        check.requestId === input.requestId &&
+        check.approved &&
+        !check.cancelled &&
+        guest.mainFrame.frameToken === check.frameToken &&
+        guest.mainFrame.processId === check.processId
+      );
     },
   );
 
@@ -570,20 +687,20 @@ export function registerBrowserDialogs(host: BrowserDialogsHost): () => void {
       if (input.type === "mouseDown" || input.type === "touchStart")
         touched.add(id);
     });
-    // No beforeunload handler: the native close settles immediately,
-    // even if destroying the guest loses the webview's forwarded event.
+    // A page closing itself is not a probe. If it goes during a check,
+    // that check cannot preserve the group's original set of pages.
     EventEmitter.prototype.on.call(contents, "close", () => {
-      if (!closing.delete(id)) return;
-      const owner = contents.hostWebContents;
-      if (owner && !owner.isDestroyed())
-        owner.send("catamorphic:browser-close-answer", {
-          guestId: id,
-          leave: true,
-        });
+      const check = closeChecks.get(id);
+      if (check) {
+        check.nativePending = false;
+        closeAnswer(contents, check, !check.preserve);
+      }
     });
     contents.on("will-prevent-unload", (event) => {
       const owner = hostOf(contents);
       if (!owner) return;
+      const check = closeChecks.get(id);
+      if (check?.cancelled) return;
       // Leave was chosen: what it redid goes, and so does whatever else
       // the page tries before it does.
       if ((leaving.get(id) ?? 0) > Date.now()) {
@@ -593,7 +710,7 @@ export function registerBrowserDialogs(host: BrowserDialogsHost): () => void {
       // The page stays for now. One "Leave site?" per page: asking again
       // (a second reload) changes it to what was tried last, except that
       // once the person or an agent tried, only they change it.
-      const attempt = closing.has(id)
+      const attempt = checking(id)
         ? { action: null, reload: false }
         : heldAttempt(id, Date.now());
       const open = dialogs.find(id, "beforeunload");
@@ -609,7 +726,7 @@ export function registerBrowserDialogs(host: BrowserDialogsHost): () => void {
       }
       held.set(id, attempt.action);
       // A tab being closed in the background comes forward to ask.
-      if (closing.has(id))
+      if (checking(id))
         owner.send("catamorphic:browser-reveal-guest", { guestId: id });
       const origin = frameOrigin(contents.mainFrame.origin);
       void dialogs
@@ -624,15 +741,10 @@ export function registerBrowserDialogs(host: BrowserDialogsHost): () => void {
         })
         .then((answer) => {
           if (contents.isDestroyed()) return;
-          if (closing.delete(id)) {
+          if (check) {
+            if (closeChecks.get(id) !== check || check.cancelled) return;
             held.delete(id);
-            // Leaving with its tab: no window or permission until it goes.
-            if (answer?.accept) activated.set(id, Number.POSITIVE_INFINITY);
-            if (!owner.isDestroyed())
-              owner.send("catamorphic:browser-close-answer", {
-                guestId: id,
-                leave: answer?.accept === true,
-              });
+            closeAnswer(contents, check, answer?.accept === true);
             return;
           }
           if (answer?.accept) leave(contents);
@@ -654,17 +766,17 @@ export function registerBrowserDialogs(host: BrowserDialogsHost): () => void {
       contents,
       "-before-unload-fired",
       (event: Electron.Event, proceed: boolean) => {
-        if (!closing.has(id)) return;
+        const check = closeChecks.get(id);
+        if (!check?.nativePending) return;
         event.preventDefault();
+        check.nativePending = false;
+        if (check.cancelled) {
+          closeChecks.delete(id);
+          releaseClose(contents, check);
+          return;
+        }
         if (!proceed) return;
-        closing.delete(id);
-        activated.set(id, Number.POSITIVE_INFINITY);
-        const owner = contents.hostWebContents;
-        if (owner && !owner.isDestroyed())
-          owner.send("catamorphic:browser-close-answer", {
-            guestId: id,
-            leave: true,
-          });
+        closeAnswer(contents, check, true);
       },
     );
     contents.on("login", (event, details, authInfo, callback) => {
@@ -685,6 +797,11 @@ export function registerBrowserDialogs(host: BrowserDialogsHost): () => void {
     contents.on("did-start-navigation", (details) => {
       if (details.isSameDocument) return;
       if (details.isMainFrame) {
+        const check = closeChecks.get(id);
+        if (check) {
+          closeAnswer(contents, check, false);
+          cancelClose(contents, check);
+        }
         mainNavigations.set(id, details.url);
         went(id);
         forgetIntents(id);
@@ -707,7 +824,8 @@ export function registerBrowserDialogs(host: BrowserDialogsHost): () => void {
       forgetIntents(id);
       held.delete(id);
       leaving.delete(id);
-      closing.delete(id);
+      const check = closeChecks.get(id);
+      if (check) cancelClose(contents, check);
       touched.delete(id);
       const save = pendingSaves.get(id);
       pendingSaves.delete(id);
@@ -736,7 +854,7 @@ export function registerBrowserDialogs(host: BrowserDialogsHost): () => void {
       forgetIntents(id);
       held.delete(id);
       leaving.delete(id);
-      closing.delete(id);
+      closeChecks.delete(id);
       touched.delete(id);
       activated.delete(id);
       pendingSaves.delete(id);
@@ -751,11 +869,14 @@ export function registerBrowserDialogs(host: BrowserDialogsHost): () => void {
     app.off("web-contents-created", wire);
     ipcMain.off("catamorphic:page-dialog", onScriptDialog);
     ipcMain.off("catamorphic:page-activated", onPageActivated);
+    ipcMain.off("catamorphic:page-close-ready", onCloseReady);
     ipcMain.off("catamorphic:browser-unload-intent", onUnloadIntent);
     ipcMain.off("catamorphic:page-navigating", onPageNavigating);
     ipcMain.removeHandler("catamorphic:page-dialogs");
     ipcMain.removeHandler("catamorphic:page-dialog-answer");
     ipcMain.removeHandler("catamorphic:browser-close-ask");
+    ipcMain.removeHandler("catamorphic:browser-close-cancel");
+    ipcMain.removeHandler("catamorphic:browser-close-approved");
     clearInterval(frameCheck);
     for (const guestId of [...hosts.keys()]) dialogs.forget(guestId);
     if (current === dialogs) current = null;

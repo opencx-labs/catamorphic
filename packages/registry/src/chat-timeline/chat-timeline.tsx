@@ -101,6 +101,7 @@ import {
   TaskNotificationRows,
 } from "./session-input.js";
 import {
+  createCompletedRowsProjector,
   DEFAULT_WORK_DISPLAY,
   foldsSteps,
   type StepSource,
@@ -688,25 +689,36 @@ export function ChatTimeline(props: ChatTimelineProps) {
   const startedAt =
     activityStartedAt === undefined ? activeTurn?.startedAt : activityStartedAt;
   const viewCache = useRef(new WeakMap<TimelineTurn, TurnView>());
-  const views: TurnView[] = timeline.map((group) => {
-    const live = Boolean(group.turn && group.turn.id === activeId);
-    const cached = viewCache.current.get(group);
-    if (
-      cached &&
-      cached.live === live &&
-      cached.display.live === workDisplay.live &&
-      cached.display.settled === workDisplay.settled
-    )
-      return cached;
-    const view: TurnView = {
-      group,
-      live,
-      display: workDisplay,
-      rows: turnRows(group, { live, display: workDisplay }),
-    };
-    viewCache.current.set(group, view);
-    return view;
-  });
+  const collapseCompletedRows = useMemo(
+    () => createCompletedRowsProjector<TurnView>(),
+    [],
+  );
+  const { live: liveDisplay, settled: settledDisplay } = workDisplay;
+  const views: TurnView[] = useMemo(() => {
+    const display: WorkDisplay = { live: liveDisplay, settled: settledDisplay };
+    const perTurn: TurnView[] = timeline.map((group) => {
+      const live = Boolean(group.turn && group.turn.id === activeId);
+      const cached = viewCache.current.get(group);
+      if (
+        cached &&
+        cached.live === live &&
+        cached.display.live === display.live &&
+        cached.display.settled === display.settled
+      )
+        return cached;
+      const view: TurnView = {
+        group,
+        live,
+        display,
+        rows: turnRows(group, { live, display }),
+      };
+      viewCache.current.set(group, view);
+      return view;
+    });
+    return display.settled === "collapse"
+      ? collapseCompletedRows(perTurn)
+      : perTurn;
+  }, [timeline, activeId, liveDisplay, settledDisplay, collapseCompletedRows]);
   // The running turn's clock rides its latest steps line: the work in
   // progress, or the latest note's steps until more work follows it.
   let clockRow: string | undefined;

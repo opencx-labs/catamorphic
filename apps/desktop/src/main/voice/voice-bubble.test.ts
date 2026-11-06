@@ -202,6 +202,7 @@ describe("createVoiceBubble", () => {
         "catamorphic:prefs-set",
         "catamorphic:voice-learn",
         "catamorphic:voice-reset",
+        "catamorphic:voice-open-chat",
         "catamorphic:voice-bubble-menu",
       ]),
     );
@@ -211,6 +212,7 @@ describe("createVoiceBubble", () => {
     ]);
     for (const channel of [
       "catamorphic:agents-create",
+      "catamorphic:workspace-navigate",
       "catamorphic:terminal-create",
       "catamorphic:editor-file-write",
     ])
