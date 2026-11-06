@@ -32,6 +32,9 @@ beforeAll(async () => {
   );
   await wait("return !$('[data-testid=project-submit]').disabled;");
   await run("$('[data-testid=project-submit]').click();");
+  await wait(
+    `return $('[aria-label="Switch project"]')?.textContent.includes('Session workflows');`,
+  );
   await wait("return !!$('[aria-label=\"New chat\"]');");
   await run(
     "window.dispatchEvent(new KeyboardEvent('keydown',{key:'n',metaKey:/Mac/.test(navigator.platform),ctrlKey:!/Mac/.test(navigator.platform),bubbles:true}));",
