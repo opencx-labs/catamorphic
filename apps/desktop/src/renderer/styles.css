@@ -149,9 +149,6 @@
   line-height: 1.6;
   color: var(--color-fg-faint);
 }
-.onboarding-welcome small {
-  margin-top: 24px;
-}
 .onboarding-step {
   width: 100%;
   max-width: 880px;
@@ -187,7 +184,7 @@
 .onboarding-copy small {
   margin-top: 20px;
 }
-:where(.onboarding-copy) kbd {
+:where(.onboarding-copy, .onboarding-hint) kbd {
   display: inline-block;
   padding: 0 5px;
   border: 1px solid var(--color-border);
@@ -198,6 +195,35 @@
   color: var(--color-fg);
   background: var(--color-bg-raised);
   white-space: nowrap;
+}
+.onboarding-footer {
+  flex-shrink: 0;
+}
+.onboarding-hint {
+  display: grid;
+  min-height: 58px;
+  justify-items: center;
+  align-items: end;
+  padding-inline: 24px;
+  text-align: center;
+}
+.onboarding-hint small {
+  animation: onboarding-hint-in 150ms var(--ease-standard);
+}
+@keyframes onboarding-hint-in {
+  from {
+    opacity: 0;
+    transform: translateY(4px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .onboarding-hint small {
+    animation: none;
+  }
 }
 .onboarding-navigation {
   display: grid;
@@ -2072,36 +2098,19 @@ html[data-surface="dock"] #root {
   }
 }
 
-/* Browser setup actions keep their footprint when they become status rows. */
+/* Shared button roles own color and hover states. Browser setup actions keep
+   their footprint as status rows and use the same native-style cursor. */
 .browser-setup-action {
-  display: inline-flex;
   width: 100%;
   height: 36px;
-  align-items: center;
-  justify-content: center;
   gap: 8px;
-  border: 1px solid var(--color-border);
-  border-radius: var(--radius-md);
-  padding-inline: 12px;
-  color: var(--color-fg);
-  font-size: 13px;
-  cursor: pointer;
-  transition:
-    color 150ms var(--ease-standard),
-    background-color 150ms var(--ease-standard),
-    border-color 150ms var(--ease-standard);
-}
-.browser-setup-action:enabled:hover {
-  background-color: var(--color-bg-overlay);
-}
-.browser-setup-action:disabled {
-  color: var(--color-fg-faint);
   cursor: default;
 }
 .browser-setup-action[data-action-state="done"] {
   color: var(--color-fg-muted);
   background-color: var(--color-bg-raised);
   border-color: transparent;
+  opacity: 1;
 }
 @media (prefers-reduced-motion: reduce) {
   .browser-setup-action {

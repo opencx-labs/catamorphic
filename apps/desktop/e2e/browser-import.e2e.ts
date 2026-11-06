@@ -78,6 +78,56 @@ afterAll(async () => {
 });
 
 describe("shared browser import and personal history", () => {
+  it("keeps browser action contrast and cursors consistent across themes", async () => {
+    await openOnboardingStep(app, "Browser setup");
+    const original = await app.eval("window.catamorphicDesktop.themeConfig()");
+    const luminance = (color: string) => {
+      const channels = color
+        .match(/[\d.]+/g)
+        ?.slice(0, 3)
+        .map(Number);
+      if (channels?.length !== 3) throw new Error(`Unexpected color: ${color}`);
+      return channels.reduce((total, channel, index) => {
+        const value = channel / 255;
+        const linear =
+          value <= 0.04045 ? value / 12.92 : ((value + 0.055) / 1.055) ** 2.4;
+        return total + linear * [0.2126, 0.7152, 0.0722][index]!;
+      }, 0);
+    };
+    try {
+      for (const selection of ["nord", "light", "dark"]) {
+        await app.eval(
+          `window.catamorphicDesktop.setTheme({selection:${JSON.stringify(selection)},overrides:{}})`,
+        );
+        const point = await app.eval<{ x: number; y: number }>(`(() => {
+          const rect = document.querySelector('[data-testid="onboarding-browser-import"]').getBoundingClientRect();
+          return {x:rect.x+rect.width/2,y:rect.y+rect.height/2};
+        })()`);
+        await app.movePointer(point);
+        await app.waitFor(
+          `document.getAnimations().every(animation => animation.playState !== 'running' || animation.effect?.getTiming().iterations === Infinity)`,
+        );
+        const styles = await app.eval<{
+          color: string;
+          background: string;
+          cursors: string[];
+        }>(`(() => {
+          const button = document.querySelector('[data-testid="onboarding-browser-import"]');
+          const style = getComputedStyle(button);
+          return {color:style.color,background:style.backgroundColor,cursors:[...document.querySelectorAll('.onboarding-browser-actions .browser-setup-action')].map(button=>getComputedStyle(button).cursor)};
+        })()`);
+        const values = [luminance(styles.color), luminance(styles.background)];
+        expect(
+          (Math.max(...values) + 0.05) / (Math.min(...values) + 0.05),
+        ).toBeGreaterThanOrEqual(4.5);
+        expect(styles.cursors).toEqual(["default", "default"]);
+      }
+    } finally {
+      await app.eval(
+        `window.catamorphicDesktop.setTheme(${JSON.stringify(original)})`,
+      );
+    }
+  });
   it("uses themed, animated controls with keyboard selection and nested Escape", async () => {
     await openOnboardingStep(app, "Browser setup");
     expect(

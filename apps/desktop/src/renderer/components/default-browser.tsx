@@ -80,7 +80,7 @@ export function DefaultBrowserButton({
         }
         onClick={() => void request()}
         data-testid="default-browser-button"
-        className="browser-setup-action"
+        className="button-secondary browser-setup-action"
       >
         <span className="inline-flex items-center gap-2">
           <Globe className="size-3.5" />

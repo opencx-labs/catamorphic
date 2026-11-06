@@ -2399,7 +2399,7 @@ export function App({
       const tab: WorkspaceTab = {
         kind: "onboarding",
         name: "welcome",
-        label: "Onboarding",
+        label: "Tutorial",
         step: 0,
       };
       return { ...ws, tabs: [...ws.tabs, tab], activeTabKey: tabKey(tab) };
@@ -3572,7 +3572,7 @@ export function App({
       openTab({
         kind: "onboarding",
         name: "welcome",
-        label: "Onboarding",
+        label: "Tutorial",
         step: 0,
       }),
     "choose-theme": () => {
@@ -3870,7 +3870,7 @@ export function App({
           const tutorial: WorkspaceTab = {
             kind: "onboarding",
             name: "welcome",
-            label: "Onboarding",
+            label: "Tutorial",
             step: 0,
           };
           const workspace =
@@ -4635,6 +4635,7 @@ export function App({
     ),
   );
   const presentedTabs = workspace.tabs.map((tab) => {
+    if (tab.kind === "onboarding") return { ...tab, label: "Tutorial" };
     const metadata = tab.kind === "app" ? appMetadata.get(tab.name) : undefined;
     return tab.kind === "app" && metadata
       ? { ...tab, label: metadata.title, appIcon: metadata.icon }
@@ -5389,7 +5390,7 @@ export function App({
                 {
                   kind: "onboarding",
                   name: "welcome",
-                  label: "Onboarding",
+                  label: "Tutorial",
                   step: request.step,
                 },
               ],

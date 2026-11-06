@@ -3,6 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { nativeGit } from "@catamorphic/git";
 import { afterAll, beforeAll, expect, it } from "vitest";
+import { configureReviewSidebar } from "./fixtures/sidebar-config.js";
 import {
   type AppHandle,
   launchApp,
@@ -58,6 +59,7 @@ beforeAll(async () => {
       CATAMORPHIC_E2E_PICK_FOLDER: root,
     },
   });
+  await configureReviewSidebar(app);
   await openProjectSwitcher(app);
   await wait(`return !!byText('button','New project');`);
   await run(`byText('button','New project').click();return true;`);

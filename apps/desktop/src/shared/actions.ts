@@ -45,11 +45,11 @@ export const BUILTIN_ACTIONS = [
   },
   {
     id: "open-onboarding",
-    label: "Onboarding",
+    label: "Tutorial",
     description: "open the Work tutorial in a tab",
     defaultBinding: null,
     keywords: [
-      "tutorial",
+      "onboarding",
       "welcome",
       "tour",
       "getting started",

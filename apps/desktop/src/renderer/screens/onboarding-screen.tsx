@@ -18,7 +18,6 @@ import {
 } from "lucide-react";
 import {
   type ReactNode,
-  useCallback,
   useEffect,
   useLayoutEffect,
   useRef,
@@ -83,6 +82,26 @@ export function OnboardingScreen({
     setPrevious(current);
     onStepChange(next);
   };
+  const hints: ReactNode[] = [
+    <>
+      You can skip this tutorial by closing this tab. Whenever you want to come
+      back to it, just{" "}
+      {bindings["new-tab"] ? (
+        <>
+          hit <kbd>{formatBinding(bindings["new-tab"])}</kbd>
+        </>
+      ) : (
+        <>open a new tab</>
+      )}{" "}
+      and search for “Tutorial”.
+    </>,
+    "You can always change your theme later.",
+    null,
+    null,
+    "You can see all bindings in Settings.",
+    null,
+    "You can do this later in Settings or from the palette.",
+  ];
   const pages: ReactNode[] = [
     <div key="welcome" className="onboarding-welcome">
       <h1>Welcome to Work</h1>
@@ -94,15 +113,11 @@ export function OnboardingScreen({
       >
         Explore Work
       </button>
-      <small>
-        You can come back anytime. Search “Onboarding” in the palette.
-      </small>
     </div>,
     <Step
       key="theme"
       heading="Make the app yours"
       description="Start by choosing a theme."
-      hint="You can always change your theme later."
     >
       <WorkspacePreview />
       <button
@@ -172,7 +187,7 @@ export function OnboardingScreen({
     <Step
       key="shortcuts"
       heading="Move at the speed of thought"
-      description="Work allows you to fully customize keyboard shortcuts. You can hover on buttons to see what shortcut can do the same action, or ask your agent to set a key binding. You can see all bindings in Settings."
+      description="Work allows you to fully customize keyboard shortcuts. You can hover on buttons to see what shortcut can do the same action, or ask your agent to set a key binding."
     >
       <div className="onboarding-browser-mark">
         <Keyboard strokeWidth={1} />
@@ -204,15 +219,14 @@ export function OnboardingScreen({
           Quickly find your tabs, bookmarks, frequently used items, and more.
         </>
       }
-      hint="One place to search, open, and explore."
     >
       <PalettePreview />
+      <small>One place to search, open, and explore.</small>
     </Step>,
     <Step
       key="import"
       heading="Browse the web from Work"
       description="Work is a fully-featured browser. Import your bookmarks, passwords, signed-in accounts, and history."
-      hint="You can do this later in Settings or from the palette."
     >
       <div className="onboarding-browser-mark">
         <Globe strokeWidth={1} />
@@ -245,7 +259,7 @@ export function OnboardingScreen({
       className="onboarding"
       data-testid="onboarding"
       data-onboarding-step={current}
-      aria-label="Onboarding"
+      aria-label="Tutorial"
     >
       <p className="sr-only" role="status">
         Step {current + 1} of {ONBOARDING_STEPS.length}:{" "}
@@ -271,42 +285,47 @@ export function OnboardingScreen({
           ))}
         </div>
       </div>
-      <footer className="onboarding-navigation">
-        <button
-          type="button"
-          className={`button-ghost ${current === 0 ? "invisible" : ""}`}
-          onClick={() => navigate(current - 1)}
-          disabled={current === 0}
-        >
-          <ArrowLeft className="size-3.5" />
-          Back
-        </button>
-        <nav aria-label="Tutorial steps" className="onboarding-progress">
-          {ONBOARDING_STEPS.map((label, index) => (
-            <button
-              type="button"
-              key={label}
-              aria-label={label}
-              aria-current={current === index ? "step" : undefined}
-              onClick={() => navigate(index)}
-            >
-              <span />
-            </button>
-          ))}
-        </nav>
-        <button
-          type="button"
-          className={`button-ghost ${current === 0 ? "invisible" : ""}`}
-          onClick={() =>
-            current === ONBOARDING_STEPS.length - 1
-              ? onFinish()
-              : navigate(current + 1)
-          }
-          disabled={current === 0}
-          data-testid="onboarding-next"
-        >
-          {current === ONBOARDING_STEPS.length - 1 ? "Done" : "Next"}
-        </button>
+      <footer className="onboarding-footer">
+        <div className="onboarding-hint">
+          {hints[current] && <small key={current}>{hints[current]}</small>}
+        </div>
+        <div className="onboarding-navigation">
+          <button
+            type="button"
+            className={`button-ghost ${current === 0 ? "invisible" : ""}`}
+            onClick={() => navigate(current - 1)}
+            disabled={current === 0}
+          >
+            <ArrowLeft className="size-3.5" />
+            Back
+          </button>
+          <nav aria-label="Tutorial steps" className="onboarding-progress">
+            {ONBOARDING_STEPS.map((label, index) => (
+              <button
+                type="button"
+                key={label}
+                aria-label={label}
+                aria-current={current === index ? "step" : undefined}
+                onClick={() => navigate(index)}
+              >
+                <span />
+              </button>
+            ))}
+          </nav>
+          <button
+            type="button"
+            className={`button-ghost ${current === 0 ? "invisible" : ""}`}
+            onClick={() =>
+              current === ONBOARDING_STEPS.length - 1
+                ? onFinish()
+                : navigate(current + 1)
+            }
+            disabled={current === 0}
+            data-testid="onboarding-next"
+          >
+            {current === ONBOARDING_STEPS.length - 1 ? "Done" : "Next"}
+          </button>
+        </div>
       </footer>
       {profileId && (
         <BrowserImportDialog
@@ -324,13 +343,11 @@ function Step({
   heading,
   description,
   detail,
-  hint,
   children,
 }: {
   heading: string;
   description: ReactNode;
   detail?: ReactNode;
-  hint?: string;
   children: ReactNode;
 }) {
   const items = Array.isArray(children) ? children : [children];
@@ -342,7 +359,6 @@ function Step({
         <p>{description}</p>
         {detail && <p>{detail}</p>}
         {items.slice(1)}
-        {hint && <small>{hint}</small>}
       </div>
     </div>
   );
@@ -359,19 +375,6 @@ function DockPreview() {
   const frame = useRef<HTMLDivElement>(null);
   const [playing, setPlaying] = useState(false);
   const [expanded, setExpanded] = useState(false);
-  const timers = useRef<ReturnType<typeof setTimeout>[]>([]);
-  const clear = useCallback(() => {
-    timers.current.forEach(clearTimeout);
-    timers.current = [];
-  }, []);
-  const cycle = () => {
-    clear();
-    setExpanded(false);
-    timers.current = [
-      setTimeout(() => setExpanded(true), 1400),
-      setTimeout(() => setExpanded(false), 4800),
-    ];
-  };
   useLayoutEffect(() => {
     const root = frame.current;
     if (!root) return;
@@ -430,21 +433,47 @@ function DockPreview() {
   }, [expanded]);
   useEffect(() => {
     const media = window.matchMedia("(prefers-reduced-motion: reduce)");
+    // Fast Refresh can retain CSS playback while rebuilding the measured DOM.
+    // Begin a fresh cycle so the collapsed target is ready before the click.
+    const animation = frame.current
+      ?.querySelector(".onboarding-demo-cursor")
+      ?.getAnimations()[0];
+    if (animation) animation.currentTime = 0;
+    setExpanded(false);
+    let frameId = 0;
+    let previousPhase: boolean | undefined;
+    const tick = () => {
+      const cursor = frame.current?.querySelector(".onboarding-demo-cursor");
+      const time = cursor?.getAnimations()[0]?.currentTime;
+      if (typeof time === "number") {
+        // One timeline owns both the pointer and the real dock. Visibility
+        // changes and hot reloads can never reset one without the other.
+        const phase = time % 7200;
+        const next = phase >= 1400 && phase < 4800;
+        if (next !== previousPhase) {
+          previousPhase = next;
+          setExpanded(next);
+        }
+      }
+      frameId = requestAnimationFrame(tick);
+    };
     const update = () => {
-      clear();
+      cancelAnimationFrame(frameId);
+      previousPhase = undefined;
       const animate = !media.matches && !document.hidden;
       setPlaying(animate);
-      setExpanded(!animate);
+      if (animate) frameId = requestAnimationFrame(tick);
+      else setExpanded(true);
     };
     update();
     media.addEventListener("change", update);
     document.addEventListener("visibilitychange", update);
     return () => {
-      clear();
+      cancelAnimationFrame(frameId);
       media.removeEventListener("change", update);
       document.removeEventListener("visibilitychange", update);
     };
-  }, [clear]);
+  }, []);
   return (
     <div
       ref={frame}
@@ -479,15 +508,7 @@ function DockPreview() {
           onMenuAction={noop}
           onNewChat={noop}
         />
-        <span
-          className="onboarding-demo-cursor"
-          onAnimationStart={(event) => {
-            if (event.target === event.currentTarget) cycle();
-          }}
-          onAnimationIteration={(event) => {
-            if (event.target === event.currentTarget) cycle();
-          }}
-        >
+        <span className="onboarding-demo-cursor">
           <MousePointer2 fill="var(--color-fg)" stroke="var(--color-bg)" />
           <span className="onboarding-demo-click" />
         </span>

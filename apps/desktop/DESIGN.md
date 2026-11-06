@@ -154,7 +154,9 @@ Low-chroma so run states don't scream: `--color-success`, `--color-warning`,
   Completed setup actions read as status rows: explicit completion text, a success
   check, a quiet filled surface and no interactive outline or hover response.
   Use the shared `browser-setup-action` treatment for import and default-browser
-  setup. Unavailable actions use muted text and explain their reason visibly;
+  setup, composed with the primary or secondary button role. Both actions use
+  the native arrow cursor; their role owns the matching foreground, background
+  and hover colors. Unavailable actions use muted text and explain their reason visibly;
   hover-only hints are supplementary. Reserve space for asynchronous reasons so
   later actions do not shift. `data-action-state` exposes the shared button state
   for host styling without duplicating its logic.
@@ -1057,13 +1059,14 @@ sends the dock to the display's edge.
 
 ### 2026-11-06: A welcome you can come back to
 
-Onboarding is an ordinary tab (ADR 0155), with Welcome, Theme, AI agents, The dock,
+Tutorial is the user-facing name for the ordinary onboarding tab (ADR 0155), with Welcome, Theme, AI agents, The dock,
 Keyboard shortcuts, Palette, and Browser setup steps. Import and default-browser actions share one step.
 Done closes the tutorial and opens a normal New Tab palette. It opens under the former welcome
 and automatic setup conditions. The palette finds it as onboarding, tutorial,
 welcome, tour, getting started, learn, guide, or help. The track slides left as
 users advance and reverses for Back, over 250ms on the standard easing. Navigation
-stays in place; reduced motion settles immediately.
+stays in place; reminders about skipping, returning, or changing things later
+appear in a shared footer immediately above it. Reduced motion settles immediately.
 
 The theme preview uses the workspace's tabs, sidebar rows, chat timeline, and
 composer with inert local example data. Theme selection is one modal across the
@@ -1074,6 +1077,10 @@ position as its content expands or shrinks, bounded by the window. Asking
 an agent for a theme opens setup and then a chat in another tab, retaining the
 tutorial and its current step.
 
+The default right sidebar has no tabs or widgets, only the centered agent
+customization button. Activity and Proposals remain available as configurable
+sections. New projects inherit this empty default unless a sidebar is configured.
+
 A first launch fills the display's work area with both sidebars collapsed. This
 initial profile choice is written only when neither saved window state nor profile
 preferences exist. Later launches restore the person's window placement and sidebar
@@ -1083,7 +1090,9 @@ The agent step opens the existing wizard as a modal and keeps the tutorial in
 place. Its action becomes complete
 when an agent is configured. The dock starts collapsed in the right corner;
 opening a conversation expands it. Its tutorial hero reuses the real bubble strip
-with an animated cursor, pausing while hidden and settling under reduced motion.
+with an animated cursor. Its CSS animation timeline also drives expansion, so
+visibility changes and preview refreshes cannot separate the pointer from the
+dock. It pauses while hidden and settles under reduced motion.
 Keyboard shortcuts and palette steps have no extra actions; their shortcut labels
 follow the effective bindings. Project creation remains in the project switcher.
 

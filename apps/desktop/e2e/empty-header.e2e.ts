@@ -39,7 +39,7 @@ afterAll(async () => {
 });
 
 describe("empty workspace header", () => {
-  it("anchors the right sidebar control to the right edge without a project or tabs", async () => {
+  it("anchors the right sidebar control to the right edge with the default project", async () => {
     for (const width of [1200, 800]) {
       await app.eval(
         `window.catamorphicDesktop.devWindow('setSize', ${width}, 700)`,
@@ -79,7 +79,7 @@ describe("empty workspace header", () => {
     expect(app.getRendererErrors()).toEqual([]);
   });
 
-  it("centers customization in a projectless sidebar and shares its chat with the left button", async () => {
+  it("centers customization in the empty right sidebar and shares its chat with the left button", async () => {
     await click('[aria-label="Expand right sidebar"]');
     await app.waitFor(
       `document.querySelector('[data-sidebar="right"]')?.getAttribute('aria-hidden') === 'false'`,

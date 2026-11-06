@@ -129,7 +129,7 @@ Whole-operation errors are retryable and cancellation never marks import complet
 
 ## Onboarding
 
-A new profile opens in a real Default Project, with the normal Onboarding tab
+A new profile opens in a real Default Project, with the normal Tutorial tab
 already selected and the dock visible, collapsed on the right. Startup waits
 behind the boot veil for the project and workspace to be ready. The default
 project operation reuses the profile's project and coalesces simultaneous startup
@@ -159,5 +159,6 @@ normal implementation. Component previews are inert and use local example data.
 Theme customization carries the tutorial into the default project when needed,
 opens agent setup in another tab, then starts a normal theme conversation.
 
-First launch opens maximized with both sidebars collapsed. Existing profile
+First launch opens maximized with both sidebars collapsed. New projects start with an empty right sidebar containing
+only the agent customization button. Existing profile
 preferences and saved window placement are respected on subsequent launches.

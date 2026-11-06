@@ -75,30 +75,7 @@ export const DEFAULT_SIDEBAR_CONFIG: SidebarConfig = {
       ],
     },
   ],
-  right: [
-    {
-      id: "companion",
-      title: "Activity",
-      icon: "Activity",
-      sections: [
-        { id: "activity", type: "activity" },
-        {
-          id: "subsessions",
-          type: "subsessions",
-          title: "Subsessions",
-          when: { surface: ["chat"], session: true },
-          hideEmpty: true,
-        },
-        { id: "changes", type: "git", hideEmpty: true },
-      ],
-    },
-    {
-      id: "reviews",
-      title: "Proposals",
-      icon: "GitPullRequest",
-      sections: [{ id: "prs", type: "prs" }],
-    },
-  ],
+  right: [],
 };
 
 export const DEFAULT_SIDEBAR_FILE = `${SIDEBAR_AUTHORING_GUIDE.split("\n")

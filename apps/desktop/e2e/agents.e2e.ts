@@ -603,7 +603,7 @@ describe("agents and profiles", () => {
           window.catamorphicDesktop.agentsRemove(agent.id))));
     `);
     await runWait(
-      `return !!$('[data-testid="onboarding"]') && !!byText('[role="tab"], button', 'Onboarding');`,
+      `return !!$('[data-testid="onboarding"]') && !!byText('[role="tab"], button', 'Tutorial');`,
       { label: "tutorial tab auto-opened" },
     );
 

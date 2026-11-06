@@ -1,5 +1,6 @@
 import { APP_PROTOCOL_VERSION } from "@catamorphic/app";
 import { afterAll, beforeAll, expect, it } from "vitest";
+import { configureReviewSidebar } from "./fixtures/sidebar-config.js";
 import {
   type AppHandle,
   type FrameHandle,
@@ -118,6 +119,7 @@ async function verifyReviewTheme(frame: FrameHandle) {
 }
 beforeAll(async () => {
   app = await launchApp({ env: { CATAMORPHIC_E2E_REVIEW: "1" } });
+  await configureReviewSidebar(app);
   await openProjectSwitcher(app);
   await wait("return !!button('New project');");
   await run("button('New project').click();");

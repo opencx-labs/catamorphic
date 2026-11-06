@@ -32,7 +32,7 @@ async function palette(query: string) {
   );
   await app.insertText(query);
   await app.waitFor(
-    `document.activeElement?.closest('[role="dialog"]')?.querySelector('[role="option"][aria-selected="true"]')?.textContent.includes('Onboarding')`,
+    `document.activeElement?.closest('[role="dialog"]')?.querySelector('[role="option"][aria-selected="true"]')?.textContent.includes('Tutorial')`,
   );
   await app.press("Enter");
   await app.waitFor(
@@ -90,6 +90,15 @@ describe("the Work tutorial", () => {
         `document.querySelectorAll('[data-testid="onboarding"] img').length`,
       ),
     ).toBe(0);
+    expect(
+      await app.eval(`(() => {
+        const hint=document.querySelector('.onboarding-hint');
+        const navigation=document.querySelector('.onboarding-navigation');
+        return hint.textContent.includes('You can skip this tutorial by closing this tab.') &&
+          hint.textContent.includes('and search for “Tutorial”.') &&
+          hint.getBoundingClientRect().bottom <= navigation.getBoundingClientRect().top;
+      })()`),
+    ).toBe(true);
   });
 
   it("slides left into a live workspace preview and applies a theme everywhere", async () => {
@@ -218,6 +227,16 @@ describe("the Work tutorial", () => {
         `document.querySelector('.onboarding-copy')?.textContent.includes('using the') && !!document.querySelector('.onboarding-copy svg[aria-label="plus"]')`,
       ),
     ).toBe(true);
+    expect(
+      await app.eval(
+        `document.querySelector('.onboarding-copy small')?.textContent`,
+      ),
+    ).toBe("One place to search, open, and explore.");
+    expect(
+      await app.eval(
+        `document.querySelector('.onboarding-hint').textContent.trim()`,
+      ),
+    ).toBe("");
     const original = await app.eval<Record<string, string>>(
       `window.catamorphicDesktop.getKeybindings()`,
     );
@@ -308,6 +327,20 @@ describe("the Work tutorial", () => {
     await app.waitFor(
       `getComputedStyle(document.querySelector('${demo}')).getPropertyValue('--dock-demo-collapse-x') !== ''`,
     );
+    // A visibility refresh must not reset the dock independently of the pointer.
+    expect(
+      await app.eval(`(async () => {
+        const cursor=document.querySelector('${demo} .onboarding-demo-cursor');
+        const animation=cursor.getAnimations()[0];
+        const original=animation.currentTime;
+        animation.pause(); animation.currentTime=3000;
+        try {
+          document.dispatchEvent(new Event('visibilitychange'));
+          await new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+          return document.querySelector('${demo} [data-dock-rail]').dataset.dockCollapsed;
+        } finally { animation.currentTime=original; animation.play(); }
+      })()`),
+    ).toBe("false");
     expect(
       await app.eval(`(() => {
       const cursor=document.querySelector('${demo} .onboarding-demo-cursor');
@@ -367,6 +400,16 @@ describe("the Work tutorial", () => {
     ).toBe(false);
     await app.cdp("Emulation.setEmulatedMedia", { features: [] });
     await openOnboardingStep(app, "Keyboard shortcuts");
+    expect(
+      await app.eval(
+        `document.querySelector('.onboarding-hint')?.textContent.trim()`,
+      ),
+    ).toBe("You can see all bindings in Settings.");
+    expect(
+      await app.eval(
+        `document.querySelector('.onboarding-copy')?.textContent.includes('in Settings')`,
+      ),
+    ).toBe(false);
     expect(
       await app.eval(
         `document.querySelector('.onboarding-copy h1')?.textContent`,
@@ -432,7 +475,7 @@ describe("the Work tutorial", () => {
     ).toBe("64px");
     expect(
       await app.eval(
-        `document.querySelector('.onboarding-navigation').getBoundingClientRect().bottom <= document.querySelector('[data-dock-host] [data-dock-rail]').getBoundingClientRect().top`,
+        `document.querySelector('.onboarding-footer').getBoundingClientRect().bottom <= document.querySelector('[data-dock-host] [data-dock-rail]').getBoundingClientRect().top`,
       ),
     ).toBe(true);
 

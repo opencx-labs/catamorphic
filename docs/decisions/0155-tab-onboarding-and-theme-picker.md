@@ -11,11 +11,12 @@ the workspace and lets them leave to work with an agent without losing their pla
 
 ## Decision
 
-Use the existing workspace tab model for a closable, restorable Onboarding tab.
+Use the existing workspace tab model for a closable, restorable Tutorial tab.
 Open it under the former empty-profile and agent-less-project conditions, with
 project load errors retaining their retry surface. Closing it skips automatic
 presentation for that profile in the current session. The palette reopens it via
-Onboarding, Tutorial, Welcome, Tour, Getting started, Learn, Guide, and Help.
+Tutorial, Onboarding, Welcome, Tour, Getting started, Learn, Guide, and Help.
+Tutorial is the user-facing name in the tab, palette, and return hint.
 
 Begin with Welcome, Theme, AI agents, The dock, Keyboard shortcuts, Palette,
 and Browser setup for import and default browser. Agent configuration opens the
@@ -25,9 +26,12 @@ the real bubble strip with an animated cursor. Project creation and server
 connections remain in the project switcher. Use actual presentational
 components with inert example data, no images, and the existing motion contract.
 Keep the step on the tab, including when changing to a customization chat.
+Place later/return reminders above the navigation in a shared footer.
 Done closes onboarding and opens an ordinary New Tab palette, preserving other tabs.
 A first launch opens maximized in a real Default Project with onboarding selected,
 both sidebars collapsed, and the dock already visible and collapsed on the right.
+The default right sidebar contains only the agent customization button; Activity,
+Proposals, and other widgets are opt-in through sidebar configuration.
 The default-project operation reuses the profile's project and coalesces concurrent
 startup requests, with the boot veil waiting for its workspace. Later launches
 restore saved placement and sidebar choices.

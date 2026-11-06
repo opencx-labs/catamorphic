@@ -71,6 +71,7 @@ describe("resolveSidebarConfig", () => {
     });
     expect(resolved.layer).toBe("default");
     expect(resolved.config).toEqual(DEFAULT_SIDEBAR_CONFIG);
+    expect(resolved.config.right).toEqual([]);
   });
 
   it("uses the profile layer when it is the only file", () => {
