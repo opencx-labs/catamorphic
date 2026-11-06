@@ -1822,9 +1822,25 @@ export interface CatamorphicDesktopApi {
    * Closing a tab asks its page first: "close" now, or "asking" while its
    * beforeunload runs (the page closes, or "Leave site?" answers).
    */
-  browserCloseAsk: (input: { guestId: number }) => Promise<"close" | "asking">;
+  browserCloseAsk: (input: {
+    guestId: number;
+    requestId: string;
+    preserve: boolean;
+  }) => Promise<"close" | "asking" | "cancel">;
+  browserCloseCancel: (input: {
+    guestId: number;
+    requestId: string;
+  }) => Promise<void>;
+  browserCloseApproved: (input: {
+    guestId: number;
+    requestId: string;
+  }) => Promise<boolean>;
   onBrowserCloseAnswer: (
-    listener: (answer: { guestId: number; leave: boolean }) => void,
+    listener: (answer: {
+      guestId: number;
+      requestId: string;
+      leave: boolean;
+    }) => void,
   ) => () => void;
   sitePermissionAnswer: (answer: SitePermissionAnswer) => Promise<boolean>;
   onSitePermissionRequest: (
@@ -2243,6 +2259,8 @@ export interface CatamorphicDesktopApi {
   ) => void;
   /** Close the assistant's chat; the next start makes a new one. */
   voiceReset: () => Promise<void>;
+  /** Open the profile's assistant chat in its owning workspace window. */
+  voiceOpenChat: () => Promise<void>;
   /** Learn the person's voice now, starting voice when it is off. */
   voiceLearn: (input: {
     projectId?: string;

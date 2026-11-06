@@ -2110,6 +2110,11 @@ describe("subagents and background watchers", () => {
   });
 
   it("a background command pulses until it ends, then wakes the chat and leaves no terminal behind", async () => {
+    // This scenario inspects notification delivery in place. The folded
+    // presentation across wakeup turns has its own completed-work suite.
+    await app.eval(
+      "window.catamorphicDesktop.setPrefs({chatWorkSettled:'keep'})",
+    );
     // Keep the real child running until every running-state assertion has
     // observed it, including on a loaded native runner.
     const gate = path.join(app.userDataDir, "background-command-ready");

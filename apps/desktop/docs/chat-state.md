@@ -20,6 +20,15 @@ resumes from that glide, so a delayed upward-scroll handler cannot cancel a new
 request for the latest response, and new words keep following as they arrive.
 Layout that carries the view past its saved endpoint also counts as arrival.
 
+With "Fold notes into steps" enabled, completed notes, steps and read task
+notifications share one disclosure before the latest answer to the person's
+message. Automatic task wakeups can span execution turns; they do not create
+new reading sections. Expanding retains their original order, output and source
+links. A person's next message, an answered question, unread or required attention,
+and an unfinished or failed turn remain boundaries. Failed command results can
+fold once the agent has read them; a task needing input or a failed child result
+stays visible (ADR 0305).
+
 Running background commands remain visible outside the folded steps list and
 align with the main conversation column, without a nested border or indentation.
 When background work finishes, its row becomes inert and collapses before joining

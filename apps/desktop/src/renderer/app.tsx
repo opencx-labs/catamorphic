@@ -256,9 +256,9 @@ import {
   attachedTabKeys,
   type BrowserEntry,
   browserTabKey,
-  CLOSED_TABS_KEPT,
   chatTabKey,
   chatVisible,
+  closingTabKeys,
   type EditorEntry,
   editorTabKey,
   emptyUtilityWorkspace,
@@ -780,7 +780,10 @@ export function App({
     open: boolean;
   } | null>(null);
   const [paletteOpen, setPaletteOpen] = useState(false);
-  const [closingWorkflow, setClosingWorkflow] = useState<string | null>(null);
+  const [closingEdits, setClosingEdits] = useState<{
+    requestedKey: string;
+    grouped: boolean;
+  } | null>(null);
   // Live per-chat signals reported by each ChatDock (working / draft /
   // awaiting-input); unread is host-derived (needs surface visibility).
   const [signalsByChat, setSignalsByChat] = useState<
@@ -2805,6 +2808,20 @@ export function App({
           "This chat's project is not available in this profile.",
         );
       }
+      // Only the project's owner materializes its chat. Mutating a local
+      // background copy and then focusing another window loses the open.
+      if (target.projectId !== projectIdRef.current) {
+        await desktopApi.workspaceNavigate({
+          projectId: target.projectId,
+          surface: {
+            url,
+            title: "Chat",
+            mode,
+            nonce: crypto.randomUUID(),
+          },
+        });
+        return;
+      }
       const saved = await desktopApi.workspaceStateGet(target.projectId);
       setWorkspaces((current) => {
         const targetWorkspace =
@@ -2875,34 +2892,64 @@ export function App({
     });
   };
 
+  const requestDiscardEdits = ({
+    key,
+    discardDraft,
+  }: {
+    key: string;
+    discardDraft?: boolean;
+  }) => {
+    if (discardDraft) return false;
+    const keys = closingTabKeys(workspaceRef.current, key);
+    const draft = workspaceRef.current.tabs.some(
+      (tab) =>
+        tab.kind === "workflow" && keys.includes(tabKey(tab)) && tab.draft,
+    );
+    const dirtyEditor =
+      keys.length > 1 &&
+      workspaceRef.current.editors.some(
+        (editor) => editor.dirty && keys.includes(editorTabKey(editor.localId)),
+      );
+    if (draft || dirtyEditor) {
+      setClosingEdits({ requestedKey: key, grouped: keys.length > 1 });
+      return true;
+    }
+    return false;
+  };
   const closeTabImmediately = (
     key: string,
     opts?: { force?: boolean; discardDraft?: boolean },
-  ) => {
-    if (
-      !opts?.discardDraft &&
-      workspace.tabs.some(
-        (tab) => tab.kind === "workflow" && tabKey(tab) === key && tab.draft,
-      )
-    ) {
-      setClosingWorkflow(key);
-      return;
-    }
+  ): boolean => {
+    if (requestDiscardEdits({ key, discardDraft: opts?.discardDraft }))
+      return false;
+    const keys = closingTabKeys(workspaceRef.current, key);
     if (key.startsWith("agent-setup:") && activeProfileId)
       setupDismissedRef.current.add(activeProfileId);
-    const browser = workspaceRef.current.browsers.find(
-      (item) => browserTabKey(item.localId) === key,
-    );
-    if (browser && (!browser.chatLocalId || opts?.force)) {
-      browserNavigatorsRef.current.delete(browser.localId);
-      browserHistoryNavigatorsRef.current.delete(browser.localId);
-      browserGuestIdsRef.current.delete(browser.localId);
+    for (const browser of workspaceRef.current.browsers) {
+      if (
+        keys.includes(browserTabKey(browser.localId)) &&
+        (keys.length > 1 || !browser.chatLocalId || opts?.force)
+      ) {
+        browserNavigatorsRef.current.delete(browser.localId);
+        browserHistoryNavigatorsRef.current.delete(browser.localId);
+        browserGuestIdsRef.current.delete(browser.localId);
+      }
+    }
+    for (const chat of workspaceRef.current.chats) {
+      if (!keys.includes(chatTabKey(chat.localId))) continue;
+      closingChatIds.current.delete(chat.localId);
+      chatClosersRef.current.delete(chat.localId);
+      chatMinimizersRef.current.delete(chat.localId);
+      chatSkillsRef.current.delete(chat.localId);
+      composerFocusesRef.current.delete(chat.localId);
     }
     updateWorkspace((ws) =>
       transitionWorkspace(ws, { type: "close", key, ...opts }),
     );
+    return true;
   };
 
+  const pendingTabCloses = useRef(new Set<string>());
   const closeTab = (
     key: string,
     opts?: {
@@ -2916,20 +2963,62 @@ export function App({
     // A close that disposes a page asks it first: a beforeunload may hold
     // it with "Leave site?" (ADR 0227). A chat's attached page only goes
     // back to its chip, still loaded, so nothing is asked then.
-    const localId = key.startsWith("browser:")
-      ? key.slice("browser:".length)
-      : null;
-    const browser = workspaceRef.current.browsers.find(
-      (item) => item.localId === localId,
-    );
-    const page =
-      localId && browser && (!browser.chatLocalId || close.force) && !final
-        ? browserCommandsRef.current.get(localId)
-        : undefined;
-    if (page) {
-      void page.mayClose().then((leave) => {
-        if (leave) closeTab(key, { ...close, final: true });
-      });
+    const keys = closingTabKeys(workspaceRef.current, key);
+    if (keys.some((key) => pendingTabCloses.current.has(key))) return;
+    // Ask about drafts before granting any page a native close approval.
+    if (requestDiscardEdits({ key, discardDraft: close.discardDraft })) return;
+    const pages = !final
+      ? workspaceRef.current.browsers.flatMap((browser) => {
+          const page =
+            keys.includes(browserTabKey(browser.localId)) &&
+            (keys.length > 1 || !browser.chatLocalId || close.force)
+              ? browserCommandsRef.current.get(browser.localId)
+              : undefined;
+          return page ? [page] : [];
+        })
+      : [];
+    if (pages.length > 0) {
+      for (const key of keys) pendingTabCloses.current.add(key);
+      const release = () =>
+        Promise.all(pages.map((page) => page.cancelClose()));
+      void (async () => {
+        let accepted = false;
+        let retry = false;
+        try {
+          const preserve = keys.length > 1;
+          for (const page of pages)
+            if (!(await page.mayClose({ preserve }))) return;
+          if (
+            preserve &&
+            (await Promise.all(pages.map((page) => page.closeApproved()))).some(
+              (approved) => !approved,
+            )
+          )
+            return;
+          // A new subtab opened while a page asked: release this approval
+          // and check the complete group again.
+          const current = closingTabKeys(workspaceRef.current, key);
+          if (
+            current.length !== keys.length ||
+            current.some((value, index) => value !== keys[index])
+          ) {
+            retry = true;
+            return;
+          }
+          if (workspaceRef.current.floatingKey === key) {
+            floatingMotion.dismiss(() => {
+              if (!closeTabImmediately(key, close)) void release();
+            });
+            accepted = true;
+          } else accepted = closeTabImmediately(key, close);
+        } finally {
+          if (!accepted) await release();
+          for (const key of keys) pendingTabCloses.current.delete(key);
+          if (retry) closeTab(key, close);
+        }
+      })().catch((cause: unknown) =>
+        console.warn("[browser] closing tabs failed:", cause),
+      );
       return;
     }
     if (workspaceRef.current.floatingKey === key)
@@ -2972,38 +3061,7 @@ export function App({
 
   const closingChatIds = useRef(new Set<string>());
   const closeChat = (localId: string) => {
-    closingChatIds.current.delete(localId);
-    chatClosersRef.current.delete(localId);
-    chatMinimizersRef.current.delete(localId);
-    chatSkillsRef.current.delete(localId);
-    composerFocusesRef.current.delete(localId);
-    updateWorkspace((ws) => {
-      const closing = ws.chats.find((chat) => chat.localId === localId);
-      const chats = ws.chats.filter((chat) => chat.localId !== localId);
-      return {
-        ...ws,
-        chats,
-        // Every close path feeds Cmd+Shift+T, not just the tab strip's —
-        // the dock's own X, a bubble's X, and Cmd+W-on-floating all land
-        // here. Sessionless chats are skipped: reopening one would just
-        // make a new empty chat.
-        closedTabs: closing?.sessionId
-          ? [
-              ...ws.closedTabs,
-              {
-                kind: "chat" as const,
-                sessionId: closing.sessionId,
-                incognito: closing.incognito,
-              },
-            ].slice(-CLOSED_TABS_KEPT)
-          : ws.closedTabs,
-        activeChatId: ws.activeChatId === localId ? undefined : ws.activeChatId,
-        activeTabKey:
-          ws.activeTabKey === chatTabKey(localId)
-            ? nextActiveTabKey(ws, chatTabKey(localId), chats)
-            : ws.activeTabKey,
-      };
-    });
+    closeTab(chatTabKey(localId));
   };
 
   // Cmd+N and the palette open the floating aside, or the New Tab in
@@ -3603,7 +3661,20 @@ export function App({
         else closeChatRef.current(floating.localId);
         return;
       }
-      if (ws.activeTabKey) closeTabRef.current(ws.activeTabKey);
+      if (ws.activeTabKey) {
+        // Restoring a workspace or revealing a leave prompt can focus a
+        // child while its group stays folded. Cmd+W closes the header
+        // shown in the strip, just as its X does.
+        const group = ws.chats.find(
+          (chat) =>
+            chat.mode === "tab" &&
+            chat.surfacesCollapsed &&
+            attachedTabKeys(ws, chat.localId).includes(ws.activeTabKey ?? ""),
+        );
+        closeTabRef.current(
+          group ? chatTabKey(group.localId) : ws.activeTabKey,
+        );
+      }
     }, 25);
   }, []);
   useEffect(() => {
@@ -4396,12 +4467,13 @@ export function App({
   // Talk to this chat (voice): the chat in front, for its shortcut.
   const frontChatSession = actionChat(workspace)?.sessionId ?? null;
   useEffect(() => {
+    if (!runtime.visible) return;
     desktopApi.voiceFrontChat(
       projectId && frontChatSession
         ? { projectId, sessionId: frontChatSession }
         : null,
     );
-  }, [projectId, frontChatSession]);
+  }, [projectId, frontChatSession, runtime.visible]);
 
   const toggleChatMinimized = () => {
     const ws = workspaceRef.current;
@@ -8706,8 +8778,8 @@ export function App({
             )}
 
             <Modal
-              open={closingWorkflow !== null}
-              onClose={() => setClosingWorkflow(null)}
+              open={closingEdits !== null}
+              onClose={() => setClosingEdits(null)}
               labelledBy="workflow-close-title"
             >
               <div className="p-5">
@@ -8715,17 +8787,20 @@ export function App({
                   id="workflow-close-title"
                   className="text-base font-semibold"
                 >
-                  Discard workflow edits?
+                  {closingEdits?.grouped
+                    ? "Discard unsaved edits?"
+                    : "Discard workflow edits?"}
                 </h2>
                 <p className="mt-2 text-sm text-fg-muted">
-                  This workflow has unsaved changes. Keep editing to save them,
-                  or discard the draft and close the tab.
+                  {closingEdits?.grouped
+                    ? "This group contains unsaved edits. Keep editing to save them, or discard the edits and close the group."
+                    : "This workflow has unsaved changes. Keep editing to save them, or discard the draft and close the tab."}
                 </p>
                 <div className="mt-5 flex justify-end gap-2">
                   <button
                     type="button"
                     className="button-ghost"
-                    onClick={() => setClosingWorkflow(null)}
+                    onClick={() => setClosingEdits(null)}
                   >
                     Keep editing
                   </button>
@@ -8733,9 +8808,11 @@ export function App({
                     type="button"
                     className="button-danger"
                     onClick={() => {
-                      if (closingWorkflow)
-                        closeTab(closingWorkflow, { discardDraft: true });
-                      setClosingWorkflow(null);
+                      setClosingEdits(null);
+                      if (closingEdits)
+                        closeTab(closingEdits.requestedKey, {
+                          discardDraft: true,
+                        });
                     }}
                   >
                     Discard and close

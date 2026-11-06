@@ -14,7 +14,6 @@ import {
   type VoiceKeysState,
   type VoiceLevels,
   type VoicePress,
-  type VoiceSessionRef,
   type VoiceStatus,
 } from "../../shared/voice.js";
 import {
@@ -308,7 +307,6 @@ export function VoiceButton({
   chat,
   nativeMenus = false,
   bubble = false,
-  onOpenChat,
   onCreateAssistant,
 }: {
   projectId: string | undefined;
@@ -334,8 +332,6 @@ export function VoiceButton({
    * along the bottom of the screen.
    */
   bubble?: boolean;
-  /** Opens the assistant's chat. */
-  onOpenChat?: (session: VoiceSessionRef) => void;
   /** Adds an agent and makes it the assistant. */
   onCreateAssistant?: () => void;
 }) {
@@ -607,7 +603,12 @@ export function VoiceButton({
   };
   const pick = (action: string | null) => {
     if (!action) return;
-    if (action === "open" && session) onOpenChat?.(session);
+    if (action === "open" && session)
+      void desktopApi
+        .voiceOpenChat()
+        .catch((cause: unknown) =>
+          console.warn("[voice] opening the assistant's chat failed:", cause),
+        );
     if (action === "reset") void desktopApi.voiceReset();
     if (action === "create-assistant") onCreateAssistant?.();
     if (action.startsWith("assistant:"))

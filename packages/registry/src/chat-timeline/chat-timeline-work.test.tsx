@@ -10,6 +10,7 @@ import {
   fileChange,
   input,
   notice,
+  notification,
   reply,
   timelineOf,
   toolCall,
@@ -44,6 +45,11 @@ describe("ChatTimeline work display", () => {
     vi.stubGlobal("cancelAnimationFrame", (handle: number) =>
       window.clearTimeout(handle),
     );
+    vi.stubGlobal("CSS", { escape: (value: string) => value });
+    Object.defineProperty(HTMLElement.prototype, "scrollTo", {
+      configurable: true,
+      value: vi.fn(),
+    });
     vi.stubGlobal(
       "ResizeObserver",
       class {
@@ -65,6 +71,7 @@ describe("ChatTimeline work display", () => {
     act(() => root.unmount());
     container.remove();
     vi.unstubAllGlobals();
+    Reflect.deleteProperty(HTMLElement.prototype, "scrollTo");
     Reflect.set(globalThis, "IS_REACT_ACT_ENVIRONMENT", false);
   });
 
@@ -88,6 +95,65 @@ describe("ChatTimeline work display", () => {
     ]
       .filter((toggle) => !toggle.closest("[inert]"))
       .map((toggle) => toggle.getAttribute("aria-expanded"));
+
+  it("reads completed command wakeups as one work section and preserves notification details and focus", async () => {
+    const timeline = timelineOf({
+      turns: [turn("t1", 1), turn("t2", 2), turn("t3", 3)],
+      items: [
+        input("t1", "Fix the issue"),
+        command("c1", "t1"),
+        reply("note", "t1", "Running the checks\nFull earlier answer details"),
+        notification("failed", "t2", "Checks failed", {
+          task: {
+            type: "background_command",
+            id: "cmd",
+            title: "Checks",
+            status: "failed",
+          },
+          detail: "Exact command failure output",
+        }),
+        command("c2", "t2"),
+        reply("retry", "t2", "Retrying the checks"),
+        notification("done", "t3", "Checks completed"),
+        reply("answer", "t3", "Everything is ready"),
+      ],
+    });
+    await render({ timeline });
+    expect(container.querySelectorAll("article")).toHaveLength(2);
+    expect(articles().at(-1)).toBe("Everything is ready");
+    expect(toggles()).toEqual(["false"]);
+    expect(
+      container.querySelector('[data-testid="chat-task-notification"]'),
+    ).toBeNull();
+    await act(async () =>
+      container
+        .querySelector<HTMLButtonElement>(
+          '[data-testid="chat-turn-steps-toggle"]',
+        )
+        ?.click(),
+    );
+    expect(stepKinds()).toEqual([
+      "command",
+      "note",
+      "notification",
+      "command",
+      "note",
+      "notification",
+    ]);
+    await render({ timeline, focusMessageId: "failed" });
+    const failure = container.querySelector('[data-message-id="failed"]');
+    expect(failure?.textContent).toContain("Exact command failure output");
+    expect(failure?.textContent).toContain("Checks failed");
+    expect(container.querySelector('[data-message-id="note"]')).not.toBeNull();
+    await render({ timeline, focusMessageId: "note" });
+    const earlier = container.querySelector(
+      '[data-step-kind="note"][data-message-id="note"]',
+    );
+    expect(earlier?.textContent).toContain("Full earlier answer details");
+    expect(
+      earlier?.querySelector("button")?.getAttribute("aria-expanded"),
+    ).toBe("true");
+  });
 
   it("reads a settled turn as the question and the answer, the notes under its steps", async () => {
     await render({ timeline: settled() });

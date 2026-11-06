@@ -1818,6 +1818,12 @@ function ChatDockContent({
 
   const animatedClose = () => {
     if (closingRef.current) return;
+    // A folded group closes several tabs. Its host checks their drafts and
+    // page leave guards first; a cancelled close must leave this chat visible.
+    if (entryRef.current.mode === "tab" && entryRef.current.surfacesCollapsed) {
+      onCloseRef.current(entryRef.current.localId);
+      return;
+    }
     closingRef.current = true;
     onCloseStarted?.();
     onLeaveStarted?.();

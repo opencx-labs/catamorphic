@@ -1070,8 +1070,19 @@ const api = {
   // Sent, not invoked: it must reach main before the navigation it names.
   browserUnloadIntent: (input: { guestId: number; intent: unknown }): void =>
     ipcRenderer.send("catamorphic:browser-unload-intent", input),
-  browserCloseAsk: (input: { guestId: number }): Promise<string> =>
-    invoke("catamorphic:browser-close-ask", input),
+  browserCloseAsk: (input: {
+    guestId: number;
+    requestId: string;
+    preserve: boolean;
+  }): Promise<string> => invoke("catamorphic:browser-close-ask", input),
+  browserCloseCancel: (input: {
+    guestId: number;
+    requestId: string;
+  }): Promise<void> => invoke("catamorphic:browser-close-cancel", input),
+  browserCloseApproved: (input: {
+    guestId: number;
+    requestId: string;
+  }): Promise<boolean> => invoke("catamorphic:browser-close-approved", input),
   onBrowserCloseAnswer: (listener: (answer: unknown) => void) => {
     const handler = (_event: unknown, answer: unknown) => listener(answer);
     ipcRenderer.on("catamorphic:browser-close-answer", handler);
@@ -1719,6 +1730,7 @@ const api = {
   voiceFrontChat: (chat: { projectId: string; sessionId: string } | null) =>
     ipcRenderer.send("catamorphic:voice-front-chat", chat),
   voiceReset: (): Promise<void> => invoke("catamorphic:voice-reset"),
+  voiceOpenChat: (): Promise<void> => invoke("catamorphic:voice-open-chat"),
   voiceLearn: (input: {
     projectId?: string;
     sessionId?: string;

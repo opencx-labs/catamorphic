@@ -6,7 +6,6 @@ import {
   useState,
   useSyncExternalStore,
 } from "react";
-import { chatBookmarkUrl } from "../../shared/bookmark-target.js";
 import type { ChatSignals } from "../../shared/chat.js";
 import type {
   ChatEvent,
@@ -1112,13 +1111,6 @@ export function DockHost({
                 <VoiceButton
                   projectId={currentProjectId}
                   nativeMenus={detachedWindow}
-                  onOpenChat={(session) =>
-                    navigateSurface({
-                      url: chatBookmarkUrl(session),
-                      title: "Assistant",
-                      mode: "floating",
-                    })
-                  }
                   onCreateAssistant={() =>
                     navigateSurface({
                       url: "new-assistant",

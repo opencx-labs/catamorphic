@@ -126,20 +126,23 @@ export interface VoiceShortcutChat {
   sessionId: string;
 }
 
-/** Both a window's current chat and its fallback must still belong to this profile. */
+/** Current and remembered chats must belong to this window's project and profile. */
 export function chatForVoiceShortcut({
   profileId,
+  projectId,
   frontChat,
   lastChat,
   profileForProject,
 }: {
   profileId: string;
+  projectId?: string | null;
   frontChat: VoiceShortcutChat | undefined;
   lastChat: VoiceShortcutChat | undefined;
   profileForProject: (projectId: string) => string;
 }): { projectId: string; sessionId: string } | undefined {
   for (const chat of [frontChat, lastChat]) {
     if (!chat || chat.profileId !== profileId) continue;
+    if (projectId && chat.projectId !== projectId) continue;
     if (profileForProject(chat.projectId) === profileId)
       return { projectId: chat.projectId, sessionId: chat.sessionId };
   }

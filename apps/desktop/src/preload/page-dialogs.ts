@@ -50,7 +50,31 @@ export function installPageDialogs({ top }: { top: boolean }): void {
         frame.ask(kind, message, defaultValue),
     ],
   });
-  if (top) rememberLeaving();
+  if (top) {
+    rememberLeaving();
+    // Only an active close check gets a listener. Without one, Electron
+    // destroys a plain page instead of emitting its cancellable native
+    // beforeunload result. The listener itself never asks to stay.
+    let closeRequest: string | null = null;
+    const sentinel = () => {};
+    ipcRenderer.on(
+      "catamorphic:page-close-prepare",
+      (_event, request: unknown) => {
+        if (typeof request !== "string") return;
+        closeRequest = request;
+        window.addEventListener("beforeunload", sentinel);
+        ipcRenderer.send("catamorphic:page-close-ready", request);
+      },
+    );
+    ipcRenderer.on(
+      "catamorphic:page-close-release",
+      (_event, request: unknown) => {
+        if (request !== closeRequest) return;
+        closeRequest = null;
+        window.removeEventListener("beforeunload", sentinel);
+      },
+    );
+  }
 }
 
 /** The page's text, as main takes it: a string, cut to what a dialog shows. */

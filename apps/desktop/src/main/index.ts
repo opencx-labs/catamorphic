@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import path from "node:path";
 import { ProjectNotFoundError } from "@catamorphic/core";
 import { emitLog } from "@catamorphic/otel";
@@ -22,6 +23,7 @@ import {
   type WebContents,
   webContents,
 } from "electron";
+import { chatBookmarkUrl } from "../shared/bookmark-target.js";
 import { SHELL_WINDOW_ARGUMENT } from "../shared/desktop-workspace.js";
 import { opensInWork } from "../shared/downloads.js";
 import { localFileUrl } from "../shared/surface-link.js";
@@ -996,6 +998,17 @@ app.whenReady().then(async () => {
     isWorkspace: (window) => desktopWorkspaces?.isWorkspace(window) ?? false,
     activeProject: (window) => desktopWorkspaces?.activeProject(window) ?? null,
     browserProfileFor: (contents) => browserSupport?.profileOf(contents),
+    openChat: ({ sender, session }) =>
+      desktopWorkspaces?.navigate({
+        sender,
+        projectId: session.projectId,
+        surface: {
+          url: chatBookmarkUrl(session),
+          title: "Assistant",
+          mode: "floating",
+          nonce: randomUUID(),
+        },
+      }),
   });
   terminalSupport = registerTerminalSupport(
     state,

@@ -999,7 +999,7 @@ export class DesktopWorkspaces {
     );
   }
 
-  private navigate(input: WorkspaceNavigation & { sender: WebContents }) {
+  navigate(input: WorkspaceNavigation & { sender: WebContents }) {
     const profileId = this.options.windows.profileFor(input.sender);
     if (this.options.profileForProject(input.projectId) !== profileId) return;
     const owner = this.owner(input.projectId);

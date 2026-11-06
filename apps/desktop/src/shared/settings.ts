@@ -64,7 +64,7 @@ export const SETTINGS = {
   chatWorkSettled: {
     label: "Once it has answered",
     description:
-      'Steps fold into a line you can open either way (a single step stays in view unless "Notes only" is on). "Fold notes into steps" moves the notes into that line too.',
+      'Steps fold into a line you can open either way (a single step stays in view unless "Notes only" is on). "Fold notes into steps" groups notes, steps and read task updates into one line before the latest answer, including automatic follow-up turns.',
     scopes: profileScope,
     valid: oneOf("keep", "collapse"),
     options: { keep: "Keep the notes", collapse: "Fold notes into steps" },

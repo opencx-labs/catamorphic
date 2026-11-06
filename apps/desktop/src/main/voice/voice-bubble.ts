@@ -186,6 +186,7 @@ export function createVoiceBubble(options: {
               "catamorphic:voice-press",
               "catamorphic:voice-release",
               "catamorphic:voice-reset",
+              "catamorphic:voice-open-chat",
               "catamorphic:voice-learn",
               "catamorphic:voice-bubble-menu",
               "catamorphic:voice-bubble-state",
