@@ -5390,7 +5390,10 @@ export function App({
       onStartWithAgent={startWithAgent}
       onNewProject={() => setProjectModalOpen(true)}
       onConnectRemote={() => setRemoteConnect({ open: true, link: null })}
-      onFinish={() => closeTab(tabKey(tab))}
+      onFinish={() => {
+        closeTab(tabKey(tab));
+        openPaletteTab();
+      }}
       profileId={activeProfile?.id}
       importCompleted={Boolean(activeProfile?.browserImportCompletedAt)}
       hasProject={Boolean(projectId)}
@@ -5882,9 +5885,7 @@ export function App({
                 {sidebarToggle}
               </span>
             )}
-            {(projectId || allTabs.length > 0) &&
-              !tabsInSidebar &&
-              workspaceTabBar}
+            {!tabsInSidebar && workspaceTabBar}
             {projectId && tabsInSidebar && !headerInSidebar && workspaceTitle}
             {!rightSidebarOpen && (
               <ShortcutHint
@@ -6700,7 +6701,6 @@ export function App({
             loadError={projectsLoadError}
             retrying={projectsFetching}
             onRetry={() => void projectsQuery.refetch()}
-            onOpenOnboarding={() => actionHandlers["open-onboarding"]()}
           />
         )}
       </main>
@@ -6932,13 +6932,11 @@ function EmptyState({
   loadError,
   retrying,
   onRetry,
-  onOpenOnboarding,
 }: {
   loading: boolean;
   loadError: boolean;
   retrying: boolean;
   onRetry: () => void;
-  onOpenOnboarding: () => void;
 }) {
   return (
     <div className="grid min-h-0 flex-1 place-items-center p-6">
@@ -6961,15 +6959,7 @@ function EmptyState({
           </div>
         ) : loading ? (
           <p className="text-sm text-fg-muted">Loading…</p>
-        ) : (
-          <button
-            type="button"
-            className="button-ghost"
-            onClick={onOpenOnboarding}
-          >
-            Explore Work
-          </button>
-        )}
+        ) : null}
       </div>
     </div>
   );

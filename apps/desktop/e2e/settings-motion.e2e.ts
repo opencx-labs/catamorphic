@@ -38,7 +38,8 @@ it("animates category navigation while preserving the forms and settling at the 
     top: number;
   }>(`
     const root = $('[data-settings-scroll]');
-    const input = $('[aria-label="Theme scope"]');
+    const input = $('select[name="tabPlacement"]');
+    if (!input) throw new Error('Workspace form is not ready');
     root.scrollTop = 0;
     const original = root.animate;
     return new Promise(resolve => {
@@ -50,7 +51,7 @@ it("animates category navigation while preserving the forms and settling at the 
         animation.finished.then(() => resolve({
           duration: timing.duration, easing: timing.easing, start,
           end: getComputedStyle(root).transform,
-          preserved: input === $('[aria-label="Theme scope"]'),
+          preserved: input === $('select[name="tabPlacement"]'),
           top: $('#settings-shortcuts').getBoundingClientRect().top - root.getBoundingClientRect().top,
         }));
         return animation;

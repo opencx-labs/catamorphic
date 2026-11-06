@@ -32,7 +32,7 @@ async function palette(query: string) {
   );
   await app.insertText(query);
   await app.waitFor(
-    `document.querySelector('[aria-hidden="false"] [role="option"][aria-selected="true"]')?.textContent.includes('Onboarding')`,
+    `document.activeElement?.closest('[role="dialog"]')?.querySelector('[role="option"][aria-selected="true"]')?.textContent.includes('Onboarding')`,
   );
   await app.press("Enter");
   await app.waitFor(
@@ -92,6 +92,11 @@ describe("the Work tutorial", () => {
     await settled();
     expect(
       await app.eval(
+        `(() => { const preview = document.querySelector('.onboarding-workspace-preview').getBoundingClientRect(); return preview.height / preview.width; })()`,
+      ),
+    ).toBeGreaterThan(0.58);
+    expect(
+      await app.eval(
         `new DOMMatrix(getComputedStyle(document.querySelector('.onboarding-track')).transform).m41 < 0`,
       ),
     ).toBe(true);
@@ -135,6 +140,58 @@ describe("the Work tutorial", () => {
     ).toBe(true);
   });
 
+  it("animates the customization disclosure and the whole theme dialog in both directions", async () => {
+    await click('[data-testid="onboarding-choose-theme"]');
+    await app.waitFor(
+      `!!document.querySelector('.theme-editor button[aria-expanded]')`,
+    );
+    await settled();
+    for (const expanded of [true, false]) {
+      const frames = await app.eval<
+        { height: number; top: number; bottom: number; viewport: number }[]
+      >(`new Promise(resolve => {
+        const panel = document.querySelector('[aria-labelledby="theme-picker-title"]');
+        const toggle = panel.querySelector('.theme-editor button[aria-expanded]');
+        const frames = [];
+        const start = performance.now();
+        const sample = now => {
+          const rect = panel.getBoundingClientRect();
+          frames.push({height:rect.height,top:rect.top,bottom:rect.bottom,viewport:innerHeight});
+          if (now - start < 650) requestAnimationFrame(sample); else resolve(frames);
+        };
+        toggle.click();
+        requestAnimationFrame(sample);
+      })`);
+      expect(
+        new Set(frames.map((frame) => Math.round(frame.height))).size,
+      ).toBeGreaterThan(3);
+      const first = frames[0];
+      const last = frames.at(-1);
+      expect(first).toBeDefined();
+      expect(last).toBeDefined();
+      if (first && last)
+        expect(
+          expanded ? last.height - first.height : first.height - last.height,
+        ).toBeGreaterThan(80);
+      for (const frame of frames) {
+        expect(frame.top).toBeGreaterThanOrEqual(23);
+        expect(frame.bottom).toBeLessThanOrEqual(frame.viewport - 23);
+        expect(
+          Math.abs(frame.top - (frame.viewport - frame.height) / 2),
+        ).toBeLessThan(2);
+      }
+      expect(
+        await app.eval(
+          `document.querySelector('.theme-editor button[aria-expanded]').getAttribute('aria-expanded')`,
+        ),
+      ).toBe(String(expanded));
+    }
+    await click('[aria-labelledby="theme-picker-title"] .button-primary');
+    await app.waitFor(
+      `!document.querySelector('[aria-labelledby="theme-picker-title"]')`,
+    );
+  });
+
   it("shows the actual shortcuts and keeps the palette step free of extra actions", async () => {
     await click('[data-testid="onboarding-next"]');
     await settled();
@@ -172,6 +229,23 @@ describe("the Work tutorial", () => {
         ),
       ).toBe(1);
     }
+  });
+
+  it("finishes an empty profile into a normal New Tab with the add-tab control", async () => {
+    await openOnboardingStep(app, "Get started");
+    await click('[data-testid="onboarding-next"]');
+    await app.waitFor(
+      `!document.querySelector('[data-testid="onboarding"]') && document.activeElement?.matches('textarea[aria-label="Search commands, pages, and more"]')`,
+    );
+    expect(
+      await app.eval(
+        `(() => { const button = document.querySelector('button[aria-label="New tab"]'); return button && button.getBoundingClientRect().width > 0; })()`,
+      ),
+    ).toBe(true);
+    expect(
+      await app.eval(`document.body.innerText.includes('Explore Work')`),
+    ).toBe(false);
+    await palette("onboarding");
   });
 
   it("respects reduced motion and fits a narrow tab", async () => {
@@ -218,6 +292,24 @@ describe("the Work tutorial", () => {
     await app.waitFor(
       `document.querySelector('[data-testid="onboarding"]')?.dataset.onboardingStep === '1'`,
     );
+    expect(app.getRendererErrors()).toEqual([]);
+  });
+
+  it("finishes into a new palette tab while keeping the customization chat", async () => {
+    const chatKeys = await app.eval<string[]>(
+      `[...document.querySelectorAll('[data-point-key^="chat:"]')].filter(element => !element.closest('[data-testid="onboarding"]')).map(element => element.dataset.pointKey)`,
+    );
+    expect(chatKeys.length).toBeGreaterThan(0);
+    await openOnboardingStep(app, "Get started");
+    await click('[data-testid="onboarding-next"]');
+    await app.waitFor(
+      `!document.querySelector('[data-testid="onboarding"]') && document.activeElement?.matches('textarea[aria-label="Search commands, pages, and more"]')`,
+    );
+    expect(
+      await app.eval(
+        `[...document.querySelectorAll('[data-point-key^="chat:"]')].filter(element => !element.closest('[data-testid="onboarding"]')).map(element => element.dataset.pointKey)`,
+      ),
+    ).toEqual(chatKeys);
     expect(app.getRendererErrors()).toEqual([]);
   });
 });

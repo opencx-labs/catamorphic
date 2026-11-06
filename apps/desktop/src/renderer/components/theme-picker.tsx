@@ -1,5 +1,5 @@
-import { Monitor, RotateCcw, Sparkles } from "lucide-react";
-import { useEffect, useRef, useState } from "react";
+import { ChevronDown, Monitor, RotateCcw, Sparkles } from "lucide-react";
+import { useEffect, useId, useRef, useState } from "react";
 import type { SettingsScope } from "../../shared/settings.js";
 import type { SettingsDestination } from "../../shared/settings-catalog.js";
 import {
@@ -34,6 +34,7 @@ export function ThemePicker({
       onClose={onClose}
       width={640}
       labelledBy="theme-picker-title"
+      animateSize
     >
       <header className="px-6 pt-6 pb-4">
         <h2
@@ -149,6 +150,7 @@ function ThemeEditor({
     };
   }, [projectId, scope, reload]);
   const [editing, setEditing] = useState(false);
+  const disclosureId = useId();
   useEffect(() => {
     if (destination && destination.id !== "theme.selection") setEditing(true);
   }, [destination]);
@@ -385,125 +387,136 @@ function ThemeEditor({
 
       <button
         type="button"
+        id={disclosureId}
+        aria-expanded={editing}
+        aria-controls={`${disclosureId}-content`}
         onClick={() => setEditing((value) => !value)}
-        className="mt-4 cursor-pointer text-xs text-fg-muted hover:text-fg"
+        className="mt-4 flex w-full cursor-pointer items-center justify-between gap-3 border-t border-border pt-4 pb-1 text-left text-[13px] text-fg-muted hover:text-fg"
       >
-        {editing ? "Hide customization" : "Customize colors and fonts…"}
+        Customize colors and fonts
+        <ChevronDown
+          className={`size-3.5 transition-transform duration-200 motion-reduce:transition-none ${editing ? "rotate-180" : ""}`}
+        />
       </button>
 
-      <Collapsible open={editing}>
-        <div className="mt-2 flex flex-col gap-1">
-          {(Object.keys(TOKEN_LABELS) as ThemeToken[]).map((token) => (
-            <div
-              key={token}
-              data-setting-id={`theme.overrides.${token}`}
-              className="flex h-8 items-center justify-between rounded-md border border-border bg-bg-raised/40 px-2.5"
-            >
-              <span className="text-xs">
-                {TOKEN_LABELS[token]}
-                {config.overrides?.[token] && (
-                  <span className="ml-1.5 text-accent">•</span>
-                )}
-              </span>
-              <span className="flex items-center gap-2">
-                <span className="font-mono text-[11px] text-fg-faint">
-                  {theme.colors[token]}
+      <section id={`${disclosureId}-content`} aria-labelledby={disclosureId}>
+        <Collapsible open={editing}>
+          <div className="mt-2 flex flex-col gap-1">
+            {(Object.keys(TOKEN_LABELS) as ThemeToken[]).map((token) => (
+              <div
+                key={token}
+                data-setting-id={`theme.overrides.${token}`}
+                className="flex h-8 items-center justify-between rounded-md border border-border bg-bg-raised/40 px-2.5"
+              >
+                <span className="text-xs">
+                  {TOKEN_LABELS[token]}
+                  {config.overrides?.[token] && (
+                    <span className="ml-1.5 text-accent">•</span>
+                  )}
                 </span>
-                <input
-                  type="color"
-                  value={toHex6(theme.colors[token])}
-                  onChange={(event) =>
+                <span className="flex items-center gap-2">
+                  <span className="font-mono text-[11px] text-fg-faint">
+                    {theme.colors[token]}
+                  </span>
+                  <input
+                    type="color"
+                    value={toHex6(theme.colors[token])}
+                    onChange={(event) =>
+                      void saveTheme({
+                        fonts: config.fonts,
+                        ...(config.selection
+                          ? { selection: config.selection }
+                          : {}),
+                        overrides: {
+                          ...config.overrides,
+                          [token]: event.target.value,
+                        },
+                      })
+                    }
+                    aria-label={`${TOKEN_LABELS[token]} color`}
+                    className="size-5 cursor-pointer appearance-none border-none bg-transparent p-0"
+                  />
+                </span>
+              </div>
+            ))}
+          </div>
+
+          <div className="mt-4 flex flex-col gap-2">
+            <div className="flex items-center justify-between">
+              <h3 className="text-xs font-medium">Fonts</h3>
+              {(theme.fonts.sans !== DEFAULT_THEME_FONTS.sans ||
+                theme.fonts.mono !== DEFAULT_THEME_FONTS.mono) && (
+                <button
+                  type="button"
+                  className="cursor-pointer text-xs text-fg-muted hover:text-fg"
+                  onClick={() =>
                     void saveTheme({
-                      fonts: config.fonts,
                       ...(config.selection
                         ? { selection: config.selection }
                         : {}),
-                      overrides: {
-                        ...config.overrides,
-                        [token]: event.target.value,
-                      },
+                      overrides: config.overrides,
                     })
                   }
-                  aria-label={`${TOKEN_LABELS[token]} color`}
-                  className="size-5 cursor-pointer appearance-none border-none bg-transparent p-0"
-                />
-              </span>
+                >
+                  Reset fonts
+                </button>
+              )}
             </div>
-          ))}
-        </div>
-
-        <div className="mt-4 flex flex-col gap-2">
-          <div className="flex items-center justify-between">
-            <h3 className="text-xs font-medium">Fonts</h3>
-            {(theme.fonts.sans !== DEFAULT_THEME_FONTS.sans ||
-              theme.fonts.mono !== DEFAULT_THEME_FONTS.mono) && (
-              <button
-                type="button"
-                className="cursor-pointer text-xs text-fg-muted hover:text-fg"
-                onClick={() =>
-                  void saveTheme({
-                    ...(config.selection
-                      ? { selection: config.selection }
-                      : {}),
-                    overrides: config.overrides,
-                  })
-                }
+            {(["sans", "mono"] as const).map((token) => (
+              <label
+                key={token}
+                data-setting-id={`theme.fonts.${token}`}
+                className="flex flex-col gap-1 text-xs text-fg-muted"
               >
-                Reset fonts
-              </button>
-            )}
-          </div>
-          {(["sans", "mono"] as const).map((token) => (
-            <label
-              key={token}
-              data-setting-id={`theme.fonts.${token}`}
-              className="flex flex-col gap-1 text-xs text-fg-muted"
-            >
-              {token === "sans" ? "Interface font" : "Monospace font"}
-              <input
-                key={theme.fonts[token]}
-                type="text"
-                defaultValue={theme.fonts[token]}
-                placeholder={DEFAULT_THEME_FONTS[token]}
-                spellCheck={false}
-                maxLength={200}
-                className="field h-8 w-full px-2 text-xs text-fg"
-                onChange={(event) => event.currentTarget.setCustomValidity("")}
-                onKeyDown={(event) => {
-                  if (event.key === "Enter") event.currentTarget.blur();
-                }}
-                onBlur={(event) => {
-                  const value = event.currentTarget.value.trim();
-                  if (value && !isValidFontStack(value)) {
-                    event.currentTarget.setCustomValidity(
-                      "Enter font names separated by commas, such as Arial, sans-serif.",
-                    );
-                    event.currentTarget.reportValidity();
-                    return;
+                {token === "sans" ? "Interface font" : "Monospace font"}
+                <input
+                  key={theme.fonts[token]}
+                  type="text"
+                  defaultValue={theme.fonts[token]}
+                  placeholder={DEFAULT_THEME_FONTS[token]}
+                  spellCheck={false}
+                  maxLength={200}
+                  className="field h-8 w-full px-2 text-xs text-fg"
+                  onChange={(event) =>
+                    event.currentTarget.setCustomValidity("")
                   }
-                  const font = value || DEFAULT_THEME_FONTS[token];
-                  event.currentTarget.value = font;
-                  if (font === theme.fonts[token]) return;
-                  void saveTheme({
-                    ...(config.selection
-                      ? { selection: config.selection }
-                      : {}),
-                    overrides: config.overrides,
-                    fonts: { ...config.fonts, [token]: font },
-                  });
-                }}
-              />
-            </label>
-          ))}
-          <p className="text-xs text-fg-faint">
-            Use installed font names with comma-separated fallbacks. Press Enter
-            or leave the field to apply. Clear a field to restore its default.
+                  onKeyDown={(event) => {
+                    if (event.key === "Enter") event.currentTarget.blur();
+                  }}
+                  onBlur={(event) => {
+                    const value = event.currentTarget.value.trim();
+                    if (value && !isValidFontStack(value)) {
+                      event.currentTarget.setCustomValidity(
+                        "Enter font names separated by commas, such as Arial, sans-serif.",
+                      );
+                      event.currentTarget.reportValidity();
+                      return;
+                    }
+                    const font = value || DEFAULT_THEME_FONTS[token];
+                    event.currentTarget.value = font;
+                    if (font === theme.fonts[token]) return;
+                    void saveTheme({
+                      ...(config.selection
+                        ? { selection: config.selection }
+                        : {}),
+                      overrides: config.overrides,
+                      fonts: { ...config.fonts, [token]: font },
+                    });
+                  }}
+                />
+              </label>
+            ))}
+            <p className="text-xs text-fg-faint">
+              Use installed font names with comma-separated fallbacks. Press
+              Enter or leave the field to apply. Clear a field to restore its
+              default.
+            </p>
+          </div>
+          <p className="mt-3 break-all font-mono text-[11px] text-fg-faint">
+            {file}
           </p>
-        </div>
-        <p className="mt-3 break-all font-mono text-[11px] text-fg-faint">
-          {file}
-        </p>
-      </Collapsible>
+        </Collapsible>
+      </section>
     </section>
   );
 }

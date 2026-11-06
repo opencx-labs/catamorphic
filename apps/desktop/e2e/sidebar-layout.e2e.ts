@@ -71,9 +71,19 @@ describe("configurable browser workspace", () => {
     const before = await run<string[]>(
       "return [...document.querySelectorAll('[data-tab-orientation] [data-point-key]:not([data-sidebar-item-id])')].map(e => e.dataset.pointKey)",
     );
-    await run(
-      "button('Work Light').click(); setReactValue($('select[name=tabPlacement]'), 'sidebar')",
+    await run("button('Choose theme').click()");
+    await app.waitFor("!!document.querySelector('[data-theme-preset=light]')");
+    await run("$('[data-theme-preset=light]').click()");
+    await app.waitFor(
+      "document.querySelector('[data-theme-preset=light]').getAttribute('aria-pressed') === 'true'",
     );
+    await run(
+      "$('[aria-labelledby=theme-picker-title] .button-primary').click()",
+    );
+    await app.waitFor(
+      "!document.querySelector('[aria-labelledby=theme-picker-title]')",
+    );
+    await run("setReactValue($('select[name=tabPlacement]'), 'sidebar')");
     await app.waitFor(
       "document.documentElement.dataset.theme === 'light' && !!document.querySelector('aside [data-tab-orientation=vertical]')",
     );

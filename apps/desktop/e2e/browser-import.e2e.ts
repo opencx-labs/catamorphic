@@ -79,7 +79,7 @@ afterAll(async () => {
 
 describe("shared browser import and personal history", () => {
   it("uses themed, animated controls with keyboard selection and nested Escape", async () => {
-    await openOnboardingStep(app, "Default browser");
+    await openOnboardingStep(app, "Browser setup");
     expect(
       await app.eval(`(() => {
         const button = document.querySelector('[data-testid="default-browser-button"]');
@@ -89,7 +89,6 @@ describe("shared browser import and personal history", () => {
       disabled: true,
       reason: "Use the installed Work app to set your default browser.",
     });
-    await openOnboardingStep(app, "Browser import");
     await click('[data-testid="onboarding-browser-import"]');
     await app.waitFor(
       `document.querySelector('select[aria-label="Browser profile"]')?.options.length === 2`,
@@ -242,7 +241,7 @@ describe("shared browser import and personal history", () => {
     await app.waitFor(
       `!!document.querySelector('[aria-label="Switch profile: Fresh import profile"]')`,
     );
-    await openOnboardingStep(app, "Browser import");
+    await openOnboardingStep(app, "Browser setup");
     await app.waitFor(
       `document.querySelector('[data-testid="onboarding-browser-import"]')?.dataset.actionState === 'idle'`,
     );

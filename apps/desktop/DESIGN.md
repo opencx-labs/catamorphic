@@ -1058,7 +1058,8 @@ sends the dock to the display's edge.
 ### 2026-11-06: A welcome you can come back to
 
 Onboarding is an ordinary tab (ADR 0155), with Welcome, Theme, Palette, Browser
-import, Default browser, and Get started steps. It opens under the former welcome
+setup, and Get started steps. Import and default-browser actions share one step.
+Done closes the tutorial and opens a normal New Tab palette. It opens under the former welcome
 and automatic setup conditions. The palette finds it as onboarding, tutorial,
 welcome, tour, getting started, learn, guide, or help. The track slides left as
 users advance and reverses for Back, over 250ms on the standard easing. Navigation
@@ -1067,7 +1068,9 @@ stays in place; reduced motion settles immediately.
 The theme preview uses the workspace's tabs, sidebar rows, chat timeline, and
 composer with inert local example data. Theme selection is one modal across the
 tour, Settings, and palette. Registered color tokens interpolate over 200ms instead
-of repainting abruptly. Advanced colors and fonts remain in this picker. Asking
+of repainting abruptly. Advanced colors and fonts use a labeled disclosure with
+the shared collapse motion. The whole dialog eases its height and centered
+position as its content expands or shrinks, bounded by the window. Asking
 an agent for a theme opens setup and then a chat in another tab, retaining the
 tutorial and its current step.
 

@@ -137,8 +137,10 @@ again using onboarding, tutorial, welcome, tour, getting started, learn, guide,
 or help. Reopening resets the same tab to Welcome rather than creating a duplicate.
 Project tabs persist their current step across relaunches.
 
-The tutorial introduces themes and the palette, then offers browser import,
-default-browser setup, and the existing starting choices. Each action reuses its
+The tutorial introduces themes and the palette, then offers browser import and
+default-browser setup together, followed by the existing starting choices. Done
+closes the tutorial and opens an ordinary New Tab palette, keeping other tabs.
+An empty workspace retains its New tab control. Each action reuses its
 normal implementation. Component previews are inert and use local example data.
 Theme customization carries the tutorial into the default project when needed,
 opens agent setup in another tab, then starts a normal theme conversation.

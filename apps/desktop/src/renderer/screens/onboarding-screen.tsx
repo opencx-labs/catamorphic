@@ -3,7 +3,6 @@ import {
   ArrowUp,
   Check,
   ChevronDown,
-  Download,
   Folder,
   Globe,
   MessageSquare,
@@ -38,8 +37,7 @@ export const ONBOARDING_STEPS = [
   "Welcome",
   "Theme",
   "Palette",
-  "Browser import",
-  "Default browser",
+  "Browser setup",
   "Get started",
 ];
 
@@ -91,7 +89,7 @@ export function OnboardingScreen({
   const pages: ReactNode[] = [
     <div key="welcome" className="onboarding-welcome">
       <h1>Welcome to Work</h1>
-      <p>A little space for your biggest ideas.</p>
+      <p>The place to get things done and build your dreams.</p>
       <button
         type="button"
         className="button-primary onboarding-explore"
@@ -145,48 +143,40 @@ export function OnboardingScreen({
           Quickly find your tabs, bookmarks, frequently used items, and more.
         </>
       }
-      hint="One place to search, open, and ask."
+      hint="One place to search, open, and explore."
     >
       <PalettePreview />
     </Step>,
     <Step
       key="import"
       heading="Bring your browser with you"
-      description="Your bookmarks, history, passwords, and signed-in accounts. Right where you need them."
-      hint="Choose what to bring. You can also do this later in Settings."
-    >
-      <div className="onboarding-browser-mark">
-        <Download strokeWidth={1} />
-      </div>
-      <PendingButton
-        type="button"
-        pending={false}
-        done={importCompleted || justImported}
-        doneLabel={
-          <span className="inline-flex items-center gap-2">
-            <Check className="size-3.5" />
-            Browser import complete
-          </span>
-        }
-        onClick={() => setImportOpen(true)}
-        disabled={!profileId}
-        data-disabled-reason="Loading this profile"
-        data-testid="onboarding-browser-import"
-        className="browser-setup-action mt-5"
-      >
-        Import from a browser
-      </PendingButton>
-    </Step>,
-    <Step
-      key="default"
-      heading="A home for your links"
-      description="Make Work your default browser, so links from other apps open here."
-      hint="Your browser and your workspace, together."
+      description="Work is a fully-featured browser. Import your bookmarks, passwords, signed-in accounts, and history."
+      hint="Choose what to bring. You can also do this later in Settings or from the palette."
     >
       <div className="onboarding-browser-mark">
         <Globe strokeWidth={1} />
       </div>
-      <DefaultBrowserButton className="mt-5" />
+      <div className="onboarding-browser-actions">
+        <PendingButton
+          type="button"
+          pending={false}
+          done={importCompleted || justImported}
+          doneLabel={
+            <span className="inline-flex items-center gap-2">
+              <Check className="size-3.5" />
+              Browser import complete
+            </span>
+          }
+          onClick={() => setImportOpen(true)}
+          disabled={!profileId}
+          data-disabled-reason="Loading this profile"
+          data-testid="onboarding-browser-import"
+          className="button-primary browser-setup-action"
+        >
+          Import from a browser
+        </PendingButton>
+        <DefaultBrowserButton />
+      </div>
     </Step>,
     <Step
       key="start"

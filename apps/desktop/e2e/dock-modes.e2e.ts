@@ -1,5 +1,10 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { type AppHandle, launchApp, setReactValueJs } from "./harness.js";
+import {
+  type AppHandle,
+  launchApp,
+  openOnboardingStep,
+  setReactValueJs,
+} from "./harness.js";
 
 /**
  * Floating-dock behaviors around a working agent:
@@ -19,6 +24,7 @@ beforeAll(async () => {
   app = await launchApp({
     env: { CATAMORPHIC_E2E_AUTH_HEALTH: "expired" },
   });
+  await openOnboardingStep(app, "Get started");
 }, 180_000);
 
 afterAll(async () => {

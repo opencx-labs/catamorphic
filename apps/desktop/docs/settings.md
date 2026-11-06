@@ -125,7 +125,9 @@ Onboarding, Settings > Appearance > Choose theme, and the Choose theme palette
 command open one modal. Theme-related settings search destinations open that same
 picker, revealing advanced colors or fonts when needed. Preset selection applies
 immediately, and Done dismisses the modal. Color token changes interpolate over
-200ms; reduced motion applies them immediately. A project opens the picker at
+200ms; reduced motion applies them immediately. Advanced colors and fonts use a
+labeled disclosure; the centered dialog animates its bounded height in both
+directions as content expands or shrinks. A project opens the picker at
 Just for me; the scope selector retains Profile, Project where available, and
 Just for me. Sparse file resolution and reset behavior are unchanged.
 
