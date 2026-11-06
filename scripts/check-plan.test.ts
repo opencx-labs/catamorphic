@@ -71,9 +71,9 @@ describe("checkCommands", () => {
       ),
     ).toEqual([
       "lint",
-      "root orchestration typecheck",
       "workspace typecheck",
       "build",
+      "root orchestration typecheck",
       "database migration",
       "database codegen",
       "generated-type diff check",

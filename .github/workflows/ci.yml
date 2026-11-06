@@ -171,6 +171,8 @@ jobs:
       - uses: ./.github/actions/test-setup
         with:
           cache-suffix: module-confinement-macos
+      - name: Build confinement dependencies
+        run: bun scripts/tool-runtime.ts turbo run build --filter=@catamorphic/work-customization... --filter=@catamorphic/sandbox...
       - name: Probe native macOS confinement
         run: bun run --cwd apps/desktop test src/main/module-sandbox.test.ts src/main/egress-proxy.test.ts src/main/sidebar-source-children.test.ts src/main/customization-processes.test.ts
       - name: Measure macOS sandbox overhead
@@ -198,6 +200,8 @@ jobs:
         with:
           cache-suffix: module-confinement-linux
           electron: "true"
+      - name: Build confinement dependencies
+        run: bun scripts/tool-runtime.ts turbo run build --filter=@catamorphic/work-customization... --filter=@catamorphic/sandbox...
       - name: Install namespace tools
         run: |
           sudo apt-get update -o Acquire::Retries=3
