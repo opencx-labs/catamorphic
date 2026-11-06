@@ -50,7 +50,6 @@ import {
   workflowsSource,
 } from "./resources.js";
 import { runRowAction } from "./run.js";
-import { callProjectWorkflow } from "./workflow-call.js";
 
 /**
  * Work's lists, as one window serves them (ADR 0234): to its sections, to
@@ -64,6 +63,7 @@ export interface WorkSources extends AppCollections {
   execute: (
     request: Parameters<AppCollections["execute"]>[0] & {
       values?: Record<string, string>;
+      mode?: OpenMode;
     },
   ) => Promise<void>;
   /** One page of a list's own rows, remembered for `execute`. */
@@ -407,7 +407,7 @@ export function useWorkSources({
         }
         return [...rows.values()].slice(0, limit);
       },
-      execute: async ({ source, itemId, action, values, signal }) => {
+      execute: async ({ source, itemId, action, mode, values, signal }) => {
         const name = requireName(source);
         const row = known.get(name)?.get(itemId);
         if (!row) throw new Error("This item is no longer available");
@@ -416,6 +416,7 @@ export function useWorkSources({
           row,
           itemId,
           action,
+          ...(mode ? { mode } : {}),
           ...(values ? { values } : {}),
           signal,
           open: (url, mode) => openRef.current(url, mode),
@@ -503,7 +504,6 @@ export function useAnswerSourceWork({
   sources: WorkSources | null;
   projectId: string | undefined;
 }) {
-  const { apiClient } = useCatamorphic();
   const ref = useRef(sources);
   ref.current = sources;
   useEffect(
@@ -540,17 +540,13 @@ export function useAnswerSourceWork({
                 source: call.source,
                 itemId: call.itemId,
                 action: call.action,
+                ...(call.mode ? { mode: call.mode } : {}),
                 ...(call.values ? { values: call.values } : {}),
                 signal,
               });
               return null;
             }
-            return callProjectWorkflow({
-              apiClient,
-              projectId: asked,
-              workflow: call.workflow,
-              input: call.input,
-            });
+            throw new Error("Host operations are answered by Work's runtime.");
           };
           void answer().then(
             (value) => reply({ ok: true, value }),
@@ -562,6 +558,6 @@ export function useAnswerSourceWork({
           );
         },
       ),
-    [apiClient, projectId],
+    [projectId],
   );
 }

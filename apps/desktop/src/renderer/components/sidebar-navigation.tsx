@@ -221,6 +221,7 @@ export function ConfiguredSection({
         itemId: "",
         action: entry.action,
         values,
+        surface,
         ...(chat.current ? { session: chat.current } : {}),
         signal: new AbortController().signal,
         open,

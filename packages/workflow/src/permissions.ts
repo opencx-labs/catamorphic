@@ -6,6 +6,11 @@
  * need, and a run gets only what it declared.
  */
 export const PROJECT_PERMISSIONS = [
+  /** This member's versioned private state. */
+  "private-state:read",
+  "private-state:write",
+  /** Publish a durable alert for the calling member. */
+  "notifications:write",
   /** The project's source: working copy, history, every definition. */
   "program:read",
   /** Edit the working copy: files, branches, commits, app builds. */

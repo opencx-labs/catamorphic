@@ -83,7 +83,7 @@ beforeAll(async () => {
     `
     import {watch} from 'node:fs'; import {readFile,writeFile,rename} from 'node:fs/promises';
     export default {
-      async load(){await new Promise(r=>setTimeout(r,250));return {items:JSON.parse(await readFile('todo-data/todos.json','utf8')).map(t=>({id:t.id,label:t.text,icon:t.done?'CircleCheck':'Circle',description:t.done?'Completed':undefined,actions:[{action:'toggle',label:t.done?'Reopen':'Complete',icon:'Check'}],menu:[{action:'fail',label:'Fail write'}]}))}},
+      async load(){await new Promise(r=>setTimeout(r,250));return {items:JSON.parse(await readFile('todo-data/todos.json','utf8')).map(t=>({id:t.id,label:t.text,icon:t.done?'CircleCheck':'Circle',description:t.done?'Completed':'Due tomorrow',descriptionVisibility:'hover',actions:[{action:'toggle',label:t.done?'Reopen':'Complete',icon:'Check'}],menu:[{action:'fail',label:'Fail write'}]}))}},
       subscribe({invalidate}){void writeFile('todo-data/subscribed','yes');const w=watch('todo-data',(event,n)=>{if(event==='rename'||!n||n==='todos.json')invalidate()});return()=>{w.close();void writeFile('todo-data/subscribed','no')}},
       async action({itemId,action}){await new Promise(r=>setTimeout(r,400));if(action==='fail')throw Error('Write unavailable');const ts=JSON.parse(await readFile('todo-data/todos.json','utf8'));ts.find(t=>t.id===itemId).done=!ts.find(t=>t.id===itemId).done;await writeFile('todo-data/todos.tmp',JSON.stringify(ts));await rename('todo-data/todos.tmp','todo-data/todos.json')}
     };`,
@@ -99,7 +99,7 @@ beforeAll(async () => {
     { lists: ["tabs"] },
     `export default {
       async load({work,parentId,cursor}){const page=await work.read({source:'tabs',parentId,cursor});return {...page,items:[...page.items].sort((a,b)=>a.label.localeCompare(b.label))}},
-      action:({work,itemId,action,values})=>work.execute({source:'tabs',itemId,action,values})
+      action:({work,itemId,action,mode,values})=>work.execute({source:'tabs',itemId,action,mode,values})
     };`,
   );
   fs.writeFileSync(
@@ -148,6 +148,114 @@ it("loads file and HTTP rows in native animated trees", async () => {
   ).toBe(true);
   await app.waitFor(
     `document.querySelector('[data-sidebar-source="todos"]')?.getAttribute('aria-busy')==='false'`,
+  );
+});
+it("gives a long label its whole row until hover or keyboard focus reveals secondary text", async () => {
+  const selector =
+    '[data-sidebar-source="todos"] [data-sidebar-item-id="todo"]';
+  const primary = `${selector} [data-tree-primary]`;
+  const description = `${selector} [data-description-visibility="hover"]`;
+  const label = `${primary} > .truncate`;
+  await app.waitFor(`!!document.querySelector(${JSON.stringify(description)})`);
+  await app.movePointer({ x: 700, y: 400 });
+  await app.eval(`document.activeElement?.blur()`);
+  await app.waitFor(
+    `(()=>{const el=document.querySelector(${JSON.stringify(description)});return el&&el.getBoundingClientRect().width<1&&getComputedStyle(el).opacity==='0'})()`,
+  );
+  const mediaRoot = process.env.CATAMORPHIC_E2E_ARTIFACTS_DIR;
+  const media = mediaRoot
+    ? path.join(mediaRoot, "sidebar-customization")
+    : undefined;
+  if (media) fs.mkdirSync(media, { recursive: true });
+  const clip = await app.eval<{
+    x: number;
+    y: number;
+    width: number;
+    height: number;
+  }>(
+    `(()=>{const r=document.querySelector(${JSON.stringify(selector)}).closest('[data-sidebar]').getBoundingClientRect();return{x:r.x,y:r.y,width:r.width,height:Math.min(r.height,400)}})()`,
+  );
+  const capture = async (name: string) => {
+    if (!media) return;
+    const shot = await app.cdp("Page.captureScreenshot", {
+      format: "png",
+      clip: { ...clip, scale: 2 },
+    });
+    if (
+      !shot ||
+      typeof shot !== "object" ||
+      !("data" in shot) ||
+      typeof shot.data !== "string"
+    )
+      throw new Error("Missing screenshot");
+    fs.writeFileSync(
+      path.join(media, `${name}.png`),
+      Buffer.from(shot.data, "base64"),
+    );
+  };
+  await capture("rest");
+  const frames: Array<{ file: string; at: number }> = [];
+  const off = app.onCdpEvent("Page.screencastFrame", (event) => {
+    if (!event || typeof event !== "object" || !("sessionId" in event)) return;
+    void app
+      .cdp("Page.screencastFrameAck", { sessionId: event.sessionId })
+      .catch(() => {});
+    if (
+      !media ||
+      !("data" in event) ||
+      typeof event.data !== "string" ||
+      !("metadata" in event) ||
+      !event.metadata ||
+      typeof event.metadata !== "object" ||
+      !("timestamp" in event.metadata) ||
+      typeof event.metadata.timestamp !== "number"
+    )
+      return;
+    const file = `frame-${frames.length}.png`;
+    fs.writeFileSync(path.join(media, file), Buffer.from(event.data, "base64"));
+    frames.push({ file, at: event.metadata.timestamp });
+  });
+  if (media)
+    await app.cdp("Page.startScreencast", { format: "png", everyNthFrame: 1 });
+  const rest = await app.eval<number>(
+    `document.querySelector(${JSON.stringify(label)}).getBoundingClientRect().width`,
+  );
+  const point = await app.eval<{ x: number; y: number }>(
+    `(()=>{const r=document.querySelector(${JSON.stringify(primary)}).getBoundingClientRect();return{x:r.x+r.width/2,y:r.y+r.height/2}})()`,
+  );
+  await app.movePointer(point);
+  await app.waitFor(
+    `(()=>{const el=document.querySelector(${JSON.stringify(description)});return el&&el.getBoundingClientRect().width>20&&getComputedStyle(el).opacity==='1'})()`,
+  );
+  expect(
+    await app.eval<number>(
+      `document.querySelector(${JSON.stringify(label)}).getBoundingClientRect().width`,
+    ),
+  ).toBeLessThan(rest - 20);
+  await capture("hover");
+  await app.movePointer({ x: 700, y: 400 });
+  await app.waitFor(
+    `getComputedStyle(document.querySelector(${JSON.stringify(description)})).opacity==='0'`,
+  );
+  // Focus begins from outside the row, then real Tab establishes keyboard modality.
+  await app.eval(
+    `(()=>{const start=document.createElement('button');start.id='sidebar-focus-start';start.style.position='fixed';start.style.left='600px';start.textContent='Start';document.querySelector(${JSON.stringify(primary)}).before(start);start.focus()})()`,
+  );
+  await app.press("Tab");
+  await app.waitFor(
+    `document.activeElement?.matches(${JSON.stringify(primary)})&&getComputedStyle(document.querySelector(${JSON.stringify(description)})).opacity==='1'`,
+  );
+  await capture("keyboard");
+  if (media) {
+    await app.cdp("Page.stopScreencast");
+    fs.writeFileSync(
+      path.join(media, "motion.json"),
+      JSON.stringify({ clip, frames }),
+    );
+  }
+  off();
+  await app.eval(
+    `document.activeElement?.blur();document.getElementById('sidebar-focus-start')?.remove()`,
   );
 });
 it("writes a todo with visible busy feedback and follows external atomic edits", async () => {
@@ -296,6 +404,12 @@ it("sorts Work's tabs in a module, follows them live and closes through them", a
   await app.waitFor(
     `document.querySelectorAll('${sorted} [data-sidebar-item-id]').length === document.querySelectorAll('[data-tab-orientation] [data-point-key]').length && document.querySelectorAll('${sorted} [data-sidebar-item-id]').length >= 2`,
     { label: "every tab listed" },
+  );
+  // Work list updates coalesce before the module reads again. The same row
+  // count can precede the refreshed labels and their sorted order.
+  await app.waitFor(
+    `(()=>{const labels=[...document.querySelectorAll('${sorted} [data-sidebar-item-id]')].map(row=>row.querySelector('[data-tree-primary]').textContent.trim());return labels.every((label,index)=>index===0||labels[index-1].localeCompare(label)<=0)})()`,
+    { label: "source sort applied" },
   );
   const listed = await labels();
   expect(listed).toEqual([...listed].sort((a, b) => a.localeCompare(b)));

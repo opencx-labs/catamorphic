@@ -6,6 +6,7 @@ import { accessBeyond } from "../shared/code-access.js";
 import {
   canonicalModuleAccess,
   describeModuleAccess,
+  moduleAccessSubject,
   readModuleAccess,
 } from "./module-access.js";
 
@@ -21,6 +22,60 @@ function folder() {
   folders.push(root);
   return root;
 }
+
+it("reads host permissions from the package boundary without granting unnamed operations", () => {
+  const projectRoot = folder();
+  const packageRoot = path.join(projectRoot, "todos");
+  fs.mkdirSync(packageRoot);
+  fs.writeFileSync(
+    path.join(packageRoot, "package.json"),
+    JSON.stringify({
+      catamorphic: {
+        access: {
+          permissions: ["background", "processes", "state", "notifications"],
+          writes: ["data"],
+        },
+      },
+    }),
+  );
+  const declared = readModuleAccess({
+    projectRoot,
+    modulePath: path.join(packageRoot, "source.ts"),
+  });
+  expect(declared.file).toBe(path.join(packageRoot, "package.json"));
+  expect(declared.access.permissions).toEqual([
+    "background",
+    "notifications",
+    "processes",
+    "state",
+  ]);
+  expect(declared.access.writes).toEqual([path.join(projectRoot, "data")]);
+  expect(
+    accessBeyond({ permissions: ["state"] }, declared.access).permissions,
+  ).toEqual(["background", "notifications", "processes"]);
+});
+
+it("shares approval across a package's entry points but not projects or packages", () => {
+  const projectRoot = folder();
+  fs.mkdirSync(path.join(projectRoot, "todos"));
+  fs.mkdirSync(path.join(projectRoot, "other"));
+  for (const entry of ["todos", "other"])
+    fs.writeFileSync(path.join(projectRoot, entry, "package.json"), "{}");
+  const subject = (entry: string, projectId = "p") => {
+    const modulePath = path.join(projectRoot, entry);
+    return moduleAccessSubject({
+      projectId,
+      projectRoot,
+      modulePath,
+      declaration: readModuleAccess({ projectRoot, modulePath }),
+    });
+  };
+  expect(subject("todos/index.ts")).toBe(subject("todos/reminders.ts"));
+  expect(subject("todos/index.ts")).not.toBe(subject("other/index.ts"));
+  expect(subject("todos/index.ts")).not.toBe(
+    subject("todos/index.ts", "another"),
+  );
+});
 
 it("resolves the existing ancestor of a new file before approval", () => {
   const projectRoot = folder();

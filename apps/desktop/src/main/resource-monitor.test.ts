@@ -13,6 +13,7 @@ const {
   processName,
   ResourceMonitor,
   chatTag,
+  endResourceProcess,
 } = await import("./resource-monitor.js");
 type Sources = ConstructorParameters<typeof ResourceMonitor>[0];
 type Row = Awaited<ReturnType<Sources["table"]>>;
@@ -60,6 +61,43 @@ const row = (
   cpuTime: number,
   comm = "proc",
 ): NonNullable<Row>[number] => ({ pid, ppid, memory: 1024, cpuTime, comm });
+
+describe("supervised resource termination", () => {
+  it("disables a service when its child is ended and keeps ordinary termination unchanged", async () => {
+    const value = monitor({
+      table: () => [row(200, MAIN, 0), row(201, 200, 0), row(300, MAIN, 0)],
+      owners: () =>
+        new Map([[200, { kind: "module", modulePath: "service.ts" }]]),
+      now: () => 1000,
+    });
+    const rawEnd = vi.spyOn(value, "end").mockImplementation(() => {});
+    const stopOwned = vi.fn(async (ancestors: readonly number[]) =>
+      ancestors.includes(200),
+    );
+    await endResourceProcess({ monitor: value, pid: 201, stopOwned });
+    expect(stopOwned).toHaveBeenCalledWith([201, 200]);
+    expect(rawEnd).not.toHaveBeenCalled();
+    await endResourceProcess({ monitor: value, pid: 300, stopOwned });
+    expect(rawEnd).toHaveBeenCalledWith(300);
+  });
+  it("preserves services when disabling persistence fails and rejects Work-owned processes", async () => {
+    const value = monitor({
+      table: () => [row(200, MAIN, 0)],
+      now: () => 1000,
+    });
+    const rawEnd = vi.spyOn(value, "end");
+    const stopOwned = vi.fn(async () => {
+      throw new Error("State unavailable");
+    });
+    await expect(
+      endResourceProcess({ monitor: value, pid: 200, stopOwned }),
+    ).rejects.toThrow("State unavailable");
+    expect(rawEnd).not.toHaveBeenCalled();
+    await expect(
+      endResourceProcess({ monitor: value, pid: MAIN, stopOwned }),
+    ).rejects.toThrow("Work can only end");
+  });
+});
 
 describe("process tables", () => {
   it("reads ps times of every length", () => {

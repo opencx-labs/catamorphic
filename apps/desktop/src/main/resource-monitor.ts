@@ -669,17 +669,51 @@ export function createResourceMonitor(): ResourceMonitor {
 }
 
 /** `work:resources` reads and ends through these (ADR 0266). */
-export function registerResourceSupport(
-  monitor: ResourceMonitor = createResourceMonitor(),
-): () => void {
+export function registerResourceSupport({
+  monitor = createResourceMonitor(),
+  stopOwned,
+}: {
+  monitor?: ResourceMonitor;
+  /** A supervised service is disabled before its process or descendant ends. */
+  stopOwned?: (ancestors: readonly number[]) => Promise<boolean>;
+} = {}): () => void {
   ipcMain.handle("catamorphic:resources-read", () => monitor.read());
-  ipcMain.handle("catamorphic:resources-end", (_event, pid: unknown) => {
+  ipcMain.handle("catamorphic:resources-end", async (_event, pid: unknown) => {
     if (typeof pid !== "number" || !Number.isSafeInteger(pid))
       throw new Error("A process id is a whole number");
-    monitor.end(pid);
+    await endResourceProcess({ monitor, pid, stopOwned });
   });
   return () => {
     ipcMain.removeHandler("catamorphic:resources-read");
     ipcMain.removeHandler("catamorphic:resources-end");
   };
+}
+
+/** Preserve ordinary process termination while letting a service disable restart. */
+export async function endResourceProcess({
+  monitor,
+  pid,
+  stopOwned,
+}: {
+  monitor: Pick<ResourceMonitor, "read" | "end">;
+  pid: number;
+  stopOwned?: (ancestors: readonly number[]) => Promise<boolean>;
+}) {
+  const snapshot = await monitor.read();
+  const rows = new Map(
+    snapshot.groups
+      .flatMap((group) => group.processes)
+      .map((process) => [process.pid, process]),
+  );
+  if (!rows.get(pid)?.endable)
+    throw new Error("Work can only end a process it started for you");
+  const ancestors: number[] = [];
+  for (
+    let current: number | undefined = pid;
+    current !== undefined && !ancestors.includes(current);
+    current = rows.get(current)?.parentPid
+  )
+    ancestors.push(current);
+  if (await stopOwned?.(ancestors)) return;
+  monitor.end(pid);
 }

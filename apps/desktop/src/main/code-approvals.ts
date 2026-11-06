@@ -170,11 +170,34 @@ export class CodeApprovals {
   }
 
   /** What the person approved this code to reach, or null for nothing yet. */
-  async approved(subject: string): Promise<CodeAccess | null> {
+  async approved(
+    subject: string,
+    options: { refresh?: boolean } = {},
+  ): Promise<CodeAccess | null> {
+    if (options.refresh) this.records = undefined;
     return (
       (await this.load()).find((record) => record.subject === subject)
         ?.access ?? null
     );
+  }
+
+  /** Host-owned service definitions, authenticated separately from access grants. */
+  async sealServiceDefinition(input: { payload: string }): Promise<string> {
+    return createHmac("sha256", await this.secret())
+      .update(`work-service-definition\n${input.payload}`)
+      .digest("hex");
+  }
+
+  async verifyServiceDefinition(input: {
+    payload: string;
+    signature: string;
+  }): Promise<boolean> {
+    if (!/^[a-f0-9]{64}$/.test(input.signature)) return false;
+    const expected = Buffer.from(
+      await this.sealServiceDefinition(input),
+      "hex",
+    );
+    return timingSafeEqual(expected, Buffer.from(input.signature, "hex"));
   }
 
   /** Approve exactly this reach; it replaces what was approved before. */

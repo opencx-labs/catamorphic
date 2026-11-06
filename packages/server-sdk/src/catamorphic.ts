@@ -23,6 +23,7 @@ import type {
   RegisteredCodingAgent,
   RetentionConfig,
   TriggerKindRuntime,
+  UserNotificationTransport,
 } from "@catamorphic/core";
 import {
   createCatamorphicCore,
@@ -231,6 +232,7 @@ export interface CatamorphicHostConfig {
   onToolAlwaysAllowed?: CatamorphicCoreConfig["onToolAlwaysAllowed"];
   /** Optional host-owned delivery transport for durable user notifications. */
   pushNotifications?: PushNotificationTransport;
+  notificationTransport?: UserNotificationTransport;
   /**
    * Boot-registered plugin host halves (ADR 0046), built with
    * `definePlugin`. Each contributes capability providers, project
@@ -415,6 +417,7 @@ export class Catamorphic {
         ? { onToolAlwaysAllowed: config.onToolAlwaysAllowed }
         : {}),
       pushNotifications: config.pushNotifications,
+      notificationTransport: config.notificationTransport,
       capabilityProviders: contributions.capabilityProviders,
       projectHooks: contributions.projectHooks,
       projectSeeds: config.projectSeeds,

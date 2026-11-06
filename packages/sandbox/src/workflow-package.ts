@@ -1,6 +1,5 @@
-import { readdir, readFile } from "node:fs/promises";
-import { createRequire } from "node:module";
-import path from "node:path";
+import appPayload from "@catamorphic/app/package-payload";
+import workflowPayload from "@catamorphic/workflow/package-payload";
 import type { PluginPayload } from "./plugin-upload.js";
 
 export const WORKFLOW_PACKAGE_NAME = "@catamorphic/workflow";
@@ -64,82 +63,16 @@ export function removePackageDependencies(args: {
 }
 
 /**
- * The @catamorphic/app runtime for in-sandbox app builds, read from the local
- * install the same way the workflow fallback is. Uploaded into node_modules
- * so the build receives the host's exact runtime payload.
+ * Built JavaScript carries the exact app runtime and declarations. Uploading
+ * this payload does not depend on declaration files surviving host packaging.
  */
 export async function loadAppPackagePayload(): Promise<PluginPayload> {
-  const require = createRequire(import.meta.url);
-  const packageJsonPath = require.resolve(`${APP_PACKAGE_NAME}/package.json`);
-  const packageRoot = path.dirname(packageJsonPath);
-  const files: Record<string, string> = {
-    "package.json": await readFile(packageJsonPath, "utf8"),
-  };
-  // The runtime and UI entries are self-contained. Project-installed component
-  // packs are ordinary source and dependencies, not part of this payload.
-  for (const entry of await readdir(path.join(packageRoot, "dist"), {
-    recursive: true,
-    withFileTypes: true,
-  })) {
-    if (!entry.isFile() || !/\.(js|ts)$/.test(entry.name)) continue;
-    const absolute = path.join(entry.parentPath, entry.name);
-    files[path.relative(packageRoot, absolute)] = await readFile(
-      absolute,
-      "utf8",
-    );
-  }
-  return { packageName: APP_PACKAGE_NAME, files };
+  return appPayload;
 }
 
+/** Built JavaScript carries the exact SDK payload, including its declarations. */
 export async function loadWorkflowPackagePayload(): Promise<WorkflowPackagePayload> {
-  const require = createRequire(import.meta.url);
-  const packageJsonPath = require.resolve(
-    `${WORKFLOW_PACKAGE_NAME}/package.json`,
-  );
-  const packageRoot = path.dirname(packageJsonPath);
-  const [
-    packageJson,
-    javascript,
-    javascriptMap,
-    indexTypes,
-    indexTypesMap,
-    batchTypes,
-    batchTypesMap,
-    jsonTypes,
-    jsonTypesMap,
-    workflowTypes,
-    workflowTypesMap,
-  ] = await Promise.all([
-    readFile(packageJsonPath, "utf8"),
-    readFile(path.join(packageRoot, "dist/index.js"), "utf8"),
-    readFile(path.join(packageRoot, "dist/index.js.map"), "utf8"),
-    readFile(path.join(packageRoot, "dist/index.d.ts"), "utf8"),
-    readFile(path.join(packageRoot, "dist/index.d.ts.map"), "utf8"),
-    readFile(path.join(packageRoot, "dist/batch.d.ts"), "utf8"),
-    readFile(path.join(packageRoot, "dist/batch.d.ts.map"), "utf8"),
-    readFile(path.join(packageRoot, "dist/json.d.ts"), "utf8"),
-    readFile(path.join(packageRoot, "dist/json.d.ts.map"), "utf8"),
-    readFile(path.join(packageRoot, "dist/workflow.d.ts"), "utf8"),
-    readFile(path.join(packageRoot, "dist/workflow.d.ts.map"), "utf8"),
-  ]);
-  const metadata = parsePackageMetadata(packageJson);
-  return {
-    packageName: WORKFLOW_PACKAGE_NAME,
-    version: metadata.version,
-    files: {
-      "package.json": packageJson,
-      "dist/index.js": javascript,
-      "dist/index.js.map": javascriptMap,
-      "dist/index.d.ts": indexTypes,
-      "dist/index.d.ts.map": indexTypesMap,
-      "dist/batch.d.ts": batchTypes,
-      "dist/batch.d.ts.map": batchTypesMap,
-      "dist/json.d.ts": jsonTypes,
-      "dist/json.d.ts.map": jsonTypesMap,
-      "dist/workflow.d.ts": workflowTypes,
-      "dist/workflow.d.ts.map": workflowTypesMap,
-    },
-  };
+  return workflowPayload;
 }
 
 function readDeclaredVersion(packageJson?: string): string | undefined {
@@ -156,20 +89,6 @@ function readDependencyVersion(value: unknown): string | undefined {
   if (!isRecord(value)) return undefined;
   const version = value[WORKFLOW_PACKAGE_NAME];
   return typeof version === "string" ? version : undefined;
-}
-
-function parsePackageMetadata(packageJson: string): {
-  name: string;
-  version: string;
-} {
-  const parsed = parseJsonObject(packageJson);
-  if (
-    parsed.name !== WORKFLOW_PACKAGE_NAME ||
-    typeof parsed.version !== "string"
-  ) {
-    throw new Error("Invalid @catamorphic/workflow package metadata");
-  }
-  return { name: parsed.name, version: parsed.version };
 }
 
 function parseJsonObject(value: string): Record<string, unknown> {

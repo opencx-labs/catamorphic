@@ -40,6 +40,7 @@ import {
 } from "../shared/browser-history.js";
 import { browserImportRequestSchema } from "../shared/browser-import.js";
 import { chromeBrandHeaders } from "../shared/chrome-brands.js";
+import { accessBeyond, isEmptyAccess } from "../shared/code-access.js";
 import {
   type HistoryProject,
   historyProjectSchema,
@@ -75,6 +76,7 @@ import {
   sitePermissionKindSchema,
   sitePermissionStateSchema,
 } from "../shared/site-settings.js";
+import { sanitizeSidebarSourceItem } from "../shared/source-rows.js";
 import type { TerminalMacro } from "../shared/terminal-macros.js";
 import { isCaretKey, TEXT_FIELD_PROBE } from "../shared/text-field.js";
 import { isVoiceAction } from "../shared/voice.js";
@@ -115,13 +117,18 @@ import { recordDownload, trackConsole } from "./browser-tab-records.js";
 import { PasswordVault } from "./browser-vault.js";
 import { registerCodeApprovals } from "./code-approvals.js";
 import { credentialEncryptionAvailableAsync } from "./credential-encryption.js";
+import { customizationAuthoring } from "./customization-authoring.js";
+import {
+  checkCustomization,
+  previewCustomization,
+} from "./customization-check.js";
 import { DownloadsManager, DownloadsStore } from "./downloads.js";
 import { isLoopback } from "./egress-proxy.js";
 import { ExtensionsHost } from "./extensions/host.js";
 import { restoreGuestHistory } from "./history-restore.js";
 import type { WindowProfileRegistry } from "./index.js";
 import { LoginCapture, type LoginSubmission } from "./login-capture.js";
-import { readModuleAccess } from "./module-access.js";
+import { moduleAccessSubject, readModuleAccess } from "./module-access.js";
 import { popupNativeMenu } from "./native-menu.js";
 import {
   menuActions,
@@ -137,7 +144,12 @@ import { PopupPasskeySheets } from "./popup-passkey-sheets.js";
 import type { ProfileConfigManager } from "./profile-config.js";
 import type { ProfilesStore } from "./profiles.js";
 import { isRegisteredShellContents, shellIpcMain } from "./shell-ipc.js";
-import { registerSidebarSources } from "./sidebar-source-ipc.js";
+import {
+  parseWorkCall,
+  registerSidebarSources,
+  type SourceHostCall,
+  sourceRequestSchema,
+} from "./sidebar-source-ipc.js";
 import { SiteIcons } from "./site-icons.js";
 import {
   cookieCoversHost,
@@ -432,6 +444,10 @@ async function doPrepareProfileSession(
 }
 
 export interface BrowserSupport {
+  customization: (
+    projectId: string,
+    input: Record<string, unknown>,
+  ) => Promise<unknown>;
   history: HistoryStore;
   /** Read-only ownership of a prepared browsing session, without shell authority. */
   profileOf: (contents: WebContents) => string | undefined;
@@ -460,6 +476,15 @@ export function registerBrowserSupport(
     unconfined: boolean;
     /** Ports of Work's own loopback servers, which no module reaches. */
     workPorts: () => number[];
+    targetFor?: (projectId: string) => WebContents | undefined;
+    hostCall?: (input: SourceHostCall) => Promise<unknown>;
+    sourceStopped?: (owner: {
+      profileId: string;
+      projectId: string;
+      modulePath: string;
+      viewId?: string;
+      viewSignal?: AbortSignal;
+    }) => void | Promise<void>;
   },
 ): BrowserSupport {
   const userData = app.getPath("userData");
@@ -495,6 +520,8 @@ export function registerBrowserSupport(
     unconfined: moduleSandbox.unconfined,
     blocked: (host, port) =>
       isLoopback(host) && moduleSandbox.workPorts().includes(port),
+    hostCall: moduleSandbox.hostCall,
+    sourceStopped: moduleSandbox.sourceStopped,
   });
   const history = new HistoryStore(profilesDir);
   const paletteUsage = new PaletteUsageStore(profilesDir);
@@ -3440,6 +3467,184 @@ export function registerBrowserSupport(
 
   return {
     history,
+    customization: async (projectId, input) => {
+      const root = await projectRootFor(projectId);
+      if (!root) throw new Error("This project has no local folder.");
+      const authoring = customizationAuthoring({
+        cacheDirectory: path.join(userData, "authoring"),
+      });
+      if (input.action === "reference")
+        return {
+          ...authoring,
+          content: fs.readFileSync(authoring.reference, "utf8"),
+        };
+      const sourcePath =
+        typeof input.sourcePath === "string" ? input.sourcePath : undefined;
+      const workspacePath =
+        typeof input.workspacePath === "string"
+          ? input.workspacePath
+          : undefined;
+      const toolchain = await sidebarToolchain();
+      if (input.action === "check")
+        return checkCustomization({
+          projectRoot: root,
+          sourcePath,
+          workspacePath,
+          sdkRoot: authoring.sdkRoot,
+          bunPath: toolchain.CATAMORPHIC_BUN,
+          kind: input.kind === "workflow" ? "workflow" : "source",
+        });
+      if (!sourcePath) throw new Error("Name this package's source file.");
+      const profileId = profiles.profileForProject(projectId).id;
+      const modulePath = path.resolve(root, sourcePath);
+      const declaration = readModuleAccess({ projectRoot: root, modulePath });
+      const subject = moduleAccessSubject({
+        projectId,
+        projectRoot: root,
+        modulePath,
+        declaration,
+      });
+      const approved = await approvals
+        .approvalsFor(profileId)
+        .approved(subject, { refresh: true });
+      const required = accessBeyond(approved, declaration.access);
+      if (!isEmptyAccess(required))
+        return { ok: false, accessRequired: required, package: subject };
+      const options =
+        typeof input.options === "object" && input.options !== null
+          ? input.options
+          : {};
+      const viewId = crypto.randomUUID();
+      const viewController = new AbortController();
+      const host = async (raw: unknown) => {
+        viewController.signal.throwIfAborted();
+        const current = readModuleAccess({ projectRoot: root, modulePath });
+        const currentSubject = moduleAccessSubject({
+          projectId,
+          projectRoot: root,
+          modulePath,
+          declaration: current,
+        });
+        if (
+          currentSubject !== subject ||
+          !isEmptyAccess(
+            accessBeyond(
+              await approvals
+                .approvalsFor(profileId)
+                .approved(subject, { refresh: true }),
+              current.access,
+            ),
+          )
+        )
+          throw new Error("This package's access needs approval.");
+        parseWorkCall(raw, declaration.access);
+        const call = parseWorkCall(raw, current.access);
+        viewController.signal.throwIfAborted();
+        if (call.op === "read" || call.op === "execute") {
+          const sender = moduleSandbox.targetFor?.(projectId);
+          if (
+            !sender ||
+            sender.isDestroyed() ||
+            windows.profileFor(sender) !== profileId
+          )
+            throw new Error(
+              "Open this project in Work to preview its live lists.",
+            );
+          return disposeSidebarSources.windowWork({
+            sender,
+            projectId,
+            sectionId: "preview",
+            call,
+          });
+        }
+        if (!moduleSandbox.hostCall)
+          throw new Error("The host runtime is unavailable.");
+        return moduleSandbox.hostCall({
+          viewId,
+          viewSignal: viewController.signal,
+          profileId,
+          projectId,
+          modulePath,
+          subject,
+          access: current.access,
+          workflows: (declaration.access.workflows ?? []).filter((name) =>
+            current.access.workflows?.includes(name),
+          ),
+          call,
+        });
+      };
+      if (input.action === "state-read")
+        return host(
+          z
+            .object({ op: z.literal("state-read"), key: z.string() })
+            .parse({ op: input.action, ...options }),
+        );
+      if (input.action === "state-write")
+        return host(
+          z
+            .object({
+              op: z.literal("state-write"),
+              key: z.string(),
+              value: z.json(),
+              ifVersion: z.number().int().nonnegative(),
+            })
+            .parse({ op: input.action, ...options }),
+        );
+      if (input.action === "process-list") return host({ op: "process-list" });
+      if (input.action === "process-read")
+        return host(
+          z
+            .object({
+              op: z.literal("process-read"),
+              key: z.string(),
+              cursor: z.number().optional(),
+              maxBytes: z.number().optional(),
+              waitMs: z.number().optional(),
+            })
+            .parse({ op: input.action, ...options }),
+        );
+      if (input.action === "process-stop")
+        return host(
+          z
+            .object({ op: z.literal("process-stop"), key: z.string() })
+            .parse({ op: input.action, ...options }),
+        );
+      const request = sourceRequestSchema.parse({
+        ...options,
+        projectId,
+        sectionId: "preview",
+        requestId: crypto.randomUUID(),
+        method: Reflect.get(options, "method") ?? "load",
+      });
+      const { after, ...previewRequest } = request;
+      return previewCustomization({
+        projectRoot: root,
+        sourcePath,
+        workerPath: authoring.worker,
+        scratchRoot: path.join(userData, "authoring-preview"),
+        toolchain,
+        approvedAccess: approved ?? {},
+        blocked: (host, port) =>
+          isLoopback(host) && moduleSandbox.workPorts().includes(port),
+        cleanup: async () => {
+          viewController.abort();
+          await moduleSandbox.sourceStopped?.({
+            profileId,
+            projectId,
+            modulePath,
+            viewId,
+            viewSignal: viewController.signal,
+          });
+        },
+        request: {
+          ...previewRequest,
+          ...(after === undefined
+            ? {}
+            : { after: sanitizeSidebarSourceItem(after) }),
+        },
+        work: async (_id, raw) => host(raw),
+      });
+    },
     profileOf,
     images,
     dispose: () => {
@@ -3447,7 +3652,7 @@ export function registerBrowserSupport(
       approvals.dispose();
       disposeTrustedHosts();
       unwatchBookmarks();
-      disposeSidebarSources();
+      disposeSidebarSources.dispose();
       disposePasskeys();
       disposeSleep();
       disposeDialogs();

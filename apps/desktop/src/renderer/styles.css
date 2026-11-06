@@ -1216,6 +1216,33 @@ kbd {
 .row-reveal[aria-expanded="true"] {
   opacity: 1;
 }
+/* Secondary row text can yield its whole width at rest while keeping the
+   same pointer and keyboard reveal as the row's controls. */
+.sidebar-row-description[data-description-visibility="hover"] {
+  max-width: 0;
+  margin-inline-start: -0.5rem;
+  overflow: hidden;
+  white-space: nowrap;
+  opacity: 0;
+  transition:
+    max-width 150ms var(--ease-standard),
+    margin-inline-start 150ms var(--ease-standard),
+    opacity 150ms var(--ease-standard);
+}
+.group:hover .sidebar-row-description[data-description-visibility="hover"],
+.group:has(:focus-visible)
+  .sidebar-row-description[data-description-visibility="hover"] {
+  max-width: 8rem;
+  margin-inline-start: 0;
+  opacity: 1;
+}
+[data-contextual="icon"] [data-sidebar-row-icon] {
+  border-radius: 3px;
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--color-accent) 16%, transparent);
+}
+[data-contextual="icon"] [data-sidebar-row-icon] svg {
+  color: var(--color-accent);
+}
 /* A copy button beside a value (a path, an address, a command) rests
    hidden in its place until its copyable item, the nearest
    [data-copyable], is hovered or holds keyboard focus, so a card of values
@@ -1238,6 +1265,7 @@ kbd {
 }
 @media (prefers-reduced-motion: reduce) {
   .row-reveal,
+  .sidebar-row-description,
   .copy-reveal {
     transition: none;
   }

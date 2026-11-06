@@ -7000,6 +7000,9 @@ export function App({
             ),
         )
       : undefined);
+  const sidebarBrowser = workspace.browsers.find(
+    (browser) => browserTabKey(browser.localId) === sidebarSurfaceKey,
+  );
   const sidebarSurface: SidebarSurface = {
     tabPlacement: prefs?.tabPlacement === "sidebar" ? "sidebar" : "top",
     kind: sidebarChat
@@ -7012,6 +7015,7 @@ export function App({
     projectId,
     sessionId: sidebarSessionChat?.sessionId ?? undefined,
     path: sidebarEditor?.filePath ?? undefined,
+    url: sidebarBrowser?.url || sidebarBrowser?.initialUrl || undefined,
     selection: Boolean(sidebarEditor && sidebarHasSelection),
   };
   const openProjectFile = (filePath: string, mode?: CommitMode) => {

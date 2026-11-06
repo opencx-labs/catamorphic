@@ -73,3 +73,10 @@ export {
   appThemeCss,
   appThemeVars,
 } from "./theme.js";
+
+export {
+  createWorkflowClient,
+  type WorkflowClient,
+  type WorkflowClientTransport,
+  type WorkflowRequest,
+} from "./workflow-client.js";

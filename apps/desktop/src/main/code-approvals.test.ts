@@ -31,6 +31,38 @@ function store() {
 }
 
 describe("approvals (ADR 0277)", () => {
+  it("authenticates exact host service payloads across restart without accepting edits or another profile's key", async () => {
+    const { dir, approvals } = store();
+    const payload = JSON.stringify([
+      7,
+      { owner: "package", command: "bun service.ts" },
+    ]);
+    const signature = await approvals.sealServiceDefinition({ payload });
+    expect(
+      await new CodeApprovals({ dir, keyring }).verifyServiceDefinition({
+        payload,
+        signature,
+      }),
+    ).toBe(true);
+    expect(
+      await approvals.verifyServiceDefinition({
+        payload: payload.replace("7", "8"),
+        signature,
+      }),
+    ).toBe(false);
+    expect(
+      await approvals.verifyServiceDefinition({
+        payload: payload.replace("service", "other"),
+        signature,
+      }),
+    ).toBe(false);
+    expect(
+      await store().approvals.verifyServiceDefinition({ payload, signature }),
+    ).toBe(false);
+    expect(
+      await approvals.verifyServiceDefinition({ payload, signature: "forged" }),
+    ).toBe(false);
+  });
   it("keeps what the person approved, across restarts", async () => {
     const { dir, approvals } = store();
     expect(await approvals.approved("module:p:.work/todos.ts")).toBeNull();

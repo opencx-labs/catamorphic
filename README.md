@@ -74,6 +74,11 @@ Chat links and images from agents ask before reaching an untrusted host.
 Executable sidebar, palette and chip modules run confined on macOS and Linux with
 declared access to files, hosts and Work's lists. Work asks before their
 access grows, and keeps the person's approvals signed in their profile.
+The installed customization SDK includes a static checker and a preview using
+the live confined runtime. Sources and apps share typed workflow run handles.
+Member-private workflows, versioned state, notifications and explicitly enabled
+background services can outlive the creating chat and the desktop window.
+Private source and state stay local unless explicitly transferred.
 
 ### Self-hosted server
 

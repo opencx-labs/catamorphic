@@ -1,4 +1,4 @@
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { lstat } from "node:fs/promises";
 import path from "node:path";
 import { type DB, storableText } from "@catamorphic/db";
@@ -17,7 +17,12 @@ import {
   PROJECT_WORKFLOWS_DIR,
 } from "@catamorphic/workflow/project-layout";
 import { type Kysely, type Selectable, sql } from "kysely";
-import { type Identity, identityCovers } from "../identity.js";
+import {
+  type Identity,
+  identityCovers,
+  isProjectPrincipal,
+  mayUseProject,
+} from "../identity.js";
 import { appScaffold, workspaceFiles } from "../seeds.js";
 import { assertAgentSessionAccess } from "./agent-session-access.js";
 import type { AppBundleStore } from "./app-bundle-store.js";
@@ -36,6 +41,8 @@ export interface SessionArtifact {
   id: string;
   projectId: string;
   sessionId: string | null;
+  lifetime: "session" | "member";
+  workflowEnablementId: string | null;
   kind: SessionArtifactKind;
   name: string;
   title: string;
@@ -93,7 +100,8 @@ export class SessionArtifactsService {
   async create(input: {
     identity: Identity;
     projectId: string;
-    sessionId: string;
+    sessionId?: string;
+    lifetime?: "session" | "member";
     kind: SessionArtifactKind;
     name: string;
     title?: string;
@@ -112,7 +120,7 @@ export class SessionArtifactsService {
         },
       },
       async () => {
-        await this.assertSession(input);
+        await this.assertCreation(input);
         if (!NAME.test(input.name))
           throw new SessionArtifactValidationError("Invalid artifact name");
         if (input.kind === "app" && !/^[a-z][a-z0-9-]*$/.test(input.name)) {
@@ -125,7 +133,10 @@ export class SessionArtifactsService {
           input.kind === "app"
             ? `${PROJECT_APPS_DIR}/${input.name}/src/App.tsx`
             : `${PROJECT_WORKFLOWS_DIR}/src/artifacts/${id}.ts`;
-        const remoteBranch = artifactCandidateBranch(id);
+        const remoteBranch =
+          input.lifetime === "member"
+            ? artifactBranchPrefix(id)
+            : artifactCandidateBranch(id);
         const defaults =
           input.kind === "app"
             ? {
@@ -139,21 +150,32 @@ export class SessionArtifactsService {
           ...input.files,
           [sourcePath]: input.source,
         });
-        const snapshot = await this.snapshot({
-          ...input,
-          files,
-          sourcePath,
-          remoteBranch,
-        });
+        const snapshot =
+          input.lifetime === "member"
+            ? privateSnapshot({
+                files: { ...workspaceFiles({ name: input.name }), ...files },
+                name: input.name,
+                sourcePath,
+                artifactId: id,
+                revision: 1,
+              })
+            : await this.snapshot({
+                ...input,
+                files,
+                sourcePath,
+                remoteBranch,
+              });
         try {
           return await this.db.transaction().execute(async (trx) => {
-            await this.assertSession(input, trx);
+            await this.assertCreation(input, trx);
             const row = await trx
               .insertInto("session_artifacts")
               .values({
                 id,
                 project_id: input.projectId,
-                session_id: input.sessionId,
+                session_id:
+                  input.lifetime === "member" ? null : input.sessionId,
+                lifetime: input.lifetime ?? "session",
                 owner_external_user_id: input.identity.externalUserId,
                 kind: input.kind,
                 name: input.name,
@@ -169,18 +191,35 @@ export class SessionArtifactsService {
               .insertInto("session_artifact_revisions")
               .values({
                 artifact_id: id,
+                source_revision: 1,
                 commit_sha: snapshot.commitSha,
+                remote_branch: remoteBranch,
+                source_files:
+                  input.lifetime === "member"
+                    ? filesOfSnapshot(snapshot)
+                    : null,
                 source_paths: snapshot.paths,
               })
               .execute();
             return present(row);
           });
         } catch (error) {
-          await this.removeRef(
-            input.identity.tenantId,
-            input.projectId,
-            remoteBranch,
-          );
+          if (input.lifetime !== "member")
+            await this.removeRef(
+              input.identity.tenantId,
+              input.projectId,
+              remoteBranch,
+            );
+          if (
+            input.lifetime === "member" &&
+            typeof error === "object" &&
+            error !== null &&
+            "constraint" in error &&
+            error.constraint === "private_artifacts_owner_name"
+          )
+            throw new SessionArtifactConflictError(
+              "A private workflow with this name already exists. Read or update its artifact.",
+            );
           throw error;
         }
       },
@@ -190,18 +229,48 @@ export class SessionArtifactsService {
   async list(input: {
     identity: Identity;
     projectId: string;
-    sessionId: string;
+    sessionId?: string;
+    lifetime?: "session" | "member";
   }): Promise<SessionArtifact[]> {
-    await this.assertSession({ ...input, allowClosed: true });
-    const rows = await this.db
+    if (input.lifetime === "member") {
+      await requireTenantProject(
+        this.db,
+        input.identity.tenantId,
+        input.projectId,
+      );
+      if (!mayUseProject(input.identity, input.projectId))
+        throw new AccessDeniedError();
+    } else {
+      if (!input.sessionId)
+        throw new SessionArtifactValidationError(
+          "Session artifacts require sessionId",
+        );
+      await this.assertSession({
+        ...input,
+        sessionId: input.sessionId,
+        allowClosed: true,
+      });
+    }
+    let query = this.db
       .selectFrom("session_artifacts")
       .where("project_id", "=", input.projectId)
-      .where("session_id", "=", input.sessionId)
+      .where("lifetime", "=", input.lifetime ?? "session")
       .where("owner_external_user_id", "=", input.identity.externalUserId)
       .orderBy("created_at", "desc")
-      .selectAll()
-      .execute();
-    return rows.map(present);
+      .selectAll();
+    if (input.lifetime !== "member" && input.sessionId)
+      query = query.where("session_id", "=", input.sessionId);
+    return (await query.execute())
+      .filter(
+        (row) =>
+          row.lifetime !== "member" ||
+          identityCovers(input.identity, {
+            kind: "workflow",
+            projectId: input.projectId,
+            name: row.name,
+          }),
+      )
+      .map(present);
   }
 
   async get(input: SessionArtifactAddress): Promise<SessionArtifact> {
@@ -212,18 +281,14 @@ export class SessionArtifactsService {
     input: SessionArtifactAddress & { commitSha?: string },
   ): Promise<Record<string, string>> {
     const row = await this.row(input);
-    if (!row.session_id) throw new SessionArtifactNotFoundError();
-    await this.assertSession({
-      ...input,
-      sessionId: row.session_id,
-      allowClosed: true,
-    });
+    await this.assertLifecycle(input, row, this.db, true);
     const revision = await this.db
       .selectFrom("session_artifact_revisions")
-      .select("source_paths")
+      .select(["source_paths", "source_files"])
       .where("artifact_id", "=", row.id)
       .where("commit_sha", "=", input.commitSha ?? row.commit_sha)
       .executeTakeFirstOrThrow();
+    if (row.lifetime === "member") return sourceFiles(revision.source_files);
     const repo = await this.projectManager.openEphemeral({
       tenantId: input.identity.tenantId,
       projectId: input.projectId,
@@ -269,27 +334,38 @@ export class SessionArtifactsService {
       async () => {
         const files = validFiles(input.files);
         const previous = await this.row(input);
-        if (!previous.session_id) throw new SessionArtifactNotFoundError();
-        await this.assertSession({ ...input, sessionId: previous.session_id });
+        await this.assertLifecycle(input, previous);
         if (previous.revision !== input.revision)
           throw new SessionArtifactConflictError(
             "Artifact changed. Read the latest revision before editing.",
           );
         // Each writer publishes its own immutable candidate. Neither a stale
         // writer nor crash recovery can rewind a ref another writer accepted.
-        const remoteBranch = artifactCandidateBranch(previous.id);
-        const snapshot = await this.snapshot({
-          ...input,
-          files,
-          kind: artifactKind(previous.kind),
-          name: previous.name,
-          sourcePath: previous.source_path,
-          remoteBranch,
-          previous: {
-            sha: previous.commit_sha,
-            branch: previous.remote_branch,
-          },
-        });
+        const remoteBranch =
+          previous.lifetime === "member"
+            ? previous.remote_branch
+            : artifactCandidateBranch(previous.id);
+        const snapshot =
+          previous.lifetime === "member"
+            ? privateSnapshot({
+                files: updatedPrivateFiles(await this.files(input), files),
+                name: previous.name,
+                sourcePath: previous.source_path,
+                artifactId: previous.id,
+                revision: previous.revision + 1,
+              })
+            : await this.snapshot({
+                ...input,
+                files,
+                kind: artifactKind(previous.kind),
+                name: previous.name,
+                sourcePath: previous.source_path,
+                remoteBranch,
+                previous: {
+                  sha: previous.commit_sha,
+                  branch: previous.remote_branch,
+                },
+              });
         const paths = [
           ...new Set(
             [...pathsOf(previous.source_paths), ...snapshot.paths].filter(
@@ -311,7 +387,10 @@ export class SessionArtifactsService {
         } catch (error) {
           // Discarded while this writer published: its candidate goes now,
           // not at the reclaimed artifact's next revisit.
-          if (error instanceof SessionArtifactNotFoundError)
+          if (
+            previous.lifetime === "session" &&
+            error instanceof SessionArtifactNotFoundError
+          )
             await this.removeRef(
               input.identity.tenantId,
               input.projectId,
@@ -332,14 +411,13 @@ export class SessionArtifactsService {
   }: {
     input: SessionArtifactAddress & { revision: number; title?: string };
     previous: ArtifactRow;
-    snapshot: { commitSha: string };
+    snapshot: { commitSha: string; files?: Record<string, string> };
     paths: string[];
     remoteBranch: string;
   }): Promise<SessionArtifact> {
     return this.db.transaction().execute(async (trx) => {
       const row = await this.row(input, trx, true);
-      if (!row.session_id) throw new SessionArtifactNotFoundError();
-      await this.assertSession({ ...input, sessionId: row.session_id }, trx);
+      await this.assertLifecycle(input, row, trx);
       if (
         row.revision !== input.revision ||
         row.commit_sha !== previous.commit_sha
@@ -351,7 +429,10 @@ export class SessionArtifactsService {
         .insertInto("session_artifact_revisions")
         .values({
           artifact_id: row.id,
+          source_revision: row.revision + 1,
           commit_sha: snapshot.commitSha,
+          remote_branch: remoteBranch,
+          source_files: snapshot.files ?? null,
           source_paths: paths,
         })
         .onConflict((conflict) => conflict.doNothing())
@@ -383,34 +464,55 @@ export class SessionArtifactsService {
           "catamorphic.artifact.id": input.artifactId,
         },
       },
-      async () => {
-        const row = await this.row(input, this.db, false, true);
-        if (row.session_id)
-          await this.assertSession({
-            ...input,
-            sessionId: row.session_id,
-            allowClosed: true,
-          });
-        const updated = await this.db
-          .updateTable("session_artifacts")
-          .set({
-            status: "discarded",
-            discarded_at: new Date(),
-            updated_at: new Date(),
-          })
-          .where("id", "=", input.artifactId)
-          .where("status", "=", "active")
-          .returningAll()
-          .executeTakeFirst();
-        return present(updated ?? row);
-      },
+      async () =>
+        this.db.transaction().execute(async (trx) => {
+          const row = await this.row(input, trx, true, true);
+          if (row.session_id)
+            await this.assertSession(
+              {
+                ...input,
+                sessionId: row.session_id,
+                allowClosed: true,
+              },
+              trx,
+            );
+          await trx
+            .updateTable("workflow_enablements")
+            .set(({ eb }) => ({
+              status: "disabled",
+              revision: eb("revision", "+", 1),
+              updated_at: new Date(),
+            }))
+            .where("project_id", "=", row.project_id)
+            .where("owner_external_user_id", "=", row.owner_external_user_id)
+            .where(
+              "commit_sha",
+              "in",
+              trx
+                .selectFrom("session_artifact_revisions")
+                .select("commit_sha")
+                .where("artifact_id", "=", row.id),
+            )
+            .execute();
+          const updated = await trx
+            .updateTable("session_artifacts")
+            .set({
+              status: "discarded",
+              discarded_at: new Date(),
+              updated_at: new Date(),
+            })
+            .where("id", "=", input.artifactId)
+            .where("status", "=", "active")
+            .returningAll()
+            .executeTakeFirst();
+          return present(updated ?? row);
+        }),
     );
   }
 
   async assertActive(input: SessionArtifactAddress): Promise<void> {
     const row = await this.row(input);
-    if (!row.session_id) throw new SessionArtifactNotFoundError();
-    await this.assertSession({ ...input, sessionId: row.session_id });
+    await this.assertLifecycle(input, row);
   }
 
   /**
@@ -427,7 +529,10 @@ export class SessionArtifactsService {
       .where(({ or, eb }) =>
         or([
           eb("artifact.status", "=", "discarded"),
-          eb("artifact.session_id", "is", null),
+          eb.and([
+            eb("artifact.lifetime", "=", "session"),
+            eb("artifact.session_id", "is", null),
+          ]),
         ]),
       )
       // Revisit tombstones now and then: an update may publish after
@@ -484,6 +589,7 @@ export class SessionArtifactsService {
         "artifact.id",
         "artifact.project_id",
         "artifact.remote_branch",
+        "artifact.lifetime",
         "projects.tenant_id",
       ])
       // Rotate the sweep so revisits never starve new retirees.
@@ -507,6 +613,19 @@ export class SessionArtifactsService {
           .deleteFrom("apps")
           .where("session_artifact_id", "=", row.id)
           .execute();
+        if (row.lifetime === "member") {
+          await this.db
+            .updateTable("session_artifact_revisions")
+            .set({ source_files: null })
+            .where("artifact_id", "=", row.id)
+            .execute();
+          await this.db
+            .updateTable("session_artifacts")
+            .set({ ref_deleted_at: new Date(), last_error: null })
+            .where("id", "=", row.id)
+            .execute();
+          continue;
+        }
         const remote = this.projectManager.remoteBackend;
         if (!remote) throw new Error("Artifact storage is unavailable");
         await remote.withOrigin(
@@ -546,6 +665,47 @@ export class SessionArtifactsService {
     }
   }
 
+  async privateSource(input: {
+    identity: Identity;
+    projectId: string;
+    commitSha: string;
+  }): Promise<Record<string, string> | null> {
+    await requireTenantProject(
+      this.db,
+      input.identity.tenantId,
+      input.projectId,
+    );
+    const source = await this.db
+      .selectFrom("session_artifacts as artifact")
+      .innerJoin(
+        "session_artifact_revisions as revision",
+        "revision.artifact_id",
+        "artifact.id",
+      )
+      .where("artifact.project_id", "=", input.projectId)
+      .where("artifact.lifetime", "=", "member")
+      .where("revision.commit_sha", "=", input.commitSha)
+      .select([
+        "artifact.id",
+        "artifact.owner_external_user_id",
+        "artifact.name",
+        "revision.source_files",
+      ])
+      .executeTakeFirst();
+    if (!source) return null;
+    if (
+      source.owner_external_user_id !== input.identity.externalUserId ||
+      !identityCovers(input.identity, {
+        kind: "workflow",
+        projectId: input.projectId,
+        name: source.name,
+      })
+    )
+      throw new AccessDeniedError();
+    // Existing runs retain discarded revisions until their terminal state.
+    return sourceFiles(source.source_files);
+  }
+
   private async row(
     input: SessionArtifactAddress,
     db = this.db,
@@ -562,9 +722,20 @@ export class SessionArtifactsService {
     if (!includeDiscarded)
       query = query
         .where("status", "=", "active")
-        .where("session_id", "is not", null);
+        .where(({ or, eb }) =>
+          or([eb("lifetime", "=", "member"), eb("session_id", "is not", null)]),
+        );
     const row = await (lock ? query.forUpdate() : query).executeTakeFirst();
     if (!row) throw new SessionArtifactNotFoundError();
+    if (
+      row.lifetime === "member" &&
+      !identityCovers(input.identity, {
+        kind: "workflow",
+        projectId: input.projectId,
+        name: row.name,
+      })
+    )
+      throw new AccessDeniedError();
     if (
       row.session_id &&
       !identityCovers(input.identity, {
@@ -583,6 +754,54 @@ export class SessionArtifactsService {
       );
     }
     return row;
+  }
+
+  private async assertCreation(
+    input: {
+      identity: Identity;
+      projectId: string;
+      sessionId?: string;
+      lifetime?: "session" | "member";
+      kind: SessionArtifactKind;
+      name: string;
+    },
+    db = this.db,
+  ): Promise<void> {
+    if (input.lifetime === "member") {
+      await requireTenantProject(db, input.identity.tenantId, input.projectId);
+      if (
+        input.kind !== "workflow" ||
+        !input.identity.externalUserId ||
+        isProjectPrincipal(input.identity.externalUserId) ||
+        !mayUseProject(input.identity, input.projectId) ||
+        !identityCovers(input.identity, {
+          kind: "workflow",
+          projectId: input.projectId,
+          name: input.name,
+        })
+      )
+        throw new AccessDeniedError();
+      return;
+    }
+    if (!input.sessionId)
+      throw new SessionArtifactValidationError(
+        "Session artifacts require sessionId",
+      );
+    await this.assertSession({ ...input, sessionId: input.sessionId }, db);
+  }
+
+  private async assertLifecycle(
+    input: SessionArtifactAddress,
+    row: ArtifactRow,
+    db = this.db,
+    allowClosed = false,
+  ): Promise<void> {
+    if (row.lifetime === "member") return;
+    if (!row.session_id) throw new SessionArtifactNotFoundError();
+    await this.assertSession(
+      { ...input, sessionId: row.session_id, allowClosed },
+      db,
+    );
   }
 
   private async assertSession(
@@ -789,6 +1008,8 @@ function present(row: ArtifactRow): SessionArtifact {
     id: row.id,
     projectId: row.project_id,
     sessionId: row.session_id,
+    lifetime: row.lifetime === "member" ? "member" : "session",
+    workflowEnablementId: row.workflow_enablement_id,
     kind: artifactKind(row.kind),
     name: row.name,
     title: row.title,
@@ -863,4 +1084,70 @@ async function assertNoSymlink(root: string, file: string): Promise<void> {
         `Artifact path follows a symbolic link: ${file}`,
       );
   }
+}
+
+function sourceFiles(value: unknown): Record<string, string> {
+  if (!value || typeof value !== "object" || Array.isArray(value))
+    throw new SessionArtifactNotFoundError();
+  return Object.fromEntries(
+    Object.entries(value).map(([key, content]) => {
+      if (typeof content !== "string")
+        throw new SessionArtifactValidationError("Invalid retained source");
+      return [key, content];
+    }),
+  );
+}
+function updatedPrivateFiles(
+  previous: Record<string, string>,
+  changes: Record<string, string | null>,
+): Record<string, string> {
+  return Object.fromEntries(
+    Object.entries({ ...previous, ...changes }).flatMap(([key, value]) =>
+      value === null ? [] : [[key, value]],
+    ),
+  );
+}
+function privateSnapshot(input: {
+  files: Record<string, string>;
+  name: string;
+  sourcePath: string;
+  artifactId: string;
+  revision: number;
+}) {
+  const parsed = parseProject(input.files);
+  if (
+    parsed.errors.length ||
+    !parsed.workflows.some(
+      (workflow) =>
+        workflow.functionName === input.name &&
+        workflow.filePath === input.sourcePath,
+    )
+  )
+    throw new SessionArtifactValidationError(
+      `Invalid workflow source: ${parsed.errors.map((error) => error.message).join("\n") || `source must export ${input.name}`}`,
+    );
+  const files = Object.fromEntries(
+    Object.entries(input.files).sort(([a], [b]) => a.localeCompare(b)),
+  );
+  // A private immutable snapshot pin, never a ref or object in the user's Git.
+  const commitSha = createHash("sha256")
+    .update(
+      JSON.stringify({
+        artifactId: input.artifactId,
+        revision: input.revision,
+        files,
+      }),
+    )
+    .digest("hex");
+  return { commitSha, paths: Object.keys(files), files };
+}
+
+function filesOfSnapshot(snapshot: {
+  commitSha: string;
+}): Record<string, string> {
+  if (!("files" in snapshot))
+    throw new SessionArtifactValidationError(
+      "Private source snapshot is unavailable",
+    );
+  return sourceFiles(snapshot.files);
 }

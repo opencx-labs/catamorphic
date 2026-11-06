@@ -1,6 +1,10 @@
-import { readFileSync } from "node:fs";
-import { describe, expect, it } from "vitest";
+import { spawn } from "node:child_process";
+import fs, { readFileSync } from "node:fs";
+import os from "node:os";
+import path from "node:path";
+import { describe, expect, it, vi } from "vitest";
 import {
+  desktopTestShards,
   desktopVitestArguments,
   includeDesktopTestSource,
   isInstallInput,
@@ -8,6 +12,25 @@ import {
 import { isIsolatedDesktopTestHost } from "./desktop-test-environment.js";
 
 describe("desktop test isolation", () => {
+  it("keeps each configured shard in a separate Docker invocation without recursive native sharding", () => {
+    expect(
+      desktopTestShards({ native: false, args: [], configured: "4" }),
+    ).toBe(4);
+    expect(desktopTestShards({ native: true, args: [], configured: "4" })).toBe(
+      1,
+    );
+    expect(
+      desktopTestShards({
+        native: false,
+        args: ["--shard=2/4"],
+        configured: "4",
+      }),
+    ).toBe(1);
+    for (const configured of ["0", "9", "2.5", "invalid"])
+      expect(() =>
+        desktopTestShards({ native: false, args: [], configured }),
+      ).toThrow();
+  });
   it("rejects ordinary desktops, including CI flags on a developer Mac", () => {
     for (const env of [
       {},
@@ -117,3 +140,106 @@ describe("desktop test image dependencies", () => {
     );
   });
 });
+
+for (const duringStartup of [false, true])
+  it(`cleans owned containers when cancelled ${duringStartup ? "during startup" : "after launch"}`, async () => {
+    const temporary = fs.mkdtempSync(
+      path.join(os.tmpdir(), "desktop-shard-cancel-"),
+    );
+    const binary = path.join(temporary, "bin");
+    const markers = path.join(temporary, "containers");
+    const preparing = path.join(temporary, "preparing");
+    const trace = path.join(temporary, "docker.jsonl");
+    const preload = path.join(temporary, "delay-setup.mjs");
+    fs.writeFileSync(
+      preload,
+      `import fs from 'node:fs';import {syncBuiltinESMExports} from 'node:module';
+const mkdir=fs.promises.mkdir;
+fs.promises.mkdir=async(...args)=>{if(String(args[0]).endsWith('/shard-2')){fs.writeFileSync(${JSON.stringify(preparing)},'waiting');await new Promise(resolve=>setTimeout(resolve,1000));}return mkdir(...args)};
+syncBuiltinESMExports();`,
+    );
+    fs.mkdirSync(binary);
+    fs.mkdirSync(markers);
+    fs.writeFileSync(
+      path.join(binary, "docker"),
+      `#!/usr/bin/env bun
+import fs from 'node:fs';import path from 'node:path';
+const args=process.argv.slice(2), markers=${JSON.stringify(markers)};
+fs.appendFileSync(${JSON.stringify(trace)},JSON.stringify(args)+'\\n');
+if(args[0]==='build'){fs.writeFileSync(args[args.indexOf('--iidfile')+1],'sha256:fixture');}
+else if(args[0]==='run'){fs.writeFileSync(path.join(markers,args[args.indexOf('--name')+1]),'running');process.on('SIGTERM',()=>{});process.on('SIGINT',()=>{});setInterval(()=>{},1000);}
+else if(args[0]==='rm'){for(const name of args.slice(2))fs.rmSync(path.join(markers,name),{force:true});}
+else if(args[0]==='image')console.log('1000');
+`,
+      { mode: 0o755 },
+    );
+    const child = spawn(
+      "bun",
+      [
+        ...(duringStartup ? ["--preload", preload] : []),
+        path.join(import.meta.dirname, "desktop-test.ts"),
+      ],
+      {
+        cwd: path.resolve(import.meta.dirname, ".."),
+        detached: true,
+        env: {
+          ...process.env,
+          PATH: `${binary}${path.delimiter}${process.env.PATH ?? ""}`,
+          CATAMORPHIC_DESKTOP_TEST_SHARDS: "4",
+          CATAMORPHIC_E2E_ARTIFACTS_DIR: path.join(temporary, "artifacts"),
+        },
+        stdio: ["ignore", "ignore", "pipe"],
+      },
+    );
+    let stderr = "";
+    child.stderr?.on("data", (chunk) => {
+      stderr += chunk;
+    });
+    const exited = new Promise<number | null>((resolve, reject) => {
+      child.once("exit", resolve);
+      child.once("error", reject);
+    });
+    try {
+      await vi.waitFor(
+        () =>
+          duringStartup
+            ? expect(fs.existsSync(preparing)).toBe(true)
+            : expect(fs.readdirSync(markers)).toHaveLength(4),
+        {
+          timeout: 20_000,
+          interval: 25,
+        },
+      );
+      child.kill("SIGTERM");
+      await vi.waitFor(
+        () =>
+          expect(
+            child.exitCode !== null || child.signalCode !== null,
+            stderr,
+          ).toBe(true),
+        { timeout: 12_000, interval: 25 },
+      );
+      expect(await exited).not.toBe(0);
+      if (duringStartup) {
+        const calls: string[][] = fs
+          .readFileSync(trace, "utf8")
+          .trim()
+          .split("\n")
+          .map((line) => JSON.parse(line));
+        expect(
+          calls
+            .filter((call) => call[0] === "run")
+            .some((call) =>
+              call.some((argument) => argument.endsWith("-shard-2")),
+            ),
+        ).toBe(false);
+      }
+      expect(fs.readdirSync(markers), stderr).toEqual([]);
+    } finally {
+      if (child.exitCode === null && child.signalCode === null) {
+        child.kill("SIGTERM");
+        await exited;
+      }
+      fs.rmSync(temporary, { recursive: true, force: true });
+    }
+  }, 30_000);

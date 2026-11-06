@@ -2,6 +2,7 @@ import fs from "node:fs";
 import http from "node:http";
 import os from "node:os";
 import path from "node:path";
+import { promisify } from "node:util";
 import { afterEach, expect, it, vi } from "vitest";
 import { sanitizeSidebarSourcePage } from "../shared/source-rows.js";
 import type { ModuleLaunch } from "./module-sandbox.js";
@@ -108,6 +109,164 @@ it("reads files, serializes simultaneous writes, watches changes, and keeps cons
   await eventually(() => expect(notify).toHaveBeenCalled());
   release();
 });
+
+it("reloads imported helpers before another request, with an observable source revision", async () => {
+  const { root, runtime, load } = setup(`
+    import {label} from './helper';
+    export default {async load(){return {items:[{id:'a',label}]};}};
+  `);
+  const helper = path.join(root, "helper.ts");
+  fs.writeFileSync(helper, "export const label = 'Before';");
+  expect(await load()).toMatchObject({ items: [{ label: "Before" }] });
+  const before = runtime.inspect();
+  expect(before.files).toContain(helper);
+  fs.writeFileSync(helper, "export const label = 'After';");
+  expect(await load()).toMatchObject({ items: [{ label: "After" }] });
+  expect(runtime.inspect().revision).not.toBe(before.revision);
+  expect(runtime.inspect().generation).toBeGreaterThan(before.generation);
+});
+
+it("reloads a bare package's transitive helper, exports manifest and install lock", async () => {
+  const { root, runtime, load } = setup(`
+    import {label} from 'sidebar-helper';
+    export default {async load(){return {items:[{id:'a',label}]};}};
+  `);
+  const pkg = path.join(root, "node_modules/sidebar-helper");
+  fs.mkdirSync(pkg, { recursive: true });
+  const manifest = path.join(pkg, "package.json");
+  fs.writeFileSync(
+    manifest,
+    JSON.stringify({
+      name: "sidebar-helper",
+      type: "module",
+      exports: "./index.ts",
+    }),
+  );
+  fs.writeFileSync(
+    path.join(pkg, "index.ts"),
+    "export {label} from './label';",
+  );
+  const helper = path.join(pkg, "label.ts");
+  fs.writeFileSync(helper, "export const label = 'Before';");
+  expect(await load()).toMatchObject({ items: [{ label: "Before" }] });
+  const before = runtime.inspect();
+  expect(before.files).toContain(helper);
+  expect(before.files).toContain(manifest);
+  const original = fs.statSync(helper);
+  fs.writeFileSync(helper, "export const label = 'After!';");
+  fs.utimesSync(helper, original.atime, original.mtime);
+  expect(await load()).toMatchObject({ items: [{ label: "After!" }] });
+  fs.writeFileSync(
+    path.join(pkg, "replacement.ts"),
+    "export const label = 'New export';",
+  );
+  fs.writeFileSync(
+    manifest,
+    JSON.stringify({
+      name: "sidebar-helper",
+      type: "module",
+      exports: "./replacement.ts",
+    }),
+  );
+  expect(await load()).toMatchObject({ items: [{ label: "New export" }] });
+  const installed = runtime.inspect();
+  fs.writeFileSync(path.join(root, "bun.lock"), "new installation revision");
+  expect(await load()).toMatchObject({ items: [{ label: "New export" }] });
+  expect(runtime.inspect().generation).toBeGreaterThan(installed.generation);
+});
+
+it("polls workspace package imports and follows a changed node_modules alias", async () => {
+  const { root, runtime, load } = setup(`
+    import {label} from 'workspace-helper';
+    export default {async load(){return {items:[{id:'a',label}]};}};
+  `);
+  fs.mkdirSync(path.join(root, "node_modules"));
+  for (const [folder, label] of [
+    ["first", "First"],
+    ["second", "Second"],
+  ]) {
+    const pkg = path.join(root, "packages", folder ?? "");
+    fs.mkdirSync(pkg, { recursive: true });
+    fs.writeFileSync(
+      path.join(pkg, "package.json"),
+      JSON.stringify({
+        name: "workspace-helper",
+        type: "module",
+        exports: "./index.ts",
+      }),
+    );
+    fs.writeFileSync(
+      path.join(pkg, "index.ts"),
+      `export const label = '${label}';`,
+    );
+  }
+  const alias = path.join(root, "node_modules/workspace-helper");
+  fs.symlinkSync("../packages/first", alias, "dir");
+  const notify = vi.fn();
+  const release = runtime.subscribe(notify);
+  expect(await load()).toMatchObject({ items: [{ label: "First" }] });
+  notify.mockClear();
+  fs.writeFileSync(
+    path.join(root, "packages/first/index.ts"),
+    "export const label = 'Edited';",
+  );
+  await eventually(() => expect(notify).toHaveBeenCalled());
+  expect(await load()).toMatchObject({ items: [{ label: "Edited" }] });
+  fs.unlinkSync(alias);
+  fs.symlinkSync("../packages/second", alias, "dir");
+  expect(await load()).toMatchObject({ items: [{ label: "Second" }] });
+  release();
+});
+
+it.skipIf(process.platform === "win32")(
+  "forged FIFO and outside-symlink dependencies cannot block or read through main",
+  async () => {
+    // A separate process bounds a future regression that would synchronously
+    // open the FIFO and block its entire event loop, including test timers.
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "source-metadata-"));
+    const outside = fs.mkdtempSync(path.join(os.tmpdir(), "source-outside-"));
+    roots.push(root, outside);
+    const fifo = path.join(root, "blocked.pipe");
+    execFileSync("mkfifo", [fifo]);
+    const secret = path.join(outside, "private.ts");
+    fs.writeFileSync(secret, "private content");
+    const link = path.join(root, "outside.ts");
+    fs.symlinkSync(secret, link);
+    const sparse = path.join(root, "large.bin");
+    fs.writeFileSync(sparse, "");
+    fs.truncateSync(sparse, 4 * 1024 * 1024 * 1024);
+    const source = path.join(root, "source.ts");
+    fs.writeFileSync(source, "export default {};");
+    const worker = path.join(root, "protocol.ts");
+    fs.writeFileSync(
+      worker,
+      `import {writeSync} from 'node:fs';import {createInterface} from 'node:readline';
+    const send=value=>writeSync(3,JSON.stringify(value)+'\\n');
+    send({type:'dependencies',files:${JSON.stringify([fifo, link, sparse])}});
+    send({type:'capabilities'});
+    createInterface({input:process.stdin}).on('line',line=>{const request=JSON.parse(line);if(request.id)send({id:request.id,result:{items:[{id:'a',label:'Ready'}]}})});
+  `,
+    );
+    const driver = path.join(root, "driver.ts");
+    fs.writeFileSync(
+      driver,
+      `import {SidebarSourceRuntime} from ${JSON.stringify(path.join(import.meta.dirname, "sidebar-source-runtime.ts"))};
+    const runtime=new SidebarSourceRuntime({projectRoot:${JSON.stringify(root)},modulePath:${JSON.stringify(source)},launch:async()=>({command:'bun',args:[${JSON.stringify(worker)}],env:{PATH:process.env.PATH},close:async()=>{}})});
+    try{const page=await runtime.request({projectId:'p',sectionId:'s',requestId:'r',method:'load'});console.log(JSON.stringify({page,files:runtime.inspect().files}));}finally{runtime.dispose()}
+  `,
+    );
+    const result = await promisify(execFile)("bun", [driver], {
+      cwd: root,
+      timeout: 5_000,
+    });
+    const evidence = JSON.parse(result.stdout);
+    expect(evidence.page).toMatchObject({ items: [{ label: "Ready" }] });
+    expect(evidence.files).toContain(sparse);
+    expect(evidence.files).not.toContain(fifo);
+    expect(evidence.files).not.toContain(link);
+    expect(fs.readFileSync(secret, "utf8")).toBe("private content");
+  },
+);
 
 it("hands a session-scoped section's chat to load and actions, and nothing elsewhere (ADR 0226)", async () => {
   const { root, runtime, load } = setup(`
@@ -531,3 +690,5 @@ it("answers work only for a request the worker is serving", async () => {
   await new Promise((resolve) => setTimeout(resolve, 300));
   expect(work).not.toHaveBeenCalled();
 });
+
+import { execFile, execFileSync } from "node:child_process";

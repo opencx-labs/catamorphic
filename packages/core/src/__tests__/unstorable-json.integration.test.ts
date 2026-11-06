@@ -310,6 +310,8 @@ describe.each(databases)("JSON a service builds, on %s", (name, open) => {
         kinds: [ticketCreated],
         projectManager,
         runs: {
+          assertTriggerAccess: async () => {},
+          get: async () => ({}),
           triggerProduction: async (args: { input: unknown }) => {
             started.push(args.input);
             return { id: randomUUID() };

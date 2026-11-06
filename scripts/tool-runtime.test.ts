@@ -221,7 +221,7 @@ describe("toolRuntime", () => {
     );
     expect(desktopScripts["test:e2e:visible"]).toBeUndefined();
     expect(desktopScripts["test:eval"]).toBe(
-      "bun --bun electron-vite build && bun ../../scripts/tool-runtime.ts vitest --tool-cwd apps/desktop --config ./vitest.eval.config.ts",
+      "bun ../../scripts/customization-eval.ts",
     );
     expect(pwaScripts["test:e2e"]).toBe(
       "bun --bun vite build && bun ../../scripts/tool-runtime.ts vitest --tool-cwd apps/pwa --config ./vitest.e2e.config.ts",

@@ -9,6 +9,7 @@ import {
   type DocumentRef,
   hasProjectPermission,
   type Identity,
+  isProjectPrincipal,
   scopeCovers,
 } from "../identity.js";
 import type { AppBundleStore } from "./app-bundle-store.js";
@@ -341,6 +342,7 @@ export class DocumentsService {
     const current = await this.db
       .selectFrom("store_documents")
       .where("project_id", "=", input.projectId)
+      .where("owner_external_user_id", "=", "")
       .where("path", "=", input.path)
       .selectAll()
       .executeTakeFirst();
@@ -441,6 +443,7 @@ export class DocumentsService {
       const rows = await this.db
         .selectFrom("store_documents")
         .where("project_id", "=", args.projectId)
+        .where("owner_external_user_id", "=", "")
         .where("deleted", "=", false)
         .where("path", "like", `${escapeLike(storePrefix)}%`)
         .select([
@@ -491,6 +494,7 @@ export class DocumentsService {
     identity: Identity;
     projectId: string;
     path: string;
+    audience?: "member";
     version?: number;
   }): Promise<DocumentContent> {
     return withSpan(
@@ -513,10 +517,50 @@ export class DocumentsService {
   }
 
   /** Metadata + raw bytes of one document (a version, for store paths). */
+  async head(args: {
+    identity: Identity;
+    projectId: string;
+    path: string;
+    audience?: "member";
+  }): Promise<{ version: number; deleted: boolean; bytes: Uint8Array }> {
+    await this.requireProject(args.identity, args.projectId);
+    const path = normalizeDocumentPath(args.path);
+    if (!isStorePath(path))
+      throw new DocumentPathError("Document heads require a store path");
+    this.assertAccess(
+      args.identity,
+      args.projectId,
+      path,
+      "read",
+      args.audience,
+    );
+    if (!args.audience) await this.refreshLocal({ ...args, path });
+    const row = await this.db
+      .selectFrom("store_documents")
+      .where("project_id", "=", args.projectId)
+      .where(
+        "owner_external_user_id",
+        "=",
+        args.audience ? args.identity.externalUserId : "",
+      )
+      .where("path", "=", path)
+      .selectAll()
+      .executeTakeFirst();
+    if (!row) return { version: 0, deleted: true, bytes: new Uint8Array() };
+    // Bytes and version come from this one immutable observed head, including tombstones.
+    return {
+      version: row.version,
+      deleted: row.deleted,
+      bytes: row.deleted ? new Uint8Array() : await this.bytesOf(row),
+    };
+  }
+
+  /** Metadata + raw bytes of one document (a version, for store paths). */
   async readBytes(args: {
     identity: Identity;
     projectId: string;
     path: string;
+    audience?: "member";
     version?: number;
   }): Promise<DocumentContent & { bytes: Uint8Array }> {
     return withSpan(
@@ -532,8 +576,16 @@ export class DocumentsService {
       async () => {
         await this.requireProject(args.identity, args.projectId);
         const path = normalizeDocumentPath(args.path);
-        this.assertAccess(args.identity, args.projectId, path, "read");
+        this.assertAccess(
+          args.identity,
+          args.projectId,
+          path,
+          "read",
+          args.audience,
+        );
 
+        if (args.audience && !isStorePath(path))
+          throw new DocumentPathError("Member documents must be under store/");
         if (!isStorePath(path)) {
           if (!(await this.programVisible(args)))
             throw new DocumentNotFoundError(path);
@@ -554,8 +606,8 @@ export class DocumentsService {
           };
         }
 
-        if (args.version === undefined) {
-          await this.refreshLocal({ ...args, path });
+        if (args.version === undefined && !args.audience) {
+          if (!args.audience) await this.refreshLocal({ ...args, path });
           const root = await this.projectManager.localPath({
             tenantId: args.identity.tenantId,
             projectId: args.projectId,
@@ -573,6 +625,11 @@ export class DocumentsService {
         const doc = await this.db
           .selectFrom("store_documents")
           .where("project_id", "=", args.projectId)
+          .where(
+            "owner_external_user_id",
+            "=",
+            args.audience ? args.identity.externalUserId : "",
+          )
           .where("path", "=", path)
           .selectAll()
           .executeTakeFirst();
@@ -611,6 +668,7 @@ export class DocumentsService {
     identity: Identity;
     projectId: string;
     path: string;
+    audience?: "member";
     content: Uint8Array | string;
     contentType?: string;
     ifVersion?: number;
@@ -628,13 +686,22 @@ export class DocumentsService {
       },
       async () => {
         await this.requireProject(args.identity, args.projectId);
+        if (args.audience && args.ifVersion === undefined)
+          throw new DocumentPathError("Member state writes require ifVersion");
         const normalized = normalizeDocumentPath(args.path);
         if (!isStorePath(normalized) || normalized === STORE_ROOT)
           throw new DocumentPathError(
             `Only paths under ${STORE_ROOT}/ are writable; the program changes by commit`,
           );
-        this.assertAccess(args.identity, args.projectId, normalized, "write");
-        await this.refreshLocal({ ...args, path: normalized });
+        this.assertAccess(
+          args.identity,
+          args.projectId,
+          normalized,
+          "write",
+          args.audience,
+        );
+        if (!args.audience)
+          await this.refreshLocal({ ...args, path: normalized });
         args.signal?.throwIfAborted();
         const result = await this.writeInner(args);
         return result;
@@ -647,6 +714,7 @@ export class DocumentsService {
       identity: Identity;
       projectId: string;
       path: string;
+      audience?: "member";
       content: Uint8Array | string;
       contentType?: string;
       ifVersion?: number;
@@ -666,6 +734,7 @@ export class DocumentsService {
       args.projectId,
       path,
       localRefresh ? "read" : "write",
+      args.audience,
     );
     const bytes =
       typeof args.content === "string"
@@ -686,6 +755,9 @@ export class DocumentsService {
         .insertInto("store_documents")
         .values({
           project_id: args.projectId,
+          owner_external_user_id: args.audience
+            ? args.identity.externalUserId
+            : "",
           path,
           version: 0,
           content_type: contentType,
@@ -693,12 +765,19 @@ export class DocumentsService {
           written_by: writtenBy,
         })
         .onConflict((conflict) =>
-          conflict.columns(["project_id", "path"]).doNothing(),
+          conflict
+            .columns(["project_id", "owner_external_user_id", "path"])
+            .doNothing(),
         )
         .execute();
       const current = await trx
         .selectFrom("store_documents")
         .where("project_id", "=", args.projectId)
+        .where(
+          "owner_external_user_id",
+          "=",
+          args.audience ? args.identity.externalUserId : "",
+        )
         .where("path", "=", path)
         .forUpdate()
         .selectAll()
@@ -760,7 +839,7 @@ export class DocumentsService {
         .where("id", "=", documentId)
         .execute();
       args.signal?.throwIfAborted();
-      if (!localRefresh) {
+      if (!localRefresh && !args.audience) {
         const root = await this.projectManager.localPath({
           tenantId: args.identity.tenantId,
           projectId: args.projectId,
@@ -798,6 +877,7 @@ export class DocumentsService {
     identity: Identity;
     projectId: string;
     path: string;
+    audience?: "member";
     ifVersion?: number;
     signal?: AbortSignal;
   }): Promise<{ version: number }> {
@@ -813,14 +893,22 @@ export class DocumentsService {
       },
       async () => {
         await this.requireProject(args.identity, args.projectId);
+        if (args.audience && args.ifVersion === undefined)
+          throw new DocumentPathError("Member state writes require ifVersion");
         const path = normalizeDocumentPath(args.path);
         if (!isStorePath(path)) {
           throw new DocumentPathError(
             `Only paths under ${STORE_ROOT}/ can be deleted here`,
           );
         }
-        this.assertAccess(args.identity, args.projectId, path, "write");
-        await this.refreshLocal({ ...args, path });
+        this.assertAccess(
+          args.identity,
+          args.projectId,
+          path,
+          "write",
+          args.audience,
+        );
+        if (!args.audience) await this.refreshLocal({ ...args, path });
         args.signal?.throwIfAborted();
         return this.deleteInner({ ...args, path });
       },
@@ -832,6 +920,7 @@ export class DocumentsService {
       identity: Identity;
       projectId: string;
       path: string;
+      audience?: "member";
       ifVersion?: number;
       signal?: AbortSignal;
     },
@@ -845,6 +934,11 @@ export class DocumentsService {
       const current = await trx
         .selectFrom("store_documents")
         .where("project_id", "=", args.projectId)
+        .where(
+          "owner_external_user_id",
+          "=",
+          args.audience ? args.identity.externalUserId : "",
+        )
         .where("path", "=", path)
         .forUpdate()
         .selectAll()
@@ -888,7 +982,7 @@ export class DocumentsService {
         projectId: args.projectId,
       });
       args.signal?.throwIfAborted();
-      if (root && !localRefresh)
+      if (root && !localRefresh && !args.audience)
         await fs.rm(await localDocumentPath(root, path), { force: true });
       args.signal?.throwIfAborted();
       return { version };
@@ -901,15 +995,27 @@ export class DocumentsService {
     identity: Identity;
     projectId: string;
     path: string;
+    audience?: "member";
   }): Promise<DocumentVersion[]> {
     await this.requireProject(args.identity, args.projectId);
     const path = normalizeDocumentPath(args.path);
-    this.assertAccess(args.identity, args.projectId, path, "read");
+    this.assertAccess(
+      args.identity,
+      args.projectId,
+      path,
+      "read",
+      args.audience,
+    );
     if (!isStorePath(path)) return [];
-    await this.refreshLocal({ ...args, path });
+    if (!args.audience) await this.refreshLocal({ ...args, path });
     const doc = await this.db
       .selectFrom("store_documents")
       .where("project_id", "=", args.projectId)
+      .where(
+        "owner_external_user_id",
+        "=",
+        args.audience ? args.identity.externalUserId : "",
+      )
       .where("path", "=", path)
       .select("id")
       .executeTakeFirst();
@@ -1027,6 +1133,7 @@ export class DocumentsService {
           let q = this.db
             .selectFrom("store_documents")
             .where("project_id", "=", args.projectId)
+            .where("owner_external_user_id", "=", "")
             .where("deleted", "=", false)
             .where("text_content", "is not", null)
             .where("path", "like", `${escapeLike(storePrefix)}%`);
@@ -1069,7 +1176,17 @@ export class DocumentsService {
     projectId: string,
     path: string,
     access: "read" | "write",
+    audience?: "member",
   ): void {
+    if (audience) {
+      if (
+        !identity.externalUserId ||
+        isProjectPrincipal(identity.externalUserId) ||
+        !hasProjectPermission(identity, projectId, `private-state:${access}`)
+      )
+        throw new AccessDeniedError();
+      return;
+    }
     if (!documentAccessAllowed(identity, projectId, path, access)) {
       throw new AccessDeniedError();
     }
