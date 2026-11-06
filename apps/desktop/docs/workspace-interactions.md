@@ -131,6 +131,8 @@ Whole-operation errors are retryable and cancellation never marks import complet
 
 The welcome experience is a normal Onboarding tab, automatically offered for an
 empty profile or an agent-less project once project and remote state resolve.
+An external page opened at startup retains focus instead of being replaced by
+the empty-profile welcome.
 Loading and project-load errors remain separate, with retry on failure. Closing
 onboarding skips it for that profile during this session. The palette can open it
 again using onboarding, tutorial, welcome, tour, getting started, learn, guide,

@@ -2409,6 +2409,9 @@ export function App({
     )
       return;
     updateWorkspace((ws) => {
+      // Opening an external page replaces the former empty-profile welcome.
+      // Its asynchronous handoff must not lose focus to agent discovery.
+      if (!projectId && orderedTabKeys(ws).length > 0) return ws;
       if (ws.tabs.some((tab) => tab.kind === "onboarding")) return ws;
       const tab: WorkspaceTab = {
         kind: "onboarding",
