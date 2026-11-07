@@ -1,7 +1,14 @@
 import { type ChildProcess, spawn } from "node:child_process";
 import path from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { type AppHandle, launchApp, setReactValueJs } from "./harness.js";
+import {
+  type AppHandle,
+  launchApp,
+  openProjectSwitcher,
+  setReactValueJs,
+  waitForProjectWorkspace,
+  workspaceDomHelpersJs,
+} from "./harness.js";
 
 /**
  * Agent-level tool access (ADR 0054): Settings → edit agent shows a row per
@@ -36,6 +43,7 @@ beforeAll(async () => {
     fake.once("exit", () => reject(new Error("fake server exited")));
   });
   app = await launchApp();
+  await openProjectSwitcher(app);
 }, 180_000);
 
 afterAll(async () => {
@@ -44,8 +52,7 @@ afterAll(async () => {
 });
 
 const helpers = `
-  const $ = (selector) => document.querySelector(selector);
-  const $$ = (selector) => [...document.querySelectorAll(selector)];
+  ${workspaceDomHelpersJs}
   const byText = (selector, text) =>
     $$(selector).find((el) => el.textContent.trim().includes(text));
   ${setReactValueJs}
@@ -63,13 +70,11 @@ let sharedId = "";
 
 describe("agent tool access", () => {
   it("boots, creates a project, an authorized 'fake' connection with a probed roster", async () => {
-    await runWait(`return !!byText('button', 'Create or import project');`, {
+    await runWait(`return !!byText('button', 'New project');`, {
       timeoutMs: 120_000,
       label: "onboarding",
     });
-    await run(
-      `byText('button', 'Create or import project').click(); return true;`,
-    );
+    await run(`byText('button', 'New project').click(); return true;`);
     await runWait(
       `const input = $('[data-testid="project-name-input"]');
        if (!input) return false; setReactValue(input, 'policy-e2e'); return true;`,
@@ -80,6 +85,7 @@ describe("agent tool access", () => {
        if (!create || create.disabled) return false; create.click(); return true;`,
       { label: "create project" },
     );
+    await waitForProjectWorkspace({ app, name: "policy-e2e" });
     await runWait(`return !!byText('button, [role="tab"]', 'New Tab');`, {
       timeoutMs: 60_000,
       label: "workspace",

@@ -19,6 +19,7 @@ beforeAll(async () => {
   }>(`(async()=>{
     const api=window.catamorphicDesktop;
     const project=await api.createProject({name:'Long chat fixture',rootPath:${JSON.stringify(path.join(artifacts, "retention-project"))}});
+    await api.workspaceNavigate({projectId:project.id});
     const agent=await api.agentsCreate({name:'Fixture helper',harness:'ai-sdk'});
     await api.agentsSetDefault(agent.id);
     const {url}=await api.getServerState();

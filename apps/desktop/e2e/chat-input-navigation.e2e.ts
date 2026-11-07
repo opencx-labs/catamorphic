@@ -1,6 +1,11 @@
 import path from "node:path";
 import { afterAll, beforeAll, expect, it } from "vitest";
-import { type AppHandle, focusWindow, launchApp } from "./harness.js";
+import {
+  type AppHandle,
+  createProjectWorkspace,
+  focusWindow,
+  launchApp,
+} from "./harness.js";
 
 let app: AppHandle;
 const dock = "document.querySelector('[data-chat-local-id]:not([inert])')";
@@ -29,9 +34,11 @@ const aligned = (index: number) =>
 beforeAll(async () => {
   app = await launchApp();
   await app.waitFor(`!!document.querySelector('[data-sidebar="left"]')`);
-  await app.eval(
-    `window.catamorphicDesktop.createProject({name:'Chat input and navigation',rootPath:${JSON.stringify(path.join("/tmp", "chat-input-navigation"))}})`,
-  );
+  await createProjectWorkspace({
+    app,
+    name: "Chat input and navigation",
+    rootPath: path.join("/tmp", "chat-input-navigation"),
+  });
   await app.waitFor(`!!document.querySelector('[data-workspace-ready]')`);
   await app.press("n", process.platform === "darwin" ? 4 : 2);
   await app.waitFor(`!!${editor}`);

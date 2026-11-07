@@ -1,5 +1,12 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { type AppHandle, launchApp, setReactValueJs } from "./harness.js";
+import {
+  type AppHandle,
+  launchApp,
+  openProjectSwitcher,
+  setReactValueJs,
+  waitForProjectWorkspace,
+  workspaceDomHelpersJs,
+} from "./harness.js";
 
 /**
  * Approvals and connector requests are durable session requests (ADR 0197),
@@ -11,6 +18,7 @@ let projectId: string;
 
 beforeAll(async () => {
   app = await launchApp();
+  await openProjectSwitcher(app);
 }, 180_000);
 
 afterAll(async () => {
@@ -18,8 +26,7 @@ afterAll(async () => {
 });
 
 const helpers = `
-  const $ = (selector) => document.querySelector(selector);
-  const $$ = (selector) => [...document.querySelectorAll(selector)];
+  ${workspaceDomHelpersJs}
   const byText = (selector, text) =>
     $$(selector).find((el) => el.textContent.trim().includes(text));
   ${setReactValueJs}
@@ -63,13 +70,11 @@ const settled = () =>
 describe("tool permissions", () => {
   it("boots, creates a project, a 'fake' connection, and a chat", async () => {
     await run(`window.focus(); return true;`);
-    await runWait(`return !!byText('button', 'Create or import project');`, {
+    await runWait(`return !!byText('button', 'New project');`, {
       timeoutMs: 120_000,
       label: "onboarding",
     });
-    await run(
-      `byText('button', 'Create or import project').click(); return true;`,
-    );
+    await run(`byText('button', 'New project').click(); return true;`);
     await runWait(
       `const input = $('[data-testid="project-name-input"]');
        if (!input) return false; setReactValue(input, 'perm-e2e'); return true;`,
@@ -80,6 +85,7 @@ describe("tool permissions", () => {
        if (!create || create.disabled) return false; create.click(); return true;`,
       { label: "create project" },
     );
+    await waitForProjectWorkspace({ app, name: "perm-e2e" });
     await runWait(`return !!byText('button, [role="tab"]', 'New Tab');`, {
       timeoutMs: 60_000,
       label: "workspace ready",

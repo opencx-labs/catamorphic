@@ -1,6 +1,11 @@
 import http from "node:http";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { type AppHandle, focusWindow, launchApp } from "./harness.js";
+import {
+  type AppHandle,
+  createProjectWorkspace,
+  focusWindow,
+  launchApp,
+} from "./harness.js";
 import { pressNativeMacKey } from "./native-pointer.js";
 
 /**
@@ -83,10 +88,11 @@ beforeAll(async () => {
     throw new Error("Missing server address");
   origin = `http://127.0.0.1:${address.port}`;
   app = await launchApp();
-  await app.eval(`window.catamorphicDesktop.createProject({
-    name: 'Caret lab',
-    rootPath: ${JSON.stringify(`${app.userDataDir}/caret-lab`)}
-  })`);
+  await createProjectWorkspace({
+    app,
+    name: "Caret lab",
+    rootPath: `${app.userDataDir}/caret-lab`,
+  });
   await app.reload();
   await app.waitFor(`document.body?.innerText.includes('Caret lab')`, {
     timeoutMs: 30_000,

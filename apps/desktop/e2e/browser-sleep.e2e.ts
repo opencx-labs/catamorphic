@@ -1,6 +1,12 @@
 import http from "node:http";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { type AppHandle, launchApp, setReactValueJs } from "./harness.js";
+import {
+  type AppHandle,
+  launchApp,
+  openProjectSwitcher,
+  setReactValueJs,
+  waitForProjectWorkspace,
+} from "./harness.js";
 
 /**
  * Sleeping tabs (ADR 0194). A minute lasts 25 ms here, so the default hour
@@ -41,7 +47,8 @@ afterAll(async () => {
 });
 
 async function createProject(name: string) {
-  const create = `[...document.querySelectorAll('button')].find(b=>b.textContent.trim()==='Create or import project')`;
+  await openProjectSwitcher(app);
+  const create = `[...document.querySelectorAll('button')].find(b=>b.textContent.trim()==='New project')`;
   await app.waitFor(`!!${create}`);
   await app.eval(`${create}.click()`);
   await app.waitFor(
@@ -53,6 +60,7 @@ async function createProject(name: string) {
   await app.waitFor(
     `(()=>{const b=document.querySelector('[data-testid="project-submit"]');if(b&&!b.disabled){b.click();return true}return false})()`,
   );
+  await waitForProjectWorkspace({ app, name });
   await app.waitFor("!!document.querySelector('[data-workspace-ready]')", {
     label: "workspace ready",
   });

@@ -1,5 +1,12 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { type AppHandle, launchApp, setReactValueJs } from "./harness.js";
+import {
+  type AppHandle,
+  launchApp,
+  openProjectSwitcher,
+  setReactValueJs,
+  waitForProjectWorkspace,
+  workspaceDomHelpersJs,
+} from "./harness.js";
 
 /**
  * A tab's close button in the horizontal strip takes no room (DESIGN.md,
@@ -15,7 +22,7 @@ const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
 const helpers = `
   ${setReactValueJs}
-  const $ = (selector) => document.querySelector(selector);
+  ${workspaceDomHelpersJs}
   const strip = () => $('[data-tab-orientation="horizontal"]');
   const tabs = () => [...strip().querySelectorAll('[data-point-key]')].filter((tab) => !tab.getAttribute('aria-hidden'));
   const tabByTitle = (title) => tabs().find((tab) => tab.textContent.includes(title));
@@ -122,11 +129,12 @@ const openPage = async (title: string) => {
 
 beforeAll(async () => {
   app = await launchApp();
+  await openProjectSwitcher(app);
   await app.waitFor(
-    "[...document.querySelectorAll('button')].some(b => b.textContent.trim() === 'Create or import project')",
+    "[...document.querySelectorAll('button')].some(b => b.textContent.trim() === 'New project')",
   );
   await run(
-    "[...document.querySelectorAll('button')].find(b => b.textContent.trim() === 'Create or import project').click(); return true;",
+    "[...document.querySelectorAll('button')].find(b => b.textContent.trim() === 'New project').click(); return true;",
   );
   await app.waitFor(
     "!!document.querySelector('[data-testid=project-name-input]')",
@@ -138,6 +146,7 @@ beforeAll(async () => {
     "!document.querySelector('[data-testid=project-submit]').disabled",
   );
   await run("$('[data-testid=project-submit]').click(); return true;");
+  await waitForProjectWorkspace({ app, name: "Tabs" });
   await runWait("return !!strip() && tabs().length >= 1;", {
     timeoutMs: 60_000,
     label: "workspace ready",

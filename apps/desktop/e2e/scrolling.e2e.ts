@@ -1,50 +1,51 @@
 import { afterAll, beforeAll, expect, it } from "vitest";
-import { type AppHandle, launchApp, setReactValueJs } from "./harness.js";
+import {
+  type AppHandle,
+  launchApp,
+  openProjectSwitcher,
+  setReactValueJs,
+  workspaceDomHelpersJs,
+} from "./harness.js";
 
 let app: AppHandle;
 
+const helpers = `${workspaceDomHelpersJs} ${setReactValueJs}
+  const byText = (selector, text) => $$(selector).find(el => el.textContent.trim() === text);`;
 const run = <T>(body: string) =>
-  app.eval<T>(`(() => {
-  const $ = (selector) => document.querySelector(selector);
-  const byText = (selector, text) => [...document.querySelectorAll(selector)]
-    .find(el => el.textContent.trim() === text);
-  ${setReactValueJs}
-  ${body}
-})()`);
+  app.eval<T>(`(() => { ${helpers} ${body} })()`);
+const wait = (body: string, options?: { timeoutMs?: number; label?: string }) =>
+  app.waitFor(`(() => { ${helpers} return (${body}); })()`, options);
 
 beforeAll(async () => {
   app = await launchApp();
-  await app.waitFor(`!![...document.querySelectorAll('button')].find(
-    el => el.textContent.trim() === 'Create or import project')`);
-  await run(`byText('button', 'Create or import project').click();`);
-  await app.waitFor(
-    `!!document.querySelector('[data-testid="project-name-input"]')`,
-  );
+  await openProjectSwitcher(app);
+  await wait(`!![...$$('button')].find(
+    el => el.textContent.trim() === 'New project')`);
+  await run(`byText('button', 'New project').click();`);
+  await wait(`!!$('[data-testid="project-name-input"]')`);
   await run(
     `setReactValue($('[data-testid="project-name-input"]'), 'scrolling-test');`,
   );
-  await app.waitFor(`(() => {
-    const button = document.querySelector('[data-testid="project-submit"]');
+  await wait(`(() => {
+    const button = $('[data-testid="project-submit"]');
     if (!button || button.disabled) return false;
     button.click();
     return true;
   })()`);
-  await app.waitFor(
-    `!![...document.querySelectorAll('[role="tab"], button')].find(
+  await wait(
+    `!![...$$('[role="tab"], button')].find(
     el => el.textContent.includes('New Tab'))`,
     { timeoutMs: 60_000 },
   );
-  await app.waitFor(`!![...document.querySelectorAll('button')].find(
-    el => el.textContent.trim() === 'Settings')`);
+  await wait(
+    `$('[aria-label="Switch project"]')?.textContent.includes('scrolling-test')`,
+  );
+  await wait(`!!byText('button', 'Settings')`);
   await run(`byText('button', 'Settings').click();`);
-  await app.waitFor(
-    `!!document.querySelector('[aria-label="Edit Fake Agent"]')`,
-  );
+  await wait(`!!$('[aria-label="Edit Fake Agent"]')`);
   await app.eval(`window.catamorphicDesktop.devWindow('setSize', 900, 480)`);
-  await app.waitFor(`window.innerHeight <= 480`);
-  await app.waitFor(
-    `!document.querySelector('#settings-import .animate-pulse')`,
-  );
+  await wait(`window.innerHeight <= 480`);
+  await wait(`!$('#settings-import .animate-pulse')`);
 });
 
 afterAll(async () => {
@@ -56,7 +57,7 @@ it("scrolls Settings to the last section without moving the workspace chrome", a
     `new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)))`,
   );
   const before = await run<number>(
-    `return document.querySelector('main').getBoundingClientRect().top;`,
+    `return $('main').getBoundingClientRect().top;`,
   );
   const point = await run<{ x: number; y: number }>(`
     const panel = $('[data-settings-scroll]');
@@ -68,7 +69,7 @@ it("scrolls Settings to the last section without moving the workspace chrome", a
   // wheel, which can grow the page under a single tick; keep wheeling until
   // the last card is in view, the way a person would.
   const atEnd = `(() => {
-    const panel = document.querySelector('[data-settings-scroll]');
+    const panel = $('[data-settings-scroll]');
     const footer = panel.querySelector('#settings-import [data-testid="settings-browser-import"]');
     const rect = footer.getBoundingClientRect();
     const bounds = panel.getBoundingClientRect();
@@ -85,20 +86,18 @@ it("scrolls Settings to the last section without moving the workspace chrome", a
     // Stop only at the very end: the category rail follows scroll position
     // and must land on the last category, not merely show its card.
     if (
-      await app.eval<boolean>(
-        `(() => { const panel = document.querySelector('[data-settings-scroll]'); return panel.scrollTop >= panel.scrollHeight - panel.clientHeight - 1; })()`,
+      await run<boolean>(
+        `return (() => { const panel = $('[data-settings-scroll]'); return panel.scrollTop >= panel.scrollHeight - panel.clientHeight - 1; })()`,
       )
     )
       break;
   }
-  await app.waitFor(atEnd, {
+  await wait(atEnd, {
     label: "last Settings section reachable by wheel",
   });
-  expect(
-    await app.eval(
-      `document.querySelector('[aria-label="Settings category"]').value`,
-    ),
-  ).toBe("import");
+  expect(await run(`return $('[aria-label="Settings category"]').value;`)).toBe(
+    "import",
+  );
   // Both import actions remain available before browser detection. Keep the
   // final action reachable at this short window height.
   const deltaY = await run<number>(`
@@ -116,9 +115,9 @@ it("scrolls Settings to the last section without moving the workspace chrome", a
       deltaY,
     });
   }
-  await app.waitFor(
+  await wait(
     `(() => {
-    const panel = document.querySelector('[data-settings-scroll]');
+    const panel = $('[data-settings-scroll]');
     const button = [...panel.querySelectorAll('button')].filter(el => el.getClientRects().length > 0).at(-1);
     const rect = button.getBoundingClientRect();
     const bounds = panel.getBoundingClientRect();
@@ -126,11 +125,9 @@ it("scrolls Settings to the last section without moving the workspace chrome", a
   })()`,
     { label: "last Settings action reachable by wheel" },
   );
-  expect(
-    await run(
-      `return document.querySelector('main').getBoundingClientRect().top;`,
-    ),
-  ).toBe(before);
+  expect(await run(`return $('main').getBoundingClientRect().top;`)).toBe(
+    before,
+  );
   expect(await app.eval("document.scrollingElement.scrollTop")).toBe(0);
   expect(
     await run(`
@@ -146,12 +143,10 @@ it("scrolls Settings to the last section without moving the workspace chrome", a
 it("keeps long agent dialogs inside the window and scrolls their bottom actions into view", async () => {
   await run(`$('[data-settings-scroll]').scrollTop = 0;
     $('[aria-label="Edit Fake Agent"]').click();`);
-  await app.waitFor(
-    `!!document.querySelector('[data-testid="configure-agent-modal"]')`,
-  );
-  await app.waitFor(
+  await wait(`!!$('[data-testid="configure-agent-modal"]')`);
+  await wait(
     `(() => {
-    const panel = document.querySelector('[data-testid="configure-agent-modal"]').closest('[role="dialog"]');
+    const panel = $('[data-testid="configure-agent-modal"]').closest('[role="dialog"]');
     return panel.scrollHeight > panel.clientHeight;
   })()`,
     { label: "agent form overflows at minimum window height" },
@@ -172,9 +167,9 @@ it("keeps long agent dialogs inside the window and scrolls their bottom actions 
     panel.focus({ preventScroll: true });
   `);
   await app.press("Tab", 8);
-  await app.waitFor(
+  await wait(
     `(() => {
-    const panel = document.querySelector('[data-testid="configure-agent-modal"]').closest('[role="dialog"]');
+    const panel = $('[data-testid="configure-agent-modal"]').closest('[role="dialog"]');
     const button = document.activeElement;
     const rect = button.getBoundingClientRect();
     const bounds = panel.getBoundingClientRect();
@@ -184,9 +179,9 @@ it("keeps long agent dialogs inside the window and scrolls their bottom actions 
     { label: "keyboard focus reveals the bottom action" },
   );
   await app.press("Tab");
-  await app.waitFor(
+  await wait(
     `(() => {
-    const panel = document.querySelector('[data-testid="configure-agent-modal"]').closest('[role="dialog"]');
+    const panel = $('[data-testid="configure-agent-modal"]').closest('[role="dialog"]');
     return panel.scrollTop === 0;
   })()`,
     { label: "Tab wraps back to the top of the dialog" },

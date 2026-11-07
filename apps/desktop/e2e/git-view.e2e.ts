@@ -3,7 +3,13 @@ import os from "node:os";
 import path from "node:path";
 import { nativeGit } from "@catamorphic/git";
 import { afterAll, beforeAll, expect, it } from "vitest";
-import { type AppHandle, launchApp, setReactValueJs } from "./harness.js";
+import {
+  type AppHandle,
+  launchApp,
+  openProjectSwitcher,
+  setReactValueJs,
+  workspaceDomHelpersJs,
+} from "./harness.js";
 import { addSidebarSections } from "./sidebar-config.js";
 
 /**
@@ -18,7 +24,7 @@ let root: string;
 let linked: string;
 const visible = '[data-workspace-visible="true"]';
 const changes = `${visible} [data-sidebar-widget="changes"]`;
-const helper = `const $ = s => document.querySelector(s); const $$ = s => [...document.querySelectorAll(s)]; const byText = (s,t) => $$(s).find(e => e.textContent.trim().includes(t)); const diffText = () => { const read = root => root.textContent + [...root.querySelectorAll("*")].filter(e => e.shadowRoot).map(e => read(e.shadowRoot)).join("\\n"); return $$("[data-testid=code-diff]").map(read).join("\\n").replaceAll("\\u00a0", " "); }; ${setReactValueJs}`;
+const helper = `${workspaceDomHelpersJs} const byText = (s,t) => $$(s).find(e => e.textContent.trim().includes(t)); const diffText = () => { const read = root => root.textContent + [...root.querySelectorAll("*")].filter(e => e.shadowRoot).map(e => read(e.shadowRoot)).join("\\n"); return $$("[data-testid=code-diff]").map(read).join("\\n").replaceAll("\\u00a0", " "); }; ${setReactValueJs}`;
 const run = <T>(body: string) => app.eval<T>(`(()=>{${helper};${body}})()`);
 const wait = (body: string, label?: string) =>
   app.waitFor(`(()=>{${helper};${body}})()`, {
@@ -72,9 +78,14 @@ beforeAll(async () => {
     path.join(root, "notes.txt"),
     "Working primary document\n",
   );
-  app = await launchApp({ env: { CATAMORPHIC_E2E_PICK_FOLDER: root } });
-  await wait(`return !!byText('button','Create or import project');`);
-  await run(`byText('button','Create or import project').click();return true;`);
+  app = await launchApp({
+    env: {
+      CATAMORPHIC_E2E_PICK_FOLDER: root,
+    },
+  });
+  await openProjectSwitcher(app);
+  await wait(`return !!byText('button','New project');`);
+  await run(`byText('button','New project').click();return true;`);
   await wait(`return !!byText('button','Import folder');`);
   await run(`byText('button','Import folder').click();return true;`);
   await wait(`return !!$('[data-testid="import-folder-picker"]');`);

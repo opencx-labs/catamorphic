@@ -2,7 +2,11 @@ import fs from "node:fs";
 import http from "node:http";
 import path from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { type AppHandle, launchApp } from "./harness.js";
+import {
+  type AppHandle,
+  createProjectWorkspace,
+  launchApp,
+} from "./harness.js";
 
 /**
  * Downloads (ADR 0153): a page's download lands in the profile's
@@ -49,10 +53,11 @@ beforeAll(async () => {
   downloadsDir = fs.mkdtempSync(path.join(fs.realpathSync("/tmp"), "work-dl-"));
   app = await launchApp({ env: { CATAMORPHIC_DOWNLOADS_DIR: downloadsDir } });
   // The dock lives with a project; open the lab page inside one.
-  await app.eval(`window.catamorphicDesktop.createProject({
-    name: 'Downloads lab',
-    rootPath: ${JSON.stringify(`${app.userDataDir}/downloads-lab`)}
-  })`);
+  await createProjectWorkspace({
+    app,
+    name: "Downloads lab",
+    rootPath: `${app.userDataDir}/downloads-lab`,
+  });
   // The new project becomes the workspace on the next load.
   await app.reload();
   await app.waitFor(`document.body?.innerText.includes('Downloads lab')`, {

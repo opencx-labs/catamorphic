@@ -1,6 +1,12 @@
 import type { SessionSnapshot } from "@catamorphic/agent-protocol";
 import { afterAll, beforeAll, expect, it } from "vitest";
-import { type AppHandle, focusWindow, launchApp } from "./harness.js";
+import {
+  type AppHandle,
+  createProjectWorkspace,
+  focusWindow,
+  launchApp,
+  waitForProjectWorkspace,
+} from "./harness.js";
 
 let app: AppHandle;
 let projectId: string;
@@ -9,15 +15,21 @@ const chat = "section[data-chat-local-id]:not([inert], [inert] *)";
 
 beforeAll(async () => {
   app = await launchApp();
-  projectId = await app.eval<string>(`(async () => {
+  const project = await createProjectWorkspace({
+    app,
+    name: "Agent updates",
+    rootPath: `${app.userDataDir}/agent-updates`,
+  });
+  projectId = project.id;
+  await app.eval(`(async () => {
     const api = window.catamorphicDesktop;
-    const project = await api.createProject({name:'Agent updates',rootPath:${JSON.stringify(`${app.userDataDir}/agent-updates`)}});
     const agent = await api.agentsCreate({name:'Review helper',harness:'codex',model:'fake-model-a',effort:'high'});
     await api.agentsSetDefault(agent.id);
-    return project.id;
   })()`);
   await app.reload();
-  await app.waitFor("!!document.querySelector('[data-workspace-ready]')");
+  expect(await waitForProjectWorkspace({ app, name: "Agent updates" })).toBe(
+    projectId,
+  );
   await focusWindow(app);
 });
 afterAll(async () => {
@@ -41,15 +53,17 @@ async function fresh() {
   );
   await app.press("n", process.platform === "darwin" ? 4 : 2);
   localId = await app.waitFor<string>(
-    `[...document.querySelectorAll(${JSON.stringify(chat)})].find(e=>!${JSON.stringify(previous)}.includes(e.dataset.chatLocalId)&&e.querySelector('[data-composer-input]'))?.dataset.chatLocalId`,
+    `[...document.querySelectorAll(${JSON.stringify(chat)})].find(e=>e.dataset.chatProject===${JSON.stringify(projectId)}&&!${JSON.stringify(previous)}.includes(e.dataset.chatLocalId)&&e.querySelector('[data-composer-input]'))?.dataset.chatLocalId`,
   );
 }
 const snapshotExpression = () => `(async () => {
     const api=window.catamorphicDesktop;
     const dock=await api.dockSnapshot();
-    const entry=dock.chats.find(c=>c.entry.localId===${JSON.stringify(localId)}).entry;
+    const chat=dock.chats.find(c=>c.entry.localId===${JSON.stringify(localId)});
+    if(!chat || chat.projectId!==${JSON.stringify(projectId)}) throw new Error('Chat owner mismatch: '+JSON.stringify(chat && {projectId:chat.projectId,localId:chat.entry.localId}));
     const {url}=await api.getServerState();
-    const response=await fetch(url+'/api/projects/'+${JSON.stringify(projectId)}+'/agent/sessions/'+entry.sessionId);
+    const response=await fetch(url+'/api/projects/'+${JSON.stringify(projectId)}+'/agent/sessions/'+chat.entry.sessionId);
+    if(!response.ok) throw new Error('Load session snapshot: '+response.status+' '+await response.text());
     return (await response.json()).snapshot;
   })()`;
 const snapshot = () => app.eval<SessionSnapshot>(snapshotExpression());
@@ -162,10 +176,14 @@ it("reloads interleaved context-only peer reports as one loose activity block", 
     }>(`(async () => {
       const api=window.catamorphicDesktop;
       const dock=await api.dockSnapshot();
-      const mainId=dock.chats.find(c=>c.entry.localId===${JSON.stringify(localId)}).entry.sessionId;
+      const chat=dock.chats.find(c=>c.entry.localId===${JSON.stringify(localId)});
+      if(!chat || chat.projectId!==${JSON.stringify(projectId)}) throw new Error('Peer fixture chat belongs to another project');
+      const mainId=chat.entry.sessionId;
       const {url}=await api.getServerState();
       const base=url+'/api/projects/'+${JSON.stringify(projectId)}+'/agent/sessions';
-      const main=await fetch(base+'/'+mainId).then(r=>r.json());
+      const loaded=await fetch(base+'/'+mainId);
+      if(!loaded.ok) throw new Error('Load peer parent: '+loaded.status+' '+await loaded.text());
+      const main=await loaded.json();
       const created=await fetch(base, {
         method:'POST',headers:{'content-type':'application/json'},
         body:JSON.stringify({agentId:main.agentId,title:'Independent context reporter',source:'desktop'})
@@ -235,6 +253,9 @@ it("reloads interleaved context-only peer reports as one loose activity block", 
     expect(users.map((item) => item.text)).toEqual(["Context reports main"]);
 
     await app.reload();
+    expect(await waitForProjectWorkspace({ app, name: "Agent updates" })).toBe(
+      projectId,
+    );
     await app.waitFor(
       `!!document.querySelector(${JSON.stringify(`${scope} [data-composer-input]`)}) && !!document.querySelector(${JSON.stringify(`${scope} [data-testid=chat-turn-steps-toggle]`)})`,
       { timeoutMs: 30_000, label: "working chat restored with peer activity" },

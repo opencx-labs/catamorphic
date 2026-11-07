@@ -33,10 +33,15 @@ describe("PrefsStore", () => {
     expect(normalizePrefs({})).toEqual(DEFAULT_PREFS);
   });
 
-  it("keeps the person's fold of the bubble strip, open unless folded", () => {
-    expect(normalizePrefs({}).dockCollapsed).toBe(false);
+  it("starts the dock folded on the right and keeps the person's choice", () => {
+    expect(normalizePrefs({})).toMatchObject({
+      dockCollapsed: true,
+      dockSide: "right",
+    });
     expect(normalizePrefs({ dockCollapsed: true }).dockCollapsed).toBe(true);
-    expect(normalizePrefs({ dockCollapsed: "yes" }).dockCollapsed).toBe(false);
+    expect(normalizePrefs({ dockCollapsed: false }).dockCollapsed).toBe(false);
+    expect(normalizePrefs({ dockCollapsed: "yes" }).dockCollapsed).toBe(true);
+    expect(normalizePrefs({ dockSide: "left" }).dockSide).toBe("left");
   });
 
   it("shows the window buttons unless turned off", () => {

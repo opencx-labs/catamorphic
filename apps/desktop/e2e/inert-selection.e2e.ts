@@ -1,12 +1,18 @@
 import { afterAll, afterEach, beforeAll, expect, it } from "vitest";
-import { type AppHandle, launchApp } from "./harness.js";
+import {
+  type AppHandle,
+  createProjectWorkspace,
+  launchApp,
+} from "./harness.js";
 
 let app: AppHandle;
 beforeAll(async () => {
   app = await launchApp();
-  await app.eval(`window.catamorphicDesktop.createProject({
-    name: 'Selection workload', rootPath: ${JSON.stringify(`${app.userDataDir}/selection-workload`)}
-  })`);
+  await createProjectWorkspace({
+    app,
+    name: "Selection workload",
+    rootPath: `${app.userDataDir}/selection-workload`,
+  });
   await app.reload();
   await app.waitFor("!!document.querySelector('[data-workspace-ready]')");
 });

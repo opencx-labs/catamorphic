@@ -3,7 +3,13 @@ import http from "node:http";
 import path from "node:path";
 import { SESSION_PROTOCOL_VERSION } from "@catamorphic/agent-protocol";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { type AppHandle, launchApp } from "./harness.js";
+import {
+  type AppHandle,
+  launchApp,
+  openProjectSwitcher,
+  waitForProjectWorkspace,
+  workspaceDomHelpersJs,
+} from "./harness.js";
 
 /**
  * Remote projects end to end (ADR 0055): a member pastes a connect link,
@@ -31,8 +37,7 @@ let introspectionUnavailable = false;
 const proposals: Array<Record<string, unknown>> = [];
 
 const helpers = `
-  const $ = (selector) => document.querySelector(selector);
-  const $$ = (selector) => [...document.querySelectorAll(selector)];
+  ${workspaceDomHelpersJs}
   const byText = (selector, text) =>
     $$(selector).find((el) => el.textContent.trim().includes(text));
   const setReactValue = (el, value) => {
@@ -327,6 +332,7 @@ describe("remote projects (ADR 0055)", () => {
   beforeAll(async () => {
     await startFakeServer();
     app = await launchApp();
+    await openProjectSwitcher(app);
   }, 120_000);
 
   afterAll(async () => {
@@ -335,13 +341,13 @@ describe("remote projects (ADR 0055)", () => {
   });
 
   it("connects from a pasted link and materializes the scoped tree", async () => {
-    // The empty state offers connecting to a server beside "Create or import project".
-    await runWait(`return !!$('[data-testid="empty-connect-remote"]');`, {
+    // The empty state offers connecting to a server beside "New project".
+    await runWait(`return !!$('[data-testid="switcher-connect-remote"]');`, {
       timeoutMs: 60_000,
       label: "empty-state connect button",
     });
     await run(
-      `$('[data-testid="empty-connect-remote"]').click(); return true;`,
+      `$('[data-testid="switcher-connect-remote"]').click(); return true;`,
     );
     await runWait(`return !!$('[data-testid="remote-link-input"]');`, {
       label: "connect modal",
@@ -367,11 +373,12 @@ describe("remote projects (ADR 0055)", () => {
       `return $$('webview').some((view) => (view.src ?? '').includes('/api/auth/mcp/authorize'));`,
       { timeoutMs: 30_000, label: "remote sign-in in workspace browser tab" },
     );
+    await waitForProjectWorkspace({ app, name: "Acme brain" });
 
     // Member documents and sharing live in the default Project sidebar.
     // Files is a collapsible section, without builder-only Git controls.
     await runWait(
-      `[...document.querySelectorAll('[data-sidebar="left"] [data-sidebar-widget="files"] button[aria-expanded="false"]')].find(button => button.textContent.trim() === 'Files')?.click();
+      `$$('[data-sidebar="left"] [data-sidebar-widget="files"] button[aria-expanded="false"]').find(button => button.textContent.trim() === 'Files')?.click();
        return $('[data-sidebar-section="files"]')?.textContent.includes('.work');`,
       {
         timeoutMs: 60_000,
@@ -451,7 +458,7 @@ describe("remote projects (ADR 0055)", () => {
 
   it("Publish ships a dirty store file first, then hands back the link", async () => {
     await run(
-      `[...document.querySelectorAll('[data-sidebar="left"] [data-sidebar-widget="files"] button[aria-expanded="false"]')].find(button => button.textContent.trim() === 'Files')?.click(); return true;`,
+      `$$('[data-sidebar="left"] [data-sidebar-widget="files"] button[aria-expanded="false"]').find(button => button.textContent.trim() === 'Files')?.click(); return true;`,
     );
     await runWait(
       `for (const name of ['.work', 'app-data', 'store', 'customers']) { const folder = byText('[data-sidebar-section="files"] button', name); if (folder?.getAttribute('aria-expanded') === 'false') { folder.click(); return false; } } return !!byText('[data-sidebar-section="files"] button', 'acme');`,

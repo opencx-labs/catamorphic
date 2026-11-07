@@ -1,6 +1,12 @@
 import http from "node:http";
 import { afterAll, beforeAll, expect, it } from "vitest";
-import { type AppHandle, launchApp, setReactValueJs } from "./harness.js";
+import {
+  type AppHandle,
+  launchApp,
+  openProjectSwitcher,
+  setReactValueJs,
+  waitForProjectWorkspace,
+} from "./harness.js";
 
 let app: AppHandle;
 let fixture: http.Server;
@@ -18,11 +24,12 @@ beforeAll(async () => {
     throw new Error("Missing fixture port");
   fixtureUrl = `http://127.0.0.1:${address.port}`;
   app = await launchApp();
+  await openProjectSwitcher(app);
   await app.waitFor(
-    `!![...document.querySelectorAll('button')].find(b=>b.textContent.trim()==='Create or import project')`,
+    `!![...document.querySelectorAll('button')].find(b=>b.textContent.trim()==='New project')`,
   );
   await app.eval(
-    `[...document.querySelectorAll('button')].find(b=>b.textContent.trim()==='Create or import project').click()`,
+    `[...document.querySelectorAll('button')].find(b=>b.textContent.trim()==='New project').click()`,
   );
   await app.waitFor(
     `!!document.querySelector('[data-testid="project-name-input"]')`,
@@ -33,6 +40,7 @@ beforeAll(async () => {
   await app.waitFor(
     `(()=>{const b=document.querySelector('[data-testid="project-submit"]');if(b&&!b.disabled){b.click();return true}return false})()`,
   );
+  await waitForProjectWorkspace({ app, name: "Idle fixture" });
   await app.waitFor(
     `!![...document.querySelectorAll('button')].find(b=>b.textContent.includes('New Tab'))`,
   );

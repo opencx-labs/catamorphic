@@ -1,6 +1,10 @@
 import http from "node:http";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { type AppHandle, launchApp } from "./harness.js";
+import {
+  type AppHandle,
+  createProjectWorkspace,
+  launchApp,
+} from "./harness.js";
 
 /**
  * A page meets Chrome: the request's User-Agent and, in JavaScript, the
@@ -47,10 +51,11 @@ beforeAll(async () => {
     throw new Error("Missing server address");
   origin = `http://127.0.0.1:${address.port}`;
   app = await launchApp();
-  await app.eval(`window.catamorphicDesktop.createProject({
-    name: 'Identity lab',
-    rootPath: ${JSON.stringify(`${app.userDataDir}/identity-lab`)}
-  })`);
+  await createProjectWorkspace({
+    app,
+    name: "Identity lab",
+    rootPath: `${app.userDataDir}/identity-lab`,
+  });
   await app.reload();
   await app.waitFor(`document.body?.innerText.includes('Identity lab')`, {
     timeoutMs: 30_000,

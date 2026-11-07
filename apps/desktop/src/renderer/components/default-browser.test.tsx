@@ -51,6 +51,7 @@ describe("DefaultBrowserButton request ordering", () => {
       request.promise,
     );
     await act(async () => root.render(<DefaultBrowserButton />));
+    expect(container.querySelector(".lucide-globe")).toBeNull();
     await act(async () => container.querySelector("button")?.click());
     await act(async () => window.dispatchEvent(new Event("focus")));
     expect(desktopApi.defaultBrowserState).toHaveBeenCalledTimes(1);
@@ -58,6 +59,11 @@ describe("DefaultBrowserButton request ordering", () => {
     await act(async () => initial.resolve(available));
     expect(container.querySelector("button")?.dataset.actionState).toBe("done");
     expect(container.querySelector("button")?.disabled).toBe(true);
+    expect(
+      container.querySelector('[aria-hidden="false"] .lucide-check'),
+    ).not.toBeNull();
+    await act(async () => container.querySelector("button")?.click());
+    expect(desktopApi.defaultBrowserRequest).toHaveBeenCalledTimes(1);
   });
 
   it("ignores stale errors and clears an error after a successful focus refresh", async () => {

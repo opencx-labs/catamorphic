@@ -4,7 +4,12 @@ import os from "node:os";
 import path from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { createBrowserProfile } from "./fixtures/browser-profile.js";
-import { type AppHandle, focusWindow, launchApp } from "./harness.js";
+import {
+  type AppHandle,
+  focusWindow,
+  launchApp,
+  openOnboardingStep,
+} from "./harness.js";
 
 let app: AppHandle;
 let directory: string;
@@ -84,23 +89,67 @@ afterAll(async () => {
 });
 
 describe("shared browser import and personal history", () => {
-  it("uses themed, animated controls with keyboard selection and nested Escape", async () => {
-    await app.waitFor(
-      `!!document.querySelector('[data-testid="default-browser-button"]')`,
-    );
-    expect(
+  it("keeps browser action contrast and cursors consistent across themes", async () => {
+    await openOnboardingStep(app, "Browser setup");
+    const original = await app.eval("window.catamorphicDesktop.themeConfig()");
+    const luminance = (color: string) => {
+      const channels = color
+        .match(/[\d.]+/g)
+        ?.slice(0, 3)
+        .map(Number);
+      if (channels?.length !== 3) throw new Error(`Unexpected color: ${color}`);
+      return channels.reduce((total, channel, index) => {
+        const value = channel / 255;
+        const linear =
+          value <= 0.04045 ? value / 12.92 : ((value + 0.055) / 1.055) ** 2.4;
+        return total + linear * [0.2126, 0.7152, 0.0722][index]!;
+      }, 0);
+    };
+    try {
+      for (const selection of ["nord", "light", "dark"]) {
+        await app.eval(
+          `window.catamorphicDesktop.setTheme({selection:${JSON.stringify(selection)},overrides:{}})`,
+        );
+        const point = await app.eval<{ x: number; y: number }>(`(() => {
+          const rect = document.querySelector('[data-testid="onboarding-browser-import"]').getBoundingClientRect();
+          return {x:rect.x+rect.width/2,y:rect.y+rect.height/2};
+        })()`);
+        await app.movePointer(point);
+        await app.waitFor(
+          `document.getAnimations().every(animation => animation.playState !== 'running' || animation.effect?.getTiming().iterations === Infinity)`,
+        );
+        const styles = await app.eval<{
+          color: string;
+          background: string;
+          cursors: string[];
+        }>(`(() => {
+          const button = document.querySelector('[data-testid="onboarding-browser-import"]');
+          const style = getComputedStyle(button);
+          return {color:style.color,background:style.backgroundColor,cursors:[...document.querySelectorAll('.onboarding-browser-actions .browser-setup-action')].map(button=>getComputedStyle(button).cursor)};
+        })()`);
+        const values = [luminance(styles.color), luminance(styles.background)];
+        expect(
+          (Math.max(...values) + 0.05) / (Math.min(...values) + 0.05),
+        ).toBeGreaterThanOrEqual(4.5);
+        expect(styles.cursors).toEqual(["default", "default"]);
+      }
+    } finally {
       await app.eval(
-        `(()=>{const a=document.querySelector('[data-testid="onboarding-browser-import"]').getBoundingClientRect();const b=document.querySelector('[data-testid="default-browser-button"]').getBoundingClientRect();return b.y >= a.bottom && a.width === b.width;})()`,
-      ),
-    ).toBe(true);
+        `window.catamorphicDesktop.setTheme(${JSON.stringify(original)})`,
+      );
+    }
+  });
+  it("uses themed, animated controls with keyboard selection and nested Escape", async () => {
+    await openOnboardingStep(app, "Browser setup");
     expect(
       await app.eval(`(() => {
         const button = document.querySelector('[data-testid="default-browser-button"]');
-        return {disabled: button.disabled, reason: document.getElementById(button.getAttribute('aria-describedby')).innerText};
+        return {disabled: button.disabled, reason: button.dataset.disabledReason, description: button.getAttribute('aria-describedby')};
       })()`),
     ).toEqual({
       disabled: true,
       reason: "Use the installed Work app to set your default browser.",
+      description: null,
     });
     await click('[data-testid="onboarding-browser-import"]');
     await app.waitFor(
@@ -212,6 +261,7 @@ describe("shared browser import and personal history", () => {
     const completed = await app.eval<{
       disabled: boolean;
       state: string;
+      checked: boolean;
       background: string;
       border: string;
       x: number;
@@ -220,10 +270,11 @@ describe("shared browser import and personal history", () => {
       const button = document.querySelector('[data-testid="onboarding-browser-import"]');
       const style = getComputedStyle(button);
       const bounds = button.getBoundingClientRect();
-      return {disabled: button.disabled, state: button.dataset.actionState, background: style.backgroundColor, border: style.borderTopColor, x: bounds.x + bounds.width / 2, y: bounds.y + bounds.height / 2};
+      return {disabled: button.disabled, state: button.dataset.actionState, checked: !!button.querySelector('[aria-hidden="false"] .lucide-check'), background: style.backgroundColor, border: style.borderTopColor, x: bounds.x + bounds.width / 2, y: bounds.y + bounds.height / 2};
     })()`);
     expect(completed.disabled).toBe(true);
     expect(completed.state).toBe("done");
+    expect(completed.checked).toBe(true);
     expect(completed.border).toBe("rgba(0, 0, 0, 0)");
     await app.movePointer({ x: completed.x, y: completed.y });
     expect(
@@ -255,6 +306,7 @@ describe("shared browser import and personal history", () => {
     await app.waitFor(
       `!!document.querySelector('[aria-label="Switch profile: Fresh import profile"]')`,
     );
+    await openOnboardingStep(app, "Browser setup");
     await app.waitFor(
       `document.querySelector('[data-testid="onboarding-browser-import"]')?.dataset.actionState === 'idle'`,
     );
@@ -287,13 +339,13 @@ describe("shared browser import and personal history", () => {
     await app.waitFor(`${input}?.placeholder === 'Search history…'`);
     await app.insertText("Deep archive needle");
     await app.waitFor(
-      `document.querySelector('[role="option"]')?.textContent.includes('Deep archive needle')`,
+      `(${input})?.closest('[role="dialog"]')?.querySelector('[role="option"]')?.textContent.includes('Deep archive needle')`,
     );
     await app.press("Escape");
     await palette();
     await app.insertText("History");
     await app.waitFor(
-      `[...document.querySelectorAll('[role="option"]')].some(el=>el.textContent.includes("Pages and work you've opened"))`,
+      `[...((${input})?.closest('[role="dialog"]')?.querySelectorAll('[role="option"]') ?? [])].some(el=>el.textContent.includes("Pages and work you've opened"))`,
     );
     await app.press("Enter");
     await app.waitFor(
@@ -308,7 +360,7 @@ describe("shared browser import and personal history", () => {
     await palette();
     await app.insertText("Settings");
     await app.waitFor(
-      `[...document.querySelectorAll('[role="option"]')].some(el=>el.textContent.trim().startsWith('Settings'))`,
+      `[...((${input})?.closest('[role="dialog"]')?.querySelectorAll('[role="option"]') ?? [])].some(el=>el.textContent.trim().startsWith('Settings'))`,
     );
     await app.press("Enter");
     await app.waitFor(`!${input}`);

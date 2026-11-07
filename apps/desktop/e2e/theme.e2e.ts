@@ -1,16 +1,23 @@
 import fs from "node:fs";
 import { afterAll, beforeAll, expect, it } from "vitest";
 import { DEFAULT_THEME_FONTS } from "../src/shared/theme-fonts.js";
-import { type AppHandle, launchApp, setReactValueJs } from "./harness.js";
+import {
+  type AppHandle,
+  launchApp,
+  openProjectSwitcher,
+  setReactValueJs,
+  waitForProjectWorkspace,
+} from "./harness.js";
 
 let app: AppHandle;
 
 beforeAll(async () => {
   app = await launchApp();
+  await openProjectSwitcher(app);
   await app.waitFor(`!![...document.querySelectorAll('button')].find(
-    el => el.textContent.trim() === 'Create or import project')`);
+    el => el.textContent.trim() === 'New project')`);
   await app.eval(`[...document.querySelectorAll('button')].find(
-    el => el.textContent.trim() === 'Create or import project').click()`);
+    el => el.textContent.trim() === 'New project').click()`);
   await app.waitFor(
     `!!document.querySelector('[data-testid="project-name-input"]')`,
   );
@@ -24,17 +31,38 @@ beforeAll(async () => {
     button.click();
     return true;
   })()`);
+  await waitForProjectWorkspace({ app, name: "theme-test" });
   await app.waitFor(
     `!![...document.querySelectorAll('[role="tab"], button')].find(
     el => el.textContent.includes('New Tab'))`,
     { timeoutMs: 60_000 },
   );
-  await app.waitFor(`!![...document.querySelectorAll('button')].find(
-    el => el.textContent.trim() === 'Settings')`);
-  await app.eval(`[...document.querySelectorAll('button')].find(
-    el => el.textContent.trim() === 'Settings').click()`);
-  await app.waitFor(`!![...document.querySelectorAll('label')].find(
-    el => el.textContent.includes('Interface font'))`);
+  await app.eval(
+    `window.dispatchEvent(new KeyboardEvent('keydown',{key:'p',metaKey:/Mac/.test(navigator.platform),ctrlKey:!/Mac/.test(navigator.platform),bubbles:true}))`,
+  );
+  await app.waitFor(
+    `document.activeElement?.matches('textarea[aria-label="Search commands, pages, and more"]') && !!document.activeElement.closest('.fixed[aria-hidden="false"]')`,
+  );
+  await app.insertText("Choose theme");
+  await app.waitFor(
+    `document.activeElement?.closest('[role="dialog"]')?.querySelector('[role="option"][aria-selected="true"]')?.textContent.includes('Choose theme')`,
+  );
+  await app.press("Enter");
+  await app.waitFor(`!!document.querySelector('[data-theme-preset="dark"]')`);
+  await app.eval(`(() => {
+    const select = document.querySelector('select[aria-label="Theme scope"]');
+    const setter = Object.getOwnPropertyDescriptor(HTMLSelectElement.prototype, 'value').set;
+    setter.call(select, 'profile'); select.dispatchEvent(new Event('change',{bubbles:true}));
+  })()`);
+  await app.waitFor(
+    `document.querySelector('select[aria-label="Theme scope"]')?.value === 'profile'`,
+  );
+  await app.waitFor(
+    `(() => { const button = [...document.querySelectorAll('button')].find(el => el.textContent.includes('Customize colors and fonts')); if (!button) return false; button.click(); return true; })()`,
+  );
+  await app.waitFor(
+    `!![...document.querySelectorAll('label')].find(el => el.textContent.includes('Interface font'))`,
+  );
 });
 
 afterAll(async () => {

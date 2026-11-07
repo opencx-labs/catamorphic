@@ -1,5 +1,12 @@
 import { afterAll, describe, it } from "vitest";
-import { type AppHandle, launchApp, setReactValueJs } from "./harness.js";
+import {
+  type AppHandle,
+  launchApp,
+  openProjectSwitcher,
+  setReactValueJs,
+  waitForProjectWorkspace,
+  workspaceDomHelpersJs,
+} from "./harness.js";
 import { addSidebarSections, CHATS_SECTION } from "./sidebar-config.js";
 
 /**
@@ -17,8 +24,7 @@ afterAll(async () => {
 });
 
 const helpers = `
-  const $ = (selector) => document.querySelector(selector);
-  const $$ = (selector) => [...document.querySelectorAll(selector)];
+  ${workspaceDomHelpersJs}
   const byText = (selector, text) =>
     $$(selector).find((el) => el.textContent.trim().includes(text));
   const visibleDock = () =>
@@ -54,13 +60,12 @@ const runWait = <T>(
 describe("interrupted turn recovery", () => {
   it("a turn killed mid-flight settles as interrupted on relaunch", async () => {
     app = await launchApp();
-    await runWait(`return !!byText('button', 'Create or import project');`, {
+    await openProjectSwitcher(app);
+    await runWait(`return !!byText('button', 'New project');`, {
       timeoutMs: 60_000,
       label: "empty state",
     });
-    await run(
-      `byText('button', 'Create or import project').click(); return true;`,
-    );
+    await run(`byText('button', 'New project').click(); return true;`);
     await runWait(`return !!$('[data-testid="project-name-input"]');`);
     await run(`
       setReactValue($('[data-testid="project-name-input"]'), 'e2e-recovery');
@@ -71,6 +76,7 @@ describe("interrupted turn recovery", () => {
        if (btn && !btn.disabled) { btn.click(); return true; } return false;`,
       { label: "project submit enabled" },
     );
+    await waitForProjectWorkspace({ app, name: "e2e-recovery" });
     await runWait(`return !!byText('[role="tab"], button', 'New Tab');`, {
       timeoutMs: 60_000,
       label: "workspace ready",

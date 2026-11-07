@@ -446,3 +446,41 @@ closed; a new phase or explicit check can show the next message.
 The sidebar panel's overlay thumb passes wheel input to the native scroller
 beneath it, preserving the screen edge's scrolling. A press on the thumb still
 captures its drag; section thumbs continue to address their own nested lists.
+
+## Onboarding
+
+A new profile opens in a real Default Project, with the normal Tutorial tab
+already selected and the dock visible, collapsed on the right. Startup waits
+behind the boot veil for the project and workspace to be ready. The default
+project operation reuses the profile's project and coalesces simultaneous startup
+requests; creating a new project remains an explicit project-switcher action.
+Agent-less projects also offer onboarding once project and remote state resolve.
+An external page opened at startup retains focus instead of being replaced by
+the empty-profile welcome.
+Loading and project-load errors remain separate, with retry on failure. Closing
+onboarding skips it for that profile during this session. The palette can open it
+again using onboarding, tutorial, welcome, tour, getting started, learn, guide,
+or help. Reopening resets the same tab to Welcome rather than creating a duplicate.
+Project tabs persist their current step across relaunches.
+
+The tutorial introduces themes, agent setup, the dock, keyboard shortcuts, the
+palette modes, sidebar customization, and combined browser import/default-browser
+setup. The sidebar hero uses the real workspace preview, with a centered chat
+and both sidebars expanding and collapsing. Reduced motion shows it statically. The agent step opens
+the existing wizard as a modal, retains the tutorial and its step, and shows a
+completed action once configured. The dock is already visible before setup; its walkthrough uses the real bubble strip and an animated
+cursor, expanding from the right corner into the center of the window, with a
+static illustration under reduced motion. Expanding the real dock reserves bottom
+space in onboarding over 250ms so the copy and navigation remain clear; the
+preview's animation does not change that clearance. The palette and dock
+steps show effective shortcuts and the plus icon. Project creation and server
+connections stay in the normal project switcher. Done
+closes the tutorial and opens an ordinary New Tab palette, keeping other tabs.
+An empty workspace retains its New tab control. Each action reuses its
+normal implementation. Component previews are inert and use local example data.
+Theme customization carries the tutorial into the default project when needed,
+opens agent setup in another tab, then starts a normal theme conversation.
+
+First launch opens maximized with both sidebars collapsed. New projects start with an empty right sidebar containing
+only the agent customization button. Existing profile
+preferences and saved window placement are respected on subsequent launches.

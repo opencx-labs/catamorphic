@@ -52,6 +52,13 @@ const FOLD_MS = 250;
 
 type Spot = "left" | "center" | "right";
 
+/** An ancestor's slide must not count as movement between the dock's spots. */
+function dockEdges({ rail }: { rail: HTMLElement }) {
+  const bounds = rail.getBoundingClientRect();
+  const origin = rail.parentElement?.getBoundingClientRect().left ?? 0;
+  return { left: bounds.left - origin, right: bounds.right - origin };
+}
+
 /**
  * Whether the strip shows folded, derived where the dock renders so the
  * fold and what it moves (a chat tab's clearance, the detached window's
@@ -515,7 +522,9 @@ export function ChatBubbles({
   // or the region moved), never where it was when it last changed spots.
   const slideFrom =
     dragLeft === null && (shownSpot.current !== spot || shownDragged.current)
-      ? (railRef.current?.getBoundingClientRect() ?? null)
+      ? railRef.current
+        ? dockEdges({ rail: railRef.current })
+        : null
       : null;
   useLayoutEffect(() => {
     const rail = railRef.current;
@@ -547,7 +556,7 @@ export function ChatBubbles({
           )
         : 1;
     running?.animation.cancel();
-    const rect = rail.getBoundingClientRect();
+    const rect = dockEdges({ rail });
     // Compare the edge that anchors the new spot so a width change during
     // the same commit does not read as travel.
     const delta =

@@ -3,7 +3,14 @@ import http from "node:http";
 import os from "node:os";
 import path from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { type AppHandle, launchApp, setReactValueJs } from "./harness.js";
+import {
+  type AppHandle,
+  launchApp,
+  openProjectSwitcher,
+  setReactValueJs,
+  waitForProjectWorkspace,
+  workspaceDomHelpersJs,
+} from "./harness.js";
 
 /**
  * Motion-contract tests. These do NOT measure frame rate (machine-dependent,
@@ -54,6 +61,7 @@ beforeAll(async () => {
       CATAMORPHIC_PWA_DIST: pairingDist,
     },
   });
+  await openProjectSwitcher(app);
 });
 
 afterAll(async () => {
@@ -62,8 +70,7 @@ afterAll(async () => {
 });
 
 const helpers = `
-  const $ = (selector) => document.querySelector(selector);
-  const $$ = (selector) => [...document.querySelectorAll(selector)];
+  ${workspaceDomHelpersJs}
   const byText = (selector, text) =>
     $$(selector).find((el) => el.textContent.trim().includes(text));
   const visibleDock = () =>
@@ -168,10 +175,8 @@ const collectAnimationRules = () =>
 
 describe("setup", () => {
   it("creates a project workspace", async () => {
-    await runWait(`return !!byText('button', 'Create or import project');`);
-    await run(
-      `byText('button', 'Create or import project').click(); return true;`,
-    );
+    await runWait(`return !!byText('button', 'New project');`);
+    await run(`byText('button', 'New project').click(); return true;`);
     await runWait(`return !!$('[data-testid="project-name-input"]');`);
     await run(`
       setReactValue($('[data-testid="project-name-input"]'), 'motion-project');
@@ -181,6 +186,7 @@ describe("setup", () => {
       `const btn = $('[data-testid="project-submit"]');
        if (btn && !btn.disabled) { btn.click(); return true; } return false;`,
     );
+    await waitForProjectWorkspace({ app, name: "motion-project" });
     await runWait(`return !!byText('button', 'New Tab');`, {
       timeoutMs: 60_000,
       label: "workspace ready",

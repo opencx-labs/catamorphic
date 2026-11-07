@@ -1,4 +1,4 @@
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -16,7 +16,9 @@ async function executable(body: string) {
   const dir = await mkdtemp(path.join(tmpdir(), "codex-models-"));
   directories.push(dir);
   const file = path.join(dir, "codex");
-  await writeFile(file, `#!${process.execPath}\n${body}`, { mode: 0o755 });
+  const runtime = path.join(dir, "node");
+  await symlink(process.execPath, runtime);
+  await writeFile(file, `#!${runtime}\n${body}`, { mode: 0o755 });
   return file;
 }
 

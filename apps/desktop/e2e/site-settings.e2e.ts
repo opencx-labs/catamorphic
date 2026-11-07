@@ -224,7 +224,7 @@ describe("site settings", () => {
       `(document.querySelector('[data-point-key^="browser:"] button') ?? document.querySelector('[data-point-key^="browser:"]')).click(); true`,
     );
     await app.waitFor(
-      `(() => { const view = ${guest}; try { return !!view && view.getTitle() === 'Lab' && !view.isLoading(); } catch { return false; } })()`,
+      `(() => { const view = ${guest}; try { return !!view && view.getURL() === ${JSON.stringify(`${origin}/lab`)} && view.checkVisibility({opacityProperty:true,visibilityProperty:true}) && !view.isLoading(); } catch { return false; } })()`,
       { label: "lab page back" },
     );
     // No app is registered for this scheme, so nothing can launch; the

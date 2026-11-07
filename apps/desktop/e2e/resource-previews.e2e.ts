@@ -1,7 +1,11 @@
 import fs from "node:fs";
 import path from "node:path";
 import { afterAll, beforeAll, expect, it } from "vitest";
-import { type AppHandle, launchApp } from "./harness.js";
+import {
+  type AppHandle,
+  createProjectWorkspace,
+  launchApp,
+} from "./harness.js";
 
 let app: AppHandle;
 let root: string;
@@ -64,9 +68,11 @@ beforeAll(async () => {
   app = await launchApp();
   await app.waitFor(`!!document.querySelector('[data-sidebar="left"]')`);
   root = path.join(app.userDataDir, "preview-project");
-  await app.eval(
-    `window.catamorphicDesktop.createProject({name:'Preview project',rootPath:${JSON.stringify(root)}})`,
-  );
+  await createProjectWorkspace({
+    app,
+    name: "Preview project",
+    rootPath: root,
+  });
   fs.writeFileSync(
     path.join(root, "picture.svg"),
     '<svg xmlns="http://www.w3.org/2000/svg" width="360" height="220"><rect width="360" height="220" fill="#647cff"/><circle cx="180" cy="110" r="70" fill="#ffbd69"/></svg>',

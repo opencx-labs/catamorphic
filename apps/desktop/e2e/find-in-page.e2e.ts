@@ -1,6 +1,11 @@
 import http from "node:http";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { type AppHandle, focusWindow, launchApp } from "./harness.js";
+import {
+  type AppHandle,
+  createProjectWorkspace,
+  focusWindow,
+  launchApp,
+} from "./harness.js";
 
 /**
  * Find in page, as in Chrome: Cmd+F opens the tab's find bar (unless the
@@ -178,10 +183,11 @@ beforeAll(async () => {
     throw new Error("Missing server address");
   origin = `http://127.0.0.1:${address.port}`;
   app = await launchApp();
-  await app.eval(`window.catamorphicDesktop.createProject({
-    name: 'Find lab',
-    rootPath: ${JSON.stringify(`${app.userDataDir}/find-lab`)}
-  })`);
+  await createProjectWorkspace({
+    app,
+    name: "Find lab",
+    rootPath: `${app.userDataDir}/find-lab`,
+  });
   await app.reload();
   await app.waitFor(`document.body?.innerText.includes('Find lab')`, {
     timeoutMs: 30_000,
@@ -256,12 +262,17 @@ describe("find in page", () => {
   it("paints matches and selected text in the theme's accent, and a page's own colors over it", async () => {
     // What is painted, not computed: Chromium computes highlight styles it
     // never paints (a user-origin sheet's).
-    const accent = await app.eval<string>(
-      "getComputedStyle(document.documentElement).getPropertyValue('--color-accent').trim()",
-    );
-    const rgb = [1, 3, 5].map((at) =>
-      Number.parseInt(accent.slice(at, at + 2), 16),
-    );
+    const rgb = await app.eval<number[]>(`(async () => {
+      const projectId = document.querySelector('[data-workspace-visible="true"]').dataset.projectRuntime;
+      const theme = await window.catamorphicDesktop.getTheme(projectId);
+      const canvas = document.createElement('canvas');
+      canvas.width = canvas.height = 1;
+      const context = canvas.getContext('2d');
+      if (!context) throw new Error('No color probe context');
+      context.fillStyle = theme.colors.accent;
+      context.fillRect(0, 0, 1, 1);
+      return [...context.getImageData(0, 0, 1, 1).data].slice(0, 3);
+    })()`);
     /** The accent at `percent` over the page's white. */
     const over = (percent: number) =>
       rgb.map((channel) =>

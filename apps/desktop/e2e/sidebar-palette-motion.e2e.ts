@@ -1,7 +1,11 @@
 import fs from "node:fs";
 import path from "node:path";
 import { afterAll, beforeAll, expect, it } from "vitest";
-import { type AppHandle, launchApp } from "./harness.js";
+import {
+  type AppHandle,
+  createProjectWorkspace,
+  launchApp,
+} from "./harness.js";
 import { CHATS_SECTION, writeSidebarSections } from "./sidebar-config.js";
 
 let app: AppHandle;
@@ -9,7 +13,7 @@ const section =
   '[data-workspace-visible="true"] [data-sidebar-section="chats"]';
 const box = `${section} > [data-collapsible]`;
 const input =
-  '[data-palette="overlay"] [aria-label="Search commands, pages, and more"]';
+  '[data-workspace-visible="true"] [data-palette="overlay"] [aria-label="Search commands, pages, and more"]';
 const artifacts = process.env.CATAMORPHIC_E2E_ARTIFACTS_DIR;
 const shot = async (name: string) => {
   if (artifacts) await app.screenshot(path.join(artifacts, `${name}.png`));
@@ -42,9 +46,11 @@ beforeAll(async () => {
     })()`,
   });
   await app.waitFor(`!!document.querySelector('[data-sidebar="left"]')`);
-  const project = await app.eval<{ id: string }>(
-    `window.catamorphicDesktop.createProject({name:'Sidebar and palette motion',rootPath:${JSON.stringify(path.join(app.userDataDir, "motion-project"))}})`,
-  );
+  const project = await createProjectWorkspace({
+    app,
+    name: "Sidebar and palette motion",
+    rootPath: path.join(app.userDataDir, "motion-project"),
+  });
   const server = await app.eval<{ url: string }>(
     "window.catamorphicDesktop.getServerState()",
   );
@@ -235,7 +241,7 @@ it("keeps long palette edits focused and free of an inner border in both inputs"
     await shot(agent ? "palette-agent-deleted" : "palette-textarea-deleted");
     await app.press("Escape");
     await app.waitFor(
-      `!!document.querySelector('[data-palette="overlay"]').closest('[inert]')`,
+      `!!document.querySelector('[data-workspace-visible="true"] [data-palette="overlay"]')?.closest('[inert]')`,
     );
   }
   if (artifacts)
@@ -322,7 +328,7 @@ it("keeps the caret visible after scroll-away deletion in a narrow New Tab", asy
     `document.getAnimations().every(a=>a.playState!=='running'||a.effect?.getTiming().iterations===Infinity)`,
   );
   const target =
-    '[data-palette="tab"] [aria-label="Search commands, pages, and more"]';
+    '[data-workspace-visible="true"] [data-palette="tab"] [aria-label="Search commands, pages, and more"]';
   const prose = Array.from(
     { length: 14 },
     (_, i) =>
@@ -342,7 +348,7 @@ it("keeps the caret visible after scroll-away deletion in a narrow New Tab", asy
     await app.press("Backspace");
     await app.waitFor(`document.querySelector('${target}').scrollTop>0`);
     await app.waitFor(
-      `document.querySelector('[data-palette="tab"]').getAnimations({subtree:true}).every(a=>a.playState!=='running'||a.effect?.getTiming().iterations===Infinity)`,
+      `document.querySelector('[data-workspace-visible="true"] [data-palette="tab"]').getAnimations({subtree:true}).every(a=>a.playState!=='running'||a.effect?.getTiming().iterations===Infinity)`,
     );
     const geometry = await app.eval<{
       visible: boolean;

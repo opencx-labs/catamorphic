@@ -1,7 +1,13 @@
 import fs from "node:fs";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
-import { type FrameHandle, launchApp, setReactValueJs } from "./harness.js";
+import {
+  type FrameHandle,
+  launchApp,
+  openProjectSwitcher,
+  setReactValueJs,
+  workspaceDomHelpersJs,
+} from "./harness.js";
 
 /**
  * Eval-style e2e: a REAL model-backed agent builds a small app end to end —
@@ -68,8 +74,7 @@ const ARTIFACTS_DIR = path.join(import.meta.dirname, "artifacts");
 
 /** DOM helpers injected into every page eval (same idiom as the e2e files). */
 const helpers = `
-  const $ = (selector) => document.querySelector(selector);
-  const $$ = (selector) => [...document.querySelectorAll(selector)];
+  ${workspaceDomHelpersJs}
   const byText = (selector, text) =>
     $$(selector).find((el) => el.textContent.trim().includes(text));
   const visibleDock = () =>
@@ -98,6 +103,7 @@ describeIf("agent build eval (real model)", () => {
           : { OPENAI_API_KEY: openaiKey }),
       },
     });
+    await openProjectSwitcher(app);
     const run = <T>(body: string) =>
       app.eval<T>(`(async () => { ${helpers}\n${body} })()`);
     const runWait = <T>(
@@ -108,13 +114,11 @@ describeIf("agent build eval (real model)", () => {
     let frame: FrameHandle | undefined;
     try {
       // --- 1. Create a project ---
-      await runWait(`return !!byText('button', 'Create or import project');`, {
+      await runWait(`return !!byText('button', 'New project');`, {
         timeoutMs: 60_000,
-        label: "empty-state Create or import project button",
+        label: "empty-state New project button",
       });
-      await run(
-        `byText('button', 'Create or import project').click(); return true;`,
-      );
+      await run(`byText('button', 'New project').click(); return true;`);
       await runWait(`return !!$('[data-testid="project-name-input"]');`);
       await run(`
           setReactValue($('[data-testid="project-name-input"]'), '${PROJECT_NAME}');

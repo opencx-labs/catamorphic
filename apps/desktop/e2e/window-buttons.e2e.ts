@@ -2,9 +2,11 @@ import fs from "node:fs";
 import { afterAll, beforeAll, expect, it } from "vitest";
 import {
   type AppHandle,
+  createProjectWorkspace,
   focusWindow,
   launchApp,
   setReactValueJs,
+  workspaceDomHelpersJs,
 } from "./harness.js";
 
 /**
@@ -20,7 +22,7 @@ let prefsFile: string;
 let projectId = "";
 const helpers = `
 ${setReactValueJs}
-const $ = s => document.querySelector(s);
+${workspaceDomHelpersJs}
 const input=()=>[...document.querySelectorAll('textarea[aria-label="Search commands, pages, and more"]')].find(el=>!el.closest('[inert]') && el.getBoundingClientRect().width>0);
 const key=(key, mods={})=>input().dispatchEvent(new KeyboardEvent('keydown',{key,bubbles:true,cancelable:true,...mods}));
 const rows=()=>[...input().closest('[role="dialog"]').querySelectorAll('[role="option"]')];
@@ -61,9 +63,11 @@ const searchPalette = async (text: string) => {
 beforeAll(async () => {
   app = await launchApp();
   await app.waitFor(`!!document.querySelector('[data-sidebar="left"]')`);
-  const project = await app.eval<{ id: string }>(
-    `window.catamorphicDesktop.createProject({name:'Chrome corner',rootPath:${JSON.stringify(`${app.userDataDir}/chrome-corner-project`)}})`,
-  );
+  const project = await createProjectWorkspace({
+    app,
+    name: "Chrome corner",
+    rootPath: `${app.userDataDir}/chrome-corner-project`,
+  });
   const profileId = await app.eval<string>(
     `window.catamorphicDesktop.profilesList().then(data => data.profiles.find(profile => profile.projectIds.includes(${JSON.stringify(project.id)}))?.id ?? data.defaultProfileId)`,
   );
@@ -248,7 +252,6 @@ it.skipIf(mac)("offers nothing where the OS draws the frame", async () => {
  * document, whatever is drawn on top.
  */
 const regions = `
-  const $$ = (selector) => [...document.querySelectorAll(selector)];
   const regions = () => [...document.querySelectorAll('*')].flatMap((element) => {
     const style = getComputedStyle(element);
     const region = style.getPropertyValue('app-region') || style.getPropertyValue('-webkit-app-region');
@@ -531,7 +534,7 @@ it("keeps a background project's drag areas off the visible tabs", async () => {
       `window.catamorphicDesktop.workspaceNavigate({projectId: ${JSON.stringify(id)}})`,
     );
     await settle(
-      `${visible}?.dataset.projectRuntime === ${JSON.stringify(id)} && !!${visible}.querySelector('.workspace-chrome button[aria-label="New tab"]')`,
+      `${visible}?.dataset.projectRuntime === ${JSON.stringify(id)} && !!${visible}.querySelector('[data-workspace-ready] .workspace-chrome button[aria-label="New tab"]')`,
       label,
     );
   };
@@ -543,7 +546,7 @@ it("keeps a background project's drag areas off the visible tabs", async () => {
     room: number;
     tabs: number[];
   }>(`
-    const hidden = $('[data-workspace-visible="false"]');
+    const hidden = document.querySelector('[data-project-runtime=${JSON.stringify(background.id)}][data-workspace-visible="false"]');
     const room = hidden.querySelector('[data-tab-strip-room="end"]').getBoundingClientRect();
     return {
       after: !!(${visible}.compareDocumentPosition(hidden) & Node.DOCUMENT_POSITION_FOLLOWING),

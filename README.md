@@ -37,7 +37,11 @@ pre-migration database backup.
 
 Work uses a fresh application identity and storage directory. Alpha data and
 credentials from the previous app are not migrated automatically. Project
-folders remain ordinary files you can import.
+folders remain ordinary files you can import. The Tutorial tab introduces the
+workspace and walks through themes, AI agent setup, the dock, keyboard shortcuts,
+palette modes, sidebars, and browser setup, then opens a normal New Tab palette. New profiles
+start in Default Project with the dock collapsed on the right and an empty right
+sidebar ready for agent customization. Reopen the tutorial from the palette at any time.
 
 On macOS, Finder's **Open With** menu and Work's Dock icon accept PDFs, images,
 media, web pages, text and code. Work appears as an alternative without changing

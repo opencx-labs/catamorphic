@@ -11,6 +11,7 @@ import {
   clickNativePointer,
   moveNativePointer,
   moveNativePointerThrough,
+  type NativeClickOptions,
 } from "./native-pointer.js";
 
 /**
@@ -112,7 +113,10 @@ export interface AppHandle {
    * whichever window the OS finds there, so a window above the workspace
    * either takes it or lets it through.
    */
-  clickPointer: (point: { x: number; y: number }) => Promise<void>;
+  clickPointer: (
+    point: { x: number; y: number },
+    options?: NativeClickOptions,
+  ) => Promise<void>;
   /** Insert text through Chromium's real editing path (including Monaco). */
   insertText: (text: string) => Promise<void>;
   /**
@@ -147,8 +151,12 @@ export interface LaunchOpts {
   urls?: string[];
   /** Installed/packaged binary for release performance checks with isolated data. */
   executablePath?: string;
+  /** Exercise the shipped first-launch layout instead of the standard workspace fixture. */
+  firstLaunch?: boolean;
   /** Leave native startup visibility/focus untouched for restoration checks. */
   activateWindow?: boolean;
+  /** Accept a restored utility window whose preferred project is owned elsewhere. */
+  allowUtilityWorkspace?: boolean;
   /** Reuse an existing userData dir (relaunch scenarios). */
   userDataDir?: string;
   /** Extra environment variables for the app process (e2e seams). */
@@ -251,6 +259,38 @@ export async function launchApp(opts: LaunchOpts = {}): Promise<AppHandle> {
         label: "launched desktop activated",
       });
     }
+    // IPC and DOM fixtures must start at the same composed first paint a
+    // person sees, after Default Project initialization has settled.
+    await client.waitFor(
+      `(async () => {
+        if (document.querySelector('[data-workspace-visible=true] [data-workspace-ready], [data-testid="project-load-error"]')) return true;
+        if (!${opts.allowUtilityWorkspace === true}) return false;
+        const utility = document.querySelector('[data-project-runtime="initial"][data-workspace-visible="true"]');
+        const profile = utility?.querySelector('[aria-label^="Switch profile:"]');
+        return !!utility && !utility.querySelector('[data-workspace-ready], [data-boot-veil]') &&
+          !!utility.querySelector('[data-testid="project-open-recovery"]') &&
+          !!profile?.checkVisibility({ opacityProperty: true, visibilityProperty: true }) &&
+          (await window.catamorphicDesktop.workspaceInitial()).projectIds.length === 0;
+      })()`,
+      { timeoutMs: 60_000, label: "initial workspace revealed" },
+    );
+    // Most interaction suites use an explicit, stable workspace layout. The
+    // tutorial/window suites opt into the real first-launch presentation.
+    if (
+      !opts.userDataDir &&
+      !opts.firstLaunch &&
+      opts.activateWindow !== false
+    ) {
+      await client.eval(
+        "window.catamorphicDesktop.setPrefs({sidebarOpen:true,dockCollapsed:false})",
+      );
+      await client.eval(
+        "window.catamorphicDesktop.devWindow('fitSize',1200,800)",
+      );
+      await client.waitFor(
+        `!!document.querySelector('[aria-label="Collapse sidebar"]')`,
+      );
+    }
     // App iframes with an opaque origin render out of process; their CDP
     // targets appear on the same /json endpoint as the page. Attach a
     // dedicated WebSocket so tests can evaluate inside the frame.
@@ -333,11 +373,11 @@ export async function launchApp(opts: LaunchOpts = {}): Promise<AppHandle> {
           points.map(({ x, y }) => ({ x: bounds.x + x, y: bounds.y + y })),
         );
       },
-      clickPointer: async ({ x, y }) => {
+      clickPointer: async ({ x, y }, options) => {
         const bounds = await client.eval<{ x: number; y: number }>(
           "window.catamorphicDesktop.devWindow('get').then(state => state.contentBounds)",
         );
-        await clickNativePointer({ x: bounds.x + x, y: bounds.y + y });
+        await clickNativePointer({ x: bounds.x + x, y: bounds.y + y }, options);
       },
       connectToFrame,
       getOutput: () => output,
@@ -695,7 +735,8 @@ const KEY_CODES = {
  * a test that types into the New Tab page waits for this one: typing into
  * the overlay's before the New Tab page mounts goes nowhere.
  */
-export const NEW_TAB_INPUT = '[data-palette="tab"] textarea';
+export const NEW_TAB_INPUT =
+  '[data-workspace-visible="true"] [data-palette="tab"] textarea';
 
 /** The overlay palette's input while it is open (Cmd+P). */
 export const OVERLAY_INPUT =
@@ -839,3 +880,87 @@ function sampleHung(child: ChildProcess, directory?: string): void {
 
 const sleep = (ms: number) =>
   new Promise<void>((resolve) => setTimeout(resolve, ms));
+
+/** Navigate the real tutorial when a suite needs one of its setup actions. */
+export async function openOnboardingStep(app: AppHandle, label: string) {
+  await app.waitFor(`!!document.querySelector('[data-testid="onboarding"]')`);
+  await app.eval(
+    `document.querySelector('.onboarding-progress button[aria-label=${JSON.stringify(label)}]').click()`,
+  );
+  await app.waitFor(
+    `document.querySelector('.onboarding-progress button[aria-current="step"]')?.getAttribute('aria-label') === ${JSON.stringify(label)} && document.querySelector('.onboarding-track')?.getAnimations().every(animation => animation.playState !== 'running')`,
+  );
+}
+
+/** Project creation and server connections live in the normal project switcher. */
+export async function openProjectSwitcher(app: AppHandle) {
+  await app.waitFor(
+    `!!document.querySelector('[data-workspace-visible=true] [aria-label="Switch project"]')`,
+  );
+  await app.eval(
+    `document.querySelector('[data-workspace-visible=true] button[aria-label="Expand sidebar"]')?.click()`,
+  );
+  await app.eval(
+    `document.querySelector('[data-workspace-visible=true] button[aria-label="Switch project"]').click()`,
+  );
+  await app.waitFor(
+    `!!document.querySelector('[data-testid="switcher-connect-remote"]:not([inert] *)')`,
+  );
+}
+
+/** Ordinary UI queries ignore retained project runtimes that the user cannot see.
+ * Hidden panes within the active workspace remain queryable for lifecycle tests.
+ * Portaled dialogs and the shared dock are outside project runtimes. */
+export const workspaceDomHelpersJs = `
+  const $$ = (selector) => [...document.querySelectorAll(selector)]
+    .filter(element => !element.closest('[data-workspace-visible="false"]'));
+  const $ = (selector) => $$(selector)[0] ?? null;
+`;
+
+/** Wait until UI project creation has selected and saved its real workspace.
+ * A retained Default Project can already contain a ready New Tab or dock. */
+export async function waitForProjectWorkspace({
+  app,
+  name,
+}: {
+  app: AppHandle;
+  name: string;
+}) {
+  return app.waitFor<string>(
+    `(async () => {
+      const workspace = document.querySelector('[data-project-runtime][data-workspace-visible="true"]');
+      const projectId = workspace?.dataset.projectRuntime;
+      if (!projectId || projectId === 'initial' || !workspace.querySelector('[data-workspace-ready]') ||
+        !workspace.querySelector('[aria-label="Switch project"]')?.textContent.includes(${JSON.stringify(name)}) ||
+        document.querySelector('[data-testid="project-name-input"]')) return false;
+      const prefs = await window.catamorphicDesktop.getPrefs();
+      return prefs.lastProjectId === projectId && projectId;
+    })()`,
+    { timeoutMs: 60_000, label: `${name} workspace selected and saved` },
+  );
+}
+
+/** Create and explicitly select a fixture project, like the project modal does.
+ * Reloading alone preserves the workspace owner that is already active. */
+export async function createProjectWorkspace({
+  app,
+  name,
+  rootPath,
+  importExisting,
+}: {
+  app: AppHandle;
+  name: string;
+  rootPath: string;
+  importExisting?: boolean;
+}) {
+  const project = await app.eval<{ id: string; name: string }>(
+    `window.catamorphicDesktop.createProject(${JSON.stringify({ name, rootPath, importExisting })})`,
+  );
+  await app.eval(
+    `window.catamorphicDesktop.workspaceNavigate({projectId:${JSON.stringify(project.id)}})`,
+  );
+  await app.waitFor(
+    `document.querySelector('[data-workspace-visible=true]')?.dataset.projectRuntime === ${JSON.stringify(project.id)} && !!document.querySelector('[data-workspace-visible=true] [data-workspace-ready]')`,
+  );
+  return project;
+}

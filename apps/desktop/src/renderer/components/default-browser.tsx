@@ -1,4 +1,4 @@
-import { Check, Globe } from "lucide-react";
+import { Check } from "lucide-react";
 import { useCallback, useEffect, useId, useRef, useState } from "react";
 import type { DefaultBrowserState } from "../../shared/default-browser.js";
 import { desktopApi } from "../lib/desktop-api.js";
@@ -7,8 +7,10 @@ import { PendingButton } from "./pending-button.js";
 /** One OS-backed action in onboarding and Settings. No persisted pretend toggle. */
 export function DefaultBrowserButton({
   className = "",
+  showAvailabilityReason = true,
 }: {
   className?: string;
+  showAvailabilityReason?: boolean;
 }) {
   const descriptionId = useId();
   const [state, setState] = useState<DefaultBrowserState>();
@@ -73,23 +75,28 @@ export function DefaultBrowserButton({
         }
         disabled={state ? !state.available : false}
         data-disabled-reason={state?.reason}
-        aria-describedby={descriptionId}
+        aria-describedby={
+          showAvailabilityReason || message ? descriptionId : undefined
+        }
         onClick={() => void request()}
         data-testid="default-browser-button"
-        className="browser-setup-action"
+        className="button-secondary browser-setup-action"
       >
-        <span className="inline-flex items-center gap-2">
-          <Globe className="size-3.5" />
-          Make default browser
-        </span>
+        Make Work your default browser
       </PendingButton>
-      <p
-        id={descriptionId}
-        role="status"
-        className="mt-2 min-h-10 text-xs leading-5 text-fg-muted"
-      >
-        {state?.isDefault ? null : (state?.reason ?? message)}
-      </p>
+      {(showAvailabilityReason || message) && (
+        <p
+          id={descriptionId}
+          role="status"
+          className="mt-2 min-h-10 text-xs leading-5 text-fg-muted"
+        >
+          {state?.isDefault
+            ? null
+            : showAvailabilityReason
+              ? (state?.reason ?? message)
+              : message}
+        </p>
+      )}
     </div>
   );
 }

@@ -49,7 +49,9 @@ it("keeps browser and terminal resources alive when the same window switches pro
     `window.catamorphicDesktop.workspaceNavigate({projectId: ${JSON.stringify(first)}})`,
   );
   await app.waitFor(
-    `!!document.querySelector('[data-workspace-visible="true"] [data-workspace-chat-region]')`,
+    `document.querySelector('[data-workspace-visible="true"]')?.dataset.projectRuntime === ${JSON.stringify(first)} &&
+      !!document.querySelector('[data-workspace-visible="true"] [data-workspace-ready] [data-workspace-chat-region]')`,
+    { label: "First project selected and ready" },
   );
   await key("`", "ctrlKey: true");
   await app.waitFor(
@@ -68,7 +70,7 @@ it("keeps browser and terminal resources alive when the same window switches pro
     { label: "first browser" },
   );
   await app.eval(
-    `window.__retainedTerminal = document.querySelector('canvas'); window.__retainedBrowser = document.querySelector('webview'); true;`,
+    `window.__retainedTerminal = document.querySelector('[data-workspace-visible="true"] canvas'); window.__retainedBrowser = document.querySelector('[data-workspace-visible="true"] webview'); true;`,
   );
   second = (await create("Second project")).id;
   await app.eval(
@@ -123,7 +125,7 @@ it("shows a project's chat and theme over another project's workspace and routes
     await app.eval(
       `getComputedStyle(document.querySelector('[data-floating-chat]:not([inert])')).getPropertyValue('--color-accent').trim()`,
     ),
-  ).toBe("#8b72d8");
+  ).toBe("rgb(139, 114, 216)");
   await app.waitFor(
     `document.querySelector('[data-floating-chat]:not([inert])')?.innerText.includes('Done after a long think.')`,
     { label: "agent completes after project switch" },
@@ -198,7 +200,7 @@ it("keeps an unsent draft when detached and reattached, and supports either edge
     right: number;
     bottom: number;
   }>(
-    `(() => { const r = document.querySelector('[data-workspace-chat-region]').getBoundingClientRect(); return { left: screenX + r.left, right: screenX + r.right, bottom: screenY + (outerHeight - innerHeight) + r.bottom }; })()`,
+    `(() => { const r = document.querySelector('[data-workspace-visible="true"] [data-workspace-chat-region]').getBoundingClientRect(); return { left: screenX + r.left, right: screenX + r.right, bottom: screenY + (outerHeight - innerHeight) + r.bottom }; })()`,
   );
   await dock.waitFor(
     `Math.abs(screenX + outerWidth / 2 - ${(region.left + region.right) / 2}) < 3 && Math.abs(screenY + outerHeight + 12 - ${region.bottom}) < 3`,

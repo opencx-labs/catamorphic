@@ -1,6 +1,10 @@
 import path from "node:path";
 import { afterAll, beforeAll, expect, it } from "vitest";
-import { type AppHandle, launchApp } from "./harness.js";
+import {
+  type AppHandle,
+  createProjectWorkspace,
+  launchApp,
+} from "./harness.js";
 import { CHATS_SECTION, writeSidebarSections } from "./sidebar-config.js";
 
 /**
@@ -44,9 +48,11 @@ beforeAll(async () => {
     })()`,
   });
   await app.waitFor(`!!document.querySelector('[data-sidebar="left"]')`);
-  const project = await app.eval<{ id: string }>(
-    `window.catamorphicDesktop.createProject({name:'Paged chats',rootPath:${JSON.stringify(path.join(app.userDataDir, "paged-chats"))}})`,
-  );
+  const project = await createProjectWorkspace({
+    app,
+    name: "Paged chats",
+    rootPath: path.join(app.userDataDir, "paged-chats"),
+  });
   const server = await app.eval<{ url: string }>(
     "window.catamorphicDesktop.getServerState()",
   );

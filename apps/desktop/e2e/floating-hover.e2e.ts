@@ -1,7 +1,12 @@
 import http from "node:http";
 import path from "node:path";
 import { afterAll, beforeAll, expect, it } from "vitest";
-import { type AppHandle, focusWindow, launchApp } from "./harness.js";
+import {
+  type AppHandle,
+  createProjectWorkspace,
+  focusWindow,
+  launchApp,
+} from "./harness.js";
 
 let app: AppHandle;
 let server: http.Server;
@@ -51,9 +56,11 @@ beforeAll(async () => {
   if (!address || typeof address === "string") throw Error("No fixture port");
   app = await launchApp();
   await app.waitFor(`!!document.querySelector('[data-sidebar="left"]')`);
-  await app.eval(
-    `window.catamorphicDesktop.createProject({name:'Floating hover',rootPath:${JSON.stringify("/tmp/floating-hover")}})`,
-  );
+  await createProjectWorkspace({
+    app,
+    name: "Floating hover",
+    rootPath: "/tmp/floating-hover",
+  });
   await app.waitFor(
     `!!document.querySelector('[data-dock-rail] button[aria-label="New chat"]')`,
   );

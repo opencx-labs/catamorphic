@@ -71,6 +71,7 @@ import { fadeEdges } from "./catamorphic/edge-fade.js";
 import { ComposerInput, type ComposerInputHandle } from "./composer-input.js";
 import { PILL_SURFACE } from "./context-pill.js";
 import { OpenResourceButton } from "./open-resource-button.js";
+import { PaletteSurface } from "./palette-surface.js";
 
 /**
  * The command palette, in two hosts: a Cmd+P overlay above everything, and
@@ -1092,70 +1093,74 @@ export function CommandPalette({
       : null;
 
   const panel = (
-    <div
+    <PaletteSurface
       role="dialog"
       aria-label="Command palette"
-      data-palette={variant}
-      className="pointer-events-auto flex w-full max-w-2xl flex-col overflow-hidden rounded-2xl border border-border bg-bg-raised shadow-2xl"
-    >
-      <div className="mx-3 flex items-start gap-2 border-b border-border">
-        {chip && (
-          <span
-            data-testid={chip.live ? "palette-mode-chip" : undefined}
-            onAnimationEnd={(event) => {
-              if (event.animationName === "chip-out") setExitingChip(null);
-            }}
-            className={`mt-[9px] flex shrink-0 items-center gap-1.5 overflow-hidden whitespace-nowrap py-1 pl-1.5 pr-2 ${PILL_SURFACE} ${
-              chip.live ? "animate-chip-in" : "animate-chip-out"
-            }`}
+      variant={variant}
+      input={
+        <>
+          {chip && (
+            <span
+              data-testid={chip.live ? "palette-mode-chip" : undefined}
+              onAnimationEnd={(event) => {
+                if (event.animationName === "chip-out") setExitingChip(null);
+              }}
+              className={`mt-[9px] flex shrink-0 items-center gap-1.5 overflow-hidden whitespace-nowrap py-1 pl-1.5 pr-2 ${PILL_SURFACE} ${
+                chip.live ? "animate-chip-in" : "animate-chip-out"
+              }`}
+            >
+              <chip.icon className="size-3.5 shrink-0" />
+              {chip.label}
+            </span>
+          )}
+          {/* Grows like the chat composer: Shift+Enter or a wrapping line
+            glides the input taller instead of snapping. */}
+          <div
+            ref={inputFrameRef}
+            className={`${GLIDING_FRAME} min-w-0 flex-1`}
           >
-            <chip.icon className="size-3.5 shrink-0" />
-            {chip.label}
-          </span>
-        )}
-        {/* Grows like the chat composer: Shift+Enter or a wrapping line
-          glides the input taller instead of snapping. */}
-        <div ref={inputFrameRef} className={`${GLIDING_FRAME} min-w-0 flex-1`}>
-          <div ref={inputContentRef}>
-            {modeId === "agent" && projectId ? (
-              <ComposerInput
-                key={`${projectId}:${inputEpoch}`}
-                ref={agentInputRef}
-                chatComposer={false}
-                testId="palette-agent-input"
-                ariaLabel="Search commands, pages, and more"
-                placeholder="Message the agent…"
-                className="block max-h-40 min-h-11 w-full overflow-y-auto px-1 py-3 text-sm"
-                onChange={({ text, pillCount }) => {
-                  setQuery(text);
-                  setPillCount(pillCount);
-                  setSelection(TOP_ROW);
-                }}
-                onPaste={onAgentPaste}
-                onKeyDown={onInputKeyDown}
-              />
-            ) : (
-              <textarea
-                ref={inputRef}
-                value={query}
-                onChange={(event) => {
-                  setQuery(event.target.value);
-                  setSelection(TOP_ROW);
-                  if (listRef.current) listRef.current.scrollTop = 0;
-                }}
-                onKeyDown={onInputKeyDown}
-                rows={1}
-                spellCheck={false}
-                placeholder={
-                  activeMode?.placeholder ?? "Search or ask anything…"
-                }
-                aria-label="Search commands, pages, and more"
-                className="field-sizing-content block max-h-40 w-full resize-none bg-transparent px-1 py-3 text-sm outline-none placeholder:text-fg-faint"
-              />
-            )}
+            <div ref={inputContentRef}>
+              {modeId === "agent" && projectId ? (
+                <ComposerInput
+                  key={`${projectId}:${inputEpoch}`}
+                  ref={agentInputRef}
+                  chatComposer={false}
+                  testId="palette-agent-input"
+                  ariaLabel="Search commands, pages, and more"
+                  placeholder="Message the agent…"
+                  className="block max-h-40 min-h-11 w-full overflow-y-auto px-1 py-3 text-sm"
+                  onChange={({ text, pillCount }) => {
+                    setQuery(text);
+                    setPillCount(pillCount);
+                    setSelection(TOP_ROW);
+                  }}
+                  onPaste={onAgentPaste}
+                  onKeyDown={onInputKeyDown}
+                />
+              ) : (
+                <textarea
+                  ref={inputRef}
+                  value={query}
+                  onChange={(event) => {
+                    setQuery(event.target.value);
+                    setSelection(TOP_ROW);
+                    if (listRef.current) listRef.current.scrollTop = 0;
+                  }}
+                  onKeyDown={onInputKeyDown}
+                  rows={1}
+                  spellCheck={false}
+                  placeholder={
+                    activeMode?.placeholder ?? "Search or ask anything…"
+                  }
+                  aria-label="Search commands, pages, and more"
+                  className="field-sizing-content block max-h-40 w-full resize-none bg-transparent px-1 py-3 text-sm outline-none placeholder:text-fg-faint"
+                />
+              )}
+            </div>
           </div>
-        </div>
-      </div>
+        </>
+      }
+    >
       {modeId === "agent" && pendingTransfers > 0 && (
         <p role="status" className="px-4 py-2 text-xs text-fg-muted">
           Preparing attachments…
@@ -1305,7 +1310,7 @@ export function CommandPalette({
           <FooterHint key={hint.keycap} {...hint} />
         ))}
       </footer>
-    </div>
+    </PaletteSurface>
   );
 
   if (variant === "tab") {

@@ -1,10 +1,32 @@
+import { execFile } from "node:child_process";
+import { promisify } from "node:util";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { type AppHandle, launchApp, setReactValueJs } from "./harness.js";
+import { assertIsolatedDesktopTestHost } from "../../../scripts/desktop-test-environment.js";
+import {
+  type AppHandle,
+  createProjectWorkspace,
+  focusWindow,
+  launchApp,
+  openProjectSwitcher,
+  setReactValueJs,
+  waitForProjectWorkspace,
+  workspaceDomHelpersJs,
+} from "./harness.js";
+
+import { pressNativeMacKey } from "./native-pointer.js";
 
 let app: AppHandle;
+async function pressAddressShortcut() {
+  assertIsolatedDesktopTestHost();
+  if (process.platform === "darwin") await pressNativeMacKey("l", ["command"]);
+  else
+    await promisify(execFile)("xdotool", ["key", "ctrl+l"], {
+      timeout: 10_000,
+    });
+}
 const run = <T>(body: string) =>
   app.eval<T>(
-    `(() => { ${setReactValueJs}\n const $ = s => document.querySelector(s); const button = text => [...document.querySelectorAll('button')].find(b => b.textContent.trim() === text); ${body} })()`,
+    `(() => { ${setReactValueJs}\n ${workspaceDomHelpersJs} const button = text => $$('button').find(b => b.textContent.trim() === text); ${body} })()`,
   );
 /**
  * What draws a sidebar row's keyboard ring, as page script: the row itself,
@@ -15,13 +37,14 @@ const ringOf =
 
 beforeAll(async () => {
   app = await launchApp();
+  await openProjectSwitcher(app);
   await app.eval(
     "window.__sidebarErrors = []; window.addEventListener('error', event => window.__sidebarErrors.push(event.message + ' ' + event.error?.stack)); window.addEventListener('unhandledrejection', event => window.__sidebarErrors.push(String(event.reason)))",
   );
   await app.waitFor(
-    "[...document.querySelectorAll('button')].some(b => b.textContent.trim() === 'Create or import project')",
+    "[...document.querySelectorAll('button')].some(b => b.textContent.trim() === 'New project')",
   );
-  await run("button('Create or import project').click()");
+  await run("button('New project').click()");
   await app.waitFor(
     "!!document.querySelector('[data-testid=project-name-input]')",
   );
@@ -32,6 +55,9 @@ beforeAll(async () => {
     "!document.querySelector('[data-testid=project-submit]').disabled",
   );
   await run("$('[data-testid=project-submit]').click()");
+  await app.waitFor(
+    "document.querySelector('[data-workspace-visible=true] [aria-label=\"Switch project\"]')?.textContent.includes('Browser workspace')",
+  );
   await app.waitFor(
     "!!document.querySelector('textarea[placeholder*=\"Search or ask\"]')",
   );
@@ -64,7 +90,7 @@ describe("configurable browser workspace", () => {
     ).toBe(true);
     await app.eval("window.catamorphicDesktop.setPrefs({tabPlacement:'top'})");
     await app.waitFor(
-      "!!document.querySelector('main [data-tab-orientation=horizontal]')",
+      "!!document.querySelector('[data-workspace-visible=true] main [data-tab-orientation=horizontal]')",
       { label: "tabs back on top" },
     );
   });
@@ -74,21 +100,31 @@ describe("configurable browser workspace", () => {
     // The New Tab the app opened with closes once Settings shows in its
     // place; its tab stays in the strip while it animates out.
     await app.waitFor(
-      "!!document.querySelector('select[name=tabPlacement]') && !!document.querySelector('[data-tab-orientation] [data-point-key^=\"settings:\"]') && !document.querySelector('[data-tab-orientation] [data-point-key^=\"palette:\"]')",
+      "!!document.querySelector('select[name=tabPlacement]') && !!document.querySelector('[data-workspace-visible=true] [data-tab-orientation] [data-point-key^=\"settings:\"]') && !document.querySelector('[data-workspace-visible=true] [data-tab-orientation] [data-point-key^=\"palette:\"]')",
     );
     const before = await run<string[]>(
-      "return [...document.querySelectorAll('[data-tab-orientation] [data-point-key]')].map(e => e.dataset.pointKey)",
+      "return [...document.querySelectorAll('[data-workspace-visible=true] [data-tab-orientation] [data-point-key]:not([data-sidebar-item-id])')].map(e => e.dataset.pointKey)",
+    );
+    await run("button('Choose theme').click()");
+    await app.waitFor("!!document.querySelector('[data-theme-preset=light]')");
+    await run("$('[data-theme-preset=light]').click()");
+    await app.waitFor(
+      "document.querySelector('[data-theme-preset=light]').getAttribute('aria-pressed') === 'true'",
     );
     await run(
-      "button('Work Light').click(); setReactValue($('select[name=tabPlacement]'), 'sidebar')",
+      "$('[aria-labelledby=theme-picker-title] .button-primary').click()",
     );
     await app.waitFor(
-      "document.documentElement.dataset.theme === 'light' && !!document.querySelector('aside [data-sidebar-section=tabs] [data-sidebar-item-id]')",
+      "!document.querySelector('[aria-labelledby=theme-picker-title]')",
+    );
+    await run("setReactValue($('select[name=tabPlacement]'), 'sidebar')");
+    await app.waitFor(
+      "document.documentElement.dataset.theme === 'light' && !!document.querySelector('[data-workspace-visible=true] aside [data-sidebar-section=tabs] [data-sidebar-item-id]')",
     );
     // The tabs are the Tabs section's rows now (ADR 0234), same keys.
     expect(
       await app.waitFor<string[]>(
-        `(() => { const keys = [...document.querySelectorAll('aside [data-sidebar-section=tabs] [data-sidebar-item-id]')].filter(e => !e.closest('[data-tree-exiting]')).map(e => e.dataset.sidebarItemId); return JSON.stringify(keys) === ${JSON.stringify(JSON.stringify(before))} && keys; })()`,
+        `(() => { const keys = [...document.querySelectorAll('[data-workspace-visible=true] aside [data-sidebar-section=tabs] [data-sidebar-item-id]')].filter(e => !e.closest('[data-tree-exiting]')).map(e => e.dataset.sidebarItemId); return JSON.stringify(keys) === ${JSON.stringify(JSON.stringify(before))} && keys; })()`,
         { label: "the same tabs listed in the sidebar" },
       ),
     ).toEqual(before);
@@ -108,7 +144,7 @@ describe("configurable browser workspace", () => {
   it("keeps the header title-only while the sidebar is collapsed", async () => {
     await run("$('button[aria-label=\"Collapse sidebar\"]').click()");
     await app.waitFor(
-      "document.querySelector('aside').dataset.motion === 'closed' && document.querySelector('aside').dataset.settled === 'true'",
+      "document.querySelector('[data-workspace-visible=true] aside').dataset.motion === 'closed' && document.querySelector('[data-workspace-visible=true] aside').dataset.settled === 'true'",
     );
     expect(await run("return !!$('main [data-tab-orientation]')")).toBe(false);
     expect(
@@ -126,7 +162,7 @@ describe("configurable browser workspace", () => {
     ).toBe(true);
     await run("$('button[aria-label=\"Expand sidebar\"]').click()");
     await app.waitFor(
-      "document.querySelector('aside').dataset.motion === 'open' && document.querySelector('aside').dataset.settled === 'true' && !!document.querySelector('aside [data-sidebar-section=tabs] [data-sidebar-item-id]')",
+      "document.querySelector('[data-workspace-visible=true] aside').dataset.motion === 'open' && document.querySelector('[data-workspace-visible=true] aside').dataset.settled === 'true' && !!document.querySelector('[data-workspace-visible=true] aside [data-sidebar-section=tabs] [data-sidebar-item-id]')",
     );
   });
 
@@ -163,7 +199,8 @@ describe("configurable browser workspace", () => {
   });
 
   it("lets its items leave before it does, and brings them back when it opens mid-close", async () => {
-    const aside = "document.querySelector('aside[data-sidebar=left]')";
+    const aside =
+      "document.querySelector('[data-workspace-visible=true] aside[data-sidebar=left]')";
     // The leave runs on Web Animations; the panel's slide is a transition.
     const leaving = `(element) => element.getAnimations({ subtree: true }).filter((animation) => animation.id === 'sidebar-leave')`;
     const read = () =>
@@ -264,7 +301,7 @@ describe("configurable browser workspace", () => {
           const el = document.querySelector('[data-point-key="sidebar:Reference"] [data-tree-primary]');
           const r = el?.getBoundingClientRect();
           const hit = r && document.elementFromPoint(r.x + r.width / 2, r.y + r.height / 2);
-          const aside = document.querySelector('aside[data-sidebar=left]');
+          const aside = document.querySelector('[data-workspace-visible=true] aside[data-sidebar=left]');
           const scroller = el?.closest('[data-sidebar-scroll], .overflow-y-auto, .overflow-auto');
           return {
             rect: r && { x: r.x, y: r.y, width: r.width, height: r.height },
@@ -436,13 +473,13 @@ describe("configurable browser workspace", () => {
       "window.dispatchEvent(new KeyboardEvent('keydown', {key:'t', metaKey:/Mac/.test(navigator.platform),ctrlKey:!/Mac/.test(navigator.platform), altKey:true, bubbles:true, cancelable:true}))",
     );
     await app.waitFor(
-      "!!document.querySelector('.workspace-chrome input[aria-label=\"Address and search bar\"]')",
+      "!!document.querySelector('[data-workspace-visible=true] .workspace-chrome input[aria-label=\"Address and search bar\"]')",
     );
     await run(
       "const input = $('input[aria-label=\"Address and search bar\"]'); input.focus(); setReactValue(input, 'data:text/html,<title>Header check</title><h1>Same page</h1>'); input.dispatchEvent(new KeyboardEvent('keydown',{key:'Enter',bubbles:true,cancelable:true}))",
     );
     await app.waitFor(
-      "[...document.querySelectorAll('aside button')].some(b => b.textContent.includes('Header check'))",
+      "[...document.querySelectorAll('[data-workspace-visible=true] aside button')].some(b => b.textContent.includes('Header check'))",
     );
     const guest = await run("return $('webview').getWebContentsId()");
     expect(
@@ -452,16 +489,16 @@ describe("configurable browser workspace", () => {
     ).toBe(1);
     await app.eval("window.catamorphicDesktop.setPrefs({tabPlacement:'top'})");
     await app.waitFor(
-      "!!document.querySelector('main [data-tab-orientation=horizontal]')",
+      "!!document.querySelector('[data-workspace-visible=true] main [data-tab-orientation=horizontal]')",
     );
     expect(await run("return $('webview').getWebContentsId()")).toBe(guest);
     await run("$('button[aria-label=\"Collapse sidebar\"]').click()");
     // The sidebar's own toggle slides away with it; measure the one left.
     await app.waitFor(
-      "document.querySelector('aside').dataset.motion === 'closed' && document.querySelector('aside').dataset.settled === 'true'",
+      "document.querySelector('[data-workspace-visible=true] aside').dataset.motion === 'closed' && document.querySelector('[data-workspace-visible=true] aside').dataset.settled === 'true'",
     );
     await app.waitFor(
-      "document.querySelector('[data-tab-orientation=horizontal]').getAnimations({subtree:true}).every(animation => animation.animationName !== 'tab-in' || animation.playState === 'finished')",
+      "document.querySelector('[data-workspace-visible=true] [data-tab-orientation=horizontal]').getAnimations({subtree:true}).every(animation => animation.animationName !== 'tab-in' || animation.playState === 'finished')",
       { label: "tab entrance animation settled" },
     );
     const centers = await run<[number, number]>(
@@ -473,14 +510,14 @@ describe("configurable browser workspace", () => {
       "window.catamorphicDesktop.setPrefs({tabPlacement:'sidebar'})",
     );
     await app.waitFor(
-      "!!document.querySelector('.workspace-chrome [data-browser-toolbar]')",
+      "!!document.querySelector('[data-workspace-visible=true] .workspace-chrome [data-browser-toolbar]')",
     );
     expect(await run("return $('webview').getWebContentsId()")).toBe(guest);
     await app.eval(
       "window.catamorphicDesktop.setPrefs({headerPlacement:'sidebar'})",
     );
     await app.waitFor(
-      "!!document.querySelector('aside input[aria-label=\"Address and search bar\"]') && !!document.querySelector('[data-sidebar-navigation] button[aria-label=Back]')",
+      "!!document.querySelector('[data-workspace-visible=true] aside input[aria-label=\"Address and search bar\"]') && !!document.querySelector('[data-sidebar-navigation] button[aria-label=Back]')",
     );
     expect(await run("return !!$('main .workspace-chrome')")).toBe(false);
     expect(
@@ -490,15 +527,15 @@ describe("configurable browser workspace", () => {
     ).toBe(true);
     expect(await run("return $('webview').getWebContentsId()")).toBe(guest);
     await app.waitFor(
-      "document.querySelector('aside').getBoundingClientRect().width === 260",
+      "document.querySelector('[data-workspace-visible=true] aside').getBoundingClientRect().width === 260",
     );
     const listedTabs =
-      "[...document.querySelectorAll('aside [data-sidebar-section=tabs] [data-sidebar-item-id]')].filter(e => !e.closest('[data-tree-exiting]')).length";
+      "[...document.querySelectorAll('[data-workspace-visible=true] aside [data-sidebar-section=tabs] [data-sidebar-item-id]')].filter(e => !e.closest('[data-tree-exiting]')).length";
     const tabRows = `return ${listedTabs}`;
     const tabCount = await run<number>(tabRows);
     // New tab is the Tabs section's header action.
     await app.waitFor(
-      "document.querySelector('aside').dataset.settled === 'true'",
+      "document.querySelector('[data-workspace-visible=true] aside').dataset.settled === 'true'",
     );
     await run(
       "$('aside [data-sidebar-section=tabs] button[data-header-action=\"command:new-tab\"]').click()",
@@ -512,10 +549,10 @@ describe("configurable browser workspace", () => {
     });
     expect(await run<number>(tabRows)).toBe(tabCount + 1);
     await run(
-      "[...document.querySelectorAll('aside button')].find(b => b.textContent.includes('Header check')).click()",
+      "[...document.querySelectorAll('[data-workspace-visible=true] aside button')].find(b => b.textContent.includes('Header check')).click()",
     );
     await app.waitFor(
-      "!!document.querySelector('aside [data-browser-toolbar]')",
+      "!!document.querySelector('[data-workspace-visible=true] aside [data-browser-toolbar]')",
     );
     expect(await run("return $('webview').getWebContentsId()")).toBe(guest);
     // Collapsed with the header in the sidebar, the sidebar reveals itself
@@ -524,7 +561,7 @@ describe("configurable browser workspace", () => {
     await app.movePointer({ x: 400, y: 100 });
     await run("$('button[aria-label=\"Collapse sidebar\"]').click()");
     await app.waitFor(
-      "document.querySelector('aside').dataset.motion === 'closed' && document.querySelector('aside').dataset.settled === 'true' && document.querySelector('aside').getBoundingClientRect().width === 0",
+      "document.querySelector('[data-workspace-visible=true] aside').dataset.motion === 'closed' && document.querySelector('[data-workspace-visible=true] aside').dataset.settled === 'true' && document.querySelector('[data-workspace-visible=true] aside').getBoundingClientRect().width === 0",
     );
     expect(
       await run(
@@ -532,7 +569,7 @@ describe("configurable browser workspace", () => {
       ),
     ).toEqual(
       await app.eval(
-        "[0, 0, innerWidth - document.querySelector('[data-sidebar=right]').getBoundingClientRect().width, innerHeight]",
+        "[0, 0, innerWidth - document.querySelector('[data-workspace-visible=true] [data-sidebar=right]').getBoundingClientRect().width, innerHeight]",
       ),
     );
     expect(
@@ -550,7 +587,7 @@ describe("configurable browser workspace", () => {
     const pointerY = await app.eval<number>("innerHeight / 2");
     await app.movePointer({ x: 3, y: pointerY });
     await app.waitFor(
-      "document.querySelector('aside').dataset.sidebarRevealed === 'true'",
+      "document.querySelector('[data-workspace-visible=true] aside').dataset.sidebarRevealed === 'true'",
       { label: "native pointer reveals collapsed sidebar" },
     );
     // The compositor may still send guest entry events while the sidebar
@@ -560,7 +597,7 @@ describe("configurable browser workspace", () => {
     );
     // Over the page, not beside it: the aside takes no space.
     await app.waitFor(
-      "(() => { const aside = document.querySelector('aside'); const panel = aside.firstElementChild.getBoundingClientRect(); return aside.dataset.motion === 'open' && aside.dataset.docked === 'false' && aside.getBoundingClientRect().width === 0 && panel.left === 0 && panel.width === 260 })()",
+      "(() => { const aside = document.querySelector('[data-workspace-visible=true] aside'); const panel = aside.firstElementChild.getBoundingClientRect(); return aside.dataset.motion === 'open' && aside.dataset.docked === 'false' && aside.getBoundingClientRect().width === 0 && panel.left === 0 && panel.width === 260 })()",
     );
     expect(await run("return $('aside').dataset.sidebarRevealed")).toBe("true");
     expect(
@@ -569,7 +606,7 @@ describe("configurable browser workspace", () => {
       ),
     ).toEqual(
       await app.eval(
-        "[0, 0, innerWidth - document.querySelector('[data-sidebar=right]').getBoundingClientRect().width, innerHeight]",
+        "[0, 0, innerWidth - document.querySelector('[data-workspace-visible=true] [data-sidebar=right]').getBoundingClientRect().width, innerHeight]",
       ),
     );
     expect(
@@ -586,11 +623,11 @@ describe("configurable browser workspace", () => {
     );
     await run("$('webview').focus()");
     await app.waitFor(
-      "document.querySelector('aside').getAttribute('aria-hidden') === 'true'",
+      "document.querySelector('[data-workspace-visible=true] aside').getAttribute('aria-hidden') === 'true'",
     );
     await run("$('button[aria-label=\"Show sidebar\"]').focus()");
     await app.waitFor(
-      "document.querySelector('aside').dataset.sidebarRevealed === 'true'",
+      "document.querySelector('[data-workspace-visible=true] aside').dataset.sidebarRevealed === 'true'",
     );
     // A keyboard reveal hands focus to the sidebar it revealed.
     await app.waitFor(
@@ -599,14 +636,14 @@ describe("configurable browser workspace", () => {
     );
     await run("$('button[aria-label=\"Expand sidebar\"]').click()");
     await app.waitFor(
-      "document.querySelector('aside').getAttribute('aria-hidden') === 'false'",
+      "document.querySelector('[data-workspace-visible=true] aside').getAttribute('aria-hidden') === 'false'",
     );
     expect(await run("return $('aside').dataset.sidebarRevealed")).toBe(
       "false",
     );
     await run("$('button[aria-label=\"Collapse sidebar\"]').click()");
     await app.waitFor(
-      "document.querySelector('aside').getAttribute('aria-hidden') === 'true' && document.querySelector('aside').dataset.motion === 'closed' && document.querySelector('aside').dataset.settled === 'true'",
+      "document.querySelector('[data-workspace-visible=true] aside').getAttribute('aria-hidden') === 'true' && document.querySelector('[data-workspace-visible=true] aside').dataset.motion === 'closed' && document.querySelector('[data-workspace-visible=true] aside').dataset.settled === 'true'",
     );
     // Hold the address unavailable across frames, as while its sidebar
     // arrives. One scheduled focus attempt cannot complete this handoff.
@@ -616,7 +653,7 @@ describe("configurable browser workspace", () => {
     try {
       await app.press("l", process.platform === "darwin" ? 4 : 2);
       await app.waitFor(
-        "document.querySelector('aside').getAttribute('aria-hidden') === 'false'",
+        "document.querySelector('[data-workspace-visible=true] aside').getAttribute('aria-hidden') === 'false'",
       );
       await app.eval(
         "new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)))",
@@ -630,7 +667,7 @@ describe("configurable browser workspace", () => {
       await run("$('#address-not-ready')?.remove()");
     }
     await app.waitFor(
-      "(() => { const input = document.querySelector('aside input[aria-label=\"Address and search bar\"]'); return document.activeElement === input && input.selectionStart === 0 && input.selectionEnd === input.value.length; })()",
+      "(() => { const input = document.querySelector('[data-workspace-visible=true] aside input[aria-label=\"Address and search bar\"]'); return document.activeElement === input && input.selectionStart === 0 && input.selectionEnd === input.value.length; })()",
       { label: "the available address bar takes focus and selects its URL" },
     );
     expect(await run("return $('webview').getWebContentsId()")).toBe(guest);
@@ -691,10 +728,10 @@ describe("configurable browser workspace", () => {
       ),
     ).toBe(true);
     await run(
-      "$('[data-e2e-focus-owner=settings]').removeAttribute('data-e2e-focus-owner'); [...document.querySelectorAll('aside button')].find(button => button.textContent.includes('Header check')).click()",
+      "$('[data-e2e-focus-owner=settings]').removeAttribute('data-e2e-focus-owner'); [...document.querySelectorAll('[data-workspace-visible=true] aside button')].find(button => button.textContent.includes('Header check')).click()",
     );
     await app.waitFor(
-      "!!document.querySelector('aside [data-browser-toolbar]')",
+      "!!document.querySelector('[data-workspace-visible=true] aside [data-browser-toolbar]')",
     );
     // Cmd+L also reverses a collapse; the guest keeps its identity.
     await app.waitFor(
@@ -702,16 +739,20 @@ describe("configurable browser workspace", () => {
       { label: "the returned browser is at rest before reversing its sidebar" },
     );
     const collapsePoint = await app.waitFor<{ x: number; y: number }>(
-      "(() => { const aside = document.querySelector('aside'); if (aside.dataset.settled !== 'true') return false; const button = aside.querySelector('button[aria-label=\"Collapse sidebar\"]'); const r = button.getBoundingClientRect(); const x = r.x+r.width/2; const y = r.y+r.height/2; return button.contains(document.elementFromPoint(x,y)) && {x,y}; })()",
+      "(() => { const aside = document.querySelector('[data-workspace-visible=true] aside'); if (aside.dataset.settled !== 'true') return false; const button = aside.querySelector('button[aria-label=\"Collapse sidebar\"]'); const r = button.getBoundingClientRect(); const x = r.x+r.width/2; const y = r.y+r.height/2; return button.contains(document.elementFromPoint(x,y)) && {x,y}; })()",
     );
     await app.cdp("Animation.enable");
     await app.cdp("Animation.setPlaybackRate", { playbackRate: 0.1 });
     try {
       await app.clickPointer(collapsePoint);
       await app.waitFor(
-        "document.querySelector('aside').dataset.motion === 'closing'",
+        "document.querySelector('[data-workspace-visible=true] aside').dataset.motion === 'closing' && document.activeElement === document.body && document.hasFocus()",
+        {
+          label:
+            "the closing sidebar has released native focus to the workspace",
+        },
       );
-      await app.press("l", process.platform === "darwin" ? 4 : 2);
+      await pressAddressShortcut();
     } finally {
       await app.cdp("Animation.setPlaybackRate", { playbackRate: 1 });
       await app.cdp("Animation.disable");
@@ -723,11 +764,52 @@ describe("configurable browser workspace", () => {
       },
     );
     expect(await run("return $('webview').getWebContentsId()")).toBe(guest);
+    // A workspace mounted after this one must not count the same forwarded
+    // page key as new input and cancel this page's deferred address focus.
+    const ownerId = await app.eval<string>(
+      "document.querySelector('[data-workspace-visible=true]').dataset.projectRuntime",
+    );
+    const { id: retainedId } = await createProjectWorkspace({
+      app,
+      name: "Retained key target",
+      rootPath: `${app.userDataDir}/retained-key-target`,
+    });
+    await app.eval(
+      `window.catamorphicDesktop.workspaceNavigate({projectId:${JSON.stringify(ownerId)}})`,
+    );
+    expect(
+      await waitForProjectWorkspace({ app, name: "Browser workspace" }),
+    ).toBe(ownerId);
+    expect(
+      await app.eval(`(() => {
+      const roots = [...document.querySelectorAll('[data-project-runtime]')];
+      return roots.findIndex(root => root.dataset.projectRuntime === ${JSON.stringify(ownerId)}) <
+        roots.findIndex(root => root.dataset.projectRuntime === ${JSON.stringify(retainedId)});
+    })()`),
+    ).toBe(true);
+    await app.eval("window.catamorphicDesktop.setPrefs({sidebarOpen:false})");
+    await app.waitFor(
+      "document.querySelector('[data-workspace-visible=true] aside').dataset.motion === 'closed'",
+    );
+    await focusWindow(app);
+    await run("$('webview').focus()");
+    await app.waitFor(
+      `document.querySelector('[data-workspace-visible=true] webview').executeJavaScript('document.hasFocus()')`,
+    );
+    await pressAddressShortcut();
+    await app.waitFor(
+      "document.activeElement?.getAttribute('aria-label') === 'Address and search bar'",
+      {
+        label:
+          "a retained workspace cannot cancel the owner's forwarded address key",
+      },
+    );
+    expect(await run("return $('webview').getWebContentsId()")).toBe(guest);
     await app.eval(
       "window.catamorphicDesktop.setPrefs({headerPlacement:'top'})",
     );
     await app.waitFor(
-      "!!document.querySelector('.workspace-chrome [data-browser-toolbar]')",
+      "!!document.querySelector('[data-workspace-visible=true] .workspace-chrome [data-browser-toolbar]')",
     );
     await run("$('button[aria-label=\"Close Header check\"]').click()");
     await app.waitFor("!document.querySelector('[data-browser-toolbar]')");
@@ -735,7 +817,7 @@ describe("configurable browser workspace", () => {
 
   it("aligns the compact footer controls", async () => {
     await app.waitFor(
-      "!!document.querySelector('aside footer button[aria-label=Settings]') && !!document.querySelector('button[aria-label^=\"Switch profile:\"]')",
+      "!!document.querySelector('[data-workspace-visible=true] aside footer button[aria-label=Settings]') && !!document.querySelector('button[aria-label^=\"Switch profile:\"]')",
       { label: "profile footer after changing layout" },
     );
     const centers = await run<[number, number]>(

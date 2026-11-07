@@ -414,6 +414,7 @@ describe("test process orchestration", () => {
       `process.on("SIGTERM",()=>{require("node:fs").writeFileSync(${JSON.stringify(terminatedPath)},"terminated");process.exit(0)});` +
       `require("node:fs").writeFileSync(${JSON.stringify(readyPath)},String(process.pid));setInterval(()=>{},1000)`;
 
+    const executable = `'${process.execPath.replaceAll("'", "'\\''")}'`;
     const operation = withDisposablePostgres({
       driver,
       pid: process.pid,
@@ -423,7 +424,7 @@ describe("test process orchestration", () => {
           command: "/bin/sh",
           args: [
             "-c",
-            `${process.execPath} -e '${descendantCode}' & while [ ! -f "${readyPath}" ]; do sleep 0.01; done; printf '%s\\n' "$$" > "${markerPath}"; exit 0`,
+            `${executable} -e '${descendantCode}' & while [ ! -f "${readyPath}" ]; do sleep 0.01; done; printf '%s\\n' "$$" > "${markerPath}"; exit 0`,
           ],
           cwd: directory,
           env: process.env,

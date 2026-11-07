@@ -3,7 +3,15 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { type AppHandle, launchApp, setReactValueJs } from "./harness.js";
+import {
+  type AppHandle,
+  launchApp,
+  openOnboardingStep,
+  openProjectSwitcher,
+  setReactValueJs,
+  waitForProjectWorkspace,
+  workspaceDomHelpersJs,
+} from "./harness.js";
 
 /**
  * User-onboarding flows, asserted on the REAL filesystem and git repo the
@@ -16,8 +24,7 @@ let app: AppHandle;
 
 /** DOM helpers injected into every eval — keep selectors in one place. */
 const helpers = `
-  const $ = (selector) => document.querySelector(selector);
-  const $$ = (selector) => [...document.querySelectorAll(selector)];
+  ${workspaceDomHelpersJs}
   const byText = (selector, text) =>
     $$(selector).find((el) => el.textContent.trim().includes(text));
   const visibleDock = () =>
@@ -78,13 +85,11 @@ const until = async (
 
 /** Drive the New-project modal to submission and wait for the workspace. */
 const createProjectViaUi = async (name: string): Promise<void> => {
-  await runWait(`return !!byText('button', 'Create or import project');`, {
+  await runWait(`return !!byText('button', 'New project');`, {
     timeoutMs: 60_000,
-    label: "empty-state Create or import project button",
+    label: "empty-state New project button",
   });
-  await run(
-    `byText('button', 'Create or import project').click(); return true;`,
-  );
+  await run(`byText('button', 'New project').click(); return true;`);
   await runWait(`return !!$('[data-testid="project-name-input"]');`);
   await run(`
     setReactValue($('[data-testid="project-name-input"]'), '${name}');
@@ -95,6 +100,7 @@ const createProjectViaUi = async (name: string): Promise<void> => {
      if (btn && !btn.disabled) { btn.click(); return true; } return false;`,
     { label: "project submit enabled" },
   );
+  await waitForProjectWorkspace({ app, name });
   await runWait(
     `return !!byText('[role="tab"], button', 'New Tab') &&
             !!$('textarea[placeholder*="Search or ask"]');`,
@@ -104,7 +110,14 @@ const createProjectViaUi = async (name: string): Promise<void> => {
 
 describe("agent-first onboarding", () => {
   beforeAll(async () => {
-    app = await launchApp();
+    const userDataDir = fs.mkdtempSync(
+      path.join(os.tmpdir(), "work-first-launch-"),
+    );
+    const occupiedDir = path.join(userDataDir, "Work", "default-project");
+    fs.mkdirSync(occupiedDir, { recursive: true });
+    fs.writeFileSync(path.join(occupiedDir, "KEEP.txt"), "leave me alone\n");
+    app = await launchApp({ userDataDir });
+    await openOnboardingStep(app, "AI agents");
     await run(`
       return window.catamorphicDesktop.agentsList().then((data) =>
         Promise.all(data.agents.map((agent) =>
@@ -116,20 +129,23 @@ describe("agent-first onboarding", () => {
     await app?.stop();
   });
 
-  it("creates a collision-safe Default Project and opens the agent wizard", async () => {
+  it("starts in a collision-safe Default Project and opens the agent wizard", async () => {
     const projectsDir = path.join(app.userDataDir, "Work");
     const occupiedDir = path.join(projectsDir, "default-project");
-    fs.mkdirSync(occupiedDir, { recursive: true });
-    fs.writeFileSync(path.join(occupiedDir, "KEEP.txt"), "leave me alone\n");
+    expect(fs.readFileSync(path.join(occupiedDir, "KEEP.txt"), "utf8")).toBe(
+      "leave me alone\n",
+    );
 
-    await runWait(`return !!$('[data-testid="empty-start-agent"]');`, {
+    await runWait(`return !!$('[data-testid="onboarding-setup-agent"]');`, {
       timeoutMs: 60_000,
       label: "empty project state",
     });
-    expect(await run(`return !!$('[data-testid="empty-start-agent"]');`)).toBe(
-      true,
+    expect(
+      await run(`return !!$('[data-testid="onboarding-setup-agent"]');`),
+    ).toBe(true);
+    await run(
+      `$('[data-testid="onboarding-setup-agent"]').click(); return true;`,
     );
-    await run(`$('[data-testid="empty-start-agent"]').click(); return true;`);
     await runWait(
       `const wizard = $$('[data-testid="agent-wizard"]')
          .find((el) => !el.closest('[inert]'));
@@ -235,11 +251,11 @@ describe("agent-first onboarding", () => {
     );
   });
 
-  it("allocates distinct folders for concurrent default projects", async () => {
+  it("reuses the default project for concurrent startup requests", async () => {
     const roots = await run<(string | null)[]>(`
       return Promise.all([
-        window.catamorphicDesktop.createDefaultProject(),
-        window.catamorphicDesktop.createDefaultProject(),
+        window.catamorphicDesktop.ensureDefaultProject(),
+        window.catamorphicDesktop.ensureDefaultProject(),
       ]).then((projects) => Promise.all(projects.map((project) =>
         window.catamorphicDesktop.projectRoot(project.id))));
     `);
@@ -247,7 +263,113 @@ describe("agent-first onboarding", () => {
     expect(roots).toHaveLength(2);
     expect(roots[0]).not.toBeNull();
     expect(roots[1]).not.toBeNull();
-    expect(roots[0]).not.toBe(roots[1]);
+    expect(roots[0]).toBe(roots[1]);
+  });
+});
+
+describe("initial workspace recovery", () => {
+  it("keeps startup failures within their profile and retries when returning", async () => {
+    const userDataDir = fs.mkdtempSync(
+      path.join(os.tmpdir(), "work-startup-retry-"),
+    );
+    const projectsDir = path.join(userDataDir, "Work");
+    fs.writeFileSync(projectsDir, "a file blocking the project folder");
+    const recoveryApp = await launchApp({ userDataDir });
+    try {
+      await recoveryApp.waitFor(
+        `!!document.querySelector('[data-testid="project-load-error"]')`,
+      );
+      const failedProfile = await recoveryApp.eval<{
+        id: string;
+        name: string;
+      }>(
+        `(async () => {
+          const api = window.catamorphicDesktop;
+          const id = await api.windowProfile();
+          return (await api.profilesList()).profiles.find(profile => profile.id === id);
+        })()`,
+      );
+      const switchProfile = async ({
+        id,
+        name,
+      }: {
+        id: string;
+        name: string;
+      }) => {
+        await recoveryApp.waitFor(
+          "!document.querySelector('.animate-profile-veil-in, .animate-profile-veil-out')",
+        );
+        await recoveryApp.eval(`(() => {
+          ${workspaceDomHelpersJs}
+          $('button[aria-label="Expand sidebar"]')?.click();
+        })()`);
+        await recoveryApp.waitFor(`(() => {
+          ${workspaceDomHelpersJs}
+          return !!$('button[aria-label^="Switch profile:"]:not([inert] *)');
+        })()`);
+        await recoveryApp.eval(`(() => {
+          ${workspaceDomHelpersJs}
+          $('button[aria-label^="Switch profile:"]').click();
+        })()`);
+        const dialog =
+          '[role="dialog"][aria-label="Profiles"][aria-hidden="false"]';
+        await recoveryApp.waitFor(`(() => {
+          ${workspaceDomHelpersJs}
+          return [...($(${JSON.stringify(dialog)})?.querySelectorAll('button') ?? [])]
+            .some(button => button.textContent.includes(${JSON.stringify(name)}));
+        })()`);
+        await recoveryApp.eval(`(() => {
+          ${workspaceDomHelpersJs}
+          [...$(${JSON.stringify(dialog)}).querySelectorAll('button')]
+            .find(button => button.textContent.includes(${JSON.stringify(name)})).click();
+        })()`);
+        await recoveryApp.waitFor(
+          `(() => {
+          ${workspaceDomHelpersJs}
+          return !!$('button[aria-label=${JSON.stringify(`Switch profile: ${name}`)}]') &&
+            !document.querySelector('.animate-profile-veil-in, .animate-profile-veil-out') &&
+            window.catamorphicDesktop.windowProfile().then(profileId => profileId === ${JSON.stringify(id)});
+        })()`,
+          { label: `profile UI switched to ${name}` },
+        );
+      };
+      fs.unlinkSync(projectsDir);
+      const otherProfile = await recoveryApp.eval<{ id: string; name: string }>(
+        "window.catamorphicDesktop.profilesCreate('Independent startup')",
+      );
+      await switchProfile(otherProfile);
+      const otherProjectId = await recoveryApp.waitFor<string>(
+        `(() => { const runtime = document.querySelector('[data-workspace-visible=true]'); return runtime?.querySelector('[data-workspace-ready]') && runtime.querySelector('[aria-label="Switch project"]')?.textContent.includes('Default Project') && runtime.dataset.projectRuntime; })()`,
+        {
+          label:
+            "another profile initializes independently of the failed profile",
+        },
+      );
+      expect(
+        await recoveryApp.eval(
+          "!!document.querySelector('[data-testid=project-load-error]')",
+        ),
+      ).toBe(false);
+      await switchProfile(failedProfile);
+      await recoveryApp.waitFor(
+        "!!document.querySelector('[data-testid=project-load-error]')",
+        { label: "the failed profile retains its retry action" },
+      );
+      await recoveryApp.eval(
+        `[...document.querySelectorAll('button')].find(button => button.textContent.includes('Retry loading projects')).click()`,
+      );
+      await recoveryApp.waitFor(
+        `!document.querySelector('[data-testid="project-load-error"]') && !!document.querySelector('[data-testid="onboarding"]') && document.querySelector('[aria-label="Switch project"]')?.textContent.includes('Default Project') && !!document.querySelector('[data-dock-host] [data-dock-rail]')`,
+      );
+      expect(
+        await recoveryApp.eval(
+          "document.querySelector('[data-workspace-visible=true]')?.dataset.projectRuntime",
+        ),
+      ).not.toBe(otherProjectId);
+      expect(recoveryApp.getRendererErrors()).toEqual([]);
+    } finally {
+      await recoveryApp.stop();
+    }
   });
 });
 
@@ -256,6 +378,7 @@ describe("blank project onboarding", () => {
 
   beforeAll(async () => {
     app = await launchApp();
+    await openProjectSwitcher(app);
   });
 
   afterAll(async () => {
@@ -374,6 +497,7 @@ describe.each([false, true])(
       app = await launchApp({
         env: { CATAMORPHIC_E2E_PICK_FOLDER: importDir },
       });
+      await openProjectSwitcher(app);
     });
 
     afterAll(async () => {
@@ -382,13 +506,11 @@ describe.each([false, true])(
     });
 
     it("opens the folder in place without adding files or changing history", async () => {
-      await runWait(`return !!byText('button', 'Create or import project');`, {
+      await runWait(`return !!byText('button', 'New project');`, {
         timeoutMs: 60_000,
-        label: "empty-state Create or import project button",
+        label: "empty-state New project button",
       });
-      await run(
-        `byText('button', 'Create or import project').click(); return true;`,
-      );
+      await run(`byText('button', 'New project').click(); return true;`);
       await runWait(`return !!byText('button', 'Import folder');`, {
         label: "project modal with Import mode",
       });
@@ -412,6 +534,7 @@ describe.each([false, true])(
        if (btn && !btn.disabled) { btn.click(); return true; } return false;`,
         { label: "import submit enabled" },
       );
+      await waitForProjectWorkspace({ app, name: "imported-notes" });
       await runWait(
         `return (async () => await projectReady() &&
               !!byText('[role="tab"], button', 'New Tab') &&

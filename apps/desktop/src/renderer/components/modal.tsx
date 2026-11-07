@@ -1,4 +1,10 @@
-import { type ReactNode, useEffect, useRef, useState } from "react";
+import {
+  type ReactNode,
+  useEffect,
+  useLayoutEffect,
+  useRef,
+  useState,
+} from "react";
 import { createPortal } from "react-dom";
 import { themeStyle, useTheme } from "../lib/theme.js";
 
@@ -8,12 +14,14 @@ export function Modal({
   children,
   width = 480,
   labelledBy,
+  animateSize = false,
 }: {
   open: boolean;
   onClose: () => void;
   children: ReactNode;
   width?: number;
   labelledBy?: string;
+  animateSize?: boolean;
 }) {
   const theme = useTheme();
   const [mounted, setMounted] = useState(open);
@@ -21,6 +29,30 @@ export function Modal({
     if (open) setMounted(true);
   }, [open]);
   const panelRef = useRef<HTMLDivElement>(null);
+  const contentRef = useRef<HTMLDivElement>(null);
+  const [height, setHeight] = useState<number>();
+  useLayoutEffect(() => {
+    const content = contentRef.current;
+    if (
+      !mounted ||
+      !animateSize ||
+      !content ||
+      typeof ResizeObserver === "undefined"
+    )
+      return;
+    // Measure natural content, then ease the dialog's bounded height. Its
+    // centered position and scroll range follow the same resize.
+    const measure = () =>
+      setHeight(Math.min(content.offsetHeight + 2, window.innerHeight - 48));
+    const observer = new ResizeObserver(measure);
+    observer.observe(content);
+    window.addEventListener("resize", measure);
+    measure();
+    return () => {
+      observer.disconnect();
+      window.removeEventListener("resize", measure);
+    };
+  }, [mounted, animateSize]);
   const onCloseRef = useRef(onClose);
   onCloseRef.current = onClose;
   // Where focus was as the dialog opened, read before a field inside it
@@ -113,7 +145,7 @@ export function Modal({
     <div
       data-theme={theme?.appearance}
       style={themeStyle(theme)}
-      className={`fixed inset-0 z-[100] grid place-items-center transition-opacity duration-150 ease-standard motion-reduce:duration-0 ${
+      className={`theme-colors fixed inset-0 z-[100] grid place-items-center transition-opacity duration-150 ease-standard motion-reduce:duration-0 ${
         open
           ? "pointer-events-auto animate-fade-in"
           : "pointer-events-none animate-fade-out"
@@ -142,12 +174,16 @@ export function Modal({
         aria-modal="true"
         aria-labelledby={labelledBy}
         tabIndex={-1}
-        style={{ width, maxWidth: "calc(100vw - 48px)" }}
-        className={`relative max-h-[calc(100dvh-48px)] overflow-y-auto overscroll-contain rounded-xl border border-border bg-bg-raised shadow-2xl outline-none motion-reduce:animate-none ${
+        style={{
+          width,
+          maxWidth: "calc(100vw - 48px)",
+          height: animateSize ? height : undefined,
+        }}
+        className={`relative max-h-[calc(100dvh-48px)] overflow-y-auto overscroll-contain rounded-xl border border-border bg-bg-raised shadow-2xl outline-none motion-reduce:animate-none ${animateSize ? "transition-[height] duration-200 ease-standard motion-reduce:transition-none" : ""} ${
           open ? "animate-modal-in" : "animate-modal-out"
         }`}
       >
-        {children}
+        {animateSize ? <div ref={contentRef}>{children}</div> : children}
       </div>
     </div>,
     document.body,

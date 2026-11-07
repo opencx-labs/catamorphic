@@ -19,10 +19,10 @@ it("keeps older profile projects and refreshes other windows when projects arriv
       `window.catamorphicDesktop.createProject(${JSON.stringify({ name, rootPath: path.join(handle.userDataDir, name.replaceAll(" ", "-")) })})`,
     );
   await handle.waitFor(
-    "document.body.innerText.includes('Make yourself at home')",
+    "document.querySelector('[data-workspace-visible=true] [aria-label=\"Switch project\"]')?.textContent.includes('Default Project')",
   );
   // A profile ownership broadcast arrives before its catalog refresh. Hold
-  // that request so cached emptiness cannot masquerade as onboarding.
+  // that request so the current workspace cannot be replaced by onboarding.
   const paused: string[] = [];
   const unsubscribe = handle.onCdpEvent("Fetch.requestPaused", (event) => {
     if (
@@ -40,7 +40,7 @@ it("keeps older profile projects and refreshes other windows when projects arriv
   try {
     await expect.poll(() => paused.length).toBeGreaterThan(0);
     await handle.waitFor(
-      "document.querySelector('[aria-label=\"Switch project\"]')?.textContent.includes('Loading projects')",
+      "document.querySelector('[data-workspace-visible=true] [aria-label=\"Switch project\"]')?.textContent.includes('Default Project')",
     );
     expect(
       await handle.eval(
@@ -103,20 +103,20 @@ it("keeps older profile projects and refreshes other windows when projects arriv
   for (let index = 0; index < 21; index += 1)
     await create(second, `New project ${index}`);
   await handle.eval(
-    "document.querySelector('[aria-label=\"Switch project\"]').click()",
+    "document.querySelector('[data-workspace-visible=true] [aria-label=\"Switch project\"]').click()",
   );
   await handle.waitFor(
     "Array.from(document.querySelectorAll('[role=\"option\"]')).some(row => row.textContent.includes('New project 20'))",
   );
   expect(await handle.eval(active)).toBe(true);
   await handle.eval(
-    "document.querySelector('[aria-label=\"Switch project\"]').click()",
+    "document.querySelector('[data-workspace-visible=true] [aria-label=\"Switch project\"]').click()",
   );
   // A cold catalog read must retain the main process's older project claim.
   await handle.reload();
   await handle.waitFor(active);
   await handle.waitFor(
-    "document.querySelector('[aria-label=\"Switch project\"]')?.textContent.includes('Older profile project')",
+    "document.querySelector('[data-workspace-visible=true] [aria-label=\"Switch project\"]')?.textContent.includes('Older profile project')",
   );
   expect(
     await handle.eval(

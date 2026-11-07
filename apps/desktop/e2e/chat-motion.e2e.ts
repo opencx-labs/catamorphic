@@ -6,7 +6,10 @@ import {
   type AppHandle,
   focusWindow,
   launchApp,
+  openProjectSwitcher,
   setReactValueJs,
+  waitForProjectWorkspace,
+  workspaceDomHelpersJs,
 } from "./harness.js";
 
 /**
@@ -54,8 +57,7 @@ afterAll(async () => {
 });
 
 const helpers = `
-  const $ = (selector) => document.querySelector(selector);
-  const $$ = (selector) => [...document.querySelectorAll(selector)];
+  ${workspaceDomHelpersJs}
   const byText = (selector, text) =>
     $$(selector).find((el) => el.textContent?.includes(text));
   const frontDock = () =>
@@ -621,13 +623,12 @@ function workPhase(frames: Frame[]): Frame[] {
 
 describe("chat motion", () => {
   it("opens a project and a chat", async () => {
-    await runWait(`return !!byText('button', 'Create or import project');`, {
+    await openProjectSwitcher(app);
+    await runWait(`return !!byText('button', 'New project');`, {
       timeoutMs: 120_000,
       label: "onboarding",
     });
-    await run(
-      `byText('button', 'Create or import project').click(); return true;`,
-    );
+    await run(`byText('button', 'New project').click(); return true;`);
     await runWait(
       `const input = $('[data-testid="project-name-input"]');
        if (!input) return false; setReactValue(input, 'chat-motion'); return true;`,
@@ -638,6 +639,7 @@ describe("chat motion", () => {
        if (!create || create.disabled) return false; create.click(); return true;`,
       { label: "create project" },
     );
+    await waitForProjectWorkspace({ app, name: "chat-motion" });
     await runWait(`return !!byText('button, [role="tab"]', 'New Tab');`, {
       timeoutMs: 60_000,
       label: "workspace ready",
@@ -1679,11 +1681,9 @@ describe("chat motion", () => {
     });
     // Settings reads the same provider as the chat. Wait for its new
     // bindings to render, not merely for the IPC broadcast to arrive.
-    await app.eval(
-      "document.querySelector('button[aria-label=\"Settings\"]').click()",
-    );
-    await app.waitFor(
-      "!!document.querySelector('[data-setting-id=\"shortcut.chat-previous-message\"]')",
+    await run("$('button[aria-label=\"Settings\"]').click(); return true;");
+    await runWait(
+      "return !!$('[data-setting-id=\"shortcut.chat-previous-message\"]');",
     );
     await app.eval(`(async () => {
       const api=window.catamorphicDesktop, current=await api.getKeybindings();
@@ -1692,9 +1692,10 @@ describe("chat motion", () => {
       });
       return true;
     })()`);
-    await app.waitFor(`
-      document.querySelector('[data-setting-id="shortcut.chat-previous-message"] button')?.textContent === '⌥↑' &&
-      document.querySelector('[data-setting-id="shortcut.chat-next-message"] button')?.textContent === '⌥↓'`);
+    await runWait(`
+      const mac = /Mac/.test(navigator.platform);
+      return $('[data-setting-id="shortcut.chat-previous-message"] button')?.textContent === (mac ? '⌥↑' : 'Alt+ArrowUp') &&
+        $('[data-setting-id="shortcut.chat-next-message"] button')?.textContent === (mac ? '⌥↓' : 'Alt+ArrowDown');`);
     // Opening Settings minimizes the floating chat; restore it normally.
     await app.press("m", process.platform === "darwin" ? 4 : 2);
     await runWait(

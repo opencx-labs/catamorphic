@@ -1,6 +1,11 @@
 import http from "node:http";
 import { afterAll, beforeAll, expect, it } from "vitest";
-import { type AppHandle, launchApp, setReactValueJs } from "./harness.js";
+import {
+  type AppHandle,
+  createProjectWorkspace,
+  launchApp,
+  setReactValueJs,
+} from "./harness.js";
 
 let app: AppHandle;
 let origin: string;
@@ -69,9 +74,11 @@ beforeAll(async () => {
   origin = `http://127.0.0.1:${address.port}`;
   app = await launchApp();
   await app.waitFor("!!document.querySelector('[data-sidebar=left]')");
-  await app.eval(
-    `window.catamorphicDesktop.createProject({name:'Chat state',rootPath:${JSON.stringify(`${app.userDataDir}/chat-state`)}})`,
-  );
+  await createProjectWorkspace({
+    app,
+    name: "Chat state",
+    rootPath: `${app.userDataDir}/chat-state`,
+  });
   await app.reload();
   await app.waitFor(
     "!!document.querySelector('textarea[placeholder*=\"Search or ask\"]')",

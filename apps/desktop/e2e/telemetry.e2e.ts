@@ -60,7 +60,7 @@ it("exports desktop project signals using committed settings and machine destina
       env,
     });
     const project = await app.eval<{ id: string; root: string }>(`(async () => {
-      const project = await window.catamorphicDesktop.createDefaultProject();
+      const project = await window.catamorphicDesktop.ensureDefaultProject();
       return { id: project.id, root: await window.catamorphicDesktop.projectRoot(project.id) };
     })()`);
     const manifestPath = path.join(project.root, ".work/project.json");

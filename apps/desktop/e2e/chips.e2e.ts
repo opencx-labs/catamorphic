@@ -2,7 +2,13 @@ import fs from "node:fs";
 import http from "node:http";
 import path from "node:path";
 import { afterAll, beforeAll, expect, it } from "vitest";
-import { type AppHandle, launchApp, setReactValueJs } from "./harness.js";
+import {
+  type AppHandle,
+  createProjectWorkspace,
+  launchApp,
+  setReactValueJs,
+  workspaceDomHelpersJs,
+} from "./harness.js";
 
 /**
  * The chips above a chat's composer (ADR 0239): recorded pull requests as
@@ -17,8 +23,7 @@ let projectRoot: string;
 let serial = 0;
 
 const helpers = `${setReactValueJs}
-const $ = (selector) => document.querySelector(selector);
-const $$ = (selector) => [...document.querySelectorAll(selector)];
+${workspaceDomHelpersJs}
 const dock = () => $$('section[aria-label]').find((el) => !el.closest('[inert]') && el.querySelector('[data-composer-input]'));
 const composer = () => dock()?.querySelector('[data-composer-input]');
 const rail = () => dock()?.querySelector('[data-testid="chip-rail"]');
@@ -65,9 +70,7 @@ beforeAll(async () => {
   app = await launchApp();
   await app.waitFor(`!!document.querySelector('[data-sidebar="left"]')`);
   projectRoot = path.join(app.userDataDir, "chips-project");
-  await app.eval(
-    `window.catamorphicDesktop.createProject({name:'Chips',rootPath:${JSON.stringify(projectRoot)}})`,
-  );
+  await createProjectWorkspace({ app, name: "Chips", rootPath: projectRoot });
   await app.reload();
   await app.waitFor(`document.body?.innerText.includes('Chips')`);
   await app.eval(`window.catamorphicDesktop.devWindow('setSize',1200,850)`);
@@ -295,12 +298,16 @@ it("takes the theme's surfaces, never a fixed black", async () => {
   await app.movePointer({ x: 20, y: 20 });
   await run("composer().focus();return true;");
   // The chip's color once its transition settles on the theme's raised one.
-  const settled = (theme: string) =>
-    wait<string>(
+  const settled = async (theme: string) => {
+    const target = await app.eval<string>(`(async () => {
+      const projectId = document.querySelector('[data-workspace-visible="true"]').dataset.projectRuntime;
+      return (await window.catamorphicDesktop.getTheme(projectId)).colors['bg-raised'];
+    })()`);
+    return wait<string>(
       `if (document.documentElement.dataset.theme !== ${JSON.stringify(theme)}) return false;
        const el = chip('https://github.com/acme/widgets/pull/4');
        const probe = document.createElement('div');
-       probe.style.background = 'var(--color-bg-raised)';
+       probe.style.background = ${JSON.stringify(target)};
        document.body.append(probe);
        const raised = getComputedStyle(probe).backgroundColor;
        probe.remove();
@@ -308,6 +315,7 @@ it("takes the theme's surfaces, never a fixed black", async () => {
        return color === raised ? color : false;`,
       { label: `chips on the ${theme} theme's raised surface` },
     );
+  };
   await app.eval(
     `window.catamorphicDesktop.setTheme({selection:'dark',overrides:{}})`,
   );
