@@ -1,12 +1,18 @@
 import { afterAll, beforeAll, expect, it } from "vitest";
-import { type AppHandle, launchApp } from "./harness.js";
+import {
+  type AppHandle,
+  createProjectWorkspace,
+  launchApp,
+} from "./harness.js";
 
 let app: AppHandle;
 beforeAll(async () => {
   app = await launchApp();
-  await app.eval(
-    `window.catamorphicDesktop.createProject({name:'Maximized chat',rootPath:${JSON.stringify(`${app.userDataDir}/maximized-chat`)}})`,
-  );
+  await createProjectWorkspace({
+    app,
+    name: "Maximized chat",
+    rootPath: `${app.userDataDir}/maximized-chat`,
+  });
   await app.reload();
   await app.waitFor("!!document.querySelector('[data-workspace-ready]')");
 });

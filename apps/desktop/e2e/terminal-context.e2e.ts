@@ -82,6 +82,12 @@ beforeAll(async () => {
   );
   projectId = project.id;
   await app.eval(
+    `window.catamorphicDesktop.workspaceNavigate({projectId:${JSON.stringify(projectId)}})`,
+  );
+  await app.waitFor(
+    `document.querySelector('[data-workspace-visible=true]')?.dataset.projectRuntime === ${JSON.stringify(projectId)}`,
+  );
+  await app.eval(
     `window.catamorphicDesktop.setTheme({selection:'catppuccin-macchiato',overrides:{}})`,
   );
   await app.eval(

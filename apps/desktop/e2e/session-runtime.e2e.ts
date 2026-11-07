@@ -1,18 +1,25 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { type AppHandle, launchApp, setReactValueJs } from "./harness.js";
+import {
+  type AppHandle,
+  launchApp,
+  openProjectSwitcher,
+  setReactValueJs,
+  waitForProjectWorkspace,
+  workspaceDomHelpersJs,
+} from "./harness.js";
 import { addSidebarSections, CHATS_SECTION } from "./sidebar-config.js";
 
 let app: AppHandle;
 beforeAll(async () => {
   app = await launchApp();
+  await openProjectSwitcher(app);
 });
 afterAll(async () => {
   await app?.stop();
 });
 
 const helpers = `
-  const $ = (selector) => document.querySelector(selector);
-  const $$ = (selector) => [...document.querySelectorAll(selector)];
+  ${workspaceDomHelpersJs}
   const dock = () => {
     const candidates = $$('section[data-chat-local-id]').filter(el => !el.closest('[inert]') && el.getBoundingClientRect().width > 0 && el.querySelector('[data-composer-input]'));
     return candidates.find(el => el.dataset.floatingChat === 'true') ?? candidates[0];
@@ -72,7 +79,7 @@ const pickEffort = (level: string) =>
 describe("session runtime controls", () => {
   it("edits only the current conversation and preserves the setting on reload", async () => {
     await wait(
-      `const button = $$('button').find(el => el.textContent.includes('Create or import project')); if (!button) return false; button.click(); return true;`,
+      `const button = $$('button').find(el => el.textContent.includes('New project')); if (!button) return false; button.click(); return true;`,
     );
     await wait(`return !!$('[data-testid="project-name-input"]');`);
     await run(
@@ -81,6 +88,7 @@ describe("session runtime controls", () => {
     await wait(
       `const button = $('[data-testid="project-submit"]'); if (!button || button.disabled) return false; button.click(); return true;`,
     );
+    await waitForProjectWorkspace({ app, name: "runtime-controls" });
     await wait(
       `return $$('[role="tab"], button').some(el => el.textContent.includes('New Tab'));`,
     );
@@ -536,7 +544,7 @@ it("keeps the person's fold of the strip through a chat tab, beside an open chat
     );
   // A page to return to, and a chat in a tab of its own.
   await run(
-    `[...document.querySelectorAll('button')].find((button) => button.textContent.trim() === 'Settings')?.click();`,
+    `$$('button').find((button) => button.textContent.trim() === 'Settings')?.click();`,
   );
   await wait(
     `return !!$('[data-tab-orientation] [data-point-key^="settings:"]');`,

@@ -3,7 +3,12 @@ import path from "node:path";
 import { nativeGit } from "@catamorphic/git";
 import { publishedRef } from "@catamorphic/workflow/project-layout";
 import { afterAll, beforeAll, expect, it } from "vitest";
-import { type AppHandle, launchApp, setReactValueJs } from "./harness.js";
+import {
+  type AppHandle,
+  createProjectWorkspace,
+  launchApp,
+  setReactValueJs,
+} from "./harness.js";
 
 /**
  * Links and images an agent writes reach only hosts the chat trusts without
@@ -41,9 +46,7 @@ beforeAll(async () => {
   app = await launchApp();
   await app.waitFor(`!!document.querySelector('[data-sidebar="left"]')`);
   const root = path.join(app.userDataDir, "trusted-hosts-project");
-  await app.eval(
-    `window.catamorphicDesktop.createProject({name:'Trusted hosts',rootPath:${JSON.stringify(root)}})`,
-  );
+  await createProjectWorkspace({ app, name: "Trusted hosts", rootPath: root });
   fs.mkdirSync(path.join(root, ".work"), { recursive: true });
   const manifest = path.join(root, ".work/project.json");
   const existing = fs.existsSync(manifest)

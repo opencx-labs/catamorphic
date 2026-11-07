@@ -6,7 +6,10 @@ import {
   type AppHandle,
   launchApp,
   NEW_TAB_INPUT,
+  openProjectSwitcher,
   setReactValueJs,
+  waitForProjectWorkspace,
+  workspaceDomHelpersJs,
 } from "./harness.js";
 
 let app: AppHandle;
@@ -19,7 +22,7 @@ const server = http.createServer((request, response) => {
 });
 const run = <T>(body: string) =>
   app.eval<T>(
-    `(() => { ${setReactValueJs}\n const $=s=>document.querySelector(s); ${body} })()`,
+    `(() => { ${setReactValueJs}\n ${workspaceDomHelpersJs} ${body} })()`,
   );
 const key = (value: string, mods: Record<string, boolean> = {}) =>
   app.eval(
@@ -46,11 +49,12 @@ beforeAll(async () => {
     throw new Error("No fixture port");
   origin = `http://127.0.0.1:${address.port}`;
   app = await launchApp();
+  await openProjectSwitcher(app);
   await app.waitFor(
-    "[...document.querySelectorAll('button')].some(b=>b.textContent.trim()==='Create or import project')",
+    "[...document.querySelectorAll('button')].some(b=>b.textContent.trim()==='New project')",
   );
   await run(
-    "[...document.querySelectorAll('button')].find(b=>b.textContent.trim()==='Create or import project').click()",
+    "$$('button').find(b=>b.textContent.trim()==='New project').click()",
   );
   await app.waitFor(
     "!!document.querySelector('[data-testid=project-name-input]')",
@@ -62,6 +66,7 @@ beforeAll(async () => {
     "!document.querySelector('[data-testid=project-submit]').disabled",
   );
   await run("$('[data-testid=project-submit]').click()");
+  await waitForProjectWorkspace({ app, name: "Floating workspace" });
   await app.waitFor(
     `!!document.querySelector(${JSON.stringify(NEW_TAB_INPUT)})`,
     { label: "New Tab palette" },
@@ -76,7 +81,7 @@ beforeAll(async () => {
     `setReactValue($(${JSON.stringify(NEW_TAB_INPUT)}),${JSON.stringify(`${origin}/anchor`)})`,
   );
   await app.waitFor(
-    "document.querySelector('[data-item-id=web]')?.getAttribute('aria-selected') === 'true'",
+    "document.querySelector('[data-workspace-visible=true] [data-item-id=web]')?.getAttribute('aria-selected') === 'true'",
   );
   await run(`$(${JSON.stringify(NEW_TAB_INPUT)}).focus()`);
   await app.press("Enter");
@@ -426,7 +431,7 @@ describe("floating surfaces", () => {
     );
     const sessions = await app.eval<number>("window.__terminalIds.length");
     await run(
-      "[...document.querySelectorAll('button')].find(b=>b.textContent.trim()==='Add macro').click()",
+      "$$('button').find(b=>b.textContent.trim()==='Add macro').click()",
     );
     // The editor renders after the click; a slow runner would fill nothing.
     await app.waitFor(

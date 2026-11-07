@@ -366,7 +366,13 @@ it("renders an interactive project app without exposing the shell bridge or broa
   await addSidebarSections(handle, [{ id: "apps", source: "work:apps" }]);
   await handle.reload();
   await handle.waitFor(
-    `(() => { const button = [...document.querySelectorAll('[data-sidebar-widget="apps"] button')].find(button => button.textContent.includes(${JSON.stringify(APP_NAME)})); if (!button) return false; button.click(); return true; })()`,
+    `document.querySelector('[data-workspace-visible="true"][data-project-runtime="${projectId}"] [data-workspace-ready]') !== null`,
+  );
+  await handle.eval(
+    `document.querySelector('[data-workspace-visible="true"] button[aria-label="Expand sidebar"]')?.click(); true`,
+  );
+  await handle.waitFor(
+    `(() => { const button = [...document.querySelectorAll('[data-workspace-visible="true"] [data-sidebar-widget="apps"] button')].find(button => button.textContent.includes(${JSON.stringify(APP_NAME)})); if (!button?.checkVisibility({ opacityProperty: true, visibilityProperty: true })) return false; button.click(); return true; })()`,
     { label: "open security app from its real sidebar" },
   );
   const guestUrl = await handle.waitFor<string>(

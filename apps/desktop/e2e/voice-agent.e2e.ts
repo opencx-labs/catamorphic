@@ -4,7 +4,10 @@ import {
   type AppHandle,
   focusWindow,
   launchApp,
+  openProjectSwitcher,
   setReactValueJs,
+  waitForProjectWorkspace,
+  workspaceDomHelpersJs,
 } from "./harness.js";
 
 /**
@@ -71,8 +74,7 @@ afterAll(async () => {
 });
 
 const helpers = `
-  const $ = (selector) => document.querySelector(selector);
-  const $$ = (selector) => [...document.querySelectorAll(selector)];
+  ${workspaceDomHelpersJs}
   const byText = (selector, text) =>
     $$(selector).find((el) => el.textContent?.includes(text));
   const mic = () => $('[data-testid="voice-button"]');
@@ -239,13 +241,12 @@ async function talk(utterance: string, reply: string): Promise<Ref> {
 
 describe("voice", () => {
   it("boots into a project with the microphone in the dock", async () => {
-    await runWait(`return !!byText('button', 'Create or import project');`, {
+    await openProjectSwitcher(app);
+    await runWait(`return !!byText('button', 'New project');`, {
       timeoutMs: 120_000,
       label: "onboarding",
     });
-    await run(
-      `byText('button', 'Create or import project').click(); return true;`,
-    );
+    await run(`byText('button', 'New project').click(); return true;`);
     await runWait(
       `const input = $('[data-testid="project-name-input"]');
        if (!input) return false; setReactValue(input, 'voice-e2e'); return true;`,
@@ -256,6 +257,7 @@ describe("voice", () => {
        if (!create || create.disabled) return false; create.click(); return true;`,
       { label: "create project" },
     );
+    await waitForProjectWorkspace({ app, name: "voice-e2e" });
     await runWait(`return mic()?.dataset.phase === 'off';`, {
       timeoutMs: 60_000,
       label: "microphone in the dock, off",

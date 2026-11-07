@@ -350,13 +350,32 @@ const openPalettePage = async (label: string) => {
 const card = `document.querySelector('[data-testid="extension-card"]')`;
 /** The first browser tab in the strip (its titled button, not its close). */
 const selectFirstBrowserTab = async () => {
-  const selected = await app.eval<boolean>(`(() => {
-    const item = document.querySelector('[data-point-key^="browser:"]');
+  const selected = await app.eval<string | null>(`(() => {
+    const item = document.querySelector('[data-workspace-visible="true"] [data-point-key^="browser:"]');
     const button = [...(item?.querySelectorAll('button') ?? [])].find((b) => b.textContent.trim().length > 0);
     button?.click();
-    return Boolean(button);
+    return button ? item.dataset.pointKey : null;
   })()`);
-  expect(selected).toBe(true);
+  expect(selected).toBeTruthy();
+  await app.waitFor(
+    `document.querySelector('[data-workspace-visible="true"] [data-point-key="${selected}"]')?.hasAttribute('data-tab-active')`,
+    {
+      label: "first browser tab selected",
+    },
+  );
+};
+const clickExtensionAction = async () => {
+  const point = await app.waitFor<{ x: number; y: number }>(
+    `(() => {
+    const button = document.querySelector('[data-testid="extension-action"][data-extension-id="${extensionId}"]');
+    if (!button || !button.checkVisibility({checkOpacity:true, checkVisibilityCSS:true})) return false;
+    const rect = button.getBoundingClientRect();
+    const point = { x: rect.x + rect.width / 2, y: rect.y + rect.height / 2 };
+    return rect.width > 0 && rect.height > 0 && button.contains(document.elementFromPoint(point.x, point.y)) ? point : false;
+  })()`,
+    { label: "extension action reachable" },
+  );
+  await app.clickPointer(point);
 };
 let extensionId = "";
 let popup: FrameHandle | null = null;
@@ -435,11 +454,15 @@ describe("an unpacked extension", () => {
   });
 
   it("blocks requests, sets the brand headers and shows its badge", async () => {
-    // The profile's workspace shows one surface at a time: the tab's page
-    // comes back when the tab does.
+    // The existing guest loaded before installation and stays mounted while
+    // hidden. Bring it back, then reload to apply the extension to its page.
     await selectFirstBrowserTab();
     await app.waitFor(
-      `(() => { try { return ${pageView}?.getTitle() === 'Lab blocked'; } catch { return false; } })()`,
+      `(() => { try {
+        const view = ${pageView};
+        return !!view && view.checkVisibility({ opacityProperty: true, visibilityProperty: true }) &&
+          ['Lab loaded', 'Lab blocked'].includes(view.getTitle());
+      } catch { return false; } })()`,
       { label: "page back" },
     );
     headers.length = 0;
@@ -504,9 +527,7 @@ describe("an unpacked extension", () => {
   });
 
   it("opens its popup, which sees the tab and storage.sync", async () => {
-    await click(
-      `[data-testid="extension-action"][data-extension-id="${extensionId}"]`,
-    );
+    await clickExtensionAction();
     await app.waitFor(
       `!!document.querySelector('[data-testid="extension-popup"]')`,
       {
@@ -539,6 +560,9 @@ describe("an unpacked extension", () => {
     expect(width).toBeGreaterThan(250);
     expect(width).toBeLessThan(300);
     // Escape closes it, as in Chrome; the next click opens it again.
+    await popup.waitFor("document.hasFocus()", {
+      label: "extension popup owns keyboard focus",
+    });
     await app.press("Escape");
     await app.waitFor(
       `!document.querySelector('[data-testid="extension-popup"]')`,
@@ -547,9 +571,7 @@ describe("an unpacked extension", () => {
       },
     );
     popup.close();
-    await click(
-      `[data-testid="extension-action"][data-extension-id="${extensionId}"]`,
-    );
+    await clickExtensionAction();
     await app.waitFor(
       `!!document.querySelector('[data-testid="extension-popup"]')`,
       {
@@ -1036,10 +1058,16 @@ process.stdin.on("data", (chunk) => {
     await app.waitFor(`${card}.dataset.enabled === 'false'`, {
       label: "turned off",
     });
+    // Revisit the tab: retained inactive toolbars refresh when shown.
+    await selectFirstBrowserTab();
     await app.waitFor(
-      `!document.querySelector('[data-testid="extension-action"][data-extension-id="${extensionId}"]')`,
-      { label: "toolbar button gone" },
+      `![...document.querySelectorAll('[data-testid="extension-action"][data-extension-id="${extensionId}"]')].some(button => button.checkVisibility({visibilityProperty:true}))`,
+      { label: "disabled extension absent from the visible toolbar" },
     );
+    await openPalettePage("Extensions");
+    await app.waitFor(`${card}?.dataset.enabled === 'false'`, {
+      label: "disabled extension ready to remove",
+    });
     await click('[data-testid="extension-card-remove"]');
     await app.waitFor(
       `document.querySelector('[data-testid="extension-prompt"]')?.dataset.kind === 'remove'`,

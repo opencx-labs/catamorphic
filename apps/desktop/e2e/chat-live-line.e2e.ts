@@ -1,5 +1,12 @@
 import { afterAll, beforeAll, expect, it } from "vitest";
-import { type AppHandle, launchApp, setReactValueJs } from "./harness.js";
+import {
+  type AppHandle,
+  launchApp,
+  openProjectSwitcher,
+  setReactValueJs,
+  waitForProjectWorkspace,
+  workspaceDomHelpersJs,
+} from "./harness.js";
 
 /**
  * The line beside the activity spinner says the best a harness gives about
@@ -22,8 +29,7 @@ afterAll(async () => {
 
 const helpers = `
   ${setReactValueJs}
-  const $ = (selector) => document.querySelector(selector);
-  const $$ = (selector) => [...document.querySelectorAll(selector)];
+  ${workspaceDomHelpersJs}
   const byText = (selector, text) =>
     $$(selector).find((el) => el.textContent.trim() === text);
   const frontDock = () =>
@@ -43,13 +49,12 @@ const runWait = <T = unknown>(
 ) => app.waitFor<T>(`(() => { ${helpers}\n${body} })()`, opts);
 
 it("says the agent's own words through their steps, a step's description, then a verb", async () => {
-  await runWait(`return !!byText('button', 'Create or import project');`, {
+  await openProjectSwitcher(app);
+  await runWait(`return !!byText('button', 'New project');`, {
     timeoutMs: 120_000,
     label: "onboarding",
   });
-  await run(
-    `byText('button', 'Create or import project').click(); return true;`,
-  );
+  await run(`byText('button', 'New project').click(); return true;`);
   await runWait(
     `const input = $('[data-testid="project-name-input"]');
      if (!input) return false; setReactValue(input, 'live-line'); return true;`,
@@ -60,6 +65,7 @@ it("says the agent's own words through their steps, a step's description, then a
      if (!create || create.disabled) return false; create.click(); return true;`,
     { label: "create project" },
   );
+  await waitForProjectWorkspace({ app, name: "live-line" });
   await runWait("return !!$('[data-workspace-ready]');", {
     timeoutMs: 60_000,
     label: "workspace ready",

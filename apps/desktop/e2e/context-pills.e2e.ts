@@ -1,7 +1,14 @@
 import fs from "node:fs";
 import path from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { type AppHandle, launchApp, setReactValueJs } from "./harness.js";
+import {
+  type AppHandle,
+  launchApp,
+  openProjectSwitcher,
+  setReactValueJs,
+  waitForProjectWorkspace,
+  workspaceDomHelpersJs,
+} from "./harness.js";
 
 /**
  * Context pills e2e: the composer is a contenteditable with INLINE pills.
@@ -18,6 +25,7 @@ let app: AppHandle;
 
 beforeAll(async () => {
   app = await launchApp();
+  await openProjectSwitcher(app);
 }, 180_000);
 
 afterAll(async () => {
@@ -25,8 +33,7 @@ afterAll(async () => {
 });
 
 const helpers = `
-  const $ = (selector) => document.querySelector(selector);
-  const $$ = (selector) => [...document.querySelectorAll(selector)];
+  ${workspaceDomHelpersJs}
   const visible = (selector) =>
     $$(selector).filter((el) => {
       const rect = el.getBoundingClientRect();
@@ -89,13 +96,11 @@ const BIG = Array.from(
 
 describe("context pills", () => {
   it("boots into a project and opens a floating chat", async () => {
-    await runWait(`return !!byText('button', 'Create or import project');`, {
+    await runWait(`return !!byText('button', 'New project');`, {
       timeoutMs: 120_000,
       label: "onboarding",
     });
-    await run(
-      `byText('button', 'Create or import project').click(); return true;`,
-    );
+    await run(`byText('button', 'New project').click(); return true;`);
     await runWait(
       `const input = $('[data-testid="project-name-input"]');
        if (!input) return false; setReactValue(input, 'pills-e2e'); return true;`,
@@ -106,6 +111,7 @@ describe("context pills", () => {
        if (!create || create.disabled) return false; create.click(); return true;`,
       { label: "create project" },
     );
+    await waitForProjectWorkspace({ app, name: "pills-e2e" });
     await runWait(`return !!byText('button, [role="tab"]', 'New Tab');`, {
       timeoutMs: 60_000,
       label: "workspace ready",

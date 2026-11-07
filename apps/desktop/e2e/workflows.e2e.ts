@@ -1,5 +1,12 @@
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
-import { type AppHandle, launchApp, setReactValueJs } from "./harness.js";
+import {
+  type AppHandle,
+  launchApp,
+  openProjectSwitcher,
+  setReactValueJs,
+  waitForProjectWorkspace,
+  workspaceDomHelpersJs,
+} from "./harness.js";
 import {
   WORKFLOW_EDITOR_EXPANDED_SOURCE,
   WORKFLOW_EDITOR_SOURCE,
@@ -9,11 +16,12 @@ let app: AppHandle;
 let projectId: string;
 beforeAll(async () => {
   app = await launchApp();
+  await openProjectSwitcher(app);
 });
 afterAll(async () => {
   await app?.stop();
 });
-const helpers = `const $ = s => document.querySelector(s); const $$ = s => [...document.querySelectorAll(s)]; const button = text => $$('.workflow-workbench button').find(el => !el.closest('[inert]') && el.innerText.trim() === text); const status = () => $('[data-testid="workflow-status-trigger"]')?.textContent ?? ''; const title = () => $('[data-testid="workflow-status-trigger"]')?.getAttribute('aria-label')?.split(' status:')[0] ?? ''; const popoverButton = text => $$('[data-testid="workflow-status-content"] button').find(el => el.innerText.trim() === text); const showCode = () => { const toggle = $('button[aria-label="Code"]'); if (toggle.getAttribute('aria-pressed') !== 'true') toggle.click(); }; const tabLabel = () => $('[data-point-key="workflow:linkedWorkflow"]')?.textContent ?? ''; const panel = () => $('.workflow-stage')?.dataset; const node = label => $$('.react-flow__node').find(el => el.textContent.trim() === label); ${setReactValueJs}`;
+const helpers = `${workspaceDomHelpersJs} const button = text => $$('.workflow-workbench button').find(el => !el.closest('[inert]') && el.innerText.trim() === text); const status = () => $('[data-testid="workflow-status-trigger"]')?.textContent ?? ''; const title = () => $('[data-testid="workflow-status-trigger"]')?.getAttribute('aria-label')?.split(' status:')[0] ?? ''; const popoverButton = text => $$('[data-testid="workflow-status-content"] button').find(el => el.innerText.trim() === text); const showCode = () => { const toggle = $('button[aria-label="Code"]'); if (toggle.getAttribute('aria-pressed') !== 'true') toggle.click(); }; const tabLabel = () => $('[data-point-key="workflow:linkedWorkflow"]')?.textContent ?? ''; const panel = () => $('.workflow-stage')?.dataset; const node = label => $$('.react-flow__node').find(el => el.textContent.trim() === label); ${setReactValueJs}`;
 const run = <T>(body: string) =>
   app.eval<T>(`(async () => { ${helpers} ${body} })()`);
 // Most of these waits end on a server-side parse or deploy of the workflow
@@ -50,11 +58,11 @@ afterEach(async (context) => {
 describe("workflow authoring", { retry: 0 }, () => {
   it("opens a readable host inspector and can always reach code", async () => {
     await wait(
-      `return !!$$('button').find(el => el.textContent.trim() === 'Create or import project');`,
+      `return !!$$('button').find(el => el.textContent.trim() === 'New project');`,
       "empty workspace",
     );
     await run(
-      `$$('button').find(el => el.textContent.trim() === 'Create or import project').click(); return true;`,
+      `$$('button').find(el => el.textContent.trim() === 'New project').click(); return true;`,
     );
     await wait(
       `return !!$('[data-testid="project-name-input"]');`,
@@ -67,6 +75,7 @@ describe("workflow authoring", { retry: 0 }, () => {
       `const submit=$('[data-testid="project-submit"]'); if(submit && !submit.disabled) {submit.click(); return true;} return false;`,
       "create project",
     );
+    await waitForProjectWorkspace({ app, name: "Workflow authoring" });
     await wait(
       `const submit=$('[data-testid="project-submit"]'); return !!$('textarea[placeholder*="Search or ask"]') && (!submit || !!submit.closest('[inert]'));`,
       "project workspace",

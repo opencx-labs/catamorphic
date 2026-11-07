@@ -1,7 +1,12 @@
 import fs from "node:fs";
 import path from "node:path";
 import { afterAll, beforeAll, expect, it } from "vitest";
-import { type AppHandle, focusWindow, launchApp } from "./harness.js";
+import {
+  type AppHandle,
+  createProjectWorkspace,
+  focusWindow,
+  launchApp,
+} from "./harness.js";
 import {
   type NativeDisplayBounds,
   readNativeMacDisplays,
@@ -70,9 +75,11 @@ async function selectComposerContents() {
 
 beforeAll(async () => {
   app = await launchApp();
-  await app.eval(
-    `window.catamorphicDesktop.createProject({name:'Chat interactions',rootPath:${JSON.stringify("/tmp/chat-interactions-project")}})`,
-  );
+  await createProjectWorkspace({
+    app,
+    name: "Chat interactions",
+    rootPath: "/tmp/chat-interactions-project",
+  });
   await app.reload();
   await app.waitFor("!!document.querySelector('[data-workspace-ready]')");
   await click('[data-dock-rail] button[aria-label="New chat"]');

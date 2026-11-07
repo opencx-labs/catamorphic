@@ -5,8 +5,11 @@ import {
   type AppHandle,
   focusWindow,
   launchApp,
+  openProjectSwitcher,
   pointerOnPage,
   setReactValueJs,
+  waitForProjectWorkspace,
+  workspaceDomHelpersJs,
 } from "./harness.js";
 
 /**
@@ -30,7 +33,7 @@ const server = http.createServer((request, response) => {
 const mac = process.platform === "darwin";
 const run = <T>(body: string) =>
   app.eval<T>(
-    `(() => { ${setReactValueJs}\n const $ = s => document.querySelector(s); const button = text => [...document.querySelectorAll('button')].find(b => b.textContent.trim() === text); ${body} })()`,
+    `(() => { ${setReactValueJs}\n ${workspaceDomHelpersJs} const button = text => [...document.querySelectorAll('button')].find(b => b.textContent.trim() === text); ${body} })()`,
   );
 const paletteInput = `[...document.querySelectorAll('textarea[aria-label="Search commands, pages, and more"]')].find((el) => !el.closest('[inert]') && el.checkVisibility())`;
 const openPage = async (name: string) => {
@@ -79,10 +82,11 @@ beforeAll(async () => {
     throw new Error("Missing server address");
   origin = `http://127.0.0.1:${address.port}`;
   app = await launchApp();
+  await openProjectSwitcher(app);
   await app.waitFor(
-    "[...document.querySelectorAll('button')].some(b => b.textContent.trim() === 'Create or import project')",
+    "[...document.querySelectorAll('button')].some(b => b.textContent.trim() === 'New project')",
   );
-  await run("button('Create or import project').click()");
+  await run("button('New project').click()");
   await app.waitFor(
     "!!document.querySelector('[data-testid=project-name-input]')",
   );
@@ -93,9 +97,7 @@ beforeAll(async () => {
     "!document.querySelector('[data-testid=project-submit]').disabled",
   );
   await run("$('[data-testid=project-submit]').click()");
-  await app.waitFor(
-    "window.catamorphicDesktop.getPrefs().then(prefs => Boolean(prefs.lastProjectId))",
-  );
+  await waitForProjectWorkspace({ app, name: "Tab drags" });
   await app.eval(
     "window.catamorphicDesktop.setPrefs({tabPlacement:'sidebar',headerPlacement:'sidebar'})",
   );
@@ -152,7 +154,8 @@ it("gives the shown page back its presses when the dragged tab's row leaves mid-
 
 it("ends a strip tab's drag when the tab closes before the drop", async () => {
   await app.eval("window.catamorphicDesktop.setPrefs({tabPlacement:'top'})");
-  const strip = '[data-tab-orientation="horizontal"]';
+  const strip =
+    '[data-workspace-visible=true] [data-tab-orientation="horizontal"]';
   const tab = await openPage("Strip");
   const source = `${strip} [data-point-key="${tab}"]`;
   await app.waitFor(`!!document.querySelector(${JSON.stringify(source)})`);

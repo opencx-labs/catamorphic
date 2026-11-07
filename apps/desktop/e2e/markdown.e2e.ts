@@ -1,5 +1,12 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { type AppHandle, launchApp, setReactValueJs } from "./harness.js";
+import {
+  type AppHandle,
+  launchApp,
+  openProjectSwitcher,
+  setReactValueJs,
+  waitForProjectWorkspace,
+  workspaceDomHelpersJs,
+} from "./harness.js";
 
 /**
  * Markdown editor e2e: .md files open in the rich editor (not Monaco) inside
@@ -13,6 +20,7 @@ let app: AppHandle;
 
 beforeAll(async () => {
   app = await launchApp();
+  await openProjectSwitcher(app);
 }, 180_000);
 
 afterAll(async () => {
@@ -21,8 +29,7 @@ afterAll(async () => {
 
 /** DOM helpers injected into every eval — keep selectors in one place. */
 const helpers = `
-  const $ = (selector) => document.querySelector(selector);
-  const $$ = (selector) => [...document.querySelectorAll(selector)];
+  ${workspaceDomHelpersJs}
   const byText = (selector, text) =>
     $$(selector).find((el) => el.textContent?.includes(text));
   const visible = (selector) =>
@@ -200,13 +207,11 @@ const PLAIN_DOC = `# Plain notes\n\nJust a paragraph.\n`;
 
 describe("markdown editor", () => {
   it("boots into a project and seeds markdown files over the file API", async () => {
-    await runWait(`return !!byText('button', 'Create or import project');`, {
+    await runWait(`return !!byText('button', 'New project');`, {
       timeoutMs: 120_000,
       label: "onboarding",
     });
-    await run(
-      `byText('button', 'Create or import project').click(); return true;`,
-    );
+    await run(`byText('button', 'New project').click(); return true;`);
     await runWait(
       `const input = $('[data-testid="project-name-input"]');
        if (!input) return false;
@@ -220,6 +225,7 @@ describe("markdown editor", () => {
        create.click(); return true;`,
       { label: "create project" },
     );
+    await waitForProjectWorkspace({ app, name: "md-e2e" });
     await runWait(`return !!byText('button, [role="tab"]', 'New Tab');`, {
       timeoutMs: 60_000,
       label: "workspace ready",

@@ -2,7 +2,14 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterAll, beforeAll, describe, it } from "vitest";
-import { type AppHandle, launchApp, setReactValueJs } from "./harness.js";
+import {
+  type AppHandle,
+  launchApp,
+  openProjectSwitcher,
+  setReactValueJs,
+  waitForProjectWorkspace,
+  workspaceDomHelpersJs,
+} from "./harness.js";
 
 /**
  * Hermes as an agent of the person's own (ADR 0241): the setup wizard finds
@@ -53,8 +60,7 @@ afterAll(async () => {
 });
 
 const helpers = `
-  const $ = (selector) => document.querySelector(selector);
-  const $$ = (selector) => [...document.querySelectorAll(selector)];
+  ${workspaceDomHelpersJs}
   const byText = (selector, text) =>
     $$(selector).find((el) => el.textContent.trim().includes(text));
   const visible = (selector) => $$(selector).find((el) => !el.closest('[inert]'));
@@ -106,13 +112,12 @@ const palette = async (command: string) => {
 
 describe("Hermes as the person's own agent", () => {
   it("boots into a project workspace", async () => {
-    await runWait(`return !!byText('button', 'Create or import project');`, {
+    await openProjectSwitcher(app);
+    await runWait(`return !!byText('button', 'New project');`, {
       timeoutMs: 60_000,
       label: "empty state",
     });
-    await run(
-      `byText('button', 'Create or import project').click(); return true;`,
-    );
+    await run(`byText('button', 'New project').click(); return true;`);
     await runWait(`return !!$('[data-testid="project-name-input"]');`);
     await run(`
       setReactValue($('[data-testid="project-name-input"]'), 'e2e-hermes');
@@ -123,6 +128,7 @@ describe("Hermes as the person's own agent", () => {
        if (btn && !btn.disabled) { btn.click(); return true; } return false;`,
       { label: "project submit enabled" },
     );
+    await waitForProjectWorkspace({ app, name: "e2e-hermes" });
     await runWait(`return !!$('textarea[placeholder*="Search or ask"]');`, {
       timeoutMs: 60_000,
       label: "workspace",

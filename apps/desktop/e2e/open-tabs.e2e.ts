@@ -1,6 +1,12 @@
 import http from "node:http";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { type AppHandle, launchApp, setReactValueJs } from "./harness.js";
+import {
+  type AppHandle,
+  launchApp,
+  openProjectSwitcher,
+  setReactValueJs,
+  waitForProjectWorkspace,
+} from "./harness.js";
 
 /**
  * A page already open in a tab opens there (`switchToOpenTab`): a bookmark,
@@ -77,10 +83,11 @@ beforeAll(async () => {
     throw new Error("Missing server address");
   origin = `http://127.0.0.1:${address.port}`;
   app = await launchApp();
+  await openProjectSwitcher(app);
   await app.waitFor(
-    "[...document.querySelectorAll('button')].some(b => b.textContent.trim() === 'Create or import project')",
+    "[...document.querySelectorAll('button')].some(b => b.textContent.trim() === 'New project')",
   );
-  await run("button('Create or import project').click()");
+  await run("button('New project').click()");
   await app.waitFor(
     "!!document.querySelector('[data-testid=project-name-input]')",
   );
@@ -89,12 +96,10 @@ beforeAll(async () => {
     "!document.querySelector('[data-testid=project-submit]').disabled",
   );
   await run("$('[data-testid=project-submit]').click()");
-  await app.waitFor(
-    "window.catamorphicDesktop.getPrefs().then(prefs => Boolean(prefs.lastProjectId))",
-  );
+  const projectId = await waitForProjectWorkspace({ app, name: "Tabs" });
   await app.eval(`(async () => {
     const api = window.catamorphicDesktop;
-    const scope = { profileId: await api.windowProfile(), projectId: (await api.getPrefs()).lastProjectId };
+    const scope = { profileId: await api.windowProfile(), projectId: ${JSON.stringify(projectId)} };
     await api.bookmarksAdd({ ...scope, label: 'Team wiki', url: ${JSON.stringify(`${origin}/a`)} });
     return true;
   })()`);

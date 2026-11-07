@@ -6,6 +6,7 @@ import { afterAll, describe, expect, it } from "vitest";
 import type { WindowSession } from "../src/main/window-state.js";
 import {
   type AppHandle,
+  createProjectWorkspace,
   type FrameHandle,
   launchApp,
   setReactValueJs,
@@ -41,13 +42,10 @@ const geometry = () =>
 const settle = () => new Promise((resolve) => setTimeout(resolve, 700));
 
 describe("window state", () => {
-  it("a maximized window relaunches maximized", async () => {
-    app = await launchApp();
+  it("the first window starts maximized and relaunches maximized", async () => {
+    app = await launchApp({ firstLaunch: true });
     await app.waitFor(
       "window.catamorphicDesktop.devWindow('get').then(state => state.visible)",
-    );
-    await (app as AppHandle).eval(
-      `window.catamorphicDesktop.devWindow('maximize')`,
     );
     await app.waitFor(
       "window.catamorphicDesktop.devWindow('get').then(state => state.maximized)",
@@ -163,6 +161,9 @@ describe("window state", () => {
           "utf8",
         ),
       );
+    const initialProjectIds = await handle.eval<string[]>(
+      "Array.from(document.querySelectorAll('[data-project-runtime]')).map(element => element.dataset.projectRuntime).filter(id => id !== 'initial')",
+    );
     try {
       const first = await create(handle, "Saved first");
       await navigate(handle, first.id);
@@ -220,8 +221,8 @@ describe("window state", () => {
       );
       expect(await other.eval(active(second.id))).toBe(true);
 
-      // A third window changes to an empty profile. It remains a real saved
-      // workspace window, without borrowing another profile's last project.
+      // A third window changes to a new profile. It gets its own Default
+      // Project, without borrowing another profile's last project.
       const third = await create(handle, "Saved third");
       await handle.eval(
         `window.catamorphicDesktop.workspaceNavigate({projectId:${JSON.stringify(third.id)},newWindow:true})`,
@@ -238,6 +239,9 @@ describe("window state", () => {
       await empty.eval(`location.reload(); true`);
       await empty.waitFor(
         `!!document.querySelector('[aria-label="Switch profile: Saved empty profile"]')`,
+      );
+      const profileDefaultId = await empty.waitFor<string>(
+        `(() => { const runtime = document.querySelector('[data-workspace-visible=true]'); return runtime?.querySelector('[data-workspace-ready]') && runtime.querySelector('[aria-label="Switch project"]')?.textContent.includes('Default Project') && runtime.dataset.projectRuntime; })()`,
       );
       await empty.eval(
         `window.catamorphicDesktop.devWindow('setSize',860,560)`,
@@ -263,7 +267,8 @@ describe("window state", () => {
             saved.windows.some(
               (window) =>
                 window.profileId === profile.id &&
-                window.projectIds.length === 0,
+                window.projectIds.length === 1 &&
+                window.projectIds.includes(profileDefaultId),
             )
           );
         })
@@ -275,7 +280,7 @@ describe("window state", () => {
             window.projectIds.includes(first.id),
           )?.projectIds ?? []),
         ].sort(),
-      ).toEqual([first.id, background.id].sort());
+      ).toEqual([...initialProjectIds, first.id, background.id].sort());
       const userDataDir = handle.userDataDir;
       for (const frame of frames.splice(0)) frame.close();
       await handle.stop({ preserveUserData: true });
@@ -336,17 +341,11 @@ describe("window state", () => {
     await app?.stop();
     app = await launchApp();
     const handle = app;
-    const project = await handle.eval<{
-      id: string;
-    }>(`window.catamorphicDesktop.createProject({
-      name:'Immediate Quit', rootPath:${JSON.stringify(`${handle.userDataDir}/immediate-quit`)}
-    })`);
-    await handle.eval(
-      `window.catamorphicDesktop.workspaceNavigate({projectId:${JSON.stringify(project.id)}})`,
-    );
-    await handle.waitFor(
-      `!!document.querySelector('[data-workspace-visible="true"] [data-workspace-ready]')`,
-    );
+    const project = await createProjectWorkspace({
+      app: handle,
+      name: "Immediate Quit",
+      rootPath: `${handle.userDataDir}/immediate-quit`,
+    });
     await handle.eval(`window.dispatchEvent(new KeyboardEvent('keydown',{
       key:',',altKey:true,metaKey:/Mac/.test(navigator.platform),ctrlKey:!/Mac/.test(navigator.platform),bubbles:true
     }));true`);
@@ -396,24 +395,17 @@ describe("window state", () => {
     await app?.stop();
     app = await launchApp();
     const handle = app;
+    const startupProjectIds = await handle.eval<string[]>(
+      "window.catamorphicDesktop.workspaceInitial().then(initial => initial.projectIds)",
+    );
     const create = (name: string) =>
-      handle.eval<{ id: string }>(
-        `window.catamorphicDesktop.createProject(${JSON.stringify({ name, rootPath: path.join(handle.userDataDir, name) })})`,
-      );
+      createProjectWorkspace({
+        app: handle,
+        name,
+        rootPath: path.join(handle.userDataDir, name),
+      });
     const first = await create("Removed project");
-    await handle.eval(
-      `window.catamorphicDesktop.workspaceNavigate({projectId:${JSON.stringify(first.id)}})`,
-    );
-    await handle.waitFor(
-      `document.querySelector('[data-workspace-visible="true"]')?.dataset.projectRuntime === ${JSON.stringify(first.id)}`,
-    );
     const second = await create("Kept project");
-    await handle.eval(
-      `window.catamorphicDesktop.workspaceNavigate({projectId:${JSON.stringify(second.id)}})`,
-    );
-    await handle.waitFor(
-      `document.querySelector('[data-workspace-visible="true"]')?.dataset.projectRuntime === ${JSON.stringify(second.id)}`,
-    );
     await handle.eval(
       `window.catamorphicDesktop.deleteProject({projectId:${JSON.stringify(first.id)}})`,
     );
@@ -425,14 +417,16 @@ describe("window state", () => {
       await handle.eval<string[]>(
         `window.catamorphicDesktop.workspaceInitial().then(initial=>initial.projectIds)`,
       ),
-    ).toEqual([second.id]);
+    ).toEqual([...startupProjectIds, second.id]);
     const userDataDir = handle.userDataDir;
     await handle.stop({ preserveUserData: true });
     const file = path.join(userDataDir, "window-state.json");
     const stale: WindowSession = JSON.parse(await fs.readFile(file, "utf8"));
     const saved = stale.windows[0];
     if (!saved) throw new Error("Missing saved window");
-    saved.projectIds.push(first.id);
+    // The first viable saved claim is the intended fallback after the stale
+    // active claim is rejected. Keep the retained startup project too.
+    saved.projectIds = [second.id, ...startupProjectIds, first.id];
     saved.activeProjectId = first.id;
     await fs.writeFile(file, JSON.stringify(stale));
     app = await launchApp({ userDataDir });
@@ -443,7 +437,7 @@ describe("window state", () => {
       await app.eval<string[]>(
         `window.catamorphicDesktop.workspaceInitial().then(initial=>initial.projectIds)`,
       ),
-    ).toEqual([second.id]);
+    ).toEqual([second.id, ...startupProjectIds]);
     expect(
       await app.eval(
         `!!document.querySelector('[data-project-runtime="${first.id}"]')`,
@@ -455,25 +449,22 @@ describe("window state", () => {
     await app?.stop();
     app = await launchApp();
     const handle = app;
-    const project = await handle.eval<{
-      id: string;
-    }>(`window.catamorphicDesktop.createProject({
-      name:'Sole owned project',rootPath:${JSON.stringify(`${handle.userDataDir}/sole-owned-project`)}
-    })`);
-    await handle.eval(
-      `window.catamorphicDesktop.workspaceNavigate({projectId:${JSON.stringify(project.id)}})`,
+    const startupProjectIds = await handle.eval<string[]>(
+      "window.catamorphicDesktop.workspaceInitial().then(initial => initial.projectIds)",
     );
-    await handle.waitFor(
-      `!!document.querySelector('[data-workspace-visible="true"] [data-workspace-ready]')`,
-    );
+    const project = await createProjectWorkspace({
+      app: handle,
+      name: "Sole owned project",
+      rootPath: `${handle.userDataDir}/sole-owned-project`,
+    });
     await handle.eval(`window.dispatchEvent(new KeyboardEvent('keydown',{
       key:'t',altKey:true,metaKey:/Mac/.test(navigator.platform),ctrlKey:!/Mac/.test(navigator.platform),bubbles:true
     }))`);
     await handle.waitFor(
-      `!!document.querySelector('input[aria-label="Address and search bar"]')`,
+      `!!document.querySelector('[data-workspace-visible=true] input[aria-label="Address and search bar"]')`,
     );
     await handle.eval(`(()=>{${setReactValueJs};
-      const input=document.querySelector('input[aria-label="Address and search bar"]');
+      const input=document.querySelector('[data-workspace-visible=true] input[aria-label="Address and search bar"]');
       setReactValue(input,'data:text/html,<title>Sole owner sentinel</title><p>Kept by its owner</p>');
       input.dispatchEvent(new KeyboardEvent('keydown',{key:'Enter',bubbles:true,cancelable:true}));
     })()`);
@@ -505,7 +496,11 @@ describe("window state", () => {
         lastFocusedWindowId: owner.id,
       }),
     );
-    app = await launchApp({ userDataDir, activateWindow: false });
+    app = await launchApp({
+      userDataDir,
+      activateWindow: false,
+      allowUtilityWorkspace: true,
+    });
     const empty = await app.connectToFrame(`window=${emptyId}`);
     const owned = await app.connectToFrame(`window=${owner.id}`);
     try {
@@ -513,7 +508,7 @@ describe("window state", () => {
         `document.querySelector('[data-workspace-visible="true"]')?.dataset.projectRuntime===${JSON.stringify(project.id)}`,
       );
       await owned.waitFor(
-        `!!document.querySelector('[data-workspace-ready] webview')`,
+        `!!document.querySelector('[data-workspace-visible=true] [data-workspace-ready] webview')`,
       );
       await empty.waitFor(
         `!!document.querySelector('[aria-label="Switch profile: Default Profile"]')`,
@@ -545,7 +540,7 @@ describe("window state", () => {
         await owned.eval(
           `window.catamorphicDesktop.workspaceInitial().then(initial=>initial.projectIds)`,
         ),
-      ).toEqual([project.id]);
+      ).toEqual([...startupProjectIds, project.id]);
       expect(
         await owned.eval(`window.catamorphicDesktop.workspaceStateGet(${JSON.stringify(project.id)}).then(state=>({
         settings:state.tabs.some(tab=>tab.kind==='settings'),

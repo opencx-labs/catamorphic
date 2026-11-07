@@ -5,7 +5,12 @@ import https from "node:https";
 import os from "node:os";
 import path from "node:path";
 import { afterAll, beforeAll, expect, it } from "vitest";
-import { type AppHandle, launchApp, setReactValueJs } from "./harness.js";
+import {
+  type AppHandle,
+  createProjectWorkspace,
+  launchApp,
+  setReactValueJs,
+} from "./harness.js";
 
 // Responses stay unfinished until the test releases them. Approval must not
 // change a single bounding box while the network has nothing to show yet.
@@ -60,9 +65,11 @@ beforeAll(async () => {
   // Production certificate checks and CSP stay unchanged.
   await app.cdp("Security.setIgnoreCertificateErrors", { ignore: true });
   await app.waitFor("!!document.querySelector('[data-sidebar=\"left\"]')");
-  await app.eval(
-    `window.catamorphicDesktop.createProject({name:'Image consent',rootPath:${JSON.stringify(`${app.userDataDir}/image-consent`)}})`,
-  );
+  await createProjectWorkspace({
+    app,
+    name: "Image consent",
+    rootPath: `${app.userDataDir}/image-consent`,
+  });
   await app.reload();
   await app.waitFor('!!document.querySelector("[data-workspace-ready]")');
 });
@@ -108,7 +115,11 @@ async function ask(name: string) {
     input.closest('form').requestSubmit();
   })()`);
   await app.waitFor(
-    `!!${pill} && !!document.querySelector('[aria-label*="Session status:"][aria-label*="Ready"]')`,
+    `(() => {
+      const placeholder = ${pill};
+      return !!placeholder?.closest('[data-chat-local-id]')?.querySelector('[aria-label*="Session status:"][aria-label*="Ready"]');
+    })()`,
+    { label: "the image's own chat finished its response" },
   );
   await app.eval(
     `document.fonts.ready.then(()=>new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(()=>resolve(true)))))`,
@@ -129,22 +140,48 @@ async function ask(name: string) {
 }
 
 async function approve(always = false) {
-  const point = await app.waitFor<{ x: number; y: number }>(
-    `(() => {${helpers}
+  const target = `(() => {${helpers}
     const button=pill.querySelectorAll('button')[${always ? 1 : 0}];
+    for (let node=frame;node;node=node.parentElement)
+      if (node.getAnimations().some(animation =>
+        animation.effect?.getTiming().iterations !== Infinity &&
+        (animation.pending || animation.playState === 'running' || animation.playState === 'paused'))) return false;
     const r=button.getBoundingClientRect();
     if (button.disabled || !r.width || !r.height || !button.contains(document.elementFromPoint(r.x+r.width/2,r.y+r.height/2))) return false;
     return {x:r.x+r.width/2,y:r.y+r.height/2};
-  })()`,
-    { label: "image approval ready for a pointer click" },
+  })()`;
+  const point = await app.waitFor<{ x: number; y: number }>(target, {
+    label: "image approval ready for the pointer",
+  });
+  await app.movePointer(point);
+  const reached = await app.waitFor<{ x: number; y: number }>(target, {
+    label: "image approval ready for a pointer click",
+  });
+  await app.eval(
+    `window.imageApproval = { pill: ${pill}, frame: ${pill}.parentElement }; true`,
   );
-  for (const type of ["mousePressed", "mouseReleased"])
-    await app.cdp("Input.dispatchMouseEvent", {
-      type,
-      ...point,
-      button: "left",
-      clickCount: 1,
+  try {
+    await app.clickPointer(reached);
+    await app.waitFor(
+      `window.imageApproval.frame.isConnected &&
+        window.imageApproval.frame.dataset.remoteImage === 'loading' &&
+        !!window.imageApproval.frame.querySelector('img') &&
+        window.imageApproval.frame.contains(window.imageApproval.pill)`,
+      { label: "the approved image is loading with its original pill" },
+    );
+  } catch (error) {
+    const state = await app.eval(`({
+      connected: window.imageApproval.frame.isConnected,
+      state: window.imageApproval.frame.dataset.remoteImage,
+      pill: window.imageApproval.pill.outerHTML,
     });
+    `);
+    throw new Error(`Image approval: ${JSON.stringify(state)}`, {
+      cause: error,
+    });
+  } finally {
+    await app.eval("delete window.imageApproval; true");
+  }
 }
 
 async function unchangedWhileLoading(before: Rect[]) {

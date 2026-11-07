@@ -139,6 +139,7 @@ beforeAll(async () => {
   }>(`(async () => {
     const api=window.catamorphicDesktop;
     const project=await api.createProject({name:'Terminal control',rootPath:${JSON.stringify(root)},importExisting:true});
+    await api.workspaceNavigate({projectId:project.id});
     const agent=await api.agentsCreate({name:'Terminal helper',harness:'ai-sdk',model:'fake-model-a'});
     await api.agentsSetDefault(agent.id);
     return {projectId:project.id,agentId:agent.id};

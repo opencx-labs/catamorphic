@@ -3,13 +3,19 @@ import http from "node:http";
 import os from "node:os";
 import path from "node:path";
 import { afterAll, beforeAll, expect, it } from "vitest";
-import { type AppHandle, launchApp, setReactValueJs } from "./harness.js";
+import {
+  type AppHandle,
+  createProjectWorkspace,
+  launchApp,
+  setReactValueJs,
+} from "./harness.js";
 
 let app: AppHandle;
 let projectRoot: string;
+let projectId: string;
 const helpers = `
 ${setReactValueJs}
-const input=()=>[...document.querySelectorAll('[aria-label="Search commands, pages, and more"]')].find(el=>!el.closest('[inert]') && el.getBoundingClientRect().width>0);
+const input=()=>[...document.querySelectorAll('[data-workspace-visible="true"] [aria-label="Search commands, pages, and more"]')].find(el=>!el.closest('[inert]') && el.getBoundingClientRect().width>0);
 const key=(key, mods={})=>input().dispatchEvent(new KeyboardEvent('keydown',{key,bubbles:true,cancelable:true,...mods}));
 const rows=()=>[...input().closest('[role="dialog"]').querySelectorAll('[role="option"]')];
 const labels=()=>rows().map(row=>row.textContent);
@@ -51,7 +57,7 @@ const type = (text: string) =>
 const chatState = `JSON.stringify({
   floating: [...document.querySelectorAll('section[data-floating-chat]')].map((el) => el.dataset.chatLocalId),
   inTabs: [...document.querySelectorAll('section[data-chat-tab]')].map((el) => el.dataset.chatLocalId),
-  strip: [...document.querySelectorAll('[data-tab-orientation] [data-point-key]:not([data-sidebar-item-id])')].map((el) => el.dataset.pointKey),
+  strip: [...document.querySelectorAll('[data-workspace-visible="true"] [data-tab-orientation] [data-point-key]:not([data-sidebar-item-id])')].map((el) => el.dataset.pointKey),
   focused: (() => { const el = document.activeElement; return el && [el.tagName, el.getAttribute('aria-label'), el.closest('section')?.dataset.chatLocalId ?? null, el.closest('[data-palette]')?.dataset.palette ?? null]; })(),
   appDocumentHasFocus: document.hasFocus(),
 })`;
@@ -73,9 +79,12 @@ beforeAll(async () => {
   app = await launchApp();
   await app.waitFor(`!!document.querySelector('[data-sidebar="left"]')`);
   projectRoot = path.join(app.userDataDir, "palette-project");
-  await app.eval(
-    `window.catamorphicDesktop.createProject({name:'Palette ranking',rootPath:${JSON.stringify(projectRoot)}})`,
-  );
+  const project = await createProjectWorkspace({
+    app,
+    name: "Palette ranking",
+    rootPath: projectRoot,
+  });
+  projectId = project.id;
   fs.mkdirSync(path.join(projectRoot, ".work"), { recursive: true });
   fs.writeFileSync(
     path.join(projectRoot, "tickets.json"),
@@ -139,7 +148,7 @@ beforeAll(async () => {
   );
   // Close the startup New Tab so every search uses the overlay.
   await shortcut("w");
-  await app.eval(`window.catamorphicDesktop.devWindow('setSize',1300,900)`);
+  await app.eval(`window.catamorphicDesktop.devWindow('fitSize',1300,900)`);
 });
 afterAll(async () => {
   await app?.stop();
@@ -454,26 +463,117 @@ it("switches to open tabs from search and the Tabs mode, above bookmarks and his
 it("leaves the list where it is when the pointer highlights a clipped row", async () => {
   await open();
   const list = `input().closest('[role="dialog"]').querySelector('[role="listbox"]')`;
-  // The last row the list cuts off at its bottom edge, once its motion settled.
-  const target = await wait<{ x: number; y: number; id: string }>(`
-    const box = ${list}.getBoundingClientRect();
-    if (${list}.getAnimations({ subtree: true }).some((a) => a.playState === 'running')) return false;
-    const row = rows().find((row) => { const r = row.getBoundingClientRect(); return r.top < box.bottom && r.bottom > box.bottom; });
-    if (!row || ${list}.scrollTop !== 0) return false;
-    const r = row.getBoundingClientRect();
-    return { x: r.left + r.width / 2, y: box.bottom - 6, id: row.dataset.itemId };
+  const still = `!input().closest('[role="dialog"]').parentElement.getAnimations({ subtree: true }).some(a =>
+    a.effect?.getTiming().iterations !== Infinity && (a.pending || a.playState === 'running' || a.playState === 'paused'))`;
+  await run(`
+    const probe = window.__clippedPalettePointer = { events: [] };
+    probe.listener = event => {
+      if (!event.isTrusted) return;
+      const dialog = input()?.closest('[role="dialog"]');
+      probe.events.push({
+        clientX: event.clientX, clientY: event.clientY,
+        movementX: event.movementX, movementY: event.movementY,
+        row: event.target instanceof Element ? event.target.closest('[role="option"]')?.dataset.itemId ?? null : null,
+        selected: dialog?.querySelector('[role="option"][aria-selected="true"]')?.dataset.itemId ?? null,
+      });
+      if (probe.events.length > 50) probe.events.shift();
+    };
+    window.addEventListener('mousemove', probe.listener, true);
+    return true;
   `);
-  await app.movePointerThrough([{ x: target.x, y: target.y - 40 }, target]);
-  await wait(
-    `return rows().find((row) => row.dataset.itemId === ${JSON.stringify(target.id)})?.getAttribute('aria-selected') === 'true'`,
-    "the pointer highlights the clipped row",
-  );
-  await new Promise((resolve) => setTimeout(resolve, 300));
-  expect(await run(`return ${list}.scrollTop`)).toBe(0);
-  // The keyboard still keeps the row it chooses in view.
-  await run(`key('ArrowDown'); return true;`);
-  await wait(`return ${list}.scrollTop > 0`, "arrow keys scroll");
-  await close();
+  const pointFor = (kind: "precursor" | "clipped") =>
+    wait<{
+      x: number;
+      y: number;
+      id: string;
+      top: number;
+      bottom: number;
+      edge: number;
+    }>(
+      `
+      if (!(${still}) || ${list}.scrollTop !== 0) return false;
+      const box = ${list}.getBoundingClientRect();
+      const row = rows().find(row => {
+        const r = row.getBoundingClientRect();
+        return ${
+          kind === "clipped"
+            ? "r.top < box.bottom && r.bottom > box.bottom"
+            : "r.top >= box.top && r.bottom <= box.bottom && !row.matches(':hover')"
+        };
+      });
+      if (!row) return false;
+      const r = row.getBoundingClientRect();
+      // Native pointer helpers round coordinates. Pick an integer inside the
+      // actual visible intersection and hit-test that exact integer.
+      const left = Math.ceil(Math.max(r.left, box.left)), right = Math.ceil(Math.min(r.right, box.right)) - 1;
+      const top = Math.ceil(Math.max(r.top, box.top)), bottom = Math.ceil(Math.min(r.bottom, box.bottom)) - 1;
+      if (right < left || bottom < top) return false;
+      const point = { x: Math.floor((left + right) / 2), y: Math.floor((top + bottom) / 2), id: row.dataset.itemId,
+        top: r.top, bottom: r.bottom, edge: box.bottom };
+      if (!row.contains(document.elementFromPoint(point.x, point.y))) return false;
+      window.__clippedPalettePointer.${kind} = point;
+      return point;
+    `,
+      `${kind} row and outer palette wrapper settled`,
+    );
+  try {
+    const precursor = await pointFor("precursor");
+    await app.movePointer(precursor);
+    await wait(
+      `return window.__clippedPalettePointer.events.some(event =>
+      event.clientX === ${precursor.x} && event.clientY === ${precursor.y} && event.row === ${JSON.stringify(precursor.id)});`,
+      "a trusted native move reached the fully visible precursor row",
+    );
+    // The precursor must actually reach Chromium before moving again, so the
+    // final move cannot coalesce with it into an ignored zero-movement event.
+    const target = await pointFor("clipped");
+    expect(target.top).toBeLessThan(target.edge);
+    expect(target.bottom).toBeGreaterThan(target.edge);
+    await app.movePointer(target);
+    await wait(
+      `return window.__clippedPalettePointer.events.some(event =>
+      event.clientX === ${target.x} && event.clientY === ${target.y} && event.row === ${JSON.stringify(target.id)} &&
+      (event.movementX !== 0 || event.movementY !== 0)) &&
+      rows().find(row => row.dataset.itemId === ${JSON.stringify(target.id)})?.getAttribute('aria-selected') === 'true';`,
+      "the trusted pointer move highlights the clipped row",
+    );
+    // Observe the queued scroll/focus work and the highlight's visual rest.
+    await run(
+      `return new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)));`,
+    );
+    await wait(`return ${still};`, "the hovered palette at rest");
+    expect(await run(`return ${list}.scrollTop`)).toBe(0);
+    // The keyboard still keeps the row it chooses in view.
+    await run(`key('ArrowDown'); return true;`);
+    await wait(`return ${list}.scrollTop > 0`, "arrow keys scroll");
+    await close();
+  } catch (error) {
+    const state = await run(`
+      const dialog = input()?.closest('[role="dialog"]');
+      const wrapper = dialog?.parentElement;
+      const list = dialog?.querySelector('[role="listbox"]');
+      const style = wrapper && getComputedStyle(wrapper);
+      return {
+        pointer: window.__clippedPalettePointer,
+        wrapper: wrapper && { rect: wrapper.getBoundingClientRect().toJSON(), translate: style.translate, scale: style.scale, opacity: style.opacity,
+          animations: wrapper.getAnimations({ subtree: true }).map(animation => ({ name: animation.animationName ?? animation.transitionProperty,
+            state: animation.playState, pending: animation.pending, time: animation.currentTime, timing: animation.effect?.getTiming() })) },
+        list: list && { rect: list.getBoundingClientRect().toJSON(), scrollTop: list.scrollTop },
+        rows: [...(list?.querySelectorAll('[role="option"]') ?? [])].map(row => ({ id: row.dataset.itemId,
+          selected: row.getAttribute('aria-selected'), rect: row.getBoundingClientRect().toJSON() })),
+      };
+    `).catch((cause: unknown) => `unreadable (${String(cause)})`);
+    throw new Error(`Clipped palette pointer: ${JSON.stringify(state)}`, {
+      cause: error,
+    });
+  } finally {
+    await run(`
+      const probe = window.__clippedPalettePointer;
+      if (probe) window.removeEventListener('mousemove', probe.listener, true);
+      delete window.__clippedPalettePointer;
+      return true;
+    `);
+  }
 });
 
 it("moves the caret between the input's lines with the arrows, and the highlight past them", async () => {
@@ -558,7 +658,7 @@ it("moves the caret between the input's lines with the arrows, and the highlight
 });
 
 it("closes an untouched New Tab once another tab is shown, and keeps a typed one", async () => {
-  const strip = `[...document.querySelectorAll('[data-tab-orientation] [data-point-key]:not([data-sidebar-item-id])')]`;
+  const strip = `[...document.querySelectorAll('[data-workspace-visible="true"] [data-tab-orientation] [data-point-key]:not([data-sidebar-item-id])')]`;
   const newTabs = () =>
     run<number>(
       `return ${strip}.filter((el) => el.dataset.pointKey.startsWith('palette:')).length`,
@@ -588,7 +688,7 @@ it("closes an untouched New Tab once another tab is shown, and keeps a typed one
   await showOtherTab();
   // The strip lets the closed tab play its exit before it leaves.
   await wait(
-    `return !document.querySelector('[data-palette="tab"]') && ${strip}.every((el) => !el.dataset.pointKey.startsWith('palette:'))`,
+    `return !document.querySelector('[data-workspace-visible="true"] [data-palette="tab"]') && ${strip}.every((el) => !el.dataset.pointKey.startsWith('palette:'))`,
     "untouched New Tab closed",
   );
   // Typed into, it is kept for later.
@@ -607,11 +707,11 @@ it("closes an untouched New Tab once another tab is shown, and keeps a typed one
 it("opens a chat asked for from a New Tab in that tab, in its place", async () => {
   const keys = () =>
     run<string[]>(
-      `return [...document.querySelectorAll('[data-tab-orientation] [data-point-key]:not([data-sidebar-item-id])')].map((el) => el.dataset.pointKey)`,
+      `return [...document.querySelectorAll('[data-workspace-visible="true"] [data-tab-orientation] [data-point-key]:not([data-sidebar-item-id])')].map((el) => el.dataset.pointKey)`,
     );
   const select = async (key: string) => {
     const point = await wait<{ x: number; y: number }>(`
-      const tab = document.querySelector('[data-tab-orientation] [data-point-key="${key}"]');
+      const tab = document.querySelector('[data-workspace-visible="true"] [data-tab-orientation] [data-point-key="${key}"]');
       if (!tab?.checkVisibility()) return false;
       if (tab.closest('[data-tab-orientation]').getAnimations({ subtree: true }).some((a) => a.playState === 'running')) return false;
       const r = tab.getBoundingClientRect();
@@ -624,7 +724,7 @@ it("opens a chat asked for from a New Tab in that tab, in its place", async () =
   };
   /** The chat in front: in a tab, its composer focused, nothing floating. */
   const chatInTab = `(() => {
-    const chat = document.querySelector('section[data-chat-tab]');
+    const chat = document.querySelector('section[data-chat-tab][data-chat-project="${projectId}"]');
     return !!chat && !document.querySelector('section[data-floating-chat]') &&
       chat.querySelector('[data-composer-input]') === document.activeElement &&
       chat.dataset.chatLocalId;
@@ -632,7 +732,7 @@ it("opens a chat asked for from a New Tab in that tab, in its place", async () =
   /** The strip once the New Tab a chat replaced has played its exit. */
   const withoutNewTab = (label: string) =>
     wait<string[]>(
-      `const keys = [...document.querySelectorAll('[data-tab-orientation] [data-point-key]:not([data-sidebar-item-id])')].map((el) => el.dataset.pointKey);
+      `const keys = [...document.querySelectorAll('[data-workspace-visible="true"] [data-tab-orientation] [data-point-key]:not([data-sidebar-item-id])')].map((el) => el.dataset.pointKey);
        return !keys.some((key) => key.startsWith('palette:')) && keys;`,
       label,
     );
@@ -689,7 +789,7 @@ it("opens a chat asked for from a New Tab in that tab, in its place", async () =
     "Send to agent picked",
   );
   const third = await wait<string>(
-    `const chat = document.querySelector('section[data-chat-tab]');
+    `const chat = document.querySelector('section[data-chat-tab][data-chat-project="${projectId}"]');
      return !document.querySelector('section[data-floating-chat]') &&
        chat?.querySelector('[role="log"]')?.textContent.includes('hello from a new tab') &&
        chat.dataset.chatLocalId;`,
@@ -715,7 +815,7 @@ it("opens a chat asked for from a New Tab in that tab, in its place", async () =
   // before the floating chat's autofocus frame does (on a slow machine):
   // the chat it moves in still takes focus.
   await run(`
-    const field = document.querySelector('[data-palette="tab"] textarea');
+    const field = document.querySelector('[data-workspace-visible="true"] [data-palette="tab"] textarea');
     field.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true }));
     field.focus();
     return true;
@@ -739,7 +839,7 @@ it("opens a chat asked for from a New Tab in that tab, in its place", async () =
   // In front before Cmd+N: asked while the fresh chat still is, Cmd+N
   // keeps to that chat, as it should.
   await wait(
-    `return !!document.querySelector('[data-tab-orientation] [data-point-key="${page}"] [aria-current]')`,
+    `return !!document.querySelector('[data-workspace-visible="true"] [data-tab-orientation] [data-point-key="${page}"] [aria-current]')`,
     "the page in front",
   );
   await shortcut("n");
@@ -770,10 +870,10 @@ it("shows the new chat's harness, model name and effort in chat mode", async () 
     "Ask agentReview helper · Fake Model A · high",
   );
   await shot("palette-chat-harness-model-effort.png");
-  await app.eval(`window.catamorphicDesktop.devWindow('setSize',700,600)`);
+  await app.eval(`window.catamorphicDesktop.devWindow('fitSize',700,600)`);
   await shot("palette-chat-harness-model-effort-narrow.png");
   await close();
-  await app.eval(`window.catamorphicDesktop.devWindow('setSize',1300,900)`);
+  await app.eval(`window.catamorphicDesktop.devWindow('fitSize',1300,900)`);
   await app.eval(
     `window.catamorphicDesktop.agentsSetDefault(${JSON.stringify(defaultId)})`,
   );

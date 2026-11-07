@@ -116,6 +116,18 @@ modifier flags and pairs its press and release as one click. Suites share the
 runner's pointer state, so park it away from hover targets after a native gesture
 when the next app must start without a hover card.
 
+For a race that starts immediately before a native press, use
+`app.clickPointer(point, { beforePress })`. The macOS helper validates the display,
+moves the pointer and reports readiness before the callback runs. A stdin handshake
+then releases one press and release; callback failure cancels it without a click.
+This keeps process startup outside the behavior's deadline. Record the real guest
+report and trusted pointer event on the same renderer clock to verify their order.
+
+The harness uses `devWindow('fitSize')` to fit native pointer fixtures inside
+the current display's work area. Fixtures must measure the resulting viewport;
+the native macOS runner can have a smaller display than the Linux runner.
+Geometry tests retain `devWindow('setSize')` when they require an exact size.
+
 Audio tests synchronize with captured samples. A held voice can show its intent
 before the microphone has delivered audio, so elapsed wall time after a phase
 change does not prove that the scripted speech has reached the worker.

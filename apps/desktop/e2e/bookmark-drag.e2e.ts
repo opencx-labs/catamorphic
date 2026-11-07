@@ -3,16 +3,19 @@ import {
   type AppHandle,
   launchApp,
   NEW_TAB_INPUT,
+  openProjectSwitcher,
   setReactValueJs,
+  workspaceDomHelpersJs,
 } from "./harness.js";
 import { addSidebarSections, CHATS_SECTION } from "./sidebar-config.js";
 
 let app: AppHandle;
 let folderId: string;
+const helpers = `${setReactValueJs} ${workspaceDomHelpersJs} const button = text => $$('button').find(b => !b.closest('[inert]') && b.textContent.trim() === text);`;
 const run = <T>(body: string) =>
-  app.eval<T>(
-    `(() => { ${setReactValueJs}\n const $ = s => document.querySelector(s); const button = text => [...document.querySelectorAll('button')].find(b => b.textContent.trim() === text); ${body} })()`,
-  );
+  app.eval<T>(`(() => { ${helpers} ${body} })()`);
+const wait = (body: string) =>
+  app.waitFor(`(() => { ${helpers} return (${body}); })()`);
 /**
  * Drives the shared tree drag model the way a pointer would: dragstart on
  * the source, then dragover and drop on the target at a point inside it.
@@ -25,11 +28,11 @@ async function drop(
   at: "center" | "top" = "center",
 ) {
   await app.eval(
-    `(()=>{window.__bookmarkDrag=new DataTransfer();document.querySelector(${JSON.stringify(source)}).dispatchEvent(new DragEvent('dragstart',{bubbles:true,dataTransfer:window.__bookmarkDrag}))})()`,
+    `(()=>{${helpers} window.__bookmarkDrag=new DataTransfer();$(${JSON.stringify(source)}).dispatchEvent(new DragEvent('dragstart',{bubbles:true,dataTransfer:window.__bookmarkDrag}))})()`,
   );
-  await app.waitFor(`!!document.querySelector(${JSON.stringify(target)})`);
+  await wait(`!!$(${JSON.stringify(target)})`);
   await app.eval(
-    `(()=>{const target=document.querySelector(${JSON.stringify(target)});const r=target.getBoundingClientRect();const init={bubbles:true,cancelable:true,dataTransfer:window.__bookmarkDrag,clientX:r.left+Math.min(24,r.width/2),clientY:${at === "top" ? "r.top+2" : "r.top+r.height/2"}};for(const type of ['dragover','drop'])target.dispatchEvent(new DragEvent(type,init));document.dispatchEvent(new DragEvent('dragend',{bubbles:true}));delete window.__bookmarkDrag})()`,
+    `(()=>{${helpers} const target=$(${JSON.stringify(target)});const r=target.getBoundingClientRect();const init={bubbles:true,cancelable:true,dataTransfer:window.__bookmarkDrag,clientX:r.left+Math.min(24,r.width/2),clientY:${at === "top" ? "r.top+2" : "r.top+r.height/2"}};for(const type of ['dragover','drop'])target.dispatchEvent(new DragEvent(type,init));document.dispatchEvent(new DragEvent('dragend',{bubbles:true}));delete window.__bookmarkDrag})()`,
   );
 }
 const bookmarks = () =>
@@ -40,27 +43,22 @@ const bookmarks = () =>
 
 beforeAll(async () => {
   app = await launchApp();
-  await app.waitFor(
-    "[...document.querySelectorAll('button')].some(b=>b.textContent.trim()==='Create or import project')",
-  );
-  await run("button('Create or import project').click()");
-  await app.waitFor(
-    "!!document.querySelector('[data-testid=project-name-input]')",
-  );
+  await openProjectSwitcher(app);
+  await wait("[...$$('button')].some(b=>b.textContent.trim()==='New project')");
+  await run("button('New project').click()");
+  await wait("!!$('[data-testid=project-name-input]')");
   await run(
     "setReactValue($('[data-testid=project-name-input]'),'Pinning workspace')",
   );
-  await app.waitFor(
-    "!document.querySelector('[data-testid=project-submit]').disabled",
-  );
+  await wait("!$('[data-testid=project-submit]').disabled");
   await run("$('[data-testid=project-submit]').click()");
-  await app.waitFor(
-    `!!document.querySelector(${JSON.stringify(NEW_TAB_INPUT)})`,
+  await wait(`!!$(${JSON.stringify(NEW_TAB_INPUT)})`);
+  await wait(
+    "$('[aria-label=\"Switch project\"]')?.textContent.includes('Pinning workspace')",
   );
-  // The palette can mount before project selection persists its preference.
-  // Wait for that selection before creating project-scoped fixtures.
-  await app.waitFor(
-    "window.catamorphicDesktop.getPrefs().then(prefs=>Boolean(prefs.lastProjectId))",
+  // Bind bookmarks to the visible project after its selection persists.
+  await wait(
+    "window.catamorphicDesktop.getPrefs().then(prefs=>prefs.lastProjectId===$('[data-workspace-visible=true]')?.dataset.projectRuntime)",
   );
   folderId = await app.eval(
     "(async()=>{const api=window.catamorphicDesktop;await api.setPrefs({tabPlacement:'sidebar',headerPlacement:'sidebar'});window.__bookmarkScope={profileId:await api.windowProfile(),projectId:(await api.getPrefs()).lastProjectId};return (await api.bookmarksAddFolder({...window.__bookmarkScope,label:'Research'})).id})()",
@@ -77,18 +75,16 @@ describe("drag tabs and chats into bookmarks", () => {
     await run(
       `const input=$(${JSON.stringify(NEW_TAB_INPUT)});input.focus();setReactValue(input,'https://example.test/reference')`,
     );
-    await app.waitFor(
+    await wait(
       "document.activeElement?.matches('textarea[aria-label=\"Search commands, pages, and more\"]') && document.activeElement.closest('[role=dialog]').querySelector('[data-item-id=web]')?.getAttribute('aria-selected')==='true'",
     );
     await app.press("Enter");
-    await app.waitFor(
-      "!!document.querySelector('aside [data-point-key^=\"browser:\"]')",
-    );
+    await wait("!!$('aside [data-point-key^=\"browser:\"]')");
     await drop(
       'aside [data-point-key^="browser:"]',
       `[data-tree-id="${folderId}"]`,
     );
-    await app.waitFor(
+    await wait(
       "window.catamorphicDesktop.bookmarksGet(window.__bookmarkScope).then(d=>d.project.bookmarks.length===1)",
     );
     expect((await bookmarks()).project.bookmarks[0]).toMatchObject({
@@ -103,12 +99,12 @@ describe("drag tabs and chats into bookmarks", () => {
     await run(
       "$('[data-sidebar-section=chats] button[aria-label=\"New chat\"]').click()",
     );
-    await app.waitFor("!!document.querySelector('[data-composer-input]')");
+    await wait("!!$('[data-composer-input]')");
     await run(
       "setReactValue($('[data-composer-input]'),'remember this pinned conversation');$('[data-composer-input]').focus()",
     );
     await app.press("Enter");
-    await app.waitFor("!!document.querySelector('aside [data-session-id]')");
+    await wait("!!$('aside [data-session-id]')");
     const sessionId = await run<string>(
       "return $('aside [data-session-id]').dataset.sessionId",
     );
@@ -131,32 +127,28 @@ describe("drag tabs and chats into bookmarks", () => {
     await app.eval(
       `window.catamorphicDesktop.bookmarksUpdate({...window.__bookmarkScope,scope:'pinned',id:${JSON.stringify(pinned.id)},label:'Saved conversation'})`,
     );
-    await app.waitFor(
-      "!!document.querySelector('[data-drop-zone=pinned] button[aria-label=\"Saved conversation\"]') || [...document.querySelectorAll('[data-drop-zone=pinned] button')].some(b=>b.textContent.trim()==='Saved conversation')",
+    await wait(
+      "!!$('[data-drop-zone=pinned] button[aria-label=\"Saved conversation\"]') || [...$$('[data-drop-zone=pinned] button')].some(b=>b.textContent.trim()==='Saved conversation')",
     );
     await run(
       "$('[data-drop-zone=pinned] [data-point-key=\"sidebar:Saved conversation\"] button').click()",
     );
-    await app.waitFor(
-      "!!document.querySelector('aside [data-point-key^=\"chat:\"]')",
-    );
+    await wait("!!$('aside [data-point-key^=\"chat:\"]')");
     await run(
       '$(\'aside [data-point-key^="chat:"] button[aria-label^="Close"]\').click()',
     );
-    await app.waitFor(
-      "!document.querySelector('aside [data-point-key^=\"chat:\"]')",
-    );
+    await wait("!$('aside [data-point-key^=\"chat:\"]')");
     await run(
       "$('[data-drop-zone=pinned] [data-point-key=\"sidebar:Saved conversation\"] button').click()",
     );
-    await app.waitFor(
-      "!!document.querySelector('aside [data-point-key^=\"chat:\"]') && document.body.textContent.includes('remember this pinned conversation')",
+    await wait(
+      "!!$('aside [data-point-key^=\"chat:\"]') && document.body.textContent.includes('remember this pinned conversation')",
     );
     await drop(
       "[data-drop-zone=pinned] li[draggable]",
       `[data-tree-id="${folderId}"]`,
     );
-    await app.waitFor(
+    await wait(
       "window.catamorphicDesktop.bookmarksGet(window.__bookmarkScope).then(d=>d.pinned.bookmarks.length===0 && d.project.bookmarks.length===2)",
     );
     expect(
@@ -167,19 +159,19 @@ describe("drag tabs and chats into bookmarks", () => {
     const ids = await app.eval<string[]>(
       `(async()=>{const api=window.catamorphicDesktop;const out=[];for(const name of ['One','Two','Three'])out.push((await api.bookmarksAdd({...window.__bookmarkScope,label:name,url:'https://order.test/'+name})).id);return out})()`,
     );
-    await app.waitFor(`!!document.querySelector('[data-tree-id="${ids[2]}"]')`);
+    await wait(`!!$('[data-tree-id="${ids[2]}"]')`);
     // Three before One: the top edge of One's row is the "before" slot.
     await drop(
       `[data-tree-id="${ids[2]}"]`,
       `[data-tree-id="${ids[0]}"]`,
       "top",
     );
-    await app.waitFor(
+    await wait(
       `window.catamorphicDesktop.bookmarksGet(window.__bookmarkScope).then(d=>d.project.bookmarks.filter(b=>!b.folderId).map(b=>b.label).join()==='Three,One,Two')`,
     );
     // Two into the Research folder: the middle of a folder row is "inside".
     await drop(`[data-tree-id="${ids[1]}"]`, `[data-tree-id="${folderId}"]`);
-    await app.waitFor(
+    await wait(
       `window.catamorphicDesktop.bookmarksGet(window.__bookmarkScope).then(d=>d.project.bookmarks.find(b=>b.label==='Two')?.folderId===${JSON.stringify(folderId)})`,
     );
     expect(app.getRendererErrors()).toEqual([]);
@@ -202,7 +194,8 @@ describe("drag tabs and chats into bookmarks", () => {
   });
   it("nests a tab dropped on a chat's tab in the top strip, and takes it out at the strip's end", async () => {
     await app.eval("window.catamorphicDesktop.setPrefs({tabPlacement:'top'})");
-    const strip = '[data-tab-orientation="horizontal"]';
+    const strip =
+      '[data-workspace-visible="true"] [data-tab-orientation="horizontal"]';
     const page = `${strip} [data-point-key^="browser:"]`;
     const chat = `${strip} [data-point-key^="chat:"]`;
     await app.waitFor(

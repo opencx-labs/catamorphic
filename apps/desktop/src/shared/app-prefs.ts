@@ -157,7 +157,7 @@ export const DEFAULT_PREFS: AppPrefs = {
   dockDetached: false,
   dockSide: "right",
   dockPlacement: "center",
-  dockCollapsed: false,
+  dockCollapsed: true,
   chatWorkLive: "all",
   chatWorkSettled: "collapse",
   chatQueueMessages: false,
@@ -247,7 +247,7 @@ export function normalizePrefs(raw: unknown): AppPrefs {
     dockMultiProject: record.dockMultiProject === true,
     dockDetached: record.dockDetached === true,
     dockSide: record.dockSide === "left" ? "left" : "right",
-    dockCollapsed: record.dockCollapsed === true,
+    dockCollapsed: record.dockCollapsed !== false,
     chatWorkLive:
       record.chatWorkLive === "latest" || record.chatWorkLive === "notes"
         ? record.chatWorkLive

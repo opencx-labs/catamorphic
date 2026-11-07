@@ -4,7 +4,11 @@ import { nativeGit } from "@catamorphic/git";
 import { afterAll, beforeAll, expect, it } from "vitest";
 import { DEFAULT_WORKSPACE_CONFIG } from "../src/main/workspace-config.js";
 import type { WorkspaceConfig } from "../src/shared/workspace-config.js";
-import { type AppHandle, launchApp } from "./harness.js";
+import {
+  type AppHandle,
+  createProjectWorkspace,
+  launchApp,
+} from "./harness.js";
 import { CHATS_SECTION } from "./sidebar-config.js";
 
 /**
@@ -95,10 +99,12 @@ beforeAll(async () => {
     "-m",
     "Initial",
   ]);
-  const project = await app.eval<{ id: string }>(
-    // The folder already holds the repository: open it as it is.
-    `window.catamorphicDesktop.createProject({name:'Session sidebar',rootPath:${JSON.stringify(root)},importExisting:true})`,
-  );
+  const project = await createProjectWorkspace({
+    app,
+    name: "Session sidebar",
+    rootPath: root,
+    importExisting: true,
+  });
   projectId = project.id;
   const server = await app.eval<{ url: string }>(
     "window.catamorphicDesktop.getServerState()",

@@ -4,7 +4,10 @@ import {
   type AppHandle,
   launchApp,
   NEW_TAB_INPUT,
+  openProjectSwitcher,
   setReactValueJs,
+  waitForProjectWorkspace,
+  workspaceDomHelpersJs,
 } from "./harness.js";
 
 /**
@@ -37,7 +40,7 @@ const server = http.createServer((request, response) => {
 
 const run = <T>(body: string) =>
   app.eval<T>(
-    `(() => { ${setReactValueJs}\n const $ = s => document.querySelector(s); const button = text => [...document.querySelectorAll('button')].find(b => b.textContent.trim() === text); ${body} })()`,
+    `(() => { ${setReactValueJs}\n ${workspaceDomHelpersJs} const button = text => [...document.querySelectorAll('button')].find(b => b.textContent.trim() === text); ${body} })()`,
   );
 const view = `[...document.querySelectorAll('webview')].find(w => w.checkVisibility({ visibilityProperty: true, opacityProperty: true }))`;
 const errorShown = `document.body.innerText.includes('This page didn’t load.')`;
@@ -51,10 +54,11 @@ beforeAll(async () => {
     throw new Error("Missing server address");
   origin = `http://127.0.0.1:${address.port}`;
   app = await launchApp();
+  await openProjectSwitcher(app);
   await app.waitFor(
-    "[...document.querySelectorAll('button')].some(b => b.textContent.trim() === 'Create or import project')",
+    "[...document.querySelectorAll('button')].some(b => b.textContent.trim() === 'New project')",
   );
-  await run("button('Create or import project').click()");
+  await run("button('New project').click()");
   await app.waitFor(
     "!!document.querySelector('[data-testid=project-name-input]')",
   );
@@ -63,6 +67,7 @@ beforeAll(async () => {
     "!document.querySelector('[data-testid=project-submit]').disabled",
   );
   await run("$('[data-testid=project-submit]').click()");
+  await waitForProjectWorkspace({ app, name: "Errors" });
   await app.waitFor(
     `!!document.querySelector(${JSON.stringify(NEW_TAB_INPUT)})`,
     { label: "New Tab palette" },

@@ -2,7 +2,14 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { type AppHandle, launchApp, setReactValueJs } from "./harness.js";
+import {
+  type AppHandle,
+  launchApp,
+  openProjectSwitcher,
+  setReactValueJs,
+  waitForProjectWorkspace,
+  workspaceDomHelpersJs,
+} from "./harness.js";
 import { addSidebarSections, CHATS_SECTION } from "./sidebar-config.js";
 
 /**
@@ -16,6 +23,7 @@ let app: AppHandle;
 
 beforeAll(async () => {
   app = await launchApp();
+  await openProjectSwitcher(app);
 });
 
 afterAll(async () => {
@@ -24,8 +32,7 @@ afterAll(async () => {
 
 /** DOM helpers injected into every eval — keep selectors in one place. */
 const helpers = `
-  const $ = (selector) => document.querySelector(selector);
-  const $$ = (selector) => [...document.querySelectorAll(selector)];
+  ${workspaceDomHelpersJs}
   const byText = (selector, text) =>
     $$(selector).find((el) => el.textContent.trim().includes(text));
   const visibleDock = () =>
@@ -134,16 +141,17 @@ const settleAnimationFrame = () =>
   `);
 
 describe("first launch", () => {
-  it("boots to the empty state with no projects", async () => {
-    await runWait(`return !!byText('button', 'Create or import project');`, {
-      label: "empty-state Create or import project button",
-    });
+  it("starts in Default Project and offers the normal project switcher", async () => {
+    await runWait(
+      `return !!byText('button', 'New project') && $('[aria-label="Switch project"]')?.textContent.includes('Default Project');`,
+      {
+        label: "empty-state New project button",
+      },
+    );
   });
 
   it("creates a project and lands on a palette New Tab", async () => {
-    await run(
-      `byText('button', 'Create or import project').click(); return true;`,
-    );
+    await run(`byText('button', 'New project').click(); return true;`);
     await runWait(`return !!$('[data-testid="project-name-input"]');`);
     // Point the location at a temp folder (bypasses the native folder picker).
     await run(`
@@ -155,6 +163,7 @@ describe("first launch", () => {
        if (btn && !btn.disabled) { btn.click(); return true; } return false;`,
       { label: "project submit enabled" },
     );
+    await waitForProjectWorkspace({ app, name: "e2e-project" });
     // First workspace tab is the palette "New Tab" (same as Cmd+T).
     await runWait(
       `return !!byText('[role="tab"], button', 'New Tab') &&
@@ -1200,7 +1209,7 @@ describe("palette intent", () => {
 
 describe("chat tab activity indicators", () => {
   // Locate the tab surface independently of its placement and styling.
-  const tabStrip = `document.querySelector('[data-tab-orientation]')`;
+  const tabStrip = `$('[data-tab-orientation]')`;
   const tabSpinnerOn = `[...${tabStrip}.querySelectorAll('svg.animate-spin')]
     .some((el) => getComputedStyle(el).opacity === '1')`;
   const tabDotOn = `[...${tabStrip}.querySelectorAll('span.bg-accent')]

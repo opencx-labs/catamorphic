@@ -5,7 +5,10 @@ import {
   type AppHandle,
   focusWindow,
   launchApp,
+  openProjectSwitcher,
   setReactValueJs,
+  waitForProjectWorkspace,
+  workspaceDomHelpersJs,
 } from "./harness.js";
 
 /** A chat keeps its identity and history across agent and harness changes. */
@@ -19,8 +22,7 @@ afterAll(async () => {
 });
 
 const helpers = `
-  const $ = (selector) => document.querySelector(selector);
-  const $$ = (selector) => [...document.querySelectorAll(selector)];
+  ${workspaceDomHelpersJs}
   const dock = () => {
     const candidates = $$('section[data-chat-local-id]').filter(el => !el.closest('[inert]') && el.getBoundingClientRect().width > 0 && el.querySelector('[data-composer-input]'));
     return candidates.find(el => el.dataset.floatingChat === 'true') ?? candidates[0];
@@ -117,8 +119,9 @@ const shownAgent = (name: string) =>
 
 describe("picking a chat's agent", () => {
   it("switches agents and harnesses in place before and after the chat starts", async () => {
+    await openProjectSwitcher(app);
     await wait(
-      `const button = $$('button').find(el => el.textContent.includes('Create or import project')); if (!button) return false; button.click(); return true;`,
+      `const button = $$('button').find(el => el.textContent.includes('New project')); if (!button) return false; button.click(); return true;`,
     );
     await wait(`return !!$('[data-testid="project-name-input"]');`);
     await run(
@@ -127,6 +130,7 @@ describe("picking a chat's agent", () => {
     await wait(
       `const button = $('[data-testid="project-submit"]'); if (!button || button.disabled) return false; button.click(); return true;`,
     );
+    await waitForProjectWorkspace({ app, name: "agent-switch" });
     await wait(
       `return $$('[role="tab"], button').some(el => el.textContent.includes('New Tab'));`,
     );

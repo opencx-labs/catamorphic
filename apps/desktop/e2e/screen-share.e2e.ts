@@ -41,6 +41,38 @@ beforeAll(async () => {
   // A second tab sits in the background: hidden pages paint no frames, and
   // the picker must still list them.
   app = await launchApp({ urls: [`${origin}/background`, `${origin}/share`] });
+  // Restored background tabs start asleep. This fixture needs a loaded,
+  // hidden page so the native capture picker can list its real guest.
+  const browsers = await app.waitFor<{ localId: string; url: string }[]>(
+    `(async () => {
+    const projectId = document.querySelector('[data-workspace-visible="true"]').dataset.projectRuntime;
+    const saved = await window.catamorphicDesktop.workspaceStateGet(projectId);
+    return saved?.browsers.length === 2 && saved.browsers;
+  })()`,
+    { label: "both capture fixture tabs retained" },
+  );
+  for (const url of [`${origin}/background`, `${origin}/share`]) {
+    const browser = browsers.find((entry) => entry.url === url);
+    if (!browser) throw new Error(`Missing capture fixture tab: ${url}`);
+    await app.eval(
+      `document.querySelector('[data-workspace-visible="true"] [data-point-key="browser:${browser.localId}"] .workspace-tab-label').click()`,
+    );
+    await app.waitFor(
+      `([...document.querySelectorAll('[data-workspace-visible="true"] webview')]).some(view => {
+      try { return view.checkVisibility({opacityProperty:true,visibilityProperty:true}) && view.getURL() === ${JSON.stringify(url)} && !view.isLoading(); }
+      catch { return false; }
+    })`,
+      { label: `${url} loaded for capture` },
+    );
+  }
+  await app.waitFor(
+    `(() => {
+    const background = document.querySelector('webview[src$="/background"]');
+    try { return background?.getTitle() === 'Background Lab' && !background.isLoading() && !background.checkVisibility({opacityProperty:true,visibilityProperty:true}); }
+    catch { return false; }
+  })()`,
+    { label: "background capture fixture is loaded and hidden" },
+  );
 });
 afterAll(async () => {
   await app?.stop();

@@ -5,7 +5,10 @@ import {
   type AppHandle,
   launchApp,
   OVERLAY_INPUT,
+  openProjectSwitcher,
   setReactValueJs,
+  waitForProjectWorkspace,
+  workspaceDomHelpersJs,
 } from "./harness.js";
 
 /**
@@ -42,6 +45,7 @@ beforeAll(async () => {
     fake.once("exit", () => reject(new Error("fake OAuth server exited")));
   });
   app = await launchApp();
+  await openProjectSwitcher(app);
 }, 180_000);
 
 afterAll(async () => {
@@ -50,8 +54,7 @@ afterAll(async () => {
 });
 
 const helpers = `
-  const $ = (selector) => document.querySelector(selector);
-  const $$ = (selector) => [...document.querySelectorAll(selector)];
+  ${workspaceDomHelpersJs}
   const byText = (selector, text) =>
     $$(selector).find((el) => el.textContent.trim().includes(text));
   ${setReactValueJs}
@@ -75,13 +78,11 @@ const runWait = <T>(
 
 describe("connector OAuth", () => {
   it("boots, creates a project, and adds a connection to the protected server", async () => {
-    await runWait(`return !!byText('button', 'Create or import project');`, {
+    await runWait(`return !!byText('button', 'New project');`, {
       timeoutMs: 120_000,
       label: "onboarding",
     });
-    await run(
-      `byText('button', 'Create or import project').click(); return true;`,
-    );
+    await run(`byText('button', 'New project').click(); return true;`);
     await runWait(
       `const input = $('[data-testid="project-name-input"]');
        if (!input) return false; setReactValue(input, 'oauth-e2e'); return true;`,
@@ -92,6 +93,7 @@ describe("connector OAuth", () => {
        if (!create || create.disabled) return false; create.click(); return true;`,
       { label: "create project" },
     );
+    await waitForProjectWorkspace({ app, name: "oauth-e2e" });
     await runWait(`return !!byText('button, [role="tab"]', 'New Tab');`, {
       timeoutMs: 60_000,
       label: "workspace ready",

@@ -139,7 +139,7 @@ ordinary documents, privacy, or the existence of a proposal.
 | `--font-mono` | JetBrains Mono, ui-monospace | code, logs, ids, timestamps |
 
 These are defaults. Each profile can override `fonts.sans` and `fonts.mono`
-in `theme.json` or Settings > Theme using installed CSS font stacks.
+in `theme.json` or the theme picker using installed CSS font stacks.
 Removing a key restores its default. Font choices survive color preset
 changes and apply live to the shell, editors, terminals, and themed apps.
 
@@ -203,7 +203,9 @@ Low-chroma so run states don't scream: `--color-success`, `--color-warning`,
   Completed setup actions read as status rows: explicit completion text, a success
   check, a quiet filled surface and no interactive outline or hover response.
   Use the shared `browser-setup-action` treatment for import and default-browser
-  setup. Unavailable actions use muted text and explain their reason visibly;
+  setup, composed with the primary or secondary button role. Both actions use
+  the native arrow cursor; their role owns the matching foreground, background
+  and hover colors. Unavailable actions use muted text and explain their reason visibly;
   hover-only hints are supplementary. Reserve space for asynchronous reasons so
   later actions do not shift. `data-action-state` exposes the shared button state
   for host styling without duplicating its logic.
@@ -4018,3 +4020,62 @@ With "Fold notes into steps", completed notes, steps and read terminal updates
 share one activity disclosure, including automatic follow-up turns (ADR 0305).
 A person's messages and items needing attention remain visible boundaries. The
 full work remains available in order when opened.
+
+### 2026-11-06: A welcome you can come back to
+
+Tutorial is the user-facing name for the ordinary onboarding tab (ADR 0306), with Welcome, Theme, AI agents, The dock,
+Keyboard shortcuts, Palette, Sidebars, and Browser setup steps. Import and default-browser actions share one step.
+Done closes the tutorial and opens a normal New Tab palette. It opens under the former welcome
+and automatic setup conditions. The palette finds it as onboarding, tutorial,
+welcome, tour, getting started, learn, guide, or help. The track slides left as
+users advance and reverses for Back, over 250ms on the standard easing. Navigation
+stays in place; reminders about skipping, returning, or changing things later
+appear in a shared footer immediately above it. Reduced motion settles immediately.
+
+The theme preview uses the workspace's tabs, sidebar rows, chat timeline, and
+composer with inert local example data. Theme selection is one modal across the
+tour, Settings, and palette. Registered color tokens interpolate over 200ms instead
+of repainting abruptly. Advanced colors and fonts use a labeled disclosure with
+the shared collapse motion. The whole dialog eases its height and centered
+position as its content expands or shrinks, bounded by the window. Asking
+an agent for a theme opens setup and then a chat in another tab, retaining the
+tutorial and its current step.
+
+The default right sidebar has no tabs or widgets, only the centered agent
+customization button. Activity and Proposals remain available as configurable
+sections. New projects inherit this empty default unless a sidebar is configured.
+
+A first launch fills the display's work area with both sidebars collapsed. This
+initial profile choice is written only when neither saved window state nor profile
+preferences exist. Later launches restore the person's window placement and sidebar
+choices; onboarding never forces those choices again.
+
+The agent step opens the existing wizard as a modal and keeps the tutorial in
+place. Its action becomes complete
+when an agent is configured. The dock starts collapsed in the right corner;
+opening a conversation expands it. Its tutorial hero reuses the real bubble strip
+with an animated cursor. One Web Animations timeline drives the pointer and expansion. Cursor keyframes
+use measured pixel coordinates, updated after the controls settle, so compositor
+playback never depends on unresolved CSS variables. It pauses while hidden and
+settles under reduced motion.
+Keyboard shortcuts and palette steps have no extra actions; their shortcut labels
+follow the effective bindings. The palette explains entering and customizing modes
+using History as the example. The following sidebar step reuses the workspace
+preview with a centered chat and both sidebars folding over 300ms, then holding
+before the reverse motion; reduced motion keeps them open. Project creation
+remains in the project switcher.
+
+New profiles start in Default Project with onboarding selected and the dock
+visible before agent setup. Initialization reuses one profile-owned project even
+when windows start together; the boot veil waits for that workspace. Existing
+profiles restore their selected project. The dock remains collapsed at startup.
+
+The dock tutorial's strip travels from the right corner to the window center as
+it expands. Its cursor follows the controls in both positions. Dock position changes are
+measured relative to its container, so entering a sliding tutorial page never
+adds the page travel to the first dock expansion. Browser setup actions become
+disabled, checked completion labels; the default-browser action has no leading
+globe. Expanding the
+real attached dock reserves 64px beneath onboarding, moving its content and
+navigation upward with the existing 250ms padding motion. The inert tutorial
+preview never changes real workspace clearance. Reduced motion settles directly.

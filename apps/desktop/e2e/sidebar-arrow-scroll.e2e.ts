@@ -2,7 +2,11 @@ import fs from "node:fs";
 import path from "node:path";
 import { afterAll, beforeAll, expect, it } from "vitest";
 import { z } from "zod";
-import { type AppHandle, launchApp } from "./harness.js";
+import {
+  type AppHandle,
+  createProjectWorkspace,
+  launchApp,
+} from "./harness.js";
 import { writeSidebarSections } from "./sidebar-config.js";
 
 let app: AppHandle;
@@ -30,6 +34,20 @@ const settle = () =>
   app.waitFor(
     `!${viewport}.hasAttribute('data-tree-revealing') && ${viewport}.getAnimations({subtree:true}).every(a=>a.playState!=='running'||a.effect?.getTiming().iterations===Infinity)`,
   );
+const ready = (height: number, outerScroll = false) =>
+  app.waitFor(
+    `(() => {
+  const view=${viewport},panel=view?.closest('.sidebar-tab-panel');
+  return !!view?.closest('[data-workspace-ready]') &&
+    !!view.querySelector('[data-tree-id="item-00.txt"]') &&
+    view.style.height===${JSON.stringify(String(height))}+'px' && view.clientHeight===${height} &&
+    !!panel && (!${outerScroll} || (view.scrollHeight<=view.clientHeight && panel.scrollHeight>panel.clientHeight)) &&
+    panel.getAnimations({subtree:true}).every(a=>a.playState!=='running'||a.effect?.getTiming().iterations===Infinity);
+})()`,
+    {
+      label: `ready ${height}px Files list${outerScroll ? " inside a scrollable panel" : ""}`,
+    },
+  );
 const place = async (index: number) => {
   await app.eval(`${viewport}.scrollTop=0`);
   await app.waitFor(`!!${row(0)}`);
@@ -37,6 +55,9 @@ const place = async (index: number) => {
   await app.press("Home");
   for (let i = 0; i < index; i++) await app.press("ArrowDown");
   await settle();
+  expect(await app.eval("document.activeElement?.dataset.treeId")).toBe(
+    `item-${String(index).padStart(2, "0")}.txt`,
+  );
 };
 const observe = () =>
   app.eval(`window.__arrowFrames=[{at:performance.now(),...${sample}}];window.__arrowDone=new Promise(resolve=>{
@@ -60,15 +81,18 @@ beforeAll(async () => {
       path.join(root, `item-${String(i).padStart(2, "0")}.txt`),
       `Fixture ${i}\n`,
     );
-  await app.eval(
-    `window.catamorphicDesktop.createProject({name:'Sidebar arrow motion',rootPath:${JSON.stringify(root)},importExisting:true})`,
-  );
+  await createProjectWorkspace({
+    app,
+    name: "Sidebar arrow motion",
+    rootPath: root,
+    importExisting: true,
+  });
   await writeSidebarSections(app, [
     { id: "files", source: "work:files", height: 196, collapsed: false },
   ]);
   await app.reload();
-  await app.waitFor(`!!${row(0)}`);
-  await app.eval("window.catamorphicDesktop.devWindow('setSize',1100,850)");
+  await ready(196);
+  await app.eval("window.catamorphicDesktop.devWindow('fitSize',1100,850)");
   await app.waitFor(
     `document.getAnimations().every(a=>a.playState!=='running'||a.effect?.getTiming().iterations===Infinity)`,
   );
@@ -188,7 +212,7 @@ it("follows the ring at the upper edge and when only the outer panel scrolls", a
     { id: "files", source: "work:files", height: 1120, collapsed: false },
   ]);
   await app.reload();
-  await app.waitFor(`!!${row(0)}`);
+  await ready(1120, true);
   await place(0);
   await app.eval(`${viewport}.closest('.sidebar-tab-panel').scrollTop=0`);
   try {
@@ -197,6 +221,9 @@ it("follows the ring at the upper edge and when only the outer panel scrolls", a
     );
     for (let i = 0; i < edge; i++) await app.press("ArrowDown");
     await settle();
+    expect(await app.eval("document.activeElement?.dataset.treeId")).toBe(
+      `item-${String(edge).padStart(2, "0")}.txt`,
+    );
     const start = await app.eval<{ panel: number; ring: number }>(sample);
     await observe();
     await app.press("ArrowDown");
@@ -218,7 +245,7 @@ it("follows the ring at the upper edge and when only the outer panel scrolls", a
       { id: "files", source: "work:files", height: 196, collapsed: false },
     ]);
     await app.reload();
-    await app.waitFor(`!!${row(0)}`);
+    await ready(196);
   }
 });
 

@@ -6,7 +6,11 @@ import {
   PROJECT_WORKSPACE_ROOT,
 } from "@catamorphic/workflow/project-layout";
 import { afterAll, beforeAll, expect, it } from "vitest";
-import { type AppHandle, launchApp } from "./harness.js";
+import {
+  type AppHandle,
+  createProjectWorkspace,
+  launchApp,
+} from "./harness.js";
 
 let app: AppHandle;
 let base: string;
@@ -32,9 +36,11 @@ beforeAll(async () => {
   );
   const code = fs.readFileSync(bundle, "utf8");
   await app.waitFor(`!!document.querySelector('[data-sidebar="left"]')`);
-  const project = await app.eval<{ id: string }>(
-    `window.catamorphicDesktop.createProject({name:'Sidebar primitives',rootPath:${JSON.stringify(path.join(app.userDataDir, "sidebar-primitives"))}})`,
-  );
+  const project = await createProjectWorkspace({
+    app,
+    name: "Sidebar primitives",
+    rootPath: path.join(app.userDataDir, "sidebar-primitives"),
+  });
   const projectRoot = path.join(app.userDataDir, "sidebar-primitives");
   const appRoot = path.join(projectRoot, PROJECT_APPS_DIR, "agent-monitor");
   fs.mkdirSync(appRoot, { recursive: true });
@@ -110,7 +116,7 @@ beforeAll(async () => {
   await app.reload();
   try {
     await app.waitFor(
-      `!!document.querySelector('[data-sidebar-item-id="${parentId}"]')`,
+      `!!document.querySelector('[data-workspace-visible="true"] [data-sidebar-item-id="${parentId}"]')`,
     );
   } catch (error) {
     await app.screenshot("/tmp/catamorphic-sidebar-failure.png");
@@ -126,22 +132,22 @@ afterAll(async () => {
 it("loads the real Codex-authored tree and independent right-click menu", async () => {
   expect(
     await app.eval(
-      `!!document.querySelector('[role="tab"][aria-label="Focused chat"]')`,
+      `!!document.querySelector('[data-workspace-visible="true"] [role="tab"][aria-label="Focused chat"]')`,
     ),
   ).toBe(false);
   await app.eval(
-    `document.querySelector('[role="tab"][aria-label="Docs"]').click()`,
+    `document.querySelector('[data-workspace-visible="true"] [role="tab"][aria-label="Docs"]').click()`,
   );
   await app.waitFor(
-    `!!document.querySelector('[data-sidebar-item-id="docs-mdn"]')`,
+    `!!document.querySelector('[data-workspace-visible="true"] [data-sidebar-item-id="docs-mdn"]')`,
   );
   expect(
     await app.eval(
-      `!!document.querySelector('[data-sidebar-item-id="docs-mdn"] [aria-haspopup="menu"]')`,
+      `!!document.querySelector('[data-workspace-visible="true"] [data-sidebar-item-id="docs-mdn"] [aria-haspopup="menu"]')`,
     ),
   ).toBe(false);
   await app.eval(
-    `document.querySelector('[data-sidebar-item-id="docs-mdn"]').dispatchEvent(new MouseEvent('contextmenu',{bubbles:true,cancelable:true,clientX:160,clientY:180}))`,
+    `document.querySelector('[data-workspace-visible="true"] [data-sidebar-item-id="docs-mdn"]').dispatchEvent(new MouseEvent('contextmenu',{bubbles:true,cancelable:true,clientX:160,clientY:180}))`,
   );
   await app.waitFor(`!!document.querySelector('[data-sidebar-menu]')`);
   expect(
@@ -156,22 +162,22 @@ it("loads the real Codex-authored tree and independent right-click menu", async 
   await app.press("Escape");
   await app.waitFor(`!document.querySelector('[data-sidebar-menu]')`);
   await app.eval(
-    `document.querySelector('[role="tab"][aria-label="Project"]').click()`,
+    `document.querySelector('[data-workspace-visible="true"] [role="tab"][aria-label="Project"]').click()`,
   );
 });
 
 it("discovers children lazily and updates a hidden contextual section", async () => {
   await app.eval(
-    `document.querySelector('[data-sidebar-item-id="${parentId}"] [data-tree-primary]').click()`,
+    `document.querySelector('[data-workspace-visible="true"] [data-sidebar-item-id="${parentId}"] [data-tree-primary]').click()`,
   );
   await app.waitFor(
-    `!!document.querySelector('[role="tab"][aria-label="Focused chat"]')`,
+    `!!document.querySelector('[data-workspace-visible="true"] [role="tab"][aria-label="Focused chat"]')`,
   );
   await app.eval(
-    `document.querySelector('[aria-label="Expand right sidebar"]')?.click(); document.querySelector('[role="tab"][aria-label="Focused chat"]').click()`,
+    `document.querySelector('[data-workspace-visible="true"] [aria-label="Expand right sidebar"]')?.click(); document.querySelector('[data-workspace-visible="true"] [role="tab"][aria-label="Focused chat"]').click()`,
   );
   await app.waitFor(
-    `document.querySelector('[data-sidebar-widget="subsessions"]')?.hidden === true`,
+    `document.querySelector('[data-workspace-visible="true"] [data-sidebar-widget="subsessions"]')?.hidden === true`,
   );
   const response = await fetch(base, {
     method: "POST",
@@ -193,15 +199,15 @@ it("discovers children lazily and updates a hidden contextual section", async ()
     throw new Error("Child did not return an id");
   childId = child.id;
   await app.waitFor(
-    `document.querySelector('[data-sidebar-widget="subsessions"]')?.hidden === false && !!document.querySelector('[data-sidebar-widget="subsessions"] [data-sidebar-item-id="${childId}"]')`,
+    `document.querySelector('[data-workspace-visible="true"] [data-sidebar-widget="subsessions"]')?.hidden === false && !!document.querySelector('[data-workspace-visible="true"] [data-sidebar-widget="subsessions"] [data-sidebar-item-id="${childId}"]')`,
   );
   expect(
     await app.eval(
-      `!!document.querySelector('[data-sidebar-widget="subsessions"] [aria-label="Open beside chat"]:not(:disabled)')`,
+      `!!document.querySelector('[data-workspace-visible="true"] [data-sidebar-widget="subsessions"] [aria-label="Open beside chat"]:not(:disabled)')`,
     ),
   ).toBe(true);
   await app.eval(
-    `document.querySelector('[data-sidebar-widget="subsessions"] [data-sidebar-item-id="${childId}"]').dispatchEvent(new MouseEvent('contextmenu',{bubbles:true,cancelable:true,clientX:1100,clientY:170}))`,
+    `document.querySelector('[data-workspace-visible="true"] [data-sidebar-widget="subsessions"] [data-sidebar-item-id="${childId}"]').dispatchEvent(new MouseEvent('contextmenu',{bubbles:true,cancelable:true,clientX:1100,clientY:170}))`,
   );
   await app.waitFor(`!!document.querySelector('[data-sidebar-menu]')`);
   expect(
@@ -219,7 +225,7 @@ it("discovers children lazily and updates a hidden contextual section", async ()
   await app.press("Escape");
   await app.waitFor(`!document.querySelector('[data-sidebar-menu]')`);
   await app.eval(
-    `document.querySelector('[data-sidebar-widget="subsessions"] [aria-label="More actions for Research child"]').click()`,
+    `document.querySelector('[data-workspace-visible="true"] [data-sidebar-widget="subsessions"] [aria-label="More actions for Research child"]').click()`,
   );
   await app.waitFor(`!!document.querySelector('[data-sidebar-menu]')`);
   expect(
@@ -248,16 +254,16 @@ it("suspends expanded child IO when the whole section is collapsed", async () =>
   );
   const branchReads = `performance.getEntriesByType('resource').filter(entry => new URL(entry.name).searchParams.get('parentSessionId') === ${JSON.stringify(childId)}).length`;
   await app.waitFor(
-    `!!document.querySelector('[data-sidebar-widget="subsessions"] [aria-label="Expand Research child"]')`,
+    `!!document.querySelector('[data-workspace-visible="true"] [data-sidebar-widget="subsessions"] [aria-label="Expand Research child"]')`,
   );
   await app.eval(
-    `document.querySelector('[data-sidebar-widget="subsessions"] [aria-label="Expand Research child"]').click()`,
+    `document.querySelector('[data-workspace-visible="true"] [data-sidebar-widget="subsessions"] [aria-label="Expand Research child"]').click()`,
   );
   await app.waitFor(
-    `document.querySelector('[data-sidebar-widget="subsessions"]').textContent.includes('Nested research') && ${branchReads} > 0`,
+    `document.querySelector('[data-workspace-visible="true"] [data-sidebar-widget="subsessions"]').textContent.includes('Nested research') && ${branchReads} > 0`,
   );
   await app.eval(
-    `document.querySelector('[data-sidebar-widget="subsessions"] .sidebar-section > div > button').click()`,
+    `document.querySelector('[data-workspace-visible="true"] [data-sidebar-widget="subsessions"] .sidebar-section > div > button').click()`,
   );
   // Reads already on their way when it closed land first (a timing entry
   // is written when its response ends); from then on, nothing.
@@ -266,10 +272,10 @@ it("suspends expanded child IO when the whole section is collapsed", async () =>
   await app.eval("new Promise(resolve => setTimeout(resolve, 2200))");
   expect(await app.eval<number>(branchReads)).toBe(before);
   await app.eval(
-    `document.querySelector('[data-sidebar-widget="subsessions"] .sidebar-section > div > button').click()`,
+    `document.querySelector('[data-workspace-visible="true"] [data-sidebar-widget="subsessions"] .sidebar-section > div > button').click()`,
   );
   await app.waitFor(
-    `${branchReads} > ${before} && document.querySelector('[data-sidebar-widget="subsessions"]').textContent.includes('Nested research')`,
+    `${branchReads} > ${before} && document.querySelector('[data-workspace-visible="true"] [data-sidebar-widget="subsessions"]').textContent.includes('Nested research')`,
   );
   expect(app.getRendererErrors()).toEqual([]);
 });
@@ -282,7 +288,7 @@ it("mounts the real Codex-authored live widget through the sandboxed app bridge"
   );
   try {
     await app.waitFor(
-      `!!document.querySelector('[data-sidebar-widget="agent-monitor"] iframe')`,
+      `!!document.querySelector('[data-workspace-visible="true"] [data-sidebar-widget="agent-monitor"] iframe')`,
     );
   } catch (cause) {
     throw new Error(
@@ -290,7 +296,7 @@ it("mounts the real Codex-authored live widget through the sandboxed app bridge"
     );
   }
   const guestUrl = await app.eval<string>(
-    `document.querySelector('[data-sidebar-widget="agent-monitor"] iframe').src`,
+    `document.querySelector('[data-workspace-visible="true"] [data-sidebar-widget="agent-monitor"] iframe').src`,
   );
   expect(guestUrl).toMatch(/^work-guest:\/\/p-/);
   const frame = await app.connectToFrame(guestUrl);
@@ -310,7 +316,7 @@ it("mounts the real Codex-authored live widget through the sandboxed app bridge"
     await app.screenshot("/tmp/catamorphic-sidebar-agent-widget.png");
     expect(
       await app.eval(
-        `document.querySelector('[data-sidebar-widget="agent-monitor"] iframe').getAttribute('sandbox')`,
+        `document.querySelector('[data-workspace-visible="true"] [data-sidebar-widget="agent-monitor"] iframe').getAttribute('sandbox')`,
       ),
     ).not.toContain("allow-same-origin");
     expect(app.getRendererErrors()).toEqual([]);

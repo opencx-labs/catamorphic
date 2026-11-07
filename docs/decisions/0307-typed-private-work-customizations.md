@@ -1,4 +1,4 @@
-# 0306: Typed private Work customizations
+# 0307: Typed private Work customizations
 
 - **Status:** Accepted
 - **Date:** 2026-11-06

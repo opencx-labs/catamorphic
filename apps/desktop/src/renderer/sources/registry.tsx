@@ -510,15 +510,15 @@ export function useAnswerSourceWork({
     () =>
       desktopApi.onSidebarSourceWork(
         ({ callId, projectId: asked, sectionId, call }) => {
-          // A chat's chips answer for their own module, beside the chat.
-          if (sectionId === CHIPS_OWNER_ID) return;
+          // Retained projects and a chat's chips answer for their own module.
+          if (sectionId === CHIPS_OWNER_ID || asked !== projectId) return;
           const reply = (result: {
             ok: boolean;
             value?: unknown;
             error?: string;
           }) => void desktopApi.sidebarSourceWorkResult({ callId, ...result });
           const current = ref.current;
-          if (!current || asked !== projectId) {
+          if (!current) {
             reply({ ok: false, error: "This project is not open here." });
             return;
           }

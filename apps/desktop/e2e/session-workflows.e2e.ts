@@ -1,10 +1,16 @@
 import { afterAll, beforeAll, expect, it } from "vitest";
-import { type AppHandle, launchApp, setReactValueJs } from "./harness.js";
+import {
+  type AppHandle,
+  launchApp,
+  openProjectSwitcher,
+  setReactValueJs,
+  workspaceDomHelpersJs,
+} from "./harness.js";
 
 let app: AppHandle;
 // The chat on screen: a minimized one stays mounted (hidden, inert), and
 // typing into its composer sends where nothing on screen shows the answer.
-const helpers = `${setReactValueJs}; const $ = s => document.querySelector(s); const button = text => [...document.querySelectorAll('button')].find(b => !b.closest('[inert]') && b.textContent.trim() === text); const composer = () => [...document.querySelectorAll('[data-chat-local-id] [data-composer-input]')].find(el => !el.closest('[inert]'));`;
+const helpers = `${setReactValueJs}; ${workspaceDomHelpersJs} const button = text => $$('button').find(b => !b.closest('[inert]') && b.textContent.trim() === text); const composer = () => $$('[data-chat-local-id] [data-composer-input]').find(el => !el.closest('[inert]'));`;
 const run = <T>(body: string) =>
   app.eval<T>(`(async()=>{${helpers};${body}})()`);
 const wait = (body: string) =>
@@ -22,14 +28,18 @@ async function send(scenario: string) {
 }
 beforeAll(async () => {
   app = await launchApp();
-  await wait("return !!button('Create or import project');");
-  await run("button('Create or import project').click();");
+  await openProjectSwitcher(app);
+  await wait("return !!button('New project');");
+  await run("button('New project').click();");
   await wait("return !!$('[data-testid=project-name-input]');");
   await run(
     "setReactValue($('[data-testid=project-name-input]'), 'Session workflows');",
   );
   await wait("return !$('[data-testid=project-submit]').disabled;");
   await run("$('[data-testid=project-submit]').click();");
+  await wait(
+    `return $('[aria-label="Switch project"]')?.textContent.includes('Session workflows');`,
+  );
   // Keys pressed before the workspace is restored are lost or open a tab.
   await wait("return !!$('[data-workspace-ready]');");
   // A floating chat, which the tabs these tests open leave as a bubble:

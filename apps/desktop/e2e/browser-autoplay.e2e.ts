@@ -1,6 +1,6 @@
 import http from "node:http";
 import { afterAll, beforeAll, expect, it } from "vitest";
-import { type AppHandle, launchApp } from "./harness.js";
+import { type AppHandle, focusWindow, launchApp } from "./harness.js";
 
 let app: AppHandle;
 let origin: string;
@@ -35,7 +35,7 @@ afterAll(async () => {
   server.close();
 });
 
-const view = "document.querySelector('webview')";
+const view = "document.querySelector('[data-workspace-visible=true] webview')";
 const ready = (name: string) =>
   app.waitFor(
     `(() => { try { return ${view}.getTitle() === ${JSON.stringify(`Video ${name}`)} && !${view}.isLoading(); } catch { return false; } })()`,
@@ -43,6 +43,26 @@ const ready = (name: string) =>
   );
 const page = (expression: string) =>
   app.eval(`${view}.executeJavaScript(${JSON.stringify(expression)}, false)`);
+
+async function clickHistory(direction: "Back" | "Forward") {
+  // A native macOS click only activates a window that is not key. Page
+  // readiness alone does not establish the window or toolbar's readiness.
+  await focusWindow(app);
+  const point = await app.waitFor<{ x: number; y: number }>(
+    `(() => {
+    if (document.documentElement.hasAttribute('data-content-settling')) return false;
+    const button = document.querySelector('[data-workspace-visible=true] button[aria-label="${direction}"]');
+    if (!button || button.disabled || !button.checkVisibility({opacityProperty:true,visibilityProperty:true})) return false;
+    const toolbar = button.closest('[data-browser-toolbar]');
+    if (toolbar?.getAnimations({subtree:true}).some(animation => animation.pending || animation.playState === 'running')) return false;
+    const r = button.getBoundingClientRect();
+    const point = {x:r.x+r.width/2,y:r.y+r.height/2};
+    return r.width > 0 && r.height > 0 && button.contains(document.elementFromPoint(point.x,point.y)) && point;
+  })()`,
+    { label: `${direction} ready for a native click` },
+  );
+  await app.clickPointer(point);
+}
 
 it("keeps the previous autoplayed video reachable from the back button", async () => {
   expect(await page("navigator.userActivation.hasBeenActive")).toBe(false);
@@ -62,11 +82,7 @@ it("keeps the previous autoplayed video reachable from the back button", async (
       label: "back enabled after automatic navigation",
     },
   );
-  const point = await app.eval<{ x: number; y: number }>(`(() => {
-    const r=document.querySelector('button[aria-label=Back]').getBoundingClientRect();
-    return {x:r.x+r.width/2,y:r.y+r.height/2};
-  })()`);
-  await app.clickPointer(point);
+  await clickHistory("Back");
   await ready("one");
 });
 
@@ -78,17 +94,9 @@ it("returns to the preceding video after an automatic full-page navigation", asy
   await app.waitFor(
     "!document.querySelector('button[aria-label=Back]').disabled",
   );
-  const point = await app.eval<{ x: number; y: number }>(`(() => {
-    const r=document.querySelector('button[aria-label=Back]').getBoundingClientRect();
-    return {x:r.x+r.width/2,y:r.y+r.height/2};
-  })()`);
-  await app.clickPointer(point);
+  await clickHistory("Back");
   await ready("full-one");
-  const forward = await app.eval<{ x: number; y: number }>(`(() => {
-    const r=document.querySelector('button[aria-label=Forward]').getBoundingClientRect();
-    return {x:r.x+r.width/2,y:r.y+r.height/2};
-  })()`);
-  await app.clickPointer(forward);
+  await clickHistory("Forward");
   await ready("full-two");
   expect(app.getRendererErrors()).toEqual([]);
 });

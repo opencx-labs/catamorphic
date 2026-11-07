@@ -311,4 +311,5 @@ Settled design decisions live here as short Architecture Decision Records. They 
 | [0303](0303-incognito-browser-tabs.md) | Incognito browser tabs | Accepted |
 | [0304](0304-closing-a-folded-tab-group-closes-its-tabs.md) | Closing a folded tab group closes its tabs | Accepted |
 | [0305](0305-completed-work-folds-toward-the-latest-answer.md) | Completed work folds toward the latest answer | Accepted (amends 0278) |
-| [0306](0306-typed-private-work-customizations.md) | Typed private Work customizations | Accepted (amends 0069, 0134, 0139, 0234, 0239, 0277) |
+| [0306](0306-work-tutorial-and-theme-picker.md) | Tab onboarding and one shared theme picker | Accepted |
+| [0307](0307-typed-private-work-customizations.md) | Typed private Work customizations | Accepted (amends 0069, 0134, 0139, 0234, 0239, 0277) |

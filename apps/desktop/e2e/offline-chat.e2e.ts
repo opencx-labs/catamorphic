@@ -21,6 +21,7 @@ beforeAll(async () => {
     `(async () => {
     const api = window.catamorphicDesktop;
     const project = await api.createProject({name:'Offline chats',rootPath:${JSON.stringify(`${app.userDataDir}/offline-chats`)}});
+    await api.workspaceNavigate({projectId:project.id});
     const agent = await api.agentsCreate({name:'Local helper',harness:'codex',model:'fake-model-a'});
     await api.agentsSetDefault(agent.id);
     const {url} = await api.getServerState();

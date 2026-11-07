@@ -6,12 +6,15 @@ import {
   type AppHandle,
   type FrameHandle,
   launchApp,
+  openProjectSwitcher,
   setReactValueJs,
+  waitForProjectWorkspace,
+  workspaceDomHelpersJs,
 } from "./harness.js";
 
 let app: AppHandle;
 let projectId: string;
-const helper = `${setReactValueJs}; const $ = s => document.querySelector(s); const button = text => [...document.querySelectorAll('button')].find(b => b.textContent.trim() === text);`;
+const helper = `${setReactValueJs}; ${workspaceDomHelpersJs} const button = text => $$('button').find(b => b.textContent.trim() === text);`;
 const run = <T>(body: string) => app.eval<T>(`(()=>{${helper};${body}})()`);
 const wait = (body: string) =>
   app.waitFor(`(()=>{${helper};${body}})()`, { timeoutMs: 60000 });
@@ -119,22 +122,18 @@ async function verifyReviewTheme(frame: FrameHandle) {
 }
 beforeAll(async () => {
   app = await launchApp({ env: { CATAMORPHIC_E2E_REVIEW: "1" } });
-  await wait("return !!button('Create or import project');");
-  await run("button('Create or import project').click();");
+  await openProjectSwitcher(app);
+  await wait("return !!button('New project');");
+  await run("button('New project').click();");
   await wait("return !!$('[data-testid=project-name-input]');");
   await run(
     "setReactValue($('[data-testid=project-name-input]'), 'Review fixture');",
   );
   await wait("return !$('[data-testid=project-submit]').disabled;");
   await run("$('[data-testid=project-submit]').click();");
-  projectId = await app.waitFor<string>(
-    `(async()=>{
-    const {url}=await window.catamorphicDesktop.getServerState();
-    const data=await fetch(url+'/api/projects').then(response=>response.json());
-    return data.items.find(project=>project.name==='Review fixture')?.id;
-  })()`,
-    { label: "review fixture project created" },
-  );
+  // The API record can appear while Default Project is still in front.
+  // Apply sidebar configuration only after this project's real UI is ready.
+  projectId = await waitForProjectWorkspace({ app, name: "Review fixture" });
   // The fixture stands in for a connected GitHub; the section only asks
   // for pull requests while the connection preference is on.
   await app.eval(
@@ -168,20 +167,20 @@ beforeAll(async () => {
     "return !!$('[data-sidebar=right] [role=tab][aria-label=\"Proposals\"]');",
   );
   // It started empty, so closed: open it.
-  await run(
-    "[...document.querySelectorAll('[aria-label=\"Expand right sidebar\"]')].find(b => !b.closest('[inert]'))?.click();",
-  );
+  await run("$('[aria-label=\"Expand right sidebar\"]')?.click();");
   await wait(
     "return $('[data-sidebar=right]')?.getAttribute('aria-hidden') === 'false';",
   );
-  await run(
-    "$('[data-sidebar=right] [role=tab][aria-label=\"Proposals\"]').click();",
-  );
+  await wait(`
+    const tab = $('[data-sidebar=right] [role=tab][aria-label="Proposals"]');
+    if (!tab || tab.closest('[inert]')) return false;
+    tab.click(); return true;
+  `);
   await wait(
-    "return [...document.querySelectorAll('[data-sidebar=right] button')].some(b=>b.textContent.includes('Validate input before processing'));",
+    "return $$('[data-sidebar=right] button').some(b=>b.textContent.includes('Validate input before processing'));",
   );
   await run(
-    "[...document.querySelectorAll('[data-sidebar=right] button')].find(b=>b.textContent.includes('Validate input before processing')).click();",
+    "$$('[data-sidebar=right] button').find(b=>b.textContent.includes('Validate input before processing')).click();",
   );
   await wait("return !!$('[aria-label=\"Pull request details\"]');");
   // The review gets the window's width back, as with the sidebar closed by
@@ -226,15 +225,27 @@ it("generates an ordinary review app, follows evidence and retains the result", 
   try {
     // A fresh merge-gate cache performs the real dependency install. Match
     // the service's bounded install + compile budget; UI errors fail early.
-    await app.waitFor(
-      `(()=>{${helper};return !!button('Open review') || !!document.querySelector('[aria-label="Code review guide"] [role="alert"]');})()`,
+    const result = await app.waitFor<{ ready: boolean; error?: string }>(
+      `(async () => {
+        ${helper}
+        if (button('Open review')) return {ready:true};
+        const alert = $('[aria-label="Code review guide"] [role="alert"]');
+        if (alert) return {ready:false,error:alert.textContent};
+        const api = window.catamorphicDesktop;
+        const projectId = (await api.getPrefs()).lastProjectId;
+        const key = Object.keys(localStorage).find(key => key.startsWith('review-app:' + projectId + ':') && key.endsWith(':session'));
+        const sessionId = key && localStorage.getItem(key);
+        if (!sessionId) return false;
+        const server = await api.getServerState();
+        const base = server.url + '/api/projects/' + projectId;
+        const session = await (await fetch(base + '/agent/sessions/' + sessionId)).json();
+        return session.execution?.status === 'failed'
+          ? {ready:false,error:session.messages.findLast(message => message.role === 'assistant')?.content}
+          : false;
+      })()`,
       { timeoutMs: 630_000, label: "review app build" },
     );
-    expect(
-      await run(
-        "return $('[aria-label=\"Code review guide\"] [role=alert]')?.textContent ?? null;",
-      ),
-    ).toBeNull();
+    expect(result).toEqual({ ready: true });
   } catch (error) {
     console.error(
       "Review readiness",

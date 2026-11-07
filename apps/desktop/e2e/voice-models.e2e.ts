@@ -3,7 +3,14 @@ import os from "node:os";
 import path from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { voiceModelPaths } from "../src/main/voice/models.js";
-import { type AppHandle, launchApp, setReactValueJs } from "./harness.js";
+import {
+  type AppHandle,
+  launchApp,
+  openProjectSwitcher,
+  setReactValueJs,
+  waitForProjectWorkspace,
+  workspaceDomHelpersJs,
+} from "./harness.js";
 
 /**
  * Voice on the real speech models (ADR 0216): the app's own
@@ -65,8 +72,7 @@ async function recordRequest(modelsDir: string): Promise<string> {
 }
 
 const helpers = `
-  const $ = (selector) => document.querySelector(selector);
-  const $$ = (selector) => [...document.querySelectorAll(selector)];
+  ${workspaceDomHelpersJs}
   const byText = (selector, text) =>
     $$(selector).find((el) => el.textContent?.includes(text));
   const mic = () => $('[data-testid="voice-button"]');
@@ -108,13 +114,12 @@ describe.skipIf(!MODELS)("voice agent on the real speech models", () => {
   });
 
   it("hears a spoken request and speaks the answer", async () => {
-    await runWait(`return !!byText('button', 'Create or import project');`, {
+    await openProjectSwitcher(app);
+    await runWait(`return !!byText('button', 'New project');`, {
       timeoutMs: 120_000,
       label: "onboarding",
     });
-    await run(
-      `byText('button', 'Create or import project').click(); return true;`,
-    );
+    await run(`byText('button', 'New project').click(); return true;`);
     await runWait(
       `const input = $('[data-testid="project-name-input"]');
        if (!input) return false; setReactValue(input, 'voice-models-e2e'); return true;`,
@@ -125,6 +130,7 @@ describe.skipIf(!MODELS)("voice agent on the real speech models", () => {
        if (!create || create.disabled) return false; create.click(); return true;`,
       { label: "create project" },
     );
+    await waitForProjectWorkspace({ app, name: "voice-models-e2e" });
     await runWait(`return mic()?.dataset.phase === 'off';`, {
       timeoutMs: 60_000,
       label: "microphone in the dock",

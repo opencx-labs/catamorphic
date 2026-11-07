@@ -1,10 +1,16 @@
 import { afterAll, beforeAll, expect, it } from "vitest";
-import { type AppHandle, launchApp, setReactValueJs } from "./harness.js";
+import {
+  type AppHandle,
+  createProjectWorkspace,
+  launchApp,
+  setReactValueJs,
+  workspaceDomHelpersJs,
+} from "./harness.js";
 
 let app: AppHandle;
 const run = <T>(body: string) =>
   app.eval<T>(`(async () => {
-  const $ = (selector) => document.querySelector(selector);
+  ${workspaceDomHelpersJs}
   const navigate = (label) => [...document.querySelectorAll('nav[aria-label="Settings categories"] button')]
     .find(button => button.textContent.trim() === label).click();
   ${setReactValueJs}
@@ -14,9 +20,11 @@ const run = <T>(body: string) =>
 beforeAll(async () => {
   app = await launchApp();
   await app.waitFor(`!!document.querySelector('[data-sidebar="left"]')`);
-  await app.eval(
-    `window.catamorphicDesktop.createProject({name:'Settings preview',rootPath:${JSON.stringify(`${app.userDataDir}/settings-preview`)}})`,
-  );
+  await createProjectWorkspace({
+    app,
+    name: "Settings preview",
+    rootPath: `${app.userDataDir}/settings-preview`,
+  });
   await app.reload();
   await app.waitFor(`document.body?.innerText.includes('Settings preview')`);
   await run(`$('[aria-label="Settings"]').click()`);
@@ -41,7 +49,9 @@ it("animates category content while the navigation stays still and the forms kee
     const root = $('[data-settings-scroll]');
     const content = $('[data-settings-content]');
     const nav = $('nav[aria-label="Settings categories"]');
-    const input = $('[aria-label="Theme scope"]');
+
+    const input = $('select[name="tabPlacement"]');
+    if (!input) throw new Error('Workspace form is not ready');
     root.scrollTop = 0;
     const original = content.animate;
     return new Promise(resolve => {
@@ -54,7 +64,7 @@ it("animates category content while the navigation stays still and the forms kee
         animation.finished.then(() => resolve({
           duration: timing.duration, easing: timing.easing, start,
           end: getComputedStyle(content).transform, stationary,
-          preserved: input === $('[aria-label="Theme scope"]'),
+          preserved: input === $('select[name="tabPlacement"]'),
           top: $('#settings-shortcuts').getBoundingClientRect().top - root.getBoundingClientRect().top,
         }));
         return animation;

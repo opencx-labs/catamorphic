@@ -10,6 +10,11 @@ import {
 } from "react";
 import type { LoginFieldKind } from "../../shared/login-fields.js";
 import type { PasskeyChoice } from "../../shared/passkeys.js";
+import {
+  moveFocusAsApp,
+  personInputCount,
+  personMovedOn,
+} from "../lib/app-focus.js";
 import { desktopApi, type SavedCredential } from "../lib/desktop-api.js";
 import { MaskedPassword } from "./password-editor.js";
 import { SiteFavicon } from "./site-favicon.js";
@@ -130,6 +135,39 @@ export function usePasswordAutofill({
   openRef.current = open;
   const highlightRef = useRef(highlight);
   highlightRef.current = highlight;
+  const pickedGuest = useRef<{
+    guest: AutofillGuest;
+    url: string;
+    inputCount: number;
+  } | null>(null);
+  useLayoutEffect(() => {
+    if (suggestions !== null) return;
+    const picked = pickedGuest.current;
+    pickedGuest.current = null;
+    const container = containerRef.current;
+    // A dialog or another control can take focus without a new key or press.
+    const active = document.activeElement;
+    if (
+      !picked ||
+      guestRef.current !== picked.guest ||
+      picked.guest.getURL() !== picked.url ||
+      !container ||
+      container.closest("[inert]") ||
+      !container.checkVisibility({
+        opacityProperty: true,
+        visibilityProperty: true,
+      }) ||
+      (active !== null &&
+        active !== document.body &&
+        active !== document.documentElement &&
+        !Object.is(active, picked.guest)) ||
+      personMovedOn(picked.inputCount)
+    )
+      return;
+    // A native press can report the page's blur after the synchronous focus
+    // in pick(). Hand its keys back once the closing shell overlay is gone.
+    moveFocusAsApp(() => picked.guest.focus());
+  }, [suggestions, guestRef, containerRef]);
   // Pressing the list moves focus out of the page, which blurs its field
   // before the click lands; that blur must not close the list. The page's
   // report of the blur and the press race each other (on macOS the report
@@ -263,6 +301,11 @@ export function usePasswordAutofill({
       const current = suggestionsRef.current;
       close();
       if (!guest || !current) return;
+      pickedGuest.current = {
+        guest,
+        url: guest.getURL(),
+        inputCount: personInputCount(),
+      };
       // Typing continues in the page, as after any autofill.
       guest.focus();
       const guestId = guest.getWebContentsId();

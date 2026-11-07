@@ -5,6 +5,7 @@ import path from "node:path";
 import { afterAll, beforeAll, expect, it } from "vitest";
 import {
   type AppHandle,
+  createProjectWorkspace,
   type FrameHandle,
   launchApp,
   setReactValueJs,
@@ -84,9 +85,11 @@ beforeAll(async () => {
   );
   app = await launchApp({ env: { CATAMORPHIC_DOWNLOADS_DIR: downloads } });
   await app.waitFor(`!!document.querySelector('[data-sidebar="left"]')`);
-  await app.eval(
-    `window.catamorphicDesktop.createProject({name:'Browser testing',rootPath:${JSON.stringify(path.join(app.userDataDir, "browser-project"))}})`,
-  );
+  await createProjectWorkspace({
+    app,
+    name: "Browser testing",
+    rootPath: path.join(app.userDataDir, "browser-project"),
+  });
   await app.reload();
   await app.waitFor(`document.body?.innerText.includes('Browser testing')`);
   await app.eval(`window.catamorphicDesktop.devWindow('setSize',1200,850)`);

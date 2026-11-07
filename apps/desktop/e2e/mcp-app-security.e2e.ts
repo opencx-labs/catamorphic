@@ -10,7 +10,12 @@ import {
   ReadResourceRequestSchema,
 } from "@modelcontextprotocol/sdk/types.js";
 import { afterAll, afterEach, beforeAll, expect, it } from "vitest";
-import { type AppHandle, type FrameHandle, launchApp } from "./harness.js";
+import {
+  type AppHandle,
+  createProjectWorkspace,
+  type FrameHandle,
+  launchApp,
+} from "./harness.js";
 
 const RESOURCE = "ui://mcp-security/view.html";
 const FIXTURE = "mcp-security-native-fixture";
@@ -211,9 +216,11 @@ beforeAll(async () => {
   app = await launchApp({ sandboxedRenderers: true });
   const handle = running();
   await handle.waitFor("!!document.querySelector('[data-sidebar=\"left\"]')");
-  const project = await handle.eval<{ id: string }>(
-    `window.catamorphicDesktop.createProject(${JSON.stringify({ name: "MCP app security", rootPath: path.join(handle.userDataDir, "mcp-security-project") })})`,
-  );
+  const project = await createProjectWorkspace({
+    app: handle,
+    name: "MCP app security",
+    rootPath: path.join(handle.userDataDir, "mcp-security-project"),
+  });
   projectId = project.id;
   const connection = await handle.eval<{ id: string }>(
     `window.catamorphicDesktop.connectionsCreate(${JSON.stringify({ name: "MCP Security", transport: "http", url: `http://127.0.0.1:${address.port}/mcp` })})`,

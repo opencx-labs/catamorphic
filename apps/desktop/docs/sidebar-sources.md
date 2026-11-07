@@ -35,4 +35,4 @@ overflow; `[]` removes that placement. Section buttons use `headerActions`.
 
 The [security boundary](security.md) documents confinement. The
 [background runtime](background-runtime.md) describes execution after Work's UI
-quits. ADRs 0234, 0239, 0277 and 0306 record the accepted boundaries.
+quits. ADRs 0234, 0239, 0277 and 0307 record the accepted boundaries.

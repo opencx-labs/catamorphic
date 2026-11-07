@@ -2,7 +2,15 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import type { WindowSession } from "../src/main/window-state.js";
-import { type AppHandle, launchApp, setReactValueJs } from "./harness.js";
+import {
+  type AppHandle,
+  createProjectWorkspace,
+  launchApp,
+  openProjectSwitcher,
+  setReactValueJs,
+  waitForProjectWorkspace,
+  workspaceDomHelpersJs,
+} from "./harness.js";
 
 /**
  * Electron's autoUpdater.quitAndInstall announces `before-quit-for-update`
@@ -56,8 +64,7 @@ async function restartForUpdate(handle: AppHandle, beforeQuit = "") {
 }
 
 const helpers = `
-  const $ = (selector) => document.querySelector(selector);
-  const $$ = (selector) => [...document.querySelectorAll(selector)];
+  ${workspaceDomHelpersJs}
   const visibleDock = () =>
     $$('section[aria-label]').find((el) => !el.inert && el.querySelector('[data-composer-input]'));
   ${setReactValueJs}
@@ -78,13 +85,12 @@ const runWait = <T>(
 describe("update restart", () => {
   it("hands a working agent back, and the relaunch continues it (ADR 0246)", async () => {
     app = await launchApp();
-    await runWait(`return !!byText('button', 'Create or import project');`, {
+    await openProjectSwitcher(app);
+    await runWait(`return !!byText('button', 'New project');`, {
       timeoutMs: 60_000,
       label: "empty state",
     });
-    await runWait(
-      `byText('button', 'Create or import project').click(); return true;`,
-    );
+    await runWait(`byText('button', 'New project').click(); return true;`);
     await runWait(`return !!$('[data-testid="project-name-input"]');`);
     await runWait(`
       setReactValue($('[data-testid="project-name-input"]'), 'update-continue');
@@ -95,6 +101,7 @@ describe("update restart", () => {
        if (btn && !btn.disabled) { btn.click(); return true; } return false;`,
       { label: "project submit enabled" },
     );
+    await waitForProjectWorkspace({ app, name: "update-continue" });
     await runWait(`return !!byText('[role="tab"], button', 'New Tab');`, {
       timeoutMs: 60_000,
       label: "workspace ready",
@@ -151,12 +158,11 @@ describe("update restart", () => {
 
   it("exits with a project window open once the update quit is announced", async () => {
     app = await launchApp();
-    const first = await app.eval<{
-      id: string;
-    }>(`window.catamorphicDesktop.createProject({
-      name: 'update-restart',
-      rootPath: ${JSON.stringify(`${app.userDataDir}/update-restart`)}
-    })`);
+    const first = await createProjectWorkspace({
+      app,
+      name: "update-restart",
+      rootPath: `${app.userDataDir}/update-restart`,
+    });
     await app.eval(
       `window.catamorphicDesktop.workspaceNavigate({projectId:${JSON.stringify(first.id)}})`,
     );
@@ -200,15 +206,11 @@ describe("update restart", () => {
   it("flushes a just-opened tab before update restart and keeps saving after an aborted attempt", async () => {
     app = await launchApp();
     const handle = app;
-    const project = await handle.eval<{ id: string }>(
-      `window.catamorphicDesktop.createProject({name:'Update flush',rootPath:${JSON.stringify(`${handle.userDataDir}/update-flush`)}})`,
-    );
-    await handle.eval(
-      `window.catamorphicDesktop.workspaceNavigate({projectId:${JSON.stringify(project.id)}})`,
-    );
-    await handle.waitFor(
-      `!!document.querySelector('[data-workspace-visible="true"] [data-workspace-ready]')`,
-    );
+    const project = await createProjectWorkspace({
+      app: handle,
+      name: "Update flush",
+      rootPath: `${handle.userDataDir}/update-flush`,
+    });
     await handle.eval(
       `window.catamorphicDesktop.devUpdateRestart({abort:true})`,
     );

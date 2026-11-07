@@ -3,7 +3,10 @@ import {
   type AppHandle,
   focusWindow,
   launchApp,
+  openProjectSwitcher,
   setReactValueJs,
+  waitForProjectWorkspace,
+  workspaceDomHelpersJs,
 } from "./harness.js";
 import { addSidebarSections, CHATS_SECTION } from "./sidebar-config.js";
 
@@ -16,9 +19,15 @@ import { addSidebarSections, CHATS_SECTION } from "./sidebar-config.js";
  */
 
 let app: AppHandle;
+let startupProjectId: string;
 
 beforeAll(async () => {
   app = await launchApp();
+  startupProjectId = await waitForProjectWorkspace({
+    app,
+    name: "Default Project",
+  });
+  await openProjectSwitcher(app);
 });
 
 afterAll(async () => {
@@ -26,8 +35,7 @@ afterAll(async () => {
 });
 
 const helpers = `
-  const $ = (selector) => document.querySelector(selector);
-  const $$ = (selector) => [...document.querySelectorAll(selector)];
+  ${workspaceDomHelpersJs}
   const byText = (selector, text) =>
     $$(selector).find((el) => el.textContent.trim().includes(text));
   const visibleDock = () => {
@@ -140,13 +148,11 @@ const paletteEscape = `
 
 describe("agents and profiles", () => {
   it("boots into a project workspace", async () => {
-    await runWait(`return !!byText('button', 'Create or import project');`, {
+    await runWait(`return !!byText('button', 'New project');`, {
       timeoutMs: 60_000,
       label: "empty state",
     });
-    await run(
-      `byText('button', 'Create or import project').click(); return true;`,
-    );
+    await run(`byText('button', 'New project').click(); return true;`);
     await runWait(`return !!$('[data-testid="project-name-input"]');`);
     await run(`
       setReactValue($('[data-testid="project-name-input"]'), 'e2e-agents');
@@ -157,6 +163,7 @@ describe("agents and profiles", () => {
        if (btn && !btn.disabled) { btn.click(); return true; } return false;`,
       { label: "project submit enabled" },
     );
+    await waitForProjectWorkspace({ app, name: "e2e-agents" });
     await runWait(
       `return !!byText('[role="tab"], button', 'New Tab') &&
               !!$('textarea[placeholder*="Search or ask"]') &&
@@ -529,8 +536,42 @@ describe("agents and profiles", () => {
   });
 
   it("switches profile in place under the veil when only New Tabs are open", async () => {
-    // The workspace holds only the seeded palette New Tab — that counts
-    // as empty, so switching runs in place. The 200ms veil fades can slip
+    // This policy case intentionally owns one project. Reload preserves the
+    // startup Default Project too, so remove only that disposable fixture.
+    const selectedProjectId = await waitForProjectWorkspace({
+      app,
+      name: "e2e-agents",
+    });
+    const startup = await app.eval<{
+      projectIds: string[];
+      profileName: string;
+      profileProjectIds: string[];
+    }>(`(async () => {
+      const initial = await window.catamorphicDesktop.workspaceInitial();
+      const profiles = await window.catamorphicDesktop.profilesList();
+      const profile = profiles.profiles.find(item => item.id === profiles.defaultProfileId);
+      return {
+        projectIds: initial.projectIds,
+        profileName: profile?.name,
+        profileProjectIds: profile?.projectIds,
+      };
+    })()`);
+    expect(startup.profileName).toBe("Default Profile");
+    expect(startupProjectId).not.toBe(selectedProjectId);
+    expect(startup.profileProjectIds).toEqual(
+      expect.arrayContaining([startupProjectId, selectedProjectId]),
+    );
+    expect([...startup.projectIds].sort()).toEqual(
+      [startupProjectId, selectedProjectId].sort(),
+    );
+    await app.eval(
+      `window.catamorphicDesktop.deleteProject({projectId: ${JSON.stringify(startupProjectId)}})`,
+    );
+    await runWait(
+      `return document.querySelectorAll('[data-project-runtime]').length === 1 && !!byText('button', 'New Tab');`,
+      { label: "one workspace with a New Tab" },
+    );
+    // A workspace with only a New Tab is empty, so switching runs in place. The 200ms veil fades can slip
     // between 200ms polls; observe the DOM from inside the page instead.
     await run(`
       window.__veilSeen = false;
@@ -569,8 +610,8 @@ describe("agents and profiles", () => {
       { timeoutMs: 15_000, label: "veil played and settled on Work" },
     );
 
-    // Switch back the same way (the fresh profile has no projects, which
-    // must still count as an empty workspace).
+    // The fresh profile's Default Project only has onboarding, which also
+    // counts as empty. Switching back restores the previously selected project.
     await run(
       `byText('button[aria-haspopup="dialog"]', 'Work').click(); return true;`,
     );
@@ -681,8 +722,8 @@ describe("agents and profiles", () => {
       label: "wizard modal open",
     });
     await run(paletteEscape);
-    await runWait(`return !wizardVisible();`, {
-      label: "wizard modal closed",
+    await runWait(`return !$('[data-testid="agent-wizard"]');`, {
+      label: "wizard modal exit and focus handoff completed",
     });
   });
 
@@ -694,26 +735,52 @@ describe("agents and profiles", () => {
       { label: "no chat docks mounted" },
     );
 
-    // Empty the roster: the setup wizard auto-opens as a closable tab.
+    // Emptying the roster adds Tutorial without taking focus from existing
+    // work. Open its closable tab before exercising skip and chat gating.
     await run(`
       return window.catamorphicDesktop.agentsList().then((data) =>
         Promise.all(data.agents.map((agent) =>
           window.catamorphicDesktop.agentsRemove(agent.id))));
     `);
+    const tutorial = await runWait<{ x: number; y: number; key: string }>(
+      `const button = $$('button.workspace-tab-label').find(el => el.querySelector('.workspace-tab-title')?.textContent.trim() === 'Tutorial');
+       const tab = button?.closest('[data-point-key]');
+       if (!button || !tab || button.closest('[inert]') ||
+         !button.checkVisibility({opacityProperty:true,visibilityProperty:true}) ||
+         tab.getAnimations({subtree:true}).some(animation =>
+           animation.effect?.getTiming().iterations !== Infinity &&
+           (animation.pending || animation.playState === 'running' || animation.playState === 'paused'))) return false;
+       const rect = button.getBoundingClientRect();
+       const x = rect.left + rect.width / 2, y = rect.top + rect.height / 2;
+       return rect.width > 0 && rect.height > 0 && button.contains(document.elementFromPoint(x,y)) &&
+         {x,y,key:tab.dataset.pointKey};`,
+      { label: "auto-opened Tutorial tab ready for a native click" },
+    ).catch(async (error: unknown) => {
+      const state =
+        await run(`return $$('button.workspace-tab-label').map(button => {
+        const tab = button.closest('[data-point-key]');
+        const rect = button.getBoundingClientRect();
+        return {
+          text: button.textContent, key: tab?.dataset.pointKey,
+          inert: !!button.closest('[inert]'), visible: button.checkVisibility({opacityProperty:true,visibilityProperty:true}),
+          rect: {x:rect.x,y:rect.y,width:rect.width,height:rect.height},
+          hit: document.elementFromPoint(rect.x+rect.width/2,rect.y+rect.height/2)?.outerHTML.slice(0,250),
+          animations: tab?.getAnimations({subtree:true}).map(animation => ({
+            state:animation.playState,pending:animation.pending,iterations:animation.effect?.getTiming().iterations,
+            target:animation.effect?.target?.outerHTML.slice(0,150),
+          })),
+        };
+      });`);
+      throw new Error(`Tutorial tab readiness: ${JSON.stringify(state)}`, {
+        cause: error,
+      });
+    });
+    await app.clickPointer(tutorial);
     await runWait(
-      `const visibleFree = $$('[data-testid="agent-wizard-free"]')
-         .filter((el) => !el.closest('[inert]'));
-       const wizard = $$('[data-testid="agent-wizard"]')
-         .find((el) => !el.closest('[inert]'));
-       const freeMentions = wizard?.innerText.match(/\\bfree\\b/gi) ?? [];
-       return wizardVisible() &&
-              !!byText('[role="tab"], button', 'Set up agent') &&
-              visibleFree.length === 1 &&
-              freeMentions.length === 1;`,
-      {
-        timeoutMs: 15_000,
-        label: "setup tab auto-opened, free option present",
-      },
+      `return $$('[data-point-key]').some(tab => tab.dataset.pointKey === ${JSON.stringify(tutorial.key)} &&
+        tab.querySelector('button.workspace-tab-label[aria-current="true"]')) &&
+        !!$('[data-testid="onboarding"]:not([inert], [inert] *)');`,
+      { label: "the clicked Tutorial tab selected and visible" },
     );
 
     // Closing the tab skips setup entirely…
