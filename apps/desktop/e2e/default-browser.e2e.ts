@@ -60,13 +60,21 @@ afterAll(async () => {
 });
 describe("default browser links", () => {
   it("retains every cold-launch link until a profile workspace is ready", async () => {
-    await app.waitFor(
-      `document.querySelectorAll('[data-workspace-visible=true] webview').length === 2`,
+    const browsers = await app.waitFor<{ localId: string; url: string }[]>(
+      `(async () => {
+        const api = window.catamorphicDesktop;
+        const workspace = document.querySelector('[data-workspace-visible=true]');
+        const projectId = workspace?.dataset.projectRuntime;
+        if (!projectId || (await api.getPrefs()).lastProjectId !== projectId) return false;
+        const saved = await api.workspaceStateGet(projectId);
+        return saved?.browsers.length === 2 && saved.browsers;
+      })()`,
+      { label: "both launching links retained in Default Project" },
     );
-    const urls = await app.eval<string[]>(
-      `[...document.querySelectorAll('[data-workspace-visible=true] webview')].map(view=>view.getAttribute('src'))`,
-    );
-    expect(urls.sort()).toEqual([`${origin}/one`, `${origin}/two`]);
+    expect(browsers.map((browser) => browser.url).sort()).toEqual([
+      `${origin}/one`,
+      `${origin}/two`,
+    ]);
     expect(
       await app.eval(
         "window.catamorphicDesktop.agentsList().then(data => data.agents.length)",
@@ -91,6 +99,20 @@ describe("default browser links", () => {
     expect(
       await app.eval("window.catamorphicDesktop.browserTakePendingUrls()"),
     ).toEqual([]);
+    // Restored background pages start asleep. Each launching link must still
+    // load when selected, without requiring every background guest to mount.
+    for (const url of [`${origin}/one`, `${origin}/two`]) {
+      const browser = browsers.find((entry) => entry.url === url);
+      expect(browser).toBeDefined();
+      if (!browser) throw new Error(`Missing launching link: ${url}`);
+      await app.eval(
+        `document.querySelector('[data-workspace-visible=true] [data-point-key="browser:${browser.localId}"] .workspace-tab-label').click()`,
+      );
+      await app.waitFor(
+        `[...document.querySelectorAll('[data-workspace-visible=true] webview')].some(view => view.checkVisibility() && view.getURL() === ${JSON.stringify(url)} && !view.isLoading())`,
+        { label: `${url} loads when selected` },
+      );
+    }
     expect(app.getRendererErrors()).toEqual([]);
   });
   it("does not change the operating system defaults from a development/test executable", async () => {

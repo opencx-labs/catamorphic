@@ -6,6 +6,7 @@ import {
   launchApp,
   openProjectSwitcher,
   setReactValueJs,
+  waitForProjectWorkspace,
 } from "./harness.js";
 
 let app: AppHandle;
@@ -30,6 +31,7 @@ beforeAll(async () => {
     button.click();
     return true;
   })()`);
+  await waitForProjectWorkspace({ app, name: "theme-test" });
   await app.waitFor(
     `!![...document.querySelectorAll('[role="tab"], button')].find(
     el => el.textContent.includes('New Tab'))`,

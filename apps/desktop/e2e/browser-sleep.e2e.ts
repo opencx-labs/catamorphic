@@ -5,6 +5,7 @@ import {
   launchApp,
   openProjectSwitcher,
   setReactValueJs,
+  waitForProjectWorkspace,
 } from "./harness.js";
 
 /**
@@ -59,6 +60,7 @@ async function createProject(name: string) {
   await app.waitFor(
     `(()=>{const b=document.querySelector('[data-testid="project-submit"]');if(b&&!b.disabled){b.click();return true}return false})()`,
   );
+  await waitForProjectWorkspace({ app, name });
   await app.waitFor("!!document.querySelector('[data-workspace-ready]')", {
     label: "workspace ready",
   });

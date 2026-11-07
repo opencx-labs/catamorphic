@@ -262,12 +262,17 @@ describe("find in page", () => {
   it("paints matches and selected text in the theme's accent, and a page's own colors over it", async () => {
     // What is painted, not computed: Chromium computes highlight styles it
     // never paints (a user-origin sheet's).
-    const accent = await app.eval<string>(
-      "getComputedStyle(document.documentElement).getPropertyValue('--color-accent').trim()",
-    );
-    const rgb = [1, 3, 5].map((at) =>
-      Number.parseInt(accent.slice(at, at + 2), 16),
-    );
+    const rgb = await app.eval<number[]>(`(async () => {
+      const projectId = document.querySelector('[data-workspace-visible="true"]').dataset.projectRuntime;
+      const theme = await window.catamorphicDesktop.getTheme(projectId);
+      const canvas = document.createElement('canvas');
+      canvas.width = canvas.height = 1;
+      const context = canvas.getContext('2d');
+      if (!context) throw new Error('No color probe context');
+      context.fillStyle = theme.colors.accent;
+      context.fillRect(0, 0, 1, 1);
+      return [...context.getImageData(0, 0, 1, 1).data].slice(0, 3);
+    })()`);
     /** The accent at `percent` over the page's white. */
     const over = (percent: number) =>
       rgb.map((channel) =>

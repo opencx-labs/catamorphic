@@ -298,12 +298,16 @@ it("takes the theme's surfaces, never a fixed black", async () => {
   await app.movePointer({ x: 20, y: 20 });
   await run("composer().focus();return true;");
   // The chip's color once its transition settles on the theme's raised one.
-  const settled = (theme: string) =>
-    wait<string>(
+  const settled = async (theme: string) => {
+    const target = await app.eval<string>(`(async () => {
+      const projectId = document.querySelector('[data-workspace-visible="true"]').dataset.projectRuntime;
+      return (await window.catamorphicDesktop.getTheme(projectId)).colors['bg-raised'];
+    })()`);
+    return wait<string>(
       `if (document.documentElement.dataset.theme !== ${JSON.stringify(theme)}) return false;
        const el = chip('https://github.com/acme/widgets/pull/4');
        const probe = document.createElement('div');
-       probe.style.background = 'var(--color-bg-raised)';
+       probe.style.background = ${JSON.stringify(target)};
        document.body.append(probe);
        const raised = getComputedStyle(probe).backgroundColor;
        probe.remove();
@@ -311,6 +315,7 @@ it("takes the theme's surfaces, never a fixed black", async () => {
        return color === raised ? color : false;`,
       { label: `chips on the ${theme} theme's raised surface` },
     );
+  };
   await app.eval(
     `window.catamorphicDesktop.setTheme({selection:'dark',overrides:{}})`,
   );

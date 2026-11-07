@@ -5,6 +5,7 @@ import {
   launchApp,
   openProjectSwitcher,
   setReactValueJs,
+  waitForProjectWorkspace,
   workspaceDomHelpersJs,
 } from "./harness.js";
 import { addSidebarSections, CHATS_SECTION } from "./sidebar-config.js";
@@ -18,9 +19,14 @@ import { addSidebarSections, CHATS_SECTION } from "./sidebar-config.js";
  */
 
 let app: AppHandle;
+let startupProjectId: string;
 
 beforeAll(async () => {
   app = await launchApp();
+  startupProjectId = await waitForProjectWorkspace({
+    app,
+    name: "Default Project",
+  });
   await openProjectSwitcher(app);
 });
 
@@ -157,6 +163,7 @@ describe("agents and profiles", () => {
        if (btn && !btn.disabled) { btn.click(); return true; } return false;`,
       { label: "project submit enabled" },
     );
+    await waitForProjectWorkspace({ app, name: "e2e-agents" });
     await runWait(
       `return !!byText('[role="tab"], button', 'New Tab') &&
               !!$('textarea[placeholder*="Search or ask"]') &&
@@ -529,9 +536,37 @@ describe("agents and profiles", () => {
   });
 
   it("switches profile in place under the veil when only New Tabs are open", async () => {
-    // Reload the selected project to exercise the one-workspace case,
-    // without retaining the initial Default Project in the background.
-    await app.reload();
+    // This policy case intentionally owns one project. Reload preserves the
+    // startup Default Project too, so remove only that disposable fixture.
+    const selectedProjectId = await waitForProjectWorkspace({
+      app,
+      name: "e2e-agents",
+    });
+    const startup = await app.eval<{
+      projectIds: string[];
+      profileName: string;
+      profileProjectIds: string[];
+    }>(`(async () => {
+      const initial = await window.catamorphicDesktop.workspaceInitial();
+      const profiles = await window.catamorphicDesktop.profilesList();
+      const profile = profiles.profiles.find(item => item.id === profiles.defaultProfileId);
+      return {
+        projectIds: initial.projectIds,
+        profileName: profile?.name,
+        profileProjectIds: profile?.projectIds,
+      };
+    })()`);
+    expect(startup.profileName).toBe("Default Profile");
+    expect(startupProjectId).not.toBe(selectedProjectId);
+    expect(startup.profileProjectIds).toEqual(
+      expect.arrayContaining([startupProjectId, selectedProjectId]),
+    );
+    expect([...startup.projectIds].sort()).toEqual(
+      [startupProjectId, selectedProjectId].sort(),
+    );
+    await app.eval(
+      `window.catamorphicDesktop.deleteProject({projectId: ${JSON.stringify(startupProjectId)}})`,
+    );
     await runWait(
       `return document.querySelectorAll('[data-project-runtime]').length === 1 && !!byText('button', 'New Tab');`,
       { label: "one workspace with a New Tab" },
@@ -700,16 +735,22 @@ describe("agents and profiles", () => {
       { label: "no chat docks mounted" },
     );
 
-    // Empty the roster: the setup wizard auto-opens as a closable tab.
+    // Emptying the roster adds Tutorial without taking focus from existing
+    // work. Open its closable tab before exercising skip and chat gating.
     await run(`
       return window.catamorphicDesktop.agentsList().then((data) =>
         Promise.all(data.agents.map((agent) =>
           window.catamorphicDesktop.agentsRemove(agent.id))));
     `);
-    await runWait(
-      `return !!$('[data-testid="onboarding"]') && !!byText('[role="tab"], button', 'Tutorial');`,
-      { label: "tutorial tab auto-opened" },
+    await runWait(`return !!byText('[role="tab"], button', 'Tutorial');`, {
+      label: "tutorial tab auto-opened",
+    });
+    await run(
+      `byText('[role="tab"], button', 'Tutorial').click(); return true;`,
     );
+    await runWait(`return !!$('[data-testid="onboarding"]');`, {
+      label: "tutorial selected",
+    });
 
     // Closing the tab skips setup entirely…
     await run(`pressKey('w', { metaKey: true }); return true;`);

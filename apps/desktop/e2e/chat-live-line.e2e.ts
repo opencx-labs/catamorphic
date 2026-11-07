@@ -4,6 +4,7 @@ import {
   launchApp,
   openProjectSwitcher,
   setReactValueJs,
+  waitForProjectWorkspace,
   workspaceDomHelpersJs,
 } from "./harness.js";
 
@@ -64,6 +65,7 @@ it("says the agent's own words through their steps, a step's description, then a
      if (!create || create.disabled) return false; create.click(); return true;`,
     { label: "create project" },
   );
+  await waitForProjectWorkspace({ app, name: "live-line" });
   await runWait("return !!$('[data-workspace-ready]');", {
     timeoutMs: 60_000,
     label: "workspace ready",

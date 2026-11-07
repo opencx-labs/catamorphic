@@ -9,9 +9,11 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import {
   type AppHandle,
   launchApp,
+  openProjectSwitcher,
   removeE2eDirectory,
   setReactValueJs,
   terminate,
+  workspaceDomHelpersJs,
 } from "./harness.js";
 
 /**
@@ -54,8 +56,7 @@ let publicUrl = "";
 let projectId = "";
 
 const helpers = `
-  const $ = (selector) => document.querySelector(selector);
-  const $$ = (selector) => [...document.querySelectorAll(selector)];
+  ${workspaceDomHelpersJs}
   const byText = (selector, text) =>
     $$(selector).find((el) => !el.closest('[inert]') && el.textContent.trim().includes(text));
   ${setReactValueJs}
@@ -544,12 +545,13 @@ describe("remote development on a Work server", () => {
   });
 
   it("connects bob to the project from a link", async () => {
-    await runWait(`return !!$('[data-testid="empty-connect-remote"]');`, {
+    await openProjectSwitcher(app);
+    await runWait(`return !!$('[data-testid="switcher-connect-remote"]');`, {
       timeoutMs: 60_000,
-      label: "empty state",
+      label: "project switcher connection action",
     });
     await run(
-      `$('[data-testid="empty-connect-remote"]').click(); return true;`,
+      `$('[data-testid="switcher-connect-remote"]').click(); return true;`,
     );
     await runWait(`return !!$('[data-testid="remote-link-input"]');`, {
       label: "connect modal",

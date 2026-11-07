@@ -7,6 +7,7 @@ import {
   type AppHandle,
   launchApp,
   openProjectSwitcher,
+  waitForProjectWorkspace,
   workspaceDomHelpersJs,
 } from "./harness.js";
 
@@ -372,11 +373,12 @@ describe("remote projects (ADR 0055)", () => {
       `return $$('webview').some((view) => (view.src ?? '').includes('/api/auth/mcp/authorize'));`,
       { timeoutMs: 30_000, label: "remote sign-in in workspace browser tab" },
     );
+    await waitForProjectWorkspace({ app, name: "Acme brain" });
 
     // Member documents and sharing live in the default Project sidebar.
     // Files is a collapsible section, without builder-only Git controls.
     await runWait(
-      `[...document.querySelectorAll('[data-sidebar="left"] [data-sidebar-widget="files"] button[aria-expanded="false"]')].find(button => button.textContent.trim() === 'Files')?.click();
+      `$$('[data-sidebar="left"] [data-sidebar-widget="files"] button[aria-expanded="false"]').find(button => button.textContent.trim() === 'Files')?.click();
        return $('[data-sidebar-section="files"]')?.textContent.includes('.work');`,
       {
         timeoutMs: 60_000,
@@ -456,7 +458,7 @@ describe("remote projects (ADR 0055)", () => {
 
   it("Publish ships a dirty store file first, then hands back the link", async () => {
     await run(
-      `[...document.querySelectorAll('[data-sidebar="left"] [data-sidebar-widget="files"] button[aria-expanded="false"]')].find(button => button.textContent.trim() === 'Files')?.click(); return true;`,
+      `$$('[data-sidebar="left"] [data-sidebar-widget="files"] button[aria-expanded="false"]').find(button => button.textContent.trim() === 'Files')?.click(); return true;`,
     );
     await runWait(
       `for (const name of ['.work', 'app-data', 'store', 'customers']) { const folder = byText('[data-sidebar-section="files"] button', name); if (folder?.getAttribute('aria-expanded') === 'false') { folder.click(); return false; } } return !!byText('[data-sidebar-section="files"] button', 'acme');`,

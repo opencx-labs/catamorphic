@@ -151,6 +151,8 @@ export interface LaunchOpts {
   firstLaunch?: boolean;
   /** Leave native startup visibility/focus untouched for restoration checks. */
   activateWindow?: boolean;
+  /** Accept a restored utility window whose preferred project is owned elsewhere. */
+  allowUtilityWorkspace?: boolean;
   /** Reuse an existing userData dir (relaunch scenarios). */
   userDataDir?: string;
   /** Extra environment variables for the app process (e2e seams). */
@@ -256,7 +258,16 @@ export async function launchApp(opts: LaunchOpts = {}): Promise<AppHandle> {
     // IPC and DOM fixtures must start at the same composed first paint a
     // person sees, after Default Project initialization has settled.
     await client.waitFor(
-      `!!document.querySelector('[data-workspace-visible=true] [data-workspace-ready], [data-testid="project-load-error"]')`,
+      `(async () => {
+        if (document.querySelector('[data-workspace-visible=true] [data-workspace-ready], [data-testid="project-load-error"]')) return true;
+        if (!${opts.allowUtilityWorkspace === true}) return false;
+        const utility = document.querySelector('[data-project-runtime="initial"][data-workspace-visible="true"]');
+        const profile = utility?.querySelector('[aria-label^="Switch profile:"]');
+        return !!utility && !utility.querySelector('[data-workspace-ready], [data-boot-veil]') &&
+          !!utility.querySelector('[data-testid="project-open-recovery"]') &&
+          !!profile?.checkVisibility({ opacityProperty: true, visibilityProperty: true }) &&
+          (await window.catamorphicDesktop.workspaceInitial()).projectIds.length === 0;
+      })()`,
       { timeoutMs: 60_000, label: "initial workspace revealed" },
     );
     // Most interaction suites use an explicit, stable workspace layout. The
@@ -901,6 +912,29 @@ export const workspaceDomHelpersJs = `
     .filter(element => !element.closest('[data-workspace-visible="false"]'));
   const $ = (selector) => $$(selector)[0] ?? null;
 `;
+
+/** Wait until UI project creation has selected and saved its real workspace.
+ * A retained Default Project can already contain a ready New Tab or dock. */
+export async function waitForProjectWorkspace({
+  app,
+  name,
+}: {
+  app: AppHandle;
+  name: string;
+}) {
+  return app.waitFor<string>(
+    `(async () => {
+      const workspace = document.querySelector('[data-project-runtime][data-workspace-visible="true"]');
+      const projectId = workspace?.dataset.projectRuntime;
+      if (!projectId || projectId === 'initial' || !workspace.querySelector('[data-workspace-ready]') ||
+        !workspace.querySelector('[aria-label="Switch project"]')?.textContent.includes(${JSON.stringify(name)}) ||
+        document.querySelector('[data-testid="project-name-input"]')) return false;
+      const prefs = await window.catamorphicDesktop.getPrefs();
+      return prefs.lastProjectId === projectId && projectId;
+    })()`,
+    { timeoutMs: 60_000, label: `${name} workspace selected and saved` },
+  );
+}
 
 /** Create and explicitly select a fixture project, like the project modal does.
  * Reloading alone preserves the workspace owner that is already active. */

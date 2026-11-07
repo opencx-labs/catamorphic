@@ -6,6 +6,7 @@ import {
   NEW_TAB_INPUT,
   openProjectSwitcher,
   setReactValueJs,
+  waitForProjectWorkspace,
   workspaceDomHelpersJs,
 } from "./harness.js";
 
@@ -66,6 +67,7 @@ beforeAll(async () => {
     "!document.querySelector('[data-testid=project-submit]').disabled",
   );
   await run("$('[data-testid=project-submit]').click()");
+  await waitForProjectWorkspace({ app, name: "Errors" });
   await app.waitFor(
     `!!document.querySelector(${JSON.stringify(NEW_TAB_INPUT)})`,
     { label: "New Tab palette" },

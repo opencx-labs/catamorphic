@@ -277,16 +277,65 @@ describe("initial workspace recovery", () => {
       await recoveryApp.waitFor(
         `!!document.querySelector('[data-testid="project-load-error"]')`,
       );
-      const failedProfileId = await recoveryApp.eval<string>(
-        "window.catamorphicDesktop.windowProfile()",
+      const failedProfile = await recoveryApp.eval<{
+        id: string;
+        name: string;
+      }>(
+        `(async () => {
+          const api = window.catamorphicDesktop;
+          const id = await api.windowProfile();
+          return (await api.profilesList()).profiles.find(profile => profile.id === id);
+        })()`,
       );
+      const switchProfile = async ({
+        id,
+        name,
+      }: {
+        id: string;
+        name: string;
+      }) => {
+        await recoveryApp.waitFor(
+          "!document.querySelector('.animate-profile-veil-in, .animate-profile-veil-out')",
+        );
+        await recoveryApp.eval(`(() => {
+          ${workspaceDomHelpersJs}
+          $('button[aria-label="Expand sidebar"]')?.click();
+        })()`);
+        await recoveryApp.waitFor(`(() => {
+          ${workspaceDomHelpersJs}
+          return !!$('button[aria-label^="Switch profile:"]:not([inert] *)');
+        })()`);
+        await recoveryApp.eval(`(() => {
+          ${workspaceDomHelpersJs}
+          $('button[aria-label^="Switch profile:"]').click();
+        })()`);
+        const dialog =
+          '[role="dialog"][aria-label="Profiles"][aria-hidden="false"]';
+        await recoveryApp.waitFor(`(() => {
+          ${workspaceDomHelpersJs}
+          return [...($(${JSON.stringify(dialog)})?.querySelectorAll('button') ?? [])]
+            .some(button => button.textContent.includes(${JSON.stringify(name)}));
+        })()`);
+        await recoveryApp.eval(`(() => {
+          ${workspaceDomHelpersJs}
+          [...$(${JSON.stringify(dialog)}).querySelectorAll('button')]
+            .find(button => button.textContent.includes(${JSON.stringify(name)})).click();
+        })()`);
+        await recoveryApp.waitFor(
+          `(() => {
+          ${workspaceDomHelpersJs}
+          return !!$('button[aria-label=${JSON.stringify(`Switch profile: ${name}`)}]') &&
+            !document.querySelector('.animate-profile-veil-in, .animate-profile-veil-out') &&
+            window.catamorphicDesktop.windowProfile().then(profileId => profileId === ${JSON.stringify(id)});
+        })()`,
+          { label: `profile UI switched to ${name}` },
+        );
+      };
       fs.unlinkSync(projectsDir);
-      const otherProfile = await recoveryApp.eval<{ id: string }>(
+      const otherProfile = await recoveryApp.eval<{ id: string; name: string }>(
         "window.catamorphicDesktop.profilesCreate('Independent startup')",
       );
-      await recoveryApp.eval(
-        `window.catamorphicDesktop.windowSetProfile(${JSON.stringify(otherProfile.id)})`,
-      );
+      await switchProfile(otherProfile);
       const otherProjectId = await recoveryApp.waitFor<string>(
         `(() => { const runtime = document.querySelector('[data-workspace-visible=true]'); return runtime?.querySelector('[data-workspace-ready]') && runtime.querySelector('[aria-label="Switch project"]')?.textContent.includes('Default Project') && runtime.dataset.projectRuntime; })()`,
         {
@@ -299,9 +348,7 @@ describe("initial workspace recovery", () => {
           "!!document.querySelector('[data-testid=project-load-error]')",
         ),
       ).toBe(false);
-      await recoveryApp.eval(
-        `window.catamorphicDesktop.windowSetProfile(${JSON.stringify(failedProfileId)})`,
-      );
+      await switchProfile(failedProfile);
       await recoveryApp.waitFor(
         "!!document.querySelector('[data-testid=project-load-error]')",
         { label: "the failed profile retains its retry action" },

@@ -1,5 +1,10 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { type AppHandle, launchApp, openOnboardingStep } from "./harness.js";
+import {
+  type AppHandle,
+  createProjectWorkspace,
+  launchApp,
+  openOnboardingStep,
+} from "./harness.js";
 
 let app: AppHandle;
 const mod = process.platform === "darwin" ? 4 : 2;
@@ -629,6 +634,74 @@ describe("the Work tutorial", () => {
         `[...document.querySelectorAll('[data-point-key^="chat:"]')].filter(element => !element.closest('[data-testid="onboarding"]')).map(element => element.dataset.pointKey)`,
       ),
     ).toEqual(chatKeys);
+    expect(app.getRendererErrors()).toEqual([]);
+  });
+
+  it("pauses the retained dock demonstration in a hidden project and resumes on return", async () => {
+    await palette("tutorial");
+    await openOnboardingStep(app, "The dock");
+    const projectId = await app.eval<string>(
+      "document.querySelector('[data-workspace-visible=true]').dataset.projectRuntime",
+    );
+    const demo = `[data-project-runtime="${projectId}"] .onboarding-dock-preview`;
+    await app.waitFor(
+      `document.querySelector(${JSON.stringify(demo)})?.dataset.animated === 'true'`,
+    );
+    await app.waitFor(`(() => {
+      const root = document.querySelector(${JSON.stringify(demo)});
+      const animations = [root?.querySelector('.onboarding-demo-cursor'), root?.querySelector('.onboarding-demo-click')]
+        .flatMap(element => element?.getAnimations() ?? []);
+      if (root?.dataset.animated !== 'true' || animations.length !== 2 || animations.some(animation => animation.playState !== 'running')) return false;
+      window.__retainedTutorialDemo = root;
+      return true;
+    })()`);
+    await createProjectWorkspace({
+      app,
+      name: "Another tutorial workspace",
+      rootPath: `${app.userDataDir}/tutorial-background`,
+    });
+    await app.waitFor(`(() => {
+      const root = document.querySelector(${JSON.stringify(demo)});
+      const animations = [root?.querySelector('.onboarding-demo-cursor'), root?.querySelector('.onboarding-demo-click')]
+        .flatMap(element => element?.getAnimations() ?? []);
+      return root === window.__retainedTutorialDemo && root.closest('[data-workspace-visible="false"]') &&
+        root.dataset.animated === 'false' && animations.length === 2 &&
+        animations.every(animation => animation.playState === 'paused');
+    })()`);
+    expect(
+      await app.eval<boolean>(`(async () => {
+      const root = window.__retainedTutorialDemo;
+      const animations = [root.querySelector('.onboarding-demo-cursor'), root.querySelector('.onboarding-demo-click')]
+        .flatMap(element => element.getAnimations());
+      const times = animations.map(animation => animation.currentTime);
+      await new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(() => requestAnimationFrame(resolve))));
+      const after = [root.querySelector('.onboarding-demo-cursor'), root.querySelector('.onboarding-demo-click')]
+        .flatMap(element => element.getAnimations());
+      return after.length === times.length && after.every((animation, index) => animation.currentTime === times[index]);
+    })()`),
+    ).toBe(true);
+    await app.eval(
+      `window.catamorphicDesktop.workspaceNavigate({projectId:${JSON.stringify(projectId)}})`,
+    );
+    await app.waitFor(`(() => {
+      const root = document.querySelector(${JSON.stringify(demo)});
+      const animations = [root?.querySelector('.onboarding-demo-cursor'), root?.querySelector('.onboarding-demo-click')]
+        .flatMap(element => element?.getAnimations() ?? []);
+      return root === window.__retainedTutorialDemo && root.closest('[data-workspace-visible="true"]') &&
+        root.dataset.animated === 'true' && animations.length === 2 &&
+        animations.every(animation => animation.playState === 'running');
+    })()`);
+    expect(
+      await app.eval<boolean>(`(async () => {
+      const root = window.__retainedTutorialDemo;
+      const animation = root.querySelector('.onboarding-demo-cursor').getAnimations()[0];
+      const before = animation.currentTime;
+      await new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(() => requestAnimationFrame(resolve))));
+      const after = root.querySelector('.onboarding-demo-cursor').getAnimations()[0]?.currentTime;
+      return typeof after === 'number' && typeof before === 'number' && after > before;
+    })()`),
+    ).toBe(true);
+    await app.eval("delete window.__retainedTutorialDemo; true");
     expect(app.getRendererErrors()).toEqual([]);
   });
 });

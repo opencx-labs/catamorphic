@@ -8,6 +8,7 @@ import {
   launchApp,
   openProjectSwitcher,
   setReactValueJs,
+  waitForProjectWorkspace,
   workspaceDomHelpersJs,
 } from "./harness.js";
 
@@ -129,6 +130,7 @@ describe.skipIf(!MODELS)("voice agent on the real speech models", () => {
        if (!create || create.disabled) return false; create.click(); return true;`,
       { label: "create project" },
     );
+    await waitForProjectWorkspace({ app, name: "voice-models-e2e" });
     await runWait(`return mic()?.dataset.phase === 'off';`, {
       timeoutMs: 60_000,
       label: "microphone in the dock",

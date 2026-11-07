@@ -204,15 +204,11 @@ describe("update restart", () => {
   it("flushes a just-opened tab before update restart and keeps saving after an aborted attempt", async () => {
     app = await launchApp();
     const handle = app;
-    const project = await handle.eval<{ id: string }>(
-      `window.catamorphicDesktop.createProject({name:'Update flush',rootPath:${JSON.stringify(`${handle.userDataDir}/update-flush`)}})`,
-    );
-    await handle.eval(
-      `window.catamorphicDesktop.workspaceNavigate({projectId:${JSON.stringify(project.id)}})`,
-    );
-    await handle.waitFor(
-      `!!document.querySelector('[data-workspace-visible="true"] [data-workspace-ready]')`,
-    );
+    const project = await createProjectWorkspace({
+      app: handle,
+      name: "Update flush",
+      rootPath: `${handle.userDataDir}/update-flush`,
+    });
     await handle.eval(
       `window.catamorphicDesktop.devUpdateRestart({abort:true})`,
     );

@@ -5,6 +5,7 @@ import {
   launchApp,
   openProjectSwitcher,
   setReactValueJs,
+  waitForProjectWorkspace,
 } from "./harness.js";
 
 /**
@@ -95,12 +96,10 @@ beforeAll(async () => {
     "!document.querySelector('[data-testid=project-submit]').disabled",
   );
   await run("$('[data-testid=project-submit]').click()");
-  await app.waitFor(
-    "window.catamorphicDesktop.getPrefs().then(prefs => Boolean(prefs.lastProjectId))",
-  );
+  const projectId = await waitForProjectWorkspace({ app, name: "Tabs" });
   await app.eval(`(async () => {
     const api = window.catamorphicDesktop;
-    const scope = { profileId: await api.windowProfile(), projectId: (await api.getPrefs()).lastProjectId };
+    const scope = { profileId: await api.windowProfile(), projectId: ${JSON.stringify(projectId)} };
     await api.bookmarksAdd({ ...scope, label: 'Team wiki', url: ${JSON.stringify(`${origin}/a`)} });
     return true;
   })()`);

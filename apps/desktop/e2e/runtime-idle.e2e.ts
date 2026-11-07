@@ -5,6 +5,7 @@ import {
   launchApp,
   openProjectSwitcher,
   setReactValueJs,
+  waitForProjectWorkspace,
 } from "./harness.js";
 
 let app: AppHandle;
@@ -39,6 +40,7 @@ beforeAll(async () => {
   await app.waitFor(
     `(()=>{const b=document.querySelector('[data-testid="project-submit"]');if(b&&!b.disabled){b.click();return true}return false})()`,
   );
+  await waitForProjectWorkspace({ app, name: "Idle fixture" });
   await app.waitFor(
     `!![...document.querySelectorAll('button')].find(b=>b.textContent.includes('New Tab'))`,
   );

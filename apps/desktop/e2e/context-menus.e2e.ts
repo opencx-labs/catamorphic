@@ -9,6 +9,7 @@ import {
   openProjectSwitcher,
   pointerOnPage,
   setReactValueJs,
+  waitForProjectWorkspace,
   workspaceDomHelpersJs,
 } from "./harness.js";
 
@@ -234,16 +235,14 @@ beforeAll(async () => {
     "!document.querySelector('[data-testid=project-submit]').disabled",
   );
   await run("$('[data-testid=project-submit]').click()");
+  const projectId = await waitForProjectWorkspace({ app, name: "Menus" });
   await app.waitFor(
     `!!document.querySelector(${JSON.stringify(NEW_TAB_INPUT)})`,
     { label: "New Tab palette" },
   );
-  await app.waitFor(
-    "window.catamorphicDesktop.getPrefs().then(prefs => Boolean(prefs.lastProjectId))",
-  );
   await app.eval(`(async () => {
     const api = window.catamorphicDesktop;
-    ${scope} = { profileId: await api.windowProfile(), projectId: (await api.getPrefs()).lastProjectId };
+    ${scope} = { profileId: await api.windowProfile(), projectId: ${JSON.stringify(projectId)} };
     await api.bookmarksAdd({ ...${scope}, label: 'Docs', url: ${JSON.stringify(`${origin}/docs`)} });
     const pinned = await api.bookmarksAdd({ ...${scope}, label: 'Pinned site', url: ${JSON.stringify(`${origin}/pinned`)} });
     await api.bookmarksPin({ ...${scope}, id: pinned.id });
@@ -264,7 +263,7 @@ afterAll(async () => {
 });
 
 const row = (label: string) =>
-  `document.querySelector('[data-point-key="sidebar:${label}"]')`;
+  `document.querySelector('[data-workspace-visible=true] [data-point-key="sidebar:${label}"]')`;
 /** Right-click a sidebar row at its middle, as the pointer would. */
 const rowMenu = async (label: string) => {
   const point = await app.waitFor<{ x: number; y: number }>(
@@ -295,7 +294,7 @@ const toggleSidebar = () =>
   })); true`);
 const sidebarMotion = () =>
   app.eval<string>(
-    "document.querySelector('aside[data-sidebar=left]').dataset.motion",
+    "document.querySelector('[data-workspace-visible=true] aside[data-sidebar=left]').dataset.motion",
   );
 
 describe("sidebar menus", () => {
@@ -447,12 +446,12 @@ describe("sidebar menus", () => {
     await toggleSidebar();
     await closed();
     await app.waitFor(
-      "document.querySelector('aside[data-sidebar=left]').dataset.motion === 'closed'",
+      "document.querySelector('[data-workspace-visible=true] aside[data-sidebar=left]').dataset.motion === 'closed'",
       { label: "sidebar closed" },
     );
     await toggleSidebar();
     await app.waitFor(
-      "document.querySelector('aside[data-sidebar=left]').dataset.motion === 'open' && document.querySelector('aside[data-sidebar=left]').dataset.settled === 'true'",
+      "document.querySelector('[data-workspace-visible=true] aside[data-sidebar=left]').dataset.motion === 'open' && document.querySelector('[data-workspace-visible=true] aside[data-sidebar=left]').dataset.settled === 'true'",
       { label: "sidebar open" },
     );
     expect(await sidebarMotion()).toBe("open");
@@ -624,7 +623,7 @@ describe("page menus", () => {
     // A press elsewhere (here the sidebar) closes it the same way.
     await pageMenuAt("#blank", 0.3, 0.5);
     const sidebar = await app.eval<{ x: number; y: number }>(
-      "(() => { const r = document.querySelector('aside[data-sidebar=left]').getBoundingClientRect(); return { x: Math.round(r.left + r.width / 2), y: Math.round(r.bottom - 120) }; })()",
+      "(() => { const r = document.querySelector('[data-workspace-visible=true] aside[data-sidebar=left]').getBoundingClientRect(); return { x: Math.round(r.left + r.width / 2), y: Math.round(r.bottom - 120) }; })()",
     );
     await mouse(sidebar, "left");
     await closed();

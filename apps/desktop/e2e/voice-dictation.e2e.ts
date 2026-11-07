@@ -5,6 +5,7 @@ import {
   launchApp,
   openProjectSwitcher,
   setReactValueJs,
+  waitForProjectWorkspace,
   workspaceDomHelpersJs,
 } from "./harness.js";
 
@@ -122,6 +123,7 @@ describe("dictation and voice's keys", () => {
        if (!create || create.disabled) return false; create.click(); return true;`,
       { label: "create project" },
     );
+    await waitForProjectWorkspace({ app, name: "dictation-e2e" });
     await runWait(`return mic()?.dataset.phase === 'off';`, {
       timeoutMs: 60_000,
       label: "microphone in the dock, off",

@@ -198,7 +198,7 @@ describe("tabbed sidebars", () => {
       "Work companion";
     writeConfig(config);
     await app.waitFor(
-      `!!document.querySelector('[role="tab"][aria-label="Work companion"]')`,
+      `!!document.querySelector('[data-workspace-visible=true] [role="tab"][aria-label="Work companion"]')`,
     );
     expect(
       await app.eval(
@@ -216,7 +216,7 @@ describe("tabbed sidebars", () => {
     );
     expect(
       await app.eval(
-        `!!document.querySelector('[role="tab"][aria-label="Work companion"]')`,
+        `!!document.querySelector('[data-workspace-visible=true] [role="tab"][aria-label="Work companion"]')`,
       ),
     ).toBe(true);
     writeConfig(config);
@@ -228,9 +228,9 @@ describe("tabbed sidebars", () => {
   it("persists widths and tab selection, and collapses each side independently", async () => {
     await app.eval(`(() => {
       document.querySelector('[data-workspace-visible="true"] [data-sidebar="right"] [role="tab"][aria-label="Proposals"]').click();
-      const handle = document.querySelector('[aria-label="Resize right sidebar"]');
+      const handle = document.querySelector('[data-workspace-visible=true] [aria-label="Resize right sidebar"]');
       handle.dispatchEvent(new KeyboardEvent('keydown', {key:'ArrowLeft',bubbles:true,cancelable:true}));
-      document.querySelector('[aria-label="Collapse sidebar"]').click();
+      document.querySelector('[data-workspace-visible=true] [aria-label="Collapse sidebar"]').click();
     })()`);
     await app.waitFor(
       `document.querySelector('[data-workspace-visible="true"] [data-sidebar="left"]').getAttribute('aria-hidden') === 'true'`,
@@ -246,7 +246,7 @@ describe("tabbed sidebars", () => {
     );
     expect(
       await app.eval(
-        `document.querySelector('[aria-label="Resize right sidebar"]').getAttribute('aria-valuenow')`,
+        `document.querySelector('[data-workspace-visible=true] [aria-label="Resize right sidebar"]').getAttribute('aria-valuenow')`,
       ),
     ).toBe("340");
     expect(
@@ -255,10 +255,10 @@ describe("tabbed sidebars", () => {
       ),
     ).toBe("true");
     await app.eval(
-      `document.querySelector('[aria-label="Expand sidebar"]').click(); document.querySelector('[role="tab"][aria-label="Work companion"]').click()`,
+      `document.querySelector('[data-workspace-visible=true] [aria-label="Expand sidebar"]').click(); document.querySelector('[data-workspace-visible=true] [role="tab"][aria-label="Work companion"]').click()`,
     );
     await app.waitFor(`(() => {
-      const sides = [...document.querySelectorAll('[data-sidebar]')];
+      const sides = [...document.querySelectorAll('[data-workspace-visible=true] [data-sidebar]')];
       return sides.length === 2 && sides.every(side => side.dataset.settled === 'true' && side.getAnimations({subtree:true}).every(a => a.playState !== 'running')) && !document.getAnimations().some(a => a.effect?.pseudoElement?.startsWith('::view-transition'));
     })()`);
     if (process.env.CATAMORPHIC_SIDEBAR_SCREENSHOT)
@@ -376,7 +376,7 @@ describe("tabbed sidebars", () => {
     );
     await reload();
     await app.waitFor(
-      `!!document.querySelector('[aria-label="Switch profile: Empty profile"]')`,
+      `!!document.querySelector('[data-workspace-visible=true] [aria-label="Switch profile: Empty profile"]')`,
     );
     await waitRight(false);
     expect(app.getRendererErrors()).toEqual([]);
@@ -385,13 +385,13 @@ describe("tabbed sidebars", () => {
     // An empty workspace switches profiles in place. Its configuration and
     // visibility must come from the destination, including project overrides.
     await app.eval(
-      `document.querySelector('[aria-label="Switch profile: Empty profile"]').click()`,
+      `document.querySelector('[data-workspace-visible=true] [aria-label="Switch profile: Empty profile"]').click()`,
     );
     await app.eval(
-      `Array.from(document.querySelectorAll('button')).find(b => b.textContent.trim().endsWith('Default Profile') && !b.getAttribute('aria-label')).click()`,
+      `Array.from(document.querySelectorAll('[data-workspace-visible=true] button')).find(b => b.textContent.trim().endsWith('Default Profile') && !b.getAttribute('aria-label')).click()`,
     );
     await app.waitFor(
-      `!!document.querySelector('[aria-label="Switch profile: Default Profile"]')`,
+      `!!document.querySelector('[data-workspace-visible=true] [aria-label="Switch profile: Default Profile"]')`,
     );
     await app.waitFor(
       `!!document.querySelector('[data-workspace-visible="true"] [data-sidebar="right"] [role="tab"]')`,

@@ -6,6 +6,7 @@ import {
   launchApp,
   openProjectSwitcher,
   setReactValueJs,
+  waitForProjectWorkspace,
   workspaceDomHelpersJs,
 } from "./harness.js";
 
@@ -256,6 +257,7 @@ describe("voice", () => {
        if (!create || create.disabled) return false; create.click(); return true;`,
       { label: "create project" },
     );
+    await waitForProjectWorkspace({ app, name: "voice-e2e" });
     await runWait(`return mic()?.dataset.phase === 'off';`, {
       timeoutMs: 60_000,
       label: "microphone in the dock, off",

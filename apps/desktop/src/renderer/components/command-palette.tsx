@@ -1094,6 +1094,8 @@ export function CommandPalette({
 
   const panel = (
     <PaletteSurface
+      role="dialog"
+      aria-label="Command palette"
       variant={variant}
       input={
         <>

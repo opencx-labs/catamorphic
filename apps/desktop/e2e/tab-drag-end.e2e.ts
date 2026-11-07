@@ -8,6 +8,7 @@ import {
   openProjectSwitcher,
   pointerOnPage,
   setReactValueJs,
+  waitForProjectWorkspace,
   workspaceDomHelpersJs,
 } from "./harness.js";
 
@@ -96,9 +97,7 @@ beforeAll(async () => {
     "!document.querySelector('[data-testid=project-submit]').disabled",
   );
   await run("$('[data-testid=project-submit]').click()");
-  await app.waitFor(
-    "window.catamorphicDesktop.getPrefs().then(prefs => Boolean(prefs.lastProjectId))",
-  );
+  await waitForProjectWorkspace({ app, name: "Tab drags" });
   await app.eval(
     "window.catamorphicDesktop.setPrefs({tabPlacement:'sidebar',headerPlacement:'sidebar'})",
   );
@@ -155,7 +154,8 @@ it("gives the shown page back its presses when the dragged tab's row leaves mid-
 
 it("ends a strip tab's drag when the tab closes before the drop", async () => {
   await app.eval("window.catamorphicDesktop.setPrefs({tabPlacement:'top'})");
-  const strip = '[data-tab-orientation="horizontal"]';
+  const strip =
+    '[data-workspace-visible=true] [data-tab-orientation="horizontal"]';
   const tab = await openPage("Strip");
   const source = `${strip} [data-point-key="${tab}"]`;
   await app.waitFor(`!!document.querySelector(${JSON.stringify(source)})`);

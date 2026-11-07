@@ -109,7 +109,7 @@ const SHOWN = `((element) => element.checkVisibility({ visibilityProperty: true 
 const VIEW = `[...document.querySelectorAll('webview')].find(${SHOWN})`;
 /** Its dialog, if it shows one. */
 const DIALOG = `${VIEW}?.parentElement.querySelector('[data-testid="page-dialog"]:not([inert])')`;
-const ACTIVE_KEY = `document.querySelector('[data-point-key] [aria-current="true"]')?.closest('[data-point-key]')?.dataset.pointKey`;
+const ACTIVE_KEY = `document.querySelector('[data-workspace-visible="true"] [data-point-key] [aria-current="true"]')?.closest('[data-point-key]')?.dataset.pointKey`;
 const ADDRESS = `[...document.querySelectorAll('input[aria-label="Address and search bar"]')].find(${SHOWN})`;
 const host = (url: string) => url.slice("http://".length);
 
@@ -920,7 +920,7 @@ const logs=()=>[...document.querySelectorAll('[role="log"]')].map(el=>el.textCon
     // asked, and its tab comes forward to ask.
     const removeButton = `document.querySelector('[data-chip-root=${JSON.stringify(key)}] [data-chip-button="remove"]')`;
     const remove = `${removeButton}.click(); true`;
-    const anyDialog = `document.querySelector('[data-testid="page-dialog"]:not([inert])')`;
+    const anyDialog = `document.querySelector('[data-workspace-visible="true"] [data-testid="page-dialog"]:not([inert])')`;
     await app.eval(remove);
     await app.waitFor(`${anyDialog}?.dataset.kind === 'beforeunload'`, {
       label: "Leave site? for the chip's page",

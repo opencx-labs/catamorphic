@@ -8,6 +8,7 @@ import {
   launchApp,
   openProjectSwitcher,
   setReactValueJs,
+  waitForProjectWorkspace,
   workspaceDomHelpersJs,
 } from "./harness.js";
 
@@ -638,6 +639,7 @@ describe("chat motion", () => {
        if (!create || create.disabled) return false; create.click(); return true;`,
       { label: "create project" },
     );
+    await waitForProjectWorkspace({ app, name: "chat-motion" });
     await runWait(`return !!byText('button, [role="tab"]', 'New Tab');`, {
       timeoutMs: 60_000,
       label: "workspace ready",
@@ -1679,11 +1681,9 @@ describe("chat motion", () => {
     });
     // Settings reads the same provider as the chat. Wait for its new
     // bindings to render, not merely for the IPC broadcast to arrive.
-    await app.eval(
-      "document.querySelector('button[aria-label=\"Settings\"]').click()",
-    );
-    await app.waitFor(
-      "!!document.querySelector('[data-setting-id=\"shortcut.chat-previous-message\"]')",
+    await run("$('button[aria-label=\"Settings\"]').click(); return true;");
+    await runWait(
+      "return !!$('[data-setting-id=\"shortcut.chat-previous-message\"]');",
     );
     await app.eval(`(async () => {
       const api=window.catamorphicDesktop, current=await api.getKeybindings();
@@ -1692,9 +1692,10 @@ describe("chat motion", () => {
       });
       return true;
     })()`);
-    await app.waitFor(`
-      document.querySelector('[data-setting-id="shortcut.chat-previous-message"] button')?.textContent === '⌥↑' &&
-      document.querySelector('[data-setting-id="shortcut.chat-next-message"] button')?.textContent === '⌥↓'`);
+    await runWait(`
+      const mac = /Mac/.test(navigator.platform);
+      return $('[data-setting-id="shortcut.chat-previous-message"] button')?.textContent === (mac ? '⌥↑' : 'Alt+ArrowUp') &&
+        $('[data-setting-id="shortcut.chat-next-message"] button')?.textContent === (mac ? '⌥↓' : 'Alt+ArrowDown');`);
     // Opening Settings minimizes the floating chat; restore it normally.
     await app.press("m", process.platform === "darwin" ? 4 : 2);
     await runWait(

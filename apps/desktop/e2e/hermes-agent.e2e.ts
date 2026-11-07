@@ -7,6 +7,7 @@ import {
   launchApp,
   openProjectSwitcher,
   setReactValueJs,
+  waitForProjectWorkspace,
   workspaceDomHelpersJs,
 } from "./harness.js";
 
@@ -127,6 +128,7 @@ describe("Hermes as the person's own agent", () => {
        if (btn && !btn.disabled) { btn.click(); return true; } return false;`,
       { label: "project submit enabled" },
     );
+    await waitForProjectWorkspace({ app, name: "e2e-hermes" });
     await runWait(`return !!$('textarea[placeholder*="Search or ask"]');`, {
       timeoutMs: 60_000,
       label: "workspace",

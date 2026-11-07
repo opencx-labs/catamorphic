@@ -4,6 +4,7 @@ import {
   launchApp,
   openProjectSwitcher,
   setReactValueJs,
+  waitForProjectWorkspace,
   workspaceDomHelpersJs,
 } from "./harness.js";
 
@@ -145,6 +146,7 @@ beforeAll(async () => {
     "!document.querySelector('[data-testid=project-submit]').disabled",
   );
   await run("$('[data-testid=project-submit]').click(); return true;");
+  await waitForProjectWorkspace({ app, name: "Tabs" });
   await runWait("return !!strip() && tabs().length >= 1;", {
     timeoutMs: 60_000,
     label: "workspace ready",

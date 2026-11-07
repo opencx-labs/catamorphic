@@ -13,7 +13,7 @@ const section =
   '[data-workspace-visible="true"] [data-sidebar-section="chats"]';
 const box = `${section} > [data-collapsible]`;
 const input =
-  '[data-palette="overlay"] [aria-label="Search commands, pages, and more"]';
+  '[data-workspace-visible="true"] [data-palette="overlay"] [aria-label="Search commands, pages, and more"]';
 const artifacts = process.env.CATAMORPHIC_E2E_ARTIFACTS_DIR;
 const shot = async (name: string) => {
   if (artifacts) await app.screenshot(path.join(artifacts, `${name}.png`));
@@ -241,7 +241,7 @@ it("keeps long palette edits focused and free of an inner border in both inputs"
     await shot(agent ? "palette-agent-deleted" : "palette-textarea-deleted");
     await app.press("Escape");
     await app.waitFor(
-      `!!document.querySelector('[data-palette="overlay"]').closest('[inert]')`,
+      `!!document.querySelector('[data-workspace-visible="true"] [data-palette="overlay"]')?.closest('[inert]')`,
     );
   }
   if (artifacts)
@@ -328,7 +328,7 @@ it("keeps the caret visible after scroll-away deletion in a narrow New Tab", asy
     `document.getAnimations().every(a=>a.playState!=='running'||a.effect?.getTiming().iterations===Infinity)`,
   );
   const target =
-    '[data-palette="tab"] [aria-label="Search commands, pages, and more"]';
+    '[data-workspace-visible="true"] [data-palette="tab"] [aria-label="Search commands, pages, and more"]';
   const prose = Array.from(
     { length: 14 },
     (_, i) =>
@@ -348,7 +348,7 @@ it("keeps the caret visible after scroll-away deletion in a narrow New Tab", asy
     await app.press("Backspace");
     await app.waitFor(`document.querySelector('${target}').scrollTop>0`);
     await app.waitFor(
-      `document.querySelector('[data-palette="tab"]').getAnimations({subtree:true}).every(a=>a.playState!=='running'||a.effect?.getTiming().iterations===Infinity)`,
+      `document.querySelector('[data-workspace-visible="true"] [data-palette="tab"]').getAnimations({subtree:true}).every(a=>a.playState!=='running'||a.effect?.getTiming().iterations===Infinity)`,
     );
     const geometry = await app.eval<{
       visible: boolean;

@@ -1,7 +1,11 @@
 import fs from "node:fs";
 import path from "node:path";
 import { afterAll, beforeAll, expect, it } from "vitest";
-import { type AppHandle, launchApp } from "./harness.js";
+import {
+  type AppHandle,
+  createProjectWorkspace,
+  launchApp,
+} from "./harness.js";
 
 /**
  * Opened by the person, a sidebar takes keyboard focus to the row of what is
@@ -90,9 +94,12 @@ beforeAll(async () => {
   for (const name of ["a", "b", "c"])
     fs.writeFileSync(path.join(root, "notes", `${name}.txt`), `${name}\n`);
   fs.writeFileSync(path.join(root, "readme.txt"), "readme\n");
-  await app.eval(
-    `window.catamorphicDesktop.createProject({name:'Sidebar focus',rootPath:${JSON.stringify(root)},importExisting:true}).then((project) => window.catamorphicDesktop.workspaceNavigate({ projectId: project.id }))`,
-  );
+  await createProjectWorkspace({
+    app,
+    name: "Sidebar focus",
+    rootPath: root,
+    importExisting: true,
+  });
   await app.waitFor(
     `!!document.querySelector('${files} button[aria-expanded]')`,
     {

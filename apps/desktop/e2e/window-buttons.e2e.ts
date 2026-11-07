@@ -252,7 +252,7 @@ it.skipIf(mac)("offers nothing where the OS draws the frame", async () => {
  * document, whatever is drawn on top.
  */
 const regions = `
-  const regions = () => $$('*').flatMap((element) => {
+  const regions = () => [...document.querySelectorAll('*')].flatMap((element) => {
     const style = getComputedStyle(element);
     const region = style.getPropertyValue('app-region') || style.getPropertyValue('-webkit-app-region');
     if (region !== 'drag' && region !== 'no-drag') return [];
@@ -534,7 +534,7 @@ it("keeps a background project's drag areas off the visible tabs", async () => {
       `window.catamorphicDesktop.workspaceNavigate({projectId: ${JSON.stringify(id)}})`,
     );
     await settle(
-      `${visible}?.dataset.projectRuntime === ${JSON.stringify(id)} && !!${visible}.querySelector('.workspace-chrome button[aria-label="New tab"]')`,
+      `${visible}?.dataset.projectRuntime === ${JSON.stringify(id)} && !!${visible}.querySelector('[data-workspace-ready] .workspace-chrome button[aria-label="New tab"]')`,
       label,
     );
   };
@@ -546,7 +546,7 @@ it("keeps a background project's drag areas off the visible tabs", async () => {
     room: number;
     tabs: number[];
   }>(`
-    const hidden = $('[data-workspace-visible="false"]');
+    const hidden = document.querySelector('[data-project-runtime=${JSON.stringify(background.id)}][data-workspace-visible="false"]');
     const room = hidden.querySelector('[data-tab-strip-room="end"]').getBoundingClientRect();
     return {
       after: !!(${visible}.compareDocumentPosition(hidden) & Node.DOCUMENT_POSITION_FOLLOWING),

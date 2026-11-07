@@ -12,9 +12,10 @@ import {
 
 let app: AppHandle;
 let projectRoot: string;
+let projectId: string;
 const helpers = `
 ${setReactValueJs}
-const input=()=>[...document.querySelectorAll('[aria-label="Search commands, pages, and more"]')].find(el=>!el.closest('[inert]') && el.getBoundingClientRect().width>0);
+const input=()=>[...document.querySelectorAll('[data-workspace-visible="true"] [aria-label="Search commands, pages, and more"]')].find(el=>!el.closest('[inert]') && el.getBoundingClientRect().width>0);
 const key=(key, mods={})=>input().dispatchEvent(new KeyboardEvent('keydown',{key,bubbles:true,cancelable:true,...mods}));
 const rows=()=>[...input().closest('[role="dialog"]').querySelectorAll('[role="option"]')];
 const labels=()=>rows().map(row=>row.textContent);
@@ -56,7 +57,7 @@ const type = (text: string) =>
 const chatState = `JSON.stringify({
   floating: [...document.querySelectorAll('section[data-floating-chat]')].map((el) => el.dataset.chatLocalId),
   inTabs: [...document.querySelectorAll('section[data-chat-tab]')].map((el) => el.dataset.chatLocalId),
-  strip: [...document.querySelectorAll('[data-tab-orientation] [data-point-key]:not([data-sidebar-item-id])')].map((el) => el.dataset.pointKey),
+  strip: [...document.querySelectorAll('[data-workspace-visible="true"] [data-tab-orientation] [data-point-key]:not([data-sidebar-item-id])')].map((el) => el.dataset.pointKey),
   focused: (() => { const el = document.activeElement; return el && [el.tagName, el.getAttribute('aria-label'), el.closest('section')?.dataset.chatLocalId ?? null, el.closest('[data-palette]')?.dataset.palette ?? null]; })(),
   appDocumentHasFocus: document.hasFocus(),
 })`;
@@ -78,11 +79,12 @@ beforeAll(async () => {
   app = await launchApp();
   await app.waitFor(`!!document.querySelector('[data-sidebar="left"]')`);
   projectRoot = path.join(app.userDataDir, "palette-project");
-  await createProjectWorkspace({
+  const project = await createProjectWorkspace({
     app,
     name: "Palette ranking",
     rootPath: projectRoot,
   });
+  projectId = project.id;
   fs.mkdirSync(path.join(projectRoot, ".work"), { recursive: true });
   fs.writeFileSync(
     path.join(projectRoot, "tickets.json"),
@@ -565,7 +567,7 @@ it("moves the caret between the input's lines with the arrows, and the highlight
 });
 
 it("closes an untouched New Tab once another tab is shown, and keeps a typed one", async () => {
-  const strip = `[...document.querySelectorAll('[data-tab-orientation] [data-point-key]:not([data-sidebar-item-id])')]`;
+  const strip = `[...document.querySelectorAll('[data-workspace-visible="true"] [data-tab-orientation] [data-point-key]:not([data-sidebar-item-id])')]`;
   const newTabs = () =>
     run<number>(
       `return ${strip}.filter((el) => el.dataset.pointKey.startsWith('palette:')).length`,
@@ -595,7 +597,7 @@ it("closes an untouched New Tab once another tab is shown, and keeps a typed one
   await showOtherTab();
   // The strip lets the closed tab play its exit before it leaves.
   await wait(
-    `return !document.querySelector('[data-palette="tab"]') && ${strip}.every((el) => !el.dataset.pointKey.startsWith('palette:'))`,
+    `return !document.querySelector('[data-workspace-visible="true"] [data-palette="tab"]') && ${strip}.every((el) => !el.dataset.pointKey.startsWith('palette:'))`,
     "untouched New Tab closed",
   );
   // Typed into, it is kept for later.
@@ -614,11 +616,11 @@ it("closes an untouched New Tab once another tab is shown, and keeps a typed one
 it("opens a chat asked for from a New Tab in that tab, in its place", async () => {
   const keys = () =>
     run<string[]>(
-      `return [...document.querySelectorAll('[data-tab-orientation] [data-point-key]:not([data-sidebar-item-id])')].map((el) => el.dataset.pointKey)`,
+      `return [...document.querySelectorAll('[data-workspace-visible="true"] [data-tab-orientation] [data-point-key]:not([data-sidebar-item-id])')].map((el) => el.dataset.pointKey)`,
     );
   const select = async (key: string) => {
     const point = await wait<{ x: number; y: number }>(`
-      const tab = document.querySelector('[data-tab-orientation] [data-point-key="${key}"]');
+      const tab = document.querySelector('[data-workspace-visible="true"] [data-tab-orientation] [data-point-key="${key}"]');
       if (!tab?.checkVisibility()) return false;
       if (tab.closest('[data-tab-orientation]').getAnimations({ subtree: true }).some((a) => a.playState === 'running')) return false;
       const r = tab.getBoundingClientRect();
@@ -631,7 +633,7 @@ it("opens a chat asked for from a New Tab in that tab, in its place", async () =
   };
   /** The chat in front: in a tab, its composer focused, nothing floating. */
   const chatInTab = `(() => {
-    const chat = document.querySelector('section[data-chat-tab]');
+    const chat = document.querySelector('section[data-chat-tab][data-chat-project="${projectId}"]');
     return !!chat && !document.querySelector('section[data-floating-chat]') &&
       chat.querySelector('[data-composer-input]') === document.activeElement &&
       chat.dataset.chatLocalId;
@@ -639,7 +641,7 @@ it("opens a chat asked for from a New Tab in that tab, in its place", async () =
   /** The strip once the New Tab a chat replaced has played its exit. */
   const withoutNewTab = (label: string) =>
     wait<string[]>(
-      `const keys = [...document.querySelectorAll('[data-tab-orientation] [data-point-key]:not([data-sidebar-item-id])')].map((el) => el.dataset.pointKey);
+      `const keys = [...document.querySelectorAll('[data-workspace-visible="true"] [data-tab-orientation] [data-point-key]:not([data-sidebar-item-id])')].map((el) => el.dataset.pointKey);
        return !keys.some((key) => key.startsWith('palette:')) && keys;`,
       label,
     );
@@ -696,7 +698,7 @@ it("opens a chat asked for from a New Tab in that tab, in its place", async () =
     "Send to agent picked",
   );
   const third = await wait<string>(
-    `const chat = document.querySelector('section[data-chat-tab]');
+    `const chat = document.querySelector('section[data-chat-tab][data-chat-project="${projectId}"]');
      return !document.querySelector('section[data-floating-chat]') &&
        chat?.querySelector('[role="log"]')?.textContent.includes('hello from a new tab') &&
        chat.dataset.chatLocalId;`,
@@ -722,7 +724,7 @@ it("opens a chat asked for from a New Tab in that tab, in its place", async () =
   // before the floating chat's autofocus frame does (on a slow machine):
   // the chat it moves in still takes focus.
   await run(`
-    const field = document.querySelector('[data-palette="tab"] textarea');
+    const field = document.querySelector('[data-workspace-visible="true"] [data-palette="tab"] textarea');
     field.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true }));
     field.focus();
     return true;
@@ -746,7 +748,7 @@ it("opens a chat asked for from a New Tab in that tab, in its place", async () =
   // In front before Cmd+N: asked while the fresh chat still is, Cmd+N
   // keeps to that chat, as it should.
   await wait(
-    `return !!document.querySelector('[data-tab-orientation] [data-point-key="${page}"] [aria-current]')`,
+    `return !!document.querySelector('[data-workspace-visible="true"] [data-tab-orientation] [data-point-key="${page}"] [aria-current]')`,
     "the page in front",
   );
   await shortcut("n");

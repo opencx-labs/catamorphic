@@ -36,23 +36,27 @@ it("reopens the hidden workspace when an empty window selects its profile", asyn
     `window.catamorphicDesktop.workspaceNavigate({projectId:${JSON.stringify(project.id)}})`,
   );
   await handle.waitFor(active(project.id));
-  await handle.waitFor("!!document.querySelector('[data-workspace-ready]')");
+  await handle.waitFor(
+    `!!document.querySelector('[data-project-runtime="${project.id}"][data-workspace-visible="true"] [data-workspace-ready]')`,
+  );
   // A live resource must stay in its original renderer, not be recreated in
   // the new window after its project claim is refused.
   await handle.eval(`window.dispatchEvent(new KeyboardEvent('keydown', {
     key:'t', altKey:true, metaKey:/Mac/.test(navigator.platform), ctrlKey:!/Mac/.test(navigator.platform), bubbles:true
   }))`);
   await handle.waitFor(
-    "!!document.querySelector('input[aria-label=\"Address and search bar\"]')",
+    '!!document.querySelector(\'[data-workspace-visible="true"] input[aria-label="Address and search bar"]\')',
   );
   await handle.eval(`(() => { ${setReactValueJs};
-    const input = document.querySelector('input[aria-label="Address and search bar"]');
+    const input = document.querySelector('[data-workspace-visible="true"] input[aria-label="Address and search bar"]');
     setReactValue(input, 'data:text/html,<title>Personal page</title><p>Retained personal work</p>');
     input.dispatchEvent(new KeyboardEvent('keydown', { key:'Enter', bubbles:true, cancelable:true }));
   })()`);
-  await handle.waitFor("!!document.querySelector('webview')");
+  await handle.waitFor(
+    "!!document.querySelector('[data-workspace-visible=\"true\"] webview')",
+  );
   await handle.eval(
-    "window.__personalPage = document.querySelector('webview'); true",
+    "window.__personalPage = document.querySelector('[data-workspace-visible=\"true\"] webview'); true",
   );
 
   const otherProfile = await handle.eval<{ id: string }>(
@@ -84,17 +88,18 @@ it("reopens the hidden workspace when an empty window selects its profile", asyn
   await handle.eval(`window.dispatchEvent(new KeyboardEvent('keydown', {
     key:'p', metaKey:/Mac/.test(navigator.platform), ctrlKey:!/Mac/.test(navigator.platform), bubbles:true
   }))`);
-  await handle.waitFor(
-    "!!document.querySelector('textarea[aria-label=\"Search commands, pages, and more\"]')",
-  );
+  await handle.waitFor(`(() => {
+    const input = document.querySelector('[data-workspace-visible="true"] [data-palette="overlay"] textarea[aria-label="Search commands, pages, and more"]');
+    return !!input && document.activeElement === input && !input.closest('[inert]');
+  })()`);
   await handle.eval(`(() => { ${setReactValueJs};
-    setReactValue(document.querySelector('textarea[aria-label="Search commands, pages, and more"]'), '>close current work window');
+    setReactValue(document.activeElement, '>close current work window');
   })()`);
   await handle.waitFor(
-    "Array.from(document.querySelectorAll('[role=\"option\"]')).some(row => row.textContent.includes('Close current Work window'))",
+    "Array.from(document.activeElement.closest('[role=\"dialog\"]').querySelectorAll('[role=\"option\"]')).some(row => row.textContent.includes('Close current Work window'))",
   );
   await handle.eval(
-    "Array.from(document.querySelectorAll('[role=\"option\"]')).find(row => row.textContent.includes('Close current Work window')).dispatchEvent(new MouseEvent('mousedown', { bubbles:true, cancelable:true }))",
+    "Array.from(document.activeElement.closest('[role=\"dialog\"]').querySelectorAll('[role=\"option\"]')).find(row => row.textContent.includes('Close current Work window')).dispatchEvent(new MouseEvent('mousedown', { bubbles:true, cancelable:true }))",
   );
   await handle.waitFor(
     "window.catamorphicDesktop.devWindow('get').then(state => !state.visible)",
@@ -127,7 +132,7 @@ it("reopens the hidden workspace when an empty window selects its profile", asyn
   expect(await handle.eval(active(project.id))).toBe(true);
   expect(
     await handle.eval(
-      "window.__personalPage.isConnected && window.__personalPage === document.querySelector('webview')",
+      "window.__personalPage.isConnected && window.__personalPage === document.querySelector('[data-workspace-visible=\"true\"] webview')",
     ),
   ).toBe(true);
   expect(
@@ -158,6 +163,10 @@ it("reopens the hidden workspace when an empty window selects its profile", asyn
   );
   if (!duplicate) throw new Error("The empty source window was not retained");
   duplicate.profileId = profileId;
+  // The old duplicate has no project claim. The source profile now starts
+  // in its own Default Project, which must not carry into this fixture.
+  duplicate.projectIds = [];
+  delete duplicate.activeProjectId;
   await fs.writeFile(
     path.join(handle.userDataDir, "window-state.json"),
     JSON.stringify(saved),
@@ -165,6 +174,7 @@ it("reopens the hidden workspace when an empty window selects its profile", asyn
   app = await launchApp({
     userDataDir: handle.userDataDir,
     activateWindow: false,
+    allowUtilityWorkspace: true,
   });
   const empty = await app.connectToFrame(`window=${sourceState.id}`);
   frames.push(empty);

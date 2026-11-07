@@ -194,7 +194,8 @@ describe("drag tabs and chats into bookmarks", () => {
   });
   it("nests a tab dropped on a chat's tab in the top strip, and takes it out at the strip's end", async () => {
     await app.eval("window.catamorphicDesktop.setPrefs({tabPlacement:'top'})");
-    const strip = '[data-tab-orientation="horizontal"]';
+    const strip =
+      '[data-workspace-visible="true"] [data-tab-orientation="horizontal"]';
     const page = `${strip} [data-point-key^="browser:"]`;
     const chat = `${strip} [data-point-key^="chat:"]`;
     await app.waitFor(

@@ -175,25 +175,27 @@ const navigate = async (path: string, title: string) => {
   await pageReady(title);
 };
 
-async function clickAt(point: { x: number; y: number }) {
-  await app.cdp("Input.dispatchMouseEvent", { type: "mouseMoved", ...point });
-  for (const type of ["mousePressed", "mouseReleased"])
-    await app.cdp("Input.dispatchMouseEvent", {
-      type,
-      ...point,
-      button: "left",
-      clickCount: 1,
-    });
-}
-/** A real click on an element of the app. */
-async function clickInApp(selector: string) {
-  await app.waitFor(`!!document.querySelector(${JSON.stringify(selector)})`, {
-    label: selector,
-  });
-  const point = await app.eval<{ x: number; y: number }>(
-    `(() => { const r = document.querySelector(${JSON.stringify(selector)}).getBoundingClientRect(); return { x: r.x + r.width / 2, y: r.y + r.height / 2 }; })()`,
+/** A settled, enabled app control with its center reachable by the pointer. */
+async function pointInApp(selector: string) {
+  return app.waitFor<{ x: number; y: number }>(
+    `(() => {
+      const element = document.querySelector(${JSON.stringify(selector)});
+      if (!element || element.matches(':disabled') || element.closest('[inert], [aria-disabled="true"]') ||
+        !element.checkVisibility({ opacityProperty: true, visibilityProperty: true })) return false;
+      const card = element.closest('[role="dialog"], [role="listbox"]') ?? element;
+      if (card.getAnimations({ subtree: true }).some(animation =>
+        animation.effect?.getTiming().iterations !== Infinity &&
+        (animation.pending || animation.playState === 'running' || animation.playState === 'paused'))) return false;
+      const rect = element.getBoundingClientRect();
+      const point = { x: rect.x + rect.width / 2, y: rect.y + rect.height / 2 };
+      return rect.width > 0 && rect.height > 0 && element.contains(document.elementFromPoint(point.x, point.y)) && point;
+    })()`,
+    { label: `${selector} settled and reachable` },
   );
-  await clickAt(point);
+}
+/** One native click after the app control has finished moving. */
+async function clickInApp(selector: string) {
+  await app.clickPointer(await pointInApp(selector));
 }
 /** Give a page field keyboard focus (a new-password field offers here). */
 async function focusInPage(selector: string) {
@@ -313,7 +315,12 @@ describe("browser passwords", () => {
       ),
     ).toBe("alice@example.com");
     await clickInApp('[data-testid="password-prompt-save"]');
-    await app.waitFor(`!${prompt}`, { label: "card closed" });
+    await app.waitFor(
+      `window.catamorphicDesktop.vaultList({ profileId: ${JSON.stringify(await profileId())} })
+        .then(list => list.some(item => item.username === 'alice@example.com' && item.origin === ${JSON.stringify(origin)}))`,
+      { label: "Alice login persisted after Save" },
+    );
+    await app.waitFor(`!${prompt}`, { label: "saved card exit completed" });
     expect((await saved()).map(({ username }) => username)).toEqual([
       "alice@example.com",
     ]);
@@ -368,8 +375,10 @@ describe("browser passwords", () => {
       `document.querySelector('[data-testid="password-suggestions"]')?.dataset.open === 'true'`,
       "suggestions open",
     );
+    const point = await pointInApp('[data-testid="password-suggestion"]');
     await inGuest("document.activeElement.blur(); true");
-    await clickInApp('[data-testid="password-suggestion"]');
+    // No readiness wait after blur: the press must land within its grace period.
+    await app.clickPointer(point);
     await app.waitFor(
       `${guest}.executeJavaScript("document.querySelector('#pw').value === 'correct horse' && document.querySelector('#email').value === 'alice@example.com'")`,
       { label: "filled after an early blur" },

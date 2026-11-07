@@ -4,6 +4,8 @@ import {
   createProjectWorkspace,
   launchApp,
   setReactValueJs,
+  waitForProjectWorkspace,
+  workspaceDomHelpersJs,
 } from "./harness.js";
 
 /**
@@ -14,6 +16,10 @@ import {
 
 let app: AppHandle;
 let root = "";
+const run = <T = unknown>(body: string) =>
+  app.eval<T>(`(() => { ${workspaceDomHelpersJs} ${body} })()`);
+const wait = (body: string) =>
+  app.waitFor(`(() => { ${workspaceDomHelpersJs} ${body} })()`);
 const MENU = [
   "Open here",
   "Open in new tab",
@@ -28,9 +34,15 @@ beforeAll(async () => {
   app = await launchApp();
   await app.waitFor("!!document.querySelector('[data-sidebar=left]')");
   root = `${app.userDataDir}/file-menu`;
-  await createProjectWorkspace({ app, name: "File menu", rootPath: root });
+  const project = await createProjectWorkspace({
+    app,
+    name: "File menu",
+    rootPath: root,
+  });
   await app.reload();
-  await app.waitFor("!!document.querySelector('[data-workspace-ready]')");
+  expect(await waitForProjectWorkspace({ app, name: "File menu" })).toBe(
+    project.id,
+  );
   const status = await app.eval<number>(`(async () => {
     const { url } = await window.catamorphicDesktop.getServerState();
     const projects = await fetch(url + '/api/projects').then((r) => r.json());
@@ -143,20 +155,23 @@ async function copied(label: string): Promise<string> {
 }
 
 it("lists a file tab's actions after its ways to open, from anywhere on the tab", async () => {
-  await app.eval(
-    `document.querySelector('[data-header-action="command:search-files"]').click(); true`,
+  await run(
+    `$('[data-header-action="command:search-files"]').click(); return true;`,
+  );
+  await wait(`return !!$('textarea[placeholder="Search filenames…"]');`);
+  await run(
+    `${setReactValueJs}; setReactValue($('textarea[placeholder="Search filenames…"]'), 'plan'); return true;`,
   );
   await app.waitFor(
-    `!!document.querySelector('textarea[placeholder="Search filenames…"]')`,
-  );
-  await app.eval(
-    `(() => { ${setReactValueJs}; setReactValue(document.querySelector('textarea[placeholder="Search filenames…"]'), 'plan'); return true; })()`,
-  );
-  await app.waitFor(
-    `(() => { const row = [...document.querySelectorAll('[role="option"]')].find((el) => el.textContent.includes('plan.md')); if (!row) return false; row.dispatchEvent(new MouseEvent('mousedown',{button:0,bubbles:true,cancelable:true})); return true; })()`,
+    `(() => { ${workspaceDomHelpersJs}
+      const input = $('textarea[placeholder="Search filenames…"]');
+      const row = [...(input?.closest('[role="dialog"]').querySelectorAll('[role="option"]') ?? [])].find(el => el.textContent.includes('plan.md'));
+      if (!row) return false;
+      row.dispatchEvent(new MouseEvent('mousedown',{button:0,bubbles:true,cancelable:true})); return true;
+    })()`,
     { timeoutMs: 30_000, label: "plan.md in the Files palette" },
   );
-  const tab = '[data-point-key^="editor:"]';
+  const tab = '[data-workspace-visible="true"] [data-point-key^="editor:"]';
   await app.waitFor(`!!document.querySelector('${tab}')`, {
     timeoutMs: 30_000,
   });
@@ -254,7 +269,7 @@ it("copies the address of a URL in chat and an ordinary link elsewhere", async (
     anchor.id = 'ordinary-url'; anchor.href = ${JSON.stringify(url)};
     anchor.textContent = 'Read the guide';
     anchor.style.cssText = 'position:fixed;left:300px;top:60px;z-index:100';
-    document.querySelector('[data-workspace-ready]').append(anchor);
+    document.querySelector('[data-workspace-visible="true"] [data-workspace-ready]').append(anchor);
   })()`);
   expect(await rightClick("#ordinary-url", 0.5, true, ["Copy link"])).toEqual([
     "Copy link",
@@ -265,16 +280,16 @@ it("copies the address of a URL in chat and an ordinary link elsewhere", async (
   await app.eval(`window.dispatchEvent(new KeyboardEvent('keydown', {
     key:'p',metaKey:/Mac/.test(navigator.platform),ctrlKey:!/Mac/.test(navigator.platform),bubbles:true,
   }))`);
-  const palette = '[data-palette="overlay"] textarea';
+  const palette =
+    '[data-workspace-visible="true"] [data-palette="overlay"] textarea';
   await app.waitFor(
     `document.activeElement === document.querySelector('${palette}')`,
   );
   await app.eval(
     `(() => { ${setReactValueJs}; setReactValue(document.querySelector('${palette}'),${JSON.stringify(url)}); })()`,
   );
-  await app.waitFor(`!!document.querySelector('[data-item-id="web"]')`);
-  expect(await rightClick('[data-item-id="web"]', 0.5, true, actions)).toEqual(
-    actions,
-  );
+  const webRow = '[data-workspace-visible="true"] [data-item-id="web"]';
+  await app.waitFor(`!!document.querySelector('${webRow}')`);
+  expect(await rightClick(webRow, 0.5, true, actions)).toEqual(actions);
   expect(await copied("Copy link")).toBe(url);
 });

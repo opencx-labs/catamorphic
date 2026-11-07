@@ -4,6 +4,7 @@ import {
   launchApp,
   openProjectSwitcher,
   setReactValueJs,
+  waitForProjectWorkspace,
   workspaceDomHelpersJs,
 } from "./harness.js";
 import { addSidebarSections, CHATS_SECTION } from "./sidebar-config.js";
@@ -87,6 +88,7 @@ describe("session runtime controls", () => {
     await wait(
       `const button = $('[data-testid="project-submit"]'); if (!button || button.disabled) return false; button.click(); return true;`,
     );
+    await waitForProjectWorkspace({ app, name: "runtime-controls" });
     await wait(
       `return $$('[role="tab"], button').some(el => el.textContent.includes('New Tab'));`,
     );
@@ -542,7 +544,7 @@ it("keeps the person's fold of the strip through a chat tab, beside an open chat
     );
   // A page to return to, and a chat in a tab of its own.
   await run(
-    `[...document.querySelectorAll('button')].find((button) => button.textContent.trim() === 'Settings')?.click();`,
+    `$$('button').find((button) => button.textContent.trim() === 'Settings')?.click();`,
   );
   await wait(
     `return !!$('[data-tab-orientation] [data-point-key^="settings:"]');`,

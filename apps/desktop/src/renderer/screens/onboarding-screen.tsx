@@ -493,7 +493,13 @@ function DockPreview({ active }: { active: boolean }) {
           ].map((keyframe) => ({ ...keyframe, easing })),
           options,
         );
-        pulse.startTime = animation.startTime;
+        // Newly created animations have a pending, null start time. Use the
+        // document's resolved clock so synchronizing the pulse cannot pause it.
+        const startTime = document.timeline.currentTime;
+        if (typeof startTime === "number") {
+          animation.startTime = startTime;
+          pulse.startTime = startTime;
+        }
         clickAnimation.current = pulse;
         if (
           !active ||

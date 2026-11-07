@@ -7,6 +7,7 @@ import {
   launchApp,
   openProjectSwitcher,
   setReactValueJs,
+  waitForProjectWorkspace,
   workspaceDomHelpersJs,
 } from "./harness.js";
 
@@ -129,6 +130,7 @@ describe("picking a chat's agent", () => {
     await wait(
       `const button = $('[data-testid="project-submit"]'); if (!button || button.disabled) return false; button.click(); return true;`,
     );
+    await waitForProjectWorkspace({ app, name: "agent-switch" });
     await wait(
       `return $$('[role="tab"], button').some(el => el.textContent.includes('New Tab'));`,
     );

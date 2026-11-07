@@ -252,7 +252,7 @@ it("returns a large retained chat from a browser tab without a history load or e
     setReactValue(window.__retained.input,'Draft survives the tab switch');
   })()`);
   await app.eval(
-    `document.querySelector('button[aria-label="New tab"]').click()`,
+    `document.querySelector('[data-workspace-visible="true"] button[aria-label="New tab"]').click()`,
   );
   await app.waitFor(
     `document.activeElement?.getAttribute("aria-label")==="Search commands, pages, and more"`,

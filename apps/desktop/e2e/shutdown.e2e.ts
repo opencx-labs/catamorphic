@@ -28,6 +28,30 @@ describe("terminal shutdown", () => {
         throw new Error("Missing fixture server address");
       const origin = `http://127.0.0.1:${address.port}`;
       app = await launchApp({ urls: [`${origin}/one`, `${origin}/two`] });
+      // Select each launch tab so this case really quits two loaded guests,
+      // including the one hidden behind the tab in front.
+      const browsers = await app.waitFor<{ localId: string; url: string }[]>(
+        `(async () => {
+        const projectId = document.querySelector('[data-workspace-visible="true"]').dataset.projectRuntime;
+        const saved = await window.catamorphicDesktop.workspaceStateGet(projectId);
+        return saved?.browsers.length === 2 && saved.browsers;
+      })()`,
+        { label: "both shutdown fixture tabs retained" },
+      );
+      for (const url of [`${origin}/one`, `${origin}/two`]) {
+        const browser = browsers.find((entry) => entry.url === url);
+        if (!browser) throw new Error(`Missing shutdown fixture tab: ${url}`);
+        await app.eval(
+          `document.querySelector('[data-workspace-visible="true"] [data-point-key="browser:${browser.localId}"] .workspace-tab-label').click()`,
+        );
+        await app.waitFor(
+          `([...document.querySelectorAll('[data-workspace-visible="true"] webview')]).some(page => {
+          try { return page.checkVisibility({opacityProperty:true,visibilityProperty:true}) && page.getURL() === ${JSON.stringify(url)} && page.getTitle() === 'Quit fixture' && !page.isLoading(); }
+          catch { return false; }
+        })`,
+          { label: `${url} loaded before Quit` },
+        );
+      }
       await app.waitFor(
         `(() => {
         const pages = [...document.querySelectorAll('webview')];

@@ -283,24 +283,25 @@ it("releases hidden sources and virtualizes a large file-backed list", async () 
   expect(app.getRendererErrors()).toEqual([]);
 });
 it("sorts Work's tabs in a module, follows them live and closes through them", async () => {
-  const sorted = '[data-sidebar-source="sorted-tabs"]';
+  const sorted =
+    '[data-workspace-visible=true] [data-sidebar-source="sorted-tabs"]';
   const labels = () =>
     app.eval<string[]>(
       `[...document.querySelectorAll('${sorted} [data-sidebar-item-id]')].map(row => row.querySelector('[data-tree-primary]').textContent.trim())`,
     );
   const strip = () =>
     app.eval<string[]>(
-      `[...document.querySelectorAll('[data-tab-orientation] [data-point-key]')].map(tab => tab.dataset.pointKey)`,
+      `[...document.querySelectorAll('[data-workspace-visible=true] [data-tab-orientation] [data-point-key]')].map(tab => tab.dataset.pointKey)`,
     );
   await app.eval(
-    `document.querySelector('aside footer button[aria-label=Settings]').click()`,
+    `document.querySelector('[data-workspace-visible=true] aside footer button[aria-label=Settings]').click()`,
   );
   await app.eval(
     `window.dispatchEvent(new KeyboardEvent('keydown',{key:'t',metaKey:/Mac/.test(navigator.platform),ctrlKey:!/Mac/.test(navigator.platform),bubbles:true}))`,
   );
   // The strip has Settings, then the New Tab; the module lists them by name.
   await app.waitFor(
-    `document.querySelectorAll('${sorted} [data-sidebar-item-id]').length === document.querySelectorAll('[data-tab-orientation] [data-point-key]').length && document.querySelectorAll('${sorted} [data-sidebar-item-id]').length >= 2`,
+    `document.querySelectorAll('${sorted} [data-sidebar-item-id]').length === document.querySelectorAll('[data-workspace-visible=true] [data-tab-orientation] [data-point-key]').length && document.querySelectorAll('${sorted} [data-sidebar-item-id]').length >= 2`,
     { label: "every tab listed" },
   );
   const listed = await labels();
@@ -315,7 +316,7 @@ it("sorts Work's tabs in a module, follows them live and closes through them", a
     `document.querySelector('${sorted} [data-point-key="${settings}"] button[aria-label^="Close"]').click()`,
   );
   await app.waitFor(
-    `!document.querySelector('[data-tab-orientation] [data-point-key="${settings}"]') && !document.querySelector('${sorted} [data-point-key="${settings}"]')`,
+    `!document.querySelector('[data-workspace-visible=true] [data-tab-orientation] [data-point-key="${settings}"]') && !document.querySelector('${sorted} [data-point-key="${settings}"]')`,
     { label: "the tab closed through the module, and gone from its list" },
   );
   expect(app.getRendererErrors()).toEqual([]);
