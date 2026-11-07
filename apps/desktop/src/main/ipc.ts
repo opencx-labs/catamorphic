@@ -28,6 +28,7 @@ import {
   clipboard,
   dialog,
   nativeImage,
+  screen,
   shell,
   type WebContents,
 } from "electron";
@@ -1755,6 +1756,7 @@ export function registerIpcHandlers(
           | "minimize"
           | "restore"
           | "setSize"
+          | "fitSize"
           | "zoom"
           | "focus"
           | "quit"
@@ -1783,10 +1785,29 @@ export function registerIpcHandlers(
           // Films on a 1x display: a 1680x1050 window zoomed by 1.3125 lays
           // out at 1280x800 and renders, and screencasts, at 1680x1050.
           event.sender.setZoomFactor(width ?? 1);
-        } else if (action === "setSize") {
+        } else if (action === "setSize" || action === "fitSize") {
           if (width && height) {
             if (window.isMaximized()) window.unmaximize();
-            window.setBounds({ x: 0, y: 30, width, height });
+            if (action === "setSize") {
+              window.setBounds({ x: 0, y: 30, width, height });
+            } else {
+              // Native pointer fixtures must fit the real display, including
+              // the smaller macOS CI desktop and its menu bar/dock work area.
+              const area = screen.getDisplayMatching(
+                window.getBounds(),
+              ).workArea;
+              const fittedWidth = Math.min(width, area.width);
+              const fittedHeight = Math.min(height, area.height);
+              window.setBounds({
+                x: area.x,
+                y: Math.min(
+                  Math.max(area.y, 30),
+                  area.y + area.height - fittedHeight,
+                ),
+                width: fittedWidth,
+                height: fittedHeight,
+              });
+            }
           }
         } else {
           window[action]();

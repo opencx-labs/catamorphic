@@ -281,7 +281,7 @@ export async function launchApp(opts: LaunchOpts = {}): Promise<AppHandle> {
         "window.catamorphicDesktop.setPrefs({sidebarOpen:true,dockCollapsed:false})",
       );
       await client.eval(
-        "window.catamorphicDesktop.devWindow('setSize',1200,800)",
+        "window.catamorphicDesktop.devWindow('fitSize',1200,800)",
       );
       await client.waitFor(
         `!!document.querySelector('[aria-label="Collapse sidebar"]')`,

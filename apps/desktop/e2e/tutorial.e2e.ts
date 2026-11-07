@@ -170,31 +170,66 @@ describe("the Work tutorial", () => {
     await settled();
     for (const expanded of [true, false]) {
       const frames = await app.eval<
-        { height: number; top: number; bottom: number; viewport: number }[]
+        {
+          height: number;
+          disclosure: number;
+          top: number;
+          bottom: number;
+          viewport: number;
+        }[]
       >(`new Promise(resolve => {
         const panel = document.querySelector('[aria-labelledby="theme-picker-title"]');
         const toggle = panel.querySelector('.theme-editor button[aria-expanded]');
-        const frames = [];
+        const disclosure = document.getElementById(toggle.getAttribute('aria-controls')).querySelector('[data-collapsible]');
+        const read = () => {
+          const rect = panel.getBoundingClientRect();
+          return {height:rect.height,disclosure:disclosure.getBoundingClientRect().height,top:rect.top,bottom:rect.bottom,viewport:innerHeight};
+        };
+        const frames = [read()];
         const start = performance.now();
         const sample = now => {
-          const rect = panel.getBoundingClientRect();
-          frames.push({height:rect.height,top:rect.top,bottom:rect.bottom,viewport:innerHeight});
+          frames.push(read());
           if (now - start < 650) requestAnimationFrame(sample); else resolve(frames);
         };
         toggle.click();
         requestAnimationFrame(sample);
       })`);
       expect(
-        new Set(frames.map((frame) => Math.round(frame.height))).size,
+        new Set(frames.map((frame) => Math.round(frame.disclosure))).size,
       ).toBeGreaterThan(3);
       const first = frames[0];
       const last = frames.at(-1);
       expect(first).toBeDefined();
       expect(last).toBeDefined();
-      if (first && last)
+      if (first && last) {
         expect(
-          expanded ? last.height - first.height : first.height - last.height,
+          expanded
+            ? last.disclosure - first.disclosure
+            : first.disclosure - last.disclosure,
         ).toBeGreaterThan(80);
+        const change = expanded
+          ? last.height - first.height
+          : first.height - last.height;
+        if (change > 1) {
+          expect(
+            new Set(frames.map((frame) => Math.round(frame.height * 10))).size,
+          ).toBeGreaterThan(3);
+          expect(
+            frames.some(
+              (frame) =>
+                frame.height > Math.min(first.height, last.height) + 0.1 &&
+                frame.height < Math.max(first.height, last.height) - 0.1,
+            ),
+          ).toBe(true);
+        } else {
+          // A small desktop can cap the dialog in both states. Its
+          // disclosure still animates while the whole dialog stays bounded.
+          expect(Math.abs(first.height - (first.viewport - 48))).toBeLessThan(
+            2,
+          );
+          expect(Math.abs(last.height - (last.viewport - 48))).toBeLessThan(2);
+        }
+      }
       for (const frame of frames) {
         expect(frame.top).toBeGreaterThanOrEqual(23);
         expect(frame.bottom).toBeLessThanOrEqual(frame.viewport - 23);
@@ -317,14 +352,14 @@ describe("the Work tutorial", () => {
         `document.querySelector('${preview} aside').getAnimations().length`,
       ),
     ).toBe(0);
-    await app.eval(`window.catamorphicDesktop.devWindow('setSize',700,650)`);
+    await app.eval(`window.catamorphicDesktop.devWindow('fitSize',700,650)`);
     await settled();
     expect(
       await app.eval(
         `document.querySelector('.onboarding-page:not([inert])').scrollWidth <= document.querySelector('.onboarding-page:not([inert])').clientWidth`,
       ),
     ).toBe(true);
-    await app.eval(`window.catamorphicDesktop.devWindow('setSize',1200,800)`);
+    await app.eval(`window.catamorphicDesktop.devWindow('fitSize',1200,800)`);
     await app.cdp("Emulation.setEmulatedMedia", { features: [] });
     expect(app.getRendererErrors()).toEqual([]);
   });
@@ -367,14 +402,14 @@ describe("the Work tutorial", () => {
         `parseFloat(getComputedStyle(document.querySelector('.onboarding-track')).transitionDuration) <= 0.001`,
       ),
     ).toBe(true);
-    await app.eval(`window.catamorphicDesktop.devWindow('setSize',700,650)`);
+    await app.eval(`window.catamorphicDesktop.devWindow('fitSize',700,650)`);
     await settled();
     expect(
       await app.eval(
         `document.querySelector('.onboarding-page:not([inert])').scrollWidth <= document.querySelector('.onboarding-page:not([inert])').clientWidth`,
       ),
     ).toBe(true);
-    await app.eval(`window.catamorphicDesktop.devWindow('setSize',1200,800)`);
+    await app.eval(`window.catamorphicDesktop.devWindow('fitSize',1200,800)`);
     await app.cdp("Emulation.setEmulatedMedia", { features: [] });
   });
 
@@ -430,7 +465,7 @@ describe("the Work tutorial", () => {
     // stale compositor keyframes and conceal a pointer rendered at the origin.
     for (const width of [1800, 900, 1200]) {
       await app.eval(
-        `window.catamorphicDesktop.devWindow('setSize',${width},800)`,
+        `window.catamorphicDesktop.devWindow('fitSize',${width},800)`,
       );
       for (const target of [
         { selector: '[aria-label="New chat"]', start: 2700, end: 3600 },
@@ -666,13 +701,14 @@ describe("the Work tutorial", () => {
         .flatMap(element => element?.getAnimations() ?? []);
       return root === window.__retainedTutorialDemo && root.closest('[data-workspace-visible="false"]') &&
         root.dataset.animated === 'false' && animations.length === 2 &&
-        animations.every(animation => animation.playState === 'paused');
+        animations.every(animation => animation.playState === 'paused' && !animation.pending);
     })()`);
     expect(
       await app.eval<boolean>(`(async () => {
       const root = window.__retainedTutorialDemo;
       const animations = [root.querySelector('.onboarding-demo-cursor'), root.querySelector('.onboarding-demo-click')]
         .flatMap(element => element.getAnimations());
+      await Promise.all(animations.map(animation => animation.ready));
       const times = animations.map(animation => animation.currentTime);
       await new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(() => requestAnimationFrame(resolve))));
       const after = [root.querySelector('.onboarding-demo-cursor'), root.querySelector('.onboarding-demo-click')]

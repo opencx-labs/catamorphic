@@ -148,7 +148,7 @@ beforeAll(async () => {
   );
   // Close the startup New Tab so every search uses the overlay.
   await shortcut("w");
-  await app.eval(`window.catamorphicDesktop.devWindow('setSize',1300,900)`);
+  await app.eval(`window.catamorphicDesktop.devWindow('fitSize',1300,900)`);
 });
 afterAll(async () => {
   await app?.stop();
@@ -466,11 +466,16 @@ it("leaves the list where it is when the pointer highlights a clipped row", asyn
   // The last row the list cuts off at its bottom edge, once its motion settled.
   const target = await wait<{ x: number; y: number; id: string }>(`
     const box = ${list}.getBoundingClientRect();
-    if (${list}.getAnimations({ subtree: true }).some((a) => a.playState === 'running')) return false;
+    if (input().closest('[role="dialog"]').getAnimations({ subtree: true }).some((a) =>
+      a.effect?.getTiming().iterations !== Infinity && (a.pending || a.playState === 'running' || a.playState === 'paused'))) return false;
     const row = rows().find((row) => { const r = row.getBoundingClientRect(); return r.top < box.bottom && r.bottom > box.bottom; });
     if (!row || ${list}.scrollTop !== 0) return false;
     const r = row.getBoundingClientRect();
-    return { x: r.left + r.width / 2, y: box.bottom - 6, id: row.dataset.itemId };
+    const left = Math.max(r.left, box.left), right = Math.min(r.right, box.right);
+    const top = Math.max(r.top, box.top), bottom = Math.min(r.bottom, box.bottom);
+    if (right <= left || bottom <= top) return false;
+    const point = { x: (left + right) / 2, y: (top + bottom) / 2 };
+    return row.contains(document.elementFromPoint(point.x, point.y)) && { ...point, id: row.dataset.itemId };
   `);
   await app.movePointerThrough([{ x: target.x, y: target.y - 40 }, target]);
   await wait(
@@ -779,10 +784,10 @@ it("shows the new chat's harness, model name and effort in chat mode", async () 
     "Ask agentReview helper · Fake Model A · high",
   );
   await shot("palette-chat-harness-model-effort.png");
-  await app.eval(`window.catamorphicDesktop.devWindow('setSize',700,600)`);
+  await app.eval(`window.catamorphicDesktop.devWindow('fitSize',700,600)`);
   await shot("palette-chat-harness-model-effort-narrow.png");
   await close();
-  await app.eval(`window.catamorphicDesktop.devWindow('setSize',1300,900)`);
+  await app.eval(`window.catamorphicDesktop.devWindow('fitSize',1300,900)`);
   await app.eval(
     `window.catamorphicDesktop.agentsSetDefault(${JSON.stringify(defaultId)})`,
   );

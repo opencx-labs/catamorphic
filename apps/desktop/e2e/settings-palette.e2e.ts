@@ -6,6 +6,7 @@ import {
   createProjectWorkspace,
   launchApp,
   setReactValueJs,
+  waitForProjectWorkspace,
 } from "./harness.js";
 
 let app: AppHandle;
@@ -13,7 +14,7 @@ let projectId: string;
 let personalFile: string;
 const helpers = `
 ${setReactValueJs}
-const input=()=>[...document.querySelectorAll('[aria-label="Search commands, pages, and more"]')].find(el=>!el.closest('[inert]') && el.getBoundingClientRect().width>0);
+const input=()=>[...document.querySelectorAll('[data-workspace-visible="true"] [aria-label="Search commands, pages, and more"]')].find(el=>!el.closest('[inert]') && el.getBoundingClientRect().width>0);
 const key=(key, mods={})=>input().dispatchEvent(new KeyboardEvent('keydown',{key,bubbles:true,cancelable:true,...mods}));
 const rows=()=>[...input().closest('[role="dialog"]').querySelectorAll('[role="option"]')];
 `;
@@ -31,16 +32,16 @@ const type = (text: string) =>
   run(`setReactValue(input(),${JSON.stringify(text)})`);
 const destination = async (id: string) => {
   await app.waitFor(
-    `document.querySelector('[data-setting-id="${id}"]')?.dataset.settingsTarget==='true'`,
+    `document.querySelector('[data-workspace-visible="true"] [data-setting-id="${id}"]')?.dataset.settingsTarget==='true'`,
   );
   // The row is scrolled into view and kept there while the content above
   // it settles; the wait covers that beat instead of one frame.
   await app.waitFor(
-    `(()=>{const row=document.querySelector('[data-setting-id="${id}"]');const root=document.querySelector('[data-settings-scroll]');if(!row||!root)return false;const a=row.getBoundingClientRect(),b=root.getBoundingClientRect();return a.top>=b.top && a.top<b.bottom})()`,
+    `(()=>{const row=document.querySelector('[data-workspace-visible="true"] [data-setting-id="${id}"]');const root=document.querySelector('[data-workspace-visible="true"] [data-settings-scroll]');if(!row||!root)return false;const a=row.getBoundingClientRect(),b=root.getBoundingClientRect();return a.top>=b.top && a.top<b.bottom})()`,
     { label: `${id} row in view` },
   );
   const ring = await app.eval<{ width: number; offset: number }>(`(() => {
-    const row = document.querySelector('[data-setting-id="${id}"]');
+    const row = document.querySelector('[data-workspace-visible="true"] [data-setting-id="${id}"]');
     const style = getComputedStyle(row);
     return {width:parseFloat(style.outlineWidth),offset:parseFloat(style.outlineOffset)};
   })()`);
@@ -61,12 +62,14 @@ beforeAll(async () => {
   );
   personalFile = `${app.userDataDir}/profiles/${profileId}/settings-projects/${projectId}.json`;
   await app.reload();
-  await app.waitFor(`document.body?.innerText.includes('Settings palette')`);
+  expect(await waitForProjectWorkspace({ app, name: "Settings palette" })).toBe(
+    projectId,
+  );
   // Close the startup New Tab so all following searches use the overlay.
   await app.eval(
     `window.dispatchEvent(new KeyboardEvent('keydown',{key:'w',metaKey:/Mac/.test(navigator.platform),ctrlKey:!/Mac/.test(navigator.platform),bubbles:true}))`,
   );
-  await app.eval(`window.catamorphicDesktop.devWindow('setSize',1300,900)`);
+  await app.eval(`window.catamorphicDesktop.devWindow('fitSize',1300,900)`);
 });
 afterAll(async () => {
   await app?.stop();
@@ -79,7 +82,7 @@ it("finds a setting in ordinary search and opens its control", async () => {
   await destination("contentFrame");
   expect(
     await app.eval(
-      `(()=>{const row=document.querySelector('[data-setting-id="contentFrame"]');const a=row.getBoundingClientRect(), text=row.querySelector('label').getBoundingClientRect(), control=row.querySelector('input').getBoundingClientRect();return {left:text.left-a.left,right:a.right-control.right,top:text.top-a.top}})()`,
+      `(()=>{const row=document.querySelector('[data-workspace-visible="true"] [data-setting-id="contentFrame"]');const a=row.getBoundingClientRect(), text=row.querySelector('label').getBoundingClientRect(), control=row.querySelector('input').getBoundingClientRect();return {left:text.left-a.left,right:a.right-control.right,top:text.top-a.top}})()`,
     ),
   ).toMatchObject({ left: 8, right: 8 });
   expect(await app.eval(`document.activeElement?.getAttribute('name')`)).toBe(
@@ -108,11 +111,12 @@ it("settings Space scopes search and opens the shared theme picker for colors", 
   );
   expect(
     await app.eval(
-      `document.querySelectorAll('[data-point-key="settings:settings"]').length`,
+      `document.querySelectorAll('[data-workspace-visible="true"] [data-point-key="settings:settings"]').length`,
     ),
   ).toBe(1);
   await wait(
-    `return !input() && [...document.querySelectorAll('[role="dialog"]')].filter(dialog=>dialog.querySelector('[aria-label="Search commands, pages, and more"]')).every(dialog=>getComputedStyle(dialog.parentElement).opacity==='0')`,
+    `const overlay = document.querySelector('[data-workspace-visible="true"] [data-palette="overlay"]');
+     return !input() && !!overlay && getComputedStyle(overlay.parentElement).opacity === '0';`,
   );
   expect(
     await app.eval(
@@ -149,7 +153,7 @@ it("keeps the first shortcut highlight inside its clipped list and clears it wit
   await run(`key('Enter')`);
   await destination("shortcut.configure-agent");
   const before = await app.eval<string>(`(() => {
-    const row = document.querySelector('[data-setting-id="shortcut.configure-agent"]');
+    const row = document.querySelector('[data-workspace-visible="true"] [data-setting-id="shortcut.configure-agent"]');
     row.tabIndex = -1;
     row.focus({preventScroll:true});
     document.documentElement.dataset.focusModality = 'keyboard';
@@ -158,7 +162,8 @@ it("keeps the first shortcut highlight inside its clipped list and clears it wit
   // The destination remains fully inset even if the row itself receives focus.
   await destination("shortcut.configure-agent");
   await wait(
-    `return !input() && [...document.querySelectorAll('[role="dialog"]')].filter(dialog=>dialog.querySelector('[aria-label="Search commands, pages, and more"]')).every(dialog=>getComputedStyle(dialog.parentElement).opacity==='0')`,
+    `const overlay = document.querySelector('[data-workspace-visible="true"] [data-palette="overlay"]');
+     return !input() && !!overlay && getComputedStyle(overlay.parentElement).opacity === '0';`,
   );
   await app.screenshot(
     path.join(
@@ -173,7 +178,7 @@ it("keeps the first shortcut highlight inside its clipped list and clears it wit
   await destination("contentFrame");
   expect(
     await app.eval(`(() => {
-    const row = document.querySelector('[data-setting-id="shortcut.configure-agent"]');
+    const row = document.querySelector('[data-workspace-visible="true"] [data-setting-id="shortcut.configure-agent"]');
     return !row.hasAttribute('data-settings-target') && getComputedStyle(row).borderRadius === ${JSON.stringify(before)};
   })()`),
   ).toBe(true);
@@ -217,7 +222,7 @@ it("keeps valid file settings active through invalid edits and reports recovery 
   await run(`key('Enter')`);
   await destination("contentFrame");
   await app.waitFor(
-    `(()=>{const input=document.querySelector('[name="contentFrame"]');const rect=input.getBoundingClientRect();return document.elementFromPoint(rect.x+rect.width/2,rect.y+rect.height/2)===input})()`,
+    `(()=>{const input=document.querySelector('[data-workspace-visible="true"] [name="contentFrame"]');const rect=input.getBoundingClientRect();return document.elementFromPoint(rect.x+rect.width/2,rect.y+rect.height/2)===input})()`,
   );
   await app.waitFor(
     `!document.getAnimations().some(animation=>animation.playState==='running')`,
@@ -243,7 +248,7 @@ it("keeps valid file settings active through invalid edits and reports recovery 
     `window.catamorphicDesktop.setTheme({selection:'light',overrides:{}})`,
   );
   await app.waitFor(`document.documentElement.dataset.theme==='light'`);
-  await app.eval(`window.catamorphicDesktop.devWindow('setSize',900,760)`);
+  await app.eval(`window.catamorphicDesktop.devWindow('fitSize',900,760)`);
   await app.waitFor(`window.innerWidth===900`);
   await app.waitFor(
     `!document.getAnimations().some(animation=>animation.playState==='running')`,

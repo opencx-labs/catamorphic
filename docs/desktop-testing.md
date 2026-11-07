@@ -116,6 +116,11 @@ modifier flags and pairs its press and release as one click. Suites share the
 runner's pointer state, so park it away from hover targets after a native gesture
 when the next app must start without a hover card.
 
+The harness uses `devWindow('fitSize')` to fit native pointer fixtures inside
+the current display's work area. Fixtures must measure the resulting viewport;
+the native macOS runner can have a smaller display than the Linux runner.
+Geometry tests retain `devWindow('setSize')` when they require an exact size.
+
 Audio tests synchronize with captured samples. A held voice can show its intent
 before the microphone has delivered audio, so elapsed wall time after a phase
 change does not prove that the scripted speech has reached the worker.
