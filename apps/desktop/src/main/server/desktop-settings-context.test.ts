@@ -36,14 +36,24 @@ function fixture() {
     config.dispose();
     fs.rmSync(root, { recursive: true, force: true });
   });
-  return { root, config, one, two };
+  return {
+    root,
+    config,
+    one,
+    two,
+    authoringAssetsFile: path.resolve(
+      import.meta.dirname,
+      "../../../out/main/authoring-assets.json",
+    ),
+  };
 }
 it("identifies the owning profile and primary project paths, with live file errors", () => {
-  const { root, config, one, two } = fixture();
+  const { root, config, one, two, authoringAssetsFile } = fixture();
   const project = { id: "project-one", rootPath: `${root}/primary-project` };
   config.forProfile(two.id); // A different foreground profile must not affect the contract.
   const input = {
     config,
+    authoringAssetsFile,
     profileId: one.id,
     project,
     access: "native" as const,
@@ -80,9 +90,10 @@ it("identifies the owning profile and primary project paths, with live file erro
   );
 });
 it("distinguishes restricted native access from an unavailable host filesystem", () => {
-  const { config, one } = fixture();
+  const { config, one, authoringAssetsFile } = fixture();
   const input = {
     config,
+    authoringAssetsFile,
     profileId: one.id,
     project: { id: "project", rootPath: null },
   };
@@ -98,7 +109,7 @@ it("distinguishes restricted native access from an unavailable host filesystem",
 });
 
 it("points shared parts at the other profile's files and names it", () => {
-  const { root, config, one, two } = fixture();
+  const { root, config, one, two, authoringAssetsFile } = fixture();
   const project = { id: "project-two", rootPath: `${root}/primary-project` };
   config.syncSettings({
     profileId: two.id,
@@ -108,6 +119,7 @@ it("points shared parts at the other profile's files and names it", () => {
   });
   const context = desktopSettingsContext({
     config,
+    authoringAssetsFile,
     profileId: two.id,
     project,
     access: "native",

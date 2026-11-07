@@ -56,6 +56,10 @@ function registryWith(configs: Partial<AgentConfig>[]) {
     },
     agentHomesDir: homes,
     harnessComponentsDir: "/unused",
+    authoringAssetsFile: path.resolve(
+      import.meta.dirname,
+      "../../../out/main/authoring-assets.json",
+    ),
   } as unknown as DesktopAgentRegistryDeps;
   const registry = new DesktopAgentRegistry(deps);
   // The CLI components are downloaded on demand; the probe only needs a path.

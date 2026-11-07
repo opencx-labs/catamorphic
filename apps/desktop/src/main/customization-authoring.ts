@@ -21,10 +21,10 @@ const assetsSchema = z.object({
 /** Materialize immutable host build assets; no user code or dependency install runs here. */
 export function customizationAuthoring({
   cacheDirectory,
-  assetsFile = path.join(import.meta.dirname, "authoring-assets.json"),
+  assetsFile,
 }: {
   cacheDirectory: string;
-  assetsFile?: string;
+  assetsFile: string;
 }) {
   const raw = fs.readFileSync(assetsFile, "utf8");
   const assets = assetsSchema.parse(JSON.parse(raw));

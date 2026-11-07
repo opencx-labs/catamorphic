@@ -4,7 +4,7 @@ import type {
   ScopedClient,
 } from "@catamorphic/server-sdk";
 import { aiToolKind } from "@catamorphic/server-sdk";
-import { DESKTOP_TENANT_ID, DESKTOP_USER_ID } from "./boot.js";
+import { DESKTOP_TENANT_ID, DESKTOP_USER_ID } from "./identity.js";
 import { terminalIdle } from "./trigger-kinds.js";
 
 export { DESKTOP_TRIGGER_KINDS, terminalIdle } from "./trigger-kinds.js";

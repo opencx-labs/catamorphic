@@ -10,11 +10,13 @@ import {
 /** Host metadata, refreshed per turn; it grants no filesystem permissions. */
 export function desktopSettingsContext({
   config,
+  authoringAssetsFile,
   profileId,
   project,
   access,
 }: {
   config: ProfileConfigManager;
+  authoringAssetsFile: string;
   profileId: string;
   project: { id: string; rootPath: string | null };
   access: "native" | "read-only" | "unavailable";
@@ -32,6 +34,7 @@ export function desktopSettingsContext({
   const authoring = () => {
     try {
       return customizationAuthoring({
+        assetsFile: authoringAssetsFile,
         cacheDirectory: path.resolve(
           config.profileDir(profileId),
           "../../authoring",

@@ -592,14 +592,26 @@ describe("floating surfaces", () => {
     );
     // The fixture writes outside the app; reload to refresh its file inventory.
     await app.reload();
+    await waitForProjectWorkspace({ app, name: "Floating workspace" });
+    // The widget wrapper can precede its header. Wait for the actual control
+    // in the restored workspace so opening Files cannot silently do nothing.
+    const filesHeader =
+      "document.querySelector('[data-workspace-visible=true] [data-sidebar-section=files] button[aria-expanded]')";
     await app.waitFor(
-      "!!document.querySelector('[data-sidebar-widget=files]')",
+      `!!${filesHeader} && !${filesHeader}.closest('[inert]') && ${filesHeader}.checkVisibility()`,
+      { label: "restored Files header ready" },
     );
     await run(
-      "const section=$('[data-sidebar-widget=files]');const toggle=section.querySelector('button[aria-expanded=false]');toggle?.click()",
+      "const toggle=$('[data-sidebar-section=files] button[aria-expanded]');if(toggle.getAttribute('aria-expanded')==='false')toggle.click()",
     );
     await app.waitFor(
-      "!!document.querySelector('[data-sidebar-section=files] [data-sidebar-item-id=\"placement-one.ts\"] [data-tree-primary]')",
+      `${filesHeader}?.getAttribute('aria-expanded') === 'true'`,
+      {
+        label: "Files section expanded",
+      },
+    );
+    await app.waitFor(
+      "!!document.querySelector('[data-workspace-visible=true] [data-sidebar-section=files] [data-sidebar-item-id=\"placement-one.ts\"] [data-tree-primary]')",
     );
     await run(
       "$('[data-sidebar-section=files] [data-sidebar-item-id=\"placement-one.ts\"] [data-tree-primary]').dispatchEvent(new MouseEvent('click',{bubbles:true,altKey:true}))",

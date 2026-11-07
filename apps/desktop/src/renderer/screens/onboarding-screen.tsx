@@ -18,6 +18,7 @@ import {
   Star,
 } from "lucide-react";
 import {
+  memo,
   type ReactNode,
   useEffect,
   useLayoutEffect,
@@ -25,6 +26,10 @@ import {
   useState,
 } from "react";
 import { BrowserImportDialog } from "../components/browser-import.js";
+import {
+  afterMotion,
+  transitionPlaying,
+} from "../components/catamorphic/activity-text.js";
 import { ChatTimeline } from "../components/catamorphic/chat-timeline.js";
 import { ChatBubbles } from "../components/chat-bubbles.js";
 import { ChatGlyph } from "../components/chat-icon.js";
@@ -39,6 +44,7 @@ import {
   WorkspaceTabBar,
 } from "../components/workspace-tabs.js";
 import { formatBinding, useKeybindings } from "../lib/keybindings.js";
+import { motionMs } from "../lib/motion.js";
 
 export const ONBOARDING_STEPS = [
   "Welcome",
@@ -76,6 +82,17 @@ export function OnboardingScreen({
 }) {
   const current = Math.max(0, Math.min(step, ONBOARDING_STEPS.length - 1));
   const [previous, setPrevious] = useState<number | null>(null);
+  const track = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (previous === null) return;
+    // Reduced motion and a hidden track may never emit transitionend.
+    // Keep the outgoing page only while its slide can still be seen.
+    return afterMotion(
+      motionMs(250),
+      () => transitionPlaying(track.current, "transform"),
+      () => setPrevious(null),
+    );
+  }, [previous]);
   const [importOpen, setImportOpen] = useState(false);
   const [justImported, setJustImported] = useState(false);
   const bindings = useKeybindings();
@@ -284,6 +301,7 @@ export function OnboardingScreen({
       </p>
       <div className="onboarding-viewport">
         <div
+          ref={track}
           className="onboarding-track"
           style={{ transform: `translateX(-${current * 100}%)` }}
           onTransitionEnd={(event) => {
@@ -622,80 +640,74 @@ const PREVIEW_TABS: WorkspaceTab[] = [
   { kind: "app", name: "notes", label: "My notes" },
   { kind: "browser", name: "inspiration", label: "Inspiration" },
 ];
-const PREVIEW_ITEM: ItemCommon = {
-  id: "preview",
-  sessionId: "preview",
-  turnId: null,
-  attemptId: null,
-  parentItemId: null,
-  position: 0,
-  status: "completed",
-  nativeRef: null,
-  createdAt: "2026-11-06T12:00:00.000Z",
-  updatedAt: "2026-11-06T12:00:00.000Z",
-  startedAt: null,
-  endedAt: null,
-};
-const PREVIEW_TIMELINE: TimelineTurn[] = [
-  {
-    key: "preview",
-    turn: null,
-    entries: [
-      {
-        kind: "input",
-        item: {
-          ...PREVIEW_ITEM,
-          id: "hello",
-          kind: "user_message",
-          author: { kind: "user", externalUserId: "preview" },
-          text: "I have an idea. Can you help me bring it to life?",
-          attachments: [],
-          dispatch: "queue",
-          attention: null,
-          idempotencyKey: null,
-          deliveredBy: null,
-          causation: [],
+// Illustrative messages are current for each visit, even after Work stayed
+// open overnight. They do not need an aging fixed date's relative formatter.
+function previewTimeline(): TimelineTurn[] {
+  const sentAt = new Date().toISOString();
+  const item: ItemCommon = {
+    id: "preview",
+    sessionId: "preview",
+    turnId: null,
+    attemptId: null,
+    parentItemId: null,
+    position: 0,
+    status: "completed",
+    nativeRef: null,
+    createdAt: sentAt,
+    updatedAt: sentAt,
+    startedAt: null,
+    endedAt: null,
+  };
+  return [
+    {
+      key: "preview",
+      turn: null,
+      entries: [
+        {
+          kind: "input",
+          item: {
+            ...item,
+            id: "hello",
+            kind: "user_message",
+            author: { kind: "user", externalUserId: "preview" },
+            text: "I have an idea. Can you help me bring it to life?",
+            attachments: [],
+            dispatch: "queue",
+            attention: null,
+            idempotencyKey: null,
+            deliveredBy: null,
+            causation: [],
+          },
         },
-      },
-      {
-        kind: "reply",
-        item: {
-          ...PREVIEW_ITEM,
-          id: "reply",
-          position: 1,
-          kind: "assistant_message",
-          text: "Of course. Tell me what you have in mind, and we’ll make it happen.",
-          agentId: null,
+        {
+          kind: "reply",
+          item: {
+            ...item,
+            id: "reply",
+            position: 1,
+            kind: "assistant_message",
+            text: "Of course. Tell me what you have in mind, and we’ll make it happen.",
+            agentId: null,
+          },
+          steps: [],
         },
-        steps: [],
-      },
-    ],
-  },
-];
+      ],
+    },
+  ];
+}
 const noop = () => {};
 
 /** Real tab, sidebar, chat timeline, and composer components, with local example data. */
-export function WorkspacePreview({
+export const WorkspacePreview = memo(function WorkspacePreview({
   animateSidebars = false,
   active = true,
 }: {
   animateSidebars?: boolean;
   active?: boolean;
 }) {
-  const frame = useRef<HTMLDivElement>(null);
-  const [scale, setScale] = useState(1);
-  useLayoutEffect(() => {
-    const element = frame.current;
-    if (!element) return;
-    const observer = new ResizeObserver(([entry]) => {
-      if (entry) setScale(entry.contentRect.width / 880);
-    });
-    observer.observe(element);
-    return () => observer.disconnect();
-  }, []);
+  const [timeline] = useState(previewTimeline);
   return (
     <div
-      ref={frame}
       className="onboarding-workspace-preview"
       data-preview-sidebars={animateSidebars || undefined}
       data-preview-active={active}
@@ -706,12 +718,7 @@ export function WorkspacePreview({
       }
       role="img"
     >
-      <div
-        className="onboarding-workspace-model"
-        style={{ transform: `scale(${scale})` }}
-        inert
-        aria-hidden="true"
-      >
+      <div className="onboarding-workspace-model" inert aria-hidden="true">
         <aside className="onboarding-preview-sidebar">
           <div className="onboarding-preview-project">
             <Folder className="size-4" />
@@ -761,10 +768,7 @@ export function WorkspacePreview({
               onNew={noop}
             />
           </div>
-          <ChatTimeline
-            timeline={PREVIEW_TIMELINE}
-            className="min-h-0 flex-1"
-          />
+          <ChatTimeline timeline={timeline} className="min-h-0 flex-1" />
           <div className="mx-5 mb-5 rounded-xl border border-border bg-bg-inset p-3">
             <ComposerInput
               placeholder="Ask anything…"
@@ -819,7 +823,7 @@ export function WorkspacePreview({
       </div>
     </div>
   );
-}
+});
 
 function PalettePreview() {
   const bindings = useKeybindings();

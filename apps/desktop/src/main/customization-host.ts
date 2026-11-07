@@ -3,7 +3,7 @@ import { rowTargetAllowed } from "../shared/sidebar.js";
 import { customizationStateKey } from "./customization-address.js";
 import { customizationWorkflowCall } from "./customization-workflow.js";
 import type { EmbeddedServer } from "./server/boot.js";
-import { DESKTOP_TENANT_ID, DESKTOP_USER_ID } from "./server/boot.js";
+import { DESKTOP_TENANT_ID, DESKTOP_USER_ID } from "./server/identity.js";
 import type { SourceHostCall } from "./sidebar-source-ipc.js";
 
 /** Main owns identity and credentials; sources receive only authorized values. */
