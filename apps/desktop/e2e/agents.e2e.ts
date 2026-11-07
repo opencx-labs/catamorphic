@@ -609,6 +609,11 @@ describe("agents and profiles", () => {
               !!byText('button[aria-haspopup="dialog"]', 'Work');`,
       { timeoutMs: 15_000, label: "veil played and settled on Work" },
     );
+    await waitForProjectWorkspace({ app, name: "Default Project" });
+    await app.waitFor(
+      `!!document.querySelector('[data-workspace-visible=true] nav[aria-label="Tutorial steps"]')`,
+      { label: "Work profile's first project shows onboarding" },
+    );
 
     // The fresh profile's Default Project only has onboarding, which also
     // counts as empty. Switching back restores the previously selected project.
@@ -619,6 +624,7 @@ describe("agents and profiles", () => {
       label: "profile menu lists Default Profile",
     });
     await run(`byText('button', 'Default Profile').click(); return true;`);
+    await waitForProjectWorkspace({ app, name: "e2e-agents" });
     await runWait(
       `return !$('[class*="animate-profile-veil"]') &&
               !!byText('button[aria-haspopup="dialog"]', 'Default Profile') &&
