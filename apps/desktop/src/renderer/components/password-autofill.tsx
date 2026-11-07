@@ -145,6 +145,8 @@ export function usePasswordAutofill({
     const picked = pickedGuest.current;
     pickedGuest.current = null;
     const container = containerRef.current;
+    // A dialog or another control can take focus without a new key or press.
+    const active = document.activeElement;
     if (
       !picked ||
       guestRef.current !== picked.guest ||
@@ -155,6 +157,10 @@ export function usePasswordAutofill({
         opacityProperty: true,
         visibilityProperty: true,
       }) ||
+      (active !== null &&
+        active !== document.body &&
+        active !== document.documentElement &&
+        !Object.is(active, picked.guest)) ||
       personMovedOn(picked.inputCount)
     )
       return;

@@ -143,6 +143,35 @@ function mount() {
 }
 
 describe("password autofill focus handoff", () => {
+  it("leaves an app-focused control inside the browser in charge", async () => {
+    const fixture = mount();
+    await fixture.show();
+    fixture.pick();
+    const findInput = document.createElement("input");
+    fixture.container.append(findInput);
+    findInput.focus();
+    fixture.finishExit();
+    expect(document.activeElement).toBe(findInput);
+    expect(fixture.guest.focus).toHaveBeenCalledTimes(1);
+  });
+
+  it("leaves focus in a dialog opened before the picked list finishes closing", async () => {
+    const fixture = mount();
+    await fixture.show();
+    fixture.pick();
+    // The next action can open its dialog without another key or press.
+    const dialog = document.createElement("div");
+    dialog.setAttribute("role", "dialog");
+    dialog.setAttribute("aria-modal", "true");
+    const choice = document.createElement("button");
+    dialog.append(choice);
+    document.body.append(dialog);
+    choice.focus();
+    fixture.finishExit();
+    expect(document.activeElement).toBe(choice);
+    expect(fixture.guest.focus).toHaveBeenCalledTimes(1);
+  });
+
   it("restores the page once after the picked list has actually left the DOM", async () => {
     const fixture = mount();
     await fixture.show();
