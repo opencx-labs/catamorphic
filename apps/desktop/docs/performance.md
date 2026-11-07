@@ -488,6 +488,12 @@ once per opening and per new query session, never per keystroke. Render at most
 80 results. Queries longer than 256 characters or
 containing a newline bypass fuzzy search and remain available to agent/web actions.
 
+The fuzzy scorer's cursors and termination checks use normalized string lengths.
+Repeated spaces can shorten a query, and Unicode lowercasing can lengthen it;
+neither may turn an exhausted query into an empty-string search. Transpositions
+require two remaining normalized characters. Regression coverage includes both
+forms of length change and the real palette's repeated-space search.
+
 Search remains linear in catalog size, plus sorting matches. A local Bun probe on
 2026-09-09 measured 75 settings at 0.05 ms p95, and a synthetic 10,000-resource
 index at 15.4 ms p95 across literal, abbreviated and missing queries (30 samples).

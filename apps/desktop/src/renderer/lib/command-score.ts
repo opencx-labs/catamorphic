@@ -31,8 +31,10 @@ function score(
   queryIndex: number,
   memo: Record<string, number>,
 ): number {
-  if (queryIndex === query.length) {
-    return stringIndex === string.length
+  // These cursors index normalized text. Whitespace folding and Unicode
+  // lowercasing can change its length relative to the original input.
+  if (queryIndex >= queryLower.length) {
+    return stringIndex === stringLower.length
       ? SCORE_CONTINUE_MATCH
       : PENALTY_NOT_COMPLETE;
   }
@@ -87,10 +89,11 @@ function score(
 
     // Transposition tolerance: "sotck" still finds "stock".
     if (
-      (candidate < SCORE_TRANSPOSITION &&
+      queryIndex + 1 < queryLower.length &&
+      ((candidate < SCORE_TRANSPOSITION &&
         stringLower.charAt(index - 1) === queryLower.charAt(queryIndex + 1)) ||
-      (queryLower.charAt(queryIndex + 1) === queryLower.charAt(queryIndex) &&
-        stringLower.charAt(index - 1) !== queryLower.charAt(queryIndex))
+        (queryLower.charAt(queryIndex + 1) === queryLower.charAt(queryIndex) &&
+          stringLower.charAt(index - 1) !== queryLower.charAt(queryIndex)))
     ) {
       const transposed = score(
         string,

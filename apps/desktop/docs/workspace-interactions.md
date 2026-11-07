@@ -164,6 +164,20 @@ responses do not acquire hidden-chat unread or activity cues.
 
 ## State and motion ownership
 
+Render failures stay with the view that failed (ADR 0309). Each tab pane and chat
+presentation has a React error boundary; the floating command palette has its own.
+The recovery view offers Try again and Close, while the tab strip, split geometry,
+and healthy sibling views stay mounted. Retry remounts only the failed content.
+Closing and reopening a failed palette starts a fresh search. Failed chats retain
+their bubble and tab close actions. A presentation failure keeps the last session
+signals until retry rereads the session; it does not announce that the agent has
+finished. The window has a final recovery boundary for errors in the shell itself,
+with local console diagnostics for every caught error. A detached dock expands
+its native bounds and takes pointer input so its recovery controls remain usable.
+State held only inside failed content can be lost on unmount. These boundaries
+cover React rendering and lifecycle errors; they do not catch arbitrary async
+failures, a blocked event loop, or a renderer process crash.
+
 `src/renderer/lib/workspace-state.ts` owns workspace identities, ordering,
 serialization, reconciliation and navigation transitions. `workspace-layout.ts`
 derives slots. IO, dirty-buffer prompts, native handles and animation scheduling
