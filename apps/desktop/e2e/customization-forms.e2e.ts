@@ -33,8 +33,25 @@ async function click(selector: string) {
 async function fill(name: string, text: string) {
   const selector = `[role="dialog"] [name="${name}"]`;
   await click(selector);
-  await app.press("a", process.platform === "darwin" ? 4 : 2);
+  // CDP does not resolve macOS's native editing key bindings.
+  for (const type of ["keyDown", "keyUp"])
+    await app.cdp("Input.dispatchKeyEvent", {
+      type,
+      key: "a",
+      code: "KeyA",
+      windowsVirtualKeyCode: 65,
+      modifiers: process.platform === "darwin" ? 4 : 2,
+      ...(type === "keyDown" ? { commands: ["selectAll"] } : {}),
+    });
+  await app.press("Backspace");
+  await app.waitFor(`document.querySelector(${json(selector)})?.value===''`, {
+    label: `${name} cleared`,
+  });
   await app.insertText(text);
+  await app.waitFor(
+    `document.querySelector(${json(selector)})?.value===${json(text)}`,
+    { label: `${name} entered ${text}` },
+  );
 }
 async function select(name: string, value: string) {
   const selector = `[role="dialog"] select[name="${name}"]`;
