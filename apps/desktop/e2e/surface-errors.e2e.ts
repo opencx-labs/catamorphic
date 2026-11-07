@@ -273,11 +273,21 @@ it("recovers a failed chat in the same tab and keeps the tab's close action work
   // The failed slash query is a retained draft, so the composer shows Send
   // until it is cleared. The backend turn must still offer Stop afterward.
   await app.eval(`document.querySelector(${JSON.stringify(composer)}).focus()`);
-  await app.press(
-    "a",
-    await app.eval<number>(`/Mac/.test(navigator.platform) ? 4 : 2`),
-  );
+  // CDP does not resolve macOS's native editing key bindings.
+  for (const type of ["keyDown", "keyUp"])
+    await app.cdp("Input.dispatchKeyEvent", {
+      type,
+      key: "a",
+      code: "KeyA",
+      windowsVirtualKeyCode: 65,
+      modifiers: process.platform === "darwin" ? 4 : 2,
+      ...(type === "keyDown" ? { commands: ["selectAll"] } : {}),
+    });
   await app.press("Backspace");
+  await app.waitFor(
+    `document.querySelector(${JSON.stringify(composer)})?.textContent === ''`,
+    { label: "the retained failed-query draft cleared" },
+  );
   await app.waitFor(
     `!!document.querySelector('[data-chat-local-id="${chatId}"] [data-testid="chat-stop"]')`,
   );
