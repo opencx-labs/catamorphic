@@ -233,5 +233,3 @@ validator as the live list. It reports access still requiring approval; it canno
 grant itself access. Fixture projects make interaction previews independent from
 real user data. The retained eval scenarios exercise actual Codex agents and can
 select Claude Code or the builtin harness through the same runner.
-
-Existing customizations can use the [contract change notes](customization-migration.md).
