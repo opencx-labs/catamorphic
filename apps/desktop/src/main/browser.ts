@@ -3472,6 +3472,10 @@ export function registerBrowserSupport(
       if (!root) throw new Error("This project has no local folder.");
       const authoring = customizationAuthoring({
         cacheDirectory: path.join(userData, "authoring"),
+        assetsFile: path.join(
+          app.getAppPath(),
+          "out/main/authoring-assets.json",
+        ),
       });
       if (input.action === "reference")
         return {

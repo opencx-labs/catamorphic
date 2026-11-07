@@ -153,6 +153,8 @@ export function signInOf(
 export interface DesktopAgentRegistryDeps {
   profiles: ProfilesStore;
   profileConfig: ProfileConfigManager;
+  /** Build assets anchored at the application root, independent of chunks. */
+  authoringAssetsFile: string;
   /** `agent-homes/` root; each account-auth agent gets a private home. */
   agentHomesDir: string;
   /** App-owned cache for integrity-pinned native harness components. */
@@ -1809,6 +1811,7 @@ export class DesktopAgentRegistry implements CodingAgentRegistry {
   settingsContext(projectId: string, config?: Pick<AgentConfig, "sandboxing">) {
     return desktopSettingsContext({
       config: this.deps.profileConfig,
+      authoringAssetsFile: this.deps.authoringAssetsFile,
       profileId: this.deps.profiles.profileForProject(projectId).id,
       project: {
         id: projectId,

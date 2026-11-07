@@ -72,12 +72,8 @@ import { assertProductionLaunchArguments } from "./production-launch.js";
 import { ProfileConfigManager } from "./profile-config.js";
 import { ProfilesStore } from "./profiles.js";
 import { registerResourceSupport } from "./resource-monitor.js";
-import {
-  DESKTOP_TENANT_ID,
-  DESKTOP_USER_ID,
-  type EmbeddedServer,
-  startEmbeddedServer,
-} from "./server/boot.js";
+import type { EmbeddedServer } from "./server/boot.js";
+import { DESKTOP_TENANT_ID, DESKTOP_USER_ID } from "./server/identity.js";
 import { DESKTOP_API_TOKEN_HEADER } from "./server/local-api-guard.js";
 import { resolveDataPaths } from "./server/paths.js";
 import {
@@ -874,19 +870,22 @@ app.whenReady().then(async () => {
     };
     try {
       await loginPathAdopted;
-      serverStarting = startEmbeddedServer(
-        paths,
-        profilesStore,
-        profileConfig,
-        undefined,
-        connectors,
-        undefined,
-        new IncognitoSessionsStore(
-          path.join(paths.root, "..", "incognito-sessions.json"),
-        ),
-        [desktopProfileMcpProvider],
-        undefined,
-        { openNotification: openDesktopNotification, launchNotificationId },
+      serverStarting = import("./server/boot.js").then(
+        ({ startEmbeddedServer }) =>
+          startEmbeddedServer(
+            paths,
+            profilesStore,
+            profileConfig,
+            undefined,
+            connectors,
+            undefined,
+            new IncognitoSessionsStore(
+              path.join(paths.root, "..", "incognito-sessions.json"),
+            ),
+            [desktopProfileMcpProvider],
+            undefined,
+            { openNotification: openDesktopNotification, launchNotificationId },
+          ),
       );
       server = await serverStarting;
       if (!(await server.hasBackgroundWork())) {
@@ -1345,22 +1344,27 @@ app.whenReady().then(async () => {
       );
     }
     await loginPathAdopted;
-    serverStarting = startEmbeddedServer(
-      paths,
-      profilesStore,
-      profileConfig,
-      agentBridge?.bridge,
-      connectors,
-      mcpApps,
-      incognitoSessions,
-      [desktopProfileMcpProvider],
-      (ownerId) => {
-        const contents = webContents.fromId(ownerId);
-        return contents && isRegisteredShellContents(contents)
-          ? windows.profileFor(contents)
-          : undefined;
-      },
-      { openNotification: openDesktopNotification, launchNotificationId },
+    // Let the shell start loading before evaluating boot. Track the import
+    // and initialization together so an early Quit waits for both.
+    serverStarting = import("./server/boot.js").then(
+      ({ startEmbeddedServer }) =>
+        startEmbeddedServer(
+          paths,
+          profilesStore,
+          profileConfig,
+          agentBridge?.bridge,
+          connectors,
+          mcpApps,
+          incognitoSessions,
+          [desktopProfileMcpProvider],
+          (ownerId) => {
+            const contents = webContents.fromId(ownerId);
+            return contents && isRegisteredShellContents(contents)
+              ? windows.profileFor(contents)
+              : undefined;
+          },
+          { openNotification: openDesktopNotification, launchNotificationId },
+        ),
     );
     server = await serverStarting;
     if (browserSupport)

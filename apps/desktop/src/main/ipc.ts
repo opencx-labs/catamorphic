@@ -172,13 +172,13 @@ import {
   syncRemoteProject,
 } from "./remote-sync.js";
 import type { EmbeddedServer } from "./server/boot.js";
-import { DESKTOP_TENANT_ID, DESKTOP_USER_ID } from "./server/boot.js";
 import { e2eReviewFixture } from "./server/e2e-review-fixture.js";
 import { GITHUB_APP } from "./server/github.js";
 import {
   listAgentModels,
   type ModelCatalogAgent,
 } from "./server/harness-models.js";
+import { DESKTOP_TENANT_ID, DESKTOP_USER_ID } from "./server/identity.js";
 import { DESKTOP_API_TOKEN_HEADER } from "./server/local-api-guard.js";
 import type { DataPaths } from "./server/paths.js";
 import { parseProjectAgentId } from "./server/project-agents.js";

@@ -935,6 +935,41 @@ async function* fakeScript(turn: FakeTurn): AsyncGenerator<FakeStep> {
   const message = turn.message;
   const prompt = message.toLowerCase();
 
+  if (prompt === "inspect customization authoring assets") {
+    let report: unknown;
+    try {
+      const settings = z
+        .object({ authoring: z.unknown() })
+        .parse(await turn.tool("desktop_settings", {}));
+      const reference = z
+        .object({
+          revision: z.string(),
+          sdkRoot: z.string(),
+          content: z.string(),
+        })
+        .parse(await turn.tool("customization", { action: "reference" }));
+      report = {
+        authoring: settings.authoring,
+        reference: {
+          revision: reference.revision,
+          sdkRoot: reference.sdkRoot,
+          hasSdkReference: reference.content.includes(
+            "@catamorphic/work-customization",
+          ),
+        },
+      };
+    } catch (cause) {
+      report = {
+        error: cause instanceof Error ? cause.message : String(cause),
+      };
+    }
+    yield {
+      type: "text",
+      content: `\`\`\`json\n${JSON.stringify(report)}\n\`\`\``,
+    };
+    return;
+  }
+
   if (prompt.includes("provider retry lifecycle")) {
     if (oneShotFailures.has(prompt)) {
       yield { type: "text", content: "Manual retry completed." };

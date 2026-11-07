@@ -283,6 +283,7 @@
   outline-offset: var(--focus-ring-inset);
 }
 .onboarding-workspace-preview {
+  container-type: inline-size;
   position: relative;
   width: min(100%, 720px);
   aspect-ratio: 880 / 520;
@@ -298,6 +299,7 @@
   height: 520px;
   text-align: left;
   transform-origin: top left;
+  transform: scale(calc(100cqi / 880px));
 }
 .onboarding-preview-sidebar {
   display: flex;

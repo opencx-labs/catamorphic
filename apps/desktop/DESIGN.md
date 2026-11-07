@@ -4038,7 +4038,10 @@ stays in place; reminders about skipping, returning, or changing things later
 appear in a shared footer immediately above it. Reduced motion settles immediately.
 
 The theme preview uses the workspace's tabs, sidebar rows, chat timeline, and
-composer with inert local example data. Theme selection is one modal across the
+composer with inert local example data. Its model scales in CSS and retains
+the same component tree across unrelated workspace renders, while inherited
+theme tokens remain live. Exiting steps release their previews even when
+reduced motion suppresses the slide. Theme selection is one modal across the
 tour, Settings, and palette. Registered color tokens interpolate over 200ms instead
 of repainting abruptly. Advanced colors and fonts use a labeled disclosure with
 the shared collapse motion. The whole dialog eases its height and centered

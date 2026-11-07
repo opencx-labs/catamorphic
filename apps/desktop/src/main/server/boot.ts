@@ -113,6 +113,7 @@ import {
   type HostSkillsRuntime,
   materializeHostSkills,
 } from "./host-skills.js";
+import { DESKTOP_TENANT_ID, DESKTOP_USER_ID } from "./identity.js";
 import { localApiRefusal, newDesktopApiToken } from "./local-api-guard.js";
 import type { DataPaths } from "./paths.js";
 import { ProjectRootsStore } from "./project-roots.js";
@@ -134,9 +135,6 @@ import {
 import { DESKTOP_WORKSPACE_SKILL } from "./workspace-skill.js";
 import { WorkspaceStateStore } from "./workspace-state.js";
 
-/** The desktop app is single-tenant: one fixed identity for the machine. */
-export const DESKTOP_TENANT_ID = "00000000-0000-4000-8000-00000000d001";
-export const DESKTOP_USER_ID = "desktop-user";
 /**
  * How often the embedded server's idle pollers look for work no write in
  * this process announced (ADR 0229): scheduled retries and timers carry
@@ -485,6 +483,10 @@ export async function startEmbeddedServer(
   const agentRegistry = new DesktopAgentRegistry({
     profiles,
     profileConfig,
+    authoringAssetsFile: path.join(
+      electronApp.getAppPath(),
+      "out/main/authoring-assets.json",
+    ),
     agentHomesDir: paths.agentHomesDir,
     harnessComponentsDir: paths.harnessComponentsDir,
     attachmentsDir: paths.attachmentsDir,

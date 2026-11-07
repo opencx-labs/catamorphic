@@ -118,6 +118,10 @@ function registryWith(
     },
     agentHomesDir: "/tmp/catamorphic-agent-registry-test",
     harnessComponentsDir: "/unused",
+    authoringAssetsFile: path.resolve(
+      import.meta.dirname,
+      "../../../out/main/authoring-assets.json",
+    ),
     ...extra,
   } as unknown as DesktopAgentRegistryDeps;
   const registry = new DesktopAgentRegistry(deps);
