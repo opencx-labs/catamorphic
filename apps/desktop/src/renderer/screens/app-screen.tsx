@@ -42,6 +42,7 @@ export function AppScreen({
   surface,
   collections,
   onContentState,
+  hostContext,
 }: {
   projectId: string;
   appName: string;
@@ -51,6 +52,7 @@ export function AppScreen({
   surface?: AppSurface;
   collections?: AppCollections;
   onContentState?: (state: AppContentState) => void;
+  hostContext?: Record<string, unknown>;
 }) {
   const guestDocuments = useRef(new Set<string>());
   const mountId = useId();
@@ -136,6 +138,7 @@ export function AppScreen({
         context={{
           tenantId: DESKTOP_TENANT_ID,
           user: { id: DESKTOP_USER_ID },
+          host: hostContext,
         }}
         // Apps live inside the shell: hand them the full theme — the
         // profile's resolved colors plus the desktop's feel tokens — so

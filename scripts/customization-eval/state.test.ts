@@ -1,9 +1,9 @@
-import { execFile } from "node:child_process";
+import { execFile, execFileSync } from "node:child_process";
 import { mkdir, mkdtemp, realpath, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
-import { afterAll, beforeAll, beforeEach, expect, it } from "vitest";
+import { afterAll, beforeAll, beforeEach, expect, it, vi } from "vitest";
 import { createPrivateCustomizationEvalHost } from "../../apps/desktop/evals/private-customization-host.js";
 import {
   privateSnapshotSchema,
@@ -40,6 +40,9 @@ beforeAll(async () => {
     directory,
     adapter: createCodexAdapter(),
     scenario: "todo-sidebar",
+    bunPath: execFileSync("bun", ["-p", "process.execPath"], {
+      encoding: "utf8",
+    }).trim(),
   });
 });
 beforeEach(async () => {
@@ -304,4 +307,90 @@ it.skipIf(process.platform !== "darwin")(
     }
   },
   40_000,
+);
+
+it.skipIf(process.platform !== "darwin")(
+  "drives manual reminder runs through source grants and a full host restart",
+  async () => {
+    const artifact = await fixture.invoke({
+      name: "private_workflow",
+      input: {
+        action: "create",
+        name: "manualReminder",
+        source: `import {defineWorkflow,type BoundaryContext,type PauseResult} from '@catamorphic/workflow';
+ type R={title:string;delay:string;key:string};
+ export const manualReminder=defineWorkflow(({defineBoundary})=>({permissions:['notifications:write'],steps:[
+ defineBoundary({run:({input,pause}:BoundaryContext<R>)=>pause<null,R>({timeout:input.delay,state:input})}),
+ defineBoundary({run:({input,host}:BoundaryContext<PauseResult<null,R>>)=>host['catamorphic.notifications'].publish({title:input.state.title,idempotencyKey:input.state.key})})
+ ]}));`,
+      },
+    });
+    if (
+      typeof artifact !== "object" ||
+      artifact === null ||
+      Array.isArray(artifact) ||
+      typeof artifact.id !== "string" ||
+      typeof artifact.revision !== "number"
+    )
+      throw Error("Invalid private workflow artifact");
+    const preview = await fixture.invoke({
+      name: "private_workflow",
+      input: {
+        action: "preview",
+        artifactId: artifact.id,
+        revision: artifact.revision,
+      },
+    });
+    if (
+      typeof preview !== "object" ||
+      preview === null ||
+      Array.isArray(preview) ||
+      typeof preview.consentDigest !== "string"
+    )
+      throw Error("Invalid private workflow consent preview");
+    await fixture.invoke({
+      name: "private_workflow",
+      input: {
+        action: "activate",
+        artifactId: artifact.id,
+        revision: artifact.revision,
+        consentDigest: preview.consentDigest,
+      },
+    });
+    const workflow = `private:${artifact.id}:${artifact.revision}`;
+    await writeFile(
+      manifest,
+      JSON.stringify({
+        name: "state-sidebar",
+        catamorphic: {
+          access: { permissions: ["state"], workflows: [workflow] },
+        },
+      }),
+    );
+    const allowed = sourceWork();
+    for (const [i, delay] of ["2d", "7d", "2s"].entries())
+      await allowed("add", {
+        op: "start",
+        workflow,
+        input: {
+          title: i === 2 ? "Manually added custom reminder" : "Presets",
+          delay,
+          key: `manual:${i}`,
+        },
+      });
+    const errors = vi.spyOn(console, "error");
+    try {
+      const grades = await fixture.grade();
+      expect(grades).toEqual([
+        expect.objectContaining({
+          id: "manual-reminder-after-host-restart",
+          passed: true,
+        }),
+      ]);
+      expect(errors.mock.calls.flat().join("\n")).not.toContain("poll failed");
+    } finally {
+      errors.mockRestore();
+    }
+  },
+  20000,
 );

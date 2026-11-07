@@ -238,7 +238,10 @@ describe("resolveWorkspaceConfig", () => {
     for (const [entry, message] of [
       [`{ label: "Toggle", action: "run:toggle" }`, "without run:"],
       [`{ label: "Bad", action: "Bad Name" }`, "not one of Work's verbs"],
-      [`{ label: "Ask", action: "ask", input: { fields: [] } }`, "one to four"],
+      [
+        `{ label: "Ask", action: "ask", input: { fields: [] } }`,
+        "one to sixteen",
+      ],
       [
         `{ label: "Ask", action: "ask", input: { fields: [{ name: "a", label: "A" }, { name: "a", label: "B" }] } }`,
         "unique name",

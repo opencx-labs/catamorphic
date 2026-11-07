@@ -84,7 +84,9 @@ const MESSAGE_MS = 8000;
 interface InputRequest {
   label: string;
   input: SidebarActionInput;
-  run: (values: Record<string, string>) => Promise<unknown>;
+  run: (
+    values: import("@catamorphic/work-customization").SidebarInputValues,
+  ) => Promise<unknown>;
 }
 
 /**
@@ -430,7 +432,7 @@ function SourceView({
     row: SidebarSourceItem | undefined,
     itemId: string,
     action: string,
-    values?: Record<string, string>,
+    values?: import("@catamorphic/work-customization").SidebarInputValues,
     mode?: OpenMode,
   ) => {
     const effect = await runRowAction({
@@ -900,6 +902,10 @@ function SourceRow({
       ...(row.menu ?? []),
       ...(row.contextMenu ?? []),
       ...(row.actions ?? []),
+      ...(row.preview === false ? [] : (row.preview?.actions ?? [])),
+      ...(row.preview === false
+        ? []
+        : (row.preview?.metadata?.flatMap((f) => f.actions ?? []) ?? [])),
     ].map((entry) => entry.action),
     ...(row.url ? ["copy-url"] : []),
     ...(canAct
@@ -907,6 +913,13 @@ function SourceRow({
           ...(overrides.menu ?? []),
           ...(overrides.contextMenu ?? []),
           ...(overrides.actions ?? []),
+          ...(overrides.preview === false
+            ? []
+            : (overrides.preview?.actions ?? [])),
+          ...(overrides.preview === false
+            ? []
+            : (overrides.preview?.metadata?.flatMap((f) => f.actions ?? []) ??
+              [])),
         ].map((entry) => entry.action)
       : []),
   ];
@@ -957,6 +970,7 @@ function SourceRow({
       activity={row.activity}
       active={active}
       resource={Boolean(row.url)}
+      resourceUrl={row.url}
       defaultOpenMode={row.open ?? "replace"}
       // [] removes the overflow menu; entries join the open modes.
       menu={row.menu?.length === 0 ? [] : undefined}

@@ -267,7 +267,10 @@ export async function startEmbeddedServer(
   };
   const imageBuilderCommand = findImageBuilderCommand();
   const sandboxProvider = e2eFakeAgent
-    ? new E2eLocalSandboxProvider(resolveProjectData)
+    ? new E2eLocalSandboxProvider(
+        resolveProjectData,
+        path.join(paths.root, "e2e-sandboxes"),
+      )
     : new MicrosandboxSandboxProvider({
         projectDataDirectory: resolveProjectData,
         // Environments that name a Dockerfile run here when Docker or

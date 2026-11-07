@@ -27,6 +27,7 @@ export function sidebarSourceEffect(
   const open = "open" in value ? value.open : undefined;
   const mode = "mode" in value ? value.mode : undefined;
   const message = "message" in value ? value.message : undefined;
+  const copy = "copy" in value ? value.copy : undefined;
   // Only commands that open something (ROW_COMMANDS), and a bounded address.
   const target =
     typeof open === "string" &&
@@ -37,6 +38,7 @@ export function sidebarSourceEffect(
       : undefined;
   const effect: SidebarSourceEffect = {
     ...(target ? { open: target } : {}),
+    ...(typeof copy === "string" && copy.length <= 8192 ? { copy } : {}),
     ...(target &&
     (mode === "replace" ||
       mode === "tab" ||
@@ -48,7 +50,9 @@ export function sidebarSourceEffect(
       ? { message: message.slice(0, 280) }
       : {}),
   };
-  return effect.open || effect.message ? effect : undefined;
+  return effect.open || effect.message || effect.copy !== undefined
+    ? effect
+    : undefined;
 }
 
 /** Which optional handlers a running source exports; drives drag targets. */
@@ -69,7 +73,7 @@ export interface SidebarSourceRequest {
   itemId?: string;
   action?: string;
   mode?: OpenMode;
-  values?: Record<string, string>;
+  values?: import("@catamorphic/work-customization").SidebarInputValues;
   beforeId?: string;
   payload?: SidebarDropPayload;
   url?: string;
@@ -96,7 +100,7 @@ export type SidebarSourceWorkCall =
       itemId: string;
       action: string;
       mode?: OpenMode;
-      values?: Record<string, string>;
+      values?: import("@catamorphic/work-customization").SidebarInputValues;
     }
   | { op: "call" | "start"; workflow: string; input?: unknown }
   | { op: "poll-run"; runId: string }

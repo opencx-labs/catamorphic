@@ -149,3 +149,16 @@ bun scripts/tool-runtime.ts vitest --dir scripts/customization-eval \
 
 `bun run --cwd apps/desktop test:eval` is an alias for the same parameterized
 runner. The earlier API-key wizard and local-registry evaluation was removed.
+The todo scenario now also requests manual Add with a title, reminder presets,
+custom duration/units and date/time, repeated reminders, and inspector copying.
+Its source grader exercises the actual declared form values and source restart.
+It then archives the chat, reopens Core and the database, and uses the ordinary
+durable timeout worker and run driver to require one custom-reminder notification
+without an agent turn.
+`customization-forms.e2e.ts` separately drives those controls in real Work: manual
+creation, multiple reminders, native select interaction, readable/copyable hover,
+semantic menu composition, full application restart and an ordinary private
+workflow's durable wait and notification. Collection lifecycle tests cover context
+switches without losing DOM, focus, expansion or subscription ownership. These UI
+fixtures do not turn headless source checks into evidence of native interaction;
+retain both result sets and hand-test generated output when assessing usability.

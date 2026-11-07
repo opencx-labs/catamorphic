@@ -119,6 +119,6 @@ async function record({}: Record<string, never>) {
         )
         .toBe(false);
     }
-    removeE2eDirectory(app.userDataDir);
+    await removeE2eDirectory(app.userDataDir);
   }
 });

@@ -16,6 +16,7 @@ import type {
 import { sidebarSourceEffect } from "../../apps/desktop/src/shared/sidebar-source.js";
 import { sanitizeSidebarSourcePage } from "../../apps/desktop/src/shared/source-rows.js";
 import type { EvalFixture } from "./fixture.js";
+import { inputHasDateTime, todoFormValues } from "./manual-form.js";
 import { TODO_SEED } from "./scenarios.js";
 
 export interface Grade {
@@ -154,8 +155,15 @@ export async function gradeTodo(input: {
     );
     return "Work's installed SDK checker accepts the source and runtime layout";
   });
+  const config = loadWorkspaceConfigFile(layout);
+  const todoSection = [...config.sidebars.left, ...config.sidebars.right]
+    .flatMap((t) => t.sections)
+    .find(
+      (s) =>
+        typeof s.source === "string" &&
+        path.resolve(input.project, s.source) === modulePath,
+    );
   await check("typed-layout", async () => {
-    const config = loadWorkspaceConfigFile(layout);
     const sections = [
       ...config.sidebars.left,
       ...config.sidebars.right,
@@ -182,8 +190,15 @@ export async function gradeTodo(input: {
       ...body,
     });
   const load = async () =>
-    sanitizeSidebarSourcePage(await request({ method: "load", parentId: null }))
-      .items;
+    sanitizeSidebarSourcePage(
+      await request({ method: "load", parentId: null }),
+      {
+        apps: evalSourceAccess({
+          project: input.project,
+          modulePath,
+        }).lists?.includes("apps"),
+      },
+    ).items;
   let rows: SidebarSourceItem[] = [];
   const row = (id: string) => {
     const found = rows.find((entry) => entry.id === id);
@@ -336,6 +351,83 @@ export async function gradeTodo(input: {
         "Completed state did not survive",
       );
       return "A new confined process preserves the user's edits";
+    });
+    await check("manual-add-presets-and-multiple-reminders", async () => {
+      const add = todoSection?.headerActions?.find(
+        (a) => /add|new/i.test(a.label) && a.input,
+      );
+      if (!add?.input)
+        throw Error("No manual Add action with a form in the layout.");
+      assert(
+        inputHasDateTime(add.input.fields),
+        "Add form has no custom date/time control.",
+      );
+      await request({
+        method: "action",
+        itemId: "",
+        action: add.action,
+        values: todoFormValues(
+          add.input,
+          "presets",
+          "Manually added with two reminders",
+        ),
+      });
+      rows = await load();
+      const added = rows.find(
+        (r) => r.label === "Manually added with two reminders",
+      );
+      assert(added, "Manual Add did not create the requested task.");
+      const details = added?.preview || undefined;
+      assert(
+        details?.metadata && details.metadata.length >= 2,
+        "Hover does not expose both reminder times.",
+      );
+      return "Actual header form saves a title with 2-day and one-week reminders";
+    });
+    await check("manual-add-custom-timeout-and-restart", async () => {
+      const add = todoSection?.headerActions?.find(
+        (a) => /add|new/i.test(a.label) && a.input,
+      );
+      if (!add?.input) throw Error("No Add form.");
+      await request({
+        method: "action",
+        itemId: "",
+        action: add.action,
+        values: todoFormValues(
+          add.input,
+          "custom",
+          "Manually added custom reminder",
+        ),
+      });
+      runtime.dispose();
+      runtime = createRuntime();
+      rows = await load();
+      assert(
+        rows.some((r) => r.label === "Manually added custom reminder") &&
+          rows.some((r) => r.label === "Manually added with two reminders"),
+        "Manually added tasks did not survive source restart.",
+      );
+      const added = rows.find(
+        (r) => r.label === "Manually added custom reminder",
+      );
+      const preview = added?.preview || undefined;
+      const copy = [
+        ...(preview?.actions ?? []),
+        ...(preview?.metadata?.flatMap((f) => f.actions ?? []) ?? []),
+      ].find((a) => /copy.*title/i.test(a.label));
+      if (!copy) throw Error("Inspector has no copy action.");
+      const effect = sidebarSourceEffect(
+        await request({
+          method: "action",
+          itemId: added?.id,
+          action: copy.action,
+        }),
+      );
+      assert(
+        effect?.copy === "Manually added custom reminder",
+        "Copy action lost the full title.",
+      );
+      return "Custom timeout is saved through typed form values, survives restart, and offers exact title copying";
     });
   } finally {
     runtime.dispose();

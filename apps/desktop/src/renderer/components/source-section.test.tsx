@@ -602,8 +602,10 @@ describe("every list draws one way (ADR 0234)", () => {
   });
 
   it("asks for an action's values first and says what happened", async () => {
-    const actions: Array<{ action: string; values?: Record<string, string> }> =
-      [];
+    const actions: Array<{
+      action: string;
+      values?: import("@catamorphic/work-customization").SidebarInputValues;
+    }> = [];
     const view = await mount({
       source: memorySource(
         [

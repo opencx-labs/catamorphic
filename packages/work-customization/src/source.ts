@@ -2,6 +2,7 @@ import type { JsonValue, SessionMetadata } from "@catamorphic/agent-protocol";
 import type { CollectionPage, WorkflowClient } from "@catamorphic/app";
 import type {
   OpenMode,
+  SidebarInputValues,
   SidebarItem,
   SidebarSourceEffect,
   SidebarSurface,
@@ -108,7 +109,7 @@ export interface SidebarSourceWork extends WorkflowClient {
     itemId: string;
     action: string;
     mode?: OpenMode;
-    values?: Record<string, string>;
+    values?: SidebarInputValues;
   }) => Promise<void>;
 }
 
@@ -180,7 +181,7 @@ export interface SidebarSourceModule {
       action: string;
       /** Opening is always action "open" with a separate mode. */
       mode?: OpenMode;
-      values?: Record<string, string>;
+      values?: SidebarInputValues;
     },
   ) =>
     | void

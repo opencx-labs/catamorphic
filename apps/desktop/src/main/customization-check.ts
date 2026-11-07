@@ -258,10 +258,14 @@ export async function previewCustomization({
           : request.method === "reveal"
             ? result == null
               ? null
-              : sanitizeSidebarSourceItem(result)
+              : sanitizeSidebarSourceItem(result, new Set(), {
+                  apps: declaration.access.lists?.includes("apps"),
+                })
             : request.method === "move" || request.method === "drop"
               ? null
-              : sanitizeSidebarSourcePage(result),
+              : sanitizeSidebarSourcePage(result, {
+                  apps: declaration.access.lists?.includes("apps"),
+                }),
       runtime: runtime.inspect(),
     };
   } catch (cause) {

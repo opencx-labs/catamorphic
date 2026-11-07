@@ -62,7 +62,7 @@ export interface WorkSources extends AppCollections {
   /** A row's action; an action that asks for input takes its `values`. */
   execute: (
     request: Parameters<AppCollections["execute"]>[0] & {
-      values?: Record<string, string>;
+      values?: import("@catamorphic/work-customization").SidebarInputValues;
       mode?: OpenMode;
     },
   ) => Promise<void>;

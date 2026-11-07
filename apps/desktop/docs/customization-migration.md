@@ -23,6 +23,19 @@ or uploaded by this change.
   A contextual row is independent of the tree's keyboard focus. Use
   `contextualIndicator: 'row' | 'icon' | 'none'` and
   `descriptionVisibility: 'always' | 'hover'` for presentation.
+- Standard opening entries compose once per mode and destination. Remove manual
+  duplicate-opening workarounds; explicit menu overrides still replace their
+  placement. Current context refreshes persistent lists without replacing their
+  collection, focus or expansion. Use `when.session` only for chat-scoped data.
+- Action `values` now use `SidebarInputValues`, including numbers, booleans and
+  repeated named groups. Guard existing string operations with a type check.
+  Native forms support select options, conditional fields, custom dates and
+  repeatable scalar groups. The source still validates application rules.
+- Inspector facts wrap and preserve label casing. Use fact `copy`, `actions`,
+  `tone` and `display` instead of encoding these into labels. Rich prose uses
+  `content.markdown`; interactive content uses an existing sandboxed project
+  app via `content.app`, requiring `apps` in the source package's list grant
+  and the app's own consent.
 - Approval now identifies the canonical package location, project and profile.
   Existing per-file approvals require one new approval for the package's declared
   reach. Moving the package or widening its access requires another review.

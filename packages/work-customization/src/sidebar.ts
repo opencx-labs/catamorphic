@@ -88,19 +88,64 @@ export function rowTargetAllowed(url: string): boolean {
  */
 export type SidebarAction = string;
 
-/** One value an action asks the person for before it runs. */
-export interface SidebarInputField {
-  /** The key the action receives the value under (`values.name`). */
-  name: string;
-  label: string;
-  value?: string;
-  placeholder?: string;
+/** Values cross the same JSON boundary as source requests, without string encoding. */
+export type SidebarInputValue =
+  | string
+  | number
+  | boolean
+  | null
+  | SidebarInputValues[];
+export interface SidebarInputValues {
+  [name: string]: SidebarInputValue;
 }
 
-/** Up to four text values an action asks for first (a name, an address). */
+interface SidebarFieldBase {
+  name: string;
+  label: string;
+  description?: string;
+  /** Compare a sibling field. Hidden values are omitted from the submitted object. */
+  when?: { field: string; equals: string | number | boolean };
+}
+interface SidebarScalarField extends SidebarFieldBase {
+  required?: boolean;
+  placeholder?: string;
+}
+export type SidebarScalarInputField =
+  | (SidebarScalarField & {
+      type?: "text" | "textarea" | "date" | "time" | "datetime";
+      /** datetime uses an ISO instant; the control shows the machine's local timezone. */
+      value?: string;
+      minLength?: number;
+      maxLength?: number;
+    })
+  | (SidebarScalarField & {
+      type: "number";
+      value?: number;
+      min?: number;
+      max?: number;
+      step?: number;
+    })
+  | (SidebarScalarField & { type: "checkbox"; value?: boolean })
+  | (SidebarScalarField & {
+      type: "select";
+      value?: string;
+      options: { label: string; value: string; disabled?: boolean }[];
+    });
+export type SidebarInputField =
+  | SidebarScalarInputField
+  | (SidebarFieldBase & {
+      type: "repeat";
+      /** A repeat contains scalar fields, with sibling conditions per entry. */
+      fields: SidebarScalarInputField[];
+      value?: SidebarInputValues[];
+      minItems?: number;
+      maxItems?: number;
+      addLabel?: string;
+    });
+
+/** A small host-rendered form. Complex application screens remain ordinary apps. */
 export interface SidebarActionInput {
   title?: string;
-  /** The confirming button's label (default "Save"). */
   submit?: string;
   fields: SidebarInputField[];
 }
@@ -130,6 +175,8 @@ export interface SidebarSourceEffect {
   mode?: OpenMode;
   /** One short sentence saying what happened ("3 files uploaded"). */
   message?: string;
+  /** Copy only after an explicit action, never while reading a source. */
+  copy?: string;
 }
 
 export interface SidebarSurface {
@@ -232,6 +279,13 @@ export interface SidebarItemPresentation {
 export interface SidebarPreviewMetadata {
   label: string;
   value: string;
+  tone?: SidebarTone;
+  display?: "text" | "code" | "badge" | "color";
+  /** Hex color swatch; the full textual value stays visible. */
+  color?: string;
+  /** Exact text to copy from this fact's hover/focus button. */
+  copy?: string;
+  actions?: SidebarMenuEntry[];
 }
 
 /** Compact, declarative content for a sidebar item's hover preview. */
@@ -239,6 +293,15 @@ export interface SidebarPreview {
   title?: string;
   description?: string;
   metadata?: SidebarPreviewMetadata[];
+  actions?: SidebarMenuEntry[];
+  /** Rich prose, tables and lists, or an ordinary sandboxed app for arbitrary UI. */
+  content?:
+    | { markdown: string }
+    | {
+        app: string;
+        height?: number;
+        data?: import("@catamorphic/agent-protocol").JsonValue;
+      };
 }
 
 export interface SidebarItem extends SidebarItemPresentation {

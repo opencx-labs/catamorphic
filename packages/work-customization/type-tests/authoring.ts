@@ -72,3 +72,43 @@ export const badLayout: WorkspaceConfig = {
     right: [],
   },
 };
+
+export const form = {
+  fields: [
+    {
+      name: "reminders",
+      label: "Reminders",
+      type: "repeat",
+      fields: [
+        {
+          name: "preset",
+          label: "When",
+          type: "select",
+          options: [{ label: "One week", value: "week" }],
+        },
+        {
+          name: "after",
+          label: "After",
+          type: "number",
+          min: 1,
+          when: { field: "preset", equals: "custom" },
+        },
+        { name: "at", label: "At", type: "datetime" },
+      ],
+    },
+  ],
+} satisfies import("../src/index.js").SidebarActionInput;
+export const inspector: import("../src/index.js").SidebarPreview = {
+  metadata: [
+    {
+      label: "Status",
+      value: "Ready",
+      tone: "success",
+      display: "badge",
+      copy: "Ready",
+    },
+  ],
+  content: { app: "details", data: { id: "one" } },
+  actions: [{ action: "copy-title", label: "Copy title" }],
+};
+export const copied: SidebarSourceEffect = { copy: "Full title" };

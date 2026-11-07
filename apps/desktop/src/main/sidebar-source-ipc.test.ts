@@ -72,10 +72,12 @@ describe("a module's requests of Work (ADR 0234, 0272)", () => {
           source: "tabs",
           itemId: "x",
           action: "a",
-          values: { a: "1", b: "2", c: "3", d: "4", e: "5" },
+          values: Object.fromEntries(
+            Array.from({ length: 17 }, (_, i) => [`field${i}`, "x"]),
+          ),
         },
         grants,
       ),
-    ).toThrow("four");
+    ).toThrow();
   });
 });

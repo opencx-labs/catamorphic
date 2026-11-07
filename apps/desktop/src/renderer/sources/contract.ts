@@ -81,7 +81,7 @@ export interface SectionSource {
       itemId: string;
       action: string;
       mode?: OpenMode;
-      values?: Record<string, string>;
+      values?: import("@catamorphic/work-customization").SidebarInputValues;
     },
   ) => Promise<SidebarSourceEffect | undefined>;
   move?: (

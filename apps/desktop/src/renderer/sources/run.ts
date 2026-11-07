@@ -37,7 +37,7 @@ export async function runRowAction({
   row?: SidebarSourceItem;
   itemId: string;
   action: string;
-  values?: Record<string, string>;
+  values?: import("@catamorphic/work-customization").SidebarInputValues;
   /** How "open" opens (a click's modifiers); other verbs name their own. */
   mode?: OpenMode;
   session?: SidebarSourceSession;
@@ -71,6 +71,8 @@ export async function runRowAction({
     ...(surface ? { surface } : {}),
     signal,
   });
+  if (effect?.copy !== undefined)
+    await navigator.clipboard.writeText(effect.copy);
   if (effect?.open)
     await open(
       effect.open,

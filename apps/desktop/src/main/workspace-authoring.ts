@@ -29,6 +29,9 @@ in authorized workflows and host operations.
 
 Work sidebars are narrow, with native 28px rows. Short labels usually leave more
 room for content; previews and hover/focus descriptions hold secondary details.
-Quiet lists normally need no status rows or routine success messages. These are
+Quiet lists normally need no status rows or routine success messages. Header and
+row actions can open native forms with selects, repeated entries and custom times.
+Inspectors wrap facts and can offer copy/actions, rich prose or a sandboxed app.
+Ordinary current-context changes retain persistent project lists and focus. These are
 starting points, not restrictions on a person's design.
 `;

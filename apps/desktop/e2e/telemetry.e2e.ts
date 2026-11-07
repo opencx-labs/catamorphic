@@ -113,7 +113,7 @@ it("exports desktop project signals using committed settings and machine destina
     }
   } finally {
     if (app) await app.stop();
-    else removeE2eDirectory(directory);
+    else await removeE2eDirectory(directory);
     await Promise.all([local.close(), remote.close()]);
   }
 });

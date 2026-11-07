@@ -1,6 +1,13 @@
 import { randomUUID } from "node:crypto";
 import { appendFileSync } from "node:fs";
-import { cp, mkdir, mkdtemp, realpath, writeFile } from "node:fs/promises";
+import {
+  cp,
+  mkdir,
+  mkdtemp,
+  readFile,
+  realpath,
+  writeFile,
+} from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { RUNNER_PROTOCOL_VERSION } from "../packages/agent-protocol/src/runner.js";
@@ -112,7 +119,7 @@ export async function main(args: readonly string[]): Promise<number> {
       await writeFile(
         path.join(agent.project, "CUSTOMIZATION.md"),
         scenario.id === "todo-sidebar"
-          ? `${WORKSPACE_AUTHORING_GUIDE}\n`
+          ? `${WORKSPACE_AUTHORING_GUIDE}\n${await readFile(path.join(repository, "apps/desktop/docs/customization-reference.md"), "utf8")}\n`
           : "PRIVATE-WORKFLOWS.md describes this host's private state, workflow, and notification capabilities.\n",
       );
       const prompt = `${scenario.prompt}\n\nThis is an isolated local project with the installed SDK, native file/shell tools, and the host capabilities offered to this turn. ${scenario.id === "todo-sidebar" ? "AGENTS.md contains the result-address convention." : ""}`;
@@ -205,6 +212,8 @@ export async function main(args: readonly string[]): Promise<number> {
           detail: error instanceof Error ? error.message : String(error),
         });
       }
+      if (scenario.id === "todo-sidebar" && fixture)
+        grades.push(...(await fixture.grade()));
       report.grades = grades;
       report.files = (await sourceFiles(agent.project)).map((file) =>
         path.relative(agent?.project ?? "", file),

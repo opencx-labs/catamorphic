@@ -32,9 +32,23 @@ const text = (value: unknown) =>
  * an app, from its `data`), else what it says about itself. Inspection
  * never opens or starts anything.
  */
-export function ChipPreview({ chip }: { chip: Chip }) {
+export function ChipPreview({
+  chip,
+  onAction,
+}: {
+  chip: Chip;
+  onAction?: (
+    entry: import("../../shared/sidebar.js").SidebarMenuEntry,
+  ) => unknown;
+}) {
   if (chip.preview)
-    return <PreviewCard preview={chip.preview} fallbackTitle={chip.label} />;
+    return (
+      <PreviewCard
+        preview={chip.preview}
+        fallbackTitle={chip.label}
+        onAction={onAction}
+      />
+    );
   const data = chip.data ?? {};
   const kind = chipKind(chip);
   const filePath = text(data.filePath);

@@ -4079,3 +4079,24 @@ globe. Expanding the
 real attached dock reserves 64px beneath onboarding, moving its content and
 navigation upward with the existing 250ms padding motion. The inert tutorial
 preview never changes real workspace clearance. Reduced motion settles directly.
+
+### Customization forms and inspectors (2026-11-07)
+
+Action dialogs use the same semantic controls as Settings, including selects,
+checkboxes, multiline text, numbers, calendar dates, times and absolute instants.
+A source may condition controls on an unconditional sibling or repeat a group.
+The host retains values and focus during edits and errors; it omits hidden
+values on submit. Relative presets and their units belong to the customization.
+Datetime controls show the machine timezone and return ISO instants, refusing
+skipped or repeated clock times. Complex forms use an ordinary app.
+
+Standard row commands are composed once by action and destination. Source looks
+replace the automatic choice; different destinations remain distinct. Explicit
+menu overrides keep their existing precedence, including an empty placement.
+
+Inspector labels keep their casing and facts wrap. Copy and fact actions reveal
+on hover or focus, with the existing shared copy feedback. Values may use theme
+tones, code, badges or a color swatch alongside their text. Rich prose uses
+Markdown; arbitrary interactive inspector content mounts an ordinary sandboxed
+app, with its existing authority and cleanup. Context refreshes retain the tree
+and its expanded branches in every non-session-scoped section (ADR 0308).

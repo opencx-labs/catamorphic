@@ -41,9 +41,24 @@ const identity = z.object({
   projectId: z.string().min(1),
   sectionId: z.string().min(1),
 });
+const scalarValue = z.union([
+  z.string().max(8192),
+  z.number().finite(),
+  z.boolean(),
+  z.null(),
+]);
+const fieldValues = z
+  .record(z.string().max(40), scalarValue)
+  .refine((v) => Object.keys(v).length <= 16);
 const valuesSchema = z
-  .record(z.string().max(40), z.string().max(8192))
-  .refine((values) => Object.keys(values).length <= 4, "At most four values.");
+  .record(
+    z.string().max(40),
+    z.union([scalarValue, z.array(fieldValues).max(20)]),
+  )
+  .refine(
+    (v) => Object.keys(v).length <= 16 && JSON.stringify(v).length <= 32768,
+    "Action values are too large.",
+  );
 export const sourceRequestSchema = identity
   .extend({
     requestId: z.string().min(1),
@@ -468,7 +483,9 @@ export function registerSidebarSources(deps: {
         call,
       });
     });
-    return call.op === "read" ? sanitizeSidebarSourcePage(value) : value;
+    return call.op === "read"
+      ? sanitizeSidebarSourcePage(value, { apps: call.source === "apps" })
+      : value;
   };
 
   const resolve = async (
@@ -630,10 +647,8 @@ export function registerSidebarSources(deps: {
       } = { cancelled: false };
       requests.set(key, request);
       try {
-        const { runtime, ask, profileId, modulePath, subject } = await resolve(
-          event,
-          input,
-        );
+        const { runtime, ask, profileId, modulePath, subject, declared } =
+          await resolve(event, input);
         if (request.cancelled || event.sender.isDestroyed())
           throw new Error("Sidebar request cancelled.");
         // A module wanting more than the person allowed does not run: its
@@ -660,7 +675,11 @@ export function registerSidebarSources(deps: {
           // The last loaded row a reveal compares with, checked like any row.
           ...(after === undefined
             ? {}
-            : { after: sanitizeSidebarSourceItem(after) }),
+            : {
+                after: sanitizeSidebarSourceItem(after, new Set(), {
+                  apps: declared.access.lists?.includes("apps"),
+                }),
+              }),
           requestId: key,
         });
         if (request.cancelled || event.sender.isDestroyed())
@@ -669,14 +688,18 @@ export function registerSidebarSources(deps: {
         // drags to accept before any drop happens.
         if (input.method === "load")
           return {
-            ...sanitizeSidebarSourcePage(result),
+            ...sanitizeSidebarSourcePage(result, {
+              apps: declared.access.lists?.includes("apps"),
+            }),
             capabilities: runtime.capabilities,
             revision: runtime.inspect().revision,
           };
         if (input.method === "reveal")
           return result === null || result === undefined
             ? null
-            : sanitizeSidebarSourceItem(result);
+            : sanitizeSidebarSourceItem(result, new Set(), {
+                apps: declared.access.lists?.includes("apps"),
+              });
         if (input.method === "action")
           return sidebarSourceEffect(result) ?? null;
         return null;

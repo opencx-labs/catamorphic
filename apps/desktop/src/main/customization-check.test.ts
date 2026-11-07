@@ -134,3 +134,46 @@ it.skipIf(process.platform !== "darwin")(
     ).toMatchObject({ ok: false, accessRequired: { permissions: ["state"] } });
   },
 );
+
+it.skipIf(process.platform !== "darwin")(
+  "uses the live app-composition grant for load and reveal previews",
+  async () => {
+    const { root, project, sourcePath, authoring } = fixture();
+    fs.writeFileSync(
+      path.join(project, sourcePath),
+      `const row={id:'one',label:'Task',preview:{content:{app:'details'}}};export default {load:async()=>({items:[row]}),reveal:async()=>row};`,
+    );
+    const input = {
+      projectRoot: project,
+      sourcePath,
+      workerPath: authoring.worker,
+      scratchRoot: path.join(root, "scratch"),
+      toolchain: { PATH: process.env.PATH ?? "" },
+    };
+    expect(await previewCustomization(input)).toMatchObject({
+      ok: false,
+      error: expect.stringContaining("catamorphic.access.lists"),
+    });
+    fs.writeFileSync(
+      path.join(project, ".work/todos/package.json"),
+      JSON.stringify({ catamorphic: { access: { lists: ["apps"] } } }),
+    );
+    const approvedAccess = { lists: ["apps"] };
+    expect(
+      await previewCustomization({ ...input, approvedAccess }),
+    ).toMatchObject({
+      ok: true,
+      result: { items: [{ preview: { content: { app: "details" } } }] },
+    });
+    expect(
+      await previewCustomization({
+        ...input,
+        approvedAccess,
+        request: { method: "reveal", url: "app:details" },
+      }),
+    ).toMatchObject({
+      ok: true,
+      result: { preview: { content: { app: "details" } } },
+    });
+  },
+);

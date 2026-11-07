@@ -9,14 +9,8 @@ import {
   useRef,
   useState,
 } from "react";
+import { isMenuSeparator, type MenuSeparator } from "../../shared/menu.js";
 import {
-  dangerLast,
-  isMenuSeparator,
-  type MenuSeparator,
-  menuGroups,
-} from "../../shared/menu.js";
-import {
-  OPEN_ACTIONS,
   type OpenMode,
   openModeForAction,
   openModeFromEvent,
@@ -27,6 +21,7 @@ import type {
   SidebarSignal,
   SidebarTrend,
 } from "../../shared/sidebar.js";
+import { composeSidebarMenu } from "../../shared/sidebar-menu.js";
 import { appIsMovingFocus } from "../lib/app-focus.js";
 import type { SidebarMenuEntry, SidebarPreview } from "../lib/desktop-api.js";
 import { lucideIcon } from "../lib/lucide-icon.js";
@@ -100,6 +95,7 @@ export function SidebarItemRow({
   presentation = "row",
   expanded,
   resource = false,
+  resourceUrl,
   defaultOpenMode = "replace",
   label,
   pointKey,
@@ -145,6 +141,7 @@ export function SidebarItemRow({
   presentation?: "row" | "tile";
   expanded?: boolean;
   resource?: boolean;
+  resourceUrl?: string;
   defaultOpenMode?: OpenMode;
   label: string;
   /**
@@ -199,6 +196,10 @@ export function SidebarItemRow({
     ...(menu ?? []),
     ...(contextMenu ?? []),
     ...(actions ?? []),
+    ...(preview === false ? [] : (preview?.actions ?? [])),
+    ...(preview === false
+      ? []
+      : (preview?.metadata?.flatMap((f) => f.actions ?? []) ?? [])),
   ];
   const supports = (entry: ContextMenuEntry) =>
     Boolean(entry.url) ||
@@ -227,10 +228,12 @@ export function SidebarItemRow({
   const resolvedMenu = available(
     overrides.menu ??
       (menu === undefined
-        ? menuGroups<ContextMenuEntry>(
-            resource ? OPEN_ACTIONS : [],
-            dangerLast(defaultMenu ?? []),
-          )
+        ? composeSidebarMenu({
+            resource,
+            entries: defaultMenu ?? [],
+            url: resourceUrl,
+            defaultMode: overrides.open ?? defaultOpenMode,
+          })
         : menu),
   );
   const resolvedContext = available(configuredContext ?? resolvedMenu);
@@ -707,6 +710,7 @@ export function SidebarItemRow({
           preview={preview === false ? undefined : preview}
           content={previewContent}
           fallbackTitle={label}
+          onAction={invoke}
           onMouseEnter={() => {
             previewHoveredRef.current = true;
             clearTimeout(previewTimerRef.current);

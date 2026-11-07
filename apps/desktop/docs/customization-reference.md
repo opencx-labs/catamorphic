@@ -83,8 +83,69 @@ description, badges, progress, trend, signal, activity, preview, menus, and data
 A URL navigates through Work's normal resolver. A row without a URL receives
 `action: 'open'` and a separate `mode` (`replace`, `tab`, `side`, `floating`). An
 action may return `{ open, mode? }`. It receives `values` for an entry's `input`
-dialog: `{ title?, submit?, fields: [{ name, label, value?, placeholder? }] }`, up to
-four text fields. Thrown errors keep that dialog open with feedback.
+dialog. Thrown errors keep that dialog open with edited values and feedback.
+
+`SidebarActionInput` has `title?`, `submit?`, and `fields` (one to sixteen).
+Scalar fields have a stable `name`, visible `label`, optional `description`, `value`,
+`required`, and `placeholder`. Types: `text` (default), `textarea`, `number`
+(`min`, `max`, `step`), `checkbox`, `select` (`options: [{label,value,disabled?}]`),
+`date`, `time`, and `datetime`. Datetime controls show the machine timezone and
+submit ISO instants; calendar-only dates and times remain strings. Clock gaps
+and repeated local times are refused. `when: {field, equals}` compares an
+unconditional sibling and omits hidden values from submission.
+
+`type: 'repeat'` repeats scalar `fields`, with `minItems`, `maxItems` (up to 20),
+optional array `value`, and `addLabel`. Groups cannot nest. Actions receive
+`SidebarInputValues`: strings, numbers, booleans, null for empty numbers, and
+arrays of named group values. Validate application rules in the source too.
+Header actions use the same form, so a manual Add flow needs no separate app.
+For example, a reminder group can compose these controls (the host does not
+interpret their business meaning):
+
+```ts
+const reminderFields = [
+  {name: 'preset', label: 'Remind me', type: 'select', options: [
+    {label: '2 days', value: '2d'}, {label: 'One week', value: '1w'},
+    {label: 'Custom timeout', value: 'custom'}, {label: 'At a date and time', value: 'at'},
+  ]},
+  {name: 'amount', label: 'After', type: 'number', min: 1, required: true,
+   when: {field: 'preset', equals: 'custom'}},
+  {name: 'unit', label: 'Unit', type: 'select', options: [
+    {label: 'Minutes', value: 'minutes'}, {label: 'Hours', value: 'hours'},
+  ], when: {field: 'preset', equals: 'custom'}},
+  {name: 'at', label: 'Reminder time', type: 'datetime', required: true,
+   when: {field: 'preset', equals: 'at'}},
+] satisfies SidebarScalarInputField[];
+```
+
+Place that in `{name:'reminders', label:'Reminders', type:'repeat', fields:reminderFields}`
+and add a required title field. Convert the selected durations to instants in the
+source action. Reminders themselves use ordinary workflow runs and durable waits;
+use `work.start` for a workflow that may wait, rather than a blocking `work.call`.
+A preview is disposable, so use fixture state/workflows while trying mutations.
+
+Standard opening commands appear once per mode and destination. A source's
+entry replaces the automatic label/icon for the same opening; explicit menus
+still replace the whole placement. There is no need to list the four opens on
+URL rows. Different destinations remain separate choices.
+
+An inspector's `preview` has `title`, `description`, `metadata` facts and
+`actions` using the ordinary row action contract. Facts preserve label casing
+and wrap their values. Each supports `tone`, `display` (`text`, `code`, `badge`,
+`color`), a hex `color` swatch, `copy` text and hover/focus `actions`. Copy uses
+the shared clipboard feedback. `content: {markdown}` supplies prose, tables and
+lists (no executable HTML or remote images); `content: {app, height?, data?}` mounts an
+ordinary sandboxed project app, with its existing consent and lifecycle, for
+arbitrary UI. A source composing an app must declare `apps` in
+`catamorphic.access.lists`; the app keeps its own consent. It receives `data`
+through `(await getContext()).host.inspector` from `@catamorphic/app`. Inspector
+actions obey the same safe target rules as row actions. An explicit action may
+also return `{copy: string}`. No clipboard effect runs on load.
+
+Keep stable row IDs. Current surface/chat changes quietly refresh retained
+non-session-scoped lists, including expanded branches, without replacing their
+DOM, focus or collection. `when.session` declares a list scoped to that chat;
+omit it for a persistent project list that merely uses current context.
 
 `move({itemId,parentId,beforeId})` reorders or reparents this source's rows.
 `drop({parentId,beforeId,payload})` accepts external rows. Root parent is null;
@@ -138,7 +199,8 @@ declaration. The exact source revision is authorized; a shared workflow with
 the same name does not grant access to a private run.
 
 `work.notify({title,body?,route?,idempotencyKey})` records a durable notification
-without a model turn. Routes are local host paths. Stable keys prevent a retried
+without a model turn. Optional routes are local host paths starting with `/`,
+not `file:` or `app:` resource addresses. Stable keys prevent a retried
 operation from creating another event. OS banner display depends on user settings;
 delivery transports are at least once and receive a stable event ID.
 
