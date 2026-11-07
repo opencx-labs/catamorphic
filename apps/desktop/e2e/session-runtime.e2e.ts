@@ -418,9 +418,16 @@ it("centers expanded chats on request and drags the collapsed bubble between bot
       return rail.dataset.dockCollapsed==='true' && host.dataset.dockSide===${JSON.stringify(side)} && Math.abs((${JSON.stringify(side)}==='left'?box.left-bounds.left:bounds.right-box.right)-32)<2;`);
   }
   // Escape cancels a drag, and neither dragging nor canceling expands the dock.
-  const point = await app.eval<{ x: number; y: number }>(
-    `(() => {const b=document.querySelector('[aria-label="Expand chat bubbles"]').getBoundingClientRect();return {x:b.left+b.width/2,y:b.top+b.height/2};})()`,
-  );
+  // Cross to the opposite corner so a normal release would change the side.
+  const point = await app.eval<{
+    x: number;
+    y: number;
+    target: number;
+  }>(`(() => {
+    const b=document.querySelector('[aria-label="Expand chat bubbles"]').getBoundingClientRect();
+    const host=document.querySelector('[data-dock-host]').getBoundingClientRect();
+    return {x:b.left+b.width/2,y:b.top+b.height/2,target:host.left+80};
+  })()`);
   await app.cdp("Input.dispatchMouseEvent", {
     type: "mousePressed",
     ...point,
@@ -429,22 +436,24 @@ it("centers expanded chats on request and drags the collapsed bubble between bot
   });
   await app.cdp("Input.dispatchMouseEvent", {
     type: "mouseMoved",
-    x: point.x - 100,
+    x: point.target,
     y: point.y,
     button: "left",
     buttons: 1,
   });
+  await wait(`const rail=$('[data-dock-rail]'), host=$('[data-dock-host]');
+    return rail?.dataset.dockDragging==='true' && rail.getBoundingClientRect().left < host.getBoundingClientRect().left + host.clientWidth / 3;`);
   await app.press("Escape");
+  await wait(`return !$('[data-dock-dragging]');`);
   await app.cdp("Input.dispatchMouseEvent", {
     type: "mouseReleased",
-    x: point.x - 100,
+    x: point.target,
     y: point.y,
     button: "left",
     clickCount: 1,
   });
-  await wait(
-    `return $('[data-dock-rail]')?.dataset.dockCollapsed==='true' && !$('[data-dock-dragging]') && $('[data-dock-host]').dataset.dockSide==='right';`,
-  );
+  await wait(`const rail=$('[data-dock-rail]'), host=$('[data-dock-host]');
+    return rail?.dataset.dockCollapsed==='true' && !$('[data-dock-dragging]') && host.dataset.dockSide==='right' && Math.abs(host.getBoundingClientRect().right - rail.getBoundingClientRect().right - 32) < 2;`);
   await app.cdp("Emulation.setEmulatedMedia", {
     features: [{ name: "prefers-reduced-motion", value: "reduce" }],
   });

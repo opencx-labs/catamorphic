@@ -1,5 +1,36 @@
 # Desktop resource verification
 
+## First launch and tutorial previews
+
+The shell creates its windows before dynamically loading the embedded server's
+boot module.
+Desktop identity constants live in `main/server/identity.ts`: importing an ID
+must not evaluate backend boot. The server remains in process and retains the
+same readiness gate, migration backup, and Default Project initialization.
+Deferring boot-module evaluation lets renderer loading overlap that work. Some
+framework dependencies remain eager through other desktop features; this defers
+boot and its unique dependencies, not the entire backend dependency graph. It
+does not make backend initialization free or promise a particular launch time.
+
+Tutorial workspace previews retain the real tab, sidebar, timeline and composer
+components. Their fixed-size model scales with its CSS container, without a
+ResizeObserver feeding size changes back through React. The preview is memoized
+while its inputs stay the same; inherited theme and font tokens still update it.
+Example messages get a current timestamp on each mount, avoiding a fixed date's
+cold relative-date formatter. Only the current and exiting pages stay mounted,
+and the shared motion fallback releases an exit even when reduced motion or a
+hidden track produces no transition-end event.
+
+Keep performance claims separate from correctness checks. The diagnostic
+first-launch flow observed two preview ResizeObservers become zero and one
+relative formatter construction become zero. Instrumented click and launch times
+varied with host load, so those counts establish removed work, not a percentage
+latency improvement. Use matched native production runs for launch and animation
+comparisons; a development renderer or a software-composited private display is
+not a native release benchmark.
+
+## Resource soak runner
+
 Run `bun run build` before measuring. From the worktree root:
 
 ```sh

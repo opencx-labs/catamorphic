@@ -12,7 +12,7 @@ import {
   webhook,
 } from "@catamorphic/server-sdk";
 import { z } from "zod";
-import { DESKTOP_TENANT_ID, DESKTOP_USER_ID } from "./boot.js";
+import { DESKTOP_TENANT_ID, DESKTOP_USER_ID } from "./identity.js";
 
 /** Session events are published durably by core; these sources are desktop-owned. */
 export const terminalIdle = defineTriggerKind({

@@ -47,7 +47,7 @@ import type { ServerState } from "../ipc.js";
 import { popupNativeMenu } from "../native-menu.js";
 import type { ProfileConfigManager } from "../profile-config.js";
 import type { ProfilesStore } from "../profiles.js";
-import { DESKTOP_TENANT_ID, DESKTOP_USER_ID } from "../server/boot.js";
+import { DESKTOP_TENANT_ID, DESKTOP_USER_ID } from "../server/identity.js";
 import { shellDocumentUrl } from "../shell-document.js";
 import {
   isRegisteredShellContents,

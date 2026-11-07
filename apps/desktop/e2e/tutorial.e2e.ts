@@ -359,6 +359,29 @@ describe("the Work tutorial", () => {
         `document.querySelector('.onboarding-page:not([inert])').scrollWidth <= document.querySelector('.onboarding-page:not([inert])').clientWidth`,
       ),
     ).toBe(true);
+    expect(
+      await app.eval(`(() => {
+        const frame = document.querySelector('.onboarding-page:not([inert]) .onboarding-workspace-preview');
+        const model = frame.querySelector('.onboarding-workspace-model');
+        return Math.abs(new DOMMatrix(getComputedStyle(model).transform).a - frame.clientWidth / 880);
+      })()`),
+    ).toBeLessThan(0.001);
+    // A hidden track emits no transitionend: cleanup must still release the
+    // outgoing preview rather than retaining its subscriptions and DOM.
+    await app.eval(
+      `document.querySelector('.onboarding-track').style.display = 'none'`,
+    );
+    try {
+      await openOnboardingStep(app, "AI agents");
+      await app.waitFor(
+        `!document.querySelector('.onboarding-page[inert] .onboarding-workspace-preview')`,
+      );
+    } finally {
+      await app.eval(
+        `document.querySelector('.onboarding-track').style.removeProperty('display')`,
+      );
+    }
+    await openOnboardingStep(app, "Theme");
     await app.eval(`window.catamorphicDesktop.devWindow('fitSize',1200,800)`);
     await app.cdp("Emulation.setEmulatedMedia", { features: [] });
     expect(app.getRendererErrors()).toEqual([]);

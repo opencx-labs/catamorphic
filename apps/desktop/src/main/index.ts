@@ -58,12 +58,8 @@ import { assertProductionLaunchArguments } from "./production-launch.js";
 import { ProfileConfigManager } from "./profile-config.js";
 import { ProfilesStore } from "./profiles.js";
 import { registerResourceSupport } from "./resource-monitor.js";
-import {
-  DESKTOP_TENANT_ID,
-  DESKTOP_USER_ID,
-  type EmbeddedServer,
-  startEmbeddedServer,
-} from "./server/boot.js";
+import type { EmbeddedServer } from "./server/boot.js";
+import { DESKTOP_TENANT_ID, DESKTOP_USER_ID } from "./server/identity.js";
 import { DESKTOP_API_TOKEN_HEADER } from "./server/local-api-guard.js";
 import { resolveDataPaths } from "./server/paths.js";
 import {
@@ -1131,6 +1127,9 @@ app.whenReady().then(async () => {
       );
     }
     await loginPathAdopted;
+    // Let the shell start loading before evaluating the backend's module
+    // graph. The server still owns one readiness gate and runs in process.
+    const { startEmbeddedServer } = await import("./server/boot.js");
     server = await startEmbeddedServer(
       paths,
       profilesStore,
