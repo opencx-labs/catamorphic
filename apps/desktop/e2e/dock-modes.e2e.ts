@@ -703,6 +703,10 @@ describe("dock modes", () => {
     await dockRun(
       `window.__dockPointerDowns = 0;
        document.addEventListener('pointerdown', () => { window.__dockPointerDowns += 1; }, true);
+       window.__dockLastMove = null;
+       document.addEventListener('mousemove', event => {
+         if (event.isTrusted) window.__dockLastMove = { x: event.clientX, y: event.clientY };
+       }, true);
        return true;`,
     );
     // The margin beside the chat is empty space in the dock window: the
@@ -771,8 +775,41 @@ describe("dock modes", () => {
       `setComposer('terminal: sleep 15 && echo through-done'); send(); return true;`,
     );
     await dockWait(
-      `return dockH() > 400 && !frontDock().hasAttribute('data-lurking');`,
-      { label: "expanded while the dock window is focused" },
+      `return dockH() > 400 && !frontDock().hasAttribute('data-lurking') &&
+        frontDock().querySelector('[data-testid="session-inspector-trigger"]')?.getAttribute('aria-label')?.includes(', Working,') &&
+        frontDock().getAnimations({subtree:true}).every(animation =>
+          animation.effect?.getTiming().iterations === Infinity ||
+          (!animation.pending && animation.playState !== 'running' && animation.playState !== 'paused'));`,
+      { label: "working chat expanded while the dock window is focused" },
+    );
+    // Cross the chat's edge before leaving its native window, as in the
+    // preceding pass-through case. A direct jump can preserve parked hover.
+    const leaving = await bounds();
+    const departure = {
+      x: leaving.dock.x - leaving.main.x + Math.floor(leaving.chat.left / 2),
+      y:
+        leaving.dock.y -
+        leaving.main.y +
+        leaving.chat.top +
+        leaving.chat.height / 2,
+    };
+    await dockRun(`window.__dockLastMove = null; return true;`);
+    await app.movePointerThrough([
+      {
+        x: leaving.dock.x - leaving.main.x + leaving.chat.left + 6,
+        y: departure.y,
+      },
+      departure,
+    ]);
+    await dockWait(
+      `const move = window.__dockLastMove;
+       if (!move) return false;
+       const box = frontDock().getBoundingClientRect();
+       return (${process.platform === "linux"} || move.x < box.left || move.x > box.right ||
+         move.y < box.top || move.y > box.bottom) && !frontDock().matches(':hover');`,
+      {
+        label: "the dock observed the pointer crossing out of the working chat",
+      },
     );
     // A click on the workspace takes the focus with it: the chat lurks.
     const outside = { x: 40, y: 400 };

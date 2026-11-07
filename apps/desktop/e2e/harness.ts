@@ -11,6 +11,7 @@ import {
   clickNativePointer,
   moveNativePointer,
   moveNativePointerThrough,
+  type NativeClickOptions,
 } from "./native-pointer.js";
 
 /**
@@ -112,7 +113,10 @@ export interface AppHandle {
    * whichever window the OS finds there, so a window above the workspace
    * either takes it or lets it through.
    */
-  clickPointer: (point: { x: number; y: number }) => Promise<void>;
+  clickPointer: (
+    point: { x: number; y: number },
+    options?: NativeClickOptions,
+  ) => Promise<void>;
   /** Insert text through Chromium's real editing path (including Monaco). */
   insertText: (text: string) => Promise<void>;
   /**
@@ -369,11 +373,11 @@ export async function launchApp(opts: LaunchOpts = {}): Promise<AppHandle> {
           points.map(({ x, y }) => ({ x: bounds.x + x, y: bounds.y + y })),
         );
       },
-      clickPointer: async ({ x, y }) => {
+      clickPointer: async ({ x, y }, options) => {
         const bounds = await client.eval<{ x: number; y: number }>(
           "window.catamorphicDesktop.devWindow('get').then(state => state.contentBounds)",
         );
-        await clickNativePointer({ x: bounds.x + x, y: bounds.y + y });
+        await clickNativePointer({ x: bounds.x + x, y: bounds.y + y }, options);
       },
       connectToFrame,
       getOutput: () => output,

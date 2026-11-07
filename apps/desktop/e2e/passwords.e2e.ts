@@ -376,17 +376,79 @@ describe("browser passwords", () => {
       "suggestions open",
     );
     const point = await pointInApp('[data-testid="password-suggestion"]');
-    await inGuest("document.activeElement.blur(); true");
-    // No readiness wait after blur: the press must land within its grace period.
-    await app.clickPointer(point);
-    await app.waitFor(
-      `${guest}.executeJavaScript("document.querySelector('#pw').value === 'correct horse' && document.querySelector('#email').value === 'alice@example.com'")`,
-      { label: "filled after an early blur" },
-    );
-    await app.waitFor(
-      `!document.querySelector('[data-testid="password-suggestions"]')`,
-      { label: "suggestions closed" },
-    );
+    await app.eval(`(() => {
+      const view = ${guest};
+      const trace = { events: [], blurred: null, resolveBlur: null };
+      trace.blurred = new Promise(resolve => { trace.resolveBlur = resolve; });
+      const record = (type, event) => trace.events.push({
+        type, time: performance.now(),
+        target: event?.target?.closest?.('[data-testid]')?.dataset.testid,
+        open: document.querySelector('[data-testid="password-suggestions"]')?.dataset.open,
+      });
+      const onMessage = event => {
+        if (event.channel === 'catamorphic:autofill-hide' && event.args[0]?.reason === 'blur') {
+          record('blur-report', event);
+          trace.resolveBlur();
+        }
+      };
+      const onPointer = event => { if (event.isTrusted) record(event.type, event); };
+      view.addEventListener('ipc-message', onMessage);
+      document.addEventListener('pointerdown', onPointer, true);
+      document.addEventListener('pointerup', onPointer, true);
+      window.__earlyBlur = trace;
+      window.__removeEarlyBlur = () => {
+        view.removeEventListener('ipc-message', onMessage);
+        document.removeEventListener('pointerdown', onPointer, true);
+        document.removeEventListener('pointerup', onPointer, true);
+        delete window.__earlyBlur;
+        delete window.__removeEarlyBlur;
+      };
+      return true;
+    })()`);
+    try {
+      await app.clickPointer(point, {
+        // Process startup, native movement and display checks finish first.
+        // Release the one native press as soon as the real blur report arrives.
+        beforePress: () =>
+          app.eval<void>(`(async () => {
+            await ${guest}.executeJavaScript('document.activeElement.blur(); true');
+            await window.__earlyBlur.blurred;
+          })()`),
+      });
+      await app.waitFor(
+        "window.__earlyBlur.events.some(event => event.type === 'pointerup')",
+        { label: "the native early-blur gesture reached Chromium" },
+      );
+      const events = await app.eval<
+        { type: string; time: number; target?: string; open?: string }[]
+      >("window.__earlyBlur.events");
+      const blur = events.find((event) => event.type === "blur-report");
+      const presses = events.filter((event) => event.type === "pointerdown");
+      console.info("PASSWORD_EARLY_BLUR_TRACE", JSON.stringify(events));
+      expect(presses).toHaveLength(1);
+      expect(blur).toBeDefined();
+      expect(presses[0]?.target).toBe("password-suggestion");
+      expect(presses[0]?.open).toBe("true");
+      expect(presses[0]?.time ?? 0).toBeGreaterThan(blur?.time ?? Infinity);
+      expect((presses[0]?.time ?? Infinity) - (blur?.time ?? 0)).toBeLessThan(
+        250,
+      );
+      await app.waitFor(
+        `${guest}.executeJavaScript("document.querySelector('#pw').value === 'correct horse' && document.querySelector('#email').value === 'alice@example.com'")`,
+        { label: "filled after an early blur" },
+      );
+      await app.waitFor(
+        `!document.querySelector('[data-testid="password-suggestions"]')`,
+        { label: "suggestions closed" },
+      );
+    } catch (error) {
+      const trace = await app.eval("window.__earlyBlur.events");
+      throw new Error(`Early blur input: ${JSON.stringify({ point, trace })}`, {
+        cause: error,
+      });
+    } finally {
+      await app.eval("window.__removeEarlyBlur(); true");
+    }
   });
 
   it("closes the list when the page's field loses focus for good", async () => {

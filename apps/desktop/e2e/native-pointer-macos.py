@@ -1,6 +1,6 @@
 """Native pointer input on a dedicated GitHub macOS desktop; no extra packages.
 
-Usage: native-pointer-macos.py X Y [X Y ...] [click], or --displays
+Usage: native-pointer-macos.py X Y [X Y ...] [click|click-when-ready], or --displays
 
 The pointer moves the way a hand moves it: mouse-moved events posted where
 the hardware's arrive, each point reached from a pixel beside it, so the app
@@ -13,6 +13,7 @@ an app hovering what the pointer had already left.
 import ctypes
 import json
 import os
+import signal
 import sys
 import time
 
@@ -88,7 +89,8 @@ args = sys.argv[1:]
 if args == ["--displays"]:
     print(json.dumps(active_displays()))
     sys.exit(0)
-click = args[-1:] == ["click"]
+armed = args[-1:] == ["click-when-ready"]
+click = armed or args[-1:] == ["click"]
 if click:
     args = args[:-1]
 if not args or len(args) % 2:
@@ -155,6 +157,19 @@ for point in points:
 
 if click:
     end = points[-1]
-    post(DOWN, end)
-    time.sleep(0.05)
-    post(UP, end)
+    if armed:
+        # Setup and movement finish before the fixture starts a timed race.
+        # EOF or an unexpected command cancels without posting a press.
+        print("ready", flush=True)
+        if sys.stdin.readline() != "click\n":
+            sys.exit(0)
+    def interrupted(_signal, _frame):
+        raise SystemExit("Native click interrupted")
+
+    signal.signal(signal.SIGTERM, interrupted)
+    try:
+        post(DOWN, end)
+        time.sleep(0.05)
+    finally:
+        # A timeout during the hold must not leave the runner's button down.
+        post(UP, end)

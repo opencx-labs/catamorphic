@@ -102,24 +102,56 @@ export async function moveNativePointer(point: { x: number; y: number }) {
   }
 }
 
+export interface NativeClickOptions {
+  /** Run after native setup and movement, immediately before its one press. */
+  beforePress?: () => Promise<void>;
+}
+
 /** A real click at the current pointer position (the OS decides the window). */
-export async function clickNativePointer(point: { x: number; y: number }) {
+export async function clickNativePointer(
+  point: { x: number; y: number },
+  options?: NativeClickOptions,
+) {
   assertIsolatedDesktopTestHost();
   const coordinates = [Math.round(point.x), Math.round(point.y)].map(String);
   if (process.platform === "linux") {
     // The move handles a pointer that is already there (--sync would hang).
     await moveNativePointer(point);
+    await options?.beforePress?.();
     await promisify(execFile)("xdotool", ["click", "1"], { timeout: 10_000 });
   } else {
-    await promisify(execFile)(
+    const click = promisify(execFile)(
       "python3",
       [
         path.join(import.meta.dirname, "native-pointer-macos.py"),
         ...coordinates,
-        "click",
+        options?.beforePress ? "click-when-ready" : "click",
       ],
       { timeout: 10_000 },
     );
+    if (!options?.beforePress) return void (await click);
+    const child = click.child;
+    const ready = new Promise<void>((resolve) => {
+      let output = "";
+      child.stdout?.on("data", (chunk: Buffer) => {
+        output += chunk.toString();
+        if (output.includes("ready\n")) resolve();
+      });
+    });
+    const earlyExit = click.then(() => {
+      throw new Error("Native pointer helper exited before the press");
+    });
+    try {
+      await Promise.race([ready, earlyExit]);
+      await Promise.race([options.beforePress(), earlyExit]);
+      child.stdin?.end("click\n");
+      await click;
+    } finally {
+      // EOF cancels an armed helper; never leave it waiting after a failure.
+      child.stdin?.end();
+      if (child.exitCode === null && child.signalCode === null) child.kill();
+      await click.catch(() => {});
+    }
   }
 }
 
