@@ -39,7 +39,7 @@ const binding: StoredTriggerActivation = {
 const fired: Json[] = [];
 const dispatcher = {
   storedActiveActivations: vi.fn(async () => [binding]),
-  fireAtCommit: vi.fn(async (args: { payload: Json }) => {
+  dispatchAtCommit: vi.fn(async (args: { payload: Json }) => {
     fired.push(args.payload);
     return {
       kind: "schedule",
@@ -162,7 +162,7 @@ describe("schedule trigger dispatcher", () => {
         .executeTakeFirstOrThrow(),
     ).toEqual({ next_fire_at: new Date("2026-08-29T10:06:00.000Z") });
 
-    dispatcher.fireAtCommit.mockRejectedValueOnce(
+    dispatcher.dispatchAtCommit.mockRejectedValueOnce(
       new Error("temporary outage"),
     );
     expect(

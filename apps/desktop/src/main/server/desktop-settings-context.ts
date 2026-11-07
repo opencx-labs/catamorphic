@@ -1,5 +1,6 @@
 import path from "node:path";
 import { PROJECT_PERSONAL_DIR } from "@catamorphic/workflow/project-layout";
+import { customizationAuthoring } from "../customization-authoring.js";
 import type { ProfileConfigManager } from "../profile-config.js";
 import {
   projectLocalWorkspaceFile,
@@ -9,11 +10,13 @@ import {
 /** Host metadata, refreshed per turn; it grants no filesystem permissions. */
 export function desktopSettingsContext({
   config,
+  authoringAssetsFile,
   profileId,
   project,
   access,
 }: {
   config: ProfileConfigManager;
+  authoringAssetsFile: string;
   profileId: string;
   project: { id: string; rootPath: string | null };
   access: "native" | "read-only" | "unavailable";
@@ -28,10 +31,24 @@ export function desktopSettingsContext({
   const stores = config.forProfile(profileId);
   const preferences = config.settingsFiles(profileId, project);
   const sharedSettings = config.sharedSettings(profileId);
+  const authoring = () => {
+    try {
+      return customizationAuthoring({
+        assetsFile: authoringAssetsFile,
+        cacheDirectory: path.resolve(
+          config.profileDir(profileId),
+          "../../authoring",
+        ),
+      });
+    } catch (cause) {
+      return { error: cause instanceof Error ? cause.message : String(cause) };
+    }
+  };
   return {
     access,
     projectId: project.id,
     profileId,
+    authoring: authoring(),
     // Parts whose files this profile shares, with the other profiles' names.
     sharedSettings: Object.keys(sharedSettings).length
       ? sharedSettings

@@ -3,7 +3,7 @@ import {
   type CollectionPage,
   createCollection,
 } from "./collection.js";
-import type { AppClient, RunHandle, TypedRunSnapshot } from "./contract.js";
+import type { AppClient } from "./contract.js";
 import {
   isJsonRpcResponse,
   type JsonRpcRequest,
@@ -25,6 +25,7 @@ import {
   isHostMessage,
   type RunSnapshot,
 } from "./protocol.js";
+import { createWorkflowClient } from "./workflow-client.js";
 
 /** Call-shaped guest messages, minus the fields the bridge fills in. */
 type OutboundCall =
@@ -40,8 +41,6 @@ type OutboundCall =
       "catamorphicApp" | "callId"
     >;
 
-const DEFAULT_POLL_INTERVAL_MS = 750;
-const TERMINAL_STATUSES = new Set(["completed", "failed", "canceled"]);
 const MCP_INITIALIZE_ID = 0;
 
 export interface AppClientOptions {
@@ -400,74 +399,48 @@ export function createClient<Contract>(
   options?: AppClientOptions,
 ): AppClient<Contract> {
   const transport = getBridge();
+  const workflows = createWorkflowClient(
+    {
+      call: ({ workflow, input }) =>
+        transport.send(
+          { kind: "call", workflowName: workflow, mode: "invoke", input },
+          options,
+        ),
+      start: async ({ workflow, input }) => {
+        const value = await transport.send(
+          { kind: "call", workflowName: workflow, mode: "start", input },
+          options,
+        );
+        if (
+          !value ||
+          typeof value !== "object" ||
+          !("runId" in value) ||
+          typeof value.runId !== "string"
+        )
+          throw new AppCallError(
+            "internal",
+            "The host returned an invalid run handle",
+          );
+        return { runId: value.runId };
+      },
+      poll: async ({ runId, signal }) =>
+        (await transport.send(
+          { kind: "poll-run", runId },
+          { ...options, signal: signal ?? options?.signal },
+        )) as RunSnapshot,
+    },
+    { signal: options?.signal },
+  );
   return new Proxy({} as AppClient<Contract>, {
     get(_target, property) {
       if (typeof property !== "string") return undefined;
       return {
-        call: (input: unknown) =>
-          transport.send(
-            {
-              kind: "call",
-              workflowName: property,
-              mode: "invoke",
-              input,
-            },
-            options,
-          ),
-        start: async (input: unknown) => {
-          const value = await transport.send(
-            {
-              kind: "call",
-              workflowName: property,
-              mode: "start",
-              input,
-            },
-            options,
-          );
-          const { runId } = value as { runId: string };
-          return makeRunHandle(transport, runId, options);
-        },
+        call: (input: unknown) => workflows.call({ workflow: property, input }),
+        start: (input: unknown) =>
+          workflows.start({ workflow: property, input }),
       };
     },
   });
-}
-
-function makeRunHandle(
-  transport: GuestBridge,
-  runId: string,
-  options?: AppClientOptions,
-): RunHandle<unknown> {
-  const poll = async (
-    signal = options?.signal,
-  ): Promise<TypedRunSnapshot<unknown>> => {
-    const snapshot = (await transport.send(
-      {
-        kind: "poll-run",
-        runId,
-      },
-      { ...options, signal },
-    )) as RunSnapshot;
-    return { ...snapshot, output: snapshot.output ?? null };
-  };
-  return {
-    runId,
-    poll,
-    result: async (opts) => {
-      const interval = opts?.pollIntervalMs ?? DEFAULT_POLL_INTERVAL_MS;
-      for (;;) {
-        (opts?.signal ?? options?.signal)?.throwIfAborted();
-        const snapshot = await poll(opts?.signal ?? options?.signal);
-        if (snapshot.status === "completed") return snapshot.output;
-        if (TERMINAL_STATUSES.has(snapshot.status)) {
-          throw new AppCallError(
-            "workflow_failed",
-            snapshot.error ?? `Run ${runId} ${snapshot.status}`,
-          );
-        }
-        await sleep(interval, opts?.signal ?? options?.signal);
-      }
-    },
-  };
 }
 
 /** Mount-time snapshot from the host: tenant, user, and host extras. */
@@ -478,16 +451,6 @@ export function getContext(): Promise<AppContext> {
 /** Reports content height so the host can size the iframe. */
 export function reportHeight(height: number): void {
   getBridge().reportHeight(height);
-}
-
-function sleep(ms: number, signal?: AbortSignal): Promise<void> {
-  return waitForHost<void>(
-    (resolve) => {
-      const timer = setTimeout(resolve, ms);
-      return () => clearTimeout(timer);
-    },
-    { signal, requestTimeoutMs: Math.max(ms + 1_000, 300_000) },
-  );
 }
 
 /** Observe compact/full presentation and visibility without remounting the app. */

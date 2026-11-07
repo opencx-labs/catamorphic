@@ -238,7 +238,10 @@ describe("resolveWorkspaceConfig", () => {
     for (const [entry, message] of [
       [`{ label: "Toggle", action: "run:toggle" }`, "without run:"],
       [`{ label: "Bad", action: "Bad Name" }`, "not one of Work's verbs"],
-      [`{ label: "Ask", action: "ask", input: { fields: [] } }`, "one to four"],
+      [
+        `{ label: "Ask", action: "ask", input: { fields: [] } }`,
+        "one to sixteen",
+      ],
       [
         `{ label: "Ask", action: "ask", input: { fields: [{ name: "a", label: "A" }, { name: "a", label: "B" }] } }`,
         "unique name",
@@ -246,22 +249,62 @@ describe("resolveWorkspaceConfig", () => {
     ] as const)
       expect(
         resolveProfile(
-          sections(`{ id: "a", source: ".work/a.ts", menu: [${entry}] }`),
+          sections(
+            `{ id: "a", source: ".work/a.ts", itemDefaults: { menu: [${entry}] } }`,
+          ),
         ).error,
         entry,
       ).toContain(message);
   });
 
-  it("keeps valid conditions and drops what has an invalid one", () => {
+  it("keeps a single row override cascade and reports removed section aliases", () => {
+    const resolved = resolveProfile(
+      sections(`{ id: "tasks", source: ".work/tasks.ts",
+      itemDefaults: { open: "side", menu: [], contextMenu: [], actions: [], descriptionVisibility: "hover", contextualIndicator: "icon" },
+      itemOverrides: { task: { open: "tab", contextualIndicator: "none" } }
+    }`),
+    );
+    expect(resolved.error).toBeUndefined();
+    expect(resolved.config.sidebars.left[0]?.sections[0]).toMatchObject({
+      itemDefaults: {
+        open: "side",
+        menu: [],
+        contextMenu: [],
+        actions: [],
+        descriptionVisibility: "hover",
+        contextualIndicator: "icon",
+      },
+      itemOverrides: { task: { open: "tab", contextualIndicator: "none" } },
+    });
+    for (const field of [
+      "menu: []",
+      "contextMenu: []",
+      "actions: []",
+      'open: "side"',
+    ])
+      expect(
+        resolveProfile(
+          sections(`{ id: "tasks", source: ".work/tasks.ts", ${field} }`),
+        ).error,
+      ).toContain("into itemDefaults");
+    for (const tab of [
+      ...DEFAULT_WORKSPACE_CONFIG.sidebars.left,
+      ...DEFAULT_WORKSPACE_CONFIG.sidebars.right,
+    ])
+      for (const section of tab.sections)
+        for (const field of ["menu", "contextMenu", "actions", "open"])
+          expect(section).not.toHaveProperty(field);
+  });
+
+  it("keeps valid conditions and diagnoses invalid ones", () => {
     const resolved = resolveProfile(
       sections(`
-        { id: "tabs", source: "work:tabs", when: { tabPlacement: "sidebar" } },
-        { id: "gone", source: "work:files", when: { tabPlacement: "left" } },
-        { id: "brain", title: "Brain", when: { permissions: ["brain:maintain"] }, items: [
-          { label: "Changes", url: "https://example.test/changes", when: { permissions: ["changes:author"] } },
-          { label: "Retired builder flag", url: "https://example.test/builder", when: { builder: true } },
-        ] },`),
+      { id: "tabs", source: "work:tabs", when: { tabPlacement: "sidebar" } },
+      { id: "brain", title: "Brain", when: { permissions: ["brain:maintain"] }, items: [
+        { label: "Changes", url: "https://example.test/changes", when: { permissions: ["changes:author"] } },
+      ] },`),
     );
+    expect(resolved.error).toBeUndefined();
     const [tabs, brain, extra] =
       resolved.config.sidebars.left[0]?.sections ?? [];
     expect(extra).toBeUndefined();
@@ -273,6 +316,18 @@ describe("resolveWorkspaceConfig", () => {
         when: { permissions: ["changes:author"] },
       }),
     ]);
+    for (const body of [
+      `{ id: "gone", source: "work:files", when: { tabPlacement: "left" } }`,
+      `{ id: "brain", items: [{ label: "Retired", url: "https://example.test", when: { builder: true } }] }`,
+    ])
+      expect(resolveProfile(sections(body)).error).toContain(
+        "invalid when condition",
+      );
+    expect(
+      resolveProfile(
+        `module.exports = { sidebars: { left: [{ id: "tab", title: "Tab", when: { session: "yes" }, sections: [{ id: "files", source: "work:files" }] }], right: [] } };`,
+      ).error,
+    ).toContain("Tab tab: invalid when condition");
   });
 
   it("keeps recursive items, folder-only nodes and previews of up to six facts", () => {

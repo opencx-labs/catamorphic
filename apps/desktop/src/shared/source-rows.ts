@@ -1,10 +1,10 @@
+import { sanitizeActionInput } from "./action-input.js";
 import type { OpenMode } from "./open-mode.js";
 import {
   HOST_ACTION_LOOKS,
   isHostAction,
   isSidebarTone,
   rowTargetAllowed,
-  type SidebarActionInput,
   type SidebarActivity,
   type SidebarBadge,
   type SidebarItemPresentation,
@@ -37,42 +37,6 @@ export const asOpenMode = (value: unknown): OpenMode | undefined =>
     ? value
     : undefined;
 
-const FIELD_NAME = /^[a-zA-Z][a-zA-Z0-9_-]{0,39}$/;
-
-function sanitizeInput(raw: unknown): SidebarActionInput | undefined {
-  if (raw === undefined) return undefined;
-  if (!isRecord(raw) || !Array.isArray(raw.fields))
-    throw new Error("An action's input needs fields: [{ name, label }].");
-  if (raw.fields.length < 1 || raw.fields.length > 4)
-    throw new Error("An action asks for one to four values.");
-  const names = new Set<string>();
-  const fields = raw.fields.map((field) => {
-    if (
-      !isRecord(field) ||
-      typeof field.name !== "string" ||
-      !FIELD_NAME.test(field.name) ||
-      names.has(field.name) ||
-      typeof field.label !== "string" ||
-      !field.label.trim()
-    )
-      throw new Error("Each input field needs a unique name and a label.");
-    names.add(field.name);
-    return {
-      name: field.name,
-      label: field.label,
-      ...(typeof field.value === "string" ? { value: field.value } : {}),
-      ...(typeof field.placeholder === "string"
-        ? { placeholder: field.placeholder }
-        : {}),
-    };
-  });
-  return {
-    ...(typeof raw.title === "string" ? { title: raw.title } : {}),
-    ...(typeof raw.submit === "string" ? { submit: raw.submit } : {}),
-    fields,
-  };
-}
-
 export function sanitizeMenu(raw: unknown): SidebarMenuEntry[] | undefined {
   if (raw === undefined) return undefined;
   if (!Array.isArray(raw)) throw new Error("Actions must be an array.");
@@ -102,7 +66,7 @@ export function sanitizeMenu(raw: unknown): SidebarMenuEntry[] | undefined {
       throw new Error(
         `Action "${entry.action}" is not one of Work's verbs (open, open-tab, open-here, open-side, open-floating, copy-url, refresh, search) or a source action (lowercase words joined by dashes).`,
       );
-    const input = sanitizeInput(entry.input);
+    const input = sanitizeActionInput(entry.input);
     const icon = typeof entry.icon === "string" ? entry.icon : looks?.icon;
     return {
       label,
@@ -118,6 +82,14 @@ export function sanitizeMenu(raw: unknown): SidebarMenuEntry[] | undefined {
   });
 }
 
+const isPreviewDisplay = (
+  value: unknown,
+): value is NonNullable<SidebarPreviewMetadata["display"]> =>
+  value === "text" ||
+  value === "code" ||
+  value === "badge" ||
+  value === "color";
+
 function sanitizePreview(raw: unknown): SidebarPreview | false | undefined {
   if (raw === false) return false;
   if (!isRecord(raw)) return undefined;
@@ -129,7 +101,26 @@ function sanitizePreview(raw: unknown): SidebarPreview | false | undefined {
           typeof entry.value === "string" &&
           entry.label.length > 0 &&
           entry.value.length > 0
-            ? [{ label: entry.label, value: entry.value }]
+            ? [
+                {
+                  label: entry.label,
+                  value: entry.value,
+                  ...(isSidebarTone(entry.tone) ? { tone: entry.tone } : {}),
+                  ...(isPreviewDisplay(entry.display)
+                    ? { display: entry.display }
+                    : {}),
+                  ...(typeof entry.color === "string" &&
+                  /^#[a-fA-F0-9]{6}$/.test(entry.color)
+                    ? { color: entry.color }
+                    : {}),
+                  ...(typeof entry.copy === "string"
+                    ? { copy: entry.copy.slice(0, 8192) }
+                    : {}),
+                  ...(entry.actions !== undefined
+                    ? { actions: sanitizeMenu(entry.actions) }
+                    : {}),
+                },
+              ]
             : [],
         )
         .slice(0, 6)
@@ -142,11 +133,41 @@ function sanitizePreview(raw: unknown): SidebarPreview | false | undefined {
     typeof raw.description === "string" && raw.description.length > 0
       ? raw.description
       : undefined;
-  if (!title && !description && metadata.length === 0) return undefined;
+  let content: SidebarPreview["content"];
+  if (isRecord(raw.content)) {
+    if (typeof raw.content.markdown === "string")
+      content = { markdown: raw.content.markdown.slice(0, 16000) };
+    else if (
+      typeof raw.content.app === "string" &&
+      /^[a-zA-Z0-9][a-zA-Z0-9_-]{0,119}$/.test(raw.content.app)
+    )
+      content = {
+        app: raw.content.app,
+        ...(raw.content.data === undefined
+          ? {}
+          : { data: JSON.parse(JSON.stringify(raw.content.data)) }),
+        height:
+          typeof raw.content.height === "number" &&
+          Number.isFinite(raw.content.height)
+            ? Math.min(480, Math.max(80, raw.content.height))
+            : 240,
+      };
+  }
+  const actions = sanitizeMenu(raw.actions);
+  if (
+    !title &&
+    !description &&
+    metadata.length === 0 &&
+    !content &&
+    !actions?.length
+  )
+    return undefined;
   return {
     title,
     description,
     metadata: metadata.length > 0 ? metadata : undefined,
+    ...(content ? { content } : {}),
+    ...(actions ? { actions } : {}),
   };
 }
 
@@ -207,6 +228,17 @@ export function sanitizePresentation(
     label: typeof record.label === "string" ? record.label : undefined,
     description:
       typeof record.description === "string" ? record.description : undefined,
+    descriptionVisibility:
+      record.descriptionVisibility === "always" ||
+      record.descriptionVisibility === "hover"
+        ? record.descriptionVisibility
+        : undefined,
+    contextualIndicator:
+      record.contextualIndicator === "row" ||
+      record.contextualIndicator === "icon" ||
+      record.contextualIndicator === "none"
+        ? record.contextualIndicator
+        : undefined,
     keywords: Array.isArray(record.keywords)
       ? record.keywords
           .filter((word): word is string => typeof word === "string")
@@ -252,6 +284,7 @@ function sanitizeData(raw: unknown): Record<string, unknown> | undefined {
 export function sanitizeSidebarSourceItem(
   item: unknown,
   ids = new Set<string>(),
+  access: { apps?: boolean } = {},
 ): SidebarSourceItem {
   if (
     !isRecord(item) ||
@@ -268,6 +301,22 @@ export function sanitizeSidebarSourceItem(
   // command that does more than open something stays the layout's.
   const entries = (list: SidebarMenuEntry[] | undefined) =>
     list?.filter((entry) => !entry.url || rowTargetAllowed(entry.url));
+  const preview = presentation.preview;
+  const content = typeof preview === "object" ? preview.content : undefined;
+  if (content && "app" in content && !access.apps)
+    throw Error(
+      "Embedding an inspector app requires apps in catamorphic.access.lists.",
+    );
+  const safePreview = preview
+    ? {
+        ...preview,
+        actions: entries(preview.actions),
+        metadata: preview.metadata?.map((f) => ({
+          ...f,
+          actions: entries(f.actions),
+        })),
+      }
+    : preview;
   const url =
     typeof item.url === "string" &&
     item.url.length <= 8192 &&
@@ -276,6 +325,7 @@ export function sanitizeSidebarSourceItem(
       : undefined;
   return {
     ...presentation,
+    ...(safePreview === undefined ? {} : { preview: safePreview }),
     ...(presentation.description
       ? { description: presentation.description.slice(0, 1000) }
       : {}),
@@ -302,7 +352,10 @@ export function sanitizeSidebarSourceItem(
 }
 
 /** Validate executable source data before it crosses into the renderer. */
-export function sanitizeSidebarSourcePage(raw: unknown): {
+export function sanitizeSidebarSourcePage(
+  raw: unknown,
+  access: { apps?: boolean } = {},
+): {
   items: SidebarSourceItem[];
   cursor?: string;
 } {
@@ -311,7 +364,9 @@ export function sanitizeSidebarSourcePage(raw: unknown): {
       "Source load must return { items, cursor? }, with at most 1000 items per page.",
     );
   const ids = new Set<string>();
-  const items = raw.items.map((item) => sanitizeSidebarSourceItem(item, ids));
+  const items = raw.items.map((item) =>
+    sanitizeSidebarSourceItem(item, ids, access),
+  );
   return {
     items,
     cursor: typeof raw.cursor === "string" ? raw.cursor : undefined,

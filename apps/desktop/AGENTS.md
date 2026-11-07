@@ -109,7 +109,10 @@ performance scripts that launch Electron also require an isolated test host.
 
 Keep tests within each file ordered and one suite at a time per display.
 Shard whole files across runners for concurrency. Drive keys/pointers through
-CDP after input focus and selection settle. For native hover tracking, use
+CDP after input focus and selection settle. Local Docker runs can use
+`CATAMORPHIC_DESKTOP_TEST_SHARDS=4 bun run check`; every shard owns a separate
+container, display and artifact directory. Native runs remain single per display.
+For native hover tracking, use
 `app.movePointer` so OS and renderer coordinates agree. Wait for exit motion and focus
 handoff before opening another palette; an inert palette may still be mounted.
 

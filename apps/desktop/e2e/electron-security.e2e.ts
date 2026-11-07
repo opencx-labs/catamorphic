@@ -289,7 +289,7 @@ afterAll(async () => {
     if (!fixtureServer) return resolve();
     fixtureServer.close((error) => (error ? reject(error) : resolve()));
   });
-  if (directory) removeE2eDirectory(directory);
+  if (directory) await removeE2eDirectory(directory);
 });
 
 it("boots the internal shell with its isolated bridge, no renderer Node, and a working API", async () => {

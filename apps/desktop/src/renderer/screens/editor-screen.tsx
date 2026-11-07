@@ -404,6 +404,7 @@ export function EditorScreen({
       </div>
       <ActionInputDialog
         selectInitialValue
+        requestKey={naming ?? undefined}
         request={
           naming && {
             label: naming === "save" ? "Save file" : "Rename file",
@@ -423,7 +424,8 @@ export function EditorScreen({
               ],
             },
             run: async (values) => {
-              const name = values.name?.trim() ?? "";
+              const name =
+                typeof values.name === "string" ? values.name.trim() : "";
               if (!name) throw new Error("Name the file.");
               if (naming === "save") {
                 await saveBeforeAction(() => undefined);

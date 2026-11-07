@@ -37,6 +37,7 @@ import type {
   SidebarBadge,
   SidebarMenuEntry,
 } from "../../shared/sidebar.js";
+import { composeSidebarMenu } from "../../shared/sidebar-menu.js";
 import type { SidebarSourceSession } from "../../shared/sidebar-source.js";
 import { shownChipCount } from "../lib/chip-layout.js";
 import type { Chip } from "../lib/chips.js";
@@ -466,7 +467,9 @@ function ChipView({
         disabled={
           ghost || hidden || chip.hasChildren === true || chip.preview === false
         }
-        content={<ChipPreview chip={chip} />}
+        content={
+          <ChipPreview chip={chip} onAction={(entry) => onRun(chip, entry)} />
+        }
       >
         {({ onClick: dismissPreview, ...trigger }) => (
           <button
@@ -598,7 +601,12 @@ function GroupMembers({
           <ResourceInspector
             label={`Preview ${member.label}`}
             disabled={member.preview === false}
-            content={<ChipPreview chip={member} />}
+            content={
+              <ChipPreview
+                chip={member}
+                onAction={(entry) => onRun(member, entry)}
+              />
+            }
           >
             {({ onClick: dismissPreview, ...trigger }) => (
               <button
@@ -805,7 +813,9 @@ export const ChipRail = memo(function ChipRail({
   const [inputRequest, setInputRequest] = useState<{
     label: string;
     input: SidebarActionInput;
-    run: (values: Record<string, string>) => Promise<unknown>;
+    run: (
+      values: import("@catamorphic/work-customization").SidebarInputValues,
+    ) => Promise<unknown>;
   } | null>(null);
   const [ghosts, setGhosts] = useState<Ghost[]>([]);
   const focusFirstRef = useRef(false);
@@ -1139,7 +1149,7 @@ export const ChipRail = memo(function ChipRail({
     async (
       chip: Chip,
       entry: SidebarMenuEntry | ContextMenuEntry,
-      values?: Record<string, string>,
+      values?: import("@catamorphic/work-customization").SidebarInputValues,
     ) => {
       if (entry.action === CUSTOMIZE.action) {
         onCustomize();
@@ -1243,11 +1253,17 @@ export const ChipRail = memo(function ChipRail({
       ),
     ]);
     return menuGroups<ContextMenuEntry>(
-      chip.url ? OPEN_ACTIONS : [],
-      chip.url && /^https?:/i.test(chip.url)
-        ? [{ label: "Copy link", action: "copy-url", icon: "Link" }]
-        : [],
-      own,
+      composeSidebarMenu({
+        resource: Boolean(chip.url),
+        url: chip.url,
+        defaultMode: chip.open,
+        entries: [
+          ...(chip.url && /^https?:/i.test(chip.url)
+            ? [{ label: "Copy link", action: "copy-url", icon: "Link" }]
+            : []),
+          ...own,
+        ],
+      }),
       [CUSTOMIZE],
     );
   };

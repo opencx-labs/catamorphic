@@ -6,6 +6,7 @@ import net from "node:net";
 import os from "node:os";
 import path from "node:path";
 import { assertIsolatedDesktopTestHost } from "../../../scripts/desktop-test-environment.js";
+import { removeTestDirectory } from "../../../scripts/test-processes.js";
 import { electronLaunchArgs } from "./harness-args.js";
 import {
   clickNativePointer,
@@ -135,6 +136,8 @@ export interface AppHandle {
   userDataDir: string;
   stop: (opts?: {
     preserveUserData?: boolean;
+    /** A background engine transfer also waits for its new process to boot. */
+    shutdownTimeoutMs?: number;
     /** Skip compositor work when testing an immediate Quit boundary. */
     captureFinalFrame?: boolean;
   }) => Promise<void>;
@@ -170,13 +173,8 @@ export interface LaunchOpts {
   sandboxedRenderers?: boolean;
 }
 
-export function removeE2eDirectory(directory: string): void {
-  fs.rmSync(directory, {
-    recursive: true,
-    force: true,
-    maxRetries: 5,
-    retryDelay: 100,
-  });
+export async function removeE2eDirectory(directory: string): Promise<void> {
+  if (fs.existsSync(directory)) await removeTestDirectory(directory);
 }
 
 export async function launchApp(opts: LaunchOpts = {}): Promise<AppHandle> {
@@ -397,7 +395,10 @@ export async function launchApp(opts: LaunchOpts = {}): Promise<AppHandle> {
         ws.close();
         try {
           if (!killedForRecovery)
-            await terminate(child, { sampleTo: artifactDirectory });
+            await terminate(child, {
+              sampleTo: artifactDirectory,
+              timeoutMs: opts?.shutdownTimeoutMs,
+            });
         } catch (error) {
           throw new Error(
             `${String(error)}${mainProcessErrors(output)
@@ -405,7 +406,7 @@ export async function launchApp(opts: LaunchOpts = {}): Promise<AppHandle> {
               .join("")}\n--- app output ---\n${output.slice(-4000)}`,
           );
         }
-        if (!opts?.preserveUserData) removeE2eDirectory(userDataDir);
+        if (!opts?.preserveUserData) await removeE2eDirectory(userDataDir);
         // A main-process error the app printed (main/index.ts) fails the
         // run that saw it, by name, though the app quit.
         const failures = mainProcessErrors(output);
@@ -829,7 +830,7 @@ export function mainProcessErrors(output: string): string[] {
 
 export async function terminate(
   child: ChildProcess,
-  options: { sampleTo?: string } = {},
+  options: { sampleTo?: string; timeoutMs?: number } = {},
 ): Promise<void> {
   if (child.exitCode === null && child.signalCode === null) {
     const exited = new Promise<void>((resolve) => {
@@ -841,7 +842,7 @@ export async function terminate(
       if (child.exitCode !== null || child.signalCode !== null) return;
       sampleHung(child, options.sampleTo);
       child.kill("SIGKILL");
-    }, 15_000);
+    }, options.timeoutMs ?? 15_000);
     try {
       child.kill("SIGTERM");
       await exited;

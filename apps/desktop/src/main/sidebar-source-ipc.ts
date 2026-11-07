@@ -26,7 +26,11 @@ import {
 } from "../shared/workspace-config.js";
 import type { CodeApprovals } from "./code-approvals.js";
 import type { WindowProfileRegistry } from "./index.js";
-import { describeModuleAccess, readModuleAccess } from "./module-access.js";
+import {
+  describeModuleAccess,
+  moduleAccessSubject,
+  readModuleAccess,
+} from "./module-access.js";
 import { launchConfinedModule } from "./module-sandbox.js";
 import type { ProfileConfigManager } from "./profile-config.js";
 import type { ProfilesStore } from "./profiles.js";
@@ -37,10 +41,25 @@ const identity = z.object({
   projectId: z.string().min(1),
   sectionId: z.string().min(1),
 });
+const scalarValue = z.union([
+  z.string().max(8192),
+  z.number().finite(),
+  z.boolean(),
+  z.null(),
+]);
+const fieldValues = z
+  .record(z.string().max(40), scalarValue)
+  .refine((v) => Object.keys(v).length <= 16);
 const valuesSchema = z
-  .record(z.string().max(40), z.string().max(8192))
-  .refine((values) => Object.keys(values).length <= 4, "At most four values.");
-const requestSchema = identity
+  .record(
+    z.string().max(40),
+    z.union([scalarValue, z.array(fieldValues).max(20)]),
+  )
+  .refine(
+    (v) => Object.keys(v).length <= 16 && JSON.stringify(v).length <= 32768,
+    "Action values are too large.",
+  );
+export const sourceRequestSchema = identity
   .extend({
     requestId: z.string().min(1),
     method: z.enum(["load", "action", "move", "drop", "reveal"]),
@@ -49,6 +68,19 @@ const requestSchema = identity
     query: z.string().max(4096).optional(),
     itemId: z.string().max(4096).optional(),
     action: z.string().max(80).optional(),
+    mode: z.enum(["replace", "tab", "side", "floating"]).optional(),
+    surface: z
+      .object({
+        kind: z.string().min(1).max(40),
+        key: z.string().max(8192).optional(),
+        url: z.string().max(8192).optional(),
+        projectId: z.string().max(200).optional(),
+        sessionId: z.string().max(200).optional(),
+        path: z.string().max(8192).optional(),
+        selection: z.boolean().optional(),
+        tabPlacement: z.enum(["top", "sidebar"]).optional(),
+      })
+      .optional(),
     values: valuesSchema.optional(),
     beforeId: z.string().max(4096).optional(),
     payload: z
@@ -118,11 +150,51 @@ const workCallSchema: z.ZodType<SidebarSourceWorkCall> = z.discriminatedUnion(
           "That is not an action name.",
         ),
       values: valuesSchema.optional(),
+      mode: z.enum(["replace", "tab", "side", "floating"]).optional(),
     }),
     z.object({
-      op: z.literal("call"),
+      op: z.enum(["call", "start"]),
       workflow: z.string().min(1).max(200),
       input: z.unknown().optional(),
+    }),
+    z.object({ op: z.literal("poll-run"), runId: z.string().min(1).max(200) }),
+    z.object({ op: z.literal("state-read"), key: z.string().min(1).max(200) }),
+    z.object({
+      op: z.literal("state-write"),
+      key: z.string().min(1).max(200),
+      value: z.json(),
+      ifVersion: z.number().int().nonnegative(),
+    }),
+    z.object({
+      op: z.literal("state-delete"),
+      key: z.string().min(1).max(200),
+      ifVersion: z.number().int().nonnegative(),
+    }),
+    z.object({
+      op: z.literal("notify"),
+      title: z.string().min(1).max(200),
+      body: z.string().max(4000).optional(),
+      route: z.string().max(8192).optional(),
+      idempotencyKey: z.string().min(1).max(200),
+    }),
+    z.object({
+      op: z.literal("process-start"),
+      key: z.string().min(1).max(100),
+      command: z.string().min(1).max(65536),
+      name: z.string().max(200).optional(),
+      lifetime: z.enum(["view", "application"]),
+    }),
+    z.object({ op: z.literal("process-list") }),
+    z.object({
+      op: z.literal("process-read"),
+      key: z.string().min(1).max(100),
+      cursor: z.number().int().nonnegative().optional(),
+      maxBytes: z.number().int().positive().optional(),
+      waitMs: z.number().int().nonnegative().optional(),
+    }),
+    z.object({
+      op: z.literal("process-stop"),
+      key: z.string().min(1).max(100),
     }),
   ],
 );
@@ -143,11 +215,30 @@ export function parseWorkCall(
   owner?: string,
 ): SidebarSourceWorkCall {
   const call = workCallSchema.parse(raw);
-  if (call.op === "call") {
+  if (call.op === "call" || call.op === "start") {
     if (!(access.workflows ?? []).includes(call.workflow))
       throw new Error(
         `This module's access does not include the workflow ${call.workflow} (add it to workflows in catamorphic.access).`,
       );
+    return call;
+  }
+  if (call.op === "poll-run") return call;
+  if (call.op !== "read" && call.op !== "execute") {
+    const permission = call.op.startsWith("state-")
+      ? "state"
+      : call.op === "notify"
+        ? "notifications"
+        : "processes";
+    if (!access.permissions?.includes(permission))
+      throw new Error(
+        `This package needs ${permission} in catamorphic.access.permissions.`,
+      );
+    if (
+      call.op === "process-start" &&
+      call.lifetime === "application" &&
+      !access.permissions?.includes("background")
+    )
+      throw new Error("Application processes need background access.");
     return call;
   }
   // A chips module reads its chat's chips, in the window that shows them.
@@ -165,6 +256,19 @@ export function parseWorkCall(
 /** How long Work may take to answer a module (a workflow call included). */
 const WORK_TIMEOUT_MS = 120_000;
 
+export interface SourceHostCall {
+  viewId?: string;
+  viewSignal?: AbortSignal;
+  profileId: string;
+  projectId: string;
+  modulePath: string;
+  subject: string;
+  access: CodeAccess;
+  call: Exclude<SidebarSourceWorkCall, { op: "read" } | { op: "execute" }>;
+  /** Workflow scope at process start, intersected with the live declaration. */
+  workflows: readonly string[];
+}
+
 /** Only the desktop renderer can select sources from its owning profile's layout. */
 export function registerSidebarSources(deps: {
   windows: WindowProfileRegistry;
@@ -181,9 +285,21 @@ export function registerSidebarSources(deps: {
   unconfined?: boolean;
   /** Work's own loopback servers, which no module reaches. */
   blocked?: (host: string, port: number) => boolean;
+  hostCall?: (input: SourceHostCall) => Promise<unknown>;
+  sourceStopped?: (owner: {
+    profileId: string;
+    projectId: string;
+    modulePath: string;
+    viewId?: string;
+    viewSignal?: AbortSignal;
+  }) => void | Promise<void>;
 }) {
   /** The access each module's running process was started with. */
   const started = new WeakMap<SidebarSourceRuntime, CodeAccess>();
+  const views = new WeakMap<
+    SidebarSourceRuntime,
+    { id: string; controller: AbortController }
+  >();
   const runtimes = new Map<string, SidebarSourceRuntime>();
   let workerPath: string | undefined;
   const materializeWorker = () => {
@@ -212,6 +328,9 @@ export function registerSidebarSources(deps: {
       sectionId?: string;
       /** The chat the request serves, which Work's chat lists read. */
       sessionId?: string;
+      profileId?: string;
+      modulePath?: string;
+      subject?: string;
     }
   >();
   /** Work calls waiting on a window's answer. */
@@ -268,11 +387,87 @@ export function registerSidebarSources(deps: {
       throw new Error(
         "work is available while a source loads or acts, not in subscribe.",
       );
-    const call = parseWorkCall(
-      raw,
-      started.get(owner) ?? {},
-      request.sectionId,
-    );
+    const startedAccess = started.get(owner) ?? {};
+    const view = views.get(owner);
+    if (!view) throw new Error("This source is no longer running.");
+    view.controller.signal.throwIfAborted();
+    const call = parseWorkCall(raw, startedAccess, request.sectionId);
+    if (
+      !request.profileId ||
+      !request.projectId ||
+      !request.modulePath ||
+      !request.subject
+    )
+      throw new Error("This source has no owning package.");
+    const root = await deps.rootFor(request.projectId);
+    if (!root) throw new Error("The project folder is unavailable.");
+    const current = readModuleAccess({
+      projectRoot: root,
+      modulePath: request.modulePath,
+    });
+    if (
+      moduleAccessSubject({
+        projectId: request.projectId,
+        projectRoot: root,
+        modulePath: request.modulePath,
+        declaration: current,
+      }) !== request.subject
+    )
+      throw new Error(
+        "This source's package changed. Reload it to review its access.",
+      );
+    if (
+      !isEmptyAccess(
+        accessBeyond(
+          await deps
+            .approvals(request.profileId)
+            .approved(request.subject, { refresh: true }),
+          current.access,
+        ),
+      )
+    )
+      throw new Error("This package's access needs approval.");
+    parseWorkCall(raw, current.access, request.sectionId);
+    view.controller.signal.throwIfAborted();
+    if (call.op !== "read" && call.op !== "execute") {
+      if (!deps.hostCall)
+        throw new Error("This host does not provide customization operations.");
+      return deps.hostCall({
+        viewId: view.id,
+        viewSignal: view.controller.signal,
+        profileId: request.profileId,
+        projectId: request.projectId,
+        modulePath: request.modulePath,
+        subject: request.subject,
+        access: current.access,
+        workflows: (startedAccess.workflows ?? []).filter((name) =>
+          current.access.workflows?.includes(name),
+        ),
+        call,
+      });
+    }
+    return windowWork({
+      sender,
+      projectId: request.projectId,
+      sectionId: request.sectionId ?? "preview",
+      sessionId: request.sessionId,
+      call,
+    });
+  };
+  /** One renderer transport serves live requests and disposable previews. */
+  const windowWork = async ({
+    sender,
+    projectId,
+    sectionId,
+    sessionId,
+    call,
+  }: {
+    sender: Electron.WebContents;
+    projectId: string;
+    sectionId: string;
+    sessionId?: string;
+    call: Extract<SidebarSourceWorkCall, { op: "read" } | { op: "execute" }>;
+  }) => {
     const callId = crypto.randomUUID();
     const value = await new Promise<unknown>((resolve, reject) => {
       const timer = setTimeout(() => {
@@ -282,14 +477,17 @@ export function registerSidebarSources(deps: {
       workCalls.set(callId, { sender: sender.id, resolve, reject, timer });
       sender.send("catamorphic:sidebar-source-work", {
         callId,
-        projectId: request.projectId,
-        sectionId: request.sectionId,
-        ...(request.sessionId ? { sessionId: request.sessionId } : {}),
+        projectId,
+        sectionId,
+        ...(sessionId ? { sessionId } : {}),
         call,
       });
     });
-    return call.op === "read" ? sanitizeSidebarSourcePage(value) : value;
+    return call.op === "read"
+      ? sanitizeSidebarSourcePage(value, { apps: call.source === "apps" })
+      : value;
   };
+
   const resolve = async (
     event: Electron.IpcMainInvokeEvent,
     input: z.infer<typeof identity>,
@@ -318,7 +516,12 @@ export function registerSidebarSources(deps: {
     // (ADR 0277); read on every request, so an edit asks again at once.
     const declared = readModuleAccess({ modulePath, projectRoot: root });
     const module = path.relative(root, modulePath);
-    const subject = `module:${input.projectId}:${module}`;
+    const subject = moduleAccessSubject({
+      projectId: input.projectId,
+      projectRoot: root,
+      modulePath,
+      declaration: declared,
+    });
     const approvals = deps.approvals(profileId);
     // A module that declares nothing needs no answer, and no keychain.
     const beyond = isEmptyAccess(declared.access)
@@ -336,7 +539,12 @@ export function registerSidebarSources(deps: {
           network: Boolean(declared.access.hosts?.length),
           fingerprint: accessText(declared.access),
         };
-    const key = JSON.stringify([profileId, input.projectId, modulePath]);
+    const key = JSON.stringify([
+      profileId,
+      input.projectId,
+      subject,
+      modulePath,
+    ]);
     let runtime = runtimes.get(key);
     if (!runtime) {
       const created: SidebarSourceRuntime = new SidebarSourceRuntime({
@@ -348,6 +556,17 @@ export function registerSidebarSources(deps: {
         launch: async () => {
           const current = readModuleAccess({ modulePath, projectRoot: root });
           if (
+            moduleAccessSubject({
+              projectId: input.projectId,
+              projectRoot: root,
+              modulePath,
+              declaration: current,
+            }) !== subject
+          )
+            throw new Error(
+              "This source's package changed. Reload it to review its access.",
+            );
+          if (
             !isEmptyAccess(current.access) &&
             !isEmptyAccess(
               accessBeyond(await approvals.approved(subject), current.access),
@@ -358,6 +577,10 @@ export function registerSidebarSources(deps: {
             );
           const toolchain = await deps.toolchain();
           started.set(created, current.access);
+          views.set(created, {
+            id: crypto.randomUUID(),
+            controller: new AbortController(),
+          });
           return launchConfinedModule({
             executable: toolchain.CATAMORPHIC_BUN ?? "bun",
             workerPath: materializeWorker(),
@@ -372,6 +595,23 @@ export function registerSidebarSources(deps: {
           });
         },
         work: (requestKey, call) => answerWork(created, requestKey, call),
+        onStopped: () => {
+          const view = views.get(created);
+          views.delete(created);
+          view?.controller.abort();
+          if (view)
+            void Promise.resolve(
+              deps.sourceStopped?.({
+                profileId,
+                projectId: input.projectId,
+                modulePath,
+                viewId: view.id,
+                viewSignal: view.controller.signal,
+              }),
+            ).catch((cause) =>
+              console.error("Could not release source processes", cause),
+            );
+        },
       });
       runtime = created;
       runtimes.set(key, created);
@@ -390,12 +630,12 @@ export function registerSidebarSources(deps: {
         },
       );
     }
-    return { runtime, profileId, subject, declared, ask };
+    return { runtime, profileId, subject, declared, ask, modulePath };
   };
   ipcMain.handle(
     "catamorphic:sidebar-source-request",
     async (event, raw: unknown) => {
-      const input = requestSchema.parse(raw);
+      const input = sourceRequestSchema.parse(raw);
       const key = keyFor(event.sender.id, input.requestId);
       const request: {
         runtime?: SidebarSourceRuntime;
@@ -407,7 +647,8 @@ export function registerSidebarSources(deps: {
       } = { cancelled: false };
       requests.set(key, request);
       try {
-        const { runtime, ask } = await resolve(event, input);
+        const { runtime, ask, profileId, modulePath, subject, declared } =
+          await resolve(event, input);
         if (request.cancelled || event.sender.isDestroyed())
           throw new Error("Sidebar request cancelled.");
         // A module wanting more than the person allowed does not run: its
@@ -424,6 +665,9 @@ export function registerSidebarSources(deps: {
           projectId: input.projectId,
           sectionId: input.sectionId,
           sessionId: input.session?.id,
+          profileId,
+          modulePath,
+          subject,
         });
         const { after, ...rest } = input;
         const result = await runtime.request({
@@ -431,7 +675,11 @@ export function registerSidebarSources(deps: {
           // The last loaded row a reveal compares with, checked like any row.
           ...(after === undefined
             ? {}
-            : { after: sanitizeSidebarSourceItem(after) }),
+            : {
+                after: sanitizeSidebarSourceItem(after, new Set(), {
+                  apps: declared.access.lists?.includes("apps"),
+                }),
+              }),
           requestId: key,
         });
         if (request.cancelled || event.sender.isDestroyed())
@@ -440,13 +688,18 @@ export function registerSidebarSources(deps: {
         // drags to accept before any drop happens.
         if (input.method === "load")
           return {
-            ...sanitizeSidebarSourcePage(result),
+            ...sanitizeSidebarSourcePage(result, {
+              apps: declared.access.lists?.includes("apps"),
+            }),
             capabilities: runtime.capabilities,
+            revision: runtime.inspect().revision,
           };
         if (input.method === "reveal")
           return result === null || result === undefined
             ? null
-            : sanitizeSidebarSourceItem(result);
+            : sanitizeSidebarSourceItem(result, new Set(), {
+                apps: declared.access.lists?.includes("apps"),
+              });
         if (input.method === "action")
           return sidebarSourceEffect(result) ?? null;
         return null;
@@ -535,7 +788,7 @@ export function registerSidebarSources(deps: {
       leases.delete(key);
     },
   );
-  return () => {
+  const dispose = () => {
     for (const release of leases.values()) release();
     leases.clear();
     for (const call of workCalls.values()) {
@@ -555,4 +808,5 @@ export function registerSidebarSources(deps: {
     ])
       ipcMain.removeHandler(`catamorphic:sidebar-source-${suffix}`);
   };
+  return { dispose, windowWork };
 }

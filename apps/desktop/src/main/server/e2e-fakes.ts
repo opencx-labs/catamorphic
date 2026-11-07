@@ -93,10 +93,52 @@ export class E2eLocalSandboxProvider implements SandboxProvider {
     private readonly projectDataDirectory?: (input: {
       projectId: string;
     }) => Promise<string | undefined>,
+    root?: string,
   ) {
-    this.workspaceRoot = fs.mkdtempSync(
-      path.join(os.tmpdir(), "catamorphic-e2e-sbx-"),
+    this.workspaceRoot =
+      root ?? fs.mkdtempSync(path.join(os.tmpdir(), "catamorphic-e2e-sbx-"));
+    fs.mkdirSync(this.workspaceRoot, { recursive: true });
+    const file = path.join(this.workspaceRoot, "sandboxes.json");
+    if (fs.existsSync(file)) {
+      const saved = z
+        .object({
+          counter: z.number().int().nonnegative(),
+          sandboxes: z.array(
+            z.object({
+              id: z.string(),
+              environment: z.record(z.string(), z.string()),
+              deploymentDirectory: z.string().optional(),
+            }),
+          ),
+        })
+        .parse(JSON.parse(fs.readFileSync(file, "utf8")));
+      this.counter = saved.counter;
+      for (const sandbox of saved.sandboxes) {
+        this.roots.set(sandbox.id, this.workspaceRoot);
+        this.environments.set(sandbox.id, sandbox.environment);
+        if (sandbox.deploymentDirectory)
+          this.deploymentDirectories.set(
+            sandbox.id,
+            sandbox.deploymentDirectory,
+          );
+      }
+    }
+  }
+
+  private saveSandboxes() {
+    const file = path.join(this.workspaceRoot, "sandboxes.json");
+    fs.writeFileSync(
+      `${file}.tmp`,
+      JSON.stringify({
+        counter: this.counter,
+        sandboxes: [...this.roots.keys()].map((id) => ({
+          id,
+          environment: this.environments.get(id) ?? {},
+          deploymentDirectory: this.deploymentDirectories.get(id),
+        })),
+      }),
     );
+    fs.renameSync(`${file}.tmp`, file);
   }
 
   async createSandbox(opts: CreateSandboxOpts): Promise<SandboxHandle> {
@@ -128,10 +170,13 @@ export class E2eLocalSandboxProvider implements SandboxProvider {
       ...opts.envVars,
       ...(data ? { WORK_APP_DATA_DIR: data } : {}),
     });
+    this.saveSandboxes();
     return { id, providerId: id, sandboxType: "dev", status: "started" };
   }
 
-  async startSandbox(_sandboxId: string): Promise<void> {}
+  async startSandbox(sandboxId: string): Promise<void> {
+    if (!this.roots.has(sandboxId)) throw Error("Unknown e2e sandbox");
+  }
   async stopSandbox(sandboxId: string): Promise<void> {
     await this.deploymentRuntime.releaseSandbox({ sandboxId });
   }
@@ -145,10 +190,11 @@ export class E2eLocalSandboxProvider implements SandboxProvider {
     this.deploymentDirectories.delete(sandboxId);
     this.environments.delete(sandboxId);
     this.roots.delete(sandboxId);
+    this.saveSandboxes();
   }
 
-  async getSandboxStatus(_sandboxId: string): Promise<SandboxStatus> {
-    return "started";
+  async getSandboxStatus(sandboxId: string): Promise<SandboxStatus> {
+    return this.roots.has(sandboxId) ? "started" : "stopped";
   }
 
   async executeCommand(
@@ -888,6 +934,41 @@ export function parse(input = ""): Token[] {
 async function* fakeScript(turn: FakeTurn): AsyncGenerator<FakeStep> {
   const message = turn.message;
   const prompt = message.toLowerCase();
+
+  if (prompt === "inspect customization authoring assets") {
+    let report: unknown;
+    try {
+      const settings = z
+        .object({ authoring: z.unknown() })
+        .parse(await turn.tool("desktop_settings", {}));
+      const reference = z
+        .object({
+          revision: z.string(),
+          sdkRoot: z.string(),
+          content: z.string(),
+        })
+        .parse(await turn.tool("customization", { action: "reference" }));
+      report = {
+        authoring: settings.authoring,
+        reference: {
+          revision: reference.revision,
+          sdkRoot: reference.sdkRoot,
+          hasSdkReference: reference.content.includes(
+            "@catamorphic/work-customization",
+          ),
+        },
+      };
+    } catch (cause) {
+      report = {
+        error: cause instanceof Error ? cause.message : String(cause),
+      };
+    }
+    yield {
+      type: "text",
+      content: `\`\`\`json\n${JSON.stringify(report)}\n\`\`\``,
+    };
+    return;
+  }
 
   if (prompt.includes("provider retry lifecycle")) {
     if (oneShotFailures.has(prompt)) {

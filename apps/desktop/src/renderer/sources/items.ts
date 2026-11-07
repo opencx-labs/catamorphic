@@ -57,12 +57,15 @@ export function itemsSource({
   keep?: (item: SidebarItem) => boolean;
   title?: string;
 }): SectionSource {
-  const rows = itemRows(items, { ownerId, keep });
   return {
     title,
     empty: "No links yet.",
     capabilities: () => ({ move: false, drop: false, reveal: false }),
     load: async ({ parentId, cursor }) =>
-      pageOf(childrenOf(rows, parentId), cursor, 1000),
+      pageOf(
+        childrenOf(itemRows(items, { ownerId, keep }), parentId),
+        cursor,
+        1000,
+      ),
   };
 }

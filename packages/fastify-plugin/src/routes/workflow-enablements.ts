@@ -286,7 +286,7 @@ export function registerWorkflowEnablementRoutes(
   });
 }
 
-function handleEnablementError(error: unknown, reply: FastifyReply) {
+export function handleEnablementError(error: unknown, reply: FastifyReply) {
   if (error instanceof AuthenticationRequiredError) {
     return reply.status(428).send({
       error: error.message,

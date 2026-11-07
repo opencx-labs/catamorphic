@@ -540,8 +540,8 @@ describe("remote development on a Work server", () => {
     await new Promise<void>((resolve) =>
       proxy ? proxy.close(() => resolve()) : resolve(),
     );
-    if (dataDir) removeE2eDirectory(dataDir);
-    if (codexBin) removeE2eDirectory(codexBin);
+    if (dataDir) await removeE2eDirectory(dataDir);
+    if (codexBin) await removeE2eDirectory(codexBin);
   });
 
   it("connects bob to the project from a link", async () => {

@@ -1,4 +1,6 @@
+import fs from "node:fs";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { z } from "zod";
 import {
   type AppHandle,
   focusWindow,
@@ -1969,5 +1971,47 @@ describe("agents and profiles", () => {
 
     await run(`pressKey('Escape'); return true;`);
     await app.movePointer({ x: 1, y: 1 });
+  });
+  it("loads shipped authoring assets through both native agent tools after bundling", async () => {
+    await settled();
+    await openFreshChat("authoring asset check");
+    await run(
+      `const input = visibleDock().querySelector('[data-composer-input]');
+       setReactValue(input, 'inspect customization authoring assets');
+       input.closest('form').requestSubmit();`,
+    );
+    const report = await runWait<{
+      error?: string;
+      authoring?: unknown;
+      reference?: unknown;
+    }>(
+      `const code = visibleDock()?.querySelector('pre code');
+       if (!code) return false;
+       try { return JSON.parse(code.textContent); } catch { return false; }`,
+      { label: "native authoring tool results" },
+    );
+    expect(report.error).toBeUndefined();
+    const authoring = z
+      .object({
+        revision: z.string(),
+        sdkRoot: z.string(),
+        types: z.string(),
+        worker: z.string(),
+        tool: z.string(),
+        triggerTypes: z.string(),
+      })
+      .parse(report.authoring);
+    expect(report.reference).toEqual({
+      revision: authoring.revision,
+      sdkRoot: authoring.sdkRoot,
+      hasSdkReference: true,
+    });
+    for (const file of [
+      authoring.types,
+      authoring.worker,
+      authoring.tool,
+      authoring.triggerTypes,
+    ])
+      expect(fs.statSync(file).size).toBeGreaterThan(0);
   });
 });

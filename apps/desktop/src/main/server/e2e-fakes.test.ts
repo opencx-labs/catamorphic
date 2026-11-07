@@ -14,7 +14,7 @@ import type {
 } from "@catamorphic/agent-protocol/runner";
 import { STOPPED_WAITING_NOTE } from "@catamorphic/sandbox";
 import { afterEach, beforeEach, expect, it } from "vitest";
-import { E2eFakeAdapter } from "./e2e-fakes.js";
+import { E2eFakeAdapter, E2eLocalSandboxProvider } from "./e2e-fakes.js";
 
 let workingDirectory: string;
 beforeEach(async () => {
@@ -296,4 +296,35 @@ it("fails an auth error once, with the provider's own words", async () => {
   const retry = hostFor({});
   await new E2eFakeAdapter().start(attemptFor(message), retry.host).finished;
   expect(replyOf(retry.events)).toBe("Recovered after reconnecting.");
+});
+
+it("restores the same sandbox paths and environment across isolated desktop restarts", async () => {
+  const first = new E2eLocalSandboxProvider(undefined, workingDirectory);
+  const sandbox = await first.createSandbox({
+    language: "typescript",
+    envVars: { FIXTURE_VALUE: "saved" },
+  });
+  await first.uploadFiles(
+    sandbox.id,
+    { "kept.txt": "contents" },
+    workingDirectory,
+  );
+  const reopened = new E2eLocalSandboxProvider(undefined, workingDirectory);
+  expect(reopened.workspaceRoot).toBe(first.workspaceRoot);
+  expect(await reopened.getSandboxStatus(sandbox.id)).toBe("started");
+  expect(
+    await reopened.downloadFile(
+      sandbox.id,
+      path.join(workingDirectory, "kept.txt"),
+    ),
+  ).toBe("contents");
+  expect(
+    await reopened.executeCommand(sandbox.id, 'printf %s "$FIXTURE_VALUE"'),
+  ).toMatchObject({ exitCode: 0, result: "saved" });
+  const next = await reopened.createSandbox({ language: "typescript" });
+  expect(next.id).not.toBe(sandbox.id);
+  await reopened.destroySandbox(sandbox.id);
+  const third = new E2eLocalSandboxProvider(undefined, workingDirectory);
+  expect(await third.getSandboxStatus(sandbox.id)).toBe("stopped");
+  await expect(third.startSandbox(sandbox.id)).rejects.toThrow("Unknown");
 });

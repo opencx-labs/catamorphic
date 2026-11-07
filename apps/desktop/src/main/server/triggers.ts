@@ -3,36 +3,11 @@ import type {
   Catamorphic,
   ScopedClient,
 } from "@catamorphic/server-sdk";
-import {
-  aiToolCall,
-  aiToolKind,
-  defineTriggerKind,
-  SESSION_TRIGGER_KINDS,
-  schedule,
-  webhook,
-} from "@catamorphic/server-sdk";
-import { z } from "zod";
+import { aiToolKind } from "@catamorphic/server-sdk";
 import { DESKTOP_TENANT_ID, DESKTOP_USER_ID } from "./identity.js";
+import { terminalIdle } from "./trigger-kinds.js";
 
-/** Session events are published durably by core; these sources are desktop-owned. */
-export const terminalIdle = defineTriggerKind({
-  name: "terminal.idle",
-  description:
-    "A terminal in this project returned to its prompt after running a command",
-  display: { label: "Terminal Idle", icon: "zap", color: "#0e7490" },
-  payload: z.object({
-    sessionId: z.string(),
-    shell: z.string(),
-  }),
-});
-
-export const DESKTOP_TRIGGER_KINDS = [
-  ...SESSION_TRIGGER_KINDS,
-  terminalIdle,
-  aiToolCall,
-  schedule,
-  webhook,
-];
+export { DESKTOP_TRIGGER_KINDS, terminalIdle } from "./trigger-kinds.js";
 
 /** Tool-kind roster behind the desktop's per-project MCP endpoint. */
 export const DESKTOP_MCP_TOOL_KINDS = [aiToolKind];

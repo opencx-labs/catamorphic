@@ -114,26 +114,20 @@ export function ConfiguredSection({
   const listed = workSourceName(section.source);
   // Static items depend on what is in front (their own `when`); sources
   // never do, so switching tabs never rebuilds (and re-reads) one.
-  const itemsKey =
-    kind === "items"
-      ? JSON.stringify([
-          section.items ?? [],
-          surface.kind,
-          surface.sessionId,
-          surface.path,
-          surface.selection,
-          surface.tabPlacement,
-        ])
-      : "";
-  // biome-ignore lint/correctness/useExhaustiveDependencies: itemsKey is the value identity of the items and the surface they read; presentation edits keep the source.
+  const context = useRef({ surface, experienceContext });
+  context.current = { surface, experienceContext };
+  const itemsKey = kind === "items" ? JSON.stringify(section.items ?? []) : "";
+  // biome-ignore lint/correctness/useExhaustiveDependencies: itemsKey is the items' value identity; refs supply current context without replacing the source.
   const source = useMemo((): SectionSource | null => {
     if (kind === "items")
       return itemsSource({
         items: section.items ?? [],
         ownerId: section.id,
         keep: (item) =>
-          matchesProjectExperience(item.when, experienceContext) &&
-          matchesSidebarSurface(item.when, surface),
+          matchesProjectExperience(
+            item.when,
+            context.current.experienceContext,
+          ) && matchesSidebarSurface(item.when, context.current.surface),
       });
     if (listed) return sources.get(listed);
     // Local code never runs for a project on a server (ADR 0140).
@@ -194,7 +188,9 @@ export function ConfiguredSection({
   const [inputRequest, setInputRequest] = useState<{
     label: string;
     input: SidebarActionInput;
-    run: (values: Record<string, string>) => Promise<unknown>;
+    run: (
+      values: import("@catamorphic/work-customization").SidebarInputValues,
+    ) => Promise<unknown>;
   } | null>(null);
   const [message, setMessage] = useState<string>();
   // The chat a chat-scoped section shows, kept by its list.
@@ -215,12 +211,15 @@ export function ConfiguredSection({
     }
     if (!source || isHostAction(entry.action))
       throw new Error("This section does not support this action");
-    const run = async (values?: Record<string, string>) => {
+    const run = async (
+      values?: import("@catamorphic/work-customization").SidebarInputValues,
+    ) => {
       const effect = await runRowAction({
         source,
         itemId: "",
         action: entry.action,
         values,
+        surface,
         ...(chat.current ? { session: chat.current } : {}),
         signal: new AbortController().signal,
         open,

@@ -9,6 +9,68 @@ import {
 } from "./code-access.js";
 
 describe("code access (ADR 0277)", () => {
+  it("accepts an exact immutable private workflow address in the same grant list", () => {
+    const address = "private:106c7337-5a5b-49ba-b9b4-655ec4c32ac3:2";
+    expect(parseCodeAccess({ workflows: [address] }, "source")).toEqual({
+      workflows: [address],
+    });
+    for (const invalid of [
+      `${address}:extra`,
+      address.replace(":2", ":0"),
+      "private:missing:1",
+    ])
+      expect(() =>
+        parseCodeAccess({ workflows: [invalid] }, "source"),
+      ).toThrow();
+  });
+  it("validates, fingerprints and asks separately for host operations", () => {
+    const access = parseCodeAccess(
+      {
+        permissions: [
+          "processes",
+          "state",
+          "background",
+          "notifications",
+          "state",
+        ],
+      },
+      "package.json",
+    );
+    expect(access.permissions).toEqual([
+      "background",
+      "notifications",
+      "processes",
+      "state",
+    ]);
+    expect(isEmptyAccess(access)).toBe(false);
+    expect(
+      accessBeyond({ permissions: ["processes", "state"] }, access),
+    ).toEqual({ permissions: ["background", "notifications"] });
+    expect(
+      accessBeyond(
+        { permissions: ["background"] },
+        { permissions: ["processes"] },
+      ),
+    ).toEqual({ permissions: ["processes"] });
+    expect(accessText(access)).toBe(
+      accessText({
+        permissions: ["state", "processes", "notifications", "background"],
+      }),
+    );
+    expect(accessText(access)).not.toBe(
+      accessText({ permissions: ["processes", "state"] }),
+    );
+    expect(describeAccess(access)).toEqual([
+      "Keep this package's services running after Work quits",
+      "Send you notifications",
+      "Start and control confined processes for this package",
+      "Read and change this package's private state",
+    ]);
+    for (const permissions of [["*"], ["shell"], ["State"], "state", [true]])
+      expect(() => parseCodeAccess({ permissions }, "package.json")).toThrow(
+        "permissions are",
+      );
+  });
   it("reads a declaration, sorted and without repeats", () => {
     expect(
       parseCodeAccess(

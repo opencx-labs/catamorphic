@@ -15,6 +15,27 @@ export interface ModuleAccess {
   file: string | null;
 }
 
+/** One authority for every entry point in a canonical package, within its project. */
+export function moduleAccessSubject({
+  projectId,
+  modulePath,
+  projectRoot,
+  declaration,
+}: {
+  projectId: string;
+  modulePath: string;
+  projectRoot: string;
+  declaration: ModuleAccess;
+}): string {
+  const owner = canonicalPath(
+    declaration.file ? path.dirname(declaration.file) : modulePath,
+  );
+  const root = canonicalPath(projectRoot);
+  if (owner !== root && !insideProject(root, owner))
+    throw new Error("A customization package must belong to its project.");
+  return `package:${projectId}:${owner}`;
+}
+
 /** Resolve existing ancestors too, so a new file cannot hide a symlink. */
 function canonicalPath(file: string): string {
   let current = path.resolve(file);

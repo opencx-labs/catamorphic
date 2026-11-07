@@ -466,6 +466,9 @@ export class ScopedClient {
     allocationId?: string;
   }) => AgentCapabilityGateway;
   readonly sessionArtifacts: ReturnType<typeof buildSessionArtifacts>;
+  readonly privateState: ReturnType<typeof buildPrivateState>;
+  readonly privateWorkflows: ReturnType<typeof buildPrivateWorkflows>;
+  readonly notifications: ReturnType<typeof buildNotifications>;
   readonly apps: ReturnType<typeof buildApps>;
   readonly projects: ProjectsResource;
   readonly workflows: WorkflowsResource;
@@ -482,6 +485,9 @@ export class ScopedClient {
     this.capabilities = (args) =>
       core.agentCapabilities.forSession({ ...args, identity });
     this.sessionArtifacts = buildSessionArtifacts(core, identity);
+    this.privateState = buildPrivateState(core, identity);
+    this.privateWorkflows = buildPrivateWorkflows(core, identity);
+    this.notifications = buildNotifications(core, identity);
     this.apps = buildApps(core, identity);
     this.projects = buildProjects(core, identity);
     this.workflows = buildWorkflows(core, identity);
@@ -599,5 +605,43 @@ function buildApps(core: CatamorphicCore, identity: Identity) {
     updatePresentation: (
       args: Omit<Parameters<Service["updatePresentation"]>[0], "identity">,
     ) => service().updatePresentation({ ...args, identity }),
+  };
+}
+
+function buildPrivateState(core: CatamorphicCore, identity: Identity) {
+  type Service = CatamorphicCore["privateState"];
+  return {
+    read: (args: Omit<Parameters<Service["read"]>[0], "identity">) =>
+      core.privateState.read({ ...args, identity }),
+    write: (args: Omit<Parameters<Service["write"]>[0], "identity">) =>
+      core.privateState.write({ ...args, identity }),
+    delete: (args: Omit<Parameters<Service["delete"]>[0], "identity">) =>
+      core.privateState.delete({ ...args, identity }),
+  };
+}
+function buildPrivateWorkflows(core: CatamorphicCore, identity: Identity) {
+  type Service = CatamorphicCore["privateWorkflows"];
+  return {
+    hasEnabled: (
+      args: Omit<Parameters<Service["hasEnabled"]>[0], "identity"> = {},
+    ) => core.privateWorkflows.hasEnabled({ ...args, identity }),
+    preview: (args: Omit<Parameters<Service["preview"]>[0], "identity">) =>
+      core.privateWorkflows.preview({ ...args, identity }),
+    activate: (args: Omit<Parameters<Service["activate"]>[0], "identity">) =>
+      core.privateWorkflows.activate({ ...args, identity }),
+    stop: (args: Omit<Parameters<Service["stop"]>[0], "identity">) =>
+      core.privateWorkflows.stop({ ...args, identity }),
+    run: (args: Omit<Parameters<Service["run"]>[0], "identity">) =>
+      core.privateWorkflows.run({ ...args, identity }),
+  };
+}
+function buildNotifications(core: CatamorphicCore, identity: Identity) {
+  return {
+    publish: (
+      args: Omit<
+        Parameters<CatamorphicCore["notifications"]["notify"]>[0],
+        "identity"
+      >,
+    ) => core.notifications.notify({ ...args, identity }),
   };
 }

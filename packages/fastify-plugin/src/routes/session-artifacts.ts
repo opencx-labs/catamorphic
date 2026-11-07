@@ -16,6 +16,8 @@ export const SessionArtifactSchema = z.object({
   id: z.string().uuid(),
   projectId: z.string().uuid(),
   sessionId: z.string().uuid().nullable(),
+  lifetime: z.enum(["session", "member"]),
+  workflowEnablementId: z.string().uuid().nullable(),
   kind: z.enum(["app", "workflow"]),
   name: z.string(),
   title: z.string(),

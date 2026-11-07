@@ -1,6 +1,8 @@
 import { spawn } from "node:child_process";
 import { once } from "node:events";
 import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { removeE2eDirectory, terminate } from "./harness.js";
 
@@ -9,17 +11,26 @@ afterEach(() => {
 });
 
 describe("removeE2eDirectory", () => {
-  it("retries transient Linux directory removal races", () => {
-    const remove = vi.spyOn(fs, "rmSync").mockImplementation(() => undefined);
-
-    removeE2eDirectory("/tmp/catamorphic-e2e-data-test");
-
-    expect(remove).toHaveBeenCalledWith("/tmp/catamorphic-e2e-data-test", {
-      recursive: true,
-      force: true,
-      maxRetries: 5,
-      retryDelay: 100,
-    });
+  it("reclaims immutable snapshots without changing symlink targets", async () => {
+    const base = fs.mkdtempSync(path.join(os.tmpdir(), "e2e-cleanup-"));
+    const own = path.join(base, "profile"),
+      outside = path.join(base, "outside");
+    fs.mkdirSync(own);
+    fs.mkdirSync(outside);
+    fs.writeFileSync(path.join(outside, "keep"), "unchanged");
+    const before = fs.statSync(outside).mode;
+    fs.symlinkSync(outside, path.join(own, "link"), "dir");
+    const snapshot = path.join(own, "snapshot");
+    fs.mkdirSync(snapshot);
+    fs.writeFileSync(path.join(snapshot, "source.ts"), "source");
+    fs.chmodSync(snapshot, 0o555);
+    await removeE2eDirectory(own);
+    expect(fs.existsSync(own)).toBe(false);
+    expect(fs.readFileSync(path.join(outside, "keep"), "utf8")).toBe(
+      "unchanged",
+    );
+    expect(fs.statSync(outside).mode).toBe(before);
+    await removeE2eDirectory(base);
   });
 });
 

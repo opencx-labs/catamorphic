@@ -1,5 +1,7 @@
 /** Resource-opening intent shared by the shell and webview preload (ADR 0108). */
-export type OpenMode = "replace" | "tab" | "side" | "floating";
+export type { OpenMode } from "@catamorphic/work-customization";
+
+import type { OpenMode } from "@catamorphic/work-customization";
 
 export interface OpenModifiers {
   metaKey: boolean;

@@ -2,8 +2,9 @@
 
 ## First launch and tutorial previews
 
-The shell creates its windows before dynamically loading the embedded server's
-boot module.
+During a foreground launch, the shell creates its windows before dynamically
+loading the embedded server's boot module. Both foreground and background startup
+track that import and initialization together so an early Quit waits for both.
 Desktop identity constants live in `main/server/identity.ts`: importing an ID
 must not evaluate backend boot. The server remains in process and retains the
 same readiness gate, migration backup, and Default Project initialization.

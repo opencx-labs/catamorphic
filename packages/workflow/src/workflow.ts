@@ -345,6 +345,31 @@ export interface BoundaryContext<Input> {
   readonly host: HostNamespace & {
     readonly "catamorphic.sessions": SessionHostOperations;
     readonly "catamorphic.secrets": SecretHostOperations;
+    readonly "catamorphic.privateState": {
+      read: TransitionCall<
+        { key: string },
+        { key: string; version: number; value: JsonValue }
+      >;
+      write: TransitionCall<
+        { key: string; value: JsonValue; ifVersion: number },
+        { key: string; version: number; value: JsonValue }
+      >;
+      delete: TransitionCall<
+        { key: string; ifVersion: number },
+        { version: number }
+      >;
+    };
+    readonly "catamorphic.notifications": {
+      publish: TransitionCall<
+        {
+          title: string;
+          body?: string;
+          route?: string;
+          idempotencyKey: string;
+        },
+        { published: true }
+      >;
+    };
   };
   /** The documents surface, caller-bound (ADR 0055). */
   readonly documents: DocumentsCalls;

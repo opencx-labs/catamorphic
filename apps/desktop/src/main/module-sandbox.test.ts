@@ -162,6 +162,20 @@ export default {
 `;
 
 describe("confined modules (ADR 0277)", () => {
+  it.skipIf(process.platform !== "darwin" && !linuxConfinement)(
+    "formats timezones through the public OS runtime without extra file grants",
+    async () => {
+      const rows = await loadConfined(
+        `export default { async load() {
+        return { items: [{ id: 'date', label: new Intl.DateTimeFormat('en-GB', {
+          timeZone: 'Asia/Amman', hour: '2-digit', minute: '2-digit', hourCycle: 'h23'
+        }).format(new Date('2026-11-06T09:00:00Z')) }] };
+      } };`,
+        {},
+      );
+      expect(rows.date).toBe("12:00");
+    },
+  );
   it.skipIf(process.platform !== "darwin")(
     "denies unapproved files outside the usual home and temporary roots",
     async () => {
@@ -258,15 +272,29 @@ int main(int argc,char **argv){char b[1048576];size_t n=sizeof(b);int mib[]={CTL
       expect(
         execFileSync(probe, [String(fixture.pid)], { encoding: "utf8" }).trim(),
       ).toBe("escaped");
-      const rows = await loadConfined(
-        `
-      import {execFileSync} from 'node:child_process';
-      export default {async load(){return {items:[{id:'native',label:execFileSync(${JSON.stringify(probe)},[${JSON.stringify(String(fixture.pid))}],{encoding:'utf8'}).trim()}]}}};
-    `,
-        {},
-        project,
+      // An exec replacement still exercises the native kernel boundary when
+      // raw forks are denied. The unconfined control above proves the probe.
+      const workerPath = path.join(project, "native.mjs");
+      fs.writeFileSync(
+        workerPath,
+        `process.execve(${JSON.stringify(probe)},[${JSON.stringify(probe)},${JSON.stringify(String(fixture.pid))}],process.env);`,
       );
-      expect(rows.native).toBe("blocked");
+      const launch = await launchConfinedModule({
+        executable: "bun",
+        workerPath,
+        modulePath: workerPath,
+        projectRoot: project,
+        access: {},
+        toolchain: { PATH: process.env.PATH ?? "" },
+        scratchRoot: folder("native-scratch"),
+      });
+      cleanups.push(() => launch.close());
+      expect(
+        execFileSync(launch.command, launch.args, {
+          env: launch.env,
+          encoding: "utf8",
+        }).trim(),
+      ).toBe("blocked");
     },
     30_000,
   );
@@ -624,6 +652,7 @@ int main(int argc,char **argv){char b[1048576];size_t n=sizeof(b);int mib[]={CTL
     );
     expect(profile).toContain('(subpath "/Users/me/odd \\"name\\"")');
     expect(profile).toContain("(deny mach-lookup)");
+    expect(profile).toContain("(deny process-fork)");
     expect(
       moduleProfile({
         projectRoot: "/p",

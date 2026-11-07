@@ -668,6 +668,17 @@ export interface NotificationDeliveries {
   updated_at: Generated<Timestamp>;
 }
 
+export interface NotificationHostDeliveries {
+  attempt_count: Generated<number>;
+  delivered_at: Timestamp | null;
+  event_id: string;
+  last_error: string | null;
+  lease_expires_at: Timestamp | null;
+  lease_owner: string | null;
+  next_attempt_at: Generated<Timestamp>;
+  status: Generated<string>;
+}
+
 export interface PersonalEnvironmentEntries {
   bytes: number;
   credential_ref: string;
@@ -900,7 +911,10 @@ export interface SessionArtifactRevisions {
   artifact_id: string;
   commit_sha: string;
   created_at: Generated<Timestamp>;
+  remote_branch: string | null;
+  source_files: Json | null;
   source_paths: Json;
+  source_revision: Generated<number | null>;
 }
 
 export interface SessionArtifacts {
@@ -910,6 +924,7 @@ export interface SessionArtifacts {
   id: Generated<string>;
   kind: string;
   last_error: string | null;
+  lifetime: Generated<string>;
   name: string;
   owner_external_user_id: string;
   project_id: string;
@@ -922,6 +937,7 @@ export interface SessionArtifacts {
   status: Generated<string>;
   title: string;
   updated_at: Generated<Timestamp>;
+  workflow_enablement_id: string | null;
 }
 
 export interface SessionMailboxItems {
@@ -994,6 +1010,7 @@ export interface StoreDocuments {
   created_at: Generated<Timestamp>;
   deleted: Generated<boolean>;
   id: Generated<string>;
+  owner_external_user_id: Generated<string>;
   path: string;
   project_id: string;
   search_vector: Generated<string | null>;
@@ -1539,6 +1556,7 @@ export interface DB {
   memberships: Memberships;
   model_usage: ModelUsage;
   notification_deliveries: NotificationDeliveries;
+  notification_host_deliveries: NotificationHostDeliveries;
   personal_environment_entries: PersonalEnvironmentEntries;
   personal_environment_setups: PersonalEnvironmentSetups;
   placement_waits: PlacementWaits;

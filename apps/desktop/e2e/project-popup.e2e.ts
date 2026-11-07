@@ -230,7 +230,7 @@ beforeAll(async () => {
 afterAll(async () => {
   await app?.stop();
   server.close();
-  if (temp) removeE2eDirectory(temp);
+  if (temp) await removeE2eDirectory(temp);
 });
 
 describe("a project's card", () => {

@@ -223,7 +223,7 @@ export function chatsSource(
         stopSessions();
       };
     },
-    action: async ({ itemId, action }) => {
+    action: async ({ itemId, action, mode }) => {
       // A chat opens through its address; these are its own verbs.
       if (openModeForAction(action) || action === "open")
         return {
@@ -231,7 +231,7 @@ export function chatsSource(
             projectId: deps.projectId,
             sessionId: itemId,
           }),
-          mode: openModeForAction(action),
+          mode: openModeForAction(action) ?? mode,
         };
       chatAction(deps, itemId, action);
       return undefined;

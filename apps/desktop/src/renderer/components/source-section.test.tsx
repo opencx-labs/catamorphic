@@ -84,12 +84,14 @@ function Contributed({
   surface,
   open,
   onReport,
+  visible = true,
   children,
 }: {
   section: SidebarSectionConfig;
   surface: SidebarSurface;
   open: (url: string, mode: string) => void;
   onReport: (status: SidebarStatus) => void;
+  visible?: boolean;
   children: ReactNode;
 }) {
   const [status, setStatus] = useState<SidebarStatus>({ state: "loading" });
@@ -105,7 +107,7 @@ function Contributed({
       value={{
         section,
         surface,
-        visible: true,
+        visible,
         relevant: true,
         status,
         report,
@@ -139,12 +141,15 @@ async function mount({
   const client = new QueryClient({
     defaultOptions: { queries: { retry: false } },
   });
-  await act(async () =>
+  let visible = true;
+  let shownSurface = surface;
+  const render = () =>
     root.render(
       <QueryClientProvider client={client}>
         <Contributed
           section={section}
-          surface={surface}
+          visible={visible}
+          surface={shownSurface}
           open={open}
           onReport={(status) => reports.push(status)}
         >
@@ -157,14 +162,22 @@ async function mount({
           )}
         </Contributed>
       </QueryClientProvider>,
-    ),
-  );
+    );
+  await act(async () => render());
   await act(async () => {
     await new Promise((resolve) => setTimeout(resolve, 0));
   });
   return {
     node,
     reports,
+    show: async (next: boolean) => {
+      visible = next;
+      await act(async () => render());
+    },
+    context: async (next: SidebarSurface) => {
+      shownSurface = next;
+      await act(async () => render());
+    },
     row: (id: string) =>
       node.querySelector<HTMLElement>(`[data-sidebar-item-id="${id}"]`),
     cleanup: async () => {
@@ -300,6 +313,150 @@ describe("every list draws one way (ADR 0234)", () => {
     }
   });
 
+  it("indicates every matching row while keeping one keyboard starting row", async () => {
+    const view = await mount({
+      source: memorySource([
+        { id: "first", label: "First", url: "file:docs/a.md" },
+        {
+          id: "second",
+          label: "Second",
+          url: "file:docs/a.md",
+          contextualIndicator: "icon",
+        },
+        {
+          id: "quiet",
+          label: "Quiet",
+          url: "file:docs/a.md",
+          contextualIndicator: "none",
+        },
+      ]),
+      surface: { kind: "editor", path: "docs/a.md" },
+    });
+    try {
+      expect(view.row("first")?.getAttribute("data-contextual")).toBe("row");
+      expect(view.row("second")?.getAttribute("data-contextual")).toBe("icon");
+      expect(view.row("quiet")?.getAttribute("data-contextual")).toBe("none");
+      expect(
+        view.node.querySelectorAll('[role="treeitem"][aria-selected="true"]'),
+      ).toHaveLength(1);
+    } finally {
+      await view.cleanup();
+    }
+  });
+
+  it("passes surface and chat context without a visibility predicate", async () => {
+    chat.fields = { id: "s1", title: "Plan", metadata: { todo: "milk" } };
+    const seen: Array<{ session?: unknown; surface?: unknown }> = [];
+    const source = memorySource([], {
+      load: async ({ session, surface }) => {
+        seen.push({ session, surface });
+        return { items: [] };
+      },
+    });
+    const surface = { kind: "browser", key: "browser:docs", sessionId: "s1" };
+    const view = await mount({ source, surface });
+    try {
+      expect(seen.at(-1)).toEqual({ session: chat.fields, surface });
+    } finally {
+      await view.cleanup();
+    }
+  });
+
+  it("keeps inline, overflow and context menus independent through overrides", async () => {
+    const calls: string[] = [];
+    const view = await mount({
+      section: {
+        id: "things",
+        source: ".work/things.ts",
+        itemDefaults: { contextMenu: [] },
+        itemOverrides: { todo: { descriptionVisibility: "hover", menu: [] } },
+      },
+      source: memorySource(
+        [
+          {
+            id: "todo",
+            label: "Milk",
+            description: "Tomorrow",
+            menu: [{ label: "Rename", action: "rename" }],
+            actions: [{ label: "Done", action: "done", icon: "Check" }],
+          },
+        ],
+        {
+          action: async ({ action }) => {
+            calls.push(action);
+          },
+        },
+      ),
+    });
+    try {
+      expect(
+        view.row("todo")?.querySelector('[aria-haspopup="menu"]'),
+      ).toBeNull();
+      expect(
+        view.row("todo")?.querySelector('[data-description-visibility="hover"]')
+          ?.textContent,
+      ).toBe("Tomorrow");
+      await act(async () =>
+        view
+          .row("todo")
+          ?.querySelector<HTMLButtonElement>('[aria-label="Done"]')
+          ?.click(),
+      );
+      expect(calls).toEqual(["done"]);
+      await act(async () =>
+        view
+          .row("todo")
+          ?.dispatchEvent(
+            new MouseEvent("contextmenu", { bubbles: true, cancelable: true }),
+          ),
+      );
+      expect(document.querySelector('[role="menu"]')).toBeNull();
+    } finally {
+      await view.cleanup();
+    }
+  });
+
+  it("dispatches layout-provided actions and open modes to an addressless source row", async () => {
+    const requests: Array<{ action: string; mode?: string }> = [];
+    const view = await mount({
+      section: {
+        id: "things",
+        source: ".work/tasks.ts",
+        itemDefaults: {
+          actions: [
+            { label: "Complete", action: "complete", icon: "Check" },
+            { label: "Open beside", action: "open-side", icon: "Columns2" },
+          ],
+        },
+      },
+      source: memorySource([{ id: "todo", label: "Milk" }], {
+        action: async ({ action, mode }) => {
+          requests.push({ action, mode });
+          return undefined;
+        },
+      }),
+    });
+    try {
+      const complete = view
+        .row("todo")
+        ?.querySelector<HTMLButtonElement>('[aria-label="Complete"]');
+      const beside = view
+        .row("todo")
+        ?.querySelector<HTMLButtonElement>('[aria-label="Open beside"]');
+      expect(complete?.disabled).toBe(false);
+      expect(beside?.disabled).toBe(false);
+      await act(async () => complete?.click());
+      await act(async () => beside?.click());
+      expect(requests).toEqual([
+        { action: "complete", mode: undefined },
+        { action: "open", mode: "side" },
+      ]);
+      expect(view.node.querySelector('[role="alert"]')).toBeNull();
+    } finally {
+      await view.cleanup();
+    }
+  });
+
   it("runs a row without an address through its source", async () => {
     const actions: Array<{ itemId: string; action: string }> = [];
     const opened: string[] = [];
@@ -319,17 +476,136 @@ describe("every list draws one way (ADR 0234)", () => {
           ?.querySelector<HTMLButtonElement>("[data-tree-primary]")
           ?.click(),
       );
-      // A plain click passes the mode it opens in as its verb.
-      expect(actions).toEqual([{ itemId: "change", action: "open-here" }]);
+      expect(actions).toEqual([{ itemId: "change", action: "open" }]);
       expect(opened).toEqual(["file:README.md"]);
     } finally {
       await view.cleanup();
     }
   });
 
+  it("clears a section error only after different source code loads successfully", async () => {
+    let publish:
+      | ((change: CollectionChange<SidebarSourceItem>) => void)
+      | undefined;
+    let loadedRevision = "first";
+    let nextRevision = "first";
+    let failing = false;
+    const source = memorySource([{ id: "todo", label: "Milk" }], {
+      revision: () => loadedRevision,
+      load: async () => {
+        if (failing) throw new Error("Reload failed");
+        loadedRevision = nextRevision;
+        return { items: [{ id: "todo", label: "Milk" }] };
+      },
+      action: async () => {
+        throw new Error("Old action failed");
+      },
+      subscribe: (next) => {
+        publish = next;
+        return () => {};
+      },
+    });
+    const view = await mount({ source });
+    try {
+      await act(async () =>
+        view
+          .row("todo")
+          ?.querySelector<HTMLButtonElement>("[data-tree-primary]")
+          ?.click(),
+      );
+      expect(view.node.textContent).toContain("Old action failed");
+      await act(async () => publish?.({ type: "invalidate", quiet: true }));
+      expect(view.node.textContent).toContain("Old action failed");
+      nextRevision = "second";
+      failing = true;
+      await act(async () => publish?.({ type: "invalidate", quiet: true }));
+      expect(view.node.textContent).toContain("Old action failed");
+      failing = false;
+      await act(async () => publish?.({ type: "invalidate", quiet: true }));
+      expect(view.node.textContent).not.toContain("Old action failed");
+    } finally {
+      await view.cleanup();
+    }
+  });
+
+  it("drops an older revision's section error while its cached view is hidden", async () => {
+    let loadedRevision = "first";
+    const source = memorySource([{ id: "todo", label: "Milk" }], {
+      revision: () => loadedRevision,
+      action: async () => {
+        throw new Error("Old action failed");
+      },
+    });
+    const view = await mount({ source });
+    try {
+      await act(async () =>
+        view
+          .row("todo")
+          ?.querySelector<HTMLButtonElement>("[data-tree-primary]")
+          ?.click(),
+      );
+      expect(view.node.textContent).toContain("Old action failed");
+      await view.show(false);
+      loadedRevision = "second";
+      await view.show(false);
+      expect(view.node.textContent).not.toContain("Old action failed");
+    } finally {
+      await view.cleanup();
+    }
+  });
+
+  it("clears an inline action's error after revised code loads without remounting its row", async () => {
+    let loadedRevision = "first";
+    let nextRevision = "first";
+    let publish:
+      | ((change: CollectionChange<SidebarSourceItem>) => void)
+      | undefined;
+    const row: SidebarSourceItem = {
+      id: "todo",
+      label: "Milk",
+      actions: [{ label: "Done", action: "done", icon: "Check" }],
+    };
+    const source = memorySource([row], {
+      revision: () => loadedRevision,
+      load: async () => {
+        loadedRevision = nextRevision;
+        return { items: [row] };
+      },
+      action: async () => {
+        throw new Error("Old inline action failed");
+      },
+      subscribe: (next) => {
+        publish = next;
+        return () => {};
+      },
+    });
+    const view = await mount({ source });
+    try {
+      const originalRow = view.row("todo");
+      await act(async () =>
+        originalRow
+          ?.querySelector<HTMLButtonElement>('[aria-label="Done"]')
+          ?.click(),
+      );
+      expect(originalRow?.textContent).toContain("Old inline action failed");
+      await act(async () => publish?.({ type: "invalidate", quiet: true }));
+      expect(originalRow?.textContent).toContain("Old inline action failed");
+      nextRevision = "second";
+      await act(async () => publish?.({ type: "invalidate", quiet: true }));
+      expect(view.row("todo")).toBe(originalRow);
+      expect(originalRow?.textContent).not.toContain(
+        "Old inline action failed",
+      );
+    } finally {
+      await view.cleanup();
+    }
+  });
+
   it("asks for an action's values first and says what happened", async () => {
-    const actions: Array<{ action: string; values?: Record<string, string> }> =
-      [];
+    const actions: Array<{
+      action: string;
+      values?: import("@catamorphic/work-customization").SidebarInputValues;
+    }> = [];
     const view = await mount({
       source: memorySource(
         [
@@ -458,6 +734,184 @@ describe("every list draws one way (ADR 0234)", () => {
       expect(place()).toBeTruthy();
       await act(async () => reads[0]?.());
       expect(place()).toBeTruthy();
+    } finally {
+      await view.cleanup();
+    }
+  });
+
+  it("retains rows, expansion and focus while rebinding one active subscription to current chat context", async () => {
+    const seen: Array<{
+      parentId: string | null;
+      session?: string;
+      surface?: string;
+    }> = [];
+    let active = 0;
+    let mostActive = 0;
+    const bindings: Array<{ session?: string; surface?: string }> = [];
+    const listeners = new Map<string, () => void>();
+    const stop = vi.fn();
+    const subscribe: NonNullable<SectionSource["subscribe"]> = (
+      publish,
+      context,
+    ) => {
+      active += 1;
+      mostActive = Math.max(mostActive, active);
+      bindings.push({
+        session: context.session?.id,
+        surface: context.surface?.kind,
+      });
+      const key = context.session?.id ?? "none";
+      listeners.set(key, () =>
+        publish({ type: "invalidate", parentId: null, quiet: true }),
+      );
+      return () => {
+        stop(key);
+        active -= 1;
+        listeners.delete(key);
+      };
+    };
+    const source = memorySource([], {
+      subscribe,
+      load: async ({ parentId, session, surface }) => {
+        seen.push({ parentId, session: session?.id, surface: surface?.kind });
+        return {
+          items:
+            parentId === null
+              ? [{ id: "folder", label: "Tasks", hasChildren: true }]
+              : [
+                  {
+                    id: "task",
+                    parentId: "folder",
+                    label: "Task",
+                    description: session?.title ?? surface?.kind,
+                    url: "file:task.md",
+                  },
+                ],
+        };
+      },
+    });
+    const view = await mount({ source, surface: { kind: "browser" } });
+    try {
+      await act(async () =>
+        view
+          .row("folder")
+          ?.querySelector<HTMLButtonElement>("[data-row-disclosure]")
+          ?.click(),
+      );
+      const folder = view.row("folder");
+      const task = view.row("task");
+      const primary = task?.querySelector<HTMLButtonElement>(
+        "[data-tree-primary]",
+      );
+      expect(task).not.toBeNull();
+      await act(async () => primary?.focus());
+      const contexts: Array<{
+        fields: typeof chat.fields;
+        surface: SidebarSurface;
+        description: string;
+      }> = [
+        {
+          fields: { id: "s1", title: "First chat", metadata: {} },
+          surface: { kind: "chat", sessionId: "s1" },
+          description: "First chat",
+        },
+        {
+          fields: { id: "s2", title: "Second chat", metadata: {} },
+          surface: { kind: "editor", sessionId: "s2" },
+          description: "Second chat",
+        },
+        { fields: null, surface: { kind: "browser" }, description: "browser" },
+      ];
+      for (const context of contexts) {
+        const start = seen.length;
+        chat.fields = context.fields;
+        await view.context(context.surface);
+        expect(view.row("folder")).toBe(folder);
+        expect(view.row("task")).toBe(task);
+        expect(document.activeElement).toBe(primary);
+        expect(
+          folder
+            ?.querySelector("[data-row-disclosure]")
+            ?.getAttribute("aria-expanded"),
+        ).toBe("true");
+        expect(task?.textContent).toContain(context.description);
+        expect(active).toBe(1);
+        expect(mostActive).toBe(1);
+        expect(bindings.at(-1)).toEqual({
+          session: context.fields?.id,
+          surface: context.surface.kind,
+        });
+        expect([...listeners.keys()]).toEqual([context.fields?.id ?? "none"]);
+        expect(stop).toHaveBeenCalledTimes(bindings.length - 1);
+        expect(seen.slice(start)).toEqual([
+          {
+            parentId: null,
+            session: context.fields?.id,
+            surface: context.surface.kind,
+          },
+          {
+            parentId: "folder",
+            session: context.fields?.id,
+            surface: context.surface.kind,
+          },
+        ]);
+      }
+    } finally {
+      await view.cleanup();
+    }
+    expect(active).toBe(0);
+    expect(listeners.size).toBe(0);
+    expect(bindings).toEqual([
+      { session: undefined, surface: "browser" },
+      { session: "s1", surface: "chat" },
+      { session: "s2", surface: "editor" },
+      { session: undefined, surface: "browser" },
+    ]);
+    expect(stop.mock.calls.map(([key]) => key)).toEqual([
+      "none",
+      "s1",
+      "s2",
+      "none",
+    ]);
+  });
+
+  it("keeps explicit session-scoped collections apart while the next chat's fields load", async () => {
+    const seen: string[] = [];
+    const stop = vi.fn();
+    const subscribe = vi.fn(() => stop);
+    const source = memorySource([], {
+      subscribe,
+      load: async ({ session }) => {
+        if (!session) throw new Error("Missing session");
+        seen.push(session.id);
+        return { items: [{ id: "task", label: session.title ?? session.id }] };
+      },
+    });
+    chat.fields = { id: "s1", title: "First task", metadata: {} };
+    const view = await mount({
+      source,
+      section: {
+        id: "tasks",
+        source: ".work/tasks.ts",
+        when: { session: true },
+      },
+      surface: { kind: "chat", sessionId: "s1" },
+    });
+    try {
+      expect(view.row("task")?.textContent).toBe("First task");
+      const first = view.row("task");
+      const start = seen.length;
+      chat.fields = null;
+      await view.context({ kind: "chat", sessionId: "s2" });
+      expect(seen.slice(start)).toEqual([]);
+      expect(view.row("task")).not.toBe(first);
+      expect(view.node.textContent).not.toContain("First task");
+      chat.fields = { id: "s2", title: "Second task", metadata: {} };
+      await view.context({ kind: "chat", sessionId: "s2" });
+      expect(seen.slice(start).every((id) => id === "s2")).toBe(true);
+      expect(view.row("task")?.textContent).toBe("Second task");
+      expect(stop).toHaveBeenCalledTimes(1);
+      expect(subscribe).toHaveBeenCalledTimes(2);
     } finally {
       await view.cleanup();
     }
