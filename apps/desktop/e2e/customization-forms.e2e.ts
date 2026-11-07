@@ -36,11 +36,35 @@ async function fill(name: string, text: string) {
   await app.press("a", process.platform === "darwin" ? 4 : 2);
   await app.insertText(text);
 }
-async function select(name: string, downs: number) {
-  await click(`[role="dialog"] select[name="${name}"]`);
-  for (let i = 0; i < downs; i++) await app.press("ArrowDown");
+async function select(name: string, value: string) {
+  const selector = `[role="dialog"] select[name="${name}"]`;
+  const { current, target } = await app.waitFor<{
+    current: number;
+    target: number;
+  }>(
+    `(()=>{const el=document.querySelector(${json(selector)});if(!el)return false;return{current:el.selectedIndex,target:[...el.options].findIndex(o=>o.value===${json(value)})}})()`,
+  );
+  expect(target).toBeGreaterThanOrEqual(0);
+  await click(selector);
+  for (let i = 0; i < Math.abs(target - current); i++)
+    await app.press(target < current ? "ArrowUp" : "ArrowDown");
   await app.press("Enter");
+  await app.waitFor(
+    `document.querySelector(${json(selector)})?.value===${json(value)}`,
+    { label: `${name} selected ${value}` },
+  );
 }
+const runs = () =>
+  app.eval<{
+    items: Array<{
+      status: string;
+      error: string | null;
+      input: unknown;
+      activePause: unknown;
+    }>;
+  }>(
+    `(async()=>{const {url}=await window.catamorphicDesktop.getServerState();return (await fetch(url+'/api/projects/'+${json(projectId)}+'/workflows/remind/runs')).json()})()`,
+  );
 async function submit() {
   await click('[role="dialog"] button[type="submit"]');
   await app
@@ -149,7 +173,7 @@ it("adds tasks with presets and repeated custom reminders through native control
   });
   await app.cdp("Page.startScreencast", { format: "png", everyNthFrame: 1 });
   await click("[data-repeat-add]");
-  await select("reminders.1.preset", 1);
+  await select("reminders.1.preset", "1w");
   await app.cdp("Page.stopScreencast");
   off();
   if (process.env.CATAMORPHIC_E2E_ARTIFACTS_DIR)
@@ -165,15 +189,22 @@ it("adds tasks with presets and repeated custom reminders through native control
   await app.waitFor(`document.body.innerText.includes('Plan launch')`);
   await openAdd();
   await fill("title", "Send reminder");
-  await select("reminders.0.preset", 2);
+  await select("reminders.0.preset", "custom");
   await fill("reminders.0.amount", "30");
   await capture("modal-custom");
-  // Units start at Hours. Home then Enter picks Seconds using the native select.
-  await click('select[name="reminders.0.unit"]');
-  await app.press("Home");
-  await app.press("Enter");
+  await select("reminders.0.unit", "seconds");
+  const submittedAt = Date.now();
   await submit();
   await app.waitFor(`document.body.innerText.includes('Send reminder')`);
+  const reminder = z.object({ title: z.string(), dueAt: z.iso.datetime() });
+  const scheduled = (await runs()).items
+    .map((r) => reminder.safeParse(r.input))
+    .find((r) => r.success && r.data.title === "Send reminder");
+  expect(scheduled?.success).toBe(true);
+  if (!scheduled?.success) throw Error("Custom reminder was not enrolled.");
+  const dueAt = new Date(scheduled.data.dueAt).getTime();
+  expect(dueAt).toBeGreaterThanOrEqual(submittedAt + 30000);
+  expect(dueAt).toBeLessThanOrEqual(Date.now() + 30000);
 });
 it("composes openings once and provides readable, copyable rich hover details", async () => {
   const target = await app.eval<{ x: number; y: number }>(
@@ -257,10 +288,6 @@ it("retains tasks after a full restart and finishes the ordinary reminder workfl
   await app.waitFor(
     `document.body.innerText.includes('Plan launch') && document.body.innerText.includes('Send reminder')`,
   );
-  const runs = () =>
-    app.eval<{ items: Array<{ status: string; error: string | null }> }>(
-      `(async()=>{const {url}=await window.catamorphicDesktop.getServerState();return (await fetch(url+'/api/projects/'+${json(projectId)}+'/workflows/remind/runs')).json()})()`,
-    );
   const before = await runs();
   expect(before.items.some((r) => r.status === "waiting")).toBe(true);
   try {
@@ -272,10 +299,7 @@ it("retains tasks after a full restart and finishes the ordinary reminder workfl
       .toBe(true);
   } finally {
     const result = await runs();
-    console.log(
-      "Reminder workflow outcomes",
-      result.items.map((r) => ({ status: r.status, error: r.error })),
-    );
+    console.log("Reminder workflow outcomes", result.items);
   }
   expect(
     JSON.parse(
