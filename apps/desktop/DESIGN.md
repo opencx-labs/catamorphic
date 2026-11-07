@@ -655,6 +655,19 @@ and one component (`source-section.tsx`) draws every list.
   attributes are defects.
 - **Rows and tiles.** A row's overflow menu button appears on hover; a tile
   has no room for one and opens the same menu on right-click only.
+- **Context and focus are independent.** Every row whose address matches the
+  surface in front may indicate it, including several rows in the same list.
+  `contextualIndicator` chooses a row highlight, an icon indication or none;
+  the tree keeps one keyboard starting row and moves its focus ring separately.
+- **Secondary text can give the label its space.** A row's
+  `descriptionVisibility: "hover"` leaves that text no width at rest and
+  reveals it on pointer hover or keyboard focus, independently of badges and
+  inline actions. The existing reveal timing and reduced-motion preference apply.
+- **Row presentation has one override layer.** A source's row is followed by
+  `itemDefaults`, then `itemOverrides[id]`. Overflow `menu`, right-click
+  `contextMenu` and inline `actions` are independent; an omitted context menu
+  inherits overflow, and `[]` removes only the named placement. Section actions
+  belong in `headerActions`.
 - **One keyboard ring per list.** A list draws its ring once, over the
   focused row's own box, wholly inside it (offset by its full width) and
   above every row, so no row covers or clips it and it never reaches a
@@ -4066,3 +4079,24 @@ globe. Expanding the
 real attached dock reserves 64px beneath onboarding, moving its content and
 navigation upward with the existing 250ms padding motion. The inert tutorial
 preview never changes real workspace clearance. Reduced motion settles directly.
+
+### Customization forms and inspectors (2026-11-07)
+
+Action dialogs use the same semantic controls as Settings, including selects,
+checkboxes, multiline text, numbers, calendar dates, times and absolute instants.
+A source may condition controls on an unconditional sibling or repeat a group.
+The host retains values and focus during edits and errors; it omits hidden
+values on submit. Relative presets and their units belong to the customization.
+Datetime controls show the machine timezone and return ISO instants, refusing
+skipped or repeated clock times. Complex forms use an ordinary app.
+
+Standard row commands are composed once by action and destination. Source looks
+replace the automatic choice; different destinations remain distinct. Explicit
+menu overrides keep their existing precedence, including an empty placement.
+
+Inspector labels keep their casing and facts wrap. Copy and fact actions reveal
+on hover or focus, with the existing shared copy feedback. Values may use theme
+tones, code, badges or a color swatch alongside their text. Rich prose uses
+Markdown; arbitrary interactive inspector content mounts an ordinary sandboxed
+app, with its existing authority and cleanup. Context refreshes retain the tree
+and its expanded branches in every non-session-scoped section (ADR 0308).

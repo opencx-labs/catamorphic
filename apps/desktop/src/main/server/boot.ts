@@ -53,6 +53,16 @@ import {
 } from "../auth-health.js";
 import type { ConnectorsService } from "../connectors.js";
 import { DesktopCredentialVault } from "../credential-vault.js";
+import { customizationProcessCapabilities } from "../customization-process-capabilities.js";
+import {
+  CUSTOMIZATION_PROCESSES_STATE_KEY,
+  type CustomizationProcesses,
+} from "../customization-processes.js";
+import { desktopCustomizationProcesses } from "../customization-processes-host.js";
+import {
+  type DesktopNotificationDestination,
+  desktopNotificationTransport,
+} from "../desktop-notifications.js";
 import {
   ExternalSessionImporter,
   externalSessionHomes,
@@ -145,6 +155,9 @@ export interface EmbeddedServer {
   mcpAppViewUrl: typeof mcpAppViewUrl;
   clientRunners: RemoteClientRunners;
   catamorphic: Catamorphic;
+  customizationProcesses: CustomizationProcesses;
+  /** Whether approved persistent work needs an engine after the UI quits. */
+  hasBackgroundWork: () => Promise<boolean>;
   /**
    * The person's GitHub connection provider (ADR 0177): device-flow sign-in
    * and the `gh` CLI credential become their personal `github` connection.
@@ -223,6 +236,12 @@ export async function startEmbeddedServer(
   incognitoSessions?: IncognitoSessionsStore,
   connectionProviders?: readonly ConnectionProvider[],
   ownerProfile: (ownerId: number) => string | undefined = () => undefined,
+  host: {
+    openNotification?: (
+      destination: DesktopNotificationDestination,
+    ) => Promise<void>;
+    launchNotificationId?: string;
+  } = {},
 ): Promise<EmbeddedServer> {
   validateDatabaseFiles(paths.db);
   fs.mkdirSync(paths.db, { recursive: true });
@@ -248,7 +267,10 @@ export async function startEmbeddedServer(
   };
   const imageBuilderCommand = findImageBuilderCommand();
   const sandboxProvider = e2eFakeAgent
-    ? new E2eLocalSandboxProvider(resolveProjectData)
+    ? new E2eLocalSandboxProvider(
+        resolveProjectData,
+        path.join(paths.root, "e2e-sandboxes"),
+      )
     : new MicrosandboxSandboxProvider({
         projectDataDirectory: resolveProjectData,
         // Environments that name a Dockerfile run here when Docker or
@@ -573,6 +595,72 @@ export async function startEmbeddedServer(
   // GitHub is an ordinary connection (ADR 0177): the person signs in once
   // and it backs import, sync, pull requests, and the event poller.
   const github = desktopGithubProvider();
+  const processCapabilities = customizationProcessCapabilities({
+    member: { tenantId: DESKTOP_TENANT_ID, externalUserId: DESKTOP_USER_ID },
+    manager: () => customizationProcesses,
+    authorizeWorkflow: (context) =>
+      catamorphic.core.authorizeWorkflowHostCall(context),
+    owner: async ({ projectId, sourcePath }) => {
+      const projectRoot = await projectRoots.get(projectId);
+      if (!projectRoot)
+        throw new Error("Background services need a local project folder.");
+      return {
+        profileId: profiles.profileForProject(projectId).id,
+        projectId,
+        modulePath: path.resolve(projectRoot, sourcePath),
+      };
+    },
+    declaredPermissions: async ({
+      identity,
+      projectId,
+      runId,
+      workflowName,
+    }) => {
+      const run = await catamorphic.core.runs.get({ identity, runId });
+      if (
+        run.projectId !== projectId ||
+        run.workflowName !== workflowName ||
+        !run.provenance.commitSha
+      )
+        throw new Error("This workflow run has no pinned process authority.");
+      return (
+        await catamorphic.core.runs.resolveProductionWorkflow({
+          identity,
+          projectId,
+          workflowName,
+          commitSha: run.provenance.commitSha,
+        })
+      ).permissions;
+    },
+  });
+  const notifications = desktopNotificationTransport({
+    prefs: (projectId) => profileConfig.forProject(projectId).prefs.load(),
+    open: (destination) =>
+      host.openNotification?.(destination) ?? Promise.resolve(),
+    resolve: async (eventId) => {
+      if (
+        !/^[a-f\d]{8}-[a-f\d]{4}-[a-f\d]{4}-[a-f\d]{4}-[a-f\d]{12}$/i.test(
+          eventId,
+        )
+      )
+        return;
+      const event = await db
+        .selectFrom("user_notification_events")
+        .select(["project_id", "route", "title"])
+        .where("id", "=", eventId)
+        .where("tenant_id", "=", DESKTOP_TENANT_ID)
+        .where("external_user_id", "=", DESKTOP_USER_ID)
+        .where("kind", "=", "customization")
+        .executeTakeFirst();
+      return event?.project_id
+        ? {
+            projectId: event.project_id,
+            route: event.route,
+            title: event.title,
+          }
+        : undefined;
+    },
+  });
   const catamorphic = createCatamorphic({
     // Every write to this database is this process's own, and each one
     // wakes the poller it concerns at once, so idle pollers look rarely
@@ -661,6 +749,8 @@ export async function startEmbeddedServer(
     },
     appBundleStore: new FsBundleStore(paths.appBundles),
     pushNotifications: createPushTransport({ dataDir: paths.root }),
+    notificationTransport: notifications,
+    capabilityProviders: [processCapabilities.provider],
     documentBlobStore: new FsBundleStore(
       path.join(paths.root, "document-blobs"),
     ),
@@ -678,7 +768,7 @@ export async function startEmbeddedServer(
           .remoteProjects.get(projectId)?.capabilities?.roles;
         return { ...localPerson(), ...(roles ? { roles } : {}) };
       },
-      capabilities: [registryCapability],
+      capabilities: [registryCapability, ...processCapabilities.agents],
       sources: [
         desktopCapabilitySource({
           core: () => catamorphic.core,
@@ -1611,6 +1701,53 @@ export async function startEmbeddedServer(
   const url = `http://127.0.0.1:${address.port}`;
   apiBaseUrl = url;
   console.log(`[desktop] API ready on ${url}/api`);
+  const privateIdentity = {
+    tenantId: DESKTOP_TENANT_ID,
+    externalUserId: DESKTOP_USER_ID,
+  };
+  const localProjects = async () => {
+    const { items } = await catamorphic.core.projects.list(privateIdentity, {
+      limit: 1000,
+    });
+    return items.map((project) => project.id);
+  };
+  const customizationProcesses = desktopCustomizationProcesses({
+    root: path.join(paths.root, "customization-processes"),
+    profilesDir: paths.profilesDir,
+    profiles,
+    config: profileConfig,
+    rootFor: (projectId) => projectRoots.get(projectId),
+    toolchain: () => agentRegistry.nativeToolchainEnvironment(),
+    workPorts: () => [address.port],
+    projects: localProjects,
+    readState: (projectId) =>
+      catamorphic.core.privateState.read({
+        identity: privateIdentity,
+        projectId,
+        key: CUSTOMIZATION_PROCESSES_STATE_KEY,
+      }),
+    writeState: ({ projectId, ifVersion, value }) =>
+      catamorphic.core.privateState.write({
+        identity: privateIdentity,
+        projectId,
+        key: CUSTOMIZATION_PROCESSES_STATE_KEY,
+        ifVersion,
+        value,
+      }),
+  });
+  await customizationProcesses.restore();
+  const hasBackgroundWork = async () => {
+    if (customizationProcesses.hasEnabled()) return true;
+    for (const projectId of await localProjects())
+      if (
+        await catamorphic.core.privateWorkflows.hasEnabled({
+          identity: privateIdentity,
+          projectId,
+        })
+      )
+        return true;
+    return false;
+  };
   // Remote chats' previews, each on its own loopback origin; restored tabs
   // find theirs again (ADR 0209).
   const remotePreviews = new RemotePreviewOrigins({
@@ -1783,6 +1920,10 @@ export async function startEmbeddedServer(
             dispose: () => eventDispatcher.stop(),
           },
           { name: "workflow execution", dispose: suspendExecution },
+          {
+            name: "customization processes",
+            dispose: () => customizationProcesses.close(),
+          },
           { name: "previews", dispose: () => remotePreviews.close() },
           { name: "HTTP server", dispose: () => app.close() },
           { name: "framework services", dispose: () => catamorphic.close() },
@@ -1797,6 +1938,14 @@ export async function startEmbeddedServer(
     return shutdownDone;
   };
 
+  void notifications
+    .restore(host.launchNotificationId)
+    .catch((error: unknown) =>
+      console.warn(
+        "[desktop] Notification destinations could not be restored:",
+        error,
+      ),
+    );
   return {
     url,
     apiToken,
@@ -1804,6 +1953,8 @@ export async function startEmbeddedServer(
     mcpAppViewUrl,
     clientRunners,
     catamorphic,
+    customizationProcesses,
+    hasBackgroundWork,
     github,
     projectRoots,
     sessionCheckouts,

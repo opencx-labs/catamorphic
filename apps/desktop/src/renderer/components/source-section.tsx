@@ -18,7 +18,7 @@ import {
   useState,
 } from "react";
 import { chatBookmarkUrl } from "../../shared/bookmark-target.js";
-import { type OpenMode, openModeForAction } from "../../shared/open-mode.js";
+import type { OpenMode } from "../../shared/open-mode.js";
 import {
   isHostAction,
   type SidebarActionInput,
@@ -84,7 +84,9 @@ const MESSAGE_MS = 8000;
 interface InputRequest {
   label: string;
   input: SidebarActionInput;
-  run: (values: Record<string, string>) => Promise<unknown>;
+  run: (
+    values: import("@catamorphic/work-customization").SidebarInputValues,
+  ) => Promise<unknown>;
 }
 
 /**
@@ -101,14 +103,12 @@ export function SourceSection({
   projectId: string;
   source: SectionSource;
 }) {
-  const section = useSidebarContribution()?.section;
-  // A session-scoped section reads its chat where the chat is read.
-  return section && sessionSection(section) ? (
+  // Every source may read chat context, so its authority stays mounted as
+  // that context appears and disappears beside the retained list.
+  return (
     <SessionAccess projectId={projectId}>
       <SourceView projectId={projectId} source={source} />
     </SessionAccess>
-  ) : (
-    <SourceView projectId={projectId} source={source} />
   );
 }
 
@@ -129,14 +129,19 @@ function SourceView({
   const [message, setMessage] = useState<string>();
   const [inputRequest, setInputRequest] = useState<InputRequest | null>(null);
   const [capabilities, setCapabilities] = useState(() => source.capabilities());
+  // A quiet load may return identical rows while new code changes its revision.
+  const [, reportCodeRevision] = useState(() => source.revision?.());
   useEffect(() => setCapabilities(source.capabilities()), [source]);
   // A session-scoped section (`when.session`) is given the chat in front
   // (ADR 0226), and keeps the one it showed while it leaves.
   const sessionScoped = section ? sessionSection(section) : false;
-  const surfaceSessionId = sessionScoped ? surface.sessionId : undefined;
-  const [sessionId, setSessionId] = useState(surfaceSessionId);
-  if (surfaceSessionId && surfaceSessionId !== sessionId)
-    setSessionId(surfaceSessionId);
+  const surfaceSessionId = surface.sessionId;
+  const [lastSessionId, setLastSessionId] = useState(surfaceSessionId);
+  if (surfaceSessionId && surfaceSessionId !== lastSessionId)
+    setLastSessionId(surfaceSessionId);
+  const sessionId = sessionScoped
+    ? (surfaceSessionId ?? lastSessionId)
+    : surfaceSessionId;
   const shown =
     (contribution?.relevant ?? true) && (contribution?.visible ?? true);
   // On screen it follows the chat, so what is set outside a turn shows.
@@ -144,25 +149,34 @@ function SourceView({
     fields,
     error: sessionError,
     refetch: refetchSession,
-  } = useAgentSessionFields(projectId, sessionScoped ? sessionId : undefined, {
-    live: sessionScoped && shown,
+  } = useAgentSessionFields(projectId, sessionId, {
+    live: Boolean(sessionId) && shown,
   });
   const session = useMemo<SidebarSourceSession | undefined>(
     () =>
-      fields
+      fields && fields.id === sessionId
         ? { id: fields.id, title: fields.title, metadata: fields.metadata }
         : undefined,
-    [fields],
+    [fields, sessionId],
   );
   const sessionRef = useRef(session);
   sessionRef.current = session;
-  const withSession = () =>
-    sessionRef.current ? { session: sessionRef.current } : {};
+  const surfaceRef = useRef(surface);
+  surfaceRef.current = surface;
+  const withSession = () => ({
+    surface: surfaceRef.current,
+    ...(sessionRef.current ? { session: sessionRef.current } : {}),
+  });
   // Header actions run beside the rows, with the same chat.
   useEffect(() => {
     if (contribution?.chat) contribution.chat.current = session;
   }, [contribution?.chat, session]);
   const parents = useRef(new Set<string | null>());
+  const subscription = useRef<{
+    collection: Collection<SidebarSourceItem>;
+    rebind: () => void;
+  } | null>(null);
+  const collectionSessionId = sessionScoped ? sessionId : undefined;
   // biome-ignore lint/correctness/useExhaustiveDependencies: another source, or the chat a session-scoped section shows, must replace the cache and release old leases.
   const collection = useMemo(() => {
     parents.current = new Set();
@@ -178,6 +192,7 @@ function SourceView({
               signal,
               ...withSession(),
             });
+            if (!signal.aborted) reportCodeRevision(source.revision?.());
             // A module says what it exports with its pages.
             const now = source.capabilities();
             setCapabilities((current) =>
@@ -194,20 +209,33 @@ function SourceView({
         },
         ...(subscribe
           ? {
-              subscribe: (publish) =>
-                subscribe(publish, {
-                  ...withSession(),
-                  branches: () => [...parents.current],
-                  branchSize: (parentId) =>
-                    created.getBranch(parentId).ids.length,
-                  fail: setSubscriptionError,
-                }),
+              subscribe: (publish) => {
+                let stop: (() => void) | undefined;
+                const rebind = () => {
+                  stop?.();
+                  stop = subscribe(publish, {
+                    ...withSession(),
+                    branches: () => [...parents.current],
+                    branchSize: (parentId) =>
+                      created.getBranch(parentId).ids.length,
+                    fail: setSubscriptionError,
+                  });
+                };
+                const binding = { collection: created, rebind };
+                subscription.current = binding;
+                rebind();
+                return () => {
+                  if (subscription.current === binding)
+                    subscription.current = null;
+                  stop?.();
+                };
+              },
             }
           : {}),
       },
     });
     return created;
-  }, [source, sessionScoped ? sessionId : undefined]);
+  }, [source, collectionSessionId]);
   // A session-scoped source runs only with its chat (ADR 0226): until the
   // chat is read nothing loads it, a refresh reads the chat, and a failed
   // read is the section's error.
@@ -226,20 +254,31 @@ function SourceView({
     mode: "preview",
     projected: true,
   });
+  const loadedRevision = source.revision?.();
+  const priorCode = useRef({ source, revision: loadedRevision });
+  useEffect(() => {
+    const previous = priorCode.current;
+    priorCode.current = { source, revision: loadedRevision };
+    if (
+      previous.source !== source ||
+      (loadedRevision !== undefined && previous.revision !== loadedRevision)
+    )
+      setActionError(undefined);
+  }, [source, loadedRevision]);
   // What an agent sets on the session shows: the section loads again when
   // the chat's title or metadata changes (the same data in another key
   // order is no change), at once when shown and when it is shown next
-  // otherwise. Another chat is a new collection, which loads by itself.
-  const sessionKey = useMemo(
-    () => (session ? stableJson(session) : undefined),
-    [session],
-  );
-  const loadedWith = useRef({ collection, sessionKey });
+  // otherwise. Only an explicitly session-scoped section changes collection
+  // with its chat; other lists keep their rows, expansion and subscription.
+  const sessionKey = stableJson({ surface, session });
+  const loadedWith = useRef({ collection, sessionKey, active });
   const stale = useRef(false);
   useEffect(() => {
     const previous = loadedWith.current;
-    loadedWith.current = { collection, sessionKey };
-    if (previous.collection !== collection) stale.current = false;
+    loadedWith.current = { collection, sessionKey, active };
+    // A new or reacquired collection already loads through its branch leases.
+    if (previous.collection !== collection || (active && !previous.active))
+      stale.current = false;
     else if (
       previous.sessionKey !== undefined &&
       sessionKey !== undefined &&
@@ -248,7 +287,10 @@ function SourceView({
       stale.current = true;
     if (!active || !stale.current) return;
     stale.current = false;
-    void collection.load().catch(() => undefined);
+    if (subscription.current?.collection === collection)
+      subscription.current.rebind();
+    for (const parentId of parents.current)
+      collection.publish({ type: "invalidate", parentId, quiet: true });
   }, [collection, sessionKey, active]);
   const tiles = section?.presentation === "tiles";
   const hidden = useCallback(
@@ -329,7 +371,7 @@ function SourceView({
   // biome-ignore lint/correctness/useExhaustiveDependencies: the keys are what frontKeys reads.
   const front = useMemo(
     () => frontKeys(surface),
-    [surface.sessionId, surface.path, surface.key],
+    [surface.sessionId, surface.path, surface.key, surface.url],
   );
   const frontUrl = surface.sessionId
     ? chatBookmarkUrl({ projectId, sessionId: surface.sessionId })
@@ -390,7 +432,7 @@ function SourceView({
     row: SidebarSourceItem | undefined,
     itemId: string,
     action: string,
-    values?: Record<string, string>,
+    values?: import("@catamorphic/work-customization").SidebarInputValues,
     mode?: OpenMode,
   ) => {
     const effect = await runRowAction({
@@ -568,7 +610,10 @@ function SourceView({
           ? { open: tree.expanded, onToggle: tree.toggle }
           : undefined
       }
-      active={row.id === selectedId}
+      active={Boolean(
+        targetKey(row.url) && front.has(targetKey(row.url) ?? ""),
+      )}
+      sourceRevision={loadedRevision}
       canAct={Boolean(source.action)}
       onOpen={(mode) => {
         if (row.url || (!tree?.hasChildren && source.action))
@@ -829,6 +874,7 @@ function SourceRow({
   tile,
   disclosure,
   active,
+  sourceRevision,
   canAct,
   onOpen,
   onAction,
@@ -838,6 +884,7 @@ function SourceRow({
   tile: boolean;
   disclosure?: { open: boolean; onToggle: () => void };
   active: boolean;
+  sourceRevision?: string;
   /** Its source runs actions (a module, one of Work's lists). */
   canAct: boolean;
   onOpen: (mode: OpenMode) => void;
@@ -855,6 +902,10 @@ function SourceRow({
       ...(row.menu ?? []),
       ...(row.contextMenu ?? []),
       ...(row.actions ?? []),
+      ...(row.preview === false ? [] : (row.preview?.actions ?? [])),
+      ...(row.preview === false
+        ? []
+        : (row.preview?.metadata?.flatMap((f) => f.actions ?? []) ?? [])),
     ].map((entry) => entry.action),
     ...(row.url ? ["copy-url"] : []),
     ...(canAct
@@ -862,9 +913,14 @@ function SourceRow({
           ...(overrides.menu ?? []),
           ...(overrides.contextMenu ?? []),
           ...(overrides.actions ?? []),
-        ]
-          .map((entry) => entry.action)
-          .filter((action) => !openModeForAction(action))
+          ...(overrides.preview === false
+            ? []
+            : (overrides.preview?.actions ?? [])),
+          ...(overrides.preview === false
+            ? []
+            : (overrides.preview?.metadata?.flatMap((f) => f.actions ?? []) ??
+              [])),
+        ].map((entry) => entry.action)
       : []),
   ];
   // Work's own details for the chat a row names, wherever the row is from.
@@ -882,6 +938,7 @@ function SourceRow({
   const item = (
     <SidebarItemRow
       itemId={row.id}
+      revision={sourceRevision}
       label={row.label}
       pointKey={tab}
       // A tile shows no label: its tooltip names it. A row's shows a page's
@@ -901,6 +958,8 @@ function SourceRow({
         <RowIcon icon={row.icon} url={row.url} tone={row.tone} tile={tile} />
       }
       description={row.description}
+      descriptionVisibility={row.descriptionVisibility}
+      contextualIndicator={row.contextualIndicator}
       // A short identifier (#42, 3m) stays whole and the label gives way; a
       // long description (a path) shrinks first.
       keepDescription={(row.description?.length ?? 0) <= 8}
@@ -911,7 +970,8 @@ function SourceRow({
       activity={row.activity}
       active={active}
       resource={Boolean(row.url)}
-      defaultOpenMode={row.open ?? contribution?.section.open ?? "replace"}
+      resourceUrl={row.url}
+      defaultOpenMode={row.open ?? "replace"}
       // [] removes the overflow menu; entries join the open modes.
       menu={row.menu?.length === 0 ? [] : undefined}
       defaultMenu={row.menu}

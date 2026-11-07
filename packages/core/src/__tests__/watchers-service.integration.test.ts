@@ -197,6 +197,7 @@ describe("temporary watchers", () => {
       ],
       projectManager,
       runs,
+      workflowEnablements: () => enablements,
     });
     const sessions = {
       hostId: "local-host",
@@ -266,7 +267,14 @@ describe("temporary watchers", () => {
           .where("id", "=", enablementId)
           .executeTakeFirstOrThrow();
         if (row.status !== "active") throw new Error("Enablement disabled");
-        return { ownerIdentity: row.owner_identity };
+        return {
+          ownerIdentity: row.owner_identity,
+          enablement: {
+            projectId: row.project_id,
+            commitSha: row.commit_sha,
+            remoteBranch: row.remote_branch,
+          },
+        };
       }),
       disable: disableEnablement,
     } as unknown as WorkflowEnablementsService;

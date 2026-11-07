@@ -29,7 +29,11 @@ import {
   SYSTEM_AUTHOR,
 } from "../identity.js";
 import { PROJECT_CHECK_SCRIPT } from "../seeds.js";
-import { assertProjectPermission, resolveScope } from "./artifact-scope.js";
+import {
+  AccessDeniedError,
+  assertProjectPermission,
+  resolveScope,
+} from "./artifact-scope.js";
 import { requireTenantProject } from "./projects-service.js";
 import { jsonColumn, toJson } from "./run-coordinator.js";
 import type {
@@ -50,6 +54,7 @@ import {
   type TriggerMode,
   triggerKindInfo,
 } from "./trigger-kinds.js";
+import type { WorkflowEnablement } from "./workflow-enablement-types.js";
 import {
   WorkflowEnablementSuspendedError,
   type WorkflowEnablementsService,
@@ -204,6 +209,11 @@ interface FireArgs {
 }
 
 interface TriggersServiceDeps {
+  privateSource?: (input: {
+    identity: Identity;
+    projectId: string;
+    commitSha: string;
+  }) => Promise<Record<string, string> | null>;
   kinds: readonly TriggerKindRuntime[];
   /** Tool-kind declarations; scan validates effective tool-name uniqueness. */
   mcpToolKinds?: readonly McpToolKindSpec[];
@@ -389,6 +399,7 @@ export class TriggersService {
         ...this.registry.keys(),
       ]);
     }
+    await this.deps.privateSource?.(args);
     const bindings = await this.ensureScanAtCommit(args);
     return bindings.filter(
       (binding) =>
@@ -517,11 +528,43 @@ export class TriggersService {
     );
   }
 
+  /** Host dispatcher entry point for one durable, consented activation. */
+  async dispatchAtCommit(
+    args: FireArgs & PinnedRevision,
+  ): Promise<TriggerFireResult> {
+    const enablementId = args.enablementIds?.[0];
+    const service = this.deps.workflowEnablements?.();
+    if (!enablementId || args.enablementIds?.length !== 1 || !service)
+      throw new AccessDeniedError();
+    const { enablement, ownerIdentity } = await service.revalidate({
+      identity: args.identity,
+      enablementId,
+    });
+    if (
+      enablement.projectId !== args.projectId ||
+      enablement.commitSha !== args.commitSha ||
+      enablement.remoteBranch !== args.remoteBranch
+    )
+      throw new AccessDeniedError();
+    const dispatch = { ...args, identity: ownerIdentity };
+    return this.fireFromScan(
+      dispatch,
+      async () => ({
+        commitSha: args.commitSha,
+        bindings: await this.ensureScanAtCommit(dispatch),
+      }),
+      { commitSha: args.commitSha, remoteBranch: args.remoteBranch },
+      false,
+    );
+  }
+
   private async fireFromScan(
     args: FireArgs,
     scan: () => Promise<ScanResult>,
     pinned?: PinnedRevision,
+    callerInitiated = true,
   ): Promise<TriggerFireResult> {
+    await requireTenantProject(this.db, args.identity.tenantId, args.projectId);
     const kind = this.registry.get(args.kind);
     if (!kind) {
       throw new TriggerKindNotRegisteredError(args.kind, [
@@ -561,9 +604,17 @@ export class TriggersService {
           binding: TriggerBindingInfo;
           enablementId?: string;
           activationId?: string;
+          commitSha?: string;
+          expectedEnablement?: Pick<
+            WorkflowEnablement,
+            "commitSha" | "consentDigest" | "revision"
+          >;
         }>;
         if (args.interactive) {
-          targets = productionDefinitions.map((binding) => ({ binding }));
+          targets = productionDefinitions.map((binding) => ({
+            binding,
+            commitSha: scanned.commitSha ?? undefined,
+          }));
         } else {
           const activations = await this.db
             .selectFrom("workflow_enablement_triggers as activation")
@@ -580,6 +631,8 @@ export class TriggersService {
             .select([
               "activation.id as activation_id",
               "activation.enablement_id",
+              "enablement.consent_digest",
+              "enablement.revision",
               "definition.id",
               "definition.commit_sha",
               "definition.workflow_name",
@@ -600,6 +653,12 @@ export class TriggersService {
           targets = activations.map((activation) => ({
             enablementId: activation.enablement_id,
             activationId: activation.activation_id,
+            commitSha: activation.commit_sha,
+            expectedEnablement: {
+              commitSha: activation.commit_sha,
+              consentDigest: activation.consent_digest,
+              revision: activation.revision,
+            },
             binding: bindingFromRow(activation),
           }));
           if (productionDefinitions.length > 0 && targets.length === 0) {
@@ -625,6 +684,32 @@ export class TriggersService {
             wanted.has(binding.workflowName),
           );
         }
+        if (callerInitiated) {
+          // Check every target before enrolling any. A private enablement's
+          // owner does not grant its source or results to the event's sender.
+          const visible = await Promise.all(
+            targets.map(async (target) => {
+              try {
+                await this.deps.runs.assertTriggerAccess({
+                  identity: args.identity,
+                  projectId: args.projectId,
+                  workflowName: target.binding.workflowName,
+                  commitSha: target.commitSha,
+                });
+                return true;
+              } catch (error) {
+                if (!(error instanceof AccessDeniedError)) throw error;
+                return false;
+              }
+            }),
+          );
+          if (
+            (args.workflows || args.enablementIds || args.activationIds) &&
+            visible.some((allowed) => !allowed)
+          )
+            throw new AccessDeniedError();
+          targets = targets.filter((_, index) => visible[index]);
+        }
         // Bindings hold their config and filters as stored, with U+FFFD for
         // half of an emoji or a NUL; the payload is matched in that form.
         const payload = storedJson(args.payload);
@@ -647,7 +732,7 @@ export class TriggersService {
         const deadline = Date.now() + budgetMs;
 
         const attempts = await Promise.allSettled(
-          targets.map(({ binding, enablementId }) =>
+          targets.map(({ binding, enablementId, expectedEnablement }) =>
             this.fireOne({
               identity: args.identity,
               projectId: args.projectId,
@@ -661,8 +746,10 @@ export class TriggersService {
               commitSha: scanned.commitSha,
               triggerKind: binding.kind,
               enablementId,
+              expectedEnablement,
               interactive: args.interactive ?? false,
               pinned,
+              callerInitiated,
             }),
           ),
         );
@@ -694,8 +781,13 @@ export class TriggersService {
     commitSha: string | null;
     triggerKind: string;
     enablementId?: string;
+    expectedEnablement?: Pick<
+      WorkflowEnablement,
+      "commitSha" | "consentDigest" | "revision"
+    >;
     interactive: boolean;
     pinned?: PinnedRevision;
+    callerInitiated: boolean;
   }): Promise<TriggerFireOutcome> {
     const runArgs = {
       identity: args.identity,
@@ -710,6 +802,7 @@ export class TriggersService {
       ? await this.deps.runs.triggerWithEnablement({
           ...runArgs,
           enablementId: args.enablementId,
+          expected: args.expectedEnablement,
         })
       : args.pinned
         ? await this.deps.runs.triggerAtCommit({
@@ -718,6 +811,8 @@ export class TriggersService {
             remoteBranch: args.pinned.remoteBranch,
           })
         : await this.deps.runs.triggerProduction(runArgs);
+    if (args.callerInitiated)
+      await this.deps.runs.get({ identity: args.identity, runId: run.id });
     if (args.mode === "async") {
       return {
         workflowName: args.workflowName,
@@ -730,6 +825,8 @@ export class TriggersService {
       runId: run.id,
       deadline: args.deadline,
     });
+    if (args.callerInitiated)
+      await this.deps.runs.get({ identity: args.identity, runId: run.id });
     return { workflowName: args.workflowName, ...outcome };
   }
 
@@ -806,6 +903,8 @@ export class TriggersService {
     remoteBranch: string;
     environment?: string;
   }): Promise<TriggerBindingInfo[]> {
+    // Cached definitions are private source too; authorize before either cache.
+    const retainedFiles = await this.deps.privateSource?.(args);
     const memoKey = `${args.projectId}:${args.commitSha}`;
     const memoized = this.scans.get(memoKey);
     if (memoized) return memoized;
@@ -816,38 +915,40 @@ export class TriggersService {
       return recorded;
     }
 
-    const remote = this.deps.projectManager.remoteBackend;
-    if (!remote) {
-      throw new Error("Trigger revisions require durable project storage");
-    }
-    // The scanner never writes: it reads the published branch where the
-    // host keeps it (the origin, or the project folder).
-    const repo = await this.deps.projectManager.openPublished({
-      tenantId: args.identity.tenantId,
-      projectId: args.projectId,
-    });
     let files: Record<string, string>;
-    try {
-      const fetchedCommit = await refreshPublished({
-        repo,
-        remote,
+    if (retainedFiles) files = retainedFiles;
+    else {
+      const remote = this.deps.projectManager.remoteBackend;
+      if (!remote) {
+        throw new Error("Trigger revisions require durable project storage");
+      }
+      // The scanner never writes: it reads the published branch where the
+      // host keeps it (the origin, or the project folder).
+      const repo = await this.deps.projectManager.openPublished({
         tenantId: args.identity.tenantId,
         projectId: args.projectId,
-        branch: args.remoteBranch,
       });
-      if (fetchedCommit !== args.commitSha) {
-        throw new Error(
-          `Trigger revision ${args.commitSha} is not available at '${args.remoteBranch}'`,
+      try {
+        const fetchedCommit = await refreshPublished({
+          repo,
+          remote,
+          tenantId: args.identity.tenantId,
+          projectId: args.projectId,
+          branch: args.remoteBranch,
+        });
+        if (fetchedCommit !== args.commitSha) {
+          throw new Error(
+            `Trigger revision ${args.commitSha} is not available at '${args.remoteBranch}'`,
+          );
+        }
+        files = await repo.readAllFilesAtRef(
+          args.commitSha,
+          WORKFLOW_READ_OPTIONS,
         );
+      } finally {
+        await repo.dispose();
       }
-      files = await repo.readAllFilesAtRef(
-        args.commitSha,
-        WORKFLOW_READ_OPTIONS,
-      );
-    } finally {
-      await repo.dispose();
     }
-
     const scanning = this.scanAndRecord({
       identity: args.identity,
       projectId: args.projectId,

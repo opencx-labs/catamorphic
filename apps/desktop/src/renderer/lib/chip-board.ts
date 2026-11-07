@@ -13,7 +13,7 @@ export interface ChatChips {
   act: (request: {
     itemId: string;
     action: string;
-    values?: Record<string, string>;
+    values?: import("@catamorphic/work-customization").SidebarInputValues;
   }) => Promise<SidebarSourceEffect | undefined>;
   /** Open a chip's address as the chat opens its links. */
   open: (url: string, mode: OpenMode) => void;

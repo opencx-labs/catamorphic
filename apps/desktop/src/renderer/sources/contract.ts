@@ -1,6 +1,10 @@
 import type { CollectionChange, CollectionPage } from "@catamorphic/app";
 import type { ModuleAccessRequest } from "../../shared/code-access.js";
-import type { SidebarSourceEffect } from "../../shared/sidebar.js";
+import type {
+  OpenMode,
+  SidebarSourceEffect,
+  SidebarSurface,
+} from "../../shared/sidebar.js";
 import type {
   SidebarDropPayload,
   SidebarSourceCapabilities,
@@ -16,7 +20,8 @@ import type {
  * it has.
  */
 export interface SourceRequest {
-  /** The chat beside a session-scoped section (`when.session`). */
+  /** Current surface and its chat, independent of visibility predicates. */
+  surface?: SidebarSurface;
   session?: SidebarSourceSession;
   signal: AbortSignal;
 }
@@ -59,6 +64,7 @@ export interface SectionSource {
     publish: (change: CollectionChange<SidebarSourceItem>) => void,
     context: {
       session?: SidebarSourceSession;
+      surface?: SidebarSurface;
       /** Every branch this view has read (the root first). */
       branches: () => readonly (string | null)[];
       branchSize: (parentId: string | null) => number;
@@ -68,13 +74,14 @@ export interface SectionSource {
   ) => () => void;
   /**
    * A row's own action, or a header action (itemId ""). A row without a
-   * `url` receives the open verbs (`open`, `open-tab`, ...) here too.
+   * `url` receives action "open" and its mode here too.
    */
   action?: (
     request: SourceRequest & {
       itemId: string;
       action: string;
-      values?: Record<string, string>;
+      mode?: OpenMode;
+      values?: import("@catamorphic/work-customization").SidebarInputValues;
     },
   ) => Promise<SidebarSourceEffect | undefined>;
   move?: (
@@ -99,6 +106,8 @@ export interface SectionSource {
    * lists know it up front.
    */
   capabilities: () => SidebarSourceCapabilities;
+  /** Revision of the last successfully loaded module, when backed by code. */
+  revision?: () => string | undefined;
 }
 
 /** Read every branch a view has loaded again (a list changed somewhere). */

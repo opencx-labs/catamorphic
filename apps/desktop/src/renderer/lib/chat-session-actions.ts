@@ -62,8 +62,15 @@ export function renameChatInput(title: string): SidebarActionInput {
 }
 
 /** The name typed for a chat, or why it cannot be one. */
-export function chatName(values: Record<string, string> | undefined): string {
-  const title = values?.title?.replace(/\s+/g, " ").trim() ?? "";
+export function chatName(
+  values:
+    | import("@catamorphic/work-customization").SidebarInputValues
+    | undefined,
+): string {
+  const title =
+    typeof values?.title === "string"
+      ? values.title.replace(/\s+/g, " ").trim()
+      : "";
   if (!title) throw new Error("Name the chat.");
   return title;
 }

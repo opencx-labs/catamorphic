@@ -108,6 +108,12 @@ can still be awaited before returning a transition.
 - Session calls are described by \`session-workflows\`, including queued remote
   receipts. A queued receipt is not proof the target action has completed.
 
+Private state and notifications use the same host transition:
+\`host["catamorphic.privateState"].write({ key, value, ifVersion })\` compares the
+version, while \`host["catamorphic.notifications"].publish({ title, idempotencyKey })\`
+records a durable notification without a model turn. See workflow-lifecycle for
+ownership, declared permissions and activation.
+
 ## Approval with timeout and a child call
 
 This executable example assumes an approval request has already been created.

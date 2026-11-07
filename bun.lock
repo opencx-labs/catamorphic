@@ -48,6 +48,7 @@
         "@catamorphic/sandbox": "workspace:*",
         "@catamorphic/server-sdk": "workspace:*",
         "@catamorphic/ui": "workspace:*",
+        "@catamorphic/work-customization": "workspace:*",
         "@catamorphic/workflow": "workspace:*",
         "@electric-sql/pglite": "^0.5.4",
         "@fastify/cors": "^11.3.0",
@@ -702,6 +703,7 @@
       "devDependencies": {
         "@catamorphic/agent-runner": "workspace:*",
         "@catamorphic/fastify-plugin": "workspace:*",
+        "@catamorphic/local-process": "workspace:*",
         "@catamorphic/parser": "workspace:*",
         "@electric-sql/pglite": "^0.5.4",
         "@opentelemetry/api": "^1.9.1",
@@ -737,6 +739,14 @@
         "@tanstack/react-query": "^5",
         "react": "^18.2 || ^19",
         "react-dom": "^18.2 || ^19",
+      },
+    },
+    "packages/work-customization": {
+      "name": "@catamorphic/work-customization",
+      "version": "0.1.0-alpha.37",
+      "dependencies": {
+        "@catamorphic/agent-protocol": "workspace:*",
+        "@catamorphic/app": "workspace:*",
       },
     },
     "packages/work-server": {
@@ -1016,6 +1026,8 @@
     "@catamorphic/server-sdk": ["@catamorphic/server-sdk@workspace:packages/server-sdk"],
 
     "@catamorphic/ui": ["@catamorphic/ui@workspace:packages/ui"],
+
+    "@catamorphic/work-customization": ["@catamorphic/work-customization@workspace:packages/work-customization"],
 
     "@catamorphic/work-server": ["@catamorphic/work-server@workspace:packages/work-server"],
 

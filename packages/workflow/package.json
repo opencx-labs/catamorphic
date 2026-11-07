@@ -13,7 +13,11 @@
       "import": "./dist/project-layout.js",
       "types": "./dist/project-layout.d.ts"
     },
-    "./package.json": "./package.json"
+    "./package.json": "./package.json",
+    "./package-payload": {
+      "import": "./dist/package-payload.js",
+      "types": "./dist/package-payload.d.ts"
+    }
   },
   "files": [
     "dist",
@@ -27,7 +31,7 @@
     "!**/fixtures/**"
   ],
   "scripts": {
-    "build": "bun ../../scripts/build-package.ts && tsc --project tsconfig.json --noEmit false --emitDeclarationOnly",
+    "build": "bun ../../scripts/build-package.ts && tsc --project tsconfig.json --noEmit false --emitDeclarationOnly && bun ../../scripts/build-package-payload.ts",
     "dev": "bun ../../scripts/build-package.ts --watch",
     "test": "bun ../../scripts/tool-runtime.ts vitest --tool-cwd packages/workflow --config ../../vitest.config.ts",
     "typecheck": "bun check --project ./tsconfig.json && bun check --project ./tsconfig.type-tests.json"

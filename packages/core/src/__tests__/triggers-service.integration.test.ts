@@ -473,6 +473,159 @@ describeIf("TriggersService end to end", () => {
     expect(run.status).toBe("completed");
   }, 30_000);
 
+  it("lets another authorized member fire a shared published subscription", async () => {
+    const caller: Identity = {
+      tenantId: identity.tenantId,
+      externalUserId: "shared-trigger-sender",
+      scope: [{ kind: "workflow", projectId, name: "escalateTicket" }],
+    };
+    const result = await core.triggers.fire({
+      identity: caller,
+      projectId,
+      kind: "ticket.created",
+      payload: { ticketId: "shared-sender" },
+      mode: "sync",
+      workflows: ["escalateTicket"],
+    });
+    expect(result.runs).toEqual([
+      expect.objectContaining({
+        status: "completed",
+        output: { escalated: "shared-sender" },
+      }),
+    ]);
+    const run = await db
+      .selectFrom("workflow_runs")
+      .select(["external_user_id", "session_artifact_id"])
+      .where("id", "=", result.runs[0]?.runId ?? "")
+      .executeTakeFirstOrThrow();
+    expect(run).toEqual({
+      external_user_id: identity.externalUserId,
+      session_artifact_id: null,
+    });
+  });
+
+  it.each(["target authorization", "live revalidation"] as const)(
+    "does not enroll a private replacement after %s authorized a public pin",
+    async (window) => {
+      const name = "escalateTicket";
+      const [published] = await core.workflowEnablements.list({
+        identity,
+        projectId,
+        workflowName: name,
+      });
+      if (!published) throw new Error("Missing published subscription");
+      const artifact = await core.sessionArtifacts.create({
+        identity,
+        projectId,
+        lifetime: "member",
+        kind: "workflow",
+        name,
+        source: `import { defineWorkflow, trigger, type BoundaryContext } from "@catamorphic/workflow";
+export const escalateTicket = defineWorkflow(({ defineBoundary }) => ({
+  triggers: [trigger("ticket.created")],
+  steps: [defineBoundary({ run: ({ input }: BoundaryContext<{ ticketId: string }>) => ({ private: input.ticketId }) })]
+}));`,
+      });
+      const caller: Identity = {
+        tenantId: identity.tenantId,
+        externalUserId: "racing-public-sender",
+        scope: [{ kind: "workflow", projectId, name }],
+      };
+      let authorized = () => {};
+      let resume = () => {};
+      const paused = new Promise<void>((resolve) => {
+        authorized = resolve;
+      });
+      const resumed = new Promise<void>((resolve) => {
+        resume = resolve;
+      });
+      const originalAccess = core.runs.assertTriggerAccess.bind(core.runs);
+      const access = vi.spyOn(core.runs, "assertTriggerAccess");
+      const originalRevalidate = core.workflowEnablements.revalidate.bind(
+        core.workflowEnablements,
+      );
+      const revalidate = vi.spyOn(core.workflowEnablements, "revalidate");
+      if (window === "target authorization") {
+        access.mockImplementationOnce(async (input) => {
+          await originalAccess(input);
+          authorized();
+          await resumed;
+        });
+      } else {
+        revalidate.mockImplementation(async (input) => {
+          const result = await originalRevalidate(input);
+          if (input.identity.externalUserId === caller.externalUserId) {
+            authorized();
+            await resumed;
+          }
+          return result;
+        });
+      }
+      const request = core.triggers.fire({
+        identity: caller,
+        projectId,
+        kind: "ticket.created",
+        mode: "async",
+        payload: { ticketId: `private-race-${window}` },
+        workflows: [name],
+      });
+      const denied = expect(request).rejects.toBeInstanceOf(AccessDeniedError);
+      try {
+        await paused;
+        const preview = await core.privateWorkflows.preview({
+          identity,
+          projectId,
+          artifactId: artifact.id,
+          revision: 1,
+        });
+        const replacement = await core.privateWorkflows.activate({
+          identity,
+          projectId,
+          artifactId: artifact.id,
+          revision: 1,
+          consentDigest: preview.consentDigest,
+        });
+        expect(replacement.id).toBe(published.id);
+        resume();
+        await denied;
+        const runs = await db
+          .selectFrom("workflow_runs")
+          .select("id")
+          .where("session_artifact_id", "=", artifact.id)
+          .execute();
+        expect(runs).toEqual([]);
+      } finally {
+        resume();
+        access.mockRestore();
+        revalidate.mockRestore();
+        await core.privateWorkflows.stop({
+          identity,
+          projectId,
+          artifactId: artifact.id,
+        });
+        const preview = await core.workflowEnablements.preview({
+          identity,
+          projectId,
+          workflowName: name,
+          commitSha: published.commitSha,
+          remoteBranch: published.remoteBranch,
+        });
+        await core.workflowEnablements.updateDeployment({
+          identity,
+          enablementId: published.id,
+          commitSha: published.commitSha,
+          remoteBranch: published.remoteBranch,
+          consentDigest: preview.consentDigest,
+        });
+        await core.sessionArtifacts.discard({
+          identity,
+          projectId,
+          artifactId: artifact.id,
+        });
+      }
+    },
+  );
+
   it("fires sync: detaches with an honest outcome at the first pause", async () => {
     const result = await core.triggers.fire({
       identity,

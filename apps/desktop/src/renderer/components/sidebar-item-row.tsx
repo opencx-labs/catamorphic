@@ -9,14 +9,8 @@ import {
   useRef,
   useState,
 } from "react";
+import { isMenuSeparator, type MenuSeparator } from "../../shared/menu.js";
 import {
-  dangerLast,
-  isMenuSeparator,
-  type MenuSeparator,
-  menuGroups,
-} from "../../shared/menu.js";
-import {
-  OPEN_ACTIONS,
   type OpenMode,
   openModeForAction,
   openModeFromEvent,
@@ -27,6 +21,7 @@ import type {
   SidebarSignal,
   SidebarTrend,
 } from "../../shared/sidebar.js";
+import { composeSidebarMenu } from "../../shared/sidebar-menu.js";
 import { appIsMovingFocus } from "../lib/app-focus.js";
 import type { SidebarMenuEntry, SidebarPreview } from "../lib/desktop-api.js";
 import { lucideIcon } from "../lib/lucide-icon.js";
@@ -82,14 +77,15 @@ function TitleHint({
  * generic, so custom config-defined items and built-in bookmarks share
  * exactly the same interaction.
  */
-export function SidebarItemRow<
-  TMenuEntry extends ContextMenuEntry = SidebarMenuEntry,
->({
+export function SidebarItemRow({
   itemId,
+  revision,
   supportedActions,
   contextMenu,
   actions,
   description,
+  descriptionVisibility = "always",
+  contextualIndicator = "row",
   keepDescription = false,
   badges,
   progress,
@@ -99,6 +95,7 @@ export function SidebarItemRow<
   presentation = "row",
   expanded,
   resource = false,
+  resourceUrl,
   defaultOpenMode = "replace",
   label,
   pointKey,
@@ -120,10 +117,14 @@ export function SidebarItemRow<
   onRenameCancel,
 }: {
   itemId?: string;
+  /** Successful source revision; errors from earlier code no longer describe it. */
+  revision?: string;
   supportedActions?: readonly string[];
-  contextMenu?: readonly TMenuEntry[];
-  actions?: readonly TMenuEntry[];
+  contextMenu?: readonly SidebarMenuEntry[];
+  actions?: readonly SidebarMenuEntry[];
   description?: string;
+  descriptionVisibility?: "always" | "hover";
+  contextualIndicator?: "row" | "icon" | "none";
   /**
    * A short identifier (a pull request's number) stays whole and the label
    * gives way instead; a long description (a path) shrinks first.
@@ -140,6 +141,7 @@ export function SidebarItemRow<
   presentation?: "row" | "tile";
   expanded?: boolean;
   resource?: boolean;
+  resourceUrl?: string;
   defaultOpenMode?: OpenMode;
   label: string;
   /**
@@ -151,9 +153,9 @@ export function SidebarItemRow<
   title?: string;
   /** lucide-react icon name, or a node to render directly. */
   icon?: string | ReactNode;
-  menu?: readonly TMenuEntry[];
+  menu?: readonly SidebarMenuEntry[];
   /** The row's own menu when no configuration replaces it; may hold rules. */
-  defaultMenu?: readonly (TMenuEntry | MenuSeparator)[];
+  defaultMenu?: readonly (SidebarMenuEntry | MenuSeparator)[];
   preview?: SidebarPreview | false;
   /** Rich inspector body for built-in resources; uses the same hover shell. */
   previewContent?: ReactNode;
@@ -162,7 +164,7 @@ export function SidebarItemRow<
   end?: ReactNode;
   disclosure?: { open: boolean; onToggle: () => void };
   onOpen: (mode: OpenMode) => void;
-  onAction: (entry: TMenuEntry) => void | Promise<void>;
+  onAction: (entry: SidebarMenuEntry) => void | Promise<void>;
   /** Swap the label for an inline rename field. */
   renaming?: boolean;
   style?: CSSProperties;
@@ -181,17 +183,23 @@ export function SidebarItemRow<
     id: itemId,
   });
   const [menuKind, setMenuKind] = useState<"overflow" | "context">("overflow");
-  const { error: actionError, pending, run: runItemAction } = useItemActions();
+  const { error, pending, run: runItemAction } = useItemActions();
+  const actionRevision = useRef(revision);
+  const actionError = actionRevision.current === revision ? error : undefined;
   const configuredContext = overrides.contextMenu ?? contextMenu;
   const configuredActions = overrides.actions ?? actions ?? [];
   // Every entry this row was given, the ones it can actually run.
   const ownEntries = [
     ...(defaultMenu ?? []).filter(
-      (entry): entry is TMenuEntry => !isMenuSeparator(entry),
+      (entry): entry is SidebarMenuEntry => !isMenuSeparator(entry),
     ),
     ...(menu ?? []),
     ...(contextMenu ?? []),
     ...(actions ?? []),
+    ...(preview === false ? [] : (preview?.actions ?? [])),
+    ...(preview === false
+      ? []
+      : (preview?.metadata?.flatMap((f) => f.actions ?? []) ?? [])),
   ];
   const supports = (entry: ContextMenuEntry) =>
     Boolean(entry.url) ||
@@ -220,10 +228,12 @@ export function SidebarItemRow<
   const resolvedMenu = available(
     overrides.menu ??
       (menu === undefined
-        ? menuGroups<ContextMenuEntry>(
-            resource ? OPEN_ACTIONS : [],
-            dangerLast(defaultMenu ?? []),
-          )
+        ? composeSidebarMenu({
+            resource,
+            entries: defaultMenu ?? [],
+            url: resourceUrl,
+            defaultMode: overrides.open ?? defaultOpenMode,
+          })
         : menu),
   );
   const resolvedContext = available(configuredContext ?? resolvedMenu);
@@ -231,8 +241,9 @@ export function SidebarItemRow<
     (entry): entry is ContextMenuEntry => !isMenuSeparator(entry),
   );
   const activeMenu = menuKind === "context" ? resolvedContext : resolvedMenu;
-  const invoke = (entry: ContextMenuEntry) =>
-    runItemAction({
+  const invoke = (entry: ContextMenuEntry) => {
+    actionRevision.current = revision;
+    return runItemAction({
       id: entry.action,
       label: entry.label,
       disabledReason: entry.disabledReason,
@@ -246,21 +257,22 @@ export function SidebarItemRow<
         else if (resource && (mode || entry.action === "open"))
           onOpen(mode ?? overrides.open ?? defaultOpenMode);
         else {
-          const original = ownEntries.find(
-            (candidate) => candidate.action === entry.action,
-          );
-          if (original) await onAction(original);
-          else if (contribution?.command)
+          if (contribution?.commands?.has(entry.action) && contribution.command)
             await contribution.command(entry.action);
+          else if (supports(entry)) await onAction(entry);
           else throw new Error("This item does not support this action");
         }
       },
     });
+  };
   if (overrides.label !== undefined) labelContent = undefined;
   if (overrides.preview !== undefined) previewContent = undefined;
   label = overrides.label ?? label;
   icon = overrides.icon ?? icon;
   description = overrides.description ?? description;
+  descriptionVisibility =
+    overrides.descriptionVisibility ?? descriptionVisibility;
+  contextualIndicator = overrides.contextualIndicator ?? contextualIndicator;
   badges = overrides.badges ?? badges;
   progress = overrides.progress ?? progress;
   trend = overrides.trend ?? trend;
@@ -371,9 +383,12 @@ export function SidebarItemRow<
       ref={rowRef}
       style={{ ...style, display: overrides.hide ? "none" : style?.display }}
       data-sidebar-item-id={itemId}
+      data-contextual={active ? contextualIndicator : undefined}
       data-interacting={open || previewOpen || renaming ? "true" : undefined}
       className={`group relative flex items-center rounded-md transition-colors duration-150 ${presentation === "tile" ? "h-9 border border-border bg-bg-raised" : "h-7"} ${
-        active ? "bg-bg-overlay" : "hover:bg-bg-overlay/60"
+        active && contextualIndicator === "row"
+          ? "bg-bg-overlay"
+          : "hover:bg-bg-overlay/60"
       }`}
       data-point-key={pointKey ?? `sidebar:${label}`}
       onMouseEnter={() => {
@@ -468,7 +483,9 @@ export function SidebarItemRow<
                 onOpen(openModeFromEvent(event, defaultOpenMode));
               }}
               className={`flex h-full min-w-0 flex-1 cursor-pointer items-center gap-2 px-2 text-left text-[13px] ${presentation === "tile" ? "justify-center" : ""} hover:text-fg ${
-                active ? "text-fg" : "text-fg-muted"
+                active && contextualIndicator === "row"
+                  ? "text-fg"
+                  : "text-fg-muted"
               }`}
               aria-expanded={disclosure?.open ?? expanded}
               aria-current={active || undefined}
@@ -476,13 +493,15 @@ export function SidebarItemRow<
                 previewEnabled && previewOpen ? previewId : undefined
               }
             >
-              <SignalGlyph activity={mark} className="size-3.5">
-                {IconComponent ? (
-                  <IconComponent className="size-3.5 shrink-0 text-fg-faint" />
-                ) : (
-                  icon
-                )}
-              </SignalGlyph>
+              <span data-sidebar-row-icon="" className="shrink-0">
+                <SignalGlyph activity={mark} className="size-3.5">
+                  {IconComponent ? (
+                    <IconComponent className="size-3.5 shrink-0 text-fg-faint" />
+                  ) : (
+                    icon
+                  )}
+                </SignalGlyph>
+              </span>
               {presentation === "tile" ? (
                 <span className="sr-only">{label}</span>
               ) : (
@@ -495,7 +514,8 @@ export function SidebarItemRow<
               )}
               {description && (
                 <span
-                  className={`text-[11px] text-fg-faint ${
+                  data-description-visibility={descriptionVisibility}
+                  className={`sidebar-row-description text-[11px] text-fg-faint ${
                     keepDescription
                       ? "shrink-0 whitespace-nowrap"
                       : "min-w-0 max-w-32 shrink-[3] truncate"
@@ -690,6 +710,7 @@ export function SidebarItemRow<
           preview={preview === false ? undefined : preview}
           content={previewContent}
           fallbackTitle={label}
+          onAction={invoke}
           onMouseEnter={() => {
             previewHoveredRef.current = true;
             clearTimeout(previewTimerRef.current);

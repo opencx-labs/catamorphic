@@ -1,5 +1,7 @@
 import { type ChildProcess, spawn } from "node:child_process";
-import { type FSWatcher, readFileSync, watch } from "node:fs";
+import { createHash } from "node:crypto";
+import { type FSWatcher, watch } from "node:fs";
+import { lstat, realpath } from "node:fs/promises";
 import path from "node:path";
 import { createInterface } from "node:readline";
 import { z } from "zod";
@@ -8,6 +10,7 @@ import type {
   SidebarSourceRequest,
 } from "../shared/sidebar-source.js";
 import type { ModuleLaunch } from "./module-sandbox.js";
+import { signalProcessGroup } from "./process-group.js";
 import { registerProcessOwner } from "./process-owners.js";
 
 const responseSchema = z.object({
@@ -20,6 +23,7 @@ const responseSchema = z.object({
   reveal: z.boolean().optional(),
   requestId: z.string().optional(),
   call: z.unknown().optional(),
+  files: z.array(z.string().max(8192)).max(512).optional(),
 });
 /** How often a subscribed source checks its module for edits the watch missed. */
 const MODULE_POLL_MS = 2_000;
@@ -28,6 +32,35 @@ const START_TIMEOUT_MS = 30_000;
 /** A shared, lazy process per module. Idle sources cost no process or polling. */
 /** Calls to Work one request may have outstanding at once. */
 const MAX_WORK_CALLS = 8;
+const MAX_DEPENDENCIES = 512;
+
+function within(root: string, file: string): boolean {
+  const relative = path.relative(root, file);
+  return (
+    relative !== "" && !relative.startsWith("..") && !path.isAbsolute(relative)
+  );
+}
+
+/** Never open worker-supplied files: even O_RDONLY can block forever on a FIFO. */
+async function fileRevision(root: string, file: string) {
+  const absolute = path.resolve(file);
+  if (!within(root, absolute)) return { kind: "unsafe", revision: "outside" };
+  try {
+    const canonical = await realpath(absolute);
+    if (!within(root, canonical))
+      return { kind: "unsafe", revision: "outside" };
+    // lstat never follows a final symlink swapped after realpath. Only metadata
+    // is inspected, so intermediate-directory races cannot expose file data.
+    const stat = await lstat(canonical, { bigint: true });
+    if (!stat.isFile()) return { kind: "unsafe", revision: "not-file" };
+    return {
+      kind: "file",
+      revision: `${canonical}\0${stat.dev}:${stat.ino}:${stat.mode}:${stat.size}:${stat.mtimeNs}:${stat.ctimeNs}`,
+    };
+  } catch {
+    return { kind: "missing", revision: "missing" };
+  }
+}
 
 export class SidebarSourceRuntime {
   /** Reported by the worker once its module loads; false until then. */
@@ -45,6 +78,9 @@ export class SidebarSourceRuntime {
   private unpoll?: () => void;
   private disposed = false;
   private generation = 0;
+  private dependencies = new Set<string>();
+  private loadedRevision = "";
+  private fingerprinting?: { key: string; promise: Promise<string> };
   private listeners = new Set<(error?: string) => void>();
   private pending = new Map<
     string,
@@ -82,8 +118,92 @@ export class SidebarSourceRuntime {
       timeoutMs?: number;
       /** How long resolving the toolchain and loading the module may take. */
       startTimeoutMs?: number;
+      /** Release view-owned work; application services have their own lifetime. */
+      onStopped?: () => void;
     },
   ) {}
+
+  /** Host diagnostics, never data or authority supplied by a source. */
+  inspect() {
+    return {
+      generation: this.generation,
+      revision: this.loadedRevision,
+      files: this.sourceFiles(),
+      running: Boolean(this.child),
+    };
+  }
+  private sourceFiles(): string[] {
+    return [
+      ...new Set([
+        this.opts.modulePath,
+        ...(this.opts.watchFiles ?? []),
+        ...this.dependencies,
+      ]),
+    ].sort();
+  }
+  private fingerprint(): Promise<string> {
+    const files = this.sourceFiles();
+    const key = files.join("\0");
+    if (this.fingerprinting?.key === key) return this.fingerprinting.promise;
+    const promise = (async () => {
+      const root = await realpath(this.opts.projectRoot);
+      const revisions = await Promise.all(
+        files.map(async (file) => {
+          const absolute = path.resolve(this.opts.projectRoot, file);
+          // projectRoot itself may have been opened through a system symlink.
+          const candidate = within(
+            path.resolve(this.opts.projectRoot),
+            absolute,
+          )
+            ? path.resolve(root, path.relative(this.opts.projectRoot, absolute))
+            : absolute;
+          return [file, (await fileRevision(root, candidate)).revision];
+        }),
+      );
+      const hash = createHash("sha256");
+      for (const [file, revision] of revisions)
+        hash.update(`${file}\0${revision}\0`);
+      return hash.digest("hex");
+    })();
+    this.fingerprinting = { key, promise };
+    void promise
+      .finally(() => {
+        if (this.fingerprinting?.promise === promise)
+          this.fingerprinting = undefined;
+      })
+      .catch(() => undefined);
+    return promise;
+  }
+
+  private async sourceDependencies(
+    files: readonly string[],
+  ): Promise<Set<string>> {
+    const root = await realpath(this.opts.projectRoot);
+    const candidates = [
+      ...new Set(
+        files
+          .slice(0, MAX_DEPENDENCIES)
+          .map((file) => path.resolve(this.opts.projectRoot, file)),
+      ),
+    ];
+    const safe = await Promise.all(
+      candidates.map(async (file) => {
+        const candidate = within(path.resolve(this.opts.projectRoot), file)
+          ? path.resolve(root, path.relative(this.opts.projectRoot, file))
+          : file;
+        const revision = await fileRevision(root, candidate);
+        return revision.kind === "unsafe"
+          ? []
+          : [
+              path.resolve(
+                this.opts.projectRoot,
+                path.relative(root, candidate),
+              ),
+            ];
+      }),
+    );
+    return new Set(safe.flat());
+  }
 
   /** Resolves once the worker has loaded the module and can serve requests. */
   private async start(): Promise<ChildProcess> {
@@ -119,6 +239,7 @@ export class SidebarSourceRuntime {
         const spawned = spawn(launch.command, launch.args, {
           cwd: this.opts.projectRoot,
           env: launch.env,
+          detached: process.platform !== "win32",
           stdio: [
             "pipe",
             "ignore",
@@ -131,7 +252,11 @@ export class SidebarSourceRuntime {
         child = spawned;
         this.child = spawned;
         this.launched = launch;
-        spawned.once("exit", () => void launch.close());
+        spawned.once("exit", () => {
+          // Natural exit and crashes retire the same group as explicit stop.
+          signalProcessGroup({ child: spawned, signal: "SIGKILL" });
+          void launch.close();
+        });
         this.attach(spawned, (error) => {
           if (error) return fail(error);
           clearTimeout(startup);
@@ -166,6 +291,7 @@ export class SidebarSourceRuntime {
       stderr = `${stderr}${data}`.slice(-4000);
     });
     const lines = createInterface({ input: output });
+    let dependencies: Promise<void> | undefined;
     lines.on("line", (line) => {
       // A retired worker can still flush output during graceful shutdown.
       // Its responses and subscription errors cannot affect its replacement.
@@ -173,18 +299,49 @@ export class SidebarSourceRuntime {
       try {
         const message = responseSchema.parse(JSON.parse(line));
         if (message.type === "capabilities") {
-          // Sent once the module has loaded: the worker can serve requests.
-          this.capabilities = {
-            move: message.move === true,
-            drop: message.drop === true,
-            reveal: message.reveal === true,
-          };
-          started();
+          // Resolve the graph before the first request, including its metadata
+          // baseline. None of that filesystem work blocks Electron's loop.
+          void (dependencies ?? Promise.resolve())
+            .then(async () => {
+              if (this.child !== child) return;
+              const revision = await this.fingerprint();
+              if (this.child !== child) return;
+              this.loadedRevision = revision;
+              this.capabilities = {
+                move: message.move === true,
+                drop: message.drop === true,
+                reveal: message.reveal === true,
+              };
+              started();
+            })
+            .catch((error: unknown) => {
+              started(
+                error instanceof Error ? error : new Error(String(error)),
+              );
+              if (this.child === child)
+                this.stop(
+                  new Error("Could not inspect source dependencies."),
+                  true,
+                );
+            });
         } else if (message.type === "subscription-error") {
           this.stop(
             new Error(message.error ?? "Source subscription failed."),
             true,
           );
+        } else if (message.type === "dependencies") {
+          // Only the startup graph is accepted. A module can forge protocol
+          // output, but cannot make main read arbitrary data or queue rescans.
+          if (dependencies) return;
+          dependencies = this.sourceDependencies(message.files ?? []).then(
+            async (files) => {
+              if (this.child !== child) return;
+              this.dependencies = files;
+              const revision = await this.fingerprint();
+              if (this.child === child) this.loadedRevision = revision;
+            },
+          );
+          void dependencies.catch(() => undefined);
         } else if (message.type === "work" && message.id) {
           const id = message.id;
           // Only for a request this worker is serving now, a few at a time.
@@ -279,6 +436,7 @@ export class SidebarSourceRuntime {
       );
   }
   private stop(error: Error, report = false) {
+    this.opts.onStopped?.();
     if (report) for (const listener of this.listeners) listener(error.message);
     this.generation += 1;
     const child = this.child;
@@ -286,13 +444,14 @@ export class SidebarSourceRuntime {
     this.starting = undefined;
     void this.launched?.close();
     this.launched = undefined;
-    child?.kill();
+    if (child) signalProcessGroup({ child, signal: "SIGTERM" });
     // An infinite synchronous loop must not keep a retired worker alive.
     if (child) {
       const kill = setTimeout(() => {
         if (child.exitCode === null && child.signalCode === null)
-          child.kill("SIGKILL");
+          signalProcessGroup({ child, signal: "SIGKILL" });
       }, 1000);
+      child.once("exit", () => clearTimeout(kill));
       kill.unref();
     }
     for (const pending of this.pending.values()) {
@@ -303,8 +462,26 @@ export class SidebarSourceRuntime {
   }
   request(input: SidebarSourceRequest): Promise<unknown> {
     return new Promise((resolve, reject) => {
-      this.pending.set(input.requestId, { resolve, reject, working: 0 });
-      void this.start()
+      const request = { resolve, reject, working: 0 };
+      this.pending.set(input.requestId, request);
+      const prepare = async () => {
+        const child = this.child;
+        const loadedRevision = this.loadedRevision;
+        if (child && loadedRevision) {
+          const revision = await this.fingerprint();
+          if (this.pending.get(input.requestId) !== request) return;
+          if (this.child === child && revision !== loadedRevision) {
+            // Keep this new request while retiring requests already using
+            // the old code. cancel() remains effective during the scan.
+            this.pending.delete(input.requestId);
+            this.stop(new Error("Sidebar source changed. Reloading."));
+            this.pending.set(input.requestId, request);
+          }
+        }
+        if (this.pending.get(input.requestId) !== request) return;
+        await this.start();
+      };
+      void prepare()
         .then(() => {
           const pending = this.pending.get(input.requestId);
           if (!pending) return this.scheduleIdle();
@@ -362,26 +539,43 @@ export class SidebarSourceRuntime {
     if (this.listeners.size === 1) {
       this.send({ method: "subscribe" });
       // The module and what declares its access: either changing reloads.
-      const readSource = () =>
-        [this.opts.modulePath, ...(this.opts.watchFiles ?? [])]
-          .map((file) => {
-            try {
-              return readFileSync(file, "utf8");
-            } catch {
-              return "";
-            }
-          })
-          .join("\0");
-      let source = readSource();
+      let source = this.loadedRevision;
+      let checking = false;
+      let again = false;
+      let active = true;
       // macOS coalesces directory events, and atomic replacement may report
-      // a temporary filename. Compare the entry's contents so those edits
+      // a temporary filename. Compare the loaded files' metadata so edits
       // reload without restarting on unrelated changes.
       const changed = () => {
-        const next = readSource();
-        if (next === source) return;
-        source = next;
-        this.stop(new Error("Sidebar source changed. Reloading."));
-        for (const notify of this.listeners) notify();
+        if (checking) {
+          again = true;
+          return;
+        }
+        checking = true;
+        void this.fingerprint()
+          .then((next) => {
+            if (!active || this.disposed || next === source) return;
+            const previous = source;
+            source = next;
+            // Discovering the graph on startup is not an edit.
+            if (!previous || next === this.loadedRevision) return;
+            this.stop(new Error("Sidebar source changed. Reloading."));
+            for (const notify of this.listeners) notify();
+          })
+          .catch((error: unknown) => {
+            if (active && !this.disposed)
+              this.stop(
+                error instanceof Error ? error : new Error(String(error)),
+                true,
+              );
+          })
+          .finally(() => {
+            checking = false;
+            if (again && active) {
+              again = false;
+              changed();
+            }
+          });
       };
       try {
         this.watcher = watch(path.dirname(this.opts.modulePath), changed);
@@ -390,14 +584,17 @@ export class SidebarSourceRuntime {
           this.watcher = undefined;
           this.stop(error, true);
         });
+        changed();
         // FSEvents starts delivering a moment after the watch is created
         // and can drop an edit made in between (or under load). A slow poll
-        // compares the contents with those read above, so it catches what
-        // the watch missed; a stat poll would not, since its baseline stat
-        // is taken asynchronously and can already include the edit.
+        // compares each file's identity, mtime and ctime with the loaded
+        // revision, catching atomic replacement and same-size edits too.
         const poll = setInterval(changed, MODULE_POLL_MS);
         poll.unref();
-        this.unpoll = () => clearInterval(poll);
+        this.unpoll = () => {
+          active = false;
+          clearInterval(poll);
+        };
       } catch (cause) {
         this.listeners.delete(listener);
         this.scheduleIdle();

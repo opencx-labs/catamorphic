@@ -1069,7 +1069,7 @@ export const SandboxSchema = z.object({
   provider: z.string(),
   providerId: z.string(),
   sandboxType: z.enum(["execution", "dev"]),
-  commitSha: z.string().length(40).nullable(),
+  commitSha: z.string().nullable(),
   userId: z.string().uuid().nullable(),
   status: z.string(),
   snapshotName: z.string().nullable(),

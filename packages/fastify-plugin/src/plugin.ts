@@ -52,6 +52,7 @@ import { registerNotificationRoutes } from "./routes/notifications.js";
 import { registerParseRoutes } from "./routes/parse.js";
 import { registerPersonalEnvironmentRoutes } from "./routes/personal-environment.js";
 import { registerPluginRoutes } from "./routes/plugins.js";
+import { registerPrivateCustomizationRoutes } from "./routes/private-customizations.js";
 import { registerProjectMcpRoutes } from "./routes/project-mcp.js";
 import { registerProjectRoutes } from "./routes/projects.js";
 import { registerPublicationRoutes } from "./routes/publications.js";
@@ -323,6 +324,7 @@ export const catamorphicPlugin: FastifyPluginAsync<
   registerWebhookRoutes(app, ctx);
   registerAppRoutes(app, ctx);
   registerSessionArtifactRoutes(app, ctx);
+  registerPrivateCustomizationRoutes(app, ctx);
   registerAppsMcpRoutes(app, ctx);
   registerProjectMcpRoutes(app, ctx);
   registerAgentCapabilityRoutes(app, ctx);

@@ -31,6 +31,12 @@ abstractions, or legacy preservation. If a genuinely new abstraction or a
 non-obvious design choice is required, surface it for explicit approval and
 record the accepted decision in an ADR before implementing it.
 
+During alpha, put change-specific migration and manual repair instructions in
+the pull request body, not permanently committed files. Repository documentation
+should describe the current supported contract. Keep migration notes short: point
+agents to current source and contracts, essential checks, and data-preservation
+practices; let them discover commands and debug the details.
+
 ### Where the product is described for agents and search
 
 `llms.txt` at the repository root is the agent-facing description of Work

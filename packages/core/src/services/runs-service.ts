@@ -69,6 +69,7 @@ import type { RunPluginsLoader } from "./run-plugins-loader.js";
 import type { RunSignalReceipt, SignalRunInput } from "./run-signals.js";
 import type { RuntimeEventsService } from "./runtime-events-service.js";
 import type { TenantPoliciesService } from "./tenant-policies-service.js";
+import type { WorkflowEnablement } from "./workflow-enablement-types.js";
 import type { WorkflowEnablementsService } from "./workflow-enablements-service.js";
 import { WorkflowNotFoundError } from "./workflows-service.js";
 
@@ -471,6 +472,11 @@ function isCorrelationKeyConflict(error: unknown): boolean {
 }
 
 interface RunsServiceDeps {
+  privateSource?: (input: {
+    identity: Identity;
+    projectId: string;
+    commitSha: string;
+  }) => Promise<Record<string, string> | null>;
   appPolicies?: AppPoliciesService;
   projectManager: ProjectManager;
   sandboxProvider?: SandboxProvider;
@@ -559,70 +565,7 @@ export class RunsService {
       if (args.identity.scope) throw new AccessDeniedError();
       throw new RunNotFoundError(args.runId);
     }
-    if (row.session_artifact_id) {
-      const source = await this.db
-        .selectFrom("session_artifacts")
-        .leftJoin(
-          "agent_sessions",
-          "agent_sessions.id",
-          "session_artifacts.session_id",
-        )
-        .where("session_artifacts.id", "=", row.session_artifact_id)
-        .where("session_artifacts.project_id", "=", row.project_id)
-        .where(
-          "session_artifacts.owner_external_user_id",
-          "=",
-          args.identity.externalUserId,
-        )
-        .select(["session_artifacts.id", "agent_sessions.agent_id"])
-        .executeTakeFirst();
-      if (!source) throw new AccessDeniedError();
-      if (
-        !identityCovers(args.identity, {
-          kind: "app",
-          projectId: row.project_id,
-          name: `session-${source.id}`,
-        })
-      ) {
-        assertAgentSessionAccess({
-          identity: args.identity,
-          projectId: row.project_id,
-          externalUserId: args.identity.externalUserId,
-          agentId: source.agent_id,
-          intent: "change",
-        });
-      }
-    }
-    if (args.identity.scope) {
-      // Run polling mirrors triggering (ADR 0036, 0053): a scoped identity
-      // may read only runs of workflows its scope resolves to, within the
-      // run's own project — never arbitrary tenant runs by id.
-      const context = await resolveScope({
-        db: this.db,
-        identity: args.identity,
-        projectId: row.project_id,
-        policies: this.deps.appPolicies,
-      });
-      if (context?.sessionApp) {
-        const callerScope = Array.isArray(row.caller_scope)
-          ? row.caller_scope
-          : [];
-        if (
-          !callerScope.some(
-            (ref) =>
-              ref &&
-              typeof ref === "object" &&
-              !Array.isArray(ref) &&
-              ref.kind === "app" &&
-              ref.name === context.sessionApp?.name,
-          )
-        )
-          throw new AccessDeniedError();
-      }
-      if (context && !context.allowedWorkflows.has(row.workflow_name)) {
-        throw new AccessDeniedError();
-      }
-    }
+    await this.assertRunAccess(args.identity, row);
     const [pause, connectionActionRequired, batches, steps, attempts] =
       await Promise.all([
         this.db
@@ -691,6 +634,53 @@ export class RunsService {
         startedAt: attempt.started_at?.toISOString() ?? null,
         completedAt: attempt.completed_at?.toISOString() ?? null,
       })),
+    };
+  }
+
+  /** Caller-authorized identity of the immutable retained source this run uses. */
+  async retainedSource(input: { identity: Identity; runId: string }): Promise<{
+    artifactId: string;
+    revision: number;
+    lifetime: "member" | "session";
+  } | null> {
+    await this.assertRunPermission(input.identity, input.runId, "runs:read");
+    const row = await this.db
+      .selectFrom("workflow_runs as run")
+      .innerJoin("projects", "projects.id", "run.project_id")
+      .leftJoin(
+        "deployment_artifacts as deployment",
+        "deployment.id",
+        "run.deployment_artifact_id",
+      )
+      .leftJoin(
+        "session_artifacts as source",
+        "source.id",
+        "run.session_artifact_id",
+      )
+      .leftJoin("session_artifact_revisions as revision", (join) =>
+        join
+          .onRef("revision.artifact_id", "=", "source.id")
+          .onRef("revision.commit_sha", "=", "deployment.commit_sha"),
+      )
+      .where("run.id", "=", input.runId)
+      .where("projects.tenant_id", "=", input.identity.tenantId)
+      .select([
+        "run.session_artifact_id",
+        "source.lifetime",
+        "revision.source_revision",
+      ])
+      .executeTakeFirst();
+    if (!row) throw new AccessDeniedError();
+    if (!row.session_artifact_id) return null;
+    if (
+      row.source_revision === null ||
+      (row.lifetime !== "member" && row.lifetime !== "session")
+    )
+      throw new AccessDeniedError("Retained source revision is unavailable");
+    return {
+      artifactId: row.session_artifact_id,
+      revision: row.source_revision,
+      lifetime: row.lifetime,
     };
   }
 
@@ -816,6 +806,7 @@ export class RunsService {
       .where("source.owner_external_user_id", "=", args.identity.externalUserId)
       .where(({ or, eb }) =>
         or([
+          eb("source.lifetime", "=", "member"),
           eb.val(
             hasProjectPermission(args.identity, args.projectId, "runs:read"),
           ),
@@ -956,6 +947,22 @@ export class RunsService {
     return this.trigger(args);
   }
 
+  /** Check the requesting caller before dispatch switches to a consented owner. */
+  async assertTriggerAccess(args: {
+    identity: Identity;
+    projectId: string;
+    workflowName: string;
+    commitSha?: string;
+  }): Promise<void> {
+    await this.requireProject(args.identity, args.projectId);
+    await assertScopeAllowsWorkflow({
+      ...args,
+      db: this.db,
+      policies: this.deps.appPolicies,
+    });
+    await this.assertRetainedSourceAccess(args);
+  }
+
   /** Run an immutable non-production commit, used by temporary watchers. */
   async triggerAtCommit(args: TriggerPinnedRunInput): Promise<Run> {
     return this.trigger(args);
@@ -983,6 +990,10 @@ export class RunsService {
   async triggerWithEnablement(
     args: TriggerProductionRunInput & {
       enablementId: string;
+      expected?: Pick<
+        WorkflowEnablement,
+        "commitSha" | "consentDigest" | "revision"
+      >;
     },
   ): Promise<Run> {
     const service = this.deps.workflowEnablements?.();
@@ -992,6 +1003,13 @@ export class RunsService {
       enablementId: args.enablementId,
     });
     const enablement = validated.enablement;
+    if (
+      args.expected &&
+      (enablement.commitSha !== args.expected.commitSha ||
+        enablement.consentDigest !== args.expected.consentDigest ||
+        enablement.revision !== args.expected.revision)
+    )
+      throw new AccessDeniedError();
     if (
       enablement.projectId !== args.projectId ||
       enablement.workflowName !== args.workflowName
@@ -1008,6 +1026,11 @@ export class RunsService {
       remoteBranch: enablement.remoteBranch,
       connectionAuthorizationSnapshot: enablement.connections,
       workflowEnablementId: enablement.id,
+      enablementSnapshot: {
+        commitSha: enablement.commitSha,
+        consentDigest: enablement.consentDigest,
+        revision: enablement.revision,
+      },
       unattended: true,
     });
   }
@@ -1241,6 +1264,7 @@ export class RunsService {
       async () => {
         assertProjectPermission(args.identity, args.projectId, "runs:write");
         await this.requireProject(args.identity, args.projectId);
+        await this.assertRunPermission(args.identity, args.runId, "runs:write");
         return this.deps.coordinator.signalByKey(args);
       },
     );
@@ -1284,9 +1308,16 @@ export class RunsService {
       .where("workflow_name", "=", args.workflowName)
       .where("correlation_key", "=", args.correlationKey)
       .where("status", "not in", ["completed", "failed", "canceled"])
-      .select("id")
+      .select([
+        "id",
+        "project_id",
+        "workflow_name",
+        "session_artifact_id",
+        "caller_scope",
+      ])
       .executeTakeFirst();
-    return row ?? null;
+    if (row) await this.assertRunAccess(args.identity, row, false);
+    return row ? { id: row.id } : null;
   }
 
   /**
@@ -1384,6 +1415,7 @@ export class RunsService {
     artifact: DeploymentArtifact;
     requirements: WorkflowGraph["connections"];
     permissions: WorkflowGraph["permissions"];
+    remoteBranch?: string;
   }> {
     await this.requireProject(args.identity, args.projectId);
     const source = await this.prepareProductionSource(args);
@@ -1405,8 +1437,20 @@ export class RunsService {
         workflowPackage: source.workflowPackage,
       }),
     });
+    const retained = await this.db
+      .selectFrom("session_artifact_revisions as revision")
+      .innerJoin(
+        "session_artifacts as source",
+        "source.id",
+        "revision.artifact_id",
+      )
+      .where("source.project_id", "=", args.projectId)
+      .where("revision.commit_sha", "=", source.commitSha)
+      .select("revision.remote_branch")
+      .executeTakeFirst();
     return {
       artifact,
+      remoteBranch: retained?.remote_branch ?? args.remoteBranch,
       requirements: source.graph.connections,
       permissions: source.graph.permissions,
     };
@@ -1446,7 +1490,9 @@ export class RunsService {
     workflowName: string;
     commitSha: string;
   }): Promise<WorkflowExecutionDescriptor> {
-    return (await this.prepareProductionSource(args)).graph.execution;
+    return (
+      await this.prepareProductionSource({ ...args, allowInactiveSource: true })
+    ).graph.execution;
   }
 
   /**
@@ -1495,7 +1541,9 @@ export class RunsService {
     permissions: readonly string[];
     displayName?: string;
   }> {
-    const graph = (await this.prepareProductionSource(args)).graph;
+    const graph = (
+      await this.prepareProductionSource({ ...args, allowInactiveSource: true })
+    ).graph;
     return {
       capabilities: graph.capabilities,
       execution: graph.execution,
@@ -1548,7 +1596,7 @@ export class RunsService {
           throw new SandboxProviderNotConfiguredError();
         }
         const [source, plugins, artifact] = await Promise.all([
-          this.prepareProductionSource(args),
+          this.prepareProductionSource({ ...args, allowInactiveSource: true }),
           this.loadPlugins(args.identity, args.projectId, args.workflowName),
           this.deps.deploymentArtifacts.get({ artifactId: args.artifactId }),
         ]);
@@ -1750,6 +1798,10 @@ export class RunsService {
     unattended?: boolean;
     connectionAuthorizationSnapshot?: readonly ResolvedConnectionBinding[];
     workflowEnablementId?: string;
+    enablementSnapshot?: Pick<
+      WorkflowEnablement,
+      "commitSha" | "consentDigest" | "revision"
+    >;
     commitSha?: string;
     remoteBranch?: string;
   }): Promise<Run> {
@@ -1821,6 +1873,10 @@ export class RunsService {
     unattended?: boolean;
     connectionAuthorizationSnapshot?: readonly ResolvedConnectionBinding[];
     workflowEnablementId?: string;
+    enablementSnapshot?: Pick<
+      WorkflowEnablement,
+      "commitSha" | "consentDigest" | "revision"
+    >;
     commitSha?: string;
     remoteBranch?: string;
   }): Promise<Run> {
@@ -1926,42 +1982,65 @@ export class RunsService {
         const invocations = await this.db.transaction().execute(async (trx) => {
           // Enrollment and retirement serialize on the retained source row.
           // Source preparation may race discard; it must not enqueue work after it.
-          const retained = args.remoteBranch
-            ? await trx
-                .selectFrom("session_artifacts")
-                .selectAll()
-                .where("project_id", "=", args.projectId)
-                .where("remote_branch", "=", args.remoteBranch)
-                .forUpdate()
-                .executeTakeFirst()
-            : undefined;
-          if (args.remoteBranch) {
-            if (retained) {
-              const session = retained.session_id
-                ? await trx
-                    .selectFrom("agent_sessions")
-                    .select("status")
-                    .where("id", "=", retained.session_id)
-                    .executeTakeFirst()
-                : undefined;
-              if (
-                retained.status !== "active" ||
-                session?.status !== "active" ||
-                retained.owner_external_user_id !== args.identity.externalUserId
-              )
-                throw new AccessDeniedError();
-              const revision = await trx
+          const retained = await trx
+            .selectFrom("session_artifacts")
+            .selectAll()
+            .where("project_id", "=", args.projectId)
+            .where(
+              "id",
+              "in",
+              trx
                 .selectFrom("session_artifact_revisions")
-                .select("commit_sha")
-                .where("artifact_id", "=", retained.id)
-                .where("commit_sha", "=", source.commitSha)
-                .executeTakeFirst();
-              if (!revision) throw new AccessDeniedError();
-            } else if (
-              [
-                `${MANAGED_BRANCH_PREFIX}artifacts/`,
-                `${MANAGED_BRANCH_PREFIX}watchers/`,
-              ].some((prefix) => (args.remoteBranch ?? "").startsWith(prefix))
+                .select("artifact_id")
+                .where("commit_sha", "=", source.commitSha),
+            )
+            .forUpdate()
+            .executeTakeFirst();
+          if (retained) {
+            const session = retained.session_id
+              ? await trx
+                  .selectFrom("agent_sessions")
+                  .select("status")
+                  .where("id", "=", retained.session_id)
+                  .executeTakeFirst()
+              : undefined;
+            if (
+              retained.status !== "active" ||
+              (retained.lifetime === "session" &&
+                session?.status !== "active") ||
+              retained.owner_external_user_id !== args.identity.externalUserId
+            )
+              throw new AccessDeniedError();
+          } else if (
+            [
+              `${MANAGED_BRANCH_PREFIX}artifacts/`,
+              `${MANAGED_BRANCH_PREFIX}watchers/`,
+            ].some((prefix) => (args.remoteBranch ?? "").startsWith(prefix))
+          )
+            throw new AccessDeniedError();
+          if (args.workflowEnablementId && args.enablementSnapshot) {
+            // The caller authorized this exact consented snapshot. An update
+            // during source/admission preparation cannot replace its authority.
+            const live = await trx
+              .selectFrom("workflow_enablements")
+              .select([
+                "commit_sha",
+                "consent_digest",
+                "revision",
+                "status",
+                "expires_at",
+              ])
+              .where("id", "=", args.workflowEnablementId)
+              .where("tenant_id", "=", args.identity.tenantId)
+              .where("project_id", "=", args.projectId)
+              .forUpdate()
+              .executeTakeFirst();
+            if (
+              live?.status !== "active" ||
+              (live.expires_at && live.expires_at <= new Date()) ||
+              live.commit_sha !== args.enablementSnapshot.commitSha ||
+              live.consent_digest !== args.enablementSnapshot.consentDigest ||
+              live.revision !== args.enablementSnapshot.revision
             )
               throw new AccessDeniedError();
           }
@@ -2107,13 +2186,78 @@ export class RunsService {
     }
   }
 
+  private async assertRetainedSourceAccess(args: {
+    identity: Identity;
+    projectId: string;
+    commitSha?: string;
+    allowInactiveSource?: boolean;
+  }) {
+    const retained = args.commitSha
+      ? await this.db
+          .selectFrom("session_artifacts as source")
+          .innerJoin(
+            "session_artifact_revisions as revision",
+            "revision.artifact_id",
+            "source.id",
+          )
+          .where("source.project_id", "=", args.projectId)
+          .where("revision.commit_sha", "=", args.commitSha)
+          .select([
+            "source.owner_external_user_id",
+            "source.lifetime",
+            "source.session_id",
+            "source.name",
+            "source.status",
+          ])
+          .executeTakeFirst()
+      : undefined;
+    if (retained && retained.status !== "active" && !args.allowInactiveSource)
+      throw new AccessDeniedError();
+    if (
+      retained &&
+      retained.owner_external_user_id !== args.identity.externalUserId
+    )
+      throw new AccessDeniedError();
+    if (
+      retained?.lifetime === "member" &&
+      !identityCovers(args.identity, {
+        kind: "workflow",
+        projectId: args.projectId,
+        name: retained.name,
+      })
+    )
+      throw new AccessDeniedError();
+    return retained;
+  }
+
   private async prepareProductionSource(args: {
     identity: Identity;
     projectId: string;
     workflowName: string;
     commitSha?: string;
     remoteBranch?: string;
+    allowInactiveSource?: boolean;
   }): Promise<PreparedSource> {
+    const retained = await this.assertRetainedSourceAccess(args);
+    if (retained?.lifetime === "member" && args.commitSha) {
+      const key = preparedSourceKey({ ...args, commitSha: args.commitSha });
+      const hit = this.recallPreparedSource(key);
+      if (hit) return hit;
+      const files = await this.deps.privateSource?.({
+        ...args,
+        commitSha: args.commitSha,
+      });
+      if (!files) throw new AccessDeniedError();
+      return this.rememberPreparedSource(
+        key,
+        prepareSource({
+          projectId: args.projectId,
+          workflowName: args.workflowName,
+          files,
+          commitSha: args.commitSha,
+        }),
+      );
+    }
     const remote = this.deps.projectManager.remoteBackend;
     if (!remote) throw new ProductionDeploymentNotFoundError(args.projectId);
 
@@ -2281,22 +2425,114 @@ export class RunsService {
    * its project, so the check goes through the run row, tenant-filtered: a
    * foreign run id reads as denied, never as a pass.
    */
+  private async assertRunAccess(
+    identity: Identity,
+    row: Pick<
+      RunRow,
+      "project_id" | "workflow_name" | "session_artifact_id" | "caller_scope"
+    >,
+    checkWorkflowScope = true,
+  ): Promise<void> {
+    if (row.session_artifact_id) {
+      const source = await this.db
+        .selectFrom("session_artifacts")
+        .leftJoin(
+          "agent_sessions",
+          "agent_sessions.id",
+          "session_artifacts.session_id",
+        )
+        .where("session_artifacts.id", "=", row.session_artifact_id)
+        .where("session_artifacts.project_id", "=", row.project_id)
+        .where(
+          "session_artifacts.owner_external_user_id",
+          "=",
+          identity.externalUserId,
+        )
+        .select([
+          "session_artifacts.id",
+          "session_artifacts.lifetime",
+          "agent_sessions.agent_id",
+        ])
+        .executeTakeFirst();
+      if (!source) throw new AccessDeniedError();
+      if (
+        source.lifetime === "session" &&
+        !identityCovers(identity, {
+          kind: "app",
+          projectId: row.project_id,
+          name: `session-${source.id}`,
+        })
+      ) {
+        assertAgentSessionAccess({
+          identity,
+          projectId: row.project_id,
+          externalUserId: identity.externalUserId,
+          agentId: source.agent_id,
+          intent: "change",
+        });
+      }
+    }
+    if (
+      identity.scope &&
+      (checkWorkflowScope || row.session_artifact_id !== null)
+    ) {
+      // Run polling mirrors triggering (ADR 0036, 0053): a scoped identity
+      // may read only runs of workflows its scope resolves to, within the
+      // run's own project — never arbitrary tenant runs by id.
+      const context = await resolveScope({
+        db: this.db,
+        identity,
+        projectId: row.project_id,
+        policies: this.deps.appPolicies,
+      });
+      if (context?.sessionApp) {
+        const callerScope = Array.isArray(row.caller_scope)
+          ? row.caller_scope
+          : [];
+        if (
+          !callerScope.some(
+            (ref) =>
+              ref &&
+              typeof ref === "object" &&
+              !Array.isArray(ref) &&
+              ref.kind === "app" &&
+              ref.name === context.sessionApp?.name,
+          )
+        )
+          throw new AccessDeniedError();
+      }
+      if (context && !context.allowedWorkflows.has(row.workflow_name)) {
+        throw new AccessDeniedError();
+      }
+    }
+  }
+
   private async assertRunPermission(
     identity: Identity,
     runId: string,
     permission: "runs:read" | "runs:write",
   ): Promise<void> {
-    if (identity.scope === undefined) return;
     const row = await this.db
       .selectFrom("workflow_runs")
       .innerJoin("projects", "projects.id", "workflow_runs.project_id")
       .where("workflow_runs.id", "=", runId)
       .where("projects.tenant_id", "=", identity.tenantId)
-      .select(["workflow_runs.project_id", "workflow_runs.external_user_id"])
+      .select([
+        "workflow_runs.project_id",
+        "workflow_runs.external_user_id",
+        "workflow_runs.workflow_name",
+        "workflow_runs.session_artifact_id",
+        "workflow_runs.caller_scope",
+      ])
       .executeTakeFirst();
     // Uniform denial: a scoped caller must not learn which run ids exist.
     if (!row) throw new AccessDeniedError();
-    if (row.external_user_id === identity.externalUserId) return;
+    await this.assertRunAccess(identity, row, false);
+    if (
+      identity.scope === undefined ||
+      row.external_user_id === identity.externalUserId
+    )
+      return;
     assertProjectPermission(identity, row.project_id, permission);
   }
 

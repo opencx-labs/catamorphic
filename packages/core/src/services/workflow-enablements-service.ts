@@ -5,6 +5,7 @@ import type { Kysely, Selectable, Transaction } from "kysely";
 import type { Identity } from "../identity.js";
 import {
   hasProjectPermission,
+  identityCovers,
   mayUseProject,
   projectPrincipalIdentity,
 } from "../identity.js";
@@ -37,6 +38,7 @@ import type {
 const tracer = getTracer("@catamorphic/core");
 
 interface WorkflowTarget {
+  remoteBranch?: string;
   artifact: DeploymentArtifact;
   requirements: WorkflowGraph["connections"];
   permissions: WorkflowGraph["permissions"];
@@ -186,7 +188,7 @@ export class WorkflowEnablementsService {
       deploymentArtifactId: target.artifact.id,
       deploymentArtifactDigest: target.artifact.artifactDigest,
       commitSha: target.artifact.commitSha,
-      remoteBranch: input.remoteBranch ?? "main",
+      remoteBranch: target.remoteBranch ?? input.remoteBranch ?? "main",
       environment: admission.environmentName,
       owner,
       connections,
@@ -272,6 +274,13 @@ export class WorkflowEnablementsService {
         let created: Selectable<DB["workflow_enablements"]>;
         try {
           created = await this.db.transaction().execute(async (trx) => {
+            await this.lockRetainedSource({
+              transaction: trx,
+              identity: input.identity,
+              projectId: input.projectId,
+              commitSha: preview.commitSha,
+              owner: preview.owner,
+            });
             const row = await trx
               .insertInto("workflow_enablements")
               .values({
@@ -375,30 +384,48 @@ export class WorkflowEnablementsService {
         ]),
       );
     }
-    return Promise.all(
-      (await query.selectAll().orderBy("created_at", "desc").execute()).map(
-        (row) => this.hydrate(row),
+    const items = await Promise.all(
+      (await query.select("id").orderBy("created_at", "desc").execute()).map(
+        async (row) => {
+          try {
+            return await this.get({
+              identity: input.identity,
+              enablementId: row.id,
+            });
+          } catch (error) {
+            if (error instanceof AccessDeniedError) return null;
+            throw error;
+          }
+        },
       ),
     );
+    return items.filter((item) => item !== null);
   }
 
   async get(input: {
     identity: Identity;
     enablementId: string;
   }): Promise<WorkflowEnablement> {
-    const row = await this.requireRow(
-      input.enablementId,
-      input.identity.tenantId,
-    );
-    // The project's automations are visible to everyone in it; anyone's to
-    // `automations:read`; a member's own to them.
-    const readable =
-      (row.owner_kind === "project" &&
-        mayUseProject(input.identity, row.project_id)) ||
-      row.owner_external_user_id === input.identity.externalUserId ||
-      hasProjectPermission(input.identity, row.project_id, "automations:read");
-    if (!readable) throw new AccessDeniedError();
-    return this.hydrate(row);
+    return this.db.transaction().execute(async (transaction) => {
+      const row = await this.requireRow({
+        ...input,
+        transaction,
+        lock: "share",
+      });
+      await this.assertRetainedSourceOwner({ ...input, row, transaction });
+      // Published automations retain ordinary administrative visibility.
+      const readable =
+        (row.owner_kind === "project" &&
+          mayUseProject(input.identity, row.project_id)) ||
+        row.owner_external_user_id === input.identity.externalUserId ||
+        hasProjectPermission(
+          input.identity,
+          row.project_id,
+          "automations:read",
+        );
+      if (!readable) throw new AccessDeniedError();
+      return this.hydrate(row, transaction);
+    });
   }
 
   async disable(input: {
@@ -413,11 +440,8 @@ export class WorkflowEnablementsService {
     identity: Identity;
     enablementId: string;
   }): Promise<WorkflowEnablement> {
-    const row = await this.requireRow(
-      input.enablementId,
-      input.identity.tenantId,
-    );
-    this.assertMayManage(input.identity, row.project_id, ownerFromRow(row));
+    const current = await this.get(input);
+    this.assertMayManage(input.identity, current.projectId, current.owner);
     await this.revalidate({
       identity: input.identity,
       enablementId: input.enablementId,
@@ -430,15 +454,21 @@ export class WorkflowEnablementsService {
     identity: Identity;
     enablementId: string;
     consentDigest: string;
+    environment?: string;
+    commitSha?: string;
+    remoteBranch?: string;
+    onUpdate?: (transaction: Transaction<DB>) => Promise<void>;
   }): Promise<WorkflowEnablement> {
     const current = await this.get(input);
+    this.assertMayManage(input.identity, current.projectId, current.owner);
     const preview = await this.preview({
       identity: input.identity,
       projectId: current.projectId,
       workflowName: current.workflowName,
-      environment: current.environment,
+      environment: input.environment ?? current.environment,
       owner: current.owner,
-      remoteBranch: current.remoteBranch,
+      commitSha: input.commitSha,
+      remoteBranch: input.remoteBranch ?? current.remoteBranch,
       connectionSelections: Object.fromEntries(
         current.connections.map((connection) => [
           connection.alias,
@@ -450,10 +480,28 @@ export class WorkflowEnablementsService {
       throw new WorkflowEnablementConsentRequiredError(preview.consentDigest);
     }
     await this.db.transaction().execute(async (trx) => {
+      await this.lockRetainedSource({
+        transaction: trx,
+        identity: input.identity,
+        projectId: current.projectId,
+        commitSha: preview.commitSha,
+        owner: preview.owner,
+      });
+      // Source callbacks lock retained journals before the enablement. Their
+      // transactional writes roll back if the current-row authorization fails.
+      await input.onUpdate?.(trx);
+      const row = await this.requireRow({
+        ...input,
+        transaction: trx,
+        lock: "update",
+      });
+      await this.assertRetainedSourceOwner({ ...input, row, transaction: trx });
+      this.assertMayManage(input.identity, row.project_id, ownerFromRow(row));
       await trx
         .updateTable("workflow_enablements")
         .set((eb) => ({
           deployment_artifact_id: preview.deploymentArtifactId,
+          environment_name: preview.environment,
           commit_sha: preview.commitSha,
           remote_branch: preview.remoteBranch,
           consent_digest: preview.consentDigest,
@@ -535,10 +583,7 @@ export class WorkflowEnablementsService {
     enablementId: string;
     allowSuspended?: boolean;
   }): Promise<RevalidatedWorkflowEnablement> {
-    const row = await this.requireRow(
-      input.enablementId,
-      input.identity.tenantId,
-    );
+    const row = await this.requireRow(input);
     if (row.status === "disabled") {
       throw new WorkflowEnablementSuspendedError(row.id, "disabled");
     }
@@ -753,13 +798,15 @@ export class WorkflowEnablementsService {
     reason: string | null,
     eventType: string,
   ): Promise<WorkflowEnablement> {
-    const row = await this.requireRow(
-      input.enablementId,
-      input.identity.tenantId,
-    );
-    this.assertMayManage(input.identity, row.project_id, ownerFromRow(row));
     input.signal?.throwIfAborted();
     await this.db.transaction().execute(async (trx) => {
+      const row = await this.requireRow({
+        ...input,
+        transaction: trx,
+        lock: "update",
+      });
+      await this.assertRetainedSourceOwner({ ...input, row, transaction: trx });
+      this.assertMayManage(input.identity, row.project_id, ownerFromRow(row));
       await trx
         .updateTable("workflow_enablements")
         .set((eb) => ({
@@ -813,22 +860,95 @@ export class WorkflowEnablementsService {
     throw new AccessDeniedError();
   }
 
-  private async requireRow(enablementId: string, tenantId: string) {
-    const row = await this.db
+  private async lockRetainedSource(input: {
+    transaction: Transaction<DB>;
+    identity: Identity;
+    projectId: string;
+    commitSha: string;
+    owner: WorkflowEnablementOwner;
+  }): Promise<void> {
+    const source = await input.transaction
+      .selectFrom("session_artifacts")
+      .where("project_id", "=", input.projectId)
+      .where(
+        "id",
+        "in",
+        input.transaction
+          .selectFrom("session_artifact_revisions")
+          .select("artifact_id")
+          .where("commit_sha", "=", input.commitSha),
+      )
+      .select(["id", "status", "owner_external_user_id"])
+      .forUpdate()
+      .executeTakeFirst();
+    if (
+      source &&
+      (source.status !== "active" ||
+        source.owner_external_user_id !== input.identity.externalUserId ||
+        input.owner.type !== "member" ||
+        input.owner.externalUserId !== source.owner_external_user_id)
+    )
+      throw new AccessDeniedError();
+  }
+
+  /** Retained source metadata has the same private audience as its immutable pin. */
+  private async assertRetainedSourceOwner(input: {
+    identity: Identity;
+    row: Selectable<DB["workflow_enablements"]>;
+    transaction: Kysely<DB>;
+  }): Promise<void> {
+    const source = await input.transaction
+      .selectFrom("session_artifact_revisions as revision")
+      .innerJoin(
+        "session_artifacts as source",
+        "source.id",
+        "revision.artifact_id",
+      )
+      .where("source.project_id", "=", input.row.project_id)
+      .where("revision.commit_sha", "=", input.row.commit_sha)
+      .select([
+        "source.owner_external_user_id",
+        "source.name",
+        "source.lifetime",
+      ])
+      .executeTakeFirst();
+    if (
+      source &&
+      (source.owner_external_user_id !== input.identity.externalUserId ||
+        (source.lifetime === "member" &&
+          !identityCovers(input.identity, {
+            kind: "workflow",
+            projectId: input.row.project_id,
+            name: source.name,
+          })))
+    )
+      throw new AccessDeniedError();
+  }
+
+  private async requireRow(input: {
+    identity: Identity;
+    enablementId: string;
+    transaction?: Kysely<DB>;
+    lock?: "share" | "update";
+  }) {
+    let query = (input.transaction ?? this.db)
       .selectFrom("workflow_enablements")
       .selectAll()
-      .where("id", "=", enablementId)
-      .where("tenant_id", "=", tenantId)
-      .executeTakeFirst();
+      .where("id", "=", input.enablementId)
+      .where("tenant_id", "=", input.identity.tenantId);
+    if (input.lock === "share") query = query.forShare();
+    if (input.lock === "update") query = query.forUpdate();
+    const row = await query.executeTakeFirst();
     if (!row) throw new WorkflowEnablementNotFoundError();
     return row;
   }
 
   private async connectionRows(
     enablementId: string,
+    database: Kysely<DB> = this.db,
   ): Promise<ResolvedConnectionBinding[]> {
     return (
-      await this.db
+      await database
         .selectFrom("workflow_enablement_connections")
         .selectAll()
         .where("enablement_id", "=", enablementId)
@@ -846,10 +966,11 @@ export class WorkflowEnablementsService {
 
   private async hydrate(
     row: Selectable<DB["workflow_enablements"]>,
+    database: Kysely<DB> = this.db,
   ): Promise<WorkflowEnablement> {
     const [connections, triggers] = await Promise.all([
-      this.connectionRows(row.id),
-      this.db
+      this.connectionRows(row.id, database),
+      database
         .selectFrom("workflow_enablement_triggers as activation")
         .innerJoin(
           "trigger_definitions as definition",

@@ -70,10 +70,31 @@ export function desktopVitestArguments(input: {
   ];
 }
 
+/** Each shard owns its Docker desktop; native and explicitly sharded runs stay single. */
+export function desktopTestShards(input: {
+  native: boolean;
+  args: readonly string[];
+  configured?: string;
+}): number {
+  if (input.native || input.args.some((arg) => arg.startsWith("--shard")))
+    return 1;
+  const count = Number(input.configured ?? "1");
+  if (!Number.isInteger(count) || count < 1 || count > 8)
+    throw new Error(
+      "CATAMORPHIC_DESKTOP_TEST_SHARDS must be an integer from 1 to 8.",
+    );
+  return count;
+}
+
 async function main(): Promise<void> {
   const args = process.argv.slice(2);
   const native = args[0] === "--native";
   if (native) args.shift();
+  const shards = desktopTestShards({
+    native,
+    args,
+    configured: process.env.CATAMORPHIC_DESKTOP_TEST_SHARDS,
+  });
   // Native execution is reserved for Linux's private display and hosted macOS.
   // Ordinary invocations always enter Docker, including on a Linux workstation.
   if (native && process.platform !== "linux") assertIsolatedDesktopTestHost();
@@ -87,7 +108,10 @@ async function main(): Promise<void> {
   // host user's id is.
   if (!native) await chmod(artifacts, 0o777);
   const signals = new TestSignalController();
-  const container = `catamorphic-desktop-test-${randomUUID()}`;
+  const batch = `catamorphic-desktop-test-${randomUUID()}`;
+  const containers = Array.from({ length: shards }, (_, index) =>
+    shards === 1 ? batch : `${batch}-shard-${index + 1}`,
+  );
   // macOS allows only 103 path bytes plus the terminator for a Unix socket.
   // Chromium adds its own temporary directory and SingletonSocket suffix.
   const context = await mkdtemp(path.join(tmpdir(), "d"));
@@ -97,13 +121,14 @@ async function main(): Promise<void> {
     command: string,
     commandArgs: string[],
     env = process.env,
+    controller = signals,
   ) => {
     const result = await runLoggedProcess({
       command,
       args: commandArgs,
       cwd: root,
       env,
-      signals,
+      signals: controller,
       temporaryRoot: context,
       logPath: path.join(artifacts, `${++step}-${path.basename(command)}.log`),
     });
@@ -192,27 +217,59 @@ async function main(): Promise<void> {
         // Opt-in: the external-test authority, for the live Google sign-in
         // check (e2e/google-sign-in.e2e.ts). It never rides in by default.
         const external = process.env.CATAMORPHIC_EXTERNAL_INTEGRATIONS === "1";
-        await run("docker", [
-          "run",
-          "--rm",
-          "--init",
-          "--name",
-          container,
-          "--shm-size=1g",
-          "--mount",
-          `type=bind,source=${artifacts},target=/artifacts`,
-          ...(voiceModels
-            ? [
-                "--mount",
-                `type=bind,source=${path.resolve(voiceModels)},target=/voice-models,readonly`,
-                "--env",
-                "CATAMORPHIC_VOICE_MODELS_DIR=/voice-models",
-              ]
-            : []),
-          ...(external ? ["--env", "CATAMORPHIC_EXTERNAL_INTEGRATIONS=1"] : []),
-          imageId,
-          ...args,
-        ]);
+        const outcomes = await Promise.allSettled(
+          containers.map(async (_container, index) => {
+            const shardArtifacts =
+              shards === 1
+                ? artifacts
+                : path.join(artifacts, `shard-${index + 1}`);
+            await mkdir(shardArtifacts, { recursive: true });
+            await chmod(shardArtifacts, 0o777);
+            // Cancellation may precede this shard's listener while directory
+            // setup awaits. The root retains that signal for later launches.
+            if (signals.signal) throw new Error("Desktop tests interrupted.");
+            const controller =
+              shards === 1 ? signals : new TestSignalController();
+            try {
+              await run(
+                "docker",
+                [
+                  "run",
+                  "--rm",
+                  "--init",
+                  "--name",
+                  containers[index] ?? batch,
+                  "--shm-size=1g",
+                  "--mount",
+                  `type=bind,source=${shardArtifacts},target=/artifacts`,
+                  ...(voiceModels
+                    ? [
+                        "--mount",
+                        `type=bind,source=${path.resolve(voiceModels)},target=/voice-models,readonly`,
+                        "--env",
+                        "CATAMORPHIC_VOICE_MODELS_DIR=/voice-models",
+                      ]
+                    : []),
+                  ...(external
+                    ? ["--env", "CATAMORPHIC_EXTERNAL_INTEGRATIONS=1"]
+                    : []),
+                  imageId,
+                  ...args,
+                  ...(shards > 1 ? [`--shard=${index + 1}/${shards}`] : []),
+                ],
+                process.env,
+                controller,
+              );
+            } finally {
+              if (controller !== signals) controller.close();
+            }
+          }),
+        );
+        const failures = outcomes.flatMap((outcome) =>
+          outcome.status === "rejected" ? [outcome.reason] : [],
+        );
+        if (failures.length)
+          throw new AggregateError(failures, "Desktop test shards failed.");
         const inspect = execFileSync(
           "docker",
           ["image", "inspect", imageId, "--format", "{{.Size}}"],
@@ -226,7 +283,8 @@ async function main(): Promise<void> {
     succeeded = true;
   } finally {
     if (!native)
-      spawnSync("docker", ["rm", "--force", container], { stdio: "ignore" });
+      for (const container of containers)
+        spawnSync("docker", ["rm", "--force", container], { stdio: "ignore" });
     signals.close();
     console.log(`Desktop test diagnostics: ${artifacts}`);
     if (succeeded) await removeTestDirectory(context);

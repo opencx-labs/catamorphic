@@ -24,6 +24,7 @@ export function RenameChatDialog({
   return (
     <ActionInputDialog
       selectInitialValue
+      requestKey={chat?.sessionId}
       request={
         chat && {
           label: "Rename chat",

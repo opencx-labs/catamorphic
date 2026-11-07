@@ -9,7 +9,12 @@ import type {
 import { instrumentSandboxProvider } from "@catamorphic/sandbox";
 import { PROJECT_SKILLS_DIR } from "@catamorphic/workflow/project-layout";
 import type { Kysely } from "kysely";
-import { type Identity, mayUseProject } from "./identity.js";
+import {
+  type Identity,
+  intersectProjectPermissions,
+  intersectScope,
+  mayUseProject,
+} from "./identity.js";
 import { HOST_SKILLS, SEED_SKILLS } from "./seeds.js";
 import type { AgentCapabilityOptions } from "./services/agent-capabilities-service.js";
 import { AgentCapabilitiesService } from "./services/agent-capabilities-service.js";
@@ -25,7 +30,10 @@ import type { AppBundleStore } from "./services/app-bundle-store.js";
 import { AppPoliciesService } from "./services/app-policies-service.js";
 import { AppStorageService } from "./services/app-storage-service.js";
 import { AppsService } from "./services/apps-service.js";
-import { assertScopeAllowsWorkflow } from "./services/artifact-scope.js";
+import {
+  AccessDeniedError,
+  assertScopeAllowsWorkflow,
+} from "./services/artifact-scope.js";
 import { BatchExecutionHandler } from "./services/batch-execution-handler.js";
 import { BoundaryExecutionHandler } from "./services/boundary-execution-handler.js";
 import {
@@ -89,6 +97,12 @@ import { NodeRecoveryService } from "./services/node-recovery-service.js";
 import { PersonalEnvironmentService } from "./services/personal-environment-service.js";
 import { PlacementWaitsService } from "./services/placement-waits.js";
 import { PluginsService } from "./services/plugins-service.js";
+import {
+  privateCustomizationAgentCapabilities,
+  privateCustomizationHostCapabilities,
+} from "./services/private-customization-capabilities.js";
+import { PrivateStateService } from "./services/private-state-service.js";
+import { PrivateWorkflowsService } from "./services/private-workflows-service.js";
 import { ProjectEnvironmentsService } from "./services/project-environments-service.js";
 import { ProjectEventDispatcher } from "./services/project-event-dispatcher.js";
 import type { ProjectEventSourceProvider } from "./services/project-event-monitors-service.js";
@@ -135,6 +149,7 @@ import { TriggersService } from "./services/triggers-service.js";
 import {
   type PushNotificationTransport,
   UserNotificationsService,
+  type UserNotificationTransport,
 } from "./services/user-notifications-service.js";
 import { WatchersService } from "./services/watchers-service.js";
 import { WebhooksService } from "./services/webhooks-service.js";
@@ -343,6 +358,7 @@ export interface CatamorphicCoreConfig {
   onToolAlwaysAllowed?: (event: ToolAlwaysAllowedEvent) => void | Promise<void>;
   /** Optional host-owned Web Push transport. Events remain durable without it. */
   pushNotifications?: PushNotificationTransport;
+  notificationTransport?: UserNotificationTransport;
   /**
    * Host-side capability providers (ADR 0046): named fulfillers for plugin
    * `requires` declarations, resolved at run launch into env values that
@@ -452,6 +468,8 @@ export class CatamorphicCore {
   readonly memberships: MembershipsService;
   /** The documents surface: program (git) + project store (ADR 0055). */
   readonly documents: DocumentsService;
+  readonly privateState: PrivateStateService;
+  readonly privateWorkflows: PrivateWorkflowsService;
   /** Propose-a-change: member edits as branches/PRs on their behalf (ADR 0055). */
   readonly proposals: ProposalsService;
   /** Whether proposals can open pull requests (a code host is configured). */
@@ -509,6 +527,7 @@ export class CatamorphicCore {
     this.notifications = new UserNotificationsService(
       this.db,
       config.pushNotifications,
+      config.notificationTransport,
     );
     this.projectManager = config.projectManager;
     // Doctrine resolves ONCE, at boot: every consumer below (project
@@ -738,6 +757,13 @@ export class CatamorphicCore {
     };
     this.capabilities = new CapabilityRegistry([
       sessionDeliveryCapability,
+      ...privateCustomizationHostCapabilities({
+        state: () => this.privateState,
+        notifications: () => this.notifications,
+        workflows: () => this.privateWorkflows,
+        artifacts: () => this.sessionArtifacts,
+        authorizeWorkflow: (context) => this.authorizeWorkflowHostCall(context),
+      }),
       secretsCapability({
         // Constructed further down; resolved per call.
         secrets: () => this.secrets,
@@ -808,7 +834,20 @@ export class CatamorphicCore {
       hostId: config.workerNode?.id ?? config.hostId,
       allocations: this.executionAllocations,
       environments: this.executionEnvironments,
-      options: config.agentCapabilities,
+      options: {
+        ...config.agentCapabilities,
+        capabilities: [
+          ...privateCustomizationAgentCapabilities({
+            state: () => this.privateState,
+            notifications: () => this.notifications,
+            workflows: () => this.privateWorkflows,
+            artifacts: () => this.sessionArtifacts,
+            authorizeWorkflow: (context) =>
+              this.authorizeWorkflowHostCall(context),
+          }),
+          ...(config.agentCapabilities?.capabilities ?? []),
+        ],
+      },
       resolveMemberIdentity: config.resolveMemberIdentity,
       // Constructed below; read at call time.
       memberRoles: (args) => this.memberships.describeMember(args),
@@ -1080,6 +1119,7 @@ export class CatamorphicCore {
       coordinator.handleExhaustedJob(args),
     );
     this.runs = new RunsService(this.db, {
+      privateSource: (input) => this.sessionArtifacts.privateSource(input),
       appPolicies: this.appPolicies,
       projectManager: this.projectManager,
       sandboxProvider: this.sandboxProvider,
@@ -1181,6 +1221,7 @@ export class CatamorphicCore {
       }
     }
     this.triggers = new TriggersService(this.db, {
+      privateSource: (input) => this.sessionArtifacts.privateSource(input),
       kinds: config.triggerKinds ?? [],
       mcpToolKinds: this.mcpToolKinds,
       projectManager: this.projectManager,
@@ -1230,6 +1271,12 @@ export class CatamorphicCore {
       ...(config.documentBlobStore
         ? { blobStore: config.documentBlobStore }
         : {}),
+    });
+    this.privateState = new PrivateStateService(this.documents);
+    this.privateWorkflows = new PrivateWorkflowsService(this.db, {
+      artifacts: this.sessionArtifacts,
+      enablements: this.workflowEnablements,
+      runs: this.runs,
     });
     this.publications = new PublicationsService(this.db);
     this.proposalsOpenPullRequests = this.codeHosts.available;
@@ -1394,6 +1441,77 @@ export class CatamorphicCore {
       this.triggers,
       this.workflowEnablements,
     ).dispatch(input);
+  }
+
+  /** Revalidate live run authority and intersect it with the caller's pinned grants. */
+  async authorizeWorkflowHostCall(
+    context: import("./services/capability-providers.js").HostCallContext,
+  ): Promise<Identity> {
+    requireAttemptTime(context);
+    const run = await this.db
+      .selectFrom("workflow_runs")
+      .where("id", "=", context.runId)
+      .where("project_id", "=", context.projectId)
+      .select([
+        "status",
+        "external_user_id",
+        "workflow_enablement_id",
+        "session_artifact_id",
+      ])
+      .executeTakeFirst();
+    if (
+      !run ||
+      run.external_user_id !== context.caller.externalUserId ||
+      ["completed", "failed", "canceled", "canceling"].includes(run.status)
+    )
+      throw new AccessDeniedError();
+    if (run.session_artifact_id) {
+      const source = await this.sessionArtifacts.get({
+        identity: context.caller,
+        projectId: context.projectId,
+        artifactId: run.session_artifact_id,
+      });
+      if (source.status !== "active") throw new AccessDeniedError();
+    }
+    const live = run.workflow_enablement_id
+      ? (
+          await this.workflowEnablements.revalidate({
+            identity: context.caller,
+            enablementId: run.workflow_enablement_id,
+          })
+        ).ownerIdentity
+      : context.caller.scope !== undefined
+        ? await this.resolveMember({
+            tenantId: context.caller.tenantId,
+            projectId: context.projectId,
+            externalUserId: context.caller.externalUserId,
+          })
+        : context.caller;
+    if (
+      !live ||
+      live.tenantId !== context.caller.tenantId ||
+      live.externalUserId !== context.caller.externalUserId
+    )
+      throw new AccessDeniedError();
+    requireAttemptTime(context);
+    return {
+      ...context.caller,
+      ...(context.caller.scope === undefined
+        ? live.scope
+          ? { scope: live.scope }
+          : {}
+        : { scope: intersectScope(context.caller.scope, live) }),
+      ...(context.caller.scope === undefined
+        ? live.projectPermissions
+          ? { projectPermissions: live.projectPermissions }
+          : {}
+        : {
+            projectPermissions: intersectProjectPermissions(
+              context.caller.projectPermissions ?? [],
+              live,
+            ),
+          }),
+    };
   }
 
   private async workflowSessionOrigin(

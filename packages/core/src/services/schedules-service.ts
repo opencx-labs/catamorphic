@@ -19,7 +19,7 @@ interface ScheduleTriggerDispatcher {
     projectId: string;
     kind: string;
   }): Promise<StoredTriggerActivation[]>;
-  fireAtCommit(args: {
+  dispatchAtCommit(args: {
     commitSha: string;
     remoteBranch: string;
     identity: Identity;
@@ -235,7 +235,7 @@ export class SchedulesService {
           enrolled += 1;
           continue;
         }
-        const result = await this.triggers.fireAtCommit({
+        const result = await this.triggers.dispatchAtCommit({
           commitSha: occurrence.commitSha,
           remoteBranch: occurrence.remoteBranch,
           identity,

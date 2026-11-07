@@ -218,11 +218,14 @@ export function bookmarksSource(
         invalidateBranches(publish, branches());
       }),
     action: async ({ itemId, action, values }) => {
-      const label = values?.label?.trim() ?? "";
+      const label =
+        typeof values?.label === "string" ? values.label.trim() : "";
       if (action === "add") {
         if (scope !== "project")
           throw new Error("Add bookmarks to the project's list.");
-        const address = webAddress(values?.url ?? "");
+        const address = webAddress(
+          typeof values?.url === "string" ? values.url : "",
+        );
         await desktopApi.bookmarksAdd({
           ...target(),
           label: label || new URL(address).hostname,
@@ -257,7 +260,11 @@ export function bookmarksSource(
           // wrote that the form would refuse).
           ...(values?.url === undefined || values.url === bookmark.url
             ? {}
-            : { url: webAddress(values.url) }),
+            : {
+                url: webAddress(
+                  typeof values.url === "string" ? values.url : "",
+                ),
+              }),
         });
       } else if (action === "rename-folder") {
         if (!label) throw new Error("Name the folder.");

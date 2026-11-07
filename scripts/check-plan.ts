@@ -13,16 +13,18 @@ export function checkCommands(input: {
   const commands = [
     { label: "lint", command: "bun", args: ["run", "lint"] },
     {
-      label: "root orchestration typecheck",
-      command: "bun",
-      args: ["run", "typecheck:scripts"],
-    },
-    {
       label: "workspace typecheck",
       command: "bun",
       args: ["run", "typecheck"],
     },
     { label: "build", command: "bun", args: ["run", "build"] },
+    // Root tools consume the same installed declarations as their callers.
+    // A clean checkout has none until the workspace build completes.
+    {
+      label: "root orchestration typecheck",
+      command: "bun",
+      args: ["run", "typecheck:scripts"],
+    },
     {
       label: "database migration",
       command: "bun",
