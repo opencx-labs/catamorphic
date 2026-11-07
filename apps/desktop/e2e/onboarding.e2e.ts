@@ -9,6 +9,7 @@ import {
   openOnboardingStep,
   openProjectSwitcher,
   setReactValueJs,
+  waitForProjectWorkspace,
   workspaceDomHelpersJs,
 } from "./harness.js";
 
@@ -99,6 +100,7 @@ const createProjectViaUi = async (name: string): Promise<void> => {
      if (btn && !btn.disabled) { btn.click(); return true; } return false;`,
     { label: "project submit enabled" },
   );
+  await waitForProjectWorkspace({ app, name });
   await runWait(
     `return !!byText('[role="tab"], button', 'New Tab') &&
             !!$('textarea[placeholder*="Search or ask"]');`,
@@ -532,6 +534,7 @@ describe.each([false, true])(
        if (btn && !btn.disabled) { btn.click(); return true; } return false;`,
         { label: "import submit enabled" },
       );
+      await waitForProjectWorkspace({ app, name: "imported-notes" });
       await runWait(
         `return (async () => await projectReady() &&
               !!byText('[role="tab"], button', 'New Tab') &&

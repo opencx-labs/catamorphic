@@ -8,6 +8,7 @@ import {
   launchApp,
   openProjectSwitcher,
   setReactValueJs,
+  waitForProjectWorkspace,
   workspaceDomHelpersJs,
 } from "./harness.js";
 
@@ -100,6 +101,7 @@ describe("update restart", () => {
        if (btn && !btn.disabled) { btn.click(); return true; } return false;`,
       { label: "project submit enabled" },
     );
+    await waitForProjectWorkspace({ app, name: "update-continue" });
     await runWait(`return !!byText('[role="tab"], button', 'New Tab');`, {
       timeoutMs: 60_000,
       label: "workspace ready",

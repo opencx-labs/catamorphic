@@ -4,6 +4,7 @@ import {
   launchApp,
   openProjectSwitcher,
   setReactValueJs,
+  waitForProjectWorkspace,
   workspaceDomHelpersJs,
 } from "./harness.js";
 import {
@@ -74,6 +75,7 @@ describe("workflow authoring", { retry: 0 }, () => {
       `const submit=$('[data-testid="project-submit"]'); if(submit && !submit.disabled) {submit.click(); return true;} return false;`,
       "create project",
     );
+    await waitForProjectWorkspace({ app, name: "Workflow authoring" });
     await wait(
       `const submit=$('[data-testid="project-submit"]'); return !!$('textarea[placeholder*="Search or ask"]') && (!submit || !!submit.closest('[inert]'));`,
       "project workspace",

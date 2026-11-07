@@ -6,6 +6,7 @@ import {
   launchApp,
   openProjectSwitcher,
   setReactValueJs,
+  waitForProjectWorkspace,
   workspaceDomHelpersJs,
 } from "./harness.js";
 
@@ -158,6 +159,7 @@ describe("skills as commands", () => {
        if (btn && !btn.disabled) { btn.click(); return true; } return false;`,
       { label: "project submit enabled" },
     );
+    await waitForProjectWorkspace({ app, name: "e2e-skills" });
     await runWait(
       `return !!byText('[role="tab"], button', 'New Tab') &&
               !!$('textarea[placeholder*="Search or ask"]');`,

@@ -4,6 +4,7 @@ import {
   launchApp,
   openProjectSwitcher,
   setReactValueJs,
+  waitForProjectWorkspace,
   workspaceDomHelpersJs,
 } from "./harness.js";
 import { addSidebarSections, CHATS_SECTION } from "./sidebar-config.js";
@@ -75,6 +76,7 @@ describe("interrupted turn recovery", () => {
        if (btn && !btn.disabled) { btn.click(); return true; } return false;`,
       { label: "project submit enabled" },
     );
+    await waitForProjectWorkspace({ app, name: "e2e-recovery" });
     await runWait(`return !!byText('[role="tab"], button', 'New Tab');`, {
       timeoutMs: 60_000,
       label: "workspace ready",

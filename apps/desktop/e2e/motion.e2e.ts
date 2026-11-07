@@ -8,6 +8,7 @@ import {
   launchApp,
   openProjectSwitcher,
   setReactValueJs,
+  waitForProjectWorkspace,
   workspaceDomHelpersJs,
 } from "./harness.js";
 
@@ -185,6 +186,7 @@ describe("setup", () => {
       `const btn = $('[data-testid="project-submit"]');
        if (btn && !btn.disabled) { btn.click(); return true; } return false;`,
     );
+    await waitForProjectWorkspace({ app, name: "motion-project" });
     await runWait(`return !!byText('button', 'New Tab');`, {
       timeoutMs: 60_000,
       label: "workspace ready",

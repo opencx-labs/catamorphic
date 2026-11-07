@@ -5,6 +5,7 @@ import {
   launchApp,
   openProjectSwitcher,
   setReactValueJs,
+  waitForProjectWorkspace,
   workspaceDomHelpersJs,
 } from "./harness.js";
 
@@ -97,9 +98,15 @@ const runWait = <T = unknown>(
 const pressDockPlus = async () => {
   const point = await runWait<{ x: number; y: number }>(
     `const plus = $('[data-dock-rail] button[aria-label="New chat"]');
-     if (!plus) return false;
+     if (!plus || plus.disabled || plus.closest('[inert]') ||
+       !plus.checkVisibility({opacityProperty:true,visibilityProperty:true})) return false;
+     const host = plus.closest('[data-dock-host]');
+     if (!host || host.getAnimations({subtree:true}).some(animation =>
+       (animation.pending || animation.playState === 'running' || animation.playState === 'paused') &&
+       animation.effect?.getTiming().iterations !== Infinity)) return false;
      const r = plus.getBoundingClientRect();
-     return { x: r.left + r.width / 2, y: r.top + r.height / 2 };`,
+     const x = r.left + r.width / 2, y = r.top + r.height / 2;
+     return r.width > 0 && r.height > 0 && plus.contains(document.elementFromPoint(x, y)) && { x, y };`,
     { label: "the dock's +" },
   );
   for (const type of ["mousePressed", "mouseReleased"])
@@ -174,16 +181,16 @@ describe("dock modes", () => {
        if (!create || create.disabled) return false; create.click(); return true;`,
       { label: "create project" },
     );
-    await runWait(`return !!byText('button, [role="tab"]', 'New Tab');`, {
-      timeoutMs: 60_000,
-      label: "workspace ready",
+    const projectId = await waitForProjectWorkspace({
+      app,
+      name: "dock-e2e",
     });
     // Cmd+N would open the chat in the New Tab in front; the dock's own +
     // starts it in the dock.
     await pressDockPlus();
     await runWait(
       `const dock = frontDock();
-       return dock && document.activeElement === composer() &&
+       return dock?.dataset.chatProject === ${JSON.stringify(projectId)} && document.activeElement === composer() &&
          !dock.getAnimations({subtree:true}).some(animation =>
            animation.playState === 'running' && animation.effect?.getTiming().iterations !== Infinity);`,
       { label: "floating chat finished opening with its composer focused" },
