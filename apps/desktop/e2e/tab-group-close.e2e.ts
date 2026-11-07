@@ -3,7 +3,12 @@ import http from "node:http";
 import path from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { emptyUtilityWorkspace } from "../src/renderer/lib/workspace-state.js";
-import { type AppHandle, launchApp } from "./harness.js";
+import {
+  type AppHandle,
+  focusWindow,
+  launchApp,
+  pointerOnPage,
+} from "./harness.js";
 import { pressNativeMacKey } from "./native-pointer.js";
 
 let app: AppHandle;
@@ -11,6 +16,33 @@ const api = "window.catamorphicDesktop";
 const visible = '[data-workspace-visible="true"]';
 const group = `${visible} [data-point-key="chat:group"]`;
 const page = `${visible} webview`;
+async function activatePage(selector: string) {
+  const view = `document.querySelector(${JSON.stringify(selector)})`;
+  await focusWindow(app);
+  await app.waitFor(
+    `(() => {const view=${view};return !!view && !view.closest('[inert]') && view.checkVisibility({opacityProperty:true,visibilityProperty:true});})()`,
+    { label: "the page is visible and accepts input" },
+  );
+  await app.eval(
+    `${view}.executeJavaScript("window.__groupActivationClicks=0;addEventListener('click',event=>{if(event.isTrusted)window.__groupActivationClicks+=1;},{capture:true,once:true});true")`,
+  );
+  const point = await app.eval<{ x: number; y: number }>(
+    `(() => {const rect=${view}.getBoundingClientRect();return {x:rect.x+32,y:rect.y+32};})()`,
+  );
+  // A title can load before Chromium routes input to a newly shown guest.
+  await pointerOnPage(app, { view, selector: "html", point });
+  await app.clickPointer(point);
+  // The pointer readiness helper runs scripts with a user gesture. Observe
+  // the actual trusted press too, so activation alone cannot pass this setup.
+  await app.waitFor(
+    `${view}.executeJavaScript('window.__groupActivationClicks===1 && document.hasFocus()')`,
+    { label: "the page received its trusted activation press" },
+  );
+  await app.waitFor(
+    `${view}.executeJavaScript('navigator.userActivation.hasBeenActive')`,
+    { label: "the page is activated" },
+  );
+}
 async function closePageKey() {
   await app.waitFor(`${api}.devWindow('focus').then(state=>state.focused)`);
   await app.eval(`document.querySelector('${page}').focus()`);
@@ -181,13 +213,7 @@ describe("closing folded tab groups", () => {
     await app.eval(
       `document.querySelector('${page}').executeJavaScript("addEventListener('beforeunload', event=>{event.preventDefault();event.returnValue='';}); true")`,
     );
-    await app.eval(`(() => {
-      const view=document.querySelector('${page}'); view.focus();
-      for(const type of ['keyDown','keyUp']) view.sendInputEvent({type,keyCode:'Space'});
-    })()`);
-    await app.waitFor(
-      `document.querySelector('${page}').executeJavaScript('navigator.userActivation.hasBeenActive')`,
-    );
+    await activatePage(page);
     const selectChat = () =>
       app.eval(`document.querySelector('${group} button').click()`);
     const chat = `section[data-chat-project="${projectId}"][data-chat-local-id="group"]`;
@@ -244,12 +270,7 @@ describe("closing folded tab groups", () => {
     await app.eval(
       `document.querySelector('${page}').executeJavaScript("onbeforeunload=event=>{event.preventDefault();event.returnValue='';};true")`,
     );
-    await app.eval(
-      `(() => {const view=document.querySelector('${page}');view.focus();for(const type of ['keyDown','keyUp'])view.sendInputEvent({type,keyCode:'Space'});})()`,
-    );
-    await app.waitFor(
-      `document.querySelector('${page}').executeJavaScript('navigator.userActivation.hasBeenActive')`,
-    );
+    await activatePage(page);
     await app.eval(
       `document.querySelector('${group} [aria-label$=" grouped tabs"]').click()`,
     );
@@ -350,12 +371,7 @@ describe("closing folded tab groups", () => {
           await app.eval(
             `document.querySelector('${view(suffix)}').executeJavaScript("onbeforeunload=event=>{event.preventDefault();event.returnValue='';};true")`,
           );
-        await app.eval(
-          `(() => {const view=document.querySelector('${view(suffix)}');view.focus();for(const type of ['keyDown','keyUp'])view.sendInputEvent({type,keyCode:'Space'});})()`,
-        );
-        await app.waitFor(
-          `document.querySelector('${view(suffix)}').executeJavaScript('navigator.userActivation.hasBeenActive')`,
-        );
+        await activatePage(view(suffix));
       };
       await prepare("0");
       const firstId = await app.eval<number>(
@@ -381,19 +397,19 @@ describe("closing folded tab groups", () => {
         `document.querySelector('${visible} [aria-label="Collapse grouped tabs"]').click()`,
       );
       await app.eval(
-        `window.__groupApprovedAt=Date.now();document.querySelector('${group} button[aria-label^="Close "]').click()`,
+        `document.querySelector('${group} button[aria-label^="Close "]').click()`,
       );
       const dialog = (key: string) =>
         `document.querySelector('${visible} [data-surface-key="browser:${key}"] [data-testid="page-dialog"]:not([inert])')`;
       if (kind === "guarded") {
         await app.waitFor(`${dialog("page")}?.dataset.kind==='beforeunload'`);
         await app.eval(
-          `window.__groupApprovedAt=Date.now();${dialog("page")}.querySelector('[data-testid="page-dialog-accept"]').click()`,
+          `${dialog("page")}.querySelector('[data-testid="page-dialog-accept"]').click()`,
         );
       }
       await app.waitFor(`${dialog("second")}?.dataset.kind==='beforeunload'`);
       await app.eval(
-        `${dialog("second")}.querySelector('[data-testid="page-dialog-cancel"]').click()`,
+        `${dialog("second")}.querySelector('[data-testid="page-dialog-cancel"]').click();window.__groupCancelledAt=Date.now()`,
       );
       await app.waitFor(
         `!document.querySelector('[data-testid="page-dialog"]:not([inert])')`,
@@ -416,7 +432,9 @@ describe("closing folded tab groups", () => {
       ).toBe(firstScroll);
       // The synthetic activation from close must expire, while the cancelled
       // approval must not keep the retained first page restricted forever.
-      await app.waitFor(`Date.now()>=window.__groupApprovedAt+5100`, {
+      // The later page's question guarantees that the first native check ran;
+      // the Close click precedes its asynchronous preparation and cannot time it.
+      await app.waitFor(`Date.now()>=window.__groupCancelledAt+5100`, {
         label: "native close activation expires",
       });
       await app.eval(
