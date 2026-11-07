@@ -124,7 +124,7 @@ export async function clickNativePointer(point: { x: number; y: number }) {
 }
 
 /** macOS virtual key codes the native tests press. */
-export const MAC_KEY_CODES = { grave: 50, v: 9, w: 13 } as const;
+export const MAC_KEY_CODES = { grave: 50, l: 37, v: 9, w: 13 } as const;
 
 /**
  * A real key press on the macOS test desktop, through AppKit and the

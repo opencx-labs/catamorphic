@@ -1,13 +1,29 @@
+import { execFile } from "node:child_process";
+import { promisify } from "node:util";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { assertIsolatedDesktopTestHost } from "../../../scripts/desktop-test-environment.js";
 import {
   type AppHandle,
+  createProjectWorkspace,
+  focusWindow,
   launchApp,
   openProjectSwitcher,
   setReactValueJs,
+  waitForProjectWorkspace,
   workspaceDomHelpersJs,
 } from "./harness.js";
 
+import { pressNativeMacKey } from "./native-pointer.js";
+
 let app: AppHandle;
+async function pressAddressShortcut() {
+  assertIsolatedDesktopTestHost();
+  if (process.platform === "darwin") await pressNativeMacKey("l", ["command"]);
+  else
+    await promisify(execFile)("xdotool", ["key", "ctrl+l"], {
+      timeout: 10_000,
+    });
+}
 const run = <T>(body: string) =>
   app.eval<T>(
     `(() => { ${setReactValueJs}\n ${workspaceDomHelpersJs} const button = text => $$('button').find(b => b.textContent.trim() === text); ${body} })()`,
@@ -730,9 +746,13 @@ describe("configurable browser workspace", () => {
     try {
       await app.clickPointer(collapsePoint);
       await app.waitFor(
-        "document.querySelector('[data-workspace-visible=true] aside').dataset.motion === 'closing'",
+        "document.querySelector('[data-workspace-visible=true] aside').dataset.motion === 'closing' && document.activeElement === document.body && document.hasFocus()",
+        {
+          label:
+            "the closing sidebar has released native focus to the workspace",
+        },
       );
-      await app.press("l", process.platform === "darwin" ? 4 : 2);
+      await pressAddressShortcut();
     } finally {
       await app.cdp("Animation.setPlaybackRate", { playbackRate: 1 });
       await app.cdp("Animation.disable");
@@ -741,6 +761,47 @@ describe("configurable browser workspace", () => {
       "document.activeElement?.getAttribute('aria-label') === 'Address and search bar'",
       {
         label: "Cmd+L focuses the address while reversing the closing sidebar",
+      },
+    );
+    expect(await run("return $('webview').getWebContentsId()")).toBe(guest);
+    // A workspace mounted after this one must not count the same forwarded
+    // page key as new input and cancel this page's deferred address focus.
+    const ownerId = await app.eval<string>(
+      "document.querySelector('[data-workspace-visible=true]').dataset.projectRuntime",
+    );
+    const { id: retainedId } = await createProjectWorkspace({
+      app,
+      name: "Retained key target",
+      rootPath: `${app.userDataDir}/retained-key-target`,
+    });
+    await app.eval(
+      `window.catamorphicDesktop.workspaceNavigate({projectId:${JSON.stringify(ownerId)}})`,
+    );
+    expect(
+      await waitForProjectWorkspace({ app, name: "Browser workspace" }),
+    ).toBe(ownerId);
+    expect(
+      await app.eval(`(() => {
+      const roots = [...document.querySelectorAll('[data-project-runtime]')];
+      return roots.findIndex(root => root.dataset.projectRuntime === ${JSON.stringify(ownerId)}) <
+        roots.findIndex(root => root.dataset.projectRuntime === ${JSON.stringify(retainedId)});
+    })()`),
+    ).toBe(true);
+    await app.eval("window.catamorphicDesktop.setPrefs({sidebarOpen:false})");
+    await app.waitFor(
+      "document.querySelector('[data-workspace-visible=true] aside').dataset.motion === 'closed'",
+    );
+    await focusWindow(app);
+    await run("$('webview').focus()");
+    await app.waitFor(
+      `document.querySelector('[data-workspace-visible=true] webview').executeJavaScript('document.hasFocus()')`,
+    );
+    await pressAddressShortcut();
+    await app.waitFor(
+      "document.activeElement?.getAttribute('aria-label') === 'Address and search bar'",
+      {
+        label:
+          "a retained workspace cannot cancel the owner's forwarded address key",
       },
     );
     expect(await run("return $('webview').getWebContentsId()")).toBe(guest);

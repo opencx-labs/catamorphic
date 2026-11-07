@@ -8,6 +8,7 @@ import {
   launchApp,
   openProjectSwitcher,
   setReactValueJs,
+  waitForProjectWorkspace,
   workspaceDomHelpersJs,
 } from "./harness.js";
 
@@ -130,14 +131,9 @@ beforeAll(async () => {
   );
   await wait("return !$('[data-testid=project-submit]').disabled;");
   await run("$('[data-testid=project-submit]').click();");
-  projectId = await app.waitFor<string>(
-    `(async()=>{
-    const {url}=await window.catamorphicDesktop.getServerState();
-    const data=await fetch(url+'/api/projects').then(response=>response.json());
-    return data.items.find(project=>project.name==='Review fixture')?.id;
-  })()`,
-    { label: "review fixture project created" },
-  );
+  // The API record can appear while Default Project is still in front.
+  // Apply sidebar configuration only after this project's real UI is ready.
+  projectId = await waitForProjectWorkspace({ app, name: "Review fixture" });
   // The fixture stands in for a connected GitHub; the section only asks
   // for pull requests while the connection preference is on.
   await app.eval(
@@ -171,15 +167,15 @@ beforeAll(async () => {
     "return !!$('[data-sidebar=right] [role=tab][aria-label=\"Proposals\"]');",
   );
   // It started empty, so closed: open it.
-  await run(
-    "[...document.querySelectorAll('[aria-label=\"Expand right sidebar\"]')].find(b => !b.closest('[inert]'))?.click();",
-  );
+  await run("$('[aria-label=\"Expand right sidebar\"]')?.click();");
   await wait(
     "return $('[data-sidebar=right]')?.getAttribute('aria-hidden') === 'false';",
   );
-  await run(
-    "$('[data-sidebar=right] [role=tab][aria-label=\"Proposals\"]').click();",
-  );
+  await wait(`
+    const tab = $('[data-sidebar=right] [role=tab][aria-label="Proposals"]');
+    if (!tab || tab.closest('[inert]')) return false;
+    tab.click(); return true;
+  `);
   await wait(
     "return $$('[data-sidebar=right] button').some(b=>b.textContent.includes('Validate input before processing'));",
   );

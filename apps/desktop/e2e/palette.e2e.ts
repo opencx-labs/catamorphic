@@ -463,31 +463,117 @@ it("switches to open tabs from search and the Tabs mode, above bookmarks and his
 it("leaves the list where it is when the pointer highlights a clipped row", async () => {
   await open();
   const list = `input().closest('[role="dialog"]').querySelector('[role="listbox"]')`;
-  // The last row the list cuts off at its bottom edge, once its motion settled.
-  const target = await wait<{ x: number; y: number; id: string }>(`
-    const box = ${list}.getBoundingClientRect();
-    if (input().closest('[role="dialog"]').getAnimations({ subtree: true }).some((a) =>
-      a.effect?.getTiming().iterations !== Infinity && (a.pending || a.playState === 'running' || a.playState === 'paused'))) return false;
-    const row = rows().find((row) => { const r = row.getBoundingClientRect(); return r.top < box.bottom && r.bottom > box.bottom; });
-    if (!row || ${list}.scrollTop !== 0) return false;
-    const r = row.getBoundingClientRect();
-    const left = Math.max(r.left, box.left), right = Math.min(r.right, box.right);
-    const top = Math.max(r.top, box.top), bottom = Math.min(r.bottom, box.bottom);
-    if (right <= left || bottom <= top) return false;
-    const point = { x: (left + right) / 2, y: (top + bottom) / 2 };
-    return row.contains(document.elementFromPoint(point.x, point.y)) && { ...point, id: row.dataset.itemId };
+  const still = `!input().closest('[role="dialog"]').parentElement.getAnimations({ subtree: true }).some(a =>
+    a.effect?.getTiming().iterations !== Infinity && (a.pending || a.playState === 'running' || a.playState === 'paused'))`;
+  await run(`
+    const probe = window.__clippedPalettePointer = { events: [] };
+    probe.listener = event => {
+      if (!event.isTrusted) return;
+      const dialog = input()?.closest('[role="dialog"]');
+      probe.events.push({
+        clientX: event.clientX, clientY: event.clientY,
+        movementX: event.movementX, movementY: event.movementY,
+        row: event.target instanceof Element ? event.target.closest('[role="option"]')?.dataset.itemId ?? null : null,
+        selected: dialog?.querySelector('[role="option"][aria-selected="true"]')?.dataset.itemId ?? null,
+      });
+      if (probe.events.length > 50) probe.events.shift();
+    };
+    window.addEventListener('mousemove', probe.listener, true);
+    return true;
   `);
-  await app.movePointerThrough([{ x: target.x, y: target.y - 40 }, target]);
-  await wait(
-    `return rows().find((row) => row.dataset.itemId === ${JSON.stringify(target.id)})?.getAttribute('aria-selected') === 'true'`,
-    "the pointer highlights the clipped row",
-  );
-  await new Promise((resolve) => setTimeout(resolve, 300));
-  expect(await run(`return ${list}.scrollTop`)).toBe(0);
-  // The keyboard still keeps the row it chooses in view.
-  await run(`key('ArrowDown'); return true;`);
-  await wait(`return ${list}.scrollTop > 0`, "arrow keys scroll");
-  await close();
+  const pointFor = (kind: "precursor" | "clipped") =>
+    wait<{
+      x: number;
+      y: number;
+      id: string;
+      top: number;
+      bottom: number;
+      edge: number;
+    }>(
+      `
+      if (!(${still}) || ${list}.scrollTop !== 0) return false;
+      const box = ${list}.getBoundingClientRect();
+      const row = rows().find(row => {
+        const r = row.getBoundingClientRect();
+        return ${
+          kind === "clipped"
+            ? "r.top < box.bottom && r.bottom > box.bottom"
+            : "r.top >= box.top && r.bottom <= box.bottom && !row.matches(':hover')"
+        };
+      });
+      if (!row) return false;
+      const r = row.getBoundingClientRect();
+      // Native pointer helpers round coordinates. Pick an integer inside the
+      // actual visible intersection and hit-test that exact integer.
+      const left = Math.ceil(Math.max(r.left, box.left)), right = Math.ceil(Math.min(r.right, box.right)) - 1;
+      const top = Math.ceil(Math.max(r.top, box.top)), bottom = Math.ceil(Math.min(r.bottom, box.bottom)) - 1;
+      if (right < left || bottom < top) return false;
+      const point = { x: Math.floor((left + right) / 2), y: Math.floor((top + bottom) / 2), id: row.dataset.itemId,
+        top: r.top, bottom: r.bottom, edge: box.bottom };
+      if (!row.contains(document.elementFromPoint(point.x, point.y))) return false;
+      window.__clippedPalettePointer.${kind} = point;
+      return point;
+    `,
+      `${kind} row and outer palette wrapper settled`,
+    );
+  try {
+    const precursor = await pointFor("precursor");
+    await app.movePointer(precursor);
+    await wait(
+      `return window.__clippedPalettePointer.events.some(event =>
+      event.clientX === ${precursor.x} && event.clientY === ${precursor.y} && event.row === ${JSON.stringify(precursor.id)});`,
+      "a trusted native move reached the fully visible precursor row",
+    );
+    // The precursor must actually reach Chromium before moving again, so the
+    // final move cannot coalesce with it into an ignored zero-movement event.
+    const target = await pointFor("clipped");
+    expect(target.top).toBeLessThan(target.edge);
+    expect(target.bottom).toBeGreaterThan(target.edge);
+    await app.movePointer(target);
+    await wait(
+      `return window.__clippedPalettePointer.events.some(event =>
+      event.clientX === ${target.x} && event.clientY === ${target.y} && event.row === ${JSON.stringify(target.id)} &&
+      (event.movementX !== 0 || event.movementY !== 0)) &&
+      rows().find(row => row.dataset.itemId === ${JSON.stringify(target.id)})?.getAttribute('aria-selected') === 'true';`,
+      "the trusted pointer move highlights the clipped row",
+    );
+    // Observe the queued scroll/focus work and the highlight's visual rest.
+    await run(
+      `return new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)));`,
+    );
+    await wait(`return ${still};`, "the hovered palette at rest");
+    expect(await run(`return ${list}.scrollTop`)).toBe(0);
+    // The keyboard still keeps the row it chooses in view.
+    await run(`key('ArrowDown'); return true;`);
+    await wait(`return ${list}.scrollTop > 0`, "arrow keys scroll");
+    await close();
+  } catch (error) {
+    const state = await run(`
+      const dialog = input()?.closest('[role="dialog"]');
+      const wrapper = dialog?.parentElement;
+      const list = dialog?.querySelector('[role="listbox"]');
+      const style = wrapper && getComputedStyle(wrapper);
+      return {
+        pointer: window.__clippedPalettePointer,
+        wrapper: wrapper && { rect: wrapper.getBoundingClientRect().toJSON(), translate: style.translate, scale: style.scale, opacity: style.opacity,
+          animations: wrapper.getAnimations({ subtree: true }).map(animation => ({ name: animation.animationName ?? animation.transitionProperty,
+            state: animation.playState, pending: animation.pending, time: animation.currentTime, timing: animation.effect?.getTiming() })) },
+        list: list && { rect: list.getBoundingClientRect().toJSON(), scrollTop: list.scrollTop },
+        rows: [...(list?.querySelectorAll('[role="option"]') ?? [])].map(row => ({ id: row.dataset.itemId,
+          selected: row.getAttribute('aria-selected'), rect: row.getBoundingClientRect().toJSON() })),
+      };
+    `).catch((cause: unknown) => `unreadable (${String(cause)})`);
+    throw new Error(`Clipped palette pointer: ${JSON.stringify(state)}`, {
+      cause: error,
+    });
+  } finally {
+    await run(`
+      const probe = window.__clippedPalettePointer;
+      if (probe) window.removeEventListener('mousemove', probe.listener, true);
+      delete window.__clippedPalettePointer;
+      return true;
+    `);
+  }
 });
 
 it("moves the caret between the input's lines with the arrows, and the highlight past them", async () => {

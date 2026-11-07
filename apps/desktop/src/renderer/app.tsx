@@ -5018,21 +5018,19 @@ export function App({
     };
     window.addEventListener("keydown", onKeyDown);
     const unsubscribeGuestKeys = desktopApi.onBrowserGuestKey((key) => {
+      if (!visibleRef.current) return false;
       // A key pressed inside a page is the person's input too.
       notePersonInput();
-      return (
-        visibleRef.current &&
-        dispatchShortcut(
-          {
-            key: key.key,
-            code: key.code,
-            metaKey: key.meta,
-            ctrlKey: key.control,
-            altKey: key.alt,
-            shiftKey: key.shift,
-          },
-          key.webContentsId,
-        )
+      return dispatchShortcut(
+        {
+          key: key.key,
+          code: key.code,
+          metaKey: key.meta,
+          ctrlKey: key.control,
+          altKey: key.alt,
+          shiftKey: key.shift,
+        },
+        key.webContentsId,
       );
     });
     return () => {

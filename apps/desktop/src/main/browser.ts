@@ -2813,9 +2813,6 @@ export function registerBrowserSupport(
         suggestion.password,
         input.fieldId,
       );
-      // The suggestion was pressed in the shell. DOM focus on the webview
-      // can leave its field active while the native guest still lacks focus.
-      guest.focus();
       return true;
     },
   );

@@ -1,11 +1,14 @@
 import fs from "node:fs";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import type { WindowSession } from "../src/main/window-state.js";
 import { DEFAULT_WORKSPACE_CONFIG } from "../src/main/workspace-config.js";
 import type { WorkspaceConfig } from "../src/shared/workspace-config.js";
 import {
   type AppHandle,
   createProjectWorkspace,
+  type FrameHandle,
   launchApp,
+  waitForProjectWorkspace,
 } from "./harness.js";
 
 /**
@@ -367,36 +370,100 @@ describe("tabbed sidebars", () => {
     );
   });
 
-  it("keeps a newly created profile without a project closed", async () => {
+  it("keeps a new profile's Default Project right sidebar closed", async () => {
+    const originalProfileId = await app.eval<string>(
+      "window.catamorphicDesktop.windowProfile()",
+    );
+    expect(await waitForProjectWorkspace({ app, name: "Sidebar studio" })).toBe(
+      projectId,
+    );
     const profile = await app.eval<{ id: string }>(
       "window.catamorphicDesktop.profilesCreate('Empty profile')",
     );
-    await app.eval(
-      `window.catamorphicDesktop.windowSetProfile(${JSON.stringify(profile.id)})`,
-    );
-    await reload();
-    await app.waitFor(
-      `!!document.querySelector('[data-workspace-visible=true] [aria-label="Switch profile: Empty profile"]')`,
-    );
-    await waitRight(false);
-    expect(app.getRendererErrors()).toEqual([]);
-    if (process.env.CATAMORPHIC_SIDEBAR_SCREENSHOT)
-      await app.screenshot(process.env.CATAMORPHIC_SIDEBAR_SCREENSHOT);
-    // An empty workspace switches profiles in place. Its configuration and
-    // visibility must come from the destination, including project overrides.
-    await app.eval(
-      `document.querySelector('[data-workspace-visible=true] [aria-label="Switch profile: Empty profile"]').click()`,
-    );
-    await app.eval(
-      `Array.from(document.querySelectorAll('[data-workspace-visible=true] button')).find(b => b.textContent.trim().endsWith('Default Profile') && !b.getAttribute('aria-label')).click()`,
-    );
-    await app.waitFor(
-      `!!document.querySelector('[data-workspace-visible=true] [aria-label="Switch profile: Default Profile"]')`,
-    );
-    await app.waitFor(
-      `!!document.querySelector('[data-workspace-visible="true"] [data-sidebar="right"] [role="tab"]')`,
-    );
-    await waitRight(true);
-    expect(app.getRendererErrors()).toEqual([]);
+    const selectProfile = async (
+      frame: Pick<FrameHandle, "eval" | "waitFor">,
+      name: string,
+    ) => {
+      await frame.eval(
+        `document.querySelector('[data-workspace-visible="true"] [aria-label="Expand sidebar"]')?.click(); true`,
+      );
+      const trigger = `[data-workspace-visible="true"] [aria-label^="Switch profile:"]`;
+      await frame.waitFor(`(() => {
+        const button = document.querySelector('${trigger}');
+        return !!button && !button.closest('[inert]') && button.checkVisibility({ opacityProperty: true, visibilityProperty: true });
+      })()`);
+      await frame.eval(`document.querySelector('${trigger}').click(); true`);
+      await frame.waitFor(`(() => {
+        const dialog = document.querySelector('[role="dialog"][aria-label="Profiles"][aria-hidden="false"]');
+        const button = [...(dialog?.querySelectorAll('button') ?? [])]
+          .find(button => button.textContent.includes(${JSON.stringify(name)}));
+        if (!button || button.closest('[inert]')) return false;
+        button.click(); return true;
+      })()`);
+    };
+    // The current profile retains real work in several project groups. Its
+    // normal profile picker opens the new profile in its own window.
+    await selectProfile(app, "Empty profile");
+    const profileWindow = () => {
+      const saved: WindowSession = JSON.parse(
+        fs.readFileSync(`${app.userDataDir}/window-state.json`, "utf8"),
+      );
+      return saved.windows.find((window) => window.profileId === profile.id);
+    };
+    await expect
+      .poll(() => profileWindow()?.id, { timeout: 15_000 })
+      .toBeTruthy();
+    const window = profileWindow();
+    if (!window) throw new Error("The new profile window was not saved");
+    const other = await app.connectToFrame(`window=${window.id}`);
+    try {
+      const newProjectId = await other.waitFor<string>(
+        `(async () => {
+        const root = document.querySelector('[data-workspace-visible="true"]');
+        const id = root?.dataset.projectRuntime;
+        if (!id || id === 'initial' || !root.querySelector('[data-workspace-ready]') ||
+          !root.querySelector('[aria-label="Switch project"]')?.textContent.includes('Default Project')) return false;
+        return (await window.catamorphicDesktop.windowProfile()) === ${JSON.stringify(profile.id)} && id;
+      })()`,
+        { timeoutMs: 60_000, label: "the new profile's Default Project ready" },
+      );
+      expect(newProjectId).not.toBe(projectId);
+      await other.waitFor(`(() => {
+        const side = document.querySelector('[data-workspace-visible="true"] [data-sidebar="right"]');
+        return !!side && side.getAttribute('aria-hidden') === 'true' && !side.querySelector('[role="tab"]');
+      })()`);
+      expect(
+        await other.eval(
+          "window.catamorphicDesktop.workspaceInitial().then(initial => initial.projectIds)",
+        ),
+      ).toEqual([newProjectId]);
+      expect(other.getRendererErrors()).toEqual([]);
+      // Choosing an occupied profile returns to its existing owner. The
+      // original project's configured sidebar and saved visibility survive.
+      await selectProfile(other, "Default Profile");
+      await app.waitFor(
+        "window.catamorphicDesktop.devWindow('get').then(state => state.visible && state.focused)",
+        { label: "the original sidebar workspace comes forward" },
+      );
+      expect(await app.eval("window.catamorphicDesktop.windowProfile()")).toBe(
+        originalProfileId,
+      );
+      expect(
+        await other.eval("window.catamorphicDesktop.windowProfile()"),
+      ).toBe(profile.id);
+      expect(
+        await waitForProjectWorkspace({ app, name: "Sidebar studio" }),
+      ).toBe(projectId);
+      await app.waitFor(
+        `!!document.querySelector('[data-workspace-visible="true"] [data-sidebar="right"] [role="tab"]')`,
+      );
+      await waitRight(true);
+      expect(app.getRendererErrors()).toEqual([]);
+      expect(other.getRendererErrors()).toEqual([]);
+      if (process.env.CATAMORPHIC_SIDEBAR_SCREENSHOT)
+        await app.screenshot(process.env.CATAMORPHIC_SIDEBAR_SCREENSHOT);
+    } finally {
+      other.close();
+    }
   });
 });
