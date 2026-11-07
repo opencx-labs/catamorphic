@@ -722,8 +722,8 @@ describe("agents and profiles", () => {
       label: "wizard modal open",
     });
     await run(paletteEscape);
-    await runWait(`return !wizardVisible();`, {
-      label: "wizard modal closed",
+    await runWait(`return !$('[data-testid="agent-wizard"]');`, {
+      label: "wizard modal exit and focus handoff completed",
     });
   });
 
@@ -742,15 +742,46 @@ describe("agents and profiles", () => {
         Promise.all(data.agents.map((agent) =>
           window.catamorphicDesktop.agentsRemove(agent.id))));
     `);
-    await runWait(`return !!byText('[role="tab"], button', 'Tutorial');`, {
-      label: "tutorial tab auto-opened",
+    const tutorial = await runWait<{ x: number; y: number; key: string }>(
+      `const button = $$('button.workspace-tab-label').find(el => el.querySelector('.workspace-tab-title')?.textContent.trim() === 'Tutorial');
+       const tab = button?.closest('[data-point-key]');
+       if (!button || !tab || button.closest('[inert]') ||
+         !button.checkVisibility({opacityProperty:true,visibilityProperty:true}) ||
+         tab.getAnimations({subtree:true}).some(animation =>
+           animation.effect?.getTiming().iterations !== Infinity &&
+           (animation.pending || animation.playState === 'running' || animation.playState === 'paused'))) return false;
+       const rect = button.getBoundingClientRect();
+       const x = rect.left + rect.width / 2, y = rect.top + rect.height / 2;
+       return rect.width > 0 && rect.height > 0 && button.contains(document.elementFromPoint(x,y)) &&
+         {x,y,key:tab.dataset.pointKey};`,
+      { label: "auto-opened Tutorial tab ready for a native click" },
+    ).catch(async (error: unknown) => {
+      const state =
+        await run(`return $$('button.workspace-tab-label').map(button => {
+        const tab = button.closest('[data-point-key]');
+        const rect = button.getBoundingClientRect();
+        return {
+          text: button.textContent, key: tab?.dataset.pointKey,
+          inert: !!button.closest('[inert]'), visible: button.checkVisibility({opacityProperty:true,visibilityProperty:true}),
+          rect: {x:rect.x,y:rect.y,width:rect.width,height:rect.height},
+          hit: document.elementFromPoint(rect.x+rect.width/2,rect.y+rect.height/2)?.outerHTML.slice(0,250),
+          animations: tab?.getAnimations({subtree:true}).map(animation => ({
+            state:animation.playState,pending:animation.pending,iterations:animation.effect?.getTiming().iterations,
+            target:animation.effect?.target?.outerHTML.slice(0,150),
+          })),
+        };
+      });`);
+      throw new Error(`Tutorial tab readiness: ${JSON.stringify(state)}`, {
+        cause: error,
+      });
     });
-    await run(
-      `byText('[role="tab"], button', 'Tutorial').click(); return true;`,
+    await app.clickPointer(tutorial);
+    await runWait(
+      `return $$('[data-point-key]').some(tab => tab.dataset.pointKey === ${JSON.stringify(tutorial.key)} &&
+        tab.querySelector('button.workspace-tab-label[aria-current="true"]')) &&
+        !!$('[data-testid="onboarding"]:not([inert], [inert] *)');`,
+      { label: "the clicked Tutorial tab selected and visible" },
     );
-    await runWait(`return !!$('[data-testid="onboarding"]');`, {
-      label: "tutorial selected",
-    });
 
     // Closing the tab skips setup entirely…
     await run(`pressKey('w', { metaKey: true }); return true;`);
