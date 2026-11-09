@@ -634,6 +634,28 @@ sample used 2.4 ms of layout instead of 1.75 s. The samples were passive and the
 workloads differ; this is diagnostic evidence, not a latency guarantee. Native
 motion, navigation and a long-row workload verify behavior in isolation.
 
+The palette host also preserves its context identity while its data is unchanged.
+Navigation, command and picker callbacks read the latest app state through the
+existing ref, so replacing their closures does not rebuild rows and search
+indexes. The profile's filtered project list keeps its identity between catalog
+changes. The memoized overlay retains its mounted content and the same exit and
+reopen motion; changed context still reaches it immediately. Provider regression
+checks cover unchanged renders, fresh command closures, changed command context,
+and optional capabilities. Those counts establish removed work, not a percentage
+improvement in native interaction latency.
+
+A matched native development capture on 2026-11-09 isolated the palette context
+and memoization changes. It toggled the sidebar eight times over each 15 s window,
+with the same 1,438 DOM elements. Inclusive sampled
+JavaScript time in `CommandPalette` was 67.7 ms before, not sampled with the
+change, and 69.4 ms after reversing it. Its nested `createPaletteIndex` work was
+25.7 ms, not sampled, and 27.5 ms respectively. The reversal supports attribution
+of the removed work. Development instrumentation, screencast capture and other
+host activity make this unsuitable for a precise production latency or animation
+improvement claim. Native keyboard and pointer checks also cover interrupted
+palette closing, explicit mode entry, New Tab focus, live themes, narrow layouts
+and reduced motion.
+
 Navigation also retains its destination through transcript resizes. The scroll
 library treats a shrinking row near the end as permission to follow again;
 an active message glide overrides that until its destination settles. Its

@@ -857,6 +857,18 @@ the historical log explains how it arrived here.
 
 ## Design log
 
+### 2026-11-09: Palette rows follow their data
+
+The overlay keeps its mounted content and reversible close motion. Unrelated
+workspace updates no longer rebuild its rows: the palette host publishes only
+changed data, while retained commands run with the latest workspace state.
+Project, agent, site and command changes still update the palette at once.
+
+Sidebar pose also comes from the existing profile preferences hook, with each
+local action taking effect immediately. Late file-watch hints read the current
+store instead of applying an older pose. Earlier reads and save completions
+cannot undo newer input; profile switching still restores values under its veil.
+
 ### 2026-10-24: Chat navigation and resizing keep their place
 
 Long running turns use the same offscreen row containment as completed work.

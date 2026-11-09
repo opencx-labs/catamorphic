@@ -40,6 +40,18 @@ file retains its last valid configuration until repaired. A first invalid load
 uses defaults, and deletion resets the layer. UI edits must not overwrite an
 invalid file silently. Valid file edits apply live.
 
+The window uses `useAppPreferences` for its profile values, including sidebar
+pose, last project and unread markers. Local patches take effect immediately and
+invalidate earlier reads. File-watch events are hints to read the current store;
+a delayed snapshot must not reverse a newer sidebar action. Save completions and
+reads apply only while their intent and read are current. Canonical reads wait
+for pending saves, including overlapping changes to different keys. Both the
+whole-profile and single-choice hooks use this ordering; an unrelated choice
+still renders no single-choice consumer. A failed latest save rereads
+the store and reports the error. Initial preferences remain unknown until read,
+and a profile switch awaits its new values before the veil leaves. Only the
+explicit patch is persisted, preserving inherited defaults and project scopes.
+
 Settings > Workspace provides a scope selector, effective values at that scope,
 source labels and Reset only for explicit choices. A profile edit can remain masked
 by a project override. Reset that project override to follow the profile again.

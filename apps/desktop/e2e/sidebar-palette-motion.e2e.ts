@@ -9,6 +9,7 @@ import {
 import { CHATS_SECTION, writeSidebarSections } from "./sidebar-config.js";
 
 let app: AppHandle;
+let projectId: string;
 const section =
   '[data-workspace-visible="true"] [data-sidebar-section="chats"]';
 const box = `${section} > [data-collapsible]`;
@@ -51,6 +52,7 @@ beforeAll(async () => {
     name: "Sidebar and palette motion",
     rootPath: path.join(app.userDataDir, "motion-project"),
   });
+  projectId = project.id;
   const server = await app.eval<{ url: string }>(
     "window.catamorphicDesktop.getServerState()",
   );
@@ -257,9 +259,12 @@ it("keeps long palette edits focused and free of an inner border in both inputs"
 
 it("fades the shared refresh indicator both ways and settles under reduced motion", async () => {
   await settled();
+  // Page reads share fresh results for one second. Request a refresh through
+  // the existing project intent so this motion fixture holds actual IO.
   await app.eval(
-    `window.__holdChats();document.querySelector('${section} [aria-label="Refresh chats"]').click()`,
+    `window.__holdChats();window.dispatchEvent(new CustomEvent('catamorphic:sidebar-refresh',{detail:${JSON.stringify(projectId)}}))`,
   );
+  await app.waitFor("window.__heldChats()>0");
   try {
     await app.waitFor(
       `!!document.querySelector('${section} [data-loading-for="chats"]')`,
