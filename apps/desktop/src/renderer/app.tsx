@@ -7351,8 +7351,8 @@ export function App({
           surface={sidebarSurface}
           relevant={relevant}
           report={report}
-          visible={visible}
-          observeEmpty={observeEmpty}
+          visible={runtime.visible && visible}
+          observeEmpty={runtime.visible && observeEmpty}
           onCustomize={() => customizeSidebar(side)}
           onSearch={(request) => {
             setModeRequest({ ...request, nonce: crypto.randomUUID() });

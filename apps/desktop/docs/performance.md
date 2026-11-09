@@ -819,3 +819,16 @@ bun build apps/desktop/scripts/module-sandbox-bench.ts --target=node --external 
 module_bench_node=$(bun -e 'import {repositoryNodePath} from "./scripts/tool-runtime.ts"; console.log(repositoryNodePath({rootPath:process.cwd()}))')
 "$module_bench_node" --expose-gc apps/desktop/out/module-bench.mjs > /tmp/module-bench.json
 ```
+
+## Sidebar work in retained projects
+
+Project workspaces stay mounted when another project is selected. Their sidebar
+lists use project visibility as well as the sidebar's own visibility to acquire
+subscriptions. Empty-list observation follows the same rule. Returning to a
+project refreshes its existing collection without replacing its retained view.
+
+A fixture reproduced the previous gap: after switching projects, the inactive
+project's source still received a named file-watch event in the same worker.
+The regression covers release, fresh rows on return, retained DOM identity, and
+an empty list becoming available again. This establishes avoidable background
+source work; it does not attribute a measured percentage of whole-app CPU to it.

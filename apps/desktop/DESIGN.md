@@ -4115,3 +4115,11 @@ tones, code, badges or a color swatch alongside their text. Rich prose uses
 Markdown; arbitrary interactive inspector content mounts an ordinary sandboxed
 app, with its existing authority and cleanup. Context refreshes retain the tree
 and its expanded branches in every non-session-scoped section (ADR 0308).
+
+## Sidebar lists pause between projects
+
+A retained project keeps its sidebar's rows and pose when another project is
+in front. Its lists release their view subscriptions while inactive, including
+the observation that lets an empty list appear again. Returning reacquires the
+existing collection and reads current data. Project visibility uses the same
+subscription lifetime as a hidden sidebar; it does not dispose the workspace.
