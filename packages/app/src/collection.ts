@@ -103,6 +103,26 @@ export function createCollection<T extends CollectionItem>({
   let snapshotRevision = 0;
   let mutation = 0;
   const changedAt = new Map<string, number>();
+  const getSnapshotRevision = () => snapshotRevision;
+  const trace = (event: string, detail: Record<string, unknown> = {}) => {
+    const record = Reflect.get(
+      globalThis,
+      Symbol.for("catamorphic.e2e.sidebar-source-trace"),
+    );
+    if (typeof record === "function")
+      record({
+        layer: "collection",
+        event,
+        key: getSnapshotRevision,
+        references,
+        previewReferences,
+        branches: [...branchReferences].map(([parentId, owners]) => ({
+          parentId,
+          owners,
+        })),
+        ...detail,
+      });
+  };
   const invalidated = new Map<
     string | null,
     { pages: CollectionRefresh; quiet: boolean }
@@ -498,7 +518,7 @@ export function createCollection<T extends CollectionItem>({
     getItem: (id: string) => items.get(id),
     getBranch: branch,
     getRevision: () => revision,
-    getSnapshotRevision: () => snapshotRevision,
+    getSnapshotRevision,
     subscribeSnapshot: (listener: Listener) => {
       snapshotListeners.add(listener);
       return () => {
@@ -536,11 +556,15 @@ export function createCollection<T extends CollectionItem>({
         branchReferences.get(null) === previewReferences;
       if (mode === "preview") previewReferences += 1;
       references += 1;
+      trace("acquire", { parentId, mode });
       if (references === 1) {
+        trace("upstream-subscribe");
         unsubscribe = source.subscribe?.(publish);
+        trace("upstream-subscribed");
       }
       const owners = branchReferences.get(parentId) ?? 0;
       branchReferences.set(parentId, owners + 1);
+      trace("branch-acquired", { parentId, mode, owners: owners + 1 });
       if (!owners || (wasPreview && mode === "full")) {
         abort(parentId);
         void load({ parentId });
@@ -574,8 +598,11 @@ export function createCollection<T extends CollectionItem>({
             });
           }
         }
+        trace("release", { parentId, mode, owners });
         if (references) return;
+        trace("upstream-stop");
         unsubscribe?.();
+        trace("upstream-stopped");
         unsubscribe = undefined;
         invalidated.clear();
         for (const parentId of requests.keys()) {

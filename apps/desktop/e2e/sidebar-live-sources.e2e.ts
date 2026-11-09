@@ -37,7 +37,7 @@ async function click(selector: string) {
   });
 }
 beforeAll(async () => {
-  app = await launchApp();
+  app = await launchApp({ env: { CATAMORPHIC_E2E_SIDEBAR_TRACE: "1" } });
   server = http.createServer((_req, res) => {
     requests++;
     setTimeout(() => {
@@ -113,6 +113,21 @@ beforeAll(async () => {
     path.join(projectRoot, ".work/workspace.js"),
     `module.exports={sidebars: {left:[{id:'live',title:'Sources',icon:'ListTodo',sections:[{id:'todos',title:'My todos',source:'.work/todos/index.ts',height:180},{id:'http',title:'Service',source:'.work/http/index.ts',height:120,headerActions:[{label:'Refresh Service',action:'refresh',icon:'RefreshCw'}]},{id:'sorted-tabs',title:'Sorted tabs',source:'.work/sorted-tabs/index.ts'}]},{id:'other',title:'Other',icon:'Folder',sections:[{id:'files',source:'work:files'}]}],right:[] }};`,
   );
+  await app.cdp("Page.addScriptToEvaluateOnNewDocument", {
+    source: `(() => {
+      const keys=new WeakMap();let nextKey=0;
+      const rows=[];window.__sidebarSourceTrace=rows;
+      globalThis[Symbol.for('catamorphic.e2e.sidebar-source-trace')]=event=>{
+        if(rows.length>=5000)return;
+        const {key,...detail}=event;
+        if((typeof key==='object'&&key!==null)||typeof key==='function'){
+          if(!keys.has(key))keys.set(key,++nextKey);
+          detail.collectionKey=keys.get(key);
+        }
+        rows.push({at:Date.now(),...detail});
+      };
+    })()`,
+  });
   await app.reload();
   // Each asks before it runs, and nothing of it runs until allowed.
   const sections = ["todos", "http", "sorted-tabs"];
@@ -353,8 +368,9 @@ it("releases hidden sources and virtualizes a large file-backed list", async () 
           panels:[...(workspace?.querySelectorAll('[role="tabpanel"]')??[])].map(el=>({id:el.id,hidden:el.hidden,inert:el.inert,sources:[...el.querySelectorAll('[data-sidebar-source]')].map(source=>source.dataset.sidebarSource)})),
           sources:[...(workspace?.querySelectorAll('[data-sidebar-source]')??[])].map(el=>({id:el.dataset.sidebarSource,busy:el.getAttribute('aria-busy'),inert:!!el.closest('[inert]'),hidden:!!el.closest('[hidden]'),visible:el.checkVisibility({checkVisibilityCSS:true})})),
           palettes:[...(workspace?.querySelectorAll('[data-palette]')??[])].map(el=>({variant:el.dataset.palette,inert:!!el.closest('[inert]')})),
-          focused:document.activeElement?.outerHTML,
+          focused:{tag:document.activeElement?.tagName,role:document.activeElement?.getAttribute('role'),id:document.activeElement?.id},
           changes:window.__sourceLeaseChanges,
+          trace:window.__sidebarSourceTrace,
         };
       })()`)
       .catch((cause: unknown) => ({ error: String(cause) }));

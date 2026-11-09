@@ -109,6 +109,14 @@ export function moduleSource<Name extends string = WorkSourceName>({
   /** What the module asked at its last read, until the person allows it. */
   let asking: SourceAccess | null = null;
   let loadedRevision: string | undefined;
+  const trace = (event: string, detail: Record<string, unknown> = {}) => {
+    const record = Reflect.get(
+      globalThis,
+      Symbol.for("catamorphic.e2e.sidebar-source-trace"),
+    );
+    if (typeof record === "function")
+      record({ layer: "module-source", event, projectId, ownerId, ...detail });
+  };
   const request = async (
     input: Omit<SidebarSourceRequest, "projectId" | "sectionId" | "requestId">,
     signal: AbortSignal,
@@ -206,6 +214,7 @@ export function moduleSource<Name extends string = WorkSourceName>({
         );
       });
       const leaseId = crypto.randomUUID();
+      trace("subscribe", { leaseId });
       const unsubscribe = desktopApi.onSidebarSourceChanged((event) => {
         if (event.leaseId !== leaseId) return;
         // A failed subscription is the section's error until Retry; reading
@@ -216,16 +225,23 @@ export function moduleSource<Name extends string = WorkSourceName>({
       fail(undefined);
       void desktopApi
         .sidebarSourceSubscribe({ projectId, sectionId: ownerId, leaseId })
-        .catch((cause: unknown) => {
-          if (!released) fail(failure(cause).message);
-        });
+        .then(
+          () => trace("subscribe-ack", { leaseId, released }),
+          (cause: unknown) => {
+            trace("subscribe-error", { leaseId, released });
+            if (!released) fail(failure(cause).message);
+          },
+        );
       return () => {
+        trace("stop", { leaseId });
         released = true;
         clearTimeout(follow);
         stopWatching?.();
         for (const stop of following.values()) stop();
         unsubscribe();
-        void desktopApi.sidebarSourceUnsubscribe(leaseId);
+        void desktopApi
+          .sidebarSourceUnsubscribe(leaseId)
+          .then(() => trace("stop-ack", { leaseId }));
       };
     },
     action: async ({

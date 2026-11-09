@@ -317,6 +317,22 @@ export function registerSidebarSources(deps: {
     return workerPath;
   };
   const leases = new Map<string, () => void>();
+  const trace = (event: string, detail: Record<string, unknown>) => {
+    if (
+      process.env.CATAMORPHIC_E2E_SIDEBAR_TRACE === "1" &&
+      process.env.CATAMORPHIC_E2E_DATA_DIR
+    )
+      console.info(
+        "[sidebar-source-trace]",
+        JSON.stringify({
+          at: Date.now(),
+          layer: "ipc",
+          event,
+          leases: leases.size,
+          ...detail,
+        }),
+      );
+  };
   /** In-flight requests, by `${sender}:${requestId}`: who asked, for what. */
   const requests = new Map<
     string,
@@ -756,14 +772,19 @@ export function registerSidebarSources(deps: {
     async (event, raw: unknown) => {
       const input = identity.extend({ leaseId: z.string().min(1) }).parse(raw);
       const key = keyFor(event.sender.id, input.leaseId);
+      trace("subscribe-received", { key, sectionId: input.sectionId });
       // Install a placeholder before async lookup so an immediate release wins.
       leases.get(key)?.();
       const placeholder = () => {};
       leases.set(key, placeholder);
+      trace("subscribe-placeholder", { key, sectionId: input.sectionId });
       try {
         const { runtime } = await resolve(event, input);
-        if (leases.get(key) !== placeholder || event.sender.isDestroyed())
+        trace("subscribe-resolved", { key, sectionId: input.sectionId });
+        if (leases.get(key) !== placeholder || event.sender.isDestroyed()) {
+          trace("subscribe-cancelled", { key, sectionId: input.sectionId });
           return;
+        }
         leases.set(
           key,
           runtime.subscribe((error) => {
@@ -774,7 +795,9 @@ export function registerSidebarSources(deps: {
               });
           }),
         );
+        trace("subscribe-installed", { key, sectionId: input.sectionId });
       } catch (cause) {
+        trace("subscribe-failed", { key, sectionId: input.sectionId });
         if (leases.get(key) === placeholder) leases.delete(key);
         throw cause;
       }
@@ -784,8 +807,10 @@ export function registerSidebarSources(deps: {
     "catamorphic:sidebar-source-unsubscribe",
     (event, id: string) => {
       const key = keyFor(event.sender.id, id);
+      trace("unsubscribe-received", { key, found: leases.has(key) });
       leases.get(key)?.();
       leases.delete(key);
+      trace("unsubscribe-complete", { key });
     },
   );
   const dispose = () => {

@@ -1822,6 +1822,17 @@ export function CollectionTree<T extends CollectionItem>({
   project?: (items: readonly T[]) => readonly T[];
   renderItem: (item: T, context: TreeRenderContext) => ReactNode;
 }) {
+  const record = Reflect.get(
+    globalThis,
+    Symbol.for("catamorphic.e2e.sidebar-source-trace"),
+  );
+  if (typeof record === "function")
+    record({
+      layer: "collection-tree",
+      event: "render",
+      key: collection.getSnapshotRevision,
+      active,
+    });
   const { revision, root } = useCollection({
     collection,
     active,
