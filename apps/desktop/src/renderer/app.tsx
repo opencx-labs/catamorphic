@@ -224,6 +224,7 @@ import {
   visitSurface,
 } from "./lib/surface-history.js";
 import { useTabSleep } from "./lib/tab-sleep.js";
+import { useAppPreferences } from "./lib/use-app-preferences.js";
 import { useDesktopProjects } from "./lib/use-desktop-projects.js";
 import { useWorktreesAvailable } from "./lib/use-session-checkout.js";
 import { useSidebarReveal } from "./lib/use-sidebar-reveal.js";
@@ -748,7 +749,6 @@ export function App({
   const [deletingProject, setDeletingProject] = useState<ProjectSummary | null>(
     null,
   );
-  const [sidebarOpen, setSidebarOpen] = useState(false);
   // Raised each time the person opens a sidebar: it focuses the row of
   // what is in front (TabbedSidebar).
   const [sidebarFocusRequest, setSidebarFocusRequest] = useState(0);
@@ -761,7 +761,6 @@ export function App({
     docked: false,
     push: false,
   });
-  const [savedRightSidebarOpen, setSavedRightSidebarOpen] = useState(false);
   const [rightSidebarMotion, setRightSidebarMotion] = useState<SidebarMotion>({
     phase: "closed",
     docked: false,
@@ -774,6 +773,7 @@ export function App({
     open: boolean;
   } | null>(null);
   const [paletteOpen, setPaletteOpen] = useState(false);
+  const closePalette = useCallback(() => setPaletteOpen(false), []);
   const [closingEdits, setClosingEdits] = useState<{
     requestedKey: string;
     grouped: boolean;
@@ -795,7 +795,16 @@ export function App({
   // when an agent finishes or asks a question. Also carries relaunch
   // state: sidebar visibility and the last active project.
   const [activeProfileId, setActiveProfileId] = useState<string>();
-  const [profilePrefs, setPrefs] = useState<AppPrefs | null>(null);
+  const {
+    prefs: profileValues,
+    loaded: preferencesLoaded,
+    update: updateProfilePrefs,
+    reload: reloadProfilePrefs,
+  } = useAppPreferences();
+  const profilePrefs = preferencesLoaded ? profileValues : null;
+  const sidebarOpen = preferencesLoaded && profileValues.sidebarOpen;
+  const savedRightSidebarOpen =
+    preferencesLoaded && profileValues.rightSidebarOpen;
   const [projectPrefs, setProjectPrefs] = useState<{
     key: string;
     values: AppPrefs;
@@ -818,18 +827,6 @@ export function App({
     useState<HTMLDivElement | null>(null);
   const [browserToolbarHost, setBrowserToolbarHost] =
     useState<HTMLDivElement | null>(null);
-  useEffect(() => {
-    void desktopApi.getPrefs().then((loaded) => {
-      setPrefs(loaded);
-      setSidebarOpen(loaded.sidebarOpen);
-      setSavedRightSidebarOpen(loaded.rightSidebarOpen);
-    });
-    return desktopApi.onPrefsChanged((next) => {
-      setPrefs(next);
-      setSidebarOpen(next.sidebarOpen);
-      setSavedRightSidebarOpen(next.rightSidebarOpen);
-    });
-  }, []);
   useEffect(() => {
     let current = true;
     let request = 0;
@@ -877,10 +874,9 @@ export function App({
       const patch: Partial<AppPrefs> = { unreadSessionIds: nextIds };
       const next = { ...current, ...patch };
       prefsRef.current = next;
-      setPrefs(next);
-      void desktopApi.setPrefs(patch);
+      void updateProfilePrefs(patch);
     },
-    [],
+    [updateProfilePrefs],
   );
 
   // Profiles own the whole environment: session partition, projects,
@@ -982,22 +978,26 @@ export function App({
     target?: Profile;
   } | null>(null);
 
-  const allProjects = projectsQuery.data?.items ?? [];
+  const allProjects = useMemo(
+    () => projectsQuery.data?.items ?? [],
+    [projectsQuery.data?.items],
+  );
   // Projects created before profiles existed have no owner; the default
   // profile shows them (matches main-process lazy adoption).
-  const ownedElsewhere = new Set(
-    profilesData?.profiles
-      .filter((profile) => profile.id !== activeProfile?.id)
-      .flatMap((profile) => profile.projectIds) ?? [],
-  );
-  const projects = activeProfile
-    ? allProjects.filter(
-        (project) =>
-          activeProfile.projectIds.includes(project.id) ||
-          (activeProfile.id === profilesData?.defaultProfileId &&
-            !ownedElsewhere.has(project.id)),
-      )
-    : allProjects;
+  const projects = useMemo(() => {
+    if (!activeProfile) return allProjects;
+    const ownedElsewhere = new Set(
+      profilesData?.profiles
+        .filter((profile) => profile.id !== activeProfile.id)
+        .flatMap((profile) => profile.projectIds) ?? [],
+    );
+    return allProjects.filter(
+      (project) =>
+        activeProfile.projectIds.includes(project.id) ||
+        (activeProfile.id === profilesData?.defaultProfileId &&
+          !ownedElsewhere.has(project.id)),
+    );
+  }, [allProjects, activeProfile, profilesData]);
   // A window may suggest its profile's last/default project, but it cannot
   // mount that project's resources or saver until WorkspaceRoot owns its claim.
   const projectCatalogPending =
@@ -1103,10 +1103,9 @@ export function App({
     if (!rightSidebarHasContent || emptyRightSidebarOpen === null) return;
     // Content added during customization inherits the panel's current pose;
     // from this point onward the existing profile preference owns it again.
-    setSavedRightSidebarOpen(emptyRightSidebarOpen);
-    void desktopApi.setPrefs({ rightSidebarOpen: emptyRightSidebarOpen });
+    void updateProfilePrefs({ rightSidebarOpen: emptyRightSidebarOpen });
     setEmptyRightSidebar(null);
-  }, [rightSidebarHasContent, emptyRightSidebarOpen]);
+  }, [rightSidebarHasContent, emptyRightSidebarOpen, updateProfilePrefs]);
 
   useEffect(() => {
     if (!projectId) {
@@ -1266,12 +1265,9 @@ export function App({
       // project overrides. A second profile-only fetch could overwrite it.
       const [agents, nextPrefs] = await Promise.all([
         desktopApi.agentsList(),
-        desktopApi.getPrefs(),
+        reloadProfilePrefs(),
       ]);
       setAgentsData(agents);
-      setPrefs(nextPrefs);
-      setSidebarOpen(nextPrefs.sidebarOpen);
-      setSavedRightSidebarOpen(nextPrefs.rightSidebarOpen);
       // Resolve the destination and its preferences together so the workspace
       // owner never claims a project using the previous profile's settings.
       setActiveProfileId(profile.id);
@@ -4796,8 +4792,7 @@ export function App({
       const open = !rightSidebarOpen;
       if (open) setRightSidebarFocusRequest((count) => count + 1);
       if (rightSidebarHasContent) {
-        setSavedRightSidebarOpen(open);
-        void desktopApi.setPrefs({ rightSidebarOpen: open });
+        void updateProfilePrefs({ rightSidebarOpen: open });
       } else {
         setEmptyRightSidebar({ scope: sidebarScope, open });
       }
@@ -4805,8 +4800,7 @@ export function App({
     "toggle-sidebar": () => {
       const open = !sidebarOpen;
       if (open) setSidebarFocusRequest((count) => count + 1);
-      setSidebarOpen(open);
-      void desktopApi.setPrefs({ sidebarOpen: open });
+      void updateProfilePrefs({ sidebarOpen: open });
     },
     "close-tab": closeActiveSurface,
     "close-window": () => window.close(),
@@ -5059,7 +5053,7 @@ export function App({
   const selectProject = (id: string) => {
     void desktopApi.workspaceNavigate({ projectId: id });
     // Remembered per profile: a relaunch lands in the last project.
-    void desktopApi.setPrefs({ lastProjectId: id });
+    void updateProfilePrefs({ lastProjectId: id });
   };
 
   // A new profile starts with a real workspace instead of a "No projects" shell.
@@ -8182,8 +8176,7 @@ export function App({
                           navigationHost={browserNavigationHost}
                           onRevealToolbar={() => {
                             if (!sidebarOpen) {
-                              setSidebarOpen(true);
-                              void desktopApi.setPrefs({ sidebarOpen: true });
+                              void updateProfilePrefs({ sidebarOpen: true });
                             }
                           }}
                           visible={
@@ -8921,7 +8914,7 @@ export function App({
             <CommandPalette
               variant="overlay"
               open={paletteOpen}
-              onClose={() => setPaletteOpen(false)}
+              onClose={closePalette}
               modeRequest={modeRequest}
             />
 
@@ -8946,7 +8939,7 @@ export function App({
               onDone={(agentId) => {
                 setWizardModalOpen(false);
                 if (wizardForAssistantRef.current && agentId)
-                  void desktopApi.setPrefs({ voiceAssistant: agentId });
+                  void updateProfilePrefs({ voiceAssistant: agentId });
                 wizardForAssistantRef.current = false;
               }}
               onEngagedChange={setWizardEngaged}

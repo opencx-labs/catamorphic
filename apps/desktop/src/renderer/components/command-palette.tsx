@@ -3,6 +3,7 @@ import {
   type ClipboardEvent,
   Fragment,
   type KeyboardEvent,
+  memo,
   useCallback,
   useEffect,
   useLayoutEffect,
@@ -168,7 +169,7 @@ function FooterHint({ keycap, label }: { keycap: string; label: string }) {
   );
 }
 
-export function CommandPalette({
+export const CommandPalette = memo(function CommandPalette({
   variant,
   open = true,
   onClose,
@@ -1376,4 +1377,4 @@ export function CommandPalette({
       </div>
     </div>
   );
-}
+});

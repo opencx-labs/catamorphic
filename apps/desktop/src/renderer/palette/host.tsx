@@ -6,7 +6,7 @@ import {
   useMemo,
   useRef,
 } from "react";
-import type { ActionId } from "../../shared/actions.js";
+import { type ActionId, BUILTIN_ACTIONS } from "../../shared/actions.js";
 import type { PendingChatMessage } from "../../shared/chat.js";
 import type { HistoryEntry } from "../../shared/history.js";
 import type { OpenMode as CommitMode } from "../../shared/open-mode.js";
@@ -130,6 +130,8 @@ export interface PaletteHost {
 }
 
 const PaletteHostContext = createContext<PaletteHost | null>(null);
+const NO_PROFILES: Profile[] = [];
+const NO_AGENTS: AgentInfo[] = [];
 
 /** Same contents, same identity: plain data rebuilt on every app render. */
 function useStableData<T>(value: T): T {
@@ -140,10 +142,10 @@ function useStableData<T>(value: T): T {
 }
 
 /**
- * The app rebuilds the host object on every render. Navigation callbacks and
- * the data objects rows depend on (the focused chat, command availability,
- * macros) keep one identity while unchanged, so row indexes and the list's
- * motion do not rerun on unrelated renders.
+ * The app rebuilds the host object on every render. Callbacks always run the
+ * latest app state, without invalidating rows when their closures change.
+ * Only changed palette data publishes a context update; a sidebar motion or
+ * an unrelated chat update need not rebuild the palette's rows and indexes.
  */
 export function PaletteHostProvider({
   value,
@@ -154,29 +156,139 @@ export function PaletteHostProvider({
 }) {
   const latest = useRef(value);
   latest.current = value;
-  const navigation = useMemo(
-    () => ({
+  const callbacks = useMemo(() => {
+    const actionHandlers = { ...latest.current.actionHandlers };
+    for (const action of BUILTIN_ACTIONS)
+      actionHandlers[action.id] = (mode) =>
+        latest.current.actionHandlers[action.id](mode);
+    return {
+      actionHandlers,
       onOpenUrl: (...args: Parameters<PaletteHost["onOpenUrl"]>) =>
         latest.current.onOpenUrl(...args),
       onOpenTab: (...args: Parameters<PaletteHost["onOpenTab"]>) =>
         latest.current.onOpenTab(...args),
       onOpenSession: (...args: Parameters<PaletteHost["onOpenSession"]>) =>
         latest.current.onOpenSession(...args),
-    }),
-    [],
-  );
+      onSelectProject: (...args: Parameters<PaletteHost["onSelectProject"]>) =>
+        latest.current.onSelectProject(...args),
+      onSwitchProfile: (...args: Parameters<PaletteHost["onSwitchProfile"]>) =>
+        latest.current.onSwitchProfile(...args),
+      onSendToAgent: (...args: Parameters<PaletteHost["onSendToAgent"]>) =>
+        latest.current.onSendToAgent(...args),
+      onRunSkill: (...args: Parameters<PaletteHost["onRunSkill"]>) =>
+        latest.current.onRunSkill(...args),
+      onRunTerminalMacro: (
+        ...args: Parameters<PaletteHost["onRunTerminalMacro"]>
+      ) => latest.current.onRunTerminalMacro(...args),
+      onPickDefaultAgent: (
+        ...args: Parameters<PaletteHost["onPickDefaultAgent"]>
+      ) => latest.current.onPickDefaultAgent(...args),
+      onPickSessionAgent: (
+        ...args: Parameters<PaletteHost["onPickSessionAgent"]>
+      ) => latest.current.onPickSessionAgent(...args),
+      onPickProjectAgent: (
+        ...args: Parameters<PaletteHost["onPickProjectAgent"]>
+      ) => latest.current.onPickProjectAgent(...args),
+      onConfigureAgent: (
+        ...args: Parameters<PaletteHost["onConfigureAgent"]>
+      ) => latest.current.onConfigureAgent(...args),
+      onCreateAssistant: () => latest.current.onCreateAssistant(),
+      onClearDefaultOverride: () => latest.current.onClearDefaultOverride?.(),
+      onPickEffort: (...args: Parameters<PaletteHost["onPickEffort"]>) =>
+        latest.current.onPickEffort(...args),
+      onPickModel: (...args: Parameters<PaletteHost["onPickModel"]>) =>
+        latest.current.onPickModel(...args),
+      onPickHarnessPermissions: (
+        ...args: Parameters<PaletteHost["onPickHarnessPermissions"]>
+      ) => latest.current.onPickHarnessPermissions(...args),
+      onHighlightTarget: (target: "chat" | "close" | null) =>
+        latest.current.onHighlightTarget?.(target),
+      onOpenHistory: (...args: Parameters<PaletteHost["onOpenHistory"]>) =>
+        latest.current.onOpenHistory(...args),
+      onOpenSiteSettings: (origin: string) =>
+        latest.current.onOpenSiteSettings?.(origin),
+      onError: (message: string) => latest.current.onError?.(message),
+    };
+  }, []);
   const focusedChat = useStableData(value.focusedChat);
+  const focusedSite = useStableData(value.focusedSite);
   const actionAvailability = useStableData(value.actionAvailability);
   const terminalMacros = useStableData(value.terminalMacros);
-  const host = useMemo(
+  const profiles = value.profiles.length ? value.profiles : NO_PROFILES;
+  const agents = value.agents.length ? value.agents : NO_AGENTS;
+  const {
+    projectId,
+    profileId,
+    projects,
+    activeProjectId,
+    activeProfileId,
+    workspaceConfig,
+    startingActions,
+    defaultAgentId,
+    voiceAssistant,
+    defaultAgentOverridden,
+    incognitoAllowed,
+    memberShell,
+  } = value;
+  const canClearDefault = Boolean(value.onClearDefaultOverride);
+  const canHighlight = Boolean(value.onHighlightTarget);
+  const canOpenSiteSettings = Boolean(value.onOpenSiteSettings);
+  const canReportError = Boolean(value.onError);
+  const host = useMemo<PaletteHost>(
     () => ({
-      ...value,
-      ...navigation,
+      ...callbacks,
+      projectId,
+      profileId,
+      projects,
+      activeProjectId,
+      profiles,
+      activeProfileId,
+      workspaceConfig,
+      startingActions,
+      agents,
+      defaultAgentId,
+      voiceAssistant,
+      defaultAgentOverridden,
+      incognitoAllowed,
+      memberShell,
       focusedChat,
+      focusedSite,
       actionAvailability,
       terminalMacros,
+      onClearDefaultOverride: canClearDefault
+        ? callbacks.onClearDefaultOverride
+        : undefined,
+      onHighlightTarget: canHighlight ? callbacks.onHighlightTarget : undefined,
+      onOpenSiteSettings: canOpenSiteSettings
+        ? callbacks.onOpenSiteSettings
+        : undefined,
+      onError: canReportError ? callbacks.onError : undefined,
     }),
-    [value, navigation, focusedChat, actionAvailability, terminalMacros],
+    [
+      callbacks,
+      projectId,
+      profileId,
+      projects,
+      activeProjectId,
+      profiles,
+      activeProfileId,
+      workspaceConfig,
+      startingActions,
+      agents,
+      defaultAgentId,
+      voiceAssistant,
+      defaultAgentOverridden,
+      incognitoAllowed,
+      memberShell,
+      focusedChat,
+      focusedSite,
+      actionAvailability,
+      terminalMacros,
+      canClearDefault,
+      canHighlight,
+      canOpenSiteSettings,
+      canReportError,
+    ],
   );
   return (
     <PaletteHostContext.Provider value={host}>
