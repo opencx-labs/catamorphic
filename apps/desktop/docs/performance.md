@@ -30,6 +30,55 @@ latency improvement. Use matched native production runs for launch and animation
 comparisons; a development renderer or a software-composited private display is
 not a native release benchmark.
 
+## Voice model allocation
+
+A worker first started for dictation loads Parakeet recognition, Silero
+detection and ERes2Net speaker identification, leaving Kokoro synthesis
+unloaded. Conversation and reading replies aloud prepare recognition and
+synthesis together before the worker reports ready. Moving from dictation to a
+live conversation starts synthesis preparation immediately; reading a reply
+while dictating loads it on demand. All paths share the pending or successful
+initializer. A canceled reply or preparation must not report a stale failure
+against a newer voice, and a failed synthesis load can retry. Each text keeps
+the voice selected when it was requested. Model files, quality settings,
+download requirements and the 15-minute warm-worker lifetime are unchanged.
+
+For comparisons, use fresh processes with the same installed models and a
+fixed local speech fixture, alternating the original and changed loader. Record
+recognition readiness, synthesis preparation and the first spoken sentence
+separately. Measure native physical footprint, CPU time and wall time at each
+stage. State the runtime, file-cache state and host load; direct inference
+timings do not include microphone, agent or playback latency.
+
+On 2026-11-09, two runs per loader on an Apple M-series Mac, Bun 1.4.4 and
+sherpa-onnx-node 1.13.8, with warm model files and fresh processes, measured:
+
+| Measurement | Original, all modes | Dictation | Conversation |
+| --- | ---: | ---: | ---: |
+| Footprint at readiness | 1567 to 1601 MiB | 1118 to 1134 MiB | 1569 to 1576 MiB |
+| Footprint after two recognitions | 1648 to 1681 MiB | 1198 to 1210 MiB | 1649 to 1655 MiB |
+| Ready | 0.99 to 1.51 s | 0.90 to 0.97 s | 0.94 to 0.95 s |
+| CPU time through readiness | 1.73 to 2.21 s | 1.01 to 1.07 s | 1.71 to 1.72 s |
+| First synthesis request to first sentence | 0.94 to 0.96 s | See handoff below | 0.85 to 0.86 s |
+| Warm synthesis request to first sentence | 0.83 to 0.88 s | See handoff below | 0.83 to 0.87 s |
+
+Dictation saved about 450 MiB in these runs. Conversation retained parallel
+initialization and similar first-sentence timing; these samples do not establish
+a latency improvement. One matched read-aloud run, without recognition first,
+measured readiness at 0.94 s before and 0.99 s after, with its first sentence
+0.863 s and 0.871 s after the request. Warm first sentences took 1.03 s and
+0.83 s, respectively.
+
+Preparing synthesis after dictation took 0.59 to 0.60 s; its subsequent first
+sentence took 0.85 to 0.91 s and a warm one 0.83 to 0.89 s. Preparation can
+overlap the agent's work, but a reply requested before it finishes still waits.
+Once synthesis loads, the dictation memory saving is no longer expected.
+
+The same fixture produced identical transcription and confidence in every run.
+This single fixture does not establish general recognition accuracy, and these
+direct Bun measurements do not establish the packaged Electron worker's latency
+or memory saving.
+
 ## Resource soak runner
 
 Run `bun run build` before measuring. From the worktree root:

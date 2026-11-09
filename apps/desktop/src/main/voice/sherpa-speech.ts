@@ -16,7 +16,10 @@ import {
  * The speech models (ADR 0216, 0236), all on sherpa-onnx and the CPU:
  * Silero voice activity, Parakeet TDT 0.6B recognition, ERes2Net to tell
  * who speaks (on the microphone as heard: it needs no noise removal), and
- * Kokoro v1.0 speech.
+ * Kokoro v1.0 speech. Conversation prepares recognition and synthesis
+ * together; dictation loads recognition alone. Kokoro also loads when a
+ * voice started for dictation has something to say. A failed synthesis
+ * load can be tried again on the next reply.
  * Kokoro speaks a text in one call that runs the model once per sentence,
  * and each sentence is handed on as soon as it is made. Its pauses are kept
  * as made (sherpa-onnx would shrink them to a fifth by default), and each
@@ -27,32 +30,42 @@ import {
  * every call that returns samples copies them (`enableExternalBuffer:
  * false`).
  */
-export async function loadSherpaSpeech(
-  paths: VoiceModelPaths,
-  voice: VoiceId,
-): Promise<SpeechParts> {
-  const [recognizer, tts] = await Promise.all([
-    sherpa.OfflineRecognizer.createAsync({
-      featConfig: { sampleRate: SPEECH_SAMPLE_RATE, featureDim: 80 },
-      modelConfig: {
-        transducer: {
-          encoder: paths.asr.encoder,
-          decoder: paths.asr.decoder,
-          joiner: paths.asr.joiner,
-        },
-        tokens: paths.asr.tokens,
-        numThreads: 4,
-        provider: "cpu",
-        modelType: "nemo_transducer",
+export async function loadSherpaSpeech({
+  paths,
+  voice,
+  speaking,
+}: {
+  paths: VoiceModelPaths;
+  voice: VoiceId;
+  speaking: boolean;
+}): Promise<SpeechParts> {
+  let synthesis: ReturnType<typeof sherpa.OfflineTts.createAsync> | null = null;
+  const synthesizer = () => {
+    synthesis ??= sherpa.OfflineTts.createAsync({
+      model: { kokoro: paths.tts, numThreads: 4, provider: "cpu" },
+    }).catch((cause: unknown) => {
+      synthesis = null;
+      throw cause;
+    });
+    return synthesis;
+  };
+  const recognition = sherpa.OfflineRecognizer.createAsync({
+    featConfig: { sampleRate: SPEECH_SAMPLE_RATE, featureDim: 80 },
+    modelConfig: {
+      transducer: {
+        encoder: paths.asr.encoder,
+        decoder: paths.asr.decoder,
+        joiner: paths.asr.joiner,
       },
-    }),
-    sherpa.OfflineTts.createAsync({
-      model: {
-        kokoro: paths.tts,
-        numThreads: 4,
-        provider: "cpu",
-      },
-    }),
+      tokens: paths.asr.tokens,
+      numThreads: 4,
+      provider: "cpu",
+      modelType: "nemo_transducer",
+    },
+  });
+  const [recognizer] = await Promise.all([
+    recognition,
+    speaking ? synthesizer() : null,
   ]);
   const generationFor = (id: VoiceId) =>
     new sherpa.GenerationConfig({
@@ -65,6 +78,9 @@ export async function loadSherpaSpeech(
     numThreads: 2,
   });
   return {
+    prepareSynthesis: async () => {
+      await synthesizer();
+    },
     activity: sileroActivity(paths.vad),
     voiceprint: (samples) => {
       const stream = speakers.createStream();
@@ -87,12 +103,16 @@ export async function loadSherpaSpeech(
       };
     },
     synthesize: async (text, onSentence) => {
+      // A later voice selection belongs to the next text, even when this
+      // reply is still waiting for Kokoro to load.
+      const generationConfig = generation;
+      const tts = await synthesizer();
       const sentences: Float32Array[] = [];
       const { sampleRate } = tts;
       await tts.generateAsync({
         text,
         enableExternalBuffer: false,
-        generationConfig: generation,
+        generationConfig,
         onProgress: ({ samples }) => {
           const sentence = withoutLeadIn(samples, sampleRate);
           sentences.push(sentence);

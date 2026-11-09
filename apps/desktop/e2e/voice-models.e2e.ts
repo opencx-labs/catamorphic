@@ -55,10 +55,11 @@ async function recordRequest(modelsDir: string): Promise<string> {
   const { loadSherpaSpeech } = await import(
     "../src/main/voice/sherpa-speech.js"
   );
-  const speech = await loadSherpaSpeech(
-    voiceModelPaths(modelsDir),
-    "am_michael",
-  );
+  const speech = await loadSherpaSpeech({
+    paths: voiceModelPaths(modelsDir),
+    voice: "am_michael",
+    speaking: true,
+  });
   const { samples, sampleRate } = await speech.synthesize(REQUEST);
   // A second of quiet before, three after, so speech has a clear end.
   const padded = new Float32Array(samples.length + sampleRate * 4);
