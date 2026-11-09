@@ -14,7 +14,7 @@ let otherProjectId: string;
 const read = (name: string) =>
   fs.readFileSync(path.join(projectRoot, "probe-data", name), "utf8");
 
-async function watchPulse(value: string) {
+async function probePulse(value: string) {
   await expect
     .poll(() => {
       fs.writeFileSync(path.join(projectRoot, "probe-data", "pulse"), value);
@@ -48,19 +48,23 @@ beforeAll(async () => {
       catamorphic: { access: { writes: ["probe-data"] } },
     }),
   );
+  // Exercise view-owned IO without depending on OS file-event delivery.
   fs.writeFileSync(
     path.join(projectRoot, ".work", "probe", "index.ts"),
-    `import {readFileSync,writeFileSync,appendFileSync,watch} from 'node:fs';
+    `import {readFileSync,writeFileSync,appendFileSync,existsSync} from 'node:fs';
 const mark=event=>appendFileSync('probe-data/events',JSON.stringify({event,pid:process.pid})+'\\n');
+const pulse=()=>existsSync('probe-data/pulse')?readFileSync('probe-data/pulse','utf8'):'';
 export default {
   load(){const label=readFileSync('probe-data/label','utf8');return {items:label?[{id:'row',label}]:[]};},
   subscribe({invalidate}){
+    let label=readFileSync('probe-data/label','utf8'),previousPulse=pulse();
+    const timer=setInterval(()=>{
+      const nextLabel=readFileSync('probe-data/label','utf8'),nextPulse=pulse();
+      if(nextLabel!==label){label=nextLabel;invalidate();}
+      if(nextPulse&&nextPulse!==previousPulse){previousPulse=nextPulse;mark('pulse:'+nextPulse);}
+    },40);
     writeFileSync('probe-data/subscribed','yes');mark('subscribe');
-    const watcher=watch('probe-data',(_event,name)=>{
-      if(name==='pulse')mark('pulse:'+readFileSync('probe-data/pulse','utf8'));
-      if(name==='label')invalidate();
-    });
-    return()=>{watcher.close();writeFileSync('probe-data/subscribed','no');mark('cleanup');};
+    return()=>{clearInterval(timer);writeFileSync('probe-data/subscribed','no');mark('cleanup');};
   }
 };`,
   );
@@ -79,7 +83,35 @@ export default {
 }, 180_000);
 
 afterAll(async () => {
-  await app?.stop();
+  try {
+    const artifacts = process.env.CATAMORPHIC_E2E_ARTIFACTS_DIR;
+    if (artifacts && app && projectRoot) {
+      const files = Object.fromEntries(
+        ["events", "subscribed", "label", "pulse"].map((name) => [
+          name,
+          fs.existsSync(path.join(projectRoot, "probe-data", name))
+            ? read(name)
+            : null,
+        ]),
+      );
+      const capturedAt = Date.now();
+      const projects = await app.eval(
+        `Array.from(document.querySelectorAll('[data-project-runtime]'),el=>({id:el.dataset.projectRuntime,visible:el.dataset.workspaceVisible,inert:el.inert}))`,
+      );
+      fs.writeFileSync(
+        path.join(artifacts, "sidebar-project-visibility.json"),
+        JSON.stringify(
+          { capturedAt, projectId, otherProjectId, files, projects },
+          null,
+          2,
+        ),
+      );
+    }
+  } catch (error) {
+    console.warn("Sidebar visibility diagnostic capture failed", error);
+  } finally {
+    await app?.stop();
+  }
 });
 
 it("pauses sidebar subscriptions in a retained project and resumes its existing view", async () => {
@@ -88,7 +120,7 @@ it("pauses sidebar subscriptions in a retained project and resumes its existing 
   await app.eval(
     `window.__sidebarOwner=document.querySelector(${JSON.stringify(owner)});window.__sidebarRow=document.querySelector('${owner} [data-sidebar-item-id="row"]');undefined`,
   );
-  await watchPulse("visible");
+  await probePulse("visible");
   const other = await createProjectWorkspace({
     app,
     name: "Other project",
@@ -101,7 +133,7 @@ it("pauses sidebar subscriptions in a retained project and resumes its existing 
   try {
     await expect.poll(() => read("subscribed")).toBe("no");
   } finally {
-    // If release failed, a positive watch event distinguishes actual hidden
+    // If release failed, a positive IO pulse distinguishes actual hidden
     // work from a stale marker; keep the observation in the failure log.
     if (read("subscribed") === "yes") {
       fs.writeFileSync(path.join(projectRoot, "probe-data", "pulse"), "hidden");
@@ -146,7 +178,7 @@ it("observes an empty source only while its project is in front", async () => {
     `window.catamorphicDesktop.workspaceNavigate({projectId:${JSON.stringify(projectId)}})`,
   );
   await expect.poll(() => read("subscribed")).toBe("yes");
-  await watchPulse("empty-return");
+  await probePulse("empty-return");
   fs.writeFileSync(
     path.join(projectRoot, "probe-data", "label"),
     "Returned row",
