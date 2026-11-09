@@ -159,6 +159,8 @@ export interface Recognized {
 export interface SpeechParts {
   activity: VoiceActivity;
   recognize(samples: Float32Array): Promise<Recognized>;
+  /** Prepare speech before a conversation that started as dictation. */
+  prepareSynthesis?(): Promise<void>;
   /**
    * All the speech for a text. Each sentence also goes to `onSentence` as
    * soon as it is made, in order; returning false stops the rest.
@@ -502,6 +504,16 @@ export class VoiceEngine {
     // A conversation's hold, still in pieces, is not dictated.
     this.heldWords = [];
     this.stopSpeaking();
+    if (!enabled && this.parts.prepareSynthesis) {
+      const generation = this.generation;
+      void this.parts.prepareSynthesis().catch((cause: unknown) => {
+        if (generation !== this.generation || this.dictation) return;
+        this.emit({
+          type: "failed",
+          message: `Speech synthesis failed: ${cause instanceof Error ? cause.message : String(cause)}`,
+        });
+      });
+    }
   }
 
   /**
@@ -1139,11 +1151,18 @@ export class VoiceEngine {
         const generation = this.generation;
         this.emit({ type: "speaking", id: utterance.id });
         this.remember(utterance.text);
-        await this.parts.synthesize(utterance.text, (sentence) => {
-          if (generation !== this.generation) return false;
-          this.send(sentence.samples, sentence.sampleRate);
-          return true;
-        });
+        try {
+          await this.parts.synthesize(utterance.text, (sentence) => {
+            if (generation !== this.generation) return false;
+            this.send(sentence.samples, sentence.sampleRate);
+            return true;
+          });
+        } catch (cause) {
+          // A load or inference that outlived its reply must not stop a
+          // new one. Let the newer queue retry a failed model load.
+          if (generation !== this.generation) continue;
+          throw cause;
+        }
         if (generation !== this.generation) continue;
         this.playing.push(utterance.id);
         this.current = null;

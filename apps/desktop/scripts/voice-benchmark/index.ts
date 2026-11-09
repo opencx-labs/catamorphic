@@ -444,7 +444,11 @@ async function main() {
       "Work",
       "voice-models",
     );
-  const parts = await loadSherpaSpeech(voiceModelPaths(models), "af_heart");
+  const parts = await loadSherpaSpeech({
+    paths: voiceModelPaths(models),
+    voice: "af_heart",
+    speaking: true,
+  });
   // The agent's own voice, as it would come back through the speakers.
   const reply = await parts.synthesize(
     "I looked at the pull request and the build. The tests pass on the main branch, but two checks failed on yours: the desktop suite timed out on the voice test, and the lint step found an unused import in the engine. I can fix the import now and run the suite again, or wait until you have read the review. Tell me which you would like, and I will keep an eye on the checks either way. ".repeat(

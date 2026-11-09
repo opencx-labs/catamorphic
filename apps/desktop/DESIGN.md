@@ -4116,6 +4116,17 @@ Markdown; arbitrary interactive inspector content mounts an ordinary sandboxed
 app, with its existing authority and cleanup. Context refreshes retain the tree
 and its expanded branches in every non-session-scoped section (ADR 0308).
 
+### 2026-11-09: Dictation loads only the models that hear
+
+Starting with dictation leaves Kokoro speech synthesis unloaded. Conversation and reading
+replies aloud still prepare recognition and synthesis together before they are
+ready, preserving the first reply's latency. Moving from dictation to a live
+conversation prepares synthesis as soon as the worker receives that intent;
+reading a reply while dictating prepares it on demand. All paths share one
+initializer and the existing warm worker. A canceled preparation cannot fail a
+newer voice, and a failed load can retry. The models, voice quality, downloads
+and 15-minute warm lifetime stay the same. See [resource verification](docs/performance.md).
+
 ## Sidebar lists pause between projects
 
 A retained project keeps its sidebar's rows and pose when another project is
