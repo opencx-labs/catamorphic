@@ -109,14 +109,6 @@ export function moduleSource<Name extends string = WorkSourceName>({
   /** What the module asked at its last read, until the person allows it. */
   let asking: SourceAccess | null = null;
   let loadedRevision: string | undefined;
-  const trace = (event: string, detail: Record<string, unknown> = {}) => {
-    const record = Reflect.get(
-      globalThis,
-      Symbol.for("catamorphic.e2e.sidebar-source-trace"),
-    );
-    if (typeof record === "function")
-      record({ layer: "module-source", event, projectId, ownerId, ...detail });
-  };
   const request = async (
     input: Omit<SidebarSourceRequest, "projectId" | "sectionId" | "requestId">,
     signal: AbortSignal,
@@ -214,7 +206,6 @@ export function moduleSource<Name extends string = WorkSourceName>({
         );
       });
       const leaseId = crypto.randomUUID();
-      trace("subscribe", { leaseId });
       const unsubscribe = desktopApi.onSidebarSourceChanged((event) => {
         if (event.leaseId !== leaseId) return;
         // A failed subscription is the section's error until Retry; reading
@@ -229,7 +220,6 @@ export function moduleSource<Name extends string = WorkSourceName>({
           if (!released) fail(failure(cause).message);
         });
       return () => {
-        trace("stop", { leaseId });
         released = true;
         clearTimeout(follow);
         stopWatching?.();

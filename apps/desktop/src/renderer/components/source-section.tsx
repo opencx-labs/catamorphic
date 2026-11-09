@@ -234,18 +234,6 @@ function SourceView({
           : {}),
       },
     });
-    const record = Reflect.get(
-      globalThis,
-      Symbol.for("catamorphic.e2e.sidebar-source-trace"),
-    );
-    if (typeof record === "function")
-      record({
-        layer: "source-view",
-        event: "collection-created",
-        key: created.getSnapshotRevision,
-        projectId,
-        sectionId,
-      });
     return created;
   }, [source, collectionSessionId]);
   // A session-scoped source runs only with its chat (ADR 0226): until the

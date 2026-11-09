@@ -103,26 +103,6 @@ export function createCollection<T extends CollectionItem>({
   let snapshotRevision = 0;
   let mutation = 0;
   const changedAt = new Map<string, number>();
-  const getSnapshotRevision = () => snapshotRevision;
-  const trace = (event: string, detail: Record<string, unknown> = {}) => {
-    const record = Reflect.get(
-      globalThis,
-      Symbol.for("catamorphic.e2e.sidebar-source-trace"),
-    );
-    if (typeof record === "function")
-      record({
-        layer: "collection",
-        event,
-        key: getSnapshotRevision,
-        references,
-        previewReferences,
-        branches: [...branchReferences].map(([parentId, owners]) => ({
-          parentId,
-          owners,
-        })),
-        ...detail,
-      });
-  };
   const invalidated = new Map<
     string | null,
     { pages: CollectionRefresh; quiet: boolean }
@@ -518,7 +498,7 @@ export function createCollection<T extends CollectionItem>({
     getItem: (id: string) => items.get(id),
     getBranch: branch,
     getRevision: () => revision,
-    getSnapshotRevision,
+    getSnapshotRevision: () => snapshotRevision,
     subscribeSnapshot: (listener: Listener) => {
       snapshotListeners.add(listener);
       return () => {
@@ -556,7 +536,6 @@ export function createCollection<T extends CollectionItem>({
         branchReferences.get(null) === previewReferences;
       if (mode === "preview") previewReferences += 1;
       references += 1;
-      trace("acquire", { parentId, mode });
       if (references === 1) {
         unsubscribe = source.subscribe?.(publish);
       }
@@ -595,9 +574,7 @@ export function createCollection<T extends CollectionItem>({
             });
           }
         }
-        trace("release", { parentId, mode, owners });
         if (references) return;
-        trace("upstream-stop");
         unsubscribe?.();
         unsubscribe = undefined;
         invalidated.clear();

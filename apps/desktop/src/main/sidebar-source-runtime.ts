@@ -63,28 +63,6 @@ async function fileRevision(root: string, file: string) {
 }
 
 export class SidebarSourceRuntime {
-  private trace(event: string, detail: Record<string, unknown> = {}) {
-    if (
-      process.env.CATAMORPHIC_E2E_SIDEBAR_TRACE === "1" &&
-      process.env.CATAMORPHIC_E2E_DATA_DIR
-    ) {
-      const record = Reflect.get(
-        globalThis,
-        Symbol.for("catamorphic.e2e.sidebar-source-main-trace"),
-      );
-      if (typeof record === "function")
-        record({
-          at: Date.now(),
-          layer: "runtime",
-          event,
-          modulePath: this.opts.modulePath,
-          generation: this.generation,
-          workerPid: this.child?.pid,
-          listeners: this.listeners.size,
-          ...detail,
-        });
-    }
-  }
   /** Reported by the worker once its module loads; false until then. */
   capabilities: SidebarSourceCapabilities = {
     move: false,
@@ -273,7 +251,6 @@ export class SidebarSourceRuntime {
         launch.spawned?.();
         child = spawned;
         this.child = spawned;
-        this.trace("spawned");
         this.launched = launch;
         spawned.once("exit", () => {
           // Natural exit and crashes retire the same group as explicit stop.
@@ -448,18 +425,6 @@ export class SidebarSourceRuntime {
     });
   }
   private send(value: unknown) {
-    if (
-      typeof value === "object" &&
-      value !== null &&
-      "method" in value &&
-      (value.method === "subscribe" || value.method === "unsubscribe")
-    )
-      this.trace("send", {
-        method: value.method,
-        hasStdin: Boolean(this.child?.stdin),
-        stdinDestroyed: this.child?.stdin?.destroyed,
-        queuedBytes: this.child?.stdin?.writableLength,
-      });
     this.child?.stdin?.write(`${JSON.stringify(value)}\n`);
   }
   private scheduleIdle() {
@@ -569,9 +534,7 @@ export class SidebarSourceRuntime {
     this.scheduleIdle();
   }
   subscribe(listener: (error?: string) => void): () => void {
-    this.trace("listener-add-before");
     this.listeners.add(listener);
-    this.trace("listener-added");
     clearTimeout(this.idle);
     if (this.listeners.size === 1) {
       this.send({ method: "subscribe" });
@@ -639,9 +602,7 @@ export class SidebarSourceRuntime {
       }
     }
     return () => {
-      this.trace("listener-remove-before");
       this.listeners.delete(listener);
-      this.trace("listener-removed");
       if (!this.listeners.size) {
         this.send({ method: "unsubscribe" });
         this.watcher?.close();

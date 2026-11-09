@@ -37,7 +37,7 @@ async function click(selector: string) {
   });
 }
 beforeAll(async () => {
-  app = await launchApp({ env: { CATAMORPHIC_E2E_SIDEBAR_TRACE: "1" } });
+  app = await launchApp();
   server = http.createServer((_req, res) => {
     requests++;
     setTimeout(() => {
@@ -87,11 +87,10 @@ beforeAll(async () => {
     "todos",
     { writes: ["todo-data"] },
     `
-    import {watch,writeFileSync,appendFileSync} from 'node:fs'; import {readFile,writeFile,rename} from 'node:fs/promises';
-    const mark=event=>appendFileSync('todo-data/subscription-events.jsonl',JSON.stringify({event,pid:process.pid,at:Date.now()})+'\\n');
+    import {watch,writeFileSync} from 'node:fs'; import {readFile,writeFile,rename} from 'node:fs/promises';
     export default {
       async load(){await new Promise(r=>setTimeout(r,250));return {items:JSON.parse(await readFile('todo-data/todos.json','utf8')).map(t=>({id:t.id,label:t.text,icon:t.done?'CircleCheck':'Circle',description:t.done?'Completed':'Due tomorrow',descriptionVisibility:'hover',actions:[{action:'toggle',label:t.done?'Reopen':'Complete',icon:'Check'}],menu:[{action:'fail',label:'Fail write'}]}))}},
-      subscribe({invalidate}){mark('subscribe');writeFileSync('todo-data/subscribed','yes');const w=watch('todo-data',(event,n)=>{if(event==='rename'||!n||n==='todos.json')invalidate()});mark('watching');return()=>{mark('cleanup');w.close();mark('watch-closed');writeFileSync('todo-data/subscribed','no');mark('released')}},
+      subscribe({invalidate}){writeFileSync('todo-data/subscribed','yes');const w=watch('todo-data',(event,n)=>{if(event==='rename'||!n||n==='todos.json')invalidate()});return()=>{w.close();writeFileSync('todo-data/subscribed','no')}},
       async action({itemId,action}){await new Promise(r=>setTimeout(r,400));if(action==='fail')throw Error('Write unavailable');const ts=JSON.parse(await readFile('todo-data/todos.json','utf8'));ts.find(t=>t.id===itemId).done=!ts.find(t=>t.id===itemId).done;await writeFile('todo-data/todos.tmp',JSON.stringify(ts));await rename('todo-data/todos.tmp','todo-data/todos.json')}
     };`,
   );
@@ -113,21 +112,6 @@ beforeAll(async () => {
     path.join(projectRoot, ".work/workspace.js"),
     `module.exports={sidebars: {left:[{id:'live',title:'Sources',icon:'ListTodo',sections:[{id:'todos',title:'My todos',source:'.work/todos/index.ts',height:180},{id:'http',title:'Service',source:'.work/http/index.ts',height:120,headerActions:[{label:'Refresh Service',action:'refresh',icon:'RefreshCw'}]},{id:'sorted-tabs',title:'Sorted tabs',source:'.work/sorted-tabs/index.ts'}]},{id:'other',title:'Other',icon:'Folder',sections:[{id:'files',source:'work:files'}]}],right:[] }};`,
   );
-  await app.cdp("Page.addScriptToEvaluateOnNewDocument", {
-    source: `(() => {
-      const keys=new WeakMap();let nextKey=0;
-      const rows=[];window.__sidebarSourceTrace=rows;
-      globalThis[Symbol.for('catamorphic.e2e.sidebar-source-trace')]=event=>{
-        if(rows.length>=5000)return;
-        const {key,...detail}=event;
-        if((typeof key==='object'&&key!==null)||typeof key==='function'){
-          if(!keys.has(key))keys.set(key,++nextKey);
-          detail.collectionKey=keys.get(key);
-        }
-        rows.push({at:Date.now(),...detail});
-      };
-    })()`,
-  });
   await app.reload();
   // Each asks before it runs, and nothing of it runs until allowed.
   const sections = ["todos", "http", "sorted-tabs"];
@@ -155,17 +139,6 @@ beforeAll(async () => {
 });
 afterAll(async () => {
   await app?.stop();
-  const artifacts = process.env.CATAMORPHIC_E2E_ARTIFACTS_DIR;
-  if (artifacts && app) {
-    try {
-      fs.writeFileSync(
-        path.join(artifacts, "sidebar-source-after-quit.log"),
-        app.getOutput(),
-      );
-    } catch (cause) {
-      console.warn("Could not save source diagnostics after Quit", cause);
-    }
-  }
   server?.closeAllConnections();
   await new Promise<void>((resolve) => server?.close(() => resolve()));
 });
@@ -367,118 +340,55 @@ it("retains HTTP rows during refresh, reports failure, and retries without reope
   );
 });
 it("releases hidden sources and virtualizes a large file-backed list", async () => {
-  const snapshots: Array<{ stage: string; state: unknown }> = [];
-  const markerReads: Array<{ at: number; value: string }> = [];
-  const capture = async (stage: string) => {
-    const state = await app
-      .eval(`(() => {
-        const workspace=document.querySelector('[data-workspace-visible="true"]');
-        return {
-          at:Date.now(),
-          tabs:[...(workspace?.querySelectorAll('[role="tab"]')??[])].map(el=>({label:el.getAttribute('aria-label'),selected:el.getAttribute('aria-selected')})),
-          panels:[...(workspace?.querySelectorAll('[role="tabpanel"]')??[])].map(el=>({id:el.id,hidden:el.hidden,inert:el.inert,sources:[...el.querySelectorAll('[data-sidebar-source]')].map(source=>source.dataset.sidebarSource)})),
-          sources:[...(workspace?.querySelectorAll('[data-sidebar-source]')??[])].map(el=>({id:el.dataset.sidebarSource,busy:el.getAttribute('aria-busy'),inert:!!el.closest('[inert]'),hidden:!!el.closest('[hidden]'),visible:el.checkVisibility({checkVisibilityCSS:true})})),
-          palettes:[...(workspace?.querySelectorAll('[data-palette]')??[])].map(el=>({variant:el.dataset.palette,inert:!!el.closest('[inert]')})),
-          focused:{tag:document.activeElement?.tagName,role:document.activeElement?.getAttribute('role'),id:document.activeElement?.id},
-          changes:window.__sourceLeaseChanges,
-          trace:window.__sidebarSourceTrace,
-        };
-      })()`)
-      .catch((cause: unknown) => ({ error: String(cause) }));
-    snapshots.push({ stage, state });
-  };
-  await app.eval(
-    `window.__sourceLeaseChanges=[];window.__stopSourceLeaseChanges=window.catamorphicDesktop.onSidebarSourceChanged(event=>window.__sourceLeaseChanges.push({at:Date.now(),...event}))`,
+  await click('[role="tab"][aria-label="Other"]');
+  await app.waitFor(
+    `document.querySelector('[role="tab"][aria-label="Other"]')?.getAttribute('aria-selected')==='true'`,
   );
-  try {
-    await capture("before-other");
-    await click('[role="tab"][aria-label="Other"]');
-    await app.waitFor(
-      `document.querySelector('[role="tab"][aria-label="Other"]')?.getAttribute('aria-selected')==='true'`,
-    );
-    snapshots.push({ stage: "other-selected", state: { at: Date.now() } });
-    await expect
-      .poll(() => {
-        const value = fs.readFileSync(
-          path.join(projectRoot, "todo-data", "subscribed"),
-          "utf8",
-        );
-        markerReads.push({ at: Date.now(), value });
-        return value;
-      })
-      .toBe("no");
-    const before = requests;
-    fs.writeFileSync(
-      path.join(projectRoot, "todo-data", "todos.json"),
-      JSON.stringify(
-        Array.from({ length: 500 }, (_, i) => ({
-          id: `item-${i}`,
-          text: `Task ${i}`,
-          done: false,
-        })),
-      ),
-    );
-    await click('[role="tab"][aria-label="Sources"]');
-    await app.waitFor(`document.body.innerText.includes('Task 0')`);
-    const rows = await app.eval<number>(
-      `document.querySelector('[data-sidebar-source="todos"]').querySelectorAll('[data-sidebar-item-id]').length`,
-    );
-    expect(rows).toBeLessThan(60);
-    expect(rows).toBeGreaterThan(0);
-    expect(requests - before).toBeLessThanOrEqual(1);
-    await app.cdp("Emulation.setEmulatedMedia", {
-      features: [{ name: "prefers-reduced-motion", value: "reduce" }],
-    });
-    // The previous rows ("Plan revised", "Review notes") leave in place as
-    // inert exiting rows above the new ones, which then slide up. Act on the
-    // first new row once the list has settled, not on whichever "Complete"
-    // button comes first in the DOM.
-    await app.waitFor(`(() => {
-    const rows = [...document.querySelectorAll('[data-sidebar-source="todos"] [role="treeitem"]')];
-    return rows.length > 0 && rows.every(row => !row.inert && row.getAnimations().every(a => a.playState !== 'running'));
-  })()`);
-    await click(
-      '[data-sidebar-source="todos"] [data-sidebar-item-id="item-0"] [aria-label="Complete"]',
-    );
-    await app.waitFor(
-      `!!document.querySelector('[data-sidebar-source="todos"] [data-sidebar-item-id="item-0"] [aria-label="Reopen"]')`,
-    );
-    expect(app.getRendererErrors()).toEqual([]);
-  } finally {
-    await capture("case-finished");
-    await app.eval("window.__stopSourceLeaseChanges?.()").catch(() => {});
-    const resources = await app
-      .eval(
-        `window.catamorphicDesktop.resourcesRead().then(snapshot=>({at:snapshot.at,modules:snapshot.groups.filter(group=>group.owner.kind==='module').map(group=>({owner:group.owner,processes:group.processes.map(process=>({pid:process.pid,name:process.name}))}))}))`,
-      )
-      .catch((cause: unknown) => ({ error: String(cause) }));
-    const journal = path.join(
-      projectRoot,
-      "todo-data",
-      "subscription-events.jsonl",
-    );
-    const diagnostics = {
-      snapshots,
-      markerReads,
-      resources,
-      rendererErrors: app.getRendererErrors(),
-      marker: fs.readFileSync(
+  await expect
+    .poll(() =>
+      fs.readFileSync(
         path.join(projectRoot, "todo-data", "subscribed"),
         "utf8",
       ),
-      journal: fs.existsSync(journal) ? fs.readFileSync(journal, "utf8") : "",
-    };
-    const artifacts = process.env.CATAMORPHIC_E2E_ARTIFACTS_DIR;
-    if (artifacts)
-      fs.writeFileSync(
-        path.join(artifacts, "sidebar-source-lifecycle.json"),
-        JSON.stringify(diagnostics, null, 2),
-      );
-    console.info(
-      "Sidebar source lifecycle diagnostics",
-      JSON.stringify(diagnostics),
-    );
-  }
+    )
+    .toBe("no");
+  const before = requests;
+  fs.writeFileSync(
+    path.join(projectRoot, "todo-data", "todos.json"),
+    JSON.stringify(
+      Array.from({ length: 500 }, (_, i) => ({
+        id: `item-${i}`,
+        text: `Task ${i}`,
+        done: false,
+      })),
+    ),
+  );
+  await click('[role="tab"][aria-label="Sources"]');
+  await app.waitFor(`document.body.innerText.includes('Task 0')`);
+  const rows = await app.eval<number>(
+    `document.querySelector('[data-sidebar-source="todos"]').querySelectorAll('[data-sidebar-item-id]').length`,
+  );
+  expect(rows).toBeLessThan(60);
+  expect(rows).toBeGreaterThan(0);
+  expect(requests - before).toBeLessThanOrEqual(1);
+  await app.cdp("Emulation.setEmulatedMedia", {
+    features: [{ name: "prefers-reduced-motion", value: "reduce" }],
+  });
+  // The previous rows ("Plan revised", "Review notes") leave in place as
+  // inert exiting rows above the new ones, which then slide up. Act on the
+  // first new row once the list has settled, not on whichever "Complete"
+  // button comes first in the DOM.
+  await app.waitFor(`(() => {
+    const rows = [...document.querySelectorAll('[data-sidebar-source="todos"] [role="treeitem"]')];
+    return rows.length > 0 && rows.every(row => !row.inert && row.getAnimations().every(a => a.playState !== 'running'));
+  })()`);
+  await click(
+    '[data-sidebar-source="todos"] [data-sidebar-item-id="item-0"] [aria-label="Complete"]',
+  );
+  await app.waitFor(
+    `!!document.querySelector('[data-sidebar-source="todos"] [data-sidebar-item-id="item-0"] [aria-label="Reopen"]')`,
+  );
+  expect(app.getRendererErrors()).toEqual([]);
 });
 it("sorts Work's tabs in a module, follows them live and closes through them", async () => {
   const sorted =
