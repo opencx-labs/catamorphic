@@ -71,7 +71,11 @@ beforeAll(async () => {
     `!!document.querySelector(${JSON.stringify(NEW_TAB_INPUT)})`,
     { label: "New Tab palette" },
   );
-  await prefs({ tabPlacement: "sidebar", headerPlacement: "sidebar" });
+  await prefs({
+    tabPlacement: "sidebar",
+    headerPlacement: "sidebar",
+    linkOpenMode: "floating",
+  });
   // The new layout mounts the New Tab page again: wait for its input too.
   await app.waitFor(
     `!!document.querySelector('aside [data-sidebar-section=tabs]') && !document.querySelector('.workspace-chrome') && !!document.querySelector(${JSON.stringify(NEW_TAB_INPUT)})`,
@@ -247,7 +251,6 @@ describe("floating surfaces", () => {
   });
 
   it("uses the configured popup mode and opens Settings as a scrollable floating panel", async () => {
-    await prefs({ linkOpenMode: "floating" });
     const guest = await app.connectToFrame(`${origin}/preview`);
     await guest.eval("document.querySelector('#popup').click()");
     await app.waitFor(`!!${floating}?.querySelector('webview')`);

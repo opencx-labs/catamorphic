@@ -87,10 +87,10 @@ beforeAll(async () => {
     "todos",
     { writes: ["todo-data"] },
     `
-    import {watch} from 'node:fs'; import {readFile,writeFile,rename} from 'node:fs/promises';
+    import {watch,writeFileSync} from 'node:fs'; import {readFile,writeFile,rename} from 'node:fs/promises';
     export default {
       async load(){await new Promise(r=>setTimeout(r,250));return {items:JSON.parse(await readFile('todo-data/todos.json','utf8')).map(t=>({id:t.id,label:t.text,icon:t.done?'CircleCheck':'Circle',description:t.done?'Completed':'Due tomorrow',descriptionVisibility:'hover',actions:[{action:'toggle',label:t.done?'Reopen':'Complete',icon:'Check'}],menu:[{action:'fail',label:'Fail write'}]}))}},
-      subscribe({invalidate}){void writeFile('todo-data/subscribed','yes');const w=watch('todo-data',(event,n)=>{if(event==='rename'||!n||n==='todos.json')invalidate()});return()=>{w.close();void writeFile('todo-data/subscribed','no')}},
+      subscribe({invalidate}){writeFileSync('todo-data/subscribed','yes');const w=watch('todo-data',(event,n)=>{if(event==='rename'||!n||n==='todos.json')invalidate()});return()=>{w.close();writeFileSync('todo-data/subscribed','no')}},
       async action({itemId,action}){await new Promise(r=>setTimeout(r,400));if(action==='fail')throw Error('Write unavailable');const ts=JSON.parse(await readFile('todo-data/todos.json','utf8'));ts.find(t=>t.id===itemId).done=!ts.find(t=>t.id===itemId).done;await writeFile('todo-data/todos.tmp',JSON.stringify(ts));await rename('todo-data/todos.tmp','todo-data/todos.json')}
     };`,
   );
