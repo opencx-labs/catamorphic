@@ -3,6 +3,7 @@ import {
   type ClipboardEvent,
   Fragment,
   type KeyboardEvent,
+  memo,
   useCallback,
   useEffect,
   useLayoutEffect,
@@ -191,7 +192,9 @@ interface CommandPaletteProps {
   modeRequest?: PaletteModeRequest | null;
 }
 
-export function CommandPalette(props: CommandPaletteProps) {
+export const CommandPalette = memo(function CommandPalette(
+  props: CommandPaletteProps,
+) {
   if (props.variant === "tab") return <CommandPaletteContent {...props} />;
   return (
     <SurfaceErrorBoundary
@@ -211,7 +214,7 @@ export function CommandPalette(props: CommandPaletteProps) {
       <CommandPaletteContent {...props} />
     </SurfaceErrorBoundary>
   );
-}
+});
 
 function CommandPaletteContent({
   variant,

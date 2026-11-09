@@ -23,10 +23,11 @@ function words(text: string): string[] {
 }
 
 async function setup() {
-  const parts = await loadSherpaSpeech(
-    voiceModelPaths(MODELS ?? ""),
-    "af_heart",
-  );
+  const parts = await loadSherpaSpeech({
+    paths: voiceModelPaths(MODELS ?? ""),
+    voice: "af_heart",
+    speaking: true,
+  });
   const events: VoiceWorkerEvent[] = [];
   const played: Extract<VoiceAudioDown, { type: "play" }>[] = [];
   const engine = new VoiceEngine(

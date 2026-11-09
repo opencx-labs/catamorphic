@@ -862,6 +862,18 @@ the historical log explains how it arrived here.
 
 ## Design log
 
+### 2026-11-09: Palette rows follow their data
+
+The overlay keeps its mounted content and reversible close motion. Unrelated
+workspace updates no longer rebuild its rows: the palette host publishes only
+changed data, while retained commands run with the latest workspace state.
+Project, agent, site and command changes still update the palette at once.
+
+Sidebar pose also comes from the existing profile preferences hook, with each
+local action taking effect immediately. Late file-watch hints read the current
+store instead of applying an older pose. Earlier reads and save completions
+cannot undo newer input; profile switching still restores values under its veil.
+
 ### 2026-10-24: Chat navigation and resizing keep their place
 
 Long running turns use the same offscreen row containment as completed work.
@@ -4108,3 +4120,22 @@ tones, code, badges or a color swatch alongside their text. Rich prose uses
 Markdown; arbitrary interactive inspector content mounts an ordinary sandboxed
 app, with its existing authority and cleanup. Context refreshes retain the tree
 and its expanded branches in every non-session-scoped section (ADR 0308).
+
+### 2026-11-09: Dictation loads only the models that hear
+
+Starting with dictation leaves Kokoro speech synthesis unloaded. Conversation and reading
+replies aloud still prepare recognition and synthesis together before they are
+ready, preserving the first reply's latency. Moving from dictation to a live
+conversation prepares synthesis as soon as the worker receives that intent;
+reading a reply while dictating prepares it on demand. All paths share one
+initializer and the existing warm worker. A canceled preparation cannot fail a
+newer voice, and a failed load can retry. The models, voice quality, downloads
+and 15-minute warm lifetime stay the same. See [resource verification](docs/performance.md).
+
+## Sidebar lists pause between projects
+
+A retained project keeps its sidebar's rows and pose when another project is
+in front. Its lists release their view subscriptions while inactive, including
+the observation that lets an empty list appear again. Returning reacquires the
+existing collection and reads current data. Project visibility uses the same
+subscription lifetime as a hidden sidebar; it does not dispose the workspace.
