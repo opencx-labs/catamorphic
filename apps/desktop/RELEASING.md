@@ -189,9 +189,11 @@ npm creates a public `0.0.0-stage` placeholder for a new name. Do not stage the
 intended release version: staged and published versions share npm's uniqueness
 constraint. The staged `0.0.0` package is never approved or released.
 
-Register trusted publishing with `bun run release:trust`, then reject those
-temporary stages by id with `npm stage reject`. The public name reservations
-remain, so the tag workflow can publish the verified first release using OIDC.
+Register trusted publishing with `bun run release:trust`. Keep each temporary
+stage pending until its first real release has published successfully using
+OIDC, then reject the temporary stage by id with `npm stage reject`. Before
+that first publication, rejecting the only stage removes the name reservation
+and its trusted publisher configuration. Never approve the bootstrap stage.
 The helper runs the pinned npm client's `npm trust github` command for all
 public libraries; npm may request the owner's two-factor verification.
 Registration does not remove or replace an existing trust configuration. For

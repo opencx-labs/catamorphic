@@ -22,7 +22,7 @@
     },
     "apps/desktop": {
       "name": "catamorphic-desktop",
-      "version": "0.1.0-alpha.37",
+      "version": "0.1.0-alpha.38",
       "dependencies": {
         "@ai-sdk/anthropic": "^4.0.52",
         "@ai-sdk/openai": "^4.0.65",
@@ -131,7 +131,7 @@
     },
     "apps/pwa": {
       "name": "catamorphic-pwa",
-      "version": "0.1.0-alpha.37",
+      "version": "0.1.0-alpha.38",
       "dependencies": {
         "@catamorphic/api-client": "workspace:*",
         "@catamorphic/react": "workspace:*",
@@ -159,7 +159,7 @@
     },
     "apps/server": {
       "name": "catamorphic-server",
-      "version": "0.1.0-alpha.37",
+      "version": "0.1.0-alpha.38",
       "bin": {
         "work": "src/work.ts",
       },
@@ -187,7 +187,7 @@
     },
     "packages/acp": {
       "name": "@catamorphic/acp",
-      "version": "0.1.0-alpha.37",
+      "version": "0.1.0-alpha.38",
       "dependencies": {
         "@agentclientprotocol/sdk": "1.7.0",
         "@catamorphic/agent-protocol": "workspace:*",
@@ -201,7 +201,7 @@
     },
     "packages/agent-protocol": {
       "name": "@catamorphic/agent-protocol",
-      "version": "0.1.0-alpha.37",
+      "version": "0.1.0-alpha.38",
       "dependencies": {
         "zod": "^4.6.7",
       },
@@ -211,7 +211,7 @@
     },
     "packages/agent-runner": {
       "name": "@catamorphic/agent-runner",
-      "version": "0.1.0-alpha.37",
+      "version": "0.1.0-alpha.38",
       "dependencies": {
         "@catamorphic/agent-protocol": "workspace:*",
         "@catamorphic/sandbox": "workspace:*",
@@ -222,7 +222,7 @@
     },
     "packages/ai-sdk": {
       "name": "@catamorphic/ai-sdk",
-      "version": "0.1.0-alpha.37",
+      "version": "0.1.0-alpha.38",
       "dependencies": {
         "@catamorphic/agent-protocol": "workspace:*",
         "@catamorphic/mcp": "workspace:*",
@@ -243,7 +243,7 @@
     },
     "packages/api-client": {
       "name": "@catamorphic/api-client",
-      "version": "0.1.0-alpha.37",
+      "version": "0.1.0-alpha.38",
       "dependencies": {
         "@catamorphic/agent-protocol": "workspace:*",
         "openapi-fetch": "^0.17.0",
@@ -255,7 +255,7 @@
     },
     "packages/app": {
       "name": "@catamorphic/app",
-      "version": "0.1.0-alpha.37",
+      "version": "0.1.0-alpha.38",
       "devDependencies": {
         "@testing-library/jest-dom": "^6.9.1",
         "@testing-library/react": "^16.3.2",
@@ -277,7 +277,7 @@
     },
     "packages/claude-code": {
       "name": "@catamorphic/claude-code",
-      "version": "0.1.0-alpha.37",
+      "version": "0.1.0-alpha.38",
       "dependencies": {
         "@anthropic-ai/claude-agent-sdk": "0.3.311",
         "@catamorphic/agent-protocol": "workspace:*",
@@ -292,7 +292,7 @@
     },
     "packages/cloudflare": {
       "name": "@catamorphic/cloudflare",
-      "version": "0.1.0-alpha.37",
+      "version": "0.1.0-alpha.38",
       "dependencies": {
         "@catamorphic/git": "workspace:*",
         "@catamorphic/sandbox": "workspace:*",
@@ -304,7 +304,7 @@
     },
     "packages/cloudflare-sandbox-bridge": {
       "name": "@catamorphic/cloudflare-sandbox-bridge",
-      "version": "0.1.0-alpha.37",
+      "version": "0.1.0-alpha.38",
       "dependencies": {
         "@cloudflare/sandbox": "^0.12.3",
         "hono": "^4.13.13",
@@ -316,7 +316,7 @@
     },
     "packages/codex": {
       "name": "@catamorphic/codex",
-      "version": "0.1.0-alpha.37",
+      "version": "0.1.0-alpha.38",
       "dependencies": {
         "@catamorphic/agent-protocol": "workspace:*",
         "@catamorphic/sandbox": "workspace:*",
@@ -329,7 +329,7 @@
     },
     "packages/container": {
       "name": "@catamorphic/container",
-      "version": "0.1.0-alpha.37",
+      "version": "0.1.0-alpha.38",
       "dependencies": {
         "@catamorphic/runtime": "workspace:*",
         "@catamorphic/sandbox": "workspace:*",
@@ -341,7 +341,7 @@
     },
     "packages/core": {
       "name": "@catamorphic/core",
-      "version": "0.1.0-alpha.37",
+      "version": "0.1.0-alpha.38",
       "dependencies": {
         "@catamorphic/agent-protocol": "workspace:*",
         "@catamorphic/agent-runner": "workspace:*",
@@ -371,7 +371,7 @@
     },
     "packages/db": {
       "name": "@catamorphic/db",
-      "version": "0.1.0-alpha.37",
+      "version": "0.1.0-alpha.38",
       "bin": {
         "catamorphic-db": "./dist/cli.js",
       },
@@ -387,7 +387,7 @@
     },
     "packages/fastify-plugin": {
       "name": "@catamorphic/fastify-plugin",
-      "version": "0.1.0-alpha.37",
+      "version": "0.1.0-alpha.38",
       "dependencies": {
         "@catamorphic/agent-protocol": "workspace:*",
         "@catamorphic/app": "workspace:*",
@@ -416,7 +416,7 @@
     },
     "packages/git": {
       "name": "@catamorphic/git",
-      "version": "0.1.0-alpha.37",
+      "version": "0.1.0-alpha.38",
       "dependencies": {
         "@catamorphic/workflow": "workspace:*",
         "diff3": "0.0.3",
@@ -429,14 +429,14 @@
     },
     "packages/github": {
       "name": "@catamorphic/github",
-      "version": "0.1.0-alpha.37",
+      "version": "0.1.0-alpha.38",
       "devDependencies": {
         "@types/node": "^26.1.1",
       },
     },
     "packages/hetzner": {
       "name": "@catamorphic/hetzner",
-      "version": "0.1.0-alpha.37",
+      "version": "0.1.0-alpha.38",
       "dependencies": {
         "@catamorphic/otel": "workspace:*",
         "zod": "4.6.7",
@@ -447,7 +447,7 @@
     },
     "packages/local-process": {
       "name": "@catamorphic/local-process",
-      "version": "0.1.0-alpha.37",
+      "version": "0.1.0-alpha.38",
       "dependencies": {
         "@catamorphic/runtime": "workspace:*",
         "@catamorphic/sandbox": "workspace:*",
@@ -459,7 +459,7 @@
     },
     "packages/mcp": {
       "name": "@catamorphic/mcp",
-      "version": "0.1.0-alpha.37",
+      "version": "0.1.0-alpha.38",
       "dependencies": {
         "@catamorphic/sandbox": "workspace:*",
         "@modelcontextprotocol/client": "^2.3.1",
@@ -471,7 +471,7 @@
     },
     "packages/microsandbox": {
       "name": "@catamorphic/microsandbox",
-      "version": "0.1.0-alpha.37",
+      "version": "0.1.0-alpha.38",
       "dependencies": {
         "@catamorphic/runtime": "workspace:*",
         "@catamorphic/sandbox": "workspace:*",
@@ -484,7 +484,7 @@
     },
     "packages/otel": {
       "name": "@catamorphic/otel",
-      "version": "0.1.0-alpha.37",
+      "version": "0.1.0-alpha.38",
       "dependencies": {
         "@opentelemetry/api": "^1.9.1",
         "@opentelemetry/api-logs": "^0.222.0",
@@ -541,7 +541,7 @@
     },
     "packages/parser": {
       "name": "@catamorphic/parser",
-      "version": "0.1.0-alpha.37",
+      "version": "0.1.0-alpha.38",
       "dependencies": {
         "@catamorphic/workflow": "workspace:*",
         "dagre": "^0.8.5",
@@ -553,7 +553,7 @@
     },
     "packages/plugins": {
       "name": "@catamorphic/plugins",
-      "version": "0.1.0-alpha.37",
+      "version": "0.1.0-alpha.38",
       "dependencies": {
         "zod": "^4.6.7",
       },
@@ -563,7 +563,7 @@
     },
     "packages/react": {
       "name": "@catamorphic/react",
-      "version": "0.1.0-alpha.37",
+      "version": "0.1.0-alpha.38",
       "dependencies": {
         "@catamorphic/agent-protocol": "workspace:*",
         "@catamorphic/api-client": "workspace:*",
@@ -594,7 +594,7 @@
     },
     "packages/registry": {
       "name": "@catamorphic/registry",
-      "version": "0.1.0-alpha.37",
+      "version": "0.1.0-alpha.38",
       "dependencies": {
         "@catamorphic/react": "workspace:*",
         "@catamorphic/ui": "workspace:*",
@@ -632,7 +632,7 @@
     },
     "packages/runner-bundle": {
       "name": "@catamorphic/runner-bundle",
-      "version": "0.1.0-alpha.37",
+      "version": "0.1.0-alpha.38",
       "dependencies": {
         "@catamorphic/acp": "workspace:*",
         "@catamorphic/agent-protocol": "workspace:*",
@@ -647,7 +647,7 @@
     },
     "packages/runtime": {
       "name": "@catamorphic/runtime",
-      "version": "0.1.0-alpha.37",
+      "version": "0.1.0-alpha.38",
       "dependencies": {
         "@catamorphic/workflow": "workspace:*",
       },
@@ -657,7 +657,7 @@
     },
     "packages/s3": {
       "name": "@catamorphic/s3",
-      "version": "0.1.0-alpha.37",
+      "version": "0.1.0-alpha.38",
       "dependencies": {
         "@aws-sdk/client-s3": "^3.1085.0",
         "@catamorphic/git": "workspace:*",
@@ -669,7 +669,7 @@
     },
     "packages/sandbox": {
       "name": "@catamorphic/sandbox",
-      "version": "0.1.0-alpha.37",
+      "version": "0.1.0-alpha.38",
       "dependencies": {
         "@catamorphic/app": "workspace:*",
         "@catamorphic/otel": "workspace:*",
@@ -683,7 +683,7 @@
     },
     "packages/server-sdk": {
       "name": "@catamorphic/server-sdk",
-      "version": "0.1.0-alpha.37",
+      "version": "0.1.0-alpha.38",
       "dependencies": {
         "@catamorphic/app": "workspace:*",
         "@catamorphic/core": "workspace:*",
@@ -714,7 +714,7 @@
     },
     "packages/ui": {
       "name": "@catamorphic/ui",
-      "version": "0.1.0-alpha.37",
+      "version": "0.1.0-alpha.38",
       "dependencies": {
         "@catamorphic/app": "workspace:*",
         "@catamorphic/parser": "workspace:*",
@@ -743,7 +743,7 @@
     },
     "packages/work-customization": {
       "name": "@catamorphic/work-customization",
-      "version": "0.1.0-alpha.37",
+      "version": "0.1.0-alpha.38",
       "dependencies": {
         "@catamorphic/agent-protocol": "workspace:*",
         "@catamorphic/app": "workspace:*",
@@ -751,7 +751,7 @@
     },
     "packages/work-server": {
       "name": "@catamorphic/work-server",
-      "version": "0.1.0-alpha.37",
+      "version": "0.1.0-alpha.38",
       "dependencies": {
         "@ai-sdk/anthropic": "^4.0.52",
         "@ai-sdk/openai": "^4.0.65",
@@ -790,7 +790,7 @@
     },
     "packages/workflow": {
       "name": "@catamorphic/workflow",
-      "version": "0.1.0-alpha.37",
+      "version": "0.1.0-alpha.38",
       "devDependencies": {
         "@types/node": "^26.1.1",
       },
