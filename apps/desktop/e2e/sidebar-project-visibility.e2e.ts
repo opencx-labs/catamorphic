@@ -14,6 +14,18 @@ let otherProjectId: string;
 const read = (name: string) =>
   fs.readFileSync(path.join(projectRoot, "probe-data", name), "utf8");
 
+async function watchPulse(value: string) {
+  await expect
+    .poll(() => {
+      fs.writeFileSync(path.join(projectRoot, "probe-data", "pulse"), value);
+      return read("events")
+        .split("\n")
+        .filter(Boolean)
+        .some((line) => JSON.parse(line).event === `pulse:${value}`);
+    })
+    .toBe(true);
+}
+
 beforeAll(async () => {
   app = await launchApp();
   projectRoot = path.join(app.userDataDir, "sidebar-owner-project");
@@ -76,8 +88,7 @@ it("pauses sidebar subscriptions in a retained project and resumes its existing 
   await app.eval(
     `window.__sidebarOwner=document.querySelector(${JSON.stringify(owner)});window.__sidebarRow=document.querySelector('${owner} [data-sidebar-item-id="row"]');undefined`,
   );
-  fs.writeFileSync(path.join(projectRoot, "probe-data", "pulse"), "visible");
-  await expect.poll(() => read("events")).toContain('"pulse:visible"');
+  await watchPulse("visible");
   const other = await createProjectWorkspace({
     app,
     name: "Other project",
@@ -135,11 +146,7 @@ it("observes an empty source only while its project is in front", async () => {
     `window.catamorphicDesktop.workspaceNavigate({projectId:${JSON.stringify(projectId)}})`,
   );
   await expect.poll(() => read("subscribed")).toBe("yes");
-  fs.writeFileSync(
-    path.join(projectRoot, "probe-data", "pulse"),
-    "empty-return",
-  );
-  await expect.poll(() => read("events")).toContain('"pulse:empty-return"');
+  await watchPulse("empty-return");
   fs.writeFileSync(
     path.join(projectRoot, "probe-data", "label"),
     "Returned row",
