@@ -4126,3 +4126,11 @@ reading a reply while dictating prepares it on demand. All paths share one
 initializer and the existing warm worker. A canceled preparation cannot fail a
 newer voice, and a failed load can retry. The models, voice quality, downloads
 and 15-minute warm lifetime stay the same. See [resource verification](docs/performance.md).
+
+## Sidebar lists pause between projects
+
+A retained project keeps its sidebar's rows and pose when another project is
+in front. Its lists release their view subscriptions while inactive, including
+the observation that lets an empty list appear again. Returning reacquires the
+existing collection and reads current data. Project visibility uses the same
+subscription lifetime as a hidden sidebar; it does not dispose the workspace.
