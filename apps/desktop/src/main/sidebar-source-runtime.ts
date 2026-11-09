@@ -67,10 +67,13 @@ export class SidebarSourceRuntime {
     if (
       process.env.CATAMORPHIC_E2E_SIDEBAR_TRACE === "1" &&
       process.env.CATAMORPHIC_E2E_DATA_DIR
-    )
-      console.info(
-        "[sidebar-source-trace]",
-        JSON.stringify({
+    ) {
+      const record = Reflect.get(
+        globalThis,
+        Symbol.for("catamorphic.e2e.sidebar-source-main-trace"),
+      );
+      if (typeof record === "function")
+        record({
           at: Date.now(),
           layer: "runtime",
           event,
@@ -79,8 +82,8 @@ export class SidebarSourceRuntime {
           workerPid: this.child?.pid,
           listeners: this.listeners.size,
           ...detail,
-        }),
-      );
+        });
+    }
   }
   /** Reported by the worker once its module loads; false until then. */
   capabilities: SidebarSourceCapabilities = {
@@ -257,11 +260,7 @@ export class SidebarSourceRuntime {
         }
         const spawned = spawn(launch.command, launch.args, {
           cwd: this.opts.projectRoot,
-          env:
-            process.env.CATAMORPHIC_E2E_SIDEBAR_TRACE === "1" &&
-            process.env.CATAMORPHIC_E2E_DATA_DIR
-              ? { ...launch.env, CATAMORPHIC_E2E_SIDEBAR_TRACE: "1" }
-              : launch.env,
+          env: launch.env,
           detached: process.platform !== "win32",
           stdio: [
             "pipe",
@@ -311,23 +310,8 @@ export class SidebarSourceRuntime {
       return;
     }
     let stderr = "";
-    let diagnosticStderr = "";
     child.stderr?.on("data", (data) => {
       stderr = `${stderr}${data}`.slice(-4000);
-      if (
-        process.env.CATAMORPHIC_E2E_SIDEBAR_TRACE === "1" &&
-        process.env.CATAMORPHIC_E2E_DATA_DIR
-      ) {
-        diagnosticStderr = `${diagnosticStderr}${data}`.slice(-16_000);
-        for (;;) {
-          const newline = diagnosticStderr.indexOf("\n");
-          if (newline < 0) break;
-          const line = diagnosticStderr.slice(0, newline);
-          diagnosticStderr = diagnosticStderr.slice(newline + 1);
-          if (line.startsWith("[sidebar-source-trace]"))
-            process.stderr.write(`${line}\n`);
-        }
-      }
     });
     const lines = createInterface({ input: output });
     let dependencies: Promise<void> | undefined;

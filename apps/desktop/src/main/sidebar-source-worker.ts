@@ -23,15 +23,6 @@ import { build } from "./bun-build.js";
 const send = (value: unknown) => {
   writeSync(3, `${JSON.stringify(value)}\n`);
 };
-const trace = (event: string, detail: Record<string, unknown> = {}) => {
-  if (process.env.CATAMORPHIC_E2E_SIDEBAR_TRACE !== "1") return;
-  try {
-    writeSync(
-      2,
-      `[sidebar-source-trace] ${JSON.stringify({ at: Date.now(), layer: "worker", event, pid: process.pid, ...detail })}\n`,
-    );
-  } catch {}
-};
 const projectRoot = process.cwd();
 const inputPath = process.argv[2];
 if (!inputPath) throw new Error("Missing sidebar module path");
@@ -260,33 +251,18 @@ input.on("line", (line) => {
   }
   if (message.method === "subscribe" || message.method === "unsubscribe") {
     const active = message.method === "subscribe";
-    trace("received", { method: message.method, active, subscribed });
     subscriptionQueue = subscriptionQueue
       .then(async () => {
-        trace("queue-entry", { active, subscribed });
         if (active === subscribed) return;
         subscribed = active;
-        trace("cleanup-before", {
-          active,
-          subscribed,
-          cleanup: Boolean(cleanup),
-        });
         cleanup?.();
-        trace("cleanup-after", { active, subscribed });
         cleanup = undefined;
-        if (active) {
+        if (active)
           cleanup = await source.subscribe?.({ projectRoot, invalidate });
-          trace("subscribed", {
-            active,
-            subscribed,
-            cleanup: Boolean(cleanup),
-          });
-        }
       })
-      .catch((cause) => {
-        trace("queue-error", { active, subscribed });
-        send({ type: "subscription-error", error: String(cause) });
-      });
+      .catch((cause) =>
+        send({ type: "subscription-error", error: String(cause) }),
+      );
     return;
   }
   const controller = new AbortController();

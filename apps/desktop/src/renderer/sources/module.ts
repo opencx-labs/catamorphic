@@ -225,13 +225,9 @@ export function moduleSource<Name extends string = WorkSourceName>({
       fail(undefined);
       void desktopApi
         .sidebarSourceSubscribe({ projectId, sectionId: ownerId, leaseId })
-        .then(
-          () => trace("subscribe-ack", { leaseId, released }),
-          (cause: unknown) => {
-            trace("subscribe-error", { leaseId, released });
-            if (!released) fail(failure(cause).message);
-          },
-        );
+        .catch((cause: unknown) => {
+          if (!released) fail(failure(cause).message);
+        });
       return () => {
         trace("stop", { leaseId });
         released = true;
@@ -239,9 +235,7 @@ export function moduleSource<Name extends string = WorkSourceName>({
         stopWatching?.();
         for (const stop of following.values()) stop();
         unsubscribe();
-        void desktopApi
-          .sidebarSourceUnsubscribe(leaseId)
-          .then(() => trace("stop-ack", { leaseId }));
+        void desktopApi.sidebarSourceUnsubscribe(leaseId);
       };
     },
     action: async ({

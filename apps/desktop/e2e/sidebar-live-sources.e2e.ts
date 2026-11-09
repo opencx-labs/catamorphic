@@ -155,6 +155,17 @@ beforeAll(async () => {
 });
 afterAll(async () => {
   await app?.stop();
+  const artifacts = process.env.CATAMORPHIC_E2E_ARTIFACTS_DIR;
+  if (artifacts && app) {
+    try {
+      fs.writeFileSync(
+        path.join(artifacts, "sidebar-source-after-quit.log"),
+        app.getOutput(),
+      );
+    } catch (cause) {
+      console.warn("Could not save source diagnostics after Quit", cause);
+    }
+  }
   server?.closeAllConnections();
   await new Promise<void>((resolve) => server?.close(() => resolve()));
 });

@@ -558,13 +558,10 @@ export function createCollection<T extends CollectionItem>({
       references += 1;
       trace("acquire", { parentId, mode });
       if (references === 1) {
-        trace("upstream-subscribe");
         unsubscribe = source.subscribe?.(publish);
-        trace("upstream-subscribed");
       }
       const owners = branchReferences.get(parentId) ?? 0;
       branchReferences.set(parentId, owners + 1);
-      trace("branch-acquired", { parentId, mode, owners: owners + 1 });
       if (!owners || (wasPreview && mode === "full")) {
         abort(parentId);
         void load({ parentId });
@@ -602,7 +599,6 @@ export function createCollection<T extends CollectionItem>({
         if (references) return;
         trace("upstream-stop");
         unsubscribe?.();
-        trace("upstream-stopped");
         unsubscribe = undefined;
         invalidated.clear();
         for (const parentId of requests.keys()) {

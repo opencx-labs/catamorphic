@@ -317,21 +317,36 @@ export function registerSidebarSources(deps: {
     return workerPath;
   };
   const leases = new Map<string, () => void>();
+  const tracing = Boolean(
+    process.env.CATAMORPHIC_E2E_SIDEBAR_TRACE === "1" &&
+      process.env.CATAMORPHIC_E2E_DATA_DIR,
+  );
+  const traceRows: Array<Record<string, unknown>> = [];
+  const record = (row: Record<string, unknown>) => {
+    if (tracing && traceRows.length < 5000) traceRows.push(row);
+  };
+  if (tracing) {
+    Reflect.set(
+      globalThis,
+      Symbol.for("catamorphic.e2e.sidebar-source-main-trace"),
+      record,
+    );
+    const flush = () => {
+      for (const row of traceRows.splice(0))
+        console.info("[sidebar-source-trace]", JSON.stringify(row));
+    };
+    app.on("before-quit", flush);
+    app.on("will-quit", flush);
+  }
   const trace = (event: string, detail: Record<string, unknown>) => {
-    if (
-      process.env.CATAMORPHIC_E2E_SIDEBAR_TRACE === "1" &&
-      process.env.CATAMORPHIC_E2E_DATA_DIR
-    )
-      console.info(
-        "[sidebar-source-trace]",
-        JSON.stringify({
-          at: Date.now(),
-          layer: "ipc",
-          event,
-          leases: leases.size,
-          ...detail,
-        }),
-      );
+    if (tracing)
+      record({
+        at: Date.now(),
+        layer: "ipc",
+        event,
+        leases: leases.size,
+        ...detail,
+      });
   };
   /** In-flight requests, by `${sender}:${requestId}`: who asked, for what. */
   const requests = new Map<
