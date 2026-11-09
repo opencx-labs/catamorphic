@@ -71,8 +71,13 @@ import { resolveInput } from "../screens/browser-screen.js";
 import { fadeEdges } from "./catamorphic/edge-fade.js";
 import { ComposerInput, type ComposerInputHandle } from "./composer-input.js";
 import { PILL_SURFACE } from "./context-pill.js";
+import { Modal } from "./modal.js";
 import { OpenResourceButton } from "./open-resource-button.js";
 import { PaletteSurface } from "./palette-surface.js";
+import {
+  SurfaceError,
+  SurfaceErrorBoundary,
+} from "./surface-error-boundary.js";
 
 /**
  * The command palette, in two hosts: a Cmd+P overlay above everything, and
@@ -169,13 +174,7 @@ function FooterHint({ keycap, label }: { keycap: string; label: string }) {
   );
 }
 
-export const CommandPalette = memo(function CommandPalette({
-  variant,
-  open = true,
-  onClose,
-  onTypedChange,
-  modeRequest,
-}: {
+interface CommandPaletteProps {
   variant: "overlay" | "tab";
   /**
    * Overlay only: stays mounted while closed so the exit transition can
@@ -191,7 +190,39 @@ export const CommandPalette = memo(function CommandPalette({
   onTypedChange?: (typed: boolean) => void;
   /** Overlay only: open straight into a mode (agent commands, sidebar search). */
   modeRequest?: PaletteModeRequest | null;
-}) {
+}
+
+export const CommandPalette = memo(function CommandPalette(
+  props: CommandPaletteProps,
+) {
+  if (props.variant === "tab") return <CommandPaletteContent {...props} />;
+  return (
+    <SurfaceErrorBoundary
+      label="Command palette"
+      resetKey={props.open ?? true}
+      renderFallback={(retry) => (
+        <Modal open={props.open ?? true} onClose={props.onClose}>
+          <SurfaceError
+            label="Command palette"
+            onRetry={retry}
+            onDismiss={props.onClose}
+            dismissLabel="Close palette"
+          />
+        </Modal>
+      )}
+    >
+      <CommandPaletteContent {...props} />
+    </SurfaceErrorBoundary>
+  );
+});
+
+function CommandPaletteContent({
+  variant,
+  open = true,
+  onClose,
+  onTypedChange,
+  modeRequest,
+}: CommandPaletteProps) {
   const {
     projectId,
     profileId,
@@ -1377,4 +1408,4 @@ export const CommandPalette = memo(function CommandPalette({
       </div>
     </div>
   );
-});
+}

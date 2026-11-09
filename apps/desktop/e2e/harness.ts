@@ -131,7 +131,7 @@ export interface AppHandle {
   ) => Promise<FrameHandle>;
   /** Captured app stdout/stderr so far (diagnosing server-side behavior). */
   getOutput: () => string;
-  /** Uncaught renderer exceptions, including failures from lazy screens. */
+  /** Uncaught renderer exceptions and render errors caught by Work's boundaries. */
   getRendererErrors: () => string[];
   userDataDir: string;
   stop: (opts?: {
@@ -502,6 +502,8 @@ async function createClient(
       id?: number;
       method?: string;
       params?: {
+        type?: string;
+        args?: { value?: unknown; description?: string }[];
         exceptionDetails?: {
           text?: string;
           exception?: { description?: string };
@@ -515,6 +517,22 @@ async function createClient(
         message.params?.exceptionDetails?.exception?.description ??
           message.params?.exceptionDetails?.text ??
           "Uncaught renderer exception",
+      );
+    }
+    if (
+      message.method === "Runtime.consoleAPICalled" &&
+      message.params?.type === "error" &&
+      typeof message.params.args?.[0]?.value === "string" &&
+      message.params.args[0].value.startsWith("[Work] Could not render ")
+    ) {
+      rendererErrors.push(
+        message.params.args
+          .map(
+            (arg) =>
+              arg.description ??
+              (typeof arg.value === "string" ? arg.value : ""),
+          )
+          .join("\n"),
       );
     }
     if (message.method)

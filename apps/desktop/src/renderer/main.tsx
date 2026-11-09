@@ -10,6 +10,10 @@ import { CatamorphicAppProvider } from "./components/catamorphic/catamorphic-pro
 import { DockHost } from "./components/dock-host.js";
 import { ResourceLinkBoundary } from "./components/open-resource-button.js";
 import { PasskeyHost } from "./components/passkey-sheet.js";
+import {
+  SurfaceError,
+  SurfaceErrorBoundary,
+} from "./components/surface-error-boundary.js";
 import { VoiceBubble, VoiceSpots } from "./components/voice-bubble.js";
 import { desktopApi, type ServerInfo } from "./lib/desktop-api.js";
 import { installFieldDictation } from "./lib/field-dictation.js";
@@ -102,23 +106,50 @@ function Root() {
   );
 }
 
+/** A detached dock may have been only strip-sized when its shell failed. */
+function WindowRecovery({ retry }: { retry: () => void }) {
+  useEffect(() => {
+    if (!detachedWindow) return;
+    void (async () => {
+      const size = { width: 480, height: 220 };
+      await desktopApi.dockResize({ ...size, expanded: true });
+      // An explicit rectangle also restores native input on X11, where
+      // clearing the shape can leave the window with an empty input region.
+      await desktopApi.dockShape([{ x: 0, y: 0, ...size }]);
+      await desktopApi.dockIgnoreMouse(false);
+    })().catch((error: unknown) =>
+      console.error("[Work] Could not prepare window recovery", error),
+    );
+  }, []);
+  return (
+    <div className="pointer-events-auto flex size-full flex-col bg-bg">
+      <SurfaceError label="Work" onRetry={retry} />
+    </div>
+  );
+}
+
 createRoot(document.getElementById("root") as HTMLElement).render(
   <StrictMode>
-    {/* Outside Root: the theme must cover the pre-server "Starting…" state. */}
-    <ThemeProvider>
-      {passkeySheet ? (
-        <QueryClientProvider client={new QueryClient()}>
-          <PasskeyHost />
-        </QueryClientProvider>
-      ) : voiceBubble ? (
-        <KeybindingsProvider>
-          <VoiceBubble />
-        </KeybindingsProvider>
-      ) : voiceSpots ? (
-        <VoiceSpots />
-      ) : (
-        <Root />
-      )}
-    </ThemeProvider>
+    <SurfaceErrorBoundary
+      label="Work"
+      renderFallback={(retry) => <WindowRecovery retry={retry} />}
+    >
+      {/* Outside Root: the theme must cover the pre-server "Starting…" state. */}
+      <ThemeProvider>
+        {passkeySheet ? (
+          <QueryClientProvider client={new QueryClient()}>
+            <PasskeyHost />
+          </QueryClientProvider>
+        ) : voiceBubble ? (
+          <KeybindingsProvider>
+            <VoiceBubble />
+          </KeybindingsProvider>
+        ) : voiceSpots ? (
+          <VoiceSpots />
+        ) : (
+          <Root />
+        )}
+      </ThemeProvider>
+    </SurfaceErrorBoundary>
   </StrictMode>,
 );

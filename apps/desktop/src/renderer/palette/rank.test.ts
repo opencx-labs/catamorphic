@@ -32,6 +32,15 @@ it("bounds results on large indexes, preserves exact matches and refuses pasted 
   expect(search("line one\nline two")).toEqual([]);
 });
 
+it("keeps fuzzy searches usable after whitespace normalization", () => {
+  const items = [{ id: "frame", label: "Framed content", keywords: [] }];
+  const search = createPaletteIndex(items);
+  for (const query of ["frmd co", "frmd  co", "frmd\t\tco", "frmd -co"]) {
+    expect(search(query)).toEqual(items);
+  }
+  expect(search("unrelated")).toEqual([]);
+});
+
 type Row = {
   id: string;
   label: string;

@@ -191,6 +191,10 @@ import { RemoteMessageConnectionGuard } from "./remote-message-connection-guard.
 import { latestReportedModel } from "./reported-model.js";
 import { SessionInspector } from "./session-inspector.js";
 import { ShortcutHint } from "./shortcut-hint";
+import {
+  SurfaceError,
+  SurfaceErrorBoundary,
+} from "./surface-error-boundary.js";
 import { VoiceButton } from "./voice-button.js";
 
 /** Images in replies wait for the person to show them (ADR 0277). */
@@ -419,15 +423,96 @@ const EXPANDED_POSE =
   "translate-y-0 scale-100 opacity-100 transition-[max-width,height,opacity,translate,scale,background-color,border-radius,border-color,box-shadow]";
 
 export function ChatDock(props: ChatDockProps) {
+  const localId = props.entry.localId;
+  const onSignalsChange = useRef(props.onSignalsChange);
+  onSignalsChange.current = props.onSignalsChange;
+  // Only removing the chat clears its signals. A render failure replaces
+  // its content while the chat and its backend turn continue to exist.
+  useEffect(
+    () => () =>
+      onSignalsChange.current(localId, {
+        working: false,
+        draft: false,
+        awaitingInput: false,
+        activity: null,
+      }),
+    [localId],
+  );
   return (
-    <ProjectAuthorityProvider
-      projectId={props.projectId}
-      localOnly={props.entry.incognito}
+    <SurfaceErrorBoundary
+      label={props.title || "Chat"}
+      renderFallback={(retry) => <ChatSurfaceError {...props} retry={retry} />}
     >
-      <FilePreviewProjectContext value={props.projectId}>
-        <ChatDockContent {...props} />
-      </FilePreviewProjectContext>
-    </ProjectAuthorityProvider>
+      <ProjectAuthorityProvider
+        projectId={props.projectId}
+        localOnly={props.entry.incognito}
+      >
+        <FilePreviewProjectContext value={props.projectId}>
+          <ChatDockContent {...props} />
+        </FilePreviewProjectContext>
+      </ProjectAuthorityProvider>
+    </SurfaceErrorBoundary>
+  );
+}
+
+function ChatSurfaceError({
+  retry,
+  projectId,
+  entry,
+  title,
+  tabActive,
+  slot = "full",
+  splitRatio = 0.5,
+  onClose,
+  onEntryChange,
+  onFocusRequest,
+  registerClose,
+  registerMinimize,
+}: ChatDockProps & { retry: () => void }) {
+  // Tab-strip and bubble actions must reach the fallback, rather than an
+  // animation callback whose view React has already unmounted.
+  useEffect(() => {
+    registerClose?.(() => onClose(entry.localId));
+    registerMinimize?.(() => onEntryChange({ ...entry, mode: "min" }));
+  }, [entry, onClose, onEntryChange, registerClose, registerMinimize]);
+  const isTab = entry.mode === "tab";
+  if (entry.mode === "min" || (isTab && !tabActive)) return null;
+  return (
+    <div
+      className={`pointer-events-none absolute inset-y-0 flex flex-col ${
+        isTab
+          ? "z-10"
+          : "inset-x-0 z-30 items-center justify-end px-6 pb-16 pt-3"
+      }`}
+      style={
+        isTab
+          ? {
+              left: slot === "right" ? `${splitRatio * 100}%` : 0,
+              right: slot === "left" ? `${(1 - splitRatio) * 100}%` : 0,
+            }
+          : undefined
+      }
+    >
+      <div
+        data-chat-local-id={entry.localId}
+        data-chat-project={projectId}
+        data-chat-tab={isTab || undefined}
+        data-floating-chat={entry.mode === "partial" || undefined}
+        onMouseDownCapture={onFocusRequest}
+        className={`pointer-events-auto flex min-h-0 w-full flex-col ${
+          isTab
+            ? "h-full bg-bg"
+            : "max-w-3xl rounded-2xl border border-border bg-bg-raised shadow-2xl"
+        }`}
+      >
+        <SurfaceError
+          label={title || "Chat"}
+          onRetry={retry}
+          onDismiss={() => onClose(entry.localId)}
+          dismissLabel="Close chat"
+        />
+      </div>
+    </div>
   );
 }
 
@@ -1618,11 +1703,8 @@ function ChatDockContent({
   // (reloads) and can't stick forever — the server settles orphaned turns.
   // Draft and awaiting-input ride along so every indicator surface shares
   // one signal set. Reported only when a value actually flips (the host
-  // dedups too), and cleared on true unmount — closing a chat mid-turn
-  // must clear its flags, or the aggregate bubble spins forever for a
-  // chat that no longer exists. The unmount cleanup is a separate effect:
-  // a combined effect's cleanup would fire on every dep change, flapping
-  // working false→true and producing phantom "finished" notifications.
+  // dedups too). The outer ChatDock clears flags when the chat is removed;
+  // unmounting failed content is not evidence that its agent finished.
   const hasDraft = hasText || pillCount > 0;
   const awaitingInput = chat.requests.some(
     (request) => request.blocking && request.answerable,
@@ -1673,19 +1755,6 @@ function ChatDockContent({
     entry.localId,
     onSignalsChange,
   ]);
-  const onSignalsChangeRef = useRef(onSignalsChange);
-  onSignalsChangeRef.current = onSignalsChange;
-  useEffect(
-    () => () =>
-      onSignalsChangeRef.current(entry.localId, {
-        working: false,
-        draft: false,
-        awaitingInput: false,
-        activity: null,
-      }),
-    [entry.localId],
-  );
-
   // Fresh values for the window Escape listener without re-subscribing.
   const entryRef = useRef(entry);
   entryRef.current = entry;

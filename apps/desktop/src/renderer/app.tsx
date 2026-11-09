@@ -151,6 +151,10 @@ import { SidebarHostProvider } from "./components/sidebar-host.js";
 import { ConfiguredSection } from "./components/sidebar-navigation.js";
 import type { SessionCommand } from "./components/sidebar-session-inspector.js";
 import { SiteSettingsHost } from "./components/site-settings-modal.js";
+import {
+  SurfaceErrorBoundary,
+  SurfacePane,
+} from "./components/surface-error-boundary.js";
 import { TabbedSidebar } from "./components/tabbed-sidebar.js";
 import { ThemePicker } from "./components/theme-picker.js";
 import { UpdateBanner } from "./components/update-banner.js";
@@ -7947,8 +7951,10 @@ export function App({
                           tabKey(tab) === recedingSurface,
                       )
                       .map((tab) => (
-                        <div
+                        <SurfacePane
                           key={tabKey(tab)}
+                          label={tab.label ?? "This tab"}
+                          onDismiss={() => closeTab(tabKey(tab))}
                           className={paneClass(tabKey(tab))}
                           style={paneStyle(tabKey(tab))}
                           {...paneFocusProps(tabKey(tab))}
@@ -8129,14 +8135,18 @@ export function App({
                               />
                             </Suspense>
                           ) : null}
-                        </div>
+                        </SurfacePane>
                       ))}
 
                     {/* Browser tabs stay mounted while hidden — unmounting a
                   webview would reload the page on every tab switch. */}
                     {workspace.browsers.map((browser) => (
-                      <div
+                      <SurfacePane
                         key={browser.localId}
+                        label={browser.title || "Page"}
+                        onDismiss={() =>
+                          closeTab(browserTabKey(browser.localId))
+                        }
                         className={paneClass(browserTabKey(browser.localId))}
                         style={paneStyle(browserTabKey(browser.localId))}
                         {...paneFocusProps(browserTabKey(browser.localId))}
@@ -8285,15 +8295,19 @@ export function App({
                               : undefined
                           }
                         />
-                      </div>
+                      </SurfacePane>
                     ))}
 
                     {/* Terminals stay mounted while hidden — unmounting kills
                   the shell. Editors likewise, preserving undo history,
                   scroll position, and unsaved drafts across switches. */}
                     {workspace.terminals.map((terminal) => (
-                      <div
+                      <SurfacePane
                         key={terminal.localId}
+                        label={terminal.title || "Terminal"}
+                        onDismiss={() =>
+                          closeTab(terminalTabKey(terminal.localId))
+                        }
                         data-surface-pane
                         className={paneClass(terminalTabKey(terminal.localId))}
                         style={paneStyle(terminalTabKey(terminal.localId))}
@@ -8383,12 +8397,14 @@ export function App({
                               : undefined
                           }
                         />
-                      </div>
+                      </SurfacePane>
                     ))}
 
                     {workspace.editors.map((editor) => (
-                      <div
+                      <SurfacePane
                         key={editor.localId}
+                        label={editor.filePath?.split("/").at(-1) ?? "Editor"}
+                        onDismiss={() => closeTab(editorTabKey(editor.localId))}
                         className={paneClass(editorTabKey(editor.localId))}
                         style={paneStyle(editorTabKey(editor.localId))}
                         {...paneFocusProps(editorTabKey(editor.localId))}
@@ -8471,7 +8487,7 @@ export function App({
                             }
                           />
                         </Suspense>
-                      </div>
+                      </SurfacePane>
                     ))}
                   </div>
 
@@ -8747,150 +8763,174 @@ export function App({
                     />
                   ))}
                 </div>
-              ) : activeTab?.kind === "onboarding" ? (
-                renderOnboarding(activeTab)
-              ) : activeTab?.kind === "settings" ? (
-                <SettingsScreen
-                  destination={activeTab.destination}
-                  profile={activeProfile}
-                  profiles={profilesData}
-                  onSearch={settingsSearch}
-                  onAddAgent={() => setWizardModalOpen(true)}
-                  onCreateAssistant={createAssistant}
-                  onChooseTheme={() => setThemePicker({ open: true })}
-                  onConfigureAgent={openConfigureAgent}
-                  onManageConnectors={() => setConnectorsModalOpen(true)}
-                />
-              ) : activeTab?.kind === "history" ? (
-                <HistoryScreen
-                  profileId={activeProfile?.id}
-                  onSearch={historySearch}
-                  onOpen={openHistory}
-                />
-              ) : activeTab?.kind === "passwords" ? (
-                <PasswordsScreen profileId={activeTab.name} />
-              ) : activeTab?.kind === "sites" ? (
-                <SitesScreen onOpenSite={setSiteSettingsOrigin} />
-              ) : activeTab?.kind === "downloads" ? (
-                <DownloadsScreen onOpen={openDownload} />
-              ) : activeTab?.kind === "extensions" ? (
-                <ExtensionsScreen onOpenUrl={(url) => openBrowserTab(url)} />
-              ) : activeTab?.kind === "profile-settings" && profilesData ? (
-                <ProfileSettingsScreen
-                  profileId={activeTab.name}
-                  activeProfileId={
-                    activeProfile?.id ?? profilesData.defaultProfileId
-                  }
-                  data={profilesData}
-                  projects={allProjects}
-                  onClose={() => closeTab(tabKey(activeTab))}
-                  onOpenPasswords={() => openPasswords(activeTab.name)}
-                />
-              ) : workspace.browsers.length > 0 ? (
-                <div className="relative flex min-h-0 flex-1 flex-col">
-                  {workspace.browsers.map((browser) => (
-                    <div
-                      key={browser.localId}
-                      className={paneClass(browserTabKey(browser.localId))}
-                      style={paneStyle(browserTabKey(browser.localId))}
-                      {...paneFocusProps(browserTabKey(browser.localId))}
-                    >
-                      <BrowserScreen
-                        profileId={browser.profileId}
-                        projectId={null}
-                        floatingDismissShortcut={
-                          keybindings["dismiss-floating"]
-                        }
-                        initialUrl={browser.url || browser.initialUrl}
-                        history={browser.history}
-                        incognito={browser.incognito}
-                        surfaceKey={browserTabKey(browser.localId)}
-                        active={
-                          runtime.visible &&
-                          browser.localId === activeBrowserTabId
-                        }
-                        visible={
-                          runtime.visible &&
-                          Boolean(viewSlots[browserTabKey(browser.localId)])
-                        }
-                        asleep={tabSleep.asleep(browser.localId)}
-                        onStateChange={(state) =>
-                          onBrowserState(browser.localId, state)
-                        }
-                        onPageClose={() =>
-                          closeTab(browserTabKey(browser.localId), {
-                            final: true,
-                          })
-                        }
-                        onPagePress={focusPaneOnPagePress(
-                          browserTabKey(browser.localId),
-                        )}
-                        onOpenSiteSettings={setSiteSettingsOrigin}
-                        onOpenPasswords={() => openPasswords(browser.profileId)}
-                        onOpenExtensions={() =>
-                          openTab({
-                            kind: "extensions",
-                            name: "extensions",
-                            label: "Extensions",
-                          })
-                        }
-                        onOpenUrl={(url) => openBrowserTab(url)}
-                        registerCommands={(commands) => {
-                          if (commands)
-                            browserCommandsRef.current.set(
-                              browser.localId,
-                              commands,
-                            );
-                          else
-                            browserCommandsRef.current.delete(browser.localId);
-                        }}
-                        registerNavigate={(navigate) =>
-                          browserNavigatorsRef.current.set(
-                            browser.localId,
-                            navigate,
-                          )
-                        }
-                        registerHistoryNavigate={(navigate) =>
-                          browserHistoryNavigatorsRef.current.set(
-                            browser.localId,
-                            navigate,
-                          )
-                        }
-                        registerGuest={(guestId) => {
-                          if (guestId === null) {
-                            browserGuestIdsRef.current.delete(browser.localId);
-                          } else {
-                            browserGuestIdsRef.current.set(
-                              browser.localId,
-                              guestId,
-                            );
-                          }
-                          reportExtensionTabsRef.current();
-                        }}
-                      />
-                    </div>
-                  ))}
-                </div>
               ) : (
-                <EmptyState
-                  key={activeProfile?.id}
-                  loading={
-                    !fallbackSelectionReady ||
-                    (fallbackRequest !== null &&
-                      fallbackDecision?.request !== fallbackRequest)
+                <SurfaceErrorBoundary
+                  label={activeTab?.label ?? "Workspace"}
+                  resetKey={workspace.activeTabKey}
+                  onDismiss={
+                    activeTab ? () => closeTab(tabKey(activeTab)) : undefined
                   }
-                  openingProject={preferredProject}
-                  onOpenProject={selectProject}
-                  loadError={projectsLoadError || initialProjectError !== null}
-                  retrying={projectsFetching}
-                  onRetry={() => {
-                    if (activeProfileId)
-                      initialProjects.current.delete(activeProfileId);
-                    if (activeProfileId)
-                      clearInitialProjectError(activeProfileId);
-                    void projectsQuery.refetch();
-                  }}
-                />
+                >
+                  {activeTab?.kind === "onboarding" ? (
+                    renderOnboarding(activeTab)
+                  ) : activeTab?.kind === "settings" ? (
+                    <SettingsScreen
+                      destination={activeTab.destination}
+                      profile={activeProfile}
+                      profiles={profilesData}
+                      onSearch={settingsSearch}
+                      onAddAgent={() => setWizardModalOpen(true)}
+                      onCreateAssistant={createAssistant}
+                      onChooseTheme={() => setThemePicker({ open: true })}
+                      onConfigureAgent={openConfigureAgent}
+                      onManageConnectors={() => setConnectorsModalOpen(true)}
+                    />
+                  ) : activeTab?.kind === "history" ? (
+                    <HistoryScreen
+                      profileId={activeProfile?.id}
+                      onSearch={historySearch}
+                      onOpen={openHistory}
+                    />
+                  ) : activeTab?.kind === "passwords" ? (
+                    <PasswordsScreen profileId={activeTab.name} />
+                  ) : activeTab?.kind === "sites" ? (
+                    <SitesScreen onOpenSite={setSiteSettingsOrigin} />
+                  ) : activeTab?.kind === "downloads" ? (
+                    <DownloadsScreen onOpen={openDownload} />
+                  ) : activeTab?.kind === "extensions" ? (
+                    <ExtensionsScreen
+                      onOpenUrl={(url) => openBrowserTab(url)}
+                    />
+                  ) : activeTab?.kind === "profile-settings" && profilesData ? (
+                    <ProfileSettingsScreen
+                      profileId={activeTab.name}
+                      activeProfileId={
+                        activeProfile?.id ?? profilesData.defaultProfileId
+                      }
+                      data={profilesData}
+                      projects={allProjects}
+                      onClose={() => closeTab(tabKey(activeTab))}
+                      onOpenPasswords={() => openPasswords(activeTab.name)}
+                    />
+                  ) : workspace.browsers.length > 0 ? (
+                    <div className="relative flex min-h-0 flex-1 flex-col">
+                      {workspace.browsers.map((browser) => (
+                        <SurfacePane
+                          key={browser.localId}
+                          label={browser.title || "Page"}
+                          onDismiss={() =>
+                            closeTab(browserTabKey(browser.localId))
+                          }
+                          className={paneClass(browserTabKey(browser.localId))}
+                          style={paneStyle(browserTabKey(browser.localId))}
+                          {...paneFocusProps(browserTabKey(browser.localId))}
+                        >
+                          <BrowserScreen
+                            profileId={browser.profileId}
+                            projectId={null}
+                            floatingDismissShortcut={
+                              keybindings["dismiss-floating"]
+                            }
+                            initialUrl={browser.url || browser.initialUrl}
+                            history={browser.history}
+                            incognito={browser.incognito}
+                            surfaceKey={browserTabKey(browser.localId)}
+                            active={
+                              runtime.visible &&
+                              browser.localId === activeBrowserTabId
+                            }
+                            visible={
+                              runtime.visible &&
+                              Boolean(viewSlots[browserTabKey(browser.localId)])
+                            }
+                            asleep={tabSleep.asleep(browser.localId)}
+                            onStateChange={(state) =>
+                              onBrowserState(browser.localId, state)
+                            }
+                            onPageClose={() =>
+                              closeTab(browserTabKey(browser.localId), {
+                                final: true,
+                              })
+                            }
+                            onPagePress={focusPaneOnPagePress(
+                              browserTabKey(browser.localId),
+                            )}
+                            onOpenSiteSettings={setSiteSettingsOrigin}
+                            onOpenPasswords={() =>
+                              openPasswords(browser.profileId)
+                            }
+                            onOpenExtensions={() =>
+                              openTab({
+                                kind: "extensions",
+                                name: "extensions",
+                                label: "Extensions",
+                              })
+                            }
+                            onOpenUrl={(url) => openBrowserTab(url)}
+                            registerCommands={(commands) => {
+                              if (commands)
+                                browserCommandsRef.current.set(
+                                  browser.localId,
+                                  commands,
+                                );
+                              else
+                                browserCommandsRef.current.delete(
+                                  browser.localId,
+                                );
+                            }}
+                            registerNavigate={(navigate) =>
+                              browserNavigatorsRef.current.set(
+                                browser.localId,
+                                navigate,
+                              )
+                            }
+                            registerHistoryNavigate={(navigate) =>
+                              browserHistoryNavigatorsRef.current.set(
+                                browser.localId,
+                                navigate,
+                              )
+                            }
+                            registerGuest={(guestId) => {
+                              if (guestId === null) {
+                                browserGuestIdsRef.current.delete(
+                                  browser.localId,
+                                );
+                              } else {
+                                browserGuestIdsRef.current.set(
+                                  browser.localId,
+                                  guestId,
+                                );
+                              }
+                              reportExtensionTabsRef.current();
+                            }}
+                          />
+                        </SurfacePane>
+                      ))}
+                    </div>
+                  ) : (
+                    <EmptyState
+                      key={activeProfile?.id}
+                      loading={
+                        !fallbackSelectionReady ||
+                        (fallbackRequest !== null &&
+                          fallbackDecision?.request !== fallbackRequest)
+                      }
+                      openingProject={preferredProject}
+                      onOpenProject={selectProject}
+                      loadError={
+                        projectsLoadError || initialProjectError !== null
+                      }
+                      retrying={projectsFetching}
+                      onRetry={() => {
+                        if (activeProfileId)
+                          initialProjects.current.delete(activeProfileId);
+                        if (activeProfileId)
+                          clearInitialProjectError(activeProfileId);
+                        void projectsQuery.refetch();
+                      }}
+                    />
+                  )}
+                </SurfaceErrorBoundary>
               )}
             </main>
             <TabbedSidebar

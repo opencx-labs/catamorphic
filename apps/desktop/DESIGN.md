@@ -1,5 +1,10 @@
 # Catamorphic Desktop — Design System
 
+A failed view leaves the rest of the workspace usable (ADR 0309). Tab panes,
+chat presentations and the floating palette contain their own render errors,
+with a local Try again and Close view. Other tabs retain their state; retry
+reopens only the failed content. A shell error still offers window recovery.
+
 Native authority belongs to admitted Work documents, with explicit grants for
 auxiliary pages. Browser and app content has separate, revocable boundaries
 (ADR 0300). Sandboxing and the internal-origin migration preserve existing

@@ -314,3 +314,4 @@ Settled design decisions live here as short Architecture Decision Records. They 
 | [0306](0306-work-tutorial-and-theme-picker.md) | Tab onboarding and one shared theme picker | Accepted |
 | [0307](0307-typed-private-work-customizations.md) | Typed private Work customizations | Accepted (amends 0069, 0134, 0139, 0234, 0239, 0277) |
 | [0308](0308-customization-forms-and-inspectors.md) | Customization forms and inspectors | Accepted (amends 0234, 0239, 0307) |
+| [0309](0309-render-failures-stay-with-their-surface.md) | Render failures stay with their surface | Accepted |
