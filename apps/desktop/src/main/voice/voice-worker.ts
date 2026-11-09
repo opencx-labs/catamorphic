@@ -175,7 +175,11 @@ async function start({
       // One load at a time, shared by every start that wants it.
       if (loaded?.key !== key) {
         const loading = import("./sherpa-speech.js").then((sherpa) =>
-          sherpa.loadSherpaSpeech(speech.paths, speech.voice),
+          sherpa.loadSherpaSpeech({
+            paths: speech.paths,
+            voice: speech.voice,
+            speaking: !dictation,
+          }),
         );
         loaded = { key, parts: loading };
         loading.catch(() => {
@@ -184,6 +188,10 @@ async function start({
       }
       parts = await loaded.parts;
     }
+    if (mine !== starts) return;
+    // A warm worker may have only dictated so far. A conversation (or a
+    // reply read aloud) prepares speech before reporting ready too.
+    if (!dictation) await parts.prepareSynthesis?.();
     // Voice went off, or started again, while the models loaded.
     if (mine !== starts) return;
     if (speech.kind === "models") parts.setVoice?.(speech.voice);
