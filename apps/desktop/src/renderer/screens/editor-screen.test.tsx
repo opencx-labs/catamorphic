@@ -320,62 +320,88 @@ it("reads the open file again when its window is back, unless a draft holds it",
   }
 });
 
-it("names an untitled file when it is first saved, and the tab follows it", async () => {
-  vi.mocked(desktopApi.editorFileRead).mockResolvedValue({ content: "" });
-  vi.mocked(desktopApi.editorFileWrite).mockResolvedValue(undefined);
-  vi.mocked(desktopApi.editorFileRename).mockResolvedValue(
-    "/projects/p1/.work/personal/me/Plan.txt",
-  );
-  Reflect.set(globalThis, "IS_REACT_ACT_ENVIRONMENT", true);
-  const node = document.createElement("div");
-  document.body.append(node);
-  const root = createRoot(node);
-  const onRename = vi.fn();
-  await act(async () =>
-    root.render(
-      <QueryClientProvider client={workQueryClient({ retry: 0, staleTime: 0 })}>
-        <EditorScreen
-          active
-          projectId="p1"
-          filePath=".work/personal/me/Untitled.txt"
-          onFindFile={() => {}}
-          onDirtyChange={() => {}}
-          onRename={onRename}
-        />
-      </QueryClientProvider>,
-    ),
-  );
-  const editor = () =>
-    node.querySelector<HTMLTextAreaElement>("[data-testid=editor]");
-  await settle(() => editor() !== null);
-  try {
-    const textarea = editor();
-    if (!textarea) throw new Error("editor did not mount");
-    await type(textarea, "# Plan\nfirst steps");
-    await act(async () =>
-      node
-        .querySelector<HTMLButtonElement>("[data-testid=editor-save]")
-        ?.click(),
+it.each(["txt", "md"])(
+  "names an untitled %s file when it is first saved, including after autosave",
+  async (extension) => {
+    vi.mocked(desktopApi.editorFileRead).mockResolvedValue({ content: "" });
+    vi.mocked(desktopApi.editorFileWrite).mockResolvedValue(undefined);
+    vi.mocked(desktopApi.editorFileRename).mockResolvedValue(
+      `/projects/p1/.work/personal/me/Plan.${extension}`,
     );
-    expect(desktopApi.editorFileWrite).not.toHaveBeenCalled();
-    const name = document.querySelector<HTMLInputElement>("input[name=name]");
-    expect(name?.value).toBe("Plan");
-    await act(async () => name?.form?.requestSubmit());
-    await settle(() => onRename.mock.calls.length > 0);
-    expect(desktopApi.editorFileWrite).toHaveBeenCalledWith({
-      filePath: "/projects/p1/.work/personal/me/Untitled.txt",
-      content: "# Plan\nfirst steps",
-      expectedContent: "",
-    });
-    expect(desktopApi.editorFileRename).toHaveBeenCalledWith({
-      filePath: "/projects/p1/.work/personal/me/Untitled.txt",
-      name: "Plan",
-    });
-    expect(onRename).toHaveBeenCalledWith(".work/personal/me/Plan.txt");
-  } finally {
-    act(() => root.unmount());
-  }
-});
+    Reflect.set(globalThis, "IS_REACT_ACT_ENVIRONMENT", true);
+    const node = document.createElement("div");
+    document.body.append(node);
+    const root = createRoot(node);
+    const onRename = vi.fn();
+    await act(async () =>
+      root.render(
+        <QueryClientProvider
+          client={workQueryClient({ retry: 0, staleTime: 0 })}
+        >
+          <EditorScreen
+            active
+            projectId="p1"
+            filePath={`.work/personal/me/Untitled.${extension}`}
+            onFindFile={() => {}}
+            onDirtyChange={() => {}}
+            onRename={onRename}
+          />
+        </QueryClientProvider>,
+      ),
+    );
+    const editor = () =>
+      node.querySelector<HTMLTextAreaElement>("[data-testid=editor]");
+    await settle(() => editor() !== null);
+    try {
+      const textarea = editor();
+      if (!textarea) throw new Error("editor did not mount");
+      if (extension === "md") vi.useFakeTimers();
+      await type(textarea, "# Plan\nfirst steps");
+      if (extension === "md") {
+        await act(async () => {
+          await vi.advanceTimersByTimeAsync(550);
+        });
+        vi.useRealTimers();
+        expect(desktopApi.editorFileWrite).toHaveBeenCalledTimes(1);
+        expect(
+          node
+            .querySelector("[data-testid=editor-save]")
+            ?.hasAttribute("data-unsaved"),
+        ).toBe(false);
+      }
+      expect(
+        node.querySelector<HTMLButtonElement>("[data-testid=editor-save]")
+          ?.disabled,
+      ).toBe(false);
+      await act(async () =>
+        node
+          .querySelector<HTMLButtonElement>("[data-testid=editor-save]")
+          ?.click(),
+      );
+      if (extension === "txt")
+        expect(desktopApi.editorFileWrite).not.toHaveBeenCalled();
+      const name = document.querySelector<HTMLInputElement>("input[name=name]");
+      expect(name?.value).toBe("Plan");
+      await act(async () => name?.form?.requestSubmit());
+      await settle(() => onRename.mock.calls.length > 0);
+      expect(desktopApi.editorFileWrite).toHaveBeenCalledWith({
+        filePath: `/projects/p1/.work/personal/me/Untitled.${extension}`,
+        content: "# Plan\nfirst steps",
+        expectedContent: "",
+      });
+      expect(desktopApi.editorFileWrite).toHaveBeenCalledTimes(1);
+      expect(desktopApi.editorFileRename).toHaveBeenCalledWith({
+        filePath: `/projects/p1/.work/personal/me/Untitled.${extension}`,
+        name: "Plan",
+      });
+      expect(onRename).toHaveBeenCalledWith(
+        `.work/personal/me/Plan.${extension}`,
+      );
+    } finally {
+      act(() => root.unmount());
+    }
+  },
+);
 
 it("autosaves Markdown edits in order, including an undo during an in-flight write", async () => {
   vi.mocked(desktopApi.editorFileRead).mockResolvedValue({

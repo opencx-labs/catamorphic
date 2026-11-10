@@ -296,18 +296,20 @@ export function EditorScreen({
   }, [renameRequest]);
   const keptNamesRef = useRef(new Set<string>());
   const personal = filePath ? PERSONAL_PREFIX_PATTERN.test(filePath) : false;
+  const needsName = Boolean(
+    onRename &&
+      filePath &&
+      personal &&
+      UNTITLED_NAME.test(baseName(filePath)) &&
+      !keptNamesRef.current.has(filePath),
+  );
 
   const saveRef = useRef(() => {});
   saveRef.current = () => {
     if (!filePath) return;
     const content = draftsRef.current[filePath];
     if (writeFile.isPending) return;
-    if (
-      onRename &&
-      personal &&
-      UNTITLED_NAME.test(baseName(filePath)) &&
-      !keptNamesRef.current.has(filePath)
-    ) {
+    if (needsName) {
       setNaming("save");
       return;
     }
@@ -525,6 +527,7 @@ export function EditorScreen({
             <FileSaveButton
               dirty={draft !== undefined}
               saving={writeFile.isPending}
+              canSave={draft !== undefined || needsName}
               testId="editor-save"
               onSave={() => saveRef.current()}
             />

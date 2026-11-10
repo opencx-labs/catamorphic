@@ -149,7 +149,8 @@ explicit Save. Markdown's top-right pill contains only the Save button. File and
 workflow editors share the same fixed icon button: an accent notification dot
 marks unsaved changes and fades away after saving; the saved state keeps the Save
 icon. The saving spinner crossfades without changing the button's size. Cmd+S
-still saves immediately and can name an Untitled document.
+still saves immediately. Save and Cmd+S can name an Untitled document even after
+its content autosaves.
 An editor that finishes loading yields focus to a menu or control the person
 has chosen meanwhile; its initial focus frame is canceled when it unmounts.
 

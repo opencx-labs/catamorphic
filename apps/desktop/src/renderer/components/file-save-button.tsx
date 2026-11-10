@@ -6,6 +6,7 @@ import { ShortcutHint } from "./shortcut-hint.js";
 export function FileSaveButton({
   dirty,
   saving,
+  canSave = dirty,
   disabled = false,
   disabledReason,
   onSave,
@@ -13,12 +14,14 @@ export function FileSaveButton({
 }: {
   dirty: boolean;
   saving: boolean;
+  /** Naming a new file can remain available after its content autosaves. */
+  canSave?: boolean;
   disabled?: boolean;
   disabledReason?: string;
   onSave: () => void;
   testId?: string;
 }) {
-  const label = saving ? "Saving file" : dirty ? "Save file" : "File saved";
+  const label = saving ? "Saving file" : canSave ? "Save file" : "File saved";
   return (
     <ShortcutHint
       label={label}
@@ -28,7 +31,7 @@ export function FileSaveButton({
         <PendingButton
           type="button"
           pending={saving}
-          done={!dirty}
+          done={!canSave}
           disabled={disabled}
           data-disabled-reason={disabledReason}
           data-testid={testId}
