@@ -184,6 +184,126 @@ describe("SidebarItemRow hover preview", () => {
 });
 
 describe("SidebarItemRow menu motion", () => {
+  it("returns Escape to the row when no control was focused on opening", () => {
+    vi.useFakeTimers();
+    const { container } = mountMenuRow();
+    expect(document.activeElement).toBe(document.body);
+    act(() => {
+      container.firstElementChild?.dispatchEvent(
+        new MouseEvent("contextmenu", { bubbles: true, clientX: 200 }),
+      );
+    });
+    act(() =>
+      window.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape" })),
+    );
+    act(() => vi.advanceTimersByTime(180));
+    expect(document.activeElement).toBe(
+      container.querySelector("[data-tree-primary]"),
+    );
+  });
+
+  it("preserves the previous focus for an action that runs after exit", () => {
+    vi.useFakeTimers();
+    const { container, onAction } = mountMenuRow();
+    const input = document.createElement("input");
+    container.append(input);
+    act(() => {
+      input.focus();
+      container.firstElementChild?.dispatchEvent(
+        new MouseEvent("contextmenu", { bubbles: true, clientX: 200 }),
+      );
+    });
+    act(() =>
+      document
+        .querySelector<HTMLButtonElement>('[role="menu"] button')
+        ?.click(),
+    );
+    expect(document.activeElement).toBe(input);
+    expect(onAction).not.toHaveBeenCalled();
+    act(() => vi.advanceTimersByTime(180));
+    expect(document.activeElement).toBe(input);
+    expect(onAction).toHaveBeenCalledOnce();
+  });
+
+  it.each(["inert", "hidden", "disabled"])(
+    "returns to the previous control when the row becomes %s",
+    (unavailable) => {
+      vi.useFakeTimers();
+      const { container } = mountMenuRow();
+      const input = document.createElement("input");
+      document.body.append(input);
+      containers.push(input);
+      act(() => {
+        input.focus();
+        container.firstElementChild?.dispatchEvent(
+          new MouseEvent("contextmenu", { bubbles: true, clientX: 200 }),
+        );
+      });
+      act(() => {
+        const target =
+          unavailable === "disabled"
+            ? container.querySelector("[data-tree-primary]")
+            : container;
+        target?.setAttribute(unavailable, "");
+        window.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape" }));
+      });
+      act(() => vi.advanceTimersByTime(180));
+      expect(document.activeElement).toBe(input);
+    },
+  );
+
+  it("leaves a replacement menu focused when the previous menu exits", () => {
+    vi.useFakeTimers();
+    const first = mountMenuRow().container;
+    const second = mountMenuRow().container;
+    const open = (container: HTMLElement) => {
+      act(() => {
+        container.querySelector<HTMLElement>("[data-tree-primary]")?.focus();
+        container.firstElementChild?.dispatchEvent(
+          new MouseEvent("contextmenu", { bubbles: true, clientX: 200 }),
+        );
+      });
+    };
+    open(first);
+    act(() =>
+      window.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape" })),
+    );
+    open(second);
+    const replacement = document.querySelector('[role="menu"].animate-pop-in');
+    expect(replacement?.contains(document.activeElement)).toBe(true);
+    act(() => vi.advanceTimersByTime(180));
+    expect(document.querySelector('[role="menu"].animate-pop-in')).toBe(
+      replacement,
+    );
+    expect(replacement?.contains(document.activeElement)).toBe(true);
+    act(() =>
+      window.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape" })),
+    );
+    act(() => vi.advanceTimersByTime(180));
+    expect(document.activeElement).toBe(
+      second.querySelector("[data-tree-primary]"),
+    );
+  });
+
+  it("leaves another control focused when a menu finishes exiting", () => {
+    vi.useFakeTimers();
+    const { container } = mountMenuRow();
+    const input = document.createElement("input");
+    container.append(input);
+    act(() => {
+      container.querySelector<HTMLElement>("[data-tree-primary]")?.focus();
+      container.firstElementChild?.dispatchEvent(
+        new MouseEvent("contextmenu", { bubbles: true, clientX: 200 }),
+      );
+    });
+    act(() =>
+      window.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape" })),
+    );
+    act(() => input.focus());
+    act(() => vi.advanceTimersByTime(180));
+    expect(document.activeElement).toBe(input);
+  });
+
   it("focuses the animated entrance and stays mounted through exit", () => {
     vi.useFakeTimers();
     const { container } = mountMenuRow();

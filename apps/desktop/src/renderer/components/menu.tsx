@@ -113,6 +113,7 @@ export function MenuPortal<TEntry extends ContextMenuEntry>({
   entries,
   label,
   anchor,
+  returnFocusTo,
   onPick,
   onDismiss,
   onExited,
@@ -124,6 +125,8 @@ export function MenuPortal<TEntry extends ContextMenuEntry>({
   label?: string;
   /** The control the menu belongs to; the menu goes when it does. */
   anchor?: RefObject<Element | null>;
+  /** The owner's preferred return control, unless focus has moved elsewhere. */
+  returnFocusTo?: () => HTMLElement | null;
   onPick: (entry: TEntry) => void;
   onDismiss: () => void;
   onExited: () => void;
@@ -172,14 +175,17 @@ export function MenuPortal<TEntry extends ContextMenuEntry>({
       return;
     }
     setSub(null);
-    const back = returnFocusRef.current;
+    const targets = [returnFocusTo?.(), returnFocusRef.current];
     returnFocusRef.current = null;
     if (active && active !== document.body && !inMenu(active)) return;
     // The app's move, not the person's: the control it lands on (a chip,
     // a row) opens no hover card for it.
-    if (back?.isConnected)
-      moveFocusAsApp(() => back.focus({ preventScroll: true }));
-    else if (active instanceof HTMLElement && inMenu(active)) active.blur();
+    for (const target of targets) {
+      if (!target || anchorGone(target)) continue;
+      moveFocusAsApp(() => target.focus({ preventScroll: true }));
+      if (document.activeElement === target) return;
+    }
+    if (active instanceof HTMLElement && inMenu(active)) active.blur();
   }, [open]);
 
   useEffect(() => {

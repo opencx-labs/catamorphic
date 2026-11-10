@@ -2,6 +2,7 @@ import { afterAll, beforeAll, expect, it } from "vitest";
 import {
   type AppHandle,
   createProjectWorkspace,
+  focusWindow,
   launchApp,
   setReactValueJs,
   waitForProjectWorkspace,
@@ -82,9 +83,11 @@ async function rightClick(
 ) {
   const at = `(() => { const el = document.querySelector(${JSON.stringify(selector)}); if (!el) return false; const r = el.getBoundingClientRect(); const x = r.x + r.width * ${across}; const y = r.y + r.height / 2; const hit = document.elementFromPoint(x, y); return el.contains(hit) || (!${exactly} && el.closest('[data-point-key]')?.contains(hit)) ? { x, y } : false; })()`;
   for (let attempt = 0; ; attempt += 1) {
+    await focusWindow(app);
     const point = await app.waitFor<{ x: number; y: number }>(at, {
       label: `${selector} under the pointer`,
     });
+    await app.movePointer(point);
     for (const type of ["mousePressed", "mouseReleased"])
       await app.cdp("Input.dispatchMouseEvent", {
         type,
@@ -93,25 +96,17 @@ async function rightClick(
         clickCount: 1,
       });
     try {
-      await app.waitFor(
-        `document.querySelectorAll('[role="menuitem"]').length === ${listed.length}`,
+      return await app.waitFor<string[]>(
+        `(() => { const items = [...document.querySelectorAll('[role="menuitem"]')]; const menu = items[0]?.closest('[role="menu"]'); return items.length === ${listed.length} && menu && menu.getAnimations().every((animation) => animation.playState !== 'running') && items.map((item) => item.textContent.trim()); })()`,
         {
-          label: `menu on ${selector}`,
+          label: `menu on ${selector} at rest`,
           timeoutMs: attempt < 2 ? 3_000 : 15_000,
         },
       );
-      await app.waitFor(MENU_AT_REST, {
-        label: `menu on ${selector} at rest`,
-        timeoutMs: attempt < 2 ? 3_000 : 15_000,
-      });
-      break;
     } catch (cause) {
       if (attempt >= 2) throw cause;
     }
   }
-  return app.eval<string[]>(
-    `[...document.querySelectorAll('[role="menuitem"]')].map((item) => item.textContent.trim())`,
-  );
 }
 
 const choose = (label: string) =>
@@ -189,7 +184,7 @@ it("lists a file tab's actions after its ways to open, from anywhere on the tab"
   const middle = await app.eval<{ x: number; y: number }>(
     `(() => { const r = document.querySelector('${tab}').getBoundingClientRect(); return { x: r.x + r.width / 2, y: r.y + r.height / 2 }; })()`,
   );
-  await app.cdp("Input.dispatchMouseEvent", { type: "mouseMoved", ...middle });
+  await app.movePointer(middle);
   expect(await rightClick(`${tab} .workspace-tab-close`, 0.5, true)).toEqual(
     TAB_MENU,
   );
@@ -200,6 +195,7 @@ it("lists a file tab's actions after its ways to open, from anywhere on the tab"
   const item = await app.eval<{ x: number; y: number }>(
     `(() => { const r = [...document.querySelectorAll('[role="menuitem"]')].at(-1).getBoundingClientRect(); return { x: r.x + r.width / 2, y: r.y + r.height / 2 }; })()`,
   );
+  await app.movePointer(item);
   for (const type of ["mousePressed", "mouseReleased"])
     await app.cdp("Input.dispatchMouseEvent", {
       type,
