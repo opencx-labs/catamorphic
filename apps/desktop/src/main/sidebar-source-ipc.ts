@@ -492,6 +492,22 @@ export function registerSidebarSources(deps: {
     event: Electron.IpcMainInvokeEvent,
     input: z.infer<typeof identity>,
   ) => {
+    // A first lookup can cross a reload while its root or approval is read.
+    // Navigation must release its placeholder before that lookup can finish.
+    const senderId = event.sender.id;
+    if (!attached.has(senderId)) {
+      attached.add(senderId);
+      event.sender.once("destroyed", () => {
+        cleanup(senderId);
+        attached.delete(senderId);
+      });
+      event.sender.on(
+        "did-start-navigation",
+        (_event, _url, _inPlace, mainFrame) => {
+          if (mainFrame) cleanup(senderId);
+        },
+      );
+    }
     const profileId = deps.windows.profileFor(event.sender);
     if (deps.profiles.profileForProject(input.projectId).id !== profileId)
       throw new Error("This project belongs to another profile.");
@@ -615,20 +631,6 @@ export function registerSidebarSources(deps: {
       });
       runtime = created;
       runtimes.set(key, created);
-    }
-    const senderId = event.sender.id;
-    if (!attached.has(senderId)) {
-      attached.add(senderId);
-      event.sender.once("destroyed", () => {
-        cleanup(senderId);
-        attached.delete(senderId);
-      });
-      event.sender.on(
-        "did-start-navigation",
-        (_event, _url, _inPlace, mainFrame) => {
-          if (mainFrame) cleanup(senderId);
-        },
-      );
     }
     return { runtime, profileId, subject, declared, ask, modulePath };
   };

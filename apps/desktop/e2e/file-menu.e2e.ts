@@ -2,6 +2,7 @@ import { afterAll, beforeAll, expect, it } from "vitest";
 import {
   type AppHandle,
   createProjectWorkspace,
+  focusWindow,
   launchApp,
   setReactValueJs,
   waitForProjectWorkspace,
@@ -62,6 +63,8 @@ afterAll(async () => {
 });
 
 /** Where the open menu rests, once it has popped in; false before. */
+const TAB_MENU = [...MENU, "Rename…"];
+
 const MENU_AT_REST = `(() => { const menu = document.querySelector('[role="menuitem"]')?.closest('[role="menu"]'); return !!menu && menu.getAnimations().every((a) => a.playState !== 'running') && JSON.stringify(menu.getBoundingClientRect()); })()`;
 
 /**
@@ -76,13 +79,15 @@ async function rightClick(
   selector: string,
   across = 0.5,
   exactly = false,
-  listed = MENU,
+  listed = TAB_MENU,
 ) {
   const at = `(() => { const el = document.querySelector(${JSON.stringify(selector)}); if (!el) return false; const r = el.getBoundingClientRect(); const x = r.x + r.width * ${across}; const y = r.y + r.height / 2; const hit = document.elementFromPoint(x, y); return el.contains(hit) || (!${exactly} && el.closest('[data-point-key]')?.contains(hit)) ? { x, y } : false; })()`;
   for (let attempt = 0; ; attempt += 1) {
+    await focusWindow(app);
     const point = await app.waitFor<{ x: number; y: number }>(at, {
       label: `${selector} under the pointer`,
     });
+    await app.movePointer(point);
     for (const type of ["mousePressed", "mouseReleased"])
       await app.cdp("Input.dispatchMouseEvent", {
         type,
@@ -91,25 +96,17 @@ async function rightClick(
         clickCount: 1,
       });
     try {
-      await app.waitFor(
-        `document.querySelectorAll('[role="menuitem"]').length === ${listed.length}`,
+      return await app.waitFor<string[]>(
+        `(() => { const items = [...document.querySelectorAll('[role="menuitem"]')]; const menu = items[0]?.closest('[role="menu"]'); return items.length === ${listed.length} && menu && menu.getAnimations().every((animation) => animation.playState !== 'running') && items.map((item) => item.textContent.trim()); })()`,
         {
-          label: `menu on ${selector}`,
+          label: `menu on ${selector} at rest`,
           timeoutMs: attempt < 2 ? 3_000 : 15_000,
         },
       );
-      await app.waitFor(MENU_AT_REST, {
-        label: `menu on ${selector} at rest`,
-        timeoutMs: attempt < 2 ? 3_000 : 15_000,
-      });
-      break;
     } catch (cause) {
       if (attempt >= 2) throw cause;
     }
   }
-  return app.eval<string[]>(
-    `[...document.querySelectorAll('[role="menuitem"]')].map((item) => item.textContent.trim())`,
-  );
 }
 
 const choose = (label: string) =>
@@ -176,7 +173,9 @@ it("lists a file tab's actions after its ways to open, from anywhere on the tab"
     timeoutMs: 30_000,
   });
   // Its label.
-  expect(await rightClick(`${tab} .workspace-tab-label`, 0.3)).toEqual(MENU);
+  expect(await rightClick(`${tab} .workspace-tab-label`, 0.3)).toEqual(
+    TAB_MENU,
+  );
   expect(await copied("Copy path")).toBe(`${root}/notes/plan.md`);
   // Its close button, over the label's end once the pointer is on the tab.
   await app.waitFor(`!document.querySelector('[role="menuitem"]')`, {
@@ -185,9 +184,9 @@ it("lists a file tab's actions after its ways to open, from anywhere on the tab"
   const middle = await app.eval<{ x: number; y: number }>(
     `(() => { const r = document.querySelector('${tab}').getBoundingClientRect(); return { x: r.x + r.width / 2, y: r.y + r.height / 2 }; })()`,
   );
-  await app.cdp("Input.dispatchMouseEvent", { type: "mouseMoved", ...middle });
+  await app.movePointer(middle);
   expect(await rightClick(`${tab} .workspace-tab-close`, 0.5, true)).toEqual(
-    MENU,
+    TAB_MENU,
   );
   // A right-click in the open menu does not open it again where it was.
   const before = await app.waitFor<string>(MENU_AT_REST, {
@@ -196,6 +195,7 @@ it("lists a file tab's actions after its ways to open, from anywhere on the tab"
   const item = await app.eval<{ x: number; y: number }>(
     `(() => { const r = [...document.querySelectorAll('[role="menuitem"]')].at(-1).getBoundingClientRect(); return { x: r.x + r.width / 2, y: r.y + r.height / 2 }; })()`,
   );
+  await app.movePointer(item);
   for (const type of ["mousePressed", "mouseReleased"])
     await app.cdp("Input.dispatchMouseEvent", {
       type,
@@ -228,7 +228,7 @@ it("lists the same on a file link in a chat's reply", async () => {
     timeoutMs: 30_000,
     label: "file link in the reply",
   });
-  expect(await rightClick(link)).toEqual(MENU);
+  expect(await rightClick(link, 0.5, false, MENU)).toEqual(MENU);
   expect(await copied("Copy path")).toBe(`${root}/notes/plan.md`);
 });
 
@@ -292,4 +292,100 @@ it("copies the address of a URL in chat and an ordinary link elsewhere", async (
   await app.waitFor(`!!document.querySelector('${webRow}')`);
   expect(await rightClick(webRow, 0.5, true, actions)).toEqual(actions);
   expect(await copied("Copy link")).toBe(url);
+});
+
+it("renames the current file from its tab and palette while preserving the extension", async () => {
+  // Close the previous test's palette and show the existing file tab.
+  await run(
+    `window.dispatchEvent(new KeyboardEvent('keydown', {key:'Escape',bubbles:true})); const tab = $('[data-point-key^="editor:"] .workspace-tab-label'); tab.click(); return true;`,
+  );
+  const tab = '[data-workspace-visible="true"] [data-point-key^="editor:"]';
+  await rightClick(`${tab} .workspace-tab-label`);
+  await choose("Rename…");
+  await app.waitFor(
+    `document.querySelector('input[name="name"]')?.value === 'plan'`,
+    { label: "rename input excludes the extension" },
+  );
+  await app.eval(
+    `(() => { ${setReactValueJs}; const input = document.querySelector('input[name="name"]'); setReactValue(input, 'Roadmap.v2'); input.form.requestSubmit(); })()`,
+  );
+  await wait(
+    `return $('[data-editor-toolbar]')?.textContent.includes('Roadmap.v2.md');`,
+  );
+  await app.waitFor(`!document.querySelector('input[name="name"]')`, {
+    label: "rename dialog closed",
+  });
+  await run(
+    `window.dispatchEvent(new KeyboardEvent('keydown', {key:'p',metaKey:/Mac/.test(navigator.platform),ctrlKey:!/Mac/.test(navigator.platform),bubbles:true})); return true;`,
+  );
+  await wait(`return !!$('[data-palette="overlay"] textarea');`);
+  await run(
+    `${setReactValueJs}; setReactValue($('[data-palette="overlay"] textarea'), 'rename current file'); return true;`,
+  );
+  await wait(
+    `const row = $('[data-item-id="action:rename-file"]'); if (!row) return false; row.dispatchEvent(new MouseEvent('mousedown', {button:0,bubbles:true,cancelable:true})); return true;`,
+  );
+  await app.waitFor(
+    `document.querySelector('input[name="name"]')?.value === 'Roadmap.v2'`,
+    { label: "palette targets the renamed file" },
+  );
+  await app.eval(
+    `(() => { ${setReactValueJs}; const input = document.querySelector('input[name="name"]'); setReactValue(input, 'Final'); input.form.requestSubmit(); })()`,
+  );
+  await wait(
+    `return $('[data-editor-toolbar]')?.textContent.includes('Final.md');`,
+  );
+  const content = await app.eval<string>(
+    `window.catamorphicDesktop.editorFileRead({ filePath: ${JSON.stringify(root)} + '/notes/Final.md' }).then((file) => file.content)`,
+  );
+  expect(content).toBe("# Plan");
+});
+
+it("renames a local browser file from its tab", async () => {
+  await app.eval(`(async () => {
+    const { url } = await window.catamorphicDesktop.getServerState();
+    const { items } = await fetch(url + '/api/projects').then((r) => r.json());
+    const project = items.find((p) => p.name === 'File menu');
+    const response = await fetch(url + '/api/projects/' + project.id + '/files/' + encodeURIComponent('notes/page.html'), { method:'PUT', headers:{'content-type':'application/json'}, body:JSON.stringify({content:'<!doctype html><title>Local page</title><p>Page content</p>'}) });
+    if (!response.ok) throw new Error('Could not create local page');
+  })()`);
+  await run(
+    `$('[data-header-action="command:search-files"]').click(); return true;`,
+  );
+  await wait(`return !!$('textarea[placeholder="Search filenames…"]');`);
+  await run(
+    `${setReactValueJs}; setReactValue($('textarea[placeholder="Search filenames…"]'), 'page.html'); return true;`,
+  );
+  await wait(
+    `const row = $$('[role="option"]').find((item) => item.textContent.includes('page.html')); if (!row) return false; row.dispatchEvent(new MouseEvent('mousedown', {button:0,bubbles:true,cancelable:true})); return true;`,
+  );
+  const tab = '[data-workspace-visible="true"] [data-point-key^="browser:"]';
+  await app.waitFor(`!!document.querySelector('${tab}')`, {
+    label: "local browser file tab",
+  });
+  expect(
+    await rightClick(`${tab} .workspace-tab-label`, 0.5, false, [
+      ...MENU,
+      "Copy link",
+      "Rename file…",
+      "Rename tab…",
+    ]),
+  ).toEqual([...MENU, "Copy link", "Rename file…", "Rename tab…"]);
+  await choose("Rename file…");
+  await app.waitFor(
+    `document.querySelector('input[name="name"]')?.value === 'page'`,
+  );
+  await app.eval(
+    `(() => { ${setReactValueJs}; const input = document.querySelector('input[name="name"]'); setReactValue(input, 'renamed'); input.form.requestSubmit(); })()`,
+  );
+  await wait(
+    `return $('[data-address-field] input')?.value.includes('/notes/renamed.html');`,
+  );
+  const content = await app.eval<string>(
+    `window.catamorphicDesktop.editorFileRead({ filePath: ${JSON.stringify(root)} + '/notes/renamed.html' }).then((file) => file.content)`,
+  );
+  expect(content).toContain("Page content");
+  await app.screenshot(
+    `${process.env.CATAMORPHIC_E2E_ARTIFACTS_DIR ?? "/tmp"}/file-rename.png`,
+  );
 });

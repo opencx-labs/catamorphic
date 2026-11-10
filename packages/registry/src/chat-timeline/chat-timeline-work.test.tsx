@@ -249,7 +249,7 @@ describe("ChatTimeline work display", () => {
         (step) => [step.textContent, step.hasAttribute("data-running")],
       ),
     ).toEqual([
-      ["$ bun test4s", false],
+      ["$ bun test·exit code 04s", false],
       ["$ bun run lint3s", true],
     ]);
     expect(liveWork?.querySelector("[data-testid=chat-copy]")).toBeNull();

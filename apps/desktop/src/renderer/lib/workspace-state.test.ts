@@ -2,6 +2,7 @@ import { expect, it } from "vitest";
 import {
   agentOpenInFront,
   attachBlocker,
+  chatToExpand,
   closingTabKeys,
   emptyUtilityWorkspace,
   hydrateWorkspace,
@@ -26,6 +27,47 @@ const initial = (): Workspace => ({
   ],
   chats: [{ localId: "c", mode: "tab", sessionId: "session" }],
   activeTabKey: "chat:c",
+});
+
+it("expands the floating chat after a background chat tab takes focus", () => {
+  const ws = transitionWorkspace(
+    {
+      ...initial(),
+      chats: [
+        { localId: "floating", mode: "partial", sessionId: "floating-session" },
+        { localId: "c", mode: "tab", sessionId: "session" },
+      ],
+      activeChatId: "floating",
+    },
+    { type: "select", key: "chat:c" },
+  );
+  expect(ws.activeChatId).toBe("c");
+  expect(chatToExpand(ws)?.localId).toBe("floating");
+});
+
+it("expands the floating chat ahead of newer minimized chats without a remembered chat", () => {
+  const ws: Workspace = {
+    ...initial(),
+    activeTabKey: "palette:a",
+    chats: [
+      { localId: "floating", mode: "partial" },
+      { localId: "newer", mode: "min" },
+    ],
+  };
+  expect(chatToExpand(ws)?.localId).toBe("floating");
+});
+
+it("keeps the remembered and newest chat fallbacks when none is floating", () => {
+  const ws: Workspace = {
+    ...initial(),
+    activeChatId: "c",
+    chats: [...initial().chats, { localId: "newer", mode: "min" }],
+  };
+  expect(chatToExpand(ws)?.localId).toBe("c");
+  expect(chatToExpand({ ...ws, activeChatId: undefined })?.localId).toBe(
+    "newer",
+  );
+  expect(chatToExpand(emptyUtilityWorkspace())).toBeUndefined();
 });
 
 it.each([false, true])(
@@ -938,4 +980,41 @@ it("nests a dragged tab under a chat, opens a folded group for it, and takes it 
       beforeKey: null,
     }),
   ).toBe(ws);
+});
+
+it("keeps a browser tab name through snapshots, close/reopen and later page metadata", () => {
+  const ws: Workspace = {
+    ...emptyUtilityWorkspace(),
+    browsers: [
+      {
+        localId: "named",
+        profileId: "profile",
+        initialUrl: "https://example.test/",
+        url: "https://example.test/",
+        title: "Website title",
+        label: "Team chat",
+        faviconUrl: "https://example.test/old.ico",
+      },
+    ],
+    activeTabKey: "browser:named",
+  };
+  const restored = hydrateWorkspace(serializeWorkspace(ws));
+  expect(restored?.browsers[0]?.label).toBe("Team chat");
+  const closed = transitionWorkspace(ws, {
+    type: "close",
+    key: "browser:named",
+  });
+  const reopened = transitionWorkspace(closed, {
+    type: "reopen",
+    localId: "again",
+  });
+  const browser = reopened.browsers[0];
+  const updated = {
+    ...browser,
+    title: "Another website",
+    url: "https://other.test/",
+    faviconUrl: "https://other.test/new.ico",
+  };
+  expect(updated.label).toBe("Team chat");
+  expect(updated.faviconUrl).toBe("https://other.test/new.ico");
 });

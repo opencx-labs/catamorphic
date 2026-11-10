@@ -25,7 +25,7 @@ import { ChevronRight, Code2, ExternalLink, Play, X } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { PendingChatMessage } from "../../shared/chat.js";
 import { MonacoCodeEditor } from "../components/catamorphic/monaco-editor.js";
-import { PendingButton } from "../components/pending-button.js";
+import { FileSaveButton } from "../components/file-save-button.js";
 import {
   ProjectAuthorityProvider,
   useRemoteAuthority,
@@ -232,13 +232,7 @@ function WorkflowWorkbench({
   const select = useSetAtom(selectedNodeIdAtom);
   const write = useWriteProjectFile(projectId);
   const [saveError, setSaveError] = useState<string>();
-  const [saved, setSaved] = useState(false);
   const [statusRequest, setStatusRequest] = useState(0);
-  useEffect(() => {
-    if (!saved) return;
-    const timer = setTimeout(() => setSaved(false), 1500);
-    return () => clearTimeout(timer);
-  }, [saved]);
 
   // The panel opens for a subject and closes with it. Selecting a step shows
   // its details, except while code is kept beside the graph: the editor
@@ -288,7 +282,6 @@ function WorkflowWorkbench({
         );
       await write.mutateAsync({ path: filePath, content: snapshot.code });
       setBuffer((current) => ({ ...current, baseline: snapshot.code }));
-      setSaved(true);
     } catch (cause) {
       setSaveError(
         cause instanceof Error ? cause.message : "Could not save your changes.",
@@ -480,26 +473,19 @@ function WorkflowWorkbench({
               onRuns={() => show("runs")}
               onAutomation={() => show("automation")}
             />
-            {(dirty || (saved && !dirty)) && (
-              <PendingButton
-                type="button"
-                className="workflow-control"
-                pending={write.isPending}
-                done={saved && !dirty}
-                doneLabel="Saved"
-                disabled={!canEdit || !dirty || conflict}
-                data-disabled-reason={
-                  !canEdit
-                    ? "Only project builders can save workflow changes"
-                    : conflict
-                      ? "The file changed on disk. Review it before saving"
-                      : "No unsaved changes"
-                }
-                onClick={() => void save()}
-              >
-                Save
-              </PendingButton>
-            )}
+            <FileSaveButton
+              dirty={dirty}
+              saving={write.isPending}
+              disabled={!canEdit || conflict}
+              disabledReason={
+                !canEdit
+                  ? "Only project builders can save workflow changes"
+                  : conflict
+                    ? "The file changed on disk. Review it before saving"
+                    : undefined
+              }
+              onSave={() => void save()}
+            />
             <ShortcutHint label={view === "code" ? "Hide code" : "Show code"}>
               <button
                 type="button"
@@ -583,7 +569,6 @@ function WorkflowWorkbench({
                     code={buffer.code}
                     readOnly={!canEdit}
                     onChange={(code) => {
-                      setSaved(false);
                       setBuffer((current) => ({ ...current, code }));
                     }}
                     path={`file:///${projectId}/${filePath}`}

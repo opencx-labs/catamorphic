@@ -471,7 +471,7 @@ export function QueuedInputLine({
 }
 
 const ROW =
-  "flex w-full min-w-0 items-center gap-1.5 rounded px-1 py-0.5 text-left text-xs text-fg-muted";
+  "flex w-full min-w-0 items-center gap-1.5 rounded pr-1 py-0.5 text-left text-xs text-fg-muted";
 
 /** A row like a turn's step that opens to its detail and its links. */
 function InputRow({
@@ -553,7 +553,7 @@ function InputRow({
         <button
           type="button"
           onClick={() => setOpen((value) => !value)}
-          className={`${ROW} cursor-pointer transition-colors duration-100 hover:bg-bg-inset hover:text-fg`}
+          className={`${ROW} cursor-pointer transition-colors duration-100 hover:text-fg`}
           aria-expanded={open}
         >
           {header}

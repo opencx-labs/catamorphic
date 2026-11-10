@@ -11,6 +11,8 @@ export interface BrowserEntry {
   initialUrl: string;
   url: string;
   title: string;
+  /** A name chosen for this tab, independent of the page title. */
+  label?: string;
   faviconUrl: string | null;
   /** Chat this tab is attached to (among its chips), if any. */
   chatLocalId?: string;
@@ -97,6 +99,7 @@ export type ClosedTab = (
       kind: "browser";
       url: string;
       title: string;
+      label?: string;
       faviconUrl: string | null;
       profileId: string;
       chatLocalId?: string;
@@ -247,6 +250,7 @@ export const serializeWorkspace = (
       initialUrl: browser.url || browser.initialUrl,
       url: browser.url,
       title: browser.title,
+      ...(browser.label ? { label: browser.label } : {}),
       faviconUrl: browser.faviconUrl,
       ...chatRef(browser.chatLocalId),
       ...(browser.background ? { background: true } : {}),
@@ -433,6 +437,12 @@ export const chatVisible = (ws: Workspace, chat: ChatDockEntry) =>
   chat.mode === "partial" ||
   (chat.mode === "tab" &&
     Boolean(workspaceLayout(ws).viewSlots[chatTabKey(chat.localId)]));
+
+/** Expand the floating chat even when the tab behind it has focus. */
+export const chatToExpand = (ws: Workspace) =>
+  ws.chats.find((chat) => chat.mode === "partial") ??
+  ws.chats.find((chat) => chat.localId === ws.activeChatId) ??
+  ws.chats.at(-1);
 
 /** Tab keys attached to a chat, in per-kind order. */
 export const attachedTabKeys = (ws: Workspace, chatLocalId: string) => [
@@ -873,6 +883,7 @@ function applyWorkspaceEvent(
                   kind: "browser",
                   url: closing.url || closing.initialUrl,
                   title: closing.title,
+                  ...(closing.label ? { label: closing.label } : {}),
                   faviconUrl: closing.faviconUrl,
                   profileId: closing.profileId,
                   chatLocalId: closing.chatLocalId,
@@ -1055,6 +1066,7 @@ function applyWorkspaceEvent(
             initialUrl: record.url,
             url: record.url,
             title: record.title,
+            ...(record.label ? { label: record.label } : {}),
             faviconUrl: record.faviconUrl,
             chatLocalId: record.chatLocalId,
             ...(record.history ? { history: record.history } : {}),

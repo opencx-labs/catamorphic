@@ -109,10 +109,13 @@ export {
   reconnectDelayMs,
   type UseAgentSessionFieldsOptions,
   type UseAgentSessionFieldsResult,
+  type UseAgentSessionInfosOptions,
+  type UseAgentSessionInfosResult,
   type UseAgentSessionOptions,
   type UseAgentSessionResult,
   useAgentSession,
   useAgentSessionFields,
+  useAgentSessionInfos,
 } from "./hooks/use-agent-session.js";
 // Agent (Track A)
 export {

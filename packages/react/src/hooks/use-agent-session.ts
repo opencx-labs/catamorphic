@@ -15,6 +15,8 @@ import {
 import type { CatamorphicApiClient } from "@catamorphic/api-client";
 import {
   type QueryClient,
+  queryOptions,
+  useQueries,
   useQuery,
   useQueryClient,
 } from "@tanstack/react-query";
@@ -544,6 +546,147 @@ export interface UseAgentSessionFieldsResult {
   error: CatamorphicError | null;
   /** Load the snapshot again (a Retry). */
   refetch: () => Promise<unknown>;
+}
+
+export interface UseAgentSessionInfosOptions
+  extends UseAgentSessionFieldsOptions {
+  /**
+   * When provided, only these requested IDs stream or poll while `live`.
+   * Other requested sessions still load once and observe their shared cache.
+   */
+  liveSessionIds?: readonly string[];
+}
+
+export interface UseAgentSessionInfosResult {
+  /** Loaded rows in requested order, with duplicate session IDs removed. */
+  sessions: AgentSessionInfo[];
+  isLoading: boolean;
+  error: CatamorphicError | null;
+}
+
+function selectSessionInfo(data: AgentSessionData): AgentSessionInfo {
+  return {
+    ...data.info,
+    ...data.state.session,
+    running: isWorking(data.state),
+  };
+}
+
+/**
+ * Rows for explicitly open sessions, independent of session-list pagination.
+ * These are selectors of the conversation's cache, not another metadata cache.
+ * While live, each followed session shares the conversation's event stream or
+ * polls its snapshot while waiting for a stream slot. `liveSessionIds` limits
+ * following to the requested sessions the host currently presents.
+ */
+export function useAgentSessionInfos(
+  projectId: string | undefined,
+  sessionIds: readonly string[],
+  options: UseAgentSessionInfosOptions = {},
+): UseAgentSessionInfosResult {
+  const { apiClient } = useCatamorphic();
+  const queryClient = useQueryClient();
+  const live = options.live ?? false;
+  const pollIntervalMs = options.pollIntervalMs ?? 1_500;
+  const ids = [...new Set(sessionIds)];
+  const liveIds = new Set(live ? (options.liveSessionIds ?? ids) : []);
+  const [statuses, setStatuses] = useState(
+    new Map<string, SessionStreamStatus>(),
+  );
+  const subscriptions = useRef(new Map<string, () => void>());
+  const scope = useRef({ apiClient, queryClient, projectId });
+  const queries = useQueries({
+    queries: ids.map((sessionId) =>
+      queryOptions<AgentSessionData, CatamorphicError, AgentSessionInfo>({
+        queryKey: agentSessionQueryKey(projectId, sessionId),
+        queryFn: ({ signal }) =>
+          loadAgentSession({
+            apiClient,
+            queryClient,
+            projectId: projectId ?? "",
+            sessionId,
+            signal,
+          }),
+        enabled: Boolean(projectId && sessionId),
+        staleTime: Number.POSITIVE_INFINITY,
+        refetchOnWindowFocus: false,
+        refetchInterval: (current) =>
+          liveIds.has(sessionId) &&
+          snapshotRefetchInterval({
+            error: current.state.error,
+            data: current.state.data,
+            streaming: statuses.get(sessionId)?.streaming ?? false,
+            onScreen: true,
+            pollIntervalMs,
+          }),
+        select: selectSessionInfo,
+      }),
+    ),
+  });
+
+  useEffect(() => {
+    const owned = subscriptions.current;
+    return () => {
+      for (const unsubscribe of owned.values()) unsubscribe();
+      owned.clear();
+    };
+  }, []);
+
+  // Reconcile after each commit: adding or removing another ID must not
+  // release the leases of sessions that remain open.
+  useEffect(() => {
+    if (
+      scope.current.apiClient !== apiClient ||
+      scope.current.queryClient !== queryClient ||
+      scope.current.projectId !== projectId
+    ) {
+      for (const unsubscribe of subscriptions.current.values()) unsubscribe();
+      subscriptions.current.clear();
+      setStatuses(new Map());
+      scope.current = { apiClient, queryClient, projectId };
+    }
+    const desired = new Set(
+      projectId
+        ? ids.filter((id, index) => liveIds.has(id) && queries[index]?.data)
+        : [],
+    );
+    for (const [id, unsubscribe] of subscriptions.current) {
+      if (desired.has(id)) continue;
+      unsubscribe();
+      subscriptions.current.delete(id);
+      setStatuses((current) => {
+        if (!current.has(id)) return current;
+        const next = new Map(current);
+        next.delete(id);
+        return next;
+      });
+    }
+    if (!projectId) return;
+    for (const sessionId of desired) {
+      if (subscriptions.current.has(sessionId)) continue;
+      const unsubscribe = sharedSessionStream({
+        apiClient,
+        queryClient,
+        projectId,
+        sessionId,
+      }).subscribe((status) => {
+        setStatuses((current) => {
+          if (current.get(sessionId) === status) return current;
+          return new Map(current).set(sessionId, status);
+        });
+      }, true);
+      subscriptions.current.set(sessionId, unsubscribe);
+    }
+  });
+
+  return {
+    sessions: queries.flatMap((query) => (query.data ? [query.data] : [])),
+    isLoading: queries.some((query) => query.isLoading),
+    error:
+      queries.find((query) => query.error)?.error ??
+      ids.map((id) => statuses.get(id)?.streamError).find(Boolean) ??
+      null,
+  };
 }
 
 /**

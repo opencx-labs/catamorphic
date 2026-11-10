@@ -77,6 +77,10 @@ describe("configurable browser workspace", () => {
       "window.catamorphicDesktop.setPrefs({tabPlacement:'sidebar'})",
     );
     await app.waitFor("!!document.querySelector('[data-workspace-title]')");
+    await app.waitFor(
+      `!!document.querySelector('[data-workspace-visible="true"] main[data-tab-layout="sidebar"]') && !!document.querySelector('[data-workspace-visible="true"] [data-sidebar="left"][data-settled="true"][data-docked="true"]')`,
+      { label: "sidebar tab layout docked and settled" },
+    );
     expect(
       await run("return $('[data-workspace-title]').textContent.trim()"),
     ).toBe("");

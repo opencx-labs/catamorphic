@@ -387,3 +387,68 @@ it("retains a pressed row across the threshold and releases it on pointer up", a
   await act(async () => window.dispatchEvent(new Event("pointerup")));
   expect(row.isConnected).toBe(false);
 });
+
+it.each([0, 1, 137])(
+  "shows a shell result as a neutral exit code (%s)",
+  async (exitCode) => {
+    await act(async () =>
+      root.render(
+        <TurnSteps
+          steps={[
+            {
+              key: "shell",
+              kind: "command",
+              label: "Check files",
+              status: exitCode ? "failed" : "completed",
+              exitCode,
+              finished: true,
+            },
+          ]}
+          renderMarkdown={markdown}
+        />,
+      ),
+    );
+    expect(box.textContent).toContain(`·exit code ${exitCode}`);
+    expect(box.textContent).not.toContain("Failed");
+  },
+);
+
+it("separates a watch's status from its description", async () => {
+  await act(async () =>
+    root.render(
+      <BackgroundStates.Provider
+        value={
+          new Map([
+            [
+              "watch",
+              {
+                kind: "watch",
+                command: "true",
+                description: "Check release",
+                status: "running",
+                exitCode: null,
+              },
+            ],
+          ])
+        }
+      >
+        <TurnSteps
+          steps={[
+            {
+              key: "watch",
+              kind: "background",
+              label: "Check release",
+              background: {
+                kind: "watch",
+                ref: "watch",
+                description: "Check release",
+              },
+            },
+          ]}
+          renderMarkdown={markdown}
+        />
+      </BackgroundStates.Provider>,
+    ),
+  );
+  expect(box.textContent).toContain("Watching·Check release");
+});

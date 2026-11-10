@@ -105,6 +105,7 @@ interface WebviewElement extends HTMLElement {
 }
 
 export interface BrowserCommands {
+  focusPage: () => void;
   focusAddress: () => void;
   reload: () => void;
   reloadIgnoringCache: () => void;
@@ -330,12 +331,28 @@ export function BrowserScreen({
         previewLinksWithAlt,
       );
   }, [previewLinksWithAlt]);
+  const pageActiveRef = useRef(active);
+  pageActiveRef.current = active;
+  const pageFocusSince = useRef<number | null>(null);
+  const cancelPageFocus = useRef<(() => void) | undefined>(undefined);
+  const resumePageFocus = useRef<(() => void) | undefined>(undefined);
+  const requestPageFocus = useRef<(() => void) | undefined>(undefined);
   const inputRef = useRef<HTMLInputElement | null>(null);
   const cancelAddressFocus = useRef<(() => void) | undefined>(undefined);
   useLayoutEffect(() => {
-    if (!active) cancelAddressFocus.current?.();
+    if (!active) {
+      cancelAddressFocus.current?.();
+      cancelPageFocus.current?.();
+      pageFocusSince.current = null;
+    }
   }, [active]);
-  useLayoutEffect(() => () => cancelAddressFocus.current?.(), []);
+  useLayoutEffect(
+    () => () => {
+      cancelAddressFocus.current?.();
+      cancelPageFocus.current?.();
+    },
+    [],
+  );
   const [partition, setPartition] = useState<string>();
   const [preloadPath, setPreloadPath] = useState<string>();
   // Empty initialUrl = a fresh "New Tab": no webview until the first
@@ -769,6 +786,7 @@ export function BrowserScreen({
       listen("dom-ready", () => {
         markAlive();
         guestReadyRef.current = true;
+        if (pageFocusSince.current !== null) resumePageFocus.current?.();
         try {
           const id = view.getWebContentsId();
           registerGuestRef.current?.(id);
@@ -1252,6 +1270,7 @@ export function BrowserScreen({
       setInputValue(url);
       // Going somewhere else answers an open save offer with "not now".
       dismissPasswordPrompt();
+      requestPageFocus.current?.();
       if (firstUrl === null) {
         setFirstUrl(url);
         return;
@@ -1273,7 +1292,6 @@ export function BrowserScreen({
         if (guestReadyRef.current && /ERR_ABORTED/.test(String(error))) return;
         pendingUrlRef.current = url;
       });
-      view.focus();
     },
     [firstUrl, dismissPasswordPrompt, onOpenExtensions, pageUrl],
   );
@@ -1345,6 +1363,64 @@ export function BrowserScreen({
     else view.reload();
   }, []);
 
+  // A webview cannot take native keyboard focus before its guest is ready
+  // or while its pane/overlay still holds focus. Retry that same handoff,
+  // yielding permanently if the person has since chosen another control.
+  const focusPage = useCallback(
+    ({ since = personInputCount() }: { since?: number } = {}) => {
+      pageFocusSince.current = since;
+      cancelPageFocus.current?.();
+      let frame = 0;
+      const started = performance.now();
+      const attempt = () => {
+        if (!pageActiveRef.current || personMovedOn(since)) {
+          pageFocusSince.current = null;
+          return;
+        }
+        const view = webviewRef.current;
+        const overlay = document.querySelector(
+          '[aria-modal="true"]:not([inert], [inert] *), [data-palette="overlay"]:not([inert], [inert] *)',
+        );
+        if (
+          guestReadyRef.current &&
+          view?.isConnected &&
+          !overlay &&
+          !view.closest("[inert], [hidden]") &&
+          view.checkVisibility({ visibilityProperty: true })
+        ) {
+          // The dialog layer mounts its panel after receiving the queue.
+          // A request before that mount would become the panel's initial
+          // counter and never move focus out of the address bar.
+          if (dialogsRef.current.length) {
+            const panel = pageAreaRef.current?.querySelector(
+              '[data-testid="page-dialog"]:not([inert])',
+            );
+            if (panel?.contains(document.activeElement)) {
+              pageFocusSince.current = null;
+              return;
+            }
+            if (panel) setDialogFocus((request) => request + 1);
+          } else {
+            moveFocusAsApp(() => view.focus());
+            pageFocusSince.current = null;
+            return;
+          }
+        }
+        // dom-ready resumes a slow first load after this bounded frame loop.
+        if (performance.now() - started < ADDRESS_FOCUS_WAIT_MS)
+          frame = requestAnimationFrame(attempt);
+      };
+      cancelPageFocus.current = () => cancelAnimationFrame(frame);
+      frame = requestAnimationFrame(attempt);
+    },
+    [],
+  );
+  requestPageFocus.current = () => focusPage();
+  resumePageFocus.current = () => {
+    const since = pageFocusSince.current;
+    if (since !== null) focusPage({ since });
+  };
+
   const registerCommandsRef = useRef(registerCommands);
   registerCommandsRef.current = registerCommands;
   const navigateHistory = useCallback((direction: "back" | "forward") => {
@@ -1376,6 +1452,7 @@ export function BrowserScreen({
 
   useEffect(() => {
     registerCommandsRef.current?.({
+      focusPage,
       focusAddress,
       reload: () => reload(false),
       reloadIgnoringCache: () => reload(true),
@@ -1401,6 +1478,7 @@ export function BrowserScreen({
     });
     return () => registerCommandsRef.current?.(null);
   }, [
+    focusPage,
     focusAddress,
     reload,
     openFind,
@@ -1427,15 +1505,15 @@ export function BrowserScreen({
     // A page waiting on its dialog hands focus to the dialog.
     else if (dialogsRef.current.length > 0)
       setDialogFocus((request) => request + 1);
-    else moveFocusAsApp(() => webviewRef.current?.focus());
-  }, [active, focusAddress]);
+    else focusPage();
+  }, [active, focusAddress, focusPage]);
   // A New Tab's first address hands focus to its page, as Enter does.
   const hadUrl = useRef(firstUrl !== null);
   useEffect(() => {
     if (firstUrl === null || hadUrl.current) return;
     hadUrl.current = true;
-    if (active) webviewRef.current?.focus();
-  }, [firstUrl, active]);
+    if (active) focusPage();
+  }, [firstUrl, active, focusPage]);
 
   // Follow bookmark changes from anywhere (this star, another tab's star,
   // the sidebar's delete/pin) so the star never drifts from the sidebar.

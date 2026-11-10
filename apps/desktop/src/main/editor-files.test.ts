@@ -51,7 +51,7 @@ it("renames in place, keeps the extension, and never replaces a file", async () 
     ).rejects.toThrow("without slashes");
     expect(
       await renameEditorFile({ filePath: renamed, name: "notes.txt" }),
-    ).toBe(path.join(dir, "notes.txt"));
+    ).toBe(path.join(dir, "notes.txt.md"));
   } finally {
     await rm(dir, { recursive: true, force: true });
   }

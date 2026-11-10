@@ -257,7 +257,7 @@ export async function forwardRemoteApi(args: {
     }
     return true;
   } catch (error) {
-    if (!args.reply.sent)
+    if (!args.reply.sent && !args.reply.raw.destroyed)
       await args.reply.status(502).send({
         error:
           error instanceof Error
@@ -266,6 +266,9 @@ export async function forwardRemoteApi(args: {
       });
     return true;
   } finally {
+    // Fastify's sent flag stays false when a stream closes before end().
+    // A consumed remote request must never resume the local route's handler.
+    if (args.reply.raw.destroyed) args.reply.hijack();
     args.reply.raw.off("close", disconnect);
   }
 }

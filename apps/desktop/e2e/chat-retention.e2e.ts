@@ -94,7 +94,8 @@ it("releases a large folded log and closed details while preserving choices and 
   );
   expect(await count('[data-testid="chat-step-detail"]')).toBe(0);
   const expanded = await count("*");
-  expect(expanded).toBeLessThan(resting + 1_500);
+  // Completed command headers also retain their neutral exit-code metadata.
+  expect(expanded).toBeLessThan(resting + 1_800);
   expect(await count('[data-testid="chat-step"]')).toBeLessThan(220);
   await app.eval(
     `document.querySelector(${JSON.stringify(front)}).querySelector('[data-testid="chat-step"] button').focus()`,

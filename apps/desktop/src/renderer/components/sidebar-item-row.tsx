@@ -683,6 +683,13 @@ export function SidebarItemRow({
           open={open}
           at={menuAt}
           anchor={rowRef}
+          returnFocusTo={() =>
+            pendingActionRef.current
+              ? null
+              : (rowRef.current?.querySelector<HTMLElement>(
+                  "[data-tree-primary]",
+                ) ?? null)
+          }
           label={`Actions for ${label}`}
           entries={activeMenu}
           onDismiss={() => setOpen(false)}
@@ -695,10 +702,6 @@ export function SidebarItemRow({
             const pendingAction = pendingActionRef.current;
             pendingActionRef.current = null;
             if (pendingAction) void invoke(pendingAction);
-            else
-              rowRef.current
-                ?.querySelector<HTMLElement>("[data-tree-primary]")
-                ?.focus({ preventScroll: true });
           }}
         />
       )}
