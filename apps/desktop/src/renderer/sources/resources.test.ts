@@ -123,7 +123,7 @@ it("lists the window's tabs with what their chats are doing, a chat's tabs under
     ),
   ).toEqual(["browser:b2"]);
   await source.action?.({ itemId: "browser:b1", action: "close", signal });
-  expect(host.closeTab).toHaveBeenCalledWith("browser:b1");
+  expect(host.closeTab).toHaveBeenCalledWith("browser:b1", undefined);
   await source.move?.({
     itemId: "chat:c2",
     parentId: null,
@@ -145,8 +145,20 @@ it("renames a chat's tab as its chat, in the window's one rename dialog", async 
   expect(roots.items[1]?.menu?.map((entry) => entry.action)).toEqual([
     "rename",
     "close",
+    "close-chat-tabs",
+    "close-chat-and-tabs",
+    "close-all-tabs",
   ]);
-  expect(roots.items[0]?.menu?.map((entry) => entry.action)).toEqual(["close"]);
+  expect(roots.items[0]?.menu?.map((entry) => entry.action)).toEqual([
+    "close",
+    "close-all-tabs",
+  ]);
+  await source.action?.({
+    itemId: "browser:b2",
+    action: "close-chat-tabs",
+    signal,
+  });
+  expect(host.closeTab).toHaveBeenCalledWith("chat:c1", "chat-tabs");
   await source.action?.({ itemId: "chat:c1", action: "rename", signal });
   expect(host.sessionAction).toHaveBeenCalledWith("s1", "rename");
   await expect(

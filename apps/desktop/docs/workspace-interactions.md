@@ -179,6 +179,16 @@ close/reopen, and restart. Favicons continue to follow the website. Clearing the
 name restores the website title. A browser tab showing a local file offers both
 Rename file and Rename tab.
 
+A tab's right-click menu, in the strip or the sidebar's Tabs section, ends with
+its closes: Close tab (Close chat on a chat), Close tabs under chat, Close chat
+and its tabs, and Close all tabs. Each close goes through `closeTab` with a
+`TabCloseScope`, so several tabs close as one: a page that holds with "Leave
+site?" keeps them all, and unsaved edits are asked about once. Tabs under a chat
+that stays go back to its chips, as their own close sends them; tabs whose chat
+closes with them are closed for good. A chat floating or in a bubble is not a
+tab, so Close all tabs leaves it and sends its tabs back to its chips. A folded
+chat's close already takes its tabs, so its menu has no separate Close chat.
+
 ## Chat presentation and visibility
 
 Wait, watch, background, and notification disclosures align their chevrons with

@@ -9,6 +9,7 @@ import {
   type FileTreeNode,
   isVisibleProjectFile,
 } from "../lib/project-file-tree.js";
+import { tabCloseEntries, tabCloseRequest } from "../lib/tab-close-menu.js";
 import { tabKey, type WorkspaceTab } from "../lib/workspace-types.js";
 import {
   capabilitiesOf,
@@ -262,7 +263,11 @@ export function tabsSource(deps: WorkSourceDeps): SectionSource {
                 ...(tab.kind === "chat" && tab.sessionId
                   ? [{ label: "Rename…", action: "rename" }]
                   : []),
-                { label: `Close ${label}`, action: "close" },
+                ...tabCloseEntries({
+                  key: id,
+                  tabCount: tabs.length,
+                  groups: tabGroups,
+                }),
               ],
               data: {
                 kind: tab.kind,
@@ -302,9 +307,13 @@ export function tabsSource(deps: WorkSourceDeps): SectionSource {
         host.sessionAction(sessionId, "rename");
         return undefined;
       }
-      if (action !== "close")
-        throw new Error("This tab does not support that action");
-      host.closeTab(itemId);
+      const close = tabCloseRequest({
+        action,
+        key: itemId,
+        groups: host.tabGroups,
+      });
+      if (!close) throw new Error("This tab does not support that action");
+      host.closeTab(close.key, close.scope);
       return undefined;
     },
     move: async ({ itemId, parentId, beforeId }) => {

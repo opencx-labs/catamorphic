@@ -1,4 +1,4 @@
-import { expect, it } from "vitest";
+import { describe, expect, it } from "vitest";
 import {
   agentOpenInFront,
   attachBlocker,
@@ -183,6 +183,88 @@ it("stale animation completion cannot undo later navigation or resize", () => {
     }),
   ).toBe(resized);
 });
+describe("closing from a tab's menu", () => {
+  const page = (localId: string, chatLocalId?: string) => ({
+    localId,
+    profileId: "p",
+    initialUrl: "https://example.com/",
+    url: "https://example.com/",
+    title: localId,
+    faviconUrl: null,
+    ...(chatLocalId ? { chatLocalId } : {}),
+  });
+  const ws: Workspace = {
+    ...emptyUtilityWorkspace(),
+    tabs: [{ kind: "settings", name: "settings" }],
+    chats: [
+      { localId: "group", mode: "tab", sessionId: "session" },
+      { localId: "aside", mode: "partial", sessionId: "aside-session" },
+    ],
+    browsers: [
+      page("loose"),
+      page("child", "group"),
+      page("second", "group"),
+      page("floating-owned", "aside"),
+    ],
+    terminals: [],
+    editors: [],
+    activeTabKey: "browser:child",
+    recentTabKeys: [],
+  };
+
+  it("sends a chat's tabs back to its chips and lands on the chat", () => {
+    const closed = transitionWorkspace(ws, {
+      type: "close",
+      key: "chat:group",
+      scope: "chat-tabs",
+    });
+    expect(closed.chats.map((chat) => chat.localId)).toEqual([
+      "group",
+      "aside",
+    ]);
+    expect(
+      closed.browsers.filter((browser) => browser.chatLocalId === "group"),
+    ).toMatchObject([{ background: true }, { background: true }]);
+    expect(closed.activeTabKey).toBe("chat:group");
+  });
+
+  it("closes an unfolded chat with its tabs for good", () => {
+    const closed = transitionWorkspace(ws, {
+      type: "close",
+      key: "chat:group",
+      scope: "chat-and-tabs",
+    });
+    expect(closed.chats.map((chat) => chat.localId)).toEqual(["aside"]);
+    expect(closed.browsers.map((browser) => browser.localId)).toEqual([
+      "loose",
+      "floating-owned",
+    ]);
+  });
+
+  it("closes every tab, leaving what a chat outside the strip holds on its chips", () => {
+    const closed = transitionWorkspace(ws, {
+      type: "close",
+      key: "settings:settings",
+      scope: "all",
+    });
+    expect(closed.tabs).toEqual([]);
+    expect(orderedTabKeys(closed, { includeCollapsed: true })).toEqual([]);
+    expect(closed.chats.map((chat) => chat.localId)).toEqual(["aside"]);
+    expect(closed.browsers).toMatchObject([
+      { localId: "floating-owned", background: true },
+    ]);
+    expect(closed.activeTabKey).toBeUndefined();
+    // Cmd+Shift+T brings back what closed, the chat among them.
+    expect(closed.closedTabs.map((record) => record.kind).sort()).toEqual([
+      "browser",
+      "browser",
+      "browser",
+      "chat",
+      "screen",
+    ]);
+  });
+});
+
 it("cleans closed split and floating references before persistence", () => {
   const ws = transitionWorkspace(initial(), { type: "side", key: "palette:a" });
   const closed = reconcileWorkspace(ws, { ...ws, tabs: [] });

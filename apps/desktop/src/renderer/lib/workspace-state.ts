@@ -458,15 +458,50 @@ export const attachedTabKeys = (ws: Workspace, chatLocalId: string) => [
     .map((editor) => editorTabKey(editor.localId)),
 ];
 
-/** Closing a folded chat group includes every tab hidden behind its header. */
-export function closingTabKeys(ws: Workspace, key: string): string[] {
+/**
+ * How much a close takes along. Without one it is the tab alone, and a folded
+ * chat with what is hidden behind it. A tab's menu asks for the others.
+ */
+export type TabCloseScope = "chat-tabs" | "chat-and-tabs" | "all";
+
+/** The tabs a close takes, each chat after the tabs it holds. */
+export function closingTabKeys(
+  ws: Workspace,
+  key: string,
+  scope?: TabCloseScope,
+): string[] {
+  if (scope === "all") {
+    const keys = orderedTabKeys(ws, { includeCollapsed: true });
+    const isChat = (candidate: string) => candidate.startsWith("chat:");
+    return [
+      ...keys.filter((candidate) => !isChat(candidate)),
+      ...keys.filter(isChat),
+    ];
+  }
   const chat = key.startsWith("chat:")
     ? ws.chats.find((chat) => chatTabKey(chat.localId) === key)
     : undefined;
-  return chat?.mode === "tab" && chat.surfacesCollapsed
-    ? [...attachedTabKeys(ws, chat.localId), key]
+  const attached =
+    chat?.mode === "tab" ? attachedTabKeys(ws, chat.localId) : [];
+  if (scope === "chat-tabs") return attached;
+  return scope === "chat-and-tabs" || chat?.surfacesCollapsed
+    ? [...attached, key]
     : [key];
 }
+
+/**
+ * Of a close's tabs, those whose chat closes with them: they go for good. A
+ * tab whose chat stays only goes back to that chat's chips.
+ */
+export const tabsLeavingWithChat = (
+  ws: Workspace,
+  keys: readonly string[],
+): ReadonlySet<string> =>
+  new Set(
+    ws.chats
+      .filter((chat) => keys.includes(chatTabKey(chat.localId)))
+      .flatMap((chat) => attachedTabKeys(ws, chat.localId)),
+  );
 
 /**
  * Why a tab cannot move into a tab chat (or, with null, out of its chat),
@@ -589,7 +624,13 @@ export const nextActiveTabKey = (
 };
 
 export type WorkspaceEvent =
-  | { type: "close"; key: string; force?: boolean; discardDraft?: boolean }
+  | {
+      type: "close";
+      key: string;
+      force?: boolean;
+      discardDraft?: boolean;
+      scope?: TabCloseScope;
+    }
   | { type: "reopen"; localId: string }
   | { type: "select"; key: string }
   | { type: "focus"; key: string }
@@ -822,18 +863,27 @@ function applyWorkspaceEvent(
       : original;
   switch (event.type) {
     case "close": {
-      const { key, force, discardDraft } = event;
+      const { key, force, discardDraft, scope } = event;
       const opts = { force, discardDraft };
-      const group = closingTabKeys(ws, key);
-      if (group.length > 1) {
-        const children = group
-          .slice(0, -1)
-          .reduce(
-            (current, key) =>
-              applyWorkspaceEvent(current, { ...event, key, force: true }),
-            ws,
-          );
-        return applyWorkspaceEvent(children, event);
+      const group = closingTabKeys(ws, key, scope);
+      if (group.length !== 1 || group[0] !== key) {
+        const withChat = tabsLeavingWithChat(ws, group);
+        const closed = group.reduce(
+          (current, member) =>
+            applyWorkspaceEvent(current, {
+              type: "close",
+              key: member,
+              discardDraft,
+              force: force || withChat.has(member),
+            }),
+          ws,
+        );
+        // Its tabs gone, the chat that held them is what is left to look at.
+        return scope === "chat-tabs" &&
+          ws.activeTabKey &&
+          group.includes(ws.activeTabKey)
+          ? { ...closed, activeTabKey: key }
+          : closed;
       }
 
       // Snapshot enough to bring the tab back with Cmd+Shift+T — plus its
