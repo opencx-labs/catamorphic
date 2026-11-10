@@ -658,7 +658,7 @@ describe("floating surfaces", () => {
       "$('[data-workspace-slot=full] [data-testid=editor-save]').click()",
     );
     await app.waitFor(
-      "!document.querySelector('[data-workspace-slot=full] [data-testid=editor-save]')",
+      "!document.querySelector('[data-workspace-slot=full] [data-testid=editor-save][data-unsaved]')",
     );
     expect(
       fs.readFileSync(path.join(root, "placement-two.ts"), "utf8"),

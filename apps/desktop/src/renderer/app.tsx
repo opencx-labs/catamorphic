@@ -88,6 +88,7 @@ import {
   sidebarSections,
   visibleWorkspaceConfig,
 } from "../shared/workspace-config.js";
+import { ActionInputDialog } from "./components/action-input-dialog.js";
 import {
   activateSearch,
   findSearchInput,
@@ -1327,6 +1328,57 @@ export function App({
   } | null>(null);
   /** The latest ask to rename: a slower read for an earlier one is dropped. */
   const renameAttemptRef = useRef(0);
+  const [fileRenameRequest, setFileRenameRequest] = useState<{
+    localId: string;
+    sequence: number;
+  } | null>(null);
+  const requestFileRename = (localId: string) =>
+    setFileRenameRequest((current) => ({
+      localId,
+      sequence: (current?.sequence ?? 0) + 1,
+    }));
+  const [browserTabRename, setBrowserTabRename] = useState<{
+    localId: string;
+    title: string;
+  } | null>(null);
+  const requestBrowserTabRename = (key: string | null | undefined) => {
+    const browser = workspaceRef.current.browsers.find(
+      (item) => browserTabKey(item.localId) === key,
+    );
+    if (browser)
+      setBrowserTabRename({
+        localId: browser.localId,
+        title: browser.label ?? browser.title,
+      });
+  };
+  const [browserFileRename, setBrowserFileRename] = useState<{
+    key: string;
+    path: string;
+  } | null>(null);
+  const filePathForKey = (key: string | null | undefined) => {
+    const ws = workspaceRef.current;
+    const editor = ws.editors.find(
+      (item) => editorTabKey(item.localId) === key,
+    );
+    if (editor?.filePath) return editor.filePath;
+    const browser = ws.browsers.find(
+      (item) => browserTabKey(item.localId) === key,
+    );
+    const link = browser?.url.startsWith("file://")
+      ? parseSurfaceLink(browser.url.split("#")[0] ?? "")
+      : null;
+    return link?.kind === "file" ? link.path : null;
+  };
+  const requestTabFileRename = (key: string | null | undefined) => {
+    if (!key) return;
+    const path = filePathForKey(key);
+    if (!path) return;
+    const editor = workspaceRef.current.editors.find(
+      (item) => editorTabKey(item.localId) === key,
+    );
+    if (editor) requestFileRename(editor.localId);
+    else setBrowserFileRename({ key, path });
+  };
   /**
    * Open the rename dialog for a chat, from any of its menus or the
    * palette, with the name it has (none for an untitled chat, which shows
@@ -2017,7 +2069,7 @@ export function App({
       (browser): WorkspaceTab => ({
         kind: "browser",
         name: browser.localId,
-        label: browser.title || "New Tab",
+        label: browser.label || browser.title || "New Tab",
         faviconUrl: browser.faviconUrl,
         asleep: tabSleep.asleep(browser.localId),
         // Hover card: the page's address under its full title.
@@ -2049,8 +2101,13 @@ export function App({
       }),
     );
 
-  const selectTab = (key: string) =>
+  const selectTab = (key: string) => {
     updateWorkspace((ws) => transitionWorkspace(ws, { type: "select", key }));
+    // Selecting the already-current page from the palette still hands its
+    // keyboard back after the overlay leaves.
+    if (key.startsWith("browser:"))
+      browserCommandsRef.current.get(key.slice(8))?.focusPage();
+  };
 
   /** Open a page in a new browser tab (profile session of the workspace). */
   const openBrowserTab = useCallback(
@@ -2134,10 +2191,8 @@ export function App({
       open[0];
     if (!target) return null;
     const key = browserTabKey(target.localId);
-    if (key !== ws.floatingKey)
-      updateWorkspace((current) =>
-        transitionWorkspace(current, { type: "select", key }),
-      );
+    if (key !== ws.floatingKey) selectTab(key);
+    else browserCommandsRef.current.get(target.localId)?.focusPage();
     return key;
   };
   const switchToOpenPageRef = useRef(switchToOpenPage);
@@ -2918,7 +2973,10 @@ export function App({
     const dirtyEditor =
       keys.length > 1 &&
       workspaceRef.current.editors.some(
-        (editor) => editor.dirty && keys.includes(editorTabKey(editor.localId)),
+        (editor) =>
+          editor.dirty &&
+          !/\.(md|markdown)$/i.test(editor.filePath ?? "") &&
+          keys.includes(editorTabKey(editor.localId)),
       );
     if (draft || dirtyEditor) {
       setClosingEdits({ requestedKey: key, grouped: keys.length > 1 });
@@ -2962,6 +3020,7 @@ export function App({
     return true;
   };
 
+  const editorSaversRef = useRef(new Map<string, () => Promise<void>>());
   const pendingTabCloses = useRef(new Set<string>());
   const closeTab = (
     key: string,
@@ -2979,8 +3038,14 @@ export function App({
     // back to its chip, still loaded, so nothing is asked then.
     const keys = closingTabKeys(workspaceRef.current, key);
     if (keys.some((key) => pendingTabCloses.current.has(key))) return;
-    // Ask about drafts before granting any page a native close approval.
     if (requestDiscardEdits({ key, discardDraft: close.discardDraft })) return;
+    const saves = !close.discardDraft
+      ? keys.flatMap((key) => {
+          const save = editorSaversRef.current.get(key);
+          return save ? [save] : [];
+        })
+      : [];
+    // Drafts have been checked before saving or granting native page approval.
     const pages = !final
       ? workspaceRef.current.browsers.flatMap((browser) => {
           const page =
@@ -2991,7 +3056,7 @@ export function App({
           return page ? [page] : [];
         })
       : [];
-    if (pages.length > 0) {
+    if (pages.length > 0 || saves.length > 0) {
       for (const key of keys) pendingTabCloses.current.add(key);
       const release = () =>
         Promise.all(pages.map((page) => page.cancelClose()));
@@ -3009,6 +3074,7 @@ export function App({
             )
           )
             return;
+          await Promise.all(saves.map((save) => save()));
           // A new subtab opened while a page asked: release this approval
           // and check the complete group again.
           const current = closingTabKeys(workspaceRef.current, key);
@@ -3031,7 +3097,11 @@ export function App({
           if (retry) closeTab(key, close);
         }
       })().catch((cause: unknown) =>
-        console.warn("[browser] closing tabs failed:", cause),
+        setLinkError(
+          cause instanceof Error
+            ? cause.message
+            : "Could not save and close the document",
+        ),
       );
       return;
     }
@@ -4571,7 +4641,7 @@ export function App({
       return;
     }
     // As a click on the tab strip: a split keeps its panes.
-    updateWorkspace((ws) => transitionWorkspace(ws, { type: "select", key }));
+    selectTab(key);
   };
 
   const toggleFloatingTerminal = () => {
@@ -4824,6 +4894,14 @@ export function App({
       // The chat the palette targets: the focused one, as Status does.
       const chat = actionChat(workspaceRef.current);
       if (chat?.sessionId) applySessionAction(chat.sessionId, "archive");
+    },
+    "rename-tab": () => {
+      const ws = workspaceRef.current;
+      requestBrowserTabRename(ws.floatingKey ?? ws.activeTabKey);
+    },
+    "rename-file": () => {
+      const ws = workspaceRef.current;
+      requestTabFileRename(ws.floatingKey ?? ws.activeTabKey);
     },
     "rename-chat": () => {
       const chat = actionChat(workspaceRef.current);
@@ -6450,7 +6528,11 @@ export function App({
     // holds: a page an agent works in stays laid out over the shown one,
     // transparent, and its agent veil asks for the pointer. The agent's
     // own input reaches its page through the guest, not through here.
-    inert: viewSlots[key] ? undefined : true,
+    inert:
+      !viewSlots[key] ||
+      (viewSlots[key] === "floating" && floatingMotion.closing)
+        ? true
+        : undefined,
     "data-workspace-slot": viewSlots[key],
     "data-surface-key": key,
     "data-floating-surface": viewSlots[key] === "floating" ? key : undefined,
@@ -6661,7 +6743,7 @@ export function App({
           const key = browserTabKey(browser.localId);
           return {
             id: key,
-            label: browser.title || browser.url || "Page",
+            label: browser.label || browser.title || browser.url || "Page",
             icon: pageIcon(browser.faviconUrl),
             url: key,
             ...signalOf(key, Boolean(browser.agentControlled)),
@@ -6804,6 +6886,8 @@ export function App({
       focusedSession !== undefined && focusedSession.visibility !== "archived",
     // The same current chat the handler targets, including a minimized one.
     "rename-chat": paletteTargetChat?.sessionId !== undefined,
+    "rename-file": filePathForKey(focusedTabKey) !== null,
+    "rename-tab": focusedTabKey?.startsWith("browser:") === true,
     // Project-agent models are committed in their project definition, so
     // the mutable model picker only applies to configured profile agents.
     "switch-model":
@@ -7500,13 +7584,28 @@ export function App({
       }
       // An editor's tab acts on its file too (copy its path, show it, copy it).
       tabFile={(key) => {
-        const filePath = workspace.editors.find(
-          (candidate) => editorTabKey(candidate.localId) === key,
-        )?.filePath;
+        const filePath = filePathForKey(key);
         return filePath && projectId ? { projectId, filePath } : undefined;
       }}
-      // A chat's tab has the chat's own verbs, as its row and bubble do.
       tabActions={(key) => {
+        if (key.startsWith("browser:"))
+          return {
+            entries: [
+              ...(filePathForKey(key)
+                ? [{ label: "Rename file…", action: "rename-file" }]
+                : []),
+              { label: "Rename tab…", action: "rename-tab" },
+            ],
+            onAction: (action) =>
+              action === "rename-file"
+                ? requestTabFileRename(key)
+                : requestBrowserTabRename(key),
+          };
+        if (filePathForKey(key))
+          return {
+            entries: [{ label: "Rename…", action: "rename-file" }],
+            onAction: () => requestTabFileRename(key),
+          };
         const chat = workspace.chats.find(
           (candidate) => chatTabKey(candidate.localId) === key,
         );
@@ -7658,6 +7757,89 @@ export function App({
                 setConsentRequest(null);
                 applyProjectAgent(agent, target);
               }}
+            />
+            <ActionInputDialog
+              selectInitialValue
+              requestKey={browserTabRename ?? undefined}
+              request={
+                browserTabRename && {
+                  label: "Rename tab",
+                  input: {
+                    title: "Rename tab",
+                    submit: "Rename",
+                    fields: [
+                      {
+                        name: "name",
+                        label: "Name",
+                        value: browserTabRename.title,
+                        placeholder: "Page title",
+                      },
+                    ],
+                  },
+                  run: async (values) => {
+                    const label =
+                      typeof values.name === "string" ? values.name.trim() : "";
+                    const localId = browserTabRename.localId;
+                    updateWorkspace((ws) => ({
+                      ...ws,
+                      browsers: ws.browsers.map((browser) =>
+                        browser.localId === localId
+                          ? { ...browser, label: label || undefined }
+                          : browser,
+                      ),
+                    }));
+                  },
+                }
+              }
+              onClose={() => setBrowserTabRename(null)}
+            />
+            <ActionInputDialog
+              selectInitialValue
+              requestKey={browserFileRename ?? undefined}
+              request={
+                browserFileRename && {
+                  label: "Rename file",
+                  input: {
+                    title: "Rename file",
+                    submit: "Rename",
+                    fields: [
+                      {
+                        name: "name",
+                        label: "Name",
+                        value: (
+                          browserFileRename.path.split("/").at(-1) ?? ""
+                        ).replace(/(?<=.)\.[^.]*$/, ""),
+                        placeholder: "File name",
+                      },
+                    ],
+                  },
+                  run: async (values) => {
+                    const request = browserFileRename;
+                    const name =
+                      typeof values.name === "string" ? values.name.trim() : "";
+                    if (!name) throw new Error("Name the file.");
+                    const renamed = await desktopApi.editorFileRename({
+                      filePath: request.path,
+                      name,
+                    });
+                    const url = fileUrlFor(renamed);
+                    const browser = workspaceRef.current.browsers.find(
+                      (item) => browserTabKey(item.localId) === request.key,
+                    );
+                    if (!browser) return;
+                    updateWorkspace((ws) => ({
+                      ...ws,
+                      browsers: ws.browsers.map((item) =>
+                        item.localId === browser.localId
+                          ? { ...item, url, initialUrl: url }
+                          : item,
+                      ),
+                    }));
+                    browserNavigatorsRef.current.get(browser.localId)?.(url);
+                  },
+                }
+              }
+              onClose={() => setBrowserFileRename(null)}
             />
             <RenameChatDialog
               chat={renameRequest}
@@ -8143,7 +8325,7 @@ export function App({
                     {workspace.browsers.map((browser) => (
                       <SurfacePane
                         key={browser.localId}
-                        label={browser.title || "Page"}
+                        label={browser.label || browser.title || "Page"}
                         onDismiss={() =>
                           closeTab(browserTabKey(browser.localId))
                         }
@@ -8428,6 +8610,11 @@ export function App({
                             navigation={editor.navigation}
                             projectId={projectId}
                             filePath={editor.filePath}
+                            renameRequest={
+                              fileRenameRequest?.localId === editor.localId
+                                ? fileRenameRequest.sequence
+                                : undefined
+                            }
                             onFindFile={() =>
                               focusSearch("search-files", "files")
                             }
@@ -8441,6 +8628,11 @@ export function App({
                                   }
                                 : undefined
                             }
+                            onSaveBeforeClose={(save) => {
+                              const key = editorTabKey(editor.localId);
+                              if (save) editorSaversRef.current.set(key, save);
+                              else editorSaversRef.current.delete(key);
+                            }}
                             onDirtyChange={(dirty) =>
                               onEditorState(editor.localId, { dirty })
                             }
@@ -8817,7 +9009,7 @@ export function App({
                       {workspace.browsers.map((browser) => (
                         <SurfacePane
                           key={browser.localId}
-                          label={browser.title || "Page"}
+                          label={browser.label || browser.title || "Page"}
                           onDismiss={() =>
                             closeTab(browserTabKey(browser.localId))
                           }

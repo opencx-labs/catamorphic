@@ -49,6 +49,34 @@ it("folds a finished command and its wakeup answer together, retaining the full 
       `!!document.querySelector('${log} [data-step-kind="background"][data-running]')`,
       { label: "running command stays outside folded history" },
     );
+    const row = `${log} [data-step-kind="background"][data-running] button`;
+    const resting = await app.eval<{
+      x: number;
+      y: number;
+      background: string;
+      offset: number;
+    }>(`(() => {
+      const row = document.querySelector('${row}');
+      const box = row.getBoundingClientRect();
+      const step = document.querySelector('${log} [data-testid="chat-turn-steps-toggle"] svg');
+      return { x: box.left + box.width / 2, y: box.top + box.height / 2, background: getComputedStyle(row).backgroundColor, offset: row.querySelector('svg').getBoundingClientRect().left - step.getBoundingClientRect().left };
+    })()`);
+    expect(Math.abs(resting.offset)).toBeLessThan(0.5);
+    expect(
+      await app.eval(
+        `document.querySelector('${row}').textContent.includes('Running in background·Run it in the background')`,
+      ),
+    ).toBe(true);
+    await app.cdp("Input.dispatchMouseEvent", {
+      type: "mouseMoved",
+      x: resting.x,
+      y: resting.y,
+    });
+    await app.waitFor(
+      `(() => { const row = document.querySelector('${row}'); const color = getComputedStyle(row).backgroundColor; return row.matches(':hover') && row.getAnimations().every((a) => a.playState !== 'running') && color === ${JSON.stringify(resting.background)}; })()`,
+      { label: "background row keeps its quiet hover" },
+    );
+    await app.screenshot(path.join(artifacts, "background-row-hover.png"));
     await app.waitFor(
       `document.querySelector('${log}')?.textContent.includes('Started it in the background') && !document.querySelector('${chat} [data-testid="chat-stop"]')`,
     );

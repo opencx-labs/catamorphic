@@ -939,3 +939,40 @@ it("nests a dragged tab under a chat, opens a folded group for it, and takes it 
     }),
   ).toBe(ws);
 });
+
+it("keeps a browser tab name through snapshots, close/reopen and later page metadata", () => {
+  const ws: Workspace = {
+    ...emptyUtilityWorkspace(),
+    browsers: [
+      {
+        localId: "named",
+        profileId: "profile",
+        initialUrl: "https://example.test/",
+        url: "https://example.test/",
+        title: "Website title",
+        label: "Team chat",
+        faviconUrl: "https://example.test/old.ico",
+      },
+    ],
+    activeTabKey: "browser:named",
+  };
+  const restored = hydrateWorkspace(serializeWorkspace(ws));
+  expect(restored?.browsers[0]?.label).toBe("Team chat");
+  const closed = transitionWorkspace(ws, {
+    type: "close",
+    key: "browser:named",
+  });
+  const reopened = transitionWorkspace(closed, {
+    type: "reopen",
+    localId: "again",
+  });
+  const browser = reopened.browsers[0];
+  const updated = {
+    ...browser,
+    title: "Another website",
+    url: "https://other.test/",
+    faviconUrl: "https://other.test/new.ico",
+  };
+  expect(updated.label).toBe("Team chat");
+  expect(updated.faviconUrl).toBe("https://other.test/new.ico");
+});

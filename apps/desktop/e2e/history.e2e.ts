@@ -3,6 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { type AppHandle, focusWindow, launchApp } from "./harness.js";
+import { pressNativePrimaryKey } from "./native-pointer.js";
 
 /**
  * History (ADR 0154) belongs to the profile: files of two projects and a
@@ -173,7 +174,7 @@ describe("profile history", () => {
     })()`);
     await focusWindow(app);
     await app.waitFor(`!${paletteInput}`);
-    await app.press("p", process.platform === "darwin" ? 4 : 2);
+    await pressNativePrimaryKey("p");
     await app.waitFor(`document.activeElement === ${paletteInput}`);
     await app.insertText("history");
     await app.press("Space");

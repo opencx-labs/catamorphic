@@ -206,6 +206,10 @@ export interface TurnStep {
   };
   /** The work item's own status, when the step is one. */
   status?: WorkItem["status"];
+  /** The completed shell process result, including zero. */
+  exitCode?: number | null;
+  /** A blocking wait on a command, watch, or delegated work. */
+  waiting?: boolean;
   /** When the step started and when its result arrived (epoch ms). */
   startedAt?: number;
   endedAt?: number;
@@ -724,6 +728,7 @@ function stepOf(
         ...timing,
         key,
         kind: "command",
+        exitCode: item.status === "in_progress" ? null : item.exitCode,
         label: description || `$ ${first || "(command)"}`,
         mono: !description,
         detail: stepDetailText(
@@ -781,6 +786,7 @@ function stepOf(
         };
       const pretty = toolStepLabel(toolName, item.input);
       const description = item.description?.trim();
+      const input = asRecord(item.input);
       // The agent's own words lead here too, over the tool's friendly name.
       return {
         ...timing,
@@ -789,6 +795,13 @@ function stepOf(
         label: description || pretty.label,
         mono: !description && pretty.mono,
         toolName,
+        waiting:
+          toolName === "wait_for_subsessions" ||
+          (toolName === "read_background_output" &&
+            input !== undefined &&
+            ((typeof input.wait_seconds === "number" &&
+              input.wait_seconds > 0) ||
+              (typeof input.wait_for === "string" && input.wait_for !== ""))),
         detail: toolStepDetail(
           toolName,
           item.input,
@@ -1094,8 +1107,6 @@ function backgroundLabel(
   }
   if (state?.status === "running") return "Running in background";
   if (state?.status === "stopped") return "Stopped command in background";
-  if (state?.exitCode)
-    return `Command failed in background (exit ${state.exitCode})`;
   return "Ran command in background";
 }
 
@@ -1554,7 +1565,7 @@ const StepRow = memo(function StepRow({
   const pulsing = background?.status === "running" || step.running === true;
   const note = step.kind === "note";
   const Icon =
-    step.background?.kind === "watch"
+    step.background?.kind === "watch" || step.waiting
       ? Hourglass
       : (step.icon?.Icon ?? STEP_ICONS[step.kind]);
   const agentIcon =
@@ -1598,12 +1609,14 @@ const StepRow = memo(function StepRow({
                 ? () => onOpen(step.key, !open)
                 : undefined
           }
-          className={`flex w-full items-center gap-1.5 rounded px-1 py-0.5 text-left ${
+          className={`flex w-full items-center gap-1.5 rounded pr-1 py-0.5 text-left ${
             // A note is the agent talking, not a tool row: it reads as prose.
             note ? "text-xs text-fg" : "text-[11px] text-fg-muted"
           } ${
             interactive
-              ? "cursor-pointer transition-colors duration-100 hover:bg-bg-inset hover:text-fg"
+              ? step.background || step.waiting || step.kind === "notification"
+                ? "cursor-pointer transition-colors duration-100 hover:text-fg"
+                : "cursor-pointer transition-colors duration-100 hover:bg-bg-inset hover:text-fg"
               : "cursor-default"
           }`}
           aria-expanded={expandable ? open : undefined}
@@ -1644,17 +1657,47 @@ const StepRow = memo(function StepRow({
               >
                 {backgroundLabel(step.background.kind, background)}
               </span>
+              <span
+                aria-hidden="true"
+                className="shrink-0 text-sm leading-none text-fg-faint"
+              >
+                ·
+              </span>
               <span className="truncate text-fg-faint">{step.label}</span>
             </span>
           ) : (
             <span
               className={`min-w-0 truncate transition-colors duration-200 ${step.mono ? "font-mono" : ""} ${step.running ? "text-fg" : ""}`}
             >
+              {step.waiting && (
+                <>
+                  <span>{step.finished ? "Waited" : "Waiting"}</span>
+                  <span
+                    aria-hidden="true"
+                    className="mx-1.5 text-sm leading-none"
+                  >
+                    ·
+                  </span>
+                </>
+              )}
               {step.label}
             </span>
           )}
-          {step.status === "failed" && (
-            <span className="shrink-0 text-danger">Failed</span>
+          {(step.kind === "command" && step.exitCode != null) ||
+          (step.background?.kind === "command" &&
+            background?.exitCode != null) ? (
+            <span className="flex shrink-0 items-center gap-1.5 text-fg-faint">
+              <span aria-hidden="true" className="text-sm leading-none">
+                ·
+              </span>
+              <span>exit code {step.exitCode ?? background?.exitCode}</span>
+            </span>
+          ) : (
+            step.status === "failed" &&
+            step.kind !== "command" &&
+            !step.background && (
+              <span className="shrink-0 text-danger">Failed</span>
+            )
           )}
           {/* A background step's call returns as its work starts: its own
               time is not the work's, which runs on after it. */}
@@ -1746,6 +1789,8 @@ const SAME_STEP: {
     a.background?.kind === b.background?.kind &&
     a.background?.description === b.background?.description,
   status: sameField("status"),
+  exitCode: sameField("exitCode"),
+  waiting: sameField("waiting"),
   startedAt: sameField("startedAt"),
   endedAt: sameField("endedAt"),
   finished: sameField("finished"),

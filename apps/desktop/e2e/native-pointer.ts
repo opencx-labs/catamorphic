@@ -156,7 +156,15 @@ export async function clickNativePointer(
 }
 
 /** macOS virtual key codes the native tests press. */
-export const MAC_KEY_CODES = { grave: 50, l: 37, v: 9, w: 13 } as const;
+export const MAC_KEY_CODES = {
+  grave: 50,
+  k: 40,
+  l: 37,
+  p: 35,
+  t: 17,
+  v: 9,
+  w: 13,
+} as const;
 
 /**
  * A real key press on the macOS test desktop, through AppKit and the
@@ -178,4 +186,18 @@ export async function pressNativeMacKey(
     ],
     { timeout: 10_000 },
   );
+}
+
+/** A primary shortcut delivered to whichever native surface holds focus. */
+export async function pressNativePrimaryKey(
+  key: Exclude<keyof typeof MAC_KEY_CODES, "grave">,
+) {
+  assertIsolatedDesktopTestHost();
+  if (process.platform === "darwin") await pressNativeMacKey(key, ["command"]);
+  else
+    await promisify(execFile)(
+      "xdotool",
+      ["key", "--clearmodifiers", `ctrl+${key}`],
+      { timeout: 10_000 },
+    );
 }

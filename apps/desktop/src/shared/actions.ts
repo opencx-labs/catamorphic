@@ -528,6 +528,22 @@ export const BUILTIN_ACTIONS = [
     ],
   },
   {
+    id: "rename-tab",
+    label: "Rename current browser tab…",
+    icon: "Pencil",
+    description: "keep a name for the browser tab as its website changes",
+    defaultBinding: null,
+    keywords: ["rename", "name", "title", "current", "tab", "browser", "page"],
+  },
+  {
+    id: "rename-file",
+    label: "Rename current file…",
+    icon: "Pencil",
+    description: "rename the current file while keeping its extension",
+    defaultBinding: null,
+    keywords: ["rename", "name", "current", "file", "document"],
+  },
+  {
     id: "rename-chat",
     label: "Rename current chat…",
     icon: "Pencil",

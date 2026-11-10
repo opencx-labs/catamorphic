@@ -1,11 +1,11 @@
 import { PROJECT_PERSONAL_DIR } from "@catamorphic/workflow/project-layout";
 import Editor, { type OnMount } from "@monaco-editor/react";
-import { useMutation, useQuery } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { ExternalLink, FileText } from "lucide-react";
 import { lazy, Suspense, useEffect, useRef, useState } from "react";
 import { ActionInputDialog } from "../components/action-input-dialog.js";
 import { FileInspector } from "../components/file-inspector.js";
-import { PendingButton } from "../components/pending-button.js";
+import { FileSaveButton } from "../components/file-save-button.js";
 import { desktopApi } from "../lib/desktop-api.js";
 import {
   notifyEditorSelectionChange,
@@ -15,6 +15,7 @@ import {
 import { localEditorPath } from "../lib/local-project-files.js";
 import { useMonacoTheme } from "../lib/monaco-setup.js";
 import { useTheme } from "../lib/theme.js";
+import { useWorkspaceFlush } from "../lib/workspace-persistence.js";
 
 /** Personal files show relative to the profile's own personal folder. */
 const PERSONAL_PREFIX_PATTERN = new RegExp(
@@ -25,7 +26,7 @@ const PERSONAL_PREFIX_PATTERN = new RegExp(
 const UNTITLED_NAME = /^Untitled(?: \d+)?\.[^./]+$/;
 
 const baseName = (path: string) => path.split("/").at(-1) ?? path;
-const withoutExtension = (name: string) => name.replace(/\.[^.]+$/, "");
+const withoutExtension = (name: string) => name.replace(/(?<=.)\.[^.]*$/, "");
 
 /** A name for a new file from its first line ("# Plan" names it Plan). */
 function suggestedName(content: string | undefined): string {
@@ -81,6 +82,8 @@ export interface EditorScreenProps {
   onSharePersonal?: (filePath: string, intent: "publish" | "propose") => void;
   /** The file was renamed: the tab follows it to its new path. */
   onRename?: (filePath: string) => void;
+  renameRequest?: number;
+  onSaveBeforeClose?: (save: (() => Promise<void>) | null) => void;
 }
 
 export function EditorScreen({
@@ -96,6 +99,8 @@ export function EditorScreen({
   onPropose,
   onSharePersonal,
   onRename,
+  renameRequest,
+  onSaveBeforeClose,
 }: EditorScreenProps) {
   const activeRef = useRef(active);
   activeRef.current = active;
@@ -116,15 +121,40 @@ export function EditorScreen({
     refetchOnWindowFocus: () =>
       filePath ? draftsRef.current[filePath] === undefined : false,
   });
+  const queryClient = useQueryClient();
+  // One write at a time, including the interval before React renders pending.
+  const writing = useRef<Promise<void> | null>(null);
   const writeFile = useMutation({
-    mutationFn: async ({ path, content }: { path: string; content: string }) =>
+    mutationFn: async ({
+      path,
+      content,
+      expectedContent,
+    }: {
+      path: string;
+      content: string;
+      expectedContent: string;
+    }) =>
       desktopApi.editorFileWrite({
         filePath: await localEditorPath(projectId, path),
         content,
-        expectedContent: fileQuery.data?.content ?? "",
+        expectedContent,
       }),
-    onSuccess: () => {
-      void fileQuery.refetch();
+    onSuccess: async (_result, { path, content }) => {
+      await queryClient.cancelQueries({
+        queryKey: ["desktop-editor-file", projectId, path],
+        exact: true,
+      });
+      // Advance the comparison baseline before a later edit can save. Refetching
+      // here could return the previous content or overwrite a newer draft.
+      queryClient.setQueryData(["desktop-editor-file", projectId, path], {
+        content,
+      });
+      const current = draftsRef.current;
+      if (current[path] === content) {
+        const { [path]: _saved, ...rest } = current;
+        draftsRef.current = rest;
+        setDrafts(rest);
+      }
     },
   });
   const editorRef = useRef<EditorInstance | null>(null);
@@ -201,18 +231,30 @@ export function EditorScreen({
 
   const handleChange = (next: string) => {
     if (!filePath || savedContent === undefined) return;
-    setDrafts((current) => {
-      if (next === savedContent) {
-        const { [filePath]: _dropped, ...rest } = current;
-        return rest;
-      }
-      return { ...current, [filePath]: next };
-    });
+    // A read started while clean cannot change a draft's comparison base,
+    // including after a save conflict with an agent's edit.
+    if (draftsRef.current[filePath] === undefined)
+      void queryClient.cancelQueries({
+        queryKey: ["desktop-editor-file", projectId, filePath],
+        exact: true,
+      });
+    if (writeFile.isError) writeFile.reset();
+    const current = draftsRef.current;
+    const { [filePath]: _previous, ...rest } = current;
+    const updated =
+      next === savedContent && !writing.current
+        ? rest
+        : { ...current, [filePath]: next };
+    draftsRef.current = updated;
+    setDrafts(updated);
   };
 
   // A file Work named Untitled asks for its name when it is first saved;
   // keeping that name saves it as it is from then on.
   const [naming, setNaming] = useState<"save" | "rename" | null>(null);
+  useEffect(() => {
+    if (renameRequest !== undefined) setNaming("rename");
+  }, [renameRequest]);
   const keptNamesRef = useRef(new Set<string>());
   const personal = filePath ? PERSONAL_PREFIX_PATTERN.test(filePath) : false;
 
@@ -220,7 +262,7 @@ export function EditorScreen({
   saveRef.current = () => {
     if (!filePath) return;
     const content = draftsRef.current[filePath];
-    if (content === undefined || writeFile.isPending) return;
+    if (writeFile.isPending) return;
     if (
       onRename &&
       personal &&
@@ -230,44 +272,97 @@ export function EditorScreen({
       setNaming("save");
       return;
     }
-    writeFile.mutate(
-      { path: filePath, content },
-      {
-        onSuccess: () => {
-          setDrafts((current) => {
-            if (current[filePath] !== content) return current;
-            const { [filePath]: _saved, ...rest } = current;
-            return rest;
-          });
-        },
-      },
-    );
+    if (content !== undefined) void persist(filePath).catch(() => undefined);
   };
+
+  const persist = async (path: string) => {
+    while (writing.current) await writing.current;
+    const content = draftsRef.current[path];
+    const baseline = queryClient.getQueryData<{ content: string }>([
+      "desktop-editor-file",
+      projectId,
+      path,
+    ]);
+    if (content === undefined || !baseline) return;
+    if (content === baseline.content) {
+      const { [path]: _unchanged, ...rest } = draftsRef.current;
+      draftsRef.current = rest;
+      setDrafts(rest);
+      return;
+    }
+    const pending = writeFile.mutateAsync({
+      path,
+      content,
+      expectedContent: baseline.content,
+    });
+    writing.current = pending;
+    try {
+      await pending;
+    } finally {
+      if (writing.current === pending) writing.current = null;
+    }
+  };
+  const persistRef = useRef(persist);
+  persistRef.current = persist;
+
+  // Autosave only edits: opening or normalizing Markdown never writes.
+  // Explicit Save can still ask for an Untitled document's name.
+  useEffect(() => {
+    if (naming || writing.current || writeFile.isPending || writeFile.isError)
+      return;
+    const paths = Object.keys(drafts).filter(isMarkdownPath);
+    if (!paths.length) return;
+    const timer = setTimeout(() => {
+      void (async () => {
+        for (const path of paths) await persistRef.current(path);
+      })().catch(() => undefined);
+    }, 500);
+    return () => clearTimeout(timer);
+  }, [drafts, naming, writeFile.isPending, writeFile.isError]);
+
+  // Leaving the pane flushes its debounce, without interrupting a save.
+  useEffect(() => {
+    if (!active && filePath && isMarkdownPath(filePath))
+      void persistRef.current(filePath).catch(() => undefined);
+  }, [active, filePath]);
+
+  const flushMarkdown = async () => {
+    while (Object.keys(draftsRef.current).some(isMarkdownPath))
+      for (const path of Object.keys(draftsRef.current).filter(isMarkdownPath))
+        await persistRef.current(path);
+  };
+  const flushMarkdownRef = useRef(flushMarkdown);
+  flushMarkdownRef.current = flushMarkdown;
+  useWorkspaceFlush({ save: flushMarkdown });
+  useEffect(() => {
+    onSaveBeforeClose?.(() => flushMarkdownRef.current());
+    return () => onSaveBeforeClose?.(null);
+  }, [onSaveBeforeClose]);
 
   const saveBeforeAction = async (action: (filePath: string) => void) => {
     if (!filePath) return;
-    if (writeFile.isPending)
-      throw new Error("Wait for this file to finish saving");
-    const content = draftsRef.current[filePath];
-    if (content !== undefined) {
-      await writeFile.mutateAsync({ path: filePath, content });
-      setDrafts((current) => {
-        if (current[filePath] !== content) return current;
-        const { [filePath]: _saved, ...rest } = current;
-        return rest;
-      });
-    }
+    do {
+      await persist(filePath);
+    } while (draftsRef.current[filePath] !== undefined);
     action(filePath);
   };
 
   const renameTo = async (name: string) => {
     if (!filePath || !onRename) return;
+    // Finish the draft before moving the file it belongs to.
+    do {
+      await persist(filePath);
+    } while (draftsRef.current[filePath] !== undefined);
     const renamed = await desktopApi.editorFileRename({
       filePath: await localEditorPath(projectId, filePath),
       name,
     });
     const nextPath = filePath.replace(/[^/]*$/, baseName(renamed));
     if (nextPath === filePath) return;
+    queryClient.setQueryData(
+      ["desktop-editor-file", projectId, nextPath],
+      queryClient.getQueryData(["desktop-editor-file", projectId, filePath]),
+    );
     // An unsaved draft is the file's, whatever it is called.
     setDrafts((current) => {
       const { [filePath]: moved, ...rest } = current;
@@ -386,19 +481,13 @@ export function EditorScreen({
                 : undefined
             }
           />
-          {draft !== undefined && (
-            <PendingButton
-              pending={writeFile.isPending}
-              pendingLabel="Saving…"
-              type="button"
-              data-testid="editor-save"
-              onClick={() => saveRef.current()}
-              disabled={writeFile.isPending}
-              data-disabled-reason="Saving this file"
-              className="ml-auto h-6 shrink-0 cursor-pointer rounded border border-border-strong bg-bg-overlay px-2 text-xs text-fg transition-colors duration-150 hover:border-accent disabled:opacity-50"
-            >
-              Save
-            </PendingButton>
+          {!officeFile && !pdfFile && savedContent !== undefined && (
+            <FileSaveButton
+              dirty={draft !== undefined}
+              saving={writeFile.isPending}
+              testId="editor-save"
+              onSave={() => saveRef.current()}
+            />
           )}
         </span>
       </div>
@@ -417,7 +506,7 @@ export function EditorScreen({
                   label: "Name",
                   value:
                     naming === "save"
-                      ? suggestedName(draft)
+                      ? suggestedName(draft ?? savedContent)
                       : withoutExtension(baseName(filePath)),
                   placeholder: "File name",
                 },
@@ -440,6 +529,22 @@ export function EditorScreen({
       {(fileQuery.error || writeFile.error || pdfError) && (
         <p role="alert" className="p-3 text-xs text-danger">
           {fileQuery.error?.message ?? writeFile.error?.message ?? pdfError}
+          {writeFile.isError && (
+            <button
+              type="button"
+              data-testid="editor-reload"
+              className="button-ghost button-sm ml-2"
+              onClick={() => {
+                const { [filePath]: _discarded, ...rest } = draftsRef.current;
+                draftsRef.current = rest;
+                setDrafts(rest);
+                writeFile.reset();
+                void fileQuery.refetch();
+              }}
+            >
+              Discard edits and reload
+            </button>
+          )}
         </p>
       )}
       <div className="flex min-h-0 flex-1 flex-col">

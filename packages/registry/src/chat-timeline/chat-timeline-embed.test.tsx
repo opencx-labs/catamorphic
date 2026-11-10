@@ -92,7 +92,7 @@ describe("ChatTimeline for embedders", () => {
     });
     expect(container.textContent).toContain("hello");
     // A lone step is its own row, with how long it took.
-    expect(stepLabels()).toEqual(["$ ls -la3s"]);
+    expect(stepLabels()).toEqual(["$ ls -la·exit code 03s"]);
     expect(container.textContent).toContain("Done.");
   });
 
@@ -573,7 +573,7 @@ describe("ChatTimeline for embedders", () => {
     expect(stepLabels()).toEqual(["Read the parser"]);
   });
 
-  it("says a failed command's exit code and marks the step failed", async () => {
+  it("shows a nonzero command exit code without a failure badge", async () => {
     await render({
       timeline: timelineOf({
         turns: [turn("t1", 1)],
@@ -591,7 +591,9 @@ describe("ChatTimeline for embedders", () => {
     });
     const step = $('[data-testid="chat-step"]');
     expect(step?.getAttribute("data-step-status")).toBe("failed");
-    expect(step?.querySelector("button")?.textContent).toBe("$ bun testFailed");
+    expect(step?.querySelector("button")?.textContent).toBe(
+      "$ bun test·exit code 2",
+    );
     await act(async () => step?.querySelector("button")?.click());
     expect($('[data-testid="chat-step-detail"]')?.textContent).toBe(
       "1 failing\n\nExit code 2",

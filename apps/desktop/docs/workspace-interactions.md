@@ -137,7 +137,48 @@ stops at its first and last page; a press on a dialog does nothing; a press
 anywhere else walks surfaces. A browser tab reopened with Cmd+Shift+T, or
 restored with its window, keeps its back and forward list.
 
+## Editing and renaming files
+
+Markdown edits save automatically after a short pause, including changes to
+Properties. A save in progress retains later typing for the next write. Leaving
+the pane flushes the pause; closing the tab or quitting Work waits for its save. A disk conflict
+keeps the draft and shows the error without closing the document or overwriting
+the other edit. Discard edits and reload explicitly returns to the disk version.
+Opening a document alone never saves it. Other text editors keep
+explicit Save. File and workflow editors share one fixed icon Save button: the
+save icon, saving spinner, and saved check crossfade without changing its size. Cmd+S still saves immediately and can name an Untitled document.
+
+Every open file tab, including a local file in the browser, offers Rename in its
+context menu. Rename current file in the palette acts on the focused file pane.
+The selected input contains the base name; the file's existing extension stays
+attached, including when the base name contains dots. Rename never replaces an
+existing file. The tab follows its new path.
+
+Markdown list handles track each item's own content, including continuation
+paragraphs after a nested list. Gaps resolve to the nearest row, and horizontal
+movement in the left page margin keeps the same row. The grip glides between
+rows on the compositor and respects reduced motion.
+
+## Browser keyboard focus and names
+
+Opening a browser tab from the palette or selecting it in the strip hands
+keyboard focus to its page as soon as its guest and visible pane are ready.
+The handoff yields to a later user focus choice. Work's reserved shortcuts keep
+their existing priority through the guest keyboard router; page shortcuts stay
+with the page.
+
+Browser tabs offer Rename tab and the palette offers Rename current browser tab.
+A chosen name stays with that tab across navigation, page title changes,
+close/reopen, and restart. Favicons continue to follow the website. Clearing the
+name restores the website title. A browser tab showing a local file offers both
+Rename file and Rename tab.
+
 ## Chat presentation and visibility
+
+Wait, watch, background, and notification disclosures align their chevrons with
+the steps line. Sticky work rows use a centered dot between status and description
+and the same quiet hover without a filled background. Shell completion shows its
+exit code, including zero, as neutral metadata after a dot.
 
 Full-tab chats stay in the tab bar when another resource takes focus, with no dock
 bubble; switching to or from one is as instant as switching pages. Floating and

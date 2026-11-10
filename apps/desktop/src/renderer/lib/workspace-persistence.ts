@@ -30,6 +30,19 @@ export async function flushWorkspaceSaves(): Promise<void> {
   await Promise.all([...writes.values()]);
 }
 
+/** Mounted resources join the existing quit/update save acknowledgement. */
+export function useWorkspaceFlush({ save }: { save: () => Promise<void> }) {
+  const latest = useRef(save);
+  latest.current = save;
+  useEffect(() => {
+    const key = Symbol();
+    savers.set(key, () => latest.current());
+    return () => {
+      savers.delete(key);
+    };
+  }, []);
+}
+
 /** The regular debounce and shutdown flush read the same current snapshot. */
 export function useWorkspacePersistence({
   projectId,
@@ -40,9 +53,8 @@ export function useWorkspacePersistence({
 }) {
   const latest = useRef({ projectId, workspace });
   latest.current = { projectId, workspace };
-  useEffect(() => {
-    const key = Symbol();
-    const save = () => {
+  useWorkspaceFlush({
+    save: () => {
       const current = latest.current;
       return current.projectId && current.workspace
         ? saveWorkspace({
@@ -50,12 +62,8 @@ export function useWorkspacePersistence({
             workspace: current.workspace,
           })
         : Promise.resolve();
-    };
-    savers.set(key, save);
-    return () => {
-      savers.delete(key);
-    };
-  }, []);
+    },
+  });
   useEffect(() => {
     if (!projectId || !workspace) return;
     const timer = window.setTimeout(() => {

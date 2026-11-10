@@ -332,7 +332,7 @@ describe("ChatTimeline DOM contract", () => {
     const run = $$('[data-testid="chat-step"]')[0];
     const button = run?.querySelector("button");
     // Only its words and how long it took.
-    expect(button?.textContent).toMatch(/^Run the tests\d+s$/);
+    expect(button?.textContent).toMatch(/^Run the tests·exit code 0\d+s$/);
     expect(run?.querySelector('[data-testid="chat-step-duration"]')).not.toBe(
       null,
     );

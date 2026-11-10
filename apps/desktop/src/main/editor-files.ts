@@ -42,8 +42,7 @@ export async function writeEditorFile({
 }
 
 /**
- * Renames a file in place, keeping its extension when the new name has
- * none, and never replacing another file. Returns the new absolute path.
+ * Renames a file in place, keeping its extension, and never replacing another file. Returns the new absolute path.
  */
 export async function renameEditorFile({
   filePath,
@@ -63,8 +62,7 @@ export async function renameEditorFile({
   )
     throw new Error("Choose a name without slashes.");
   const extension = path.extname(filePath);
-  const fileName =
-    path.extname(trimmed) || !extension ? trimmed : `${trimmed}${extension}`;
+  const fileName = `${trimmed}${extension}`;
   const target = path.join(path.dirname(filePath), fileName);
   if (target === filePath) return filePath;
   const source = await fs.lstat(filePath);

@@ -66,7 +66,7 @@ const helpers = `
   const bubble = () => window.__mdBubble;
   // The control remains mounted (and says "Saving…") until the write
   // succeeds and clears the draft. Its label alone cannot signal completion.
-  const hasUnsavedChanges = () => visible('[data-testid="editor-save"]').length > 0;
+  const hasUnsavedChanges = () => visible('[data-testid="editor-save"][data-unsaved]').length > 0;
 `;
 
 const run = <T = unknown>(body: string) =>
@@ -145,6 +145,9 @@ async function hoverHandle(
 /** Every block type the drag handle can point at; the rule last, so the
  *  editor's trailing node adds an empty paragraph after it. */
 const BLOCKS_DOC = [
+  "---",
+  "name: blocks",
+  "---",
   "# Heading one",
   "",
   "A paragraph long enough to wrap onto a second line in the editor column, so the handle has to find its first line and not the middle of the block. It keeps going a little longer to be sure of that.",
@@ -156,6 +159,13 @@ const BLOCKS_DOC = [
   "- Bullet item",
   "- Second bullet",
   "  - Nested bullet",
+  "  - Second nested bullet",
+  "",
+  "  Parent continuation.",
+  "- Third bullet",
+  "  > Quoted lead",
+  "  >",
+  "  > - Quoted nested item",
   "",
   "1. Ordered item",
   "2. Second ordered",
@@ -282,19 +292,11 @@ describe("markdown editor", () => {
     expect(save).toBe(false);
   });
 
-  it("typing marks dirty and Cmd+S round-trips to the file API", async () => {
+  it("typing autosaves to disk without a save gesture", async () => {
     await run(`
       const h = mdHandle();
       h.editor.commands.focus('end');
       h.editor.commands.insertContent('Typed by e2e.');
-      return true;
-    `);
-    await runWait(`return hasUnsavedChanges();`, {
-      label: "dirty after typing",
-    });
-    await run(`
-      $('.cat-mdedit-pane').dispatchEvent(new KeyboardEvent('keydown',
-        { key: 's', metaKey: /Mac/.test(navigator.platform), ctrlKey: !/Mac/.test(navigator.platform), bubbles: true, cancelable: true }));
       return true;
     `);
     await runWait(`return !hasUnsavedChanges();`, {
@@ -471,6 +473,77 @@ describe("markdown editor", () => {
     expect(Math.abs(rule.above - 11)).toBeLessThan(0.6);
     expect(Math.abs(rule.below - 11)).toBeLessThan(0.6);
   }, 180_000);
+
+  it("tracks nested rows continuously through their gaps and the left margin", async () => {
+    const points = await run<{ x: number; y: number; target: string }[]>(`
+      const list = $('.ProseMirror > ul:not([data-type])');
+      list.scrollIntoView({ block: 'center' });
+      if (!list.querySelector('blockquote li')) throw new Error('missing quoted nested item');
+      const items = [...list.querySelectorAll('li')];
+      const margin = $('.ProseMirror').getBoundingClientRect().left + 12;
+      return items.map((item, index) => ({ x: margin, y: lineCenter(item.querySelector(':scope > p')), target: "$('.ProseMirror > ul:not([data-type])').querySelectorAll('li')[" + index + "]" }));
+    `);
+    for (const point of points) {
+      await mouse("mouseMoved", point);
+      const reading = await settledHandle(point.target, point.target);
+      expect(Math.abs(reading.handle - reading.line)).toBeLessThan(1.5);
+      // Horizontal movement, including well left of the text, cannot switch
+      // to the containing parent item while Y stays on this row.
+      for (const dx of [2, 8, 24, 50, 0]) {
+        await mouse("mouseMoved", { x: point.x + dx, y: point.y });
+        const same = await settledHandle(
+          point.target,
+          "same row in the margin",
+        );
+        expect(Math.abs(same.handle - same.line)).toBeLessThan(1.5);
+      }
+    }
+    // Between sibling subitems the handle may cross once, never return to
+    // their parent at its earlier line.
+    const nested = points.slice(2, 4);
+    if (nested.length !== 2) throw new Error("expected nested siblings");
+    const [from, to] = nested;
+    if (!from || !to) throw new Error("expected nested siblings");
+    for (let y = from.y; y <= to.y; y += 2) {
+      await mouse("mouseMoved", { x: from.x, y });
+      await runWait(
+        `const r = $('.cat-mdedit-handle').getBoundingClientRect(); return r.top + r.height / 2 >= ${from.y - 2};`,
+        { label: "handle stays with the nested rows" },
+      );
+    }
+    const continuation = await run<{ x: number; y: number }>(`
+      const parent = $('.ProseMirror > ul:not([data-type]) > li:nth-child(2)');
+      const line = parent.querySelector(':scope > p:last-child');
+      if (!line?.textContent.includes('Parent continuation')) throw new Error('missing continuation paragraph');
+      return { x: $('.ProseMirror').getBoundingClientRect().left + 12, y: lineCenter(line) };
+    `);
+    await mouse("mouseMoved", continuation);
+    const parent = await settledHandle(
+      `$('.ProseMirror > ul:not([data-type]) > li:nth-child(2)')`,
+      "parent continuation",
+    );
+    expect(Math.abs(parent.handle - parent.line)).toBeLessThan(1.5);
+    // Expanding Properties moves the editor without resizing its content.
+    await run(`$('.cat-mdedit-frontmatter > button').click(); return true;`);
+    await runWait(
+      `const panel = $('.cat-mdedit-frontmatter'); return !!panel.querySelector('textarea') && panel.getAnimations({subtree:true}).every((a) => a.playState !== 'running');`,
+      { label: "Properties expanded" },
+    );
+    const moved = await run<{ x: number; y: number }>(
+      `const line = $('.ProseMirror > ul:not([data-type]) li li p'); return { x: $('.ProseMirror').getBoundingClientRect().left + 12, y: lineCenter(line) };`,
+    );
+    await mouse("mouseMoved", moved);
+    const shifted = await settledHandle(
+      HANDLE_TARGETS["nested item"],
+      "nested row after Properties moved it",
+    );
+    expect(Math.abs(shifted.handle - shifted.line)).toBeLessThan(1.5);
+    await run(`$('.cat-mdedit-frontmatter > button').click(); return true;`);
+    await app.screenshot(
+      `${process.env.CATAMORPHIC_E2E_ARTIFACTS_DIR ?? "/tmp"}/markdown-nested-handle.png`,
+    );
+    await mouse("mouseMoved", { x: 4, y: 4 });
+  }, 60_000);
 
   it("the handle re-centers when the document changes under it", async () => {
     const table = HANDLE_TARGETS.table;
