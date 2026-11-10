@@ -56,7 +56,7 @@ it("flushes Markdown on tab close and immediately on app Quit", async () => {
       const started = performance.now();
       const sample = () => {
         const pane = document.querySelector('[data-floating-state="closing"]');
-        if (pane) { resolve(pane.inert && !pane.contains(document.activeElement)); return; }
+        if (pane) { resolve(pane.inert); return; }
         if (performance.now() - started > 3000) { reject(new Error('Floating exit did not start')); return; }
         requestAnimationFrame(sample);
       };
@@ -65,6 +65,12 @@ it("flushes Markdown on tab close and immediately on app Quit", async () => {
     })`);
     expect(inertWhileClosing).toBe(true);
     await app.insertText("late exit typing");
+    // Chromium clears focus after processing inertness; macOS can do that
+    // after the first animation-frame callback. Late input must still be blocked.
+    await app.waitFor(
+      `!document.querySelector('[data-floating-state="closing"]')?.contains(document.activeElement)`,
+      { label: "closing document releases keyboard focus" },
+    );
     await app.waitFor(
       `!document.querySelector('[data-workspace-visible="true"] [data-floating-surface]')`,
       { label: "floating document closed" },
