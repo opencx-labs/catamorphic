@@ -63,7 +63,8 @@ afterAll(async () => {
 });
 
 /** Where the open menu rests, once it has popped in; false before. */
-const TAB_MENU = [...MENU, "Rename…"];
+// The window's only tab here: "Close all tabs" comes with a second.
+const TAB_MENU = [...MENU, "Rename…", "Close tab"];
 
 const MENU_AT_REST = `(() => { const menu = document.querySelector('[role="menuitem"]')?.closest('[role="menu"]'); return !!menu && menu.getAnimations().every((a) => a.playState !== 'running') && JSON.stringify(menu.getBoundingClientRect()); })()`;
 
@@ -363,14 +364,17 @@ it("renames a local browser file from its tab", async () => {
   await app.waitFor(`!!document.querySelector('${tab}')`, {
     label: "local browser file tab",
   });
+  const pageMenu = [
+    ...MENU,
+    "Copy link",
+    "Rename file…",
+    "Rename tab…",
+    "Close tab",
+    "Close all tabs",
+  ];
   expect(
-    await rightClick(`${tab} .workspace-tab-label`, 0.5, false, [
-      ...MENU,
-      "Copy link",
-      "Rename file…",
-      "Rename tab…",
-    ]),
-  ).toEqual([...MENU, "Copy link", "Rename file…", "Rename tab…"]);
+    await rightClick(`${tab} .workspace-tab-label`, 0.5, false, pageMenu),
+  ).toEqual(pageMenu);
   await choose("Rename file…");
   await app.waitFor(
     `document.querySelector('input[name="name"]')?.value === 'page'`,

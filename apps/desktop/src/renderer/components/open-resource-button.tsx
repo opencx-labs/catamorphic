@@ -6,7 +6,11 @@ import {
   useRef,
   useState,
 } from "react";
-import { menuGroups } from "../../shared/menu.js";
+import {
+  isMenuSeparator,
+  type MenuSeparator,
+  menuGroups,
+} from "../../shared/menu.js";
 import {
   OPEN_ACTIONS,
   type OpenMode,
@@ -29,7 +33,7 @@ import {
 
 /** A resource's own verbs, after the ways to open it (a chat's Rename…). */
 export interface ResourceActions {
-  entries: readonly ContextMenuEntry[];
+  entries: readonly (ContextMenuEntry | MenuSeparator)[];
   onAction: (action: string) => void;
 }
 
@@ -101,7 +105,11 @@ function useResourceMenu() {
           if (mode) pending.current = () => choose.current?.(mode);
           else if (entry.action === "copy-link" && menu.url)
             void navigator.clipboard.writeText(menu.url);
-          else if (own?.entries.some((item) => item.action === entry.action))
+          else if (
+            own?.entries.some(
+              (item) => !isMenuSeparator(item) && item.action === entry.action,
+            )
+          )
             pending.current = () => own.onAction(entry.action);
           else if (menu.file) {
             const file = menu.file;

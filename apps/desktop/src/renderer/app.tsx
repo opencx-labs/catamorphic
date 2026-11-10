@@ -56,6 +56,7 @@ import type { ChatLiveSignals, PendingChatMessage } from "../shared/chat.js";
 import type { WorkspaceNavigation } from "../shared/desktop-workspace.js";
 import { type DownloadRecord, fileUrlFor } from "../shared/downloads.js";
 import type { HistoryEntry } from "../shared/history.js";
+import { menuGroups } from "../shared/menu.js";
 import {
   type OpenMode as CommitMode,
   type OpenModifiers,
@@ -115,8 +116,10 @@ import {
 } from "./components/elicitation-modal.js";
 import { ExtensionPromptHost } from "./components/extensions/extension-dialogs.js";
 import { FloatingPanelBar } from "./components/floating-panel-bar.js";
+import type { ContextMenuEntry } from "./components/menu.js";
 import { MobilePairingModal } from "./components/mobile-pairing-modal.js";
 import { Modal } from "./components/modal.js";
+import type { ResourceActions } from "./components/open-resource-button.js";
 import { PasskeyHost } from "./components/passkey-sheet.js";
 import { PendingButton } from "./components/pending-button.js";
 import {
@@ -230,6 +233,7 @@ import {
   surfaceLocation,
   visitSurface,
 } from "./lib/surface-history.js";
+import { tabCloseEntries, tabCloseRequest } from "./lib/tab-close-menu.js";
 import { useTabSleep } from "./lib/tab-sleep.js";
 import { useAppPreferences } from "./lib/use-app-preferences.js";
 import { useDesktopProjects } from "./lib/use-desktop-projects.js";
@@ -274,11 +278,13 @@ import {
   reconcileWorkspace,
   serializeWorkspace,
   stripTravel,
+  type TabCloseScope,
   type TerminalEntry,
   type TerminalEvent,
   tabbedBrowsers,
   tabbedEditors,
   tabbedTerminals,
+  tabsLeavingWithChat,
   terminalTabKey,
   transitionWorkspace,
   type Workspace,
@@ -780,6 +786,7 @@ export function App({
   const [closingEdits, setClosingEdits] = useState<{
     requestedKey: string;
     grouped: boolean;
+    scope?: TabCloseScope;
   } | null>(null);
   // Live per-chat signals reported by each ChatDock (working / draft /
   // awaiting-input); unread is host-derived (needs surface visibility).
@@ -2974,12 +2981,15 @@ export function App({
   const requestDiscardEdits = ({
     key,
     discardDraft,
+    scope,
   }: {
     key: string;
     discardDraft?: boolean;
+    scope?: TabCloseScope;
   }) => {
     if (discardDraft) return false;
-    const keys = closingTabKeys(workspaceRef.current, key);
+    const keys = closingTabKeys(workspaceRef.current, key, scope);
+    const withChat = tabsLeavingWithChat(workspaceRef.current, keys);
     const draft = workspaceRef.current.tabs.some(
       (tab) =>
         tab.kind === "workflow" && keys.includes(tabKey(tab)) && tab.draft,
@@ -2990,30 +3000,44 @@ export function App({
         (editor) =>
           editor.dirty &&
           !/\.(md|markdown)$/i.test(editor.filePath ?? "") &&
-          keys.includes(editorTabKey(editor.localId)),
+          keys.includes(editorTabKey(editor.localId)) &&
+          (!editor.chatLocalId || withChat.has(editorTabKey(editor.localId))),
       );
     if (draft || dirtyEditor) {
-      setClosingEdits({ requestedKey: key, grouped: keys.length > 1 });
+      setClosingEdits({ requestedKey: key, grouped: keys.length > 1, scope });
       return true;
     }
     return false;
   };
   const closeTabImmediately = (
     key: string,
-    opts?: { force?: boolean; discardDraft?: boolean },
+    opts?: { force?: boolean; discardDraft?: boolean; scope?: TabCloseScope },
   ): boolean => {
-    if (requestDiscardEdits({ key, discardDraft: opts?.discardDraft }))
-      return false;
-    const keys = closingTabKeys(workspaceRef.current, key);
     if (
-      (key.startsWith("agent-setup:") || key.startsWith("onboarding:")) &&
+      requestDiscardEdits({
+        key,
+        discardDraft: opts?.discardDraft,
+        scope: opts?.scope,
+      })
+    )
+      return false;
+    const keys = closingTabKeys(workspaceRef.current, key, opts?.scope);
+    const withChat = tabsLeavingWithChat(workspaceRef.current, keys);
+    if (
+      keys.some(
+        (closing) =>
+          closing.startsWith("agent-setup:") ||
+          closing.startsWith("onboarding:"),
+      ) &&
       activeProfileId
     )
       setupDismissedRef.current.add(activeProfileId);
     for (const browser of workspaceRef.current.browsers) {
       if (
         keys.includes(browserTabKey(browser.localId)) &&
-        (keys.length > 1 || !browser.chatLocalId || opts?.force)
+        (withChat.has(browserTabKey(browser.localId)) ||
+          !browser.chatLocalId ||
+          opts?.force)
       ) {
         browserNavigatorsRef.current.delete(browser.localId);
         browserHistoryNavigatorsRef.current.delete(browser.localId);
@@ -3043,16 +3067,25 @@ export function App({
       discardDraft?: boolean;
       /** An agent's, an extension's, or a page closing itself: not asked. */
       final?: boolean;
+      scope?: TabCloseScope;
     },
   ) => {
-    if (key === "agent-setup:theme") setThemeCustomization(null);
     const { final, ...close } = opts ?? {};
     // A close that disposes a page asks it first: a beforeunload may hold
     // it with "Leave site?" (ADR 0227). A chat's attached page only goes
     // back to its chip, still loaded, so nothing is asked then.
-    const keys = closingTabKeys(workspaceRef.current, key);
+    const keys = closingTabKeys(workspaceRef.current, key, close.scope);
+    const withChat = tabsLeavingWithChat(workspaceRef.current, keys);
+    if (keys.includes("agent-setup:theme")) setThemeCustomization(null);
     if (keys.some((key) => pendingTabCloses.current.has(key))) return;
-    if (requestDiscardEdits({ key, discardDraft: close.discardDraft })) return;
+    if (
+      requestDiscardEdits({
+        key,
+        discardDraft: close.discardDraft,
+        scope: close.scope,
+      })
+    )
+      return;
     const saves = !close.discardDraft
       ? keys.flatMap((key) => {
           const save = editorSaversRef.current.get(key);
@@ -3064,7 +3097,9 @@ export function App({
       ? workspaceRef.current.browsers.flatMap((browser) => {
           const page =
             keys.includes(browserTabKey(browser.localId)) &&
-            (keys.length > 1 || !browser.chatLocalId || close.force)
+            (withChat.has(browserTabKey(browser.localId)) ||
+              !browser.chatLocalId ||
+              close.force)
               ? browserCommandsRef.current.get(browser.localId)
               : undefined;
           return page ? [page] : [];
@@ -3091,7 +3126,11 @@ export function App({
           await Promise.all(saves.map((save) => save()));
           // A new subtab opened while a page asked: release this approval
           // and check the complete group again.
-          const current = closingTabKeys(workspaceRef.current, key);
+          const current = closingTabKeys(
+            workspaceRef.current,
+            key,
+            close.scope,
+          );
           if (
             current.length !== keys.length ||
             current.some((value, index) => value !== keys[index])
@@ -3099,7 +3138,7 @@ export function App({
             retry = true;
             return;
           }
-          if (workspaceRef.current.floatingKey === key) {
+          if (keys.includes(workspaceRef.current.floatingKey ?? "")) {
             floatingMotion.dismiss(() => {
               if (!closeTabImmediately(key, close)) void release();
             });
@@ -3119,7 +3158,7 @@ export function App({
       );
       return;
     }
-    if (workspaceRef.current.floatingKey === key)
+    if (keys.includes(workspaceRef.current.floatingKey ?? ""))
       floatingMotion.dismiss(() => closeTabImmediately(key, close));
     else closeTabImmediately(key, close);
   };
@@ -7369,7 +7408,7 @@ export function App({
           (id ? projectAgentNames[id] : undefined)
         );
       },
-      closeTab: (key) => closeTab(key),
+      closeTab: (key, scope) => closeTab(key, { scope }),
       reorderTab,
       attachTab,
       sessionAction: applySessionAction,
@@ -7571,6 +7610,41 @@ export function App({
       )}
     </div>
   );
+  /** What a tab's resource does itself, before the ways to close it. */
+  const tabVerbs = (key: string): ResourceActions | undefined => {
+    if (key.startsWith("browser:"))
+      return {
+        entries: [
+          ...(filePathForKey(key)
+            ? [{ label: "Rename file…", action: "rename-file" }]
+            : []),
+          { label: "Rename tab…", action: "rename-tab" },
+        ],
+        onAction: (action) =>
+          action === "rename-file"
+            ? requestTabFileRename(key)
+            : requestBrowserTabRename(key),
+      };
+    if (filePathForKey(key))
+      return {
+        entries: [{ label: "Rename…", action: "rename-file" }],
+        onAction: () => requestTabFileRename(key),
+      };
+    const chat = workspace.chats.find(
+      (candidate) => chatTabKey(candidate.localId) === key,
+    );
+    const sessionId = chat?.sessionId;
+    const entries = chat ? chatMenus[chat.localId] : undefined;
+    return sessionId && entries
+      ? {
+          entries,
+          onAction: (action) => {
+            const entry = entries.find((item) => item.action === action);
+            if (entry) applySessionAction(sessionId, entry.action);
+          },
+        }
+      : undefined;
+  };
   const workspaceTabBar = (
     <WorkspaceTabBar
       alignment={prefs?.tabAlignment ?? "start"}
@@ -7602,38 +7676,22 @@ export function App({
         return filePath && projectId ? { projectId, filePath } : undefined;
       }}
       tabActions={(key) => {
-        if (key.startsWith("browser:"))
-          return {
-            entries: [
-              ...(filePathForKey(key)
-                ? [{ label: "Rename file…", action: "rename-file" }]
-                : []),
-              { label: "Rename tab…", action: "rename-tab" },
-            ],
-            onAction: (action) =>
-              action === "rename-file"
-                ? requestTabFileRename(key)
-                : requestBrowserTabRename(key),
-          };
-        if (filePathForKey(key))
-          return {
-            entries: [{ label: "Rename…", action: "rename-file" }],
-            onAction: () => requestTabFileRename(key),
-          };
-        const chat = workspace.chats.find(
-          (candidate) => chatTabKey(candidate.localId) === key,
-        );
-        const sessionId = chat?.sessionId;
-        const entries = chat ? chatMenus[chat.localId] : undefined;
-        return sessionId && entries
-          ? {
-              entries,
-              onAction: (action) => {
-                const entry = entries.find((item) => item.action === action);
-                if (entry) applySessionAction(sessionId, entry.action);
-              },
-            }
-          : undefined;
+        const verbs = tabVerbs(key);
+        return {
+          entries: menuGroups<ContextMenuEntry>(
+            verbs?.entries ?? [],
+            tabCloseEntries({
+              key,
+              tabCount: allTabs.length,
+              groups: tabGroups,
+            }),
+          ),
+          onAction: (action) => {
+            const close = tabCloseRequest({ action, key, groups: tabGroups });
+            if (close) closeTab(close.key, { scope: close.scope });
+            else verbs?.onAction(action);
+          },
+        };
       }}
       onDragStateChange={(key) => {
         setTabDragKey(key);
@@ -9272,9 +9330,11 @@ export function App({
                     : "Discard workflow edits?"}
                 </h2>
                 <p className="mt-2 text-sm text-fg-muted">
-                  {closingEdits?.grouped
-                    ? "This group contains unsaved edits. Keep editing to save them, or discard the edits and close the group."
-                    : "This workflow has unsaved changes. Keep editing to save them, or discard the draft and close the tab."}
+                  {closingEdits?.scope && closingEdits.scope !== "chat-and-tabs"
+                    ? "Some of these tabs have unsaved edits. Keep editing to save them, or discard the edits and close the tabs."
+                    : closingEdits?.grouped
+                      ? "This group contains unsaved edits. Keep editing to save them, or discard the edits and close the group."
+                      : "This workflow has unsaved changes. Keep editing to save them, or discard the draft and close the tab."}
                 </p>
                 <div className="mt-5 flex justify-end gap-2">
                   <button
@@ -9292,6 +9352,7 @@ export function App({
                       if (closingEdits)
                         closeTab(closingEdits.requestedKey, {
                           discardDraft: true,
+                          scope: closingEdits.scope,
                         });
                     }}
                   >

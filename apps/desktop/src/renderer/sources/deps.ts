@@ -2,6 +2,7 @@ import type { useCatamorphic } from "@catamorphic/react";
 import type { QueryClient } from "@tanstack/react-query";
 import type { ChatSessionAction } from "../../shared/chat-session-actions.js";
 import type { OpenMode } from "../../shared/open-mode.js";
+import type { TabCloseScope } from "../lib/workspace-state.js";
 import type { WorkspaceTab } from "../lib/workspace-types.js";
 
 export type ApiClient = ReturnType<typeof useCatamorphic>["apiClient"];
@@ -20,11 +21,15 @@ export interface WorkSourceHost {
   sessionId?: string;
   tabs: readonly WorkspaceTab[];
   /** A chat tab and the tabs it opened, which nest under it. */
-  tabGroups: readonly { parentKey: string; memberKeys: readonly string[] }[];
+  tabGroups: readonly {
+    parentKey: string;
+    memberKeys: readonly string[];
+    collapsed?: boolean;
+  }[];
   activeTabKey?: string;
   unreadSessionIds: ReadonlySet<string>;
   agentName: (agentId: string | null | undefined) => string | undefined;
-  closeTab: (key: string) => void;
+  closeTab: (key: string, scope?: TabCloseScope) => void;
   /** Move a tab before another in the strip (null: to the end). */
   reorderTab: (key: string, beforeKey: string | null) => void;
   /**

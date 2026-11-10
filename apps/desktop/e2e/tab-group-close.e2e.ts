@@ -463,4 +463,85 @@ describe("closing folded tab groups", () => {
       expect(app.getRendererErrors()).toEqual([]);
     },
   );
+
+  describe("from a tab's menu", () => {
+    const menuItems = `[...document.querySelectorAll('[role="menuitem"]')]`;
+    const openMenu = async (key: string) => {
+      await app.eval(`(() => {
+        const label=document.querySelector('${visible} [data-point-key="${key}"] .workspace-tab-label');
+        const box=label.getBoundingClientRect();
+        label.dispatchEvent(new MouseEvent('contextmenu',{bubbles:true,cancelable:true,clientX:box.x+8,clientY:box.y+8}));
+      })()`);
+      await app.waitFor(`${menuItems}.length>0`, { label: "tab menu open" });
+    };
+    const closeEntries = () =>
+      app.eval<string[]>(
+        `${menuItems}.map(item=>item.textContent.trim()).filter(label=>label.startsWith('Close'))`,
+      );
+    const pick = (label: string) =>
+      app.eval(
+        `${menuItems}.find(item=>item.textContent.trim()===${JSON.stringify(label)}).click()`,
+      );
+    const state = (projectId: string) =>
+      `${api}.workspaceStateGet(${JSON.stringify(projectId)})`;
+
+    it("offers the group's closes and sends its tabs back to the chat", async () => {
+      const projectId = await openGroup({ name: "Menu chat tabs" });
+      await openMenu("chat:group");
+      expect(await closeEntries()).toEqual([
+        "Close tabs under chat",
+        "Close chat and its tabs",
+        "Close all tabs",
+      ]);
+      await app.waitFor(
+        `${menuItems}[0].closest('[role="menu"]').getAnimations({subtree:true}).every(animation=>animation.playState!=='running')`,
+        { label: "tab menu entrance settled" },
+      );
+      await app.screenshot(
+        path.join(
+          process.env.CATAMORPHIC_E2E_ARTIFACTS_DIR ?? app.userDataDir,
+          "group-close-menu.png",
+        ),
+      );
+      await pick("Close tabs under chat");
+      await app.waitFor(
+        `${state(projectId)}.then(ws=>ws.chats.length===1 && ws.browsers.length===1 && ws.browsers[0].background===true)`,
+        { label: "tab hidden back to its chat" },
+      );
+      expect(await app.eval(`!!document.querySelector('${group}')`)).toBe(true);
+      expect(app.getRendererErrors()).toEqual([]);
+    });
+
+    it("closes a chat and its tabs together", async () => {
+      const projectId = await openGroup({ name: "Menu chat and tabs" });
+      await openMenu("chat:group");
+      await pick("Close chat and its tabs");
+      await app.waitFor(
+        `${state(projectId)}.then(ws=>ws.chats.length===0 && ws.browsers.length===0)`,
+        { label: "chat and its tab closed" },
+      );
+      expect(
+        await app.eval(
+          `!!document.querySelector('${visible} [data-point-key="settings:settings"]')`,
+        ),
+      ).toBe(true);
+      expect(app.getRendererErrors()).toEqual([]);
+    });
+
+    it("closes every tab from any tab", async () => {
+      const projectId = await openGroup({ name: "Menu all tabs", pages: 2 });
+      await openMenu("settings:settings");
+      expect(await closeEntries()).toEqual(["Close tab", "Close all tabs"]);
+      await pick("Close all tabs");
+      await app.waitFor(
+        `${state(projectId)}.then(ws=>ws.chats.length===0 && ws.browsers.length===0 && ws.tabs.length===0)`,
+        { label: "every tab closed" },
+      );
+      await app.waitFor(
+        `!document.querySelector('${visible} [data-point-key]:not([aria-hidden])')`,
+        { label: "the strip is empty" },
+      );
+      expect(app.getRendererErrors()).toEqual([]);
+    });
+  });
 });
