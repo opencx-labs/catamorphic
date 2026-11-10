@@ -60,21 +60,11 @@ const hidden = (label: string) =>
 /** The middle of what `expression` finds, once it can take the pointer. */
 const centerOf = (expression: string, label: string) =>
   app.waitFor<{ x: number; y: number }>(
-    `(() => { const el = ${expression}; if (!el) return false; const r = el.getBoundingClientRect(); const x = Math.round(r.x + r.width / 2), y = Math.round(r.y + r.height / 2); return r.width > 0 && el.getAnimations({ subtree: true }).every(a => a.playState !== 'running') && { x, y }; })()`,
+    `(() => { const el = ${expression}; if (!el) return false; const r = el.getBoundingClientRect(); const x = Math.round(r.x + r.width / 2), y = Math.round(r.y + r.height / 2); return r.width > 0 && el.getAnimations({ subtree: true }).every(a => a.playState !== 'running') && el.contains(document.elementFromPoint(x, y)) && { x, y }; })()`,
     { label },
   );
-const move = (point: { x: number; y: number }) =>
-  app.cdp("Input.dispatchMouseEvent", { type: "mouseMoved", ...point });
-const press = async (point: { x: number; y: number }) => {
-  await move(point);
-  for (const type of ["mousePressed", "mouseReleased"])
-    await app.cdp("Input.dispatchMouseEvent", {
-      type,
-      ...point,
-      button: "left",
-      clickCount: 1,
-    });
-};
+const move = (point: { x: number; y: number }) => app.movePointer(point);
+const press = (point: { x: number; y: number }) => app.clickPointer(point);
 /** Where an element of the page is, in window coordinates. */
 const pagePoint = async (selector: string) => {
   const box = await inPage<{ x: number; y: number }>(`(() => {
