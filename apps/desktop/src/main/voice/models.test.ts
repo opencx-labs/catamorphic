@@ -76,6 +76,38 @@ const PATHS = (root: string): VoiceModelPaths => ({
 });
 
 describe("VoiceModelStore", () => {
+  it("native dictation works with no reply voice, even after its download fails", async () => {
+    const { installRoot, artifacts } = await fixture();
+    let downloads = 0;
+    const store = new VoiceModelStore({
+      rootDir: installRoot,
+      nativeRecognition: {
+        helperPath: "/app/speech-recognition",
+        locale: "en-US",
+      },
+      artifacts: artifacts.slice(0, 1),
+      fetchImpl: async () => {
+        downloads += 1;
+        throw new Error("Reply voice download failed");
+      },
+    });
+    const progress: unknown[] = [];
+    const dictate = () =>
+      store.ensure((tick) => progress.push(tick), { dictation: true });
+    expect((await dictate()).recognition).toEqual({
+      kind: "native",
+      helperPath: "/app/speech-recognition",
+      locale: "en-US",
+    });
+    expect(downloads).toBe(0);
+    expect(progress).toEqual([]);
+    await expect(fs.access(installRoot)).rejects.toThrow();
+    await expect(store.ensure()).rejects.toThrow("Reply voice download failed");
+    expect(downloads).toBe(1);
+    expect((await dictate()).recognition.kind).toBe("native");
+    expect(downloads).toBe(1);
+  });
+
   it("installs only reply synthesis on macOS, and keeps local STT on Linux", async () => {
     expect(
       voiceModelArtifacts("darwin").map((artifact) => artifact.id),

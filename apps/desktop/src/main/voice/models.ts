@@ -3,7 +3,7 @@ import { createHash } from "node:crypto";
 import fs from "node:fs";
 import fsPromises from "node:fs/promises";
 import path from "node:path";
-import type { VoiceModelPaths } from "../../shared/voice.js";
+import type { VoiceModelPaths, VoiceStatus } from "../../shared/voice.js";
 
 /** One installed directory of the speech models, from one pinned download. */
 export interface VoiceModelArtifact {
@@ -34,8 +34,8 @@ const KOKORO: VoiceModelArtifact = {
   id: "kokoro-multi-lang-v1_0",
   unpack: true,
   url: `${RELEASES}/tts-models/kokoro-multi-lang-v1_0.tar.bz2`,
-  sha256: "c5f7e2d2caf082bc1d20fb70334a61d99d20b484500aad32e7cf84c128ea3298",
-  bytes: 349_906_910,
+  sha256: "60703707bc05ccd48d60e1eb723f38b07d6e474795a0b6a588d7220400e0f7a4",
+  bytes: 349_886_476,
 };
 
 /** Only Linux/Windows install recognition; macOS uses Apple's speech APIs. */
@@ -75,10 +75,7 @@ export function voiceModelPaths(root: string): VoiceModelPaths {
   };
 }
 
-interface VoiceModelProgress {
-  receivedBytes: number;
-  totalBytes: number;
-}
+type VoiceModelProgress = NonNullable<VoiceStatus["download"]>;
 
 /**
  * The speech models on disk. `ensure` downloads what is missing, verifies
@@ -110,7 +107,12 @@ export class VoiceModelStore {
 
   ensure(
     onProgress: (progress: VoiceModelProgress) => void = () => {},
+    { dictation = false }: { dictation?: boolean } = {},
   ): Promise<VoiceModelPaths> {
+    // Apple's recognizer has no Work models. Dictation must not wait for
+    // (or fail because of) the unrelated voice used to speak replies.
+    if (dictation && this.options.nativeRecognition)
+      return Promise.resolve(this.paths());
     // Voice turned off and on mid-download waits on the same install, and
     // shows its progress from here on.
     this.onProgress = onProgress;
@@ -124,6 +126,16 @@ export class VoiceModelStore {
 
   private marker(artifact: VoiceModelArtifact): string {
     return path.join(this.options.rootDir, artifact.id, ".integrity");
+  }
+
+  private paths(): VoiceModelPaths {
+    const paths = (this.options.paths ?? voiceModelPaths)(this.options.rootDir);
+    return this.options.nativeRecognition
+      ? {
+          ...paths,
+          recognition: { kind: "native", ...this.options.nativeRecognition },
+        }
+      : paths;
   }
 
   private isInstalled(artifact: VoiceModelArtifact): boolean {
@@ -155,7 +167,13 @@ export class VoiceModelStore {
       lastTick = Date.now();
       let receivedBytes = 0;
       for (const value of received.values()) receivedBytes += value;
-      onProgress({ receivedBytes, totalBytes });
+      onProgress({
+        receivedBytes,
+        totalBytes,
+        kind: missing.every((artifact) => artifact.id === KOKORO.id)
+          ? "reply-voice"
+          : "speech",
+      });
     };
     if (missing.length > 0) tick("", 0, true);
     await fsPromises.mkdir(this.options.rootDir, { recursive: true });
@@ -168,13 +186,7 @@ export class VoiceModelStore {
       tick("", 0, true);
       await this.prune();
     }
-    const paths = (this.options.paths ?? voiceModelPaths)(this.options.rootDir);
-    return this.options.nativeRecognition
-      ? {
-          ...paths,
-          recognition: { kind: "native", ...this.options.nativeRecognition },
-        }
-      : paths;
+    return this.paths();
   }
 
   /**

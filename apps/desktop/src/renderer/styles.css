@@ -3349,7 +3349,7 @@ html[data-surface="dock"] #root {
   border-radius: 9999px;
   background-color: currentColor;
 }
-/* News waiting (accent) or a failed start (red), on the corner. */
+/* News waiting, on the corner. */
 .voice-button .voice-badge {
   position: absolute;
   top: -2px;
@@ -3362,8 +3362,8 @@ html[data-surface="dock"] #root {
   transform: scale(0);
   transition: transform 200ms var(--ease-standard);
 }
-.voice-button .voice-badge[data-kind="error"] {
-  background-color: var(--color-danger);
+.voice-button[data-error] {
+  color: var(--color-danger);
 }
 .voice-button .voice-badge[data-shown="true"] {
   transform: scale(1);

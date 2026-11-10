@@ -1,4 +1,4 @@
-import { Mic } from "lucide-react";
+import { CircleAlert, Mic } from "lucide-react";
 import { type MouseEvent, useEffect, useRef, useState } from "react";
 import type { AppPrefs } from "../../shared/app-prefs.js";
 import { menuGroups } from "../../shared/menu.js";
@@ -165,10 +165,11 @@ function hint({
     case "preparing": {
       const download = status.download;
       if (!download || download.totalBytes === 0) return "Starting voice";
+      const what = download.kind === "reply-voice" ? "reply voice" : "speech";
       // Downloaded, the models are unpacked and put in place.
       if (download.receivedBytes >= download.totalBytes)
-        return "Setting up speech";
-      return `Downloading speech, ${Math.floor(
+        return `Setting up ${what}`;
+      return `Downloading ${what}, ${Math.floor(
         (100 * download.receivedBytes) / download.totalBytes,
       )}%`;
     }
@@ -350,7 +351,9 @@ export function VoiceButton({
         ? target?.kind === "chat" && target.sessionId === chat.sessionId
         : target?.kind === "assistant" || (!chat && target === null);
   const phase = mine ? status.phase : "off";
-  const error = mine && phase === "off" ? status.error : null;
+  // The dock also reports a failed chat microphone: the chat may already
+  // be closed, leaving nobody else to explain why voice stopped.
+  const error = (mine || !chat) && status.phase === "off" ? status.error : null;
   // A press shows "starting" at once, until the main process has answered:
   // by then the status says where voice is.
   const [starting, setStarting] = useState(false);
@@ -644,8 +647,7 @@ export function VoiceButton({
   if (hidden) return null;
   // From the person heard to the agent heard: working, then speaking.
   const answering = phase === "thinking" || phase === "speaking";
-  const badge =
-    on || starting ? null : error ? "error" : pending ? "news" : null;
+  const badge = !on && !starting && pending;
   const description = hint({
     status,
     phase,
@@ -724,7 +726,11 @@ export function VoiceButton({
             pressUp();
           }}
           onContextMenu={openMenu}
-          aria-label={`${prefs.voiceDictation ? "Hold to dictate" : `Hold to talk to ${name}`}${pending ? ", news waiting" : ""}`}
+          aria-label={
+            error
+              ? "Hold to retry voice"
+              : `${prefs.voiceDictation ? "Hold to dictate" : `Hold to talk to ${name}`}${pending ? ", news waiting" : ""}`
+          }
           aria-description={description}
           aria-busy={loading}
           data-testid={chat ? "chat-voice-button" : "voice-button"}
@@ -736,6 +742,7 @@ export function VoiceButton({
           data-progress={progress === null ? undefined : true}
           data-pending={pending || undefined}
           data-dragging={dragging || undefined}
+          data-error={!!error || undefined}
           className="voice-button"
         >
           <span aria-hidden="true" className="voice-ripple" />
@@ -757,15 +764,20 @@ export function VoiceButton({
           <Mic
             aria-hidden="true"
             className="voice-icon"
-            data-shown={!answering}
+            data-shown={!answering && !error}
+          />
+          <CircleAlert
+            aria-hidden="true"
+            className="voice-icon"
+            data-testid="voice-error"
+            data-shown={!!error}
           />
           <VoiceBars shown={answering} />
           <span
             aria-hidden="true"
             className="voice-badge"
-            data-testid={badge === "error" ? "voice-error" : "voice-news"}
-            data-kind={badge ?? undefined}
-            data-shown={badge !== null}
+            data-testid="voice-news"
+            data-shown={badge}
           />
         </button>
       </ShortcutHint>

@@ -1437,7 +1437,9 @@ export function registerVoiceSupport(deps: {
       const prepared = (async () => {
         const paths =
           fake === undefined
-            ? await models.ensure((download) => update(voice, { download }))
+            ? await models.ensure((download) => update(voice, { download }), {
+                dictation: request.kind === "dictation",
+              })
             : null;
         if (!live()) return;
         update(voice, { download: null });

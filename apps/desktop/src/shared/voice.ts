@@ -146,7 +146,11 @@ export interface VoiceStatus {
    */
   pending: boolean;
   /** Bytes of the speech models still arriving, the first time only. */
-  download: { receivedBytes: number; totalBytes: number } | null;
+  download: {
+    receivedBytes: number;
+    totalBytes: number;
+    kind: "speech" | "reply-voice";
+  } | null;
   /** Why voice stopped or could not start. Cleared by the next start. */
   error: string | null;
   /** Voice writes what the person says where they type: dictation. */
