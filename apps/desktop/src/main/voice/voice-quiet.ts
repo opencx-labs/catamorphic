@@ -16,18 +16,11 @@ export const QUIET_PHASES: ReadonlySet<VoicePhase> = new Set([
 export function quietForConversation({
   phase,
   target,
-  learning,
 }: {
   phase: VoicePhase;
   target: VoiceTarget | null;
-  learning: boolean;
 }): boolean {
-  return (
-    !!target &&
-    target.kind !== "dictation" &&
-    !learning &&
-    QUIET_PHASES.has(phase)
-  );
+  return !!target && target.kind !== "dictation" && QUIET_PHASES.has(phase);
 }
 
 /**

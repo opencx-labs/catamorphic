@@ -1725,16 +1725,11 @@ const api = {
     invoke("catamorphic:voice-read-aloud", input),
   voicePress: (press: VoicePress): Promise<void> =>
     invoke("catamorphic:voice-press", press),
-  voiceRelease: (input?: { heldMs?: number }): Promise<void> =>
-    invoke("catamorphic:voice-release", input),
+  voiceRelease: (): Promise<void> => invoke("catamorphic:voice-release"),
   voiceFrontChat: (chat: { projectId: string; sessionId: string } | null) =>
     ipcRenderer.send("catamorphic:voice-front-chat", chat),
   voiceReset: (): Promise<void> => invoke("catamorphic:voice-reset"),
   voiceOpenChat: (): Promise<void> => invoke("catamorphic:voice-open-chat"),
-  voiceLearn: (input: {
-    projectId?: string;
-    sessionId?: string;
-  }): Promise<void> => invoke("catamorphic:voice-learn", input),
   onVoiceStatus: (listener: (status: VoiceStatus) => void) => {
     const handler = (_event: Electron.IpcRendererEvent, value: VoiceStatus) =>
       listener(value);

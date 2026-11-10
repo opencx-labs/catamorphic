@@ -78,8 +78,7 @@ export type VoiceTarget =
   | { kind: "dictation"; sessionId?: string };
 
 /**
- * What a microphone or a shortcut asks of voice (ADR 0236): a tap turns
- * it on or off, a hold talks while held.
+ * A microphone or shortcut captures while held and sends on release.
  */
 export type VoiceAction = "dictate" | "talk-to-work" | "talk-to-chat";
 
@@ -150,15 +149,8 @@ export interface VoiceStatus {
   download: { receivedBytes: number; totalBytes: number } | null;
   /** Why voice stopped or could not start. Cleared by the next start. */
   error: string | null;
-  /** Voice is learning the person's voice from what they say now. */
-  learning: boolean;
   /** Voice writes what the person says where they type: dictation. */
   dictation: boolean;
-  /**
-   * Voice listens on its own (it was tapped on); else only while held (it
-   * was started by holding a shortcut or a microphone).
-   */
-  handsFree: boolean;
   /**
    * The reply being read aloud from its button (ADR 0268), voice on or
    * off: `preparing` until its first words play.
@@ -187,9 +179,7 @@ export const VOICE_OFF: VoiceStatus = {
   pending: false,
   download: null,
   error: null,
-  learning: false,
   dictation: false,
-  handsFree: false,
   reading: null,
 };
 
@@ -215,39 +205,18 @@ export type VoiceKeysState =
   | "needs-permission"
   | "unsupported";
 
-/**
- * The person's voice, as the speaker model hears it (ADR 0236). A print
- * names its model: one made by another cannot be compared, and is
- * forgotten.
- */
-export interface Voiceprint {
-  model: typeof VOICEPRINT_MODEL;
-  vector: number[];
-}
-
-export const VOICEPRINT_MODEL = "eres2net-voxceleb";
-
-/** A stored voice print the speaker model can use, else null. */
-export function voiceprintOf(value: unknown): Voiceprint | null {
-  if (typeof value !== "object" || value === null) return null;
-  const model = "model" in value ? value.model : undefined;
-  const vector = "vector" in value ? value.vector : undefined;
-  return model === VOICEPRINT_MODEL &&
-    Array.isArray(vector) &&
-    vector.length > 0 &&
-    vector.every((entry) => typeof entry === "number")
-    ? { model, vector }
-    : null;
-}
-
 /** Local files of the speech models, as the worker loads them. */
 export interface VoiceModelPaths {
-  /** Silero voice activity detector. */
-  vad: string;
-  /** ERes2Net speaker embeddings: who is speaking. */
-  speaker: string;
-  /** Parakeet TDT transducer. */
-  asr: { encoder: string; decoder: string; joiner: string; tokens: string };
+  /** macOS uses Apple's recognizer; other platforms use local Parakeet. */
+  recognition:
+    | { kind: "native"; helperPath: string; locale: string }
+    | {
+        kind: "parakeet";
+        encoder: string;
+        decoder: string;
+        joiner: string;
+        tokens: string;
+      };
   /** Kokoro v1.0 and its voices. */
   tts: {
     model: string;
@@ -268,13 +237,8 @@ export type VoiceWorkerCommand =
       speech:
         | { kind: "models"; paths: VoiceModelPaths; voice: VoiceId }
         | FakeSpeechScript;
-      /** The person's voice print, when voice knows it. */
-      voiceprint: number[] | null;
-      handsFree: boolean;
       dictation: boolean;
     }
-  /** Listen whenever someone speaks, or only while held. */
-  | { type: "hands-free"; enabled: boolean }
   /**
    * Voice is off: drop the conversation and close the microphone, keep the
    * models loaded for the next start.
@@ -282,24 +246,12 @@ export type VoiceWorkerCommand =
   | { type: "rest" }
   /** Write what the person says into a composer, or talk with the agent. */
   | { type: "dictation"; enabled: boolean }
-  /**
-   * The keys or a microphone went down, or came up; `discard` drops what a
-   * tap caught.
-   */
-  | { type: "hold"; held: boolean; discard?: boolean; release?: number }
+  /** The keys or a microphone went down or came up. */
+  | { type: "hold"; held: boolean; release?: number }
   /** Hear nothing more; speech already asked for is still said. */
   | { type: "stop-listening" }
-  /**
-   * Voice is ending: dictation hears what the person is still saying, then
-   * nothing more; `finished` says when all of it is written.
-   */
-  | { type: "finish" }
   /** Voice moved on: drop what was said for where it was before. */
   | { type: "forget" }
-  /** Learn the person's voice from the next few seconds they speak. */
-  | { type: "learn" }
-  /** Listen to this voice alone from now on; null listens to anyone. */
-  | { type: "voiceprint"; voiceprint: number[] | null }
   /** Speak in another voice from the next reply on. */
   | { type: "voice"; voice: VoiceId }
   | { type: "speak"; id: string; text: string }
@@ -335,23 +287,16 @@ export type VoiceWorkerEvent =
   | { type: "barge-in" }
   | { type: "speaking"; id: string }
   | { type: "spoken"; id: string; interrupted: boolean }
-  /** The person's voice print, learned from what they just said. */
-  | { type: "learned"; voiceprint: number[] }
-  /** Someone else spoke: not the voice print's person, so not heard. */
-  | { type: "ignored" }
   /** The keys or the microphone were held, and let go with no words said. */
   | { type: "unheard"; release?: number }
   /** All pieces, including the tail, of this released hold have been recognized. */
   | { type: "hold-recognized"; release: number }
-  /** Everything heard before `finish` is recognized and said. */
-  | { type: "finished" }
   | ({ type: "levels" } & VoiceLevels)
   /** The microphone voice listens with, by its label (ADR 0268). */
   | { type: "microphone"; label: string };
 
 /**
- * The rate the audio page captures the microphone at, and the detector and
- * recognizer run at: Chromium resamples the device's audio to it properly.
+ * The rate the audio page captures the microphone at and recognition uses: Chromium resamples the device's audio to it properly.
  */
 export const SPEECH_SAMPLE_RATE = 16_000;
 
@@ -369,7 +314,7 @@ export interface VoiceLevels {
   levels: number[];
   /**
    * The clips shown before this one are not heard as scheduled: playback
-   * paused, stopped or carried on later (ADR 0265). Their bars go.
+   * stopped or was interrupted. Their bars go.
    */
   reset?: boolean;
 }
@@ -389,14 +334,6 @@ export type VoiceAudioDown =
   | { type: "play"; seq: number; samples: Float32Array; sampleRate: number }
   /** Drop everything queued or playing, now. */
   | { type: "flush"; seq: number }
-  /**
-   * The person is talking over the agent (ADR 0265): hold everything
-   * queued or playing where it is, and what comes after it, until resumed
-   * or flushed.
-   */
-  | { type: "pause" }
-  /** Carry on from where playback paused. */
-  | { type: "resume" }
   /** Stop capturing for good: the microphone goes off, playback goes on. */
   | { type: "close-microphone" };
 

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { sameVoiceTarget, type VoiceTarget, voiceprintOf } from "./voice.js";
+import { sameVoiceTarget, type VoiceTarget } from "./voice.js";
 
 describe("sameVoiceTarget", () => {
   it("takes dictation pressed from anywhere as whatever dictation is on", () => {
@@ -40,18 +40,5 @@ describe("sameVoiceTarget", () => {
     );
     expect(sameVoiceTarget({ kind: "assistant" }, chat)).toBe(false);
     expect(sameVoiceTarget(null, chat)).toBe(false);
-  });
-});
-
-describe("voiceprintOf", () => {
-  it("keeps a print made by the model in use, and forgets any other", () => {
-    expect(
-      voiceprintOf({ model: "eres2net-voxceleb", vector: [0.6, 0.8] }),
-    ).toEqual({ model: "eres2net-voxceleb", vector: [0.6, 0.8] });
-    expect(voiceprintOf({ model: "wespeaker", vector: [1] })).toBe(null);
-    expect(voiceprintOf([0.6, 0.8])).toBe(null);
-    expect(voiceprintOf({ model: "eres2net-voxceleb", vector: ["x"] })).toBe(
-      null,
-    );
   });
 });

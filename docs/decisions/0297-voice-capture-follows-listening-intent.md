@@ -3,6 +3,8 @@
 - **Status:** Accepted (amends 0236, 0268)
 - **Date:** 2026-10-29
 
+Native recognition and push-to-talk-only input now follow [0310](0310-native-macos-speech-and-push-to-talk.md); it supersedes automatic listening and speaker identification described below.
+
 ## Context
 
 Releasing push-to-talk left the microphone open while recognition and the reply

@@ -17,20 +17,12 @@ const speech = vi.hoisted(() => ({
 vi.mock("./sherpa-speech.js", () => ({ loadSherpaSpeech: speech.load }));
 vi.mock("./fake-speech.js", () => ({
   fakeSpeech: (): SpeechParts => ({
-    activity: {
-      windowSize: 16000,
-      accept() {},
-      detected: () => false,
-      takeSegments: () => [],
-      reset() {},
-    },
     recognize: speech.recognize,
     synthesize: async () => ({
       samples: new Float32Array(),
       sampleRate: 24000,
     }),
     cue: () => ({ samples: new Float32Array(), sampleRate: 24000 }),
-    voiceprint: () => [1],
   }),
 }));
 
@@ -43,13 +35,6 @@ beforeEach(() => {
     sampleRate: 24000,
   });
   speech.load.mockResolvedValue({
-    activity: {
-      windowSize: 512,
-      accept() {},
-      detected: () => false,
-      takeSegments: () => [],
-      reset() {},
-    },
     recognize: speech.recognize,
     synthesize: speech.synthesize,
     prepareSynthesis: speech.prepare,
@@ -75,8 +60,6 @@ async function worker() {
         paths: voiceModelPaths("/models"),
         voice: "af_heart",
       },
-      voiceprint: null,
-      handsFree: false,
       dictation,
     });
   return { events, command, start };
@@ -214,8 +197,6 @@ it("acknowledges a released hold only after every dictated piece, including its 
   command({
     type: "start",
     speech: { kind: "fake", utterance: "unused" },
-    voiceprint: null,
-    handsFree: false,
     dictation: true,
   });
   command({ type: "hold", held: true });

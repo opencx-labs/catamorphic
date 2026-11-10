@@ -151,25 +151,16 @@ function hint({
   /** Why voice stopped here, when it stopped on this microphone. */
   error: string | null;
   starting: boolean;
-  /** A click dictates rather than talks: dictation only. */
+  /** Holding dictates rather than talks: dictation only. */
   dictation: boolean;
   /** Who this microphone talks to. */
   name: string;
 }): string {
   if (starting) return "Starting voice";
   if (phase === "off")
-    return (
-      error ??
-      (dictation ? "Dictate. Hold to dictate" : `Talk to ${name}. Hold to talk`)
-    );
-  if (status.learning) return "Learning your voice. Keep talking";
-  const handsFree = status.handsFree;
+    return error ?? (dictation ? "Hold to dictate" : `Hold to talk to ${name}`);
   if (status.dictation && phase !== "preparing")
-    return phase === "hearing"
-      ? "Writing what you say"
-      : handsFree
-        ? "Dictating. Click to stop"
-        : "Hold to dictate";
+    return phase === "hearing" ? "Writing what you say" : "Hold to dictate";
   switch (phase) {
     case "preparing": {
       const download = status.download;
@@ -182,15 +173,13 @@ function hint({
       )}%`;
     }
     case "listening":
-      return handsFree ? "Listening. Click to stop" : "Hold to talk";
+      return "Hold to talk";
     case "hearing":
       return "Hearing you";
     case "thinking":
       return "Working on it";
     case "speaking":
-      return handsFree
-        ? "Speaking. Talk to interrupt"
-        : "Speaking. Hold to interrupt";
+      return "Speaking. Hold to interrupt";
   }
 }
 
@@ -293,14 +282,13 @@ const RING_LENGTH = 2 * Math.PI * RING_RADIUS;
 
 /**
  * A microphone (ADR 0216): the dock's talks to the assistant, a composer's
- * to its chat's agent. A click starts voice there (making the assistant's
+ * to its chat's agent. Holding starts voice there (making the assistant's
  * chat the first time, or a new chat's session); an arc turns around it
- * until it is really listening, then it lights up. Another click stops
- * it, and another microphone's click moves voice to that one. The dock's
- * shows news that came in while voice was off as a dot, heard first on the
- * next start. The right-click menu holds the settings that matter there:
- * the assistant and the voice, the microphone, dictation only, the person's
- * own voice, and where microphones show.
+ * until it is really listening, then it lights up. Release finishes the
+ * capture. The dock shows news that came in while voice was off as a dot,
+ * heard first on the next start. The right-click menu holds the settings that matter there:
+ * the assistant and the voice, the microphone, dictation only, and where
+ * microphones show.
  */
 export function VoiceButton({
   projectId,
@@ -327,7 +315,7 @@ export function VoiceButton({
   nativeMenus?: boolean;
   /**
    * The bubble floating over other apps (ADR 0236), where the person sees
-   * and stops whatever voice is doing, wherever it was started. Its menus
+   * and talks to whichever voice is active, wherever it was started. Its menus
    * are native: the window is only as big as the button. Dragged, it moves
    * along the bottom of the screen.
    */
@@ -340,7 +328,7 @@ export function VoiceButton({
   const { prefs, loaded, update } = useAppPreferences();
   const agents = useProfileAgents(!chat);
   const bindings = useKeybindings();
-  // What a click here does, and the shortcut that does it too.
+  // What holding here does, and the shortcut that does it too.
   const action: VoiceAction = prefs.voiceDictation
     ? "dictate"
     : chat
@@ -363,7 +351,7 @@ export function VoiceButton({
         : target?.kind === "assistant" || (!chat && target === null);
   const phase = mine ? status.phase : "off";
   const error = mine && phase === "off" ? status.error : null;
-  // A click shows "starting" at once, until the main process has answered:
+  // A press shows "starting" at once, until the main process has answered:
   // by then the status says where voice is.
   const [starting, setStarting] = useState(false);
   useEffect(() => {
@@ -468,7 +456,7 @@ export function VoiceButton({
           : []),
       ],
     },
-    // Speech to text alone: a click dictates where the person types, and
+    // Speech to text alone: holding dictates where the person types, and
     // they send it as typed text.
     {
       label: "Dictation only",
@@ -476,16 +464,6 @@ export function VoiceButton({
       checked: prefs.voiceDictation,
       setting: true,
     },
-    // Background voices (ADR 0216): once voice knows the person's voice,
-    // anyone else is ignored.
-    {
-      label: prefs.voiceprint ? "Relearn my voice" : "Learn my voice",
-      action: "learn",
-      ...(status.learning ? { disabledReason: "Learning your voice now" } : {}),
-    },
-    ...(prefs.voiceprint
-      ? [{ label: "Forget my voice", action: "forget" }]
-      : []),
     chat
       ? {
           label: "Show voice in chats",
@@ -520,7 +498,8 @@ export function VoiceButton({
   const pressOf = async (): Promise<VoicePress | null> => {
     if (on && target) return voicePressFor(target, projectId);
     if (prefs.voiceDictation) {
-      chat?.focusComposer();
+      // Keyboard capture keeps this button focused until release.
+      if (!pressedKey.current) chat?.focusComposer();
       // A new chat gets its session now, so its microphone shows dictation.
       const sessionId = chat
         ? (chat.sessionId ?? (await chat.ensureSession()))
@@ -539,11 +518,10 @@ export function VoiceButton({
   };
   /** A press under way: its release waits for it to reach voice. */
   const pressing = useRef<Promise<unknown> | null>(null);
-  /** When the press went down: the press is measured here, as it happened. */
-  const pressedAt = useRef(0);
-  const pressDown = ({ at = performance.now() }: { at?: number } = {}) => {
+  const mounted = useRef(true);
+  const pressedKey = useRef<string | null>(null);
+  const pressDown = () => {
     if (pressing.current) return;
-    pressedAt.current = at;
     if (!on) setStarting(true);
     pressing.current = pressOf()
       .then((press) => (press ? desktopApi.voicePress(press) : undefined))
@@ -555,10 +533,14 @@ export function VoiceButton({
     const press = pressing.current;
     if (!press) return;
     pressing.current = null;
-    const heldMs = performance.now() - pressedAt.current;
     void press
-      .then(() => desktopApi.voiceRelease({ heldMs }))
-      .finally(() => setStarting(false));
+      .then(() => desktopApi.voiceRelease())
+      .catch((cause: unknown) =>
+        console.warn("[voice] the microphone's release failed:", cause),
+      )
+      .finally(() => {
+        if (mounted.current) setStarting(false);
+      });
   };
   // On the bubble, a press is a tap, a hold or a drag, and reaches voice
   // only as one of the first two (bubble-press.ts): moving the bubble never
@@ -572,7 +554,7 @@ export function VoiceButton({
     if (next.press.kind !== "waiting") clearTimeout(still.current);
     setDragging(next.press.kind === "dragging");
     for (const effect of next.effects) {
-      if (effect.kind === "press") pressDown({ at: effect.at });
+      if (effect.kind === "press") pressDown();
       else if (effect.kind === "release") pressUp();
       else
         void desktopApi
@@ -584,23 +566,21 @@ export function VoiceButton({
           .catch(() => {});
     }
   };
-  useEffect(() => () => clearTimeout(still.current), []);
-  /** Voice learning, started or moved here, then settled. */
-  const send = (
-    call: (input: { projectId?: string; sessionId?: string }) => Promise<void>,
-  ) => {
-    if (!on) setStarting(true);
-    void (async () => {
-      if (!chat) return { projectId };
-      const sessionId = chat.sessionId ?? (await chat.ensureSession());
-      return sessionId ? { projectId, sessionId } : null;
-    })()
-      .then((input) => (input ? call(input) : undefined))
-      .catch((cause: unknown) =>
-        console.warn("[voice] the microphone's request failed:", cause),
-      )
-      .finally(() => setStarting(false));
-  };
+  useEffect(() => {
+    mounted.current = true;
+    return () => {
+      mounted.current = false;
+      clearTimeout(still.current);
+      const press = pressing.current;
+      pressing.current = null;
+      if (press)
+        void press
+          .then(() => desktopApi.voiceRelease())
+          .catch((cause: unknown) =>
+            console.warn("[voice] the microphone's release failed:", cause),
+          );
+    };
+  }, []);
   const pick = (action: string | null) => {
     if (!action) return;
     if (action === "open" && session)
@@ -617,8 +597,6 @@ export function VoiceButton({
       });
     if (action.startsWith("window:"))
       void desktopApi.voiceBubbleWindow(Number(action.slice("window:".length)));
-    if (action === "learn") send(desktopApi.voiceLearn);
-    if (action === "forget") void update({ voiceprint: null });
     if (action === "dictation")
       void update({ voiceDictation: !prefs.voiceDictation });
     if (action === "in-dock") void update({ voiceInDock: !prefs.voiceInDock });
@@ -685,8 +663,8 @@ export function VoiceButton({
       >
         <button
           type="button"
-          // A click turns voice on or off; held, it talks while held. The
-          // press keeps focus where it was: dictation writes there.
+          // Capture lasts while held. The press keeps focus where it was:
+          // dictation writes there.
           onPointerDown={(event) => {
             // Control-click is a right click on macOS: the menu, not voice.
             if (event.button !== 0 || event.ctrlKey) return;
@@ -718,17 +696,36 @@ export function VoiceButton({
           }
           onLostPointerCapture={() => {
             if (bubble) step({ kind: "cancel" });
+            else pressUp();
           }}
-          onClick={(event) => {
-            // From the keyboard: a tap.
-            if (event.detail !== 0) return;
+          onKeyDown={(event) => {
+            if (
+              (event.key !== " " && event.key !== "Enter") ||
+              event.altKey ||
+              event.ctrlKey ||
+              event.metaKey ||
+              event.shiftKey
+            )
+              return;
+            event.preventDefault();
+            if (event.repeat || pressedKey.current) return;
+            pressedKey.current = event.key;
             pressDown();
+          }}
+          onKeyUp={(event) => {
+            if (event.key !== pressedKey.current) return;
+            event.preventDefault();
+            pressedKey.current = null;
+            pressUp();
+            if (prefs.voiceDictation) chat?.focusComposer();
+          }}
+          onBlur={() => {
+            pressedKey.current = null;
             pressUp();
           }}
           onContextMenu={openMenu}
-          aria-label={pending ? "Voice, news waiting" : "Voice"}
+          aria-label={`${prefs.voiceDictation ? "Hold to dictate" : `Hold to talk to ${name}`}${pending ? ", news waiting" : ""}`}
           aria-description={description}
-          aria-pressed={on}
           aria-busy={loading}
           data-testid={chat ? "chat-voice-button" : "voice-button"}
           data-place={chat ? "composer" : "dock"}

@@ -2,27 +2,22 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import type { VoiceAudioUp } from "../../shared/voice.js";
 import { Speaker } from "./speaker.js";
 
-/**
- * An output whose clock moves only while it runs, as Chromium's does: a
- * suspended context holds every scheduled clip where it is.
- */
+/** An output clock with observable playback completion and cancellation. */
 class FakeContext {
   static made: FakeContext[] = [];
-  state: "running" | "suspended" = "running";
   currentTime = 0;
   outputLatency = 0;
   readonly destination = {};
-  readonly started: { at: number; stop: () => void }[] = [];
+  readonly started: {
+    at: number;
+    stop: () => void;
+    cancel: () => void;
+  }[] = [];
   constructor() {
     FakeContext.made.push(this);
   }
-  async resume() {
-    this.state = "running";
-  }
-  async suspend() {
-    this.state = "suspended";
-  }
-  async close() {}
+  async resume() {}
+  close = vi.fn(async () => {});
   createBuffer(_channels: number, length: number, rate: number) {
     return {
       duration: length / rate,
@@ -35,7 +30,11 @@ class FakeContext {
       onended: null as (() => void) | null,
       connect: () => {},
       start: (at: number) =>
-        this.started.push({ at, stop: () => source.onended?.() }),
+        this.started.push({
+          at,
+          stop: () => source.onended?.(),
+          cancel: source.stop,
+        }),
       stop: vi.fn(),
     };
     return source;
@@ -65,54 +64,61 @@ const levels = (sent: VoiceAudioUp[]) =>
   );
 
 afterEach(() => {
+  vi.restoreAllMocks();
   vi.unstubAllGlobals();
   FakeContext.made = [];
 });
 
-describe("the audio page's speaker (ADR 0265)", () => {
-  it("holds what it plays where it is while paused, and carries on after", async () => {
+describe("the audio page's speaker", () => {
+  it("streams clips back to back, schedules their levels and reports the last one drained", () => {
+    vi.stubGlobal("AudioContext", FakeContext);
+    vi.spyOn(Date, "now").mockReturnValue(1000);
+    const { speaker: out, sent } = speaker();
+    out.receive(clip(1));
+    const context = FakeContext.made[0];
+    out.receive(clip(2));
+    expect(FakeContext.made).toHaveLength(1);
+    expect(context?.started.map(({ at }) => at)).toEqual([0.03, 0.13]);
+    expect(levels(sent)).toEqual(["clip:true", "clip:true"]);
+    expect(sent).toMatchObject([
+      { type: "levels", at: 1030, frameMs: 20 },
+      { type: "levels", at: 1130, frameMs: 20 },
+    ]);
+    context?.started[0]?.stop();
+    expect(sent.some((message) => message.type === "drained")).toBe(false);
+    context?.started[1]?.stop();
+    expect(sent.at(-1)).toEqual({ type: "drained", seq: 2 });
+  });
+
+  it("drops what it was saying when stopped, clears its levels and plays the next", () => {
     vi.stubGlobal("AudioContext", FakeContext);
     const { speaker: out, sent } = speaker();
     out.receive(clip(1));
     const context = FakeContext.made[0];
-    out.receive({ type: "pause" });
-    expect(context?.state).toBe("suspended");
-    // A clip made while paused waits with the rest.
-    out.receive(clip(2));
-    expect(context?.state).toBe("suspended");
-    out.receive({ type: "resume" });
-    await Promise.resolve();
-    await Promise.resolve();
-    expect(context?.state).toBe("running");
-    // The bars forget the paused schedule, then follow both clips anew.
-    expect(levels(sent)).toEqual([
-      "clip:true",
-      "reset",
-      "reset",
-      "clip:true",
-      "clip:true",
-    ]);
-  });
-
-  it("starts a first clip paused when the person already talks over it", () => {
-    vi.stubGlobal("AudioContext", FakeContext);
-    const { speaker: out, sent } = speaker();
-    out.receive({ type: "pause" });
-    out.receive(clip(1));
-    expect(FakeContext.made[0]?.state).toBe("suspended");
-    expect(levels(sent)).toEqual(["reset"]);
-  });
-
-  it("drops what it was saying when stopped, paused or not, and plays the next", async () => {
-    vi.stubGlobal("AudioContext", FakeContext);
-    const { speaker: out, sent } = speaker();
-    out.receive(clip(1));
-    out.receive({ type: "pause" });
     out.receive({ type: "flush", seq: 2 });
+    expect(context?.started[0]?.cancel).toHaveBeenCalledOnce();
+    context?.started[0]?.stop();
+    expect(sent.some((message) => message.type === "drained")).toBe(false);
     out.receive(clip(3));
-    expect(FakeContext.made[0]?.state).toBe("running");
-    FakeContext.made[0]?.started.at(-1)?.stop();
+    expect(context?.started.at(-1)?.at).toBe(0.03);
+    context?.started.at(-1)?.stop();
     expect(sent.at(-1)).toEqual({ type: "drained", seq: 3 });
-    expect(levels(sent)).toEqual(["clip:true", "reset", "reset", "clip:true"]);
+    expect(levels(sent)).toEqual(["clip:true", "reset", "clip:true"]);
+  });
+
+  it("closes its output and cancels every scheduled clip", () => {
+    vi.stubGlobal("AudioContext", FakeContext);
+    const { speaker: out, sent } = speaker();
+    out.receive(clip(1));
+    out.receive(clip(2));
+    const context = FakeContext.made[0];
+    out.close();
+    for (const source of context?.started ?? []) {
+      expect(source.cancel).toHaveBeenCalledOnce();
+      source.stop();
+    }
+    expect(context?.close).toHaveBeenCalledOnce();
+    expect(sent.some((message) => message.type === "drained")).toBe(false);
+    expect(levels(sent)).toEqual(["clip:true", "clip:true", "reset"]);
   });
 });

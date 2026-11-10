@@ -1,0 +1,7 @@
+{
+  "protocol": 1,
+  "minimumMacOS": "13.0",
+  "sourceSha256": "c2da2b2601bf93c781e2c686981315a3d345c776d7a5cdada9cafc69f874d9ed",
+  "infoPlistSha256": "186732aab750ab6cc9d3f288cb896017b442235a63e68521812dd4364d07dabb",
+  "binarySha256": "17c508c795dc74bdd8f8075975b0c2b20acce2534201f502068c10055294f613"
+}

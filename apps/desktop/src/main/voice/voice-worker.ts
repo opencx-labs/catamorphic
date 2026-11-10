@@ -72,16 +72,12 @@ function forEngine(command: VoiceWorkerCommand): void {
     return;
   }
   switch (command.type) {
-    case "hands-free":
-      engine.setHandsFree(command.enabled);
-      return;
     case "dictation":
       engine.setDictation(command.enabled);
       return;
     case "hold": {
       const held = engine;
       held.hold(command.held, {
-        discard: command.discard === true,
         release: command.release,
       });
       const release = command.release;
@@ -94,21 +90,8 @@ function forEngine(command: VoiceWorkerCommand): void {
     case "stop-listening":
       engine.stopListening();
       return;
-    case "learn":
-      engine.learn();
-      return;
-    case "finish": {
-      const ending = engine;
-      void ending.finish().then(() => {
-        if (engine === ending) emit({ type: "finished" });
-      });
-      return;
-    }
     case "forget":
       engine.forget();
-      return;
-    case "voiceprint":
-      engine.setVoiceprint(command.voiceprint);
       return;
     case "speak":
       engine.speak(command.id, command.text);
@@ -162,8 +145,6 @@ process.parentPort.on("message", (message) => {
 
 async function start({
   speech,
-  voiceprint,
-  handsFree,
   dictation,
 }: Extract<VoiceWorkerCommand, { type: "start" }>): Promise<void> {
   const mine = ++starts;
@@ -200,8 +181,6 @@ async function start({
     const next = new VoiceEngine(parts, emit, (message) =>
       audio?.postMessage(message),
     );
-    next.setVoiceprint(voiceprint);
-    next.setHandsFree(handsFree);
     next.setDictation(dictation);
     engine = next;
     // What was heard and pressed while loading, in the order it came.

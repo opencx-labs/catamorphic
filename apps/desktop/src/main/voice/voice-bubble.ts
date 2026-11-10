@@ -30,7 +30,6 @@ export const voiceMenuPrefsPatchSchema = z.strictObject({
   voiceId: voiceId.optional(),
   agentVoices: z.record(z.string().min(1).max(1024), voiceId).optional(),
   voiceMicrophone: z.string().max(4096).nullable().optional(),
-  voiceprint: z.null().optional(),
   voiceDictation: z.boolean().optional(),
   voiceInDock: z.boolean().optional(),
 });
@@ -187,7 +186,6 @@ export function createVoiceBubble(options: {
               "catamorphic:voice-release",
               "catamorphic:voice-reset",
               "catamorphic:voice-open-chat",
-              "catamorphic:voice-learn",
               "catamorphic:voice-bubble-menu",
               "catamorphic:voice-bubble-state",
               "catamorphic:voice-bubble-drag",

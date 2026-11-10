@@ -26,23 +26,27 @@ function fixture({
   helperTeam = "TEAM123",
   voiceTeam = "TEAM123",
   quietTeam = "TEAM123",
+  speechTeam = "TEAM123",
   developerId = true,
   protocol = 1,
   voiceProtocol = 1,
   quietProtocol = 1,
+  speechProtocol = 1,
 } = {}) {
   const calls: Array<{ command: string; args: string[] }> = [];
   const run = (command: string, args: string[]) => {
     calls.push({ command, args });
     const file = args.at(-1) ?? "";
     if (args.includes("--display"))
-      return `${developerId ? "Authority=Developer ID Application: Test\n" : "Signature=adhoc\n"}TeamIdentifier=${file.endsWith("browser-keychain") ? helperTeam : file.endsWith("voice-keys") ? voiceTeam : file.endsWith("voice-quiet") ? quietTeam : "TEAM123"}`;
+      return `${developerId ? "Authority=Developer ID Application: Test\n" : "Signature=adhoc\n"}TeamIdentifier=${file.endsWith("browser-keychain") ? helperTeam : file.endsWith("voice-keys") ? voiceTeam : file.endsWith("voice-quiet") ? quietTeam : file.endsWith("speech-recognition") ? speechTeam : "TEAM123"}`;
     if (args[0] === "--version")
       return command.endsWith("voice-keys")
         ? `work-voice-keys ${voiceProtocol}`
         : command.endsWith("voice-quiet")
           ? `work-voice-quiet ${quietProtocol}`
-          : `work-browser-keychain ${protocol}`;
+          : command.endsWith("speech-recognition")
+            ? `work-speech-recognition ${speechProtocol}`
+            : `work-browser-keychain ${protocol}`;
     return "";
   };
   return { run, calls };
@@ -64,13 +68,16 @@ it("verifies every signed binary and only asks the helpers their version", () =>
       "browser-keychain": "work-browser-keychain 1",
       "voice-keys": "work-voice-keys 1",
       "voice-quiet": "work-voice-quiet 1",
+      "speech-recognition": "work-speech-recognition 1",
     },
     architectures: ["arm64", "x86_64"],
     fuses: hardenedFuses,
   });
   expect(
     calls.filter((call) =>
-      /(browser-keychain|voice-keys|voice-quiet)$/.test(call.command),
+      /(browser-keychain|voice-keys|voice-quiet|speech-recognition)$/.test(
+        call.command,
+      ),
     ),
   ).toEqual([
     {
@@ -85,7 +92,20 @@ it("verifies every signed binary and only asks the helpers their version", () =>
       command: "/release/Work.app/Contents/MacOS/voice-quiet",
       args: ["--version"],
     },
+    {
+      command: "/release/Work.app/Contents/MacOS/speech-recognition",
+      args: ["--version"],
+    },
   ]);
+  expect(calls).toContainEqual({
+    command: "lipo",
+    args: [
+      "/release/Work.app/Contents/MacOS/speech-recognition",
+      "-verify_arch",
+      "arm64",
+      "x86_64",
+    ],
+  });
 });
 
 it.each([
@@ -96,6 +116,11 @@ it.each([
   [{ voiceProtocol: 2 }, "Voice keys helper has an unsupported protocol"],
   [{ quietTeam: "OTHER123" }, "Voice quiet helper and app must have"],
   [{ quietProtocol: 2 }, "Voice quiet helper has an unsupported protocol"],
+  [{ speechTeam: "OTHER123" }, "Speech recognition helper and app must have"],
+  [
+    { speechProtocol: 2 },
+    "Speech recognition helper has an unsupported protocol",
+  ],
 ])(
   "rejects invalid release identity or helper protocol %j",
   (options, message) => {

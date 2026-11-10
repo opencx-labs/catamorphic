@@ -21,33 +21,12 @@ export interface VoiceModelArtifact {
 
 const RELEASES = "https://github.com/k2-fsa/sherpa-onnx/releases/download";
 
-const SILERO_VAD: VoiceModelArtifact = {
-  id: "silero-vad",
-  url: `${RELEASES}/asr-models/silero_vad.onnx`,
-  sha256: "9e2449e1087496d8d4caba907f23e0bd3f78d91fa552479bb9c23ac09cbb1fd6",
-  bytes: 643_854,
-};
-
 const PARAKEET: VoiceModelArtifact = {
   id: "sherpa-onnx-nemo-parakeet-tdt-0.6b-v2-int8",
   unpack: true,
   url: `${RELEASES}/asr-models/sherpa-onnx-nemo-parakeet-tdt-0.6b-v2-int8.tar.bz2`,
   sha256: "157c157bc51155e03e37d2466522a3a737dd9c72bb25f36eb18912964161e1ad",
   bytes: 482_468_385,
-};
-
-/**
- * 3D-Speaker's ERes2Net (Apache 2.0) trained on VoxCeleb: who is speaking,
- * as an embedding. On the speech benchmark it told the person from others
- * where WeSpeaker's ResNet34 could not: keeping 98% of the person's
- * stretches of 1.5 s in a café, it let 2 to 8% of others through, against
- * 24 to 62% (ADR 0236).
- */
-const SPEAKER_EMBEDDING: VoiceModelArtifact = {
-  id: "eres2net-voxceleb",
-  url: `${RELEASES}/speaker-recongition-models/3dspeaker_speech_eres2net_sv_en_voxceleb_16k.onnx`,
-  sha256: "c59158379255ad66e161679cca6af8d52d51e389e3224ab7d7a7baae295c2db5",
-  bytes: 26_485_263,
 };
 
 /** Kokoro-82M v1.0 (Apache 2.0), full precision, with its voices. */
@@ -59,18 +38,12 @@ const KOKORO: VoiceModelArtifact = {
   bytes: 349_906_910,
 };
 
-/**
- * Silero VAD and Parakeet TDT 0.6B v2 (int8, English) to listen, an
- * ERes2Net embedding to know who speaks, Kokoro v1.0 to speak: all on
- * sherpa-onnx in the speech worker (ADR 0216, 0236). About 860 MB,
- * downloaded the first time voice starts.
- */
-const VOICE_MODEL_ARTIFACTS: readonly VoiceModelArtifact[] = [
-  SILERO_VAD,
-  PARAKEET,
-  SPEAKER_EMBEDDING,
-  KOKORO,
-];
+/** Only Linux/Windows install recognition; macOS uses Apple's speech APIs. */
+export function voiceModelArtifacts(
+  platform: NodeJS.Platform,
+): readonly VoiceModelArtifact[] {
+  return platform === "darwin" ? [KOKORO] : [PARAKEET, KOKORO];
+}
 
 /**
  * Where the models are served from: GitHub releases, and the content host
@@ -85,13 +58,8 @@ export function voiceModelPaths(root: string): VoiceModelPaths {
   const asr = path.join(root, PARAKEET.id);
   const tts = path.join(root, KOKORO.id);
   return {
-    vad: path.join(root, SILERO_VAD.id, "silero_vad.onnx"),
-    speaker: path.join(
-      root,
-      SPEAKER_EMBEDDING.id,
-      "3dspeaker_speech_eres2net_sv_en_voxceleb_16k.onnx",
-    ),
-    asr: {
+    recognition: {
+      kind: "parakeet",
       encoder: path.join(asr, "encoder.int8.onnx"),
       decoder: path.join(asr, "decoder.int8.onnx"),
       joiner: path.join(asr, "joiner.int8.onnx"),
@@ -127,13 +95,17 @@ export class VoiceModelStore {
     private readonly options: {
       rootDir: string;
       artifacts?: readonly VoiceModelArtifact[];
+      nativeRecognition?: { helperPath: string; locale: string };
       fetchImpl?: typeof fetch;
       paths?: (root: string) => VoiceModelPaths;
     },
   ) {}
 
   private get artifacts(): readonly VoiceModelArtifact[] {
-    return this.options.artifacts ?? VOICE_MODEL_ARTIFACTS;
+    return (
+      this.options.artifacts ??
+      voiceModelArtifacts(this.options.nativeRecognition ? "darwin" : "linux")
+    );
   }
 
   ensure(
@@ -196,7 +168,13 @@ export class VoiceModelStore {
       tick("", 0, true);
       await this.prune();
     }
-    return (this.options.paths ?? voiceModelPaths)(this.options.rootDir);
+    const paths = (this.options.paths ?? voiceModelPaths)(this.options.rootDir);
+    return this.options.nativeRecognition
+      ? {
+          ...paths,
+          recognition: { kind: "native", ...this.options.nativeRecognition },
+        }
+      : paths;
   }
 
   /**

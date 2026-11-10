@@ -72,10 +72,13 @@ mac:
       to: MacOS/voice-keys
     - from: native/voice-quiet/bin/voice-quiet
       to: MacOS/voice-quiet
+    - from: native/speech-recognition/bin/speech-recognition
+      to: MacOS/speech-recognition
   binaries:
     - Contents/MacOS/browser-keychain
     - Contents/MacOS/voice-keys
     - Contents/MacOS/voice-quiet
+    - Contents/MacOS/speech-recognition
   category: public.app-category.developer-tools
   # Icon Composer source: packaging compiles it with Xcode 26's actool into
   # the Assets.car macOS 26 draws, plus the icns earlier versions show.
@@ -133,6 +136,7 @@ mac:
   extendInfo:
     NSLocalNetworkUsageDescription: Work uses your local network so your phone can continue this workspace.
     NSMicrophoneUsageDescription: Work uses your microphone when you talk to it, and when a site you allow asks for it, such as a video call.
+    NSSpeechRecognitionUsageDescription: Work uses speech recognition to turn what you say into text while you hold to talk or dictate.
     NSCameraUsageDescription: Work uses your camera when a site you allow asks for it, such as a video call.
   target:
     - target: dmg

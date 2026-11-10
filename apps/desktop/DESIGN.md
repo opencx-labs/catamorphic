@@ -22,9 +22,13 @@ Waiting watches use an hourglass across task rows and chat activity signals,
 including tabs, chips and bubbles. Status summaries use a centered dot, and
 expandable task rows place their disclosure before the icon and label.
 
-Voice capture ends when push-to-talk is released or listening is turned off,
-including the macOS audio-lowering input. Buffered transcription and playback
-finish separately, and long held dictation retains its last words (ADR 0297).
+Voice uses push to talk only: hold a microphone or shortcut and release to send.
+Pauses do not end a turn. macOS uses Apple's speech APIs; Linux keeps local
+Parakeet. No voice activity detector or speaker model runs on either platform.
+Pressing stops playback; a reply arriving during a hold waits for its release.
+Capture and the macOS audio-lowering input stop on release, while buffered
+transcription and playback finish separately (ADR 0310, superseding automatic
+turn-taking in the earlier voice design entries below).
 The palette's Ask agent input shares the chat composer's pills, previews and
 file preparation, including image paste and agent capability checks.
 

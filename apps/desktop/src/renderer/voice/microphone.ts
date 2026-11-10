@@ -110,13 +110,9 @@ async function capture(
 }
 
 /**
- * The chosen microphone, or the system's when it is gone or unset. Its
- * gain stays as the system sets it: automatic gain lifts a voice across
- * the room to the person's own level when they pause, and how loud speech
- * arrives is how voice tells the person from someone farther away. Noise
- * stays in too: speech recognition copes with a room's noise better than
- * with noise suppression's artifacts, which cost about twice the words
- * (ADR 0236), and voice tells speech from noise on its own.
+ * Use the chosen microphone, falling back to the system's when disconnected.
+ * Keep noise suppression and gain changes off: recognition copes better with
+ * the captured signal than with their artifacts. Push to talk supplies intent.
  */
 async function openMicrophone(
   microphone: string | null,

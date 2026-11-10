@@ -213,12 +213,6 @@ export const SETTINGS_CATALOG: readonly SettingsEntry[] = [
     keywords: ["microphone", "composer", "chat", "hide", "show"],
   },
   {
-    id: "voiceprint",
-    label: "Only listen to me",
-    category: "voice",
-    keywords: ["voice print", "learn my voice", "other people", "background"],
-  },
-  {
     id: "github-cli",
     label: "GitHub CLI",
     category: "connections",

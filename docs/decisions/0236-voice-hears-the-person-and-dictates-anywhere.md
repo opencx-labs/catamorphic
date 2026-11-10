@@ -4,6 +4,8 @@
 - **Date:** 2026-10-16
 - **Amends:** 0216 (voice)
 
+Native recognition and push-to-talk-only input now follow [0310](0310-native-macos-speech-and-push-to-talk.md); it supersedes automatic listening and speaker identification described below.
+
 ## Context
 
 Voice (0216) answered the room. A television or a colleague across it was

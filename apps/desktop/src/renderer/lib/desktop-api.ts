@@ -2247,12 +2247,11 @@ export interface CatamorphicDesktopApi {
   voiceReadAloud: (input: VoiceReadAloud) => Promise<void>;
   /**
    * A microphone or a voice shortcut went down (ADR 0236): voice hears the
-   * person from now. Released soon after, it was a tap, and voice turns on
-   * there, or off when it already was; held, it talked while held.
+   * person while the microphone or shortcut is held.
    */
   voicePress: (press: VoicePress) => Promise<void>;
-  /** The press came up; `heldMs` is how long it was down, as measured here. */
-  voiceRelease: (input?: { heldMs?: number }) => Promise<void>;
+  /** The held microphone or shortcut was released. */
+  voiceRelease: () => Promise<void>;
   /** The chat in front of this window, for "Talk to this chat". */
   voiceFrontChat: (
     chat: { projectId: string; sessionId: string } | null,
@@ -2261,11 +2260,6 @@ export interface CatamorphicDesktopApi {
   voiceReset: () => Promise<void>;
   /** Open the profile's assistant chat in its owning workspace window. */
   voiceOpenChat: () => Promise<void>;
-  /** Learn the person's voice now, starting voice when it is off. */
-  voiceLearn: (input: {
-    projectId?: string;
-    sessionId?: string;
-  }) => Promise<void>;
   onVoiceStatus: (listener: (status: VoiceStatus) => void) => () => void;
   /** How each sentence voice says sounds, as it is scheduled. */
   onVoiceLevels: (listener: (levels: VoiceLevels) => void) => () => void;

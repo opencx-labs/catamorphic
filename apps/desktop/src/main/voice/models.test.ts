@@ -5,7 +5,11 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import type { VoiceModelPaths } from "../../shared/voice.js";
-import { type VoiceModelArtifact, VoiceModelStore } from "./models.js";
+import {
+  type VoiceModelArtifact,
+  VoiceModelStore,
+  voiceModelArtifacts,
+} from "./models.js";
 
 const roots: string[] = [];
 
@@ -61,13 +65,54 @@ async function fixture() {
 }
 
 const PATHS = (root: string): VoiceModelPaths => ({
-  vad: path.join(root, "vad", "vad.onnx"),
-  speaker: "",
-  asr: { encoder: "", decoder: "", joiner: "", tokens: "" },
+  recognition: {
+    kind: "parakeet",
+    encoder: path.join(root, "vad", "vad.onnx"),
+    decoder: "",
+    joiner: "",
+    tokens: "",
+  },
   tts: { model: "", voices: "", tokens: "", lexicon: "", dataDir: "" },
 });
 
 describe("VoiceModelStore", () => {
+  it("installs only reply synthesis on macOS, and keeps local STT on Linux", async () => {
+    expect(
+      voiceModelArtifacts("darwin").map((artifact) => artifact.id),
+    ).toEqual(["kokoro-multi-lang-v1_0"]);
+    expect(voiceModelArtifacts("linux").map((artifact) => artifact.id)).toEqual(
+      ["sherpa-onnx-nemo-parakeet-tdt-0.6b-v2-int8", "kokoro-multi-lang-v1_0"],
+    );
+    const root = await fs.mkdtemp(
+      path.join(os.tmpdir(), "native-voice-models-"),
+    );
+    roots.push(root);
+    for (const artifact of voiceModelArtifacts("darwin")) {
+      await fs.mkdir(path.join(root, artifact.id));
+      await fs.writeFile(
+        path.join(root, artifact.id, ".integrity"),
+        artifact.sha256,
+      );
+    }
+    const fetchImpl = async () => {
+      throw new Error("Native STT must not download a Work model");
+    };
+    const paths = await new VoiceModelStore({
+      rootDir: root,
+      nativeRecognition: {
+        helperPath: "/app/speech-recognition",
+        locale: "en-US",
+      },
+      fetchImpl,
+    }).ensure();
+    expect(paths.recognition).toEqual({
+      kind: "native",
+      helperPath: "/app/speech-recognition",
+      locale: "en-US",
+    });
+    expect(await fs.readdir(root)).toEqual(["kokoro-multi-lang-v1_0"]);
+  });
+
   it("downloads, verifies and unpacks every model once", async () => {
     const { installRoot, artifacts, fetchImpl } = await fixture();
     let downloads = 0;
@@ -81,10 +126,10 @@ describe("VoiceModelStore", () => {
       },
       paths: PATHS,
     });
-    const paths = await store.ensure((tick) =>
-      progress.push(tick.receivedBytes),
-    );
-    expect(await fs.readFile(paths.vad, "utf8")).toBe("vad-weights");
+    await store.ensure((tick) => progress.push(tick.receivedBytes));
+    expect(
+      await fs.readFile(path.join(installRoot, "vad", "vad.onnx"), "utf8"),
+    ).toBe("vad-weights");
     expect(
       await fs.readFile(
         path.join(installRoot, "model-dir", "model.onnx"),
