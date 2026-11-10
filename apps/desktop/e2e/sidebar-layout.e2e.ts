@@ -78,7 +78,7 @@ describe("configurable browser workspace", () => {
     );
     await app.waitFor("!!document.querySelector('[data-workspace-title]')");
     await app.waitFor(
-      `!!document.querySelector('[data-workspace-visible="true"] [data-sidebar="left"][data-settled="true"][data-docked="true"]')`,
+      `!!document.querySelector('[data-workspace-visible="true"] main[data-tab-layout="sidebar"]') && !!document.querySelector('[data-workspace-visible="true"] [data-sidebar="left"][data-settled="true"][data-docked="true"]')`,
       { label: "sidebar tab layout docked and settled" },
     );
     expect(
