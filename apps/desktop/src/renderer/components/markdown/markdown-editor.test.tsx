@@ -2,6 +2,12 @@
 import { act } from "react";
 import { createRoot } from "react-dom/client";
 import { expect, it, vi } from "vitest";
+import {
+  appIsMovingFocus,
+  notePersonInput,
+  personInputCount,
+  personMovedOn,
+} from "../../lib/app-focus.js";
 import { MarkdownEditor, type MarkdownEditorProps } from "./markdown-editor.js";
 
 const plan = (counts: string) =>
@@ -20,6 +26,133 @@ const plan = (counts: string) =>
 // ProseMirror measures selections to scroll them into view; jsdom has no layout.
 Range.prototype.getClientRects = () => [] as unknown as DOMRectList;
 Range.prototype.getBoundingClientRect = () => new DOMRect();
+
+/** Keep real editor initialization, but deliver its frames only when asked. */
+function holdAnimationFrames() {
+  const frames = new Map<number, FrameRequestCallback>();
+  let nextId = 1;
+  const request = vi
+    .spyOn(window, "requestAnimationFrame")
+    .mockImplementation((callback) => {
+      const id = nextId++;
+      frames.set(id, callback);
+      return id;
+    });
+  const cancel = vi
+    .spyOn(window, "cancelAnimationFrame")
+    .mockImplementation((id) => {
+      frames.delete(id);
+    });
+  return {
+    frames,
+    release: () => {
+      const pending = [...frames.values()];
+      frames.clear();
+      for (const callback of pending) callback(performance.now());
+    },
+    restore: () => {
+      request.mockRestore();
+      cancel.mockRestore();
+    },
+  };
+}
+
+it("leaves focus and the selection reader alone when the person opens a menu before initialization finishes", async () => {
+  const frames = holdAnimationFrames();
+  const inputs = personInputCount();
+  const onSelectionReader = vi.fn();
+  const opened = await openDoc("# Plan\n", {
+    canAutofocus: () => !personMovedOn(inputs),
+    onSelectionReader,
+  });
+  const menu = document.createElement("button");
+  menu.setAttribute("role", "menuitem");
+  document.body.append(menu);
+  try {
+    notePersonInput();
+    menu.focus();
+    await act(async () => frames.release());
+    expect(document.activeElement).toBe(menu);
+    expect(onSelectionReader).not.toHaveBeenCalled();
+  } finally {
+    opened.close();
+    menu.remove();
+    opened.node.remove();
+    frames.restore();
+  }
+});
+
+it("focuses an ordinarily opened document as the app, and publishes its reader after focus", async () => {
+  const frames = holdAnimationFrames();
+  const onSelectionReader = vi.fn();
+  const opened = await openDoc("# Plan\n", {
+    canAutofocus: () => true,
+    onSelectionReader,
+  });
+  const focusAsApp = vi.fn(() => appIsMovingFocus());
+  opened.editor.view.dom.addEventListener("focus", focusAsApp);
+  try {
+    expect(onSelectionReader).not.toHaveBeenCalled();
+    await act(async () => frames.release());
+    expect(document.activeElement).toBe(opened.editor.view.dom);
+    expect(focusAsApp).toHaveReturnedWith(true);
+    expect(onSelectionReader).toHaveBeenCalledWith(expect.any(Function));
+    expect(opened.editor.state.selection.from).toBe(1);
+  } finally {
+    opened.close();
+    opened.node.remove();
+    frames.restore();
+  }
+});
+
+it("cancels the document's initial focus frame on unmount", async () => {
+  const frames = holdAnimationFrames();
+  const opened = await openDoc("# Plan\n");
+  try {
+    expect(frames.frames.size).toBeGreaterThan(0);
+    opened.close();
+    expect(frames.frames.size).toBe(0);
+    expect(() => frames.release()).not.toThrow();
+  } finally {
+    opened.node.remove();
+    frames.restore();
+  }
+});
+
+it("uses the latest focus permission when the initial frame is delivered", async () => {
+  const frames = holdAnimationFrames();
+  Reflect.set(globalThis, "IS_REACT_ACT_ENVIRONMENT", true);
+  const node = document.createElement("div");
+  document.body.append(node);
+  const root = createRoot(node);
+  const allowed = vi.fn(() => true);
+  const denied = vi.fn(() => false);
+  const onSelectionReader = vi.fn();
+  const render = (canAutofocus: () => boolean) =>
+    act(async () =>
+      root.render(
+        <MarkdownEditor
+          value="# Plan\n"
+          onChange={() => {}}
+          canAutofocus={canAutofocus}
+          onSelectionReader={onSelectionReader}
+        />,
+      ),
+    );
+  try {
+    await render(allowed);
+    await render(denied);
+    await act(async () => frames.release());
+    expect(allowed).not.toHaveBeenCalled();
+    expect(denied).toHaveBeenCalledOnce();
+    expect(onSelectionReader).not.toHaveBeenCalled();
+    expect(node.contains(document.activeElement)).toBe(false);
+  } finally {
+    act(() => root.unmount());
+    node.remove();
+    frames.restore();
+  }
+});
 
 it("loads a file changed on disk without reporting it as an edit", async () => {
   Reflect.set(globalThis, "IS_REACT_ACT_ENVIRONMENT", true);
@@ -93,7 +226,10 @@ it("keeps images: a document opening on one, and their markdown after edits", as
 /** Mounts the editor on `doc`; returns its editor and the last emission. */
 async function openDoc(
   doc: string,
-  props?: Pick<MarkdownEditorProps, "documentPath" | "readImage">,
+  props?: Pick<
+    MarkdownEditorProps,
+    "documentPath" | "readImage" | "canAutofocus" | "onSelectionReader"
+  >,
 ) {
   Reflect.set(globalThis, "IS_REACT_ACT_ENVIRONMENT", true);
   const node = document.createElement("div");

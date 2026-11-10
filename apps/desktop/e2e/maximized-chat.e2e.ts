@@ -74,3 +74,58 @@ it("keeps a maximized chat in its normal tab when the dock collapses", async () 
   }
   expect(app.getRendererErrors()).toEqual([]);
 });
+
+it("maximizes the floating chat when the chat tab behind it has focus", async () => {
+  const backgroundId = await app.waitFor<string>(
+    "document.querySelector('[data-chat-tab]:not([inert])')?.dataset.chatLocalId",
+  );
+  const primary = await app.eval<number>(
+    "/Mac/.test(navigator.platform) ? 4 : 2",
+  );
+  // The previous case leaves the rail collapsed; the shortcut opens a
+  // floating chat independently of the rail's presentation.
+  await app.press("n", primary);
+  const floatingId = await app.waitFor<string>(
+    "document.querySelector('[data-floating-chat]:not([inert])')?.dataset.chatLocalId",
+  );
+  await click("[data-floating-chat]:not([inert]) [data-composer-input]");
+  await app.insertText("A floating draft survives background focus");
+  await click(
+    `[data-tab-orientation] [data-point-key="chat:${backgroundId}"] .workspace-tab-label`,
+  );
+  await app.waitFor(
+    `document.querySelectorAll('[data-floating-chat]:not([inert])').length === 1 &&
+      document.querySelector('[data-chat-local-id="${backgroundId}"]')?.hasAttribute('data-chat-tab') &&
+      !document.activeElement?.closest('[data-floating-chat]')`,
+    { label: "one floating chat with the background tab focused" },
+  );
+  await app.press("m", primary | 8);
+  await app.waitFor(
+    `document.querySelector('[data-chat-local-id="${floatingId}"]')?.hasAttribute('data-chat-tab') &&
+      !document.querySelector('[data-floating-chat]:not([inert])') &&
+      !document.querySelector('[data-chat-bubble="${floatingId}"]')`,
+    { label: "the floating chat expanded into its own tab" },
+  );
+  expect(
+    await app.eval(
+      `document.querySelector('[data-chat-local-id="${floatingId}"] [data-composer-input]')?.textContent`,
+    ),
+  ).toBe("A floating draft survives background focus");
+  await app.press("m", primary);
+  // Inert starts with the exit tween, before the entry commits to min.
+  // Its bubble only returns after that commit; let the motions settle too.
+  await app.waitFor(
+    `document.querySelector('[data-chat-local-id="${floatingId}"]')?.inert &&
+      !!document.querySelector('[data-chat-bubble="${floatingId}"]') &&
+      !document.getAnimations().some(animation =>
+        animation.playState === 'running' && animation.effect?.getTiming().iterations !== Infinity)`,
+    { label: "the maximized chat committed to minimized and motions settled" },
+  );
+  await app.press("m", primary);
+  await app.waitFor(
+    `document.querySelector('[data-chat-local-id="${floatingId}"]')?.hasAttribute('data-floating-chat') &&
+      !document.querySelector('[data-chat-local-id="${floatingId}"]')?.inert`,
+    { label: "the same chat restored as floating" },
+  );
+  expect(app.getRendererErrors()).toEqual([]);
+});

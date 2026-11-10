@@ -20,6 +20,7 @@ import {
   useRef,
   useState,
 } from "react";
+import { moveFocusAsApp } from "../../lib/app-focus.js";
 import { MarkdownBubbleMenu } from "./bubble-menu.js";
 import { joinFrontmatter, splitFrontmatter } from "./frontmatter.js";
 import { MarkdownGuardrails } from "./guardrails.js";
@@ -53,6 +54,8 @@ export interface MarkdownEditorProps {
   onChange: (markdown: string) => void;
   /** Cmd+S inside the editor. */
   onSave?: () => void;
+  /** Whether the opening intent still owns focus when initialization finishes. */
+  canAutofocus?: () => boolean;
   /**
    * Called with a reader for the current selection while this editor is
    * the one the user is working in (registered on focus, released on
@@ -199,6 +202,7 @@ export function MarkdownEditor({
   value,
   onChange,
   onSave,
+  canAutofocus,
   onSelectionReader,
   documentPath,
   readImage,
@@ -217,6 +221,8 @@ export function MarkdownEditor({
   onChangeRef.current = onChange;
   const onSaveRef = useRef(onSave);
   onSaveRef.current = onSave;
+  const canAutofocusRef = useRef(canAutofocus);
+  canAutofocusRef.current = canAutofocus;
   const onSelectionReaderRef = useRef(onSelectionReader);
   onSelectionReaderRef.current = onSelectionReader;
   const imagesRef = useRef({ documentPath, readImage });
@@ -477,9 +483,15 @@ export function MarkdownEditor({
     if (document.activeElement === instance.view.dom) onFocus();
 
     setEditor(instance);
-    instance.commands.focus("start");
-    onFocus();
+    // Tiptap's focus command schedules its own uncancellable frame. Own the
+    // frame so a menu opened while this editor loads keeps the focus it took.
+    const focusFrame = requestAnimationFrame(() => {
+      if (instance.isDestroyed || canAutofocusRef.current?.() === false) return;
+      moveFocusAsApp(() => instance.view.focus());
+      if (instance.view.hasFocus()) onFocus();
+    });
     return () => {
+      cancelAnimationFrame(focusFrame);
       instance.view.dom.removeEventListener("focus", onFocus);
       instance.view.dom.removeEventListener("blur", onBlur);
       onSelectionReaderRef.current?.(null);

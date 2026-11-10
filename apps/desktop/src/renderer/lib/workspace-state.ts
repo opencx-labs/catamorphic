@@ -438,6 +438,12 @@ export const chatVisible = (ws: Workspace, chat: ChatDockEntry) =>
   (chat.mode === "tab" &&
     Boolean(workspaceLayout(ws).viewSlots[chatTabKey(chat.localId)]));
 
+/** Expand the floating chat even when the tab behind it has focus. */
+export const chatToExpand = (ws: Workspace) =>
+  ws.chats.find((chat) => chat.mode === "partial") ??
+  ws.chats.find((chat) => chat.localId === ws.activeChatId) ??
+  ws.chats.at(-1);
+
 /** Tab keys attached to a chat, in per-kind order. */
 export const attachedTabKeys = (ws: Workspace, chatLocalId: string) => [
   ...ws.tabs.filter((tab) => tab.chatLocalId === chatLocalId).map(tabKey),

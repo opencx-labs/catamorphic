@@ -6,6 +6,11 @@ import { lazy, Suspense, useEffect, useRef, useState } from "react";
 import { ActionInputDialog } from "../components/action-input-dialog.js";
 import { FileInspector } from "../components/file-inspector.js";
 import { FileSaveButton } from "../components/file-save-button.js";
+import {
+  moveFocusAsApp,
+  personInputCount,
+  personMovedOn,
+} from "../lib/app-focus.js";
 import { desktopApi } from "../lib/desktop-api.js";
 import {
   notifyEditorSelectionChange,
@@ -72,6 +77,8 @@ export interface EditorScreenProps {
   line?: number;
   column?: number;
   navigation?: string;
+  /** Opening input count captured before this screen's lazy module loads. */
+  autofocusSince?: number;
   /** Path of the open file (project-relative), or null for a palette entry point. */
   filePath: string | null;
   onFindFile: () => void;
@@ -92,6 +99,7 @@ export function EditorScreen({
   line,
   column,
   navigation,
+  autofocusSince,
   filePath,
   onFindFile,
   onDirtyChange,
@@ -104,6 +112,37 @@ export function EditorScreen({
 }: EditorScreenProps) {
   const activeRef = useRef(active);
   activeRef.current = active;
+  // Capture the opening intent before a file read or lazy editor can finish.
+  // Unrelated renders must not renew permission to take the person's focus.
+  const autofocusIntent = useRef({
+    projectId,
+    filePath,
+    line,
+    column,
+    navigation,
+    inputs: autofocusSince ?? personInputCount(),
+  });
+  if (
+    autofocusIntent.current.projectId !== projectId ||
+    autofocusIntent.current.filePath !== filePath ||
+    autofocusIntent.current.line !== line ||
+    autofocusIntent.current.column !== column ||
+    autofocusIntent.current.navigation !== navigation
+  ) {
+    autofocusIntent.current = {
+      projectId,
+      filePath,
+      line,
+      column,
+      navigation,
+      inputs: autofocusSince ?? personInputCount(),
+    };
+  }
+  const intent = autofocusIntent.current;
+  const canAutofocus = () =>
+    autofocusIntent.current === intent &&
+    activeRef.current &&
+    !personMovedOn(intent.inputs);
   const theme = useTheme();
   const editorTheme = useMonacoTheme();
   const officeFile = filePath ? isOfficePath(filePath) : false;
@@ -432,8 +471,7 @@ export function EditorScreen({
     };
     editor.onDidChangeCursorSelection(notifyEditorSelectionChange);
     editor.onDidFocusEditorText(() => publishReader(readMonacoSelection));
-    publishReader(readMonacoSelection);
-    editor.focus();
+    if (canAutofocus()) moveFocusAsApp(() => editor.focus());
   };
 
   if (!filePath) {
@@ -463,24 +501,26 @@ export function EditorScreen({
           {filePath.replace(PERSONAL_PREFIX_PATTERN, "")}
         </span>
         <span className="ml-auto flex shrink-0 items-center gap-0.5 rounded-lg border border-border bg-bg-raised p-0.5">
-          <FileInspector
-            projectId={projectId}
-            filePath={filePath}
-            dirty={draft !== undefined}
-            saving={writeFile.isPending}
-            onSave={() => saveRef.current()}
-            onRename={onRename ? () => setNaming("rename") : undefined}
-            onPublish={onShare ? () => saveBeforeAction(onShare) : undefined}
-            onPropose={
-              onPropose ? () => saveBeforeAction(onPropose) : undefined
-            }
-            onSharePersonal={
-              onSharePersonal
-                ? (intent) =>
-                    saveBeforeAction((path) => onSharePersonal(path, intent))
-                : undefined
-            }
-          />
+          {!isMarkdownPath(filePath) && (
+            <FileInspector
+              projectId={projectId}
+              filePath={filePath}
+              dirty={draft !== undefined}
+              saving={writeFile.isPending}
+              onSave={() => saveRef.current()}
+              onRename={onRename ? () => setNaming("rename") : undefined}
+              onPublish={onShare ? () => saveBeforeAction(onShare) : undefined}
+              onPropose={
+                onPropose ? () => saveBeforeAction(onPropose) : undefined
+              }
+              onSharePersonal={
+                onSharePersonal
+                  ? (intent) =>
+                      saveBeforeAction((path) => onSharePersonal(path, intent))
+                  : undefined
+              }
+            />
+          )}
           {!officeFile && !pdfFile && savedContent !== undefined && (
             <FileSaveButton
               dirty={draft !== undefined}
@@ -594,6 +634,7 @@ export function EditorScreen({
               value={draft ?? savedContent}
               onChange={handleChange}
               onSave={() => saveRef.current()}
+              canAutofocus={canAutofocus}
               documentPath={filePath}
               readImage={(path) =>
                 desktopApi.projectImage({ projectId, filePath: path })

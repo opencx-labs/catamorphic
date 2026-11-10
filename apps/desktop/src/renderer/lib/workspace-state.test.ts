@@ -2,6 +2,7 @@ import { expect, it } from "vitest";
 import {
   agentOpenInFront,
   attachBlocker,
+  chatToExpand,
   closingTabKeys,
   emptyUtilityWorkspace,
   hydrateWorkspace,
@@ -26,6 +27,47 @@ const initial = (): Workspace => ({
   ],
   chats: [{ localId: "c", mode: "tab", sessionId: "session" }],
   activeTabKey: "chat:c",
+});
+
+it("expands the floating chat after a background chat tab takes focus", () => {
+  const ws = transitionWorkspace(
+    {
+      ...initial(),
+      chats: [
+        { localId: "floating", mode: "partial", sessionId: "floating-session" },
+        { localId: "c", mode: "tab", sessionId: "session" },
+      ],
+      activeChatId: "floating",
+    },
+    { type: "select", key: "chat:c" },
+  );
+  expect(ws.activeChatId).toBe("c");
+  expect(chatToExpand(ws)?.localId).toBe("floating");
+});
+
+it("expands the floating chat ahead of newer minimized chats without a remembered chat", () => {
+  const ws: Workspace = {
+    ...initial(),
+    activeTabKey: "palette:a",
+    chats: [
+      { localId: "floating", mode: "partial" },
+      { localId: "newer", mode: "min" },
+    ],
+  };
+  expect(chatToExpand(ws)?.localId).toBe("floating");
+});
+
+it("keeps the remembered and newest chat fallbacks when none is floating", () => {
+  const ws: Workspace = {
+    ...initial(),
+    activeChatId: "c",
+    chats: [...initial().chats, { localId: "newer", mode: "min" }],
+  };
+  expect(chatToExpand(ws)?.localId).toBe("c");
+  expect(chatToExpand({ ...ws, activeChatId: undefined })?.localId).toBe(
+    "newer",
+  );
+  expect(chatToExpand(emptyUtilityWorkspace())).toBeUndefined();
 });
 
 it.each([false, true])(

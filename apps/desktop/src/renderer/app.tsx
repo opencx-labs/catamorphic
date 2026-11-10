@@ -1,4 +1,5 @@
 import {
+  useAgentSessionInfos,
   useAgentSessions,
   useAppPresentations,
   useArchiveAgentSession,
@@ -107,6 +108,7 @@ import { CommandPalette } from "./components/command-palette.js";
 import { ConfigureAgentModal } from "./components/configure-agent-modal.js";
 import { ConnectorsModal } from "./components/connectors-modal.js";
 import { DeleteProjectModal } from "./components/delete-project-modal.js";
+import { EditorPane } from "./components/editor-pane.js";
 import {
   ElicitationModal,
   type PendingElicitation,
@@ -216,7 +218,7 @@ import {
   rememberPreviewPort,
 } from "./lib/remote-workspace.js";
 import { LOCAL_CHATS_POLL_MS } from "./lib/session-change-hints.js";
-import { sessionLabel } from "./lib/session-label.js";
+import { sessionLabel, sessionPresentations } from "./lib/session-label.js";
 import type { SidebarMotion } from "./lib/sidebar-motion.js";
 import {
   EMPTY_SURFACE_HISTORY,
@@ -256,6 +258,7 @@ import {
   type BrowserEntry,
   browserTabKey,
   chatTabKey,
+  chatToExpand,
   chatVisible,
   closingTabKeys,
   type EditorEntry,
@@ -318,11 +321,6 @@ import {
 const TerminalScreen = lazy(() =>
   import("./screens/terminal-screen.js").then((module) => ({
     default: module.TerminalScreen,
-  })),
-);
-const EditorScreen = lazy(() =>
-  import("./screens/editor-screen.js").then((module) => ({
-    default: module.EditorScreen,
   })),
 );
 const WorkflowScreen = lazy(() =>
@@ -1312,12 +1310,6 @@ export function App({
     limit: 100,
     refetchInterval: remoteProject ? 2_000 : LOCAL_CHATS_POLL_MS,
   });
-  const projectAttention = runtime.attention;
-  const sessionsById = new Map(
-    [...(sessionsQuery.data?.items ?? []), ...(projectAttention ?? [])].map(
-      (session) => [session.id, session],
-    ),
-  );
   const archiveSession = useArchiveAgentSession(projectId);
   const unarchiveSession = useUnarchiveAgentSession(projectId);
   const renameSession = useRenameAgentSession(projectId);
@@ -1720,6 +1712,28 @@ export function App({
     : utilityWorkspaceKey
       ? (workspaces[utilityWorkspaceKey] ?? emptyUtilityWorkspace())
       : emptyUtilityWorkspace();
+  // An open chat may be older than the first page, or lose attention while
+  // it is open. Its identity comes from its own session, never that page.
+  const visibleChatSessionIds = workspace.chats.flatMap((chat) =>
+    runtime.visible && chat.sessionId && chatVisible(workspace, chat)
+      ? [chat.sessionId]
+      : [],
+  );
+  const openSessions = useAgentSessionInfos(
+    projectId,
+    workspace.chats.flatMap((chat) => (chat.sessionId ? [chat.sessionId] : [])),
+    {
+      live: runtime.visible,
+      liveSessionIds: visibleChatSessionIds,
+    },
+  );
+  const projectAttention = runtime.attention;
+  const sessionsById = sessionPresentations(
+    sessionsQuery.data?.items ?? [],
+    projectAttention ?? [],
+    openSessions.sessions,
+    new Set(visibleChatSessionIds),
+  );
   const archivedSessionIds = new Set(
     [...sessionsById.values()]
       .filter((session) => session.visibility === "archived")
@@ -4553,8 +4567,8 @@ export function App({
       }),
     );
 
-  // Cmd+M / Cmd+Shift+M act on the active chat, falling back to the most
-  // recent one — so restoring works even when no chat surface is focused.
+  // Chat commands use the active chat, falling back to the most recent
+  // one, so restoring works even when no chat surface is focused.
   const actionChat = (ws: Workspace) =>
     ws.chats.find((chat) => chat.localId === ws.activeChatId) ??
     ws.chats.at(-1);
@@ -4589,7 +4603,7 @@ export function App({
   };
 
   const expandChatToTab = () => {
-    const chat = actionChat(workspaceRef.current);
+    const chat = chatToExpand(workspaceRef.current);
     if (!chat) return;
     updateWorkspace((ws) => ({
       ...ws,
@@ -8599,86 +8613,84 @@ export function App({
                             }
                           />
                         )}
-                        <Suspense fallback={<div className="flex-1 bg-bg" />}>
-                          <EditorScreen
-                            active={
-                              runtime.visible &&
-                              Boolean(viewSlots[editorTabKey(editor.localId)])
-                            }
-                            line={editor.line}
-                            column={editor.column}
-                            navigation={editor.navigation}
-                            projectId={projectId}
-                            filePath={editor.filePath}
-                            renameRequest={
-                              fileRenameRequest?.localId === editor.localId
-                                ? fileRenameRequest.sequence
-                                : undefined
-                            }
-                            onFindFile={() =>
-                              focusSearch("search-files", "files")
-                            }
-                            onSharePersonal={
-                              remoteSurfaceStatus
-                                ? (path, intent) => {
-                                    sendToAgent(
-                                      `${intent === "propose" ? "Prepare and submit a proposal to add" : "Prepare to publish"} my local file ${JSON.stringify(path)} to this company project. Read this file, choose a suitable shared location using the project conventions, and include only this file and any dependencies it needs. Keep my local original until sharing succeeds. ${intent === "publish" ? "Show me the audience before creating the publication." : "Submit through the company proposal service and show me the review link."}`,
-                                      "float",
-                                    );
-                                  }
-                                : undefined
-                            }
-                            onSaveBeforeClose={(save) => {
-                              const key = editorTabKey(editor.localId);
-                              if (save) editorSaversRef.current.set(key, save);
-                              else editorSaversRef.current.delete(key);
-                            }}
-                            onDirtyChange={(dirty) =>
-                              onEditorState(editor.localId, { dirty })
-                            }
-                            onRename={(filePath) =>
-                              onEditorState(editor.localId, { filePath })
-                            }
-                            onShare={
-                              editor.filePath?.startsWith(
-                                `${PROJECT_STORE_DIR}/`,
-                              ) &&
-                              remoteSurfaceStatus &&
-                              remoteSurfaceStatus.capabilities?.features
-                                .publications !== false
-                                ? (path) =>
-                                    setRemotePublish({
-                                      path: path.startsWith(
-                                        `${PROJECT_APP_DATA_DIR}/`,
-                                      )
-                                        ? path.slice(
-                                            PROJECT_APP_DATA_DIR.length + 1,
-                                          )
-                                        : path,
-                                      features:
-                                        remoteSurfaceStatus.capabilities
-                                          ?.features,
-                                    })
-                                : undefined
-                            }
-                            onPropose={
-                              remoteSurfaceStatus &&
-                              remoteSurfaceStatus.capabilities?.features
-                                .proposals !== false &&
-                              !editor.filePath?.startsWith(
-                                `${PROJECT_STORE_DIR}/`,
-                              )
-                                ? (path) =>
-                                    setRemotePropose({
-                                      files: [path],
-                                      features:
-                                        remoteSurfaceStatus.capabilities
-                                          ?.features,
-                                    })
-                                : undefined
-                            }
-                          />
-                        </Suspense>
+                        <EditorPane
+                          active={
+                            runtime.visible &&
+                            Boolean(viewSlots[editorTabKey(editor.localId)])
+                          }
+                          line={editor.line}
+                          column={editor.column}
+                          navigation={editor.navigation}
+                          projectId={projectId}
+                          filePath={editor.filePath}
+                          renameRequest={
+                            fileRenameRequest?.localId === editor.localId
+                              ? fileRenameRequest.sequence
+                              : undefined
+                          }
+                          onFindFile={() =>
+                            focusSearch("search-files", "files")
+                          }
+                          onSharePersonal={
+                            remoteSurfaceStatus
+                              ? (path, intent) => {
+                                  sendToAgent(
+                                    `${intent === "propose" ? "Prepare and submit a proposal to add" : "Prepare to publish"} my local file ${JSON.stringify(path)} to this company project. Read this file, choose a suitable shared location using the project conventions, and include only this file and any dependencies it needs. Keep my local original until sharing succeeds. ${intent === "publish" ? "Show me the audience before creating the publication." : "Submit through the company proposal service and show me the review link."}`,
+                                    "float",
+                                  );
+                                }
+                              : undefined
+                          }
+                          onSaveBeforeClose={(save) => {
+                            const key = editorTabKey(editor.localId);
+                            if (save) editorSaversRef.current.set(key, save);
+                            else editorSaversRef.current.delete(key);
+                          }}
+                          onDirtyChange={(dirty) =>
+                            onEditorState(editor.localId, { dirty })
+                          }
+                          onRename={(filePath) =>
+                            onEditorState(editor.localId, { filePath })
+                          }
+                          onShare={
+                            editor.filePath?.startsWith(
+                              `${PROJECT_STORE_DIR}/`,
+                            ) &&
+                            remoteSurfaceStatus &&
+                            remoteSurfaceStatus.capabilities?.features
+                              .publications !== false
+                              ? (path) =>
+                                  setRemotePublish({
+                                    path: path.startsWith(
+                                      `${PROJECT_APP_DATA_DIR}/`,
+                                    )
+                                      ? path.slice(
+                                          PROJECT_APP_DATA_DIR.length + 1,
+                                        )
+                                      : path,
+                                    features:
+                                      remoteSurfaceStatus.capabilities
+                                        ?.features,
+                                  })
+                              : undefined
+                          }
+                          onPropose={
+                            remoteSurfaceStatus &&
+                            remoteSurfaceStatus.capabilities?.features
+                              .proposals !== false &&
+                            !editor.filePath?.startsWith(
+                              `${PROJECT_STORE_DIR}/`,
+                            )
+                              ? (path) =>
+                                  setRemotePropose({
+                                    files: [path],
+                                    features:
+                                      remoteSurfaceStatus.capabilities
+                                        ?.features,
+                                  })
+                              : undefined
+                          }
+                        />
                       </SurfacePane>
                     ))}
                   </div>

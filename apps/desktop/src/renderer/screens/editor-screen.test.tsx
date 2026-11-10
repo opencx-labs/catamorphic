@@ -1,10 +1,14 @@
 // @vitest-environment jsdom
 import { focusManager, QueryClientProvider } from "@tanstack/react-query";
-import { act, useEffect } from "react";
+import { act, useEffect, useRef } from "react";
 import { createRoot } from "react-dom/client";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { notePersonInput } from "../lib/app-focus.js";
 import { desktopApi } from "../lib/desktop-api.js";
-import { readEditorSelection } from "../lib/editor-selection.js";
+import {
+  readEditorSelection,
+  registerSelectionReader,
+} from "../lib/editor-selection.js";
 import { workQueryClient } from "../lib/query-client.js";
 import { flushWorkspaceSaves } from "../lib/workspace-persistence.js";
 import { EditorScreen } from "./editor-screen.js";
@@ -22,14 +26,19 @@ vi.mock("@monaco-editor/react", () => ({
     onChange: (next: string) => void;
     onMount: (editor: unknown, monaco: unknown) => void;
   }) => {
+    const ref = useRef<HTMLTextAreaElement>(null);
     // biome-ignore lint/correctness/useExhaustiveDependencies: Monaco calls onMount once; retained panes keep that reader across visibility changes.
     useEffect(() => {
+      const textarea = ref.current;
+      if (!textarea) throw new Error("Monaco did not mount");
       onMount(
         {
           addCommand() {},
           onDidChangeCursorSelection() {},
-          onDidFocusEditorText() {},
-          focus() {},
+          onDidFocusEditorText(listener: () => void) {
+            textarea.addEventListener("focus", listener);
+          },
+          focus: () => textarea.focus(),
           getSelection: () => ({
             isEmpty: () => !selection.text,
             startLineNumber: 1,
@@ -43,6 +52,7 @@ vi.mock("@monaco-editor/react", () => ({
     }, []);
     return (
       <textarea
+        ref={ref}
         data-testid="editor"
         value={value}
         onChange={(event) => onChange(event.target.value)}
@@ -147,6 +157,7 @@ it("does not ask the browser to lay out an inactive editor's selection", async (
     expect(readEditorSelection()).toBeNull();
     expect(visible).not.toHaveBeenCalled();
     await mounted.setActive(true);
+    mounted.editor()?.focus();
     expect(readEditorSelection()).toMatchObject({
       filePath: "notes.txt",
       text: "selected words",
@@ -157,6 +168,35 @@ it("does not ask the browser to lay out an inactive editor's selection", async (
     expect(visible).toHaveBeenCalledTimes(1);
   } finally {
     act(() => mounted.root.unmount());
+  }
+});
+
+it("keeps the prior editor's selection reader when a menu takes focus during the file read", async () => {
+  let finishRead = (_value: { content: string }) => {};
+  vi.mocked(desktopApi.editorFileRead).mockReturnValue(
+    new Promise((resolve) => {
+      finishRead = resolve;
+    }),
+  );
+  const mounted = await mount();
+  const prior = { filePath: "prior.txt", text: "prior selection" };
+  const unregister = registerSelectionReader(() => prior);
+  const menu = document.createElement("button");
+  menu.setAttribute("role", "menuitem");
+  document.body.append(menu);
+  selection.text = "late editor selection";
+  try {
+    notePersonInput();
+    menu.focus();
+    await act(async () => finishRead({ content: "late file" }));
+    await settle(() => mounted.editor() !== null);
+    expect(mounted.editor()).not.toBeNull();
+    expect(document.activeElement).toBe(menu);
+    expect(readEditorSelection()).toEqual(prior);
+  } finally {
+    unregister();
+    act(() => mounted.root.unmount());
+    menu.remove();
   }
 });
 

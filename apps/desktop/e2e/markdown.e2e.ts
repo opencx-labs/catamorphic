@@ -290,6 +290,22 @@ describe("markdown editor", () => {
     await new Promise((resolve) => setTimeout(resolve, 800));
     const save = await run<boolean>(`return hasUnsavedChanges();`);
     expect(save).toBe(false);
+    expect(
+      await run(`
+      const toolbar = $('[data-editor-toolbar]');
+      const button = toolbar.querySelector('[data-testid="editor-save"]');
+      return {buttons: toolbar.querySelectorAll('button').length,
+        inspector: !!toolbar.querySelector('[data-testid="file-inspector-trigger"]'),
+        save: !!button.querySelector('.lucide-save'), check: !!button.querySelector('.lucide-check'),
+        dot: getComputedStyle(button.parentElement.querySelector('[data-save-dot]')).opacity};
+    `),
+    ).toEqual({
+      buttons: 1,
+      inspector: false,
+      save: true,
+      check: false,
+      dot: "0",
+    });
   });
 
   it("typing autosaves to disk without a save gesture", async () => {

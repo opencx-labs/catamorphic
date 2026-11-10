@@ -1,7 +1,8 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import Fastify from "fastify";
+import { setImmediate } from "node:timers/promises";
+import Fastify, { type FastifyReply, type FastifyRequest } from "fastify";
 import { describe, expect, it, vi } from "vitest";
 
 vi.mock("electron", () => ({
@@ -152,6 +153,162 @@ it("asks the project's server for the member's own machines with the member toke
     await remote.close();
     fs.rmSync(directory, { recursive: true, force: true });
   }
+});
+
+function deferred<T>() {
+  let resolve!: (value: T | PromiseLike<T>) => void;
+  const promise = new Promise<T>((resolvePromise) => {
+    resolve = resolvePromise;
+  });
+  return { promise, resolve };
+}
+
+async function remoteStreamFixture() {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "cat-remote-api-"));
+  const local = Fastify({ forceCloseConnections: true });
+  const store = new RemoteProjectsStore(path.join(directory, "remote.json"));
+  store.set("local", {
+    connectionId: "runner-id",
+    serverUrl: "http://remote.example/api",
+    remoteProjectId: "remote",
+    remoteProjectName: "Company",
+    lastSyncAt: null,
+    credentials: {
+      clientId: "client",
+      accessToken: "member-token",
+      refreshToken: "refresh-token",
+      accessTokenExpiresAt: new Date(Date.now() + 3600000).toISOString(),
+      tokenEndpoint: "http://remote.example/token",
+      scope: "openid",
+    },
+  });
+  const started = deferred<RequestInit | undefined>();
+  const forwarded = deferred<void>();
+  const source = deferred<ReadableStreamDefaultController<Uint8Array>>();
+  const cancelled = vi.fn();
+  const body = new ReadableStream<Uint8Array>({
+    start: source.resolve,
+    cancel: cancelled,
+  });
+  const clientFetch = globalThis.fetch;
+  const upstream = vi
+    .spyOn(globalThis, "fetch")
+    .mockImplementation(async (_url, options) => {
+      started.resolve(options);
+      return new Response(body, {
+        headers: { "content-type": "text/event-stream" },
+      });
+    });
+  const rootHandler = vi.fn(
+    async (_request: FastifyRequest, reply: FastifyReply) => {
+      // A sentinel for the local-authority route that must never run.
+      reply.hijack();
+    },
+  );
+  local.addHook("preHandler", async (request, reply) => {
+    await forwardRemoteApi({
+      request,
+      reply,
+      profiles: { forProject: () => ({ remoteProjects: store }) },
+      projectId: "local",
+      apiPath: request.url.slice(4),
+    });
+    forwarded.resolve();
+  });
+  local.get("/api/projects/local/events", rootHandler);
+  const base = await local.listen({ port: 0, host: "127.0.0.1" });
+  const client = new AbortController();
+  return {
+    source: await source.promise,
+    started: started.promise,
+    forwarded: async () => {
+      await forwarded.promise;
+      // Fastify resumes its preHandler chain after the forwarding hook settles.
+      await setImmediate();
+    },
+    rootHandler,
+    cancelled,
+    client,
+    request: () =>
+      clientFetch(`${base}/api/projects/local/events`, {
+        signal: client.signal,
+      }),
+    close: async () => {
+      client.abort();
+      await local.close();
+      upstream.mockRestore();
+      fs.rmSync(directory, { recursive: true, force: true });
+    },
+  };
+}
+
+describe("remote event-stream lifecycle", () => {
+  it.each([false, true])(
+    "keeps a disconnected stream under remote authority (first event sent: %s)",
+    async (sendEvent) => {
+      const fixture = await remoteStreamFixture();
+      try {
+        const pending = fixture.request();
+        const request = await fixture.started;
+        if (sendEvent) {
+          fixture.source.enqueue(new TextEncoder().encode("data: ready\n\n"));
+          const response = await pending;
+          expect(response.status).toBe(200);
+          expect(await response.body?.getReader().read()).toEqual({
+            done: false,
+            value: new TextEncoder().encode("data: ready\n\n"),
+          });
+        }
+        fixture.client.abort();
+        if (!sendEvent) await expect(pending).rejects.toThrow();
+        await fixture.forwarded();
+        expect(request?.signal?.aborted).toBe(true);
+        expect(fixture.cancelled).toHaveBeenCalledOnce();
+        expect(fixture.rootHandler).not.toHaveBeenCalled();
+      } finally {
+        await fixture.close();
+      }
+    },
+  );
+
+  it("keeps a failed upstream stream under remote authority after its headers were sent", async () => {
+    const fixture = await remoteStreamFixture();
+    try {
+      const pending = fixture.request();
+      await fixture.started;
+      fixture.source.enqueue(new TextEncoder().encode("data: ready\n\n"));
+      const response = await pending;
+      const reader = response.body?.getReader();
+      expect((await reader?.read())?.done).toBe(false);
+      fixture.source.error(new Error("Upstream stream failed"));
+      await expect(reader?.read()).rejects.toThrow();
+      await fixture.forwarded();
+      expect(fixture.rootHandler).not.toHaveBeenCalled();
+    } finally {
+      await fixture.close();
+    }
+  });
+
+  it("answers an upstream stream failure before its first event without falling through", async () => {
+    const fixture = await remoteStreamFixture();
+    try {
+      const pending = fixture.request();
+      await fixture.started;
+      fixture.source.error(new Error("Upstream stream failed"));
+      const response = await pending;
+      expect(response.status).toBe(500);
+      expect(response.headers.get("content-type")).toContain(
+        "application/json",
+      );
+      expect(await response.json()).toMatchObject({
+        message: "Upstream stream failed",
+      });
+      await fixture.forwarded();
+      expect(fixture.rootHandler).not.toHaveBeenCalled();
+    } finally {
+      await fixture.close();
+    }
+  });
 });
 
 describe("proxiedGuestUrl", () => {

@@ -129,14 +129,17 @@ describe("tool permissions", () => {
     await run(
       `$('[data-point-key="'+${JSON.stringify(chatKey)}+'"]').querySelector('button').click(); return true;`,
     );
-    await runWait(`return !!approval();`);
+    await runWait(
+      `const card = approval(); return !!card && !card.closest('[inert]') && card.checkVisibility();`,
+      { label: "returned chat shows its pending approval" },
+    );
     await app.waitFor(
-      `window.catamorphicDesktop.workspaceStateGet(${JSON.stringify(projectId)}).then(state => state?.chats?.some(chat => 'chat:'+chat.localId===${JSON.stringify(chatKey)} && chat.mode==='tab'))`,
-      { label: "chat tab persisted before reload" },
+      `window.catamorphicDesktop.workspaceStateGet(${JSON.stringify(projectId)}).then(state => state?.activeTabKey === ${JSON.stringify(chatKey)} && state?.chats?.some(chat => 'chat:'+chat.localId===${JSON.stringify(chatKey)} && chat.mode==='tab'))`,
+      { label: "active chat tab persisted before reload" },
     );
     await app.reload();
     await runWait(
-      `return !!approval() && approval().textContent.includes('post_message');`,
+      `const card = approval(); return !!card && !card.closest('[inert]') && card.checkVisibility() && card.textContent.includes('post_message');`,
       { timeoutMs: 60000, label: "pending approval restored" },
     );
     await runWait(

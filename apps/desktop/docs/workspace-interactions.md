@@ -145,8 +145,13 @@ the pane flushes the pause; closing the tab or quitting Work waits for its save.
 keeps the draft and shows the error without closing the document or overwriting
 the other edit. Discard edits and reload explicitly returns to the disk version.
 Opening a document alone never saves it. Other text editors keep
-explicit Save. File and workflow editors share one fixed icon Save button: the
-save icon, saving spinner, and saved check crossfade without changing its size. Cmd+S still saves immediately and can name an Untitled document.
+explicit Save. Markdown's top-right pill contains only the Save button. File and
+workflow editors share the same fixed icon button: an accent notification dot
+marks unsaved changes and fades away after saving; the saved state keeps the Save
+icon. The saving spinner crossfades without changing the button's size. Cmd+S
+still saves immediately and can name an Untitled document.
+An editor that finishes loading yields focus to a menu or control the person
+has chosen meanwhile; its initial focus frame is canceled when it unmounts.
 
 Every open file tab, including a local file in the browser, offers Rename in its
 context menu. Rename current file in the palette acts on the focused file pane.
@@ -185,8 +190,11 @@ bubble; switching to or from one is as instant as switching pages. Floating and
 minimized main chats have bubbles, and only they speak through the dock: the folded
 bubble shows their activity and what needs the person, while a chat in a tab says
 so on its tab. Maximizing a floating chat makes it a normal tab, removes its
-bubble, and keeps it visible when the dock collapses. Chat controls show their
-applicable shortcut on hover, using the configured binding; returning a tabbed
+bubble, and keeps it visible when the dock collapses.
+Cmd+Shift+M maximizes the floating chat even when its background has focus.
+Open chats read their names and icons from their own sessions, independently of
+the recent-session list, including after a reload or live rename.
+Chat controls show their applicable shortcut on hover, using the configured binding; returning a tabbed
 chat to floating shows Escape. A normal link from a floating
 chat preserves that chat over the page; a floating resource preview minimizes it.
 Its bubble restores the same conversation and draft.

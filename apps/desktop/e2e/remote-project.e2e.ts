@@ -456,7 +456,7 @@ describe("remote projects (ADR 0055)", () => {
     });
   });
 
-  it("Publish ships a dirty store file first, then hands back the link", async () => {
+  it("Publish ships an autosaved store edit first, then hands back the link", async () => {
     await run(
       `$$('[data-sidebar="left"] [data-sidebar-widget="files"] button[aria-expanded="false"]').find(button => button.textContent.trim() === 'Files')?.click(); return true;`,
     );
@@ -477,8 +477,8 @@ describe("remote projects (ADR 0055)", () => {
       },
     );
     await runWait(
-      `return !!$('.cat-mdedit .ProseMirror') && !!$('[data-testid="file-inspector-trigger"]');`,
-      { timeoutMs: 60_000, label: "brief editor and file status" },
+      `return !!$('.cat-mdedit .ProseMirror') && !!$('[data-testid="editor-save"]');`,
+      { timeoutMs: 60_000, label: "brief editor and save control" },
     );
     await run(
       `const editor = window.__catMarkdownEditor.editor;
@@ -487,16 +487,19 @@ describe("remote projects (ADR 0055)", () => {
        return true;`,
     );
     await runWait(
-      `return $('[data-testid="file-inspector-trigger"]')?.getAttribute('aria-label') === 'File status: Unsaved changes';`,
-      { label: "brief marked dirty" },
+      `return !$('[data-testid="editor-save"]')?.hasAttribute('data-unsaved');`,
+      { label: "brief edit autosaved" },
     );
-    await run(
-      `$('[data-testid="file-inspector-trigger"]').click(); return true;`,
+    await run(`window.dispatchEvent(new Event('focus')); return true;`);
+    await runWait(
+      `const row = $('[data-sidebar-section="remote"] [data-sidebar-item-id$="/brief.md"]');
+       if (!row) return false; row.querySelector('[aria-haspopup="menu"]').click(); return true;`,
+      { label: "autosaved brief in server changes" },
     );
     await runWait(
-      `const publish = byText('[role="dialog"][aria-label="File status and actions"] button', 'Publish…');
+      `const publish = byText('[data-sidebar-menu] [role="menuitem"]', 'Publish…');
        if (!publish || publish.disabled) return false; publish.click(); return true;`,
-      { label: "publish from file status" },
+      { label: "publish from the file's server menu" },
     );
     await runWait(`return !!$('[data-testid="publish-submit"]');`, {
       label: "publish modal",
