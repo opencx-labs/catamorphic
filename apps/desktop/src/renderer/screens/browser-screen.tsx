@@ -1388,11 +1388,23 @@ export function BrowserScreen({
           !view.closest("[inert], [hidden]") &&
           view.checkVisibility({ visibilityProperty: true })
         ) {
-          if (dialogsRef.current.length)
-            setDialogFocus((request) => request + 1);
-          else moveFocusAsApp(() => view.focus());
-          pageFocusSince.current = null;
-          return;
+          // The dialog layer mounts its panel after receiving the queue.
+          // A request before that mount would become the panel's initial
+          // counter and never move focus out of the address bar.
+          if (dialogsRef.current.length) {
+            const panel = pageAreaRef.current?.querySelector(
+              '[data-testid="page-dialog"]:not([inert])',
+            );
+            if (panel?.contains(document.activeElement)) {
+              pageFocusSince.current = null;
+              return;
+            }
+            if (panel) setDialogFocus((request) => request + 1);
+          } else {
+            moveFocusAsApp(() => view.focus());
+            pageFocusSince.current = null;
+            return;
+          }
         }
         // dom-ready resumes a slow first load after this bounded frame loop.
         if (performance.now() - started < ADDRESS_FOCUS_WAIT_MS)
