@@ -8,6 +8,7 @@ import {
   focusWindow,
   launchApp,
   pointerOnPage,
+  waitForProjectWorkspace,
 } from "./harness.js";
 import { pressNativeMacKey } from "./native-pointer.js";
 
@@ -146,18 +147,18 @@ async function openGroup({
   await app.eval(
     `${api}.workspaceNavigate({projectId:${JSON.stringify(project.id)}})`,
   );
-  await app.waitFor(
-    `document.querySelector('[data-workspace-visible="true"]')?.dataset.projectRuntime===${JSON.stringify(project.id)} && !!document.querySelector('[data-workspace-visible="true"] [data-workspace-ready]')`,
-  );
+  // Reload only after the selected project has reached the saved preferences.
+  // Every fixture reuses chat:group, so that key alone cannot identify it.
+  await waitForProjectWorkspace({ app, name });
   await app.eval(
     `${api}.workspaceStateSet(${JSON.stringify(project.id)},${JSON.stringify(snapshot)})`,
   );
   await app.reload();
   await app.waitFor(
-    `!!document.querySelector('${group} [aria-label$=" grouped tabs"]')`,
-  );
-  await app.waitFor(
-    `!!document.querySelector('[data-workspace-visible="true"] [data-workspace-ready]')`,
+    `document.querySelector('${visible}')?.dataset.projectRuntime===${JSON.stringify(project.id)} &&
+      !!document.querySelector('${visible} [data-workspace-ready]') &&
+      !!document.querySelector('${group}:not([aria-hidden]) [aria-label$=" grouped tabs"]')`,
+    { label: "the saved project and its folded group are restored" },
   );
   if (activePage)
     await app.waitFor(
@@ -465,23 +466,57 @@ describe("closing folded tab groups", () => {
   );
 
   describe("from a tab's menu", () => {
-    const menuItems = `[...document.querySelectorAll('[role="menuitem"]')]`;
+    const menu = '[role="menu"][aria-label="Open"]:not(.animate-pop-out)';
+    const menuItems = `[...document.querySelectorAll('${menu} [role="menuitem"]')]`;
     const openMenu = async (key: string) => {
-      await app.eval(`(() => {
-        const label=document.querySelector('${visible} [data-point-key="${key}"] .workspace-tab-label');
-        const box=label.getBoundingClientRect();
-        label.dispatchEvent(new MouseEvent('contextmenu',{bubbles:true,cancelable:true,clientX:box.x+8,clientY:box.y+8}));
-      })()`);
-      await app.waitFor(`${menuItems}.length>0`, { label: "tab menu open" });
+      await focusWindow(app);
+      await app.waitFor(
+        `!document.querySelector('[role="menu"], [data-menu-shield]')`,
+      );
+      const point = await app.waitFor<{ x: number; y: number }>(
+        `(() => {
+        const tab=document.querySelector('${visible} [data-point-key="${key}"]:not([aria-hidden])');
+        const label=tab?.querySelector('.workspace-tab-label');
+        if(!label||label.closest('[inert]')) return false;
+        const r=label.getBoundingClientRect(),point={x:r.left+Math.min(8,r.width/2),y:r.top+r.height/2};
+        return label.contains(document.elementFromPoint(point.x,point.y)) &&
+          tab.getAnimations({subtree:true}).every(a=>a.playState!=='running'||a.effect?.getTiming().iterations===Infinity) ? point:false;
+      })()`,
+        { label: "the restored tab accepts a context press" },
+      );
+      await app.movePointer(point);
+      for (const type of ["mousePressed", "mouseReleased"])
+        await app.cdp("Input.dispatchMouseEvent", {
+          type,
+          ...point,
+          button: "right",
+          clickCount: 1,
+        });
+      await app.waitFor(
+        `(() => {
+        const panel=document.querySelector('${menu}');
+        return !!document.querySelector('[data-menu-shield]') && panel?.contains(document.activeElement) &&
+          ${menuItems}.length>0 && panel.getAnimations({subtree:true}).every(a=>a.playState!=='running');
+      })()`,
+        { label: "the active tab menu is focused and settled" },
+      );
     };
     const closeEntries = () =>
       app.eval<string[]>(
         `${menuItems}.map(item=>item.textContent.trim()).filter(label=>label.startsWith('Close'))`,
       );
-    const pick = (label: string) =>
-      app.eval(
-        `${menuItems}.find(item=>item.textContent.trim()===${JSON.stringify(label)}).click()`,
+    const pick = async (label: string) => {
+      const point = await app.waitFor<{ x: number; y: number }>(
+        `(() => {
+        const item=${menuItems}.find(item=>item.textContent.trim()===${JSON.stringify(label)});
+        if(!item||item.disabled) return false;
+        const r=item.getBoundingClientRect(),point={x:r.left+r.width/2,y:r.top+r.height/2};
+        return item.contains(document.elementFromPoint(point.x,point.y)) ? point:false;
+      })()`,
+        { label: `${label} accepts a press` },
       );
+      await app.clickPointer(point);
+    };
     const state = (projectId: string) =>
       `${api}.workspaceStateGet(${JSON.stringify(projectId)})`;
 

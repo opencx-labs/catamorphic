@@ -1,5 +1,5 @@
+import { CloudflareSandboxProvider } from "@catamorphic/cloudflare";
 import { describe, expect, it, vi } from "vitest";
-import { CloudflareSandboxProvider } from "../../../cloudflare/src/sandbox-provider.js";
 import { bridgeRequest } from "../bridge.js";
 import { startManagedProcess } from "../process.js";
 import { INACTIVITY_TIMEOUT_MS, SandboxBridge } from "../sandbox.js";

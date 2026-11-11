@@ -304,6 +304,7 @@
         "@cloudflare/sandbox": "^1.0.3",
       },
       "devDependencies": {
+        "@catamorphic/cloudflare": "workspace:*",
         "@cloudflare/workers-types": "^5.20261110.1",
         "wrangler": "^4.160.1",
       },
