@@ -41,7 +41,7 @@ export function reviewAppFiles(value: unknown): Record<string, string> {
     [packagePath]: JSON.stringify(manifest),
     [configPath]: `import { fileURLToPath } from "node:url";\n${configSource.replace(
       "resolve: { dedupe:",
-      'resolve: { alias: [{ find: /^shiki$/, replacement: fileURLToPath(new URL("./src/components/catamorphic/review-highlighter.ts", import.meta.url)) }], dedupe:',
+      'resolve: { alias: [{ find: /^shiki(?:\\/langs)?$/, replacement: fileURLToPath(new URL("./src/components/catamorphic/review-highlighter.ts", import.meta.url)) }], dedupe:',
     )}`,
   };
 }

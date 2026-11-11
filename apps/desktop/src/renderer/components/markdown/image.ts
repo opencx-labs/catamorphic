@@ -170,8 +170,8 @@ export const ImageParagraph = Paragraph.extend({
         helpers.parseInline(tokens),
       );
     }
-    // Tiptap's own parser (`this.parent` is untyped for this hook).
-    return Paragraph.config.parseMarkdown?.(token, helpers) ?? [];
+    // Delegate with the parent extension's complete parser context.
+    return this.parent?.(token, helpers) ?? [];
   },
 });
 
@@ -197,7 +197,7 @@ export const ImageLink = Link.extend({
         },
       };
     }
-    return Link.config.parseMarkdown?.(token, helpers) ?? [];
+    return this.parent?.(token, helpers) ?? [];
   },
 });
 

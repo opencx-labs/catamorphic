@@ -46,12 +46,12 @@
     "splitting": false
   },
   "dependencies": {
-    "kysely": "^0.29.3",
-    "pg": "^8.22.0",
-    "@types/pg": "^8.20.0"
+    "kysely": "^0.29.8",
+    "pg": "^8.23.1",
+    "@types/pg": "^8.23.1"
   },
   "devDependencies": {
-    "@electric-sql/pglite": "^0.5.4",
+    "@electric-sql/pglite": "^0.5.16",
     "kysely-codegen": "^0.20.0"
   },
   "license": "Apache-2.0",

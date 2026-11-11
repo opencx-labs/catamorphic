@@ -1,5 +1,5 @@
 import type { Context } from "@opentelemetry/api";
-import type { Span, SpanProcessor } from "@opentelemetry/sdk-trace-node";
+import type { Span, SpanProcessor } from "@opentelemetry/sdk-trace";
 import { setSpanCorrelation, telemetryContext } from "./correlation.js";
 
 /** Host opt-in enrichment for instrumentations that do not use Catamorphic's tracer. */

@@ -25,6 +25,32 @@ import {
 } from "./session-timeline.js";
 
 describe("sessionTimeline", () => {
+  it("drops withdrawn empty drafts, preserves interrupted prose and attaches work to the replacement", () => {
+    const state = sessionStateFromSnapshot(
+      snapshot({
+        turns: [turn("t1", 1)],
+        items: [
+          userMessage("t1:input", 1, "t1", "Explain it"),
+          toolCall("read", 2, "t1", "Read"),
+          { ...reply("abandoned", 3, "t1", ""), status: "cancelled" },
+          reply("complete", 4, "t1", "The complete explanation"),
+          {
+            ...reply("interrupted", 5, "t1", "Partial work worth keeping"),
+            status: "cancelled",
+          },
+        ],
+      }),
+    );
+    expect(sessionTimeline(state)[0]?.entries).toMatchObject([
+      { kind: "input" },
+      { kind: "reply", item: { id: "complete" }, steps: [{ id: "read" }] },
+      {
+        kind: "reply",
+        item: { id: "interrupted", text: "Partial work worth keeping" },
+      },
+    ]);
+  });
+
   it("keeps routine reports in work, while attention and failed tasks stay visible", () => {
     const state = sessionStateFromSnapshot(
       snapshot({

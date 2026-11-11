@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import type { PushNotificationTransport } from "@catamorphic/core";
-import webPush from "web-push";
+import * as webPush from "web-push";
 
 interface PersistedVapidKeys {
   publicKey: string;

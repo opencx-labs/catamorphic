@@ -1,3 +1,5 @@
+import { fileURLToPath } from "node:url";
+
 /**
  * Replaying recorded Claude Code transcripts (ADR 0198): fixtures from the
  * real pinned CLI, a `query` that replays them into the real adapter, and
@@ -60,7 +62,6 @@ export {
 } from "./scripted-model.js";
 
 /** Where the stdio MCP server the tool-policy scenarios connect lives. */
-export const FIXTURE_MCP_SERVER = new URL(
-  "../../src/testing/fixture-mcp-server.ts",
-  import.meta.url,
-).pathname;
+export const FIXTURE_MCP_SERVER = fileURLToPath(
+  new URL("../../src/testing/fixture-mcp-server.ts", import.meta.url),
+);

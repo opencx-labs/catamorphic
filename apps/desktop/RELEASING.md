@@ -220,6 +220,11 @@ automatic release too. The root and application manifests, including the
 deployed Cloudflare Worker, remain private; all importable framework libraries
 publish with public access.
 
+Publication and channel repair install the frozen Bun lockfile and invoke the
+repository's verified Node runtime with its locally patched npm client. They use
+the same client as package smoke tests and trust setup; a global npm installation
+does not supply release tooling. See [dependency patch provenance](../../patches/README.md).
+
 ## Work server deployments
 
 Releases publish `@catamorphic/work-server` with the other libraries.

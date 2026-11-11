@@ -273,15 +273,16 @@ chats (`sessions:read`) or delivers into them by `sessionId`
 
 ### Observability
 
-Catamorphic libraries use only the OpenTelemetry APIs (`@opentelemetry/api`
-and `@opentelemetry/api-logs`). Register your own tracer, meter, and logger
+Catamorphic libraries use only `@opentelemetry/api`, including its stable logs
+API. Register your own tracer, meter, and logger
 providers and choose any exporters, processors, samplers, resources, or views.
 Libraries do not initialize SDKs, read exporter environment variables, or take
 ownership of your providers. Without providers, instrumentation is a no-op.
 The optional `@catamorphic/otel/node` entry point provides the shipped hosts'
 NodeSDK bootstrap and accepts the complete `NodeSDKConfiguration` for embedders
 who want it. SDK/exporter dependencies are optional peers, required only by that
-entry point. See [OBSERVABILITY.md](OBSERVABILITY.md) for configuration, coverage,
+entry point. The bootstrap uses OpenTelemetry SDK 3.x and requires Node.js
+22.15 or later. See [OBSERVABILITY.md](OBSERVABILITY.md) for configuration, coverage,
 project routing, signal conventions, and the local collector.
 
 

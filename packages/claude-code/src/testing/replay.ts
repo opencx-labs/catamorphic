@@ -1,4 +1,5 @@
 import { readFile } from "node:fs/promises";
+import { fileURLToPath } from "node:url";
 import type {
   HookCallbackMatcher,
   Options,
@@ -29,8 +30,9 @@ export class ReplayDivergenceError extends Error {
 /** A fixture shipped with this package, by scenario name. */
 export function fixturePath(scenario: string): string {
   // From src/testing (Bun, Vitest) and dist/testing alike.
-  return new URL(`../../src/testing/fixtures/${scenario}.json`, import.meta.url)
-    .pathname;
+  return fileURLToPath(
+    new URL(`../../src/testing/fixtures/${scenario}.json`, import.meta.url),
+  );
 }
 
 function isTranscript(value: unknown): value is ClaudeReplayTranscript {

@@ -1,79 +1,54 @@
 {
   "$schema": "./node_modules/wrangler/config-schema.json",
-  "name": "catamorphic-sandbox-bridge",
+  "name": "catamorphic-sandbox-bridge-native",
   "main": "src/index.ts",
-  "compatibility_date": "2025-05-06",
-  "compatibility_flags": ["nodejs_compat"],
+  "compatibility_date": "2026-11-11",
+  "compatibility_flags": ["nodejs_compat", "enable_request_signal"],
   "observability": {
     "enabled": true
   },
-  // The Sandbox Durable Object + its container image.
-  // Bump the migration tag whenever new_sqlite_classes changes.
+  // This replacement Worker owns a new class and namespace. Never attach
+  // native scheduling to a legacy Sandbox namespace or mutate the old Worker.
   "containers": [
     {
-      "class_name": "Sandbox",
-      "image": "./Dockerfile",
-      // "lite" is a good default; upgrade to "standard-1" (4 vCPU / 8 GiB RAM)
-      // if workloads outgrow it. Kept as a single global instance_type — see
-      // CLOUDFLARE.md for the reasoning behind not making this per-project.
-      "instance_type": "lite",
-      "max_instances": 3
+      "class_name": "NativeSandbox",
+      "name": "catamorphic-sandbox-bridge-native",
+      "scheduling_policy": "durable_object",
+      "images": { "sandbox": { "dockerfile": "./Dockerfile" } }
     }
   ],
   "durable_objects": {
     "bindings": [
       {
-        "class_name": "Sandbox",
-        "name": "Sandbox"
-      },
-      {
-        "class_name": "WarmPool",
-        "name": "WarmPool"
+        "class_name": "NativeSandbox",
+        "name": "NativeSandbox"
       }
     ]
   },
   "migrations": [
     {
-      "new_sqlite_classes": ["Sandbox"],
+      "new_sqlite_classes": ["NativeSandbox"],
       "tag": "v1"
-    },
-    {
-      "new_sqlite_classes": ["WarmPool"],
-      "tag": "v2"
     }
   ],
-  // Warm pool is disabled by default (no surprise bills). Set WARM_POOL_TARGET
-  // > 0 and enable the cron below to pre-warm containers.
-  "vars": {
-    "WARM_POOL_TARGET": "0",
-    "WARM_POOL_REFRESH_INTERVAL": "10000"
-  },
   "env": {
     "dev": {
-      "name": "catamorphic-sandbox-bridge-dev",
+      "name": "catamorphic-sandbox-bridge-dev-native",
       "containers": [
         {
-          "class_name": "Sandbox",
-          "image": "./Dockerfile",
-          "instance_type": "lite",
-          "max_instances": 3
+          "class_name": "NativeSandbox",
+          "name": "catamorphic-sandbox-bridge-dev-native",
+          "scheduling_policy": "durable_object",
+          "images": { "sandbox": { "dockerfile": "./Dockerfile" } }
         }
       ],
       "durable_objects": {
         "bindings": [
           {
-            "class_name": "Sandbox",
-            "name": "Sandbox"
-          },
-          {
-            "class_name": "WarmPool",
-            "name": "WarmPool"
+            "class_name": "NativeSandbox",
+            "name": "NativeSandbox"
           }
         ]
-      },
-      "vars": {
-        "WARM_POOL_TARGET": "0",
-        "WARM_POOL_REFRESH_INTERVAL": "10000"
       }
     }
   },

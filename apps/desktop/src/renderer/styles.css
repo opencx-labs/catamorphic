@@ -848,6 +848,7 @@ kbd {
    Chromium won't type into. */
 .cat-composer {
   position: relative;
+  scroll-behavior: smooth;
 }
 
 /* Dictation's words while they are still being said (voice): muted until
@@ -1829,7 +1830,7 @@ kbd {
    included), above its neighbours; its close and expand buttons keep
    their own. */
 [data-tab-orientation="horizontal"]
-.workspace-tab:has(.workspace-tab-label:focus-visible) {
+  .workspace-tab:has(.workspace-tab-label:focus-visible) {
   z-index: 1;
   outline: var(--focus-ring-width) var(--focus-ring-style) var(--color-accent);
   outline-offset: var(--focus-ring-inset);
@@ -2346,6 +2347,7 @@ div:has(> button:focus-visible) > [data-menu-focus] {
   transform: translateX(100%);
 }
 /* Hidden, not only off screen: an overlay's shadow would reach in. */
+/* biome-ignore lint/style/noDescendingSpecificity: Visibility and translation are independent motion properties. */
 [data-motion="closed"] > .sidebar-inner {
   visibility: hidden;
 }
@@ -2455,6 +2457,7 @@ div:has(> button:focus-visible) > [data-menu-focus] {
    true) a lane in, the panel's outer padding widened for it. Neither ever
    lies over a row. */
 .sidebar-tab-panel,
+/* biome-ignore lint/style/noDescendingSpecificity: Scrollbar chrome is independent of tree descendant transitions. */
 .sidebar-tab-panel * {
   scrollbar-width: none;
 }
@@ -2504,11 +2507,13 @@ div:has(> button:focus-visible) > [data-menu-focus] {
 /* Panel wheels reach the native scroller beneath the visual thumb. Its
    drag starts from the sidebar's capture listener without intercepting wheels. */
 .overlay-scrollbar[data-lane="section"][data-shown="true"]
-.overlay-scrollbar-thumb {
+  .overlay-scrollbar-thumb {
   pointer-events: auto;
 }
 .overlay-scrollbar-thumb:hover,
+/* biome-ignore lint/style/noDescendingSpecificity: Thumb background states are independent of the pointer-events rule. */
 .overlay-scrollbar[data-hovered] .overlay-scrollbar-thumb,
+/* biome-ignore lint/style/noDescendingSpecificity: Thumb background states are independent of the pointer-events rule. */
 .overlay-scrollbar[data-dragging] .overlay-scrollbar-thumb {
   background: color-mix(in srgb, var(--color-fg) 38%, transparent);
 }
@@ -2641,6 +2646,7 @@ div:has(> button:focus-visible) > [data-menu-focus] {
     animation: none;
   }
 }
+/* biome-ignore lint/style/noDescendingSpecificity: Note spacing is independent of tree descendant transitions. */
 .sidebar-note > * + * {
   margin-top: 0.6em;
 }
@@ -2843,7 +2849,7 @@ div:has(> button:focus-visible) > [data-menu-focus] {
    only when nothing sits over the content (the header in the sidebar). A
    split's side by the divider stays square. */
 [data-dock-host]:not([data-dock-native])
-[data-chat-tab]:not([data-split-slot="right"]) {
+  [data-chat-tab]:not([data-split-slot="right"]) {
   border-bottom-left-radius: var(--content-frame-radius, 0px);
 }
 [data-dock-host]:not([data-dock-native])
@@ -3040,9 +3046,10 @@ html[data-surface="dock"] #root {
    sidebar was. Framed content keeps its rounded clip; there the strip
    glides during the settle instead (below). */
 [data-sidebar="left"][data-docked="true"]:is(
-  [data-motion="closing"],
-  [data-motion="closed"]
-) ~ .workspace-surface:not([data-content-frame="on"]) {
+    [data-motion="closing"],
+    [data-motion="closed"]
+  )
+  ~ .workspace-surface:not([data-content-frame="on"]) {
   overflow-x: visible;
   overflow-y: clip;
 }
@@ -3057,6 +3064,7 @@ html[data-surface="dock"] #root {
 }
 /* Opening, its far end stays where it rests, clear of the right sidebar's
    toggle, as the content gives the strip's start to the sidebar. */
+/* biome-ignore lint/style/noDescendingSpecificity: Docked and overlay motion selectors are mutually exclusive. */
 [data-sidebar="left"][data-docked="false"]:is(
     [data-motion="opening"],
     [data-motion="open"]
@@ -3067,6 +3075,7 @@ html[data-surface="dock"] #root {
   translate: var(--tab-strip-shift) 0;
   clip-path: inset(-100vh var(--tab-strip-shift) -100vh -100vw);
 }
+/* biome-ignore lint/style/noDescendingSpecificity: Settled transitions are independent of the translation rules. */
 [data-sidebar="left"][data-settled="true"]
   ~ .workspace-surface
   .workspace-chrome
@@ -3137,7 +3146,7 @@ html[data-surface="dock"] #root {
 /* With the header in the sidebar, the right sidebar's toggle floats over
    the content's corner: pushing, it fades as the panel's own arrives. */
 .workspace-surface:has(~ [data-sidebar="right"][data-push])
-.chrome-toggle-float {
+  .chrome-toggle-float {
   transition: opacity 200ms var(--ease-standard);
 }
 .workspace-surface:has(~ [data-sidebar="right"][data-push][data-items-lead])

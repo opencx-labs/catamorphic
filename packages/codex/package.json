@@ -32,11 +32,11 @@
   "dependencies": {
     "@catamorphic/agent-protocol": "workspace:*",
     "@catamorphic/sandbox": "workspace:*",
-    "@openai/codex-sdk": "0.166.0"
+    "@openai/codex-sdk": "0.167.1"
   },
   "devDependencies": {
     "@catamorphic/agent-runner": "workspace:*",
-    "@types/node": "^26.1.1"
+    "@types/node": "^26.6.6"
   },
   "license": "Apache-2.0",
   "repository": {

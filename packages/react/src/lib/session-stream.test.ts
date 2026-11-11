@@ -1,16 +1,57 @@
 import { SESSION_PROTOCOL_VERSION } from "@catamorphic/agent-protocol";
-import { describe, expect, it } from "vitest";
+import { createCatamorphicClient } from "@catamorphic/api-client";
+import { describe, expect, it, vi } from "vitest";
 import { CatamorphicError } from "./errors.js";
 import {
   acquireStreamSlot,
   isPermanentFailure,
   MAX_SESSION_STREAMS,
   parseFrame,
+  readSessionStream,
   speaksSessionProtocol,
   streamSlotKey,
 } from "./session-stream.js";
 
 describe("session streams", () => {
+  it("opens before any body bytes and cancels an idle stream on abort", async () => {
+    const opened = Promise.withResolvers<void>();
+    const cancelled = Promise.withResolvers<void>();
+    const controller = new AbortController();
+    const onMessage = vi.fn();
+    // An injected fetch separates the client's header handling from MSW's
+    // socket framing. This body stays completely empty until it is cancelled.
+    const apiClient = createCatamorphicClient({
+      baseUrl: "https://session.example",
+      fetch: async () =>
+        new Response(
+          new ReadableStream<Uint8Array>({
+            cancel: () => cancelled.resolve(),
+          }),
+          { headers: { "content-type": "text/event-stream" } },
+        ),
+    });
+    const reading = readSessionStream({
+      apiClient,
+      projectId: "project",
+      sessionId: "session",
+      after: 4,
+      signal: controller.signal,
+      onOpen: () => opened.resolve(),
+      onMessage,
+    });
+    try {
+      await opened.promise;
+      expect(onMessage).not.toHaveBeenCalled();
+      controller.abort();
+      await reading;
+      await cancelled.promise;
+      expect(onMessage).not.toHaveBeenCalled();
+    } finally {
+      controller.abort();
+      await reading;
+    }
+  });
+
   it("reads a frame's data lines and skips comments", () => {
     expect(parseFrame(": keepalive")).toBeUndefined();
     expect(

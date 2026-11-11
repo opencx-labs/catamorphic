@@ -3,7 +3,7 @@ services:
   # dev machines often already run other Postgres instances on 5432/5433;
   # point the host app's DATABASE_URL at whichever Postgres you use.
   postgres:
-    image: postgres:17
+    image: postgres:18.6@sha256:e3d24f6906d0760bf4da0dae872415391ededefad23fd471c47dc53b0ddf3c42
     # Integration tests run one pool per test file in parallel (capped at
     # poolSize: 8 in the tests); the stock ceiling of 100 connections made
     # full-workspace `turbo test` runs flake with pool timeouts.
@@ -14,8 +14,10 @@ services:
       POSTGRES_USER: catamorphic
       POSTGRES_PASSWORD: catamorphic
       POSTGRES_DB: catamorphic
+    # Keep the existing volume: PostgreSQL 18 refuses its PG17 data until an
+    # explicit upgrade puts a verified cluster in 18/docker. Never reset it.
     volumes:
-      - pgdata:/var/lib/postgresql/data
+      - pgdata:/var/lib/postgresql
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U catamorphic -d catamorphic"]
       interval: 3s
@@ -25,7 +27,7 @@ services:
   # Telemetry store for dev. Host ports are shifted (8124/19001) because
   # 8123/9000/19000 are commonly taken by other local ClickHouse/MinIO stacks.
   clickhouse:
-    image: clickhouse/clickhouse-server:latest
+    image: clickhouse/clickhouse-server:26.10.3.7@sha256:739e099abd1157390960a59e4532d21781d8fde57e6e4151cb920ea02c30b1ce
     ports:
       - "8124:8123" # HTTP interface
       - "19001:9000" # native TCP interface
@@ -49,7 +51,7 @@ services:
   # to ClickHouse. ClickHouse has no native OTLP endpoint, so the collector
   # sits in front of it.
   otel-collector:
-    image: otel/opentelemetry-collector-contrib:latest
+    image: otel/opentelemetry-collector-contrib:0.165.0@sha256:e40d61f10c9a617cca1ffd1be4d7e2b3a4b0f0001798ff07e58cabe82e618cea
     command: ["--config=/etc/otel-collector.yaml"]
     ports:
       - "4317:4317" # OTLP gRPC

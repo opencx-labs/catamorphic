@@ -1,10 +1,10 @@
-# Container image for catamorphic-sandbox-bridge.
-#
-# Extends the Cloudflare Sandbox base image (which includes the control-plane
-# server on port 3000) and pre-installs the tooling workflow runs need. Keep
-# this image tag in sync with the @cloudflare/sandbox npm version in
-# package.json — they are released together.
-FROM docker.io/cloudflare/sandbox:0.8.11
+# Native container execution needs no in-container control-plane server.
+# Match sandbox-shim to the @cloudflare/sandbox package version.
+FROM oven/bun:1.4.4@sha256:1d22548f177f4ff38e0c15baa3c2c46c6c2060ba2d1bc573bb4720b407548f1d AS bun
+FROM node:26.13.0-bookworm-slim@sha256:add5c17c14752c54d2f3d519ec46a3815684d41c33f198bcb09fb998f7dcbf68
+
+COPY --from=bun /usr/local/bin/bun /usr/local/bin/bun
+COPY --from=docker.io/cloudflare/sandbox:1.0.3@sha256:fc1740c3cba26461f0ab1771287c84018ab2cca43a70ebb823087c85d780aaec /usr/local/bin/sandbox-shim /usr/local/bin/sandbox-shim
 
 # Common tooling used by workflows / agents:
 #   tar        - workspace persist / hydrate
@@ -27,26 +27,28 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     gawk \
     unzip \
     ca-certificates \
+    bash \
+    coreutils \
+    xz-utils \
     && rm -rf /var/lib/apt/lists/*
 
-# fusermount needs /etc/mtab to find active mounts; the base image ships
-# without it, which breaks bucket unmount.
-RUN ln -sf /proc/mounts /etc/mtab
-
-# Install Bun system-wide under /usr/local so workflow runs can
-# `bun run harness.ts` from any user. The official installer treats any
-# positional arg as a version tag (no `--no-completions` flag exists), so we
-# invoke it bare and rm completions out of the install tree after.
-RUN curl -fsSL https://bun.sh/install | bash \
-    && mv /root/.bun/bin/bun /usr/local/bin/bun \
-    && chmod +x /usr/local/bin/bun \
-    && rm -rf /root/.bun
+# The official patched release precedes its npm and Docker tags. Verify its
+# native binary rather than retaining the older bootstrap runtime.
+RUN set -eu; \
+    case "$(dpkg --print-architecture)" in \
+      amd64) node_arch=x64; node_sha=5c063e46bab0fbc1c17cc445d7ff129cbdcd0471be6ed83b6ab864f8143bc864 ;; \
+      arm64) node_arch=arm64; node_sha=89e1853138db51e8b82d3e98ba9c0d3f2956a28e5e55ea1b7e12d25aae92d5dd ;; \
+      *) echo "Unsupported Node architecture" >&2; exit 1 ;; \
+    esac; \
+    curl -fsSL "https://nodejs.org/dist/v26.13.1/node-v26.13.1-linux-${node_arch}.tar.xz" -o /tmp/node.tar.xz; \
+    echo "${node_sha}  /tmp/node.tar.xz" | sha256sum -c -; \
+    tar -xJf /tmp/node.tar.xz -C /usr/local/bin --strip-components=2 "node-v26.13.1-linux-${node_arch}/bin/node"; \
+    rm /tmp/node.tar.xz; \
+    test "$(node --version)" = "v26.13.1"
 
 # Workspace root used by the sandbox service. All /v1/sandbox/:id/file/* and
 # /v1/sandbox/:id/exec cwd paths must resolve inside /workspace.
 RUN mkdir -p /workspace
 
-# Keep the base image's runtime user/entrypoint behavior intact. Overriding
-# USER here can prevent the sandbox control-plane process from starting on
-# Cloudflare-managed containers.
 WORKDIR /workspace
+CMD ["sleep", "infinity"]

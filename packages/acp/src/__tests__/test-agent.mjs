@@ -40,7 +40,7 @@
 import { spawn } from "node:child_process";
 import fs from "node:fs";
 import { Readable, Writable } from "node:stream";
-import * as acp from "@agentclientprotocol/sdk";
+import * as acp from "@agentclientprotocol/sdk/unstable";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 
@@ -80,190 +80,190 @@ if (exitSave > 0)
     }, exitSave),
   );
 
-new acp.AgentSideConnection(
-  (connection) => {
-    const say = (sessionId, sessionUpdate, text) =>
-      connection.sessionUpdate({
-        sessionId,
-        update: { sessionUpdate, content: { type: "text", text } },
-      });
-    return {
-      initialize: async () => ({
-        protocolVersion: acp.PROTOCOL_VERSION,
-        agentInfo: { name: "test-agent", version: "1" },
-        agentCapabilities: {
-          loadSession: process.env.TEST_AGENT_NO_LOAD !== "1",
-          promptCapabilities: { image: true },
-          sessionCapabilities: {
-            ...(process.env.TEST_AGENT_RESUME === "1" ? { resume: {} } : {}),
-            ...(process.env.TEST_AGENT_LIST === "1" ? { list: {} } : {}),
-          },
-          ...(process.env.TEST_AGENT_PROVIDERS ? { providers: {} } : {}),
+let connection;
+const handlers = (() => {
+  const say = (sessionId, sessionUpdate, text) =>
+    connection.notify(acp.methods.client.session.update, {
+      sessionId,
+      update: { sessionUpdate, content: { type: "text", text } },
+    });
+  return {
+    initialize: async () => ({
+      protocolVersion: acp.PROTOCOL_VERSION,
+      agentInfo: { name: "test-agent", version: "1" },
+      agentCapabilities: {
+        loadSession: process.env.TEST_AGENT_NO_LOAD !== "1",
+        promptCapabilities: { image: true },
+        sessionCapabilities: {
+          ...(process.env.TEST_AGENT_RESUME === "1" ? { resume: {} } : {}),
+          ...(process.env.TEST_AGENT_LIST === "1" ? { list: {} } : {}),
         },
-      }),
-      unstable_listProviders: async () => {
-        if (process.env.TEST_AGENT_PROVIDERS === "fail")
-          throw acp.RequestError.methodNotFound("providers/list");
-        return {
-          providers: [
-            { providerId: "main", supported: ["openai"], required: true },
-            { providerId: "cloud", supported: ["bedrock"], required: false },
-          ],
-        };
+        ...(process.env.TEST_AGENT_PROVIDERS ? { providers: {} } : {}),
       },
-      unstable_disableProvider: async ({ providerId }) => {
-        const state = read();
-        state.disabled = [...(state.disabled ?? []), providerId];
-        write(state);
-        return {};
-      },
-      unstable_setProvider: async (provider) => {
-        const state = read();
-        state.providers = {
-          ...state.providers,
-          [provider.providerId]: provider,
-        };
-        write(state);
-        return {};
-      },
-      setSessionConfigOption: async ({ sessionId, value }) => {
-        const state = read();
-        state.sessions[sessionId].model = value;
-        write(state);
-        return { configOptions: modelOptions(value) };
-      },
-      authenticate: async () => {},
-      newSession: async ({ cwd, mcpServers }) => {
-        const state = read();
-        const sessionId = `session-${Object.keys(state.sessions).length + 1}`;
-        state.sessions[sessionId] = { cwd, mcpServers, prompts: [] };
-        write(state);
-        return {
+    }),
+    unstable_listProviders: async () => {
+      if (process.env.TEST_AGENT_PROVIDERS === "fail")
+        throw acp.RequestError.methodNotFound("providers/list");
+      return {
+        providers: [
+          { providerId: "main", supported: ["openai"], required: true },
+          { providerId: "cloud", supported: ["bedrock"], required: false },
+        ],
+      };
+    },
+    unstable_disableProvider: async ({ providerId }) => {
+      const state = read();
+      state.disabled = [...(state.disabled ?? []), providerId];
+      write(state);
+      return {};
+    },
+    unstable_setProvider: async (provider) => {
+      const state = read();
+      state.providers = {
+        ...state.providers,
+        [provider.providerId]: provider,
+      };
+      write(state);
+      return {};
+    },
+    setSessionConfigOption: async ({ sessionId, value }) => {
+      const state = read();
+      state.sessions[sessionId].model = value;
+      write(state);
+      return { configOptions: modelOptions(value) };
+    },
+    authenticate: async () => {},
+    newSession: async ({ cwd, mcpServers }) => {
+      const state = read();
+      const sessionId = `session-${Object.keys(state.sessions).length + 1}`;
+      state.sessions[sessionId] = { cwd, mcpServers, prompts: [] };
+      write(state);
+      return {
+        sessionId,
+        ...(process.env.TEST_AGENT_MODELS === "1"
+          ? { configOptions: modelOptions("default-model") }
+          : {}),
+      };
+    },
+    resumeSession: async ({ sessionId, cwd, mcpServers }) => {
+      const state = read();
+      const session = state.sessions[sessionId];
+      if (!session) throw acp.RequestError.resourceNotFound(sessionId);
+      Object.assign(session, { cwd, mcpServers, reopenedWith: "resume" });
+      write(state);
+      return {};
+    },
+    loadSession: async ({ sessionId, cwd, mcpServers }) => {
+      const failing = process.env.TEST_AGENT_LOAD;
+      if (failing === "crash") process.exit(3);
+      if (failing === "auth") throw acp.RequestError.authRequired();
+      if (failing === "busy")
+        throw acp.RequestError.internalError(undefined, "database is locked");
+      if (failing === "plain")
+        throw new Error(`Invalid session identifier: ${sessionId}`);
+      if (failing === "hermes-flaky") return null;
+      const state = read();
+      const session = state.sessions[sessionId];
+      if (!session && failing === "opencode")
+        throw acp.RequestError.internalError(
+          { service: "session" },
+          "OpenCode service failure",
+        );
+      if (!session && failing === "hermes") return null;
+      if (!session) throw acp.RequestError.resourceNotFound(sessionId);
+      Object.assign(session, { cwd, mcpServers, reopenedWith: "load" });
+      write(state);
+      // ACP replays the history before answering.
+      for (const prompt of session.prompts) {
+        await say(sessionId, "user_message_chunk", prompt.at(-1)?.text ?? "");
+        await say(sessionId, "agent_message_chunk", "(replayed)");
+      }
+      return {};
+    },
+    listSessions: async () => {
+      // Noted, so a test can tell the adapter asked.
+      const state = read();
+      write({ ...state, listed: (state.listed ?? 0) + 1 });
+      return {
+        sessions: Object.entries(state.sessions).map(
+          ([sessionId, session]) => ({
+            sessionId,
+            cwd: session.cwd,
+          }),
+        ),
+      };
+    },
+    cancel: async () => {
+      write({ ...read(), cancelled: true });
+      if (process.env.TEST_AGENT_STUBBORN !== "1") cancel();
+    },
+    prompt: async ({ sessionId, prompt }) => {
+      const state = read();
+      const session = state.sessions[sessionId];
+      session.prompts.push(prompt);
+      write(state);
+      const words = prompt.at(-1)?.text ?? "";
+      await say(sessionId, "agent_thought_chunk", "Thinking it over.");
+      const tool = words.match(/\[\[tool (\S+) (\S+) (.*)\]\]/);
+      if (tool) {
+        const [, server, name, json] = tool;
+        const spec = session.mcpServers.find((entry) => entry.name === server);
+        await connection.notify(acp.methods.client.session.update, {
           sessionId,
-          ...(process.env.TEST_AGENT_MODELS === "1"
-            ? { configOptions: modelOptions("default-model") }
-            : {}),
-        };
-      },
-      resumeSession: async ({ sessionId, cwd, mcpServers }) => {
-        const state = read();
-        const session = state.sessions[sessionId];
-        if (!session) throw acp.RequestError.resourceNotFound(sessionId);
-        Object.assign(session, { cwd, mcpServers, reopenedWith: "resume" });
-        write(state);
-        return {};
-      },
-      loadSession: async ({ sessionId, cwd, mcpServers }) => {
-        const failing = process.env.TEST_AGENT_LOAD;
-        if (failing === "crash") process.exit(3);
-        if (failing === "auth") throw acp.RequestError.authRequired();
-        if (failing === "busy")
-          throw acp.RequestError.internalError(undefined, "database is locked");
-        if (failing === "plain")
-          throw new Error(`Invalid session identifier: ${sessionId}`);
-        if (failing === "hermes-flaky") return null;
-        const state = read();
-        const session = state.sessions[sessionId];
-        if (!session && failing === "opencode")
-          throw acp.RequestError.internalError(
-            { service: "session" },
-            "OpenCode service failure",
-          );
-        if (!session && failing === "hermes") return null;
-        if (!session) throw acp.RequestError.resourceNotFound(sessionId);
-        Object.assign(session, { cwd, mcpServers, reopenedWith: "load" });
-        write(state);
-        // ACP replays the history before answering.
-        for (const prompt of session.prompts) {
-          await say(sessionId, "user_message_chunk", prompt.at(-1)?.text ?? "");
-          await say(sessionId, "agent_message_chunk", "(replayed)");
-        }
-        return {};
-      },
-      listSessions: async () => {
-        // Noted, so a test can tell the adapter asked.
-        const state = read();
-        write({ ...state, listed: (state.listed ?? 0) + 1 });
-        return {
-          sessions: Object.entries(state.sessions).map(
-            ([sessionId, session]) => ({
-              sessionId,
-              cwd: session.cwd,
-            }),
-          ),
-        };
-      },
-      cancel: async () => {
-        write({ ...read(), cancelled: true });
-        if (process.env.TEST_AGENT_STUBBORN !== "1") cancel();
-      },
-      prompt: async ({ sessionId, prompt }) => {
-        const state = read();
-        const session = state.sessions[sessionId];
-        session.prompts.push(prompt);
-        write(state);
-        const words = prompt.at(-1)?.text ?? "";
-        await say(sessionId, "agent_thought_chunk", "Thinking it over.");
-        const tool = words.match(/\[\[tool (\S+) (\S+) (.*)\]\]/);
-        if (tool) {
-          const [, server, name, json] = tool;
-          const spec = session.mcpServers.find(
-            (entry) => entry.name === server,
-          );
-          await connection.sessionUpdate({
-            sessionId,
-            update: {
-              sessionUpdate: "tool_call",
-              toolCallId: "call-1",
-              title: `Calling ${name}`,
-              kind: "other",
-              status: "in_progress",
-              rawInput: JSON.parse(json),
+          update: {
+            sessionUpdate: "tool_call",
+            toolCallId: "call-1",
+            title: `Calling ${name}`,
+            kind: "other",
+            status: "in_progress",
+            rawInput: JSON.parse(json),
+          },
+        });
+        const client = new Client({ name: "test-agent", version: "1" });
+        await client.connect(
+          new StreamableHTTPClientTransport(new URL(spec.url), {
+            requestInit: {
+              headers: Object.fromEntries(
+                spec.headers.map((header) => [header.name, header.value]),
+              ),
             },
-          });
-          const client = new Client({ name: "test-agent", version: "1" });
-          await client.connect(
-            new StreamableHTTPClientTransport(new URL(spec.url), {
-              requestInit: {
-                headers: Object.fromEntries(
-                  spec.headers.map((header) => [header.name, header.value]),
-                ),
-              },
-            }),
-          );
-          const result = await client.callTool({
-            name,
-            arguments: JSON.parse(json),
-          });
-          await client.close();
-          const text = result.content.map((part) => part.text).join("");
-          await connection.sessionUpdate({
-            sessionId,
-            update: {
-              sessionUpdate: "tool_call_update",
-              toolCallId: "call-1",
-              status: result.isError ? "failed" : "completed",
-              content: [{ type: "content", content: { type: "text", text } }],
-            },
-          });
-          // Agents may still say something about a call they finished,
-          // even in the middle of a reply.
-          await say(sessionId, "agent_message_chunk", "Tool said: ");
-          await connection.sessionUpdate({
-            sessionId,
-            update: {
-              sessionUpdate: "tool_call_update",
-              toolCallId: "call-1",
-              title: "Called it",
-            },
-          });
-          await say(sessionId, "agent_message_chunk", text);
-          return { stopReason: "end_turn" };
-        }
-        if (words.includes("[[permission")) {
-          const alwaysOnly = words.includes("[[permission always-only]]");
-          const noRejectOnce = words.includes("[[permission no-reject-once]]");
-          const { outcome } = await connection.requestPermission({
+          }),
+        );
+        const result = await client.callTool({
+          name,
+          arguments: JSON.parse(json),
+        });
+        await client.close();
+        const text = result.content.map((part) => part.text).join("");
+        await connection.notify(acp.methods.client.session.update, {
+          sessionId,
+          update: {
+            sessionUpdate: "tool_call_update",
+            toolCallId: "call-1",
+            status: result.isError ? "failed" : "completed",
+            content: [{ type: "content", content: { type: "text", text } }],
+          },
+        });
+        // Agents may still say something about a call they finished,
+        // even in the middle of a reply.
+        await say(sessionId, "agent_message_chunk", "Tool said: ");
+        await connection.notify(acp.methods.client.session.update, {
+          sessionId,
+          update: {
+            sessionUpdate: "tool_call_update",
+            toolCallId: "call-1",
+            title: "Called it",
+          },
+        });
+        await say(sessionId, "agent_message_chunk", text);
+        return { stopReason: "end_turn" };
+      }
+      if (words.includes("[[permission")) {
+        const alwaysOnly = words.includes("[[permission always-only]]");
+        const noRejectOnce = words.includes("[[permission no-reject-once]]");
+        const { outcome } = await connection.request(
+          acp.methods.client.session.requestPermission,
+          {
             sessionId,
             toolCall: {
               toolCallId: "call-2",
@@ -294,82 +294,105 @@ new acp.AgentSideConnection(
                   }
                 : { optionId: "deny", kind: "reject_once", name: "Deny" },
             ],
-          });
-          await say(
-            sessionId,
-            "agent_message_chunk",
-            `Permission: ${outcome.outcome === "selected" ? outcome.optionId : "cancelled"}`,
-          );
-          return { stopReason: "end_turn" };
+          },
+        );
+        await say(
+          sessionId,
+          "agent_message_chunk",
+          `Permission: ${outcome.outcome === "selected" ? outcome.optionId : "cancelled"}`,
+        );
+        return { stopReason: "end_turn" };
+      }
+      if (words.includes("[[hang")) {
+        if (process.env.TEST_AGENT_STUBBORN === "1") {
+          const sleeper = spawn("sleep", ["60"], { stdio: "ignore" });
+          write({ ...read(), sleeper: sleeper.pid });
         }
-        if (words.includes("[[hang")) {
-          if (process.env.TEST_AGENT_STUBBORN === "1") {
-            const sleeper = spawn("sleep", ["60"], { stdio: "ignore" });
-            write({ ...read(), sleeper: sleeper.pid });
-          }
-          await say(sessionId, "agent_message_chunk", "Working");
-          await new Promise((resolve) => {
-            cancel = resolve;
-          });
-          if (words.includes("[[hang then ask]]")) {
-            // Asked after the cancel, as an agent mid-step might.
-            const { outcome } = await connection.requestPermission({
+        await say(sessionId, "agent_message_chunk", "Working");
+        await new Promise((resolve) => {
+          cancel = resolve;
+        });
+        if (words.includes("[[hang then ask]]")) {
+          // Asked after the cancel, as an agent mid-step might.
+          const { outcome } = await connection.request(
+            acp.methods.client.session.requestPermission,
+            {
               sessionId,
               toolCall: { toolCallId: "call-3", title: "one more thing" },
               options: [
                 { optionId: "allow_once", kind: "allow_once", name: "Allow" },
               ],
-            });
-            write({ ...read(), askedAfterCancel: outcome.outcome });
-          }
-          return { stopReason: "cancelled" };
-        }
-        if (words.includes("[[model]]")) {
-          const provider = read().providers?.main;
-          const base = provider?.baseUrl ?? process.env.WORK_MODEL_BASE_URL;
-          const headers = provider?.headers ?? {
-            authorization: `Bearer ${process.env.WORK_MODEL_API_KEY}`,
-          };
-          const answer = await fetch(`${base}/chat/completions`, {
-            method: "POST",
-            headers: { "content-type": "application/json", ...headers },
-            body: JSON.stringify({
-              model: session.model ?? process.env.WORK_MODEL ?? "unset",
-              messages: [{ role: "user", content: words }],
-            }),
-          });
-          const json = await answer.json();
-          await say(
-            sessionId,
-            "agent_message_chunk",
-            `Model said (${answer.status}): ${json.choices?.[0]?.message?.content ?? JSON.stringify(json)}`,
+            },
           );
-          return { stopReason: "end_turn" };
+          write({ ...read(), askedAfterCancel: outcome.outcome });
         }
-        if (words.includes("[[where]]")) {
-          await say(
-            sessionId,
-            "agent_message_chunk",
-            process.env.WORK_MODEL_BASE_URL ?? "nowhere",
-          );
-          return { stopReason: "end_turn" };
-        }
-        if (words.includes("[[recall]]")) {
-          await say(
-            sessionId,
-            "agent_message_chunk",
-            `Turn ${session.prompts.length}`,
-          );
-          return { stopReason: "end_turn" };
-        }
-        await say(sessionId, "agent_message_chunk", "Echo: ");
-        await say(sessionId, "agent_message_chunk", words);
+        return { stopReason: "cancelled" };
+      }
+      if (words.includes("[[model]]")) {
+        const provider = read().providers?.main;
+        const base = provider?.baseUrl ?? process.env.WORK_MODEL_BASE_URL;
+        const headers = provider?.headers ?? {
+          authorization: `Bearer ${process.env.WORK_MODEL_API_KEY}`,
+        };
+        const answer = await fetch(`${base}/chat/completions`, {
+          method: "POST",
+          headers: { "content-type": "application/json", ...headers },
+          body: JSON.stringify({
+            model: session.model ?? process.env.WORK_MODEL ?? "unset",
+            messages: [{ role: "user", content: words }],
+          }),
+        });
+        const json = await answer.json();
+        await say(
+          sessionId,
+          "agent_message_chunk",
+          `Model said (${answer.status}): ${json.choices?.[0]?.message?.content ?? JSON.stringify(json)}`,
+        );
         return { stopReason: "end_turn" };
-      },
-    };
-  },
+      }
+      if (words.includes("[[where]]")) {
+        await say(
+          sessionId,
+          "agent_message_chunk",
+          process.env.WORK_MODEL_BASE_URL ?? "nowhere",
+        );
+        return { stopReason: "end_turn" };
+      }
+      if (words.includes("[[recall]]")) {
+        await say(
+          sessionId,
+          "agent_message_chunk",
+          `Turn ${session.prompts.length}`,
+        );
+        return { stopReason: "end_turn" };
+      }
+      await say(sessionId, "agent_message_chunk", "Echo: ");
+      await say(sessionId, "agent_message_chunk", words);
+      return { stopReason: "end_turn" };
+    },
+  };
+})();
+const app = acp.agent();
+for (const [name, method] of Object.entries({
+  initialize: acp.methods.agent.initialize,
+  authenticate: acp.methods.agent.authenticate,
+  unstable_listProviders: acp.methods.agent.providers.list,
+  unstable_setProvider: acp.methods.agent.providers.set,
+  unstable_disableProvider: acp.methods.agent.providers.disable,
+  setSessionConfigOption: acp.methods.agent.session.setConfigOption,
+  newSession: acp.methods.agent.session.new,
+  resumeSession: acp.methods.agent.session.resume,
+  loadSession: acp.methods.agent.session.load,
+  listSessions: acp.methods.agent.session.list,
+  prompt: acp.methods.agent.session.prompt,
+}))
+  app.onRequest(method, ({ params }) => handlers[name](params));
+app.onNotification(acp.methods.agent.session.cancel, ({ params }) =>
+  handlers.cancel(params),
+);
+connection = app.connect(
   acp.ndJsonStream(
     Writable.toWeb(process.stdout),
     Readable.toWeb(process.stdin),
   ),
-);
+).client;

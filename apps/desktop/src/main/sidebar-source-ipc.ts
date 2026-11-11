@@ -279,6 +279,8 @@ export function registerSidebarSources(deps: {
   toolchain: () => Promise<Record<string, string>>;
   /** The profile's record of what the person approved code to reach. */
   approvals: (profileId: string) => CodeApprovals;
+  /** Re-read authenticated services after a successful explicit recovery. */
+  approvalsRecovered?: (input: { profileId: string }) => Promise<void>;
   /** Where modules keep a home and a temp folder of their own. */
   scratchRoot: string;
   /** A throwaway E2E profile where Work cannot confine modules (Linux CI). */
@@ -539,22 +541,34 @@ export function registerSidebarSources(deps: {
       declaration: declared,
     });
     const approvals = deps.approvals(profileId);
-    // A module that declares nothing needs no answer, and no keychain.
-    const beyond = isEmptyAccess(declared.access)
-      ? {}
-      : accessBeyond(await approvals.approved(subject), declared.access);
-    const ask: ModuleAccessRequest | null = isEmptyAccess(beyond)
-      ? null
-      : {
-          module,
-          beyond: describeModuleAccess({ access: beyond, projectRoot: root }),
-          all: describeModuleAccess({
-            access: declared.access,
-            projectRoot: root,
-          }),
-          network: Boolean(declared.access.hosts?.length),
-          fingerprint: accessText(declared.access),
-        };
+    // Identity and the declaration resolve without reading saved approvals:
+    // Allow must reach its validated mutation even after a dismissed unlock.
+    const accessRequest = async (
+      retryUnlock = false,
+    ): Promise<ModuleAccessRequest | null> => {
+      // A module that declares nothing needs no answer, and no keychain.
+      const beyond = isEmptyAccess(declared.access)
+        ? {}
+        : accessBeyond(
+            await approvals.approved(subject, {
+              refresh: retryUnlock,
+              retryUnlock,
+            }),
+            declared.access,
+          );
+      return isEmptyAccess(beyond)
+        ? null
+        : {
+            module,
+            beyond: describeModuleAccess({ access: beyond, projectRoot: root }),
+            all: describeModuleAccess({
+              access: declared.access,
+              projectRoot: root,
+            }),
+            network: Boolean(declared.access.hosts?.length),
+            fingerprint: accessText(declared.access),
+          };
+    };
     const key = JSON.stringify([
       profileId,
       input.projectId,
@@ -632,7 +646,7 @@ export function registerSidebarSources(deps: {
       runtime = created;
       runtimes.set(key, created);
     }
-    return { runtime, profileId, subject, declared, ask, modulePath };
+    return { runtime, profileId, subject, declared, accessRequest, modulePath };
   };
   ipcMain.handle(
     "catamorphic:sidebar-source-request",
@@ -649,8 +663,15 @@ export function registerSidebarSources(deps: {
       } = { cancelled: false };
       requests.set(key, request);
       try {
-        const { runtime, ask, profileId, modulePath, subject, declared } =
-          await resolve(event, input);
+        const {
+          runtime,
+          accessRequest,
+          profileId,
+          modulePath,
+          subject,
+          declared,
+        } = await resolve(event, input);
+        const ask = await accessRequest();
         if (request.cancelled || event.sender.isDestroyed())
           throw new Error("Sidebar request cancelled.");
         // A module wanting more than the person allowed does not run: its
@@ -710,6 +731,21 @@ export function registerSidebarSources(deps: {
       }
     },
   );
+  ipcMain.handle(
+    "catamorphic:sidebar-source-retry",
+    async (event, raw: unknown) => {
+      if (event.sender.getType() !== "window")
+        throw new Error("Only Work can retry a module.");
+      const { runtime, accessRequest, profileId } = await resolve(
+        event,
+        identity.parse(raw),
+      );
+      // Only the person's Retry action resets a dismissed system unlock.
+      await accessRequest(true);
+      await deps.approvalsRecovered?.({ profileId });
+      runtime.reload();
+    },
+  );
   // The person allowed what the module's section showed them (ADR 0277).
   ipcMain.handle(
     "catamorphic:sidebar-source-allow",
@@ -729,6 +765,7 @@ export function registerSidebarSources(deps: {
           "This module's access changed while you looked at it. Check it again.",
         );
       await deps.approvals(profileId).approve(subject, declared.access);
+      await deps.approvalsRecovered?.({ profileId });
       runtime.reload();
     },
   );
@@ -803,6 +840,7 @@ export function registerSidebarSources(deps: {
     for (const suffix of [
       "request",
       "allow",
+      "retry",
       "cancel",
       "subscribe",
       "unsubscribe",

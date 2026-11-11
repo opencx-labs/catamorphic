@@ -318,12 +318,18 @@ function SourceView({
     [root.ids, collection, hidden, revision],
   );
   useSidebarItemCount(roots.length);
-  const refresh = useCallback(() => {
+  const refresh = useCallback(async () => {
     setSubscriptionError(undefined);
     setActionError(undefined);
+    try {
+      await source.retry?.();
+    } catch (cause) {
+      setSubscriptionError(failure(cause).message);
+      return;
+    }
     if (!awaitingSession) return collection.load();
     return sessionId ? refetchSession() : undefined;
-  }, [collection, awaitingSession, sessionId, refetchSession]);
+  }, [source, collection, awaitingSession, sessionId, refetchSession]);
   useSidebarRefresh(refresh);
   // A module that wants more than the person allowed is not running; its
   // section shows Work's request (ADR 0277).

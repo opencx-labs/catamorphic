@@ -6,21 +6,40 @@ import {
   SpanStatusCode,
   trace,
 } from "@opentelemetry/api";
+import { AsyncLocalStorageContextManager } from "@opentelemetry/context-async-hooks";
+import {
+  CompositePropagator,
+  W3CBaggagePropagator,
+  W3CTraceContextPropagator,
+} from "@opentelemetry/core";
 import {
   InMemorySpanExporter,
-  NodeTracerProvider,
   SimpleSpanProcessor,
-} from "@opentelemetry/sdk-trace-node";
+  TracerProvider,
+} from "@opentelemetry/sdk-trace";
 import Fastify from "fastify";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { attachIdentity } from "../http-identity.js";
 import { instrumentHttpServer } from "../telemetry.js";
 
 const exporter = new InMemorySpanExporter();
-const provider = new NodeTracerProvider({
-  spanProcessors: [new SimpleSpanProcessor(exporter)],
+const provider = new TracerProvider({
+  spanProcessors: [new SimpleSpanProcessor({ exporter })],
 });
-beforeAll(() => provider.register());
+beforeAll(() => {
+  trace.setGlobalTracerProvider(provider);
+  context.setGlobalContextManager(
+    new AsyncLocalStorageContextManager().enable(),
+  );
+  propagation.setGlobalPropagator(
+    new CompositePropagator({
+      propagators: [
+        new W3CTraceContextPropagator(),
+        new W3CBaggagePropagator(),
+      ],
+    }),
+  );
+});
 afterAll(async () => {
   await provider.shutdown();
   trace.disable();

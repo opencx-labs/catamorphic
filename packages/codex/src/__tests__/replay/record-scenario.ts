@@ -192,7 +192,7 @@ async function stream(
     },
   ];
   const after: SseEvent[] = [];
-  const holds = Boolean(plan.pauseMs || plan.hang);
+  const holds = Boolean(plan.pauseMs || plan.hang || plan.disconnect);
   let held = false;
   const output: Record<string, unknown>[] = [];
   plan.items.forEach((item, index) => {
@@ -309,5 +309,9 @@ async function stream(
   }
   if (plan.pauseMs)
     await new Promise((resolve) => setTimeout(resolve, plan.pauseMs));
+  if (plan.disconnect) {
+    res.destroy();
+    return;
+  }
   res.end(sse(after));
 }

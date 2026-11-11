@@ -45,6 +45,11 @@ Codex's structured questions (`request_user_input`), command, file and
 permission approvals, and MCP elicitations are runtime requests. A steer is
 `turn/steer` into the running turn; an interrupt is `turn/interrupt`.
 
+Streamed messages become completed replies only when Codex completes the item.
+A native retry may abandon a draft without completing it; a replacement in the
+same thread withdraws that draft. Its deltas remain in the event log. Failed or
+interrupted turns retain partial prose, and child threads keep their own drafts.
+
 Native state is the thread's rollout file (`nativeState: "file"`): the
 adapter mirrors its new lines to Work as they appear, restores them into a
 fresh `CODEX_HOME` to resume elsewhere, and keeps a fork's ancestors'

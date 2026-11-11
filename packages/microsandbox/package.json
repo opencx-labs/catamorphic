@@ -26,10 +26,10 @@
     "@catamorphic/runtime": "workspace:*",
     "@catamorphic/sandbox": "workspace:*",
     "@catamorphic/workflow": "workspace:*",
-    "microsandbox": "0.7.2"
+    "microsandbox": "0.7.14"
   },
   "devDependencies": {
-    "@types/node": "^26.1.1"
+    "@types/node": "^26.6.6"
   },
   "license": "Apache-2.0",
   "repository": {

@@ -372,6 +372,9 @@ function entriesOf(
         break;
       }
       case "assistant_message":
+        // A harness can withdraw an abandoned streaming draft. Its deltas
+        // remain in the event log; it leaves no empty response in the chat.
+        if (item.status === "cancelled" && item.text === "") break;
         entries.push({ kind: "reply", item, steps });
         steps = [];
         break;

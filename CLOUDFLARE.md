@@ -1,323 +1,195 @@
 # Cloudflare integration
 
-How Catamorphic uses Cloudflare for workflow sandboxing and Git code storage, and how to provision both for development and production.
+Catamorphic hosts can use Cloudflare for sandbox execution and Git origins.
+These are independent injected backends. The Work desktop is the reference host;
+libraries do not select a provider by reading environment variables.
 
-Related: [`AGENTS.md`](./AGENTS.md), [`packages/cloudflare/README.md`](packages/cloudflare/README.md).
+Related: [INTEGRATION.md](INTEGRATION.md),
+[bridge package](packages/cloudflare-sandbox-bridge/README.md),
+[ADR 0310](docs/decisions/0310-cloudflare-sandboxes-use-native-containers.md).
 
----
+## Execution architecture
 
-> **Cloudflare-first execution.** Cloudflare Sandbox is the default execution provider and ships in **`@catamorphic/cloudflare`** (see ADRs 0004 and 0008). Until Artifacts is generally available, S3-compatible storage from **`@catamorphic/s3`** (including Cloudflare R2) is the default git origin; `ArtifactsRemoteBackend` remains the preferred Cloudflare-native option. Hosts construct every backend explicitly. The desktop app's embedded server (`apps/desktop/src/main/server/boot.ts`) is the in-repo reference wiring.
-
----
-
-## TL;DR
-
-- **Sandbox provider (default)**: [Cloudflare Sandbox](https://developers.cloudflare.com/sandbox/) — isolated VM per deployment — accessed through a thin Worker we deploy called the **Sandbox Bridge**. `CloudflareSandboxProvider` in `@catamorphic/cloudflare`.
-- **Git code storage**: [Cloudflare Artifacts](https://developers.cloudflare.com/artifacts/) — versioned repos with a Git-compatible HTTPS remote — `ArtifactsRemoteBackend` in `@catamorphic/cloudflare` (REST + [`isomorphic-git`](https://isomorphic-git.org/)). Requires the Artifacts closed beta; hosts fall back to filesystem remotes until access is granted. Artifacts origins do not keep members' drafts (ADR 0191): sandbox clone tokens read every ref of the repository, so hosts that let members draft on the server use an object-store (R2, S3, Postgres) or bare-repository origin.
-- **Worker deploy**: `wrangler deploy` to Cloudflare's edge — nothing to self-host.
-- **Fastify host**: unchanged — runs on your existing container platform and calls the Bridge Worker over HTTPS when the Cloudflare path is selected.
-
----
-
-## Why these decisions
-
-### Why Cloudflare Sandbox
-
-- True VM-level isolation per sandbox (CPU, memory, disk), not shell-level.
-- Built-in lazy start, idle shutdown, and Active-CPU billing fits workflow-run workloads (bursty, mostly idle).
-- Same auth surface as Artifacts, Workers, Durable Objects — one vendor for execution + storage.
-
-### Why a Worker is required (no direct Node integration)
-
-Cloudflare is explicit ([Sandbox bridge docs](https://developers.cloudflare.com/sandbox/bridge/)):
-
-> "The Sandbox SDK is designed for use within Cloudflare Workers. If your application runs outside of the Workers ecosystem, it cannot interact with sandboxes directly."
-
-Concrete reasons it cannot live inside the Fastify process:
-
-- `getSandbox(env.Sandbox, id)` requires a **Durable Object binding**, a Workers-runtime construct with no Node polyfill.
-- `workerd` (Cloudflare's open-source Workers runtime) can run DOs locally but **does not include Containers**. Self-host runtimes omit them too.
-- Containers are a proprietary service — they only run on Cloudflare's edge.
-
-So we accept one Worker and keep it tiny: the Bridge exists only to translate HTTP calls into Sandbox SDK operations.
-
-### Why one shared Worker, not a sidecar per Fastify replica
-
-- Workers run on Cloudflare's edge, so a "local sidecar" isn't possible.
-- Sandboxes are keyed by id **across the whole account**. Two sidecars calling `getSandbox(env, "deploy-abc")` resolve to the same underlying VM anyway.
-- One Worker per environment (`dev`, `prod`) is the right granularity. All Fastify replicas talk to the same Worker URL.
-
-### Why `isomorphic-git` (not native `git` CLI) for Artifacts
-
-- Pure JS — no `git` binary dependency in the server image or CI runners.
-- Same library Cloudflare recommends inside Workers, so logic is portable if we ever move it behind the Bridge.
-- Node gives us a real filesystem, so we use `isomorphic-git/http/node` against a local working directory (no MemoryFS needed).
-
-### Why `instance_type` is not configurable per project
-
-Workflows in the same deployment share the same code and trust boundary, so per-deployment sizing is enough — a fixed instance type, set once in the Bridge Worker's `wrangler.jsonc`, covers every workflow inside that deployment.
-
-Making it configurable means a new column on `projects`, propagation through the API → Fastify → Bridge, and UX to set it. The rest of the product doesn't yet surface "how big should this be" anywhere; adding that knob before we have a workload that outgrows `lite` creates a speculative dimension in the schema.
-
-When we see real workflows that hit memory/CPU caps on `lite`, the cheapest fix is to raise the global default. Per-project defaults + a per-deployment override are the next step after that if sizing turns out to be workload-specific.
-
-### Why one sandbox per deployment (no multi-VM fan-out)
-
-Cloudflare Sandboxes don't have built-in load-based autoscaling. Distributing runs across more than one VM means the **application** picks distinct `getSandbox` ids (per-run id, shard pool, etc.) and operates a dispatcher. Cloudflare's [Scaling and Routing](https://developers.cloudflare.com/containers/platform-details/scaling-and-routing/) docs describe only fixed-N `getRandom` today and call built-in autoscaling a roadmap item.
-
-One sandbox per `(projectId, commitSha)` matches how we already reason about immutable deployments (`SandboxManagerImpl.ensureExecSandbox`): a deployment is the artifact, and the sandbox is its execution environment. With Active-CPU billing, an idle-but-present sandbox is cheap, so "always-on per deployment" isn't a cost problem either.
-
-What this gives up is **parallelism per deployment**: concurrent runs of the same deployment share CPU/RAM and filesystem side effects inside one VM. That stays acceptable until we need either (a) hard blast-radius isolation between runs of the same deployment or (b) throughput that exceeds one VM's caps. The answer at that point is **many VMs per deployment** (shard pool or per-run sandboxes with a queue/dispatcher) — never more sessions inside one VM, which don't partition CPU/RAM at all ([Sandbox sessions](https://developers.cloudflare.com/sandbox/concepts/sessions/)).
-
----
-
-## Architecture
+`CloudflareSandboxProvider` in `@catamorphic/cloudflare` is an HTTP client. A
+Worker in `packages/cloudflare-sandbox-bridge` authenticates those requests and
+addresses a `NativeSandbox` Durable Object by the host's opaque sandbox id. That object
+starts and operates its native `ctx.container`. `@cloudflare/sandbox` 1.x supplies
+file operations through the matching `sandbox-shim` in the container image.
 
 ```mermaid
 flowchart LR
-  subgraph ours [Catamorphic hosted]
-    fastify[Fastify API Node]
-    pg[(Postgres)]
-  end
-  subgraph cf [Cloudflare managed]
-    bridge[Sandbox Bridge Worker]
-    sandbox[Sandbox DO and Container]
-    artifactsREST[Artifacts REST]
-    artifactsGit[Artifacts Git HTTPS]
-  end
-
-  fastify <--> pg
-  fastify -->|HTTPS SANDBOX_API_KEY| bridge
-  bridge -->|DO binding| sandbox
-  fastify -->|Bearer CLOUDFLARE_API_TOKEN| artifactsREST
-  fastify -->|isomorphic-git Bearer token| artifactsGit
-  sandbox -->|dev checkout clone only| artifactsGit
+  host[Host and execution worker] -->|Shared bearer over HTTPS| bridge[Sandbox Bridge Worker]
+  bridge -->|New Durable Object namespace| sandbox[NativeSandbox Durable Object]
+  sandbox -->|Native container API| container[Isolated container]
+  host -->|Storage backend| origin[Git origin]
 ```
 
-### How a production Run executes
-
-1. The Runs service resolves deployed `origin/main`, creates one canonical Run row, and enqueues Postgres work.
-2. An explicitly started host execution worker claims the job and resolves the immutable deployment artifact.
-3. Core reads the committed capability source under `.work/`, excludes `app-data/`, and uploads the verified execution snapshot. Deployment runtimes never clone the full imported repository (ADR 0142).
-4. `CloudflareSandboxProvider` creates or reuses the deployment-scoped sandbox through the Bridge Worker and materializes the immutable artifact.
-5. A warm Bun supervisor dispatches plain Workflow execution, boundary callbacks, or batch source/process/sink operations in isolated Bun Workers.
-6. Sequenced runtime events update `workflow_runs` and supporting state. Postgres schedules retries, pauses, child Runs, and subsequent scopes; the deployment sandbox may sleep between invocations.
-
-Dev sandboxes (coding-agent sessions) need the complete editable checkout. They may clone with short-lived credentials when the working copy matches the origin, or receive uploaded working files through `SandboxManager.ensureDevSandbox({ cloneSource? })`.
-
-The `RemoteBackend` interface isolates the paths — swapping filesystem remotes for `ArtifactsRemoteBackend` does not change the provider/executor contract; `getCloneSource()` is an optional capability.
-
----
-
-## Monorepo layout
-
-- `packages/cloudflare-sandbox-bridge/` — the Bridge Worker (deployed to Cloudflare). Contains `wrangler.jsonc`, `Dockerfile` (extends `cloudflare/sandbox` base), and a thin Worker entry that re-exports the `Sandbox` + `WarmPool` Durable Objects and delegates all routing to `@cloudflare/sandbox/bridge`.
-- `packages/cloudflare/src/sandbox-provider.ts` — `CloudflareSandboxProvider` implementing `SandboxProvider` as an HTTP client against the Bridge Worker.
-- `packages/cloudflare/src/artifacts-client.ts` — `ArtifactsClient`, a minimal REST client for the Artifacts API (create/get/delete repos, mint scoped short-lived tokens).
-- `packages/cloudflare/src/artifacts-remote-backend.ts` — `ArtifactsRemoteBackend` implementing `RemoteBackend` (+ `getCloneSource()`) via Artifacts REST + `isomorphic-git` over a local bare mirror.
-
----
-
-## Environment variables
-
-### Where to put `.env` values in this repo
-
-We use `.env` files (not `.env.local`) in this setup:
-
-| File | Purpose | Required keys |
-| --- | --- | --- |
-| Host app `.env` | Primary env source — catamorphic is embed-only, so the host process owns these | `CLOUDFLARE_SANDBOX_API_URL`, `CLOUDFLARE_SANDBOX_API_KEY` |
-
-> For workflow execution, the Cloudflare sandbox vars must be present in the **host process environment** (catamorphic runs in-process inside the host).
-
-### Runtime (host app / Fastify server)
-
-| Variable | Purpose | Scope |
-| --- | --- | --- |
-| `CLOUDFLARE_ACCOUNT_ID` | Identifies the CF account for REST + Git URLs | Both |
-| `CLOUDFLARE_API_TOKEN` | Auth for Artifacts REST (create repo + mint tokens) | Both |
-| `CLOUDFLARE_ARTIFACTS_NAMESPACE` | Namespace grouping repos (e.g. `catamorphic-dev`, `catamorphic-prod`) | Both |
-| `CLOUDFLARE_SANDBOX_API_URL` | URL of the deployed Bridge Worker (`http://localhost:8787` in dev) | Both |
-| `CLOUDFLARE_SANDBOX_API_KEY` | Shared bearer key between server and Bridge Worker | Both |
-
-### Bridge Worker (deploy-time, not Fastify's runtime env)
-
-| Variable | Purpose | Where |
-| --- | --- | --- |
-| `CLOUDFLARE_API_TOKEN` | Used by `wrangler deploy` to publish the Worker + container image | CI / dev machine |
-| `SANDBOX_API_KEY` (Worker secret) | Bridge's secret for authenticating inbound HTTPS from Fastify | `wrangler secret put` |
-
-> The Bridge's `SANDBOX_API_KEY` must equal Fastify's `CLOUDFLARE_SANDBOX_API_KEY`.
-
----
-
-## Provisioning Cloudflare
-
-### Prerequisites
-
-- A Cloudflare account on the **Workers Paid** plan (required for Containers — [pricing](https://workers.cloudflare.com/product/containers)).
-- The **Containers / Sandbox beta** enabled on the account (request via the Cloudflare dashboard if not visible).
-- Docker Desktop installed locally (required for `wrangler dev` and for building the container image).
-- `bun` + `wrangler` installed (`bun add -g wrangler` or use the pinned version in the monorepo).
-
-### Find your account ID
-
-Two ways:
-
-- **CLI**: after `wrangler login` or with `CLOUDFLARE_API_TOKEN` exported, run `bunx wrangler whoami` — it prints the account ID alongside your email.
-- **Dashboard**: any Workers / Pages page → right sidebar → **Account ID** (has a copy button).
-
-Export it:
-
-```bash
-export CLOUDFLARE_ACCOUNT_ID="<your-account-id>"
-```
-
-### Option A: `wrangler login` (easiest for dev)
-
-```bash
-bunx wrangler login
-```
-
-Opens a browser, completes OAuth, stores credentials in `~/.wrangler/`. After this, `wrangler deploy`, `wrangler dev`, `wrangler secret put`, and `wrangler artifacts` commands all work without explicit tokens.
-
-For Fastify runtime (Artifacts REST calls), you still need an API token — see Option B.
-
-### Option B: API token (required for CI; optional for local)
-
-Dashboard → **My Profile** → **API Tokens** → **Create Token** → **Create Custom Token**.
-
-Token scopes for a single "catamorphic server" token:
-
-- Account → **Workers Scripts: Edit** — covers the Worker deploy, its **Durable Object** classes + migrations, and attached **Containers**. There is no separate "Durable Objects" or "Containers" permission in the token UI — they're all rolled under Workers Scripts ([permissions reference](https://developers.cloudflare.com/fundamentals/api/reference/permissions)).
-- Account → **Artifacts: Edit** — create repos + mint scoped repo tokens.
-- (Optional) Account → **Workers Tail: Read** — needed only if you want `wrangler tail` for remote logs.
-- Account resources → include your account.
-- TTL → your call; `1 year` is a common choice for non-prod.
-
-For deploying the Bridge Worker to Cloudflare (`wrangler deploy --env dev` / `--env production`), ensure the token has at least:
-
-- Account → **Workers Scripts: Edit** (required, includes DO + Containers deployment path)
-- (Optional) Account → **Workers Tail: Read** (for `wrangler tail`)
-- Account resources scoped to the target account
-
-Save the token **immediately** — Cloudflare shows it once. Export it:
-
-```bash
-export CLOUDFLARE_API_TOKEN="<your-token>"
-```
-
-For **prod**, create a separate, narrower runtime-only token that the Fastify server carries:
-
-- Account → **Artifacts: Edit** (only).
-- A separate deploy token for CI holds the Workers / Containers / DO scopes and stays out of the Fastify runtime.
-
-### Enable Artifacts
-
-Artifacts is in private beta at the time of writing. API calls return `HTTP 403` with code `10004` ("Access denied by feature gate") until the account is approved.
-
-1. Dashboard → **Build** → **Storage & Databases** → **Artifacts** → register for the beta.
-2. Wait for approval (often near-instant for Workers Paid accounts; sometimes queued).
-3. Verify with:
-   ```bash
-   curl -sS -H "Authorization: Bearer $CLOUDFLARE_API_TOKEN" \
-     "https://api.cloudflare.com/client/v4/accounts/$CLOUDFLARE_ACCOUNT_ID/artifacts/namespaces/default/repos"
-   ```
-   Expect `HTTP 200` (possibly with an empty repo list). If still `403`, the beta hasn't been granted yet.
-
-Once public beta lands, no explicit registration is needed.
-
-### Create an Artifacts namespace (after beta approval)
-
-```bash
-bunx wrangler artifacts namespace create catamorphic-dev
-bunx wrangler artifacts namespace create catamorphic-prod
-```
-
-Export the chosen name into your shell:
-
-```bash
-export CLOUDFLARE_ARTIFACTS_NAMESPACE="catamorphic-dev"
-```
-
-### Choose a shared Bridge API key
-
-Pick any random string (e.g. `openssl rand -hex 32`). It becomes:
-
-- `CLOUDFLARE_SANDBOX_API_KEY` in the Fastify env.
-- `SANDBOX_API_KEY` as a Worker secret (see deploy below).
-
-Use a different value per environment.
-
----
-
-## Local development
-
-Goal: everything runs on your laptop. The sandbox path hits a local Worker via `workerd` + Docker and does **not** call Cloudflare's edge. Artifacts (when configured) talks to the real Cloudflare API — there is no local emulator; leave the Artifacts vars unset to use filesystem remotes instead.
-
-### 1. Install prerequisites
-
-- Docker Desktop running (Wrangler starts the sandbox container via Docker).
-- `bun install` at the repo root.
-- Postgres reachable at `DATABASE_URL` (the repo's Docker Compose brings one up).
-
-### 2. Set the shared bearer for the Bridge
-
-Copy the example and leave the default key in place for dev:
-
-```bash
-cp packages/cloudflare-sandbox-bridge/.dev.vars.example packages/cloudflare-sandbox-bridge/.dev.vars
-# SANDBOX_API_KEY=local-dev
-```
-
-### 3. Configure host env vars
-
-Root `.env` (used by the Fastify server):
-
-```env
-CLOUDFLARE_SANDBOX_API_URL=http://localhost:8787
-CLOUDFLARE_SANDBOX_API_KEY=local-dev
-```
-
-Set `S3_BUCKET` / `S3_ACCESS_KEY_ID` / `S3_SECRET_ACCESS_KEY` (and the
-provider-specific endpoint/region when needed) to use S3-compatible storage.
-Otherwise add `CLOUDFLARE_ACCOUNT_ID` / `CLOUDFLARE_API_TOKEN` /
-`CLOUDFLARE_ARTIFACTS_NAMESPACE` to use Artifacts. With neither configured, hosts
-fall back to filesystem remotes.
-
-### 4. Run the bridge
-
-The root `bun run dev` starts the bridge together with the docker-compose infra. To run the bridge on its own (e.g. against a different host app):
-
-```bash
-cd packages/cloudflare-sandbox-bridge
-bunx wrangler dev
-```
-
-This builds and starts the sandbox container image via Docker on `http://localhost:8787`. First boot takes a minute or two (image build); subsequent boots are fast.
-
-Smoke-test the bridge without leaving the shell:
-
-```bash
-curl http://localhost:8787/health
-# => {"ok":true}
-```
-
-### 5. Provider construction
-
-Backend selection is host boot code — there is no env-sniffing helper. A Cloudflare-stack host boots the pattern like this:
+The native container API requires Workers bindings, so it cannot run inside a
+Node or Bun host directly. The bridge is our own small HTTP adapter. The upstream
+1.x package has no bridge, Sandbox class or warm pool.
+
+The host's Environment and Allocation services decide placement, admission and
+cleanup. The provider creates an id lazily and starts its container on the first
+command or file operation. The selected image runs as a `lite` instance with
+Internet access. Ten minutes of inactivity stops it; destroying a sandbox stops
+it immediately. Native inactivity settings are restored after a Durable Object
+restart. Each exec has its own working directory and environment.
+
+The Wrangler configuration uses `scheduling_policy: "durable_object"` and an
+`images.sandbox.dockerfile` entry. Instance size belongs to native `start()`, not
+Wrangler's legacy `instance_type`. Native scheduling has no `max_instances`
+field. The framework's existing Allocation admission remains authoritative.
+Cloudflare cannot change the policy of an existing application or attach a
+replacement to the existing Durable Object namespace. The replacement has its
+own Worker name, `NativeSandbox` class, SQLite namespace and Container application.
+Rehearse the replacement on a staging Worker.
+
+A deployed workflow still runs an immutable artifact. Core uploads its verified
+`.work/` capability snapshot, excluding mutable `app-data/`. The command deployment
+runtime starts a Bun supervisor and sends workflow boundary and batch operations
+to it. Postgres remains authoritative for queued work, retries, pauses,
+continuations and terminal state. Coding-agent sandboxes can receive a complete
+editable checkout through the same provider contract.
+
+## Source layout
+
+| Source | Responsibility |
+| --- | --- |
+| `packages/cloudflare-sandbox-bridge/src/index.ts` | Worker entry and NativeSandbox Durable Object |
+| `packages/cloudflare-sandbox-bridge/src/bridge.ts` | Bearer authentication and sandbox routing |
+| `packages/cloudflare-sandbox-bridge/src/sandbox.ts` | Native lifecycle, exec, files and workspace hydration |
+| `packages/cloudflare-sandbox-bridge/src/process.ts` | Command process groups and native lifetime cleanup |
+| `packages/cloudflare-sandbox-bridge/wrangler.jsonc` | Bindings and native container images |
+| `packages/cloudflare-sandbox-bridge/Dockerfile` | Pinned Bun, Node and sandbox-shim image |
+| `packages/cloudflare/src/sandbox-provider.ts` | Host-side provider and SSE client |
+| `packages/cloudflare/src/artifacts-client.ts` | Artifacts REST client and short-lived Git tokens |
+| `packages/cloudflare/src/artifacts-remote-backend.ts` | Git origin backed by Artifacts |
+
+The bridge's [HTTP contract](packages/cloudflare-sandbox-bridge/README.md#http-api)
+includes create, destroy, liveness, exec, raw file IO and tar hydration. File
+uploads create their parents and replace the destination only after a complete
+upload. Exec environment values travel as native API data and never become shell
+source. GNU `timeout` owns each command's process group. A deadline or client
+disconnect kills the group, including ordinary shell descendants. Deliberately
+starting a new process session escapes that group. GNU timeout owns the deadline
+without a Worker timer. Request listeners are removed when the native process
+exits, so a later abort cannot signal it. `enable_request_signal` enables incoming
+disconnect events; the Worker explicitly forwards `signal: request.signal`
+through the Durable Object's `fetch()` boundary.
+
+## Host configuration
+
+These names are conventions for host boot code, not library configuration
+switches:
+
+| Host value | Purpose |
+| --- | --- |
+| `CLOUDFLARE_SANDBOX_API_URL` | Bridge URL, including its protocol |
+| `CLOUDFLARE_SANDBOX_API_KEY` | Shared bearer, matching the Worker's `SANDBOX_API_KEY` |
+| `CLOUDFLARE_ACCOUNT_ID` | Account used by the Artifacts client |
+| `CLOUDFLARE_API_TOKEN` | Runtime token for Artifacts operations |
+| `CLOUDFLARE_ARTIFACTS_NAMESPACE` | Artifacts repository namespace |
 
 ```ts
-import {
-  ArtifactsClient,
-  ArtifactsRemoteBackend,
-  CloudflareSandboxProvider,
-} from "@catamorphic/cloudflare";
+import { CloudflareSandboxProvider } from "@catamorphic/cloudflare";
 
 const sandboxProvider = new CloudflareSandboxProvider({
   apiUrl: process.env.CLOUDFLARE_SANDBOX_API_URL!,
   apiKey: process.env.CLOUDFLARE_SANDBOX_API_KEY,
 });
+```
+
+Construct the host's other backends independently and pass the provider to
+`createCatamorphic`. S3-compatible storage, including R2, is available through
+`@catamorphic/s3`; filesystem origins are also supported. Artifacts is optional.
+
+## Local development
+
+Use a dedicated worktree with `bun install` completed and Docker running.
+
+```sh
+cp packages/cloudflare-sandbox-bridge/.dev.vars.example packages/cloudflare-sandbox-bridge/.dev.vars
+bun run --cwd packages/cloudflare-sandbox-bridge dev
+```
+
+The example supplies `SANDBOX_API_KEY=local-dev`. The Worker builds and runs its
+container locally at `http://localhost:8787`. `bun run dev:infra` also starts the
+optional bridge; it does not change the host's selected provider.
+
+```sh
+curl http://localhost:8787/health
+```
+
+Health returns `{ "ok": true }` without authentication or a container start.
+All sandbox routes check the shared bearer. A missing key works only on a
+loopback request URL; a deployed Worker without its secret rejects sandbox
+requests with 503.
+
+Set the host's URL to `http://localhost:8787` and its key to `local-dev`, then
+construct the provider in the host. Artifacts has no local emulator. Leave its
+configuration unset for a local-only environment, and choose a filesystem or
+object-store origin in host boot code.
+
+## Deploying the Worker
+
+Cloudflare's native Durable Object container scheduling policy is in public
+beta. Deployment needs a Workers Paid account with Containers enabled and Docker
+to build the image. Use a Cloudflare deployment token scoped to the account with
+**Workers Scripts: Edit**; optionally add **Workers Tail: Read** for remote logs.
+Keep deployment credentials out of the host's runtime.
+
+Use separate keys for each environment. The default Wrangler configuration is
+production (`catamorphic-sandbox-bridge-native`); `--env dev` selects the separate
+`catamorphic-sandbox-bridge-dev-native` Worker.
+
+```sh
+cd packages/cloudflare-sandbox-bridge
+bunx wrangler secret put SANDBOX_API_KEY --env dev
+bunx wrangler deploy --env dev
+```
+
+For production, use `--env ""` to select the default configuration explicitly.
+Configure the deployed URL and the matching
+shared key in the host. Cloudflare deploys its Worker and container image;
+saving source, installing dependencies and running repository checks do not
+perform that deployment.
+
+A provider URL cutover is a maintenance operation. Keep the previous Worker
+available, stop admitting new work to it, and drain its active allocations.
+Preserve any files that cannot be rebuilt before releasing those allocations
+through the old provider. Restart the host against the replacement URL/key and
+admit fresh allocations. No container filesystem or Durable Object storage moves
+to the new namespace, and the old scheduling policy cannot provide a container
+snapshot for the transfer. Verify the replacement and that the old Worker has no
+remaining work or unique data before separately retiring the old deployment.
+
+To rotate the shared key, change the Worker secret, update the host's matching
+key and restart the host's clients. API tokens for provisioning and Artifacts
+can be rotated separately.
+
+Keep the exact `@cloudflare/sandbox` package version and the Dockerfile's
+`sandbox-shim` image tag together. Node and Bun are independently pinned in the
+image. Build images afresh after base-image security updates so containers do
+not retain an older certificate bundle or runtime.
+
+## Artifacts storage
+
+`ArtifactsClient` provisions repositories and mints short-lived Git tokens.
+`ArtifactsRemoteBackend` exposes the generic `RemoteBackend` contract and uses
+`isomorphic-git` for network Git operations. Hosts can choose it without changing
+the sandbox provider.
+
+Artifacts access depends on the account's current product entitlement. Provision
+an account-scoped runtime token with **Artifacts: Edit** and create the namespace
+through the current Cloudflare tooling. An account without access receives a
+feature-gate error; use another injected Git origin while arranging access.
+
+Artifacts origins do not retain member drafts (ADR 0191): their sandbox clone
+tokens read every ref of the repository. A host that allows members to draft on
+the server uses an object-store or bare-repository origin instead.
+
+```ts
+import { ArtifactsClient, ArtifactsRemoteBackend } from "@catamorphic/cloudflare";
 
 const remoteBackend = new ArtifactsRemoteBackend({
   client: new ArtifactsClient({
@@ -329,94 +201,34 @@ const remoteBackend = new ArtifactsRemoteBackend({
 });
 ```
 
----
+## Verification and troubleshooting
 
-## Cloudflare dev deploy (real edge worker)
+The normal repository checks exercise the host provider against the bridge's
+native-container boundary without Cloudflare credentials. Manually run the
+Worker with Docker to exercise workerd and the image together. Real Cloudflare
+integration tests are a separate, explicitly authorized operation through
+`bun run test:external`, with `CF_SANDBOX_INTEGRATION=1` and the intended bridge
+URL/key. No test should infer authorization from credentials already present.
 
-Use this when you want the bridge on Cloudflare edge (not `wrangler dev`):
-
-```bash
-cd packages/cloudflare-sandbox-bridge
-bunx wrangler secret put SANDBOX_API_KEY --env dev
-bunx wrangler deploy --env dev
-```
-
-Then set the server/runtime env values in your `.env` files:
-
-```env
-CLOUDFLARE_SANDBOX_API_URL=https://catamorphic-sandbox-bridge-dev.<subdomain>.workers.dev
-CLOUDFLARE_SANDBOX_API_KEY=<same-value-used-in-wrangler-secret-put>
-NEXT_PUBLIC_API_URL=http://localhost:8500
-```
-
-If deploy fails with `Forbidden` / authentication errors, re-check that your token has **Workers Scripts: Edit** and is scoped to the correct account.
-
-## Production setup
-
-### 1. Build + deploy the Bridge Worker
-
-```bash
-cd packages/cloudflare-sandbox-bridge
-bunx wrangler secret put SANDBOX_API_KEY --env production
-# paste the prod shared key when prompted
-bunx wrangler deploy --env production
-```
-
-This builds the container image, pushes it to Cloudflare's registry, and deploys the Worker. Note the deployed URL (e.g. `https://catamorphic-sandbox-bridge.<subdomain>.workers.dev`).
-
-### 2. Set Fastify prod env vars
-
-Configure these on the CaaS running Fastify:
-
-```env
-CLOUDFLARE_ACCOUNT_ID=<prod-account-id>
-CLOUDFLARE_API_TOKEN=<prod-runtime-only-token>   # Artifacts: Edit only
-CLOUDFLARE_ARTIFACTS_NAMESPACE=catamorphic-prod
-CLOUDFLARE_SANDBOX_API_URL=https://catamorphic-sandbox-bridge.<subdomain>.workers.dev
-CLOUDFLARE_SANDBOX_API_KEY=<same-value-as-worker-secret>
-```
-
-### 3. CI
-
-- Secrets: `CLOUDFLARE_API_TOKEN` (deploy-capable), `CLOUDFLARE_ACCOUNT_ID`.
-- Deploy step: `bunx wrangler deploy --env production` from `packages/cloudflare-sandbox-bridge`.
-- E2E secrets: same `CLOUDFLARE_*` runtime vars as Fastify, pointed at a dev or staging Bridge URL.
-
-### 4. Rotate
-
-- Rotate `SANDBOX_API_KEY`: `wrangler secret put SANDBOX_API_KEY --env production` → update `CLOUDFLARE_SANDBOX_API_KEY` on Fastify → rolling restart.
-- Rotate `CLOUDFLARE_API_TOKEN`: regenerate in dashboard → update Fastify env → rolling restart. Artifacts tokens we mint per-operation have short TTLs and don't need rotation.
-
----
-
-## Troubleshooting
-
-- **`Durable Object not found`** on first call: Bridge Worker was deployed but the DO migration tag hasn't been applied. Re-run `wrangler deploy` — Cloudflare applies pending migrations on deploy.
-- **`getSandbox` hangs**: Docker isn't running locally (dev), or the account isn't on the Workers Paid plan with Containers enabled (prod).
-- **`401` from the Artifacts Git remote**: the short-lived token expired mid-operation. `isomorphic-git`'s `onAuth` should mint a fresh token per push.
-- **`Too many subrequests`** from the Bridge Worker: enable `SANDBOX_TRANSPORT=websocket` in the Worker to coalesce sandbox RPCs into a single upgraded connection (see [Sandbox limits](https://developers.cloudflare.com/sandbox/platform/limits/)).
-- **Bridge cold start on first request**: expected. Set `sleepAfter` higher in `wrangler.jsonc` for latency-sensitive environments.
-
----
-
-## TODO
-
-- [ ] **Deploy the Bridge Worker to a real Cloudflare environment.** The package is ready (`packages/cloudflare-sandbox-bridge/`) but has only been exercised locally via `wrangler dev`. First real `wrangler deploy --env <env>` also validates the token's `Workers Scripts: Edit` scope and applies the DO migration.
-- [ ] **Register for the Artifacts private beta and create the `catamorphic-dev` / `catamorphic-prod` namespaces.** `ArtifactsRemoteBackend` is implemented and integration-tested, but until the account is approved all Artifacts REST calls return `HTTP 403` / code `10004` — the tests skip with a warning and hosts fall back to filesystem remotes. Once granted, re-run `packages/cloudflare`'s `artifacts.integration.test.ts` against the real API.
-- [ ] **Revisit `instance_type` configurability** once we have a workflow that outgrows the fixed default — either raise the global default or surface per-project defaults with a per-deployment override.
-- [ ] **Revisit multi-VM scaling** when concurrency or blast-radius requirements exceed one VM per deployment. The escalation path is shard pools or per-run sandbox ids with a dispatcher, not more sessions inside one VM.
-
----
+- **503 with `not_configured`**: configure the deployed Worker's shared secret.
+- **401 from the bridge**: its secret and the host's bearer differ.
+- **Container fails to start locally**: check Docker and the built image.
+- **Native exec fails**: check its argv, absolute working directory, timeout and
+  per-call environment. Image `WORKDIR` and start-time variables do not supply
+  exec's directory or environment, apart from the native `PATH` behavior.
+- **A file write fails in a new directory**: the bridge creates parents before
+  using `Files.writeFile`; direct `Files` consumers must do that themselves.
+- **Artifacts returns a feature-gate error**: check account access and runtime
+  token scope independently of the sandbox bridge.
 
 ## References
 
-- [Sandbox SDK overview](https://developers.cloudflare.com/sandbox/)
-- [Sandbox bridge (reference Worker)](https://developers.cloudflare.com/sandbox/bridge/)
-- [Sandbox sessions vs sandboxes](https://developers.cloudflare.com/sandbox/concepts/sessions/)
-- [Sandbox + Artifacts example](https://developers.cloudflare.com/artifacts/examples/sandbox-sdk-artifacts/)
-- [Artifacts Git protocol](https://developers.cloudflare.com/artifacts/api/git-protocol/)
-- [Artifacts Node Git client example](https://developers.cloudflare.com/artifacts/examples/git-client/)
-- [Artifacts isomorphic-git example (Workers)](https://developers.cloudflare.com/artifacts/examples/isomorphic-git/)
-- [Containers overview](https://developers.cloudflare.com/containers/)
-- [Containers scaling + routing](https://developers.cloudflare.com/containers/platform-details/scaling-and-routing/)
-- [Workerd (open-source runtime, does not include Containers)](https://github.com/cloudflare/workerd)
+- [Cloudflare Sandboxes](https://developers.cloudflare.com/sandbox/)
+- [Native scheduling migration](https://developers.cloudflare.com/containers/guides/migrate-to-durable-object-scheduling-policy/)
+- [Native process lifetime](https://developers.cloudflare.com/containers/api/durable-object-container/#process-lifetime)
+- [Command process groups](https://developers.cloudflare.com/containers/guides/execute-commands/#stop-the-processes-a-command-starts)
+- [Native command semantics](https://developers.cloudflare.com/sandbox/sdk/migrate/commands/)
+- [Native file semantics](https://developers.cloudflare.com/sandbox/sdk/migrate/files/)
+- [Bridge and warm-pool replacement](https://developers.cloudflare.com/sandbox/sdk/migrate/other-features/)
+- [Containers](https://developers.cloudflare.com/containers/)
+- [Artifacts](https://developers.cloudflare.com/artifacts/)

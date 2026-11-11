@@ -1,5 +1,6 @@
 import { execFileSync } from "node:child_process";
 import {
+  existsSync,
   mkdirSync,
   mkdtempSync,
   readdirSync,
@@ -11,7 +12,9 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import {
+  installRepositoryNode,
   repositoryNodePath,
+  repositoryNodeRelease,
   toolRuntime,
   vitestShardArguments,
 } from "./tool-runtime.js";
@@ -77,20 +80,7 @@ function workspacePackagePaths(): string[] {
 }
 
 describe("toolRuntime", () => {
-  it("finds each platform's Node in the optional package the root manifest pins", () => {
-    const manifest: unknown = JSON.parse(
-      readFileSync(path.join(repositoryRoot, "package.json"), "utf8"),
-    );
-    if (
-      typeof manifest !== "object" ||
-      manifest === null ||
-      !("optionalDependencies" in manifest) ||
-      typeof manifest.optionalDependencies !== "object" ||
-      manifest.optionalDependencies === null
-    ) {
-      throw new Error("Root package does not pin Node's platform packages");
-    }
-    const pinned = manifest.optionalDependencies;
+  it("pins an official checksum and isolated cache path for every supported platform", () => {
     for (const [platform, arch] of [
       ["darwin", "arm64"],
       ["darwin", "x64"],
@@ -102,15 +92,61 @@ describe("toolRuntime", () => {
         platform,
         arch,
       });
-      const name = path
-        .relative("/repo/node_modules", nodePath)
-        .split(path.sep)[0];
-      expect(pinned).toHaveProperty([name ?? ""], "24.22.1");
+      const release = repositoryNodeRelease({ platform, arch });
+      expect(release.url).toBe(
+        `https://nodejs.org/dist/v26.13.1/node-v26.13.1-${platform}-${arch}.tar.xz`,
+      );
+      expect(release.sha256).toMatch(/^[a-f0-9]{64}$/);
+      expect(nodePath).toBe(
+        path.join(
+          "/repo/node_modules/.cache/catamorphic-node",
+          release.name,
+          "bin/node",
+        ),
+      );
     }
-    expect("node" in pinned).toBe(false);
+    expect(() =>
+      repositoryNodeRelease({ platform: "win32", arch: "x64" }),
+    ).toThrow("Repository Node does not support win32-x64");
   });
 
-  it("selects repository Node 24.22.1 ahead of an older ambient Node", () => {
+  it("reuses a verified installed runtime without fetching", async () => {
+    const repository = temporaryDirectory();
+    const nodePath = writeFakeNode({
+      rootPath: repository,
+      version: "v26.13.1",
+    });
+    const fetchImpl = async () => {
+      throw new Error("Offline");
+    };
+    await expect(
+      installRepositoryNode({ rootPath: repository, fetchImpl }),
+    ).resolves.toBe(nodePath);
+  });
+
+  it("rejects altered download bytes before publishing or executing them", async () => {
+    const repository = temporaryDirectory();
+    const fetchImpl = async () => new Response("altered archive");
+    await expect(
+      installRepositoryNode({ rootPath: repository, fetchImpl }),
+    ).rejects.toThrow("Node archive SHA256 mismatch");
+    expect(existsSync(repositoryNodePath({ rootPath: repository }))).toBe(
+      false,
+    );
+  });
+
+  it("reports unavailable releases without publishing a runtime", async () => {
+    const repository = temporaryDirectory();
+    const fetchImpl = async () => new Response("", { status: 404 });
+    await expect(
+      installRepositoryNode({ rootPath: repository, fetchImpl }),
+    ).rejects.toThrow("Node download failed: 404");
+    expect(existsSync(repositoryNodePath({ rootPath: repository }))).toBe(
+      false,
+    );
+  });
+
+  it("selects repository Node 26.13.1 ahead of an older ambient Node", () => {
     const ambientRoot = temporaryDirectory();
     const ambientNode = writeFakeNode({
       rootPath: ambientRoot,
@@ -134,7 +170,7 @@ describe("toolRuntime", () => {
         encoding: "utf8",
         env: runtime.env,
       }).trim(),
-    ).toBe("v24.22.1");
+    ).toBe("v26.13.1");
   });
 
   it("rejects a repository Node with a different version", () => {
@@ -143,7 +179,7 @@ describe("toolRuntime", () => {
 
     expect(() =>
       toolRuntime({ rootPath: repository, env: { PATH: "/usr/bin" } }),
-    ).toThrow("Expected repository Node v24.22.1, received v24.12.0");
+    ).toThrow("Expected repository Node v26.13.1, received v24.12.0");
   });
 
   it("runs the checked-in Turbo entry point through pinned Node", () => {
@@ -162,7 +198,7 @@ describe("toolRuntime", () => {
           PATH: `${path.dirname(ambientNode)}${path.delimiter}${process.env.PATH ?? ""}`,
         },
       }).trim(),
-    ).toBe("2.10.10");
+    ).toBe("2.11.11");
   });
 
   it("routes dev infrastructure Turbo through the pinned launcher", () => {

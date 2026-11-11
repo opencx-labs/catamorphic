@@ -1,7 +1,8 @@
 import type { CatamorphicCore, Identity } from "@catamorphic/core";
 import { correlationAttributes, withTelemetryContext } from "@catamorphic/otel";
 import { context, trace } from "@opentelemetry/api";
-import { NodeTracerProvider } from "@opentelemetry/sdk-trace-node";
+import { AsyncLocalStorageContextManager } from "@opentelemetry/context-async-hooks";
+import { TracerProvider } from "@opentelemetry/sdk-trace";
 import { describe, expect, it, vi } from "vitest";
 import { Catamorphic } from "./catamorphic.js";
 import { ScopedClient } from "./scoped-client.js";
@@ -230,8 +231,11 @@ describe("Catamorphic execution lifecycle", () => {
 });
 
 it("binds identity per SDK invocation and isolates concurrent callers from ambient work", async () => {
-  const provider = new NodeTracerProvider();
-  provider.register();
+  const provider = new TracerProvider();
+  trace.setGlobalTracerProvider(provider);
+  context.setGlobalContextManager(
+    new AsyncLocalStorageContextManager().enable(),
+  );
   try {
     const { core, projects } = createCoreMock();
     projects.get.mockImplementation(async (identity: Identity) => {

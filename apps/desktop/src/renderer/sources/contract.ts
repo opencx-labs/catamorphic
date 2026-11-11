@@ -43,6 +43,8 @@ export interface SectionSource {
   access?: () => SourceAccess | null;
   /** The sentence an empty section shows when its layout gives none. */
   empty: string;
+  /** Prepare recovery only when the person explicitly retries or refreshes. */
+  retry?: () => Promise<void>;
   load: (
     request: SourceRequest & {
       parentId: string | null;

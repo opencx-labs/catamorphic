@@ -14,6 +14,7 @@ type ItemStatus = "completed" | "failed" | "cancelled";
 
 interface OpenItem {
   kind: ItemDraft["kind"];
+  parentKey?: string;
 }
 
 /**
@@ -66,7 +67,8 @@ export class CodexItems {
     } = {},
   ): void {
     this.workStarted = true;
-    if (!options.status) this.open.set(key, { kind: item.kind });
+    if (!options.status)
+      this.open.set(key, { kind: item.kind, parentKey: options.parentKey });
     const ref = options.ref === undefined ? key : options.ref;
     this.input.emit({
       type: "item.started",
@@ -108,6 +110,16 @@ export class CodexItems {
     if (!id) return;
     switch (item.type) {
       case "agentMessage":
+        // A native stream retry can abandon a message without completing it.
+        // Only the replacement is a reply; keep child threads independent.
+        for (const [key, open] of this.open) {
+          if (
+            key !== id &&
+            open.kind === "assistant_message" &&
+            open.parentKey === parentKey
+          )
+            this.completed(key, "cancelled", { text: "" });
+        }
         this.started(
           id,
           { kind: "assistant_message", text: "", agentId: null },
@@ -216,12 +228,7 @@ export class CodexItems {
     if (!id) return;
     switch (item.type) {
       case "agentMessage":
-        if (!this.open.has(id))
-          this.started(
-            id,
-            { kind: "assistant_message", text: "", agentId: null },
-            { parentKey },
-          );
+        if (!this.open.has(id)) this.itemStarted(item, parentKey);
         this.completed(id, "completed", { text: String(item.text ?? "") });
         return;
       case "reasoning": {
@@ -400,6 +407,12 @@ export class CodexItems {
   /** Close what is still open when the turn ends. */
   closeOpen(turn: "completed" | "failed" | "interrupted"): void {
     for (const [key, item] of [...this.open]) {
+      if (item.kind === "assistant_message" && turn === "completed") {
+        // A turn's success cannot confirm an unfinished message. Preserve
+        // its partial text when there was no replacement to withdraw it.
+        this.completed(key, "cancelled");
+        continue;
+      }
       this.completed(
         key,
         item.kind === "plan" || turn === "completed"

@@ -89,7 +89,7 @@ export async function installSdk(input: {
         type: "module",
         scripts: { check: "bun check --noEmit" },
         dependencies,
-        devDependencies: { "@types/bun": "1.4.3", typescript: "^7.0.2" },
+        devDependencies: { "@types/bun": "1.4.4", typescript: "^7.0.2" },
         overrides: dependencies,
       },
       null,

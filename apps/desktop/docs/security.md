@@ -45,6 +45,20 @@ broken key without first decrypting it. Legacy plaintext project-agent bindings
 must be reconnected. Test plaintext encryption is limited to unpackaged Linux
 tests with disposable profiles; it cannot enable a production fallback.
 
+Code approvals share one store per profile across foreground modules, apps and
+background services. Dismissing an approvals unlock leaves passive reads and
+service reconciliation quiet. Explicit app or module approval, trusted-host
+add/remove actions, and the existing source Retry/refresh action can retry it,
+including a valid host action that leaves the approved list unchanged.
+Module Allow validates the current package and the
+displayed access fingerprint before mutating approval records; retrying an
+unlock preserves the signing key and the existing signed records.
+After that explicit recovery, Work re-reads and authenticates skipped persistent
+services for that profile only. It merges valid missing definitions without
+replacing newer desired state, then checks current package approval before
+starting them. Passive reconciliation never retries the dismissed unlock or
+trusts a skipped definition.
+
 Distributed binaries disable Electron-as-Node, Node environment options and
 inspectors, enable cookie encryption and ASAR integrity, and restrict loading to
 the application archive. Extra `file:` privileges are disabled. Chromium remote

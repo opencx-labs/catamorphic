@@ -114,6 +114,29 @@ function fixture() {
 }
 
 describe("approved customization processes", () => {
+  it("does not replace newer desired service state during explicit profile recovery", async () => {
+    const { create, owner, state } = fixture();
+    const manager = create();
+    await manager.start(owner, {
+      key: "service",
+      command: "sleep 300",
+      lifetime: "application",
+    });
+    const older = structuredClone(state);
+    await manager.start(owner, {
+      key: "service",
+      command: "sleep 301",
+      lifetime: "application",
+    });
+    Object.assign(state, older);
+    await manager.recoverProfile({ profileId: owner.profileId });
+    expect(manager.inspect()).toHaveLength(1);
+    expect(manager.inspect()[0]).toMatchObject({
+      command: "sleep 301",
+      status: "running",
+    });
+  });
+
   it("fences a fire-and-forget start that reaches the manager after preview cleanup", async () => {
     const { create, owner } = fixture();
     const manager = create();

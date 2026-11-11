@@ -685,6 +685,35 @@ export class CustomizationProcesses {
     });
   }
   async restore() {
+    await this.mutate(() => this.restoreDefinitions({}));
+    await this.reconcile();
+    if (this.restarting) return;
+    this.restarting = setInterval(
+      () => void this.reconcile().catch(this.deps.onError ?? (() => {})),
+      5_000,
+    );
+    this.restarting.unref();
+  }
+
+  /** Re-authenticate skipped services only after this profile explicitly recovers. */
+  async recoverProfile(input: { profileId: string }): Promise<void> {
+    return withSpan(
+      {
+        tracer,
+        name: "customization.process.recover",
+        attributes: { "catamorphic.customization.profile.id": input.profileId },
+      },
+      () =>
+        this.mutate(async () => {
+          if (this.closed)
+            throw new Error("Work's background services are stopping.");
+          await this.restoreDefinitions(input);
+          await this.reconcileOwned(input);
+        }),
+    );
+  }
+
+  private async restoreDefinitions(input: { profileId?: string }) {
     for (const projectId of await this.deps.projects()) {
       const state = await this.deps.readState(projectId);
       const entries = z.array(z.unknown()).safeParse(state.value ?? []);
@@ -694,6 +723,7 @@ export class CustomizationProcesses {
         );
         continue;
       }
+      const authenticated: Array<{ id: string; desired: DesiredProcess }> = [];
       for (const raw of entries.data) {
         const signed = signedDesiredSchema.safeParse(raw);
         if (!signed.success) {
@@ -705,7 +735,9 @@ export class CustomizationProcesses {
         const desired = signed.data.definition;
         if (
           desired.owner.projectId !== projectId ||
-          desired.lifetime !== "application"
+          desired.lifetime !== "application" ||
+          (input.profileId !== undefined &&
+            desired.owner.profileId !== input.profileId)
         )
           continue;
         try {
@@ -723,61 +755,72 @@ export class CustomizationProcesses {
             desired.owner,
             "application",
           );
-          this.desired.set(
-            this.id(
-              desired.owner,
-              desired.key,
-              authority.subject,
-              desired.lifetime,
-            ),
-            desired,
+          const id = this.id(
+            desired.owner,
+            desired.key,
+            authority.subject,
+            desired.lifetime,
           );
+          if (!this.desired.has(id)) authenticated.push({ id, desired });
         } catch (error) {
           this.deps.onError?.(error);
         }
       }
+      if (!authenticated.length) continue;
+      if ((await this.deps.readState(projectId)).version !== state.version) {
+        this.deps.onError?.(
+          new Error(
+            "The background service registry changed during recovery. Retry to read its current definitions.",
+          ),
+        );
+        continue;
+      }
+      for (const { id, desired } of authenticated)
+        if (!this.desired.has(id)) this.desired.set(id, desired);
     }
-    await this.reconcile();
-    this.restarting = setInterval(
-      () => void this.reconcile().catch(this.deps.onError ?? (() => {})),
-      5_000,
-    );
-    this.restarting.unref();
   }
   private reconcile(): Promise<void> {
-    this.reconciling ??= this.mutate(async () => {
-      for (const [id, desired] of this.desired) {
-        if (this.closed) return;
-        try {
-          // Revocation or an expanded manifest stops even a running service.
-          const authority = await this.deps.authorize(
-            desired.owner,
-            "application",
-          );
-          this.blocked.delete(id);
-          const entry = this.entries.get(id);
-          if (
-            entry?.process.status === "running" &&
-            accessText(entry.access) !== accessText(authority.access)
-          )
-            await this.end(entry);
-          if (this.entries.get(id)?.process.status !== "running")
-            await this.startProvider(desired, authority.subject);
-        } catch (error) {
-          this.blocked.add(id);
-          const entry = this.entries.get(id);
-          if (entry) {
-            await this.end(entry);
-            entry.process.error =
-              error instanceof Error ? error.message : String(error);
-          }
-          this.deps.onError?.(error);
-        }
-      }
-    }).finally(() => {
-      this.reconciling = undefined;
-    });
+    this.reconciling ??= this.mutate(() => this.reconcileOwned({})).finally(
+      () => {
+        this.reconciling = undefined;
+      },
+    );
     return this.reconciling;
+  }
+  private async reconcileOwned(input: { profileId?: string }) {
+    for (const [id, desired] of this.desired) {
+      if (this.closed) return;
+      if (
+        input.profileId !== undefined &&
+        desired.owner.profileId !== input.profileId
+      )
+        continue;
+      try {
+        // Revocation or an expanded manifest stops even a running service.
+        const authority = await this.deps.authorize(
+          desired.owner,
+          "application",
+        );
+        this.blocked.delete(id);
+        const entry = this.entries.get(id);
+        if (
+          entry?.process.status === "running" &&
+          accessText(entry.access) !== accessText(authority.access)
+        )
+          await this.end(entry);
+        if (this.entries.get(id)?.process.status !== "running")
+          await this.startProvider(desired, authority.subject);
+      } catch (error) {
+        this.blocked.add(id);
+        const entry = this.entries.get(id);
+        if (entry) {
+          await this.end(entry);
+          entry.process.error =
+            error instanceof Error ? error.message : String(error);
+        }
+        this.deps.onError?.(error);
+      }
+    }
   }
   hasEnabled(): boolean {
     return [...this.desired.keys()].some((id) => !this.blocked.has(id));

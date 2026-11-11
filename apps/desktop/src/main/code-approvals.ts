@@ -41,6 +41,7 @@ const recordSchema = z.object({
  */
 export class CodeApprovals {
   private key?: Promise<Buffer>;
+  private keyFailed = false;
   private records?: CodeApproval[];
   private writing = Promise.resolve();
 
@@ -105,11 +106,18 @@ export class CodeApprovals {
       fs.rmSync(this.file, { force: true });
       return key;
     })().catch((cause: unknown) => {
-      // A keychain that refused now may answer later.
-      this.key = undefined;
+      // Refetching a passive approval query must not reopen a dismissed
+      // system password sheet. An explicit unlock or mutation can retry.
+      this.keyFailed = true;
       throw cause;
     });
     return this.key;
+  }
+
+  private retryKey(): void {
+    if (!this.keyFailed) return;
+    this.key = undefined;
+    this.keyFailed = false;
   }
 
   private mac(key: Buffer, record: CodeApproval): string {
@@ -120,15 +128,18 @@ export class CodeApprovals {
 
   private async load(): Promise<CodeApproval[]> {
     if (this.records) return this.records;
-    const key = await this.secret();
     let raw: unknown = [];
     try {
       raw = JSON.parse(fs.readFileSync(this.file, "utf8"));
     } catch {
       // None yet.
     }
+    // Reading an empty profile grants nothing and needs no signing key.
+    // Create or unlock it only when an approval actually needs it.
+    if (!Array.isArray(raw) || raw.length === 0) return [];
+    const key = await this.secret();
     const records: CodeApproval[] = [];
-    for (const entry of Array.isArray(raw) ? raw : []) {
+    for (const entry of raw) {
       const parsed = recordSchema.safeParse(entry);
       if (!parsed.success) continue;
       let access: CodeAccess;
@@ -172,9 +183,10 @@ export class CodeApprovals {
   /** What the person approved this code to reach, or null for nothing yet. */
   async approved(
     subject: string,
-    options: { refresh?: boolean } = {},
+    options: { refresh?: boolean; retryUnlock?: boolean } = {},
   ): Promise<CodeAccess | null> {
     if (options.refresh) this.records = undefined;
+    if (options.retryUnlock) this.retryKey();
     return (
       (await this.load()).find((record) => record.subject === subject)
         ?.access ?? null
@@ -202,6 +214,7 @@ export class CodeApprovals {
 
   /** Approve exactly this reach; it replaces what was approved before. */
   async approve(subject: string, access: CodeAccess): Promise<void> {
+    this.retryKey();
     const records = (await this.load()).filter(
       (record) => record.subject !== subject,
     );
@@ -209,6 +222,7 @@ export class CodeApprovals {
   }
 
   async revoke(subject: string): Promise<void> {
+    this.retryKey();
     const records = await this.load();
     if (!records.some((record) => record.subject === subject)) return;
     await this.save(records.filter((record) => record.subject !== subject));
@@ -227,24 +241,18 @@ const appSchema = z.object({
 const APP_SESSIONS: CodeAccess = { lists: ["chats"] };
 
 /**
- * Each profile's approvals, and the window's questions about apps: whether
- * one that reads the person's chats was allowed, and allowing it. Only
- * Work's own windows allow anything.
+ * One lazy store per profile, shared by foreground questions and background
+ * authorization so an explicit unlock recovers both without another prompt.
  */
-export function registerCodeApprovals({
+export function createCodeApprovals({
   profilesDir,
   keyring,
-  profileFor,
 }: {
   profilesDir: string;
   keyring: Keyring;
-  profileFor: (sender: Electron.WebContents) => string;
-}): {
-  approvalsFor: (profileId: string) => CodeApprovals;
-  dispose: () => void;
-} {
+}): (profileId: string) => CodeApprovals {
   const stores = new Map<string, CodeApprovals>();
-  const approvalsFor = (profileId: string) => {
+  return (profileId: string) => {
     let store = stores.get(profileId);
     if (!store) {
       store = new CodeApprovals({
@@ -255,6 +263,21 @@ export function registerCodeApprovals({
     }
     return store;
   };
+}
+
+/** App approval IPC uses the same stores as modules and background services. */
+export function registerCodeApprovals({
+  approvalsFor,
+  profileFor,
+  approvalsRecovered,
+}: {
+  approvalsFor: (profileId: string) => CodeApprovals;
+  profileFor: (sender: Electron.WebContents) => string;
+  approvalsRecovered?: (input: { profileId: string }) => Promise<void>;
+}): {
+  approvalsFor: (profileId: string) => CodeApprovals;
+  dispose: () => void;
+} {
   ipcMain.handle(
     "catamorphic:app-access-approved",
     async (event, raw: unknown) => {
@@ -271,10 +294,12 @@ export function registerCodeApprovals({
       if (event.sender.getType() !== "window")
         throw new Error("Only Work can allow an app's access.");
       const { projectId, app } = appSchema.parse(raw);
-      await approvalsFor(profileFor(event.sender)).approve(
+      const profileId = profileFor(event.sender);
+      await approvalsFor(profileId).approve(
         `app:${projectId}:${app}`,
         APP_SESSIONS,
       );
+      await approvalsRecovered?.({ profileId });
     },
   );
   return {

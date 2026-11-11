@@ -67,6 +67,12 @@ export function ReviewGuideDocument({
     },
   });
   const busy = chat.isSending || chat.isWorking;
+  const lastTurn = chat.timeline.at(-1)?.turn;
+  const generationError =
+    chat.error?.message ||
+    (!busy && lastTurn?.status === "failed"
+      ? lastTurn.error?.message
+      : undefined);
   const artifacts = useSessionArtifacts(projectId, sessionId || undefined, {
     refetchInterval: busy ? 2000 : 5000,
   });
@@ -164,14 +170,14 @@ export function ReviewGuideDocument({
           </button>
         )}
       </header>
-      {(chat.error ||
+      {(generationError ||
         saveError ||
         catalog.error ||
         artifacts.error ||
         build.error) && (
         <p role="alert" className="mb-4 text-sm text-danger">
           {saveError ||
-            chat.error?.message ||
+            generationError ||
             catalog.error?.message ||
             artifacts.error?.message ||
             build.error?.message}

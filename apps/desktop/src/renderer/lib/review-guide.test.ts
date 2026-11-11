@@ -20,7 +20,7 @@ describe("review navigation", () => {
       status: "renamed",
       patch: "@@ -1 +1 @@\n-before\n+after\n",
     });
-    const file = parsePatchFiles(patch, undefined, true)[0]?.files[0];
+    const file = parsePatchFiles(patch, { throwOnError: true })[0]?.files[0];
     expect(patch).toContain("rename from old name.ts");
     expect(patch).toContain("rename to new name.ts");
     expect(file?.name).toBe("new name.ts");

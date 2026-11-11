@@ -121,30 +121,20 @@ describe("CloudflareSandboxProvider", () => {
     expect(result.result).toBe("hello\nwarn\n");
   });
 
-  it("uses an isolated bridge session for command environment variables", async () => {
+  it("passes environment variables as native exec data for just that command", async () => {
     const fetchImpl = mockFetch((input, init) => {
-      const url = String(input);
-      if (url.endsWith("/session") && init?.method === "POST") {
-        expect(JSON.parse(init.body as string)).toEqual({
-          cwd: "/workspace/project",
-          env: { API_KEY: "$(not-shell-source)" },
-        });
-        return jsonResponse({ id: "session-1" });
-      }
-      if (url.endsWith("/exec")) {
-        expect(new Headers(init?.headers).get("Session-Id")).toBe("session-1");
-        const body = JSON.parse(init?.body as string) as {
-          cwd?: string;
-        };
-        expect(body.cwd).toBeUndefined();
-        return sseResponse([
-          { event: "exit", data: JSON.stringify({ exit_code: 0 }) },
-        ]);
-      }
-      if (url.endsWith("/session/session-1") && init?.method === "DELETE") {
-        return new Response(null, { status: 204 });
-      }
-      throw new Error(`Unexpected request: ${url}`);
+      expect(String(input)).toBe("http://bridge/v1/sandbox/id1/exec");
+      expect(new Headers(init?.headers).has("Session-Id")).toBe(false);
+      if (typeof init?.body !== "string")
+        throw new Error("Expected JSON exec data");
+      expect(JSON.parse(init.body)).toEqual({
+        argv: ["sh", "-lc", "bun run harness.ts"],
+        cwd: "/workspace/project",
+        env: { API_KEY: "$(not-shell-source)" },
+      });
+      return sseResponse([
+        { event: "exit", data: JSON.stringify({ exit_code: 0 }) },
+      ]);
     });
     const provider = new CloudflareSandboxProvider({
       apiUrl: "http://bridge",
@@ -157,7 +147,7 @@ describe("CloudflareSandboxProvider", () => {
     });
 
     expect(result.exitCode).toBe(0);
-    expect(fetchImpl).toHaveBeenCalledTimes(3);
+    expect(fetchImpl).toHaveBeenCalledOnce();
   });
 
   it("throws when the exec stream emits an error event", async () => {

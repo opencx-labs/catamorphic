@@ -3,7 +3,7 @@ import { randomBytes } from "node:crypto";
 import { createServer, type Server } from "node:http";
 import path from "node:path";
 import { Readable, Writable } from "node:stream";
-import * as acp from "@agentclientprotocol/sdk";
+import * as acp from "@agentclientprotocol/sdk/unstable";
 import type { JsonValue } from "@catamorphic/agent-protocol";
 import {
   type AttemptControl,
@@ -83,7 +83,7 @@ function startAttempt(
   let child: ChildProcess | undefined;
   let tools: Server | undefined;
   let model: LoopbackModel | undefined;
-  let connection: acp.ClientSideConnection | undefined;
+  let connection: acp.ClientContext | undefined;
   let sessionId: string | undefined;
   let interrupted = false;
   /** Conversation updates the agent replayed while reopening its session. */
@@ -165,14 +165,19 @@ function startAttempt(
     ];
 
     let agentName = path.basename(executable);
-    connection = new acp.ClientSideConnection(
-      () => ({
-        sessionUpdate: ({ update }) => {
+    const client = acp
+      .client()
+      .onNotification(
+        acp.methods.client.session.update,
+        ({ params: { update } }) => {
           // A reopened session's history, replayed before the turn starts.
           if (!items.live && REPLAYED.has(update.sessionUpdate)) replayed += 1;
           items.update(update);
         },
-        requestPermission: async ({ toolCall, options }) => {
+      )
+      .onRequest(
+        acp.methods.client.session.requestPermission,
+        async ({ params: { toolCall, options } }) => {
           // Asked before the agent read the cancel: nobody is left to answer.
           if (interrupted) return { outcome: { outcome: "cancelled" } };
           const withdrawn = new AbortController();
@@ -234,15 +239,16 @@ function startAttempt(
             asks.delete(withdrawn);
           }
         },
-      }),
+      );
+    connection = client.connect(
       acp.ndJsonStream(
         Writable.toWeb(spawned.stdin),
         Readable.toWeb(spawned.stdout),
       ),
-    );
+    ).agent;
 
     const initialized = await until(
-      connection.initialize({
+      connection.request(acp.methods.agent.initialize, {
         protocolVersion: acp.PROTOCOL_VERSION,
         clientCapabilities: {},
         clientInfo: { name: "work", version: "1" },
@@ -284,18 +290,22 @@ function startAttempt(
     /** The session's options as the agent last described them. */
     let options: acp.SessionConfigOption[] | null | undefined;
     if (earlier && reopen) {
-      const session = {
+      const session: acp.LoadSessionRequest = {
         sessionId: earlier,
         cwd: attempt.workingDirectory,
         mcpServers,
       };
       let loaded = false;
       try {
-        options = (
+        const restored =
           reopen === "resume"
-            ? await until(connection.resumeSession(session))
-            : await until(connection.loadSession(session))
-        )?.configOptions;
+            ? await until(
+                connection.request(acp.methods.agent.session.resume, session),
+              )
+            : await until(
+                connection.request(acp.methods.agent.session.load, session),
+              );
+        options = restored?.configOptions;
         loaded = true;
       } catch (error) {
         // Only the agent's own answer that the session is gone counts: a
@@ -343,7 +353,10 @@ function startAttempt(
     if (reopened && earlier) opened = earlier;
     else {
       const created = await until(
-        connection.newSession({ cwd: attempt.workingDirectory, mcpServers }),
+        connection.request(acp.methods.agent.session.new, {
+          cwd: attempt.workingDirectory,
+          mcpServers,
+        }),
       );
       opened = created.sessionId;
       options = created.configOptions;
@@ -355,7 +368,7 @@ function startAttempt(
       : undefined;
     if (choice?.kind === "set")
       await until(
-        connection.setSessionConfigOption({
+        connection.request(acp.methods.agent.session.setConfigOption, {
           sessionId: opened,
           configId: choice.configId,
           value: choice.value,
@@ -385,7 +398,7 @@ function startAttempt(
     host.emit({ type: "turn.started" });
     items.live = true;
     await until(
-      connection.prompt({
+      connection.request(acp.methods.agent.session.prompt, {
         sessionId: opened,
         prompt: promptBlocks({
           attempt,
@@ -445,7 +458,9 @@ function startAttempt(
       interrupted = true;
       for (const ask of asks) ask.abort();
       if (connection && sessionId)
-        void connection.cancel({ sessionId }).catch(() => {});
+        void connection
+          .notify(acp.methods.agent.session.cancel, { sessionId })
+          .catch(() => {});
       else if (child) signal({ child, name: "SIGTERM" });
       // An agent that ignores the cancel, and the stop, is killed.
       const timer = setTimeout(
@@ -465,21 +480,24 @@ function startAttempt(
  * reaches a model around the gateway's policy.
  */
 async function pointProviders(input: {
-  connection: acp.ClientSideConnection;
+  connection: acp.ClientContext;
   model: LoopbackModel;
 }): Promise<void> {
   const { connection, model } = input;
-  const { providers } = await connection.unstable_listProviders({});
+  const { providers } = await connection.request(
+    acp.methods.agent.providers.list,
+    {},
+  );
   for (const provider of providers)
     if (provider.supported.includes(model.api))
-      await connection.unstable_setProvider({
+      await connection.request(acp.methods.agent.providers.set, {
         providerId: provider.providerId,
         apiType: model.api,
         baseUrl: model.baseUrl,
         headers: loopbackModelHeaders(model),
       });
     else if (!provider.required)
-      await connection.unstable_disableProvider({
+      await connection.request(acp.methods.agent.providers.disable, {
         providerId: provider.providerId,
       });
 }
@@ -798,14 +816,17 @@ const LIST_PAGES = 10;
  * its own order, a page at a time. A failure to list is passing: it throws.
  */
 async function listsSession(input: {
-  connection: acp.ClientSideConnection;
+  connection: acp.ClientContext;
   sessionId: string;
   until: <T>(promise: Promise<T>) => Promise<T>;
 }): Promise<boolean> {
   let cursor: string | undefined;
   for (let page = 0; page < LIST_PAGES; page++) {
     const { sessions, nextCursor } = await input.until(
-      input.connection.listSessions(cursor ? { cursor } : {}),
+      input.connection.request(
+        acp.methods.agent.session.list,
+        cursor ? { cursor } : {},
+      ),
     );
     if (sessions.some((listed) => listed.sessionId === input.sessionId))
       return true;

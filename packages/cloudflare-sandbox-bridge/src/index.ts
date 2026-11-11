@@ -1,33 +1,36 @@
-/**
- * catamorphic-sandbox-bridge — Cloudflare Worker exposing the Sandbox SDK
- * as an HTTP API the Fastify server (running outside Cloudflare) can call.
- *
- * The heavy lifting lives in `@cloudflare/sandbox/bridge`; this module is a
- * thin wrapper that re-exports the `Sandbox` + `WarmPool` Durable Object
- * classes so Wrangler can wire their bindings.
- *
- * See `CLOUDFLARE.md` at the repo root for decisions + provisioning.
- */
+import { DurableObject } from "cloudflare:workers";
+import { Files } from "@cloudflare/sandbox";
+import { bridgeRequest } from "./bridge.js";
+import { INACTIVITY_TIMEOUT_MS, SandboxBridge } from "./sandbox.js";
 
-import { bridge } from "@cloudflare/sandbox/bridge";
+/** The host's sandbox id addresses this object and its native container. */
+export class NativeSandbox extends DurableObject<Env> {
+  private readonly bridge: SandboxBridge;
 
-export { Sandbox } from "@cloudflare/sandbox";
-export { WarmPool } from "@cloudflare/sandbox/bridge";
+  constructor(ctx: DurableObjectState, env: Env) {
+    super(ctx, env);
+    const container = ctx.container;
+    if (!container) throw new Error("The sandbox container is not configured.");
+    this.bridge = new SandboxBridge({ container, files: new Files(container) });
+    // Native inactivity settings do not survive a Durable Object restart.
+    if (container.running) {
+      void ctx.blockConcurrencyWhile(() =>
+        container.setInactivityTimeout(INACTIVITY_TIMEOUT_MS),
+      );
+    }
+  }
 
-export default bridge({
-  async fetch(
-    _request: Request,
-    _env: Env,
-    _ctx: ExecutionContext,
-  ): Promise<Response> {
-    return new Response("catamorphic-sandbox-bridge", { status: 200 });
+  override fetch(request: Request): Promise<Response> {
+    return this.bridge.fetch(request);
+  }
+}
+
+export default {
+  fetch(request: Request, env: Env): Promise<Response> {
+    return bridgeRequest({
+      request,
+      apiKey: env.SANDBOX_API_KEY,
+      sandboxes: env.NativeSandbox,
+    });
   },
-
-  async scheduled(
-    _controller: ScheduledController,
-    _env: Env,
-    _ctx: ExecutionContext,
-  ): Promise<void> {
-    // Pool priming runs before this handler via the bridge; nothing extra needed.
-  },
-});
+} satisfies ExportedHandler<Env>;

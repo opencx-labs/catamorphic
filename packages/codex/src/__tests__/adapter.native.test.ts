@@ -5,12 +5,85 @@ import path from "node:path";
 import type { HarnessEvent } from "@catamorphic/agent-protocol/runner";
 import { expect, it } from "vitest";
 import { createCodexAdapter } from "../adapter.js";
+import { isObject } from "../app-server.js";
 import { pinnedCodexCommand } from "../testing/pinned.js";
 import { type CodexTransport, processTransport } from "../transport.js";
 import { driveAttempt, NativeStore } from "./replay/driver.js";
 import { cleanup, eventsOf, replayScenario } from "./replay/harness.js";
 import { modelServer, recordScenario } from "./replay/record-scenario.js";
 import { attemptBase, scenario } from "./replay/scenarios.js";
+
+it("discards an abandoned streamed reply when the native CLI recovers", async () => {
+  const command = pinnedCodexCommand();
+  const partial =
+    "Yes, that answers it. Both versions receive the same inputs.";
+  const complete =
+    "Yes, that answers it. Both variants receive the same source and context.";
+  const live = await recordScenario({
+    command,
+    cliVersion: execFileSync(command, ["--version"], { encoding: "utf8" }),
+    scenario: {
+      name: "interrupted-reply-retry",
+      description:
+        "A response drops mid-message, then the CLI completes a replacement.",
+      model: [
+        { items: [{ message: partial }], pauseMs: 100, disconnect: true },
+        { items: [{ message: complete }] },
+      ],
+      attempts: [
+        {
+          build: (context) => {
+            const attempt = attemptBase(context, {
+              ordinal: 1,
+              text: "Explain the benchmark inputs",
+            });
+            return {
+              ...attempt,
+              options: {
+                ...attempt.options,
+                config: {
+                  ...(isObject(attempt.options.config)
+                    ? attempt.options.config
+                    : {}),
+                  "model_providers.work.stream_max_retries": 1,
+                },
+              },
+            };
+          },
+        },
+      ],
+    },
+  });
+  const events = live.results[0]?.events ?? [];
+  expect(events.at(-1)).toMatchObject({
+    type: "turn.completed",
+    status: "completed",
+  });
+  const replies = events.flatMap((event) =>
+    event.type === "item.started" && event.item.kind === "assistant_message"
+      ? [event.key]
+      : [],
+  );
+  expect(replies).toHaveLength(2);
+  expect(
+    events.filter(
+      (event) => event.type === "item.completed" && replies.includes(event.key),
+    ),
+  ).toEqual([
+    {
+      type: "item.completed",
+      key: replies[0],
+      status: "cancelled",
+      item: { text: "" },
+    },
+    {
+      type: "item.completed",
+      key: replies[1],
+      status: "completed",
+      item: { text: complete },
+    },
+  ]);
+}, 60_000);
 
 /** Events with the ids a fresh run allocates anew replaced. */
 function shape(events: HarnessEvent[]): unknown[] {

@@ -136,6 +136,11 @@ GIFs of anything that moves (root `AGENTS.md`, "Pull requests that change
 UI").
 
 For credential-free manual checks, use `CATAMORPHIC_E2E_FAKE_AGENT=1` when launching.
+Fake-agent credential probes never read the person's CLI homes or Keychain. Use
+`CATAMORPHIC_E2E_AGENT_CREDENTIALS` to supply a controlled sign-in fixture when
+testing missing or expired credentials. OS-encrypted manual profiles retain real
+encryption. A dismissed approvals unlock is retried only by an explicit approval
+mutation or unlock request, not by repeated background reads or cache refreshes.
 The root runner unsets `ELECTRON_RUN_AS_NODE`. Never reset user data to prepare a
 test without an explicit request. Prefer the isolated Electron harness.
 

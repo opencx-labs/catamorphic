@@ -146,6 +146,10 @@ markers and previews, and waits for file preparation before sending. Other palet
 modes retain their search textarea.
 Shift+Enter inserts a new line with either the main Return key or keypad Enter.
 Keypad line breaks use the same undo-aware contenteditable editing path.
+Caret reveals glide within the editable when typing, inserting new lines or
+moving a selection beyond its visible area. The height frames stay still while
+an overflowing draft scrolls. Manual scrolling retains control; reduced motion
+reveals the caret immediately.
 
 ## Attachment and response previews
 

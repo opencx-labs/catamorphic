@@ -1,82 +1,124 @@
 # @catamorphic/cloudflare-sandbox-bridge
 
-Thin Cloudflare Worker that exposes [Cloudflare Sandbox](https://developers.cloudflare.com/sandbox/) as an HTTP API so the host's Node/Bun process (which runs outside Workers) can create and drive sandboxes via `CloudflareSandboxProvider`.
+Cloudflare Worker exposing native container execution to a host outside Workers.
+`CloudflareSandboxProvider` in `@catamorphic/cloudflare` calls its authenticated
+HTTP API. Hosts still construct their provider explicitly.
 
-The Worker is a small wrapper around [`@cloudflare/sandbox/bridge`](https://developers.cloudflare.com/sandbox/bridge/) — all HTTP routing, auth, and pool logic lives in that package. Bumping the Sandbox SDK is the normal way to pick up upstream changes.
+The `NativeSandbox` Durable Object starts its container through `ctx.container`.
+`@cloudflare/sandbox` 1.x supplies `Files`; the matching `sandbox-shim` runs in
+our image. Routing, authentication and SSE framing live in this package.
+See [CLOUDFLARE.md](../../CLOUDFLARE.md) and
+[ADR 0310](../../docs/decisions/0310-cloudflare-sandboxes-use-native-containers.md).
 
-See [`CLOUDFLARE.md`](../../CLOUDFLARE.md) at the repo root for architectural decisions, env vars, token provisioning, and the dev / prod runbook.
+## Local development
 
-## Prerequisites
-
-- Docker Desktop running (the Sandbox SDK uses local Docker for `wrangler dev`).
-- `bun install` at the repo root.
-- A Cloudflare account on the Workers Paid plan **with the Containers / Sandbox beta enabled** (needed only for `wrangler deploy`, not for local dev).
-
-## Local dev
+Use the task's dedicated worktree with dependencies installed and Docker
+running:
 
 ```sh
-cp .dev.vars.example .dev.vars
-bun run dev
+cp packages/cloudflare-sandbox-bridge/.dev.vars.example packages/cloudflare-sandbox-bridge/.dev.vars
+bun run --cwd packages/cloudflare-sandbox-bridge dev
 ```
 
-This boots the Worker at `http://localhost:8787` and builds / runs the container image locally via Docker. If `SANDBOX_API_KEY` is unset the bridge skips auth (handy for local dev).
-
-Quick smoke test once it's up (`/health` is the one route that's always open):
+The Worker listens at `http://localhost:8787` and builds its image locally.
+`GET /health` is public and starts no container:
 
 ```sh
 curl http://localhost:8787/health
-# => {"ok":true}
 ```
 
-Every other route requires the shared bearer, which must match `SANDBOX_API_KEY` from `.dev.vars`:
+Every other route checks `Authorization: Bearer <SANDBOX_API_KEY>`.
+An unset key is accepted only when the request URL uses a loopback hostname;
+a deployed Worker without a key returns 503.
+
+Construct the provider in the host:
+
+```ts
+const sandboxProvider = new CloudflareSandboxProvider({
+  apiUrl: "http://localhost:8787",
+  apiKey: "local-dev",
+});
+```
+
+The root `bun run dev:infra` also starts the optional bridge. The reference
+hosts choose their own provider; running the bridge does not switch them.
+
+## Deployment
+
+Cloudflare's native Durable Object container scheduling policy is in public
+beta. Deployment needs a Workers Paid account with Containers enabled and a
+Docker installation to build the image. The default Wrangler configuration is
+production (`catamorphic-sandbox-bridge-native`); `--env dev` uses the separate
+`catamorphic-sandbox-bridge-dev-native` Worker. These replacement Workers own new
+Durable Object namespaces and never reuse a legacy Sandbox namespace.
 
 ```sh
-curl -H "Authorization: Bearer local-dev" http://localhost:8787/v1/openapi.html
+bunx wrangler secret put SANDBOX_API_KEY --env ""
+bunx wrangler deploy --env ""
 ```
 
-Open that URL in a browser (with a bearer-injecting extension, or by calling the bridge behind Fastify) to explore all routes interactively.
+Pass the deployed URL and the same key to `CloudflareSandboxProvider` in the
+host. Deployments are explicit operations, separate from installing packages or
+running checks. Cloudflare cannot change an existing Container application's
+scheduling policy or attach the replacement to its Durable Object namespace.
+Keep the previous Worker available while draining its allocations. Preserve files
+that cannot be rebuilt, release allocations through the old provider, then
+restart the host against the new URL/key and admit fresh allocations. Container
+files, snapshots and Durable Object storage do not transfer between namespaces.
+Retire the old Worker only after verifying it has no work or unique data left.
 
-## Running alongside the rest of the stack
+## Container lifecycle
 
-The repo-root `bun run dev` starts the desktop and stock-server manual
-environment; `bun run dev:infra` starts optional shared infrastructure,
-including this bridge. To pair the bridge with another host app, start it on
-its own (`bun run dev` in this package), then construct
-`new CloudflareSandboxProvider({ apiUrl, apiKey })` in that host's boot code.
-See [`CLOUDFLARE.md`](../../CLOUDFLARE.md) and
-`apps/desktop/src/main/server/boot.ts` for the current reference wiring.
+Allocating an id starts no container. The first command or file operation
+starts the configured `sandbox` image as a `lite` instance with Internet access.
+Native exec receives its own environment and working directory on each call.
+Idle containers stop after ten minutes; the timeout is restored when the Durable
+Object restarts. Destroy stops the container immediately. Warm pools and cron
+priming are unnecessary with native scheduling.
 
-## Production deploy
+The native scheduling configuration has no `max_instances` field. The host's
+Environment and Allocation policies own work admission. Change instance sizing
+in `SandboxBridge.start`, rather than adding framework-specific project settings.
 
-One Worker per environment (`dev`, `staging`, `prod`). Every Fastify replica in that environment talks to the same Worker URL.
+## HTTP API
 
-```sh
-bunx wrangler login          # or: export CLOUDFLARE_API_TOKEN=...
-openssl rand -hex 32 | bunx wrangler secret put SANDBOX_API_KEY
-bunx wrangler deploy
-```
+| Request | Behavior |
+| --- | --- |
+| `GET /health` | Return `{ "ok": true }` without starting a container |
+| `POST /v1/sandbox` | Allocate an opaque sandbox id |
+| `DELETE /v1/sandbox/:id` | Stop the container immediately |
+| `GET /v1/sandbox/:id/running` | Return `{ "running": boolean }` without starting it |
+| `POST /v1/sandbox/:id/exec` | Run native exec and stream SSE output |
+| `PUT /v1/sandbox/:id/file/<absolute-path>` | Create parents and atomically replace a file with the raw request body |
+| `GET /v1/sandbox/:id/file/<absolute-path>` | Stream raw file bytes |
+| `POST /v1/sandbox/:id/hydrate` | Extract a streamed tar archive into `/workspace` |
 
-Set the resulting URL + the same API key as `CLOUDFLARE_SANDBOX_API_URL` and `CLOUDFLARE_SANDBOX_API_KEY` on the Fastify host.
+Exec accepts `{ argv: string[], cwd?: string, env?: Record<string, string>,
+timeout_ms?: number }`. Its default directory is `/workspace` and its default
+deadline is five minutes. Commands do not inherit variables from a previous
+command. `CloudflareSandboxProvider` passes shell commands as `sh -lc` arguments,
+with environment values kept in native exec options.
 
-## Updating the container image
+SSE `stdout` events contain base64 bytes from the combined output stream.
+An `exit` event contains `{ "exit_code": number }`; an `error` event reports
+native execution failure or cancellation. A GNU timeout deadline returns a
+nonzero exit code. Commands run under GNU `timeout`, which
+owns their process group. Deadlines and response cancellation kill the group,
+including ordinary shell descendants; a process that deliberately starts a new
+session is outside that group. GNU timeout owns the deadline without a Worker
+timer. Request listeners are removed when `exitCode` settles, before a finished
+process can receive a late signal.
+The `enable_request_signal` compatibility flag propagates disconnects through
+the Worker's call to the Durable Object's `fetch()` method. The Worker passes
+`signal: request.signal` explicitly; the compatibility flag does not imply
+automatic signal passthrough.
+File path segments are URL decoded, including scoped package names and spaces.
 
-`@cloudflare/sandbox` (npm) and `docker.io/cloudflare/sandbox` (container) are released together. When bumping:
+## Updating dependencies
 
-1. Update the version in `package.json`.
-2. Update the `FROM docker.io/cloudflare/sandbox:<tag>` pin in `Dockerfile` to match.
-3. `bun install` and `bun run dev` to verify locally.
-4. `bunx wrangler deploy` per environment.
-
-## HTTP API reference
-
-The bridge exposes the routes documented in [Cloudflare's bridge API reference](https://developers.cloudflare.com/sandbox/bridge/http-api/):
-
-- `POST /v1/sandbox` — allocate a sandbox ID.
-- `DELETE /v1/sandbox/:id` — destroy.
-- `POST /v1/sandbox/:id/exec` — run a command (SSE-streamed output).
-- `PUT /v1/sandbox/:id/file/<path>` — write a file.
-- `GET /v1/sandbox/:id/file/<path>` — read a file.
-- `POST /v1/sandbox/:id/hydrate` — bulk-populate `/workspace` from a tar archive.
-- `GET /v1/sandbox/:id/running` — liveness.
-
-`CloudflareSandboxProvider` in [`packages/cloudflare/src/sandbox-provider.ts`](../cloudflare/src/sandbox-provider.ts) is the typed client the rest of the monorepo uses.
+Keep `@cloudflare/sandbox` and the `sandbox-shim` image tag in the Dockerfile at
+the same exact version. Bun and Node in the image are pinned independently.
+The image runs `sleep infinity`; native execution needs no in-container HTTP
+control-plane server. Verify the provider and bridge together with the normal
+repository checks. Credentialed Cloudflare integration tests remain explicitly
+opt-in through `bun run test:external` and their documented environment flags.

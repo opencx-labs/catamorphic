@@ -1649,6 +1649,10 @@ const api = {
     sectionId: string;
     fingerprint: string;
   }): Promise<void> => invoke("catamorphic:sidebar-source-allow", input),
+  sidebarSourceRetry: (input: {
+    projectId: string;
+    sectionId: string;
+  }): Promise<void> => invoke("catamorphic:sidebar-source-retry", input),
   appAccessApproved: (input: {
     projectId: string;
     app: string;
