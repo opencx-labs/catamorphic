@@ -451,13 +451,36 @@ describe("configurable browser workspace", () => {
         "return !!$('aside footer button[aria-label^=\"Switch profile:\"]')",
       ),
     ).toBe(true);
-    await run("$('button[aria-label^=\"Switch profile:\"]').click()");
+    await focusWindow(app);
+    const profile = await app.waitFor<{ x: number; y: number }>(
+      `(() => {
+        ${workspaceDomHelpersJs}
+        const button=$('aside footer button[aria-label^="Switch profile:"]');
+        if(!button?.checkVisibility({opacityProperty:true,visibilityProperty:true}))return false;
+        const box=button.getBoundingClientRect(),point={x:box.x+box.width/2,y:box.y+box.height/2};
+        return button.contains(document.elementFromPoint(point.x,point.y))&&point;
+      })()`,
+      { label: "the profile switcher hit target" },
+    );
+    await app.clickPointer(profile);
+    await app.waitFor(
+      `(() => { ${workspaceDomHelpersJs}
+        return $('[role="dialog"][aria-label="Profiles"][aria-hidden="false"]')?.contains(document.activeElement);
+      })()`,
+      { label: "the profile dialog took keyboard focus" },
+    );
     expect(
       await run(
         "return $('button[aria-label^=\"Switch profile:\"]').getAttribute('aria-expanded')",
       ),
     ).toBe("true");
     await app.press("Escape");
+    await app.waitFor(
+      `(() => { ${workspaceDomHelpersJs}
+        return $('button[aria-label^="Switch profile:"]')?.getAttribute('aria-expanded')==='false';
+      })()`,
+      { label: "Escape closed the profile dialog" },
+    );
     expect(
       await run(
         "return $('button[aria-label^=\"Switch profile:\"]').getAttribute('aria-expanded')",
