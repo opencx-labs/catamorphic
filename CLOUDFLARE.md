@@ -6,7 +6,7 @@ libraries do not select a provider by reading environment variables.
 
 Related: [INTEGRATION.md](INTEGRATION.md),
 [bridge package](packages/cloudflare-sandbox-bridge/README.md),
-[ADR 0310](docs/decisions/0310-cloudflare-sandboxes-use-native-containers.md).
+[ADR 0312](docs/decisions/0312-cloudflare-sandboxes-use-native-containers.md).
 
 ## Execution architecture
 

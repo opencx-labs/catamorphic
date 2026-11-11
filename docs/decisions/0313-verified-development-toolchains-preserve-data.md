@@ -1,4 +1,4 @@
-# 0311 — Verified development toolchains preserve data
+# 0313 — Verified development toolchains preserve data
 
 - **Status:** Accepted
 - **Date:** 2026-11-11

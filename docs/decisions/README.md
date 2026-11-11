@@ -141,7 +141,7 @@ Settled design decisions live here as short Architecture Decision Records. They 
 | [0126](0126-installable-component-packs.md) | Installable component packs | Accepted (recipes and `registry.read` by 0262) |
 | [0127](0127-dock-placement-and-chat-runtime-choices.md) | Dock placement and chat runtime choices | Accepted |
 | [0128](0128-durable-manual-development-data.md) | Durable manual development data | Accepted |
-| [0129](0129-isolated-desktop-tests-and-ci-sharding.md) | Isolated desktop tests and CI sharding | Accepted; test-cache policy superseded by 0131 |
+| [0129](0129-isolated-desktop-tests-and-ci-sharding.md) | Isolated desktop tests and CI sharding | Accepted; test-cache policy superseded by 0131; Linux runner family superseded by 0310 |
 | [0130](0130-macos-browser-password-import.md) | Prebuilt macOS browser password import helper | Accepted |
 | [0131](0131-content-addressed-test-reuse.md) | Content-addressed test reuse | Accepted |
 | [0132](0132-shared-contextual-sidebar-contributions.md) | Shared contextual sidebar contributions | Accepted (amended by 0234) |
@@ -315,5 +315,6 @@ Settled design decisions live here as short Architecture Decision Records. They 
 | [0307](0307-typed-private-work-customizations.md) | Typed private Work customizations | Accepted (amends 0069, 0134, 0139, 0234, 0239, 0277) |
 | [0308](0308-customization-forms-and-inspectors.md) | Customization forms and inspectors | Accepted (amends 0234, 0239, 0307) |
 | [0309](0309-render-failures-stay-with-their-surface.md) | Render failures stay with their surface | Accepted |
-| [0310](0310-cloudflare-sandboxes-use-native-containers.md) | Cloudflare sandboxes use native containers | Accepted |
-| [0311](0311-verified-development-toolchains-preserve-data.md) | Verified development toolchains preserve data | Accepted |
+| [0310](0310-linux-ci-on-github-hosted-runners.md) | Linux CI on GitHub-hosted runners | Accepted (amends 0129) |
+| [0312](0312-cloudflare-sandboxes-use-native-containers.md) | Cloudflare sandboxes use native containers | Accepted |
+| [0313](0313-verified-development-toolchains-preserve-data.md) | Verified development toolchains preserve data | Accepted |

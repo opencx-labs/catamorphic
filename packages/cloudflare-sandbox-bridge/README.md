@@ -8,7 +8,7 @@ The `NativeSandbox` Durable Object starts its container through `ctx.container`.
 `@cloudflare/sandbox` 1.x supplies `Files`; the matching `sandbox-shim` runs in
 our image. Routing, authentication and SSE framing live in this package.
 See [CLOUDFLARE.md](../../CLOUDFLARE.md) and
-[ADR 0310](../../docs/decisions/0310-cloudflare-sandboxes-use-native-containers.md).
+[ADR 0312](../../docs/decisions/0312-cloudflare-sandboxes-use-native-containers.md).
 
 ## Local development
 

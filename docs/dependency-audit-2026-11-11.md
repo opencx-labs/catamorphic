@@ -102,7 +102,7 @@ migration.
 Cloudflare 1.0 uses a fresh Worker and Durable Object namespace. Drain and release
 old allocations, preserve non-rebuildable workspace files, deploy the replacement
 separately and then change the host-injected URL/key. The old Worker is preserved.
-See [CLOUDFLARE.md](../CLOUDFLARE.md) and [ADR 0310](decisions/0310-cloudflare-sandboxes-use-native-containers.md).
+See [CLOUDFLARE.md](../CLOUDFLARE.md) and [ADR 0312](decisions/0312-cloudflare-sandboxes-use-native-containers.md).
 No deployment is part of this change.
 
 The local native-container checks cover deadlines and controlled cancellation of
@@ -113,4 +113,4 @@ request-signal flag and explicit Durable Object signal forwarding contract.
 
 Repository Node installation is an explicit, checksum-verified install step.
 Launching tools afterward remains synchronous and offline. See
-[ADR 0311](decisions/0311-verified-development-toolchains-preserve-data.md).
+[ADR 0313](decisions/0313-verified-development-toolchains-preserve-data.md).
