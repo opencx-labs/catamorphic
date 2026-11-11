@@ -171,16 +171,38 @@ async function openPage() {
   );
 }
 
-/** Opens the microphone's menu, as a right click does. */
-const openMenu = () =>
-  run(`
-    const bounds = mic().getBoundingClientRect();
-    mic().dispatchEvent(new MouseEvent('contextmenu', {
-      bubbles: true, cancelable: true, button: 2,
-      clientX: bounds.left + bounds.width / 2, clientY: bounds.top + bounds.height / 2,
-    }));
-    return true;
-  `);
+/** Open a menu through real input, keeping native hover and focus in step. */
+async function openMenu(target = "mic()") {
+  await focusWindow(app);
+  const point = await runWait<{ x: number; y: number }>(
+    `const target = ${target};
+     if (!target?.checkVisibility({opacityProperty:true,visibilityProperty:true})) return false;
+     const box = target.getBoundingClientRect();
+     return {x:box.x+box.width/2,y:box.y+box.height/2};`,
+    { label: "the voice menu's hit target" },
+  );
+  await app.movePointer(point);
+  for (const type of ["mousePressed", "mouseReleased"])
+    await app.cdp("Input.dispatchMouseEvent", {
+      type,
+      ...point,
+      button: "right",
+      clickCount: 1,
+    });
+}
+
+/** A DOM click leaves the real pointer over a different submenu's row. */
+async function clickMenuItem(expression: string, label: string) {
+  const point = await runWait<{ x: number; y: number }>(
+    `const item = ${expression};
+     if (!item?.checkVisibility({opacityProperty:true,visibilityProperty:true}) || item.disabled) return false;
+     const box = item.getBoundingClientRect();
+     const point = {x:box.x+box.width/2,y:box.y+box.height/2};
+     return item.contains(document.elementFromPoint(point.x,point.y)) && point;`,
+    { label },
+  );
+  await app.clickPointer(point);
+}
 
 /** Press or release a microphone through Chromium's actual pointer path. */
 async function microphone(
@@ -407,10 +429,9 @@ describe("voice", () => {
   it("the microphone's menu opens the assistant's chat and picks the voice and microphone", async () => {
     // Voices are a submenu, named, with who they are beside the name.
     await openMenu();
-    await runWait(
-      `const item = byText('[role="menuitem"][data-submenu]', 'Voice');
-       if (!item) return false; item.click(); return true;`,
-      { label: "open the Voice submenu" },
+    await clickMenuItem(
+      `byText('[role="menuitem"][data-submenu]', 'Voice')`,
+      "open the Voice submenu",
     );
     const voices = await runWait<{ label: string; checked: string }[]>(
       `const items = $$('[role="menu"][aria-label="Voice"] [role="menuitemradio"]');
@@ -425,8 +446,9 @@ describe("voice", () => {
       { label: "MichaelAmerican man", checked: "false" },
       { label: "FenrirAmerican man", checked: "false" },
     ]);
-    await run(
-      `byText('[role="menuitemradio"]', 'Michael').click(); return true;`,
+    await clickMenuItem(
+      `byText('[role="menuitemradio"]', 'Michael')`,
+      "choose Michael",
     );
     // The built-in assistant speaks in the default voice.
     await runWait(
@@ -436,10 +458,9 @@ describe("voice", () => {
     );
     // Microphones too: the system's, then each one the machine has.
     await openMenu();
-    await runWait(
-      `const item = byText('[role="menuitem"][data-submenu]', 'Microphone');
-       if (!item) return false; item.click(); return true;`,
-      { label: "open the Microphone submenu" },
+    await clickMenuItem(
+      `byText('[role="menuitem"][data-submenu]', 'Microphone')`,
+      "open the Microphone submenu",
     );
     const microphones = await runWait<string[]>(
       `const items = $$('[role="menu"][aria-label="Microphone"] [role="menuitemradio"]');
@@ -447,8 +468,9 @@ describe("voice", () => {
       { label: "the microphones in the submenu" },
     );
     expect(microphones[0]).toBe("System default:true");
-    await run(
-      `$$('[role="menu"][aria-label="Microphone"] [role="menuitemradio"]')[1].click(); return true;`,
+    await clickMenuItem(
+      `$$('[role="menu"][aria-label="Microphone"] [role="menuitemradio"]')[1]`,
+      "choose the microphone",
     );
     await runWait(
       `const prefs = await api.getPrefs();
@@ -456,10 +478,9 @@ describe("voice", () => {
       { label: "the chosen microphone kept" },
     );
     await openMenu();
-    await runWait(
-      `const item = byText('[role="menuitem"]', 'Open assistant chat');
-       if (!item) return false; item.click(); return true;`,
-      { label: "open the assistant's chat from the menu" },
+    await clickMenuItem(
+      `byText('[role="menuitem"]', 'Open assistant chat')`,
+      "open the assistant's chat from the menu",
     );
     // It opens like any chat, with what was said and answered.
     await runWait(
@@ -471,10 +492,9 @@ describe("voice", () => {
 
   it("reset closes the assistant's chat, and holding Enter starts a new one", async () => {
     await openMenu();
-    await runWait(
-      `const item = byText('[role="menuitem"]', 'Reset assistant chat');
-       if (!item || item.disabled) return false; item.click(); return true;`,
-      { label: "reset from the microphone's menu" },
+    await clickMenuItem(
+      `byText('[role="menuitem"]', 'Reset assistant chat')`,
+      "reset from the microphone's menu",
     );
     await runWait(
       `const prefs = await api.getPrefs();
@@ -806,10 +826,9 @@ describe("voice", () => {
       await run<{ assistantSession: Ref | null }>(`return api.getPrefs();`)
     ).assistantSession;
     await openMenu();
-    await runWait(
-      `const item = byText('[role="menuitem"][data-submenu]', 'Assistant');
-       if (!item) return false; item.click(); return true;`,
-      { label: "open the Assistant submenu" },
+    await clickMenuItem(
+      `byText('[role="menuitem"][data-submenu]', 'Assistant')`,
+      "open the Assistant submenu",
     );
     const choices = await runWait<string[]>(
       `const items = $$('[role="menu"][aria-label="Assistant"] [role="menuitemradio"], [role="menu"][aria-label="Assistant"] [role="menuitem"]');
@@ -820,8 +839,9 @@ describe("voice", () => {
     expect(choices).toEqual(
       expect.arrayContaining(["Fake Agent", "Other Fake", "Create agent…"]),
     );
-    await run(
-      `byText('[role="menuitemradio"]', 'Other Fake').click(); return true;`,
+    await clickMenuItem(
+      `byText('[role="menuitemradio"]', 'Other Fake')`,
+      "choose Other Fake",
     );
     await runWait(
       `return (await api.getPrefs()).voiceAssistant === ${JSON.stringify(other.id)};`,
@@ -833,13 +853,13 @@ describe("voice", () => {
       `return !!byText('[role="menuitem"][data-submenu]', 'Assistant')?.textContent.includes('Other Fake');`,
       { label: "the menu naming the new assistant" },
     );
-    await runWait(
-      `const item = byText('[role="menuitem"][data-submenu]', 'Voice');
-       if (!item) return false; item.click(); return true;`,
-      { label: "open the Voice submenu" },
+    await clickMenuItem(
+      `byText('[role="menuitem"][data-submenu]', 'Voice')`,
+      "open the Voice submenu",
     );
-    await run(
-      `byText('[role="menuitemradio"]', 'Bella').click(); return true;`,
+    await clickMenuItem(
+      `byText('[role="menuitemradio"]', 'Bella')`,
+      "choose Bella",
     );
     await runWait(
       `const prefs = await api.getPrefs();
@@ -886,9 +906,12 @@ describe("voice", () => {
     await openMenu();
     await runWait(
       `const item = byText('[role="menuitemcheckbox"]', 'Show voice in dock');
-       if (!item || item.getAttribute('aria-checked') !== 'true') return false;
-       item.click(); return true;`,
+       return item?.getAttribute('aria-checked') === 'true';`,
       { label: "hide from the microphone's menu" },
+    );
+    await clickMenuItem(
+      `byText('[role="menuitemcheckbox"]', 'Show voice in dock')`,
+      "hide from the microphone's menu",
     );
     await runWait(
       `const prefs = await api.getPrefs();
@@ -915,20 +938,15 @@ describe("voice", () => {
       label: "voice off by its shortcut, the microphone gone again",
     });
     // The arrows' menu always offers it.
-    await run(`
-      const arrows = $('[data-dock-arrows]');
-      const bounds = arrows.getBoundingClientRect();
-      arrows.dispatchEvent(new MouseEvent('contextmenu', {
-        bubbles: true, cancelable: true, button: 2,
-        clientX: bounds.left + bounds.width / 2, clientY: bounds.top + bounds.height / 2,
-      }));
-      return true;
-    `);
+    await openMenu("$('[data-dock-arrows]')");
     await runWait(
       `const item = byText('[role="menuitemcheckbox"]', 'Show voice in dock');
-       if (!item || item.getAttribute('aria-checked') !== 'false') return false;
-       item.click(); return true;`,
+       return item?.getAttribute('aria-checked') === 'false';`,
       { label: "show from the arrows' menu" },
+    );
+    await clickMenuItem(
+      `byText('[role="menuitemcheckbox"]', 'Show voice in dock')`,
+      "show from the arrows' menu",
     );
     await runWait(
       `const prefs = await api.getPrefs();

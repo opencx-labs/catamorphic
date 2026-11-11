@@ -467,21 +467,44 @@ describe("closing folded tab groups", () => {
   describe("from a tab's menu", () => {
     const menuItems = `[...document.querySelectorAll('[role="menuitem"]')]`;
     const openMenu = async (key: string) => {
-      await app.eval(`(() => {
-        const label=document.querySelector('${visible} [data-point-key="${key}"] .workspace-tab-label');
-        const box=label.getBoundingClientRect();
-        label.dispatchEvent(new MouseEvent('contextmenu',{bubbles:true,cancelable:true,clientX:box.x+8,clientY:box.y+8}));
-      })()`);
+      await focusWindow(app);
+      const point = await app.waitFor<{ x: number; y: number }>(
+        `(() => {
+          const label=document.querySelector('${visible} [data-point-key="${key}"] .workspace-tab-label');
+          if(!label?.checkVisibility({opacityProperty:true,visibilityProperty:true})) return false;
+          const box=label.getBoundingClientRect();
+          return {x:box.x+box.width/2,y:box.y+box.height/2};
+        })()`,
+        { label: "tab label ready for its menu" },
+      );
+      // The press owns focus while the restored chat finishes loading.
+      // A synthetic contextmenu skips that input and can lose to autofocus.
+      await app.movePointer(point);
+      for (const type of ["mousePressed", "mouseReleased"])
+        await app.cdp("Input.dispatchMouseEvent", {
+          type,
+          ...point,
+          button: "right",
+          clickCount: 1,
+        });
       await app.waitFor(`${menuItems}.length>0`, { label: "tab menu open" });
     };
     const closeEntries = () =>
       app.eval<string[]>(
         `${menuItems}.map(item=>item.textContent.trim()).filter(label=>label.startsWith('Close'))`,
       );
-    const pick = (label: string) =>
-      app.eval(
-        `${menuItems}.find(item=>item.textContent.trim()===${JSON.stringify(label)}).click()`,
+    const pick = async (label: string) => {
+      const point = await app.waitFor<{ x: number; y: number }>(
+        `(() => {
+          const item=${menuItems}.find(item=>item.textContent.trim()===${JSON.stringify(label)});
+          if(!item?.checkVisibility({opacityProperty:true,visibilityProperty:true}) || item.disabled) return false;
+          const box=item.getBoundingClientRect();
+          return {x:box.x+box.width/2,y:box.y+box.height/2};
+        })()`,
+        { label: `${label} is ready` },
       );
+      await app.clickPointer(point);
+    };
     const state = (projectId: string) =>
       `${api}.workspaceStateGet(${JSON.stringify(projectId)})`;
 
