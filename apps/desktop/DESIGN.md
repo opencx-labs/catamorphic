@@ -32,7 +32,7 @@ recognition appears in the composer's existing dictation preview while held.
 Release sends one final voice message and removes the preview, preserving any
 typed draft. Dictation keeps the final words for the person to edit and send.
 Capture and the macOS audio-lowering input stop on release, while buffered
-transcription and playback finish separately (ADR 0310, superseding automatic
+transcription and playback finish separately (ADR 0311, superseding automatic
 turn-taking in the earlier voice design entries below).
 The palette's Ask agent input shares the chat composer's pills, previews and
 file preparation, including image paste and agent capability checks.
@@ -4158,7 +4158,7 @@ playback shows speech, and the microphone settles as soon as those finish, with
 no active idle timer. The input-free audio page stays prepared between holds.
 On macOS the local inference runtime loads only for a reply, and successful Apple
 permission/asset checks are reused without retaining a native helper or model.
-See ADR 0310.
+See ADR 0311.
 
 A short click teaches holding through the shared shortcut hint, with the person's
 configured voice shortcut. Releases before 250 ms cancel recognition and clear

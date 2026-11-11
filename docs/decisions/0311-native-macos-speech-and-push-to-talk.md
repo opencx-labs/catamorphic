@@ -1,4 +1,4 @@
-# 0310: Native macOS speech and push to talk
+# 0311: Native macOS speech and push to talk
 
 - **Status:** Accepted
 - **Date:** 2026-11-10

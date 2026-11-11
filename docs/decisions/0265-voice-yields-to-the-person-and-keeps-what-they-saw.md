@@ -4,7 +4,7 @@
 - **Date:** 2026-10-19
 - **Amends:** 0216 (voice), 0236 (hearing the person)
 
-Native recognition and push-to-talk-only input now follow [0310](0310-native-macos-speech-and-push-to-talk.md); it supersedes automatic listening and speaker identification described below.
+Native recognition and push-to-talk-only input now follow [0311](0311-native-macos-speech-and-push-to-talk.md); it supersedes automatic listening and speaker identification described below.
 
 ## Context
 
