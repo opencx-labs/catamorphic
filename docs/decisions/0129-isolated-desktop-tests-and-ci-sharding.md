@@ -1,6 +1,6 @@
 # 0129 - Isolated desktop tests and CI sharding
 
-- **Status:** Accepted; test-cache policy superseded by 0131
+- **Status:** Accepted; test-cache policy superseded by 0131; Linux runner family superseded by 0310
 - **Date:** 2026-09-11
 
 ## Context
@@ -21,7 +21,8 @@ All desktop suites run with normal shown, focusable windows. Remove the
 hidden/visible split and focus emulation. Native macOS coverage runs on
 dedicated GitHub-hosted macOS CI runners, never a developer's GUI session.
 
-Use the organization's existing Blacksmith Ubuntu runner family for Linux CI.
+Use the organization's existing Blacksmith Ubuntu runner family for Linux CI
+(runner family superseded by ADR 0310).
 Run validation, workspace tests, PWA E2E, and desktop E2E as independent jobs.
 Shard Vitest by whole file across runners, preserving ordered tests and one
 Electron suite per display. Each workspace shard owns its disposable Postgres.
