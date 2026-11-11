@@ -1,4 +1,4 @@
-import sherpa from "sherpa-onnx-node";
+import type { OfflineTts } from "sherpa-onnx-node";
 import {
   SPEECH_SAMPLE_RATE,
   VOICES,
@@ -18,11 +18,20 @@ export async function loadSherpaSpeech({
   voice: VoiceId;
   speaking: boolean;
 }): Promise<SpeechParts> {
-  let synthesis: ReturnType<typeof sherpa.OfflineTts.createAsync> | null = null;
+  let library: typeof import("sherpa-onnx-node")["default"] | null = null;
+  let synthesis: Promise<OfflineTts> | null = null;
   const synthesizer = () => {
-    synthesis ??= sherpa.OfflineTts.createAsync({
-      model: { kokoro: paths.tts, numThreads: 4, provider: "cpu" },
-    }).catch((cause: unknown) => {
+    const config = {
+      model: { kokoro: paths.tts, numThreads: 4, provider: "cpu" as const },
+    };
+    synthesis ??= (
+      library
+        ? library.OfflineTts.createAsync(config)
+        : import("sherpa-onnx-node").then(({ default: sherpa }) => {
+            library = sherpa;
+            return sherpa.OfflineTts.createAsync(config);
+          })
+    ).catch((cause: unknown) => {
       synthesis = null;
       throw cause;
     });
@@ -31,10 +40,11 @@ export async function loadSherpaSpeech({
   const recognition = paths.recognition;
   const native =
     recognition.kind === "native" ? new NativeRecognition(recognition) : null;
-  // macOS never constructs or loads a sherpa recognition model.
+  // The native STT path does not even import the local inference runtime.
+  if (!native) library = (await import("sherpa-onnx-node")).default;
   const recognitionLoad =
-    recognition.kind === "parakeet"
-      ? sherpa.OfflineRecognizer.createAsync({
+    recognition.kind === "parakeet" && library
+      ? library.OfflineRecognizer.createAsync({
           featConfig: { sampleRate: SPEECH_SAMPLE_RATE, featureDim: 80 },
           modelConfig: {
             transducer: {
@@ -53,12 +63,6 @@ export async function loadSherpaSpeech({
     recognitionLoad,
     speaking && !native ? synthesizer() : null,
   ]);
-  const generationFor = (id: VoiceId) =>
-    new sherpa.GenerationConfig({
-      sid: VOICES.find((candidate) => candidate.id === id)?.speaker ?? 0,
-      silenceScale: 1,
-    });
-  let generation = generationFor(voice);
   return {
     prepareSynthesis: async () => {
       await synthesizer();
@@ -91,8 +95,14 @@ export async function loadSherpaSpeech({
     synthesize: async (text, onSentence) => {
       // A later voice selection belongs to the next text, even when this
       // reply is still waiting for Kokoro to load.
-      const generationConfig = generation;
+      const selected = voice;
       const tts = await synthesizer();
+      if (!library) throw new Error("Reply synthesis is unavailable.");
+      const generationConfig = new library.GenerationConfig({
+        sid:
+          VOICES.find((candidate) => candidate.id === selected)?.speaker ?? 0,
+        silenceScale: 1,
+      });
       const sentences: Float32Array[] = [];
       const { sampleRate } = tts;
       await tts.generateAsync({
@@ -109,7 +119,7 @@ export async function loadSherpaSpeech({
     },
     cue: () => chime(24_000),
     setVoice: (next) => {
-      generation = generationFor(next);
+      voice = next;
     },
   };
 }

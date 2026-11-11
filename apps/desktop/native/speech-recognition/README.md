@@ -78,8 +78,10 @@ Failure exits 1 and writes one JSON line:
 
 The TypeScript wrapper bounds preparation to five minutes and transcription
 to 90 seconds. Canceling it rejects pending calls and sends SIGTERM, followed
-by SIGKILL after one second if needed. The same wrapper can prepare again for
-the next voice; disposal permanently releases it. The helper also has its own deadline
+by SIGKILL after one second if needed. Successful permission/asset checks are reused
+across holds without retaining a helper or loaded native model; a recognition
+failure clears the check so the next hold can prepare again. Disposal permanently
+releases the wrapper. The helper also has its own deadline
 and exits if its parent process disappears. No audio is written to disk.
 
 ## Verification

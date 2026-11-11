@@ -12,6 +12,7 @@ const native = vi.hoisted(() => ({
   cancelNative: vi.fn(),
   disposeNative: vi.fn(),
   loadRecognition: vi.fn(),
+  importRuntime: vi.fn(),
   loadSynthesis: vi.fn<() => Promise<OfflineTts>>(),
   generate: vi.fn<OfflineTts["generateAsync"]>(),
 }));
@@ -25,15 +26,18 @@ vi.mock("./native-recognition.js", () => ({
   },
 }));
 
-vi.mock("sherpa-onnx-node", () => ({
-  default: {
-    OfflineRecognizer: { createAsync: native.loadRecognition },
-    OfflineTts: { createAsync: native.loadSynthesis },
-    GenerationConfig: class {
-      constructor(readonly options: { sid: number; silenceScale: number }) {}
+vi.mock("sherpa-onnx-node", () => {
+  native.importRuntime();
+  return {
+    default: {
+      OfflineRecognizer: { createAsync: native.loadRecognition },
+      OfflineTts: { createAsync: native.loadSynthesis },
+      GenerationConfig: class {
+        constructor(readonly options: { sid: number; silenceScale: number }) {}
+      },
     },
-  },
-}));
+  };
+});
 
 const tts: OfflineTts = {
   sampleRate: 24_000,
@@ -87,7 +91,8 @@ describe("speech model demand loading", () => {
       voice: "af_heart",
       speaking: true,
     });
-    await parts.synthesize("Read this reply.");
+    expect(native.importRuntime).not.toHaveBeenCalled();
+    expect(native.loadSynthesis).not.toHaveBeenCalled();
     expect(native.loadRecognition).not.toHaveBeenCalled();
     expect(native.prepareNative).not.toHaveBeenCalled();
     await expect(parts.recognize(sentence)).resolves.toEqual({
@@ -96,6 +101,8 @@ describe("speech model demand loading", () => {
     });
     expect(native.prepareNative).toHaveBeenCalledOnce();
     expect(native.recognizeNative).toHaveBeenCalledWith(sentence);
+    expect(native.importRuntime).not.toHaveBeenCalled();
+    await parts.synthesize("Read this reply.");
     parts.cancelRecognition?.();
     expect(native.cancelNative).toHaveBeenCalledOnce();
     parts.dispose?.();
@@ -112,8 +119,10 @@ describe("speech model demand loading", () => {
       speaking: true,
     });
     void parts.then(ready);
-    expect(native.loadRecognition).toHaveBeenCalledOnce();
-    expect(native.loadSynthesis).toHaveBeenCalledOnce();
+    await vi.waitFor(() => {
+      expect(native.loadRecognition).toHaveBeenCalledOnce();
+      expect(native.loadSynthesis).toHaveBeenCalledOnce();
+    });
     await new Promise((resolve) => setTimeout(resolve, 0));
     expect(ready).not.toHaveBeenCalled();
     loading.resolve(tts);

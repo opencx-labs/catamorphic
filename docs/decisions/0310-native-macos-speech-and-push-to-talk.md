@@ -24,6 +24,9 @@ Linux retains release-time recognition. The audio page and worklet prepare befor
 a press without opening a microphone; first captured audio drives listening feedback.
 Pressing interrupts playback; replies arriving during a hold queue until release.
 Remove automatic turn detection, voiceprints, learning controls and tap toggles.
+Silence never aborts a hold: device errors come from the capture API or an ended
+track. Once recognition, the agent turn and playback finish, the microphone
+settles immediately; there is no timed active/listening state after a reply.
 
 On macOS, a small universal native helper uses Apple's Speech framework:
 SpeechAnalyzer with SpeechTranscriber on supported macOS 26 hardware/locales,
@@ -47,3 +50,6 @@ availability and language support follow Apple; the older recognizer can require
 network access and Speech Recognition permission. Native first-use asset setup
 can delay the first transcription. Linux still downloads its pinned local STT.
 Reply synthesis remains a separate local model on both platforms.
+The local inference runtime is imported on macOS only when a reply needs synthesis.
+Successful Apple permission/asset preparation is reused across holds; cancellation
+still terminates every native helper, and an actual failure permits preparation again.

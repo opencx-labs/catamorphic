@@ -12,7 +12,6 @@ export type VoicePhase =
   | "off"
   /** Downloading or loading the speech models, opening the microphone. */
   | "preparing"
-  | "listening"
   /** The person is talking. */
   | "hearing"
   /** The chat is working on what was said and has nothing to say yet. */

@@ -173,8 +173,6 @@ function hint({
         (100 * download.receivedBytes) / download.totalBytes,
       )}%`;
     }
-    case "listening":
-      return "Hold to talk";
     case "hearing":
       return "Hearing you";
     case "thinking":
@@ -207,8 +205,7 @@ function clipEnded(clip: VoiceLevels, now: number): boolean {
  */
 function VoiceBars({ shown }: { shown: boolean }) {
   const bars = useRef<(HTMLSpanElement | null)[]>([]);
-  // Kept while the bars are hidden: a voice the person paused by talking
-  // over it (ADR 0265) carries on with clips it scheduled before.
+  // Clips arrive independently of status updates; keep their playback times.
   const scheduled = useRef<VoiceLevels[]>([]);
   useEffect(
     () =>

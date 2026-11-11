@@ -136,11 +136,7 @@ describe("VoiceQuiet", () => {
   });
 
   it("keeps other audio lowered while voice listens or waits, never while the agent speaks", () => {
-    expect([...QUIET_PHASES].sort()).toEqual([
-      "hearing",
-      "listening",
-      "thinking",
-    ]);
+    expect([...QUIET_PHASES].sort()).toEqual(["hearing", "thinking"]);
   });
 
   it("keeps dictation from lowering other audio", () => {

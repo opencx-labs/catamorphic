@@ -126,6 +126,9 @@ interface Ref {
 const recordPhases = () =>
   run(`
     window.__voicePhases = [mic().dataset.phase];
+    window.__voiceStatusLog = [];
+    window.__voiceUnsubscribe?.();
+    window.__voiceUnsubscribe = api.onVoiceStatus(status => window.__voiceStatusLog.push({phase:status.phase,at:Date.now()}));
     window.__voiceLoudest = 0;
     window.__voiceObserver?.disconnect();
     window.__voiceObserver = new MutationObserver(() => {
@@ -300,10 +303,12 @@ async function talk(
       MessagePort.prototype.postMessage = function(message, ...args) {
         if (message?.type === 'capturing' && !window.__captureFirstAt)
           window.__captureFirstAt = Date.now();
+        if (message?.type === 'drained') window.__lastVoiceDrainedAt = Date.now();
         return Reflect.apply(post, this, [message, ...args]);
       };
     }
     window.__captureFirstAt = 0;
+    window.__lastVoiceDrainedAt = 0;
     return true;
   })()`);
   // Readiness and pointer positioning happen before the press, not in its latency.
@@ -329,7 +334,6 @@ async function talk(
   const capturedAt = await captureProbe.eval<number>("window.__captureFirstAt");
   expect(pressedAt).toBeGreaterThan(0);
   const captureDelay = capturedAt - pressedAt;
-  captureProbe.close();
   expect(captureDelay).toBeGreaterThanOrEqual(0);
   expect(captureDelay).toBeLessThan(500);
   console.info("Voice press to first audio frame:", captureDelay, "ms");
@@ -348,6 +352,19 @@ async function talk(
      return phases.includes('speaking') && phases.at(-1) === 'off';`,
     { timeoutMs: 30_000, label: "the answer spoken, then voice off" },
   );
+  const lastDrainedAt = await captureProbe.eval<number>(
+    "window.__lastVoiceDrainedAt",
+  );
+  captureProbe.close();
+  const statusLog = await run<{ phase: string; at: number }[]>(
+    "return window.__voiceStatusLog;",
+  );
+  const settledAt =
+    statusLog.filter((entry) => entry.phase === "off").at(-1)?.at ?? 0;
+  expect(lastDrainedAt).toBeGreaterThan(0);
+  expect(settledAt - lastDrainedAt).toBeGreaterThanOrEqual(0);
+  expect(settledAt - lastDrainedAt).toBeLessThan(750);
+  expect(statusLog.map((entry) => entry.phase)).not.toContain("listening");
   return ref;
 }
 

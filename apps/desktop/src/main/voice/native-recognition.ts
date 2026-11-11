@@ -30,6 +30,7 @@ const partialSchema = z.object({
 export class NativeRecognition {
   private readonly pending = new Map<ChildProcess, () => void>();
   private preparing: Promise<void> | null = null;
+  private prepared = false;
   private disposed = false;
   private epoch = 0;
   private streaming: Promise<void> = Promise.resolve();
@@ -50,7 +51,9 @@ export class NativeRecognition {
       return Promise.reject(new Error("Speech recognition stopped."));
     if (this.preparing) return this.preparing;
     const preparing: Promise<void> = this.run({ prepare: true }).then(
-      () => {},
+      () => {
+        if (this.preparing === preparing) this.prepared = true;
+      },
       (error: unknown) => {
         // A canceled preparation can reject after the next voice has started.
         if (this.preparing === preparing) this.preparing = null;
@@ -95,24 +98,36 @@ export class NativeRecognition {
     let samplesWritten = 0;
     const stopped = () =>
       controller.signal.aborted || this.disposed || this.epoch !== epoch;
-    const working = Promise.all([this.prepare(), this.streaming]).then(() => {
-      if (stopped()) throw new Error("Speech recognition stopped.");
-      return this.run({
-        prepare: false,
-        signal: controller.signal,
-        stream: {
-          onPartial: (text) => {
-            if (!stopped()) onPartial(text);
-          },
-          connect: (stdin) => {
-            input = stdin;
-            for (const frame of frames) stdin.write(frame);
-            frames = [];
-            if (ended) stdin.end();
-          },
-        },
-      });
-    });
+    const working = Promise.all([this.prepare(), this.streaming]).then(
+      async () => {
+        if (stopped()) throw new Error("Speech recognition stopped.");
+        try {
+          return await this.run({
+            prepare: false,
+            signal: controller.signal,
+            stream: {
+              onPartial: (text) => {
+                if (!stopped()) onPartial(text);
+              },
+              connect: (stdin) => {
+                input = stdin;
+                for (const frame of frames) stdin.write(frame);
+                frames = [];
+                if (ended) stdin.end();
+              },
+            },
+          });
+        } catch (cause) {
+          // Assets or permission can change between holds. Retry preparation
+          // after a real failure, but keep a successful check across cancellation.
+          if (!stopped()) {
+            this.prepared = false;
+            this.preparing = null;
+          }
+          throw cause;
+        }
+      },
+    );
     this.streaming = working.then(
       () => {},
       () => {},
@@ -168,7 +183,7 @@ export class NativeRecognition {
   cancel(): void {
     this.epoch += 1;
     this.streaming = Promise.resolve();
-    this.preparing = null;
+    if (!this.prepared) this.preparing = null;
     for (const cancel of [...this.pending.values()]) cancel();
   }
 

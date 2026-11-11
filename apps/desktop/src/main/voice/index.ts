@@ -81,9 +81,6 @@ import { quietForConversation, VoiceQuiet } from "./voice-quiet.js";
 
 /** How often the assistant's chat is checked for news while voice is off. */
 const NEWS_POLL_MS = 5_000;
-/** A voice started by holding turns off once it has been idle this long. */
-const HELD_IDLE_MS = 4_000;
-
 /** The speech models stay loaded this long after voice stops. */
 const WARM_MS = 15 * 60_000;
 /** Speech starting again this soon was seen as the stretch before it. */
@@ -209,7 +206,6 @@ interface ActiveVoice {
    */
   window: number | null;
   windowPicked: boolean;
-  idle: ReturnType<typeof setTimeout> | undefined;
   /**
    * A hold came up and its words are still being recognized: voice stays
    * on for them however long that takes, rather than going idle first.
@@ -519,42 +515,33 @@ export function registerVoiceSupport(deps: {
     }
   };
 
-  /** A voice started by holding goes off when nothing is left to do. */
-  const settleIdle = (voice: ActiveVoice) => {
-    clearTimeout(voice.idle);
-    if (
-      voice.ending ||
-      voice.awaitingWords ||
-      voice.catchingUp ||
-      voice.early.length > 0 ||
-      press?.profileId === voice.profileId ||
-      voice.live.phase !== "listening"
-    )
-      return;
-    voice.idle = setTimeout(() => {
-      if (active === voice && !press && voice.live.phase === "listening")
-        void stop();
-    }, HELD_IDLE_MS);
-  };
-
   const update = (voice: ActiveVoice, patch: Partial<LiveStatus> = {}) => {
     if (active !== voice) return;
     const phase = voice.hearing
       ? "hearing"
-      : !connected(voice)
+      : wantsMicrophone(voice) || !connected(voice)
         ? "preparing"
         : voice.speaking.size > 0
           ? "speaking"
-          : voice.busy || voice.ending
+          : voice.busy ||
+              voice.ending ||
+              voice.awaitingWords !== null ||
+              voice.catchingUp !== null ||
+              voice.early.length > 0
             ? "thinking"
-            : "listening";
+            : "off";
     voice.live = {
       ...voice.live,
       phase,
       ...patch,
     };
-    settleIdle(voice);
     publish();
+    // A chat observation reports its busy state before handing over replies.
+    // Let that synchronous observation finish before resting an idle voice.
+    if (phase === "off")
+      queueMicrotask(() => {
+        if (active === voice && voice.live.phase === "off") void stop();
+      });
   };
 
   /** Voice talks with its chat, or dictates: it is ready. */
@@ -682,7 +669,6 @@ export function registerVoiceSupport(deps: {
     clearTranscript(voice);
     // A reply it was reading goes with it.
     if (reading && !reading.borrowed) reading = null;
-    clearTimeout(voice.idle);
     settleDictation(voice);
     voice.conversation?.stop();
     voice.detach();
@@ -1449,7 +1435,6 @@ export function registerVoiceSupport(deps: {
       sights: new Map(),
       window: options.window ?? windowFor(profileId)?.id ?? null,
       windowPicked: options.window !== undefined,
-      idle: undefined,
       awaitingWords: null,
       live: {
         phase: "preparing",
@@ -1567,8 +1552,7 @@ export function registerVoiceSupport(deps: {
   /**
    * A microphone or a shortcut went down (ADR 0236): voice hears the
    * person from now. Pressed where voice is already on, it holds; pressed
-   * elsewhere, voice moves there, or starts, hearing only while held until
-   * the press turns out to be a tap.
+   * elsewhere, voice moves there, or starts, hearing only while held.
    */
   const pressDown = (
     profileId: string,
@@ -1581,7 +1565,6 @@ export function registerVoiceSupport(deps: {
     const same =
       !!voice && sameVoiceTarget(voice.live.target, targetOf(request));
     press = { profileId, key, helper };
-    if (voice) clearTimeout(voice.idle);
     if (voice && same) {
       send(voice, { type: "hold", held: true });
       update(voice);

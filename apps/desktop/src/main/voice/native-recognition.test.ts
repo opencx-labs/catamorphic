@@ -391,7 +391,7 @@ describe("NativeRecognition", () => {
     expect(fourth.child.kill).not.toHaveBeenCalled();
   });
 
-  it("clears successful preparation on cancel while remaining reusable", async () => {
+  it("keeps successful asset preparation across holds without keeping a helper alive", async () => {
     const first = fakeHelper();
     const second = fakeHelper();
     const spawnImpl = vi
@@ -408,11 +408,48 @@ describe("NativeRecognition", () => {
     expect(recognition.prepare()).toBe(prepared);
     recognition.cancel();
     recognition.cancel();
-    const preparingAgain = recognition.prepare();
-    expect(preparingAgain).not.toBe(prepared);
-    second.reply({ protocol: 1, ok: true, text: "", confidence: 0 });
-    await expect(preparingAgain).resolves.toBeUndefined();
+    expect(recognition.prepare()).toBe(prepared);
+    expect(spawnImpl).toHaveBeenCalledOnce();
+    const result = recognition.recognize(audio());
+    second.reply(second.success);
+    await expect(result).resolves.toMatchObject({ text: "A sentence." });
     expect(spawnImpl).toHaveBeenCalledTimes(2);
+    recognition.dispose();
+  });
+
+  it("rechecks assets after a genuine stream failure", async () => {
+    const first = fakeHelper();
+    const stream = fakeHelper();
+    const retry = fakeHelper();
+    const spawnImpl = vi
+      .fn()
+      .mockReturnValueOnce(first.child)
+      .mockReturnValueOnce(stream.child)
+      .mockReturnValueOnce(retry.child);
+    const recognition = new NativeRecognition({
+      helperPath: "/app/speech-recognition",
+      spawnImpl: spawnImpl as unknown as typeof spawn,
+    });
+    const held = recognition.start(() => {});
+    first.reply(first.success);
+    for (let i = 0; i < 8; i++) await Promise.resolve();
+    const failed = expect(held.finish()).rejects.toThrow(
+      "Prepare assets again.",
+    );
+    stream.reply(
+      {
+        protocol: 1,
+        ok: false,
+        error: { code: "assets_required", message: "Prepare assets again." },
+      },
+      1,
+    );
+    await failed;
+    const preparing = recognition.prepare();
+    expect(spawnImpl).toHaveBeenCalledTimes(3);
+    retry.reply(retry.success);
+    await preparing;
+    recognition.dispose();
   });
 
   it("cancels all pending native work when disposed and rejects later work", async () => {

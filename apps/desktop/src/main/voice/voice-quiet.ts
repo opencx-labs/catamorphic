@@ -7,7 +7,6 @@ import type { VoicePhase, VoiceTarget } from "../../shared/voice.js";
  * not among them: macOS lowers Work's own sound with everyone else's.
  */
 export const QUIET_PHASES: ReadonlySet<VoicePhase> = new Set([
-  "listening",
   "hearing",
   "thinking",
 ]);

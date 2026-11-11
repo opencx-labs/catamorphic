@@ -21,9 +21,13 @@ function setup(warm = false) {
   const module = deferred<void>();
   const resume = deferred<void>();
   const stop = vi.fn();
+  const track = Object.assign(new EventTarget(), {
+    label: "Default microphone",
+    stop,
+  });
   const stream = {
-    getTracks: () => [{ stop }],
-    getAudioTracks: () => [{ label: "Default microphone" }],
+    getTracks: () => [track],
+    getAudioTracks: () => [track],
   } as unknown as MediaStream;
   const source = vi.fn(() => ({ connect: vi.fn(), disconnect: vi.fn() }));
   const contextClose = vi.fn(async () => {});
@@ -38,8 +42,15 @@ function setup(warm = false) {
     close = contextClose;
     suspend = suspend;
   }
+  let tap: Tap;
   class Tap {
-    port = { onmessage: null, close: vi.fn() };
+    constructor() {
+      tap = this;
+    }
+    port = {
+      onmessage: null as ((event: MessageEvent<Float32Array>) => void) | null,
+      close: vi.fn(),
+    };
     disconnect = vi.fn();
   }
   vi.stubGlobal("navigator", {
@@ -68,6 +79,9 @@ function setup(warm = false) {
     suspend,
     getUserMedia,
     addModule,
+    track,
+    frame: (samples: Float32Array) =>
+      tap.port.onmessage?.({ data: samples } as MessageEvent<Float32Array>),
   };
 }
 
@@ -155,5 +169,42 @@ describe("a microphone that stops while capture is starting", () => {
     expect(mic.stop).not.toHaveBeenCalled();
     mic.close();
     expect(mic.stop).toHaveBeenCalledOnce();
+  });
+
+  it("keeps a held input through quiet speech and Bluetooth silence, then captures sound", async () => {
+    const mic = setup(true);
+    mic.permission.resolve(mic.stream);
+    mic.module.resolve();
+    mic.resume.resolve();
+    await flush();
+    for (let second = 0; second < 8; second++)
+      mic.frame(new Float32Array(16_000));
+    mic.frame(new Float32Array(320).fill(0.00001));
+    mic.frame(new Float32Array(320).fill(0.25));
+    expect(mic.sent.filter((m) => m.type === "failed")).toEqual([]);
+    expect(mic.sent.filter((m) => m.type === "capturing")).toHaveLength(1);
+    expect(mic.sent.filter((m) => m.type === "frame")).toHaveLength(10);
+    expect(mic.stop).not.toHaveBeenCalled();
+    mic.close();
+    expect(mic.stop).toHaveBeenCalledOnce();
+  });
+
+  it("reports a disconnected device, but ignores its ended event after release", async () => {
+    const mic = setup();
+    mic.permission.resolve(mic.stream);
+    mic.module.resolve();
+    mic.resume.resolve();
+    await flush();
+    mic.track.dispatchEvent(new Event("ended"));
+    expect(mic.sent.filter((m) => m.type === "failed")).toEqual([
+      {
+        type: "failed",
+        message:
+          "The microphone disconnected. Choose a connected microphone and try again.",
+      },
+    ]);
+    mic.close();
+    mic.track.dispatchEvent(new Event("ended"));
+    expect(mic.sent.filter((m) => m.type === "failed")).toHaveLength(1);
   });
 });

@@ -1,30 +1,6 @@
 // The parts of sherpa-onnx-node (a JavaScript N-API package without type
 // declarations) the speech worker uses. Mirrors the package's types.js.
 declare module "sherpa-onnx-node" {
-  export interface VadConfig {
-    sileroVad: {
-      model: string;
-      threshold: number;
-      minSilenceDuration: number;
-      minSpeechDuration: number;
-      maxSpeechDuration: number;
-      windowSize: number;
-    };
-    sampleRate: number;
-    numThreads: number;
-  }
-
-  export class Vad {
-    constructor(config: VadConfig, bufferSizeInSeconds: number);
-    acceptWaveform(samples: Float32Array): void;
-    isEmpty(): boolean;
-    isDetected(): boolean;
-    front(enableExternalBuffer?: boolean): { samples: Float32Array };
-    pop(): void;
-    clear(): void;
-    reset(): void;
-  }
-
   export interface OfflineRecognizerConfig {
     featConfig: { sampleRate: number; featureDim: number };
     modelConfig: {
@@ -81,23 +57,7 @@ declare module "sherpa-onnx-node" {
     }): Promise<{ samples: Float32Array; sampleRate: number }>;
   }
 
-  export interface SpeakerEmbeddingStream {
-    acceptWaveform(input: { samples: Float32Array; sampleRate: number }): void;
-    inputFinished(): void;
-  }
-
-  export class SpeakerEmbeddingExtractor {
-    constructor(config: { model: string; numThreads: number });
-    createStream(): SpeakerEmbeddingStream;
-    compute(
-      stream: SpeakerEmbeddingStream,
-      enableExternalBuffer?: boolean,
-    ): Float32Array;
-  }
-
   const sherpa: {
-    Vad: typeof Vad;
-    SpeakerEmbeddingExtractor: typeof SpeakerEmbeddingExtractor;
     OfflineRecognizer: typeof OfflineRecognizer;
     OfflineTts: typeof OfflineTts;
     GenerationConfig: typeof GenerationConfig;
