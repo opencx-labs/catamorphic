@@ -162,7 +162,10 @@ export class VoiceEngine {
     this.stopSpeaking();
   }
 
-  hold(held: boolean, { release }: { release?: number } = {}): void {
+  hold(
+    held: boolean,
+    { release, discard }: { release?: number; discard?: boolean } = {},
+  ): void {
     if (!this.listening || held === (this.holding !== null)) return;
     if (held) {
       if (this.audible) {
@@ -188,6 +191,18 @@ export class VoiceEngine {
     if (!hold) return;
     this.holding = null;
     this.emit({ type: "speech-end" });
+    if (discard) {
+      hold.stream?.cancel();
+      hold.stream = null;
+      this.emit({
+        type: hold.dictation ? "dictation" : "transcript",
+        segment: hold.segment,
+        text: "",
+        final: true,
+      });
+      void this.drainSpeech();
+      return;
+    }
     this.hear(hold, { final: true, release });
     void this.drainSpeech();
   }

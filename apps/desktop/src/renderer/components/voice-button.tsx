@@ -7,6 +7,7 @@ import {
   parseAssistantAgentId,
   rosterAgentId,
   VOICE_BARS,
+  VOICE_HOLD_MS,
   VOICE_OFF,
   VOICES,
   type VoiceAction,
@@ -517,30 +518,49 @@ export function VoiceButton({
       : null;
   };
   /** A press under way: its release waits for it to reach voice. */
-  const pressing = useRef<Promise<unknown> | null>(null);
+  const pressing = useRef<{
+    at: number;
+    released: boolean;
+    promise: Promise<boolean>;
+  } | null>(null);
+  const [tapHint, setTapHint] = useState(false);
   const mounted = useRef(true);
   const pressedKey = useRef<string | null>(null);
-  const pressDown = () => {
+  const pressDown = (at = performance.now()) => {
     if (pressing.current) return;
+    setTapHint(false);
     if (!on) setStarting(true);
-    pressing.current = pressOf()
-      .then((press) => (press ? desktopApi.voicePress(press) : undefined))
-      .catch((cause: unknown) =>
-        console.warn("[voice] the microphone's press failed:", cause),
-      );
+    const held = { at, released: false, promise: Promise.resolve(false) };
+    pressing.current = held;
+    held.promise = pressOf()
+      .then(async (press) => {
+        // Session creation can finish after release. Never start input then.
+        if (!press || held.released) return false;
+        await desktopApi.voicePress(press);
+        return true;
+      })
+      .catch((cause: unknown) => {
+        console.warn("[voice] the microphone's press failed:", cause);
+        return false;
+      });
   };
-  const pressUp = () => {
+  const pressUp = (teach = true) => {
     const press = pressing.current;
     if (!press) return;
     pressing.current = null;
-    void press
-      .then(() => desktopApi.voiceRelease())
+    press.released = true;
+    const heldMs = performance.now() - press.at;
+    if (mounted.current) {
+      setStarting(false);
+      if (teach && heldMs < VOICE_HOLD_MS) setTapHint(true);
+    }
+    void press.promise
+      .then((reached) =>
+        reached ? desktopApi.voiceRelease(heldMs) : undefined,
+      )
       .catch((cause: unknown) =>
         console.warn("[voice] the microphone's release failed:", cause),
-      )
-      .finally(() => {
-        if (mounted.current) setStarting(false);
-      });
+      );
   };
   // On the bubble, a press is a tap, a hold or a drag, and reaches voice
   // only as one of the first two (bubble-press.ts): moving the bubble never
@@ -554,7 +574,7 @@ export function VoiceButton({
     if (next.press.kind !== "waiting") clearTimeout(still.current);
     setDragging(next.press.kind === "dragging");
     for (const effect of next.effects) {
-      if (effect.kind === "press") pressDown();
+      if (effect.kind === "press") pressDown(effect.at);
       else if (effect.kind === "release") pressUp();
       else
         void desktopApi
@@ -582,7 +602,7 @@ export function VoiceButton({
     blur: () => {
       step({ kind: "cancel" });
       pressedKey.current = null;
-      pressUp();
+      pressUp(false);
     },
   };
   useEffect(() => {
@@ -614,12 +634,14 @@ export function VoiceButton({
       clearTimeout(still.current);
       const press = pressing.current;
       pressing.current = null;
-      if (press)
-        void press
-          .then(() => desktopApi.voiceRelease())
+      if (press) {
+        press.released = true;
+        void press.promise
+          .then((reached) => (reached ? desktopApi.voiceRelease(0) : undefined))
           .catch((cause: unknown) =>
             console.warn("[voice] the microphone's release failed:", cause),
           );
+      }
     };
   }, []);
   const pick = (action: string | null) => {
@@ -694,11 +716,15 @@ export function VoiceButton({
     dictation: prefs.voiceDictation,
     name,
   });
+  const instruction = prefs.voiceDictation
+    ? "Press and hold to dictate"
+    : "Press and hold to speak";
   return (
     <>
       <ShortcutHint
-        label={description}
+        label={tapHint ? instruction : description}
         shortcut={shortcut || undefined}
+        showImmediately={tapHint}
         side="top"
       >
         <button
@@ -732,11 +758,11 @@ export function VoiceButton({
             bubble ? step({ kind: "up", x: event.screenX }) : pressUp()
           }
           onPointerCancel={() =>
-            bubble ? step({ kind: "cancel" }) : pressUp()
+            bubble ? step({ kind: "cancel" }) : pressUp(false)
           }
           onLostPointerCapture={() => {
             if (bubble) step({ kind: "cancel" });
-            else pressUp();
+            else pressUp(false);
           }}
           onKeyDown={(event) => {
             if (
@@ -758,7 +784,7 @@ export function VoiceButton({
               ? "Hold to retry voice"
               : `${prefs.voiceDictation ? "Hold to dictate" : `Hold to talk to ${name}`}${pending ? ", news waiting" : ""}`
           }
-          aria-description={description}
+          aria-description={tapHint ? instruction : description}
           aria-busy={loading}
           data-testid={chat ? "chat-voice-button" : "voice-button"}
           data-place={chat ? "composer" : "dock"}

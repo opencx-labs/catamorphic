@@ -45,7 +45,10 @@ follow the owning voice so stale work cannot affect another conversation.
 
 ## Consequences
 
-Voice has one input mode. A quick tap captures no sustained speech. macOS speech
+Voice has one input mode. A release before 250 ms discards the capture and shows
+the standard tooltip asking the person to hold, with their configured shortcut.
+Capture still starts on press, without waiting for that threshold. A press
+released before its chat finishes starting never opens the microphone later. macOS speech
 availability and language support follow Apple; the older recognizer can require
 network access and Speech Recognition permission. Native first-use asset setup
 can delay the first transcription. Linux still downloads its pinned local STT.

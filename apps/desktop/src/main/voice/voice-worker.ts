@@ -79,6 +79,7 @@ function forEngine(command: VoiceWorkerCommand): void {
       const held = engine;
       held.hold(command.held, {
         release: command.release,
+        discard: command.discard,
       });
       const release = command.release;
       if (!command.held && release !== undefined)

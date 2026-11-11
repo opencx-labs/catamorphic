@@ -304,8 +304,9 @@ describe("design lint", () => {
         reason: "the hover inspector primitive",
       },
       "components/shortcut-hint.tsx": {
-        count: 3,
-        reason: "tooltips hide on any press or key",
+        count: 4,
+        reason:
+          "tooltips hide on presses; Escape also dismisses an action hint while focus stays in the composer, and disabled-control hints keep their own key listener",
       },
       "components/sidebar-item-row.tsx": {
         count: 1,

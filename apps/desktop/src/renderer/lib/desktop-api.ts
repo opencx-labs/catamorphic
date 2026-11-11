@@ -2252,7 +2252,7 @@ export interface CatamorphicDesktopApi {
    */
   voicePress: (press: VoicePress) => Promise<void>;
   /** The held microphone or shortcut was released. */
-  voiceRelease: () => Promise<void>;
+  voiceRelease: (heldMs?: number) => Promise<void>;
   /** The chat in front of this window, for "Talk to this chat". */
   voiceFrontChat: (
     chat: { projectId: string; sessionId: string } | null,

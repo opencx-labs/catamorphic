@@ -60,6 +60,9 @@ export type VoiceId = (typeof VOICES)[number]["id"];
 
 export const DEFAULT_VOICE: VoiceId = "af_heart";
 
+/** Shorter releases teach push to talk instead of submitting captured audio. */
+export const VOICE_HOLD_MS = 250;
+
 /** A stored voice choice, or the default for anything unknown. */
 export function voiceIdOf(value: unknown): VoiceId {
   return VOICES.find((voice) => voice.id === value)?.id ?? DEFAULT_VOICE;
@@ -253,7 +256,7 @@ export type VoiceWorkerCommand =
   /** Write what the person says into a composer, or talk with the agent. */
   | { type: "dictation"; enabled: boolean }
   /** The keys or a microphone went down or came up. */
-  | { type: "hold"; held: boolean; release?: number }
+  | { type: "hold"; held: boolean; release?: number; discard?: boolean }
   /** Hear nothing more; speech already asked for is still said. */
   | { type: "stop-listening" }
   /** Voice moved on: drop what was said for where it was before. */

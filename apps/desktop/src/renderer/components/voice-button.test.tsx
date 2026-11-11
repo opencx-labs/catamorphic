@@ -27,7 +27,7 @@ vi.mock("../lib/use-app-preferences.js", () => ({
 }));
 vi.mock("../lib/keybindings", () => ({
   useKeybindings: () => ({}),
-  formatBinding: () => "",
+  formatBinding: () => "⌘⇧Space",
 }));
 vi.mock("../lib/microphones.js", () => ({
   useMicrophones: () => [],
@@ -39,6 +39,11 @@ let node: HTMLDivElement;
 beforeEach(() => {
   api.voicePress.mockClear();
   api.voiceRelease.mockClear();
+  vi.stubGlobal("requestAnimationFrame", (callback: FrameRequestCallback) => {
+    callback(0);
+    return 1;
+  });
+  vi.stubGlobal("cancelAnimationFrame", () => {});
   Reflect.set(globalThis, "IS_REACT_ACT_ENVIRONMENT", true);
   node = document.createElement("div");
   document.body.append(node);
@@ -48,21 +53,27 @@ afterEach(() => {
   act(() => root.unmount());
   node.remove();
   Reflect.set(globalThis, "IS_REACT_ACT_ENVIRONMENT", false);
+  vi.restoreAllMocks();
+  vi.unstubAllGlobals();
 });
 
-async function render(status: VoiceStatus, sessionId?: string) {
+async function render(
+  status: VoiceStatus,
+  sessionId?: string | null,
+  ensureSession?: () => Promise<string | null>,
+) {
   api.voiceStatus.mockResolvedValue(status);
   await act(async () =>
     root.render(
       <VoiceButton
         projectId="p"
-        {...(sessionId
+        {...(sessionId !== undefined
           ? {
               chat: {
                 sessionId,
                 agentId: null,
                 agentName: "Agent",
-                ensureSession: async () => sessionId,
+                ensureSession: ensureSession ?? (async () => sessionId),
                 focusComposer: () => {},
               },
             }
@@ -162,4 +173,79 @@ it("keeps a keyboard hold across composer focus and ends it on the matching keyu
     );
   });
   expect(api.voiceRelease).toHaveBeenCalledOnce();
+});
+
+it("teaches a quick pointer click with the shortcut, then allows an ordinary hold", async () => {
+  let now = 0;
+  vi.spyOn(performance, "now").mockImplementation(() => now);
+  const button = await render(VOICE_OFF, "s");
+  button.setPointerCapture = vi.fn();
+  await act(async () => {
+    button.dispatchEvent(
+      new MouseEvent("pointerdown", { button: 0, bubbles: true }),
+    );
+  });
+  now = 100;
+  await act(async () => {
+    button.dispatchEvent(
+      new MouseEvent("pointerup", { button: 0, bubbles: true }),
+    );
+  });
+  expect(api.voiceRelease).toHaveBeenCalledWith(100);
+  act(() => {
+    button.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+  });
+  expect(document.querySelector('[role="tooltip"]')?.textContent).toBe(
+    "Press and hold to speak⌘⇧Space",
+  );
+  expect(document.querySelector('[role="tooltip"]')?.className).toContain(
+    "opacity-100",
+  );
+  expect(button.dataset.phase).toBe("off");
+  await act(async () => {
+    button.dispatchEvent(
+      new MouseEvent("pointerdown", { button: 0, bubbles: true }),
+    );
+  });
+  expect(document.querySelector('[role="tooltip"]')?.textContent).not.toContain(
+    "Press and hold",
+  );
+  now = 600;
+  await act(async () => {
+    button.dispatchEvent(
+      new MouseEvent("pointerup", { button: 0, bubbles: true }),
+    );
+  });
+  expect(api.voiceRelease).toHaveBeenLastCalledWith(500);
+});
+
+it("never starts voice when a new chat finishes creation after a quick click", async () => {
+  let now = 0;
+  vi.spyOn(performance, "now").mockImplementation(() => now);
+  let resolve!: (session: string) => void;
+  const session = new Promise<string>((yes) => {
+    resolve = yes;
+  });
+  const button = await render(VOICE_OFF, null, () => session);
+  button.setPointerCapture = vi.fn();
+  await act(async () => {
+    button.dispatchEvent(
+      new MouseEvent("pointerdown", { button: 0, bubbles: true }),
+    );
+  });
+  now = 100;
+  await act(async () => {
+    button.dispatchEvent(
+      new MouseEvent("pointerup", { button: 0, bubbles: true }),
+    );
+  });
+  expect(document.querySelector('[role="tooltip"]')?.textContent).toContain(
+    "Press and hold to speak",
+  );
+  await act(async () => {
+    resolve("new-session");
+  });
+  expect(api.voicePress).not.toHaveBeenCalled();
+  expect(api.voiceRelease).not.toHaveBeenCalled();
+  expect(button.dataset.phase).toBe("off");
 });

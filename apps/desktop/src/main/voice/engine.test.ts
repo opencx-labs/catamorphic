@@ -77,6 +77,67 @@ function harness(
 }
 
 describe("VoiceEngine push to talk", () => {
+  it.each([false, true])(
+    "cancels a quick click without waiting on recognition, dictation=%s",
+    async (dictation) => {
+      let partial!: (text: string) => void;
+      const finish = vi.fn(() => new Promise<never>(() => {}));
+      const cancel = vi.fn();
+      const voice = harness([], (parts) => {
+        parts.startRecognition = (onPartial) => {
+          partial = onPartial;
+          return { write: vi.fn(), finish, cancel };
+        };
+      });
+      voice.engine.setDictation(dictation);
+      voice.engine.hold(true);
+      voice.frame(0.1);
+      partial("an early guess");
+      voice.engine.hold(false, { discard: true });
+      partial("a late guess");
+      await voice.engine.recognized();
+      expect(cancel).toHaveBeenCalledOnce();
+      expect(finish).not.toHaveBeenCalled();
+      expect(
+        voice.events.filter((event) => event.type === "utterance"),
+      ).toEqual([]);
+      expect(
+        voice.events
+          .filter(
+            (event) => event.type === (dictation ? "dictation" : "transcript"),
+          )
+          .at(-1),
+      ).toMatchObject({ text: "", final: true });
+      voice.engine.close();
+    },
+  );
+
+  it("keeps an earlier released message when the next press is only a click", async () => {
+    let resolve!: (value: { text: string; confidence: number }) => void;
+    const finish = vi.fn().mockReturnValueOnce(
+      new Promise((value) => {
+        resolve = value;
+      }),
+    );
+    const cancel = vi.fn();
+    const voice = harness([], (parts) => {
+      parts.startRecognition = () => ({ write: vi.fn(), finish, cancel });
+    });
+    voice.engine.hold(true);
+    voice.frame(0.5);
+    voice.engine.hold(false);
+    voice.engine.hold(true);
+    voice.engine.hold(false, { discard: true });
+    resolve({ text: "The earlier message.", confidence: 0 });
+    await voice.engine.recognized();
+    expect(finish).toHaveBeenCalledOnce();
+    expect(cancel).toHaveBeenCalledOnce();
+    expect(
+      voice.events.filter((event) => event.type === "utterance"),
+    ).toMatchObject([{ text: "The earlier message." }]);
+    voice.engine.close();
+  });
+
   it("shows revised live words during a hold and sends one final message on release", async () => {
     let partial!: (text: string) => void;
     const write = vi.fn();

@@ -4159,3 +4159,9 @@ no active idle timer. The input-free audio page stays prepared between holds.
 On macOS the local inference runtime loads only for a reply, and successful Apple
 permission/asset checks are reused without retaining a native helper or model.
 See ADR 0310.
+
+A short click teaches holding through the shared shortcut hint, with the person's
+configured voice shortcut. Releases before 250 ms cancel recognition and clear
+provisional words; they never submit a message or wait in the thinking state.
+Holding still opens capture immediately. A new chat finishing setup after release
+cannot start a late microphone.

@@ -24,6 +24,7 @@ import {
   sameVoiceTarget,
   VOICE_ACTIONS,
   VOICE_CAPTURE_MESSAGE,
+  VOICE_HOLD_MS,
   VOICE_OFF,
   VOICE_PORT_MESSAGE,
   VOICE_REST_MESSAGE,
@@ -243,6 +244,7 @@ const readAloudSchema = z.object({
 /** A microphone or shortcut held down, until it comes up. */
 interface Press {
   profileId: string;
+  at: number;
   /** It was a shortcut pressed in Work: the first may ask for every app. */
   key: boolean;
   /** The helper read it, in any app: its release comes from the helper. */
@@ -1564,7 +1566,7 @@ export function registerVoiceSupport(deps: {
       active?.profileId === profileId && !active.ending ? active : null;
     const same =
       !!voice && sameVoiceTarget(voice.live.target, targetOf(request));
-    press = { profileId, key, helper };
+    press = { profileId, key, helper, at: performance.now() };
     if (voice && same) {
       send(voice, { type: "hold", held: true });
       update(voice);
@@ -1590,8 +1592,8 @@ export function registerVoiceSupport(deps: {
     });
   };
 
-  /** Release always ends capture and transcribes this hold. */
-  const pressUp = () => {
+  /** Release closes capture; a quick click cancels instead of recognizing. */
+  const pressUp = (heldMs?: number) => {
     const done = press;
     press = null;
     if (!done) return;
@@ -1599,6 +1601,23 @@ export function registerVoiceSupport(deps: {
     const voice = active?.profileId === done.profileId ? active : null;
     if (!voice) return;
     voice.hearing = false;
+    const duration =
+      typeof heldMs === "number" && Number.isFinite(heldMs) && heldMs >= 0
+        ? heldMs
+        : performance.now() - done.at;
+    if (duration < VOICE_HOLD_MS) {
+      send(voice, { type: "hold", held: false, discard: true });
+      if (
+        !voice.busy &&
+        !voice.ending &&
+        voice.speaking.size === 0 &&
+        voice.awaitingWords === null &&
+        voice.early.length === 0
+      )
+        void stop();
+      else update(voice);
+      return;
+    }
     voice.awaitingWords = ++releases;
     send(voice, { type: "hold", held: false, release: voice.awaitingWords });
     update(voice);
@@ -1769,7 +1788,9 @@ export function registerVoiceSupport(deps: {
       pressFrom(windows.profileFor(event.sender), pressed);
     },
   );
-  shellIpcMain.handle("catamorphic:voice-release", () => pressUp());
+  shellIpcMain.handle("catamorphic:voice-release", (_event, heldMs?: number) =>
+    pressUp(heldMs),
+  );
 
   /** The chat in front of each window, for "Talk to this chat". */
   const frontChats = new WeakMap<WebContents, VoiceShortcutChat>();
