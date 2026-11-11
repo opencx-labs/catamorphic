@@ -65,6 +65,17 @@ const helpers = `
   ${workspaceDomHelpersJs}
   const byText = (selector, text) =>
     $$(selector).find((el) => el.textContent?.includes(text));
+  // A visible control can still be moving, or covered by the dock.
+  const hitPoint = (element) => {
+    if (!element?.checkVisibility({opacityProperty:true,visibilityProperty:true}) || element.disabled) return false;
+    const box = element.getBoundingClientRect();
+    const scope = element.closest('[role="menu"], [data-dock-rail], [data-chat-local-id]') ?? element;
+    if (scope.getAnimations({subtree:true}).some(animation =>
+      (animation.playState === 'running' || animation.pending) && animation.effect?.getTiming().iterations !== Infinity
+    )) return false;
+    const point = {x:box.x+box.width/2,y:box.y+box.height/2};
+    return element.contains(document.elementFromPoint(point.x,point.y)) && point;
+  };
   const mic = () => $('[data-testid="voice-button"]');
   const chatOf = (localId) => $('[data-chat-local-id="' + localId + '"]');
   const chatMic = (localId) => chatOf(localId)?.querySelector('[data-testid="chat-voice-button"]');
@@ -175,13 +186,18 @@ async function openPage() {
 async function openMenu(target = "mic()") {
   await focusWindow(app);
   const point = await runWait<{ x: number; y: number }>(
-    `const target = ${target};
-     if (!target?.checkVisibility({opacityProperty:true,visibilityProperty:true})) return false;
-     const box = target.getBoundingClientRect();
-     return {x:box.x+box.width/2,y:box.y+box.height/2};`,
+    `return hitPoint(${target});`,
     { label: "the voice menu's hit target" },
   );
   await app.movePointer(point);
+  await run(`
+    window.__voiceMenuPress = null;
+    document.addEventListener('pointerdown', event => {
+      const button = event.target instanceof Element ? event.target.closest('button') : null;
+      window.__voiceMenuPress = {label:button?.getAttribute('aria-label'),arrows:button?.hasAttribute('data-dock-arrows'),testid:button?.dataset.testid,x:event.clientX,y:event.clientY};
+    }, {once:true,capture:true});
+    return true;
+  `);
   for (const type of ["mousePressed", "mouseReleased"])
     await app.cdp("Input.dispatchMouseEvent", {
       type,
@@ -189,16 +205,21 @@ async function openMenu(target = "mic()") {
       button: "right",
       clickCount: 1,
     });
+  await runWait(`return !!$('[role="menu"]');`, {
+    label: "voice menu after the right press",
+  }).catch(async (cause: unknown) => {
+    const detail = await run(`return {
+      press:window.__voiceMenuPress,status:await api.voiceStatus(),
+      target:${target}?.getBoundingClientRect().toJSON()
+    };`);
+    throw new Error(`${String(cause)}; menu input: ${JSON.stringify(detail)}`);
+  });
 }
 
 /** A DOM click leaves the real pointer over a different submenu's row. */
 async function clickMenuItem(expression: string, label: string) {
   const point = await runWait<{ x: number; y: number }>(
-    `const item = ${expression};
-     if (!item?.checkVisibility({opacityProperty:true,visibilityProperty:true}) || item.disabled) return false;
-     const box = item.getBoundingClientRect();
-     const point = {x:box.x+box.width/2,y:box.y+box.height/2};
-     return item.contains(document.elementFromPoint(point.x,point.y)) && point;`,
+    `return hitPoint(${expression});`,
     { label },
   );
   await app.clickPointer(point);
@@ -212,10 +233,12 @@ async function microphone(
   const point = await runWait<{ x: number; y: number }>(
     `const button = ${button};
      if (!button) return false;
+     if (${JSON.stringify(type)} === 'mousePressed') return hitPoint(button);
      const box = button.getBoundingClientRect();
      return { x: box.x + box.width / 2, y: box.y + box.height / 2 };`,
     { label: "the microphone's hit target" },
   );
+  if (type === "mousePressed") await app.movePointer(point);
   await app.cdp("Input.dispatchMouseEvent", {
     type,
     button: "left",
@@ -281,9 +304,16 @@ async function talk(
       };
     }
     window.__captureFirstAt = 0;
-    window.__capturePressedAt = Date.now();
     return true;
   })()`);
+  // Readiness and pointer positioning happen before the press, not in its latency.
+  await run(`
+    window.__voicePressedAt = 0;
+    window.addEventListener(${JSON.stringify(key ? "keydown" : "pointerdown")}, () => {
+      window.__voicePressedAt = Date.now();
+    }, {once:true,capture:true});
+    return true;
+  `);
   await input(true);
   const ref = await runWait<Ref>(
     `const status = await api.voiceStatus();
@@ -295,9 +325,10 @@ async function talk(
     },
   );
   await capturedSpeech();
-  const captureDelay = await captureProbe.eval<number>(
-    "window.__captureFirstAt - window.__capturePressedAt",
-  );
+  const pressedAt = await run<number>("return window.__voicePressedAt;");
+  const capturedAt = await captureProbe.eval<number>("window.__captureFirstAt");
+  expect(pressedAt).toBeGreaterThan(0);
+  const captureDelay = capturedAt - pressedAt;
   captureProbe.close();
   expect(captureDelay).toBeGreaterThanOrEqual(0);
   expect(captureDelay).toBeLessThan(500);

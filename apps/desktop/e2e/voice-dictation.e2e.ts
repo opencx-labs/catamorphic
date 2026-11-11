@@ -2,6 +2,7 @@ import http from "node:http";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import {
   type AppHandle,
+  focusWindow,
   launchApp,
   openProjectSwitcher,
   setReactValueJs,
@@ -46,6 +47,17 @@ const helpers = `
   ${workspaceDomHelpersJs}
   const byText = (selector, text) =>
     $$(selector).find((el) => el.textContent?.includes(text));
+  // A visible control can still be moving, or covered by the dock.
+  const hitPoint = (element) => {
+    if (!element?.checkVisibility({opacityProperty:true,visibilityProperty:true}) || element.disabled) return false;
+    const box = element.getBoundingClientRect();
+    const scope = element.closest('[role="menu"], [data-dock-rail], [data-chat-local-id]') ?? element;
+    if (scope.getAnimations({subtree:true}).some(animation =>
+      (animation.playState === 'running' || animation.pending) && animation.effect?.getTiming().iterations !== Infinity
+    )) return false;
+    const point = {x:box.x+box.width/2,y:box.y+box.height/2};
+    return element.contains(document.elementFromPoint(point.x,point.y)) && point;
+  };
   const mic = () => $('[data-testid="voice-button"]');
   const chatOf = (localId) => $('[data-chat-local-id="' + localId + '"]');
   const chatMic = (localId) => chatOf(localId)?.querySelector('[data-testid="chat-voice-button"]');
@@ -90,17 +102,22 @@ const dictateKeys = (type: "keyDown" | "keyUp") =>
     return true;
   `);
 
-/** Opens a microphone's menu, as a right click does. */
-const openMenu = (button: string) =>
-  run(`
-    const button = ${button};
-    const bounds = button.getBoundingClientRect();
-    button.dispatchEvent(new MouseEvent('contextmenu', {
-      bubbles: true, cancelable: true, button: 2,
-      clientX: bounds.left + bounds.width / 2, clientY: bounds.top + bounds.height / 2,
-    }));
-    return true;
-  `);
+/** Open the microphone menu with the same pointer input as a person. */
+async function openMenu(button: string) {
+  await focusWindow(app);
+  const point = await runWait<{ x: number; y: number }>(
+    `return hitPoint(${button});`,
+    { label: "the microphone menu's hit target" },
+  );
+  await app.movePointer(point);
+  for (const type of ["mousePressed", "mouseReleased"])
+    await app.cdp("Input.dispatchMouseEvent", {
+      type,
+      ...point,
+      button: "right",
+      clickCount: 1,
+    });
+}
 
 /** Wait for enough microphone samples to recognize the complete scripted phrase. */
 async function capturedSpeech() {
@@ -168,24 +185,31 @@ describe("dictation and voice's keys", () => {
     );
     const id = JSON.stringify(localId);
     await openMenu(`chatMic(${id})`);
-    await runWait(
+    const dictationToggle = await runWait<{ x: number; y: number }>(
       `const item = byText('[role="menuitemcheckbox"]', 'Dictation only');
-       if (!item || item.getAttribute('aria-checked') !== 'false') return false;
-       item.click(); return true;`,
+       if (item?.getAttribute('aria-checked') !== 'false') return false;
+       return hitPoint(item);`,
       { label: "dictation only in the menu" },
     );
+    await app.clickPointer(dictationToggle);
     await runWait(
       `return (await api.getPrefs()).voiceDictation === true &&
          chatMic(${id})?.dataset.action === 'dictate';`,
       { label: "dictation on" },
     );
     const point = await runWait<{ x: number; y: number }>(
-      `const button = chatMic(${id});
-       if (!button) return false;
-       const box = button.getBoundingClientRect();
-       return { x: box.x + box.width / 2, y: box.y + box.height / 2 };`,
+      `return hitPoint(chatMic(${id}));`,
       { label: "the composer's microphone" },
     );
+    await app.movePointer(point);
+    await run(`
+      window.__dictationPress = null;
+      document.addEventListener('pointerdown', event => {
+        const button = event.target instanceof Element ? event.target.closest('button') : null;
+        window.__dictationPress = {testid:button?.dataset.testid,place:button?.dataset.place,label:button?.getAttribute('aria-label')};
+      }, {once:true,capture:true});
+      return true;
+    `);
     await app.cdp("Input.dispatchMouseEvent", {
       type: "mousePressed",
       button: "left",
@@ -199,7 +223,16 @@ describe("dictation and voice's keys", () => {
          status.target?.kind === 'dictation' && status.target.sessionId &&
          { projectId: lastProjectId, sessionId: status.target.sessionId };`,
       { timeoutMs: 30_000, label: "dictating while the microphone is held" },
-    );
+    ).catch(async (cause: unknown) => {
+      const detail = await run(`return {
+        status:await api.voiceStatus(),press:window.__dictationPress,
+        chat:{...chatOf(${id})?.dataset},
+        microphone:chatMic(${id})?.getAttribute('aria-description')
+      };`);
+      throw new Error(
+        `${String(cause)}; dictation input: ${JSON.stringify(detail)}`,
+      );
+    });
     await capturedSpeech();
     expect(await run(`return composerOf(${id}).textContent.trim();`)).toBe(
       UTTERANCES[0],
@@ -238,12 +271,13 @@ describe("dictation and voice's keys", () => {
       { timeoutMs: 30_000, label: "sent and answered as text" },
     );
     await openMenu(`chatMic(${id})`);
-    await runWait(
+    const dictationOff = await runWait<{ x: number; y: number }>(
       `const item = byText('[role="menuitemcheckbox"]', 'Dictation only');
        if (!item || item.getAttribute('aria-checked') !== 'true') return false;
-       item.click(); return true;`,
+       return hitPoint(item);`,
       { label: "dictation off in the menu" },
     );
+    await app.clickPointer(dictationOff);
     await runWait(`return (await api.getPrefs()).voiceDictation === false;`, {
       label: "dictation off",
     });
