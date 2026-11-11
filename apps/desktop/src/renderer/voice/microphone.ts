@@ -9,6 +9,21 @@ import captureWorklet from "./capture-worklet.ts?worker&url";
 const SILENT_SECONDS = 4;
 const SILENT_PEAK = 1e-4;
 
+/** Load the audio graph without asking for, or opening, an input device. */
+export function prepareMicrophone() {
+  const context = new AudioContext({ sampleRate: SPEECH_SAMPLE_RATE });
+  const ready = context.audioWorklet.addModule(captureWorklet);
+  void ready.catch(() => {});
+  void context.suspend().catch(() => {});
+  return {
+    context,
+    ready,
+    close: () => {
+      void context.close();
+    },
+  };
+}
+
 /**
  * Start capture, with an immediate closer. Permission, worklet loading and
  * AudioContext.resume can all finish after voice is turned off. None may
@@ -17,24 +32,28 @@ const SILENT_PEAK = 1e-4;
 export function listen(
   port: MessagePort,
   microphone: string | null,
+  prepared?: ReturnType<typeof prepareMicrophone>,
 ): () => void {
   const controller = new AbortController();
   let stream: MediaStream | null = null;
-  let context: AudioContext | null = null;
+  let context: AudioContext | null = prepared?.context ?? null;
   const close = () => {
     if (controller.signal.aborted) return;
     controller.abort();
     for (const track of stream?.getTracks() ?? []) track.stop();
-    void context?.close();
+    if (prepared) void context?.suspend().catch(() => {});
+    else void context?.close();
   };
   const start = async () => {
+    // Resume the prepared graph in parallel with the physical input opening.
+    if (prepared) void prepared.context.resume().catch(() => {});
     stream = await openMicrophone(microphone, controller.signal);
     if (controller.signal.aborted) {
       for (const track of stream.getTracks()) track.stop();
       return;
     }
-    context = new AudioContext({ sampleRate: SPEECH_SAMPLE_RATE });
-    await capture(port, stream, context, controller.signal);
+    context ??= new AudioContext({ sampleRate: SPEECH_SAMPLE_RATE });
+    await capture(port, stream, context, controller.signal, prepared?.ready);
   };
   void start().catch((cause: unknown) => {
     if (controller.signal.aborted) return;
@@ -58,12 +77,13 @@ async function capture(
   stream: MediaStream,
   context: AudioContext,
   signal: AbortSignal,
+  ready?: Promise<void>,
 ): Promise<void> {
   const [track] = stream.getAudioTracks();
   // Which microphone it is: other apps' audio is lowered only for the
   // system's own (ADR 0268).
   post(port, { type: "microphone", label: track?.label ?? "" });
-  await context.audioWorklet.addModule(captureWorklet);
+  await (ready ?? context.audioWorklet.addModule(captureWorklet));
   signal.throwIfAborted();
   const tap = new AudioWorkletNode(context, "voice-capture", {
     numberOfInputs: 1,
@@ -80,7 +100,12 @@ async function capture(
   );
   let heardSeconds = 0;
   let silent = true;
+  let started = false;
   tap.port.onmessage = (event: MessageEvent<Float32Array>) => {
+    if (!started) {
+      started = true;
+      post(port, { type: "capturing" });
+    }
     if (silent) {
       for (const sample of event.data)
         if (Math.abs(sample) > SILENT_PEAK) silent = false;
@@ -105,7 +130,9 @@ async function capture(
       sampleRate: context.sampleRate,
     });
   };
-  context.createMediaStreamSource(stream).connect(tap);
+  const source = context.createMediaStreamSource(stream);
+  source.connect(tap);
+  signal.addEventListener("abort", () => source.disconnect(), { once: true });
   await context.resume();
 }
 

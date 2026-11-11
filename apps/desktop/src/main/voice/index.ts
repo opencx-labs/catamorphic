@@ -36,6 +36,7 @@ import {
   type VoiceSessionRef,
   type VoiceStatus,
   type VoiceTarget,
+  type VoiceTranscript,
   type VoiceWindowChoice,
   type VoiceWorkerCommand,
   type VoiceWorkerEvent,
@@ -182,6 +183,7 @@ interface ActiveVoice {
   /** Whose voice it speaks in: an agent's, or null for the default voice. */
   voiceOf: string | null;
   hearing: boolean;
+  preview: { workerSegment: number; words: VoiceTranscript } | null;
   speaking: Set<string>;
   busy: boolean;
   /**
@@ -537,16 +539,15 @@ export function registerVoiceSupport(deps: {
 
   const update = (voice: ActiveVoice, patch: Partial<LiveStatus> = {}) => {
     if (active !== voice) return;
-    const phase =
-      voice.live.phase === "preparing" && !connected(voice)
+    const phase = voice.hearing
+      ? "hearing"
+      : !connected(voice)
         ? "preparing"
-        : voice.hearing
-          ? "hearing"
-          : voice.speaking.size > 0
-            ? "speaking"
-            : voice.busy || voice.ending
-              ? "thinking"
-              : "listening";
+        : voice.speaking.size > 0
+          ? "speaking"
+          : voice.busy || voice.ending
+            ? "thinking"
+            : "listening";
     voice.live = {
       ...voice.live,
       phase,
@@ -559,6 +560,25 @@ export function registerVoiceSupport(deps: {
   /** Voice talks with its chat, or dictates: it is ready. */
   const connected = (voice: ActiveVoice) =>
     voice.conversation !== null || voice.dictating !== null;
+
+  const broadcastTranscript = (voice: ActiveVoice, words: VoiceTranscript) => {
+    for (const window of BrowserWindow.getAllWindows())
+      if (
+        !window.isDestroyed() &&
+        !isAudioWindow(window) &&
+        shellProfileFor(window.webContents) === voice.profileId
+      )
+        window.webContents.send("catamorphic:voice-transcript", words);
+  };
+  const clearTranscript = (voice: ActiveVoice) => {
+    if (!voice.preview) return;
+    broadcastTranscript(voice, {
+      ...voice.preview.words,
+      text: "",
+      final: true,
+    });
+    voice.preview = null;
+  };
 
   const send = (voice: ActiveVoice, command: VoiceWorkerCommand) => {
     if (active === voice) voice.worker.postMessage(command);
@@ -574,19 +594,41 @@ export function registerVoiceSupport(deps: {
     audio: BrowserWindow | null;
     timer: ReturnType<typeof setTimeout>;
   } | null = null;
+  let preparedAudio: BrowserWindow | null = null;
+  let openingAudio: Promise<BrowserWindow> | null = null;
   /** An audio page whose renderer went: it can hear nothing more. */
   const audioGone = (window: BrowserWindow) => {
+    if (preparedAudio === window) preparedAudio = null;
     if (resting?.audio === window) resting.audio = null;
     if (reading?.borrowed?.audio === window) endReading();
     if (active?.audioWindow === window)
       void stop("The microphone stopped. Turn voice on again.");
   };
+  const prepareAudioPage = (): Promise<BrowserWindow> => {
+    if (preparedAudio && !preparedAudio.isDestroyed())
+      return Promise.resolve(preparedAudio);
+    openingAudio ??= openAudioWindow(audioGone)
+      .then((window) => {
+        if (disposed) {
+          window.destroy();
+          throw new Error("Voice stopped.");
+        }
+        preparedAudio = window;
+        return window;
+      })
+      .finally(() => {
+        openingAudio = null;
+      });
+    return openingAudio;
+  };
+  // The page and worklet are ready before the first press; no microphone opens.
+  void prepareAudioPage().catch(() => {});
   /** Workers that stopped: one not yet started is not among them. */
   const exited = new WeakSet<UtilityProcess>();
   const letGo = (warm: NonNullable<typeof resting>) => {
     clearTimeout(warm.timer);
     warm.worker.kill();
-    if (warm.audio && !warm.audio.isDestroyed()) warm.audio.destroy();
+    // Its unloaded worker can go; the input-free audio page stays ready.
   };
   const takeWarm = (): {
     worker: UtilityProcess;
@@ -637,6 +679,7 @@ export function registerVoiceSupport(deps: {
     const voice = active;
     if (!voice) return;
     active = null;
+    clearTranscript(voice);
     // A reply it was reading goes with it.
     if (reading && !reading.borrowed) reading = null;
     clearTimeout(voice.idle);
@@ -732,11 +775,8 @@ export function registerVoiceSupport(deps: {
     try {
       const paths = fakeUtterances ? null : await models.ensure(() => {});
       if (reading !== mine) return;
-      const window = warm.audio ?? (await openAudioWindow(audioGone));
-      if (reading !== mine) {
-        if (window !== warm.audio) window.destroy();
-        return;
-      }
+      const window = warm.audio ?? (await prepareAudioPage());
+      if (reading !== mine) return;
       borrowed.audio = window;
       // The page and its port first: the speech plays as soon as it is made.
       connectAudio(window, warm.worker, { microphone: null, listen: false });
@@ -1076,12 +1116,43 @@ export function registerVoiceSupport(deps: {
         if (voice.awaitingWords === event.release) voice.awaitingWords = null;
         break;
       case "speech-start":
-        voice.hearing = true;
         see(voice, event.segment);
         break;
       case "speech-end":
         voice.hearing = false;
         break;
+      case "capturing":
+        voice.hearing = wantsMicrophone(voice);
+        break;
+      case "transcript": {
+        const ref = voice.conversation?.ref;
+        if (!ref) {
+          if (!connected(voice)) {
+            voice.early = voice.early.filter(
+              (prior) => prior.type !== "transcript",
+            );
+            voice.early.push(event);
+          }
+          return;
+        }
+        if (event.final) {
+          if (voice.preview?.workerSegment === event.segment)
+            clearTranscript(voice);
+          return;
+        }
+        const words: VoiceTranscript = {
+          ...ref,
+          segment:
+            voice.preview?.workerSegment === event.segment
+              ? voice.preview.words.segment
+              : ++stretches,
+          text: event.text,
+          final: false,
+        };
+        voice.preview = { workerSegment: event.segment, words };
+        broadcastTranscript(voice, words);
+        return;
+      }
       case "utterance":
         if (!voice.conversation || voice.catchingUp) {
           if (!connected(voice) || voice.catchingUp) voice.early.push(event);
@@ -1369,6 +1440,7 @@ export function registerVoiceSupport(deps: {
       dictating: null,
       voiceOf: null,
       hearing: false,
+      preview: null,
       speaking: new Set(),
       busy: false,
       ending: false,
@@ -1425,9 +1497,8 @@ export function registerVoiceSupport(deps: {
       const microphone = (async () => {
         if (fake === undefined) await ensureMicrophone();
         if (!live()) return;
-        const window = voice.audioWindow ?? (await openAudioWindow(audioGone));
+        const window = voice.audioWindow ?? (await prepareAudioPage());
         if (!live()) {
-          if (window !== voice.audioWindow) window.destroy();
           return;
         }
         voice.audioWindow = window;
@@ -1468,6 +1539,7 @@ export function registerVoiceSupport(deps: {
 
   /** A live voice moves to another chat, or to dictation: the models stay. */
   const retarget = async (voice: ActiveVoice, request: VoiceRequest) => {
+    clearTranscript(voice);
     if (request.kind !== "dictation")
       lastRequests.set(voice.profileId, request);
     send(voice, { type: "stop-speaking" });
@@ -1526,6 +1598,10 @@ export function registerVoiceSupport(deps: {
       return;
     }
     const held = press;
+    if (!active) {
+      void start(profileId, request);
+      return;
+    }
     void stop().then(() => {
       if (press === held) return start(profileId, request);
     });
@@ -1539,6 +1615,7 @@ export function registerVoiceSupport(deps: {
     if (done.key) askForEveryApp(done.profileId);
     const voice = active?.profileId === done.profileId ? active : null;
     if (!voice) return;
+    voice.hearing = false;
     voice.awaitingWords = ++releases;
     send(voice, { type: "hold", held: false, release: voice.awaitingWords });
     update(voice);
@@ -2120,6 +2197,9 @@ export function registerVoiceSupport(deps: {
   return {
     dispose: async () => {
       disposed = true;
+      if (preparedAudio && !preparedAudio.isDestroyed())
+        preparedAudio.destroy();
+      preparedAudio = null;
       spoken.clear();
       app.off("browser-window-created", onWindowCreated);
       app.off("browser-window-created", onKeysWindow);

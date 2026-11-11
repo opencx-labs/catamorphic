@@ -13,12 +13,42 @@ const SPEECH_ENDS_AFTER = SPEECH_SAMPLE_RATE * 1.5;
  * person is still talking. Synthesis is a quiet tone as long as the words.
  */
 export function fakeSpeech(script: FakeSpeechScript): SpeechParts {
+  const textAt = (samples: number) => {
+    const words = script.utterance.split(/\s+/).filter(Boolean);
+    return words
+      .slice(
+        0,
+        Math.ceil(words.length * Math.min(1, samples / SPEECH_ENDS_AFTER)),
+      )
+      .join(" ");
+  };
   return {
-    recognize: async (heard) => {
-      const words = script.utterance.split(/\s+/).filter(Boolean);
-      const share = Math.min(1, heard.length / SPEECH_ENDS_AFTER);
+    startRecognition: (onPartial) => {
+      let samples = 0;
+      let text = "";
+      let canceled = false;
       return {
-        text: words.slice(0, Math.ceil(words.length * share)).join(" "),
+        write: (frame) => {
+          if (canceled) return;
+          samples += frame.length;
+          const next = textAt(samples);
+          if (next !== text) {
+            text = next;
+            onPartial(text);
+          }
+        },
+        finish: async () => ({
+          text: canceled ? "" : textAt(samples),
+          confidence: 0,
+        }),
+        cancel: () => {
+          canceled = true;
+        },
+      };
+    },
+    recognize: async (heard) => {
+      return {
+        text: textAt(heard.length),
         confidence: 0,
       };
     },

@@ -42,6 +42,81 @@ const audio = () => new Float32Array([0.125, -0.5, 0.25]);
 
 afterEach(() => vi.useRealTimers());
 
+describe("live native recognition", () => {
+  const flush = async () => {
+    for (let i = 0; i < 8; i++) await Promise.resolve();
+  };
+  function live() {
+    const prepare = fakeHelper();
+    const stream = fakeHelper();
+    const spawnImpl = vi
+      .fn()
+      .mockReturnValueOnce(prepare.child)
+      .mockReturnValueOnce(stream.child) as unknown as typeof spawn;
+    const recognition = new NativeRecognition({
+      helperPath: "/app/speech-recognition",
+      spawnImpl,
+    });
+    return { prepare, stream, recognition, spawnImpl };
+  }
+
+  it("streams copied PCM and revised UTF-8 text before release, then finalizes on EOF", async () => {
+    const native = live();
+    const partials: string[] = [];
+    const held = native.recognition.start((text) => partials.push(text));
+    const samples = audio();
+    held.write(samples);
+    samples.fill(1);
+    native.prepare.reply(native.prepare.success);
+    await flush();
+    expect(native.spawnImpl).toHaveBeenLastCalledWith(
+      "/app/speech-recognition",
+      ["--stream"],
+      { stdio: ["pipe", "pipe", "pipe"] },
+    );
+    expect(native.stream.child.stdin.writableEnded).toBe(false);
+    expect(Buffer.concat(native.stream.written).readFloatLE(0)).toBe(0.125);
+    const line = Buffer.from(
+      `${JSON.stringify({ protocol: 1, type: "partial", text: "café" })}\n`,
+    );
+    const accent = line.indexOf(Buffer.from("é"));
+    native.stream.stdout.write(line.subarray(0, accent + 1));
+    expect(partials).toEqual([]);
+    native.stream.stdout.write(line.subarray(accent + 1));
+    expect(partials).toEqual(["café"]);
+    native.stream.stdout.write(
+      JSON.stringify({ protocol: 1, type: "partial", text: "café today" }) +
+        "\n",
+    );
+    expect(partials).toEqual(["café", "café today"]);
+    const done = held.finish();
+    expect(native.stream.child.stdin.writableEnded).toBe(true);
+    native.stream.reply({ ...native.stream.success, text: "Café today." });
+    await expect(done).resolves.toMatchObject({ text: "Café today." });
+    native.recognition.dispose();
+  });
+
+  it("cancels an active stream and ignores its late partial and final results", async () => {
+    const native = live();
+    const partial = vi.fn();
+    const held = native.recognition.start(partial);
+    native.prepare.reply(native.prepare.success);
+    await flush();
+    held.write(audio());
+    held.cancel();
+    const done = held.finish();
+    native.stream.stdout.write(
+      JSON.stringify({ protocol: 1, type: "partial", text: "old target" }) +
+        "\n",
+    );
+    native.stream.reply(native.stream.success);
+    await expect(done).rejects.toThrow("stopped");
+    expect(partial).not.toHaveBeenCalled();
+    expect(native.stream.child.kill).toHaveBeenCalledWith("SIGTERM");
+    native.recognition.dispose();
+  });
+});
+
 describe("NativeRecognition", () => {
   it("sends only the supplied float32 view and returns Apple's transcript and log confidence", async () => {
     const helper = fakeHelper();

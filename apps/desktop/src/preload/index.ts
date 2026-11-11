@@ -97,6 +97,7 @@ import {
   type VoiceReadAloud,
   type VoiceRestMessage,
   type VoiceStatus,
+  type VoiceTranscript,
   type VoiceWindowChoice,
 } from "../shared/voice.js";
 import type {
@@ -1770,6 +1771,15 @@ const api = {
     ipcRenderer.on("catamorphic:voice-dictation", handler);
     return () =>
       ipcRenderer.removeListener("catamorphic:voice-dictation", handler);
+  },
+  onVoiceTranscript: (listener: (transcript: VoiceTranscript) => void) => {
+    const handler = (
+      _event: Electron.IpcRendererEvent,
+      value: VoiceTranscript,
+    ) => listener(value);
+    ipcRenderer.on("catamorphic:voice-transcript", handler);
+    return () =>
+      ipcRenderer.removeListener("catamorphic:voice-transcript", handler);
   },
   // --- workspace config (sidebars, palette modes) ---
   workspaceConfigGet: (projectId?: string): Promise<unknown> =>

@@ -38,7 +38,21 @@ language assets here. The voice worker prepares lazily before its first
 transcription; reading a reply aloud never requests recognition assets. The
 helper does not open the microphone; Work captures audio separately.
 
-Without `--prepare`, stdin contains little-endian Float32 mono PCM at 16 kHz,
+`--stream` accepts little-endian Float32 mono PCM at 16 kHz as it arrives.
+It writes newline-delimited provisional results while stdin remains open:
+
+```json
+{"protocol":1,"type":"partial","text":"The words so far"}
+```
+
+Each partial replaces the preceding preview. EOF finalizes recognition and
+returns the success shape below. On older Macs, OS recognition segments may
+finish during a pause; the helper continues the held stream with another request.
+Only Work's release finishes a turn. Live results report confidence as zero.
+`NativeRecognition.start(onPartial)` buffers audio during Apple preparation;
+`write(samples)` streams it and `finish()` sends EOF and returns the final text.
+
+Without `--prepare` or `--stream`, stdin contains little-endian Float32 mono PCM at 16 kHz,
 followed by EOF. Each process transcribes one stretch of up to 60 seconds.
 Empty and silent audio returns empty text before any Speech service is used.
 Transcription does not download assets. If the OS removed a language asset,
@@ -52,7 +66,7 @@ Success exits 0 and writes one JSON line:
 
 Preparation returns the same shape with empty text and zero confidence.
 Confidence is the mean log of Apple's confidence values, weighted by text
-length for SpeechTranscriber and by segment for SFSpeechRecognizer. Missing
+length for SpeechTranscriber and by segment for SFSpeechRecognizer in batch mode. Missing
 confidence attributes and empty text return zero. These values have Apple's
 calibration and should not inherit thresholds tuned for a different model.
 

@@ -77,6 +77,84 @@ function harness(
 }
 
 describe("VoiceEngine push to talk", () => {
+  it("shows revised live words during a hold and sends one final message on release", async () => {
+    let partial!: (text: string) => void;
+    const write = vi.fn();
+    const finish = vi.fn(async () => ({
+      text: "The final words.",
+      confidence: 0,
+    }));
+    const voice = harness([], (parts) => {
+      parts.startRecognition = (onPartial) => {
+        partial = onPartial;
+        return { write, finish, cancel: vi.fn() };
+      };
+    });
+    voice.engine.hold(true);
+    voice.frame(0.5);
+    partial("the first");
+    partial("the final words");
+    expect(write).toHaveBeenCalledOnce();
+    expect(
+      voice.events.filter((event) => event.type === "transcript"),
+    ).toMatchObject([
+      { text: "the first", final: false },
+      { text: "the final words", final: false },
+    ]);
+    expect(voice.events.some((event) => event.type === "utterance")).toBe(
+      false,
+    );
+    expect(finish).not.toHaveBeenCalled();
+    voice.engine.hold(false);
+    partial("a late guess");
+    await voice.engine.recognized();
+    expect(finish).toHaveBeenCalledOnce();
+    expect(
+      voice.events.filter((event) => event.type === "utterance"),
+    ).toMatchObject([{ text: "The final words." }]);
+    expect(
+      voice.events.filter((event) => event.type === "transcript").at(-1),
+    ).toMatchObject({ text: "", final: true });
+    voice.engine.close();
+  });
+
+  it("keeps live dictation in its field and cancels previews when the target changes", async () => {
+    const callbacks: ((text: string) => void)[] = [];
+    const cancel = vi.fn();
+    const voice = harness([], (parts) => {
+      parts.startRecognition = (onPartial) => {
+        callbacks.push(onPartial);
+        return {
+          write: vi.fn(),
+          finish: async () => ({ text: "Dictated words.", confidence: 0 }),
+          cancel,
+        };
+      };
+    });
+    voice.engine.setDictation(true);
+    voice.engine.hold(true);
+    callbacks[0]?.("dictated");
+    expect(
+      voice.events.filter((event) => event.type === "dictation"),
+    ).toMatchObject([{ text: "dictated", final: false }]);
+    voice.engine.forget();
+    callbacks[0]?.("old words");
+    expect(cancel).toHaveBeenCalledOnce();
+    voice.engine.hold(true);
+    callbacks[1]?.("new words");
+    voice.engine.hold(false);
+    await voice.engine.recognized();
+    expect(
+      voice.events
+        .filter((event) => event.type === "dictation")
+        .map((event) => event.text),
+    ).toEqual(["dictated", "new words", "Dictated words."]);
+    expect(voice.events.some((event) => event.type === "utterance")).toBe(
+      false,
+    );
+    voice.engine.close();
+  });
+
   const dictated = (voice: ReturnType<typeof harness>) =>
     voice.events.filter((event) => event.type === "dictation");
   it("keeps pauses within one hold and captures no audio from outside it", async () => {

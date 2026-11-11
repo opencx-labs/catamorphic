@@ -11,8 +11,12 @@ const mocks = vi.hoisted(() => ({
   listen: vi.fn(() => vi.fn()),
   speakerClose: vi.fn(),
   receive: vi.fn(),
+  prepared: { close: vi.fn() },
 }));
-vi.mock("./microphone.js", () => ({ listen: mocks.listen }));
+vi.mock("./microphone.js", () => ({
+  listen: mocks.listen,
+  prepareMicrophone: () => mocks.prepared,
+}));
 vi.mock("./speaker.js", () => ({
   Speaker: class {
     close = mocks.speakerClose;
@@ -45,7 +49,11 @@ it("releases and reopens capture on the same port while playback continues", asy
   message({ type: VOICE_CAPTURE_MESSAGE, listening: true });
   message({ type: VOICE_CAPTURE_MESSAGE, listening: true });
   expect(mocks.listen).toHaveBeenCalledTimes(2);
-  expect(mocks.listen).toHaveBeenLastCalledWith(audioPort, "chosen");
+  expect(mocks.listen).toHaveBeenLastCalledWith(
+    audioPort,
+    "chosen",
+    mocks.prepared,
+  );
   message({ type: VOICE_REST_MESSAGE });
   expect(mocks.listen.mock.results[1]?.value).toHaveBeenCalledOnce();
   message({ type: VOICE_CAPTURE_MESSAGE, listening: true });

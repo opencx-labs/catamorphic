@@ -11,7 +11,7 @@ import {
 
 /**
  * Dictation writes final words when its microphone or shortcut is released.
- * Holding captures audio without editing the field or sending a chat message.
+ * Holding shows provisional words without sending a chat message.
  * Browser shortcuts use the page's native input path.
  */
 
@@ -201,12 +201,14 @@ describe("dictation and voice's keys", () => {
       { timeoutMs: 30_000, label: "dictating while the microphone is held" },
     );
     await capturedSpeech();
-    expect(await run(`return composerOf(${id}).textContent.trim();`)).toBe("");
+    expect(await run(`return composerOf(${id}).textContent.trim();`)).toBe(
+      UTTERANCES[0],
+    );
     expect(
       await run(
         `return !!composerOf(${id}).querySelector('[data-dictation]');`,
       ),
-    ).toBe(false);
+    ).toBe(true);
     await app.cdp("Input.dispatchMouseEvent", {
       type: "mouseReleased",
       button: "left",
@@ -280,7 +282,9 @@ describe("dictation and voice's keys", () => {
       { timeoutMs: 30_000, label: "dictating while the keys are down" },
     );
     await capturedSpeech();
-    expect(await page_(`document.getElementById('note').value`)).toBe("");
+    expect(await page_(`document.getElementById('note').value`)).toBe(
+      UTTERANCES[1],
+    );
     await dictateKeys("keyUp");
     await runWait(
       `return (await $('webview').executeJavaScript("document.getElementById('note').value")) === ${JSON.stringify(UTTERANCES[1])};`,
@@ -292,7 +296,7 @@ describe("dictation and voice's keys", () => {
     });
   }, 120_000);
 
-  it("reuses dictation on a second hold without inserting words before release", async () => {
+  it("reuses dictation on a second hold and shows words before release", async () => {
     await page_(
       `const note = document.getElementById('note'); note.value = ''; note.focus(); true`,
     );
@@ -302,7 +306,9 @@ describe("dictation and voice's keys", () => {
       { timeoutMs: 30_000, label: "dictating on the next hold" },
     );
     await capturedSpeech();
-    expect(await page_(`document.getElementById('note').value`)).toBe("");
+    expect(await page_(`document.getElementById('note').value`)).toBe(
+      UTTERANCES[2],
+    );
     await dictateKeys("keyUp");
     await runWait(
       `return (await $('webview').executeJavaScript("document.getElementById('note').value")) === ${JSON.stringify(UTTERANCES[2])};`,

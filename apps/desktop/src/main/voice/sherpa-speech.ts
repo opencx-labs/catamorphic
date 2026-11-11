@@ -51,7 +51,7 @@ export async function loadSherpaSpeech({
       : null;
   const [recognizer] = await Promise.all([
     recognitionLoad,
-    speaking ? synthesizer() : null,
+    speaking && !native ? synthesizer() : null,
   ]);
   const generationFor = (id: VoiceId) =>
     new sherpa.GenerationConfig({
@@ -82,6 +82,12 @@ export async function loadSherpaSpeech({
           Math.max(1, probabilities.length),
       };
     },
+    ...(native
+      ? {
+          startRecognition: (onPartial: (text: string) => void) =>
+            native.start(onPartial),
+        }
+      : {}),
     synthesize: async (text, onSentence) => {
       // A later voice selection belongs to the next text, even when this
       // reply is still waiting for Kokoro to load.

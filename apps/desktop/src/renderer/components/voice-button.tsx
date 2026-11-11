@@ -569,6 +569,47 @@ export function VoiceButton({
           .catch(() => {});
     }
   };
+  // Session creation may move focus into the new composer while Space is
+  // still held. The physical release belongs to the window, not its old button.
+  const heldInput = useRef({
+    release: (_focus: boolean) => {},
+    blur: () => {},
+  });
+  heldInput.current = {
+    release: (focus) => {
+      const keyboard = pressedKey.current !== null;
+      pressedKey.current = null;
+      pressUp();
+      if (keyboard && focus && prefs.voiceDictation) chat?.focusComposer();
+    },
+    blur: () => {
+      step({ kind: "cancel" });
+      pressedKey.current = null;
+      pressUp();
+    },
+  };
+  useEffect(() => {
+    const down = (event: KeyboardEvent) => {
+      if (event.key !== pressedKey.current) return;
+      // A held Space/Enter must not type or send after focus moves.
+      event.preventDefault();
+      event.stopPropagation();
+    };
+    const up = (event: KeyboardEvent) => {
+      if (event.key !== pressedKey.current) return;
+      event.preventDefault();
+      heldInput.current.release(true);
+    };
+    const blur = () => heldInput.current.blur();
+    window.addEventListener("keydown", down, true);
+    window.addEventListener("keyup", up, true);
+    window.addEventListener("blur", blur);
+    return () => {
+      window.removeEventListener("keydown", down, true);
+      window.removeEventListener("keyup", up, true);
+      window.removeEventListener("blur", blur);
+    };
+  }, []);
   useEffect(() => {
     mounted.current = true;
     return () => {
@@ -713,17 +754,6 @@ export function VoiceButton({
             if (event.repeat || pressedKey.current) return;
             pressedKey.current = event.key;
             pressDown();
-          }}
-          onKeyUp={(event) => {
-            if (event.key !== pressedKey.current) return;
-            event.preventDefault();
-            pressedKey.current = null;
-            pressUp();
-            if (prefs.voiceDictation) chat?.focusComposer();
-          }}
-          onBlur={() => {
-            pressedKey.current = null;
-            pressUp();
           }}
           onContextMenu={openMenu}
           aria-label={

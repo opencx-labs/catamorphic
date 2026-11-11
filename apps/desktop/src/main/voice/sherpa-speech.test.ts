@@ -370,7 +370,7 @@ describe("speech model demand loading", () => {
   });
 
   it.each(["dictation", "close", "failure"])(
-    "prepares speech on a live dictation handoff and handles %s during loading",
+    "starts synthesis only for the first reply after dictation and handles %s during loading",
     async (ending) => {
       const loading = pendingSynthesis();
       native.loadSynthesis.mockReturnValueOnce(loading.promise);
@@ -388,6 +388,8 @@ describe("speech model demand loading", () => {
       engine.setDictation(true);
       expect(native.loadSynthesis).not.toHaveBeenCalled();
       engine.setDictation(false);
+      expect(native.loadSynthesis).not.toHaveBeenCalled();
+      engine.speak("reply", "Read this reply.");
       expect(native.loadSynthesis).toHaveBeenCalledOnce();
       if (ending === "dictation") engine.setDictation(true);
       if (ending === "close") {

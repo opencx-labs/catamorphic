@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { VoiceAudioUp } from "../../shared/voice.js";
-import { listen } from "./microphone.js";
+import { listen, prepareMicrophone } from "./microphone.js";
 
 function deferred<T>() {
   let resolve!: (value: T) => void;
@@ -16,7 +16,7 @@ const flush = async () => {
   for (let i = 0; i < 8; i++) await Promise.resolve();
 };
 
-function setup() {
+function setup(warm = false) {
   const permission = deferred<MediaStream>();
   const module = deferred<void>();
   const resume = deferred<void>();
@@ -25,21 +25,25 @@ function setup() {
     getTracks: () => [{ stop }],
     getAudioTracks: () => [{ label: "Default microphone" }],
   } as unknown as MediaStream;
-  const source = vi.fn(() => ({ connect: vi.fn() }));
+  const source = vi.fn(() => ({ connect: vi.fn(), disconnect: vi.fn() }));
   const contextClose = vi.fn(async () => {});
+  const suspend = vi.fn(async () => {});
+  const addModule = vi.fn(() => module.promise);
+  const getUserMedia = vi.fn(() => permission.promise);
   class Context {
     sampleRate = 16000;
-    audioWorklet = { addModule: () => module.promise };
+    audioWorklet = { addModule };
     createMediaStreamSource = source;
     resume = () => resume.promise;
     close = contextClose;
+    suspend = suspend;
   }
   class Tap {
     port = { onmessage: null, close: vi.fn() };
     disconnect = vi.fn();
   }
   vi.stubGlobal("navigator", {
-    mediaDevices: { getUserMedia: vi.fn(() => permission.promise) },
+    mediaDevices: { getUserMedia },
   });
   vi.stubGlobal("AudioContext", Context);
   vi.stubGlobal("AudioWorkletNode", Tap);
@@ -47,7 +51,9 @@ function setup() {
   const port = {
     postMessage: (value: VoiceAudioUp) => sent.push(value),
   } as unknown as MessagePort;
-  const close = listen(port, null);
+  const prepared = warm ? prepareMicrophone() : undefined;
+  expect(getUserMedia).not.toHaveBeenCalled();
+  const close = listen(port, null, prepared);
   return {
     permission,
     module,
@@ -58,12 +64,35 @@ function setup() {
     contextClose,
     sent,
     close,
+    prepared,
+    suspend,
+    getUserMedia,
+    addModule,
   };
 }
 
 afterEach(() => vi.unstubAllGlobals());
 
 describe("a microphone that stops while capture is starting", () => {
+  it("prepares its graph without an input and opens the device on press without reloading the worklet", async () => {
+    const mic = setup(true);
+    expect(mic.getUserMedia).toHaveBeenCalledOnce();
+    expect(mic.addModule).toHaveBeenCalledOnce();
+    mic.module.resolve();
+    await flush();
+    expect(mic.source).not.toHaveBeenCalled();
+    mic.permission.resolve(mic.stream);
+    mic.resume.resolve();
+    await flush();
+    expect(mic.source).toHaveBeenCalledOnce();
+    expect(mic.addModule).toHaveBeenCalledOnce();
+    mic.close();
+    expect(mic.stop).toHaveBeenCalledOnce();
+    expect(mic.contextClose).not.toHaveBeenCalled();
+    expect(mic.suspend).toHaveBeenCalledTimes(2);
+    mic.prepared?.close();
+    expect(mic.contextClose).toHaveBeenCalledOnce();
+  });
   it("releases a permission result that arrives after voice stopped", async () => {
     const mic = setup();
     mic.close();

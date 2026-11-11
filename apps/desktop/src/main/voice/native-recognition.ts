@@ -1,6 +1,8 @@
 import { type ChildProcess, spawn } from "node:child_process";
+import type { Writable } from "node:stream";
+import { StringDecoder } from "node:string_decoder";
 import { z } from "zod";
-import type { Recognized } from "./engine.js";
+import type { RecognitionStream, Recognized } from "./engine.js";
 
 const replySchema = z.discriminatedUnion("ok", [
   z.object({
@@ -18,12 +20,19 @@ const replySchema = z.discriminatedUnion("ok", [
 
 const MAX_SAMPLES = 16_000 * 60;
 const MAX_REPLY_BYTES = 256 * 1024;
+const partialSchema = z.object({
+  protocol: z.literal(1),
+  type: z.literal("partial"),
+  text: z.string(),
+});
 
 /** Apple speech recognition; no Work speech-to-text model or audio files. */
 export class NativeRecognition {
   private readonly pending = new Map<ChildProcess, () => void>();
   private preparing: Promise<void> | null = null;
   private disposed = false;
+  private epoch = 0;
+  private streaming: Promise<void> = Promise.resolve();
 
   constructor(
     private readonly options: {
@@ -76,8 +85,89 @@ export class NativeRecognition {
     return this.run({ prepare: false, audio });
   }
 
+  /** One held stream: PCM goes in immediately and revised text comes back live. */
+  start(onPartial: (text: string) => void): RecognitionStream {
+    const controller = new AbortController();
+    const epoch = this.epoch;
+    let frames: Buffer[] = [];
+    let input: Writable | null = null;
+    let ended = false;
+    let samplesWritten = 0;
+    const stopped = () =>
+      controller.signal.aborted || this.disposed || this.epoch !== epoch;
+    const working = Promise.all([this.prepare(), this.streaming]).then(() => {
+      if (stopped()) throw new Error("Speech recognition stopped.");
+      return this.run({
+        prepare: false,
+        signal: controller.signal,
+        stream: {
+          onPartial: (text) => {
+            if (!stopped()) onPartial(text);
+          },
+          connect: (stdin) => {
+            input = stdin;
+            for (const frame of frames) stdin.write(frame);
+            frames = [];
+            if (ended) stdin.end();
+          },
+        },
+      });
+    });
+    this.streaming = working.then(
+      () => {},
+      () => {},
+    );
+    const canceled = new Promise<Recognized>((_resolve, reject) =>
+      controller.signal.addEventListener(
+        "abort",
+        () => reject(new Error("Speech recognition stopped.")),
+        { once: true },
+      ),
+    );
+    const result = Promise.race([working, canceled]);
+    // A held stream can fail before the person releases it.
+    void result.catch(() => {});
+    return {
+      write: (samples) => {
+        if (ended || stopped()) return;
+        samplesWritten += samples.length;
+        if (
+          samplesWritten > MAX_SAMPLES ||
+          samples.some((sample) => !Number.isFinite(sample))
+        ) {
+          controller.abort();
+          throw new Error(
+            "The microphone returned invalid or excessive audio. Try dictating again.",
+          );
+        }
+        const frame = Buffer.from(
+          new Uint8Array(
+            samples.buffer,
+            samples.byteOffset,
+            samples.byteLength,
+          ),
+        );
+        if (input) input.write(frame);
+        else frames.push(frame);
+      },
+      finish: () => {
+        if (!ended) {
+          ended = true;
+          input?.end();
+        }
+        return result;
+      },
+      cancel: () => {
+        frames = [];
+        controller.abort();
+      },
+    };
+  }
+
   /** Stop current native work; the next voice can prepare and transcribe again. */
   cancel(): void {
+    this.epoch += 1;
+    this.streaming = Promise.resolve();
     this.preparing = null;
     for (const cancel of [...this.pending.values()]) cancel();
   }
@@ -91,13 +181,18 @@ export class NativeRecognition {
   private run({
     prepare,
     audio,
+    stream,
+    signal,
   }: {
     prepare: boolean;
     audio?: Buffer;
+    stream?: { onPartial(text: string): void; connect(input: Writable): void };
+    signal?: AbortSignal;
   }): Promise<Recognized> {
     return new Promise((resolve, reject) => {
       const args = [
         ...(prepare ? ["--prepare"] : []),
+        ...(stream ? ["--stream"] : []),
         ...(this.options.locale ? ["--locale", this.options.locale] : []),
       ];
       const child = (this.options.spawnImpl ?? spawn)(
@@ -108,6 +203,9 @@ export class NativeRecognition {
       const output: Buffer[] = [];
       let outputBytes = 0;
       let settled = false;
+      let lines = "";
+      const decoder = new StringDecoder("utf8");
+      let finalReply: z.infer<typeof replySchema> | null = null;
       let killTimer: ReturnType<typeof setTimeout> | undefined;
       const timeout = setTimeout(
         () =>
@@ -127,7 +225,9 @@ export class NativeRecognition {
       const cleanup = () => {
         clearTimeout(timeout);
         this.pending.delete(child);
+        signal?.removeEventListener("abort", abort);
       };
+      const abort = () => fail(new Error("Speech recognition stopped."));
       const fail = (error: Error) => {
         if (settled) return;
         settled = true;
@@ -157,6 +257,14 @@ export class NativeRecognition {
         ),
       );
       child.stderr?.resume();
+      const readLine = (line: string) => {
+        const value: unknown = JSON.parse(line);
+        const partial = partialSchema.safeParse(value);
+        if (finalReply)
+          throw new Error("Unexpected speech data after completion.");
+        if (partial.success) stream?.onPartial(partial.data.text);
+        else finalReply = replySchema.parse(value);
+      };
       child.stdout?.on("data", (chunk: Buffer) => {
         if (settled) return;
         outputBytes += chunk.length;
@@ -168,7 +276,25 @@ export class NativeRecognition {
           );
           return;
         }
-        output.push(chunk);
+        if (!stream) output.push(chunk);
+        else {
+          lines += decoder.write(chunk);
+          try {
+            let end = lines.indexOf("\n");
+            while (end >= 0) {
+              const line = lines.slice(0, end);
+              lines = lines.slice(end + 1);
+              if (line.trim()) readLine(line);
+              end = lines.indexOf("\n");
+            }
+          } catch {
+            fail(
+              new Error(
+                "macOS speech recognition returned an invalid response.",
+              ),
+            );
+          }
+        }
       });
       child.once("close", (code, signal) => {
         clearTimeout(killTimer);
@@ -176,9 +302,11 @@ export class NativeRecognition {
         settled = true;
         cleanup();
         try {
-          const value: unknown = JSON.parse(
-            Buffer.concat(output).toString("utf8"),
-          );
+          if (stream) lines += decoder.end();
+          if (stream && lines.trim()) readLine(lines);
+          const value: unknown = stream
+            ? finalReply
+            : JSON.parse(Buffer.concat(output).toString("utf8"));
           const reply = replySchema.parse(value);
           if (!reply.ok) {
             reject(new Error(reply.error.message));
@@ -202,7 +330,12 @@ export class NativeRecognition {
           );
         }
       });
-      child.stdin?.end(audio);
+      if (signal?.aborted) abort();
+      else {
+        signal?.addEventListener("abort", abort, { once: true });
+        if (stream && child.stdin) stream.connect(child.stdin);
+        else child.stdin?.end(audio);
+      }
     });
   }
 }

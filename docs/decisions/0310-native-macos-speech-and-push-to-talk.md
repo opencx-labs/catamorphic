@@ -17,7 +17,11 @@ A held microphone or shortcut already supplies that intent.
 Every platform captures only while a microphone or shortcut is held. Release
 closes physical inputs immediately and transcribes the buffered audio. Pauses
 never submit a message. Long holds use bounded recognition chunks but send one
-agent message on release. Dictation inserts completed chunks and its final words.
+agent message on release. Native macOS recognition streams provisional words while
+held. A chat previews them in its composer, preserving the typed draft; the preview
+clears when voice sends. Dictation keeps its final words in the field instead.
+Linux retains release-time recognition. The audio page and worklet prepare before
+a press without opening a microphone; first captured audio drives listening feedback.
 Pressing interrupts playback; replies arriving during a hold queue until release.
 Remove automatic turn detection, voiceprints, learning controls and tap toggles.
 
@@ -32,7 +36,8 @@ the existing audio page and never opens a second microphone or writes audio file
 Linux retains Parakeet on sherpa-onnx. Kokoro reply synthesis, the speech worker,
 audio page, chat routing and accessibility shortcuts stay shared. The macOS
 catalog contains only Kokoro; no Work-managed recognition, activity or speaker
-model is downloaded or loaded. Recognition cancellation and helper lifetimes
+model is downloaded or loaded. Native dictation skips the reply voice download too.
+Recognition cancellation and helper lifetimes
 follow the owning voice so stale work cannot affect another conversation.
 
 ## Consequences

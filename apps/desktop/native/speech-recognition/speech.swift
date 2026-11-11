@@ -38,6 +38,53 @@ private func complete(_ transcript: Transcript) -> Never {
     emit(["protocol": 1, "ok": true, "text": transcript.text, "confidence": transcript.confidence])
 }
 
+private func preview(_ text: String) {
+    if let data = try? JSONSerialization.data(withJSONObject: [
+        "protocol": 1, "type": "partial", "text": text.trimmingCharacters(in: .whitespacesAndNewlines)
+    ], options: [.sortedKeys]) {
+        FileHandle.standardOutput.write(data)
+        FileHandle.standardOutput.write(Data([10]))
+    }
+}
+
+/** The existing audio page streams PCM; this helper never opens a microphone. */
+private func liveAudio() -> AsyncThrowingStream<AVAudioPCMBuffer, Error> {
+    AsyncThrowingStream { continuation in
+        DispatchQueue.global(qos: .userInitiated).async {
+            do {
+                var pending = Data()
+                var total = 0
+                while let chunk = try FileHandle.standardInput.read(upToCount: 16_384), !chunk.isEmpty {
+                    total += chunk.count
+                    guard total <= maximumSamples * MemoryLayout<Float>.size else {
+                        throw HelperFailure(code: "audio_too_long", message: "Dictate in stretches of up to one minute, then try again.")
+                    }
+                    pending.append(chunk)
+                    let bytes = pending.count - pending.count % MemoryLayout<Float>.size
+                    if bytes == 0 { continue }
+                    let count = bytes / MemoryLayout<Float>.size
+                    guard let format = AVAudioFormat(commonFormat: .pcmFormatFloat32, sampleRate: sampleRate, channels: 1, interleaved: false),
+                          let buffer = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: AVAudioFrameCount(count)),
+                          let channel = buffer.floatChannelData?[0] else {
+                        throw HelperFailure(code: "audio_format", message: "macOS could not prepare dictation audio.")
+                    }
+                    pending.prefix(bytes).copyBytes(to: UnsafeMutableRawBufferPointer(start: channel, count: bytes))
+                    pending.removeFirst(bytes)
+                    buffer.frameLength = AVAudioFrameCount(count)
+                    for index in 0..<count where !channel[index].isFinite {
+                        throw HelperFailure(code: "invalid_audio", message: "The microphone returned invalid audio. Try dictating again.")
+                    }
+                    continuation.yield(buffer)
+                }
+                guard pending.isEmpty else {
+                    throw HelperFailure(code: "invalid_audio", message: "The audio was incomplete. Try dictating again.")
+                }
+                continuation.finish()
+            } catch { continuation.finish(throwing: error) }
+        }
+    }
+}
+
 private func watchLifetime(preparing: Bool) -> DispatchSourceTimer {
     let parent = getppid()
     let deadline = DispatchTime.now() + .seconds(preparing ? 300 : 90)
@@ -124,8 +171,117 @@ private func transcriberLocale(_ locale: Locale) async -> Locale? {
 }
 
 @available(macOS 26.0, *)
-private func makeTranscriber(locale: Locale) -> SpeechTranscriber {
-    SpeechTranscriber(locale: locale, transcriptionOptions: [], reportingOptions: [], attributeOptions: [.transcriptionConfidence])
+private func makeTranscriber(locale: Locale, live: Bool = false) -> SpeechTranscriber {
+    SpeechTranscriber(locale: locale, transcriptionOptions: [], reportingOptions: live ? [.volatileResults] : [], attributeOptions: [.transcriptionConfidence])
+}
+
+@available(macOS 26.0, *)
+private func transcribeLive(locale: Locale) async throws -> Transcript {
+    let transcriber = makeTranscriber(locale: locale, live: true)
+    guard await AssetInventory.status(forModules: [transcriber]) == .installed else {
+        throw HelperFailure(code: "assets_required", message: "macOS needs to prepare its speech recognition language. Try voice again while connected to the internet.")
+    }
+    guard let format = await SpeechAnalyzer.bestAvailableAudioFormat(compatibleWith: [transcriber]) else {
+        throw HelperFailure(code: "audio_format", message: "macOS could not prepare speech recognition.")
+    }
+    let analyzer = SpeechAnalyzer(modules: [transcriber])
+    let results = Task { () throws -> Transcript in
+        var committed = ""
+        var pending = ""
+        for try await result in transcriber.results {
+            let text = String(result.text.characters)
+            if result.isFinal {
+                committed += text
+                pending = ""
+            } else { pending = text }
+            preview(committed + pending)
+        }
+        return Transcript(text: committed.trimmingCharacters(in: .whitespacesAndNewlines), confidence: 0)
+    }
+    do {
+        let inputs = liveAudio().map { AnalyzerInput(buffer: try convert($0, to: format)) }
+        if let lastSample = try await analyzer.analyzeSequence(inputs) {
+            try await analyzer.finalizeAndFinish(through: lastSample)
+        } else { await analyzer.cancelAndFinishNow() }
+        return try await results.value
+    } catch {
+        await analyzer.cancelAndFinishNow()
+        results.cancel()
+        throw error
+    }
+}
+
+/** Older Macs can finalize an OS recognition segment during a held pause.
+ * Start the next recognition request; only stdin EOF ends the person's hold. */
+@MainActor
+private final class LegacyLiveRecognition {
+    private var task: SFSpeechRecognitionTask?
+    private var request: SFSpeechAudioBufferRecognitionRequest?
+    private var generation = 0
+    private var ended = false
+    private var committed = ""
+    private var pending = ""
+    private var failure: Error?
+    private var completion: CheckedContinuation<Transcript, Error>?
+
+    func run(locale: Locale) async throws -> Transcript {
+        try await authorizeLegacy()
+        let recognizer = try legacyRecognizer(locale: locale)
+        begin(recognizer)
+        for try await buffer in liveAudio() {
+            if let failure { throw failure }
+            request?.append(buffer)
+        }
+        if let failure { throw failure }
+        ended = true
+        return try await withCheckedThrowingContinuation { continuation in
+            completion = continuation
+            request?.endAudio()
+        }
+    }
+
+    private func begin(_ recognizer: SFSpeechRecognizer) {
+        generation += 1
+        let mine = generation
+        let input = SFSpeechAudioBufferRecognitionRequest()
+        input.shouldReportPartialResults = true
+        input.taskHint = .dictation
+        input.requiresOnDeviceRecognition = recognizer.supportsOnDeviceRecognition
+        request = input
+        task = recognizer.recognitionTask(with: input) { result, error in
+            Task { @MainActor in
+                guard mine == self.generation else { return }
+                if let result {
+                    self.pending = result.bestTranscription.formattedString
+                    preview(self.committed + self.pending)
+                    if result.isFinal {
+                        self.commit(recognizer)
+                        return
+                    }
+                }
+                if let error {
+                    if noSpeech(error) { self.commit(recognizer) }
+                    else {
+                        self.failure = error
+                        self.completion?.resume(throwing: error)
+                        self.completion = nil
+                    }
+                }
+            }
+        }
+    }
+
+    private func commit(_ recognizer: SFSpeechRecognizer) {
+        let text = (committed + pending).trimmingCharacters(in: .whitespacesAndNewlines)
+        pending = ""
+        if ended {
+            completion?.resume(returning: Transcript(text: text, confidence: 0))
+            completion = nil
+        } else {
+            committed = text.isEmpty ? "" : text + " "
+            begin(recognizer)
+        }
+    }
 }
 
 @available(macOS 26.0, *)
@@ -279,10 +435,12 @@ private struct SpeechRecognitionMain {
         do {
             var locale = Locale.current
             var prepare = false
+            var streaming = false
             var index = 0
             while index < arguments.count {
                 switch arguments[index] {
                 case "--prepare": prepare = true
+                case "--stream": streaming = true
                 case "--locale":
                     index += 1
                     guard index < arguments.count, !arguments[index].isEmpty else {
@@ -301,6 +459,12 @@ private struct SpeechRecognitionMain {
                     _ = try legacyRecognizer(locale: locale)
                 }
                 complete(.empty)
+            }
+            if streaming {
+                if #available(macOS 26.0, *), let supported = await transcriberLocale(locale) {
+                    complete(try await transcribeLive(locale: supported))
+                }
+                complete(try await LegacyLiveRecognition().run(locale: locale))
             }
             guard let input = try readAudio() else { complete(.empty) }
             if #available(macOS 26.0, *), let supported = await transcriberLocale(locale) {

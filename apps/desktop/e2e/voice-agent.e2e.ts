@@ -247,6 +247,21 @@ async function talk(
       windowsVirtualKeyCode: key === "Space" ? 32 : 13,
     });
   };
+  const captureProbe = await app.connectToFrame("voice.html");
+  await captureProbe.eval(`(() => {
+    if (!window.__captureTimingInstalled) {
+      window.__captureTimingInstalled = true;
+      const post = MessagePort.prototype.postMessage;
+      MessagePort.prototype.postMessage = function(message, ...args) {
+        if (message?.type === 'capturing' && !window.__captureFirstAt)
+          window.__captureFirstAt = Date.now();
+        return Reflect.apply(post, this, [message, ...args]);
+      };
+    }
+    window.__captureFirstAt = 0;
+    window.__capturePressedAt = Date.now();
+    return true;
+  })()`);
   await input(true);
   const ref = await runWait<Ref>(
     `const status = await api.voiceStatus();
@@ -258,6 +273,13 @@ async function talk(
     },
   );
   await capturedSpeech();
+  const captureDelay = await captureProbe.eval<number>(
+    "window.__captureFirstAt - window.__capturePressedAt",
+  );
+  captureProbe.close();
+  expect(captureDelay).toBeGreaterThanOrEqual(0);
+  expect(captureDelay).toBeLessThan(500);
+  console.info("Voice press to first audio frame:", captureDelay, "ms");
   await input(false);
   await runWait(
     `const detail = await session(${JSON.stringify(ref)});
@@ -713,7 +735,10 @@ describe("voice", () => {
       `return [...chatOf(${JSON.stringify(localId)}).querySelectorAll('.cat-markdown')].some((el) => el.textContent.trim() === 'By text.');`,
       { timeoutMs: 30_000, label: "a typed answer" },
     );
-    // Its microphone sits in the composer; the dock's stays off.
+    // Its microphone previews into the composer without consuming typed prose.
+    await run(
+      `setReactValue(chatOf(${JSON.stringify(localId)}).querySelector('[data-composer-input]'), 'Keep this draft'); return true;`,
+    );
     await microphone("mousePressed", `chatMic(${JSON.stringify(localId)})`);
     const ref = await runWait<Ref>(
       `const status = await api.voiceStatus();
@@ -724,6 +749,10 @@ describe("voice", () => {
     );
     expect(await run(`return mic().dataset.phase;`)).toBe("off");
     await capturedSpeech();
+    await runWait(
+      `const input = chatOf(${JSON.stringify(localId)}).querySelector('[data-composer-input]'); return input.textContent.includes('how am i talking to you') && !!input.querySelector('[data-dictation]');`,
+      { label: "live words in the composer before release" },
+    );
     expect(await answers("By voice.")).toBe(0);
     await microphone("mouseReleased", `chatMic(${JSON.stringify(localId)})`);
     // What the person says is the chat's next message, and the agent knows
@@ -738,6 +767,10 @@ describe("voice", () => {
       `return session(${JSON.stringify(ref)});`,
     );
     expect(detail.agentId).not.toMatch(/assistant:/);
+    await runWait(
+      `return chatOf(${JSON.stringify(localId)}).querySelector('[data-composer-input]').textContent.trim() === 'Keep this draft';`,
+      { label: "only the voice preview removed after sending" },
+    );
     // Off again, the conversation carries on in text.
     await runWait(
       `return (await api.voiceStatus()).phase === 'off' && chatMic(${JSON.stringify(localId)}).dataset.phase === 'off';`,

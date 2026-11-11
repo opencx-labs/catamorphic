@@ -199,6 +199,9 @@ export interface VoiceDictation {
   final: boolean;
 }
 
+/** A held conversation's temporary text, scoped to its chat composer. */
+export type VoiceTranscript = VoiceDictation & VoiceSessionRef;
+
 /**
  * Where voice's shortcuts work (ADR 0236): in Work's windows, or in every
  * app (macOS, once Work is allowed in Accessibility).
@@ -272,6 +275,7 @@ export interface FakeSpeechScript {
 /** Speech worker → main process. */
 export type VoiceWorkerEvent =
   | { type: "ready" }
+  | { type: "capturing" }
   | { type: "failed"; message: string }
   /** The person started talking: the `segment`th stretch of speech. */
   | { type: "speech-start"; segment: number }
@@ -287,6 +291,8 @@ export type VoiceWorkerEvent =
    * nothing was or it was someone else.
    */
   | { type: "dictation"; segment: number; text: string; final: boolean }
+  /** Live composer preview for a conversation; sending still waits for release. */
+  | { type: "transcript"; segment: number; text: string; final: boolean }
   /** The person talked over the agent, which stopped speaking. */
   | { type: "barge-in" }
   | { type: "speaking"; id: string }
@@ -326,6 +332,8 @@ export interface VoiceLevels {
 /** Audio page → speech worker, over the transferred port. */
 export type VoiceAudioUp =
   | { type: "frame"; samples: Float32Array; sampleRate: number }
+  /** First real audio frame of this press has reached the worklet. */
+  | { type: "capturing" }
   /** Playback reached the end of every chunk up to `seq`. */
   | { type: "drained"; seq: number }
   | ({ type: "levels" } & VoiceLevels)

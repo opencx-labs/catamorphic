@@ -140,6 +140,7 @@ import type {
   VoicePress,
   VoiceReadAloud,
   VoiceStatus,
+  VoiceTranscript,
   VoiceWindowChoice,
 } from "../../shared/voice.js";
 import type {
@@ -2267,6 +2268,9 @@ export interface CatamorphicDesktopApi {
   onVoiceDictation: (
     listener: (dictation: VoiceDictation) => void,
   ) => () => void;
+  onVoiceTranscript: (
+    listener: (transcript: VoiceTranscript) => void,
+  ) => () => void;
   /** A text field here has focus: dictation writes into this window. */
   voiceFieldFocus: () => void;
   /** What was dictated here was sent: listening on its own ends. */
@@ -2320,6 +2324,9 @@ export const desktopApi: CatamorphicDesktopApi = {
   onVoiceLevels: shareEvent((publish) => nativeApi.onVoiceLevels(publish)),
   onVoiceDictation: shareEvent((publish) =>
     nativeApi.onVoiceDictation(publish),
+  ),
+  onVoiceTranscript: shareEvent((publish) =>
+    nativeApi.onVoiceTranscript(publish),
   ),
   onVoiceKeys: shareEvent((publish) => nativeApi.onVoiceKeys(publish)),
   // Every chat's microphone and settings view reads prefs.

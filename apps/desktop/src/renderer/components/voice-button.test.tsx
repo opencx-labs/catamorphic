@@ -13,6 +13,8 @@ const { api } = vi.hoisted(() => ({
     onVoiceLevels: vi.fn(() => () => {}),
     agentsList: vi.fn(async () => ({ agents: [] })),
     onAgentsChanged: vi.fn(() => () => {}),
+    voicePress: vi.fn(async () => {}),
+    voiceRelease: vi.fn(async () => {}),
   },
 }));
 vi.mock("../lib/desktop-api.js", () => ({ desktopApi: api }));
@@ -35,6 +37,8 @@ vi.mock("../lib/microphones.js", () => ({
 let root: Root;
 let node: HTMLDivElement;
 beforeEach(() => {
+  api.voicePress.mockClear();
+  api.voiceRelease.mockClear();
   Reflect.set(globalThis, "IS_REACT_ACT_ENVIRONMENT", true);
   node = document.createElement("div");
   document.body.append(node);
@@ -115,4 +119,47 @@ it("identifies the reply voice download separately from recognition", async () =
   expect(button.getAttribute("aria-description")).toBe(
     "Downloading reply voice, 25%",
   );
+});
+
+it("keeps a keyboard hold across composer focus and ends it on the matching keyup", async () => {
+  const button = await render(VOICE_OFF, "s");
+  const composer = document.createElement("input");
+  node.append(composer);
+  button.focus();
+  await act(async () => {
+    button.dispatchEvent(
+      new KeyboardEvent("keydown", {
+        key: " ",
+        bubbles: true,
+        cancelable: true,
+      }),
+    );
+  });
+  expect(api.voicePress).toHaveBeenCalledOnce();
+  act(() => composer.focus());
+  expect(api.voiceRelease).not.toHaveBeenCalled();
+  const typed = vi.fn();
+  composer.addEventListener("keydown", typed);
+  const repeated = new KeyboardEvent("keydown", {
+    key: " ",
+    repeat: true,
+    bubbles: true,
+    cancelable: true,
+  });
+  act(() => composer.dispatchEvent(repeated));
+  expect(repeated.defaultPrevented).toBe(true);
+  expect(typed).not.toHaveBeenCalled();
+  expect(api.voicePress).toHaveBeenCalledOnce();
+  await act(async () => {
+    composer.dispatchEvent(
+      new KeyboardEvent("keyup", { key: "Enter", bubbles: true }),
+    );
+  });
+  expect(api.voiceRelease).not.toHaveBeenCalled();
+  await act(async () => {
+    composer.dispatchEvent(
+      new KeyboardEvent("keyup", { key: " ", bubbles: true, cancelable: true }),
+    );
+  });
+  expect(api.voiceRelease).toHaveBeenCalledOnce();
 });

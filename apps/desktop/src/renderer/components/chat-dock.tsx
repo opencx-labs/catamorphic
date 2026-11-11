@@ -140,6 +140,7 @@ import { useQueueMessages } from "../lib/use-queue-messages.js";
 import { useSessionCheckout } from "../lib/use-session-checkout.js";
 import { useVoiceReading } from "../lib/use-voice-reading.js";
 import { useWorkDisplay } from "../lib/use-work-display.js";
+import { useVoiceTranscript } from "../lib/voice-transcript.js";
 import { windowImage } from "../lib/window-images.js";
 import type { ChatMode } from "../lib/workspace-types.js";
 import { isOpenAction } from "../sources/run.js";
@@ -879,6 +880,7 @@ function ChatDockContent({
   const [hasText, setHasText] = useState(false);
   const [pillCount, setPillCount] = useState(0);
   const composerRef = useRef<ComposerInputHandle>(null);
+  useVoiceTranscript(projectId, activeSessionId, composerRef);
   const publishDraft = useComposerDraft({
     localId: entry.localId,
     composer: composerRef,

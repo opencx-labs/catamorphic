@@ -5,7 +5,7 @@ import {
   type VoiceAudioDown,
   type VoicePortMessage,
 } from "../../shared/voice.js";
-import { listen } from "./microphone.js";
+import { listen, prepareMicrophone } from "./microphone.js";
 import { Speaker } from "./speaker.js";
 
 /**
@@ -23,6 +23,11 @@ import { Speaker } from "./speaker.js";
 /** The voice this page serves now; null while it rests. */
 let current: { close(): void; setListening(listening: boolean): void } | null =
   null;
+const preparedMicrophone = prepareMicrophone();
+window.addEventListener("pagehide", () => {
+  current?.close();
+  preparedMicrophone.close();
+});
 
 window.addEventListener("message", (event: MessageEvent<unknown>) => {
   if (event.source !== window) return;
@@ -54,7 +59,7 @@ window.addEventListener("message", (event: MessageEvent<unknown>) => {
   let ended = false;
   const setListening = (listening: boolean) => {
     if (ended) return;
-    if (listening) microphone ??= listen(port, device);
+    if (listening) microphone ??= listen(port, device, preparedMicrophone);
     else {
       microphone?.();
       microphone = null;

@@ -311,6 +311,11 @@ describe("design lint", () => {
         count: 1,
         reason: "Escape closes a row's hover preview",
       },
+      "components/voice-button.tsx": {
+        count: 2,
+        reason:
+          "a held microphone key cannot type or send after focus moves, and its release ends capture",
+      },
       "screens/settings-screen.tsx": {
         count: 2,
         reason: "recording a shortcut takes the next key",

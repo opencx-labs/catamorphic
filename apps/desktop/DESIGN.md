@@ -26,6 +26,11 @@ Voice uses push to talk only: hold a microphone or shortcut and release to send.
 Pauses do not end a turn. macOS uses Apple's speech APIs; Linux keeps local
 Parakeet. No voice activity detector or speaker model runs on either platform.
 Pressing stops playback; a reply arriving during a hold waits for its release.
+The audio page and input worklet stay prepared with the microphone closed.
+The listening indicator follows the first captured frame. On macOS, provisional
+recognition appears in the composer's existing dictation preview while held.
+Release sends one final voice message and removes the preview, preserving any
+typed draft. Dictation keeps the final words for the person to edit and send.
 Capture and the macOS audio-lowering input stop on release, while buffered
 transcription and playback finish separately (ADR 0310, superseding automatic
 turn-taking in the earlier voice design entries below).

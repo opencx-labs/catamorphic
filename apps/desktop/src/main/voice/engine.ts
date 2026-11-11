@@ -20,9 +20,16 @@ export interface Recognized {
   confidence: number;
 }
 
+export interface RecognitionStream {
+  write(samples: Float32Array): void;
+  finish(): Promise<Recognized>;
+  cancel(): void;
+}
+
 /** Platform recognition and local reply synthesis, real or scripted in tests. */
 export interface SpeechParts {
   recognize(samples: Float32Array): Promise<Recognized>;
+  startRecognition?(onPartial: (text: string) => void): RecognitionStream;
   prepareSynthesis?(): Promise<void>;
   synthesize(
     text: string,
@@ -47,6 +54,8 @@ interface Hold {
   samples: number;
   words: string[];
   dictated: boolean;
+  stream: RecognitionStream | null;
+  chunk: number;
 }
 
 /**
@@ -104,15 +113,34 @@ export class VoiceEngine {
           samples.length - offset,
           CHUNK_SAMPLES - hold.samples,
         );
-        hold.chunks.push(samples.slice(offset, offset + take));
+        const piece = samples.subarray(offset, offset + take);
+        if (hold.stream) {
+          try {
+            hold.stream.write(piece);
+          } catch (cause) {
+            this.forget();
+            this.emit({
+              type: "failed",
+              message: cause instanceof Error ? cause.message : String(cause),
+            });
+            return;
+          }
+        } else hold.chunks.push(piece.slice());
         hold.samples += take;
         offset += take;
-        if (hold.samples === CHUNK_SAMPLES) this.hear(hold, { final: false });
+        if (hold.samples === CHUNK_SAMPLES) {
+          this.hear(hold, { final: false });
+          this.openRecognition(hold);
+        }
       }
     } else if (message.type === "drained") {
       this.drainedSeq = Math.max(this.drainedSeq, message.seq);
       this.settlePlayback();
-    } else if (message.type === "levels" || message.type === "microphone") {
+    } else if (
+      message.type === "levels" ||
+      message.type === "microphone" ||
+      message.type === "capturing"
+    ) {
       this.emit(message);
     } else this.emit({ type: "failed", message: message.message });
   }
@@ -132,16 +160,6 @@ export class VoiceEngine {
     this.forget();
     this.dictation = enabled;
     this.stopSpeaking();
-    if (!enabled && this.parts.prepareSynthesis) {
-      const generation = this.generation;
-      void this.parts.prepareSynthesis().catch((cause: unknown) => {
-        if (generation !== this.generation || this.dictation) return;
-        this.emit({
-          type: "failed",
-          message: `Speech synthesis failed: ${cause instanceof Error ? cause.message : String(cause)}`,
-        });
-      });
-    }
   }
 
   hold(held: boolean, { release }: { release?: number } = {}): void {
@@ -159,7 +177,10 @@ export class VoiceEngine {
         samples: 0,
         words: [],
         dictated: false,
+        stream: null,
+        chunk: 0,
       };
+      this.openRecognition(this.holding);
       this.emit({ type: "speech-start", segment: this.segment });
       return;
     }
@@ -183,6 +204,7 @@ export class VoiceEngine {
     this.epoch += 1;
     // Abandoned native preparation/inference must not block the next target.
     this.parts.cancelRecognition?.();
+    this.holding?.stream?.cancel();
     if (this.holding) this.emit({ type: "speech-end" });
     this.holding = null;
   }
@@ -222,18 +244,24 @@ export class VoiceEngine {
     hold: Hold,
     { final, release }: { final: boolean; release?: number },
   ): void {
-    const samples = concat(hold.chunks);
+    const stream = hold.stream;
+    hold.stream = null;
+    const samples = stream ? null : concat(hold.chunks);
     const segment = hold.segment;
+    const chunk = hold.chunk++;
     if (hold.dictation && !final) hold.segment = ++this.segment;
     hold.chunks = [];
     hold.samples = 0;
     const live = () =>
       this.listening && !this.closed && hold.epoch === this.epoch;
+    const result = stream?.finish();
+    void result?.catch(() => {});
     this.recognizing = this.recognizing
       .then(async () => {
         if (!live()) return;
-        const { text } =
-          samples.length > 0
+        const { text } = result
+          ? await result
+          : samples && samples.length > 0
             ? await this.parts.recognize(samples)
             : { text: "" };
         if (!live()) return;
@@ -241,9 +269,11 @@ export class VoiceEngine {
         if (hold.dictation) {
           this.emit({ type: "dictation", segment, text: words, final: true });
           hold.dictated ||= words.length > 0;
-        } else if (words) hold.words.push(words);
+        } else hold.words[chunk] = words;
         if (!final) return;
-        const said = hold.words.join(" ");
+        if (!hold.dictation && this.parts.startRecognition)
+          this.emit({ type: "transcript", segment, text: "", final: true });
+        const said = hold.words.filter(Boolean).join(" ").trim();
         if (said) this.emit({ type: "utterance", text: said, segment });
         else if (!hold.dictated)
           this.emit({
@@ -258,6 +288,29 @@ export class VoiceEngine {
           message: `Listening failed: ${cause instanceof Error ? cause.message : String(cause)}`,
         });
       });
+  }
+
+  private openRecognition(hold: Hold): void {
+    if (!this.parts.startRecognition) return;
+    const segment = hold.segment;
+    const chunk = hold.chunk;
+    let stream: RecognitionStream | null = null;
+    stream = this.parts.startRecognition((text) => {
+      if (this.closed || hold.epoch !== this.epoch || hold.stream !== stream)
+        return;
+      if (hold.dictation)
+        this.emit({ type: "dictation", segment, text, final: false });
+      else {
+        hold.words[chunk] = text;
+        this.emit({
+          type: "transcript",
+          segment,
+          text: hold.words.filter(Boolean).join(" "),
+          final: false,
+        });
+      }
+    });
+    hold.stream = stream;
   }
 
   private async drainSpeech(): Promise<void> {

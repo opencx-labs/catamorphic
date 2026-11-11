@@ -41,7 +41,7 @@ function onAudio(data: VoiceAudioUp): void {
     return;
   }
   // Which microphone it is matters before the models are loaded too.
-  if (data.type === "microphone") {
+  if (data.type === "microphone" || data.type === "capturing") {
     emit(data);
     return;
   }
@@ -172,7 +172,11 @@ async function start({
     if (mine !== starts) return;
     // A warm worker may have only dictated so far. A conversation (or a
     // reply read aloud) prepares speech before reporting ready too.
-    if (!dictation) await parts.prepareSynthesis?.();
+    if (
+      !dictation &&
+      (speech.kind === "fake" || speech.paths.recognition.kind !== "native")
+    )
+      await parts.prepareSynthesis?.();
     // Voice went off, or started again, while the models loaded.
     if (mine !== starts) return;
     if (speech.kind === "models") parts.setVoice?.(speech.voice);
@@ -209,6 +213,7 @@ function isAudioUp(value: unknown): value is VoiceAudioUp {
       value.type === "drained" ||
       value.type === "levels" ||
       value.type === "failed" ||
-      value.type === "microphone")
+      value.type === "microphone" ||
+      value.type === "capturing")
   );
 }
