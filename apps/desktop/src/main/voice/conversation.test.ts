@@ -81,6 +81,97 @@ afterEach(() => {
 });
 
 describe("VoiceConversation", () => {
+  it.each([false, true])(
+    "keeps an old idle read from settling a new delivery (arrives after commit=%s)",
+    async (afterCommit) => {
+      vi.useFakeTimers();
+      let stale!: (chat: VoiceChat) => void;
+      let delivered!: (value: {
+        itemId: string;
+        turnId: string;
+        mode: string;
+      }) => void;
+      const busy: boolean[] = [];
+      const get = vi.fn(async () => detail([], { busy: true }));
+      get.mockResolvedValueOnce(detail([])).mockImplementationOnce(
+        () =>
+          new Promise((resolve) => {
+            stale = resolve;
+          }),
+      );
+      const conversation = new VoiceConversation(ref, {
+        sessions: {
+          get,
+          send: () =>
+            new Promise((resolve) => {
+              delivered = resolve;
+            }),
+          interrupt: async () => {},
+        },
+        speech: { speak: () => {}, cue: () => {}, stopSpeaking: () => {} },
+        onBusy: (value) => busy.push(value),
+        onError: () => {},
+      });
+      await conversation.start();
+      await vi.advanceTimersByTimeAsync(1000);
+      const sending = conversation.heard("Keep every word.");
+      if (afterCommit) {
+        delivered({ itemId: "item", turnId: "turn", mode: "steer" });
+        await sending;
+      }
+      stale(detail([]));
+      await vi.advanceTimersByTimeAsync(0);
+      expect(busy).toEqual([true]);
+      if (!afterCommit) {
+        delivered({ itemId: "item", turnId: "turn", mode: "steer" });
+        await sending;
+      }
+      await vi.advanceTimersByTimeAsync(0);
+      expect(busy).toEqual([true]);
+      get.mockResolvedValue(detail([message("reply", "All done.")]));
+      await vi.advanceTimersByTimeAsync(1000);
+      expect(busy).toEqual([true, false]);
+      conversation.stop();
+    },
+  );
+
+  it("waits for delivery and a fresh chat read when the agent finishes during a send", async () => {
+    vi.useFakeTimers();
+    let delivered!: (value: {
+      itemId: string;
+      turnId: string;
+      mode: string;
+    }) => void;
+    const get = vi.fn(async () => detail([]));
+    const finished = vi.fn();
+    const conversation = new VoiceConversation(ref, {
+      sessions: {
+        get,
+        send: () =>
+          new Promise((resolve) => {
+            delivered = resolve;
+          }),
+        interrupt: async () => {},
+      },
+      speech: { speak: () => {}, cue: () => {}, stopSpeaking: () => {} },
+      onBusy: () => {},
+      onError: () => {},
+    });
+    await conversation.start();
+    const sending = conversation.heard("Keep the final sentence.");
+    conversation.finish(finished);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(finished).not.toHaveBeenCalled();
+    get.mockResolvedValue(detail([], { busy: true }));
+    delivered({ itemId: "item", turnId: "turn", mode: "steer" });
+    await sending;
+    await vi.advanceTimersByTimeAsync(0);
+    expect(finished).not.toHaveBeenCalled();
+    get.mockResolvedValue(detail([]));
+    await vi.advanceTimersByTimeAsync(1000);
+    expect(finished).toHaveBeenCalledOnce();
+  });
+
   it("speaks replies that land after listening began, never the history", async () => {
     vi.useFakeTimers();
     const voice = harness(detail([message("old", "An earlier answer.")]));

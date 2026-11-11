@@ -6,6 +6,7 @@ let app: AppHandle;
 const api = "window.catamorphicDesktop";
 const mic = "document.querySelector('[data-testid=\"voice-button\"]')";
 const utterance = "This is a held message.";
+const shortcut = process.platform === "darwin" ? "⌘⇧V" : "Ctrl+Shift+V";
 
 beforeAll(async () => {
   app = await launchApp({
@@ -22,7 +23,11 @@ beforeAll(async () => {
   );
   await app.waitFor(`!!${mic}`);
   await app.eval(`${api}.setKeybindings({'talk-to-work':'Cmd+Shift+V'})`);
-  await focusWindow(app);
+  await point();
+  await app.waitFor(
+    `[...document.querySelectorAll('[role="tooltip"]')].some(t=>t.textContent.includes(${JSON.stringify(shortcut)}))`,
+    { label: "the configured voice shortcut rendered" },
+  );
 });
 
 afterAll(async () => {
@@ -86,9 +91,7 @@ async function click() {
     `[...document.querySelectorAll('[role="tooltip"]')].find(t=>t.textContent.includes('Press and hold to speak')&&getComputedStyle(t).opacity==='1')?.textContent`,
     { label: "the hold instruction after a click" },
   );
-  expect(tooltip).toContain(
-    process.platform === "darwin" ? "⌘⇧V" : "Ctrl+Shift+V",
-  );
+  expect(tooltip).toContain(shortcut);
   expect(await app.eval<string[]>("window.__clickPhases")).not.toContain(
     "thinking",
   );
@@ -108,6 +111,13 @@ it("still captures and sends the next held message", async () => {
   try {
     await audio.eval(`(()=>{
       window.__clickSeconds=0;
+      window.__clickTracks=[];
+      const get=navigator.mediaDevices.getUserMedia;
+      navigator.mediaDevices.getUserMedia=async function(...args){
+        const stream=await Reflect.apply(get,this,args);
+        window.__clickTracks.push(...stream.getAudioTracks());
+        return stream;
+      };
       const post=MessagePort.prototype.postMessage;
       MessagePort.prototype.postMessage=function(value,...args){
         if(value?.type==='frame')window.__clickSeconds+=value.samples.length/value.sampleRate;
@@ -117,6 +127,21 @@ it("still captures and sends the next held message", async () => {
     })()`);
     const target = await point();
     await recordPhases();
+    await app.eval(`(()=>{
+      window.__voiceMotion=[];
+      window.__voiceMotionStop=false;
+      const draw=()=>{
+        const button=${mic},bars=button?.querySelector('.voice-bars');
+        if(button&&bars)window.__voiceMotion.push({
+          phase:button.dataset.phase,
+          opacity:Number(getComputedStyle(bars).opacity),
+          level:Math.max(...[...bars.children].map(bar=>Number(bar.style.getPropertyValue('--level')||0)))
+        });
+        if(!window.__voiceMotionStop)requestAnimationFrame(draw);
+      };
+      requestAnimationFrame(draw);
+      return true;
+    })()`);
     await app.cdp("Input.dispatchMouseEvent", {
       type: "mousePressed",
       ...target,
@@ -125,6 +150,21 @@ it("still captures and sends the next held message", async () => {
     });
     await app.waitFor(
       `${api}.voiceStatus().then(status=>status.phase==='hearing')`,
+    );
+    await audio.waitFor("window.__clickSeconds>=0.8", {
+      label: "audio before an input disconnect",
+    });
+    await audio.eval(
+      `(()=>{window.__clickDisconnected=window.__clickTracks.at(-1);window.__clickDisconnected.dispatchEvent(new Event('ended'));return true;})()`,
+    );
+    await audio.waitFor(
+      "window.__clickTracks.at(-1)!==window.__clickDisconnected&&window.__clickTracks.at(-1)?.readyState==='live'",
+      {
+        label: "the replacement microphone opened while held",
+      },
+    );
+    await app.waitFor(
+      `${api}.voiceStatus().then(status=>status.phase==='hearing'&&!status.error)`,
     );
     await audio.waitFor("window.__clickSeconds>=1.7", {
       label: "the held phrase captured",
@@ -143,7 +183,30 @@ it("still captures and sends the next held message", async () => {
       },
     );
     expect(await messageCount()).toBe(1);
+    await app.waitFor(
+      `getComputedStyle(${mic}.querySelector('.voice-bars')).opacity==='0'`,
+      {
+        label: "the waveform exit finished",
+      },
+    );
+    const motion = await app.eval<
+      { phase: string; opacity: number; level: number }[]
+    >(`(()=>{window.__voiceMotionStop=true;return window.__voiceMotion;})()`);
+    const speaking = motion.findIndex((frame) => frame.phase === "speaking");
+    expect(speaking).toBeGreaterThanOrEqual(0);
+    const exiting = motion
+      .slice(speaking)
+      .filter(
+        (frame) =>
+          frame.phase === "off" && frame.opacity > 0 && frame.opacity < 1,
+      );
+    expect(exiting.length).toBeGreaterThan(1);
+    expect(new Set(exiting.map((frame) => frame.level)).size).toBeGreaterThan(
+      1,
+    );
+    expect(exiting.at(-1)!.level).toBeLessThan(exiting[0]!.level);
   } finally {
+    await app.eval("window.__voiceMotionStop=true");
     audio.close();
   }
 });

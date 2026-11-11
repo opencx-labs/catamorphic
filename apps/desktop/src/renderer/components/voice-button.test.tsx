@@ -3,14 +3,22 @@ import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { DEFAULT_PREFS } from "../../shared/app-prefs.js";
-import { VOICE_OFF, type VoiceStatus } from "../../shared/voice.js";
+import {
+  VOICE_OFF,
+  type VoiceLevels,
+  type VoiceStatus,
+} from "../../shared/voice.js";
 import { VoiceButton } from "./voice-button.js";
 
 const { api } = vi.hoisted(() => ({
   api: {
     voiceStatus: vi.fn(),
-    onVoiceStatus: vi.fn(() => () => {}),
-    onVoiceLevels: vi.fn(() => () => {}),
+    onVoiceStatus: vi.fn(
+      (_listener: (status: VoiceStatus) => void) => () => {},
+    ),
+    onVoiceLevels: vi.fn(
+      (_listener: (levels: VoiceLevels) => void) => () => {},
+    ),
     agentsList: vi.fn(async () => ({ agents: [] })),
     onAgentsChanged: vi.fn(() => () => {}),
     voicePress: vi.fn(async () => {}),
@@ -136,7 +144,7 @@ it("keeps a keyboard hold across composer focus and ends it on the matching keyu
   const button = await render(VOICE_OFF, "s");
   const composer = document.createElement("input");
   node.append(composer);
-  button.focus();
+  act(() => button.focus());
   await act(async () => {
     button.dispatchEvent(
       new KeyboardEvent("keydown", {
@@ -248,4 +256,74 @@ it("never starts voice when a new chat finishes creation after a quick click", a
   expect(api.voicePress).not.toHaveBeenCalled();
   expect(api.voiceRelease).not.toHaveBeenCalled();
   expect(button.dataset.phase).toBe("off");
+});
+
+it("eases the waveform down throughout its exit and stops drawing when settled", async () => {
+  let time = 0,
+    id = 0;
+  const frames = new Map<number, FrameRequestCallback>();
+  vi.spyOn(performance, "now").mockImplementation(() => time);
+  vi.stubGlobal("requestAnimationFrame", (callback: FrameRequestCallback) => {
+    frames.set(++id, callback);
+    return id;
+  });
+  vi.stubGlobal("cancelAnimationFrame", (key: number) => frames.delete(key));
+  vi.stubGlobal("matchMedia", () => ({ matches: false }));
+  const tick = (next: number) => {
+    time = next;
+    const callbacks = [...frames.values()];
+    frames.clear();
+    act(() => {
+      for (const callback of callbacks) callback(time);
+    });
+  };
+  const button = await render({
+    ...VOICE_OFF,
+    phase: "speaking",
+    target: { kind: "assistant" },
+  });
+  const levels = api.onVoiceLevels.mock.calls.at(-1)?.[0] as
+    | ((value: { at: number; frameMs: number; levels: number[] }) => void)
+    | undefined;
+  levels?.({ at: Date.now(), frameMs: 1000, levels: Array(5).fill(1) });
+  tick(40);
+  tick(80);
+  const bar = button.querySelector<HTMLElement>(".voice-bars > span")!;
+  const before = Number(bar.style.getPropertyValue("--level"));
+  expect(before).toBeGreaterThan(0);
+  const status = api.onVoiceStatus.mock.calls.at(-1)?.[0] as
+    | ((value: VoiceStatus) => void)
+    | undefined;
+  act(() => status?.(VOICE_OFF));
+  tick(120);
+  const after = Number(bar.style.getPropertyValue("--level"));
+  expect(after).toBeGreaterThan(0);
+  expect(after).toBeLessThan(before);
+  act(() =>
+    status?.({
+      ...VOICE_OFF,
+      phase: "speaking",
+      target: { kind: "assistant" },
+    }),
+  );
+  expect(Number(bar.style.getPropertyValue("--level"))).toBe(after);
+  tick(160);
+  expect(Number(bar.style.getPropertyValue("--level"))).toBeGreaterThan(0);
+  act(() => status?.(VOICE_OFF));
+  tick(200);
+  tick(420);
+  expect(bar.style.getPropertyValue("--level")).toBe("0");
+  expect(frames.size).toBe(0);
+});
+
+it("does not start a waveform animation when reduced motion is requested", async () => {
+  const frame = vi.fn(() => 1);
+  vi.stubGlobal("requestAnimationFrame", frame);
+  vi.stubGlobal("matchMedia", () => ({ matches: true }));
+  await render({
+    ...VOICE_OFF,
+    phase: "speaking",
+    target: { kind: "assistant" },
+  });
+  expect(frame).not.toHaveBeenCalled();
 });

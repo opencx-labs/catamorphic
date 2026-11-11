@@ -36,12 +36,20 @@ const WAIT_SECONDS = 30;
 const emit = (event: VoiceWorkerEvent) => process.parentPort.postMessage(event);
 
 function onAudio(data: VoiceAudioUp): void {
+  if (data.type === "control") {
+    forEngine(data.command);
+    return;
+  }
   if (engine) {
     engine.onAudio(data);
     return;
   }
   // Which microphone it is matters before the models are loaded too.
-  if (data.type === "microphone" || data.type === "capturing") {
+  if (
+    data.type === "microphone" ||
+    data.type === "capturing" ||
+    data.type === "capture-opening"
+  ) {
     emit(data);
     return;
   }
@@ -210,7 +218,9 @@ function isAudioUp(value: unknown): value is VoiceAudioUp {
     typeof value === "object" &&
     value !== null &&
     "type" in value &&
-    (value.type === "frame" ||
+    (value.type === "capture-opening" ||
+      value.type === "control" ||
+      value.type === "frame" ||
       value.type === "drained" ||
       value.type === "levels" ||
       value.type === "failed" ||

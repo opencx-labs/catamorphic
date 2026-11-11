@@ -353,16 +353,6 @@ export function registerVoiceSupport(deps: {
       : null;
   const wantsMicrophone = (voice: ActiveVoice) =>
     active === voice && !voice.ending && press?.profileId === voice.profileId;
-  const settleCapture = () => {
-    const voice = active;
-    const page = voice?.audioWindow;
-    if (!voice || voice.capturing === null || !page || page.isDestroyed())
-      return;
-    const wanted = wantsMicrophone(voice);
-    if (voice.capturing === wanted) return;
-    voice.capturing = wanted;
-    page.webContents.send(VOICE_CAPTURE_MESSAGE, wanted);
-  };
   const connectVoiceAudio = (
     voice: ActiveVoice,
     page: BrowserWindow,
@@ -503,7 +493,6 @@ export function registerVoiceSupport(deps: {
   };
 
   const publish = () => {
-    settleCapture();
     settleQuiet();
     // The bubble first: it may read another profile's status from now.
     refreshBubble();
@@ -570,7 +559,19 @@ export function registerVoiceSupport(deps: {
   };
 
   const send = (voice: ActiveVoice, command: VoiceWorkerCommand) => {
-    if (active === voice) voice.worker.postMessage(command);
+    if (active !== voice) return;
+    const page = voice.audioWindow;
+    if (
+      voice.capturing !== null &&
+      page &&
+      !page.isDestroyed() &&
+      (command.type === "hold" ||
+        command.type === "forget" ||
+        command.type === "dictation")
+    ) {
+      if (command.type === "hold") voice.capturing = command.held;
+      page.webContents.send(VOICE_CAPTURE_MESSAGE, command);
+    } else voice.worker.postMessage(command);
   };
 
   /**
@@ -1111,6 +1112,9 @@ export function registerVoiceSupport(deps: {
         break;
       case "capturing":
         voice.hearing = wantsMicrophone(voice);
+        break;
+      case "capture-opening":
+        voice.hearing = false;
         break;
       case "transcript": {
         const ref = voice.conversation?.ref;

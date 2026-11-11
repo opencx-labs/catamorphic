@@ -3,6 +3,7 @@ import {
   VOICE_PORT_MESSAGE,
   VOICE_REST_MESSAGE,
   type VoiceAudioDown,
+  type VoiceCaptureCommand,
   type VoicePortMessage,
 } from "../../shared/voice.js";
 import { listen, prepareMicrophone } from "./microphone.js";
@@ -17,15 +18,19 @@ import { Speaker } from "./speaker.js";
  * otherwise read as the person talking over it.
  *
  * Each voice brings its own port. Between voices the page rests, loaded,
- * with its microphone closed (ADR 0236): the next voice only opens the
- * microphone, so the person's first words are heard.
+ * with its microphone closed (ADR 0236). The next voice reuses the graph;
+ * opening the physical input still takes the device's own startup time.
  */
 /** The voice this page serves now; null while it rests. */
-let current: { close(): void; setListening(listening: boolean): void } | null =
-  null;
+let current: {
+  close(): Promise<void>;
+  control(command: VoiceCaptureCommand): void;
+} | null = null;
+/** The shared input graph finishes closing before another voice resumes it. */
+let draining = Promise.resolve();
 const preparedMicrophone = prepareMicrophone();
 window.addEventListener("pagehide", () => {
-  current?.close();
+  void current?.close();
   preparedMicrophone.close();
 });
 
@@ -37,53 +42,86 @@ window.addEventListener("message", (event: MessageEvent<unknown>) => {
     data !== null &&
     "type" in data &&
     data.type === VOICE_CAPTURE_MESSAGE &&
-    "listening" in data &&
-    typeof data.listening === "boolean"
+    "command" in data &&
+    isCaptureCommand(data.command)
   ) {
-    current?.setListening(data.listening);
+    current?.control(data.command);
     return;
   }
   if (isRestMessage(event.data)) {
-    current?.close();
+    draining = current?.close() ?? draining;
     current = null;
     return;
   }
   if (!isPortMessage(event.data)) return;
   const port = event.ports[0];
   if (!port) return;
-  current?.close();
+  draining = current?.close() ?? draining;
   const speaker = new Speaker(port);
   // A reply read aloud only plays: the microphone stays closed.
   const device = event.data.microphone;
-  let microphone: (() => void) | null = null;
+  let microphone: ReturnType<typeof listen> | null = null;
   let ended = false;
-  const setListening = (listening: boolean) => {
-    if (ended) return;
-    if (listening) microphone ??= listen(port, device, preparedMicrophone);
-    else {
-      microphone?.();
-      microphone = null;
-    }
+  let pending = draining;
+  let stopping = Promise.resolve();
+  const control = (command: VoiceCaptureCommand) => {
+    // A following press waits only for the preceding worklet's final frames.
+    pending = pending
+      .then(async () => {
+        if (ended) return;
+        if (command.type === "hold" && !command.held) {
+          const close = microphone;
+          microphone = null;
+          await close?.();
+          if (ended) return;
+        }
+        port.postMessage({ type: "control", command });
+        if (command.type === "hold" && command.held)
+          microphone ??= listen(port, device, preparedMicrophone);
+      })
+      .catch((cause: unknown) => {
+        if (!ended)
+          port.postMessage({
+            type: "failed",
+            message: cause instanceof Error ? cause.message : String(cause),
+          });
+      });
   };
-  setListening(event.data.listen);
+  if (event.data.listen) control({ type: "hold", held: true });
+  const stop = () => {
+    ended = true;
+    const closed = microphone?.().catch(() => {});
+    microphone = null;
+    stopping = Promise.all([pending, stopping, closed]).then(() => {});
+    return stopping;
+  };
   port.onmessage = (message: MessageEvent<VoiceAudioDown>) => {
     if (message.data.type === "close-microphone") {
-      setListening(false);
-      ended = true;
+      draining = stop();
     } else speaker.receive(message.data);
   };
   current = {
-    setListening,
+    control,
     close: () => {
       port.onmessage = null;
       // The bars hear that what it scheduled will not play.
       speaker.close();
       port.close();
-      setListening(false);
-      ended = true;
+      return stop();
     },
   };
 });
+
+function isCaptureCommand(value: unknown): value is VoiceCaptureCommand {
+  if (typeof value !== "object" || value === null || !("type" in value))
+    return false;
+  if (value.type === "forget") return true;
+  if (value.type === "dictation")
+    return "enabled" in value && typeof value.enabled === "boolean";
+  return (
+    value.type === "hold" && "held" in value && typeof value.held === "boolean"
+  );
+}
 
 function isRestMessage(value: unknown): boolean {
   return (

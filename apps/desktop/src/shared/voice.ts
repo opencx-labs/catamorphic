@@ -268,6 +268,12 @@ export type VoiceWorkerCommand =
   | { type: "cue" }
   | { type: "stop-speaking" };
 
+/** Input edges travel with audio, so release cannot overtake captured frames. */
+export type VoiceCaptureCommand = Extract<
+  VoiceWorkerCommand,
+  { type: "hold" | "dictation" | "forget" }
+>;
+
 export interface FakeSpeechScript {
   kind: "fake";
   /** What the fake recognizer hears once audio starts arriving. */
@@ -277,6 +283,7 @@ export interface FakeSpeechScript {
 /** Speech worker → main process. */
 export type VoiceWorkerEvent =
   | { type: "ready" }
+  | { type: "capture-opening" }
   | { type: "capturing" }
   | { type: "failed"; message: string }
   /** The person started talking: the `segment`th stretch of speech. */
@@ -334,6 +341,9 @@ export interface VoiceLevels {
 /** Audio page → speech worker, over the transferred port. */
 export type VoiceAudioUp =
   | { type: "frame"; samples: Float32Array; sampleRate: number }
+  | { type: "control"; command: VoiceCaptureCommand }
+  /** A held input is reopening after its device disconnected. */
+  | { type: "capture-opening" }
   /** First real audio frame of this press has reached the worklet. */
   | { type: "capturing" }
   /** Playback reached the end of every chunk up to `seq`. */
@@ -351,7 +361,7 @@ export type VoiceAudioDown =
   /** Stop capturing for good: the microphone goes off, playback goes on. */
   | { type: "close-microphone" };
 
-/** Update physical capture without replacing the playback port. */
+/** Input control, ordered with captured audio without replacing playback. */
 export const VOICE_CAPTURE_MESSAGE = "catamorphic:voice-capture";
 
 /** The IPC message that carries the audio port into the audio page. */

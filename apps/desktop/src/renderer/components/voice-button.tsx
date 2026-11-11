@@ -206,6 +206,10 @@ function clipEnded(clip: VoiceLevels, now: number): boolean {
  */
 function VoiceBars({ shown }: { shown: boolean }) {
   const bars = useRef<(HTMLSpanElement | null)[]>([]);
+  const motion = useRef({
+    levels: Array<number>(VOICE_BARS).fill(0),
+    heard: 0,
+  });
   // Clips arrive independently of status updates; keep their playback times.
   const scheduled = useRef<VoiceLevels[]>([]);
   useEffect(
@@ -220,12 +224,15 @@ function VoiceBars({ shown }: { shown: boolean }) {
     [],
   );
   useEffect(() => {
-    if (!shown) return;
+    const state = motion.current;
+    const drawn = state.levels;
+    if (!shown && drawn.every((level) => level === 0)) return;
     if (window.matchMedia("(prefers-reduced-motion: reduce)").matches) return;
-    const drawn = Array.from({ length: VOICE_BARS }, () => 0);
     // 0 while the agent works, 1 while it is heard, eased in between.
-    let heard = 0;
+    let heard = state.heard;
     let last = performance.now();
+    // Keep drawing throughout the icon's 220ms opacity/scale exit.
+    const until = last + 220;
     let frame = 0;
     const ease = (from: number, to: number, ms: number, dt: number) =>
       from + (to - from) * (1 - Math.exp(-dt / ms));
@@ -235,24 +242,32 @@ function VoiceBars({ shown }: { shown: boolean }) {
       const now = Date.now();
       const clips = scheduled.current;
       while (clips[0] && clipEnded(clips[0], now)) clips.shift();
-      const clip = clips[0] && clips[0].at <= now ? clips[0] : null;
+      const clip = shown && clips[0] && clips[0].at <= now ? clips[0] : null;
       const offset = clip
         ? Math.floor((now - clip.at) / clip.frameMs) * VOICE_BARS
         : 0;
       heard = ease(heard, clip ? 1 : 0, CROSSFADE_MS, dt);
+      state.heard = heard;
       for (let bar = 0; bar < VOICE_BARS; bar++) {
         const wave = Math.max(
           0,
           Math.sin(2 * Math.PI * (now / WAVE_MS - bar * 0.16)),
         );
         const voice = clip ? (clip.levels[offset + bar] ?? 0) : 0;
-        const target = 0.3 * wave ** 2 * (1 - heard) + voice * heard;
+        const target = shown
+          ? 0.3 * wave ** 2 * (1 - heard) + voice * heard
+          : 0;
         const from = drawn[bar] ?? 0;
         const level = ease(from, target, target > from ? RISE_MS : FALL_MS, dt);
         drawn[bar] = level;
         bars.current[bar]?.style.setProperty("--level", level.toFixed(3));
       }
-      frame = requestAnimationFrame(draw);
+      if (shown || time < until) frame = requestAnimationFrame(draw);
+      else {
+        state.heard = 0;
+        drawn.fill(0);
+        for (const bar of bars.current) bar?.style.setProperty("--level", "0");
+      }
     };
     frame = requestAnimationFrame(draw);
     return () => cancelAnimationFrame(frame);
@@ -798,7 +813,9 @@ export function VoiceButton({
           data-error={!!error || undefined}
           className="voice-button"
         >
-          <span aria-hidden="true" className="voice-ripple" />
+          <span aria-hidden="true" className="voice-ripple">
+            <span />
+          </span>
           <svg aria-hidden="true" viewBox="0 0 38 38" className="voice-ring">
             <circle
               cx="19"

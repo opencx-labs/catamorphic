@@ -4165,3 +4165,21 @@ configured voice shortcut. Releases before 250 ms cancel recognition and clear
 provisional words; they never submit a message or wait in the thinking state.
 Holding still opens capture immediately. A new chat finishing setup after release
 cannot start a late microphone.
+
+Capture controls and samples use one ordered audio port. Release closes the
+physical input immediately, drains the worklet's last partial frame, then sends
+the release behind those samples; the next press follows that boundary too.
+The microphone's visual layers remain mounted. A stopped spinner or pulse holds
+its current position while fading, and speech bars ease down throughout their
+exit before their animation loop stops. Rapid state changes keep the current
+levels instead of restarting the waveform from zero.
+
+If a held input disconnects, drain its samples and make one bounded attempt to
+open the current system microphone, keeping the same held transcript. Show
+preparing until replacement samples arrive. Release cancels recovery immediately;
+a late device result is closed. A second disconnection remains an actionable
+error. A missing selected device falls back to the system input.
+
+A chat read begun before a spoken message committed cannot settle that new
+turn. Keep its working state through delivery and wait for a fresh idle read;
+the same boundary protects an agent finishing voice during delivery.

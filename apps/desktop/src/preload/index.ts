@@ -89,6 +89,7 @@ import {
   VOICE_PORT_MESSAGE,
   VOICE_REST_MESSAGE,
   type VoiceBubbleState,
+  type VoiceCaptureCommand,
   type VoiceDictation,
   type VoiceKeysState,
   type VoiceLevels,
@@ -1839,7 +1840,9 @@ ipcRenderer.on(VOICE_REST_MESSAGE, () => {
 });
 
 // Main owns capture intent independently of recognition and playback.
-ipcRenderer.on(VOICE_CAPTURE_MESSAGE, (_event, listening: unknown) => {
-  if (typeof listening === "boolean")
-    window.postMessage({ type: VOICE_CAPTURE_MESSAGE, listening }, "*");
-});
+ipcRenderer.on(
+  VOICE_CAPTURE_MESSAGE,
+  (_event, command: VoiceCaptureCommand) => {
+    window.postMessage({ type: VOICE_CAPTURE_MESSAGE, command }, "*");
+  },
+);

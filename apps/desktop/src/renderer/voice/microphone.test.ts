@@ -16,7 +16,11 @@ const flush = async () => {
   for (let i = 0; i < 8; i++) await Promise.resolve();
 };
 
-function setup(warm = false) {
+function setup(
+  warm = false,
+  automaticFlush = true,
+  microphone: string | null = null,
+) {
   const permission = deferred<MediaStream>();
   const module = deferred<void>();
   const resume = deferred<void>();
@@ -33,7 +37,9 @@ function setup(warm = false) {
   const contextClose = vi.fn(async () => {});
   const suspend = vi.fn(async () => {});
   const addModule = vi.fn(() => module.promise);
-  const getUserMedia = vi.fn(() => permission.promise);
+  const getUserMedia = vi.fn(
+    (_constraints: MediaStreamConstraints) => permission.promise,
+  );
   class Context {
     sampleRate = 16000;
     audioWorklet = { addModule };
@@ -48,7 +54,17 @@ function setup(warm = false) {
       tap = this;
     }
     port = {
-      onmessage: null as ((event: MessageEvent<Float32Array>) => void) | null,
+      onmessage: null as
+        | ((event: MessageEvent<Float32Array | "flushed">) => void)
+        | null,
+      postMessage: vi.fn(() => {
+        if (automaticFlush)
+          queueMicrotask(() =>
+            this.port.onmessage?.({
+              data: "flushed",
+            } as MessageEvent<"flushed">),
+          );
+      }),
       close: vi.fn(),
     };
     disconnect = vi.fn();
@@ -64,7 +80,7 @@ function setup(warm = false) {
   } as unknown as MessagePort;
   const prepared = warm ? prepareMicrophone() : undefined;
   expect(getUserMedia).not.toHaveBeenCalled();
-  const close = listen(port, null, prepared);
+  const close = listen(port, microphone, prepared);
   return {
     permission,
     module,
@@ -82,6 +98,8 @@ function setup(warm = false) {
     track,
     frame: (samples: Float32Array) =>
       tap.port.onmessage?.({ data: samples } as MessageEvent<Float32Array>),
+    flushed: () =>
+      tap.port.onmessage?.({ data: "flushed" } as MessageEvent<"flushed">),
   };
 }
 
@@ -100,7 +118,7 @@ describe("a microphone that stops while capture is starting", () => {
     await flush();
     expect(mic.source).toHaveBeenCalledOnce();
     expect(mic.addModule).toHaveBeenCalledOnce();
-    mic.close();
+    await mic.close();
     expect(mic.stop).toHaveBeenCalledOnce();
     expect(mic.contextClose).not.toHaveBeenCalled();
     expect(mic.suspend).toHaveBeenCalledTimes(2);
@@ -109,7 +127,7 @@ describe("a microphone that stops while capture is starting", () => {
   });
   it("releases a permission result that arrives after voice stopped", async () => {
     const mic = setup();
-    mic.close();
+    await mic.close();
     mic.permission.resolve(mic.stream);
     await flush();
     expect(mic.stop).toHaveBeenCalledOnce();
@@ -121,7 +139,7 @@ describe("a microphone that stops while capture is starting", () => {
     const mic = setup();
     mic.permission.resolve(mic.stream);
     await flush();
-    mic.close();
+    await mic.close();
     expect(mic.stop).toHaveBeenCalledOnce();
     expect(mic.contextClose).toHaveBeenCalledOnce();
     mic.module.resolve();
@@ -136,8 +154,8 @@ describe("a microphone that stops while capture is starting", () => {
     mic.module.resolve();
     await flush();
     expect(mic.source).toHaveBeenCalledOnce();
-    mic.close();
-    mic.close();
+    await mic.close();
+    await mic.close();
     expect(mic.stop).toHaveBeenCalledOnce();
     expect(mic.contextClose).toHaveBeenCalledOnce();
     mic.resume.reject(new Error("closed while resuming"));
@@ -167,7 +185,7 @@ describe("a microphone that stops while capture is starting", () => {
     mic.resume.resolve();
     await flush();
     expect(mic.stop).not.toHaveBeenCalled();
-    mic.close();
+    await mic.close();
     expect(mic.stop).toHaveBeenCalledOnce();
   });
 
@@ -185,16 +203,20 @@ describe("a microphone that stops while capture is starting", () => {
     expect(mic.sent.filter((m) => m.type === "capturing")).toHaveLength(1);
     expect(mic.sent.filter((m) => m.type === "frame")).toHaveLength(10);
     expect(mic.stop).not.toHaveBeenCalled();
-    mic.close();
+    await mic.close();
     expect(mic.stop).toHaveBeenCalledOnce();
   });
 
-  it("reports a disconnected device, but ignores its ended event after release", async () => {
+  it("bounds recovery to one replacement and ignores ended events after release", async () => {
     const mic = setup();
     mic.permission.resolve(mic.stream);
     mic.module.resolve();
     mic.resume.resolve();
     await flush();
+    mic.track.dispatchEvent(new Event("ended"));
+    await flush();
+    expect(mic.sent.filter((m) => m.type === "failed")).toEqual([]);
+    expect(mic.getUserMedia).toHaveBeenCalledTimes(2);
     mic.track.dispatchEvent(new Event("ended"));
     expect(mic.sent.filter((m) => m.type === "failed")).toEqual([
       {
@@ -203,8 +225,188 @@ describe("a microphone that stops while capture is starting", () => {
           "The microphone disconnected. Choose a connected microphone and try again.",
       },
     ]);
-    mic.close();
+    await mic.close();
     mic.track.dispatchEvent(new Event("ended"));
     expect(mic.sent.filter((m) => m.type === "failed")).toHaveLength(1);
   });
+});
+
+it("drains a disconnected input and resumes the same hold on the system microphone", async () => {
+  const mic = setup(true);
+  mic.permission.resolve(mic.stream);
+  mic.module.resolve();
+  mic.resume.resolve();
+  await flush();
+  mic.frame(new Float32Array([0.1]));
+  const stop = vi.fn();
+  const track = Object.assign(new EventTarget(), {
+    label: "Built-in microphone",
+    stop,
+  });
+  const fallback = {
+    getTracks: () => [track],
+    getAudioTracks: () => [track],
+  } as unknown as MediaStream;
+  mic.getUserMedia.mockResolvedValueOnce(fallback);
+  mic.track.dispatchEvent(new Event("ended"));
+  await flush();
+  expect(mic.stop).toHaveBeenCalledOnce();
+  expect(mic.getUserMedia).toHaveBeenCalledTimes(2);
+  expect(mic.source).toHaveBeenCalledTimes(2);
+  expect(mic.suspend).toHaveBeenCalledOnce();
+  mic.frame(new Float32Array([0.2]));
+  expect(mic.sent.filter((event) => event.type === "frame")).toMatchObject([
+    { samples: new Float32Array([0.1]) },
+    { samples: new Float32Array([0.2]) },
+  ]);
+  expect(mic.sent).toContainEqual({ type: "capture-opening" });
+  expect(mic.sent).toContainEqual({
+    type: "microphone",
+    label: "Built-in microphone",
+  });
+  expect(mic.sent.filter((event) => event.type === "failed")).toEqual([]);
+  await mic.close();
+  expect(stop).toHaveBeenCalledOnce();
+});
+
+it("does not mark a replacement ready because the disconnected input flushed its first partial frame", async () => {
+  const mic = setup(true, false);
+  mic.permission.resolve(mic.stream);
+  mic.module.resolve();
+  mic.resume.resolve();
+  await flush();
+  mic.track.dispatchEvent(new Event("ended"));
+  mic.frame(new Float32Array([0.1]));
+  expect(mic.sent.filter((event) => event.type === "capturing")).toEqual([]);
+  expect(mic.sent).toContainEqual({ type: "capture-opening" });
+  mic.flushed();
+  await flush();
+  mic.frame(new Float32Array([0.2]));
+  expect(mic.sent.filter((event) => event.type === "capturing")).toHaveLength(
+    1,
+  );
+  const closed = mic.close();
+  mic.flushed();
+  await closed;
+});
+
+it("does not wait for a slow replacement request when the person releases", async () => {
+  const mic = setup(true);
+  mic.permission.resolve(mic.stream);
+  mic.module.resolve();
+  mic.resume.resolve();
+  await flush();
+  const replacement = deferred<MediaStream>();
+  mic.getUserMedia.mockReturnValueOnce(replacement.promise);
+  mic.track.dispatchEvent(new Event("ended"));
+  await flush();
+  expect(mic.getUserMedia).toHaveBeenCalledTimes(2);
+  await mic.close();
+  const stop = vi.fn();
+  replacement.resolve({
+    getTracks: () => [{ stop }],
+  } as unknown as MediaStream);
+  await flush();
+  expect(stop).toHaveBeenCalledOnce();
+  expect(mic.source).toHaveBeenCalledOnce();
+});
+
+it("recovers an input that already ended before its permission result arrived", async () => {
+  const mic = setup(true);
+  Reflect.set(mic.track, "readyState", "ended");
+  const stop = vi.fn();
+  const track = Object.assign(new EventTarget(), {
+    label: "Built-in",
+    readyState: "live",
+    stop,
+  });
+  mic.getUserMedia.mockResolvedValueOnce({
+    getTracks: () => [track],
+    getAudioTracks: () => [track],
+  } as unknown as MediaStream);
+  mic.permission.resolve(mic.stream);
+  mic.module.resolve();
+  mic.resume.resolve();
+  await flush();
+  expect(mic.getUserMedia).toHaveBeenCalledTimes(2);
+  expect(mic.source).toHaveBeenCalledOnce();
+  expect(mic.sent).toContainEqual({ type: "capture-opening" });
+  expect(mic.sent.filter((event) => event.type === "failed")).toEqual([]);
+  await mic.close();
+  expect(stop).toHaveBeenCalledOnce();
+});
+
+it("does not retry a microphone permission denial", async () => {
+  const mic = setup(true, true, "chosen");
+  mic.permission.reject(
+    new DOMException("permission denied", "NotAllowedError"),
+  );
+  await flush();
+  expect(mic.getUserMedia).toHaveBeenCalledOnce();
+  expect(mic.sent.filter((event) => event.type === "failed")).toMatchObject([
+    { message: expect.stringContaining("permission denied") },
+  ]);
+});
+
+it.each(["OverconstrainedError", "NotFoundError"])(
+  "falls back when the selected input is missing (%s)",
+  async (name) => {
+    const mic = setup(true, true, "headphones");
+    mic.getUserMedia.mockResolvedValueOnce(mic.stream);
+    mic.permission.reject(new DOMException("input is gone", name));
+    mic.module.resolve();
+    mic.resume.resolve();
+    await flush();
+    expect(mic.getUserMedia).toHaveBeenCalledTimes(2);
+    expect(mic.getUserMedia.mock.calls[0]?.[0]).toMatchObject({
+      audio: { deviceId: { exact: "headphones" } },
+    });
+    expect(mic.getUserMedia.mock.calls[1]?.[0]).not.toHaveProperty(
+      "audio.deviceId",
+    );
+    expect(mic.sent.filter((event) => event.type === "failed")).toEqual([]);
+    await mic.close();
+  },
+);
+
+it("stops the physical track on release, but drains queued frames before completing", async () => {
+  const mic = setup(true, false);
+  mic.permission.resolve(mic.stream);
+  mic.module.resolve();
+  mic.resume.resolve();
+  await flush();
+  const finished = vi.fn();
+  const closed = mic.close().then(finished);
+  expect(mic.stop).toHaveBeenCalledOnce();
+  await flush();
+  expect(finished).not.toHaveBeenCalled();
+  mic.frame(new Float32Array([0.2, 0.4]));
+  mic.flushed();
+  await closed;
+  expect(mic.sent.filter((event) => event.type === "frame")).toMatchObject([
+    { samples: new Float32Array([0.2, 0.4]) },
+  ]);
+  expect(finished).toHaveBeenCalledOnce();
+  expect(mic.suspend).toHaveBeenCalledTimes(2);
+});
+
+it("reports a stalled worklet drain instead of silently finalizing incomplete audio", async () => {
+  vi.useFakeTimers();
+  try {
+    const mic = setup(true, false);
+    mic.permission.resolve(mic.stream);
+    mic.module.resolve();
+    mic.resume.resolve();
+    await flush();
+    const closed = mic.close();
+    const failed = expect(closed).rejects.toThrow(
+      "could not finish its captured audio",
+    );
+    expect(mic.stop).toHaveBeenCalledOnce();
+    await vi.advanceTimersByTimeAsync(1500);
+    await failed;
+    expect(mic.suspend).toHaveBeenCalledTimes(2);
+  } finally {
+    vi.useRealTimers();
+  }
 });

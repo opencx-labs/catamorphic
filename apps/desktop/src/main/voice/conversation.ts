@@ -116,6 +116,9 @@ export class VoiceConversation {
   private timer: ReturnType<typeof setTimeout> | undefined;
   private stopped = false;
   private busy = false;
+  private delivering = 0;
+  /** An idle read must have begun after the latest send committed. */
+  private deliveredAfter = 0;
   private heardThrough: string | null = null;
   /** Set once the chat's agent stopped listening; runs when all is said. */
   private finished: (() => void) | null = null;
@@ -200,6 +203,7 @@ export class VoiceConversation {
       return null;
     }
     this.deps.speech.cue();
+    this.delivering += 1;
     this.setBusy(true);
     let delivery: VoiceDelivery | null = null;
     try {
@@ -214,6 +218,9 @@ export class VoiceConversation {
       this.deps.onError(
         `The chat did not take that message: ${cause instanceof Error ? cause.message : String(cause)}`,
       );
+    } finally {
+      this.delivering -= 1;
+      this.deliveredAfter = this.reads;
     }
     this.schedule(0);
     return delivery;
@@ -240,7 +247,11 @@ export class VoiceConversation {
   }
 
   private observe(chat: VoiceChat, read: number): void {
-    if (this.stopped) return;
+    // A snapshot begun before delivery committed describes the preceding
+    // turn. Do not roll back busy state or the heard-through mark with it;
+    // heard() schedules a fresh read when delivery completes.
+    if (this.stopped || this.delivering > 0 || read <= this.deliveredAfter)
+      return;
     this.setBusy(chat.busy);
     // A reply is spoken once it is finished, all of it at once.
     for (const message of chat.messages) {

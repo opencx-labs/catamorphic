@@ -25,36 +25,91 @@ export function listen(
   port: MessagePort,
   microphone: string | null,
   prepared?: ReturnType<typeof prepareMicrophone>,
-): () => void {
+): () => Promise<void> {
   const controller = new AbortController();
+  let input: AbortController | null = null;
   let stream: MediaStream | null = null;
   let context: AudioContext | null = prepared?.context ?? null;
+  let finish: (() => Promise<void>) | null = null;
+  let closing: Promise<void> | null = null;
+  let flushing = Promise.resolve();
+  let recovered = false;
   const close = () => {
-    if (controller.signal.aborted) return;
+    if (closing) return closing;
     controller.abort();
     for (const track of stream?.getTracks() ?? []) track.stop();
-    if (prepared) void context?.suspend().catch(() => {});
-    else void context?.close();
+    const end = finish;
+    finish = null;
+    closing = Promise.all([flushing, end?.()])
+      .then(() => {})
+      .finally(() => {
+        if (prepared) void context?.suspend().catch(() => {});
+        else void context?.close();
+      });
+    return closing;
   };
-  const start = async () => {
-    // Resume the prepared graph in parallel with the physical input opening.
-    if (prepared) void prepared.context.resume().catch(() => {});
-    stream = await openMicrophone(microphone, controller.signal);
-    if (controller.signal.aborted) {
-      for (const track of stream.getTracks()) track.stop();
+  const fail = (message: string) => {
+    if (controller.signal.aborted) return;
+    void close().catch(() => {});
+    post(port, { type: "failed", message });
+  };
+  const disconnected = () => {
+    if (controller.signal.aborted) return;
+    if (recovered) {
+      fail(
+        "The microphone disconnected. Choose a connected microphone and try again.",
+      );
       return;
     }
-    context ??= new AudioContext({ sampleRate: SPEECH_SAMPLE_RATE });
-    await capture(port, stream, context, controller.signal, prepared?.ready);
+    recovered = true;
+    post(port, { type: "capture-opening" });
+    input?.abort();
+    for (const track of stream?.getTracks() ?? []) track.stop();
+    stream = null;
+    const end = finish;
+    finish = null;
+    flushing = end?.() ?? Promise.resolve();
+    void flushing
+      .then(() => {
+        if (!controller.signal.aborted) return start(null);
+      })
+      .catch((cause: unknown) =>
+        fail(cause instanceof Error ? cause.message : String(cause)),
+      );
   };
-  void start().catch((cause: unknown) => {
-    if (controller.signal.aborted) return;
-    close();
-    post(port, {
-      type: "failed",
-      message: `The microphone could not start: ${cause instanceof Error ? cause.message : String(cause)}`,
-    });
-  });
+  const start = async (chosen: string | null) => {
+    const device = new AbortController();
+    input = device;
+    const signal = AbortSignal.any([controller.signal, device.signal]);
+    try {
+      // Resume the prepared graph in parallel with the physical input opening.
+      if (prepared) void prepared.context.resume().catch(() => {});
+      const opened = await openMicrophone(chosen, signal);
+      if (signal.aborted) {
+        for (const track of opened.getTracks()) track.stop();
+        return;
+      }
+      stream = opened;
+      context ??= new AudioContext({ sampleRate: SPEECH_SAMPLE_RATE });
+      await capture(
+        port,
+        stream,
+        context,
+        signal,
+        disconnected,
+        (closer) => {
+          finish = closer;
+        },
+        prepared?.ready,
+      );
+    } catch (cause: unknown) {
+      if (!signal.aborted)
+        fail(
+          `The microphone could not start: ${cause instanceof Error ? cause.message : String(cause)}`,
+        );
+    }
+  };
+  void start(microphone);
   return close;
 }
 
@@ -69,21 +124,22 @@ async function capture(
   stream: MediaStream,
   context: AudioContext,
   signal: AbortSignal,
+  disconnected: () => void,
+  own: (closer: () => Promise<void>) => void,
   ready?: Promise<void>,
 ): Promise<void> {
   const [track] = stream.getAudioTracks();
   track?.addEventListener(
     "ended",
     () => {
-      if (!signal.aborted)
-        post(port, {
-          type: "failed",
-          message:
-            "The microphone disconnected. Choose a connected microphone and try again.",
-        });
+      if (!signal.aborted) disconnected();
     },
     { signal },
   );
+  if (track?.readyState === "ended") {
+    disconnected();
+    return;
+  }
   // Which microphone it is: other apps' audio is lowered only for the
   // system's own (ADR 0268).
   post(port, { type: "microphone", label: track?.label ?? "" });
@@ -93,18 +149,14 @@ async function capture(
     numberOfInputs: 1,
     numberOfOutputs: 0,
   });
-  signal.addEventListener(
-    "abort",
-    () => {
-      tap.port.onmessage = null;
-      tap.port.close();
-      tap.disconnect();
-    },
-    { once: true },
-  );
+  let flushed: (() => void) | null = null;
   let started = false;
-  tap.port.onmessage = (event: MessageEvent<Float32Array>) => {
-    if (!started) {
+  tap.port.onmessage = (event: MessageEvent<Float32Array | "flushed">) => {
+    if (event.data === "flushed") {
+      flushed?.();
+      return;
+    }
+    if (!started && !signal.aborted) {
       started = true;
       post(port, { type: "capturing" });
     }
@@ -116,7 +168,32 @@ async function capture(
   };
   const source = context.createMediaStreamSource(stream);
   source.connect(tap);
-  signal.addEventListener("abort", () => source.disconnect(), { once: true });
+  // Resuming never gates ownership of the closer, including a slow device.
+  own(
+    () =>
+      new Promise<void>((resolve, reject) => {
+        source.disconnect();
+        const cleanup = () => {
+          clearTimeout(timeout);
+          tap.port.onmessage = null;
+          tap.port.close();
+          tap.disconnect();
+        };
+        const timeout = setTimeout(() => {
+          cleanup();
+          reject(
+            new Error(
+              "The microphone could not finish its captured audio. Try again.",
+            ),
+          );
+        }, 1500);
+        flushed = () => {
+          cleanup();
+          resolve();
+        };
+        tap.port.postMessage("flush");
+      }),
+  );
   await context.resume();
 }
 
@@ -143,7 +220,8 @@ async function openMicrophone(
     } catch (cause) {
       if (
         !(cause instanceof DOMException) ||
-        cause.name !== "OverconstrainedError"
+        (cause.name !== "OverconstrainedError" &&
+          cause.name !== "NotFoundError")
       )
         throw cause;
     }

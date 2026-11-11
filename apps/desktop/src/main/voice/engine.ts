@@ -103,6 +103,8 @@ export class VoiceEngine {
   }
 
   onAudio(message: VoiceAudioUp): void {
+    // Input controls are consumed by the worker before reaching the engine.
+    if (message.type === "control") return;
     if (message.type === "frame") {
       const hold = this.holding;
       if (!hold || !this.listening) return;
@@ -138,6 +140,7 @@ export class VoiceEngine {
       this.settlePlayback();
     } else if (
       message.type === "levels" ||
+      message.type === "capture-opening" ||
       message.type === "microphone" ||
       message.type === "capturing"
     ) {
