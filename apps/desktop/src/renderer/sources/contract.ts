@@ -32,7 +32,7 @@ export interface SourceRequest {
  */
 export interface SourceAccess {
   request: ModuleAccessRequest;
-  /** The person allows what they were shown; views read again after. */
+  /** Persist the approval and invalidate every subscribed view. */
   allow: () => Promise<void>;
 }
 
@@ -43,7 +43,10 @@ export interface SectionSource {
   access?: () => SourceAccess | null;
   /** The sentence an empty section shows when its layout gives none. */
   empty: string;
-  /** Prepare recovery only when the person explicitly retries or refreshes. */
+  /**
+   * Recover on an explicit Retry or Refresh and invalidate subscribed views.
+   * Its invalidation owns their reads; callers do not load again afterward.
+   */
   retry?: () => Promise<void>;
   load: (
     request: SourceRequest & {

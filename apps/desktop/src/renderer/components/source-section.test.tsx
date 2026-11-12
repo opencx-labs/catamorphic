@@ -188,6 +188,109 @@ async function mount({
 }
 
 describe("every list draws one way (ADR 0234)", () => {
+  it("reads each subscribed view once per explicit recovery and retains a failed read until retry", async () => {
+    let failing = true;
+    const listeners = new Set<
+      (change: CollectionChange<SidebarSourceItem>) => void
+    >();
+    const load = vi.fn(async () => {
+      if (failing) throw new Error("Service unavailable: 503");
+      return { items: [{ id: "service", label: "Service item 3" }] };
+    });
+    const retry = vi.fn(async () => {
+      for (const publish of listeners) publish({ type: "invalidate" });
+    });
+    const source = memorySource([], {
+      load,
+      retry,
+      subscribe: (publish) => {
+        listeners.add(publish);
+        return () => {
+          listeners.delete(publish);
+        };
+      },
+    });
+    const first = await mount({ source });
+    const second = await mount({ source });
+    try {
+      load.mockClear();
+      await act(async () => {
+        await first.reports.at(-1)?.retry?.();
+      });
+      expect(retry).toHaveBeenCalledOnce();
+      expect(load).toHaveBeenCalledTimes(2);
+      expect(first.reports.at(-1)).toMatchObject({
+        state: "error",
+        error: "Service unavailable: 503",
+      });
+      expect(second.reports.at(-1)).toMatchObject({
+        state: "error",
+        error: "Service unavailable: 503",
+      });
+      failing = false;
+      await act(async () => {
+        await new Promise((resolve) => setTimeout(resolve, 0));
+      });
+      expect(load).toHaveBeenCalledTimes(2);
+      expect(first.reports.at(-1)).toMatchObject({ state: "error" });
+      await act(async () => {
+        await first.reports.at(-1)?.retry?.();
+      });
+      expect(load).toHaveBeenCalledTimes(4);
+      expect(first.row("service")).toBeTruthy();
+      expect(second.row("service")).toBeTruthy();
+    } finally {
+      await first.cleanup();
+      await second.cleanup();
+    }
+  });
+
+  it("reads an approved module once through its shared invalidation", async () => {
+    let approved = false;
+    let publish:
+      | ((change: CollectionChange<SidebarSourceItem>) => void)
+      | undefined;
+    const load = vi.fn(async () => ({
+      items: approved ? [{ id: "ready", label: "Ready" }] : [],
+    }));
+    const allow = vi.fn(async () => {
+      approved = true;
+      publish?.({ type: "invalidate" });
+    });
+    const source = memorySource([], {
+      load,
+      access: () =>
+        approved
+          ? null
+          : {
+              request: {
+                module: ".work/things/index.ts",
+                beyond: ["Read files"],
+                all: ["Read files"],
+                network: false,
+                fingerprint: "files",
+              },
+              allow,
+            },
+      subscribe: (next) => {
+        publish = next;
+        return () => {};
+      },
+    });
+    const view = await mount({ source });
+    try {
+      load.mockClear();
+      await act(async () => {
+        await view.reports.at(-1)?.access?.allow();
+      });
+      expect(allow).toHaveBeenCalledOnce();
+      expect(load).toHaveBeenCalledOnce();
+      expect(view.row("ready")).toBeTruthy();
+    } finally {
+      await view.cleanup();
+    }
+  });
+
   it("runs recovery only for the person's Retry, never a passive invalidation", async () => {
     let unlocked = false;
     let publish:
@@ -195,6 +298,7 @@ describe("every list draws one way (ADR 0234)", () => {
       | undefined;
     const retry = vi.fn(async () => {
       unlocked = true;
+      publish?.({ type: "invalidate" });
     });
     const source = memorySource([], {
       retry,
@@ -955,7 +1059,8 @@ describe("every list draws one way (ADR 0234)", () => {
 
   it("runs a session-scoped source only with its chat, and hands it the chat", async () => {
     chat.error = new Error("Session not found");
-    const failing = memorySource([]);
+    const retry = vi.fn(async () => {});
+    const failing = memorySource([], { retry });
     const first = await mount({
       source: failing,
       section: {
@@ -970,6 +1075,12 @@ describe("every list draws one way (ADR 0234)", () => {
         state: "error",
         error: "Could not read this chat.",
       });
+      expect(failing.loads).toHaveLength(0);
+      await act(async () => {
+        await first.reports.at(-1)?.retry?.();
+      });
+      expect(chat.refetch).toHaveBeenCalledOnce();
+      expect(retry).not.toHaveBeenCalled();
       expect(failing.loads).toHaveLength(0);
     } finally {
       await first.cleanup();

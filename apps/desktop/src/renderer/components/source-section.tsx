@@ -321,14 +321,15 @@ function SourceView({
   const refresh = useCallback(async () => {
     setSubscriptionError(undefined);
     setActionError(undefined);
+    if (awaitingSession) return sessionId ? refetchSession() : undefined;
     try {
-      await source.retry?.();
+      // Recovery invalidates every subscribed view. That event owns the
+      // read; another load here would queue a second request behind it.
+      if (source.retry) await source.retry();
+      else await collection.load();
     } catch (cause) {
       setSubscriptionError(failure(cause).message);
-      return;
     }
-    if (!awaitingSession) return collection.load();
-    return sessionId ? refetchSession() : undefined;
   }, [source, collection, awaitingSession, sessionId, refetchSession]);
   useSidebarRefresh(refresh);
   // A module that wants more than the person allowed is not running; its
@@ -340,10 +341,7 @@ function SourceView({
   const access = asked
     ? {
         request: asked.request,
-        allow: async () => {
-          await asked.allow();
-          await refresh();
-        },
+        allow: asked.allow,
       }
     : undefined;
   useSidebarContent({
