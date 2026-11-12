@@ -1,5 +1,5 @@
 import { type ChildProcess, spawn } from "node:child_process";
-import { createHash } from "node:crypto";
+import { createHash, randomBytes } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
@@ -857,7 +857,18 @@ export class CustomizationProcesses {
       this.deps.root,
       `${createHash("sha256").update(PROCESS_WORKER).digest("hex").slice(0, 16)}.mjs`,
     );
-    fs.writeFileSync(file, PROCESS_WORKER, { mode: 0o600 });
+    // Existing children may still be loading this shared path. Publish a
+    // complete private inode instead of truncating one of their readers.
+    const temporary = `${file}.${randomBytes(8).toString("hex")}.tmp`;
+    try {
+      fs.writeFileSync(temporary, PROCESS_WORKER, {
+        mode: 0o600,
+        flag: "wx",
+      });
+      fs.renameSync(temporary, file);
+    } finally {
+      fs.rmSync(temporary, { force: true });
+    }
     return file;
   }
 }
