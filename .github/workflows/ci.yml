@@ -55,7 +55,7 @@ jobs:
     name: Plan test shards
     needs: access
     if: needs.access.outputs.allowed == 'true'
-    runs-on: blacksmith-8vcpu-ubuntu-2404
+    runs-on: ubuntu-latest
     timeout-minutes: 5
     outputs:
       workspace: ${{ steps.plan.outputs.workspace }}
@@ -73,7 +73,7 @@ jobs:
   validation:
     needs: access
     if: needs.access.outputs.allowed == 'true'
-    runs-on: blacksmith-8vcpu-ubuntu-2404
+    runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@v7
@@ -101,7 +101,7 @@ jobs:
   workspace:
     needs: [access, shards]
     if: needs.access.outputs.allowed == 'true'
-    runs-on: blacksmith-8vcpu-ubuntu-2404
+    runs-on: ubuntu-latest
     timeout-minutes: 20
     strategy:
       fail-fast: false
@@ -134,7 +134,7 @@ jobs:
   pwa:
     needs: access
     if: needs.access.outputs.allowed == 'true'
-    runs-on: blacksmith-8vcpu-ubuntu-2404
+    runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@v7
@@ -192,7 +192,7 @@ jobs:
   module-confinement-linux:
     needs: access
     if: needs.access.outputs.allowed == 'true'
-    runs-on: blacksmith-8vcpu-ubuntu-2404
+    runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@v7
@@ -248,7 +248,7 @@ jobs:
   desktop-linux:
     needs: [access, shards]
     if: needs.access.outputs.allowed == 'true'
-    runs-on: blacksmith-8vcpu-ubuntu-2404
+    runs-on: ubuntu-latest
     timeout-minutes: 20
     strategy:
       fail-fast: false
@@ -303,8 +303,6 @@ jobs:
     needs: [access, shards]
     if: needs.access.outputs.allowed == 'true'
     # Keep native Cocoa/menu/Command-key coverage on a dedicated Apple desktop.
-    # Blacksmith is already enabled for Linux in this org; macOS remains on
-    # GitHub until the org's Blacksmith macOS entitlement is confirmed.
     runs-on: macos-15
     timeout-minutes: 25
     strategy:
@@ -436,7 +434,7 @@ jobs:
   eval:
     needs: checks
     if: github.event_name != 'pull_request'
-    runs-on: blacksmith-8vcpu-ubuntu-2404
+    runs-on: ubuntu-latest
     timeout-minutes: 30
     env:
       MODEL_EVAL_AVAILABLE: ${{ (secrets.ANTHROPIC_API_KEY != '' || secrets.OPENAI_API_KEY != '') && '1' || '' }}

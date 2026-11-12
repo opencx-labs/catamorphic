@@ -72,10 +72,10 @@ The same tests run across independent jobs:
 
 | Lane | Runners | Isolation |
 | --- | --- | --- |
-| Validation | 1 Blacksmith Ubuntu, 8 vCPU | Lint, types, builds, schema sync, root tests |
-| Workspace tests | Auto: 1 per 100 files, up to 16 Blacksmith Ubuntu, 8 vCPU | Vitest file shards, one disposable Postgres per job |
-| PWA | 1 Blacksmith Ubuntu, 8 vCPU | Headless Chromium |
-| Desktop Linux | Auto: 1 per 5 files, up to 32 Blacksmith Ubuntu, 8 vCPU | One private Xvfb + Openbox display per shard |
+| Validation | 1 GitHub-hosted Ubuntu, 4 vCPU | Lint, types, builds, schema sync, root tests |
+| Workspace tests | Auto: 1 per 100 files, up to 16 GitHub-hosted Ubuntu, 4 vCPU | Vitest file shards, one disposable Postgres per job |
+| PWA | 1 GitHub-hosted Ubuntu, 4 vCPU | Headless Chromium |
+| Desktop Linux | Auto: 1 per 5 files, up to 32 GitHub-hosted Ubuntu, 4 vCPU | One private Xvfb + Openbox display per shard |
 | Desktop macOS | Auto: 1 per 10 files, up to 16 GitHub-hosted macOS runners | One native desktop per shard |
 
 A short planning job runs Vitest file discovery against each workspace's config
@@ -133,9 +133,7 @@ before the microphone has delivered audio, so elapsed wall time after a phase
 change does not prove that the scripted speech has reached the worker.
 
 Linux validates real Electron behavior on Linux. macOS shards retain native
-window, menu, and Command-key coverage. Blacksmith macOS support exists, but
-this repository uses GitHub macOS until the organization's macOS entitlement
-is confirmed. See ADR 0129.
+window, menu, and Command-key coverage. See ADRs 0129 and 0310.
 
 Baseline: GitHub run 34595077215 took approximately 18 minutes, including
 315 seconds of visible and 380 seconds of hidden desktop tests. Measure the
