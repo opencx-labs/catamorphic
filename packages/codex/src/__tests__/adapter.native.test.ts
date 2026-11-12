@@ -2,7 +2,12 @@ import { execFileSync } from "node:child_process";
 import { mkdir, mkdtemp, realpath, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import type { JsonObject } from "@catamorphic/agent-protocol";
 import type { HarnessEvent } from "@catamorphic/agent-protocol/runner";
+import {
+  agentQuestionDescription,
+  agentQuestionJsonSchema,
+} from "@catamorphic/sandbox";
 import { expect, it } from "vitest";
 import { createCodexAdapter } from "../adapter.js";
 import { isObject } from "../app-server.js";
@@ -12,6 +17,90 @@ import { driveAttempt, NativeStore } from "./replay/driver.js";
 import { cleanup, eventsOf, replayScenario } from "./replay/harness.js";
 import { modelServer, recordScenario } from "./replay/record-scenario.js";
 import { attemptBase, scenario } from "./replay/scenarios.js";
+
+it.each([true, false])(
+  "passes the host's ask_user to the pinned CLI and handles blocking=%s",
+  async (blocking) => {
+    const command = pinnedCodexCommand();
+    const requests: JsonObject[] = [];
+    const run = await recordScenario({
+      command,
+      cliVersion: execFileSync(command, ["--version"], { encoding: "utf8" }),
+      onModelRequest: (body) => requests.push(body),
+      scenario: {
+        name: "host-question",
+        description:
+          "The host question tool supports free text and both delivery modes.",
+        model: [
+          {
+            items: [
+              {
+                call: "ask_user",
+                args: {
+                  blocking,
+                  questions: [
+                    {
+                      question: "What detail should I include?",
+                      header: "Detail",
+                      options: [],
+                    },
+                  ],
+                },
+              },
+            ],
+          },
+          {
+            items: [{ message: "Continuing with the task." }],
+            expectInput: [
+              blocking ? "Freeform detail" : "The answer arrives as a message",
+            ],
+          },
+        ],
+        attempts: [
+          {
+            build: (context) => ({
+              ...attemptBase(context, {
+                ordinal: 1,
+                text: "Ask me for a detail.",
+              }),
+              hostTools: [
+                {
+                  name: "ask_user",
+                  description: agentQuestionDescription,
+                  inputSchema: agentQuestionJsonSchema as JsonObject,
+                },
+              ],
+            }),
+            script: {
+              answer: () =>
+                blocking
+                  ? { kind: "question", answers: ["Freeform detail"] }
+                  : undefined,
+            },
+          },
+        ],
+      },
+    });
+    expect(JSON.stringify(requests[0]?.tools)).toContain('"name":"ask_user"');
+    const events = run.results[0]?.events ?? [];
+    expect(
+      events.filter((event) => event.type === "request.opened"),
+    ).toMatchObject([
+      {
+        request: {
+          blocking,
+          origin: { id: "ask_user" },
+          questions: [{ options: [] }],
+        },
+      },
+    ]);
+    expect(events.at(-1)).toMatchObject({
+      type: "turn.completed",
+      status: "completed",
+    });
+  },
+  60_000,
+);
 
 it("discards an abandoned streamed reply when the native CLI recovers", async () => {
   const command = pinnedCodexCommand();

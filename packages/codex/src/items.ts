@@ -1,4 +1,5 @@
 import type {
+  AgentQuestion,
   ItemPayload,
   JsonObject,
   JsonValue,
@@ -35,6 +36,7 @@ export class CodexItems {
     string,
     { server: string; tool: string; input: JsonValue }
   >();
+  private readonly asked = new Set<string>();
   private status?: string;
   /** The main thread's latest reasoning title: its words for its work. */
   private said?: string;
@@ -53,6 +55,8 @@ export class CodexItems {
       hidden?: (tool: string) => boolean;
       /** A changed file as Work names it (relative to the workspace). */
       filePath?: (path: string) => string;
+      /** Native async questions use the host's existing request lifecycle. */
+      questions?: (key: string, questions: AgentQuestion[]) => void;
     },
   ) {}
 
@@ -110,6 +114,7 @@ export class CodexItems {
     if (!id) return;
     switch (item.type) {
       case "agentMessage":
+        if (this.input.questions && asyncQuestions(item)) return;
         // A native stream retry can abandon a message without completing it.
         // Only the replacement is a reply; keep child threads independent.
         for (const [key, open] of this.open) {
@@ -227,10 +232,23 @@ export class CodexItems {
     const id = typeof item.id === "string" ? item.id : undefined;
     if (!id) return;
     switch (item.type) {
-      case "agentMessage":
+      case "agentMessage": {
+        const questions = this.input.questions && asyncQuestions(item);
+        if (questions) {
+          const key = `question:${JSON.stringify([parentKey ?? null, id])}`;
+          if (this.asked.has(key)) return;
+          this.asked.add(key);
+          this.workStarted = true;
+          // Metadata can arrive only at completion, after text was streamed.
+          if (this.open.get(id)?.parentKey === parentKey)
+            this.completed(id, "cancelled", { text: "" });
+          this.input.questions?.(key, questions);
+          return;
+        }
         if (!this.open.has(id)) this.itemStarted(item, parentKey);
         this.completed(id, "completed", { text: String(item.text ?? "") });
         return;
+      }
       case "reasoning": {
         const state = this.reasoning.get(id);
         this.reasoning.delete(id);
@@ -486,6 +504,38 @@ interface FileChangeEntry {
   path: string;
   kind: "created" | "modified" | "deleted" | "renamed";
   movePath?: string;
+}
+
+/** Codex delivers native async questions as structured agent messages. */
+function asyncQuestions(item: JsonObject): AgentQuestion[] | undefined {
+  if (
+    item.delivery !== "async" ||
+    !Array.isArray(item.questions) ||
+    item.questions.length === 0
+  )
+    return;
+  const questions: AgentQuestion[] = [];
+  for (const question of item.questions) {
+    if (
+      !isObject(question) ||
+      typeof question.title !== "string" ||
+      !question.title.trim() ||
+      (question.options != null &&
+        (!Array.isArray(question.options) ||
+          question.options.some((option) => typeof option !== "string")))
+    )
+      return;
+    questions.push({
+      question: question.title,
+      header: "Question",
+      multiSelect: false,
+      options: ((question.options ?? []) as string[]).map((label) => ({
+        label,
+        description: "",
+      })),
+    });
+  }
+  return questions;
 }
 
 function changesOf(item: JsonObject): FileChangeEntry[] {

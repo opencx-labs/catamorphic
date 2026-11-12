@@ -2,6 +2,7 @@ import { mkdir, mkdtemp, realpath, rm, writeFile } from "node:fs/promises";
 import http from "node:http";
 import { hostname, tmpdir } from "node:os";
 import path from "node:path";
+import type { JsonObject } from "@catamorphic/agent-protocol";
 import { createCodexAdapter } from "../../adapter.js";
 import type { CodexTranscript } from "../../testing/index.js";
 import { CodexRecorder } from "../../testing/record.js";
@@ -26,13 +27,16 @@ export async function recordScenario(input: {
   scenario: Scenario;
   command: string;
   cliVersion: string;
+  onModelRequest?: (body: JsonObject) => void;
 }): Promise<{ transcript: CodexTranscript; results: AttemptResult[] }> {
   const { scenario } = input;
   const root = await mkdtemp(
     path.join(await realpath(tmpdir()), "codex-replay-"),
   );
   const problems: string[] = [];
-  const model = await modelServer(scenario.model, problems);
+  const model = await modelServer(scenario.model, problems, {
+    onRequest: input.onModelRequest,
+  });
   try {
     await mkdir(path.join(root, "work"), { recursive: true });
     for (const [file, text] of Object.entries(WORKSPACE_FILES))
@@ -91,6 +95,7 @@ export async function modelServer(
   problems: string[],
   options?: {
     authorize?: (input: { authorization: string }) => Promise<boolean>;
+    onRequest?: (body: JsonObject) => void;
   },
 ): Promise<{
   url: string;
@@ -127,6 +132,7 @@ export async function modelServer(
     count += 1;
     const plan = responses[count - 1];
     const body = Buffer.concat(chunks).toString();
+    options?.onRequest?.(JSON.parse(body));
     const mentions = (text: string) =>
       body.includes(JSON.stringify(text).slice(1, -1));
     if (plan && "items" in plan) {

@@ -45,6 +45,15 @@ Codex's structured questions (`request_user_input`), command, file and
 permission approvals, and MCP elicitations are runtime requests. A steer is
 `turn/steer` into the running turn; an interrupt is `turn/interrupt`.
 
+The host's `ask_user` is passed as a dynamic tool and uses the runner's shared
+question handling. Native async questions (`agentMessage` items with
+`delivery: "async"` and structured `questions`) open the same nonblocking runtime
+requests, without duplicating their generated text. Their answers are messages:
+they steer the running turn or start a later one if it has settled. Duplicate
+native notifications do not reopen questions; interruption withdraws pending
+questions through the existing request lifecycle. Historical rollout imports
+remain transcript, rather than reopening old questions.
+
 Streamed messages become completed replies only when Codex completes the item.
 A native retry may abandon a draft without completing it; a replacement in the
 same thread withdraws that draft. Its deltas remain in the event log. Failed or
