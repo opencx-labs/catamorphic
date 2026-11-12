@@ -1,5 +1,6 @@
 import path from "node:path";
 import { afterAll, beforeAll, expect, it } from "vitest";
+import { VOICE_HOLD_MS } from "../src/shared/voice.js";
 import { type AppHandle, focusWindow, launchApp } from "./harness.js";
 
 let app: AppHandle;
@@ -77,13 +78,18 @@ async function messageCount() {
 async function click() {
   const target = await point();
   await recordPhases();
-  for (const type of ["mousePressed", "mouseReleased"])
-    await app.cdp("Input.dispatchMouseEvent", {
-      type,
-      ...target,
-      button: "left",
-      clickCount: 1,
-    });
+  await app.eval(`(()=>{
+    window.__quickClickTimes=[];
+    for(const type of ['pointerdown','pointerup'])
+      window.addEventListener(type,event=>window.__quickClickTimes.push(event.timeStamp),{once:true,capture:true});
+    return true;
+  })()`);
+  // One OS click: two CDP round trips can turn a short click into a hold.
+  await app.clickPointer(target);
+  const times = await app.eval<number[]>("window.__quickClickTimes");
+  expect(times).toHaveLength(2);
+  expect(times[1]! - times[0]!).toBeGreaterThanOrEqual(0);
+  expect(times[1]! - times[0]!).toBeLessThan(VOICE_HOLD_MS);
   await app.waitFor(`${api}.voiceStatus().then(status=>status.phase==='off')`, {
     label: "a short click cancelled",
   });

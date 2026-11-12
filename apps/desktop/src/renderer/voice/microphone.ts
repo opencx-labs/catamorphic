@@ -84,16 +84,18 @@ export function listen(
     try {
       // Resume the prepared graph in parallel with the physical input opening.
       if (prepared) void prepared.context.resume().catch(() => {});
-      const opened = await openMicrophone(chosen, signal);
-      if (signal.aborted) {
-        for (const track of opened.getTracks()) track.stop();
-        return;
-      }
-      stream = opened;
       context ??= new AudioContext({ sampleRate: SPEECH_SAMPLE_RATE });
+      const opening = openMicrophone(chosen, signal).then((opened) => {
+        if (signal.aborted) {
+          for (const track of opened.getTracks()) track.stop();
+          signal.throwIfAborted();
+        }
+        stream = opened;
+        return opened;
+      });
       await capture(
         port,
-        stream,
+        opening,
         context,
         signal,
         disconnected,
@@ -121,80 +123,106 @@ function post(port: MessagePort, message: VoiceAudioUp) {
 /** Streams the microphone's audio to the port as it comes. */
 async function capture(
   port: MessagePort,
-  stream: MediaStream,
+  opening: Promise<MediaStream>,
   context: AudioContext,
   signal: AbortSignal,
   disconnected: () => void,
   own: (closer: () => Promise<void>) => void,
   ready?: Promise<void>,
 ): Promise<void> {
-  const [track] = stream.getAudioTracks();
-  track?.addEventListener(
-    "ended",
-    () => {
-      if (!signal.aborted) disconnected();
-    },
-    { signal },
-  );
-  if (track?.readyState === "ended") {
-    disconnected();
-    return;
-  }
-  // Which microphone it is: other apps' audio is lowered only for the
-  // system's own (ADR 0268).
-  post(port, { type: "microphone", label: track?.label ?? "" });
-  await (ready ?? context.audioWorklet.addModule(captureWorklet));
-  signal.throwIfAborted();
-  const tap = new AudioWorkletNode(context, "voice-capture", {
-    numberOfInputs: 1,
-    numberOfOutputs: 0,
-  });
-  let flushed: (() => void) | null = null;
-  let started = false;
-  tap.port.onmessage = (event: MessageEvent<Float32Array | "flushed">) => {
-    if (event.data === "flushed") {
-      flushed?.();
+  let pendingTap: AudioWorkletNode | null = null;
+  // Module loading may finish after device opening has already failed.
+  let canceled = false;
+  const discard = () => {
+    canceled = true;
+    pendingTap?.port.close();
+    pendingTap?.disconnect();
+    pendingTap = null;
+  };
+  signal.addEventListener("abort", discard, { once: true });
+  try {
+    // Initialize the processor while the OS opens input, not after it opens.
+    const [stream, tap] = await Promise.all([
+      opening,
+      (ready ?? context.audioWorklet.addModule(captureWorklet)).then(() => {
+        signal.throwIfAborted();
+        if (canceled) throw new DOMException("Capture stopped.", "AbortError");
+        pendingTap = new AudioWorkletNode(context, "voice-capture", {
+          numberOfInputs: 1,
+          numberOfOutputs: 0,
+        });
+        return pendingTap;
+      }),
+    ]);
+    signal.throwIfAborted();
+    const [track] = stream.getAudioTracks();
+    track?.addEventListener(
+      "ended",
+      () => {
+        if (!signal.aborted) disconnected();
+      },
+      { signal },
+    );
+    if (track?.readyState === "ended") {
+      disconnected();
       return;
     }
-    if (!started && !signal.aborted) {
-      started = true;
-      post(port, { type: "capturing" });
-    }
-    post(port, {
-      type: "frame",
-      samples: event.data,
-      sampleRate: context.sampleRate,
-    });
-  };
-  const source = context.createMediaStreamSource(stream);
-  source.connect(tap);
-  // Resuming never gates ownership of the closer, including a slow device.
-  own(
-    () =>
-      new Promise<void>((resolve, reject) => {
-        source.disconnect();
-        const cleanup = () => {
-          clearTimeout(timeout);
-          tap.port.onmessage = null;
-          tap.port.close();
-          tap.disconnect();
-        };
-        const timeout = setTimeout(() => {
-          cleanup();
-          reject(
-            new Error(
-              "The microphone could not finish its captured audio. Try again.",
-            ),
-          );
-        }, 1500);
-        flushed = () => {
-          cleanup();
-          resolve();
-        };
-        tap.port.postMessage("flush");
-      }),
-  );
-  await context.resume();
+    // Which microphone it is: other apps' audio is lowered only for the
+    // system's own (ADR 0268).
+    post(port, { type: "microphone", label: track?.label ?? "" });
+    let flushed: (() => void) | null = null;
+    let started = false;
+    tap.port.onmessage = (event: MessageEvent<Float32Array | "flushed">) => {
+      if (event.data === "flushed") {
+        flushed?.();
+        return;
+      }
+      if (!started && !signal.aborted) {
+        started = true;
+        post(port, { type: "capturing" });
+      }
+      post(port, {
+        type: "frame",
+        samples: event.data,
+        sampleRate: context.sampleRate,
+      });
+    };
+    const source = context.createMediaStreamSource(stream);
+    source.connect(tap);
+    // Resuming never gates ownership of the closer, including a slow device.
+    own(
+      () =>
+        new Promise<void>((resolve, reject) => {
+          source.disconnect();
+          const cleanup = () => {
+            clearTimeout(timeout);
+            tap.port.onmessage = null;
+            tap.port.close();
+            tap.disconnect();
+          };
+          const timeout = setTimeout(() => {
+            cleanup();
+            reject(
+              new Error(
+                "The microphone could not finish its captured audio. Try again.",
+              ),
+            );
+          }, 1500);
+          flushed = () => {
+            cleanup();
+            resolve();
+          };
+          tap.port.postMessage("flush");
+        }),
+    );
+    // The live closer now owns the node and must flush before disposing it.
+    pendingTap = null;
+    signal.removeEventListener("abort", discard);
+    await context.resume();
+  } finally {
+    signal.removeEventListener("abort", discard);
+    discard();
+  }
 }
 
 /**

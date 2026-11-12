@@ -526,13 +526,13 @@ export function registerVoiceSupport(deps: {
       phase,
       ...patch,
     };
-    publish();
-    // A chat observation reports its busy state before handing over replies.
-    // Let that synchronous observation finish before resting an idle voice.
-    if (phase === "off")
+    // A chat observation reports idle before handing over its replies.
+    // Publish idle only if the whole observation leaves nothing to speak.
+    if (voice.live.phase === "off")
       queueMicrotask(() => {
         if (active === voice && voice.live.phase === "off") void stop();
       });
+    else publish();
   };
 
   /** Voice talks with its chat, or dictates: it is ready. */

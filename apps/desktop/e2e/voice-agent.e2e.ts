@@ -233,6 +233,7 @@ async function microphone(
   type: "mousePressed" | "mouseReleased",
   button = "mic()",
 ) {
+  if (type === "mousePressed") await focusWindow(app);
   const point = await runWait<{ x: number; y: number }>(
     `const button = ${button};
      if (!button) return false;
@@ -312,6 +313,15 @@ async function talk(
         stages.inputOpenedAt = Date.now();
         return stream;
       };
+      const Node = AudioWorkletNode;
+      window.AudioWorkletNode = new Proxy(Node, {
+        construct(target, args) {
+          window.__captureStages.processorRequestedAt = Date.now();
+          const node = Reflect.construct(target, args);
+          window.__captureStages.processorCreatedAt = Date.now();
+          return node;
+        },
+      });
       const resume = AudioContext.prototype.resume;
       AudioContext.prototype.resume = async function(...args) {
         const stages = window.__captureStages;
@@ -399,6 +409,11 @@ async function talk(
   expect(settledAt - lastDrainedAt).toBeGreaterThanOrEqual(0);
   expect(settledAt - lastDrainedAt).toBeLessThan(750);
   expect(statusLog.map((entry) => entry.phase)).not.toContain("listening");
+  const phases = statusLog
+    .filter((entry) => entry.at >= pressedAt)
+    .map((entry) => entry.phase);
+  // Becoming idle and handing over the same observation's reply is one update.
+  expect(phases.slice(0, phases.lastIndexOf("speaking"))).not.toContain("off");
   return ref;
 }
 
@@ -1141,7 +1156,15 @@ describe("voice", () => {
         timeoutMs: 30_000,
         label: "the agent stopped listening and said goodbye",
       },
-    );
+    ).catch(async (cause: unknown) => {
+      const diagnostic =
+        await run(`const detail = await session(${JSON.stringify(ref)});
+        return { status: await api.voiceStatus(), phases: window.__voicePhases,
+          messages: detail.messages?.slice(-15), focused: document.hasFocus() };`);
+      throw new Error(
+        `${String(cause)}; voice state: ${JSON.stringify(diagnostic)}`,
+      );
+    });
     await runWait(`return mic().dataset.phase === 'off';`, {
       timeoutMs: 30_000,
       label: "voice off once the goodbye is said",

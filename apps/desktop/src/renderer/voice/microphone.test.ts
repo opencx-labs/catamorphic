@@ -96,6 +96,9 @@ function setup(
     getUserMedia,
     addModule,
     track,
+    get tap() {
+      return tap;
+    },
     frame: (samples: Float32Array) =>
       tap.port.onmessage?.({ data: samples } as MessageEvent<Float32Array>),
     flushed: () =>
@@ -125,6 +128,61 @@ describe("a microphone that stops while capture is starting", () => {
     mic.prepared?.close();
     expect(mic.contextClose).toHaveBeenCalledOnce();
   });
+  it("initializes its processor while the device is still opening", async () => {
+    const mic = setup(true);
+    mic.module.resolve();
+    await flush();
+    expect(mic.tap).toBeDefined();
+    expect(mic.source).not.toHaveBeenCalled();
+    mic.permission.resolve(mic.stream);
+    mic.resume.resolve();
+    await flush();
+    expect(mic.source).toHaveBeenCalledOnce();
+    await mic.close();
+    expect(mic.tap.port.close).toHaveBeenCalledOnce();
+  });
+
+  it("releases an unused processor immediately when device opening is canceled", async () => {
+    const mic = setup(true);
+    mic.module.resolve();
+    await flush();
+    expect(mic.tap).toBeDefined();
+    await mic.close();
+    expect(mic.tap.port.close).toHaveBeenCalledOnce();
+    expect(mic.tap.disconnect).toHaveBeenCalledOnce();
+    mic.permission.resolve(mic.stream);
+    await flush();
+    expect(mic.stop).toHaveBeenCalledOnce();
+    expect(mic.source).not.toHaveBeenCalled();
+    expect(mic.sent).toEqual([]);
+  });
+
+  it("disposes the initialized processor if opening the device fails", async () => {
+    const mic = setup(true);
+    mic.module.resolve();
+    await flush();
+    expect(mic.tap).toBeDefined();
+    mic.permission.reject(new Error("device unavailable"));
+    await flush();
+    expect(mic.tap.port.close).toHaveBeenCalledOnce();
+    expect(mic.tap.disconnect).toHaveBeenCalledOnce();
+    expect(mic.source).not.toHaveBeenCalled();
+    expect(mic.sent.filter((event) => event.type === "failed")).toMatchObject([
+      { message: expect.stringContaining("device unavailable") },
+    ]);
+  });
+
+  it("does not create a late processor after device opening failed", async () => {
+    const mic = setup(true);
+    mic.permission.reject(new Error("device unavailable"));
+    await flush();
+    mic.module.resolve();
+    await flush();
+    expect(mic.tap).toBeUndefined();
+    expect(mic.source).not.toHaveBeenCalled();
+    expect(mic.sent.filter((event) => event.type === "failed")).toHaveLength(1);
+  });
+
   it("releases a permission result that arrives after voice stopped", async () => {
     const mic = setup();
     await mic.close();
@@ -327,9 +385,8 @@ it("recovers an input that already ended before its permission result arrived", 
   mic.permission.resolve(mic.stream);
   mic.module.resolve();
   mic.resume.resolve();
-  await flush();
+  await vi.waitFor(() => expect(mic.source).toHaveBeenCalledOnce());
   expect(mic.getUserMedia).toHaveBeenCalledTimes(2);
-  expect(mic.source).toHaveBeenCalledOnce();
   expect(mic.sent).toContainEqual({ type: "capture-opening" });
   expect(mic.sent.filter((event) => event.type === "failed")).toEqual([]);
   await mic.close();
