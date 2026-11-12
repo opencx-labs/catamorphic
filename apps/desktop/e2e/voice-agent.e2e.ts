@@ -127,6 +127,18 @@ const recordPhases = () =>
   run(`
     window.__voicePhases = [mic().dataset.phase];
     window.__voiceStatusLog = [];
+    window.__voiceInputLog = [];
+    if (!window.__voiceInputWatched) {
+      window.__voiceInputWatched = true;
+      for (const type of ['pointerdown', 'pointerup', 'pointercancel', 'lostpointercapture', 'keydown', 'keyup', 'blur', 'focus'])
+        window.addEventListener(type, event => {
+          const button = event.target instanceof Element ? event.target.closest('button') : null;
+          window.__voiceInputLog.push({type,at:Date.now(),key:event.key,
+            target:button?.dataset.testid,label:button?.getAttribute('aria-label'),
+            trusted:event.isTrusted,focused:document.hasFocus(),x:event.clientX,y:event.clientY});
+          window.__voiceInputLog = window.__voiceInputLog.slice(-20);
+        }, true);
+    }
     window.__voiceUnsubscribe?.();
     window.__voiceUnsubscribe = api.onVoiceStatus(status => window.__voiceStatusLog.push({phase:status.phase,at:Date.now()}));
     window.__voiceLoudest = 0;
@@ -359,7 +371,18 @@ async function talk(
       timeoutMs: 30_000,
       label: "the assistant hearing while the microphone is held",
     },
-  );
+  ).catch(async (cause: unknown) => {
+    const detail = await run(`return {
+      status:await api.voiceStatus(),inputs:window.__voiceInputLog,
+      phases:window.__voicePhases,focused:document.hasFocus(),
+      button:mic()?.getBoundingClientRect().toJSON()
+    };`);
+    const capture = await captureProbe.eval("window.__captureStages");
+    captureProbe.close();
+    throw new Error(
+      `${String(cause)}; held input: ${JSON.stringify({ detail, capture })}`,
+    );
+  });
   await capturedSpeech();
   const pressedAt = await run<number>("return window.__voicePressedAt;");
   const capturedAt = await captureProbe.eval<number>("window.__captureFirstAt");
