@@ -31,13 +31,13 @@ jobs:
     outputs:
       version: ${{ steps.release.outputs.version }}
     steps:
-      - uses: actions/checkout@v7
-      - uses: oven-sh/setup-bun@v2
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
         with:
           bun-version: 1.4.4
-      - uses: actions/setup-node@v7
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
-          node-version: 24.22.1
+          node-version: 26.13.1
       - run: bun install --frozen-lockfile
       - id: release
         name: Verify the shared release version
@@ -58,7 +58,7 @@ jobs:
       - name: Reject stale npm channels before desktop publication
         if: github.event_name == 'push' && github.ref_type == 'tag'
         run: bun scripts/release-packages.ts preflight --directory "${RUNNER_TEMP}/npm-packages"
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: npm-packages-${{ steps.release.outputs.version }}
           path: ${{ runner.temp }}/npm-packages/
@@ -78,13 +78,13 @@ jobs:
       release_kind: ${{ steps.release.outputs.release_kind }}
       update_metadata: ${{ steps.release.outputs.update_metadata }}
     steps:
-      - uses: actions/checkout@v7
-      - uses: oven-sh/setup-bun@v2
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
         with:
           bun-version: 1.4.4
-      - uses: actions/setup-node@v7
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
-          node-version: 24.22.1
+          node-version: 26.13.1
       - run: bun install --frozen-lockfile
 
       - id: release
@@ -202,7 +202,7 @@ jobs:
               "${UPDATE_METADATA}" > SHA256SUMS.txt
           )
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: work-${{ steps.release.outputs.version }}-macos-arm64
           if-no-files-found: error
@@ -311,16 +311,16 @@ jobs:
       contents: read
       id-token: write
     steps:
-      - uses: actions/checkout@v7
-      - uses: oven-sh/setup-bun@v2
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
         with:
           bun-version: 1.4.4
-      - uses: actions/setup-node@v7
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
-          node-version: 24.22.1
-      - name: Install the OIDC-capable npm client
-        run: npm install --global npm@11.21.1 --ignore-scripts
-      - uses: actions/download-artifact@v4
+          node-version: 26.13.1
+      - name: Install locked release tooling
+        run: bun install --frozen-lockfile
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: npm-packages-${{ needs.prepare-npm.outputs.version }}
           path: ${{ runner.temp }}/npm-packages
@@ -337,15 +337,15 @@ jobs:
       contents: read
       id-token: write
     steps:
-      - uses: actions/checkout@v7
-      - uses: oven-sh/setup-bun@v2
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
         with:
           bun-version: 1.4.4
-      - uses: actions/setup-node@v7
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
-          node-version: 24.22.1
-      - name: Install the OIDC-capable npm client
-        run: npm install --global npm@11.21.1 --ignore-scripts
+          node-version: 26.13.1
+      - name: Install locked release tooling
+        run: bun install --frozen-lockfile
       - name: Verify original release artifacts and repair only bootstrap channels
         env:
           GH_TOKEN: ${{ github.token }}

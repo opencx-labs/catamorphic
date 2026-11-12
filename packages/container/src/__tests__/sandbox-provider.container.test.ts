@@ -23,11 +23,15 @@ import { type ContainerRuntime, probeContainerSupport } from "../support.js";
 // (scripts/test-in-docker.sh sets one up). WORK_TEST_CONTAINER_RUNTIME=runc
 // runs the same tests under runc.
 const enabled = process.env.WORK_TEST_CONTAINER === "1";
-const IMAGE = process.env.WORK_TEST_CONTAINER_IMAGE ?? "oven/bun:1.4.4-alpine";
+const IMAGE =
+  process.env.WORK_TEST_CONTAINER_IMAGE ??
+  "oven/bun:1.4.4-alpine@sha256:4cf82f5686b196504fe119db3fcd9185b191f82ece82c40680e597228ec6070a";
 // Pinned, as every image these tests pull: an upstream release never
 // changes a run.
-const DIND_IMAGE = "docker:29.8.2-dind";
-const NESTED_IMAGE = "alpine:3.22.2";
+const DIND_IMAGE =
+  "docker:29.9.3-dind@sha256:08a98015fce594af7c382883bea080ea206de74402a95da9dc52b6428c8cd121";
+const NESTED_IMAGE =
+  "alpine:3.24.4@sha256:f59abe656b692d901e184be3445e084786602108599d2a51d229c0f5a48c71bf";
 // The daemon inside the sandbox has no mirror of its own: pull through
 // Google's public one, as Docker Hub rate-limits shared runner addresses,
 // and from Docker Hub only when the mirror fails.

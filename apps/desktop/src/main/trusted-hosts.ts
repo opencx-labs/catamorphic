@@ -23,15 +23,22 @@ export function registerTrustedHosts({
   profileFor,
   rootFor,
   windowsFor,
+  approvalsRecovered,
 }: {
   approvalsFor: (profileId: string) => CodeApprovals;
   profileFor: (sender: WebContents) => string;
   rootFor: (projectId: string) => Promise<string | null>;
   /** The profile's windows, told when its list changes. */
   windowsFor: (profileId: string) => readonly { webContents: WebContents }[];
+  approvalsRecovered?: (input: { profileId: string }) => Promise<void>;
 }): () => void {
-  const mine = async (profileId: string) =>
-    (await approvalsFor(profileId).approved(SUBJECT))?.hosts ?? [];
+  const mine = async (profileId: string, retryUnlock = false) =>
+    (
+      await approvalsFor(profileId).approved(SUBJECT, {
+        refresh: retryUnlock,
+        retryUnlock,
+      })
+    )?.hosts ?? [];
   const save = async (profileId: string, hosts: readonly string[]) => {
     const approvals = approvalsFor(profileId);
     if (hosts.length) await approvals.approve(SUBJECT, { hosts: [...hosts] });
@@ -78,8 +85,9 @@ export function registerTrustedHosts({
         throw new Error("Only Work can trust a host.");
       const host = hostInput.parse(raw);
       const profileId = profileFor(event.sender);
-      const hosts = await mine(profileId);
+      const hosts = await mine(profileId, true);
       if (!hosts.includes(host)) await save(profileId, [...hosts, host]);
+      await approvalsRecovered?.({ profileId });
     },
   );
   ipcMain.handle(
@@ -89,12 +97,13 @@ export function registerTrustedHosts({
         throw new Error("Only Work can change trusted hosts.");
       const host = hostInput.parse(raw);
       const profileId = profileFor(event.sender);
-      const hosts = await mine(profileId);
+      const hosts = await mine(profileId, true);
       if (hosts.includes(host))
         await save(
           profileId,
           hosts.filter((entry) => entry !== host),
         );
+      await approvalsRecovered?.({ profileId });
     },
   );
   return () => {

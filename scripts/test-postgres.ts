@@ -75,7 +75,7 @@ export function dockerPostgresRunArgs(input: { name: string }): string[] {
     "--health-retries",
     "240",
     // Pin the fixture bytes: successful test hashes include this script.
-    "postgres:17@sha256:e38411452a464af89e5adadb8d223bf53b898d47d6ef918b2d58c08707350449",
+    "postgres:18.6@sha256:e3d24f6906d0760bf4da0dae872415391ededefad23fd471c47dc53b0ddf3c42",
     "-c",
     "max_connections=300",
   ];

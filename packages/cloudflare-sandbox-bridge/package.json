@@ -13,11 +13,11 @@
     "test": "bun ../../scripts/tool-runtime.ts vitest --tool-cwd packages/cloudflare-sandbox-bridge --config ../../vitest.config.ts"
   },
   "dependencies": {
-    "@cloudflare/sandbox": "^0.12.3",
-    "hono": "^4.13.13"
+    "@cloudflare/sandbox": "^1.0.3"
   },
   "devDependencies": {
-    "@cloudflare/workers-types": "^5.20261006.1",
-    "wrangler": "^4.151.0"
+    "@catamorphic/cloudflare": "workspace:*",
+    "@cloudflare/workers-types": "^5.20261110.1",
+    "wrangler": "^4.160.1"
   }
 }

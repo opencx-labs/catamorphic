@@ -7,10 +7,10 @@ uplinks:
   npmjs:
     url: https://registry.npmjs.org/
 packages:
-  '@catamorphic/*':
+  "@catamorphic/*":
     access: $all
     publish: $all
-  '**':
+  "**":
     access: $all
     proxy: npmjs
 log: { type: stdout, format: pretty, level: warn }

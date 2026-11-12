@@ -130,7 +130,7 @@ export function DownloadsBubble({
       !isActiveDownload(record),
   );
   const total = active.reduce(
-    (sum, record) => sum + (record.totalBytes > 0 ? record.totalBytes : 0),
+    (sum, record) => sum + Math.max(record.totalBytes, 0),
     0,
   );
   const received = active.reduce(

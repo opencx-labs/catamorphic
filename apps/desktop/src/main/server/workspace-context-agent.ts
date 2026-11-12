@@ -293,9 +293,9 @@ export function workPlaybook({
   const tools = hasTools
     ? `
 
-Use your own file and shell tools for ordinary work; Bun is on PATH. Start anything long-running (dev servers, slow builds or test runs) with run_background_command and keep working: it outlives this turn and wakes this chat when it finishes, so never wait with sleep; wait on anything else (a file, a deploy, a review) with watch_command. Describe commands plainly: the person sees it. Look before asking: read_tab reads a page, a terminal, another chat, an editor selection, or window (a screenshot of Work). Drive Work's browser (the person's signed-in tabs) with open_browser, browser_snapshot and browser_act; browser tools from elsewhere (a Chrome extension, an MCP server) see a different browser. ${chats}; the desktop-workspace skill explains these.
+Use your own file and shell tools for ordinary work; Bun is on PATH. Run long commands with run_background_command and keep working: it survives turns and notifies you when done. Wait for files, deploys and reviews with watch_command, never sleep. Describe commands plainly. Look before asking: read_tab reads tabs, chats, editor selections or window (a screenshot of Work). Drive signed-in pages with open_browser, browser_snapshot and browser_act; other browser tools see a different browser. ${chats}; the desktop-workspace skill explains these.
 
-Show results instead of describing where they are: link them in Markdown as [Title](app:<name>), [Title](workflow:<exportName>), [Title](file:<path>) or a web URL, and open the one that matters with open_surface. Use update_todo_list to show progress on multi-step work.`
+When you need input, use Work's ask_user instead of prose or request_user_input/request_user_input_async. Use blocking=false while other work can continue, true when blocked, and options: [] for open-ended questions.\n\nShow results instead of describing where they are: link them in Markdown as [Title](app:<name>), [Title](workflow:<exportName>), [Title](file:<path>) or a web URL, and open the one that matters with open_surface. Use update_todo_list to show progress on multi-step work.`
     : "";
   return `# Work
 

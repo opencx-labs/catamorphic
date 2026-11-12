@@ -390,8 +390,8 @@ export function smokeReleasePackages(input: {
         private: true,
         type: "module",
         devDependencies: {
-          "@types/node": "^24",
-          "@types/react": "^19.2.17",
+          "@types/node": "^26.6.6",
+          "@types/react": "^19.3.0",
         },
         dependencies: Object.fromEntries([
           ...peers,
@@ -500,7 +500,7 @@ try {
           private: true,
           type: "module",
           devDependencies: {
-            "@types/node": "^24",
+            "@types/node": "^26.6.6",
           },
           dependencies: { [name]: tarballs[name] },
           overrides: tarballs,
@@ -741,7 +741,12 @@ export function bootstrapLatestRemovals(input: {
   });
 }
 
-async function reconcileBootstrapChannels(inventory: Inventory) {
+async function reconcileBootstrapChannels(input: {
+  rootPath: string;
+  inventory: Inventory;
+}) {
+  const { inventory } = input;
+  const runtime = toolRuntime({ rootPath: input.rootPath, env: process.env });
   const registered = await Promise.all(
     inventory.packages.map((pkg) => registeredPackage(pkg.name)),
   );
@@ -758,8 +763,9 @@ async function reconcileBootstrapChannels(inventory: Inventory) {
     )
       continue;
     const result = spawnSync(
-      "npm",
+      runtime.nodePath,
       [
+        path.join(input.rootPath, "node_modules/npm/bin/npm-cli.js"),
         "dist-tag",
         "rm",
         pkg.name,
@@ -768,7 +774,7 @@ async function reconcileBootstrapChannels(inventory: Inventory) {
         NPM_REGISTRY,
         `--@catamorphic:registry=${NPM_REGISTRY}`,
       ],
-      { stdio: "inherit" },
+      { cwd: input.rootPath, env: runtime.env, stdio: "inherit" },
     );
     if (result.error) throw result.error;
     if (result.status !== 0)
@@ -956,7 +962,7 @@ async function repairBootstrapRelease(input: {
     throw new Error(
       "The original artifact does not contain this complete release",
     );
-  await reconcileBootstrapChannels(inventory);
+  await reconcileBootstrapChannels({ rootPath: input.rootPath, inventory });
   await verifyPublishedRelease(inventory);
 }
 
@@ -995,10 +1001,12 @@ async function publishReleasePackages(input: {
 }) {
   const { directory } = input;
   const { inventory, pending } = await preflightReleasePackages(input);
+  const runtime = toolRuntime({ rootPath: input.rootPath, env: process.env });
   for (const pkg of pending) {
     const result = spawnSync(
-      "npm",
+      runtime.nodePath,
       [
+        path.join(input.rootPath, "node_modules/npm/bin/npm-cli.js"),
         "publish",
         path.join(directory, pkg.filename),
         "--ignore-scripts",
@@ -1010,7 +1018,7 @@ async function publishReleasePackages(input: {
         NPM_REGISTRY,
         `--@catamorphic:registry=${NPM_REGISTRY}`,
       ],
-      { stdio: "inherit" },
+      { cwd: input.rootPath, env: runtime.env, stdio: "inherit" },
     );
     if (result.error) throw result.error;
     if (result.status !== 0)
@@ -1018,7 +1026,7 @@ async function publishReleasePackages(input: {
         `npm publication failed for ${pkg.name}; preserve already published versions and rerun this release`,
       );
   }
-  await reconcileBootstrapChannels(inventory);
+  await reconcileBootstrapChannels({ rootPath: input.rootPath, inventory });
   await verifyPublishedRelease(inventory);
 }
 

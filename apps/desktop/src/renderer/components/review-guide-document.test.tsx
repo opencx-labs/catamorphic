@@ -9,9 +9,12 @@ vi.mock("@tanstack/react-query", () => ({
 }));
 
 const state = vi.hoisted(() => {
-  const messages: { id: string; role: string; content: string }[] = [];
+  const turns: {
+    status: "failed" | "completed";
+    error?: { message: string };
+  }[] = [];
   return {
-    messages,
+    turns,
     artifacts: [] as {
       id: string;
       kind: string;
@@ -45,7 +48,7 @@ vi.mock("@catamorphic/react", () => ({
     },
   }),
   useAgentChat: () => ({
-    messages: state.messages,
+    timeline: state.turns.map((turn) => ({ turn })),
     send: state.send,
     interrupt: state.interrupt,
     isSending: false,
@@ -115,6 +118,51 @@ it("generates on request and opens the returned ordinary app", async () => {
   } finally {
     await act(async () => root.unmount());
     host.remove();
+    localStorage.clear();
+  }
+});
+
+it("shows a settled generation failure and clears it after a successful retry", async () => {
+  Reflect.set(globalThis, "IS_REACT_ACT_ENVIRONMENT", true);
+  localStorage.clear();
+  state.artifacts = [];
+  state.turns.push({
+    status: "failed",
+    error: { message: "App bundle exceeds the size limit." },
+  });
+  const host = document.createElement("div");
+  document.body.append(host);
+  const root = createRoot(host);
+  const ui = () => (
+    <ReviewGuideDocument
+      projectId="failed-review"
+      number={2}
+      title="Change"
+      body="Body"
+      files={[
+        {
+          path: "src/app.ts",
+          status: "modified",
+          additions: 1,
+          deletions: 0,
+          patch: "@@ -1 +1 @@\n-a\n+b",
+        },
+      ]}
+      revision="patch-b"
+    />
+  );
+  try {
+    await act(async () => root.render(ui()));
+    expect(host.querySelector('[role="alert"]')?.textContent).toBe(
+      "App bundle exceeds the size limit.",
+    );
+    state.turns.push({ status: "completed" });
+    await act(async () => root.render(ui()));
+    expect(host.querySelector('[role="alert"]')).toBeNull();
+  } finally {
+    await act(async () => root.unmount());
+    host.remove();
+    state.turns.length = 0;
     localStorage.clear();
   }
 });

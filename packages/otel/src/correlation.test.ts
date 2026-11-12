@@ -1,5 +1,16 @@
-import { context, propagation, ROOT_CONTEXT, trace } from "@opentelemetry/api";
-import { logs } from "@opentelemetry/api-logs";
+import {
+  context,
+  logs,
+  propagation,
+  ROOT_CONTEXT,
+  trace,
+} from "@opentelemetry/api";
+import { AsyncLocalStorageContextManager } from "@opentelemetry/context-async-hooks";
+import {
+  CompositePropagator,
+  W3CBaggagePropagator,
+  W3CTraceContextPropagator,
+} from "@opentelemetry/core";
 import {
   InMemoryLogRecordExporter,
   LoggerProvider,
@@ -7,9 +18,9 @@ import {
 } from "@opentelemetry/sdk-logs";
 import {
   InMemorySpanExporter,
-  NodeTracerProvider,
   SimpleSpanProcessor,
-} from "@opentelemetry/sdk-trace-node";
+  TracerProvider,
+} from "@opentelemetry/sdk-trace";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import {
   correlationAttributes,
@@ -24,8 +35,8 @@ import { getTracer, withSpan } from "./tracing.js";
 
 const exporter = new InMemorySpanExporter();
 const processor = new CorrelationSpanProcessor();
-const provider = new NodeTracerProvider({
-  spanProcessors: [processor, new SimpleSpanProcessor(exporter)],
+const provider = new TracerProvider({
+  spanProcessors: [processor, new SimpleSpanProcessor({ exporter })],
 });
 const logExporter = new InMemoryLogRecordExporter();
 const logger = new LoggerProvider({
@@ -41,7 +52,18 @@ const ids = {
   "catamorphic.agent.turn.id": "turn",
 };
 beforeAll(() => {
-  provider.register();
+  trace.setGlobalTracerProvider(provider);
+  context.setGlobalContextManager(
+    new AsyncLocalStorageContextManager().enable(),
+  );
+  propagation.setGlobalPropagator(
+    new CompositePropagator({
+      propagators: [
+        new W3CTraceContextPropagator(),
+        new W3CBaggagePropagator(),
+      ],
+    }),
+  );
   logs.setGlobalLoggerProvider(logger);
 });
 beforeEach(() => {

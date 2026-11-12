@@ -1085,6 +1085,7 @@
   flex-shrink: 0;
 }
 
+/* biome-ignore lint/style/noDescendingSpecificity: Boundary icon sizing is independent of container toggle rotation. */
 .catamorphic-boundary-icon svg {
   width: 14px;
   height: 14px;
@@ -2326,6 +2327,7 @@
    script. */
 /* Every descendant, not only the column's children: overflow-anchor is not
    inherited, and the live turn's rows sit in display: contents wrappers. */
+/* biome-ignore lint/style/noDescendingSpecificity: Scroll anchoring is independent of reveal overflow clipping. */
 [data-pinned] * {
   overflow-anchor: none;
 }
@@ -2343,10 +2345,11 @@
 /* Loops stop where nobody sees them: an inert (hidden) chat, or an activity
    line scrolled out of view. */
 :is(
-  [inert] .cat-timeline,
-  .cat-timeline [inert],
-  .cat-timeline [data-offscreen]
-) :is(.animate-spin, .animate-pulse) {
+    [inert] .cat-timeline,
+    .cat-timeline [inert],
+    .cat-timeline [data-offscreen]
+  )
+  :is(.animate-spin, .animate-pulse) {
   animation-play-state: paused;
 }
 

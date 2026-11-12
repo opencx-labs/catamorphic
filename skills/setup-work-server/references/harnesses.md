@@ -148,7 +148,7 @@ PATH, or an ACP agent's own command. Sandboxes need bash, git, `base64`,
 
 ```dockerfile
 # .work/images/harness.Dockerfile
-FROM node:22-bookworm
+FROM node:26-bookworm
 RUN apt-get update \
   && apt-get install -y --no-install-recommends git ca-certificates \
   && rm -rf /var/lib/apt/lists/*

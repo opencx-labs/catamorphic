@@ -114,6 +114,29 @@ function fixture() {
 }
 
 describe("approved customization processes", () => {
+  it("does not replace newer desired service state during explicit profile recovery", async () => {
+    const { create, owner, state } = fixture();
+    const manager = create();
+    await manager.start(owner, {
+      key: "service",
+      command: "sleep 300",
+      lifetime: "application",
+    });
+    const older = structuredClone(state);
+    await manager.start(owner, {
+      key: "service",
+      command: "sleep 301",
+      lifetime: "application",
+    });
+    Object.assign(state, older);
+    await manager.recoverProfile({ profileId: owner.profileId });
+    expect(manager.inspect()).toHaveLength(1);
+    expect(manager.inspect()[0]).toMatchObject({
+      command: "sleep 301",
+      status: "running",
+    });
+  });
+
   it("fences a fire-and-forget start that reaches the manager after preview cleanup", async () => {
     const { create, owner } = fixture();
     const manager = create();
@@ -246,6 +269,47 @@ describe("approved customization processes", () => {
     await restored.restore();
     expect(restored.inspect()).toEqual([]);
     expect(restored.hasEnabled()).toBe(false);
+  });
+
+  it("keeps published worker bytes complete while another view starts", async () => {
+    const { create, owner, launch } = fixture();
+    const manager = create();
+    await manager.start(owner, {
+      key: "reader",
+      command: "sleep 300",
+      lifetime: "view",
+    });
+    const first = launch.mock.calls[0]?.[0];
+    if (!first) throw new Error("Worker was not launched");
+    const published = first.workerPath;
+    const source = fs.readFileSync(published, "utf8");
+    const inode = fs.statSync(published).ino;
+    const observed: string[] = [];
+    const write = fs.writeFileSync.bind(fs);
+    // A child loader can read between a writer's syscalls. Inspect the
+    // published path after only half of each new worker has been written.
+    const writing = vi
+      .spyOn(fs, "writeFileSync")
+      .mockImplementation((file, data, options) => {
+        if (data !== source) return write(file, data, options);
+        const middle = Math.floor(source.length / 2);
+        write(file, source.slice(0, middle), options);
+        observed.push(fs.readFileSync(published, "utf8"));
+        fs.appendFileSync(file, source.slice(middle));
+      });
+    try {
+      await manager.start(owner, {
+        key: "publisher",
+        command: "sleep 300",
+        lifetime: "view",
+      });
+      expect(observed).toEqual([source]);
+      expect(fs.readFileSync(published, "utf8")).toBe(source);
+      expect(fs.statSync(published).ino).not.toBe(inode);
+      expect(fs.statSync(published).mode & 0o777).toBe(0o600);
+    } finally {
+      writing.mockRestore();
+    }
   });
 
   it("keeps preview, live and sibling view leases separate while application services remain package-owned", async () => {

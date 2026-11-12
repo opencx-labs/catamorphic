@@ -20,7 +20,9 @@ export interface RenderHookWithProvidersOptions<Props>
 function makeQueryClient(): QueryClient {
   return new QueryClient({
     defaultOptions: {
-      queries: { retry: false, gcTime: 0, staleTime: 0 },
+      // Seeded, unobserved caches must survive asynchronous mutation tests.
+      // Each render creates its own client, so retaining them cannot leak state.
+      queries: { retry: false, gcTime: Infinity, staleTime: 0 },
       mutations: { retry: false },
     },
   });

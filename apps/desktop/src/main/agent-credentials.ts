@@ -73,6 +73,18 @@ export async function readAgentCredentials(
   places: CredentialPlaces,
 ): Promise<AgentCredentials> {
   const seam = e2eCredentialsFile();
+  // A fake provider must never consult the person's sign-in. The optional
+  // fixture remains authoritative, including when it is absent or expired.
+  if (process.env.CATAMORPHIC_E2E_FAKE_AGENT === "1" && !seam)
+    return {
+      present: true,
+      fingerprint: "e2e-fake",
+      raw: JSON.stringify(
+        agent.harness === "codex"
+          ? { OPENAI_API_KEY: "e2e-fake" }
+          : { claudeAiOauth: { accessToken: "e2e-fake" } },
+      ),
+    };
   const home =
     agent.auth === "local"
       ? agent.harness === "codex"

@@ -1,9 +1,9 @@
 # The review Environment's image, with OpenCode run by Work as an ACP agent.
 # The sandbox reaches only the gateway, so OpenCode's configuration is baked
 # in here and the pull request's own is ignored.
-FROM docker:27-dind
+FROM docker:29.9.3-dind@sha256:08a98015fce594af7c382883bea080ea206de74402a95da9dc52b6428c8cd121
 RUN apk add --no-cache bash curl git jq nodejs npm postgresql-client python3 ripgrep \
-  && npm install --global bun@1 pnpm@10 opencode-ai@1.18.15
+  && npm install --global bun@1.4.4 pnpm@12.18.0 opencode-ai@1.19.5
 RUN mkdir -p /etc/opencode && printf '%s\n' \
   '{' \
   '  "provider": {' \

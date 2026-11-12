@@ -1,5 +1,9 @@
-import { type Attributes, context } from "@opentelemetry/api";
-import { logs, SeverityNumber } from "@opentelemetry/api-logs";
+import {
+  type Attributes,
+  context,
+  logs,
+  SeverityNumber,
+} from "@opentelemetry/api";
 import {
   CORRELATION_KEYS,
   correlationAttributes,

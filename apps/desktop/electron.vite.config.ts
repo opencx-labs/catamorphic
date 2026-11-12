@@ -27,11 +27,15 @@ export default defineConfig({
       rollupOptions: {
         // Explicit multi-entry builds must keep asset-bearing dependencies
         // external, including their subpath exports.
-        external: (id) =>
-          id === "electron" ||
-          Object.keys(dependencies).some(
-            (name) => id === name || id.startsWith(`${name}/`),
+        external: [
+          "electron",
+          ...Object.keys(dependencies).map(
+            (name) =>
+              new RegExp(
+                `^${name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}(?:/|$)`,
+              ),
           ),
+        ],
         input: {
           index: path.resolve(import.meta.dirname, "src/main/index.ts"),
           "sidebar-source-worker": path.resolve(

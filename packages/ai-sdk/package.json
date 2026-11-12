@@ -33,17 +33,18 @@
     "@catamorphic/mcp": "workspace:*",
     "@catamorphic/otel": "workspace:*",
     "@catamorphic/sandbox": "workspace:*",
-    "@opentelemetry/api": "^1.9.1",
-    "ai": "^7.0.97",
+    "@opentelemetry/api": "^1.10.0",
+    "ai": "^7.0.170",
     "zod": "^4.6.7",
     "@types/json-schema": "^7.0.15"
   },
   "devDependencies": {
     "@catamorphic/agent-runner": "workspace:*",
     "@catamorphic/local-process": "workspace:*",
-    "@opentelemetry/sdk-metrics": "^2.9.0",
-    "@opentelemetry/sdk-trace-node": "^2.9.0",
-    "@types/node": "^26.1.1"
+    "@opentelemetry/sdk-metrics": "^3.1.1",
+    "@types/node": "^26.6.6",
+    "@opentelemetry/sdk-trace": "^3.1.1",
+    "@opentelemetry/context-async-hooks": "^3.1.1"
   },
   "license": "Apache-2.0",
   "repository": {

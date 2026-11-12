@@ -2,15 +2,177 @@ import { execFileSync } from "node:child_process";
 import { mkdir, mkdtemp, realpath, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import type { JsonObject } from "@catamorphic/agent-protocol";
 import type { HarnessEvent } from "@catamorphic/agent-protocol/runner";
+import {
+  agentQuestionDescription,
+  agentQuestionJsonSchema,
+} from "@catamorphic/sandbox";
 import { expect, it } from "vitest";
 import { createCodexAdapter } from "../adapter.js";
+import { isObject } from "../app-server.js";
 import { pinnedCodexCommand } from "../testing/pinned.js";
 import { type CodexTransport, processTransport } from "../transport.js";
 import { driveAttempt, NativeStore } from "./replay/driver.js";
 import { cleanup, eventsOf, replayScenario } from "./replay/harness.js";
 import { modelServer, recordScenario } from "./replay/record-scenario.js";
 import { attemptBase, scenario } from "./replay/scenarios.js";
+
+it.each([true, false])(
+  "passes the host's ask_user to the pinned CLI and handles blocking=%s",
+  async (blocking) => {
+    const command = pinnedCodexCommand();
+    const requests: JsonObject[] = [];
+    const run = await recordScenario({
+      command,
+      cliVersion: execFileSync(command, ["--version"], { encoding: "utf8" }),
+      onModelRequest: (body) => requests.push(body),
+      scenario: {
+        name: "host-question",
+        description:
+          "The host question tool supports free text and both delivery modes.",
+        model: [
+          {
+            items: [
+              {
+                call: "ask_user",
+                args: {
+                  blocking,
+                  questions: [
+                    {
+                      question: "What detail should I include?",
+                      header: "Detail",
+                      options: [],
+                    },
+                  ],
+                },
+              },
+            ],
+          },
+          {
+            items: [{ message: "Continuing with the task." }],
+            expectInput: [
+              blocking ? "Freeform detail" : "The answer arrives as a message",
+            ],
+          },
+        ],
+        attempts: [
+          {
+            build: (context) => ({
+              ...attemptBase(context, {
+                ordinal: 1,
+                text: "Ask me for a detail.",
+              }),
+              hostTools: [
+                {
+                  name: "ask_user",
+                  description: agentQuestionDescription,
+                  inputSchema: agentQuestionJsonSchema as JsonObject,
+                },
+              ],
+            }),
+            script: {
+              answer: () =>
+                blocking
+                  ? { kind: "question", answers: ["Freeform detail"] }
+                  : undefined,
+            },
+          },
+        ],
+      },
+    });
+    expect(JSON.stringify(requests[0]?.tools)).toContain('"name":"ask_user"');
+    const events = run.results[0]?.events ?? [];
+    expect(
+      events.filter((event) => event.type === "request.opened"),
+    ).toMatchObject([
+      {
+        request: {
+          blocking,
+          origin: { id: "ask_user" },
+          questions: [{ options: [] }],
+        },
+      },
+    ]);
+    expect(events.at(-1)).toMatchObject({
+      type: "turn.completed",
+      status: "completed",
+    });
+  },
+  60_000,
+);
+
+it("discards an abandoned streamed reply when the native CLI recovers", async () => {
+  const command = pinnedCodexCommand();
+  const partial =
+    "Yes, that answers it. Both versions receive the same inputs.";
+  const complete =
+    "Yes, that answers it. Both variants receive the same source and context.";
+  const live = await recordScenario({
+    command,
+    cliVersion: execFileSync(command, ["--version"], { encoding: "utf8" }),
+    scenario: {
+      name: "interrupted-reply-retry",
+      description:
+        "A response drops mid-message, then the CLI completes a replacement.",
+      model: [
+        { items: [{ message: partial }], pauseMs: 100, disconnect: true },
+        { items: [{ message: complete }] },
+      ],
+      attempts: [
+        {
+          build: (context) => {
+            const attempt = attemptBase(context, {
+              ordinal: 1,
+              text: "Explain the benchmark inputs",
+            });
+            return {
+              ...attempt,
+              options: {
+                ...attempt.options,
+                config: {
+                  ...(isObject(attempt.options.config)
+                    ? attempt.options.config
+                    : {}),
+                  "model_providers.work.stream_max_retries": 1,
+                },
+              },
+            };
+          },
+        },
+      ],
+    },
+  });
+  const events = live.results[0]?.events ?? [];
+  expect(events.at(-1)).toMatchObject({
+    type: "turn.completed",
+    status: "completed",
+  });
+  const replies = events.flatMap((event) =>
+    event.type === "item.started" && event.item.kind === "assistant_message"
+      ? [event.key]
+      : [],
+  );
+  expect(replies).toHaveLength(2);
+  expect(
+    events.filter(
+      (event) => event.type === "item.completed" && replies.includes(event.key),
+    ),
+  ).toEqual([
+    {
+      type: "item.completed",
+      key: replies[0],
+      status: "cancelled",
+      item: { text: "" },
+    },
+    {
+      type: "item.completed",
+      key: replies[1],
+      status: "completed",
+      item: { text: complete },
+    },
+  ]);
+}, 60_000);
 
 /** Events with the ids a fresh run allocates anew replaced. */
 function shape(events: HarnessEvent[]): unknown[] {

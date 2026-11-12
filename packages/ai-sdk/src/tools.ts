@@ -10,6 +10,7 @@ import {
   type McpToolInfo,
 } from "@catamorphic/mcp";
 import {
+  agentQuestionDescription,
   agentQuestionInputSchema,
   agentToolResult,
   extraToolResult,
@@ -64,8 +65,6 @@ export interface WorkspaceToolContext {
   stopWaiting(): AbortSignal;
 }
 
-const ASK_USER_DESCRIPTION = `Ask the user one or more questions. When the tool allows blocking=false, use it to continue independent work while awaiting answers. ALWAYS use this tool instead of writing questions as plain text whenever you are asking the user something and their answer shapes what you do next. Use it when (1) you are blocked on a decision that is genuinely the user's to make, one you cannot resolve from the request, the project, or sensible defaults, e.g. choosing between data sources, schedules, external services, or destructive vs. safe variants of an operation; or (2) the user asks you to interview them, gather their preferences, or otherwise requests that you ask them questions. A request like "ask me some questions" should go through this tool, batching up to 4 questions per call and calling it again for follow-ups. For routine implementation choices, pick a sensible default and state it instead of asking. Each option needs a concise label and a description explaining its effects, implications, or trade-offs; for open-ended questions offer plausible example answers as options. The user can always answer with free text instead of picking one. If you recommend an option, make it the first one and append " (Recommended)" to its label. Do not use it to ask "should I proceed?" or to confirm work you already described.`;
-
 const SET_TITLE_DESCRIPTION =
   "Set the title of this conversation as shown in the user's chat list and tabs. Call it once near the start of a new conversation with a concise, specific title (2-5 words, sentence case, no trailing punctuation) describing what the conversation is about. Call it again whenever the current title no longer describes the conversation: the topic moved on, the scope changed, or the original title turned out to be wrong. Don't re-title for minor detours. Examples: 'Daily sales report workflow', 'Drafting onboarding doc', 'Fixing checkout bug', 'Getting to know you'.";
 
@@ -95,7 +94,7 @@ export function conversationTools(input: {
         execute: async ({ title }) => `Conversation titled: ${title}`,
       }),
       ask_user: tool({
-        description: ASK_USER_DESCRIPTION,
+        description: agentQuestionDescription,
         inputSchema: agentQuestionInputSchema,
         execute: ({ questions, blocking }, { toolCallId, abortSignal }) =>
           input.ask({

@@ -246,6 +246,19 @@ class CodexAttempt {
       serverName: (key) => this.launch?.serverKeys.get(key) ?? key,
       hostToolServer: (tool) => this.hostTools.get(tool)?.server ?? "workspace",
       filePath: (file) => this.workspacePath(file),
+      questions: (key, questions) => {
+        // Native async delivery has already returned to Codex. As with
+        // ask_user(blocking=false), core delivers the answer as a message.
+        this.host
+          .request(key, {
+            kind: "question",
+            blocking: false,
+            title: questions[0]?.question ?? "Question",
+            origin: CODEX_ORIGIN,
+            questions,
+          })
+          .catch(() => {});
+      },
     });
   }
 

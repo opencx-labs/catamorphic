@@ -41,14 +41,15 @@ export function includeDesktopTestSource(file: string): boolean {
 /**
  * What `bun install` reads: the image's dependency layer holds only these,
  * so it stays cached across source edits. `vendor/` holds the stand-ins the
- * root overrides install (`file:./vendor/...`).
+ * root overrides install (`file:./vendor/...`); patches are install inputs too.
  */
 export function isInstallInput(file: string): boolean {
   return (
     file === "bun.lock" ||
     file === "package.json" ||
     /^(packages|apps)\/[^/]+\/package.json$/.test(file) ||
-    file.startsWith("vendor/")
+    file.startsWith("vendor/") ||
+    file.startsWith("patches/")
   );
 }
 

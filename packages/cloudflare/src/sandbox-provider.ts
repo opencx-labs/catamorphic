@@ -89,9 +89,8 @@ export class CloudflareSandboxProvider implements SandboxProvider {
   }
 
   async stopSandbox(_sandboxId: string): Promise<void> {
-    // No explicit stop — containers sleep automatically after `sleepAfter`
-    // (default 10m). Callers that need to reclaim resources immediately
-    // should use `destroySandbox` instead.
+    // The bridge's native inactivity timeout stops idle containers after 10m.
+    // Callers needing immediate cleanup use destroySandbox instead.
   }
 
   async destroySandbox(sandboxId: string): Promise<void> {
@@ -119,38 +118,27 @@ export class CloudflareSandboxProvider implements SandboxProvider {
     command: string,
     opts?: ExecOpts,
   ): Promise<ExecResult> {
-    const sessionId =
-      opts?.env && Object.keys(opts.env).length > 0
-        ? await this.createSession(sandboxId, opts)
-        : undefined;
     const payload: Record<string, unknown> = {
       argv: ["sh", "-lc", command],
     };
     if (typeof opts?.timeout === "number") {
       payload.timeout_ms = opts.timeout * 1000;
     }
-    if (!sessionId && typeof opts?.cwd === "string") {
+    if (typeof opts?.cwd === "string") {
       payload.cwd = opts.cwd;
     }
-
-    try {
-      const response = await this.request(
-        "POST",
-        `/v1/sandbox/${encodeURIComponent(sandboxId)}/exec`,
-        {
-          body: JSON.stringify(payload),
-          headers: {
-            "Content-Type": "application/json",
-            ...(sessionId ? { "Session-Id": sessionId } : {}),
-          },
-        },
-      );
-      return await consumeExecSse(response);
-    } finally {
-      if (sessionId) {
-        await this.deleteSession(sandboxId, sessionId).catch(() => {});
-      }
+    if (opts?.env && Object.keys(opts.env).length > 0) {
+      payload.env = opts.env;
     }
+    const response = await this.request(
+      "POST",
+      `/v1/sandbox/${encodeURIComponent(sandboxId)}/exec`,
+      {
+        body: JSON.stringify(payload),
+        headers: { "Content-Type": "application/json" },
+      },
+    );
+    return consumeExecSse(response);
   }
 
   async uploadFiles(
@@ -257,34 +245,6 @@ export class CloudflareSandboxProvider implements SandboxProvider {
       body: content,
       headers: { "Content-Type": "application/octet-stream" },
     });
-  }
-
-  private async createSession(
-    sandboxId: string,
-    opts: ExecOpts,
-  ): Promise<string> {
-    const response = await this.request(
-      "POST",
-      `/v1/sandbox/${encodeURIComponent(sandboxId)}/session`,
-      {
-        body: JSON.stringify({ cwd: opts.cwd, env: opts.env }),
-        headers: { "Content-Type": "application/json" },
-      },
-    );
-    const body = (await response.json()) as { id: string };
-    return body.id;
-  }
-
-  private async deleteSession(
-    sandboxId: string,
-    sessionId: string,
-  ): Promise<void> {
-    const response = await this.request(
-      "DELETE",
-      `/v1/sandbox/${encodeURIComponent(sandboxId)}/session/${encodeURIComponent(sessionId)}`,
-      { allowStatus: [204, 404] },
-    );
-    await response.arrayBuffer();
   }
 
   private async request(

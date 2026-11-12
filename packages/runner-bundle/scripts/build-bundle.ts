@@ -1,9 +1,13 @@
+import { fileURLToPath } from "node:url";
+
 /**
  * Bundles the sandbox runner into one file, `dist/runner.mjs`, with every
  * dependency inlined: a sandbox has Bun and nothing of ours installed.
  */
 const result = await Bun.build({
-  entrypoints: [new URL("../src/sandbox-main.ts", import.meta.url).pathname],
+  entrypoints: [
+    fileURLToPath(new URL("../src/sandbox-main.ts", import.meta.url)),
+  ],
   target: "node",
   format: "esm",
   minify: false,
@@ -16,7 +20,7 @@ if (!result.success) {
 const [output] = result.outputs;
 if (!output) throw new Error("The runner bundle produced no output");
 await Bun.write(
-  new URL("../dist/runner.mjs", import.meta.url).pathname,
+  fileURLToPath(new URL("../dist/runner.mjs", import.meta.url)),
   output,
 );
 console.log(`dist/runner.mjs ${(output.size / 1024).toFixed(0)} KiB`);

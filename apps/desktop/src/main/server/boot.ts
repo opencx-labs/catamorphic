@@ -51,6 +51,7 @@ import {
   signInRefreshable,
   signInUsable,
 } from "../auth-health.js";
+import type { CodeApprovals } from "../code-approvals.js";
 import type { ConnectorsService } from "../connectors.js";
 import { DesktopCredentialVault } from "../credential-vault.js";
 import { customizationProcessCapabilities } from "../customization-process-capabilities.js";
@@ -228,6 +229,7 @@ export async function startEmbeddedServer(
   paths: DataPaths,
   profiles: ProfilesStore,
   profileConfig: ProfileConfigManager,
+  approvalsFor: (profileId: string) => CodeApprovals,
   workspaceBridge?: WorkspaceBridge,
   connectors?: ConnectorsService,
   mcpApps?: McpAppsService,
@@ -1715,7 +1717,7 @@ export async function startEmbeddedServer(
   };
   const customizationProcesses = desktopCustomizationProcesses({
     root: path.join(paths.root, "customization-processes"),
-    profilesDir: paths.profilesDir,
+    approvalsFor,
     profiles,
     config: profileConfig,
     rootFor: (projectId) => projectRoots.get(projectId),

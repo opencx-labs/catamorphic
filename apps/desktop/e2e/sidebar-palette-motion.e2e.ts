@@ -355,6 +355,11 @@ it("keeps the caret visible after scroll-away deletion in a narrow New Tab", asy
     await app.waitFor(
       `document.querySelector('[data-workspace-visible="true"] [data-palette="tab"]').getAnimations({subtree:true}).every(a=>a.playState!=='running'||a.effect?.getTiming().iterations===Infinity)`,
     );
+    // Native smooth scrolling is not part of Element.getAnimations().
+    await app.waitFor(
+      `(()=>{const el=document.querySelector('${target}');if(!el.isContentEditable)return true;const caret=getSelection().getRangeAt(0).getBoundingClientRect(),viewport=el.getBoundingClientRect();return caret.height>0&&caret.top>=viewport.top-1&&caret.bottom<=viewport.bottom+1})()`,
+      { label: "the smooth caret reveal completed" },
+    );
     const geometry = await app.eval<{
       visible: boolean;
       framesStill: boolean;

@@ -1,6 +1,7 @@
 import {
   type Context,
   context,
+  type LoggerProvider,
   type MeterProvider,
   ROOT_CONTEXT,
   type Span,
@@ -9,7 +10,6 @@ import {
   type TracerProvider,
   trace,
 } from "@opentelemetry/api";
-import type { LoggerProvider } from "@opentelemetry/api-logs";
 
 import {
   CORRELATION_KEYS,

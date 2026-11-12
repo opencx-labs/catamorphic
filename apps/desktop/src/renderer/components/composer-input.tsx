@@ -566,15 +566,20 @@ export const ComposerInput = forwardRef<
     const reveal = () => {
       if (document.activeElement !== root) return;
       const selection = document.getSelection();
-      if (!selection?.isCollapsed || selection.rangeCount === 0) return;
-      const range = selection.getRangeAt(0);
-      if (!root.contains(range.startContainer)) return;
+      if (!selection?.focusNode || !root.contains(selection.focusNode)) return;
+      const range = document.createRange();
+      range.setStart(selection.focusNode, selection.focusOffset);
+      range.collapse(true);
       const caret = range.getBoundingClientRect();
       if (!caret.height) return;
       const viewport = root.getBoundingClientRect();
-      if (caret.top < viewport.top) root.scrollTop += caret.top - viewport.top;
-      else if (caret.bottom > viewport.bottom)
-        root.scrollTop += caret.bottom - viewport.bottom;
+      const delta =
+        caret.top < viewport.top
+          ? caret.top - viewport.top
+          : caret.bottom > viewport.bottom
+            ? caret.bottom - viewport.bottom
+            : 0;
+      if (delta) root.scrollTo({ top: root.scrollTop + delta });
     };
     const schedule = () => {
       if (!editing) return;
@@ -582,6 +587,7 @@ export const ComposerInput = forwardRef<
       frame = requestAnimationFrame(reveal);
     };
     const edited = () => {
+      if (document.activeElement !== root) return;
       editing = true;
       schedule();
       clearTimeout(timer);
@@ -598,12 +604,14 @@ export const ComposerInput = forwardRef<
     const observer = new ResizeObserver(schedule);
     observer.observe(root);
     root.addEventListener("input", edited);
+    document.addEventListener("selectionchange", edited);
     root.addEventListener("wheel", cancel, { passive: true });
     root.addEventListener("pointerdown", cancel);
     return () => {
       cancel();
       observer.disconnect();
       root.removeEventListener("input", edited);
+      document.removeEventListener("selectionchange", edited);
       root.removeEventListener("wheel", cancel);
       root.removeEventListener("pointerdown", cancel);
     };

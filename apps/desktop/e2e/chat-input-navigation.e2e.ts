@@ -57,10 +57,20 @@ afterAll(async () => {
 it("advances after a rounded PageUp landing and passes an unalignable final message", async () => {
   await app.press("PageUp");
   await aligned(1);
-  // Force the settled position inside the native scroll's tolerance.
+  // Establish the landing before adding the rounding offset. aligned()
+  // can observe a native glide before it reaches the navigation line.
+  // Freezing that intermediate scrollTop and emitting scrollend would
+  // start a corrective glide instead of establishing this test's premise.
   // The row's 4px padding must not make the same message count again.
   await app.eval(
-    `(()=>{const s=${scroller};s.scrollTo({top:s.scrollTop,behavior:'instant'});s.dispatchEvent(new Event('scrollend'));s.scrollTop+=1;})()`,
+    `(()=>{
+      const s=${scroller},m=s.querySelectorAll('[data-user-message]')[1];
+      const fade=s.classList.contains('cat-edge-fade') ? parseFloat(getComputedStyle(s).getPropertyValue('--cat-edge-fade'))||0 : 0;
+      const landing=s.scrollTop+m.getBoundingClientRect().top-s.getBoundingClientRect().top-12-fade;
+      s.scrollTo({top:landing,behavior:'instant'});
+      s.dispatchEvent(new Event('scrollend'));
+      s.scrollTop+=1;
+    })()`,
   );
   await app.press("PageUp");
   await aligned(0);

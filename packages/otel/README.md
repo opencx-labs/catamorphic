@@ -2,7 +2,7 @@
 
 Tiny OpenTelemetry helpers shared by catamorphic packages.
 
-Library instrumentation uses `@opentelemetry/api` and `@opentelemetry/api-logs`. The host owns tracer, meter, and logger providers, exporters, and sampling. Without providers, instrumentation is a no-op. The optional `@catamorphic/otel/node` entry point initializes the shipped hosts and supports standard OTEL environment configuration and custom NodeSDK options. See [OBSERVABILITY.md](../../OBSERVABILITY.md) and ADR 0119.
+Library instrumentation uses `@opentelemetry/api`, including its stable logs API. The host owns tracer, meter, and logger providers, exporters, and sampling. Without providers, instrumentation is a no-op. The optional `@catamorphic/otel/node` entry point initializes the shipped hosts and supports standard OTEL environment configuration and custom NodeSDK options. It uses OpenTelemetry SDK 3.x and requires Node.js 22.15 or later. See [OBSERVABILITY.md](../../OBSERVABILITY.md) and ADR 0119.
 
 ```ts
 import { getTracer, withSpan } from "@catamorphic/otel";

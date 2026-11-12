@@ -267,7 +267,7 @@ describe("the pull-request-reviews pack", () => {
     for (const verb of [...rawWrites, "git:write"])
       expect(posterCapabilities).not.toContain(verb);
     expect(file(".work/images/review.Dockerfile")).toMatch(
-      /^FROM docker:[\w.-]+-dind$/m,
+      /^FROM docker:[\w.-]+-dind@sha256:[a-f0-9]{64}$/m,
     );
     const agent = agentDefinitionSchema().safeParse(
       JSON.parse(file(".work/agents/reviewer.json")),
@@ -329,7 +329,9 @@ describe("the pull-request-reviews pack", () => {
     });
     // OpenCode's configuration names the model the agent chooses, and the
     // image keeps the pull request's own configuration out.
-    expect(REVIEW_OPENCODE_DOCKERFILE).toMatch(/^FROM docker:[\w.-]+-dind$/m);
+    expect(REVIEW_OPENCODE_DOCKERFILE).toMatch(
+      /^FROM docker:[\w.-]+-dind@sha256:[a-f0-9]{64}$/m,
+    );
     expect(REVIEW_OPENCODE_DOCKERFILE).toContain(
       `"model": "work/${agent.data?.model}"`,
     );

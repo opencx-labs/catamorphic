@@ -3,15 +3,31 @@ import { moduleSource } from "./module.js";
 
 const requests = vi.hoisted(() => ({
   load: vi.fn<(input: unknown) => Promise<unknown>>(),
+  retry: vi.fn(async (_input: unknown) => {}),
 }));
 vi.mock("../lib/desktop-api.js", () => ({
   desktopApi: {
     sidebarSourceRequest: requests.load,
+    sidebarSourceRetry: requests.retry,
     sidebarSourceCancel: vi.fn(),
   },
 }));
 
 describe("module source revision", () => {
+  it("keeps recovery intent separate from passive loads", async () => {
+    const source = moduleSource({ projectId: "project", ownerId: "tasks" });
+    requests.load.mockResolvedValue({ items: [] });
+    await source.load({ parentId: null, signal: new AbortController().signal });
+    expect(requests.retry).not.toHaveBeenCalled();
+    await source.retry?.();
+    expect(requests.retry).toHaveBeenCalledExactlyOnceWith({
+      projectId: "project",
+      sectionId: "tasks",
+    });
+    await source.load({ parentId: null, signal: new AbortController().signal });
+    expect(requests.retry).toHaveBeenCalledOnce();
+  });
+
   it("advances its revision only on a successfully validated revisioned page", async () => {
     const source = moduleSource({ projectId: "project", ownerId: "tasks" });
     const request = { parentId: null, signal: new AbortController().signal };

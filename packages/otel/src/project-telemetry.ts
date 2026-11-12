@@ -28,12 +28,16 @@ import {
 } from "@opentelemetry/sdk-metrics";
 import {
   AlwaysOffSampler,
+  AlwaysOnSampler,
   BatchSpanProcessor,
   ConsoleSpanExporter,
-  NodeTracerProvider,
+  ParentBasedSampler,
+  type Sampler,
+  TracerProvider as SdkTracerProvider,
   SimpleSpanProcessor,
   type SpanProcessor,
-} from "@opentelemetry/sdk-trace-node";
+  TraceIdRatioBasedSampler,
+} from "@opentelemetry/sdk-trace";
 import {
   activeTelemetry,
   bindSpanTelemetry,
@@ -113,6 +117,28 @@ function numberSetting(key: string): number | undefined {
   return Number.isFinite(value) && value >= 0 ? value : undefined;
 }
 
+/** The standalone 3.x provider no longer reads standard sampler settings. */
+function traceSampler(): Sampler {
+  const probability = numberSetting("OTEL_TRACES_SAMPLER_ARG");
+  const ratio = probability !== undefined && probability <= 1 ? probability : 1;
+  switch (process.env.OTEL_TRACES_SAMPLER?.trim()) {
+    case "always_on":
+      return new AlwaysOnSampler();
+    case "always_off":
+      return new AlwaysOffSampler();
+    case "parentbased_always_off":
+      return new ParentBasedSampler({ root: new AlwaysOffSampler() });
+    case "traceidratio":
+      return new TraceIdRatioBasedSampler(ratio);
+    case "parentbased_traceidratio":
+      return new ParentBasedSampler({
+        root: new TraceIdRatioBasedSampler(ratio),
+      });
+    default:
+      return new ParentBasedSampler({ root: new AlwaysOnSampler() });
+  }
+}
+
 /** Separate providers let projects export metrics without project IDs as labels. */
 export function createProjectTelemetry(args: {
   projectId: string;
@@ -132,7 +158,7 @@ export function createProjectTelemetry(args: {
         for (const exporter of signalExporters("TRACES")) {
           if (exporter === "console")
             spanProcessors.push(
-              new SimpleSpanProcessor(new ConsoleSpanExporter()),
+              new SimpleSpanProcessor({ exporter: new ConsoleSpanExporter() }),
             );
           else {
             const kind = protocol("TRACES");
@@ -142,7 +168,17 @@ export function createProjectTelemetry(args: {
                 : kind === "http/json"
                   ? new JsonTraces()
                   : new ProtoTraces();
-            spanProcessors.push(new BatchSpanProcessor(traceExporter));
+            spanProcessors.push(
+              new BatchSpanProcessor({
+                exporter: traceExporter,
+                maxQueueSize: numberSetting("OTEL_BSP_MAX_QUEUE_SIZE"),
+                maxExportBatchSize: numberSetting(
+                  "OTEL_BSP_MAX_EXPORT_BATCH_SIZE",
+                ),
+                scheduledDelayMillis: numberSetting("OTEL_BSP_SCHEDULE_DELAY"),
+                exportTimeoutMillis: numberSetting("OTEL_BSP_EXPORT_TIMEOUT"),
+              }),
+            );
           }
         }
         for (const exporter of signalExporters("LOGS")) {
@@ -210,12 +246,27 @@ export function createProjectTelemetry(args: {
   const tracerProvider = withEnvironment(
     destinations[0] ?? {},
     () =>
-      new NodeTracerProvider({
+      new SdkTracerProvider({
         resource,
         spanProcessors,
-        ...(spanProcessors.length === 0
-          ? { sampler: new AlwaysOffSampler() }
-          : {}),
+        sampler:
+          spanProcessors.length === 0 ? new AlwaysOffSampler() : traceSampler(),
+        spanLimits: {
+          attributeValueLengthLimit:
+            numberSetting("OTEL_SPAN_ATTRIBUTE_VALUE_LENGTH_LIMIT") ??
+            numberSetting("OTEL_ATTRIBUTE_VALUE_LENGTH_LIMIT"),
+          attributeCountLimit:
+            numberSetting("OTEL_SPAN_ATTRIBUTE_COUNT_LIMIT") ??
+            numberSetting("OTEL_ATTRIBUTE_COUNT_LIMIT"),
+          linkCountLimit: numberSetting("OTEL_SPAN_LINK_COUNT_LIMIT"),
+          eventCountLimit: numberSetting("OTEL_SPAN_EVENT_COUNT_LIMIT"),
+          attributePerEventCountLimit: numberSetting(
+            "OTEL_SPAN_ATTRIBUTE_PER_EVENT_COUNT_LIMIT",
+          ),
+          attributePerLinkCountLimit: numberSetting(
+            "OTEL_SPAN_ATTRIBUTE_PER_LINK_COUNT_LIMIT",
+          ),
+        },
       }),
   );
   const meterProvider = new MeterProvider({ resource, readers });

@@ -11,6 +11,7 @@
 import { mkdtemp, readFile, realpath, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { InProcessRunner } from "../../agent-runner/src/index.ts";
 import { createClaudeCodeAdapter } from "../src/index.ts";
 import {
@@ -35,7 +36,9 @@ const sdkPackage = JSON.parse(
     "utf8",
   ),
 );
-const fixtures = new URL("../src/testing/fixtures/", import.meta.url).pathname;
+const fixtures = fileURLToPath(
+  new URL("../src/testing/fixtures/", import.meta.url),
+);
 
 let failed = false;
 for (const scenario of CLAUDE_SCENARIOS) {
