@@ -5,6 +5,7 @@ import { afterAll, beforeAll, expect, it } from "vitest";
 import {
   type AppHandle,
   createProjectWorkspace,
+  focusWindow,
   launchApp,
   setReactValueJs,
   workspaceDomHelpersJs,
@@ -65,6 +66,22 @@ async function tool(
 
 const primary = async () =>
   (await app.eval<boolean>("/Mac/.test(navigator.platform)")) ? 4 : 2;
+
+async function clickComposer() {
+  await focusWindow(app);
+  const hover = await run<{ x: number; y: number }>(
+    `const r=dock().getBoundingClientRect();return{x:r.left+r.width/2,y:r.top+r.height/2};`,
+  );
+  await app.movePointer(hover);
+  const point = await wait<{ x: number; y: number }>(
+    `const input=composer(),r=input.getBoundingClientRect(),point={x:r.left+r.width/2,y:r.top+r.height/2};
+     return input.contains(document.elementFromPoint(point.x,point.y)) &&
+       dock().getAnimations({subtree:true}).every(a=>a.playState!=='running'||a.effect?.getTiming().iterations===Infinity) ? point:false;`,
+  );
+  // Unlike DOM focus, this press makes a late webview focus handoff yield.
+  await app.clickPointer(point);
+  await wait(`return document.activeElement===composer();`);
+}
 
 beforeAll(async () => {
   app = await launchApp();
@@ -769,13 +786,13 @@ it("anchors each group to its own chip through switching and wrapped reflow", as
     const address = backdrop.address();
     if (!address || typeof address === "string")
       throw Error("No backdrop port");
-    await run(`composer().focus();return true;`);
+    await clickComposer();
     await app.insertText(`show: http://127.0.0.1:${address.port}/`);
     await app.press("Enter");
     await wait(
       `return !!document.querySelector('webview')&&!dock().querySelector('[aria-label="Stop the agent"]');`,
     );
-    await run(`composer().focus();return true;`);
+    await clickComposer();
     await app.insertText("perf turn steps=0 quiet=60 stream=0");
     await app.press("Enter");
     await wait(

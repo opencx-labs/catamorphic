@@ -40,7 +40,22 @@ const moveOutside = async () => {
   return page;
 };
 const send = async (text: string) => {
-  await app.eval(`${composer}.focus()`);
+  // A real press cancels the new webview's deferred focus handoff.
+  // Programmatic focus and Input.insertText do not represent that choice.
+  await focusWindow(app);
+  const bounds = await box();
+  await app.movePointer({
+    x: (bounds.left + bounds.right) / 2,
+    y: (bounds.top + bounds.bottom) / 2,
+  });
+  const point = await app.waitFor<{ x: number; y: number }>(`(() => {
+    const input = ${composer}, card = ${dock}, r = input.getBoundingClientRect();
+    const point = {x:r.left + r.width/2, y:r.top + r.height/2};
+    return input.contains(document.elementFromPoint(point.x, point.y)) &&
+      card.getAnimations({subtree:true}).every(a => a.playState !== 'running' || a.effect?.getTiming().iterations === Infinity) ? point : false;
+  })()`);
+  await app.clickPointer(point);
+  await app.waitFor(`document.activeElement === ${composer}`);
   await app.insertText(text);
   await app.press("Enter");
 };
@@ -61,11 +76,17 @@ beforeAll(async () => {
     name: "Floating hover",
     rootPath: "/tmp/floating-hover",
   });
-  await app.waitFor(
-    `!!document.querySelector('[data-dock-rail] button[aria-label="New chat"]')`,
-  );
-  const plus = await app.eval<{ x: number; y: number }>(
-    `(()=>{const r=document.querySelector('[data-dock-rail] button[aria-label="New chat"]').getBoundingClientRect();return{x:r.left+r.width/2,y:r.top+r.height/2}})()`,
+  await focusWindow(app);
+  // The shared rail moves when project selection finishes. Click only its
+  // settled, visible button, rather than coordinates from its entering frame.
+  const plus = await app.waitFor<{ x: number; y: number }>(
+    `(() => {
+      const button=[...document.querySelectorAll('[data-dock-rail] button[aria-label="New chat"]')].find(el=>!el.closest('[inert], [data-workspace-visible="false"]'));
+      if(!button) return false;
+      const r=button.getBoundingClientRect(),point={x:r.left+r.width/2,y:r.top+r.height/2};
+      return button.contains(document.elementFromPoint(point.x,point.y)) &&
+        button.closest('[data-dock-rail]').getAnimations({subtree:true}).every(a=>a.playState!=='running'||a.effect?.getTiming().iterations===Infinity) ? point:false;
+    })()`,
   );
   await app.clickPointer(plus);
   await app.waitFor(`!!${composer}`);
