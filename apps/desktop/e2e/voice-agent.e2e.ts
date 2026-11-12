@@ -299,6 +299,26 @@ async function talk(
   await captureProbe.eval(`(() => {
     if (!window.__captureTimingInstalled) {
       window.__captureTimingInstalled = true;
+      // Keep device startup separate from Work's press-to-capture handoff.
+      window.addEventListener('message', event => {
+        if (event.source === window && event.ports.length)
+          window.__captureStages.portAt = Date.now();
+      });
+      const getUserMedia = navigator.mediaDevices.getUserMedia.bind(navigator.mediaDevices);
+      navigator.mediaDevices.getUserMedia = async (...args) => {
+        const stages = window.__captureStages;
+        stages.inputRequestedAt = Date.now();
+        const stream = await getUserMedia(...args);
+        stages.inputOpenedAt = Date.now();
+        return stream;
+      };
+      const resume = AudioContext.prototype.resume;
+      AudioContext.prototype.resume = async function(...args) {
+        const stages = window.__captureStages;
+        if (this.sampleRate === 16000) stages.graphRequestedAt ??= Date.now();
+        await Reflect.apply(resume, this, args);
+        if (this.sampleRate === 16000) stages.graphResumedAt ??= Date.now();
+      };
       const post = MessagePort.prototype.postMessage;
       MessagePort.prototype.postMessage = function(message, ...args) {
         if (message?.type === 'capturing' && !window.__captureFirstAt)
@@ -307,6 +327,7 @@ async function talk(
         return Reflect.apply(post, this, [message, ...args]);
       };
     }
+    window.__captureStages = {};
     window.__captureFirstAt = 0;
     window.__lastVoiceDrainedAt = 0;
     return true;
@@ -334,9 +355,22 @@ async function talk(
   const capturedAt = await captureProbe.eval<number>("window.__captureFirstAt");
   expect(pressedAt).toBeGreaterThan(0);
   const captureDelay = capturedAt - pressedAt;
+  const stages = await captureProbe.eval<Record<string, number>>(
+    "window.__captureStages",
+  );
+  const timing = {
+    ...Object.fromEntries(
+      Object.entries(stages).map(([stage, at]) => [stage, at - pressedAt]),
+    ),
+    firstFrame: captureDelay,
+  };
+  // Print before asserting so a slow native runner retains its startup stages.
+  console.info(
+    "Voice capture startup (ms from press):",
+    JSON.stringify(timing),
+  );
   expect(captureDelay).toBeGreaterThanOrEqual(0);
-  expect(captureDelay).toBeLessThan(500);
-  console.info("Voice press to first audio frame:", captureDelay, "ms");
+  expect(captureDelay, JSON.stringify(timing)).toBeLessThan(500);
   await input(false);
   await runWait(
     `const detail = await session(${JSON.stringify(ref)});
