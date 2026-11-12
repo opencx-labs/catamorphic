@@ -313,6 +313,45 @@ describe("approved customization processes", () => {
       ),
     ).rejects.toThrow("host-issued view lease");
   });
+  it("starts more services without rewriting the worker script earlier ones may still be loading", async () => {
+    const { create, owner, root } = fixture();
+    const manager = create();
+    const request = { key: "worker", command: "sleep 300", lifetime: "view" };
+    const second = {
+      ...owner,
+      viewId: "second-view",
+      viewSignal: new AbortController().signal,
+    };
+    const third = {
+      ...owner,
+      viewId: "third-view",
+      viewSignal: new AbortController().signal,
+    };
+    const started = [await manager.start(owner, request)];
+    const runtime = path.join(root, "runtime");
+    const scripts = fs
+      .readdirSync(runtime)
+      .filter((name) => name.endsWith(".mjs"));
+    expect(scripts).toHaveLength(1);
+    const worker = path.join(runtime, scripts[0] ?? "");
+    const intact = fs.readFileSync(worker, "utf8");
+    const untouched = new Date("2000-01-01T00:00:00Z");
+    fs.utimesSync(worker, untouched, untouched);
+    started.push(await manager.start(second, request));
+    // Rewriting it in place would truncate it under a worker still loading it.
+    expect(fs.statSync(worker).mtime).toEqual(untouched);
+    // A damaged copy is replaced whole before the next service starts.
+    fs.writeFileSync(worker, intact.slice(0, 10));
+    started.push(await manager.start(third, request));
+    expect(fs.readFileSync(worker, "utf8")).toBe(intact);
+    const leases = [owner, second, third];
+    for (const [index, lease] of leases.entries())
+      expect(
+        (await manager.list(lease)).find(
+          (entry) => entry.processId === started[index]?.processId,
+        )?.status,
+      ).toBe("running");
+  });
   it
     .runIf(
       process.platform === "darwin" ||

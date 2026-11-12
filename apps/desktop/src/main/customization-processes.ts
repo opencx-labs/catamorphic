@@ -1,5 +1,5 @@
 import { type ChildProcess, spawn } from "node:child_process";
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
@@ -857,7 +857,28 @@ export class CustomizationProcesses {
       this.deps.root,
       `${createHash("sha256").update(PROCESS_WORKER).digest("hex").slice(0, 16)}.mjs`,
     );
-    fs.writeFileSync(file, PROCESS_WORKER, { mode: 0o600 });
+    // Workers started moments ago may still be reading this script: rewriting
+    // it in place truncates it under them, and they run an empty script and
+    // exit. An intact copy stays untouched; a missing or damaged one is
+    // replaced whole.
+    const current = (() => {
+      try {
+        return fs.readFileSync(file, "utf8");
+      } catch (error) {
+        if (
+          error instanceof Error &&
+          "code" in error &&
+          error.code === "ENOENT"
+        )
+          return null;
+        throw error;
+      }
+    })();
+    if (current !== PROCESS_WORKER) {
+      const temporary = `${file}.${process.pid}.${randomUUID()}.tmp`;
+      fs.writeFileSync(temporary, PROCESS_WORKER, { mode: 0o600 });
+      fs.renameSync(temporary, file);
+    }
     return file;
   }
 }
