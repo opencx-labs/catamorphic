@@ -476,6 +476,19 @@
 .onboarding-browser-actions > [data-setting-id] {
   max-width: 260px;
 }
+/* The setup action over the one that adds more. Both hold one width, so a
+   growing count and the second action's arrival move nothing. */
+.onboarding-agent-actions {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 12px;
+  margin-top: 24px;
+}
+.onboarding-agent-actions > button {
+  width: 208px;
+  height: 36px;
+}
 .theme-agent-link {
   display: flex;
   align-items: center;

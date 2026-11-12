@@ -67,7 +67,8 @@ export function OnboardingScreen({
   onFinish,
   profileId,
   importCompleted,
-  hasAgents,
+  agentCount,
+  agentSetupOpen,
 }: {
   active?: boolean;
   step: number;
@@ -78,7 +79,11 @@ export function OnboardingScreen({
   onFinish: () => void;
   profileId?: string;
   importCompleted: boolean;
-  hasAgents: boolean;
+  /** Agents this person can chat with here. */
+  agentCount: number;
+  /** The setup wizard is open. A sign-in creates its agent before it
+   * finishes, so the step keeps its count until the wizard closes. */
+  agentSetupOpen: boolean;
 }) {
   const current = Math.max(0, Math.min(step, ONBOARDING_STEPS.length - 1));
   const [previous, setPrevious] = useState<number | null>(null);
@@ -95,6 +100,10 @@ export function OnboardingScreen({
   }, [previous]);
   const [importOpen, setImportOpen] = useState(false);
   const [justImported, setJustImported] = useState(false);
+  const [configuredAgents, setConfiguredAgents] = useState(agentCount);
+  if (!agentSetupOpen && configuredAgents !== agentCount)
+    setConfiguredAgents(agentCount);
+  const hasAgents = configuredAgents > 0;
   const bindings = useKeybindings();
   const navigate = (next: number) => {
     setPrevious(current);
@@ -156,25 +165,43 @@ export function OnboardingScreen({
       <div className="onboarding-browser-mark">
         <Sparkles strokeWidth={1} />
       </div>
-      <PendingButton
-        type="button"
-        pending={false}
-        pendingLabel="Opening agent setup…"
-        done={hasAgents}
-        doneLabel={
-          <span className="inline-flex items-center gap-2">
-            <Check className="size-3.5" />
-            Agent configured
-          </span>
-        }
-        onClick={onConfigureAgent}
-        disabled={!canConfigureAgent}
-        data-disabled-reason="Preparing your workspace"
-        className="button-primary mt-6"
-        data-testid="onboarding-setup-agent"
-      >
-        Configure an agent
-      </PendingButton>
+      <div className="onboarding-agent-actions">
+        <PendingButton
+          type="button"
+          pending={false}
+          pendingLabel="Opening agent setup…"
+          done={hasAgents}
+          doneLabel={
+            <span className="inline-flex items-center gap-2">
+              <Check className="size-3.5" />
+              {configuredAgents > 1
+                ? `${configuredAgents} agents configured`
+                : "Agent configured"}
+            </span>
+          }
+          onClick={onConfigureAgent}
+          disabled={!canConfigureAgent}
+          data-disabled-reason="Preparing your workspace"
+          className="button-primary browser-setup-action"
+          data-testid="onboarding-setup-agent"
+        >
+          Configure an agent
+        </PendingButton>
+        {/* Always laid out, so its arrival moves nothing. */}
+        <button
+          type="button"
+          className={`button-primary ${hasAgents ? "" : "opacity-0"}`}
+          inert={!hasAgents}
+          aria-hidden={!hasAgents}
+          onClick={onConfigureAgent}
+          disabled={!canConfigureAgent}
+          data-disabled-reason="Preparing your workspace"
+          data-testid="onboarding-add-agent"
+        >
+          <Plus className="size-3.5" />
+          Add another agent
+        </button>
+      </div>
     </Step>,
     <Step
       key="dock"

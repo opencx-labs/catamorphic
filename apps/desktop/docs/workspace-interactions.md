@@ -576,7 +576,9 @@ palette modes, sidebar customization, and combined browser import/default-browse
 setup. The sidebar hero uses the real workspace preview, with a centered chat
 and both sidebars expanding and collapsing. Reduced motion shows it statically. The agent step opens
 the existing wizard as a modal, retains the tutorial and its step, and shows a
-completed action once configured. The dock is already visible before setup; its walkthrough uses the real bubble strip and an animated
+completed action once configured. Add another agent then opens the same wizard
+again from its reserved place beneath; the completed action counts the agents
+once the wizard closes. The dock is already visible before setup; its walkthrough uses the real bubble strip and an animated
 cursor, expanding from the right corner into the center of the window, with a
 static illustration under reduced motion. Expanding the real dock reserves bottom
 space in onboarding over 250ms so the copy and navigation remain clear; the

@@ -7407,7 +7407,8 @@ export function App({
       }}
       profileId={activeProfile?.id}
       importCompleted={Boolean(activeProfile?.browserImportCompletedAt)}
-      hasAgents={hasAgents && !wizardModalOpen}
+      agentCount={hasAgents ? Math.max(1, agentsData?.agents.length ?? 0) : 0}
+      agentSetupOpen={wizardModalOpen}
     />
   );
   // "Customize chips" (ADR 0239): a new chat with the request waiting in

@@ -587,7 +587,7 @@ describe("the Work tutorial", () => {
     ).toBe(true);
   });
 
-  it("configures an agent in a modal, keeps the step, and reveals the collapsed dock on the right", async () => {
+  it("configures agents in a modal, keeps the step, and reveals the collapsed dock on the right", async () => {
     await app.eval(
       `window.catamorphicDesktop.agentsList().then(data => Promise.all(data.agents.map(agent => window.catamorphicDesktop.agentsRemove(agent.id))))`,
     );
@@ -602,6 +602,13 @@ describe("the Work tutorial", () => {
         `document.querySelector('.onboarding-copy h1')?.textContent`,
       ),
     ).toBe("Where AI agents can do wonders");
+    const actions = `JSON.stringify(['setup', 'add'].map(name => document.querySelector('[data-testid="onboarding-' + name + '-agent"]').getBoundingClientRect().toJSON()))`;
+    const placed = await app.eval<string>(actions);
+    expect(
+      await app.eval(
+        `(() => { const add = document.querySelector('[data-testid="onboarding-add-agent"]'); return add.inert && getComputedStyle(add).opacity === '0'; })()`,
+      ),
+    ).toBe(true);
     await click('[data-testid="onboarding-setup-agent"]');
     await app.waitFor(
       `!!document.querySelector('[role="dialog"] [data-testid="agent-wizard-free"]')`,
@@ -618,8 +625,33 @@ describe("the Work tutorial", () => {
     ).toBe(true);
     await click('[role="dialog"] [data-testid="agent-wizard-free"]');
     await app.waitFor(
-      `document.querySelector('[data-testid="onboarding-setup-agent"]')?.textContent.includes('Agent configured') && !document.querySelector('[role="dialog"] [data-testid="agent-wizard-free"]')`,
+      `document.querySelector('[data-testid="onboarding-setup-agent"]')?.dataset.actionState === 'done' && !document.querySelector('[role="dialog"] [data-testid="agent-wizard-free"]')`,
     );
+    const shown = `[...document.querySelectorAll('[data-testid="onboarding-setup-agent"] [aria-hidden="false"]')].map(label => label.textContent).join()`;
+    expect(await app.eval(shown)).toBe("Agent configured");
+
+    // The same wizard adds another, and the step counts it once it closes.
+    await click('[data-testid="onboarding-add-agent"]');
+    await app.waitFor(
+      `!!document.querySelector('[role="dialog"] [data-testid="agent-wizard-free"]')`,
+    );
+    expect(await app.eval(shown)).toBe("Agent configured");
+    await click('[role="dialog"] [data-testid="agent-wizard-free"]');
+    await app.waitFor(
+      `${shown} === '2 agents configured' && !document.querySelector('[role="dialog"] [data-testid="agent-wizard-free"]')`,
+    );
+    expect(
+      await app.eval(
+        `window.catamorphicDesktop.agentsList().then(data => data.agents.length)`,
+      ),
+    ).toBe(2);
+    await settled();
+    expect(await app.eval<string>(actions)).toBe(placed);
+    expect(
+      await app.eval(
+        `document.querySelector('[data-testid="onboarding"]')?.dataset.onboardingStep`,
+      ),
+    ).toBe("2");
     await app.waitFor(
       `document.querySelector('[data-dock-host] [data-dock-rail]')?.dataset.dockCollapsed === 'true'`,
     );
