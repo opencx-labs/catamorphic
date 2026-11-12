@@ -15,6 +15,7 @@ Workspace-owned package versions remain on the existing release train.
 | Claude SDK / CLI | 0.3.322 / 2.1.322 |
 | Codex SDK / CLI | 0.167.1 / 0.167.1 |
 | ACP SDK | 2.6.0, using its explicit unstable ACP v1 entrypoint |
+| Microsandbox SDK / runtime | 0.7.14 / 0.7.14 |
 | Cloudflare Sandbox | 1.0.3, native containers and matching shim |
 | OpenTelemetry | API 1.10, SDK 3.1.1, exporters/Node SDK 0.301.1 |
 | React / Jotai | 19.3.1 / 3.0.2 |
