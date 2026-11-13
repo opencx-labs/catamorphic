@@ -1,5 +1,18 @@
 # Workspace interactions
 
+## Palette modes and current chat
+
+Space or Tab after a mode's trigger enters that mode. The trigger is read from
+the start of the input to the caret, so inserting it before existing text carries
+that text into the mode, including Ask agent. A selection or active text
+composition keeps its normal editing behavior.
+Mode entry and Backspace exit can be undone and redone with the platform's
+Undo and Redo commands. Text edits within a mode keep their native undo behavior.
+
+Rename current chat is offered only while the active chat is visible, as a
+floating chat or the focused chat tab. A minimized or background chat keeps its
+own Rename action in its menu, but is not the palette's current chat.
+
 ## Opening resources
 
 The palette's History mode searches pages and work opened in the profile. Typed
@@ -103,7 +116,10 @@ its command ends, an open tab keeps the output and says "Command finished".
 chat's current working folder. The finished command stays ended and does not
 run again. A finished terminal has no blinking work indicator or typing cursor.
 
-A New Tab (Cmd+T, the palette as a page) is a way to somewhere, not a place. Once
+A New Tab (Cmd+T or the strip's + button, the palette as a page) opens at the right
+end of the strip. If an empty New Tab exists, that same tab is reused. Typed
+palettes retain their input, mode, attachments and selection when switching tabs
+or opening another New Tab. Once
 something else is shown in its place, a New Tab with nothing in its input closes
 (`reconcileWorkspace`); one with typed text or an entered mode, or one still on
 screen as the other pane of a split, stays. Its input is not restored on relaunch,

@@ -3940,7 +3940,8 @@ Startup reserves every project owner before loading its renderer, validates it
 against the project records, then restores the last focused visible
 workspace. Existing project stores still own their tabs and layout. The palette's
 Close current Work window uses the native close lifecycle, and Rename current
-chat names the current chat through the existing dialog, minimized chats included.
+chat names the visible current chat through the existing dialog. Minimized and
+background chats keep Rename in their own menus.
 See [ADR 0284](../../docs/decisions/0284-workspace-windows-restore-as-one-saved-set.md)
 and [workspace interactions](docs/workspace-interactions.md).
 

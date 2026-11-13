@@ -16,6 +16,7 @@ import {
   BUILTIN_ACTIONS,
   type KeybindingAction,
 } from "../../shared/actions.js";
+import type { ChatDraft } from "../../shared/desktop-workspace.js";
 import type { OpenMode as CommitMode } from "../../shared/open-mode.js";
 import {
   EMPTY_PALETTE_SIGNALS,
@@ -163,6 +164,17 @@ const COMMIT_HINTS = [
   { keycap: "⌥↵", label: "floating" },
 ];
 
+interface ModeSnapshot {
+  mode: string | null;
+  draft: ChatDraft;
+  selection?: { start: number; end: number };
+}
+
+interface ModeEdit {
+  before: ModeSnapshot;
+  after: ModeSnapshot;
+}
+
 function FooterHint({ keycap, label }: { keycap: string; label: string }) {
   return (
     <span className="flex items-center gap-1">
@@ -181,6 +193,10 @@ interface CommandPaletteProps {
    * play (unmounting kills it mid-frame). Tab variant is always open.
    */
   open?: boolean;
+  /** A retained palette tab only takes focus while it is the current pane. */
+  active?: boolean;
+  /** Reusing an already-current empty tab returns focus to its input. */
+  focusRequest?: number;
   /** Overlay: hide the palette. Tab: close/consume the palette tab. */
   onClose: () => void;
   /**
@@ -219,6 +235,8 @@ export const CommandPalette = memo(function CommandPalette(
 function CommandPaletteContent({
   variant,
   open = true,
+  active = true,
+  focusRequest = 0,
   onClose,
   onTypedChange,
   modeRequest,
@@ -269,6 +287,41 @@ function CommandPaletteContent({
   const inputContentRef = useRef<HTMLDivElement>(null);
   useGlidingHeight({ content: inputContentRef, frame: inputFrameRef });
   const agentInputRef = useRef<ComposerInputHandle>(null);
+  const currentDraft = useRef({ mode: modeId, query });
+  currentDraft.current = { mode: modeId, query };
+  const modeUndo = useRef<ModeEdit[]>([]);
+  const modeRedo = useRef<ModeEdit[]>([]);
+  const nativeEdits = useRef(false);
+  const restoreMode = useRef<ModeSnapshot | null>(null);
+  const snapshotMode = useCallback((): ModeSnapshot => {
+    const current = currentDraft.current;
+    const field = inputRef.current;
+    return {
+      mode: current.mode,
+      draft: agentInputRef.current?.snapshot() ?? {
+        message: field?.value ?? current.query,
+        attachments: [],
+      },
+      ...(field
+        ? {
+            selection: { start: field.selectionStart, end: field.selectionEnd },
+          }
+        : {}),
+    };
+  }, []);
+  const recordMode = useCallback(
+    (next: string | null, text: string) => {
+      const before = snapshotMode();
+      if (before.mode === next) return;
+      modeUndo.current.push({
+        before,
+        after: { mode: next, draft: { message: text, attachments: [] } },
+      });
+      modeRedo.current = [];
+      nativeEdits.current = false;
+    },
+    [snapshotMode],
+  );
   const targetAgent = [
     ...agents,
     ...projectAgents.map(projectAgentAsInfo),
@@ -292,8 +345,21 @@ function CommandPaletteContent({
   useLayoutEffect(() => {
     const changed = previousMode.current !== modeId;
     previousMode.current = modeId;
-    if (changed && open) focusInput();
-  }, [modeId, open, focusInput]);
+    if (changed && open && active) {
+      const restored = restoreMode.current;
+      restoreMode.current = null;
+      if (modeId === "agent") {
+        if (restored) agentInputRef.current?.restore(restored.draft);
+        else agentInputRef.current?.replaceText(query);
+      }
+      focusInput();
+      if (restored?.selection)
+        inputRef.current?.setSelectionRange(
+          restored.selection.start,
+          restored.selection.end,
+        );
+    }
+  }, [modeId, open, active, focusInput, query]);
   const onAgentPaste = (event: ClipboardEvent<HTMLDivElement>) => {
     const input = agentInputRef.current;
     if (!input || !projectId) return;
@@ -314,14 +380,15 @@ function CommandPaletteContent({
   const sizerRef = useRef<HTMLDivElement>(null);
 
   const enterMode = useCallback(
-    (next: string) => {
+    (next: string, initialQuery = "") => {
+      recordMode(next, initialQuery);
       setModeId(next);
       setExitingChip(null);
-      setQuery("");
+      setQuery(initialQuery);
       setSelection(TOP_ROW);
       focusInput();
     },
-    [focusInput],
+    [focusInput, recordMode],
   );
 
   // Keep the exiting list intact, but always start a fresh opening even if
@@ -330,6 +397,10 @@ function CommandPaletteContent({
   useLayoutEffect(() => {
     const reset = () => {
       setQuery("");
+      modeUndo.current = [];
+      modeRedo.current = [];
+      nativeEdits.current = false;
+      restoreMode.current = null;
       agentInputRef.current?.clear();
       setPillCount(0);
       setInputEpoch((epoch) => epoch + 1);
@@ -347,8 +418,9 @@ function CommandPaletteContent({
     return () => clearTimeout(timer);
   }, [open, setTransferError]);
 
+  // biome-ignore lint/correctness/useExhaustiveDependencies: repeated New Tab requests refocus an already-current retained input
   useLayoutEffect(() => {
-    if (!open) return;
+    if (!open || !active) return;
     const focus = () => focusInput();
     // A New Tab greeting its user is the app's own move (lib/app-focus): a
     // chat opened in the same frame still lands its composer autofocus.
@@ -370,7 +442,7 @@ function CommandPaletteContent({
       window.removeEventListener("keydown", cancel, true);
       window.removeEventListener("pointerdown", cancel, true);
     };
-  }, [open, variant, focusInput]);
+  }, [open, active, variant, focusInput, focusRequest]);
 
   // Commands run from anywhere open the overlay already inside their mode.
   useEffect(() => {
@@ -428,7 +500,7 @@ function CommandPaletteContent({
   // the input without an extra click. Guarded on "nothing else grabbed
   // focus" so a split-pane neighbor's input is never robbed.
   useEffect(() => {
-    if (variant !== "tab") return;
+    if (variant !== "tab" || !active) return;
     const onWindowFocus = () => {
       requestAnimationFrame(() => {
         const active = document.activeElement;
@@ -437,7 +509,7 @@ function CommandPaletteContent({
     };
     window.addEventListener("focus", onWindowFocus);
     return () => window.removeEventListener("focus", onWindowFocus);
-  }, [variant, focusInput]);
+  }, [variant, active, focusInput]);
 
   // Skills follow the target agent's allowlist: the focused chat's agent,
   // else the default, profile or project.
@@ -461,12 +533,12 @@ function CommandPaletteContent({
     commandItems,
   } = useCommandRows({ enterMode, skills, agentSkills: skillAgent?.skills });
   const { resourceItems, tabItems, bookmarkedUsage } = useResourceRows({
-    active: variant === "tab" || open,
+    active: active && open,
   });
   const { surfaceItems, historyPageItem } = useDestinationRows();
   const { historyRow, historyItems, historyEntries } = useHistoryRows({
     query,
-    enabled: (variant === "tab" || open) && !modeId,
+    enabled: active && open && !modeId,
     bookmarkedUsage,
   });
   const settingItems = useSettingRows();
@@ -493,7 +565,7 @@ function CommandPaletteContent({
     sectionSearch,
     projectAgents,
     skillModes,
-    agentModeActive: modeId === "agent" && (variant === "tab" || open),
+    agentModeActive: modeId === "agent" && active && open,
   });
   const namedModes = useMemo(
     () => modes.filter((candidate) => candidate.names?.length),
@@ -508,12 +580,75 @@ function CommandPaletteContent({
   const exitMode = () => {
     if (activeMode && !activeMode.parent)
       setExitingChip({ icon: activeMode.icon, label: activeMode.chip });
-    setModeId(activeMode?.parent ?? null);
+    const next = activeMode?.parent ?? null;
+    recordMode(next, query);
+    setModeId(next);
   };
+  const undoMode = (redo: boolean): boolean => {
+    const source = redo ? modeRedo.current : modeUndo.current;
+    const edit = source.at(-1);
+    if (!edit || nativeEdits.current) return false;
+    const current = snapshotMode();
+    const expected = redo ? edit.before : edit.after;
+    // Text edits still belong to Chromium's native undo stack. Only take
+    // the key at the mode boundary, after those edits have been undone.
+    if (
+      current.mode !== expected.mode ||
+      JSON.stringify(current.draft) !== JSON.stringify(expected.draft)
+    )
+      return false;
+    source.pop();
+    (redo ? modeUndo.current : modeRedo.current).push(edit);
+    const restored = redo ? edit.after : edit.before;
+    restoreMode.current = restored;
+    nativeEdits.current = false;
+    setExitingChip(null);
+    setModeId(restored.mode);
+    setQuery(restored.draft.message);
+    setSelection(TOP_ROW);
+    return true;
+  };
+  const undoModeRef = useRef(undoMode);
+  undoModeRef.current = undoMode;
+  useEffect(() => {
+    const content = inputContentRef.current;
+    const beforeInput = (event: InputEvent) => {
+      if (event.isComposing) return;
+      if (
+        event.inputType !== "historyUndo" &&
+        event.inputType !== "historyRedo"
+      )
+        return;
+      if (undoModeRef.current(event.inputType === "historyRedo"))
+        event.preventDefault();
+    };
+    const input = (event: Event) => {
+      const history =
+        event instanceof InputEvent &&
+        (event.inputType === "historyUndo" ||
+          event.inputType === "historyRedo");
+      if (!history) modeRedo.current = [];
+      const boundary = modeUndo.current.at(-1)?.after;
+      const current = snapshotMode();
+      // Deleting back to the same text is still an edit. Only a native
+      // history operation can return us to the mode's undo boundary.
+      nativeEdits.current =
+        !history ||
+        !boundary ||
+        current.mode !== boundary.mode ||
+        JSON.stringify(current.draft) !== JSON.stringify(boundary.draft);
+    };
+    content?.addEventListener("beforeinput", beforeInput);
+    content?.addEventListener("input", input);
+    return () => {
+      content?.removeEventListener("beforeinput", beforeInput);
+      content?.removeEventListener("input", input);
+    };
+  }, [snapshotMode]);
   const modeLoad = usePaletteLoad(
     activeMode?.rows,
     query,
-    (variant === "tab" || open) && Boolean(activeMode),
+    active && open && Boolean(activeMode),
   );
   const rankContext = useMemo(
     () => ({ signals, projectId }),
@@ -542,7 +677,7 @@ function CommandPaletteContent({
 
   const topLevelModeRows = useTopLevelModeRows(
     customModes,
-    (variant === "tab" || open) && !modeId,
+    active && open && !modeId,
   );
   // Rows everything else already lists: a bookmarked page or a workflow
   // appears once, as its own row, ranked with its history counts.
@@ -845,8 +980,9 @@ function CommandPaletteContent({
   // Rows changed: follow a chosen row to its new place, or give up a
   // choice whose row left the list.
   useLayoutEffect(() => {
+    if (!active) return;
     setSelection((current) => settleSelection(current, results));
-  }, [results]);
+  }, [results, active]);
   // A row the keyboard chose stays in view, whether an arrow key moved the
   // highlight or a re-rank moved the row. A row the pointer chose is where
   // the person is already looking: scrolling it into view would move the
@@ -877,9 +1013,10 @@ function CommandPaletteContent({
   const onHighlightTargetRef = useRef(onHighlightTarget);
   onHighlightTargetRef.current = onHighlightTarget;
   useEffect(() => {
+    if (!active || !open) return;
     onHighlightTargetRef.current?.(highlightTarget);
     return () => onHighlightTargetRef.current?.(null);
-  }, [highlightTarget]);
+  }, [highlightTarget, active, open]);
 
   // What the palette learns from a pick (ADR 0186): the typed query, and a
   // visit for destinations nothing else counts.
@@ -1009,19 +1146,39 @@ function CommandPaletteContent({
     event: KeyboardEvent<HTMLTextAreaElement | HTMLDivElement>,
   ) => {
     if (event.nativeEvent.isComposing) return;
-    // Tab or Space commits a typed mode trigger into a chip ("@agent" →
-    // [Ask agent]). Both keys, deliberately — Chrome removed Space once
-    // and had to bring it back.
+    const primary = /Mac/.test(navigator.platform)
+      ? event.metaKey
+      : event.ctrlKey;
+    const undo = primary && !event.altKey && event.key.toLowerCase() === "z";
+    const redo =
+      primary &&
+      !event.altKey &&
+      ((event.shiftKey && event.key.toLowerCase() === "z") ||
+        (!/Mac/.test(navigator.platform) && event.key.toLowerCase() === "y"));
+    if ((undo || redo) && undoMode(redo)) {
+      event.preventDefault();
+      return;
+    }
+    // Tab or Space commits the mode trigger before the caret into a chip.
+    // Text after it is already that mode's query, including when a trigger
+    // was inserted at the beginning of an existing draft.
+    const field = event.currentTarget;
+    const trigger =
+      field instanceof HTMLTextAreaElement &&
+      field.selectionStart === field.selectionEnd
+        ? query.slice(0, field.selectionStart).trim()
+        : "";
     if (
       !activeMode &&
       (event.key === "Tab" || event.key === " ") &&
-      trimmed.length > 1 &&
-      (trimmed.startsWith("@") || isFullPaletteModeName(namedModes, trimmed))
+      field instanceof HTMLTextAreaElement &&
+      trigger.length > 1 &&
+      (trigger.startsWith("@") || isFullPaletteModeName(namedModes, trigger))
     ) {
-      const candidate = matchPaletteMode(namedModes, trimmed);
+      const candidate = matchPaletteMode(namedModes, trigger);
       if (candidate) {
         event.preventDefault();
-        enterMode(candidate.id);
+        enterMode(candidate.id, query.slice(field.selectionStart));
         return;
       }
     }

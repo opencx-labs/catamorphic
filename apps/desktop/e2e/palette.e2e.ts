@@ -53,6 +53,16 @@ const shot = async (name: string) => {
 };
 const type = (text: string) =>
   run(`setReactValue(input(),${JSON.stringify(text)})`);
+const selectStripTab = async (key: string) => {
+  const point = await wait<{ x: number; y: number }>(`
+    const tab = [...document.querySelectorAll('[data-workspace-visible="true"] [data-tab-orientation] [data-point-key]:not([data-sidebar-item-id])')].find(el => el.dataset.pointKey === ${JSON.stringify(key)});
+    if (!tab || tab.closest('[data-tab-orientation]').getAnimations({subtree:true}).some(a => a.playState === 'running')) return false;
+    const r = tab.getBoundingClientRect();
+    const point = {x:r.left+Math.min(24,r.width/3), y:r.top+r.height/2};
+    return tab.contains(document.elementFromPoint(point.x,point.y)) && point;
+  `);
+  await app.clickPointer(point);
+};
 /** Where the chats are and what has focus, for a wait that timed out. */
 const chatState = `JSON.stringify({
   floating: [...document.querySelectorAll('section[data-floating-chat]')].map((el) => el.dataset.chatLocalId),
@@ -981,3 +991,287 @@ it.each([false, true])(
     expect(app.getRendererErrors()).toEqual([]);
   },
 );
+
+it.each(["overlay", "tab"])(
+  "keeps existing text when a mode trigger is inserted at its beginning (%s)",
+  async (variant) => {
+    const text = "  Keep this query\nexactly as typed.  ";
+    for (const { trigger, label } of [
+      { trigger: "web", label: "Search web" },
+      { trigger: "@hist", label: "History" },
+      { trigger: "file", label: "Files" },
+      { trigger: "tix", label: "Tickets" },
+      { trigger: "agent", label: "Ask agent" },
+    ]) {
+      if (variant === "overlay") await open();
+      else {
+        await shortcut("t");
+        await wait(`return document.activeElement === input()`);
+      }
+      await app.insertText(text);
+      await run(`input().setSelectionRange(0, 0); return true;`);
+      await app.insertText(trigger);
+      await app.press("Space");
+      await wait(`return chip() === ${JSON.stringify(label)}`);
+      const value = () =>
+        run<string>(
+          `return input().isContentEditable ? input().textContent : input().value`,
+        );
+      expect(await value()).toBe(text);
+      expect(await run(`return document.activeElement === input()`)).toBe(true);
+      // The handoff into Ask agent must reach the actual editable, so
+      // continued typing edits the retained draft rather than replacing it.
+      await run(`
+        const field = input();
+        if (field instanceof HTMLTextAreaElement) field.setSelectionRange(field.value.length, field.value.length);
+        return true;
+      `);
+      await app.insertText("more");
+      expect(await value()).toBe(`${text}more`);
+      if (trigger === "agent") await shot(`palette-prefix-${variant}.png`);
+      if (variant === "overlay") await close();
+      else {
+        await shortcut("w");
+        await wait(`return !input()`);
+      }
+    }
+    expect(app.getRendererErrors()).toEqual([]);
+  },
+);
+
+it("retains independent New Tab drafts, appends new tabs, and reuses an empty tab", async () => {
+  const strip = `[...document.querySelectorAll('[data-workspace-visible="true"] [data-tab-orientation] [data-point-key]:not([data-sidebar-item-id])')]`;
+  const keys = () =>
+    run<string[]>(`return ${strip}.map(el => el.dataset.pointKey)`);
+  const currentKey = () =>
+    run<string>(
+      `return input().closest('[data-surface-key]').dataset.surfaceKey`,
+    );
+  const select = async (key: string) => {
+    const point = await wait<{ x: number; y: number }>(`
+      const tab = ${strip}.find(el => el.dataset.pointKey === ${JSON.stringify(key)});
+      if (!tab || tab.closest('[data-tab-orientation]').getAnimations({subtree:true}).some(a => a.playState === 'running')) return false;
+      const r = tab.getBoundingClientRect();
+      const point = {x:r.left+Math.min(24,r.width/3), y:r.top+r.height/2};
+      return tab.contains(document.elementFromPoint(point.x,point.y)) && point;
+    `);
+    await app.clickPointer(point);
+    await wait(
+      `return input()?.closest('[data-surface-key]')?.dataset.surfaceKey === ${JSON.stringify(key)} && document.activeElement === input()`,
+    );
+  };
+  const newTab = async () => {
+    await shortcut("t");
+    await wait(
+      `return document.activeElement === input() && input().closest('[data-palette="tab"]')`,
+    );
+    return currentKey();
+  };
+  const before = await keys();
+  const first = await newTab();
+  expect((await keys()).at(-1)).toBe(first);
+  await app.insertText("first draft");
+  await run(`input().setSelectionRange(0, 5); return true;`);
+  const second = await newTab();
+  expect(second).not.toBe(first);
+  expect((await keys()).at(-1)).toBe(second);
+  await app.insertText("agent");
+  await app.press("Space");
+  await wait(
+    `return input()?.isContentEditable && document.activeElement === input()`,
+  );
+  await app.insertText("second draft\nwith another line");
+  await select(first);
+  expect(
+    await run(
+      `return [input().value,input().selectionStart,input().selectionEnd]`,
+    ),
+  ).toEqual(["first draft", 0, 5]);
+  await select(second);
+  expect(await run(`return [chip(),input().textContent]`)).toEqual([
+    "Ask agent",
+    "second draft\nwith another line",
+  ]);
+  const empty = await newTab();
+  expect((await keys()).at(-1)).toBe(empty);
+  expect(await newTab()).toBe(empty);
+  // The + button shares Cmd+T's reuse and focus handoff.
+  await run(
+    `document.querySelector('[data-workspace-visible="true"] button[aria-label="New tab"]').click(); return true;`,
+  );
+  await wait(`return document.activeElement === input()`);
+  expect(await currentKey()).toBe(empty);
+  expect(await keys()).toHaveLength(before.length + 3);
+  await select(first);
+  expect(await run(`return input().value`)).toBe("first draft");
+  // Leaving an empty tab still closes it; both drafts survive that cleanup.
+  await wait(
+    `return !${strip}.some(el => el.dataset.pointKey === ${JSON.stringify(empty)})`,
+  );
+  for (const key of [first, second]) {
+    await select(key);
+    await shortcut("w");
+  }
+  expect(await keys()).toEqual(before);
+  expect(app.getRendererErrors()).toEqual([]);
+});
+
+it("retains a selected skill and only accents targets while its palette is active", async () => {
+  const strip = `[...document.querySelectorAll('[data-workspace-visible="true"] [data-tab-orientation] [data-point-key]:not([data-sidebar-item-id])')]`;
+  const browser = await run<string>(
+    `return ${strip}.find(el => el.dataset.pointKey.startsWith('browser:')).dataset.pointKey`,
+  );
+  await shortcut("t");
+  await wait(
+    `return document.activeElement === input() && input().closest('[data-palette="tab"]')`,
+  );
+  const palette = await run<string>(
+    `return input().closest('[data-surface-key]').dataset.surfaceKey`,
+  );
+  await app.insertText(">close current tab");
+  await wait(
+    `return ${strip}.some(el => el.dataset.pointKey === ${JSON.stringify(palette)} && el.dataset.paletteTarget)`,
+  );
+  await selectStripTab(browser);
+  await wait(`return !${strip}.some(el => el.dataset.paletteTarget)`);
+  await selectStripTab(palette);
+  await wait(
+    `return ${strip}.some(el => el.dataset.pointKey === ${JSON.stringify(palette)} && el.dataset.paletteTarget)`,
+  );
+  await type("skills");
+  await app.press("Space");
+  await wait(`return chip() === 'Skills' && rows().length > 1`);
+  await app.press("ArrowDown");
+  const selected = await run<string>(
+    `return rows().find(el => el.getAttribute('aria-selected') === 'true').dataset.itemId`,
+  );
+  await selectStripTab(browser);
+  await selectStripTab(palette);
+  await wait(
+    `return document.activeElement === input() && chip() === 'Skills'`,
+  );
+  expect(
+    await run(
+      `return rows().find(el => el.getAttribute('aria-selected') === 'true').dataset.itemId`,
+    ),
+  ).toBe(selected);
+  await shortcut("w");
+  expect(app.getRendererErrors()).toEqual([]);
+});
+
+it.each(["web", "agent", "tix"])(
+  "undoes and redoes entering and leaving %s mode",
+  async (trigger) => {
+    const history = async (redo = false) => {
+      for (const type of ["keyDown", "keyUp"])
+        await app.cdp("Input.dispatchKeyEvent", {
+          type,
+          key: "z",
+          code: "KeyZ",
+          windowsVirtualKeyCode: 90,
+          modifiers: (process.platform === "darwin" ? 4 : 2) | (redo ? 8 : 0),
+          ...(type === "keyDown" ? { commands: [redo ? "redo" : "undo"] } : {}),
+        });
+    };
+    await open();
+    const text = "retained draft";
+    await app.insertText(text);
+    await run(`input().setSelectionRange(0,0); return true;`);
+    await app.insertText(trigger);
+    await app.press("Space");
+    await wait(`return !!chip()`);
+    const label = await run<string>(`return chip()`);
+    const value = () =>
+      run<string>(
+        `return input().isContentEditable ? input().textContent : input().value`,
+      );
+    await history();
+    await wait(
+      `return chip() === null && input().value === ${JSON.stringify(trigger + text)}`,
+    );
+    expect(
+      await run(`return [input().selectionStart,input().selectionEnd]`),
+    ).toEqual([trigger.length, trigger.length]);
+    await history(true);
+    await wait(`return chip() === ${JSON.stringify(label)}`);
+    expect(await value()).toBe(text);
+    await run(
+      `if(input() instanceof HTMLTextAreaElement) input().setSelectionRange(input().value.length,input().value.length); return true;`,
+    );
+    await app.insertText(" extra");
+    expect(await value()).toBe(`${text} extra`);
+    await history();
+    expect(await value()).toBe(text);
+    expect(await run(`return chip()`)).toBe(label);
+    // Empty the draft through native editing, then Backspace pops the chip.
+    await app.press("a", process.platform === "darwin" ? 4 : 2);
+    await app.press("Backspace");
+    await wait(`return (input().value ?? input().textContent) === ''`);
+    await app.press("Backspace");
+    await wait(`return chip() === null`);
+    await history();
+    await wait(
+      `return chip() === ${JSON.stringify(label)} && document.activeElement === input()`,
+    );
+    expect(await value()).toBe("");
+    await history(true);
+    await wait(`return chip() === null`);
+    await history();
+    await wait(`return chip() === ${JSON.stringify(label)}`);
+    // Deleting back to a boundary is a native edit, not a mode undo.
+    await app.insertText("hello");
+    await app.press("a", process.platform === "darwin" ? 4 : 2);
+    await app.press("Backspace");
+    await history();
+    expect(await value()).toBe("hello");
+    expect(await run(`return chip()`)).toBe(label);
+    await close();
+
+    await open();
+    await app.insertText(trigger);
+    await app.press("Space");
+    await wait(`return !!chip()`);
+    await history();
+    await wait(
+      `return chip() === null && input().value === ${JSON.stringify(trigger)}`,
+    );
+    // A new edit after mode undo starts a new redo branch.
+    await app.insertText("x");
+    await history();
+    expect(await value()).toBe(trigger);
+    await history(true);
+    expect(await value()).toBe(`${trigger}x`);
+    expect(await run(`return chip()`)).toBe(null);
+    await close();
+    expect(app.getRendererErrors()).toEqual([]);
+  },
+);
+
+it("only consumes a mode trigger before a collapsed caret, outside composition", async () => {
+  await open();
+  for (const [text, start, end] of [
+    ["unknownquery", 7, 7],
+    ["@squery", 2, 2],
+    ["find webquery", 8, 8],
+    ["webquery", 0, 3],
+  ] as const) {
+    await type(text);
+    await run(`input().setSelectionRange(${start}, ${end}); return true;`);
+    await app.press("Space");
+    expect(await run(`return chip()`)).toBe(null);
+    expect(await run(`return input().value`)).toBe(
+      `${text.slice(0, start)} ${text.slice(end)}`,
+    );
+  }
+  await type("webquery");
+  await run(
+    `input().setSelectionRange(3, 3); key(' ', {isComposing:true}); return true;`,
+  );
+  expect(await run(`return chip()`)).toBe(null);
+  expect(await run(`return input().value`)).toBe("webquery");
+  // Tab supports the same prefix handoff as Space.
+  await app.press("Tab");
+  await wait(`return chip() === 'Search web'`);
+  expect(await run(`return input().value`)).toBe("query");
+  await close();
+});

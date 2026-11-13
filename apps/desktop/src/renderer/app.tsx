@@ -782,6 +782,7 @@ export function App({
     open: boolean;
   } | null>(null);
   const [paletteOpen, setPaletteOpen] = useState(false);
+  const [newTabFocusRequest, setNewTabFocusRequest] = useState(0);
   const closePalette = useCallback(() => setPaletteOpen(false), []);
   const [closingEdits, setClosingEdits] = useState<{
     requestedKey: string;
@@ -2010,8 +2011,15 @@ export function App({
   };
 
   // Chrome's New Tab analog: a fresh tab whose content is the palette.
-  const openPaletteTab = () =>
-    openTab({ kind: "palette", name: crypto.randomUUID(), label: "New Tab" });
+  const openPaletteTab = () => {
+    updateWorkspace((ws) =>
+      transitionWorkspace(ws, {
+        type: "new-palette",
+        name: crypto.randomUUID(),
+      }),
+    );
+    setNewTabFocusRequest((request) => request + 1);
+  };
   // Untyped, a New Tab closes once something else is shown in its place
   // (reconcileWorkspace); typing into it keeps it.
   const markNewTabTyped = (key: string, typed: boolean) =>
@@ -4611,6 +4619,14 @@ export function App({
   const actionChat = (ws: Workspace) =>
     ws.chats.find((chat) => chat.localId === ws.activeChatId) ??
     ws.chats.at(-1);
+  const chatToRename = (ws: Workspace) =>
+    ws.chats.find(
+      (chat) =>
+        chat.localId === ws.activeChatId &&
+        (chat.mode === "partial" ||
+          (chat.mode === "tab" &&
+            (ws.floatingKey ?? ws.activeTabKey) === chatTabKey(chat.localId))),
+    );
   // Talk to this chat (voice): the chat in front, for its shortcut.
   const frontChatSession = actionChat(workspace)?.sessionId ?? null;
   useEffect(() => {
@@ -4957,7 +4973,7 @@ export function App({
       requestTabFileRename(ws.floatingKey ?? ws.activeTabKey);
     },
     "rename-chat": () => {
-      const chat = actionChat(workspaceRef.current);
+      const chat = chatToRename(workspaceRef.current);
       if (chat?.sessionId) applySessionAction(chat.sessionId, "rename");
     },
     "switch-agent": () => openPalettePicker("switch-agent"),
@@ -6937,8 +6953,7 @@ export function App({
     "open-chat-preview": remoteChatSession(paletteTargetChat?.sessionId),
     "archive-chat":
       focusedSession !== undefined && focusedSession.visibility !== "archived",
-    // The same current chat the handler targets, including a minimized one.
-    "rename-chat": paletteTargetChat?.sessionId !== undefined,
+    "rename-chat": chatToRename(workspace)?.sessionId !== undefined,
     "rename-file": filePathForKey(focusedTabKey) !== null,
     "rename-tab": focusedTabKey?.startsWith("browser:") === true,
     // Project-agent models are committed in their project definition, so
@@ -8195,12 +8210,13 @@ export function App({
                         onClick={dismissFloating}
                       />
                     )}
-                    {/* Screen-style tabs render whenever they occupy a view
-                    slot — in a split that can be two at once. */}
+                    {/* Workflow and palette drafts stay mounted when hidden.
+                    Other screens render while occupying a view slot. */}
                     {workspace.tabs
                       .filter(
                         (tab) =>
                           tab.kind === "workflow" ||
+                          tab.kind === "palette" ||
                           viewSlots[tabKey(tab)] ||
                           tabKey(tab) === recedingSurface,
                       )
@@ -8353,6 +8369,12 @@ export function App({
                             <CommandPalette
                               key={tabKey(tab)}
                               variant="tab"
+                              focusRequest={newTabFocusRequest}
+                              active={
+                                runtime.visible &&
+                                !paletteOpen &&
+                                focusedTabKey === tabKey(tab)
+                              }
                               onClose={() => closeTab(tabKey(tab))}
                               onTypedChange={(typed) =>
                                 markNewTabTyped(tabKey(tab), typed)

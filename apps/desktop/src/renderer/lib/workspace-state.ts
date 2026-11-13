@@ -140,7 +140,7 @@ export interface Workspace {
   /**
    * User-arranged strip order (drag to reorder). Keys not listed append
    * in their natural per-kind order; stale keys are ignored — only drag
-   * mutations write it.
+   * mutations and explicit end placement write it.
    */
   tabOrder: string[];
   /**
@@ -632,6 +632,7 @@ export type WorkspaceEvent =
       scope?: TabCloseScope;
     }
   | { type: "reopen"; localId: string }
+  | { type: "new-palette"; name: string }
   | { type: "select"; key: string }
   | { type: "focus"; key: string }
   | { type: "side"; key: string; previous?: string; side?: "left" | "right" }
@@ -862,6 +863,27 @@ function applyWorkspaceEvent(
       ? materializeSurface(original, event.key)
       : original;
   switch (event.type) {
+    case "new-palette": {
+      const existing = ws.tabs.find(
+        (candidate) => candidate.kind === "palette" && !candidate.typed,
+      );
+      const tab: WorkspaceTab = existing
+        ? { ...existing, chatLocalId: undefined }
+        : { kind: "palette", name: event.name, label: "New Tab" };
+      const key = tabKey(tab);
+      return {
+        ...ws,
+        tabs: existing
+          ? ws.tabs.map((candidate) =>
+              candidate === existing ? tab : candidate,
+            )
+          : [...ws.tabs, tab],
+        activeTabKey: key,
+        floatingKey: undefined,
+        split: null,
+        tabOrder: tabOrderWith(ws, key, null),
+      };
+    }
     case "close": {
       const { key, force, discardDraft, scope } = event;
       const opts = { force, discardDraft };
