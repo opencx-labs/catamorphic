@@ -76,6 +76,8 @@ export interface ScreenShareTabState {
   state: "sharing" | "ended";
   /** The site the tab is shared with. */
   origin: string;
+  /** The pick this is about (its request): a later pick is not settled by it. */
+  requestId: string;
 }
 
 /** `tab:<webContentsId>` → the id, or null for other sources. */

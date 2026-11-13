@@ -28,9 +28,12 @@ pages are shareable.
 ## Decision
 
 **The window lists its own tabs.** The picker builds the tab list from
-the workspace: every page of this window's profile and browsing session
-(incognito with incognito only), awake or asleep, in tab order. Main gives
-awake pages a thumbnail and checks a pick: same window, same session.
+the asking page's project in the window: every page of its profile and
+browsing session (incognito with incognito only), awake or asleep, in tab
+order. A window holding several projects answers a request once, in the
+asking page's project. Pages on screen (or held) get a thumbnail; a hidden
+page shows its icon, since capturing one can wait forever on macOS. Main
+checks a pick: same window, same session.
 
 **A shared tab stays rendered, as Chrome keeps painting a captured tab.**
 Picking a tab holds it the way a tab an agent works is held: laid out,
@@ -39,8 +42,10 @@ put to sleep. A sleeping tab wakes first. The picker answers once the page
 is up and laid out; until then Share shows its pending state. Main polls
 the shared page's capture each second and tells the window when the share
 starts (the tab's icon gets an accent ring and its hover card names the
-site) and when it ends, which releases the hold. A pick whose capture
-never starts is released after 15 seconds. While the share runs, the
+site) and when it ends, which releases the hold. Each pick holds the tab
+on its own and is settled by its own request, so a pick given up never
+releases a later one. A pick whose capture never starts is released after
+15 seconds. While the share runs, the
 window keeps drawing when covered or minimized, using the same rendering
 hold as agent screenshots.
 
@@ -55,11 +60,14 @@ share, and the picker says so.
 **Windows and screens are listed separately, each within eight seconds.**
 Screens come back quickly and fill their pane first. A list that times
 out says so with a retry, and screens fall back to the displays Work
-knows. When Screen Recording is not granted, the window and screen panes
-say Work needs it, link to System Settings, list again when Work regains
-focus, and say to reopen Work if access was just given. Work's helper
-surfaces (the detached dock, the voice bubble, extension popups) are not
-listed as windows.
+knows. On Linux under Wayland, capture goes through the desktop portal,
+whose own picker waits on the person: windows and screens are asked for
+once, together, with no time limit. When Screen Recording is not granted,
+the window and screen panes say Work needs it, link to System Settings,
+list again when Work regains focus, and say to reopen Work if access was
+just given. Work's helper surfaces (the detached dock, the voice bubble,
+the passkey sheet) are not listed as windows; pages Work opened in windows
+of their own (a site's popup, an extension's window) are.
 
 **The picker holds still.** The list area has a fixed height, so loading,
 switching kinds and arriving thumbnails do not resize the dialog.
@@ -74,8 +82,8 @@ while the dialog fades out.
   and the share keeps moving while the person works in another tab.
 - A shared tab costs what an open page costs until the share ends, even
   if it would otherwise sleep.
-- Tabs of other Work windows are not listed; the other window can still
-  be shared as a window.
+- Tabs of other Work windows, and of the window's other projects, are not
+  listed; such a window can still be shared as a window.
 - System audio on macOS also needs the System Audio Recording permission,
   which macOS asks for on first use. If it is refused, Chromium ends the
   audio track without telling the page.

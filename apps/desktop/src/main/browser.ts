@@ -146,6 +146,7 @@ import { generateStrongPassword } from "./password-generator.js";
 import { PopupPasskeySheets } from "./popup-passkey-sheets.js";
 import type { ProfileConfigManager } from "./profile-config.js";
 import type { ProfilesStore } from "./profiles.js";
+import { isShellDocument } from "./shell-document.js";
 import { isRegisteredShellContents, shellIpcMain } from "./shell-ipc.js";
 import {
   parseWorkCall,
@@ -1930,10 +1931,11 @@ export function registerBrowserSupport(
     tab: WebContents | null;
   } | null> => {
     const { guest, host } = input;
+    const requestId = randomUUID();
     const answer = await screenShareBroker.ask(
       input.profileId,
       {
-        id: randomUUID(),
+        id: requestId,
         guestId: guest.id,
         origin: input.origin,
         audio: input.audio,
@@ -1962,10 +1964,11 @@ export function registerBrowserSupport(
           guestId: tabId,
           state: "ended",
           origin: input.origin,
+          requestId,
         });
       return null;
     }
-    watchSharedTab({ tab, host, origin: input.origin });
+    watchSharedTab({ tab, host, origin: input.origin, requestId });
     return { choice, tab };
   };
 
@@ -1980,6 +1983,8 @@ export function registerBrowserSupport(
     {
       host: WebContents;
       origin: string;
+      /** The latest pick of the tab, which its next start or end settles. */
+      requestId: string;
       since: number;
       sharing: boolean;
       timer: ReturnType<typeof setInterval>;
@@ -1998,15 +2003,26 @@ export function registerBrowserSupport(
     tab: WebContents;
     host: WebContents;
     origin: string;
+    requestId: string;
   }): void => {
-    const { tab, host, origin } = input;
+    const { tab, host, origin, requestId } = input;
     const guestId = tab.id;
     const known = sharedTabs.get(guestId);
     if (known) {
       // Picked again (a second page, or the same page asking again): the
       // watch starts over, so an earlier share stopping meanwhile does not
       // end the one about to start. A capture still running says so again.
+      // An earlier pick whose share never started is settled here.
+      if (!known.sharing)
+        tellShareState(host, {
+          guestId,
+          state: "ended",
+          origin: known.origin,
+          requestId: known.requestId,
+        });
       known.since = Date.now();
+      known.origin = origin;
+      known.requestId = requestId;
       known.sharing = false;
       known.release?.();
       known.release = undefined;
@@ -2018,7 +2034,12 @@ export function registerBrowserSupport(
       clearInterval(entry.timer);
       sharedTabs.delete(guestId);
       entry.release?.();
-      tellShareState(host, { guestId, state: "ended", origin: entry.origin });
+      tellShareState(host, {
+        guestId,
+        state: "ended",
+        origin: entry.origin,
+        requestId: entry.requestId,
+      });
     };
     const timer = setInterval(() => {
       const entry = sharedTabs.get(guestId);
@@ -2033,7 +2054,12 @@ export function registerBrowserSupport(
         // The window paints on while its tab is shared, even covered or
         // minimized, as Chrome paints a captured tab.
         entry.release = holdCaptureFrames(tab);
-        tellShareState(host, { guestId, state: "sharing", origin });
+        tellShareState(host, {
+          guestId,
+          state: "sharing",
+          origin: entry.origin,
+          requestId: entry.requestId,
+        });
       } else if (
         !captured &&
         (entry.sharing || Date.now() - entry.since > SHARE_START_MS)
@@ -2044,6 +2070,7 @@ export function registerBrowserSupport(
     sharedTabs.set(guestId, {
       host,
       origin,
+      requestId,
       since: Date.now(),
       sharing: false,
       timer,
@@ -2247,6 +2274,17 @@ export function registerBrowserSupport(
     ]).finally(() => clearTimeout(timer));
   };
 
+  /**
+   * Linux on Wayland captures through the desktop portal (PipeWire): each
+   * capturer opens the system's own picker and waits on the person, so
+   * windows and screens are asked for once, together, with no time limit.
+   * Both listings of one picker share that request.
+   */
+  const portalCapture =
+    process.platform === "linux" &&
+    /^wayland/i.test(process.env.XDG_SESSION_TYPE ?? "");
+  let portalListing: Promise<Electron.DesktopCapturerSource[]> | null = null;
+
   shellIpcMain.handle(
     "catamorphic:screen-share-sources",
     async (_event, input: unknown): Promise<ScreenShareCaptureSources> => {
@@ -2254,23 +2292,41 @@ export function registerBrowserSupport(
         .object({ kinds: z.array(z.enum(["window", "screen"])).min(1) })
         .parse(input);
       const wanted = new Set(kinds);
-      const [listedScreens, listedWindows] = await Promise.all([
-        wanted.has("screen") ? captureSources("screen") : [],
-        wanted.has("window") ? captureSources("window") : [],
-      ]);
+      if (portalCapture) {
+        portalListing ??= desktopCapturer
+          .getSources({
+            types: ["window", "screen"],
+            thumbnailSize: SHARE_THUMBNAIL_SIZE,
+            fetchWindowIcons: true,
+          })
+          .catch(() => [])
+          .finally(() => {
+            portalListing = null;
+          });
+      }
+      const portal = portalListing ? await portalListing : null;
+      const [listedScreens, listedWindows] = portal
+        ? // What the person chose in the portal, whichever kind it is.
+          [portal, portal]
+        : await Promise.all([
+            wanted.has("screen") ? captureSources("screen") : [],
+            wanted.has("window") ? captureSources("window") : [],
+          ]);
       // Work's own helper surfaces (the detached dock, the voice bubble,
-      // an extension's popup) are not windows a person shares; its
-      // workspace windows are.
+      // the passkey sheet) are not windows a person shares; its workspace
+      // windows and the pages it opened in windows (a site's popup, an
+      // extension's window) are.
       const helperWindows = new Set(
         BrowserWindow.getAllWindows()
           .filter((window) => {
             if (window.isDestroyed()) return false;
+            const url = window.webContents.getURL();
             try {
-              return !new URL(window.webContents.getURL()).searchParams.has(
-                "window",
+              return (
+                isShellDocument(url) && !new URL(url).searchParams.has("window")
               );
             } catch {
-              return true;
+              return false;
             }
           })
           .map((window) => window.getMediaSourceId()),
@@ -2291,13 +2347,13 @@ export function registerBrowserSupport(
             : null,
       });
       let screens = (listedScreens ?? [])
-        .filter((source) => source.id.startsWith("screen:"))
+        .filter((source) => portal !== null || source.id.startsWith("screen:"))
         .map((source) => toSource(source, "screen"));
       // macOS lists no screens when Screen Recording access is stale or
       // missing, or when it does not answer; the displays still exist and
       // their ids are what the capturer would have used, so sharing can
       // still be attempted.
-      if (wanted.has("screen") && screens.length === 0) {
+      if (wanted.has("screen") && screens.length === 0 && !portal) {
         const displays = screen.getAllDisplays();
         screens = displays.map((display, index) => ({
           id: `screen:${display.id}:0`,
@@ -2311,7 +2367,8 @@ export function registerBrowserSupport(
         windows: (listedWindows ?? [])
           .filter(
             (source) =>
-              source.id.startsWith("window:") && !helperWindows.has(source.id),
+              (portal !== null || source.id.startsWith("window:")) &&
+              !helperWindows.has(source.id),
           )
           .map((source) => toSource(source, "window")),
         screens,

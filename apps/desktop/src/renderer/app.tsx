@@ -365,12 +365,22 @@ const PILL_QUIET_MS = 4_000;
 /** How long a tab picked for a share gets to wake and load its page. */
 const SHARE_TAB_READY_MS = 15_000;
 
-/** A browser tab held for a page's share (ADR 0315). */
+/** A browser tab a page in this window shares (ADR 0315). */
 interface SharedBrowser {
-  /** Its page, once ready; null while it wakes or loads. */
-  guestId: number | null;
-  /** The site it is shared with, once the share runs. */
-  sharingWith: string | null;
+  guestId: number;
+  /** The site it is shared with. */
+  sharingWith: string;
+}
+
+/**
+ * A pick for a share, from the moment the picker readies its tab until main
+ * says the share started or ended. Each pick holds the tab on its own, so a
+ * pick given up never lets go of another one's.
+ */
+interface ShareClaim {
+  localId: string;
+  /** The share request the pick answers: main settles it by this id. */
+  requestId: string;
 }
 
 /** Keep `value` within `low` and `high`. */
@@ -2853,41 +2863,61 @@ export function App({
     setBusyBrowsers(new Set());
   }, [projectId]);
   const browserGuestIdsRef = useRef(new Map<string, number>());
-  // Browser tabs a page in this window shares (ADR 0315), or that the share
-  // picker is readying for one. Like a page an agent works, such a page
+  // Browser tabs a page in this window shares (ADR 0315), and the picks
+  // being readied for a share. Like a page an agent works, such a page
   // stays laid out (transparent while out of sight) and awake, so its
-  // capture keeps painting; main says when the share starts and ends.
+  // capture keeps painting; main says when a share starts and ends.
   const [sharedBrowsers, setSharedBrowsers] = useState<
     ReadonlyMap<string, SharedBrowser>
   >(new Map());
-  // biome-ignore lint/correctness/useExhaustiveDependencies: shares belong to the mounted project's pages
-  useEffect(() => {
-    setSharedBrowsers(new Map());
-  }, [projectId]);
-  useEffect(
+  const shareClaimsRef = useRef(new Map<symbol, ShareClaim>());
+  const [claimedBrowsers, setClaimedBrowsers] = useState<ReadonlySet<string>>(
+    new Set(),
+  );
+  const syncShareClaims = useCallback(
     () =>
-      desktopApi.onScreenShareTabState(({ guestId, state, origin }) =>
-        setSharedBrowsers((current) => {
-          const next = new Map(current);
-          if (state === "ended") {
-            for (const [localId, entry] of current)
-              if (entry.guestId === guestId) next.delete(localId);
-            return next.size === current.size ? current : next;
-          }
-          for (const [localId, entry] of current)
-            if (entry.guestId === guestId)
-              next.set(localId, { guestId, sharingWith: siteHost(origin) });
-          for (const [localId, id] of browserGuestIdsRef.current)
-            if (id === guestId && !next.has(localId))
-              next.set(localId, { guestId, sharingWith: siteHost(origin) });
-          return next;
-        }),
+      setClaimedBrowsers(
+        new Set(
+          [...shareClaimsRef.current.values()].map((claim) => claim.localId),
+        ),
       ),
     [],
   );
+  // biome-ignore lint/correctness/useExhaustiveDependencies: shares belong to the mounted project's pages
+  useEffect(() => {
+    setSharedBrowsers(new Map());
+    shareClaimsRef.current.clear();
+    syncShareClaims();
+  }, [projectId]);
+  useEffect(
+    () =>
+      desktopApi.onScreenShareTabState(
+        ({ guestId, state, origin, requestId }) => {
+          // The pick this is about is settled by its share's start or end;
+          // another pick of the same page is not.
+          for (const [key, claim] of shareClaimsRef.current)
+            if (claim.requestId === requestId)
+              shareClaimsRef.current.delete(key);
+          syncShareClaims();
+          setSharedBrowsers((current) => {
+            const next = new Map(current);
+            for (const [localId, entry] of current)
+              if (entry.guestId === guestId) next.delete(localId);
+            if (state === "sharing")
+              for (const [localId, id] of browserGuestIdsRef.current)
+                if (id === guestId)
+                  next.set(localId, { guestId, sharingWith: siteHost(origin) });
+            return next;
+          });
+        },
+      ),
+    [syncShareClaims],
+  );
   /** Kept laid out and awake: an agent works it, or it is shared. */
   const heldBrowser = (localId: string) =>
-    busyBrowsers.has(localId) || sharedBrowsers.has(localId);
+    busyBrowsers.has(localId) ||
+    sharedBrowsers.has(localId) ||
+    claimedBrowsers.has(localId);
 
   // Browser tabs out of sight for a while sleep (ADR 0194); tabs the
   // workspace mounts with start asleep, so only the shown ones load.
@@ -3596,65 +3626,55 @@ export function App({
   const workspaceRef = useRef(workspace);
   workspaceRef.current = workspace;
 
-  /** A tab readied for a share that did not happen goes back to normal. */
-  const releaseShareTab = useCallback((localId: string) => {
-    setSharedBrowsers((current) => {
-      const entry = current.get(localId);
-      if (!entry || entry.sharingWith) return current;
-      const next = new Map(current);
-      next.delete(localId);
-      return next;
-    });
-  }, []);
   /**
    * Readies a browser tab for a page's share (ADR 0315): held laid out and
    * awake, woken if it slept, until its page is up. Resolves with the
-   * page's guest id, which the picker hands to main.
+   * page's guest id, which the picker hands to main; the hold then lasts
+   * until main says that request's share started or ended. `letGo` drops
+   * it when the answer never reached main. An aborted pick lets go of its
+   * own hold only.
    */
   const prepareShareTab = useCallback(
-    async (localId: string): Promise<number> => {
-      setSharedBrowsers((current) =>
-        current.has(localId)
-          ? current
-          : new Map(current).set(localId, {
-              guestId: null,
-              sharingWith: null,
-            }),
-      );
+    async (input: {
+      localId: string;
+      requestId: string;
+      signal: AbortSignal;
+    }): Promise<{ guestId: number; letGo: () => void }> => {
+      const { localId, requestId, signal } = input;
+      const key = Symbol(localId);
+      shareClaimsRef.current.set(key, { localId, requestId });
+      syncShareClaims();
+      const letGo = () => {
+        if (shareClaimsRef.current.delete(key)) syncShareClaims();
+      };
       if (tabAsleepRef.current(localId)) wakeTab(localId);
-      const key = browserTabKey(localId);
+      const surface = browserTabKey(localId);
       const deadline = Date.now() + SHARE_TAB_READY_MS;
       while (Date.now() < deadline) {
         await new Promise((resolve) => setTimeout(resolve, 100));
+        if (signal.aborted) {
+          letGo();
+          throw new DOMException("The pick was given up.", "AbortError");
+        }
         if (
           !workspaceRef.current.browsers.some(
             (browser) => browser.localId === localId,
           )
         ) {
-          releaseShareTab(localId);
+          letGo();
           throw new Error("That tab was closed.");
         }
         const guestId = browserGuestIdsRef.current.get(localId);
         const bounds = document
-          .querySelector(`[data-surface-key="${CSS.escape(key)}"] webview`)
+          .querySelector(`[data-surface-key="${CSS.escape(surface)}"] webview`)
           ?.getBoundingClientRect();
-        if (guestId !== undefined && bounds?.width && bounds.height) {
-          setSharedBrowsers((current) => {
-            const entry = current.get(localId);
-            return entry?.guestId === guestId
-              ? current
-              : new Map(current).set(localId, {
-                  guestId,
-                  sharingWith: entry?.sharingWith ?? null,
-                });
-          });
-          return guestId;
-        }
+        if (guestId !== undefined && bounds?.width && bounds.height)
+          return { guestId, letGo };
       }
-      releaseShareTab(localId);
+      letGo();
       throw new Error("That tab did not load in time. Try again.");
     },
-    [wakeTab, releaseShareTab],
+    [wakeTab, syncShareClaims],
   );
 
   const signalsRef = useRef<Record<string, ChatLiveSignals>>({});
@@ -7873,6 +7893,7 @@ export function App({
               onClose={() => setSiteSettingsOrigin(null)}
             />
             <ScreenShareHost
+              visible={runtime.visible}
               tabs={workspace.browsers}
               asleep={tabSleep.asleep}
               laidOut={(localId) =>
@@ -7882,7 +7903,6 @@ export function App({
               }
               guestIds={browserGuestIdsRef}
               prepareTab={prepareShareTab}
-              releaseTab={releaseShareTab}
             />
             <ExtensionPromptHost />
             <PasskeyHost onOpenPasswords={() => openPasswords()} />

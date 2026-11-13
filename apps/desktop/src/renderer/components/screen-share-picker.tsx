@@ -28,7 +28,7 @@ import { SiteFavicon } from "./site-favicon.js";
 
 /** The window's tabs, as the share picker needs them. */
 export interface ScreenShareTabsProps {
-  /** Every browser tab of the window's workspace, asleep or not. */
+  /** Every browser tab of the project's workspace, asleep or not. */
   tabs: readonly BrowserEntry[];
   asleep: (localId: string) => boolean;
   /**
@@ -41,12 +41,23 @@ export interface ScreenShareTabsProps {
   guestIds: RefObject<ReadonlyMap<string, number>>;
   /**
    * Holds a tab laid out and awake for the share, waking it if it slept,
-   * and resolves with its page once that is ready.
+   * and resolves with its page once that is ready. The hold lasts until
+   * main settles the request, or `letGo` (the answer never reached main);
+   * aborting gives up the pick.
    */
-  prepareTab: (localId: string) => Promise<number>;
-  /** Lets go of a tab readied for a share that did not happen. */
-  releaseTab: (localId: string) => void;
+  prepareTab: (input: {
+    localId: string;
+    requestId: string;
+    signal: AbortSignal;
+  }) => Promise<{ guestId: number; letGo: () => void }>;
 }
+
+/**
+ * The mounted hosts, one per project the window holds, each saying whether
+ * a page is one of its project's. A request goes to the asking page's own
+ * project, so one picker answers it, listing that project's tabs.
+ */
+const hosts = new Set<(guestId: number) => boolean>();
 
 /**
  * Chrome's "Choose what to share" for a page's `getDisplayMedia` call
@@ -55,22 +66,41 @@ export interface ScreenShareTabsProps {
  * goes along when the page asks for it. Cancel, Escape or a closed tab
  * refuse the request; the page sees NotAllowedError.
  */
-export function ScreenShareHost(props: ScreenShareTabsProps) {
+export function ScreenShareHost({
+  visible,
+  ...props
+}: ScreenShareTabsProps & {
+  /** This project is the one on screen in the window. */
+  visible: boolean;
+}) {
   const [requests, setRequests] = useState<ScreenShareRequest[]>([]);
+  const visibleRef = useRef(visible);
+  visibleRef.current = visible;
+  const { guestIds } = props;
   useEffect(() => {
-    const stopRequests = desktopApi.onScreenShareRequest((request) =>
-      setRequests((queue) => [...queue, request]),
-    );
+    const owns = (guestId: number) =>
+      [...(guestIds.current?.values() ?? [])].includes(guestId);
+    hosts.add(owns);
+    const stopRequests = desktopApi.onScreenShareRequest((request) => {
+      // A page no project here holds (an extension's panel) asks the
+      // project on screen.
+      const take =
+        owns(request.guestId) ||
+        ((visibleRef.current || hosts.size === 1) &&
+          ![...hosts].some((other) => other(request.guestId)));
+      if (take) setRequests((queue) => [...queue, request]);
+    });
     const stopWithdrawn = desktopApi.onScreenShareWithdrawn(({ ids }) =>
       setRequests((queue) =>
         queue.filter((request) => !ids.includes(request.id)),
       ),
     );
     return () => {
+      hosts.delete(owns);
       stopRequests();
       stopWithdrawn();
     };
-  }, []);
+  }, [guestIds]);
   const request = requests[0] ?? null;
   // The answered request stays drawn while the dialog leaves, so the
   // panel fades out with its content rather than collapsing first.
@@ -78,19 +108,22 @@ export function ScreenShareHost(props: ScreenShareTabsProps) {
   if (request) shownRef.current = request;
   const shown = request ?? shownRef.current;
   const cancelRef = useRef<(() => void) | null>(null);
-  const { releaseTab } = props;
   const answer = useCallback(
-    (requestId: string, choice: ScreenShareChoice | null, heldTab?: string) => {
+    (
+      requestId: string,
+      choice: ScreenShareChoice | null,
+      letGo?: () => void,
+    ) => {
       setRequests((queue) => queue.filter((entry) => entry.id !== requestId));
       void desktopApi
         .screenShareAnswer({ requestId, choice })
         .catch(() => false)
         .then((delivered) => {
           // The page stopped asking meanwhile: the tab is not shared.
-          if (!delivered && heldTab) releaseTab(heldTab);
+          if (!delivered) letGo?.();
         });
     },
-    [releaseTab],
+    [],
   );
   return (
     <Modal
@@ -109,7 +142,7 @@ export function ScreenShareHost(props: ScreenShareTabsProps) {
           request={shown}
           closing={request === null}
           cancelRef={cancelRef}
-          onAnswer={(choice, heldTab) => answer(shown.id, choice, heldTab)}
+          onAnswer={(choice, letGo) => answer(shown.id, choice, letGo)}
         />
       )}
     </Modal>
@@ -153,7 +186,6 @@ function ScreenSharePicker({
   laidOut,
   guestIds,
   prepareTab,
-  releaseTab,
   cancelRef,
   onAnswer,
 }: ScreenShareTabsProps & {
@@ -161,7 +193,7 @@ function ScreenSharePicker({
   /** Answered: the dialog is leaving, nothing here acts any more. */
   closing: boolean;
   cancelRef: RefObject<(() => void) | null>;
-  onAnswer: (choice: ScreenShareChoice | null, heldTab?: string) => void;
+  onAnswer: (choice: ScreenShareChoice | null, letGo?: () => void) => void;
 }) {
   const host = siteHost(request.origin);
   const [kind, setKind] = useState<ScreenShareKind>("tab");
@@ -227,47 +259,59 @@ function ScreenSharePicker({
   }, []);
 
   // Screens arrive quickly; macOS can take seconds to list windows. Each
-  // fills its own pane as it comes.
-  const listCapture = useCallback((which: "window" | "screen") => {
-    const set = which === "window" ? setWindows : setScreens;
-    let cancelled = false;
-    set((current) =>
-      current.status === "ready" ? current : { status: "loading" },
-    );
-    void desktopApi
-      .screenShareSources({ kinds: [which] })
-      .then((next: ScreenShareCaptureSources) => {
-        if (cancelled) return;
-        setSystem(next.system);
-        setSystemAudio(next.systemAudio);
-        set({
-          status: "ready",
-          items: which === "window" ? next.windows : next.screens,
-          timedOut: next.timedOut,
+  // fills its own pane as it comes, one listing at a time per kind. Asked
+  // to try again, an empty list shows it is looking; a quiet refresh (Work
+  // focused again) and a list with something in it keep what they show.
+  const listing = useRef({ window: false, screen: false });
+  const alive = useRef(true);
+  useEffect(
+    () => () => {
+      alive.current = false;
+    },
+    [],
+  );
+  const listCapture = useCallback(
+    (which: "window" | "screen", quiet = false) => {
+      if (listing.current[which]) return;
+      listing.current[which] = true;
+      const set = which === "window" ? setWindows : setScreens;
+      set((current) =>
+        current.status === "ready" && (quiet || current.items.length > 0)
+          ? current
+          : { status: "loading" },
+      );
+      void desktopApi
+        .screenShareSources({ kinds: [which] })
+        .then((next: ScreenShareCaptureSources) => {
+          if (!alive.current) return;
+          setSystem(next.system);
+          setSystemAudio(next.systemAudio);
+          set({
+            status: "ready",
+            items: which === "window" ? next.windows : next.screens,
+            timedOut: next.timedOut,
+          });
+        })
+        .catch(() => {
+          if (alive.current) set({ status: "failed" });
+        })
+        .finally(() => {
+          listing.current[which] = false;
         });
-      })
-      .catch(() => {
-        if (!cancelled) set({ status: "failed" });
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, []);
+    },
+    [],
+  );
   useEffect(() => {
-    const stopScreens = listCapture("screen");
-    const stopWindows = listCapture("window");
-    return () => {
-      stopScreens();
-      stopWindows();
-    };
+    listCapture("screen");
+    listCapture("window");
   }, [listCapture]);
   // Back from System Settings (Screen Recording), the lists are asked
   // for again.
   useEffect(() => {
     if (system !== "denied") return;
     const refresh = () => {
-      listCapture("screen");
-      listCapture("window");
+      listCapture("screen", true);
+      listCapture("window", true);
     };
     window.addEventListener("focus", refresh);
     return () => window.removeEventListener("focus", refresh);
@@ -294,28 +338,24 @@ function ScreenSharePicker({
     request.audio && (kind === "tab" || (kind === "screen" && systemAudio));
 
   // A tab readied for this request and then left (cancel, a closed
-  // asking page) goes back to normal.
-  const preparingRef = useRef<string | null>(null);
+  // asking page) gives up its pick, which lets go of the tab.
+  const readyingRef = useRef<AbortController | null>(null);
   const answeredRef = useRef(false);
   const closingRef = useRef(closing);
   closingRef.current = closing;
-  useEffect(
-    () => () => {
-      const held = preparingRef.current;
-      if (held && !answeredRef.current) releaseTab(held);
-    },
-    [releaseTab],
-  );
-  const finish = (choice: ScreenShareChoice | null, heldTab?: string) => {
+  useEffect(() => {
+    if (closing) readyingRef.current?.abort();
+  }, [closing]);
+  useEffect(() => () => readyingRef.current?.abort(), []);
+  const finish = (choice: ScreenShareChoice | null, letGo?: () => void) => {
     if (answeredRef.current) return;
     answeredRef.current = true;
-    onAnswer(choice, heldTab);
+    onAnswer(choice, letGo);
   };
   const cancel = () => {
     if (answeredRef.current) return;
-    const held = preparingRef.current;
-    preparingRef.current = null;
-    if (held) releaseTab(held);
+    readyingRef.current?.abort();
+    readyingRef.current = null;
     setPreparing(null);
     finish(null);
   };
@@ -340,23 +380,27 @@ function ScreenSharePicker({
     }
     const tab = tabs.find((entry) => entry.localId === id);
     if (!tab) return;
-    const localId = tab.localId;
-    preparingRef.current = localId;
-    setPreparing(localId);
+    const readying = new AbortController();
+    readyingRef.current = readying;
+    setPreparing(tab.localId);
     setWaking(tab.asleep);
     setStatus(null);
     try {
-      const guestId = await prepareTab(localId);
-      // Cancelled, or the asking page went away, while the tab readied:
-      // readying held it again, so it is let go once more.
+      const { guestId, letGo } = await prepareTab({
+        localId: tab.localId,
+        requestId: request.id,
+        signal: readying.signal,
+      });
+      // Cancelled, or the asking page went away, as the tab became ready.
       if (
+        readying.signal.aborted ||
         answeredRef.current ||
-        closingRef.current ||
-        preparingRef.current !== localId
+        closingRef.current
       ) {
-        releaseTab(localId);
+        letGo();
         return;
       }
+      readyingRef.current = null;
       finish(
         {
           id: `tab:${guestId}`,
@@ -364,11 +408,11 @@ function ScreenSharePicker({
           name: tab.title.slice(0, 4096),
           audio: request.audio && audio.tab,
         },
-        localId,
+        letGo,
       );
     } catch (error) {
-      if (answeredRef.current) return;
-      preparingRef.current = null;
+      if (readying.signal.aborted || answeredRef.current) return;
+      readyingRef.current = null;
       setPreparing(null);
       setStatus(
         error instanceof Error ? error.message : "Could not ready that tab.",
@@ -452,7 +496,7 @@ function ScreenSharePicker({
                     }
                     selected={selection.tab === tab.localId}
                     focusable={
-                      selection.tab
+                      tabs.some((entry) => entry.localId === selection.tab)
                         ? selection.tab === tab.localId
                         : index === 0
                     }
@@ -885,7 +929,11 @@ function CapturePane({
               key={source.id}
               source={source}
               selected={selected === source.id}
-              focusable={selected ? selected === source.id : index === 0}
+              focusable={
+                list.items.some((item) => item.id === selected)
+                  ? selected === source.id
+                  : index === 0
+              }
               onChoose={() => onChoose(source.id)}
               onCommit={() => {
                 onChoose(source.id);

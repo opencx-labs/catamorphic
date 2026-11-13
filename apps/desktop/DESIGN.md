@@ -873,8 +873,8 @@ the historical log explains how it arrived here.
 
 ### 2026-11-14: A shared tab keeps painting; sound is a choice
 
-"Choose what to share" lists every page of the window, including tabs that
-are asleep (ADR 0315). A shared tab is held like a page an agent works: laid
+"Choose what to share" lists every page of the asking page's project,
+including tabs that are asleep (ADR 0315). A shared tab is held like a page an agent works: laid
 out under the shown tab, transparent and inert, told it is visible, never put
 to sleep. A sleeping pick wakes first, while Share shows its pending state.
 While the share runs, the tab's icon wears an accent ring (200 ms opacity, both
