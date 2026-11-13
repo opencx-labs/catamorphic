@@ -4,8 +4,9 @@ Use this when a Work server should let agents or workflows act on company
 systems: APIs, a production database, internal MCP tools (ADRs 0162, 0163),
 or when developers' remote Environments need the variables they have on their
 laptops (ADR 0206). The rule for company systems: workloads get permission to
-act, never the credential. The Work server holds credentials in its vault and
-makes each call itself, after any guards the company added review it.
+act, never the credential. The Work server holds credentials in its vault (or
+the host's own, see below) and makes each call itself, after any guards the
+company added review it.
 
 Simple servers need none of this. Add it when a project needs a system that
 holds company data.
@@ -14,10 +15,10 @@ holds company data.
 
 | Need | Use |
 | --- | --- |
-| An HTTP API with a key (billing, CRM, internal service) that agents call | An `http` gateway connection |
-| An HTTP API with a shared key that code in a sandbox calls (a dev server or tests reading a logging cluster) | The same `http` gateway connection, reached at `WORK_HTTP_<ALIAS>`: [HTTP APIs from sandboxes](#http-apis-from-sandboxes-through-the-gateway) |
-| Reading a production database | A `postgres` gateway connection to a read-only replica role |
-| Tools behind an MCP server | An `mcp` gateway connection |
+| An HTTP API with a key (billing, CRM, internal service) that agents call | An HTTP API connection (`defineHttpApiConnectionProvider`) |
+| An HTTP API with a shared key that code in a sandbox calls (a dev server or tests reading a logging cluster) | The same HTTP API connection, reached at `WORK_HTTP_<ALIAS>`: [HTTP APIs from sandboxes](#http-apis-from-sandboxes-through-the-gateway) |
+| Reading a production database | A Postgres connection (`definePostgresConnectionProvider`) to a read-only replica role |
+| Tools behind an MCP server | An MCP connection (`defineMcpConnectionProvider`) |
 | Git with a company remote from agents' sandboxes (fetch, push a fix branch) | A Git-capable connection (`defineGitConnectionProvider`, or the built-in GitHub provider) bound with `git` rules |
 | A value a workflow's own code must read (a webhook signing secret, a non-sensitive token) | A project secret (`defineSecrets`), sealed in the vault |
 | A variable developers' code needs in remote Environments (a Sentry DSN, a test Stripe key) | A project secret listed on the Environment: [Secrets in Environments](#secrets-in-environments) |
@@ -61,16 +62,21 @@ matters.
   ```ts
   credentialVault: routeCredentialVaults({
     vaults: { members: memberTokensVault, company: companySecretsVault },
+    fallback: "company",
     select: ({ placement }) =>
       placement.owner.kind === "member" ? "members" : "company",
   }),
   ```
 
-- A connection can also keep nothing in Work: a provider whose
-  `completeAuthorization` returns empty `material` is stored as connected
-  with no record, and each call's `context` (tenant, project, Environment,
-  alias, principal, acting member) lets your provider fetch or issue its
-  credential from your own systems at that moment.
+  Moving an existing deployment onto your own vaults: name the vault that
+  already holds its records as `fallback` (refs written before routing go
+  there), or enter every credential again.
+- A connection can also keep nothing at all: a provider that declares
+  `keepsNoCredential: true` is stored as connected with no record, and each
+  action call's `context` (tenant, project, Environment, alias, principal,
+  acting member) lets it fetch or issue its credential from your own
+  systems at that moment. Such a provider cannot serve the gateway's Git,
+  model or sandbox HTTP routes, which forward a stored credential.
 
 Store all of these with the deployment's secret mechanism. Never commit them,
 print them, or pass them to agents.
@@ -527,7 +533,7 @@ credential, and after closing the chat its grant is refused.
 
 Code running in a chat's sandbox (a dev server, a CLI, an SDK, a test suite)
 often needs a company API with a shared key: a logging cluster's HTTP
-interface, an internal service. Bind an `http` gateway connection instead of
+interface, an internal service. Bind an HTTP API connection instead of
 listing the key as a secret (ADR 0212): the code gets the session's grant,
 never the key.
 

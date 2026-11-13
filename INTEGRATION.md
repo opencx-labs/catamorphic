@@ -1048,15 +1048,39 @@ external systems are enabled. Both are host code, never configuration (ADR
 0315): the provider helpers are functions a host calls, and the vault may be
 Work's `EncryptedCredentialVault` or any `CredentialVault` over the host's
 own secret manager; a Work server takes them as `hooks.connectionProviders`
-and `hooks.credentialVault`. The host vault stores opaque encrypted material using an injected store and key.
+and `hooks.credentialVault`. Work's own `EncryptedCredentialVault` stores
+opaque encrypted material using an injected store and key.
+
+Every vault write carries a trusted `placement` (`purpose`, `owner`,
+`projectId`), set by core, so host code can route it:
+`routeCredentialVaults({ vaults, select, fallback })` sends each write to the
+vault `select` names, keeps each ref on the vault that wrote it, and reads
+refs written before routing from `fallback`. A host adopting its own vault on
+an existing deployment must keep its old records readable this way, or enter
+every credential again. Provider action calls (`invoke`, `listActions`,
+`refresh`, `revoke`) receive a `ConnectionCallContext`: tenant, connection,
+principal, project, Environment, alias, and the live acting member. A
+provider that declares `keepsNoCredential` stores nothing in any vault and
+obtains its credential from that context on each call; it cannot also serve
+the gateway's Git, model or sandbox HTTP routes. Empty material from any
+other provider is refused (ADR 0316).
 Storing project secret values also requires `credentialVault` (ADR 0281),
 even without connection providers. No plaintext storage or automatic legacy
 import exists. Keep production wrapping keys outside the database; use
 `MemoryCredentialVault` only for tests or ephemeral hosts.
 `EncryptedCredentialVault` can use `PostgresObjectStore` or a host store; the
 wrapping key remains outside the database. Provider code runs in the control plane. Workflows call
-`context.connections.<alias>.<action>(args)` and agents use allocation-bound
-Catamorphic MCP grants. Neither receives upstream credentials.
+`context.connections.<alias>.<action>(args)`, Work-hosted agents use
+allocation-bound Catamorphic MCP grants, and members' own agents call the
+project MCP's `<alias>__<action>` tools as caller `member`, with no
+Allocation and live authority on every call (ADR 0316). None receives
+upstream credentials. A host serving members' own agents sets
+`projectMcp.connectLink` to a page that requires a browser signed in as the
+member, calls `connections.redeemConnectionOffer`, sets the returned
+`browserBinding` as the HTTP-only `__Host-catamorphic_connect` cookie
+(`catamorphic_connect` on loopback), and redirects to the challenge; the
+plugin's callback route reads it with `connectBinding`. The Work server
+ships this page at `/connect/:token`.
 For a shared host, provide `resolveMemberIdentity` so every session connection
 call resolves the member's live authority, including after a human approval.
 The same resolver supplies live identity for OAuth callbacks; `projectId` is

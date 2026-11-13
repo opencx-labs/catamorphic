@@ -35,6 +35,7 @@ export {
   isProjectPrincipal,
   isScoped,
   mayUseProject,
+  mayUseProjectConnections,
   narrowIdentity,
   PROJECT_PERMISSION_GRANT_PATTERN,
   PROJECT_PERMISSION_PATTERN,

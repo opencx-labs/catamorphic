@@ -718,7 +718,11 @@ describe("credential connections", () => {
         .update(JSON.stringify(deniedInput))
         .digest("hex"),
     });
-    expect(allowedInvocation?.metadata).toEqual({});
+    // Every audit row names who acted and how (ADR 0316).
+    expect(allowedInvocation?.metadata).toEqual({
+      actor: "member",
+      caller: "workflow",
+    });
     expect(deniedInvocation?.metadata).toEqual({});
     expect(deniedInvocation?.argumentsDigest).not.toBe(deniedInput.userId);
     expect(allowedInvocation).not.toHaveProperty("input");

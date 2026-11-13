@@ -1,5 +1,12 @@
-import type { CatamorphicCore, Identity } from "@catamorphic/core";
-import { CONNECT_BINDING_COOKIE } from "@catamorphic/fastify-plugin";
+import {
+  type CatamorphicCore,
+  ConnectionUnavailableError,
+  type Identity,
+} from "@catamorphic/core";
+import {
+  CONNECT_BINDING_COOKIE,
+  connectBinding,
+} from "@catamorphic/fastify-plugin";
 import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 import type { WorkAuth } from "./auth/work-auth-types.js";
 import { escapeHtml, sendPage } from "./shares/share-routes.js";
@@ -60,25 +67,25 @@ export function registerConnectRoutes(
         token,
         redirectUri: callback,
       });
-    } catch {
+    } catch (error) {
       return unavailable(
         reply,
-        "This link has expired, was already used, or was made for another account.",
+        error instanceof ConnectionUnavailableError &&
+          error.message.includes("only in the Work app")
+          ? "This account connects only in the Work app."
+          : "This link has expired, was already used, or was made for another account.",
       );
     }
     reply.header(
       "set-cookie",
-      `${CONNECT_BINDING_COOKIE}=${started.browserBinding}; Path=/; HttpOnly; SameSite=Lax; Max-Age=${BINDING_MAX_AGE_SECONDS}${secure ? "; Secure" : ""}`,
+      // `__Host-` over HTTPS: only this origin can set it (no Domain).
+      `${secure ? "__Host-" : ""}${CONNECT_BINDING_COOKIE}=${started.browserBinding}; Path=/; HttpOnly; SameSite=Lax; Max-Age=${BINDING_MAX_AGE_SECONDS}${secure ? "; Secure" : ""}`,
     );
     const { challenge } = started;
     if (challenge.kind === "url") return reply.redirect(challenge.url, 303);
+    if (challenge.kind !== "form")
+      return unavailable(reply, "This account connects only in the Work app.");
     const state = escapeHtml(started.authorizationId);
-    if (challenge.kind === "device") {
-      return sendPage(reply, {
-        title: `Connect ${started.alias}`,
-        body: `<p>Open <a href="${escapeHtml(challenge.verificationUrl)}" rel="noreferrer" target="_blank">${escapeHtml(challenge.verificationUrl)}</a> and enter <strong>${escapeHtml(challenge.userCode)}</strong>.</p><form method="post" action="/connect/complete"><input type="hidden" name="state" value="${state}"><button type="submit">I have entered the code</button></form>`,
-      });
-    }
     const fields = challenge.fields
       .map(
         (field) =>
@@ -104,10 +111,7 @@ export function registerConnectRoutes(
       typeof request.body === "string" ? request.body : "",
     );
     const state = form.get("state") ?? "";
-    const binding = (request.headers.cookie ?? "")
-      .split(";")
-      .map((part) => part.trim().split("="))
-      .find(([name]) => name === CONNECT_BINDING_COOKIE)?.[1];
+    const binding = connectBinding(request.headers.cookie);
     const fields = Object.fromEntries(
       [...form.entries()]
         .filter(([name]) => name.startsWith("field."))

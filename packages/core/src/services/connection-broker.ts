@@ -111,7 +111,7 @@ export class ConnectionBroker {
       agentSessionId?: string;
     } & BrokerTarget,
   ) {
-    const { scope, binding, provider } = await this.resolveInvocation({
+    const { scope, binding, provider, actor } = await this.resolveInvocation({
       ...args,
     });
     await this.connections.refreshIfNeeded({
@@ -133,7 +133,7 @@ export class ConnectionBroker {
         listActions({
           material,
           context: this.connections.providerContext({
-            identity: args.identity,
+            identity: actor,
             connection,
             projectId: scope.projectId,
             environment: scope.environment,
@@ -195,7 +195,8 @@ export class ConnectionBroker {
     } & BrokerTarget,
   ): Promise<Json> {
     args.signal?.throwIfAborted();
-    const { scope, binding, provider } = await this.resolveInvocation(args);
+    const { scope, binding, provider, actor } =
+      await this.resolveInvocation(args);
     const digest = createHash("sha256")
       .update(JSON.stringify(args.input))
       .digest("hex");
@@ -313,7 +314,7 @@ export class ConnectionBroker {
             capabilities: binding.capabilities,
             connection: { id: connection.id, revision: connection.revision },
             context: this.connections.providerContext({
-              identity: args.identity,
+              identity: actor,
               connection,
               projectId: scope.projectId,
               environment: scope.environment,
@@ -1014,15 +1015,16 @@ export class ConnectionBroker {
     | { verdict: "allow"; metadata: Json }
     | { verdict: "deny"; reason: string; metadata: Json }
   > {
-    if (this.gateway.guards.length === 0) {
-      return { verdict: "allow", metadata: {} };
-    }
     const caller = args.caller ?? "workflow";
     const actor =
       args.actor ||
       (args.agentSessionId &&
         (await this.gateway.sessionOwner?.(args.agentSessionId))) ||
       args.identity.externalUserId;
+    // Every audit row says who acted and how, guards or not.
+    if (this.gateway.guards.length === 0) {
+      return { verdict: "allow", metadata: { actor, caller } };
+    }
     const outcome = await reviewConnectionAction({
       guards: this.gateway.guards,
       ...(this.gateway.guardTimeoutMs
@@ -1128,6 +1130,8 @@ export class ConnectionBroker {
     scope: InvocationScope;
     binding: ResolvedConnectionBinding;
     provider: ConnectionProvider;
+    /** The member the call acts for, resolved live: never a grant id. */
+    actor: Identity;
   }> {
     if (!("allocationId" in args)) return this.resolveMemberInvocation(args);
     const allocation = await this.allocations.get({
@@ -1235,6 +1239,7 @@ export class ConnectionBroker {
       },
       binding,
       provider,
+      actor: identity,
     };
   }
 
@@ -1256,9 +1261,26 @@ export class ConnectionBroker {
       throw new ConnectionActionDeniedError(
         "Connection authority is unavailable",
       );
+    // Re-resolve on every call, as the session path does: a role narrowed
+    // while a guard deliberated applies to the re-check after it.
+    const identity = this.gateway.resolveMemberIdentity
+      ? await this.gateway.resolveMemberIdentity({
+          tenantId: args.identity.tenantId,
+          projectId: args.projectId,
+          externalUserId: args.identity.externalUserId,
+        })
+      : args.identity;
+    if (
+      !identity ||
+      identity.tenantId !== args.identity.tenantId ||
+      identity.externalUserId !== args.identity.externalUserId
+    )
+      throw new ConnectionActionDeniedError(
+        "Connection authority is unavailable",
+      );
     const [binding] = await this.connections
       .resolve({
-        identity: args.identity,
+        identity,
         projectId: args.projectId,
         environment: args.environment,
         aliases: [args.alias],
@@ -1278,6 +1300,7 @@ export class ConnectionBroker {
       scope: { projectId: args.projectId, environment: args.environment },
       binding,
       provider,
+      actor: identity,
     };
   }
 }

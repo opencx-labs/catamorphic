@@ -23,16 +23,22 @@ Environment (`?environment=`, else the project default) as native tools,
 results unchanged (ADR 0225). Calls go through the broker's ordinary guards
 and audit with a third caller kind, `member`, and no Allocation: authority
 resolves live on every call, so detaching, revoking or narrowing a role
-applies at once. Escalations are refused. A role that grants only
-connections makes its holder a project member.
+applies at once (the member is re-resolved after guards, too). Escalations
+are refused. A role that grants only connections opens the endpoint for
+those connections and nothing else of the project.
 
 **Connecting is a browser step bound to the person.** An alias the member
 has not connected offers `<alias>__connect`, which returns a single-use
 link (`connections.offerConnection`, hash stored, 15 minutes). The host's
 page (`projectMcp.connectLink`) requires a browser signed in as that member,
-redeems the link, and keeps a browser binding in the HTTP-only
-`catamorphic_connect` cookie; the attempt completes only with it. A
-forwarded link, or a forwarded upstream consent page, connects nothing.
+redeems the link, and keeps a browser binding in the HTTP-only cookie
+`__Host-catamorphic_connect` (plain `catamorphic_connect` on loopback);
+the attempt completes only with it, and a callback without it ends the
+attempt. A forwarded link, or a forwarded upstream consent page, connects
+nothing. Device codes are refused for links: anyone handed the code could
+consent. Attempts started through the older authorize API (the desktop and
+PWA) are not browser-bound; they remain as phishable as before and should
+move to this flow.
 
 **An alias acts with one authority.** A binding's `principal` is `member` or
 `service`; `either` is removed, as is a requirement's own `principal`. A
@@ -41,15 +47,24 @@ project that wants both declares two aliases.
 **Core tells host code what it handles.** Every vault write carries a
 trusted `placement` (purpose, owner, project); `routeCredentialVaults`
 composes vaults by host logic and keeps each ref on the vault that wrote it.
-Every provider call carries a `ConnectionCallContext` (tenant, connection,
-principal, project, Environment, alias, acting member), so a provider can
-mint or fetch its credential per call. Empty authorization material stores
-nothing: Work never has to hold a secret.
+Every action call (`invoke`, `listActions`, `refresh`, `revoke`) carries a
+`ConnectionCallContext` (tenant, connection, principal, project,
+Environment, alias, and the live acting member, never a grant id), so a
+provider can mint or fetch its credential per call. A provider that
+declares `keepsNoCredential` is stored with nothing at all; empty material
+from any other provider is an error. Gateway protocol routes (Git, model,
+HTTP from sandboxes) forward stored credentials, so such providers cannot
+serve them. A host vault, or `routeCredentialVaults` with a `fallback` for
+records written before routing, keeps the rest outside Work.
 
-**Refresh is serialized.** A per-connection lease in Postgres lets one
-caller on any replica exchange a refresh token; others wait for its result.
-Admission refreshes before judging expiry; revoked or expired connections
-are never refreshed.
+**Refresh is serialized.** A per-connection lease with a holder token in
+Postgres lets one caller on any replica exchange a refresh token; the
+exchange is abandoned before the lease can lapse, a taken-over holder can
+neither publish nor expire the connection, and waiting callers take over a
+lease its holder dropped or let lapse. Admission and snapshot revalidation
+refresh before judging expiry; revoked or expired connections are never
+refreshed, and revocation releases the credential stored when it locks the
+row.
 
 Considered: generic `discover`/`invoke` tools instead of native ones.
 Rejected: clients lose per-tool permissions, annotations and typed results.

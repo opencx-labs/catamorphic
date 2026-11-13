@@ -75,6 +75,15 @@ class RecordingVault implements CredentialVault {
 const calls: Array<{ material: string; context: ConnectionCallContext }> = [];
 let refreshes = 0;
 let refreshRefused = false;
+/** An ordinary provider that wrongly answers with nothing to keep. */
+const careless: ConnectionProvider = {
+  kind: "careless",
+  displayName: "Careless",
+  beginAuthorization: async () => ({ challenge: { kind: "form", fields: [] } }),
+  completeAuthorization: async () => ({ material: new Uint8Array(0) }),
+  invoke: async () => ({}),
+};
+
 /** Refresh tokens already exchanged: each is single-use upstream. */
 const spent = new Set<string>();
 let refreshDelayMs = 0;
@@ -106,6 +115,7 @@ const oauth: ConnectionProvider = {
 const hostIssued: ConnectionProvider = {
   kind: "host-issued",
   displayName: "Host issued",
+  keepsNoCredential: true,
   beginAuthorization: async () => ({
     challenge: { kind: "form", fields: [] },
   }),
@@ -122,11 +132,16 @@ const hostIssued: ConnectionProvider = {
 const committed: Record<string, EnvironmentConnectionBinding> = {
   mine: { provider: "oauth", principal: "member" },
   shared: { provider: "host-issued", principal: "service", service: "issuer" },
+  sloppy: { provider: "careless", principal: "service", service: "sloppy" },
 };
 
 describe("host-owned connections (ADR 0316)", () => {
   const vault = new RecordingVault();
-  const providers = new ConnectionProviderRegistry([oauth, hostIssued]);
+  const providers = new ConnectionProviderRegistry([
+    oauth,
+    hostIssued,
+    careless,
+  ]);
   const service = (target: CredentialVault = vault) =>
     new ConnectionsService({
       db,
@@ -424,6 +439,87 @@ describe("host-owned connections (ADR 0316)", () => {
       },
     });
   });
+
+  it("refuses empty material from a provider that does not declare it keeps none", async () => {
+    const sloppy = await connections.createService({
+      identity: admin,
+      name: "sloppy",
+      providerKind: "careless",
+      principalKind: "project_service",
+      projectId,
+    });
+    const started = await connections.beginServiceAuthorization({
+      identity: admin,
+      connectionId: sloppy.id,
+      redirectUri: "https://work.test/api/connection-authorizations/callback",
+    });
+    await expect(
+      connections.completeAuthorization({
+        identity: admin,
+        state: started.authorizationId,
+        callback: {},
+      }),
+    ).rejects.toThrow("returned no credential");
+    expect(
+      () =>
+        new ConnectionProviderRegistry([
+          {
+            ...hostIssued,
+            kind: "forwarding",
+            http: {
+              baseUrl: "https://api.test",
+              headers: () => ({}),
+            },
+          },
+        ]),
+    ).toThrow("keeps no credential");
+  });
+
+  it("takes over a refresh another replica abandoned", async () => {
+    const owner = memberOf("abandoned", ["mine"]);
+    const created = await memberConnection({
+      owner,
+      token: "abandoned-token",
+      expiresAt: new Date(Date.now() - 1_000),
+    });
+    // Another replica took the lease and then crashed: it lapses.
+    await db
+      .updateTable("connections")
+      .set({
+        refresh_lease_until: new Date(Date.now() + 300),
+        refresh_lease_holder: "crashed-replica",
+      })
+      .where("id", "=", created.id)
+      .execute();
+    const before = refreshes;
+    await connections.refreshIfNeeded({
+      identity: owner,
+      connectionId: created.id,
+    });
+    expect(refreshes).toBe(before + 1);
+    const row = await db
+      .selectFrom("connections")
+      .select(["status", "refresh_lease_holder"])
+      .where("id", "=", created.id)
+      .executeTakeFirstOrThrow();
+    expect(row).toEqual({ status: "ready", refresh_lease_holder: null });
+  });
+
+  it("revokes the credential stored when it locks the row", async () => {
+    const owner = memberOf("revoker", ["mine"]);
+    const created = await memberConnection({ owner, token: "revoke-me" });
+    await connections.revoke({ identity: owner, connectionId: created.id });
+    const row = await db
+      .selectFrom("connections")
+      .select(["status", "credential_ref", "revision"])
+      .where("id", "=", created.id)
+      .executeTakeFirstOrThrow();
+    expect(row).toEqual({
+      status: "revoked",
+      credential_ref: null,
+      revision: created.revision + 1,
+    });
+  });
 });
 
 describe("routeCredentialVaults", () => {
@@ -473,6 +569,31 @@ describe("routeCredentialVaults", () => {
         ref: { id: token.id.slice("personal:".length) },
         use: () => "present",
       }),
+    ).rejects.toThrow("Credential not found");
+  });
+
+  it("keeps reading records written before routing through the fallback", async () => {
+    const existing: CredentialVault = new MemoryCredentialVault();
+    const old = await existing.put({
+      tenantId,
+      material: new TextEncoder().encode("before routing"),
+      placement: placement("connection"),
+    });
+    const vault = routeCredentialVaults({
+      vaults: { existing, secrets: new MemoryCredentialVault() },
+      fallback: "existing",
+      select: () => "secrets",
+    });
+    expect(
+      await vault.withMaterial({
+        tenantId,
+        ref: old,
+        use: (material) => new TextDecoder().decode(material),
+      }),
+    ).toBe("before routing");
+    await vault.delete({ tenantId, ref: old });
+    await expect(
+      existing.withMaterial({ tenantId, ref: old, use: () => 1 }),
     ).rejects.toThrow("Credential not found");
   });
 

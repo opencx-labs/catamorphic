@@ -535,6 +535,7 @@ export interface Connections {
   principal_kind: string;
   project_id: string | null;
   provider_kind: string;
+  refresh_lease_holder: string | null;
   refresh_lease_until: Timestamp | null;
   revision: Generated<number>;
   scopes: Generated<Json>;

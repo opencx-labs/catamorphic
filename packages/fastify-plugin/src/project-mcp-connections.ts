@@ -44,6 +44,9 @@ const CONNECT = "connect";
 /** Clients cap tool names; Claude Code allows 64 after its own prefix. */
 const MAX_TOOL_NAME = 64;
 const ACTIONS_TTL_MS = 60_000;
+/** Clients keep a stateless server's tool list until they reconnect. */
+const RECONNECT =
+  "Afterwards, reconnect this server in your client (in Claude Code, /mcp) to see its tools.";
 
 interface Entry {
   alias: string;
@@ -94,7 +97,6 @@ export function connectionTools(args: {
     const bindings = await connections
       .listBindings({ identity, projectId, environment })
       .catch(() => []);
-    const taken = new Set<string>();
     const result: Entry[] = [];
     for (const binding of bindings) {
       const authority =
@@ -105,14 +107,13 @@ export function connectionTools(args: {
         // Only a member can connect their own account; a missing service
         // account is an administrator's to authorize.
         if (binding.principal === "member") {
-          const name = toolName(binding.alias, CONNECT, taken);
           result.push({
             alias: binding.alias,
             mcp: false,
             definition: forwardedTool({
-              name,
+              name: CONNECT,
               title: `Connect ${binding.alias}`,
-              description: `Connect your own ${binding.alias} account so its tools appear here. Returns a link for the person to open in their browser, signed in to Work. After they connect, list tools again.`,
+              description: `Connect your own ${binding.alias} account so its tools appear here. Returns a link for the person to open in their browser, signed in to Work. ${RECONNECT}`,
               inputSchema: { type: "object", properties: {} },
               annotations: { readOnlyHint: true },
             }),
@@ -131,7 +132,7 @@ export function connectionTools(args: {
           mcp,
           definition: forwardedTool({
             ...action,
-            name: toolName(binding.alias, action.name, taken),
+            name: action.name,
             description: `${binding.alias}: ${action.description ?? action.name}`,
             // Only an MCP server's own results match its output schema.
             ...(mcp ? {} : { outputSchema: undefined }),
@@ -139,7 +140,7 @@ export function connectionTools(args: {
         });
       }
     }
-    return result;
+    return named(result);
   };
 
   const listActions = async (environment: string, alias: string) => {
@@ -175,22 +176,27 @@ export function connectionTools(args: {
     const connections = core.connections;
     if (!connections) return toolError("Connections are not configured");
     if (!args.connectLink) {
+      return toolError(`Connect your ${alias} account in Work. ${RECONNECT}`);
+    }
+    let offer: Awaited<ReturnType<typeof connections.offerConnection>>;
+    try {
+      offer = await connections.offerConnection({
+        identity,
+        projectId,
+        environment,
+        alias,
+      });
+    } catch {
       return toolError(
-        `Connect your ${alias} account in Work, then list tools again.`,
+        `${alias} cannot be connected from here: it uses an account an administrator connects, or your roles do not include it.`,
       );
     }
-    const offer = await connections.offerConnection({
-      identity,
-      projectId,
-      environment,
-      alias,
-    });
     const url = args.connectLink({ token: offer.token, projectId });
     return toolValue({
       alias,
       url,
       expiresAt: offer.expiresAt.toISOString(),
-      instructions: `Ask the person to open this link in their browser, signed in to Work as themselves, and connect their ${alias} account. It works once, for them only. Then list tools again.`,
+      instructions: `Ask the person to open this link in their browser, signed in to Work as themselves, and connect their ${alias} account. It works once, for them only. ${RECONNECT}`,
     });
   };
 
@@ -238,21 +244,32 @@ export function connectionTools(args: {
 }
 
 /**
- * `<alias>__<action>`, limited to the characters and length MCP clients
- * accept; a name too long or already taken gets a short digest suffix.
+ * Give each entry its tool name, `<alias>__<action>`, limited to the
+ * characters and length MCP clients accept. Every name that would be too
+ * long, ambiguous (an alias containing `__`), or shared by two entries gets
+ * a digest of its own alias and action, so no entry's name depends on
+ * which others are listed: a name a person approved keeps its meaning.
  */
-function toolName(alias: string, action: string, taken: Set<string>): string {
-  const base = `${alias}__${action.replace(/[^A-Za-z0-9_-]/g, "_")}`;
-  let name = base;
-  if (name.length > MAX_TOOL_NAME || taken.has(name)) {
-    const digest = createHash("sha256")
-      .update(`${alias}\u0000${action}`)
-      .digest("hex")
-      .slice(0, 8);
-    name = `${base.slice(0, MAX_TOOL_NAME - 9)}_${digest}`;
-  }
-  taken.add(name);
-  return name;
+function named(entries: Entry[]): Entry[] {
+  const action = (entry: Entry) => entry.action ?? CONNECT;
+  const base = (entry: Entry) =>
+    `${entry.alias}__${action(entry).replace(/[^A-Za-z0-9_-]/g, "_")}`;
+  const counts = new Map<string, number>();
+  for (const entry of entries)
+    counts.set(base(entry), (counts.get(base(entry)) ?? 0) + 1);
+  return entries.map((entry) => {
+    const plain = base(entry);
+    const name =
+      plain.length > MAX_TOOL_NAME ||
+      entry.alias.includes("__") ||
+      (counts.get(plain) ?? 0) > 1
+        ? `${plain.slice(0, MAX_TOOL_NAME - 9)}_${createHash("sha256")
+            .update(`${entry.alias}\u0000${action(entry)}`)
+            .digest("hex")
+            .slice(0, 8)}`
+        : plain;
+    return { ...entry, definition: { ...entry.definition, name } };
+  });
 }
 
 function toJson(value: unknown): Json {

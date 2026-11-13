@@ -175,57 +175,71 @@ describe("connecting a member's own account from their agent (ADR 0316)", () => 
   it("offers a link only the member's own signed-in browser can complete", async () => {
     const ada = tokens.ada ?? "";
     expect(await toolNames(ada)).toContain("tracker__connect");
-    const offered = await mcp(ada, "tools/call", {
-      name: "tracker__connect",
-      arguments: {},
-    });
-    const { url } = JSON.parse(offered.content[0].text);
-    const link = new URL(url);
-    expect(link.origin).toBe("https://work.local:4700");
+    const offer = async () => {
+      const offered = await mcp(ada, "tools/call", {
+        name: "tracker__connect",
+        arguments: {},
+      });
+      const link = new URL(JSON.parse(offered.content[0].text).url);
+      expect(link.origin).toBe("https://work.local:4700");
+      return link.pathname;
+    };
+    const redeem = async (link: string) => {
+      const opened = await server.app.inject({
+        url: link,
+        headers: { cookie: cookies.ada ?? "" },
+      });
+      expect(opened.statusCode).toBe(303);
+      const upstream = new URL(String(opened.headers.location));
+      expect(upstream.origin).toBe("https://tracker.test");
+      const binding = cookieOf(opened.headers["set-cookie"]);
+      // Over HTTPS only this origin can set it.
+      expect(binding).toMatch(/^__Host-catamorphic_connect=/);
+      return {
+        binding,
+        callback: `/api/connection-authorizations/callback?state=${encodeURIComponent(upstream.searchParams.get("state") ?? "")}&code=granted`,
+      };
+    };
 
+    const first = await offer();
     // Signed out: sign in first, then come back.
-    const anonymous = await server.app.inject(link.pathname);
+    const anonymous = await server.app.inject(first);
     expect(anonymous.statusCode).toBe(302);
     expect(anonymous.headers.location).toContain("/login?next=");
-
     // Someone else's browser opens nothing, and spends nothing.
     const forwarded = await server.app.inject({
-      url: link.pathname,
+      url: first,
       headers: { cookie: cookies.bob ?? "" },
     });
     expect(forwarded.statusCode).toBe(410);
 
-    const opened = await server.app.inject({
-      url: link.pathname,
-      headers: { cookie: cookies.ada ?? "" },
-    });
-    expect(opened.statusCode).toBe(303);
-    const upstream = new URL(String(opened.headers.location));
-    expect(upstream.origin).toBe("https://tracker.test");
-    const state = upstream.searchParams.get("state") ?? "";
-    const binding = cookieOf(opened.headers["set-cookie"]);
-    expect(binding).toMatch(/^catamorphic_connect=/);
-
     // The provider's consent page, forwarded to another browser, completes
-    // nothing there.
-    const callback = `/api/connection-authorizations/callback?state=${encodeURIComponent(state)}&code=granted`;
+    // nothing there, and ends the attempt so its code cannot be replayed.
+    const phished = await redeem(first);
     const elsewhere = await server.app.inject({
-      url: callback,
+      url: phished.callback,
       headers: { cookie: cookies.bob ?? "" },
     });
     expect(elsewhere.statusCode).not.toBe(200);
-    const completed = await server.app.inject({
-      url: callback,
-      headers: { cookie: `${cookies.ada}; ${binding}` },
+    const replayed = await server.app.inject({
+      url: phished.callback,
+      headers: { cookie: `${cookies.ada}; ${phished.binding}` },
     });
-    expect(completed.statusCode).toBe(200);
-
+    expect(replayed.statusCode).not.toBe(200);
     // Used once.
     const again = await server.app.inject({
-      url: link.pathname,
+      url: first,
       headers: { cookie: cookies.ada ?? "" },
     });
     expect(again.statusCode).toBe(410);
+
+    // A fresh link, completed in the browser that redeemed it, connects.
+    const connected = await redeem(await offer());
+    const completed = await server.app.inject({
+      url: connected.callback,
+      headers: { cookie: `${cookies.ada}; ${connected.binding}` },
+    });
+    expect(completed.statusCode).toBe(200);
   });
 
   it("then serves the member's tools, acting for them with their own account", async () => {

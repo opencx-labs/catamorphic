@@ -89,9 +89,13 @@ default is the project's default Environment.
 - An alias that acts with each member's own account, not yet connected,
   lists one `<alias>__connect` tool. It returns a link that works once, for
   that member only, in a browser signed in to Work as them; after
-  connecting, list tools again (`/mcp` reconnect in Claude Code).
+  connecting, reconnect the server in the client (`/mcp` in Claude Code) to
+  see the alias's tools. A provider that signs in with a device code
+  connects only in the Work app.
 - An alias that acts with a service connection works once an administrator
   has authorized it.
+- A role that grants only connections opens this address for those
+  connections and nothing else of the project.
 - Every call checks the member's current roles and the company's guards;
   removing a role or disconnecting an account takes effect on the next call.
   An action a guard escalates is refused here, because there is no Work chat

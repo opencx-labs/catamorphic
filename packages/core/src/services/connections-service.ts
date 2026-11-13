@@ -39,6 +39,8 @@ const tracer = getTracer("@catamorphic/core");
 
 /** How long one refresher may hold a connection before another takes over. */
 const REFRESH_LEASE_MS = 60_000;
+/** The provider's exchange is abandoned before the lease can lapse. */
+const REFRESH_EXCHANGE_MS = 45_000;
 const REFRESH_POLL_MS = 200;
 /** How long a member's connect link stays redeemable. */
 const CONNECT_OFFER_MS = 15 * 60_000;
@@ -272,7 +274,10 @@ export class ConnectionsService {
       providerKind: connection.provider_kind,
       projectId: connection.project_id ?? undefined,
       redirectUri: args.redirectUri,
-      target: { serviceConnectionId: connection.id },
+      target: {
+        serviceConnectionId: connection.id,
+        serviceName: connection.name,
+      },
     });
   }
 
@@ -346,6 +351,7 @@ export class ConnectionsService {
     }
     const ref = await this.seal({
       tenantId: args.identity.tenantId,
+      providerKind: args.providerKind,
       material: args.authorized.material,
       placement: {
         purpose: "connection",
@@ -523,8 +529,19 @@ export class ConnectionsService {
       )
       .returningAll()
       .executeTakeFirst();
-    if (!attempt)
+    if (!attempt) {
+      // A bound attempt's callback in any other browser ends the attempt:
+      // its code cannot be replayed from the right browser later.
+      await this.db
+        .updateTable("connection_authorization_attempts")
+        .set({ status: "canceled", completed_at: new Date() })
+        .where("tenant_id", "=", args.identity.tenantId)
+        .where("state_hash", "=", hashBearer(args.state))
+        .where("status", "=", "pending")
+        .where("browser_binding_hash", "is not", null)
+        .execute();
       throw new ConnectionUnavailableError("authorization", "Attempt expired");
+    }
     const subject =
       attempt.alias ?? attempt.service_connection_id ?? attempt.provider_kind;
     const provider = this.providers.get(attempt.provider_kind);
@@ -814,6 +831,18 @@ export class ConnectionsService {
       redirectUri: args.redirectUri,
       browserBinding,
     });
+    // A device code can be entered by anyone it is handed to, so it cannot
+    // prove that the member is the person consenting.
+    if (started.challenge.kind === "device") {
+      await this.cancelAuthorization({
+        identity: args.identity,
+        state: started.authorizationId,
+      });
+      throw new ConnectionUnavailableError(
+        offer.alias,
+        "This account connects only in the Work app",
+      );
+    }
     return { ...started, browserBinding, alias: offer.alias };
   }
 
@@ -842,6 +871,7 @@ export class ConnectionsService {
     await requireTenantProject(this.db, args.identity.tenantId, args.projectId);
     const ref = await this.seal({
       tenantId: args.identity.tenantId,
+      providerKind: args.providerKind,
       material: args.material,
       placement: {
         purpose: "connection",
@@ -1371,10 +1401,13 @@ export class ConnectionsService {
           selected.connectionId,
         );
       }
-      const connection = await this.requireConnection(
+      const stored = await this.requireConnection(
         args.identity,
         selected.connectionId,
       );
+      // Refresh before judging expiry, as admission does (ADR 0316).
+      const connection =
+        (await this.admissible(args.identity, stored)) ?? stored;
       if (
         !isReady(connection) ||
         connection.provider_kind !== selected.providerKind
@@ -1470,7 +1503,16 @@ export class ConnectionsService {
     ) {
       throw new ConnectionPermissionDeniedError();
     }
-    await this.db.transaction().execute(async (trx) => {
+    // The credential revoked is the one stored when the row is locked: a
+    // refresh that published meanwhile replaced what `connection` names.
+    const locked = await this.db.transaction().execute(async (trx) => {
+      const row = await trx
+        .selectFrom("connections")
+        .select(["credential_ref"])
+        .where("id", "=", args.connectionId)
+        .where("tenant_id", "=", args.identity.tenantId)
+        .forUpdate()
+        .executeTakeFirstOrThrow();
       await trx
         .updateTable("connection_capability_grants")
         .set({ revoked_at: new Date() })
@@ -1479,15 +1521,18 @@ export class ConnectionsService {
         .execute();
       await trx
         .updateTable("connections")
-        .set({
+        .set((eb) => ({
           status: "revoked",
           credential_ref: null,
-          revision: connection.revision + 1,
+          refresh_lease_until: null,
+          refresh_lease_holder: null,
+          revision: eb("revision", "+", 1),
           updated_at: new Date(),
-        })
+        }))
         .where("id", "=", args.connectionId)
         .where("tenant_id", "=", args.identity.tenantId)
         .execute();
+      return row;
     });
     await this.release(connection);
     await this.onConnectionUnavailable?.({
@@ -1497,7 +1542,7 @@ export class ConnectionsService {
     let revokeFailed = false;
     const provider = this.providers.get(connection.provider_kind);
     const revokeProvider = provider?.revoke;
-    const credentialRef = connection.credential_ref;
+    const credentialRef = locked.credential_ref;
     if (revokeProvider) {
       try {
         await withSpan(
@@ -1584,13 +1629,24 @@ export class ConnectionsService {
     });
   }
 
-  /** Seal provider material, or nothing when the provider keeps none. */
+  /**
+   * Seal provider material in the host's vault, or nothing for a provider
+   * that keeps no credential (ADR 0316). Empty material from any other
+   * provider is a defect, never a silent "store nothing".
+   */
   private async seal(args: {
     tenantId: string;
+    providerKind: string;
     material: Uint8Array;
     placement: CredentialPlacement;
   }): Promise<{ id: string } | null> {
-    if (args.material.byteLength === 0) return null;
+    if (this.providers.get(args.providerKind)?.keepsNoCredential) return null;
+    if (args.material.byteLength === 0) {
+      throw new ConnectionUnavailableError(
+        args.providerKind,
+        "The provider returned no credential",
+      );
+    }
     return this.vault.put({
       tenantId: args.tenantId,
       material: args.material,
@@ -1638,6 +1694,16 @@ export class ConnectionsService {
     connectionId: string;
     minimumTtlSeconds?: number;
   }): Promise<void> {
+    await this.refreshOnce({ ...args, takeover: true });
+  }
+
+  private async refreshOnce(args: {
+    identity: Identity;
+    connectionId: string;
+    minimumTtlSeconds?: number;
+    /** Whether a caller that waited may take a lapsed or dropped lease. */
+    takeover: boolean;
+  }): Promise<void> {
     const threshold = () =>
       new Date(Date.now() + (args.minimumTtlSeconds ?? 60) * 1000);
     const needsRefresh = (row: ConnectionRow) =>
@@ -1663,10 +1729,19 @@ export class ConnectionsService {
     // One refresher per connection across every replica: a refresh token
     // is often single-use, so a second exchange fails and reuse detection
     // can revoke the first (ADR 0316).
-    const leased = await this.takeRefreshLease(connection);
-    if (!leased) {
+    const lease = await this.takeRefreshLease(connection);
+    if (!lease) {
       const settled = await this.awaitRefresh(args.identity, connection);
       if (settled && !needsRefresh(settled)) return;
+      // The holder gave up or lapsed at this revision: refresh ourselves,
+      // once, rather than fail a credential whose authority is still good.
+      if (
+        args.takeover &&
+        settled?.revision === connection.revision &&
+        settled.status === "ready"
+      ) {
+        return this.refreshOnce({ ...args, takeover: false });
+      }
       throw new ConnectionUnavailableError(
         connection.id,
         "Refresh in progress",
@@ -1692,6 +1767,9 @@ export class ConnectionsService {
             use: (material) =>
               refresh({
                 material,
+                // Finish well inside the lease, so no one takes it over
+                // while this exchange can still succeed.
+                signal: AbortSignal.timeout(REFRESH_EXCHANGE_MS),
                 context: this.providerContext({
                   identity: args.identity,
                   connection,
@@ -1699,28 +1777,35 @@ export class ConnectionsService {
               }),
           }),
       );
+      if (!provider.keepsNoCredential && refreshed.material.byteLength === 0)
+        throw new Error("The provider returned no credential");
     } catch (error) {
-      await this.dropRefreshLease(leased);
       // A refresh that never reached the provider (offline, a dropped
       // connection) or that it failed to answer (a server error) says
       // nothing about the grant: the connection stays ready and its next
       // use refreshes again. Refused, it is spent.
       if (!transient(error) && connection.expires_at <= new Date()) {
-        await this.markExpired(leased);
+        await this.markExpiredHolding(lease);
       }
+      await this.dropRefreshLease(lease);
       throw new ConnectionUnavailableError(connection.id, "Refresh failed");
     }
-    // Empty material keeps what is stored.
     let nextRef: { id: string } | null;
     try {
       nextRef = await this.seal({
         tenantId: args.identity.tenantId,
+        providerKind: connection.provider_kind,
         material: refreshed.material,
         placement: connectionPlacement(connection),
       });
-    } catch (error) {
-      await this.dropRefreshLease(leased);
-      throw error;
+    } catch {
+      // The exchange spent the old refresh token; without somewhere to keep
+      // the new one the person must connect again once access lapses.
+      if (connection.expires_at <= new Date()) {
+        await this.markExpiredHolding(lease);
+      }
+      await this.dropRefreshLease(lease);
+      throw new ConnectionUnavailableError(connection.id, "Refresh failed");
     }
     const updated = await this.db
       .updateTable("connections")
@@ -1736,6 +1821,7 @@ export class ConnectionsService {
         ),
         expires_at: refreshed.expiresAt ?? null,
         refresh_lease_until: null,
+        refresh_lease_holder: null,
         revision: connection.revision + 1,
         updated_at: new Date(),
       })
@@ -1743,10 +1829,11 @@ export class ConnectionsService {
       .where("tenant_id", "=", args.identity.tenantId)
       .where("revision", "=", connection.revision)
       .where("status", "=", "ready")
+      .where("refresh_lease_holder", "=", lease.holder)
       .returning("id")
       .executeTakeFirst();
     if (!updated) {
-      await this.dropRefreshLease(leased);
+      await this.dropRefreshLease(lease);
       await this.unseal({ tenantId: args.identity.tenantId, ref: nextRef });
       return;
     }
@@ -1760,17 +1847,21 @@ export class ConnectionsService {
   }
 
   /**
-   * Claim the refresh of one credential revision. Returns the row as
-   * claimed, or undefined while another caller (on any replica) holds an
-   * unexpired lease or the revision has moved on.
+   * Claim the refresh of one credential revision with a holder token.
+   * Undefined while another caller (on any replica) holds an unexpired
+   * lease, or once the revision has moved on.
    */
   private async takeRefreshLease(
     connection: ConnectionRow,
-  ): Promise<ConnectionRow | undefined> {
+  ): Promise<{ row: ConnectionRow; holder: string } | undefined> {
     const now = new Date();
-    return this.db
+    const holder = randomBearer();
+    const row = await this.db
       .updateTable("connections")
-      .set({ refresh_lease_until: new Date(now.getTime() + REFRESH_LEASE_MS) })
+      .set({
+        refresh_lease_until: new Date(now.getTime() + REFRESH_LEASE_MS),
+        refresh_lease_holder: holder,
+      })
       .where("id", "=", connection.id)
       .where("tenant_id", "=", connection.tenant_id)
       .where("revision", "=", connection.revision)
@@ -1783,14 +1874,33 @@ export class ConnectionsService {
       )
       .returningAll()
       .executeTakeFirst();
+    return row ? { row, holder } : undefined;
   }
 
-  private async dropRefreshLease(connection: ConnectionRow): Promise<void> {
+  /** Release a lease this caller still holds; a successor's stays. */
+  private async dropRefreshLease(lease: {
+    row: ConnectionRow;
+    holder: string;
+  }): Promise<void> {
     await this.db
       .updateTable("connections")
-      .set({ refresh_lease_until: null })
-      .where("id", "=", connection.id)
-      .where("revision", "=", connection.revision)
+      .set({ refresh_lease_until: null, refresh_lease_holder: null })
+      .where("id", "=", lease.row.id)
+      .where("refresh_lease_holder", "=", lease.holder)
+      .execute();
+  }
+
+  /** Expire only while still holding the lease: a successor may succeed. */
+  private async markExpiredHolding(lease: {
+    row: ConnectionRow;
+    holder: string;
+  }): Promise<void> {
+    await this.db
+      .updateTable("connections")
+      .set({ status: "expired", updated_at: new Date() })
+      .where("id", "=", lease.row.id)
+      .where("revision", "=", lease.row.revision)
+      .where("refresh_lease_holder", "=", lease.holder)
       .execute();
   }
 
@@ -1953,7 +2063,7 @@ export class ConnectionsService {
           alias: string;
           reauthorizeConnectionId: string | null;
         }
-      | { serviceConnectionId: string }
+      | { serviceConnectionId: string; serviceName: string | null }
       | { personal: true; reauthorizeConnectionId: string | null };
   }): Promise<{ authorizationId: string; challenge: AuthorizationChallenge }> {
     const subject =
@@ -2011,10 +2121,13 @@ export class ConnectionsService {
           placement: {
             purpose: "authorization",
             ...(args.projectId ? { projectId: args.projectId } : {}),
-            owner: {
-              kind: "member",
-              externalUserId: args.identity.externalUserId,
-            },
+            owner:
+              "serviceConnectionId" in args.target
+                ? { kind: "service", name: args.target.serviceName }
+                : {
+                    kind: "member",
+                    externalUserId: args.identity.externalUserId,
+                  },
           },
         })
       : undefined;
@@ -2228,6 +2341,7 @@ export class ConnectionsService {
     const { current } = args;
     const nextRef = await this.seal({
       tenantId: args.identity.tenantId,
+      providerKind: current.provider_kind,
       material: args.authorized.material,
       placement: connectionPlacement(current),
     });
@@ -2243,12 +2357,16 @@ export class ConnectionsService {
             scopes: toJson(args.authorized.scopes ?? []),
             capabilities: toJson(args.authorized.capabilities ?? []),
             expires_at: args.authorized.expiresAt ?? null,
+            refresh_lease_until: null,
+            refresh_lease_holder: null,
             revision: current.revision + 1,
             updated_at: new Date(),
           })
           .where("id", "=", current.id)
           .where("tenant_id", "=", args.identity.tenantId)
           .where("revision", "=", current.revision)
+          // A revoked connection is never brought back by a replacement.
+          .where("status", "!=", "revoked")
           .returningAll()
           .executeTakeFirst();
         if (!updated)

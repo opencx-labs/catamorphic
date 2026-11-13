@@ -135,7 +135,7 @@ function EnvironmentConnectionRow({
           <p className="font-medium text-fg">{binding.alias}</p>
           <p className="mt-0.5 text-fg-muted">{binding.provider}</p>
         </div>
-        {binding.principal !== "service" && (
+        {binding.principal === "member" && (
           <button
             type="button"
             disabled={authorize.isPending}
@@ -148,9 +148,13 @@ function EnvironmentConnectionRow({
           </button>
         )}
       </div>
-      <div className="mt-2 grid gap-1.5 sm:grid-cols-2">
-        <PrincipalLine label="Personal" principal={personal} />
-        <PrincipalLine label="Service" principal={service} />
+      {/* An alias acts with one authority, so only that one shows (ADR 0316). */}
+      <div className="mt-2 grid gap-1.5">
+        {binding.principal === "member" ? (
+          <PrincipalLine label="Personal" principal={personal} />
+        ) : (
+          <PrincipalLine label="Service" principal={service} />
+        )}
       </div>
       {challenge?.kind === "url" && (
         <button

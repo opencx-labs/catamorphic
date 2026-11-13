@@ -501,10 +501,18 @@ function handleConnectionError(
  */
 export const CONNECT_BINDING_COOKIE = "catamorphic_connect";
 
-function connectBinding(header: string | undefined): string | undefined {
+/**
+ * The binding a host's connect page set: `__Host-` prefixed over HTTPS,
+ * so no sibling subdomain can plant one, plain on a loopback address.
+ */
+export function connectBinding(header: string | undefined): string | undefined {
+  const names = new Set([
+    `__Host-${CONNECT_BINDING_COOKIE}`,
+    CONNECT_BINDING_COOKIE,
+  ]);
   for (const part of header?.split(";") ?? []) {
-    const [name, ...value] = part.trim().split("=");
-    if (name === CONNECT_BINDING_COOKIE) return value.join("=") || undefined;
+    const [name = "", ...value] = part.trim().split("=");
+    if (names.has(name)) return value.join("=") || undefined;
   }
   return undefined;
 }

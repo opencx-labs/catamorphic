@@ -22,10 +22,9 @@ export type AuthorizationChallenge =
 
 export interface ConnectionAuthorizationResult {
   /**
-   * What Work keeps for the connection, in the host's vault. Empty when the
-   * provider obtains its credential itself, from the call's context
-   * (ADR 0316): Work then stores nothing for it, and later calls receive
-   * empty material. From `refresh`, empty keeps what is stored.
+   * What Work keeps for the connection, in the host's vault. A provider
+   * that `keepsNoCredential` returns it empty; for any other provider empty
+   * material is an error (ADR 0316).
    */
   material: Uint8Array;
   account?: Json;
@@ -190,6 +189,14 @@ export interface ConnectionProvider {
    */
   readonly mcp?: boolean;
   /**
+   * The provider obtains its credential itself on each call, from the
+   * call's `context` (a host secret manager, a token service), so Work
+   * stores nothing for its connections and its calls receive empty
+   * material (ADR 0316). Not available with `git`, `model` or `http`,
+   * whose gateway routes forward stored credentials.
+   */
+  readonly keepsNoCredential?: boolean;
+  /**
    * Start authorizing a member's or a service connection. `projectId` is
    * absent for a tenant service connection; `externalUserId` is whoever
    * authorizes (the member, or the administrator for a service).
@@ -259,6 +266,8 @@ export interface ConnectionProvider {
   refresh?(args: {
     material: Uint8Array;
     context: ConnectionCallContext;
+    /** Aborts an exchange that would outlive the refresh lease. */
+    signal?: AbortSignal;
   }): Promise<ConnectionAuthorizationResult>;
   revoke?(args: {
     material: Uint8Array;
@@ -285,6 +294,14 @@ export class ConnectionProviderRegistry {
     for (const provider of providers) {
       if (!/^[a-z0-9][a-z0-9._-]*$/.test(provider.kind)) {
         throw new Error(`Invalid connection provider kind '${provider.kind}'`);
+      }
+      if (
+        provider.keepsNoCredential &&
+        (provider.git || provider.model || provider.http)
+      ) {
+        throw new Error(
+          `Connection provider '${provider.kind}' keeps no credential but serves a gateway route that forwards one`,
+        );
       }
       if (this.providers.has(provider.kind)) {
         throw new Error(`Duplicate connection provider '${provider.kind}'`);

@@ -111,9 +111,12 @@ const ROUTE_KEY = /^[a-z0-9][a-z0-9-]{0,31}$/;
  * carries the key of the vault that wrote it, so reads, refreshes and
  * deletes reach that vault even after `select` changes; changing `select`
  * only moves new writes. Keys are lowercase letters, digits and hyphens.
+ * `fallback` names the vault that holds refs written before routing (refs
+ * without a known key), so an existing deployment keeps its records.
  */
 export function routeCredentialVaults(args: {
   vaults: Readonly<Record<string, CredentialVault>>;
+  fallback?: string;
   select: (write: {
     tenantId: string;
     placement: CredentialPlacement;
@@ -129,13 +132,15 @@ export function routeCredentialVaults(args: {
     if (!vault) throw new Error(`No credential vault '${name}'`);
     return vault;
   };
+  if (args.fallback !== undefined) vaultFor(args.fallback);
   const split = (ref: CredentialRef) => {
     const at = ref.id.indexOf(":");
-    if (at <= 0) throw new Error("Credential not found");
-    return {
-      vault: vaultFor(ref.id.slice(0, at)),
-      ref: { id: ref.id.slice(at + 1) },
-    };
+    const name = at > 0 ? ref.id.slice(0, at) : undefined;
+    if (name !== undefined && Object.hasOwn(args.vaults, name)) {
+      return { vault: vaultFor(name), ref: { id: ref.id.slice(at + 1) } };
+    }
+    if (args.fallback === undefined) throw new Error("Credential not found");
+    return { vault: vaultFor(args.fallback), ref };
   };
   return {
     async put(write) {

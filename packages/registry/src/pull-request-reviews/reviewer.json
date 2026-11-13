@@ -6,9 +6,9 @@
   "sandboxing": "contained",
   "environment": { "preferred": ["review"], "allowed": ["review"] },
   "connections": [
-    { "alias": "github", "principal": "service" },
-    { "alias": "prod", "principal": "service", "optional": true },
-    { "alias": "slack", "principal": "service", "optional": true }
+    { "alias": "github" },
+    { "alias": "prod", "optional": true },
+    { "alias": "slack", "optional": true }
   ],
   "toolPolicies": {
     "github": {

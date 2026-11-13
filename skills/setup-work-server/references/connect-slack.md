@@ -108,8 +108,9 @@ Members may instead connect their own token when a binding says
 `"principal": "member"`, for their own chats only.
 
 **Slack's MCP server** is an alternative for people rather than automations:
-an `mcp` entry (`"url": "https://mcp.slack.com/mcp"`) with Slack's
-pre-registered client in `oauth.client`, bound with `"principal": "member"`.
+a `defineMcpConnectionProvider` provider (`server: { transport: "http",
+url: "https://mcp.slack.com/mcp" }`) with Slack's pre-registered client in
+`oauth.client`, bound to its own alias with `"principal": "member"`.
 Register `<WORK_PUBLIC_URL>/api/connection-authorizations/callback` as its
 redirect URL.
 

@@ -319,5 +319,5 @@ Settled design decisions live here as short Architecture Decision Records. They 
 | [0311](0311-native-macos-speech-and-push-to-talk.md) | Native macOS speech and push to talk | Accepted (amends 0216, 0236, 0265, 0268, 0297; supersedes 0267) |
 | [0312](0312-cloudflare-sandboxes-use-native-containers.md) | Cloudflare sandboxes use native containers | Accepted |
 | [0313](0313-verified-development-toolchains-preserve-data.md) | Verified development toolchains preserve data | Accepted |
-| [0315](0315-connections-and-vaults-are-host-code.md) | Connections and vaults are host code | Accepted (amends 0162, 0183) |
+| [0315](0315-connections-and-vaults-are-host-code.md) | Connections and vaults are host code | Accepted (amends 0162, 0163, 0183, 0256) |
 | [0316](0316-members-agents-use-connections-and-hosts-route-custody.md) | Members' own agents use connections; hosts route custody | Accepted (amends 0065, 0166, 0172; builds on 0315) |

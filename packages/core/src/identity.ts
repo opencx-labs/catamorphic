@@ -444,9 +444,21 @@ export function mayUseProject(identity: Identity, projectId: string): boolean {
     identity.scope.some((ref) => ref.projectId === projectId) ||
     (identity.projectPermissions ?? []).some(
       (ref) => ref.projectId === projectId,
-    ) ||
-    // A role that grants only connections still makes its holder a member
-    // who uses the project's tools from their own agent (ADR 0316).
+    )
+  );
+}
+
+/**
+ * Whether a caller may open the project MCP: a project member, or someone
+ * whose roles grant only connections, who uses those connections from
+ * their own agent and nothing else of the project (ADR 0316).
+ */
+export function mayUseProjectConnections(
+  identity: Identity,
+  projectId: string,
+): boolean {
+  return (
+    mayUseProject(identity, projectId) ||
     (identity.connectionScope ?? []).some((ref) => ref.projectId === projectId)
   );
 }

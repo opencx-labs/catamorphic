@@ -1,9 +1,10 @@
-import type {
-  CatamorphicCore,
-  Identity,
-  McpToolMetadata,
-  TriggerBindingInfo,
-  TriggerFireOutcome,
+import {
+  type CatamorphicCore,
+  type Identity,
+  type McpToolMetadata,
+  mayUseProjectConnections,
+  type TriggerBindingInfo,
+  type TriggerFireOutcome,
 } from "@catamorphic/core";
 import { agentCapabilityTools } from "@catamorphic/sandbox";
 import type { FastifyInstance } from "fastify";
@@ -62,6 +63,10 @@ import {
  */
 const TOOL_SYNC_BUDGET_MS = 30_000;
 
+/** What a member's own agent is told about connection tools (ADR 0316). */
+const CONNECTION_INSTRUCTIONS =
+  "- Connections: tools named <alias>__<action> call the project's connected systems as you, under your roles and the company's checks; no credential reaches you. An <alias>__connect tool returns a link for the person to connect their own account in their browser; afterwards, reconnect this server in your client (in Claude Code, /mcp) to see its tools.";
+
 interface ProjectTool {
   name: string;
   kind: string;
@@ -104,41 +109,46 @@ export function registerProjectMcpRoutes(
       environment?: string;
     };
     const identity = resolveIdentity(request);
-    // Someone the project grants nothing sees no project here at all.
-    if (!mayUseProject(identity, projectId)) {
+    // Someone the project grants nothing sees no project here at all; a
+    // role granting only connections sees only those (ADR 0316).
+    const member = mayUseProject(identity, projectId);
+    if (!member && !mayUseProjectConnections(identity, projectId)) {
       return reply.status(404).send({ error: "Project not found" });
     }
     const abort = new AbortController();
     reply.raw.once("close", () => abort.abort());
-    const gatewayTools = sessionId
-      ? agentCapabilityTools(
-          core.agentCapabilities.forSession({
-            identity,
-            projectId,
-            sessionId,
-            allocationId,
-          }),
-          abort.signal,
-        )
-      : [];
-    const surface: SurfaceTool[] = [
-      ...surfaceTools(core, identity, projectId, ctx.features, sessionId),
-      ...programTools(core, identity, projectId),
-      ...(ctx.projectMcp?.tools?.({ identity, projectId }) ?? []).map(
-        (tool) => ({
-          definition: tool.definition,
-          call: async (args: Record<string, unknown>) => {
-            try {
-              return toolValue(await tool.call(args));
-            } catch (error) {
-              return toolError(
-                error instanceof Error ? error.message : String(error),
-              );
-            }
-          },
-        }),
-      ),
-    ];
+    const gatewayTools =
+      member && sessionId
+        ? agentCapabilityTools(
+            core.agentCapabilities.forSession({
+              identity,
+              projectId,
+              sessionId,
+              allocationId,
+            }),
+            abort.signal,
+          )
+        : [];
+    const surface: SurfaceTool[] = !member
+      ? []
+      : [
+          ...surfaceTools(core, identity, projectId, ctx.features, sessionId),
+          ...programTools(core, identity, projectId),
+          ...(ctx.projectMcp?.tools?.({ identity, projectId }) ?? []).map(
+            (tool) => ({
+              definition: tool.definition,
+              call: async (args: Record<string, unknown>) => {
+                try {
+                  return toolValue(await tool.call(args));
+                } catch (error) {
+                  return toolError(
+                    error instanceof Error ? error.message : String(error),
+                  );
+                }
+              },
+            }),
+          ),
+        ];
 
     // A Work session reaches connections through its own grants; a member's
     // own agent reaches them here, with live authority (ADR 0316).
@@ -167,22 +177,33 @@ export function registerProjectMcpRoutes(
                 title: "Catamorphic project",
               }),
             },
-            instructions: await projectInstructions({
-              core,
-              identity,
-              projectId,
-              toolNames: new Set(
-                surface.map((tool) => String(tool.definition.name)),
-              ),
-              ...(ctx.projectMcp?.instructions
-                ? { host: ctx.projectMcp.instructions }
-                : {}),
-            }),
+            instructions: [
+              ...(member
+                ? [
+                    await projectInstructions({
+                      core,
+                      identity,
+                      projectId,
+                      toolNames: new Set(
+                        surface.map((tool) => String(tool.definition.name)),
+                      ),
+                      ...(ctx.projectMcp?.instructions
+                        ? { host: ctx.projectMcp.instructions }
+                        : {}),
+                    }),
+                  ]
+                : []),
+              ...(connections && core.connections
+                ? [CONNECTION_INSTRUCTIONS]
+                : []),
+            ].join("\n"),
           };
         case "ping":
           return {};
         case "tools/list": {
-          const tools = await loadProjectTools(core, identity, projectId);
+          const tools = member
+            ? await loadProjectTools(core, identity, projectId)
+            : [];
           // A workflow tool that claims a surface name wins the name (the
           // project chose it); the surface tool steps aside for this project.
           const taken = new Set(tools.map((tool) => tool.name));
@@ -247,11 +268,9 @@ export function registerProjectMcpRoutes(
               );
             }
           }
-          const workflowTools = await loadProjectTools(
-            core,
-            identity,
-            projectId,
-          );
+          const workflowTools = member
+            ? await loadProjectTools(core, identity, projectId)
+            : [];
           const surfaced = workflowTools.some((tool) => tool.name === name)
             ? undefined
             : surface.find((tool) => tool.definition.name === name);
@@ -263,6 +282,7 @@ export function registerProjectMcpRoutes(
             const connected = await connections?.call(name, args);
             if (connected) return connected;
           }
+          if (!member) return toolError(`Unknown tool: ${name}`);
           return callTool(core, identity, projectId, name, args);
         }
         default:

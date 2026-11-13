@@ -39,8 +39,8 @@ holding only a machine credential exchanged once for an operator's single-use en
 dial out to the control plane over HTTPS and run agent sandboxes; workflow runs
 and every credential stay on the control plane. For availability, run
 control-plane replicas on shared Postgres with the same `WORK_SECRET`,
-`WORK_VAULT_KEY`, `WORK_OPERATOR_SECRET`, public origin, and sign-in and
-gateway configuration. Replicas are disposable (ADR 0190): each start is a new
+`WORK_VAULT_KEY`, `WORK_OPERATOR_SECRET`, public origin, sign-in
+configuration, and entry point with its connection providers. Replicas are disposable (ADR 0190): each start is a new
 machine, a stopped or lost replica's workflow runs and chats move to the
 others, `/readyz` answers 503 while its lease is not renewing, and
 `/healthz` answers 503 once its lease is lost for good. Workers own their
@@ -156,11 +156,11 @@ Projects commit which Environment may use which named connection in
 API. Members see an Environment's aliases and authorize their own accounts at
 `/api/projects/:id/environments/:environment/connections`.
 
-Provider drivers and OAuth application details are deployment configuration.
+Connection providers and OAuth application details are host code (ADR 0315).
 The library does not supply a shared Slack or Google OAuth identity. Register
-your own provider applications (an `mcp` gateway entry takes a pre-registered
-`oauth.client`), configure their HTTPS callback URLs, and inject further
-connection providers with the `connectionProviders` hook. Service accounts
+your own provider applications (`defineMcpConnectionProvider` takes a
+pre-registered `oauth.client`), configure their HTTPS callback URLs, and pass
+providers with the `connectionProviders` hook. Service accounts
 are explicit project or tenant service connections and are never inferred from
 a member login. Unattended workflows use the connections authorized by their
 explicit enablement, including member connections for member-owned enablements.

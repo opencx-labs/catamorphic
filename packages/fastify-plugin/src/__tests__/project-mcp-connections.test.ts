@@ -227,6 +227,87 @@ describe("connections on the project MCP for a member's own agent (ADR 0316)", (
     expect(JSON.stringify(opaque.result)).not.toContain("token abc");
   });
 
+  it("serves a role that grants only connections its connections and nothing else", async () => {
+    const { core } = fakeCore();
+    const served = createTestApp({
+      core: core as never,
+      identity: () => ({
+        tenantId: "tenant-1",
+        externalUserId: "member-1",
+        scope: [],
+        connectionScope: [
+          { projectId: PROJECT_ID, environment: "company", alias: "tracker" },
+        ],
+      }),
+    });
+    apps.push(served);
+    const { result } = await rpc(served, "tools/list");
+    const names = ((result?.tools ?? []) as Array<{ name: string }>).map(
+      (tool) => tool.name,
+    );
+    expect(names).toEqual(["tracker__issues_list"]);
+    const init = await rpc(served, "initialize", {
+      protocolVersion: "2025-06-18",
+    });
+    expect(String(init.result?.instructions)).toContain("<alias>__connect");
+    expect(String(init.result?.instructions)).not.toContain("project_overview");
+    const outsider = createTestApp({
+      core: core as never,
+      identity: () => ({
+        tenantId: "tenant-1",
+        externalUserId: "x",
+        scope: [],
+      }),
+    });
+    apps.push(outsider);
+    const refused = await outsider.inject({
+      method: "POST",
+      url: `/api/projects/${PROJECT_ID}/mcp`,
+      headers: HEADERS,
+      payload: { jsonrpc: "2.0", id: 1, method: "tools/list" },
+    });
+    expect(refused.statusCode).toBe(404);
+  });
+
+  it("names colliding tools by their own alias and action, never by listing order", async () => {
+    const { core } = fakeCore();
+    const colliding = {
+      ...core,
+      connections: {
+        ...core.connections,
+        listBindings: async () =>
+          ["a", "a__x"].map((alias) => ({
+            environment: "company",
+            alias,
+            provider: "tracker-mcp",
+            principal: "member",
+            service: null,
+            capabilities: null,
+            memberConnection: { connectionId: alias, status: "ready" },
+            serviceConnection: null,
+          })),
+      },
+      connectionBroker: {
+        ...core.connectionBroker,
+        listActions: async (input: { alias: string }) => [
+          {
+            name: input.alias === "a" ? "x__y" : "y",
+            inputSchema: { type: "object" },
+          },
+        ],
+      },
+    };
+    const { result } = await rpc(app(colliding), "tools/list");
+    const names = ((result?.tools ?? []) as Array<{ name: string }>)
+      .map((tool) => tool.name)
+      .filter((name) => name.startsWith("a__"));
+    expect(names).toHaveLength(2);
+    expect(new Set(names).size).toBe(2);
+    expect(names.every((name) => /^a__x__y_[0-9a-f]{8}$/.test(name))).toBe(
+      true,
+    );
+  });
+
   it("serves no connection tools to a Work session, which holds its own grants", async () => {
     const { core, listActions } = fakeCore();
     const { result } = await rpc(

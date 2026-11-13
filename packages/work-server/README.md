@@ -115,10 +115,11 @@ current schema. See [ADR 0296](../../docs/decisions/0296-one-oauth-token-endpoin
 | --- | --- |
 | `agentCapabilities` | Host capabilities, profiles, and approvals for agents |
 | `capabilityProviders` | Existing SDK capability providers and `context.host` workflow calls; authorize each call using its host-stamped caller |
-| `connectionProviders` | Connection providers beside the configured MCP endpoints |
+| `connectionProviders` | Every connection the gateway brokers beyond the built-in GitHub and model providers, as provider code (`defineHttpApiConnectionProvider`, `definePostgresConnectionProvider`, `defineMcpConnectionProvider`, or your own) (ADR 0315) |
 | `github` | Options of the built-in `github` connection provider: Enterprise Server URLs, the App's OAuth client for members' own connections (ADR 0177) |
 | `connectionGuards` | Guards that review each gateway action (ADR 0162). Work ships none; a guard is host code (ADR 0183) |
 | `vaultKeys` | Credential vault keys from a key service instead of `WORK_VAULT_KEY` |
+| `credentialVault` | Your own `CredentialVault` (a secret manager, or several composed with `routeCredentialVaults`) in place of Work's; exclusive with vault keys (ADRs 0315, 0316) |
 | `directories` | Upstream directories (beyond Google Workspace) that keep accounts active or disable them (ADR 0161) |
 | `machineProvisioner` | Creates and destroys worker machines on a platform Work does not ship, for `custom` machine classes, so machine rules give people and teams their own machines, or machines on demand for waiting work. `create` gets the class's `options`, the rule, and what the waiting work needs, and is idempotent per enrollment code (`enrollment.idempotencyKey`); `destroy` removes every machine with the name and answers `{ done }` (ADRs 0167, 0205, 0258) |
 | `hetzner` | Hetzner Cloud API options for `hetzner-cloud` machine classes: another endpoint, or a `fetch` for tests (the token is `WORK_HETZNER_TOKEN`) |
