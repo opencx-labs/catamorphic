@@ -121,7 +121,7 @@ it("maximizes the floating chat when the chat tab behind it has focus", async ()
       `document.querySelector('[data-chat-local-id="${floatingId}"]')?.hasAttribute('data-chat-tab') && !document.querySelector('[data-chat-bubble="${floatingId}"]')`,
     ),
   ).toBe(true);
-  await app.press("m", primary | 8);
+  await app.press("Escape");
   await app.waitFor(
     `!!document.querySelector('[data-chat-local-id="${floatingId}"][data-floating-chat]:not([inert])') &&
       !document.getAnimations().some(animation => animation.playState === 'running' && animation.effect?.getTiming().iterations !== Infinity)`,

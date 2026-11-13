@@ -1130,7 +1130,12 @@ it("retains independent New Tab drafts, appends new tabs, and reuses an empty ta
   );
   await wait(`return document.activeElement === input()`);
   expect(await currentKey()).toBe(empty);
-  expect(await keys()).toHaveLength(before.length + 3);
+  expect(await keys()).toEqual([
+    ...before.filter((key) => key !== first),
+    first,
+    second,
+    empty,
+  ]);
   await select(first);
   expect(await run(`return input().value`)).toBe("first draft");
   // Leaving an empty tab still closes it; both drafts survive that cleanup.

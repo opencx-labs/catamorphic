@@ -473,18 +473,26 @@ describe("closing folded tab groups", () => {
       await app.waitFor(
         `!document.querySelector('[role="menu"], [data-menu-shield]')`,
       );
-      const point = await app.waitFor<{ x: number; y: number }>(
-        `(() => {
+      const targetPoint = () =>
+        app.waitFor<{ x: number; y: number }>(
+          `(() => {
         const tab=document.querySelector('${visible} [data-point-key="${key}"]:not([aria-hidden])');
         const label=tab?.querySelector('.workspace-tab-label');
         if(!label||label.closest('[inert]')) return false;
         const r=label.getBoundingClientRect(),point={x:r.left+Math.min(8,r.width/2),y:r.top+r.height/2};
         return label.contains(document.elementFromPoint(point.x,point.y)) &&
-          tab.getAnimations({subtree:true}).every(a=>a.playState!=='running'||a.effect?.getTiming().iterations===Infinity) ? point:false;
+          (tab.closest('[data-tab-orientation]')??tab).getAnimations({subtree:true}).every(a=>(a.playState!=='running'&&!a.pending)||a.effect?.getTiming().iterations===Infinity) ? point:false;
       })()`,
-        { label: "the restored tab accepts a context press" },
-      );
-      await app.movePointer(point);
+          { label: "the restored tab accepts a context press" },
+        );
+      await app.movePointer(await targetPoint());
+      const point = await targetPoint();
+      await app.eval(`(()=>{
+        window.__tabMenuPress=null;
+        window.addEventListener('pointerdown',event=>{
+          window.__tabMenuPress={key:event.target.closest?.('[data-point-key]')?.dataset.pointKey,button:event.button,x:event.clientX,y:event.clientY};
+        },{once:true,capture:true});return true;
+      })()`);
       for (const type of ["mousePressed", "mouseReleased"])
         await app.cdp("Input.dispatchMouseEvent", {
           type,
@@ -492,14 +500,24 @@ describe("closing folded tab groups", () => {
           button: "right",
           clickCount: 1,
         });
-      await app.waitFor(
-        `(() => {
+      await app
+        .waitFor(
+          `(() => {
         const panel=document.querySelector('${menu}');
         return !!document.querySelector('[data-menu-shield]') && panel?.contains(document.activeElement) &&
           ${menuItems}.length>0 && panel.getAnimations({subtree:true}).every(a=>a.playState!=='running');
       })()`,
-        { label: "the active tab menu is focused and settled" },
-      );
+          { label: "the active tab menu is focused and settled" },
+        )
+        .catch(async (cause: unknown) => {
+          const diagnostic = await app.eval(`({
+          press:window.__tabMenuPress,focused:document.hasFocus(),active:document.activeElement.outerHTML.slice(0,300),
+          menus:[...document.querySelectorAll('[role="menu"]')].map(menu=>({label:menu.getAttribute('aria-label'),text:menu.textContent.slice(0,300)}))
+        })`);
+          throw new Error(
+            `${String(cause)}; tab menu: ${JSON.stringify(diagnostic)}`,
+          );
+        });
     };
     const closeEntries = () =>
       app.eval<string[]>(

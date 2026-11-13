@@ -1084,14 +1084,23 @@ describe("chat flows", () => {
     await rename("Launch checklist", "Launch notes");
 
     // A minimized chat is remembered, but is no longer visibly current.
+    const minimizedId = await run<string>(
+      `return floatingDock().closest('[data-chat-local-id]').dataset.chatLocalId;`,
+    );
     await run(`pressKey('m', { metaKey: true }); return true;`);
-    await runWait(`return !floatingDock();`, {
-      label: "current chat minimized before checking palette availability",
-    });
+    const minimizedChats = await runWait<
+      Array<{ localId: string; mode: string }>
+    >(
+      `return (async () => { const {chats} = await window.catamorphicDesktop.dockSnapshot();
+       if (floatingDock() || chats.find(chat => chat.entry.localId === ${JSON.stringify(minimizedId)})?.entry.mode !== 'min') return false;
+       return chats.map(({entry}) => ({localId:entry.localId,mode:entry.mode})); })();`,
+      { label: "the named chat committed to minimized" },
+    );
     await run(`pressKey('p', { metaKey: true }); return true;`);
     await runWait(
       `const input = $('[data-palette="overlay"] [aria-label="Search commands, pages, and more"]');
        if (!input || document.activeElement !== input || input.closest('[inert]')) return false;
+       if (input.closest('[data-palette="overlay"]').parentElement.getAnimations({subtree:true}).some(animation => animation.playState === 'running')) return false;
        setReactValue(input, '>rename current chat');
        return true;`,
       { label: "palette asked for Rename current chat" },
@@ -1107,6 +1116,11 @@ describe("chat flows", () => {
         label: "palette dismissed before restoring the chat",
       },
     );
+    expect(
+      await run(
+        `return window.catamorphicDesktop.dockSnapshot().then(({chats}) => chats.map(({entry}) => ({localId:entry.localId,mode:entry.mode})));`,
+      ),
+    ).toEqual(minimizedChats);
     await run(`pressKey('m', { metaKey: true }); return true;`);
     await runWait(`return !!floatingDock();`, {
       label: "current chat visible again",
