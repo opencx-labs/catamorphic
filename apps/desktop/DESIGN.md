@@ -4195,3 +4195,13 @@ error. A missing selected device falls back to the system input.
 A chat read begun before a spoken message committed cannot settle that new
 turn. Keep its working state through delivery and wait for a fresh idle read;
 the same boundary protects an agent finishing voice during delivery.
+
+
+### 2026-11-14: Agent choice belongs to the draft
+
+Ask agent's metadata opens the existing palette agent picker. Each retained draft
+can choose its own agent while its composer and attachments stay mounted. An
+unselected draft follows the live default. Settings starts default-agent edits at
+the current personal project scope and offers Profile and inheritance reset; it
+uses the same resolved identity as the palette. Agent rows close with the shared
+Collapsible and keep their spacing inside that motion.

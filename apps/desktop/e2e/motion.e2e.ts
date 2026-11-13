@@ -657,6 +657,13 @@ describe("animate-before-unmount", () => {
   });
 
   it("closing a workspace tab plays tab-out before removal", async () => {
+    // A second empty New Tab is deliberately reused. Give the first a
+    // draft before requesting the tab whose close motion we measure.
+    await run(`$('button[aria-label="New tab"]').click(); return true;`);
+    await runWait(
+      `return !!document.activeElement?.matches('[data-palette="tab"] textarea');`,
+    );
+    await app.insertText("Retain the first tab");
     await run(`$('button[aria-label="New tab"]').click(); return true;`);
     // Scope to tab-strip elements (bubble close buttons share the
     // "Close …" aria-label prefix).

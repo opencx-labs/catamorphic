@@ -1180,7 +1180,7 @@ describe("chat flows", () => {
     await app.insertText("keep this pane");
     await run(`pressKey('\\\\', { metaKey: true }); return true;`);
     await runWait(
-      `return !!visibleDock()?.closest('[data-workspace-slot="right"], [data-workspace-slot="left"]');`,
+      `return !!visibleDock()?.matches('[data-split-slot="right"], [data-split-slot="left"]');`,
       {
         label: "chat remains visible in the other split pane",
       },

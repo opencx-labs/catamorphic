@@ -22,12 +22,6 @@ import type {
 } from "../lib/desktop-api.js";
 
 /**
- * What a picked project agent becomes: the default, the focused chat's
- * agent.
- */
-export type ProjectAgentTarget = "default" | "session";
-
-/**
  * Everything the palette reads from the app: data, the focused context and
  * the actions rows run. Provided once around the app, so the overlay and
  * every palette tab read the same host (ADR 0186).
@@ -86,12 +80,11 @@ export interface PaletteHost {
   /**
    * A project agent was picked. The app runs the consent flow first when
    * the definition isn't approved (or approval went stale), then applies
-   * the same default or session pick the profile-agent handlers
-   * do.
+   * the original pick. A draft, session and default share this approval.
    */
   onPickProjectAgent: (
     agent: ProjectAgentInfo,
-    target: ProjectAgentTarget,
+    onApproved: (agentId: string) => void,
   ) => void;
   /** A configure-picker row was committed: open the agent's modal. */
   onConfigureAgent: (agentId: string) => void;

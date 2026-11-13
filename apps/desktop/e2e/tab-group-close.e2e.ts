@@ -15,7 +15,8 @@ import { pressNativeMacKey } from "./native-pointer.js";
 let app: AppHandle;
 const api = "window.catamorphicDesktop";
 const visible = '[data-workspace-visible="true"]';
-const group = `${visible} [data-point-key="chat:group"]`;
+let chatId = "";
+let group = "";
 const page = `${visible} webview`;
 async function activatePage(selector: string) {
   const view = `document.querySelector(${JSON.stringify(selector)})`;
@@ -99,6 +100,8 @@ async function openGroup({
     if(!response.ok) throw new Error(await response.text());
     return response.json();
   })()`);
+  chatId = `group-${project.id}`;
+  group = `${visible} [data-point-key="chat:${chatId}"]`;
   const base = `${origin}/${encodeURIComponent(name)}`;
   const profileId = await app.eval<string>(`${api}.windowProfile()`);
   if (editor)
@@ -111,7 +114,7 @@ async function openGroup({
     tabs: [{ kind: "settings", name: "settings" }],
     chats: [
       {
-        localId: "group",
+        localId: chatId,
         mode: "tab",
         sessionId: session.id,
         surfacesCollapsed: true,
@@ -124,7 +127,7 @@ async function openGroup({
       url: `${base}/${index}`,
       title: "Group page",
       faviconUrl: null,
-      chatLocalId: "group",
+      chatLocalId: chatId,
     })),
     editors: editor
       ? [
@@ -132,7 +135,7 @@ async function openGroup({
             localId: "file",
             filePath: "draft.txt",
             dirty: false,
-            chatLocalId: "group",
+            chatLocalId: chatId,
           },
         ]
       : [],
@@ -140,15 +143,15 @@ async function openGroup({
       ? "browser:page"
       : editor
         ? "editor:file"
-        : "chat:group",
-    activeChatId: "group",
+        : `chat:${chatId}`,
+    activeChatId: chatId,
     recentTabKeys: ["settings:settings"],
   };
   await app.eval(
     `${api}.workspaceNavigate({projectId:${JSON.stringify(project.id)}})`,
   );
   // Reload only after the selected project has reached the saved preferences.
-  // Every fixture reuses chat:group, so that key alone cannot identify it.
+  // Give every restored chat its own identity across project runtimes.
   await waitForProjectWorkspace({ app, name });
   await app.eval(
     `${api}.workspaceStateSet(${JSON.stringify(project.id)},${JSON.stringify(snapshot)})`,
@@ -166,7 +169,7 @@ async function openGroup({
     );
   else if (!editor)
     await app.waitFor(
-      `document.activeElement?.matches('[data-chat-local-id="group"] [data-composer-input]') &&
+      `document.activeElement?.matches('[data-chat-local-id="${chatId}"] [data-composer-input]') &&
        document.activeElement.closest('[data-chat-project]')?.dataset.chatProject===${JSON.stringify(project.id)}`,
       { label: "the restored chat finished its composer focus handoff" },
     );
@@ -223,7 +226,7 @@ describe("closing folded tab groups", () => {
     await activatePage(page);
     const selectChat = () =>
       app.eval(`document.querySelector('${group} button').click()`);
-    const chat = `section[data-chat-project="${projectId}"][data-chat-local-id="group"]`;
+    const chat = `section[data-chat-project="${projectId}"][data-chat-local-id="${chatId}"]`;
     const close = `document.querySelector('${chat} button[aria-label="Close chat"]').click()`;
     const dialog = `document.querySelector('[data-testid="page-dialog"]:not([inert])')`;
     await selectChat();
@@ -546,7 +549,7 @@ describe("closing folded tab groups", () => {
 
     it("offers the group's closes and sends its tabs back to the chat", async () => {
       const projectId = await openGroup({ name: "Menu chat tabs" });
-      await openMenu("chat:group");
+      await openMenu(`chat:${chatId}`);
       expect(await closeEntries()).toEqual([
         "Close tabs under chat",
         "Close chat and its tabs",
@@ -573,7 +576,7 @@ describe("closing folded tab groups", () => {
 
     it("offers group folding first on the parent and every attached tab", async () => {
       const projectId = await openGroup({ name: "Group menu folding" });
-      await openMenu("chat:group");
+      await openMenu(`chat:${chatId}`);
       expect(await app.eval(`${menuItems}[0].textContent.trim()`)).toBe(
         "Expand group",
       );
@@ -603,7 +606,7 @@ describe("closing folded tab groups", () => {
         );
       }
       await app.waitFor(
-        `${state(projectId)}.then(ws=>ws.chats.length===1&&ws.chats[0].mode==='tab'&&ws.activeTabKey==='chat:group')`,
+        `${state(projectId)}.then(ws=>ws.chats.length===1&&ws.chats[0].mode==='tab'&&ws.activeTabKey===${JSON.stringify(`chat:${chatId}`)})`,
       );
       expect(
         await app.eval(
@@ -615,7 +618,7 @@ describe("closing folded tab groups", () => {
 
     it("closes a chat and its tabs together", async () => {
       const projectId = await openGroup({ name: "Menu chat and tabs" });
-      await openMenu("chat:group");
+      await openMenu(`chat:${chatId}`);
       await pick("Close chat and its tabs");
       await app.waitFor(
         `${state(projectId)}.then(ws=>ws.chats.length===0 && ws.browsers.length===0)`,

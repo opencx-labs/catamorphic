@@ -103,6 +103,14 @@ checkout selection are runtime state, separate from presentation preferences.
 | Voice (`voiceAssistant`, `voiceId`, `agentVoices`, `voiceMicrophone`, `voiceDictation`, `voiceShortcutsAsked`, `voiceInDock`, `voiceInChats`, `voiceBubbleSpot`) | Profile only, in `prefs.json`; a live voice follows edits from anywhere (ADR 0216, 0236) |
 | Runtime state | Explicit owner, not inherited appearance configuration |
 
+Settings > Agents opens at This project, just for me inside a project. Its star
+sets the same personal default as the palette's default-agent command and applies
+immediately to new chats and palette drafts without an explicit agent choice.
+The scope selector also offers Profile; project defaults can mask that layer.
+Reset to inherited default removes the personal override. Settings and the palette
+share the host's live default resolution. Removing an agent makes its row inert
+immediately, then collapses it with the shared list motion before removal.
+
 App-themed terminals use the nearest resolved project theme and its monospace
 font, including shared and personal project overrides. The appearance provider
 loads only the profile's source choice and optional Ghostty configuration; it

@@ -526,10 +526,15 @@ Cmd+Enter (Ctrl+Enter outside macOS) belongs to a focused review comment form on
 while that form is focused; a page or embedded frame keeps it for its own submit
 action. Work's window and navigation shortcuts retain their configured bindings.
 
-The palette's Ask agent mode shows the default agent's harness mark and its name,
-model name and reasoning effort, separated by middle dots. Unpinned models resolve
-from the harness for the current project; focused-chat overrides do not change the
-identity of a new chat. Unsupported reasoning controls are omitted.
+The palette's Ask agent mode shows its agent's harness mark, name, model and
+reasoning effort. Clicking that metadata opens the same agent picker as a chat's
+status popup. The choice belongs to that palette draft; another draft, the saved
+default and an existing chat keep their own agents. Choosing or cancelling keeps
+the mounted multiline composer, attachments, pending transfers and selection.
+Project agents use the normal approval flow before a choice applies. Until an
+agent is explicitly chosen, a draft follows the live resolved default. Unpinned
+models resolve from the harness for the current project. Unsupported reasoning
+controls are omitted.
 
 ### Profile recovery and shared update messages
 

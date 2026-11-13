@@ -544,9 +544,9 @@ function RepeatedFields({
             <div
               data-repeat-entry
               data-repeat-key={key}
-              className="flex min-w-0 flex-col gap-3 rounded-md border border-border p-3"
+              className="flex min-w-0 flex-col rounded-md border border-border p-3"
             >
-              <div className="flex items-center justify-between gap-2">
+              <div className="mb-3 flex items-center justify-between gap-2">
                 <span className="text-xs text-fg-muted">
                   {field.label} {index + 1}
                 </span>

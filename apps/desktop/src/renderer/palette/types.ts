@@ -154,6 +154,12 @@ export type PaletteChoiceMode =
 
 /** Built-in modes by id, plus the choice modes. */
 export type PaletteModeId = BuiltinPaletteMode | PaletteChoiceMode;
+
+/** A picker that answers for one draft, rather than a default or live chat. */
+export interface PaletteAgentChoice {
+  currentId: string | null;
+  onPick: (agentId: string) => void;
+}
 /** Open the palette inside a mode (a command run from anywhere, a sidebar search). */
 export type PaletteModeRequest = { nonce: string } & (
   | { mode: PaletteModeId }

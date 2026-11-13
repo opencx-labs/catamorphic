@@ -26,7 +26,7 @@ async function capture(name: string) {
 }
 async function click(selector: string) {
   const box = await app.waitFor<{ x: number; y: number }>(
-    `(()=>{const el=document.querySelector(${json(selector)});if(!el||el.closest('[inert]')||el.matches(':disabled'))return false;const surface=el.closest('[role="dialog"], [data-sidebar]');if(surface?.getAnimations({subtree:true}).some(a=>a.playState==='running'&&a.effect?.getTiming().iterations!==Infinity))return false;const r=el.getBoundingClientRect();const x=r.x+r.width/2,y=r.y+r.height/2;return el.contains(document.elementFromPoint(x,y))?{x,y}:false})()`,
+    `(()=>{const el=document.querySelector(${json(selector)});if(!el||el.closest('[inert]')||el.matches(':disabled'))return false;el.scrollIntoView({block:'nearest',inline:'nearest'});const surface=el.closest('[role="dialog"], [data-sidebar]');if(surface?.getAnimations({subtree:true}).some(a=>a.playState==='running'&&a.effect?.getTiming().iterations!==Infinity))return false;const r=el.getBoundingClientRect();const x=r.x+r.width/2,y=r.y+r.height/2;return el.contains(document.elementFromPoint(x,y))?{x,y}:false})()`,
   );
   await app.clickPointer(box);
 }

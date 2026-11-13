@@ -21,18 +21,21 @@ import type { PaletteItem, PaletteMode } from "../types.js";
 export function useInputModes({
   projectAgents,
   agentModeActive,
+  agentId,
 }: {
   projectAgents: readonly ProjectAgentInfo[];
   agentModeActive: boolean;
+  agentId?: string | null;
 }): PaletteMode[] {
   const { projectId, onOpenUrl, onSendToAgent, agents, defaultAgentId } =
     usePaletteHost();
+  const targetId = agentId ?? defaultAgentId;
   const agent = useMemo(
     () =>
       [...agents, ...projectAgents.map(projectAgentAsInfo)].find(
-        (candidate) => candidate.id === defaultAgentId,
+        (candidate) => candidate.id === targetId,
       ),
-    [agents, projectAgents, defaultAgentId],
+    [agents, projectAgents, targetId],
   );
   const catalog = useQuery({
     queryKey: ["desktop", "agent-models", agent?.id],
@@ -83,7 +86,11 @@ export function useInputModes({
             ...(typed ? {} : { commit: "stay" as const }),
             run: (commitMode) => {
               if (typed)
-                onSendToAgent(query, commitMode === "tab" ? "tab" : "float");
+                onSendToAgent(
+                  query,
+                  commitMode === "tab" ? "tab" : "float",
+                  agent?.id,
+                );
             },
           },
         ];

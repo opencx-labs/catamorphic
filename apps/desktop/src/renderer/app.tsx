@@ -291,11 +291,7 @@ import {
   type Workspace,
   workspaceLayout,
 } from "./lib/workspace-state.js";
-import {
-  type PaletteHost,
-  PaletteHostProvider,
-  type ProjectAgentTarget,
-} from "./palette/host.js";
+import { type PaletteHost, PaletteHostProvider } from "./palette/host.js";
 import { loadSourceRows } from "./palette/sources.js";
 import type { PaletteChoiceMode, PaletteModeRequest } from "./palette/types.js";
 import { AppScreen } from "./screens/app-screen.js";
@@ -2137,6 +2133,8 @@ export function App({
     // keyboard back after the overlay leaves.
     if (key.startsWith("browser:"))
       browserCommandsRef.current.get(key.slice(8))?.focusPage();
+    if (key.startsWith("palette:"))
+      setNewTabFocusRequest((request) => request + 1);
   };
 
   /** Open a page in a new browser tab (profile session of the workspace). */
@@ -4122,25 +4120,18 @@ export function App({
   // switch immediately, exactly like profile agents.
   const [consentRequest, setConsentRequest] = useState<{
     agent: ProjectAgentInfo;
-    target: ProjectAgentTarget;
+    onApproved: (agentId: string) => void;
   } | null>(null);
-  const applyProjectAgent = (
-    agent: ProjectAgentInfo,
-    target: ProjectAgentTarget,
-  ) => {
-    if (target === "default") pickDefaultAgent(agent.id);
-    else pickSessionAgent(agent.id);
-  };
   const pickProjectAgent = (
     agent: ProjectAgentInfo,
-    target: ProjectAgentTarget,
+    onApproved: (agentId: string) => void,
   ) => {
     if (agent.invalid) return;
     if (agent.consent === "ok" || agent.consent === "not-required") {
-      applyProjectAgent(agent, target);
+      onApproved(agent.id);
       return;
     }
-    setConsentRequest({ agent, target });
+    setConsentRequest({ agent, onApproved });
   };
 
   const pickEffort = (effort: AgentEffort | null) => {
@@ -7827,9 +7818,9 @@ export function App({
               request={consentRequest}
               onClose={() => setConsentRequest(null)}
               onApproved={(agent) => {
-                const target = consentRequest?.target ?? "session";
+                const onApproved = consentRequest?.onApproved;
                 setConsentRequest(null);
-                applyProjectAgent(agent, target);
+                onApproved?.(agent.id);
               }}
             />
             <ActionInputDialog
@@ -8294,6 +8285,7 @@ export function App({
                             />
                           ) : tab.kind === "settings" ? (
                             <SettingsScreen
+                              defaultAgentId={effectiveDefaultAgentId}
                               destination={tab.destination}
                               projectId={projectId}
                               profile={activeProfile}
@@ -9043,6 +9035,7 @@ export function App({
                     renderOnboarding(activeTab)
                   ) : activeTab?.kind === "settings" ? (
                     <SettingsScreen
+                      defaultAgentId={effectiveDefaultAgentId}
                       destination={activeTab.destination}
                       profile={activeProfile}
                       profiles={profilesData}
