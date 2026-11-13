@@ -770,16 +770,13 @@ export function registerIpcHandlers(
     },
   );
 
-  // Removing an agent (ADR 0314): the person's chats on it stop until they
-  // choose another, the subsessions other agents started on it are
-  // archived, and the voice assistant returns to the default agent.
+  // Removing an agent (ADR 0314): the subsessions agents started on it are
+  // archived while it still exists, so their turns stop as archived ones
+  // do; the person's own chats on it stop until they choose another; the
+  // voice assistant returns to the default agent.
   ipcMain.handle("catamorphic:agents-remove", async (event, id: string) => {
     const stores = storesFor(event);
-    const removed = stores.agents.remove(id);
-    if (!removed) return false;
-    if (stores.prefs.load().voiceAssistant === id)
-      stores.prefs.save({ voiceAssistant: null });
-    agentsChanged(event, stores.agents);
+    if (!stores.agents.getMetadata(id)) return false;
     await state.current?.catamorphic.core.agentSessions
       ?.archiveSubsessionsOnAgent(
         { tenantId: DESKTOP_TENANT_ID, externalUserId: DESKTOP_USER_ID },
@@ -791,6 +788,10 @@ export function registerIpcHandlers(
           error,
         ),
       );
+    if (!stores.agents.remove(id)) return false;
+    if (stores.prefs.load().voiceAssistant === id)
+      stores.prefs.save({ voiceAssistant: null });
+    agentsChanged(event, stores.agents);
     return true;
   });
 

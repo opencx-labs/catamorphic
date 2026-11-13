@@ -408,9 +408,10 @@ describe("picking a chat's agent", () => {
       window.__switch.doomed = doomed.id;
       const patch=await fetch(base+'/'+id,{method:'PATCH',headers:{'content-type':'application/json'},body:JSON.stringify({agentId:doomed.id})});
       if(!patch.ok) throw new Error(await patch.text());
-      const child=await fetch(base,{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({parentSessionId:id,agentId:doomed.id,title:'Doomed child'})});
+      // A subsession its agent started (ADR 0271): archived with the agent.
+      const child=await fetch(base+'/'+id+'/subsessions',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({task:'Doomed child',title:'Doomed child'})});
       if(!child.ok) throw new Error(await child.text());
-      window.__switch.doomedChild=(await child.json()).id;
+      window.__switch.doomedChild=(await child.json()).session.id;
     `);
     await inspector();
     await shownAgent("Doomed Fake");

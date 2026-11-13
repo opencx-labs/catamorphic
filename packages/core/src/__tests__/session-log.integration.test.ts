@@ -2368,6 +2368,24 @@ describe("session log", () => {
     );
   });
 
+  it("stops a resting chat whose agent was removed rather than leaving it queued", async () => {
+    const { projectId, sessionId } = await chat("Removed agent at rest");
+    // Its workspace was given back while it rested (ADR 0193).
+    await db
+      .updateTable("agent_sessions")
+      .set({ agent_id: "removed", allocation_id: null })
+      .where("id", "=", sessionId)
+      .execute();
+    const { turn } = await sessions.sendMessage(
+      identity,
+      projectId,
+      sessionId,
+      "hello",
+    );
+    expect(turn.status).toBe("failed");
+    expect(turn.error?.kind).toBe("agent_missing");
+  });
+
   it("archives the subsessions of a removed agent, not the person's own chats", async () => {
     const parent = await chat("Removed agent parent");
     const child = {
@@ -2376,10 +2394,24 @@ describe("session log", () => {
     const own = {
       sessionId: (await sessions.create(identity, parent.projectId)).id,
     };
+    // A subsession the person keeps in their list, and a fork: theirs.
+    const pinned = (await sessions.create(identity, parent.projectId)).id;
+    const fork = (await sessions.create(identity, parent.projectId)).id;
     await db
       .updateTable("agent_sessions")
       .set({ agent_id: "retired", parent_session_id: parent.sessionId })
-      .where("id", "=", child.sessionId)
+      .where("id", "in", [child.sessionId, pinned, fork])
+      .execute();
+    await db
+      .updateTable("agent_sessions")
+      .set({ forked_from_session_id: parent.sessionId })
+      .where("id", "=", fork)
+      .execute();
+    // An agent starts its subsessions out of the person's list.
+    await db
+      .updateTable("agent_session_views")
+      .set({ visibility: "latent", previous_visibility: "latent" })
+      .where("session_id", "in", [child.sessionId, fork])
       .execute();
     await db
       .updateTable("agent_sessions")

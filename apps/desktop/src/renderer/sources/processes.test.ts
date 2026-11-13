@@ -103,6 +103,7 @@ function deps(host: Partial<WorkSourceHost> = {}): WorkSourceDeps {
     tabGroups: [],
     unreadSessionIds: new Set(),
     agentName: () => undefined,
+    agentDeleted: () => false,
     closeTab: vi.fn(),
     reorderTab: vi.fn(),
     attachTab: vi.fn(),

@@ -120,8 +120,9 @@ export function chatRow({
           label: "Agent",
           value:
             host.agentName(session.agentId) ??
-            // On this computer an agent no list has was deleted (ADR 0314).
-            (session.agentId && !deps.remote
+            (session.agentId &&
+            !deps.remote &&
+            host.agentDeleted(session.agentId)
               ? "Deleted agent"
               : "Unknown agent"),
         },

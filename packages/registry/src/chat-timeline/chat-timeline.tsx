@@ -2698,8 +2698,10 @@ function renderTurnOutcome({
   const retrying =
     (turn.status === "queued" || turn.status === "held") &&
     turn.attemptCount > 0;
-  // Its agent is gone: running it again needs another agent, not Retry.
-  const agentMissing = turn.error?.kind === "agent_missing";
+  // Its agent is gone: while the host offers another, that replaces Retry;
+  // once the chat has an agent again, Retry runs it there.
+  const chooseAgent =
+    latest && turn.error?.kind === "agent_missing" ? onChooseAgent : undefined;
   if (turn.status === "failed" || retrying)
     return (
       <ErrorCard
@@ -2711,7 +2713,7 @@ function renderTurnOutcome({
         // A turn waiting to retry counts down, and stops, wherever it is.
         retryAt={retrying ? (turn.retryAt ?? "") : null}
         onRetry={
-          latest && !retrying && !agentMissing && onRetry
+          latest && !retrying && !chooseAgent && onRetry
             ? () => onRetry(turn.id)
             : undefined
         }
@@ -2724,11 +2726,7 @@ function renderTurnOutcome({
             : undefined
         }
         reauthLabel={reauthLabel}
-        onChooseAgent={
-          latest && agentMissing && onChooseAgent
-            ? () => onChooseAgent(turn.id)
-            : undefined
-        }
+        onChooseAgent={chooseAgent ? () => chooseAgent(turn.id) : undefined}
       />
     );
   if (turn.status !== "interrupted") return null;

@@ -662,9 +662,17 @@ export class UnsupportedAgentTopologyError extends Error {
   }
 }
 
+/** What a turn on a chat whose agent no longer exists fails with. */
+export const AGENT_MISSING_MESSAGE =
+  "The agent this chat used was deleted. Choose another agent to continue.";
+
 /** The named agent (or the default) is not present in the host's registry. */
 export class AgentNotConfiguredError extends Error {
-  constructor(readonly agentId: string | undefined) {
+  constructor(
+    readonly agentId: string | undefined,
+    /** `invalid`: its committed definition exists but does not load. */
+    readonly reason: "missing" | "invalid" = "missing",
+  ) {
     super(
       agentId
         ? `Coding agent '${agentId}' is not configured`
@@ -674,9 +682,19 @@ export class AgentNotConfiguredError extends Error {
   }
 }
 
-/** What a turn on a chat whose agent no longer exists fails with. */
-export const AGENT_MISSING_MESSAGE =
-  "The agent this chat used was deleted. Choose another agent to continue.";
+/** The named agent no longer exists: its chats stop (ADR 0314). */
+function isAgentMissing(error: unknown): boolean {
+  return (
+    error instanceof AgentNotConfiguredError &&
+    error.agentId !== undefined &&
+    error.reason === "missing"
+  );
+}
+
+const AGENT_MISSING_ERROR = {
+  message: AGENT_MISSING_MESSAGE,
+  kind: "agent_missing",
+} as const;
 
 /** The session has a turn executing right now; retry after it settles. */
 export class AgentTurnInProgressError extends Error {
@@ -4768,11 +4786,12 @@ export class AgentSessionsService {
         const placed = await this.placeWaiting(identity, session);
         if (placed.kind === "admitted") continue;
         if (placed.kind === "waiting") return;
-        // It waited as long as its Environment allows: its turn fails.
+        // It waited as long as its Environment allows, or its agent is
+        // gone (the engine says so): its turn fails.
         const refused = await this.engine.runNext({
           sessionId,
           ...(this.workerNode ? { localNode: this.workerNode } : {}),
-          refusal: placed.reason,
+          ...(placed.kind === "expired" ? { refusal: placed.reason } : {}),
         });
         if (!refused) return;
         continue;
@@ -4830,8 +4849,7 @@ export class AgentSessionsService {
         ).catch((error: unknown) => {
           // The chat's own agent was removed: it stops until the person
           // chooses another (ADR 0314), rather than switching on its own.
-          if (error instanceof AgentNotConfiguredError && error.agentId)
-            return undefined;
+          if (isAgentMissing(error)) return undefined;
           throw error;
         });
         if (!agent)
@@ -4839,10 +4857,7 @@ export class AgentSessionsService {
             harness: "",
             agentId: session.agent_id,
             recovery: "stop" as const,
-            unavailable: {
-              message: AGENT_MISSING_MESSAGE,
-              kind: "agent_missing" as const,
-            },
+            unavailable: AGENT_MISSING_ERROR,
           };
         return {
           harness: harnessIdOf(agent),
@@ -4883,6 +4898,9 @@ export class AgentSessionsService {
         this.stopGrantRenewal(sessionId);
         this.workingDirectories.delete(turnId);
       },
+      // A turn whose agent was removed while it ran ends saying so.
+      failureOf: (error) =>
+        isAgentMissing(error) ? AGENT_MISSING_ERROR : undefined,
       secretValues: ({ identity, session }) =>
         this.sessionSecretValues({
           identity,
@@ -9847,6 +9865,7 @@ export class AgentSessionsService {
     | { kind: "admitted" }
     | { kind: "waiting" }
     | { kind: "expired"; reason: string }
+    | { kind: "agent_missing" }
   > {
     const wait = await this.placementWaits.get({ rootWorkloadId: session.id });
     if (wait?.expired)
@@ -9858,8 +9877,14 @@ export class AgentSessionsService {
       // Its Environment cannot take it at all (gone, refused, invalid):
       // waiting would never end, so its due turns fail saying why.
       if (isPlacementRefusal(error)) return { refused: error.message } as const;
+      // Its agent was removed: the engine stops the turn as such (ADR 0314).
+      if (isAgentMissing(error)) return { agentMissing: true } as const;
       throw error;
     });
+    if ("agentMissing" in placed) {
+      await this.placementWaits.clear({ rootWorkloadIds: [session.id] });
+      return { kind: "agent_missing" };
+    }
     if ("refused" in placed) {
       await this.placementWaits.clear({ rootWorkloadIds: [session.id] });
       return { kind: "expired", reason: placed.refused };
@@ -11045,24 +11070,37 @@ export class AgentSessionsService {
       .where("projects.tenant_id", "=", identity.tenantId)
       .where("agent_sessions.external_user_id", "=", identity.externalUserId)
       .where("agent_sessions.agent_id", "=", input.agentId)
+      // Subsessions, not forks: a fork is the person's own chat. One they
+      // promoted into their list is theirs too.
       .where("agent_sessions.parent_session_id", "is not", null)
+      .where("agent_sessions.forked_from_session_id", "is", null)
       .where((eb) =>
         eb.or([
           eb("agent_session_views.visibility", "is", null),
-          eb("agent_session_views.visibility", "!=", "archived"),
+          eb("agent_session_views.visibility", "=", "latent"),
         ]),
       )
       .execute();
-    const archivedSessionIds: string[] = [];
+    const archived = new Set<string>();
     for (const row of rows) {
       // An earlier one's tree may already have taken it along.
-      if (archivedSessionIds.includes(row.id)) continue;
-      const { impact } = await this.archive(identity, row.project_id, row.id, {
-        confirmStop: true,
-      });
-      archivedSessionIds.push(...impact.sessionIds);
+      if (archived.has(row.id)) continue;
+      try {
+        const { impact } = await this.archive(
+          identity,
+          row.project_id,
+          row.id,
+          { confirmStop: true },
+        );
+        for (const id of impact.sessionIds) archived.add(id);
+      } catch (error) {
+        console.warn(
+          `[catamorphic] Could not archive subsession ${row.id} of a removed agent`,
+          error,
+        );
+      }
     }
-    return { archivedSessionIds };
+    return { archivedSessionIds: [...archived] };
   }
 
   /** Stop and hide one session tree. The caller confirms only live work. */
@@ -11606,8 +11644,9 @@ export class AgentSessionsService {
       if (!entry) {
         const builtin = this.codingAgents.get(id);
         if (builtin) return builtin;
+        throw new AgentNotConfiguredError(id);
       }
-      if (!entry?.definition) throw new AgentNotConfiguredError(id);
+      if (!entry.definition) throw new AgentNotConfiguredError(id, "invalid");
       const resolved = await this.codingAgents.projectAgent({ id, entry });
       if (!resolved) throw new AgentNotConfiguredError(id);
       return withDefinitionPolicy(resolved, entry.definition);

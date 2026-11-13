@@ -19,10 +19,16 @@ Retry. Choosing one switches the chat's agent the usual way, recording the
 change in the transcript, and runs the stopped turn again. The chat shows
 "Deleted agent" before anything is sent.
 
-Removing an agent asks for confirmation, saying its chats will stop. It also
-archives the subsessions other agents started on it
-(`archiveSubsessionsOnAgent`), removes it from other agents' subsession
-grants, and returns the voice assistant to the default agent.
+Removing an agent asks for confirmation, saying its chats will stop. Before
+it goes, the subsessions agents started on it are archived
+(`archiveSubsessionsOnAgent`), so their turns stop as archived ones do.
+Forks and subsessions the person keeps in their list are theirs and stay.
+Removal also drops the agent from other agents' subsession grants and
+returns the voice assistant to the default agent.
+
+A committed project agent whose file exists but does not load is invalid,
+not removed: its chats fail with the definition's error, since the fix is
+in the file.
 
 Switching such chats to the default agent automatically was rejected. It
 could carry a Claude Code conversation over to Codex, or to another

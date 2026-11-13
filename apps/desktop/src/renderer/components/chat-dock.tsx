@@ -1424,14 +1424,15 @@ function ChatDockContent({
       );
   // The chat's own agent was deleted (ADR 0314): it stops until the person
   // chooses another. Only said once the list it would be in has arrived.
+  const chatAgentId = chat.session?.agentId ?? entry.agentId;
   const agentMissing =
     !authority &&
-    Boolean(sessionAgentId) &&
-    (sessionAgentId?.startsWith("project:")
+    Boolean(chatAgentId) &&
+    (chatAgentId?.startsWith("project:")
       ? roster.loaded.project
       : roster.loaded.profile) &&
     !roster.agents.some(
-      (agent) => agent.id === rosterAgentId(sessionAgentId ?? ""),
+      (agent) => agent.id === rosterAgentId(chatAgentId ?? ""),
     );
   // Any available agent can continue this chat, with context handed to
   // its harness. Connected projects use their server's agent catalog.
@@ -2027,16 +2028,43 @@ function ChatDockContent({
   const turnBusy = Boolean(chat.isSending || chat.session?.running);
   const editAgent = turnBusy || otherAgents === 0 ? undefined : onEditAgent;
   // The turn that stopped on a deleted agent runs again once the person
-  // has chosen another for the chat.
-  const [resumeTurnId, setResumeTurnId] = useState<string | null>(null);
+  // has chosen another for the chat, while it is still the latest: the
+  // latest turn, past notes after it (the agent switch adds one).
+  const lastTurn = [...chat.timeline]
+    .reverse()
+    .find((group) => group.turn)?.turn;
+  const [resume, setResume] = useState<{
+    turnId: string;
+    fromAgentId: string | null | undefined;
+  } | null>(null);
   const retryRef = useRef(chat.retry);
   retryRef.current = chat.retry;
   useEffect(() => {
-    if (!resumeTurnId || agentMissing || !sessionAgentId) return;
-    setResumeTurnId(null);
-    void retryRef.current(resumeTurnId);
-  }, [resumeTurnId, agentMissing, sessionAgentId]);
-  const chooseAgent = agentMissing ? editAgent : undefined;
+    if (!resume) return;
+    if (lastTurn?.id !== resume.turnId) {
+      setResume(null);
+      return;
+    }
+    if (
+      agentMissing ||
+      !sessionAgentId ||
+      sessionAgentId === resume.fromAgentId
+    )
+      return;
+    setResume(null);
+    void retryRef.current(resume.turnId);
+  }, [resume, lastTurn?.id, agentMissing, sessionAgentId]);
+  const chooseAgent =
+    agentMissing && editAgent
+      ? () => {
+          if (
+            lastTurn?.status === "failed" &&
+            lastTurn.error?.kind === "agent_missing"
+          )
+            setResume({ turnId: lastTurn.id, fromAgentId: sessionAgentId });
+          editAgent();
+        }
+      : undefined;
   const editModel = turnBusy || !activeAgent ? undefined : onEditModel;
   const editEffort =
     turnBusy || supportedEfforts(activeAgent, effortModel).length === 0
@@ -3338,14 +3366,7 @@ function ChatDockContent({
               onLoadOlder={chat.loadOlder}
               onReauth={reauth?.run}
               reauthLabel={reauth?.label}
-              onChooseAgent={
-                chooseAgent
-                  ? (turnId) => {
-                      setResumeTurnId(turnId);
-                      chooseAgent();
-                    }
-                  : undefined
-              }
+              onChooseAgent={chooseAgent}
               resolveAgentName={resolveAgentName}
               renderAgentIcon={renderAgentIcon}
               sourceHref={sourceHref}

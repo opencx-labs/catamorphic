@@ -165,6 +165,11 @@ export interface FinalizedTurn {
 export interface TurnEngineHost {
   /** The identity a session's work runs as (its owner, ADR 0173). */
   owner(session: SessionRow): Promise<Identity | null>;
+  /**
+   * What a failure outside the protocol means, when the host knows (its
+   * agent was removed, say); otherwise the turn fails with its message.
+   */
+  failureOf?(error: unknown): TurnError | undefined;
   /** The harness the session's agent runs on and how its turns recover. */
   harnessOf(input: { identity: Identity; session: SessionRow }): Promise<{
     harness: string;
@@ -3666,7 +3671,7 @@ export class TurnEngine {
       turn,
       attempt,
       status: "failed",
-      error: {
+      error: this.deps.host.failureOf?.(error) ?? {
         message: error instanceof Error ? error.message : String(error),
       },
       outcome: turn.outcome ?? { changedFiles: [] },
