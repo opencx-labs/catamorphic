@@ -45,7 +45,7 @@
     "@catamorphic/server-sdk": "workspace:*",
     "@catamorphic/workflow": "workspace:*",
     "@electric-sql/pglite": "^0.5.16",
-    "@openai/codex": "0.167.1",
+    "@openai/codex": "0.169.0",
     "better-auth": "1.7.21",
     "fastify": "^5.12.8",
     "kysely": "^0.29.8",
