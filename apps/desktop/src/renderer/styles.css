@@ -3367,6 +3367,7 @@ html[data-surface="dock"] #root {
   gap: 2px;
   width: 1.25rem;
 }
+/* biome-ignore lint/style/noDescendingSpecificity: waveform bars and the listening ripple have different children. */
 .voice-button .voice-bars > span {
   width: 2px;
   height: 16px;

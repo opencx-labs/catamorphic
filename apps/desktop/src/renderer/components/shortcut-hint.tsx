@@ -168,8 +168,7 @@ export function ShortcutHint({
     const key = (event: KeyboardEvent) => {
       if (event.key !== "Escape" || !visible) return;
       hide();
-      event.preventDefault();
-      event.stopPropagation();
+      // Hints are nonmodal: the focused menu or dialog still owns Escape.
     };
     document.addEventListener("pointerover", outside, true);
     document.addEventListener("pointerdown", away, true);
