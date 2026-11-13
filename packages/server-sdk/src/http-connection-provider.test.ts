@@ -2,8 +2,18 @@ import { describe, expect, it } from "vitest";
 import { z } from "zod";
 import {
   defineHttpApiConnectionProvider,
+  HTTP_MAX_RESPONSE_BYTES,
+  HTTP_MAX_TIMEOUT_MS,
   type HttpApiConnectionOptions,
 } from "./http-connection-provider.js";
+
+/** Who a provider call is for, as core derives it (ADR 0316). */
+const TEST_CONTEXT = {
+  tenantId: "tenant-1",
+  connectionId: "connection-1",
+  principal: { kind: "service" as const, name: "test" },
+  externalUserId: "member-1",
+};
 
 const KEY = new TextEncoder().encode("sk-live-secret");
 const CONNECTION = { id: "connection", revision: 1 };
@@ -46,6 +56,7 @@ describe("brokered HTTP API connections (ADR 0162)", () => {
       },
     });
     const request = api.invoke({
+      context: TEST_CONTEXT,
       material: KEY,
       connection: CONNECTION,
       capabilities: ["get"],
@@ -59,6 +70,7 @@ describe("brokered HTTP API connections (ADR 0162)", () => {
     await rejected;
     await expect(
       api.invoke({
+        context: TEST_CONTEXT,
         material: KEY,
         connection: CONNECTION,
         capabilities: ["get"],
@@ -105,6 +117,7 @@ describe("brokered HTTP API connections (ADR 0162)", () => {
   it("adds the key for the configured origin only and returns the response", async () => {
     const { api, requests } = provider();
     const output = await api.invoke({
+      context: TEST_CONTEXT,
       material: KEY,
       action: "post",
       input: {
@@ -195,6 +208,7 @@ describe("brokered HTTP API connections (ADR 0162)", () => {
     const basic = `Basic ${Buffer.from("reader:pa:ss").toString("base64")}`;
     expect(logs.http?.headers({ material })).toEqual({ authorization: basic });
     await logs.invoke({
+      context: TEST_CONTEXT,
       material,
       action: "get",
       input: { path: "/", query: { query: "SELECT 1" } },
@@ -210,6 +224,7 @@ describe("brokered HTTP API connections (ADR 0162)", () => {
     const { api, requests } = provider({ paths: ["/invoices"] });
     const call = (input: Record<string, unknown>) =>
       api.invoke({
+        context: TEST_CONTEXT,
         material: KEY,
         action: "get",
         input: JSON.parse(JSON.stringify(input)),
@@ -278,6 +293,7 @@ describe("brokered HTTP API connections (ADR 0162)", () => {
         })
         .parse(
           await api.invoke({
+            context: TEST_CONTEXT,
             material: KEY,
             action: "get",
             input: {
@@ -315,6 +331,7 @@ describe("brokered HTTP API connections (ADR 0162)", () => {
     const { api: small2 } = provider();
     await expect(
       small2.invoke({
+        context: TEST_CONTEXT,
         material: KEY,
         action: "get",
         input: { path: "/invoices" },
@@ -324,6 +341,7 @@ describe("brokered HTTP API connections (ADR 0162)", () => {
     ).resolves.not.toHaveProperty("range");
     await expect(
       small2.invoke({
+        context: TEST_CONTEXT,
         material: KEY,
         action: "post",
         input: { path: "/invoices", range: { offset: 0 } },
@@ -364,6 +382,7 @@ describe("brokered HTTP API connections (ADR 0162)", () => {
       "chat.postMessage",
     ]);
     const listed = await slack.listActions?.({
+      context: TEST_CONTEXT,
       material: KEY,
       capabilities: ["chat.postMessage"],
     });
@@ -377,6 +396,7 @@ describe("brokered HTTP API connections (ADR 0162)", () => {
 
     const call = (action: string, input: Record<string, unknown>) =>
       slack.invoke({
+        context: TEST_CONTEXT,
         material: new TextEncoder().encode("xoxb-bot"),
         action,
         input: JSON.parse(JSON.stringify(input)),
@@ -465,6 +485,26 @@ describe("brokered HTTP API connections (ADR 0162)", () => {
     expect(
       define({ actions: [{ ...post, name: "has space", path: "/a" }] }),
     ).toThrow("invalid action name");
+  });
+
+  it("holds limits within the host ceilings (ADR 0315)", () => {
+    const define = (overrides: Partial<HttpApiConnectionOptions>) => () =>
+      defineHttpApiConnectionProvider({
+        kind: "billing",
+        displayName: "Billing",
+        baseUrl: "https://api.billing.test/v1",
+        ...overrides,
+      });
+    expect(
+      define({ maxResponseBytes: HTTP_MAX_RESPONSE_BYTES, timeoutMs: 120_000 }),
+    ).not.toThrow();
+    expect(define({ maxResponseBytes: HTTP_MAX_RESPONSE_BYTES + 1 })).toThrow(
+      "maxResponseBytes",
+    );
+    expect(define({ maxResponseBytes: 0 })).toThrow("maxResponseBytes");
+    expect(define({ timeoutMs: HTTP_MAX_TIMEOUT_MS + 1 })).toThrow("timeoutMs");
+    expect(define({ timeoutMs: 1.5 })).toThrow("timeoutMs");
+    expect(define({ paths: ["admin"] })).toThrow("must start with '/'");
   });
 
   it("requires HTTPS for remote APIs", () => {

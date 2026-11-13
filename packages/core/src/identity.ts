@@ -444,7 +444,10 @@ export function mayUseProject(identity: Identity, projectId: string): boolean {
     identity.scope.some((ref) => ref.projectId === projectId) ||
     (identity.projectPermissions ?? []).some(
       (ref) => ref.projectId === projectId,
-    )
+    ) ||
+    // A role that grants only connections still makes its holder a member
+    // who uses the project's tools from their own agent (ADR 0316).
+    (identity.connectionScope ?? []).some((ref) => ref.projectId === projectId)
   );
 }
 

@@ -21,6 +21,12 @@ export type AuthorizationChallenge =
     };
 
 export interface ConnectionAuthorizationResult {
+  /**
+   * What Work keeps for the connection, in the host's vault. Empty when the
+   * provider obtains its credential itself, from the call's context
+   * (ADR 0316): Work then stores nothing for it, and later calls receive
+   * empty material. From `refresh`, empty keeps what is stored.
+   */
   material: Uint8Array;
   account?: Json;
   scopes?: readonly string[];
@@ -142,6 +148,28 @@ export interface ConnectionHttpEndpoint {
   headers(args: { material: Uint8Array }): Record<string, string>;
 }
 
+/**
+ * Who and what a provider call is for, derived by core from the
+ * connection and its caller, never from tool arguments (ADR 0316). A
+ * provider may use it to mint or fetch a credential per call, scope an
+ * upstream session, or tag the upstream audit trail.
+ */
+export interface ConnectionCallContext {
+  tenantId: string;
+  connectionId: string;
+  /** Whose authority the connection carries. */
+  principal:
+    | { kind: "member"; externalUserId: string }
+    | { kind: "service"; name: string | null };
+  /** The project of the call; absent for a tenant-wide maintenance call. */
+  projectId?: string;
+  /** The Environment and alias the call came through, when it did. */
+  environment?: string;
+  alias?: string;
+  /** The member the call acts for: an agent's person, a run's caller. */
+  externalUserId: string;
+}
+
 export interface ConnectionProvider {
   readonly kind: string;
   readonly displayName: string;
@@ -176,6 +204,9 @@ export interface ConnectionProvider {
      * e.g. GitHub asks a person to sign in but an administrator for an App.
      */
     principal: "member" | "service";
+    /** The Environment and alias a member connects through, when known. */
+    environment?: string;
+    alias?: string;
     redirectUri: string;
     state: string;
   }): Promise<{ challenge: AuthorizationChallenge; privateState?: Uint8Array }>;
@@ -184,6 +215,9 @@ export interface ConnectionProvider {
     projectId?: string;
     externalUserId: string;
     principal: "member" | "service";
+    /** The Environment and alias a member connects through, when known. */
+    environment?: string;
+    alias?: string;
     callback: Readonly<Record<string, string>>;
     privateState?: Uint8Array;
   }): Promise<ConnectionAuthorizationResult>;
@@ -193,6 +227,7 @@ export interface ConnectionProvider {
     /** Absolute ISO deadline of the workflow attempt, when invoked by one. */
     deadlineAt?: string;
     material: Uint8Array;
+    context: ConnectionCallContext;
     action: string;
     input: Json;
     capabilities: readonly string[];
@@ -212,6 +247,7 @@ export interface ConnectionProvider {
   }): Promise<Json>;
   listActions?(args: {
     material: Uint8Array;
+    context: ConnectionCallContext;
     capabilities: readonly string[];
   }): Promise<readonly ConnectionActionDefinition[]>;
   /**
@@ -222,8 +258,12 @@ export interface ConnectionProvider {
   readOnly?(action: string): boolean;
   refresh?(args: {
     material: Uint8Array;
+    context: ConnectionCallContext;
   }): Promise<ConnectionAuthorizationResult>;
-  revoke?(args: { material: Uint8Array }): Promise<void>;
+  revoke?(args: {
+    material: Uint8Array;
+    context: ConnectionCallContext;
+  }): Promise<void>;
   /**
    * Drop anything held for a connection's earlier credentials (pooled
    * sessions). Called after rotation, refresh, and revocation.

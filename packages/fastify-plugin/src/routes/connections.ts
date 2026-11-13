@@ -430,6 +430,7 @@ export function registerConnectionRoutes(
             "Authorization was declined",
           );
         }
+        const browserBinding = connectBinding(request.headers.cookie);
         return reply.send(
           await connections.completeAuthorizationCallback({
             state: request.query.state,
@@ -437,6 +438,7 @@ export function registerConnectionRoutes(
               ...(request.query.code ? { code: request.query.code } : {}),
               ...(request.query.iss ? { iss: request.query.iss } : {}),
             },
+            ...(browserBinding ? { browserBinding } : {}),
           }),
         );
       } catch (error) {
@@ -491,4 +493,18 @@ function handleConnectionError(
     return reply.status(409).send({ error: error.message });
   }
   throw error;
+}
+
+/**
+ * The cookie a host's connect page sets when a member redeems a connect
+ * link (ADR 0316); an attempt started there completes only with it.
+ */
+export const CONNECT_BINDING_COOKIE = "catamorphic_connect";
+
+function connectBinding(header: string | undefined): string | undefined {
+  for (const part of header?.split(";") ?? []) {
+    const [name, ...value] = part.trim().split("=");
+    if (name === CONNECT_BINDING_COOKIE) return value.join("=") || undefined;
+  }
+  return undefined;
 }

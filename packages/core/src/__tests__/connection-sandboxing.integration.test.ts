@@ -191,11 +191,6 @@ describe("connection actions by agent sandboxing (ADR 0182)", () => {
       projectId,
       environment: "review",
       aliases: ["directory", "chat", "repo"],
-      principalsByAlias: {
-        directory: "service",
-        chat: "service",
-        repo: "service",
-      },
     });
     allocationId = (
       await allocations.create({

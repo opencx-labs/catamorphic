@@ -1,6 +1,6 @@
 # 0163 — Production databases through the gateway, with reviewed queries
 
-- **Status:** Accepted (amended by 0183)
+- **Status:** Accepted (amended by 0183, [0315](0315-connections-and-vaults-are-host-code.md): connections are declared in host code, not the gateway file)
 - **Date:** 2026-09-25
 - **Refines:** 0162
 

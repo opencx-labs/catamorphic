@@ -13,6 +13,10 @@ import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { promisify } from "node:util";
 import type { CapabilityProviderRuntime, Identity } from "@catamorphic/core";
+import {
+  defineHttpApiConnectionProvider,
+  definePostgresConnectionProvider,
+} from "@catamorphic/server-sdk";
 import { WORKFLOW_PACKAGE_VERSION } from "@catamorphic/workflow";
 import pg from "pg";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
@@ -559,38 +563,6 @@ describe.skipIf(!databaseUrl)("reviewing pull requests (#118)", () => {
     gitBase = await listen(upstream);
     const slackBase = await listen(fakeSlack);
 
-    const gatewayFile = path.join(root, "gateway.json");
-    fs.writeFileSync(
-      gatewayFile,
-      JSON.stringify({
-        connections: [
-          {
-            type: "postgres",
-            kind: "prod-replica",
-            displayName: "Production (replica)",
-            poolSize: 2,
-          },
-          {
-            type: "http",
-            kind: "slack",
-            displayName: "Slack",
-            baseUrl: `${slackBase}/api`,
-            actions: [
-              {
-                name: "conversations.replies",
-                method: "get",
-                path: "/conversations.replies",
-              },
-              {
-                name: "search.messages",
-                method: "get",
-                path: "/search.messages",
-              },
-            ],
-          },
-        ],
-      }),
-    );
     // Install the exact shipped publisher as deployment-owned source, outside
     // the reviewed checkout. Its independent database is the application's
     // ledger, not Catamorphic's schema and not the production replica.
@@ -640,11 +612,34 @@ describe.skipIf(!databaseUrl)("reviewing pull requests (#118)", () => {
         env: {
           WORK_FAKE_AGENT: "1",
           WORK_CONTROL_PLANE_WORKLOADS: "workflow",
-          WORK_GATEWAY_CONFIG: gatewayFile,
           PATH: process.env.PATH,
         },
       }),
       hooks: {
+        connectionProviders: [
+          definePostgresConnectionProvider({
+            kind: "prod-replica",
+            displayName: "Production (replica)",
+            poolSize: 2,
+          }),
+          defineHttpApiConnectionProvider({
+            kind: "slack",
+            displayName: "Slack",
+            baseUrl: `${slackBase}/api`,
+            actions: [
+              {
+                name: "conversations.replies",
+                method: "get",
+                path: "/conversations.replies",
+              },
+              {
+                name: "search.messages",
+                method: "get",
+                path: "/search.messages",
+              },
+            ],
+          }),
+        ],
         capabilityProviders: [
           publisher.reviewPublicationCapability({
             core: () => server.catamorphic.core,

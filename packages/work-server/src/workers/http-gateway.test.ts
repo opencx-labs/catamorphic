@@ -6,6 +6,7 @@ import os from "node:os";
 import path from "node:path";
 import type { Identity } from "@catamorphic/core";
 import { readConnectionGrant } from "@catamorphic/sandbox";
+import { defineHttpApiConnectionProvider } from "@catamorphic/server-sdk";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import {
   createWorkServer,
@@ -107,21 +108,6 @@ beforeAll(async () => {
   if (!upstreamAddress || typeof upstreamAddress === "string")
     throw new Error("No upstream address");
 
-  const gatewayFile = path.join(root, "gateway.json");
-  fs.writeFileSync(
-    gatewayFile,
-    JSON.stringify({
-      connections: [
-        {
-          type: "http",
-          kind: "logs-cluster",
-          displayName: "Logs",
-          baseUrl: `http://127.0.0.1:${upstreamAddress.port}`,
-          auth: { basic: true },
-        },
-      ],
-    }),
-  );
   const port = await freePort();
   base = `http://127.0.0.1:${port}`;
   server = await createWorkServer(
@@ -131,8 +117,17 @@ beforeAll(async () => {
       env: {
         WORK_FAKE_AGENT: "1",
         WORK_CONTROL_PLANE_WORKLOADS: "workflow",
-        WORK_GATEWAY_CONFIG: gatewayFile,
         PATH: process.env.PATH,
+      },
+      hooks: {
+        connectionProviders: [
+          defineHttpApiConnectionProvider({
+            kind: "logs-cluster",
+            displayName: "Logs",
+            baseUrl: `http://127.0.0.1:${upstreamAddress.port}`,
+            auth: { basic: true },
+          }),
+        ],
       },
     }),
   );

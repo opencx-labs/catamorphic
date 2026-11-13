@@ -1,6 +1,6 @@
 # 0172 — Committed connection bindings, named service connections, organization administrators
 
-- **Status:** Accepted
+- **Status:** Accepted (one principal per alias, amended by [0316](0316-members-agents-use-connections-and-hosts-route-custody.md))
 - **Date:** 2026-09-27
 - **Refines:** 0065, 0086, 0158, 0162, 0163
 

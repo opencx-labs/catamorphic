@@ -4,6 +4,7 @@ import http from "node:http";
 import os from "node:os";
 import path from "node:path";
 import { type Identity, projectPrincipalIdentity } from "@catamorphic/core";
+import { defineHttpApiConnectionProvider } from "@catamorphic/server-sdk";
 import { WORKFLOW_PACKAGE_VERSION } from "@catamorphic/workflow";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import {
@@ -216,41 +217,35 @@ beforeAll(async () => {
   );
   const address = fakeSlack.address();
   if (!address || typeof address === "string") throw new Error("No address");
-  const gatewayFile = path.join(root, "gateway.json");
   const action = (name: string, method: "get" | "post") => ({
     name,
     method,
     path: `/${name}`,
   });
-  fs.writeFileSync(
-    gatewayFile,
-    JSON.stringify({
-      connections: [
-        {
-          type: "http",
-          kind: "slack",
-          displayName: "Slack",
-          baseUrl: `http://127.0.0.1:${address.port}/api`,
-          actions: [
-            action("conversations.history", "get"),
-            action("conversations.replies", "get"),
-            action("chat.postMessage", "post"),
-            action("chat.getPermalink", "get"),
-            action("users.info", "get"),
-            action("search.messages", "get"),
-          ],
-        },
-      ],
-    }),
-  );
   server = await createWorkServer(
     testServerOptions({
       dataDir: path.join(root, "server"),
       publicBases: ["https://work.local:4700"],
       env: {
         WORK_FAKE_AGENT: "1",
-        WORK_GATEWAY_CONFIG: gatewayFile,
         PATH: process.env.PATH,
+      },
+      hooks: {
+        connectionProviders: [
+          defineHttpApiConnectionProvider({
+            kind: "slack",
+            displayName: "Slack",
+            baseUrl: `http://127.0.0.1:${address.port}/api`,
+            actions: [
+              action("conversations.history", "get"),
+              action("conversations.replies", "get"),
+              action("chat.postMessage", "post"),
+              action("chat.getPermalink", "get"),
+              action("users.info", "get"),
+              action("search.messages", "get"),
+            ],
+          }),
+        ],
       },
     }),
   );

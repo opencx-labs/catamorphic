@@ -1044,7 +1044,11 @@ for the current limitations and required evidence. Custom hosts continue to
 inject their own infrastructure and auth.
 
 Pass `credentialVault` and `connectionProviders` to `createCatamorphic` when
-external systems are enabled. The host vault stores opaque encrypted material using an injected store and key.
+external systems are enabled. Both are host code, never configuration (ADR
+0315): the provider helpers are functions a host calls, and the vault may be
+Work's `EncryptedCredentialVault` or any `CredentialVault` over the host's
+own secret manager; a Work server takes them as `hooks.connectionProviders`
+and `hooks.credentialVault`. The host vault stores opaque encrypted material using an injected store and key.
 Storing project secret values also requires `credentialVault` (ADR 0281),
 even without connection providers. No plaintext storage or automatic legacy
 import exists. Keep production wrapping keys outside the database; use
@@ -1107,9 +1111,12 @@ administrators.
 
 Environment bindings are committed in `.work/project.json`:
 `environments.<name>.connections.<alias>` is
-`{ provider, principal: "member" | "service" | "either", service?, capabilities? }`,
+`{ provider, principal: "member" | "service", service?, capabilities? }`,
 where `service` names a service connection (the project's own name first,
-then the tenant's) and `capabilities` narrows the alias. Core reads them with
+then the tenant's) and `capabilities` narrows the alias. An alias acts with
+one authority, never both: a project that wants a member's own account and
+a shared one declares two aliases, and workflows and agents name the alias
+they need (ADR 0316). Core reads them with
 the Environment on demand; there is no binding table or API. A host may offer
 extra aliases beside the committed ones with the `connectionBindings` option
 of `createCatamorphic` (the desktop offers its profile MCP servers this way);

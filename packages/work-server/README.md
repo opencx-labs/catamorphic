@@ -30,9 +30,16 @@ same schemas as the environment parser. `hooks` are code. Only
 `workServerConfigFromEnv` knows the `WORK_*` variables and file paths
 documented in [`apps/server`](../../apps/server/README.md): it reads
 `WORK_AUTH_CONFIG` (default `<WORK_DATA_DIR>/auth-config.json`) into
-`config.auth` and `WORK_GATEWAY_CONFIG` into `config.gateway`, resolving each
-secret a file names by variable into its value (ADR 0183). `createWorkServer`
-reads no configuration file.
+`config.auth` (ADR 0183). `createWorkServer` reads no configuration file.
+
+Connections and secret storage are host code, never configuration (ADR
+0315). The gateway brokers the built-in GitHub and model providers plus the
+providers a server passes as `hooks.connectionProviders`, built with
+`defineHttpApiConnectionProvider`, `definePostgresConnectionProvider`,
+`defineModelConnectionProvider` and `defineGitConnectionProvider` from
+`@catamorphic/server-sdk`, `defineMcpConnectionProvider` from
+`@catamorphic/mcp`, or written by hand. Providers that expose `close()` (a
+Postgres provider's pools) are closed at shutdown.
 
 A server can build the config in code instead, for example from a secret
 manager:
@@ -54,25 +61,38 @@ const server = await createWorkServer({
         },
       ],
     },
-    gateway: {
-      connections: [
-        {
-          kind: "slack-mcp",
-          displayName: "Slack",
-          url: "https://mcp.slack.com/mcp",
-          oauth: { client: { id: "1234.5678", secret: secrets.slackSecret } },
+  },
+  hooks: {
+    connectionProviders: [
+      defineMcpConnectionProvider({
+        kind: "slack-mcp",
+        displayName: "Slack",
+        server: { transport: "http", url: "https://mcp.slack.com/mcp" },
+        oauth: {
+          client: { clientId: "1234.5678", clientSecret: secrets.slackSecret },
         },
-      ],
-    },
+      }),
+      definePostgresConnectionProvider({
+        kind: "prod-replica",
+        displayName: "Production (replica)",
+        maxRows: 1000,
+      }),
+    ],
   },
 });
 ```
 
-`WorkAuthConfigSchema` and `GatewayConfigSchema` are exported for hosts that
-validate earlier. Generated state stays in files under `dataDir` (the vault
-key, the generated secrets, the host id, worker credentials); the matching
-config fields and hooks (`secret`, `vaultKeys`, `operatorSecret`) supply them
-instead. With `databaseUrl` the server is a disposable replica (ADR 0190):
+`WorkAuthConfigSchema` is exported for hosts that validate earlier.
+Generated state stays in files under `dataDir` (the vault key, the generated
+secrets, the host id, worker credentials); the matching config fields and
+hooks (`secret`, `vaultKeys`, `operatorSecret`) supply them instead.
+
+Stored credentials (connection keys, OAuth tokens, members' sign-ins) live
+in Work's encrypted vault by default. A host that keeps secrets in its own
+secret manager passes `hooks.credentialVault`, any `CredentialVault`
+implementation: Work then writes no vault key or credentials directory, and
+refuses to start if vault keys are also configured, since the supplied vault
+keeps its own. With `databaseUrl` the server is a disposable replica (ADR 0190):
 `secret`, vault keys, and `operatorSecret` are required, it writes no identity
 to `dataDir`, and it registers a new machine at every start. `server.lost`
 resolves when that machine's lease is lost (`/healthz` then answers 503;

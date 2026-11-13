@@ -3,6 +3,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { projectPrincipalIdentity } from "@catamorphic/core";
+import { definePostgresConnectionProvider } from "@catamorphic/server-sdk";
 import pg from "pg";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { z } from "zod";
@@ -128,20 +129,6 @@ describe.skipIf(!databaseUrl)("service connections (ADR 0172)", () => {
     serverUrl.pathname = `/${serverDatabase}`;
 
     root = fs.mkdtempSync(path.join(os.tmpdir(), "work-service-connections-"));
-    const gatewayFile = path.join(root, "gateway.json");
-    fs.writeFileSync(
-      gatewayFile,
-      JSON.stringify({
-        connections: [
-          {
-            type: "postgres",
-            kind: "prod-replica",
-            displayName: "Production replica",
-            poolSize: 2,
-          },
-        ],
-      }),
-    );
     server = await createWorkServer(
       testServerOptions({
         dataDir: path.join(root, "control-plane"),
@@ -152,8 +139,16 @@ describe.skipIf(!databaseUrl)("service connections (ADR 0172)", () => {
           WORK_VAULT_KEY: Buffer.alloc(32, 5).toString("base64"),
           WORK_FAKE_AGENT: "1",
           WORK_CONTROL_PLANE_WORKLOADS: "workflow",
-          WORK_GATEWAY_CONFIG: gatewayFile,
           PATH: process.env.PATH,
+        },
+        hooks: {
+          connectionProviders: [
+            definePostgresConnectionProvider({
+              kind: "prod-replica",
+              displayName: "Production replica",
+              poolSize: 2,
+            }),
+          ],
         },
       }),
     );

@@ -348,7 +348,6 @@ export function agentDefinitionSchema(opts?: { allowE2eFake?: boolean }) {
             z.string().regex(CONNECTION_ALIAS_PATTERN),
             z.object({
               alias: z.string().regex(CONNECTION_ALIAS_PATTERN),
-              principal: z.enum(["member", "service", "either"]).optional(),
               capabilities: z.array(z.string().min(1)).optional(),
               optional: z.boolean().optional(),
             }),

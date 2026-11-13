@@ -469,7 +469,6 @@ export const WorkflowGraphSchema = z.object({
   connections: z.array(
     z.object({
       alias: z.string(),
-      principal: z.enum(["member", "service", "either"]).optional(),
       capabilities: z.array(z.string()).optional(),
       optional: z.boolean().optional(),
     }),
@@ -733,7 +732,7 @@ export const ConnectionBindingSchema = z.object({
   environment: z.string(),
   alias: z.string(),
   provider: z.string(),
-  principal: z.enum(["member", "service", "either"]),
+  principal: z.enum(["member", "service"]),
   /** The service connection's name; shown to connection administrators. */
   service: z.string().nullable(),
   capabilities: z.array(z.string()).nullable(),
@@ -2239,7 +2238,6 @@ export const ProjectAgentDefinitionSchema = z.object({
         z.string(),
         z.object({
           alias: z.string(),
-          principal: z.enum(["member", "service", "either"]).optional(),
           capabilities: z.array(z.string()).optional(),
           optional: z.boolean().optional(),
         }),

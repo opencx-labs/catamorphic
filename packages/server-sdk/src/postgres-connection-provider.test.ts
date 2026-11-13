@@ -23,7 +23,18 @@ vi.mock("pg", () => ({
   },
 }));
 
-import { definePostgresConnectionProvider } from "./postgres-connection-provider.js";
+import {
+  definePostgresConnectionProvider,
+  POSTGRES_CONNECTION_CEILINGS,
+} from "./postgres-connection-provider.js";
+
+/** Who a provider call is for, as core derives it (ADR 0316). */
+const TEST_CONTEXT = {
+  tenantId: "tenant-1",
+  connectionId: "connection-1",
+  principal: { kind: "service" as const, name: "test" },
+  externalUserId: "member-1",
+};
 
 beforeEach(() => {
   fake.query.mockReset();
@@ -58,6 +69,7 @@ describe("Postgres transaction-pool cancellation", () => {
       });
       const abort = new AbortController();
       const operation = provider.invoke({
+        context: TEST_CONTEXT,
         material: new TextEncoder().encode(
           JSON.stringify({
             connectionString: "postgresql://fixture.invalid/db",
@@ -123,6 +135,7 @@ describe("Postgres transaction-pool cancellation", () => {
     });
     const abort = new AbortController();
     const operation = provider.invoke({
+      context: TEST_CONTEXT,
       material: new TextEncoder().encode(
         JSON.stringify({ connectionString: "postgresql://fixture.invalid/db" }),
       ),
@@ -144,5 +157,31 @@ describe("Postgres transaction-pool cancellation", () => {
     } finally {
       await provider.close();
     }
+  });
+});
+
+describe("Postgres connection ceilings (ADR 0315)", () => {
+  const define = (limits: Record<string, number>) => () =>
+    definePostgresConnectionProvider({
+      kind: "prod-db",
+      displayName: "Production",
+      ...limits,
+    });
+
+  it("accepts limits up to the ceilings", () => {
+    expect(define({ ...POSTGRES_CONNECTION_CEILINGS })).not.toThrow();
+  });
+
+  it.each([
+    ["maxRows", POSTGRES_CONNECTION_CEILINGS.maxRows + 1],
+    ["statementTimeoutMs", POSTGRES_CONNECTION_CEILINGS.statementTimeoutMs + 1],
+    ["lockTimeoutMs", POSTGRES_CONNECTION_CEILINGS.lockTimeoutMs + 1],
+    ["poolSize", POSTGRES_CONNECTION_CEILINGS.poolSize + 1],
+    ["poolIdleTimeoutMs", POSTGRES_CONNECTION_CEILINGS.poolIdleTimeoutMs + 1],
+    ["maxResultBytes", 0],
+    ["maxCost", -1],
+    ["maxPlanRows", Number.NaN],
+  ])("refuses %s of %d", (name, value) => {
+    expect(define({ [name]: value })).toThrow(name);
   });
 });

@@ -178,7 +178,7 @@ function fixture() {
     connectionBroker: {
       async invoke(args) {
         expect(args.identity).toEqual(context().caller);
-        expect(args.allocationId).toBe("allocation");
+        expect(args).toMatchObject({ allocationId: "allocation" });
         expect(args.caller).toBe("workflow");
         expect(args.alias).toBe("github");
         expect(args.signal).toBeInstanceOf(AbortSignal);

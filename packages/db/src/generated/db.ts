@@ -472,6 +472,7 @@ export interface ConnectionAuditEvents {
 
 export interface ConnectionAuthorizationAttempts {
   alias: string | null;
+  browser_binding_hash: string | null;
   completed_at: Timestamp | null;
   created_at: Generated<Timestamp>;
   environment_name: string | null;
@@ -509,6 +510,18 @@ export interface ConnectionCapabilityGrants {
   token_hash: string;
 }
 
+export interface ConnectionConnectOffers {
+  alias: string;
+  created_at: Generated<Timestamp>;
+  environment_name: string;
+  expires_at: Timestamp;
+  external_user_id: string;
+  project_id: string;
+  redeemed_at: Timestamp | null;
+  tenant_id: string;
+  token_hash: string;
+}
+
 export interface Connections {
   account_summary: Generated<Json>;
   capabilities: Generated<Json>;
@@ -522,6 +535,7 @@ export interface Connections {
   principal_kind: string;
   project_id: string | null;
   provider_kind: string;
+  refresh_lease_until: Timestamp | null;
   revision: Generated<number>;
   scopes: Generated<Json>;
   status: Generated<string>;
@@ -1546,6 +1560,7 @@ export interface DB {
   connection_audit_events: ConnectionAuditEvents;
   connection_authorization_attempts: ConnectionAuthorizationAttempts;
   connection_capability_grants: ConnectionCapabilityGrants;
+  connection_connect_offers: ConnectionConnectOffers;
   connections: Connections;
   deployment_artifacts: DeploymentArtifacts;
   deployment_runtimes: DeploymentRuntimes;

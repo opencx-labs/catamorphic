@@ -68,7 +68,7 @@ export function registerConnectionSetup(args: {
       if (!connections) {
         void reply.status(503).send({
           error:
-            "No connection providers are configured. Declare them in WORK_GATEWAY_CONFIG.",
+            "No connection providers are configured. Pass them to the server as hooks.connectionProviders.",
         });
       }
       return connections;

@@ -6,6 +6,7 @@ import type { AgentCapabilityOptions } from "@catamorphic/core";
 import {
   type ConnectionActionGuard,
   type ConnectionProvider,
+  type CredentialVault,
   type Identity,
   type ModelRequestRewrite,
   startEventDispatcher,
@@ -80,16 +81,13 @@ import {
 } from "./cluster.js";
 import { startCompanyProjectSync } from "./company-sync.js";
 import type { WorkServerConfig } from "./config.js";
+import { registerConnectRoutes } from "./connect-routes.js";
 import { EncryptedFileCredentialVault } from "./credential-vault.js";
 import {
   agentsReachMachine,
   resolveExecutionSettings,
   workExecution,
 } from "./execution-config.js";
-import {
-  gatewayProviders,
-  parseGatewayConfig,
-} from "./gateway/gateway-config.js";
 import { AccountLifecycle } from "./identity/account-lifecycle.js";
 import { registerAdministratorRoutes } from "./identity/administrator-routes.js";
 import { WorkAdministrators } from "./identity/administrators.js";
@@ -159,8 +157,19 @@ export interface WorkServerHooks {
   agentCapabilities?: AgentCapabilityOptions;
   /** Workflow host calls and run capabilities, using the existing SDK contract. */
   capabilityProviders?: CreateCatamorphicConfig["capabilityProviders"];
-  /** Added to the connections declared in `config.gateway`. */
-  connectionProviders?: readonly ConnectionProvider[];
+  /**
+   * The connections the gateway brokers beside the built-in GitHub and
+   * model providers (ADR 0315): host code built with
+   * `defineHttpApiConnectionProvider`, `definePostgresConnectionProvider`,
+   * `defineModelConnectionProvider`, `defineGitConnectionProvider` (from
+   * `@catamorphic/server-sdk`), `defineMcpConnectionProvider` (from
+   * `@catamorphic/mcp`), or the host's own. A provider with the kind of a
+   * built-in model provider replaces it. A provider exposing `close()` is
+   * closed when the server shuts down.
+   */
+  connectionProviders?: readonly (ConnectionProvider & {
+    close?: () => Promise<void>;
+  })[];
   /**
    * The built-in `github` connection provider (ADR 0177): an Enterprise
    * Server's URLs, the App's OAuth client for members' own connections, or
@@ -184,8 +193,7 @@ export interface WorkServerHooks {
    * Rewrites of model request bodies through the gateway, in order, before
    * its policy reads them and after nothing else (ADR 0256): pin the
    * providers OpenRouter may route to, per project or session. They apply
-   * to every model connection of their `kinds`, configured or built in; a
-   * connection's own `override` in WORK_GATEWAY_CONFIG has the last word.
+   * to every model connection of their `kinds`, the host's or built in.
    */
   modelRequestRewrites?: readonly ModelRequestRewrite[];
   /**
@@ -193,6 +201,14 @@ export interface WorkServerHooks {
    * boot), current first. Overrides `config.vaultKeys`.
    */
   vaultKeys?: () => Promise<Uint8Array[]>;
+  /**
+   * Where every stored credential lives, replacing Work's own encrypted
+   * vault (ADR 0315): a company secret manager, an HSM, or any store that
+   * implements `CredentialVault`. Work then creates no vault key and no
+   * credentials directory, and boot fails if `vaultKeys` (here or in
+   * config) is also given, since the supplied vault keeps its own keys.
+   */
+  credentialVault?: CredentialVault;
   /**
    * Upstream directories beyond the configured Google Workspace ones, each
    * governing the accounts of one sign-in provider (ADR 0161).
@@ -288,7 +304,14 @@ async function createWorkServerInner(
       "Warning: sign-in rate limits are off (WORK_AUTH_RATE_LIMIT=off). Passwords can be guessed without limit; use this only for tests.",
     );
   }
-  const gateway = config.gateway ? parseGatewayConfig(config.gateway) : null;
+  if (
+    hooks.credentialVault &&
+    (hooks.vaultKeys || (config.vaultKeys && config.vaultKeys.length > 0))
+  ) {
+    throw new Error(
+      "A supplied credential vault keeps its own keys: remove vaultKeys (WORK_VAULT_KEY) or the credentialVault hook",
+    );
+  }
   if (
     config.connectionGuardTimeoutMs !== undefined &&
     !(
@@ -430,18 +453,14 @@ async function createWorkServerInner(
   // The credential vault key is its own secret (ADR 0162): never derived
   // from the sign-in secret, and supplied by a key service through a hook
   // when the deployment has one.
-  const vaultKeys = (await hooks.vaultKeys?.()) ?? config.vaultKeys ?? [];
-  if (objectStore && vaultKeys.length === 0) {
-    throw new Error(
-      "Postgres deployments require WORK_VAULT_KEY (or the vaultKeys hook) on every instance",
-    );
-  }
-  const credentialVault = objectStore
-    ? new EncryptedCredentialVault({ store: objectStore, keys: vaultKeys })
-    : new EncryptedFileCredentialVault(
-        path.join(data, "credentials"),
-        vaultKeys,
-      );
+  // A host may instead supply the whole vault, keys and all (ADR 0315).
+  const credentialVault: CredentialVault =
+    hooks.credentialVault ??
+    workCredentialVault({
+      keys: (await hooks.vaultKeys?.()) ?? config.vaultKeys ?? [],
+      objectStore,
+      directory: path.join(data, "credentials"),
+    });
   if (objectStore) {
     const key = "work/deployment-fingerprint";
     const fingerprint = createHash("sha256")
@@ -469,8 +488,16 @@ async function createWorkServerInner(
           );
         }
       });
-    // Vault keys rotate (ADR 0162): an instance must open at least one key
-    // the deployment already knows; its current key then joins the set.
+  }
+  // Vault keys rotate (ADR 0162): an instance must open at least one key
+  // the deployment already knows; its current key then joins the set. A
+  // vault the host supplies keeps and rotates its own keys (ADR 0315).
+  const keyed =
+    hooks.credentialVault === undefined &&
+    credentialVault instanceof EncryptedCredentialVault
+      ? credentialVault
+      : undefined;
+  if (objectStore && keyed) {
     const keysRecord = "work/vault-key-ids";
     const known = await objectStore
       .get(keysRecord)
@@ -481,13 +508,13 @@ async function createWorkServerInner(
               .parse(JSON.parse(Buffer.from(record.data).toString()))
           : [],
       );
-    const ids = credentialVault.keyIds;
+    const ids = keyed.keyIds;
     if (known.length > 0 && !ids.some((id) => known.includes(id))) {
       throw new Error(
         "WORK_VAULT_KEY and WORK_VAULT_PREVIOUS_KEYS share no key with this Postgres deployment",
       );
     }
-    if (!known.includes(credentialVault.currentKeyId)) {
+    if (!known.includes(keyed.currentKeyId)) {
       await objectStore.put(
         keysRecord,
         Buffer.from(JSON.stringify([...new Set([...known, ...ids])])),
@@ -570,11 +597,10 @@ async function createWorkServerInner(
   // backed by the `github` service connection an administrator connects.
   const github = defineGithubConnectionProvider(hooks.github);
 
-  const gatewayConnectionProviders = gateway ? gatewayProviders(gateway) : [];
+  // Connections are host code (ADR 0315); pooled ones close on shutdown.
+  const hostConnectionProviders = hooks.connectionProviders ?? [];
   disposers.push(() =>
-    Promise.all(
-      gatewayConnectionProviders.map((provider) => provider.close?.()),
-    ),
+    Promise.all(hostConnectionProviders.map((provider) => provider.close?.())),
   );
   const catamorphic = createCatamorphic({
     hostId,
@@ -641,12 +667,11 @@ async function createWorkServerInner(
       // reach them through the gateway's model routes.
       ...builtinModelConnectionProviders().filter(
         (provider) =>
-          !gatewayConnectionProviders.some(
-            (configured) => configured.kind === provider.kind,
+          !hostConnectionProviders.some(
+            (hosted) => hosted.kind === provider.kind,
           ),
       ),
-      ...gatewayConnectionProviders,
-      ...(hooks.connectionProviders ?? []),
+      ...hostConnectionProviders,
     ],
     codeHosts: [githubCodeHost(github)],
     connectionMcpUrl: () => `${publicBase}/api/connection-mcp`,
@@ -1112,6 +1137,7 @@ async function createWorkServerInner(
       instructions:
         "- Share with people outside the company: share_create gives a document, folder, or app its own sign-in link; shares_list and share_revoke manage them.",
       tools: (scope) => shareTools(shares, scope),
+      connectLink: ({ token }) => `${publicBase}/connect/${token}`,
     },
     // Webhook URLs name the public origin when one is configured; without
     // one they follow the address the builder reached the server on.
@@ -1213,6 +1239,21 @@ async function createWorkServerInner(
         externalUserId: authenticated.userId,
       });
     },
+  });
+  registerConnectRoutes(app, {
+    core,
+    auth: workAuth,
+    publicBase,
+    memberForUser: async (userId) =>
+      (await accountLifecycle.isActive(userId)) &&
+      !(await shares.isGuest(userId))
+        ? administrators.withPermissions(
+            await core.memberships.identityForUser({
+              tenantId: SERVER_TENANT_ID,
+              externalUserId: userId,
+            }),
+          )
+        : null,
   });
   const administratorAccess = {
     administrators,
@@ -1522,4 +1563,27 @@ function isLoopbackBase(base: string): boolean {
   return (
     hostname === "127.0.0.1" || hostname === "localhost" || hostname === "[::1]"
   );
+}
+
+/**
+ * Work's own vault (ADR 0162): sealed records in the shared object store on
+ * Postgres, which then requires configured keys, or files under the data
+ * directory, with a generated key when none is configured.
+ */
+function workCredentialVault(args: {
+  keys: readonly Uint8Array[];
+  objectStore: PostgresObjectStore | undefined;
+  directory: string;
+}): EncryptedCredentialVault {
+  if (!args.objectStore)
+    return new EncryptedFileCredentialVault(args.directory, args.keys);
+  if (args.keys.length === 0) {
+    throw new Error(
+      "Postgres deployments require WORK_VAULT_KEY (or the vaultKeys hook) on every instance",
+    );
+  }
+  return new EncryptedCredentialVault({
+    store: args.objectStore,
+    keys: args.keys,
+  });
 }

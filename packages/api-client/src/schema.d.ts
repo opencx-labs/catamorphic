@@ -2241,7 +2241,7 @@ export interface paths {
                             alias: string;
                             provider: string;
                             /** @enum {string} */
-                            principal: "member" | "service" | "either";
+                            principal: "member" | "service";
                             service: string | null;
                             capabilities: string[] | null;
                             memberConnection: {
@@ -2949,8 +2949,6 @@ export interface paths {
                             }[];
                             connections: {
                                 alias: string;
-                                /** @enum {string} */
-                                principal?: "member" | "service" | "either";
                                 capabilities?: string[];
                                 optional?: boolean;
                             }[];
@@ -10149,8 +10147,6 @@ export interface paths {
                                 };
                                 connections?: (string | {
                                     alias: string;
-                                    /** @enum {string} */
-                                    principal?: "member" | "service" | "either";
                                     capabilities?: string[];
                                     optional?: boolean;
                                 })[];
@@ -17145,8 +17141,6 @@ export interface paths {
                             }[];
                             connections: {
                                 alias: string;
-                                /** @enum {string} */
-                                principal?: "member" | "service" | "either";
                                 capabilities?: string[];
                                 optional?: boolean;
                             }[];

@@ -123,12 +123,15 @@ Postgres installs store encrypted records in shared object storage under
 `WORK_VAULT_PREVIOUS_KEYS` keeps older keys readable during a rotation. Back up
 the database and protect the key separately. Losing the key makes provider
 connections and project secrets unrecoverable. Project secrets are sealed in
-the same vault; their database rows hold only references.
+the same vault; their database rows hold only references. A deployment that
+keeps secrets in its own secret manager passes it as the `credentialVault`
+hook instead; Work then holds no vault key or records (ADR 0315).
 
-Agents and workflows reach company systems through the connection gateway:
-`WORK_GATEWAY_CONFIG` declares MCP endpoints, HTTP APIs, Git hosts, model APIs,
-and read-only database connections. Add company guards and model routing
-policy in the hooks of your own entry point (ADRs 0183, 0294;
+Agents and workflows reach company systems through the connection gateway.
+MCP endpoints, HTTP APIs, Git hosts, model APIs, and read-only database
+connections are providers your own entry point passes as
+`hooks.connectionProviders`, beside company guards and model routing policy
+(ADRs 0183, 0294, 0315;
 reference source: [`src/index.ts`](src/index.ts);
 [your own image](../../packages/work-server/README.md#your-own-image)). See
 [secrets and the gateway](../../skills/setup-work-server/references/secrets-and-gateway.md).

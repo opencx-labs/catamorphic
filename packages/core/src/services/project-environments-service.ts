@@ -40,7 +40,7 @@ const LABEL = /^[a-z0-9][a-z0-9._-]{0,62}$/;
 const EnvironmentConnectionBindingSchema = z
   .strictObject({
     provider: z.string().regex(CONNECTION_NAME_PATTERN),
-    principal: z.enum(["member", "service", "either"]),
+    principal: z.enum(["member", "service"]),
     service: z.string().regex(CONNECTION_NAME_PATTERN).optional(),
     capabilities: z.array(z.string().min(1)).optional(),
     /** Git through the gateway (ADR 0175): reachable repositories, push rules. */

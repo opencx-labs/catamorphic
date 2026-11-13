@@ -541,9 +541,10 @@ fresh one with an empty disk at any time.
    share one data directory between two running replicas: a replica removes
    the sandboxes it finds there when it starts.
 2. Supply the deployment's `DATABASE_URL`, `WORK_SECRET`, `WORK_VAULT_KEY`,
-   `WORK_OPERATOR_SECRET`, `WORK_PUBLIC_URL`, sign-in configuration
-   (`WORK_AUTH_CONFIG`), and gateway configuration (`WORK_GATEWAY_CONFIG`)
-   through the secret mechanism. Boot refuses a Postgres deployment without
+   `WORK_OPERATOR_SECRET`, `WORK_PUBLIC_URL`, and sign-in configuration
+   (`WORK_AUTH_CONFIG`) through the secret mechanism, and run the same
+   server entry point, so every replica passes the same connection
+   providers. Boot refuses a Postgres deployment without
    `WORK_OPERATOR_SECRET`, since every replica must answer the same operator
    credential. With TLS to Postgres (`sslmode=require` or stricter), the
    server checks the certificate against the host in `DATABASE_URL`, as Node
@@ -689,11 +690,11 @@ Do not call a controller sandbox a locally running model or promise offline use.
 
 ## Connections and verification
 
-`WORK_GATEWAY_CONFIG` declares the connections the server brokers (MCP
-endpoints, HTTP APIs, databases, Git hosts, model APIs); guards that review
-them are code in a custom server. See
-[secrets and the gateway](secrets-and-gateway.md). This is host endpoint
-configuration, not workflow logic or a second role model.
+The connections the server brokers (MCP endpoints, HTTP APIs, databases, Git
+hosts, model APIs) are providers your server's entry point passes as
+`hooks.connectionProviders`, and guards that review them are code there too.
+See [secrets and the gateway](secrets-and-gateway.md). This is host code,
+not workflow logic or a second role model.
 Organization administrators connect the named service connections once;
 projects commit which Environment binds which name in `.work/project.json`,
 and roles grant the aliases (ADR 0172). Members authorize their own accounts

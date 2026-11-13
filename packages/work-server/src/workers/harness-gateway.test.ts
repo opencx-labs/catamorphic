@@ -4,8 +4,13 @@ import http from "node:http";
 import net from "node:net";
 import os from "node:os";
 import path from "node:path";
-import type { ConnectionActionGuard, Identity } from "@catamorphic/core";
+import type {
+  ConnectionActionGuard,
+  ConnectionProvider,
+  Identity,
+} from "@catamorphic/core";
 import { readConnectionGrant } from "@catamorphic/sandbox";
+import { defineModelConnectionProvider } from "@catamorphic/server-sdk";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { executionSettingsFromEnv } from "../execution-config.js";
 import {
@@ -43,6 +48,7 @@ let base: string;
 let projectId: string;
 let workerDir: string;
 let upstream: http.Server;
+let anthropic: ConnectionProvider;
 let database: Awaited<ReturnType<typeof createTestDatabase>> | undefined;
 const extraServers: WorkServer[] = [];
 const SHARED_SECRET = "model-takeover-test-secret-with-at-least-32-characters";
@@ -207,21 +213,13 @@ beforeAll(async () => {
   );
   fs.chmodSync(path.join(bin, "claude"), 0o755);
 
-  const gatewayFile = path.join(root, "gateway.json");
-  fs.writeFileSync(
-    gatewayFile,
-    JSON.stringify({
-      connections: [
-        {
-          type: "model",
-          kind: "anthropic",
-          displayName: "Anthropic",
-          api: "anthropic",
-          baseUrl: `http://127.0.0.1:${upstreamAddress.port}`,
-        },
-      ],
-    }),
-  );
+  // The host's own Anthropic connection replaces the built-in one.
+  anthropic = defineModelConnectionProvider({
+    kind: "anthropic",
+    displayName: "Anthropic",
+    api: "anthropic",
+    baseUrl: `http://127.0.0.1:${upstreamAddress.port}`,
+  });
   const port = await freePort();
   base = `http://127.0.0.1:${port}`;
   server = await createWorkServer({
@@ -239,11 +237,10 @@ beforeAll(async () => {
           : {}),
         WORK_FAKE_AGENT: "1",
         WORK_CONTROL_PLANE_WORKLOADS: "workflow",
-        WORK_GATEWAY_CONFIG: gatewayFile,
         PATH: process.env.PATH,
       },
     }),
-    hooks: { connectionGuards: [nightGuard] },
+    hooks: { connectionGuards: [nightGuard], connectionProviders: [anthropic] },
   });
   await server.app.listen({ port, host: "127.0.0.1" });
   const operatorSecret = database
@@ -621,11 +618,13 @@ describe("Claude Code on a worker, with its model through the gateway", () => {
             WORK_VAULT_KEY: SHARED_VAULT_KEY,
             WORK_CONTROL_PLANE_WORKLOADS: "workflow",
             WORK_FAKE_AGENT: "1",
-            WORK_GATEWAY_CONFIG: path.join(root, "gateway.json"),
             PATH: process.env.PATH,
           },
         }),
-        hooks: { connectionGuards: [nightGuard] },
+        hooks: {
+          connectionGuards: [nightGuard],
+          connectionProviders: [anthropic],
+        },
       });
       extraServers.push(b);
       await waitFor(async () => {

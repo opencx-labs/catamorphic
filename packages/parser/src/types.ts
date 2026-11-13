@@ -390,7 +390,6 @@ export interface WorkflowGraph {
 
 export interface WorkflowConnectionRequirement {
   alias: string;
-  principal?: "member" | "service" | "either";
   capabilities?: string[];
   optional?: boolean;
 }

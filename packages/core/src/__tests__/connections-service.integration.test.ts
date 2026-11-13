@@ -127,7 +127,7 @@ const provider: ConnectionProvider = {
 const committed: Record<string, EnvironmentConnectionBinding> = {
   directory: {
     provider: "fake",
-    principal: "either",
+    principal: "member",
     capabilities: ["users.list", "users.disable"],
   },
   "service-only": {
@@ -241,14 +241,7 @@ describe("credential connections", () => {
         aliases: ["directory"],
         unattended: true,
       }),
-    ).rejects.toMatchObject({
-      requirements: [
-        {
-          alias: "directory",
-          principalKinds: ["project_service", "tenant_service"],
-        },
-      ],
-    });
+    ).rejects.toBeInstanceOf(ConnectionUnavailableError);
   });
 
   it("administers named service connections only with connections:write", async () => {
@@ -323,15 +316,20 @@ describe("credential connections", () => {
     ).rejects.toBeInstanceOf(ConnectionPermissionDeniedError);
   });
 
-  it("does not fall back from a required service principal to member auth", async () => {
+  it("never falls back from a service binding to the member's own account", async () => {
     const memberConnection = (await connections.list({ identity: member }))[0]!;
+    committed.directory = {
+      provider: "fake",
+      principal: "service",
+      service: "directory-bot",
+      capabilities: ["users.list", "users.disable"],
+    };
     await expect(
       connections.resolve({
         identity: member,
         projectId,
         environment: "company",
         aliases: ["directory"],
-        principalsByAlias: { directory: "service" },
       }),
     ).rejects.toBeInstanceOf(AuthenticationRequiredError);
 
@@ -344,18 +342,11 @@ describe("credential connections", () => {
       label: "Directory bot",
     });
     await authorizeService(connections, service.id, "service-token");
-    committed.directory = {
-      provider: "fake",
-      principal: "either",
-      service: "directory-bot",
-      capabilities: ["users.list", "users.disable"],
-    };
     const [resolved] = await connections.resolve({
       identity: member,
       projectId,
       environment: "company",
       aliases: ["directory"],
-      principalsByAlias: { directory: "service" },
     });
     expect(resolved).toMatchObject({
       connectionId: service.id,
@@ -469,9 +460,9 @@ describe("credential connections", () => {
     expect(forMember.map((binding) => binding.alias)).toEqual(["directory"]);
     expect(forMember[0]).toMatchObject({
       provider: "fake",
-      principal: "either",
+      principal: "service",
       service: null,
-      memberConnection: { principalKind: "member" },
+      memberConnection: null,
       serviceConnection: { connectionId: null, label: "Directory bot" },
     });
     const forAdmin = await connections.listBindings({
@@ -506,7 +497,6 @@ describe("credential connections", () => {
       projectId,
       environment: "company",
       aliases: ["directory"],
-      principalsByAlias: { directory: "service" },
     });
     expect(resolved).toBeDefined();
     const allocation = await allocations.create({
@@ -793,7 +783,6 @@ describe("credential connections", () => {
       projectId,
       environment: "company",
       aliases: ["directory"],
-      principalsByAlias: { directory: "service" },
     });
     const allocation = await allocations.create({
       identity: member,
@@ -898,7 +887,6 @@ describe("credential connections", () => {
       projectId,
       environment: "company",
       aliases: ["directory"],
-      principalsByAlias: { directory: "service" },
     });
     const enablementId = crypto.randomUUID();
     const allocation = await allocations.create({
@@ -1214,7 +1202,15 @@ describe("credential connections", () => {
         db,
         vault: localVault,
         providers,
-        bindings: async () => committed,
+        // Members authorize their own account through a member alias.
+        bindings: async () => ({
+          ...committed,
+          directory: {
+            provider: "fake",
+            principal: "member",
+            capabilities: ["users.list", "users.disable"],
+          },
+        }),
         resolveMemberIdentity: async () => live,
       });
       const service =

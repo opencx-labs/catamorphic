@@ -77,7 +77,7 @@ Settled design decisions live here as short Architecture Decision Records. They 
 | [0062](0062-session-privacy-and-fork-ux.md) | Session privacy & fork UX: incognito sessions, project policy, fork markers, admin usage | Accepted (admin-token usage route superseded by 0072) |
 | [0063](0063-agent-checkout-coordination.md) | Agent coordination and optional worktree isolation | Accepted (refined by 0215: the person chooses too) |
 | [0064](0064-execution-environments-and-allocations.md) | Execution Environments and immutable Allocations | Accepted (agent placement model superseded by 0067; missing project policy refined by 0070) |
-| [0065](0065-credential-connections-and-capability-broker.md) | Credential connections and capability broker | Accepted (refined by 0066, 0068, and 0172; MCP results pass through by 0225) |
+| [0065](0065-credential-connections-and-capability-broker.md) | Credential connections and capability broker | Accepted (refined by 0066, 0068, and 0172; MCP results pass through by 0225; member caller and call context by 0316) |
 | [0066](0066-greenfield-environment-and-connection-cutover.md) | Greenfield Environment and connection cutover | Accepted (service-only unattended rule superseded by 0068) |
 | [0067](0067-long-lived-agent-runtimes-and-capability-gateway.md) | Long-lived agent runtimes and a unified capability gateway | Superseded by 0198 |
 | [0068](0068-personal-artifacts-and-workflow-enablement.md) | Local personal artifacts and explicit workflow enablement | Accepted |
@@ -174,17 +174,17 @@ Settled design decisions live here as short Architecture Decision Records. They 
 | [0159](0159-work-server-identity-and-image.md) | The Work server: product identity and a published image | Accepted |
 | [0160](0160-work-server-package.md) | The Work server is a package with typed hooks | Accepted (config as typed data by 0183; your own image by 0261) |
 | [0161](0161-company-identity-and-deprovisioning.md) | Company identity: Google Workspace sign-in and deprovisioning | Accepted (directory events by 0210) |
-| [0162](0162-connection-gateway-guards-and-sealed-secrets.md) | The connection gateway: guards, sealed secrets, separate vault keys | Accepted (limits refined by 0172; guards are host code by 0183; amended by 0184, 0206; HTTP APIs for code in sandboxes by 0212) |
-| [0163](0163-database-gateway-and-reviewed-queries.md) | Production databases through the gateway, with reviewed queries | Accepted (file-declared guards removed by 0183) |
+| [0162](0162-connection-gateway-guards-and-sealed-secrets.md) | The connection gateway: guards, sealed secrets, separate vault keys | Accepted (limits refined by 0172; guards are host code by 0183; amended by 0184, 0206; HTTP APIs for code in sandboxes by 0212; host-supplied vaults by 0315) |
+| [0163](0163-database-gateway-and-reviewed-queries.md) | Production databases through the gateway, with reviewed queries | Accepted (file-declared guards removed by 0183; connections are host code by 0315) |
 | [0164](0164-control-plane-and-enrolled-workers.md) | A control plane and enrolled workers without credentials | Accepted (placement refined by 0167; processes by 0174; transport by 0187; lease holder superseded by 0192; sandbox backends by 0204; sealed operations by 0207; machine classes and pools by 0205) |
 | [0165](0165-guests-and-shares.md) | Guests and shares for people outside the company | Accepted |
-| [0166](0166-members-work-from-their-own-agents.md) | Members work from their own agents over the project MCP | Accepted (drafts are origin refs per 0191) |
+| [0166](0166-members-work-from-their-own-agents.md) | Members work from their own agents over the project MCP | Accepted (drafts are origin refs per 0191; members call connections directly by 0316) |
 | [0167](0167-machine-pools-access-and-owner-placement.md) | Machine pools, node access, and placement by owner | Accepted (project access and chat placement refined by 0173; classes, pools and retention by 0205; container sandboxes by 0204) |
 | [0168](0168-keyboard-led-focus-rings-and-continuous-sidebar-motion.md) | Keyboard-led focus rings and continuous sidebar motion | Accepted (amended by 0238) |
 | [0169](0169-work-project-workspace.md) | The project workspace is `.work/`, and what lands in repositories is named Work | Accepted |
 | [0170](0170-attached-repositories-receive-pull-requests.md) | Attached repositories receive pull requests, never pushes | Accepted (publishing through connections refined by 0177) |
 | [0171](0171-project-trigger-kinds-and-declarative-webhook-ingress.md) | Project-defined trigger kinds and declarative webhook ingress | Accepted (GitHub host kinds removed by 0177; `$prefix` leaf in 0181; directory events by 0210) |
-| [0172](0172-committed-connection-bindings-and-named-service-connections.md) | Committed connection bindings, named service connections, organization administrators | Accepted (refined by 0177, 0179, 0181) |
+| [0172](0172-committed-connection-bindings-and-named-service-connections.md) | Committed connection bindings, named service connections, organization administrators | Accepted (refined by 0177, 0179, 0181; one principal per alias by 0316) |
 | [0173](0173-keyed-chat-lifecycle-and-chat-placement.md) | Keyed chats: project keys, close, idle release, and their own placement | Accepted (project chat connections refined by 0181; idle release on any replica by 0192; setup and volumes by 0208) |
 | [0174](0174-background-processes-as-a-sandbox-capability.md) | Background processes are a sandbox capability | Accepted (amended by 0198; terminals and previews by 0209; Daytona follow-up dropped by 0231) |
 | [0175](0175-grants-reach-sandboxes.md) | Grants reach sandboxes; credentials never do | Accepted (Git implementation notes; workspaces at a ref in 0178; models and harnesses in 0180; amended by 0184, 0206; HTTP APIs for code in 0212) |
@@ -195,7 +195,7 @@ Settled design decisions live here as short Architecture Decision Records. They 
 | [0180](0180-harnesses-run-in-the-sandbox-models-through-the-gateway.md) | Harnesses run in the sandbox; models through the gateway | Accepted (control loop superseded by 0198; amended by 0184, 0199, 0256) |
 | [0181](0181-project-chats-use-their-environments-bindings.md) | Project chats use their Environment's bindings; session events carry keys | Accepted (the `pull-request-reviews` pack by 0262) |
 | [0182](0182-sandboxing-and-permission-modes-are-different-settings.md) | Sandboxing and permission modes are different settings | Accepted |
-| [0183](0183-guards-are-host-code-work-server-config-is-typed-data.md) | Guards are host code; Work server config is typed data | Accepted |
+| [0183](0183-guards-are-host-code-work-server-config-is-typed-data.md) | Guards are host code; Work server config is typed data | Accepted (connections are host code by 0315) |
 | [0184](0184-personal-credentials-reach-a-members-own-sessions.md) | Personal credentials reach a member's own sessions | Accepted (logins superseded by 0199; amended by 0206; container sandboxes by 0204; sealed operations by 0207; setup and volumes by 0208) |
 | [0185](0185-passkey-requests-stay-answerable.md) | Passkey requests in browser tabs stay answerable | Accepted (amended by 0201, 0220) |
 | [0186](0186-palette-modes-and-use-ranked-search.md) | Palette modes share one shape, and search ranks by use | Accepted (amended by 0234) |
@@ -262,7 +262,7 @@ Settled design decisions live here as short Architecture Decision Records. They 
 | [0249](0249-a-window-coming-back-reads-only-what-it-missed.md) | A window coming back reads only what it missed: no refetch on focus, one catch-up for a hidden window | Accepted (refines 0229) |
 | [0250](0250-a-message-from-another-agent-reaches-a-working-agent.md) | A message from another agent reaches a working agent at its next step; a subagent's always reaches its parent | Accepted (extends 0240) |
 | [0255](0255-acp-agents-run-on-the-work-server.md) | ACP agents run on the Work server, their model through the gateway on loopback | Accepted (builds on 0180, 0198, 0241; amends 0212) |
-| [0256](0256-the-gateway-rewrites-model-requests.md) | The gateway rewrites model requests: host rewrites, then a connection's override and paths, before policy, failing closed | Accepted (amends 0180; amended by 0261) |
+| [0256](0256-the-gateway-rewrites-model-requests.md) | The gateway rewrites model requests: host rewrites, then a connection's override and paths, before policy, failing closed | Accepted (amends 0180; amended by 0261, 0315) |
 | [0257](0257-setup-has-its-own-network.md) | Setup has its own network: the base checkout alone, widened for a while, narrow before the session's work arrives | Accepted (amends 0208) |
 | [0258](0258-machines-on-demand.md) | Machines on demand: work waits for a machine, rules scale with it, and a machine drains under its node lock | Accepted (refines 0173, 0193, 0205) |
 | [0259](0259-reviews-post-from-a-workflow.md) | Reviews post from a workflow: the review chat never writes to GitHub | Accepted (refines 0177, 0181) |
@@ -319,3 +319,5 @@ Settled design decisions live here as short Architecture Decision Records. They 
 | [0311](0311-native-macos-speech-and-push-to-talk.md) | Native macOS speech and push to talk | Accepted (amends 0216, 0236, 0265, 0268, 0297; supersedes 0267) |
 | [0312](0312-cloudflare-sandboxes-use-native-containers.md) | Cloudflare sandboxes use native containers | Accepted |
 | [0313](0313-verified-development-toolchains-preserve-data.md) | Verified development toolchains preserve data | Accepted |
+| [0315](0315-connections-and-vaults-are-host-code.md) | Connections and vaults are host code | Accepted (amends 0162, 0183) |
+| [0316](0316-members-agents-use-connections-and-hosts-route-custody.md) | Members' own agents use connections; hosts route custody | Accepted (amends 0065, 0166, 0172; builds on 0315) |

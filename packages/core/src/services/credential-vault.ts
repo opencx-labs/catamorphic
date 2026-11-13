@@ -4,10 +4,52 @@ export interface CredentialRef {
 
 export type CredentialMaterial = Uint8Array;
 
+/**
+ * What a stored record is for (ADR 0316). Core names every writer, so a
+ * host vault can route each kind to its own store.
+ */
+export type CredentialPurpose =
+  /** A connection's credential (a token, key, or host descriptor). */
+  | "connection"
+  /** A pending authorization's private state (a PKCE verifier). */
+  | "authorization"
+  /** A project secret's value, shared or one member's own. */
+  | "project-secret"
+  /** Values delivered to a session, kept so its transcript stays masked. */
+  | "session-secrets"
+  /** A member's private file for their sessions. */
+  | "personal-file"
+  /** A host's own setup record, such as a registered GitHub App. */
+  | "host-setup";
+
+/** Whose authority a record carries. */
+export type CredentialOwner =
+  | { kind: "member"; externalUserId: string }
+  | { kind: "service"; name: string | null }
+  | { kind: "project" }
+  | { kind: "host" };
+
+/**
+ * Trusted context for one write, set by core and never by a caller of a
+ * public API (ADR 0316). Reads and deletes take only the ref, so a ref must
+ * identify the store that wrote it.
+ */
+export interface CredentialPlacement {
+  purpose: CredentialPurpose;
+  owner: CredentialOwner;
+  /** Absent for tenant-wide records. */
+  projectId?: string;
+}
+
+/**
+ * Credential custody. Hosts may supply any implementation: Work never
+ * requires that a secret be stored by Work itself (ADR 0316).
+ */
 export interface CredentialVault {
   put(args: {
     tenantId: string;
     material: CredentialMaterial;
+    placement: CredentialPlacement;
   }): Promise<CredentialRef>;
   withMaterial<T>(args: {
     tenantId: string;
@@ -60,4 +102,57 @@ export class MemoryCredentialVault implements CredentialVault {
 
 function key(tenantId: string, ref: CredentialRef): string {
   return JSON.stringify([tenantId, ref.id]);
+}
+
+const ROUTE_KEY = /^[a-z0-9][a-z0-9-]{0,31}$/;
+
+/**
+ * One vault over several, chosen per write by host code (ADR 0316). Each ref
+ * carries the key of the vault that wrote it, so reads, refreshes and
+ * deletes reach that vault even after `select` changes; changing `select`
+ * only moves new writes. Keys are lowercase letters, digits and hyphens.
+ */
+export function routeCredentialVaults(args: {
+  vaults: Readonly<Record<string, CredentialVault>>;
+  select: (write: {
+    tenantId: string;
+    placement: CredentialPlacement;
+  }) => string | Promise<string>;
+}): CredentialVault {
+  for (const name of Object.keys(args.vaults)) {
+    if (!ROUTE_KEY.test(name)) {
+      throw new Error(`Invalid credential vault key '${name}'`);
+    }
+  }
+  const vaultFor = (name: string): CredentialVault => {
+    const vault = args.vaults[name];
+    if (!vault) throw new Error(`No credential vault '${name}'`);
+    return vault;
+  };
+  const split = (ref: CredentialRef) => {
+    const at = ref.id.indexOf(":");
+    if (at <= 0) throw new Error("Credential not found");
+    return {
+      vault: vaultFor(ref.id.slice(0, at)),
+      ref: { id: ref.id.slice(at + 1) },
+    };
+  };
+  return {
+    async put(write) {
+      const name = await args.select({
+        tenantId: write.tenantId,
+        placement: write.placement,
+      });
+      const ref = await vaultFor(name).put(write);
+      return { id: `${name}:${ref.id}` };
+    },
+    async withMaterial(read) {
+      const target = split(read.ref);
+      return target.vault.withMaterial({ ...read, ref: target.ref });
+    },
+    async delete(removal) {
+      const target = split(removal.ref);
+      return target.vault.delete({ ...removal, ref: target.ref });
+    },
+  };
 }

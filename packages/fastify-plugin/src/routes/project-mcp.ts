@@ -20,6 +20,7 @@ import {
   toolError,
   toolValue,
 } from "../mcp-shared.js";
+import { connectionTools } from "../project-mcp-connections.js";
 import { programTools, projectInstructions } from "../project-mcp-program.js";
 import {
   allowedWorkflowNames,
@@ -96,9 +97,11 @@ export function registerProjectMcpRoutes(
         .send({ error: "MCP is turned off on this server" });
     }
     const { projectId } = request.params as { projectId: string };
-    const { sessionId, allocationId } = request.query as {
+    const { sessionId, allocationId, environment } = request.query as {
       sessionId?: string;
       allocationId?: string;
+      /** The Environment a member's own agent works in (ADR 0316). */
+      environment?: string;
     };
     const identity = resolveIdentity(request);
     // Someone the project grants nothing sees no project here at all.
@@ -137,6 +140,20 @@ export function registerProjectMcpRoutes(
       ),
     ];
 
+    // A Work session reaches connections through its own grants; a member's
+    // own agent reaches them here, with live authority (ADR 0316).
+    const connections = sessionId
+      ? undefined
+      : connectionTools({
+          core,
+          identity,
+          projectId,
+          ...(environment ? { environment } : {}),
+          ...(ctx.projectMcp?.connectLink
+            ? { connectLink: ctx.projectMcp.connectLink }
+            : {}),
+        });
+
     return handleMcpPost(reply, request.body, async (method, params) => {
       switch (method) {
         case "initialize":
@@ -169,6 +186,12 @@ export function registerProjectMcpRoutes(
           // A workflow tool that claims a surface name wins the name (the
           // project chose it); the surface tool steps aside for this project.
           const taken = new Set(tools.map((tool) => tool.name));
+          const named = new Set([
+            ...taken,
+            ...gatewayTools.map((tool) => tool.name),
+            ...surface.map((tool) => String(tool.definition.name)),
+            POLL_RUN_TOOL,
+          ]);
           return {
             tools: [
               ...gatewayTools.map((tool) => ({
@@ -188,6 +211,9 @@ export function registerProjectMcpRoutes(
               ...surface
                 .filter((tool) => !taken.has(String(tool.definition.name)))
                 .map((tool) => tool.definition),
+              ...((await connections?.list()) ?? []).filter(
+                (tool) => !named.has(String(tool.name)),
+              ),
             ],
           };
         }
@@ -230,6 +256,13 @@ export function registerProjectMcpRoutes(
             ? undefined
             : surface.find((tool) => tool.definition.name === name);
           if (surfaced) return surfaced.call(args);
+          if (
+            name !== POLL_RUN_TOOL &&
+            !workflowTools.some((tool) => tool.name === name)
+          ) {
+            const connected = await connections?.call(name, args);
+            if (connected) return connected;
+          }
           return callTool(core, identity, projectId, name, args);
         }
         default:
