@@ -885,10 +885,10 @@ describe("chat flows", () => {
     // Cmd+P toggles the overlay. Earlier flows can leave it open; preserve
     // that state instead of turning the searchable palette off.
     await run(
-      `if (!document.querySelector('[data-palette="overlay"]:not([inert], [inert] *)')) pressKey('p', { metaKey: true }); return true;`,
+      `if (!$('[data-palette="overlay"]:not([inert], [inert] *)')) pressKey('p', { metaKey: true }); return true;`,
     );
     await runWait(
-      `const input = document.querySelector('[data-palette="overlay"] [aria-label="Search commands, pages, and more"]');
+      `const input = $('[data-palette="overlay"] [aria-label="Search commands, pages, and more"]');
        if (!input || document.activeElement !== input) return false;
        setReactValue(input, 'Session menu');
        return true;`,
@@ -1090,7 +1090,7 @@ describe("chat flows", () => {
     });
     await run(`pressKey('p', { metaKey: true }); return true;`);
     await runWait(
-      `const input = document.querySelector('[data-palette="overlay"] [aria-label="Search commands, pages, and more"]');
+      `const input = $('[data-palette="overlay"] [aria-label="Search commands, pages, and more"]');
        if (!input || document.activeElement !== input || input.closest('[inert]')) return false;
        setReactValue(input, '>rename current chat');
        return true;`,
@@ -1102,7 +1102,7 @@ describe("chat flows", () => {
     ).toBe(false);
     await run(`pressKey('Escape'); return true;`);
     await runWait(
-      `return !document.querySelector('[data-palette="overlay"]:not([inert], [inert] *)');`,
+      `return !$('[data-palette="overlay"]:not([inert], [inert] *)');`,
       {
         label: "palette dismissed before restoring the chat",
       },
@@ -1113,7 +1113,7 @@ describe("chat flows", () => {
     });
     await run(`pressKey('p', { metaKey: true }); return true;`);
     await runWait(
-      `const input = document.querySelector('[data-palette="overlay"] [aria-label="Search commands, pages, and more"]');
+      `const input = $('[data-palette="overlay"] [aria-label="Search commands, pages, and more"]');
        if (!input || document.activeElement !== input) return false;
        setReactValue(input, '>rename current chat');
        return true;`,
@@ -1177,7 +1177,7 @@ describe("chat flows", () => {
     ).toBe(false);
     await run(`pressKey('Escape'); return true;`);
     await runWait(
-      `return !document.querySelector('[data-palette="overlay"]:not([inert], [inert] *)');`,
+      `return !$('[data-palette="overlay"]:not([inert], [inert] *)');`,
     );
     await run(`pressKey('w', { metaKey: true }); return true;`);
     await runWait(
@@ -1200,7 +1200,7 @@ describe("chat flows", () => {
     ).toBe(false);
     await run(`pressKey('Escape'); return true;`);
     await runWait(
-      `return !document.querySelector('[data-palette="overlay"]:not([inert], [inert] *)');`,
+      `return !$('[data-palette="overlay"]:not([inert], [inert] *)');`,
     );
     await run(`pressKey('w', { metaKey: true }); return true;`);
     await runWait(`return !document.querySelector('[data-floating-surface]');`);

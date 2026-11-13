@@ -1073,9 +1073,13 @@ it("retains independent New Tab drafts, appends new tabs, and reuses an empty ta
       `return input().closest('[data-surface-key]').dataset.surfaceKey`,
     );
   const select = async (key: string) => {
+    await run(`
+      ${strip}.find(el => el.dataset.pointKey === ${JSON.stringify(key)})?.scrollIntoView({block:'nearest',inline:'nearest',behavior:'instant'});
+      return true;
+    `);
     const point = await wait<{ x: number; y: number }>(`
       const tab = ${strip}.find(el => el.dataset.pointKey === ${JSON.stringify(key)});
-      if (!tab || tab.closest('[data-tab-orientation]').getAnimations({subtree:true}).some(a => a.playState === 'running')) return false;
+      if (!tab || tab.closest('[data-tab-orientation]').getAnimations({subtree:true}).some(a => a.playState === 'running' && a.effect?.getTiming().iterations !== Infinity)) return false;
       const r = tab.getBoundingClientRect();
       const point = {x:r.left+Math.min(24,r.width/3), y:r.top+r.height/2};
       return tab.contains(document.elementFromPoint(point.x,point.y)) && point;
@@ -1088,7 +1092,7 @@ it("retains independent New Tab drafts, appends new tabs, and reuses an empty ta
   const newTab = async () => {
     await shortcut("t");
     await wait(
-      `return document.activeElement === input() && !!input().closest('[data-palette="tab"]')`,
+      `return input() instanceof HTMLTextAreaElement && input().value === '' && document.activeElement === input() && !!input().closest('[data-palette="tab"]')`,
     );
     return currentKey();
   };
@@ -1113,7 +1117,7 @@ it("retains independent New Tab drafts, appends new tabs, and reuses an empty ta
     ),
   ).toEqual(["first draft", 0, 5]);
   await select(second);
-  expect(await run(`return [chip(),input().textContent]`)).toEqual([
+  expect(await run(`return [chip(),input().innerText]`)).toEqual([
     "Ask agent",
     "second draft\nwith another line",
   ]);

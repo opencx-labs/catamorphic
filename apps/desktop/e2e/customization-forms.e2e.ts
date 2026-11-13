@@ -26,7 +26,7 @@ async function capture(name: string) {
 }
 async function click(selector: string) {
   const box = await app.waitFor<{ x: number; y: number }>(
-    `(()=>{const el=document.querySelector(${json(selector)});if(!el)return false;if(el.closest('[data-sidebar]')?.getAnimations({subtree:true}).some(a=>a.playState==='running'&&a.effect?.getTiming().iterations!==Infinity))return false;const r=el.getBoundingClientRect();const x=r.x+r.width/2,y=r.y+r.height/2;return el.contains(document.elementFromPoint(x,y))?{x,y}:false})()`,
+    `(()=>{const el=document.querySelector(${json(selector)});if(!el||el.closest('[inert]')||el.matches(':disabled'))return false;const surface=el.closest('[role="dialog"], [data-sidebar]');if(surface?.getAnimations({subtree:true}).some(a=>a.playState==='running'&&a.effect?.getTiming().iterations!==Infinity))return false;const r=el.getBoundingClientRect();const x=r.x+r.width/2,y=r.y+r.height/2;return el.contains(document.elementFromPoint(x,y))?{x,y}:false})()`,
   );
   await app.clickPointer(box);
 }
@@ -63,9 +63,21 @@ async function select(name: string, value: string) {
   );
   expect(target).toBeGreaterThanOrEqual(0);
   await click(selector);
+  await app.waitFor(
+    `document.querySelector(${json(selector)})?.matches(':open')`,
+    {
+      label: `${name} picker opened`,
+    },
+  );
   for (let i = 0; i < Math.abs(target - current); i++)
     await app.press(target < current ? "ArrowUp" : "ArrowDown");
   await app.press("Enter");
+  await app.waitFor(
+    `!document.querySelector(${json(selector)})?.matches(':open')`,
+    {
+      label: `${name} picker closed`,
+    },
+  );
   await app.waitFor(
     `document.querySelector(${json(selector)})?.value===${json(value)}`,
     { label: `${name} selected ${value}` },
