@@ -101,5 +101,35 @@ describe("serializeComposer", () => {
       attachments: [],
       text: "",
     });
+    expect(
+      serializeComposer(el("DIV", [text(""), el("BR"), text("")]), () => null, {
+        trim: false,
+        emptyPlaceholder: true,
+      }),
+    ).toEqual({ message: "", attachments: [], text: "" });
+    expect(
+      serializeComposer(el("DIV", [el("BR"), el("BR")]), () => null, {
+        trim: false,
+        emptyPlaceholder: true,
+      }).message,
+    ).toBe("\n\n");
+    // A selection prefix ending between two real line breaks is not the
+    // full empty editor. Keep its newline so caret offsets remain exact.
+    expect(
+      serializeComposer(el("DIV", [el("BR")]), () => null, { trim: false })
+        .message,
+    ).toBe("\n");
+    expect(
+      serializeComposer(el("DIV", [text("\n")]), () => null, {
+        trim: false,
+        emptyPlaceholder: true,
+      }).message,
+    ).toBe("\n");
+    expect(
+      serializeComposer(el("DIV", [text(" ")]), () => null, {
+        trim: false,
+        emptyPlaceholder: true,
+      }).message,
+    ).toBe(" ");
   });
 });

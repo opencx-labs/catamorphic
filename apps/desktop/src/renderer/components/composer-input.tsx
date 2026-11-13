@@ -266,7 +266,7 @@ export const ComposerInput = forwardRef<
       const raw = serializeComposer(
         logicalComposerRoot(root, exitingRef.current),
         resolve,
-        options,
+        { ...options, emptyPlaceholder: true },
       );
       return {
         ...raw,
