@@ -19,6 +19,7 @@ import type { EnvironmentConnectionBinding } from "../services/connection-types.
 import {
   AuthenticationRequiredError,
   ConnectionsService,
+  ConnectionTemporarilyUnavailableError,
 } from "../services/connections-service.js";
 import {
   type CredentialPlacement,
@@ -75,6 +76,8 @@ class RecordingVault implements CredentialVault {
 const calls: Array<{ material: string; context: ConnectionCallContext }> = [];
 let refreshes = 0;
 let refreshRefused = false;
+/** The token endpoint is down: nothing is known about the grant. */
+let refreshUnreachable = false;
 /** An ordinary provider that wrongly answers with nothing to keep. */
 const careless: ConnectionProvider = {
   kind: "careless",
@@ -98,6 +101,9 @@ const oauth: ConnectionProvider = {
   refresh: async ({ material }) => {
     const token = new TextDecoder().decode(material);
     await new Promise((resolve) => setTimeout(resolve, refreshDelayMs));
+    if (refreshUnreachable) {
+      throw Object.assign(new Error("service unavailable"), { status: 503 });
+    }
     if (refreshRefused || spent.has(token)) {
       throw Object.assign(new Error("invalid_grant"), { status: 400 });
     }
@@ -213,6 +219,7 @@ describe("host-owned connections (ADR 0316)", () => {
     calls.length = 0;
     reviewed.length = 0;
     refreshRefused = false;
+    refreshUnreachable = false;
     refreshDelayMs = 0;
     verdict = "allow";
   });
@@ -265,6 +272,43 @@ describe("host-owned connections (ADR 0316)", () => {
         aliases: ["mine"],
       }),
     ).rejects.toBeInstanceOf(AuthenticationRequiredError);
+  });
+
+  it("reads an unreachable token endpoint as temporary, never as a reason to reconnect", async () => {
+    const owner = memberOf("unreachable", ["mine"]);
+    const created = await memberConnection({
+      owner,
+      token: "unreachable-token",
+      expiresAt: new Date(Date.now() - 1_000),
+    });
+    refreshUnreachable = true;
+    await expect(
+      connections.resolve({
+        identity: owner,
+        projectId,
+        environment: "company",
+        aliases: ["mine"],
+      }),
+    ).rejects.toBeInstanceOf(ConnectionTemporarilyUnavailableError);
+    expect(
+      (await connections.list({ identity: owner })).find(
+        (record) => record.id === created.id,
+      )?.status,
+    ).toBe("ready");
+    // Still valid for a while: a call goes ahead despite the failed refresh.
+    await db
+      .updateTable("connections")
+      .set({ expires_at: new Date(Date.now() + 30_000) })
+      .where("id", "=", created.id)
+      .execute();
+    await expect(
+      connections.resolve({
+        identity: owner,
+        projectId,
+        environment: "company",
+        aliases: ["mine"],
+      }),
+    ).resolves.toHaveLength(1);
   });
 
   it("never refreshes a revoked connection", async () => {

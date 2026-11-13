@@ -26,6 +26,7 @@ import {
   AuthenticationRequiredError,
   ConnectionPermissionDeniedError,
   type ConnectionsService,
+  ConnectionTemporarilyUnavailableError,
   ConnectionUnavailableError,
 } from "./connections-service.js";
 import type { ExecutionAllocationsService } from "./execution-allocations-service.js";
@@ -222,6 +223,8 @@ export class ConnectionBroker {
         !(await this.readsOnly({
           identity: args.identity,
           actor,
+          scope,
+          alias: binding.alias,
           connectionId: binding.connectionId,
           capabilities: binding.capabilities,
           provider,
@@ -354,12 +357,23 @@ export class ConnectionBroker {
         cause instanceof ConnectionUnavailableError ||
         isConnectionAuthorizationExpiredError(cause)
       ) {
-        if (scope.workflowEnablementId) {
+        // A refresh that could not run now says nothing about authority:
+        // the call fails, the enablement stays on.
+        if (
+          scope.workflowEnablementId &&
+          !(cause instanceof ConnectionTemporarilyUnavailableError)
+        ) {
           await this.workflowEnablements?.().suspendForConnection({
             identity: args.identity,
             connectionId: binding.connectionId,
           });
         }
+        if (cause instanceof ConnectionTemporarilyUnavailableError)
+          throw new ConnectionTemporarilyUnavailableError(
+            args.alias,
+            "Connection is temporarily unavailable",
+            binding.connectionId,
+          );
         throw new ConnectionUnavailableError(
           args.alias,
           isConnectionAuthorizationExpiredError(cause)
@@ -1091,6 +1105,8 @@ export class ConnectionBroker {
     identity: Identity;
     /** The member the call acts for, for the provider's context. */
     actor: Identity;
+    scope: InvocationScope;
+    alias: string;
     connectionId: string;
     capabilities: readonly string[];
     provider: ConnectionProvider;
@@ -1108,6 +1124,9 @@ export class ConnectionBroker {
           context: this.connections.providerContext({
             identity: args.actor,
             connection,
+            projectId: args.scope.projectId,
+            environment: args.scope.environment,
+            alias: args.alias,
           }),
           capabilities: args.capabilities,
         }),
@@ -1185,7 +1204,13 @@ export class ConnectionBroker {
           identity: args.identity,
           enablementId: allocation.policy.workflowEnablementId,
         });
-      } catch {
+      } catch (error) {
+        if (error instanceof ConnectionTemporarilyUnavailableError)
+          throw new ConnectionTemporarilyUnavailableError(
+            args.alias,
+            "Connection is temporarily unavailable",
+            selected.connectionId,
+          );
         throw new ConnectionUnavailableError(
           args.alias,
           "Workflow enablement authority is unavailable",

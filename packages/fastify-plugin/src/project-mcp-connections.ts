@@ -263,6 +263,9 @@ function named(entries: Entry[]): Entry[] {
     const exact =
       safe === action(entry) &&
       !entry.alias.includes("__") &&
+      // `notes_` + `send` and `notes` + `_send` would both read
+      // `notes___send`: only an alias without a trailing `_` ends at `__`.
+      !entry.alias.endsWith("_") &&
       plain.length <= MAX_TOOL_NAME &&
       counts.get(key(entry)) === 1;
     const name = exact

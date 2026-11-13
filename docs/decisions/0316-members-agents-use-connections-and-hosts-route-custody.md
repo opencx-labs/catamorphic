@@ -64,7 +64,9 @@ neither publish nor expire the connection, and waiting callers take over a
 lease its holder dropped or let lapse. Admission and snapshot revalidation
 refresh before judging expiry; revoked or expired connections are never
 refreshed, and revocation releases the credential stored when it locks the
-row.
+row. A refresh that cannot run now (the provider unreachable, another
+replica still refreshing) fails only that call: a token with time left is
+still used, and nothing is suspended, parked, or sent to reconnect.
 
 Considered: generic `discover`/`invoke` tools instead of native ones.
 Rejected: clients lose per-tool permissions, annotations and typed results.

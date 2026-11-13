@@ -283,6 +283,7 @@ export {
   ConnectionNotFoundError,
   ConnectionPermissionDeniedError,
   ConnectionsService,
+  ConnectionTemporarilyUnavailableError,
   ConnectionUnavailableError,
   type EnvironmentConnectionStatus,
 } from "./services/connections-service.js";

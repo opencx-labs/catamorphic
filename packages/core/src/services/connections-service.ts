@@ -100,6 +100,21 @@ export class ConnectionUnavailableError extends Error {
   }
 }
 
+/**
+ * The connection's refresh could not run just now (offline, the provider
+ * failed to answer, another replica still refreshing): nothing says its
+ * authority is gone, so the call may be retried and nothing is suspended
+ * or sent to reconnect (ADR 0316).
+ */
+export class ConnectionTemporarilyUnavailableError extends ConnectionUnavailableError {
+  readonly transient = true;
+
+  constructor(alias: string, message: string, connectionId?: string) {
+    super(alias, message, connectionId);
+    this.name = "ConnectionTemporarilyUnavailableError";
+  }
+}
+
 export interface ConnectionAuditEvent {
   id: string;
   projectId: string | null;
@@ -792,7 +807,28 @@ export class ConnectionsService {
       .deleteFrom("connection_connect_offers")
       .where("expires_at", "<", new Date(Date.now() - CONNECT_OFFER_MS))
       .execute();
+    await this.sweepAbandonedAttempts(args.identity.tenantId);
     return { token, expiresAt };
+  }
+
+  /**
+   * End attempts that expired while pending (a consent tab closed) and
+   * release their private state, which would otherwise stay in the host's
+   * vault for good.
+   */
+  private async sweepAbandonedAttempts(tenantId: string): Promise<void> {
+    const ended = await this.db
+      .updateTable("connection_authorization_attempts")
+      .set({ status: "expired", completed_at: new Date() })
+      .where("tenant_id", "=", tenantId)
+      .where("status", "=", "pending")
+      .where("expires_at", "<=", new Date())
+      .returning("private_state_ref")
+      .execute();
+    for (const attempt of ended)
+      await this.unseal({ tenantId, ref: attempt.private_state_ref }).catch(
+        () => {},
+      );
   }
 
   /**
@@ -1772,7 +1808,7 @@ export class ConnectionsService {
       ) {
         return this.refreshOnce({ ...args, takeover: false });
       }
-      throw new ConnectionUnavailableError(
+      throw new ConnectionTemporarilyUnavailableError(
         connection.id,
         "Refresh in progress",
       );
@@ -1814,11 +1850,17 @@ export class ConnectionsService {
       // connection) or that it failed to answer (a server error) says
       // nothing about the grant: the connection stays ready and its next
       // use refreshes again. Refused, it is spent.
-      if (!transient(error) && connection.expires_at <= new Date()) {
+      const passing = transient(error);
+      if (!passing && connection.expires_at <= new Date()) {
         await this.markExpiredHolding(lease);
       }
       await this.dropRefreshLease(lease);
-      throw new ConnectionUnavailableError(connection.id, "Refresh failed");
+      throw passing
+        ? new ConnectionTemporarilyUnavailableError(
+            connection.id,
+            "Refresh failed",
+          )
+        : new ConnectionUnavailableError(connection.id, "Refresh failed");
     }
     let nextRef: { id: string } | null;
     try {

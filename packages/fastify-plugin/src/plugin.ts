@@ -132,6 +132,8 @@ export interface ProjectMcpHost {
    * `browserBinding` in the cookie `connectBindingCookie` names, for the
    * callback.
    * Without it, connect tools tell the person to connect in Work instead.
+   * Set `publicApiBase` with it: the callback names the binding cookie from
+   * the public address, which a proxy's rewritten `Host` would misstate.
    */
   connectLink?: (args: { token: string; projectId: string }) => string;
 }
