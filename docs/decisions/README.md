@@ -317,3 +317,5 @@ Settled design decisions live here as short Architecture Decision Records. They 
 | [0309](0309-render-failures-stay-with-their-surface.md) | Render failures stay with their surface | Accepted |
 | [0310](0310-linux-ci-on-github-hosted-runners.md) | Linux CI on GitHub-hosted runners | Accepted (amends 0129) |
 | [0311](0311-native-macos-speech-and-push-to-talk.md) | Native macOS speech and push to talk | Accepted (amends 0216, 0236, 0265, 0268, 0297; supersedes 0267) |
+| [0312](0312-cloudflare-sandboxes-use-native-containers.md) | Cloudflare sandboxes use native containers | Accepted |
+| [0313](0313-verified-development-toolchains-preserve-data.md) | Verified development toolchains preserve data | Accepted |

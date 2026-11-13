@@ -139,8 +139,8 @@ export type TriggerConfig<Kind extends TriggerKindName> =
   TriggerKinds[Kind] extends { config: infer Config } ? Config : never;
 
 class TriggerBindingImpl<Payload, Output = unknown> {
-  private declare readonly payload: Payload;
-  private declare readonly output: Output;
+  declare private readonly payload: Payload;
+  declare private readonly output: Output;
 
   readonly kind: string;
   readonly config: unknown;
@@ -199,7 +199,7 @@ export type BindingPayload<Binding> =
   Binding extends TriggerBinding<infer Payload, unknown> ? Payload : never;
 
 class ProjectTriggerImpl<Payload> {
-  private declare readonly payload: Payload;
+  declare private readonly payload: Payload;
 
   readonly name: string;
   readonly description: string | undefined;

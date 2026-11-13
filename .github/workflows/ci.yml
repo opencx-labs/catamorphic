@@ -27,7 +27,7 @@ jobs:
     steps:
       - name: Check contributor permission
         id: permission
-        uses: actions/github-script@v9
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
         with:
           script: |
             if (context.eventName !== "pull_request") {
@@ -62,7 +62,7 @@ jobs:
       desktop_linux: ${{ steps.plan.outputs.desktop_linux }}
       desktop_macos: ${{ steps.plan.outputs.desktop_macos }}
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: ./.github/actions/test-setup
         id: setup
         with:
@@ -76,7 +76,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: ./.github/actions/test-setup
         id: setup
         with:
@@ -87,7 +87,7 @@ jobs:
         with:
           key: ${{ steps.setup.outputs.task-cache-key }}
       - name: Upload task execution summary
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         # Diagnostics only: an artifact service outage never fails verification.
         continue-on-error: true
         if: ${{ !cancelled() }}
@@ -108,7 +108,7 @@ jobs:
       matrix:
         include: ${{ fromJSON(needs.shards.outputs.workspace) }}
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: ./.github/actions/test-setup
         id: setup
         with:
@@ -120,7 +120,7 @@ jobs:
         with:
           key: ${{ steps.setup.outputs.task-cache-key }}
       - name: Upload task execution summary
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         # Diagnostics only: an artifact service outage never fails verification.
         continue-on-error: true
         if: ${{ !cancelled() }}
@@ -137,7 +137,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: ./.github/actions/test-setup
         id: setup
         with:
@@ -150,7 +150,7 @@ jobs:
         with:
           key: ${{ steps.setup.outputs.task-cache-key }}
       - name: Upload task execution summary
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         # Diagnostics only: an artifact service outage never fails verification.
         continue-on-error: true
         if: ${{ !cancelled() }}
@@ -167,7 +167,7 @@ jobs:
     runs-on: macos-15
     timeout-minutes: 10
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: ./.github/actions/test-setup
         with:
           cache-suffix: module-confinement-macos
@@ -181,7 +181,7 @@ jobs:
           bun build apps/desktop/scripts/module-sandbox-bench.ts --target=node --external @anthropic-ai/sandbox-runtime --outfile apps/desktop/out/module-bench.mjs
           module_bench_node=$(bun -e 'import {repositoryNodePath} from "./scripts/tool-runtime.ts"; console.log(repositoryNodePath({rootPath:process.cwd()}))')
           "$module_bench_node" --expose-gc apps/desktop/out/module-bench.mjs > test-results/module-bench-macos.json
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         if: always()
         continue-on-error: true
         with:
@@ -195,7 +195,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: ./.github/actions/test-setup
         with:
           cache-suffix: module-confinement-linux
@@ -208,10 +208,10 @@ jobs:
           sudo apt-get install --yes bubblewrap socat time xvfb xauth x11-utils xdotool openbox build-essential curl xz-utils meson ninja-build pkg-config libcap-dev
           # Noble's older package does not include safe destination symlink
           # setup. Build the pinned upstream release for this disposable runner.
-          curl --fail --location --retry 3 https://github.com/containers/bubblewrap/releases/download/v0.13.0/bubblewrap-0.13.0.tar.xz --output /tmp/work-bubblewrap.tar.xz
-          echo '4734237473c0e5d695e4e9034a34e43b2dbf5164655bd13fa59ae376b2b7a765  /tmp/work-bubblewrap.tar.xz' | sha256sum --check
+          curl --fail --location --retry 3 https://github.com/containers/bubblewrap/releases/download/v0.13.1/bubblewrap-0.13.1.tar.xz --output /tmp/work-bubblewrap.tar.xz
+          echo '0e85c8702248b8dd64144f594147553650cdd0e4c951690345faace79c217c4d  /tmp/work-bubblewrap.tar.xz' | sha256sum --check
           tar -xJf /tmp/work-bubblewrap.tar.xz --directory /tmp
-          meson setup /tmp/work-bubblewrap-build /tmp/bubblewrap-0.13.0 -Dtests=false -Dman=disabled -Dbash_completion=disabled -Dzsh_completion=disabled
+          meson setup /tmp/work-bubblewrap-build /tmp/bubblewrap-0.13.1 -Dtests=false -Dman=disabled -Dbash_completion=disabled -Dzsh_completion=disabled
           ninja -C /tmp/work-bubblewrap-build
           sudo install -m 0755 /tmp/work-bubblewrap-build/bwrap /usr/bin/bwrap
           sudo install -d -o "$(id -u)" -g "$(id -g)" /usr/local/etc/work-module-tests /etc/ssl/work-module-tests
@@ -237,7 +237,7 @@ jobs:
           bun build apps/desktop/scripts/module-sandbox-bench.ts --target=node --external @anthropic-ai/sandbox-runtime --outfile apps/desktop/out/module-bench.mjs
           module_bench_node=$(bun -e 'import {repositoryNodePath} from "./scripts/tool-runtime.ts"; console.log(repositoryNodePath({rootPath:process.cwd()}))')
           "$module_bench_node" --expose-gc apps/desktop/out/module-bench.mjs > test-results/module-bench-linux.json
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         if: always()
         continue-on-error: true
         with:
@@ -255,7 +255,7 @@ jobs:
       matrix:
         include: ${{ fromJSON(needs.shards.outputs.desktop_linux) }}
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: ./.github/actions/test-setup
         id: setup
         with:
@@ -274,7 +274,7 @@ jobs:
         env:
           CATAMORPHIC_TEST_SHARD: ${{ matrix.shard }}/${{ matrix.total }}
         run: bun scripts/tool-runtime.ts turbo run test:e2e:ci --filter=catamorphic-desktop --concurrency=2 --force=${{ github.event_name != 'pull_request' }} --output-logs=new-only --summarize
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         # Diagnostics only: an artifact service outage never fails verification.
         continue-on-error: true
         if: always()
@@ -288,7 +288,7 @@ jobs:
         with:
           key: ${{ steps.setup.outputs.task-cache-key }}
       - name: Upload task execution summary
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         # Diagnostics only: an artifact service outage never fails verification.
         continue-on-error: true
         if: ${{ !cancelled() }}
@@ -310,7 +310,7 @@ jobs:
       matrix:
         include: ${{ fromJSON(needs.shards.outputs.desktop_macos) }}
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: ./.github/actions/test-setup
         id: setup
         with:
@@ -344,7 +344,7 @@ jobs:
           grep -q '^Watching only for' "${permission_log}"
           bun scripts/tool-runtime.ts turbo run test:e2e:ci --filter=catamorphic-desktop --concurrency=2 --force=${{ github.event_name != 'pull_request' }} --output-logs=new-only --summarize
           kill -0 "${permission_pid}"
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         # Diagnostics only: an artifact service outage never fails verification.
         continue-on-error: true
         if: always()
@@ -358,7 +358,7 @@ jobs:
         with:
           key: ${{ steps.setup.outputs.task-cache-key }}
       - name: Upload task execution summary
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         # Diagnostics only: an artifact service outage never fails verification.
         continue-on-error: true
         if: ${{ !cancelled() }}
@@ -378,7 +378,7 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: ./.github/actions/test-setup
         id: setup
         with:
@@ -388,7 +388,7 @@ jobs:
         # own; move it forward deliberately (the same one as
         # packages/container/scripts/test-machine.Dockerfile).
         env:
-          GVISOR_RELEASE: "20260928"
+          GVISOR_RELEASE: "20261102"
         run: |
           curl -fsSL https://gvisor.dev/archive.key | sudo gpg --dearmor -o /usr/share/keyrings/gvisor-archive-keyring.gpg
           echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/gvisor-archive-keyring.gpg] https://storage.googleapis.com/gvisor/releases $GVISOR_RELEASE main" | sudo tee /etc/apt/sources.list.d/gvisor.list
@@ -405,7 +405,7 @@ jobs:
           sudo systemctl restart docker
           for i in $(seq 1 60); do docker info >/dev/null 2>&1 && break; sleep 1; done
           docker info --format '{{json .Runtimes.runsc}}'
-          docker run --rm --runtime=runsc --network none alpine:3.22.2 echo gVisor runs
+          docker run --rm --runtime=runsc --network none alpine:3.24.4@sha256:f59abe656b692d901e184be3445e084786602108599d2a51d229c0f5a48c71bf echo gVisor runs
       - run: bun scripts/tool-runtime.ts turbo run build --filter=@catamorphic/container... --output-logs=errors-only
       - name: Real container sandboxes under gVisor
         env:
@@ -418,7 +418,19 @@ jobs:
 
   checks:
     name: checks
-    needs: [access, shards, validation, workspace, pwa, module-confinement-macos, module-confinement-linux, desktop-linux, desktop-macos, container]
+    needs:
+      [
+        access,
+        shards,
+        validation,
+        workspace,
+        pwa,
+        module-confinement-macos,
+        module-confinement-linux,
+        desktop-linux,
+        desktop-macos,
+        container,
+      ]
     if: always() && needs.access.outputs.allowed == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 5
@@ -440,7 +452,7 @@ jobs:
       MODEL_EVAL_AVAILABLE: ${{ (secrets.ANTHROPIC_API_KEY != '' || secrets.OPENAI_API_KEY != '') && '1' || '' }}
       CATAMORPHIC_E2E_ARTIFACTS_DIR: ${{ github.workspace }}/test-results/eval
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         if: env.MODEL_EVAL_AVAILABLE == '1'
       - uses: ./.github/actions/test-setup
         id: setup

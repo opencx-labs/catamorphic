@@ -14,6 +14,16 @@ import {
 } from "./dates.js";
 
 const DOW_LABELS = ["Su", "Mo", "Tu", "We", "Th", "Fr", "Sa"];
+const FOCUS_JUMPS: Record<string, (day: string) => string> = {
+  ArrowLeft: (day) => addDays(day, -1),
+  ArrowRight: (day) => addDays(day, 1),
+  ArrowUp: (day) => addDays(day, -7),
+  ArrowDown: (day) => addDays(day, 7),
+  PageUp: (day) => addMonths(day, -1),
+  PageDown: (day) => addMonths(day, 1),
+  Home: (day) => addDays(day, -fromIsoDate(day).getDay()),
+  End: (day) => addDays(day, 6 - fromIsoDate(day).getDay()),
+};
 
 export type CalendarProps =
   | {
@@ -73,20 +83,10 @@ export function Calendar(props: CalendarProps) {
   };
 
   const onGridKeyDown = (event: KeyboardEvent<HTMLDivElement>) => {
-    const jumps: Record<string, () => string> = {
-      ArrowLeft: () => addDays(focusedDay, -1),
-      ArrowRight: () => addDays(focusedDay, 1),
-      ArrowUp: () => addDays(focusedDay, -7),
-      ArrowDown: () => addDays(focusedDay, 7),
-      PageUp: () => addMonths(focusedDay, -1),
-      PageDown: () => addMonths(focusedDay, 1),
-      Home: () => addDays(focusedDay, -fromIsoDate(focusedDay).getDay()),
-      End: () => addDays(focusedDay, 6 - fromIsoDate(focusedDay).getDay()),
-    };
-    const jump = jumps[event.key];
+    const jump = FOCUS_JUMPS[event.key];
     if (!jump) return;
     event.preventDefault();
-    moveFocus(jump());
+    moveFocus(jump(focusedDay));
   };
 
   const onDayClick = (day: string) => {

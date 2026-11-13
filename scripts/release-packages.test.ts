@@ -609,6 +609,11 @@ it("keeps default dispatch read-only, isolates bootstrap repair and publishes on
   expect(publish?.if).toContain("github.ref_type == 'tag'");
   expect(publish?.permissions?.["id-token"]).toBe("write");
   expect(publish?.environment).toBeUndefined();
+  for (const job of [publish, repair]) {
+    const commands = job?.steps.map((step) => step.run).join("\n");
+    expect(commands).toContain("bun install --frozen-lockfile");
+    expect(commands).not.toMatch(/npm install --global|npm@11\./);
+  }
   expect(prepare?.steps.map((step) => step.run).join("\n")).toContain(
     "release:smoke",
   );

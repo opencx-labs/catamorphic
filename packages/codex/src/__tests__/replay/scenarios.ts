@@ -42,6 +42,8 @@ export type ModelResponse =
       pauseMs?: number;
       /** Never finish after the first text delta (until Codex hangs up). */
       hang?: boolean;
+      /** Disconnect after the first delta to exercise a native stream retry. */
+      disconnect?: boolean;
       /** The recorder checks the request Codex sent mentions these... */
       expectInput?: string[];
       /** ...and not these (a fork must not know later turns). */

@@ -373,6 +373,10 @@ export function sseStream() {
   const body = new ReadableStream<Uint8Array>({
     start(value) {
       controller = value;
+      // MSW 3 writes mocked responses through Node's ServerResponse, which
+      // holds headers until the first body byte. Flush with an SSE comment,
+      // without emitting a session message or advancing its cursor.
+      controller.enqueue(encoder.encode(": connected\n\n"));
     },
     cancel() {
       closed = true;

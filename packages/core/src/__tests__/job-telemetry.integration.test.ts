@@ -4,11 +4,12 @@ import { getTracer, withSpan, withTelemetryContext } from "@catamorphic/otel";
 import { PGlite } from "@electric-sql/pglite";
 import { pgcrypto } from "@electric-sql/pglite/contrib/pgcrypto";
 import { context, trace } from "@opentelemetry/api";
+import { AsyncLocalStorageContextManager } from "@opentelemetry/context-async-hooks";
 import {
   InMemorySpanExporter,
-  NodeTracerProvider,
   SimpleSpanProcessor,
-} from "@opentelemetry/sdk-trace-node";
+  TracerProvider,
+} from "@opentelemetry/sdk-trace";
 import { Kysely, PGliteDialect, WithSchemaPlugin } from "kysely";
 import { afterAll, beforeAll, expect, it } from "vitest";
 import { ExecutionJobsService } from "../services/execution-jobs-service.js";
@@ -21,14 +22,17 @@ const db = new Kysely<DB>({
   plugins: [new WithSchemaPlugin("job_telemetry")],
 });
 const exporter = new InMemorySpanExporter();
-const provider = new NodeTracerProvider({
-  spanProcessors: [new SimpleSpanProcessor(exporter)],
+const provider = new TracerProvider({
+  spanProcessors: [new SimpleSpanProcessor({ exporter })],
 });
 const tenantId = randomUUID();
 const projectId = randomUUID();
 const runId = randomUUID();
 beforeAll(async () => {
-  provider.register();
+  trace.setGlobalTracerProvider(provider);
+  context.setGlobalContextManager(
+    new AsyncLocalStorageContextManager().enable(),
+  );
   await migrateToLatest({ db, schema: "job_telemetry" });
   await db
     .insertInto("tenants")

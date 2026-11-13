@@ -53,7 +53,8 @@ echo "Installing and building..."
 docker exec -w /work "$name" bash -c '
   set -euo pipefail
   bun install --frozen-lockfile --ignore-scripts --filter @catamorphic/container --filter catamorphic >/tmp/install.log 2>&1 || { tail -40 /tmp/install.log; exit 1; }
-  node_modules/.bin/turbo run build --filter=@catamorphic/container... --output-logs=errors-only >/tmp/build.log 2>&1 || { tail -60 /tmp/build.log; exit 1; }
+  bun scripts/tool-runtime.ts install
+  bun scripts/tool-runtime.ts turbo run build --filter=@catamorphic/container... --output-logs=errors-only >/tmp/build.log 2>&1 || { tail -60 /tmp/build.log; exit 1; }
 '
 
 echo "Waiting for the machine's Docker daemon..."
@@ -65,4 +66,4 @@ docker exec "$name" bash -c '
 echo "Running the tests under $runtime..."
 docker exec -w /work/packages/container \
   -e WORK_TEST_CONTAINER=1 -e WORK_TEST_CONTAINER_RUNTIME="$runtime" \
-  "$name" node ../../node_modules/vitest/vitest.mjs run --config ../../vitest.config.ts ${args[@]+"${args[@]}"}
+  "$name" bun ../../scripts/tool-runtime.ts vitest --tool-cwd packages/container --config ../../vitest.config.ts ${args[@]+"${args[@]}"}

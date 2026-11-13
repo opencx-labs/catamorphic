@@ -309,6 +309,10 @@ it("shows failed write feedback without losing the item", async () => {
   ).toContain("Plan revised");
 });
 it("retains HTTP rows during refresh, reports failure, and retries without reopening", async () => {
+  await app.waitFor(
+    `document.querySelector('[data-sidebar-source="http"]')?.getAttribute('aria-busy')==='false'`,
+  );
+  const beforeRefresh = requests;
   version = 2;
   delay = 1200;
   await click('[aria-label="Refresh Service"]');
@@ -320,24 +324,31 @@ it("retains HTTP rows during refresh, reports failure, and retries without reope
       `document.querySelector('[data-sidebar-source="http"]').innerText`,
     ),
   ).toContain("Service item 1");
-  await app.waitFor(`document.body.innerText.includes('Service item 2')`);
+  await app.waitFor(
+    `document.body.innerText.includes('Service item 2') && document.querySelector('[data-sidebar-source="http"]')?.getAttribute('aria-busy')==='false'`,
+  );
+  expect(requests - beforeRefresh).toBe(1);
+  const beforeFailure = requests;
   fail = true;
   await click('[aria-label="Refresh Service"]');
   await app.waitFor(
-    `document.body.innerText.includes('Service unavailable: 503')`,
+    `document.body.innerText.includes('Service unavailable: 503') && document.querySelector('[data-sidebar-source="http"]')?.getAttribute('aria-busy')==='false'`,
   );
+  expect(requests - beforeFailure).toBe(1);
   expect(
     await app.eval(
       `document.querySelector('[data-sidebar-source="http"]').innerText`,
     ),
   ).toContain("Service item 2");
+  const beforeRetry = requests;
   fail = false;
   version = 3;
   delay = 50;
   await click('[data-sidebar-section="http"] [role="alert"] button');
   await app.waitFor(
-    `document.body.innerText.includes('Service item 3') && !document.querySelector('[data-sidebar-source="http"] [role="alert"]')`,
+    `document.body.innerText.includes('Service item 3') && !document.querySelector('[data-sidebar-source="http"] [role="alert"]') && document.querySelector('[data-sidebar-source="http"]')?.getAttribute('aria-busy')==='false'`,
   );
+  expect(requests - beforeRetry).toBe(1);
 });
 it("releases hidden sources and virtualizes a large file-backed list", async () => {
   await click('[role="tab"][aria-label="Other"]');

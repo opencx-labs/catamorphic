@@ -1,5 +1,11 @@
-import { context, metrics, SpanStatusCode, trace } from "@opentelemetry/api";
-import { logs } from "@opentelemetry/api-logs";
+import {
+  context,
+  logs,
+  metrics,
+  SpanStatusCode,
+  trace,
+} from "@opentelemetry/api";
+import { AsyncLocalStorageContextManager } from "@opentelemetry/context-async-hooks";
 import {
   InMemoryLogRecordExporter,
   LoggerProvider,
@@ -13,17 +19,17 @@ import {
 } from "@opentelemetry/sdk-metrics";
 import {
   InMemorySpanExporter,
-  NodeTracerProvider,
   SimpleSpanProcessor,
-} from "@opentelemetry/sdk-trace-node";
+  TracerProvider,
+} from "@opentelemetry/sdk-trace";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { getTracer, markSpanError, withSpan } from "./tracing.js";
 
 // Import and resolve tracers before registration, as consumers commonly do.
 const tracer = getTracer("@catamorphic/test");
 const spans = new InMemorySpanExporter();
-const provider = new NodeTracerProvider({
-  spanProcessors: [new SimpleSpanProcessor(spans)],
+const provider = new TracerProvider({
+  spanProcessors: [new SimpleSpanProcessor({ exporter: spans })],
 });
 const exportedLogs = new InMemoryLogRecordExporter();
 const loggerProvider = new LoggerProvider({
@@ -42,7 +48,10 @@ const meterProvider = new MeterProvider({
 });
 
 beforeAll(() => {
-  provider.register();
+  trace.setGlobalTracerProvider(provider);
+  context.setGlobalContextManager(
+    new AsyncLocalStorageContextManager().enable(),
+  );
   metrics.setGlobalMeterProvider(meterProvider);
   logs.setGlobalLoggerProvider(loggerProvider);
 });

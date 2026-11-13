@@ -11,7 +11,6 @@ import {
   Notification,
   nativeTheme,
   type Session,
-  safeStorage,
   screen,
   session,
   shell,
@@ -115,8 +114,7 @@ import {
 } from "./browser-sleep.js";
 import { recordDownload, trackConsole } from "./browser-tab-records.js";
 import { PasswordVault } from "./browser-vault.js";
-import { registerCodeApprovals } from "./code-approvals.js";
-import { credentialEncryptionAvailableAsync } from "./credential-encryption.js";
+import { type CodeApprovals, registerCodeApprovals } from "./code-approvals.js";
 import { customizationAuthoring } from "./customization-authoring.js";
 import {
   checkCustomization,
@@ -472,6 +470,8 @@ export function registerBrowserSupport(
   isDock: (window: BrowserWindow) => boolean,
   /** How sidebar modules are confined (ADR 0277). */
   moduleSandbox: {
+    approvalsFor: (profileId: string) => CodeApprovals;
+    approvalsRecovered?: (input: { profileId: string }) => Promise<void>;
     /** A throwaway E2E profile on a platform Work cannot confine. */
     unconfined: boolean;
     /** Ports of Work's own loopback servers, which no module reaches. */
@@ -492,15 +492,9 @@ export function registerBrowserSupport(
   // What the person approved code to reach (ADR 0277), sealed with a key
   // only this app can unseal from the keychain.
   const approvals = registerCodeApprovals({
-    profilesDir,
+    approvalsFor: moduleSandbox.approvalsFor,
     profileFor: (sender) => windows.profileFor(sender),
-    keyring: {
-      // Never the synchronous check: it blocks main on a keychain prompt.
-      available: () => credentialEncryptionAvailableAsync(),
-      encrypt: (text) => safeStorage.encryptStringAsync(text),
-      decrypt: async (data) =>
-        (await safeStorage.decryptStringAsync(data)).result,
-    },
+    approvalsRecovered: moduleSandbox.approvalsRecovered,
   });
   // Hosts a chat opens and shows without asking (ADR 0277).
   const disposeTrustedHosts = registerTrustedHosts({
@@ -508,6 +502,7 @@ export function registerBrowserSupport(
     profileFor: (sender) => windows.profileFor(sender),
     rootFor: projectRootFor,
     windowsFor: (profileId) => windows.windowsFor(profileId),
+    approvalsRecovered: moduleSandbox.approvalsRecovered,
   });
   const disposeSidebarSources = registerSidebarSources({
     windows,
@@ -516,6 +511,7 @@ export function registerBrowserSupport(
     rootFor: projectRootFor,
     toolchain: sidebarToolchain,
     approvals: approvals.approvalsFor,
+    approvalsRecovered: moduleSandbox.approvalsRecovered,
     scratchRoot: path.join(userData, "sidebar-runtime", "scratch"),
     unconfined: moduleSandbox.unconfined,
     blocked: (host, port) =>

@@ -14,27 +14,27 @@
     "test:e2e:ci": "bun ../../scripts/tool-runtime.ts vitest --tool-cwd apps/pwa --config ./vitest.e2e.config.ts"
   },
   "dependencies": {
-    "@noble/hashes": "2.3.0",
+    "@noble/hashes": "2.4.0",
     "@catamorphic/api-client": "workspace:*",
     "@catamorphic/react": "workspace:*",
     "@catamorphic/ui": "workspace:*",
     "@catamorphic/workflow": "workspace:*",
-    "@tanstack/react-query": "^5.101.2",
-    "lucide-react": "^1.25.0",
-    "react": "^19.2.7",
-    "react-dom": "^19.2.7",
+    "@tanstack/react-query": "^5.107.1",
+    "lucide-react": "^1.72.0",
+    "react": "^19.3.1",
+    "react-dom": "^19.3.1",
     "react-markdown": "^10.1.0",
     "remark-gfm": "^4.0.1",
     "use-stick-to-bottom": "^1.1.6"
   },
   "devDependencies": {
-    "@tailwindcss/vite": "^4.2.2",
-    "jsdom": "^29.1.1",
-    "@types/node": "^26.1.1",
-    "@types/react": "^19.2.17",
-    "@types/react-dom": "^19.2.3",
-    "@vitejs/plugin-react": "^6.0.5",
-    "tailwindcss": "^4.2.2",
-    "vite": "^8.2.2"
+    "@tailwindcss/vite": "^4.3.5",
+    "jsdom": "^31.0.0",
+    "@types/node": "^26.6.6",
+    "@types/react": "^19.3.0",
+    "@types/react-dom": "^19.3.0",
+    "@vitejs/plugin-react": "^6.3.0",
+    "tailwindcss": "^4.3.5",
+    "vite": "^8.3.8"
   }
 }

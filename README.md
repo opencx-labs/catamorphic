@@ -883,6 +883,10 @@ credentialed `.env` wholesale. Add only the individual settings a task needs.
 Root orchestration tests under `scripts/**/*.test.ts` run before the package
 graph. Package-local Vitest commands also select the repository-pinned Node,
 including when the ambient `node` is Node 20.
+`bun install` downloads the official Node release once, verifies its pinned
+SHA256, and caches it in that checkout. Installation needs `tar` with xz support
+(install `xz-utils` on Linux); later test and build commands resolve it offline.
+After an install with `--ignore-scripts`, run `bun scripts/tool-runtime.ts install`.
 
 External integration tests never run merely because credentials are present.
 They require the explicit `bun run test:external` authority, which sets

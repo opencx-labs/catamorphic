@@ -70,11 +70,14 @@ describe("Finder's Open With", () => {
     );
     const associations = [
       ...config.matchAll(
-        /- name: (.+)\n\s+ext: \[(.+)\]\n\s+role: (\w+)\n\s+rank: (\w+)/g,
+        /- name: (.+)\n\s+ext:\s*\[([^\]]+)\]\n\s+role: (\w+)\n\s+rank: (\w+)/g,
       ),
     ].map(([, name, ext, role, rank]) => ({
       name,
-      ext: ext?.split(", "),
+      ext: ext
+        ?.split(",")
+        .map((value) => value.trim())
+        .filter(Boolean),
       role,
       rank,
     }));

@@ -2188,6 +2188,11 @@ export interface CatamorphicDesktopApi {
     sectionId: string;
     fingerprint: string;
   }) => Promise<void>;
+  /** Retry a module after an explicit request from the person. */
+  sidebarSourceRetry: (input: {
+    projectId: string;
+    sectionId: string;
+  }) => Promise<void>;
   /** Whether the person allowed an app to read their chats (ADR 0148, 0272). */
   appAccessApproved: (input: {
     projectId: string;

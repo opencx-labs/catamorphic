@@ -13,6 +13,12 @@ import { Modal } from "./modal.js";
 import { PendingButton } from "./pending-button.js";
 
 interface TemporalApi {
+  PlainDateTime: {
+    from: (
+      fields: Record<string, number>,
+      options: { overflow: "reject" },
+    ) => unknown;
+  };
   ZonedDateTime: {
     from: (
       fields: Record<string, unknown>,
@@ -24,11 +30,16 @@ function isTemporalApi(value: unknown): value is TemporalApi {
   if (
     typeof value !== "object" ||
     value === null ||
-    !("ZonedDateTime" in value)
+    !("ZonedDateTime" in value) ||
+    !("PlainDateTime" in value)
   )
     return false;
   const zoned = value.ZonedDateTime;
+  const plain = value.PlainDateTime;
   return (
+    typeof plain === "function" &&
+    "from" in plain &&
+    typeof plain.from === "function" &&
     typeof zoned === "function" &&
     "from" in zoned &&
     typeof zoned.from === "function"
@@ -116,17 +127,18 @@ export function dateTimeInstant(local: string): string {
   ];
   const temporal: unknown = Reflect.get(globalThis, "Temporal");
   if (isTemporalApi(temporal)) {
+    const fields = { year, month, day, hour, minute, second, millisecond };
+    // Calendar overflow is different from a timezone gap or fold.
+    try {
+      temporal.PlainDateTime.from(fields, { overflow: "reject" });
+    } catch {
+      throw Error("This local time does not exist. Choose another time.");
+    }
     try {
       return new Date(
         temporal.ZonedDateTime.from(
           {
-            year,
-            month,
-            day,
-            hour,
-            minute,
-            second,
-            millisecond,
+            ...fields,
             timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone,
           },
           { disambiguation: "reject", overflow: "reject" },

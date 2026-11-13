@@ -31,6 +31,50 @@ function store() {
 }
 
 describe("approvals (ADR 0277)", () => {
+  it("does not initialize OS encryption just to read a profile without approvals", async () => {
+    const { dir } = store();
+    const available = vi.fn(keyring.available);
+    const approvals = new CodeApprovals({
+      dir,
+      keyring: { ...keyring, available },
+    });
+    expect(await approvals.approved("trusted-hosts")).toBeNull();
+    expect(await approvals.list()).toEqual([]);
+    expect(available).not.toHaveBeenCalled();
+    expect(fs.existsSync(path.join(dir, "approvals.key"))).toBe(false);
+  });
+
+  it("retains a dismissed unlock across passive refreshes and retries only an explicit unlock", async () => {
+    const { dir, approvals } = store();
+    await approvals.approve("trusted-hosts", { hosts: ["example.com"] });
+    const sealed = fs.readFileSync(path.join(dir, "approvals.key"));
+    const saved = fs.readFileSync(path.join(dir, "approvals.json"));
+    const decrypt = vi
+      .fn(keyring.decrypt)
+      .mockRejectedValueOnce(new Error("User cancelled"));
+    const locked = new CodeApprovals({ dir, keyring: { ...keyring, decrypt } });
+    await expect(locked.approved("trusted-hosts")).rejects.toThrow(
+      "could not unlock",
+    );
+    await expect(
+      locked.approved("trusted-hosts", { refresh: true }),
+    ).rejects.toThrow("could not unlock");
+    await expect(locked.approved("trusted-hosts")).rejects.toThrow(
+      "could not unlock",
+    );
+    await expect(locked.list()).rejects.toThrow("could not unlock");
+    expect(decrypt).toHaveBeenCalledOnce();
+    expect(fs.readFileSync(path.join(dir, "approvals.key"))).toEqual(sealed);
+    expect(fs.readFileSync(path.join(dir, "approvals.json"))).toEqual(saved);
+    expect(
+      await locked.approved("trusted-hosts", {
+        refresh: true,
+        retryUnlock: true,
+      }),
+    ).toEqual({ hosts: ["example.com"] });
+    expect(decrypt).toHaveBeenCalledTimes(2);
+  });
+
   it("authenticates exact host service payloads across restart without accepting edits or another profile's key", async () => {
     const { dir, approvals } = store();
     const payload = JSON.stringify([
@@ -122,9 +166,10 @@ describe("approvals (ADR 0277)", () => {
       dir: path.join(dir, "none"),
       keyring: { ...keyring, available: async () => false },
     });
-    await expect(locked.approved("app:p:activity")).rejects.toThrow(
-      "keychain is not available",
-    );
+    expect(await locked.approved("app:p:activity")).toBeNull();
+    await expect(
+      locked.approve("app:p:activity", { lists: ["chats"] }),
+    ).rejects.toThrow("keychain is not available");
   });
   it("refuses an existing key when its OS storage is unavailable and can retry after unlock", async () => {
     const { dir, approvals } = store();
@@ -146,7 +191,9 @@ describe("approvals (ADR 0277)", () => {
       recordsBefore,
     );
     available = true;
-    await expect(locked.approved("app:p:activity")).resolves.toEqual({
+    await expect(
+      locked.approved("app:p:activity", { refresh: true, retryUnlock: true }),
+    ).resolves.toEqual({
       lists: ["chats"],
     });
   });

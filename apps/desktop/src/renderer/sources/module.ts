@@ -135,6 +135,8 @@ export function moduleSource<Name extends string = WorkSourceName>({
   return {
     title,
     empty,
+    retry: () =>
+      desktopApi.sidebarSourceRetry({ projectId, sectionId: ownerId }),
     capabilities: () => capabilities,
     revision: () => loadedRevision,
     access: () => asking,

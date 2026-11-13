@@ -14,19 +14,19 @@ outputs:
 runs:
   using: composite
   steps:
-    - uses: oven-sh/setup-bun@v2
+    - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
       with:
         bun-version: 1.4.4
-    - uses: actions/setup-node@v7
+    - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
       with:
-        node-version: 24.22.1
-    - uses: actions/cache@v5
+        node-version: 26.13.1
+    - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
       with:
         path: ~/.bun/install/cache
         key: dependencies-v2-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('bun.lock') }}
         restore-keys: |
           dependencies-v2-${{ runner.os }}-${{ runner.arch }}-
-    - uses: actions/cache/restore@v5
+    - uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
       id: tasks
       with:
         path: .turbo/cache
@@ -59,7 +59,7 @@ runs:
       shell: bash
       run: echo "version=$(node -p "require('./apps/desktop/node_modules/electron/package.json').version")" >> "$GITHUB_OUTPUT"
     - if: inputs.electron == 'true'
-      uses: actions/cache@v5
+      uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
       with:
         path: |
           ~/.cache/electron

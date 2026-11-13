@@ -41,7 +41,7 @@ describeIf("CloudflareSandboxProvider (integration)", () => {
     const handle = await provider.createSandbox({});
     createdSandboxIds.push(handle.providerId);
 
-    expect(handle.providerId).toMatch(/^[a-z2-7]+$/);
+    expect(handle.providerId).toMatch(/^[a-zA-Z0-9_-]+$/);
 
     const result = await provider.executeCommand(
       handle.providerId,

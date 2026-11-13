@@ -2,6 +2,7 @@ import { readdir, stat } from "node:fs/promises";
 import path from "node:path";
 import type { HarnessEvent } from "@catamorphic/agent-protocol/runner";
 import { afterEach, describe, expect, it } from "vitest";
+import { isObject } from "../app-server.js";
 import { readRollout } from "../rollout.js";
 import { loadCodexFixture } from "../testing/index.js";
 import type { CodexTranscriptEntry } from "../testing/transcript.js";
@@ -55,6 +56,162 @@ async function homeRollout(
 }
 
 describe("Codex adapter, replayed from the pinned app-server", () => {
+  it("opens native async questions without waiting for an RPC response or closing them on completion", async () => {
+    const recorded = await loadCodexFixture("simple-reply");
+    const transcript = {
+      ...recorded,
+      // The native async AgentMessage shape observed in the Voices trace.
+      // Its tool has already returned accepted:true; there is no server RPC.
+      entries: recorded.entries.flatMap((entry): CodexTranscriptEntry[] => {
+        const message = "emit_inbound" in entry ? entry.emit_inbound : null;
+        const params =
+          message && isObject(message.params) ? message.params : {};
+        const item = isObject(params.item) ? params.item : {};
+        if (
+          message?.method !== "item/completed" ||
+          item.type !== "agentMessage"
+        )
+          return [entry];
+        const completed = {
+          ...entry,
+          emit_inbound: {
+            ...message,
+            params: {
+              ...params,
+              item: {
+                ...item,
+                delivery: "async",
+                questions: [
+                  { title: "Which theme?", options: ["Orange", "Blue"] },
+                ],
+              },
+            },
+          },
+        };
+        return [completed, completed];
+      }),
+    };
+    const run = await replay("simple-reply", { transcript });
+    const events = eventsOf(run);
+    const request = one(events, "request.opened");
+    expect(request.request).toMatchObject({
+      kind: "question",
+      blocking: false,
+      questions: [
+        {
+          question: "Which theme?",
+          options: [{ label: "Orange" }, { label: "Blue" }],
+        },
+      ],
+    });
+    expect(all(events, "request.closed")).toEqual([]);
+    expect(completionOf(run)?.status).toBe("completed");
+    expect(
+      all(events, "item.completed").filter(
+        (event) => event.status === "cancelled",
+      ),
+    ).toMatchObject([{ item: { text: "" } }]);
+  });
+
+  it("withdraws a native async question when its running turn is interrupted", async () => {
+    const recorded = await loadCodexFixture("interrupt-mid-turn");
+    let inserted = false;
+    const transcript = {
+      ...recorded,
+      entries: recorded.entries.flatMap((entry): CodexTranscriptEntry[] => {
+        const message = "emit_inbound" in entry ? entry.emit_inbound : null;
+        if (inserted || message?.method !== "item/agentMessage/delta")
+          return [entry];
+        inserted = true;
+        return [
+          entry,
+          {
+            emit_inbound: {
+              method: "item/completed",
+              params: {
+                ...(isObject(message.params) ? message.params : {}),
+                item: {
+                  type: "agentMessage",
+                  id: "async-question",
+                  delivery: "async",
+                  questions: [{ title: "Any preferences?" }],
+                },
+              },
+            },
+          },
+        ];
+      }),
+    };
+    const run = await replay("interrupt-mid-turn", {
+      transcript,
+      scripts: {
+        0: {
+          onEvent: (event, act) => {
+            if (event.type === "request.opened") act.interrupt();
+          },
+        },
+      },
+    });
+    const events = eventsOf(run);
+    expect(one(events, "request.closed")).toMatchObject({
+      key: one(events, "request.opened").key,
+      reason: "The turn was interrupted before it was answered.",
+    });
+    expect(completionOf(run)?.status).toBe("interrupted");
+  });
+
+  it("delivers a native async answer as a message into the running turn", async () => {
+    const recorded = await loadCodexFixture("steer-mid-turn");
+    let inserted = false;
+    const transcript = {
+      ...recorded,
+      entries: recorded.entries.flatMap((entry): CodexTranscriptEntry[] => {
+        const message = "emit_inbound" in entry ? entry.emit_inbound : null;
+        if (inserted || message?.method !== "item/agentMessage/delta")
+          return [entry];
+        inserted = true;
+        return [
+          entry,
+          {
+            emit_inbound: {
+              method: "item/completed",
+              params: {
+                ...(isObject(message.params) ? message.params : {}),
+                item: {
+                  type: "agentMessage",
+                  id: "async-question",
+                  delivery: "async",
+                  questions: [{ title: "Anything else to include?" }],
+                },
+              },
+            },
+          },
+        ];
+      }),
+    };
+    const run = await replay("steer-mid-turn", {
+      transcript,
+      scripts: {
+        0: {
+          answer: () => ({
+            kind: "question",
+            answers: ["Also mention the weather."],
+          }),
+        },
+      },
+    });
+    const events = eventsOf(run);
+    expect(one(events, "request.opened").request.blocking).toBe(false);
+    expect(one(events, "input.consumed").itemIds).toEqual(["steer-1"]);
+    expect(itemText(events, "msg_2_0")).toBe(
+      "Summary done, and the weather is sunny.",
+    );
+    expect(
+      run.results[0]?.commands.filter((command) => command.kind === "respond"),
+    ).toEqual([]);
+    expect(completionOf(run)?.status).toBe("completed");
+  });
+
   it("streams a fresh thread's reasoning, status and reply, then settles with usage", async () => {
     const run = await replay("simple-reply");
     const events = eventsOf(run);

@@ -1,8 +1,6 @@
 import path from "node:path";
-import { safeStorage } from "electron";
 import { accessBeyond, isEmptyAccess } from "../shared/code-access.js";
-import { CodeApprovals } from "./code-approvals.js";
-import { credentialEncryptionAvailableAsync } from "./credential-encryption.js";
+import type { CodeApprovals } from "./code-approvals.js";
 import { CustomizationProcesses } from "./customization-processes.js";
 import { isLoopback } from "./egress-proxy.js";
 import { moduleAccessSubject, readModuleAccess } from "./module-access.js";
@@ -13,7 +11,8 @@ import type { ProfilesStore } from "./profiles.js";
 /** Host adapter shared by the foreground and the headless Work engine. */
 export function desktopCustomizationProcesses(input: {
   root: string;
-  profilesDir: string;
+  /** Shared with foreground approvals, including an explicit unlock retry. */
+  approvalsFor: (profileId: string) => CodeApprovals;
   profiles: ProfilesStore;
   config: ProfileConfigManager;
   rootFor: (projectId: string) => Promise<string | null>;
@@ -27,23 +26,6 @@ export function desktopCustomizationProcesses(input: {
     typeof CustomizationProcesses
   >[0]["writeState"];
 }) {
-  const approvals = new Map<string, CodeApprovals>();
-  const approvalsFor = (profileId: string) => {
-    let store = approvals.get(profileId);
-    if (!store) {
-      store = new CodeApprovals({
-        dir: path.join(input.profilesDir, profileId),
-        keyring: {
-          available: () => credentialEncryptionAvailableAsync(),
-          encrypt: (text) => safeStorage.encryptStringAsync(text),
-          decrypt: async (data) =>
-            (await safeStorage.decryptStringAsync(data)).result,
-        },
-      });
-      approvals.set(profileId, store);
-    }
-    return store;
-  };
   const ownerApprovals = (owner: { profileId: string; projectId: string }) => {
     // Registry data is untrusted before authentication. Never use its profile
     // string as a filesystem path or ask another profile's keyring for a key.
@@ -54,7 +36,7 @@ export function desktopCustomizationProcesses(input: {
       throw new Error(
         "This service registry entry belongs to another profile.",
       );
-    return approvalsFor(owner.profileId);
+    return input.approvalsFor(owner.profileId);
   };
   return new CustomizationProcesses({
     ...input,
@@ -108,7 +90,7 @@ export function desktopCustomizationProcesses(input: {
       if (
         !isEmptyAccess(
           accessBeyond(
-            await approvalsFor(owner.profileId).approved(subject, {
+            await input.approvalsFor(owner.profileId).approved(subject, {
               refresh: true,
             }),
             access,

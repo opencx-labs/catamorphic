@@ -119,7 +119,10 @@ describe("desktop test isolation", () => {
 
 describe("desktop test image dependencies", () => {
   it("install from the manifests, the lockfile and every overridden stand-in", () => {
-    const manifest: { overrides: Record<string, string> } = JSON.parse(
+    const manifest: {
+      overrides: Record<string, string>;
+      patchedDependencies: Record<string, string>;
+    } = JSON.parse(
       readFileSync(new URL("../package.json", import.meta.url), "utf8"),
     );
     const local = Object.values(manifest.overrides)
@@ -132,6 +135,7 @@ describe("desktop test image dependencies", () => {
       "packages/core/package.json",
       "apps/desktop/package.json",
       ...local,
+      ...Object.values(manifest.patchedDependencies),
     ])
       expect(isInstallInput(file), file).toBe(true);
     expect(isInstallInput("packages/core/src/index.ts")).toBe(false);

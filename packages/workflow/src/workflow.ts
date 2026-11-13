@@ -95,15 +95,15 @@ export function rateLimited(args: {
 }
 
 class WorkflowTransitionImpl<Output> {
-  private declare readonly output: Output;
+  declare private readonly output: Output;
 }
 
 /** An instruction that resolves before the next workflow step starts. */
 export type WorkflowTransition<Output> = WorkflowTransitionImpl<Output>;
 
 class BoundaryDefinitionImpl<Input, Output> {
-  private declare readonly input: Input;
-  private declare readonly output: Output;
+  declare private readonly input: Input;
+  declare private readonly output: Output;
 
   readonly run: (context: BoundaryContext<Input>) => unknown | Promise<unknown>;
   readonly retry?: RetryPolicy;
@@ -128,8 +128,8 @@ export type BoundaryDefinition<Input, Output> = BoundaryDefinitionImpl<
 >;
 
 class WorkflowDefinitionImpl<Input, Output, Steps extends readonly unknown[]> {
-  private declare readonly input: Input;
-  private declare readonly output: Output;
+  declare private readonly input: Input;
+  declare private readonly output: Output;
 
   readonly steps: Steps;
   readonly controls?: WorkflowControls;

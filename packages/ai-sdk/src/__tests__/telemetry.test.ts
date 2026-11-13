@@ -1,6 +1,7 @@
 import { getTracer, withSpan, withTelemetryContext } from "@catamorphic/otel";
 import type { SandboxProvider } from "@catamorphic/sandbox";
 import { context, metrics, SpanStatusCode, trace } from "@opentelemetry/api";
+import { AsyncLocalStorageContextManager } from "@opentelemetry/context-async-hooks";
 import {
   AggregationTemporality,
   InMemoryMetricExporter,
@@ -9,9 +10,9 @@ import {
 } from "@opentelemetry/sdk-metrics";
 import {
   InMemorySpanExporter,
-  NodeTracerProvider,
   SimpleSpanProcessor,
-} from "@opentelemetry/sdk-trace-node";
+  TracerProvider,
+} from "@opentelemetry/sdk-trace";
 import {
   afterAll,
   beforeAll,
@@ -32,8 +33,8 @@ import {
 import { attemptStart, FakeHost } from "./fake-host.js";
 
 const spans = new InMemorySpanExporter();
-const provider = new NodeTracerProvider({
-  spanProcessors: [new SimpleSpanProcessor(spans)],
+const provider = new TracerProvider({
+  spanProcessors: [new SimpleSpanProcessor({ exporter: spans })],
 });
 const metricExporter = new InMemoryMetricExporter(
   AggregationTemporality.CUMULATIVE,
@@ -47,7 +48,10 @@ const meterProvider = new MeterProvider({
   ],
 });
 beforeAll(() => {
-  provider.register();
+  trace.setGlobalTracerProvider(provider);
+  context.setGlobalContextManager(
+    new AsyncLocalStorageContextManager().enable(),
+  );
   metrics.setGlobalMeterProvider(meterProvider);
 });
 beforeEach(() => spans.reset());

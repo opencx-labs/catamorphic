@@ -23,12 +23,12 @@
     ]
   },
   "dependencies": {
-    "@aws-sdk/client-s3": "^3.1085.0",
+    "@aws-sdk/client-s3": "^3.1166.0",
     "@catamorphic/git": "workspace:*"
   },
   "devDependencies": {
-    "@types/node": "^26.1.1",
-    "isomorphic-git": "^1.38.6"
+    "@types/node": "^26.6.6",
+    "isomorphic-git": "^1.44.12"
   },
   "license": "Apache-2.0",
   "repository": {

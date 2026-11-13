@@ -8,7 +8,8 @@ import { FsBackend, ProjectManager } from "@catamorphic/git";
 import { correlationAttributes, withTelemetryContext } from "@catamorphic/otel";
 import type { SandboxProvider } from "@catamorphic/sandbox";
 import { context, trace } from "@opentelemetry/api";
-import { NodeTracerProvider } from "@opentelemetry/sdk-trace-node";
+import { AsyncLocalStorageContextManager } from "@opentelemetry/context-async-hooks";
+import { TracerProvider } from "@opentelemetry/sdk-trace";
 import { sql } from "kysely";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { type Identity, projectPrincipalIdentity } from "../identity.js";
@@ -565,8 +566,11 @@ describeIf("scoped agent sessions (ADR 0055)", () => {
 
   it("reconstructs each durable turn scope without the drainer caller's workflow or job IDs", async () => {
     if (!db) throw new Error("unreachable");
-    const provider = new NodeTracerProvider();
-    provider.register();
+    const provider = new TracerProvider();
+    trace.setGlobalTracerProvider(provider);
+    context.setGlobalContextManager(
+      new AsyncLocalStorageContextManager().enable(),
+    );
     try {
       const session = await sessions.create(admin, projectId, {
         agentId: salesAgentId,

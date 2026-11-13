@@ -1,4 +1,5 @@
 import type {
+  AgentQuestion,
   ItemPayload,
   JsonObject,
   JsonValue,
@@ -14,6 +15,7 @@ type ItemStatus = "completed" | "failed" | "cancelled";
 
 interface OpenItem {
   kind: ItemDraft["kind"];
+  parentKey?: string;
 }
 
 /**
@@ -34,6 +36,7 @@ export class CodexItems {
     string,
     { server: string; tool: string; input: JsonValue }
   >();
+  private readonly asked = new Set<string>();
   private status?: string;
   /** The main thread's latest reasoning title: its words for its work. */
   private said?: string;
@@ -52,6 +55,8 @@ export class CodexItems {
       hidden?: (tool: string) => boolean;
       /** A changed file as Work names it (relative to the workspace). */
       filePath?: (path: string) => string;
+      /** Native async questions use the host's existing request lifecycle. */
+      questions?: (key: string, questions: AgentQuestion[]) => void;
     },
   ) {}
 
@@ -66,7 +71,8 @@ export class CodexItems {
     } = {},
   ): void {
     this.workStarted = true;
-    if (!options.status) this.open.set(key, { kind: item.kind });
+    if (!options.status)
+      this.open.set(key, { kind: item.kind, parentKey: options.parentKey });
     const ref = options.ref === undefined ? key : options.ref;
     this.input.emit({
       type: "item.started",
@@ -108,6 +114,17 @@ export class CodexItems {
     if (!id) return;
     switch (item.type) {
       case "agentMessage":
+        if (this.input.questions && asyncQuestions(item)) return;
+        // A native stream retry can abandon a message without completing it.
+        // Only the replacement is a reply; keep child threads independent.
+        for (const [key, open] of this.open) {
+          if (
+            key !== id &&
+            open.kind === "assistant_message" &&
+            open.parentKey === parentKey
+          )
+            this.completed(key, "cancelled", { text: "" });
+        }
         this.started(
           id,
           { kind: "assistant_message", text: "", agentId: null },
@@ -215,15 +232,23 @@ export class CodexItems {
     const id = typeof item.id === "string" ? item.id : undefined;
     if (!id) return;
     switch (item.type) {
-      case "agentMessage":
-        if (!this.open.has(id))
-          this.started(
-            id,
-            { kind: "assistant_message", text: "", agentId: null },
-            { parentKey },
-          );
+      case "agentMessage": {
+        const questions = this.input.questions && asyncQuestions(item);
+        if (questions) {
+          const key = `question:${JSON.stringify([parentKey ?? null, id])}`;
+          if (this.asked.has(key)) return;
+          this.asked.add(key);
+          this.workStarted = true;
+          // Metadata can arrive only at completion, after text was streamed.
+          if (this.open.get(id)?.parentKey === parentKey)
+            this.completed(id, "cancelled", { text: "" });
+          this.input.questions?.(key, questions);
+          return;
+        }
+        if (!this.open.has(id)) this.itemStarted(item, parentKey);
         this.completed(id, "completed", { text: String(item.text ?? "") });
         return;
+      }
       case "reasoning": {
         const state = this.reasoning.get(id);
         this.reasoning.delete(id);
@@ -400,6 +425,12 @@ export class CodexItems {
   /** Close what is still open when the turn ends. */
   closeOpen(turn: "completed" | "failed" | "interrupted"): void {
     for (const [key, item] of [...this.open]) {
+      if (item.kind === "assistant_message" && turn === "completed") {
+        // A turn's success cannot confirm an unfinished message. Preserve
+        // its partial text when there was no replacement to withdraw it.
+        this.completed(key, "cancelled");
+        continue;
+      }
       this.completed(
         key,
         item.kind === "plan" || turn === "completed"
@@ -473,6 +504,38 @@ interface FileChangeEntry {
   path: string;
   kind: "created" | "modified" | "deleted" | "renamed";
   movePath?: string;
+}
+
+/** Codex delivers native async questions as structured agent messages. */
+function asyncQuestions(item: JsonObject): AgentQuestion[] | undefined {
+  if (
+    item.delivery !== "async" ||
+    !Array.isArray(item.questions) ||
+    item.questions.length === 0
+  )
+    return;
+  const questions: AgentQuestion[] = [];
+  for (const question of item.questions) {
+    if (
+      !isObject(question) ||
+      typeof question.title !== "string" ||
+      !question.title.trim() ||
+      (question.options != null &&
+        (!Array.isArray(question.options) ||
+          question.options.some((option) => typeof option !== "string")))
+    )
+      return;
+    questions.push({
+      question: question.title,
+      header: "Question",
+      multiSelect: false,
+      options: ((question.options ?? []) as string[]).map((label) => ({
+        label,
+        description: "",
+      })),
+    });
+  }
+  return questions;
 }
 
 function changesOf(item: JsonObject): FileChangeEntry[] {

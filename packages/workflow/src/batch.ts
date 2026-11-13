@@ -299,8 +299,8 @@ declare class BatchDefinitionImpl<
   SinkState,
   Artifact,
 > {
-  private declare readonly input: Input;
-  private declare readonly output: Output;
+  declare private readonly input: Input;
+  declare private readonly output: Output;
 
   readonly source: BatchOptions<
     Input,

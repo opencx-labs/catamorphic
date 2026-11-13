@@ -318,12 +318,19 @@ function SourceView({
     [root.ids, collection, hidden, revision],
   );
   useSidebarItemCount(roots.length);
-  const refresh = useCallback(() => {
+  const refresh = useCallback(async () => {
     setSubscriptionError(undefined);
     setActionError(undefined);
-    if (!awaitingSession) return collection.load();
-    return sessionId ? refetchSession() : undefined;
-  }, [collection, awaitingSession, sessionId, refetchSession]);
+    if (awaitingSession) return sessionId ? refetchSession() : undefined;
+    try {
+      // Recovery invalidates every subscribed view. That event owns the
+      // read; another load here would queue a second request behind it.
+      if (source.retry) await source.retry();
+      else await collection.load();
+    } catch (cause) {
+      setSubscriptionError(failure(cause).message);
+    }
+  }, [source, collection, awaitingSession, sessionId, refetchSession]);
   useSidebarRefresh(refresh);
   // A module that wants more than the person allowed is not running; its
   // section shows Work's request (ADR 0277).
@@ -334,10 +341,7 @@ function SourceView({
   const access = asked
     ? {
         request: asked.request,
-        allow: async () => {
-          await asked.allow();
-          await refresh();
-        },
+        allow: asked.allow,
       }
     : undefined;
   useSidebarContent({

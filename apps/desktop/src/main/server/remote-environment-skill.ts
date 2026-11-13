@@ -127,7 +127,7 @@ Docker or Podman is installed):
 \`\`\`
 
 \`\`\`dockerfile
-FROM node:22-bookworm
+FROM node:26-bookworm
 RUN apt-get update \\
   && apt-get install -y --no-install-recommends git ca-certificates \\
   && rm -rf /var/lib/apt/lists/*

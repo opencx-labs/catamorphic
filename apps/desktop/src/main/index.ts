@@ -39,8 +39,10 @@ import {
   serveBackgroundRuntime,
 } from "./background-runtime.js";
 import { registerBrowserSupport } from "./browser.js";
+import { createCodeApprovals } from "./code-approvals.js";
 import { toPublicConnection } from "./connections-store.js";
 import { ConnectorsService } from "./connectors.js";
+import { credentialEncryptionAvailableAsync } from "./credential-encryption.js";
 import { customizationHost } from "./customization-host.js";
 import {
   externalBrowserUrl,
@@ -360,6 +362,16 @@ emitLog({ scope: "catamorphic-desktop", body: "Desktop starting" });
 const loginPathAdopted = adoptLoginShellPath({ packaged: app.isPackaged });
 
 const paths = resolveDataPaths();
+// Foreground questions and background authorization share one unlock state.
+const approvalsFor = createCodeApprovals({
+  profilesDir: paths.profilesDir,
+  keyring: {
+    available: () => credentialEncryptionAvailableAsync(),
+    encrypt: (text) => safeStorage.encryptStringAsync(text),
+    decrypt: async (data) =>
+      (await safeStorage.decryptStringAsync(data)).result,
+  },
+});
 const profilesStore = new ProfilesStore(paths.profilesFile);
 // Per-profile config (theme, keybindings, workspace, agents) — one manager
 // shared by IPC, the window layer, and the chat agent's config mirror.
@@ -876,6 +888,7 @@ app.whenReady().then(async () => {
             paths,
             profilesStore,
             profileConfig,
+            approvalsFor,
             undefined,
             connectors,
             undefined,
@@ -1171,6 +1184,10 @@ app.whenReady().then(async () => {
       (await state.current?.agentRegistry.nativeToolchainEnvironment()) ?? {},
     (window) => desktopWorkspaces?.isDock(window) ?? false,
     {
+      approvalsFor,
+      approvalsRecovered: (input) =>
+        server?.customizationProcesses.recoverProfile(input) ??
+        Promise.resolve(),
       hostCall: customizationHost(() => server),
       targetFor: (projectId) => desktopWorkspaces?.target(projectId),
       sourceStopped: (owner) => {
@@ -1352,6 +1369,7 @@ app.whenReady().then(async () => {
           paths,
           profilesStore,
           profileConfig,
+          approvalsFor,
           agentBridge?.bridge,
           connectors,
           mcpApps,

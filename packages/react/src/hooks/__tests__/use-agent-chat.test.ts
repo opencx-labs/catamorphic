@@ -253,7 +253,7 @@ describe("useAgentSession", () => {
       useAgentSession(PROJECT_ID, SESSION_ID),
     );
     await waitFor(() => expect(served.cursors).toEqual([4]));
-    // Nothing was sent: an idle chat is still connected.
+    // No session message was sent: an idle chat is still connected.
     await waitFor(() => expect(result.current.connection).toBe("live"));
   });
 

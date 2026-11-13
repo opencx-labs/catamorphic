@@ -126,7 +126,26 @@ mac:
       role: Editor
       rank: Alternate
     - name: Source code
-      ext: [js, mjs, cjs, ts, tsx, jsx, css, sh, py, rb, go, rs, java, c, h, cpp, sql]
+      ext:
+        [
+          js,
+          mjs,
+          cjs,
+          ts,
+          tsx,
+          jsx,
+          css,
+          sh,
+          py,
+          rb,
+          go,
+          rs,
+          java,
+          c,
+          h,
+          cpp,
+          sql,
+        ]
       role: Editor
       rank: Alternate
     - name: Patch

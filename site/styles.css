@@ -388,6 +388,7 @@ site-nav .nav-links a[aria-current] {
   padding: 18px 20px;
 }
 
+/* biome-ignore lint/style/noDescendingSpecificity: The more specific duo code window keeps its compact padding. */
 .code-window pre {
   margin: 0;
   padding: 20px 24px;
@@ -637,6 +638,7 @@ section {
   background: var(--bg-overlay);
 }
 
+/* biome-ignore lint/style/noDescendingSpecificity: Package rows and prose code are separate components. */
 .pkg-row code {
   font-size: 13.5px;
   color: var(--accent);

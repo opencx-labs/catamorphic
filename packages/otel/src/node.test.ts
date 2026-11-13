@@ -2,12 +2,15 @@ import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { createServer } from "node:http";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { context, metrics, propagation, trace } from "@opentelemetry/api";
-import { logs } from "@opentelemetry/api-logs";
+import { context, logs, metrics, propagation, trace } from "@opentelemetry/api";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { withTelemetryContext } from "./correlation.js";
 import { emitLog } from "./logging.js";
-import { loadTelemetryEnvironmentFile, startTelemetry } from "./node.js";
+import {
+  createProjectTelemetry,
+  loadTelemetryEnvironmentFile,
+  startTelemetry,
+} from "./node.js";
 import { getTracer, withSpan } from "./tracing.js";
 
 async function receiver() {
@@ -57,6 +60,62 @@ afterEach(() => {
 });
 
 describe("host SDK", () => {
+  it("preserves project sampler, span limits and batch settings with the standalone provider", async () => {
+    const target = await receiver();
+    const destination = {
+      OTEL_EXPORTER_OTLP_ENDPOINT: target.endpoint,
+      OTEL_EXPORTER_OTLP_PROTOCOL: "http/json",
+    };
+    const dropped = createProjectTelemetry({
+      projectId: "dropped",
+      serviceName: "project-test",
+      configuration: {
+        remote: { ...destination, OTEL_TRACES_SAMPLER: "always_off" },
+      },
+    });
+    const capped = createProjectTelemetry({
+      projectId: "capped",
+      serviceName: "project-test",
+      configuration: {
+        remote: {
+          ...destination,
+          OTEL_TRACES_SAMPLER: "always_on",
+          OTEL_ATTRIBUTE_VALUE_LENGTH_LIMIT: "5",
+          OTEL_SPAN_EVENT_COUNT_LIMIT: "0",
+          OTEL_BSP_MAX_QUEUE_SIZE: "1",
+          OTEL_BSP_MAX_EXPORT_BATCH_SIZE: "1",
+          OTEL_BSP_SCHEDULE_DELAY: "60000",
+        },
+      },
+    });
+    try {
+      const skipped = dropped.tracerProvider
+        .getTracer("test")
+        .startSpan("skipped");
+      expect(skipped.isRecording()).toBe(false);
+      skipped.end();
+      const span = capped.tracerProvider
+        .getTracer("test")
+        .startSpan("bounded", {
+          attributes: { detail: "abcdefgh" },
+        });
+      span.addEvent("discarded-event");
+      span.end();
+      // A one-span batch exports without waiting for the configured one-minute delay.
+      await expect
+        .poll(() => JSON.stringify(target.received), { timeout: 3000 })
+        .toContain("bounded");
+      const exported = JSON.stringify(target.received);
+      expect(exported).toContain("abcde");
+      expect(exported).not.toContain("abcdefgh");
+      expect(exported).not.toContain("discarded-event");
+      expect(exported).not.toContain("skipped");
+    } finally {
+      await Promise.all([dropped.shutdown(), capped.shutdown()]);
+      await target.close();
+    }
+  });
+
   it("picks up project configuration when its folder becomes available after initial work", async () => {
     const target = await receiver();
     const sdk = startTelemetry({ serviceName: "desktop-test" });

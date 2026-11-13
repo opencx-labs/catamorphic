@@ -23,7 +23,7 @@ export const agentQuestionInputSchema = z.object({
     .max(4),
 });
 export const agentQuestionDescription =
-  "Ask the user one or more questions. Ask only what you cannot find out yourself: look at their screen, files, and tabs with your tools before asking what they see. Set blocking=false when independent work can continue while waiting. Answers are delivered automatically; do not poll or ask again. Use blocking=true when the answer is required before proceeding. The user can always reply in their own words in the chat instead of picking an option, so do not add an 'Other' option.";
+  "Ask the user for missing information, preferences, or decisions. Use this tool instead of asking in chat text or using native question tools, including for required and open-ended questions. Ask only what you cannot find out yourself: inspect the screen, files, and tabs first, and use sensible defaults for routine implementation choices. Set blocking=false when independent work can continue while waiting; use blocking=true when the answer is required before proceeding. Answers arrive automatically; do not poll or ask again. For open-ended questions use options: []; otherwise give concise choices with descriptions, putting the recommended choice first and marking it '(Recommended)'. The user can always answer in their own words, so do not add an 'Other' option. Do not ask for permission to perform work already authorized.";
 export const agentQuestionJsonSchema = z.toJSONSchema(
   agentQuestionInputSchema,
   { io: "input" },

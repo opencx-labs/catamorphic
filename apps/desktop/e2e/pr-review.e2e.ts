@@ -239,8 +239,9 @@ it("generates an ordinary review app, follows evidence and retains the result", 
         const server = await api.getServerState();
         const base = server.url + '/api/projects/' + projectId;
         const session = await (await fetch(base + '/agent/sessions/' + sessionId)).json();
-        return session.execution?.status === 'failed'
-          ? {ready:false,error:session.messages.findLast(message => message.role === 'assistant')?.content}
+        const turn = session.snapshot.turns.at(-1);
+        return turn?.status === 'failed'
+          ? {ready:false,error:turn.error?.message}
           : false;
       })()`,
       { timeoutMs: 630_000, label: "review app build" },
