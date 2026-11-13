@@ -612,9 +612,8 @@ function KindTabs({
 }
 
 /**
- * A radio group of sources: the arrow keys move the pick (by row, or
- * across and down a grid), Enter shares the pick, a double click shares
- * at once.
+ * A listbox of sources: the arrow keys move the pick (by row, or across
+ * and down a grid), Enter shares the pick, a double click shares at once.
  */
 function SourceList({
   label,
@@ -685,7 +684,7 @@ function SourceList({
   return (
     <div
       ref={listRef}
-      role="radiogroup"
+      role="listbox"
       aria-label={label}
       aria-busy={busy || undefined}
       data-testid={testId}
@@ -742,8 +741,8 @@ function TabRow({
   } catch {}
   return (
     <div
-      role="radio"
-      aria-checked={selected}
+      role="option"
+      aria-selected={selected}
       tabIndex={focusable ? 0 : -1}
       onClick={onChoose}
       onDoubleClick={onCommit}
@@ -915,8 +914,8 @@ function SourceCard({
 }) {
   return (
     <div
-      role="radio"
-      aria-checked={selected}
+      role="option"
+      aria-selected={selected}
       tabIndex={focusable ? 0 : -1}
       onClick={onChoose}
       onDoubleClick={onCommit}
