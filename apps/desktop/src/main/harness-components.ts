@@ -111,7 +111,7 @@ const CLAUDE_VERSION = "0.3.322";
  * (ADR 0196). scripts/harness-bump.ts moves it with CLAUDE_VERSION.
  */
 export const CLAUDE_CODE_MIN_VERSION = "2.1.322";
-const CODEX_VERSION = "0.168.0";
+const CODEX_VERSION = "0.169.0";
 const BUN_VERSION = "1.4.4";
 const MAX_ARCHIVE_BYTES = 512 * 1024 * 1024;
 /**
@@ -126,7 +126,7 @@ const PLATFORM_RELEASES: Record<string, PlatformRelease> = {
     claudeIntegrity:
       "sha512-LoKkldW2zkLfaOLQD44mL1Ot4Aup8dBIo356LEeO3v2vF7JVNhMllQIXhhGpbYRz57QaYsGvOe0Kb4SbssHwcg==",
     codexIntegrity:
-      "sha512-gnAO7m6o0wdiUm6EfYD1r1KLgrJdDL5W83VWzPz+uZwb3whAcX6fcTbs8ekBWimT3g+mP1XqEWRnNtOrJK5FMQ==",
+      "sha512-5WsWFBbVP78D+6FvNo1MMVxLPZdmcoQlqVJFrF4qx/TmvneLnMQKtLyXkUo54XOTDfoYKpNouTJ/F7gTVA8FnQ==",
     bunIntegrity:
       "sha512-zW/hxwc8sJAILGwB5eTC4i48ouGXf0V4lrxmEOk3JIE6JkYVW1TZh1E2pIempqsezgW1sckTIIDudFON8bJ2Mw==",
   },
@@ -135,7 +135,7 @@ const PLATFORM_RELEASES: Record<string, PlatformRelease> = {
     claudeIntegrity:
       "sha512-rTvLS9G1OzjMIaSXrJglQtmRtVcaRmMbJQC+ND02+atCA463ac7Ty/Wc6tyzBGk8zFFGKWnfAhKtLZTNg91eMg==",
     codexIntegrity:
-      "sha512-4TCdvAEr71NZJb5jW2Any1M3uHMI3e3IyHQnqk/A8gbSnSCI1h40Ke1Br7BV3Hzc9++yCiqoDOLX1fAq2B2YQw==",
+      "sha512-K1FKSsSLl9v3z5TeagBQXyQRDBIGB5Jncy5dxsRxwT3aaTqN3AI8VrCfoxBxKMOOU9O2QX1vg7WkBwNVth/s9A==",
     bunIntegrity:
       "sha512-oKGcxLsvh4oHjAo28nPm8c/xN0o/OmGyj1IHYc94vprkWsW2hNg2keEZt5f40cI5Hvu4jDlSRTR0UNpv1UIAxw==",
   },
@@ -144,7 +144,7 @@ const PLATFORM_RELEASES: Record<string, PlatformRelease> = {
     claudeIntegrity:
       "sha512-H1v33+MxB5JMPlnJLZffiOQ+6muxyA7tgHPyYQ+So4TH7uRhaPcjv2X03CUo5U9gXleO6u+X8ngNNDRFtfUaSg==",
     codexIntegrity:
-      "sha512-QQh3WpLwWhGimv4QeP9rmuLv/qpql6QDUI9eFHkaB+I4rGi6SXHnXCSiMWZhki1Rz6gZM5U/YHypRjnY1A57BQ==",
+      "sha512-NZ/DaQUpcQmxmqee7Z9uC1rzw3GhSbooawcaTe1LN5Yk+WlinUKGdTXJgClRT/9ogQEEM9TWxYzvxPfj5G/xFg==",
     bunIntegrity:
       "sha512-ZTVtpf9zmHSBVPX1sBwe5agGb/rN34yPGg/Hby8e2Ax2uCUA2URZKlZH7qLntK7qaFJCMXh9v0GWNYN2zINz1w==",
   },
@@ -153,7 +153,7 @@ const PLATFORM_RELEASES: Record<string, PlatformRelease> = {
     claudeIntegrity:
       "sha512-M/i7uV5wQf1kvjiPJr2KF5PeA9BpftUpMTtwE+DpQ0Tj+scthQXSMsEhDvau/Rh/MfFOc+UHED4tltignmA5+Q==",
     codexIntegrity:
-      "sha512-0RfDOlpWUh3JthqYuD0Eu1Ot4m58rO2JGbKkJIEbJEMb3MwdLeVLMEvlxgHwmsknq41sF8xXlr0RB5ygFWOMaw==",
+      "sha512-o05NyAOCDygSPRo1yinzxvkRSdmsZyBD9E7mbpmjRanSfM8lypqWtQgEo4XfNkwhuCR2aFu8mlGOsQGFXVbVww==",
     bunIntegrity:
       "sha512-CHbbkmHVM28T1GFq+6GL4Ao4ujwwYwj1CxFFwEFzLanPfNsId9AhbIP0Q4reWuWBkGimUkoQygrK7Rgjtj3vog==",
   },
@@ -162,7 +162,7 @@ const PLATFORM_RELEASES: Record<string, PlatformRelease> = {
     claudeIntegrity:
       "sha512-o5sPmBKT4NOglODC45wSTFmjD1AQIboC9NdGFQFOTa8kMF3bok+YqpB0DF81RmMDf3iR5tieonZvOXdYm1TDjQ==",
     codexIntegrity:
-      "sha512-/1sSEd4XHYf6K1aIf8JwzTbn/m1PNuqoNe56gQ1gSrzpz4/I8eeEGSNRFP/sfLU4w1m5d3RG6cPKTK/V2Q9zxQ==",
+      "sha512-nTN9SpkacGohq60+I80R3t0R8Mhbnlt3OVYNahgAv1Gu77KFwhPc0vz9Ou/DAGDtYhKVWA/jiYXJXnlzkwb/JA==",
     bunIntegrity:
       "sha512-n0ep5ZRPCZY1+dqFJpnnRUZB1wy4GYU6At8RF+pyzySCLjkN9R4rFh2PtBHAgF/lg1vOl3/CeER3pDM+p40ATA==",
   },
@@ -171,7 +171,7 @@ const PLATFORM_RELEASES: Record<string, PlatformRelease> = {
     claudeIntegrity:
       "sha512-gONOkYx76of3p73opgWAT9gqpV7PRL8+az3vKoWXLc4xaDW6vhZF7fixpCnLDeUmPWxjXhnQxf30WGpKneTzNw==",
     codexIntegrity:
-      "sha512-bdy0PV8bMXNPeZ5bJrAeAqdm6O5MnhrZZDAzuUltNiqgR/YK/k59EXmtGUFycFzyiG2U8ew0rUr0jVrP47QlCQ==",
+      "sha512-nC+McFU8xRNL9tk3IhxcKdhcyOElwF/HhPO+gzSQCY7yjh3XdzSajX+MYWcHUVHWRHajfwn3/WgJYJK2wS+XWg==",
     bunIntegrity:
       "sha512-a3LNctBVO8PjePsFZfwDleF2JXYf2BfQ1u/PLRnBDLnC2Riml+4+LgJpKj4xRGhB92KweGyQI5PXaTkP9qypMQ==",
   },
