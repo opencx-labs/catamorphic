@@ -35,6 +35,8 @@ import {
 import type { TerminalMacro } from "../../shared/terminal-macros.js";
 import { VOICES, voiceIdOf } from "../../shared/voice.js";
 import { BrowserImport } from "../components/browser-import.js";
+import { ClosingCollapsible } from "../components/closing-collapsible.js";
+import { Collapsible } from "../components/collapsible.js";
 import { CopyButton } from "../components/copy-button.js";
 import { DefaultBrowserButton } from "../components/default-browser.js";
 import { DockIconSetting } from "../components/dock-icon-setting.js";
@@ -43,6 +45,7 @@ import { PendingButton } from "../components/pending-button.js";
 import { SyncedNote } from "../components/profile-settings-sync.js";
 import { ShortcutHint } from "../components/shortcut-hint.js";
 import { useProfileAgents, useVoiceKeys } from "../components/voice-button.js";
+import { useClosingItems } from "../lib/closing-items.js";
 import {
   type AgentHarness,
   type AgentsData,
@@ -67,6 +70,7 @@ import { useAppPreferences } from "../lib/use-app-preferences.js";
 
 export function SettingsScreen({
   projectId,
+  defaultAgentId,
   destination,
   profile,
   profiles,
@@ -78,6 +82,8 @@ export function SettingsScreen({
   onChooseTheme,
 }: {
   projectId?: string;
+  /** The host resolved this for new chats and the palette too. */
+  defaultAgentId?: string | null;
   destination?: SettingsDestination;
   /** The window's profile, to say which categories it shares (ADR 0272). */
   profile?: Profile;
@@ -202,7 +208,14 @@ export function SettingsScreen({
           Add agent
         </button>
       ),
-      content: <AgentsSection onConfigureAgent={onConfigureAgent} />,
+      content: (
+        <AgentsSection
+          key={projectId ?? "profile"}
+          projectId={projectId}
+          defaultAgentId={defaultAgentId}
+          onConfigureAgent={onConfigureAgent}
+        />
+      ),
     },
     {
       id: "connections",
@@ -508,11 +521,26 @@ interface AgentLoginUi {
  * in, and removes the ones that exist.
  */
 function AgentsSection({
+  projectId,
+  defaultAgentId,
   onConfigureAgent,
 }: {
+  projectId?: string;
+  defaultAgentId?: string | null;
   onConfigureAgent: (agentId: string) => void;
 }) {
   const [data, setData] = useState<AgentsData | null>(null);
+  const [scope, setScope] = useState<"profile" | "personal">(
+    projectId ? "personal" : "profile",
+  );
+  const [mutationError, setMutationError] = useState<string | null>(null);
+  const [saving, setSaving] = useState(false);
+  const rows = useClosingItems(data?.agents ?? []);
+  const projectOverride = projectId
+    ? data?.projectDefaults?.[projectId]
+    : undefined;
+  const currentDefaultId =
+    scope === "personal" && projectId ? defaultAgentId : data?.defaultAgentId;
   const [loginOk, setLoginOk] = useState<Record<string, boolean>>({});
   const [login, setLogin] = useState<Record<string, AgentLoginUi>>({});
 
@@ -533,7 +561,12 @@ function AgentsSection({
           [agent.id, await desktopApi.agentLoginStatus(agent.id)] as const,
       ),
     ).then((entries) => {
-      if (!cancelled) setLoginOk(Object.fromEntries(entries));
+      // A removed row still draws its last account state while closing.
+      if (!cancelled)
+        setLoginOk((previous) => ({
+          ...previous,
+          ...Object.fromEntries(entries),
+        }));
     });
     return () => {
       cancelled = true;
@@ -552,7 +585,18 @@ function AgentsSection({
     [],
   );
 
-  const refresh = () => void desktopApi.agentsList().then(setData);
+  const mutate = async (change: () => Promise<unknown>) => {
+    setSaving(true);
+    setMutationError(null);
+    try {
+      await change();
+      setData(await desktopApi.agentsList());
+    } catch (cause) {
+      setMutationError(cause instanceof Error ? cause.message : String(cause));
+    } finally {
+      setSaving(false);
+    }
+  };
 
   const signIn = async (id: string) => {
     setLogin((prev) => ({ ...prev, [id]: { pending: true } }));
@@ -579,22 +623,73 @@ function AgentsSection({
   return (
     <section className="settings-card" data-setting-id="agents">
       <p className="mb-3 text-xs leading-5 text-fg-muted">
-        Agents belong to the current profile. Add one with the setup wizard; set
-        the default here and switch per chat from the command palette.
+        Agents belong to the current profile. Choose the default for new chats,
+        or choose another agent for an individual chat in the palette.
       </p>
+      {projectId && (
+        <div className="mb-3 flex flex-wrap items-center gap-3">
+          <label
+            className="text-xs text-fg-muted"
+            htmlFor="agent-default-scope"
+          >
+            Default for
+          </label>
+          <select
+            id="agent-default-scope"
+            aria-label="Default agent scope"
+            value={scope}
+            className="field h-8 min-w-0 max-w-full rounded-md px-2 text-xs"
+            onChange={(event) =>
+              setScope(
+                event.target.value === "profile" ? "profile" : "personal",
+              )
+            }
+          >
+            <option value="profile">Profile</option>
+            <option value="personal">This project, just for me</option>
+          </select>
+          {scope === "personal" && projectOverride && (
+            <button
+              type="button"
+              data-testid="agent-default-reset"
+              className="button-secondary button-sm"
+              disabled={saving}
+              onClick={() =>
+                void mutate(() =>
+                  desktopApi.agentsSetProjectDefault(projectId, null),
+                )
+              }
+            >
+              Reset to inherited default
+            </button>
+          )}
+          <p className="basis-full text-[11px] text-fg-faint">
+            {scope === "profile"
+              ? "Profile defaults apply where a project has no override."
+              : projectOverride
+                ? "Your default for new chats in this project."
+                : "Inheriting the project or profile default."}
+          </p>
+        </div>
+      )}
+      <Collapsible open={Boolean(mutationError)}>
+        <p role="alert" className="mb-3 text-xs text-danger">
+          {mutationError}
+        </p>
+      </Collapsible>
 
       {!data ? (
         <p className="animate-pulse text-sm text-fg-muted">Loading…</p>
       ) : (
-        <div className="flex flex-col gap-1.5">
-          {data.agents.length === 0 && (
+        <div className="flex flex-col">
+          <Collapsible open={rows.length === 0}>
             <p className="text-xs text-fg-faint">
-              No agents yet — add one to start chatting.
+              No agents yet. Add one to start chatting.
             </p>
-          )}
+          </Collapsible>
 
-          {data.agents.map((agent) => {
-            const isDefault = agent.id === data.defaultAgentId;
+          {rows.map(({ item: agent, present }) => {
+            const isDefault = agent.id === currentDefaultId;
             const connected = loginOk[agent.id] === true;
             const ui = login[agent.id] ?? {};
             const keyed = agent.auth === "api-key";
@@ -608,128 +703,145 @@ function AgentsSection({
                   ? "Account connected"
                   : "Account not signed in";
             return (
-              <div
-                key={agent.id}
-                className="group rounded-md px-2 py-2 transition-colors duration-150 hover:bg-bg-overlay/60"
-              >
-                <div className="flex items-center gap-1">
-                  <span className="min-w-0 flex-1 truncate text-[13px]">
-                    {agent.name}
-                  </span>
-                  <button
-                    type="button"
-                    onClick={() => void desktopApi.agentsSetDefault(agent.id)}
-                    className={`grid size-6 shrink-0 cursor-pointer place-items-center rounded text-fg-faint transition-colors duration-150 hover:text-fg ${
-                      isDefault ? "" : "row-reveal"
-                    }`}
-                    aria-label={
-                      isDefault
-                        ? `${agent.name} is the default agent`
-                        : `Make ${agent.name} the default agent`
-                    }
-                    title={isDefault ? "Default agent" : "Make default"}
+              <ClosingCollapsible key={agent.id} open={present}>
+                <div className="pb-1.5">
+                  <div
+                    data-agent-id={agent.id}
+                    className="group rounded-md px-2 py-2 transition-colors duration-150 hover:bg-bg-overlay/60"
                   >
-                    <Star
-                      className={`size-3 ${isDefault ? "fill-current text-fg-muted" : ""}`}
-                    />
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => onConfigureAgent(agent.id)}
-                    className="row-reveal grid size-6 shrink-0 cursor-pointer place-items-center rounded text-fg-faint transition-colors hover:text-fg"
-                    aria-label={`Edit ${agent.name}`}
-                    title="Edit"
-                  >
-                    <Pencil className="size-3" />
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() =>
-                      void desktopApi.agentsRemove(agent.id).then(refresh)
-                    }
-                    className="row-reveal grid size-6 shrink-0 cursor-pointer place-items-center rounded text-fg-faint transition-colors hover:text-danger"
-                    aria-label={`Remove ${agent.name}`}
-                    title="Remove"
-                  >
-                    <Trash2 className="size-3" />
-                  </button>
-                </div>
-                <div className="mt-1 flex flex-wrap items-center gap-x-1.5 gap-y-0.5 text-[11px] text-fg-faint">
-                  <span>{HARNESS_LABELS[agent.harness]}</span>
-                  <span>·</span>
-                  {agent.harness === "acp" ? (
-                    // An ACP agent keeps these in its own configuration
-                    // (ADR 0241).
-                    <>
-                      <span className="font-mono">
-                        {displayCommand(agent.acp?.command ?? [])}
+                    <div className="flex items-center gap-1">
+                      <span className="min-w-0 flex-1 truncate text-[13px]">
+                        {agent.name}
                       </span>
-                      <span>·</span>
-                      <span>its own model and sign-in</span>
-                    </>
-                  ) : (
-                    <>
-                      <span className={agent.model ? "font-mono" : ""}>
-                        {agent.model || "default model"}
-                      </span>
-                      <span>·</span>
-                      <span>{agent.effort} effort</span>
-                      <span>·</span>
-                      <span
-                        className={keyed && agent.hasApiKey ? "font-mono" : ""}
-                      >
-                        {authText}
-                      </span>
-                    </>
-                  )}
-                </div>
-                {agent.credentialError && (
-                  <p role="alert" className="mt-2 text-[11px] text-danger">
-                    {agent.credentialError}
-                  </p>
-                )}
-                {agent.auth === "account" && !connected && (
-                  <div className="mt-2 flex flex-col gap-1.5">
-                    {ui.command ? (
-                      <>
-                        <div
-                          data-copyable
-                          className="flex items-center gap-1.5"
-                        >
-                          <code className="min-w-0 flex-1 truncate rounded-md border border-border bg-bg-inset px-2 py-1 font-mono text-[11px] text-fg-muted">
-                            {ui.command}
-                          </code>
-                          <CopyButton
-                            value={ui.command}
-                            label="Copy sign-in command"
-                          />
-                        </div>
-                        <p className="text-[11px] text-fg-faint">
-                          Finish sign-in in your terminal, then come back.
-                        </p>
-                      </>
-                    ) : (
-                      <PendingButton
+                      <button
                         type="button"
-                        pending={ui.pending === true}
-                        pendingLabel="Opening…"
-                        onClick={() => void signIn(agent.id)}
-                        className="h-6 w-fit cursor-pointer rounded-md border border-border-strong bg-bg-inset px-2 text-[12px] text-fg-muted transition-colors duration-150 hover:border-fg-faint hover:text-fg"
+                        disabled={saving}
+                        onClick={() =>
+                          void mutate(() =>
+                            scope === "personal" && projectId
+                              ? desktopApi.agentsSetProjectDefault(
+                                  projectId,
+                                  agent.id,
+                                )
+                              : desktopApi.agentsSetDefault(agent.id),
+                          )
+                        }
+                        className={`grid size-6 shrink-0 cursor-pointer place-items-center rounded text-fg-faint transition-colors duration-150 hover:text-fg ${
+                          isDefault ? "" : "row-reveal"
+                        }`}
+                        aria-label={
+                          isDefault
+                            ? `${agent.name} is the default agent`
+                            : `Make ${agent.name} the default agent`
+                        }
+                        title={isDefault ? "Default agent" : "Make default"}
                       >
-                        Sign in…
-                      </PendingButton>
-                    )}
-                    {ui.waiting && (
-                      <p className="text-[11px] text-fg-faint">
-                        Finish sign-in in your browser…
+                        <Star
+                          className={`size-3 ${isDefault ? "fill-current text-fg-muted" : ""}`}
+                        />
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => onConfigureAgent(agent.id)}
+                        className="row-reveal grid size-6 shrink-0 cursor-pointer place-items-center rounded text-fg-faint transition-colors hover:text-fg"
+                        aria-label={`Edit ${agent.name}`}
+                        title="Edit"
+                      >
+                        <Pencil className="size-3" />
+                      </button>
+                      <button
+                        type="button"
+                        disabled={saving}
+                        onClick={() =>
+                          void mutate(() => desktopApi.agentsRemove(agent.id))
+                        }
+                        className="row-reveal grid size-6 shrink-0 cursor-pointer place-items-center rounded text-fg-faint transition-colors hover:text-danger"
+                        aria-label={`Remove ${agent.name}`}
+                        title="Remove"
+                      >
+                        <Trash2 className="size-3" />
+                      </button>
+                    </div>
+                    <div className="mt-1 flex flex-wrap items-center gap-x-1.5 gap-y-0.5 text-[11px] text-fg-faint">
+                      <span>{HARNESS_LABELS[agent.harness]}</span>
+                      <span>·</span>
+                      {agent.harness === "acp" ? (
+                        // An ACP agent keeps these in its own configuration
+                        // (ADR 0241).
+                        <>
+                          <span className="font-mono">
+                            {displayCommand(agent.acp?.command ?? [])}
+                          </span>
+                          <span>·</span>
+                          <span>its own model and sign-in</span>
+                        </>
+                      ) : (
+                        <>
+                          <span className={agent.model ? "font-mono" : ""}>
+                            {agent.model || "default model"}
+                          </span>
+                          <span>·</span>
+                          <span>{agent.effort} effort</span>
+                          <span>·</span>
+                          <span
+                            className={
+                              keyed && agent.hasApiKey ? "font-mono" : ""
+                            }
+                          >
+                            {authText}
+                          </span>
+                        </>
+                      )}
+                    </div>
+                    {agent.credentialError && (
+                      <p role="alert" className="mt-2 text-[11px] text-danger">
+                        {agent.credentialError}
                       </p>
                     )}
-                    {ui.error && (
-                      <p className="text-[11px] text-danger">{ui.error}</p>
+                    {agent.auth === "account" && !connected && (
+                      <div className="mt-2 flex flex-col gap-1.5">
+                        {ui.command ? (
+                          <>
+                            <div
+                              data-copyable
+                              className="flex items-center gap-1.5"
+                            >
+                              <code className="min-w-0 flex-1 truncate rounded-md border border-border bg-bg-inset px-2 py-1 font-mono text-[11px] text-fg-muted">
+                                {ui.command}
+                              </code>
+                              <CopyButton
+                                value={ui.command}
+                                label="Copy sign-in command"
+                              />
+                            </div>
+                            <p className="text-[11px] text-fg-faint">
+                              Finish sign-in in your terminal, then come back.
+                            </p>
+                          </>
+                        ) : (
+                          <PendingButton
+                            type="button"
+                            pending={ui.pending === true}
+                            pendingLabel="Opening…"
+                            onClick={() => void signIn(agent.id)}
+                            className="h-6 w-fit cursor-pointer rounded-md border border-border-strong bg-bg-inset px-2 text-[12px] text-fg-muted transition-colors duration-150 hover:border-fg-faint hover:text-fg"
+                          >
+                            Sign in…
+                          </PendingButton>
+                        )}
+                        {ui.waiting && (
+                          <p className="text-[11px] text-fg-faint">
+                            Finish sign-in in your browser…
+                          </p>
+                        )}
+                        {ui.error && (
+                          <p className="text-[11px] text-danger">{ui.error}</p>
+                        )}
+                      </div>
                     )}
                   </div>
-                )}
-              </div>
+                </div>
+              </ClosingCollapsible>
             );
           })}
         </div>

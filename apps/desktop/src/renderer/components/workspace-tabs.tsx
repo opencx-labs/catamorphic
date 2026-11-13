@@ -564,6 +564,26 @@ function TabStrip({
         const highlighted = !exiting && key === highlightKey;
         const Icon = TAB_ICONS[tab.kind];
         const parentGroup = groupByParent.get(key);
+        const group = tab.groupId
+          ? groupByParent.get(`chat:${tab.groupId}`)
+          : undefined;
+        const ownActions = tabActions?.(key);
+        const actions =
+          group && onToggleGroup
+            ? {
+                leading: [
+                  {
+                    label: group.collapsed ? "Expand group" : "Collapse group",
+                    action: "toggle-group",
+                  },
+                ],
+                entries: ownActions?.entries ?? [],
+                onAction: (action: string) =>
+                  action === "toggle-group"
+                    ? onToggleGroup(group.parentKey.slice("chat:".length))
+                    : ownActions?.onAction(action),
+              }
+            : ownActions;
         const closesGroup = !exiting ? lastMemberKeys.get(key) : undefined;
         // The split pair merges into one bubble when adjacent: facing
         // corners square off, inner borders drop, and the gap closes.
@@ -764,7 +784,7 @@ function TabStrip({
                   type="button"
                   url={tab.kind === "browser" ? tab.bookmarkUrl : undefined}
                   file={tabFile?.(key)}
-                  actions={tabActions?.(key)}
+                  actions={actions}
                   onOpen={(mode) => {
                     disarmHoverCard();
                     onSelect(key, mode);

@@ -1,4 +1,12 @@
-import { Bot, Check, Globe, type LucideIcon, Search, Star } from "lucide-react";
+import {
+  Bot,
+  Check,
+  ChevronDown,
+  Globe,
+  type LucideIcon,
+  Search,
+  Star,
+} from "lucide-react";
 import {
   type ClipboardEvent,
   Fragment,
@@ -35,6 +43,11 @@ import { pointerMoved } from "../lib/pointer-moved.js";
 import { useProjectSkillCatalog } from "../lib/skills.js";
 import { useComposerFiles } from "../lib/use-composer-files.js";
 import { GLIDING_FRAME, useGlidingHeight } from "../lib/use-gliding-height.js";
+import {
+  PaletteHistory,
+  type PaletteSnapshot,
+  samePaletteDraft,
+} from "../palette/history.js";
 import { usePaletteHost } from "../palette/host.js";
 import {
   isFullPaletteModeName,
@@ -65,7 +78,11 @@ import {
   settleSelection,
   TOP_ROW,
 } from "../palette/selection.js";
-import type { PaletteItem, PaletteModeRequest } from "../palette/types.js";
+import type {
+  PaletteAgentChoice,
+  PaletteItem,
+  PaletteModeRequest,
+} from "../palette/types.js";
 import { bareUrl, rememberedOrigins } from "../palette/urls.js";
 import { resolveInput } from "../screens/browser-screen.js";
 import { fadeEdges } from "./catamorphic/edge-fade.js";
@@ -158,10 +175,14 @@ function NewTabShortcutHints({
 
 const COMMIT_HINTS = [
   { keycap: "↵", label: "open" },
-  { keycap: "⌘↵", label: "new tab" },
-  { keycap: "⌘⇧↵", label: "side" },
-  { keycap: "⌥↵", label: "floating" },
+  { keycap: "⌘\u202f↵", label: "new tab" },
+  { keycap: "⌘\u202f⇧\u202f↵", label: "side" },
+  { keycap: "⌥\u202f↵", label: "floating" },
 ];
+const hasOpenModal = () =>
+  [...document.querySelectorAll('[role="dialog"][aria-modal="true"]')].some(
+    (dialog) => !dialog.closest("[inert]"),
+  );
 
 function FooterHint({ keycap, label }: { keycap: string; label: string }) {
   return (
@@ -181,6 +202,10 @@ interface CommandPaletteProps {
    * play (unmounting kills it mid-frame). Tab variant is always open.
    */
   open?: boolean;
+  /** A retained palette tab only takes focus while it is the current pane. */
+  active?: boolean;
+  /** Reusing an already-current empty tab returns focus to its input. */
+  focusRequest?: number;
   /** Overlay: hide the palette. Tab: close/consume the palette tab. */
   onClose: () => void;
   /**
@@ -190,6 +215,8 @@ interface CommandPaletteProps {
   onTypedChange?: (typed: boolean) => void;
   /** Overlay only: open straight into a mode (agent commands, sidebar search). */
   modeRequest?: PaletteModeRequest | null;
+  /** Reuse the agent picker for a draft without changing a live chat. */
+  agentChoice?: PaletteAgentChoice;
 }
 
 export const CommandPalette = memo(function CommandPalette(
@@ -219,9 +246,12 @@ export const CommandPalette = memo(function CommandPalette(
 function CommandPaletteContent({
   variant,
   open = true,
+  active: hostActive = true,
+  focusRequest = 0,
   onClose,
   onTypedChange,
   modeRequest,
+  agentChoice,
 }: CommandPaletteProps) {
   const {
     projectId,
@@ -234,6 +264,39 @@ function CommandPaletteContent({
     defaultAgentId,
     actionAvailability,
   } = usePaletteHost();
+  const [chosenAgentId, setChosenAgentId] = useState<string | null>(null);
+  const draftPicker = Boolean(agentChoice);
+  const agentId = chosenAgentId ?? defaultAgentId;
+  useEffect(() => {
+    if (
+      chosenAgentId &&
+      !chosenAgentId.startsWith("project:") &&
+      !agents.some((agent) => agent.id === chosenAgentId)
+    )
+      setChosenAgentId(null);
+  }, [agents, chosenAgentId]);
+  const [pickingAgent, setPickingAgent] = useState(false);
+  const [agentPickerRequest, setAgentPickerRequest] =
+    useState<PaletteModeRequest | null>(null);
+  const active = hostActive && !pickingAgent;
+  useEffect(() => {
+    if (!hostActive) setPickingAgent(false);
+  }, [hostActive]);
+  // A live range follows multiline DOM and attachment transfers while the
+  // same composer stays mounted behind the picker.
+  const draftSelection = useRef<{ range: Range; backward: boolean } | null>(
+    null,
+  );
+  const draftAgentChoice = useMemo(
+    () => ({
+      currentId: agentId,
+      onPick: (id: string) => {
+        setChosenAgentId(id);
+        setPickingAgent(false);
+      },
+    }),
+    [agentId],
+  );
   const [query, setQuery] = useState("");
   // Stays on a chosen row while late sources re-rank the list under it.
   const [selection, setSelection] = useState(TOP_ROW);
@@ -269,10 +332,75 @@ function CommandPaletteContent({
   const inputContentRef = useRef<HTMLDivElement>(null);
   useGlidingHeight({ content: inputContentRef, frame: inputFrameRef });
   const agentInputRef = useRef<ComposerInputHandle>(null);
+  const currentDraft = useRef({ mode: modeId, query });
+  currentDraft.current = { mode: modeId, query };
+  const editHistory = useRef(new PaletteHistory());
+  const lastSnapshot = useRef<PaletteSnapshot>({
+    mode: null,
+    draft: { message: "", attachments: [] },
+  });
+  const beforeEdit = useRef<PaletteSnapshot | null>(null);
+  const editKind = useRef("change");
+  const composing = useRef(false);
+  const restoringHistory = useRef(false);
+  const restoreMode = useRef<PaletteSnapshot | null>(null);
+  const [, renderHistoryRestore] = useState(0);
+  const snapshotMode = useCallback((): PaletteSnapshot => {
+    const current = currentDraft.current;
+    const field = inputRef.current;
+    return {
+      mode: current.mode,
+      draft: agentInputRef.current?.snapshot() ?? {
+        message: field?.value ?? current.query,
+        attachments: [],
+      },
+      selection: field
+        ? {
+            anchor:
+              field.selectionDirection === "backward"
+                ? field.selectionEnd
+                : field.selectionStart,
+            focus:
+              field.selectionDirection === "backward"
+                ? field.selectionStart
+                : field.selectionEnd,
+          }
+        : (agentInputRef.current?.selection() ??
+          lastSnapshot.current.selection),
+    };
+  }, []);
+  const recordInput = useCallback(() => {
+    if (restoringHistory.current || composing.current) return;
+    const after = snapshotMode();
+    editHistory.current.record({
+      before: beforeEdit.current ?? lastSnapshot.current,
+      after,
+      kind: editKind.current,
+    });
+    lastSnapshot.current = after;
+    beforeEdit.current = null;
+    editKind.current = "change";
+  }, [snapshotMode]);
+  const recordMode = useCallback(
+    (next: string | null, text: string) => {
+      const before = snapshotMode();
+      if (before.mode === next) return;
+      const after = {
+        mode: next,
+        draft: { message: text, attachments: [] },
+        selection: { anchor: text.length, focus: text.length },
+      };
+      editHistory.current.record({ before, after, kind: "mode" });
+      lastSnapshot.current = after;
+      restoreMode.current = after;
+      beforeEdit.current = null;
+    },
+    [snapshotMode],
+  );
   const targetAgent = [
     ...agents,
     ...projectAgents.map(projectAgentAsInfo),
-  ].find((agent) => agent.id === defaultAgentId);
+  ].find((agent) => agent.id === agentId);
   const {
     addFilesTo,
     pendingTransfers,
@@ -285,15 +413,52 @@ function CommandPaletteContent({
     owner: agentInputRef,
   });
   const focusInput = useCallback(() => {
-    if (agentInputRef.current) agentInputRef.current.focusToType();
+    const saved = draftSelection.current;
+    const input = agentInputRef.current?.element();
+    if (saved && input?.contains(saved.range.commonAncestorContainer)) {
+      input.focus();
+      const { range, backward } = saved;
+      window
+        .getSelection()
+        ?.setBaseAndExtent(
+          backward ? range.endContainer : range.startContainer,
+          backward ? range.endOffset : range.startOffset,
+          backward ? range.startContainer : range.endContainer,
+          backward ? range.startOffset : range.endOffset,
+        );
+      draftSelection.current = null;
+    } else if (agentInputRef.current) agentInputRef.current.focusToType();
     else inputRef.current?.focus();
   }, []);
   const previousMode = useRef(modeId);
   useLayoutEffect(() => {
     const changed = previousMode.current !== modeId;
     previousMode.current = modeId;
-    if (changed && open) focusInput();
-  }, [modeId, open, focusInput]);
+    if ((changed || restoreMode.current) && open && active) {
+      const restored = restoreMode.current;
+      restoreMode.current = null;
+      restoringHistory.current = true;
+      if (modeId === "agent") {
+        if (restored) agentInputRef.current?.restore(restored.draft);
+        else agentInputRef.current?.replaceText(query);
+      }
+      focusInput();
+      if (restored?.selection) {
+        if (modeId === "agent")
+          agentInputRef.current?.restoreSelection(restored.selection);
+        else
+          inputRef.current?.setSelectionRange(
+            Math.min(restored.selection.anchor, restored.selection.focus),
+            Math.max(restored.selection.anchor, restored.selection.focus),
+            restored.selection.anchor > restored.selection.focus
+              ? "backward"
+              : "forward",
+          );
+      }
+      lastSnapshot.current = snapshotMode();
+      restoringHistory.current = false;
+    }
+  });
   const onAgentPaste = (event: ClipboardEvent<HTMLDivElement>) => {
     const input = agentInputRef.current;
     if (!input || !projectId) return;
@@ -314,14 +479,15 @@ function CommandPaletteContent({
   const sizerRef = useRef<HTMLDivElement>(null);
 
   const enterMode = useCallback(
-    (next: string) => {
+    (next: string, initialQuery = "") => {
+      recordMode(next, initialQuery);
       setModeId(next);
       setExitingChip(null);
-      setQuery("");
+      setQuery(initialQuery);
       setSelection(TOP_ROW);
       focusInput();
     },
-    [focusInput],
+    [focusInput, recordMode],
   );
 
   // Keep the exiting list intact, but always start a fresh opening even if
@@ -329,7 +495,17 @@ function CommandPaletteContent({
   // modeRequest so an explicit mode can initialize the fresh palette.
   useLayoutEffect(() => {
     const reset = () => {
+      restoringHistory.current = true;
       setQuery("");
+      setChosenAgentId(null);
+      setPickingAgent(false);
+      editHistory.current.clear();
+      lastSnapshot.current = {
+        mode: null,
+        draft: { message: "", attachments: [] },
+      };
+      beforeEdit.current = null;
+      restoreMode.current = null;
       agentInputRef.current?.clear();
       setPillCount(0);
       setInputEpoch((epoch) => epoch + 1);
@@ -338,6 +514,7 @@ function CommandPaletteContent({
       setModeId(null);
       setExitingChip(null);
       listMotionRef.current.reset();
+      restoringHistory.current = false;
     };
     if (open) {
       reset();
@@ -347,9 +524,12 @@ function CommandPaletteContent({
     return () => clearTimeout(timer);
   }, [open, setTransferError]);
 
+  // biome-ignore lint/correctness/useExhaustiveDependencies: repeated New Tab requests refocus an already-current retained input
   useLayoutEffect(() => {
-    if (!open) return;
-    const focus = () => focusInput();
+    if (!open || !active) return;
+    const focus = () => {
+      if (!hasOpenModal()) focusInput();
+    };
     // A New Tab greeting its user is the app's own move (lib/app-focus): a
     // chat opened in the same frame still lands its composer autofocus.
     const frame = requestAnimationFrame(() =>
@@ -370,14 +550,17 @@ function CommandPaletteContent({
       window.removeEventListener("keydown", cancel, true);
       window.removeEventListener("pointerdown", cancel, true);
     };
-  }, [open, variant, focusInput]);
+  }, [open, active, variant, focusInput, focusRequest]);
 
   // Commands run from anywhere open the overlay already inside their mode.
   useEffect(() => {
-    if (variant !== "overlay" || !modeRequest) return;
+    if (variant !== "overlay" || !open || !modeRequest) return;
     if (modeRequest.mode === "section") setSectionSearch(modeRequest);
     enterMode(modeRequest.mode);
-  }, [variant, modeRequest, enterMode]);
+    // This temporary picker can undo its search, but its entry belongs to
+    // the draft below it. Backspace or Escape returns to that draft.
+    if (draftPicker) editHistory.current.clear();
+  }, [variant, open, modeRequest, enterMode, draftPicker]);
 
   const keybindings = useKeybindings();
   // Fresh on every open, like history below: skills are files an agent or
@@ -428,7 +611,7 @@ function CommandPaletteContent({
   // the input without an extra click. Guarded on "nothing else grabbed
   // focus" so a split-pane neighbor's input is never robbed.
   useEffect(() => {
-    if (variant !== "tab") return;
+    if (variant !== "tab" || !active) return;
     const onWindowFocus = () => {
       requestAnimationFrame(() => {
         const active = document.activeElement;
@@ -437,7 +620,7 @@ function CommandPaletteContent({
     };
     window.addEventListener("focus", onWindowFocus);
     return () => window.removeEventListener("focus", onWindowFocus);
-  }, [variant, focusInput]);
+  }, [variant, active, focusInput]);
 
   // Skills follow the target agent's allowlist: the focused chat's agent,
   // else the default, profile or project.
@@ -461,12 +644,12 @@ function CommandPaletteContent({
     commandItems,
   } = useCommandRows({ enterMode, skills, agentSkills: skillAgent?.skills });
   const { resourceItems, tabItems, bookmarkedUsage } = useResourceRows({
-    active: variant === "tab" || open,
+    active: active && open,
   });
   const { surfaceItems, historyPageItem } = useDestinationRows();
   const { historyRow, historyItems, historyEntries } = useHistoryRows({
     query,
-    enabled: (variant === "tab" || open) && !modeId,
+    enabled: active && open && !modeId,
     bookmarkedUsage,
   });
   const settingItems = useSettingRows();
@@ -493,7 +676,9 @@ function CommandPaletteContent({
     sectionSearch,
     projectAgents,
     skillModes,
-    agentModeActive: modeId === "agent" && (variant === "tab" || open),
+    agentModeActive: modeId === "agent" && active && open,
+    agentId,
+    agentChoice,
   });
   const namedModes = useMemo(
     () => modes.filter((candidate) => candidate.names?.length),
@@ -506,14 +691,81 @@ function CommandPaletteContent({
     if (modeId && !activeMode) setModeId(null);
   }, [modeId, activeMode]);
   const exitMode = () => {
+    if (agentChoice) {
+      onClose();
+      return;
+    }
     if (activeMode && !activeMode.parent)
       setExitingChip({ icon: activeMode.icon, label: activeMode.chip });
-    setModeId(activeMode?.parent ?? null);
+    const next = activeMode?.parent ?? null;
+    recordMode(next, query);
+    setModeId(next);
   };
+  const undoMode = (redo: boolean): boolean => {
+    const restored = redo
+      ? editHistory.current.redo()
+      : editHistory.current.undo();
+    if (!restored) return true;
+    restoreMode.current = restored;
+    lastSnapshot.current = restored;
+    beforeEdit.current = null;
+    setExitingChip(null);
+    setModeId(restored.mode);
+    setQuery(restored.draft.message);
+    renderHistoryRestore((epoch) => epoch + 1);
+    setSelection(TOP_ROW);
+    return true;
+  };
+  const undoModeRef = useRef(undoMode);
+  undoModeRef.current = undoMode;
+  useEffect(() => {
+    const content = inputContentRef.current;
+    const beforeInput = (event: InputEvent) => {
+      if (event.isComposing) return;
+      if (
+        event.inputType === "historyUndo" ||
+        event.inputType === "historyRedo"
+      ) {
+        undoModeRef.current(event.inputType === "historyRedo");
+        event.preventDefault();
+        return;
+      }
+      beforeEdit.current = snapshotMode();
+      editKind.current = event.inputType;
+    };
+    const selection = () => {
+      if (beforeEdit.current || composing.current || restoringHistory.current)
+        return;
+      const current = snapshotMode();
+      if (samePaletteDraft(current, lastSnapshot.current))
+        lastSnapshot.current = current;
+    };
+    const startComposition = () => {
+      composing.current = true;
+      beforeEdit.current = snapshotMode();
+      editHistory.current.breakGroup();
+    };
+    const endComposition = () =>
+      queueMicrotask(() => {
+        composing.current = false;
+        editKind.current = "composition";
+        recordInput();
+      });
+    content?.addEventListener("beforeinput", beforeInput);
+    content?.addEventListener("compositionstart", startComposition);
+    content?.addEventListener("compositionend", endComposition);
+    document.addEventListener("selectionchange", selection);
+    return () => {
+      content?.removeEventListener("beforeinput", beforeInput);
+      content?.removeEventListener("compositionstart", startComposition);
+      content?.removeEventListener("compositionend", endComposition);
+      document.removeEventListener("selectionchange", selection);
+    };
+  }, [snapshotMode, recordInput]);
   const modeLoad = usePaletteLoad(
     activeMode?.rows,
     query,
-    (variant === "tab" || open) && Boolean(activeMode),
+    active && open && Boolean(activeMode),
   );
   const rankContext = useMemo(
     () => ({ signals, projectId }),
@@ -542,7 +794,7 @@ function CommandPaletteContent({
 
   const topLevelModeRows = useTopLevelModeRows(
     customModes,
-    (variant === "tab" || open) && !modeId,
+    active && open && !modeId,
   );
   // Rows everything else already lists: a bookmarked page or a workflow
   // appears once, as its own row, ranked with its history counts.
@@ -845,8 +1097,9 @@ function CommandPaletteContent({
   // Rows changed: follow a chosen row to its new place, or give up a
   // choice whose row left the list.
   useLayoutEffect(() => {
+    if (!active) return;
     setSelection((current) => settleSelection(current, results));
-  }, [results]);
+  }, [results, active]);
   // A row the keyboard chose stays in view, whether an arrow key moved the
   // highlight or a re-rank moved the row. A row the pointer chose is where
   // the person is already looking: scrolling it into view would move the
@@ -877,9 +1130,10 @@ function CommandPaletteContent({
   const onHighlightTargetRef = useRef(onHighlightTarget);
   onHighlightTargetRef.current = onHighlightTarget;
   useEffect(() => {
+    if (!active || !open) return;
     onHighlightTargetRef.current?.(highlightTarget);
     return () => onHighlightTargetRef.current?.(null);
-  }, [highlightTarget]);
+  }, [highlightTarget, active, open]);
 
   // What the palette learns from a pick (ADR 0186): the typed query, and a
   // visit for destinations nothing else counts.
@@ -929,6 +1183,7 @@ function CommandPaletteContent({
       onSendToAgent(
         { text: composed.message, attachments: composed.attachments },
         commitModeFor(withCmd, withShift, floating) === "tab" ? "tab" : "float",
+        agentId ?? undefined,
       );
       onClose();
       return;
@@ -1009,19 +1264,39 @@ function CommandPaletteContent({
     event: KeyboardEvent<HTMLTextAreaElement | HTMLDivElement>,
   ) => {
     if (event.nativeEvent.isComposing) return;
-    // Tab or Space commits a typed mode trigger into a chip ("@agent" →
-    // [Ask agent]). Both keys, deliberately — Chrome removed Space once
-    // and had to bring it back.
+    const primary = /Mac/.test(navigator.platform)
+      ? event.metaKey
+      : event.ctrlKey;
+    const undo = primary && !event.altKey && event.key.toLowerCase() === "z";
+    const redo =
+      primary &&
+      !event.altKey &&
+      ((event.shiftKey && event.key.toLowerCase() === "z") ||
+        (!/Mac/.test(navigator.platform) && event.key.toLowerCase() === "y"));
+    if ((undo || redo) && undoMode(redo)) {
+      event.preventDefault();
+      return;
+    }
+    // Tab or Space commits the mode trigger before the caret into a chip.
+    // Text after it is already that mode's query, including when a trigger
+    // was inserted at the beginning of an existing draft.
+    const field = event.currentTarget;
+    const trigger =
+      field instanceof HTMLTextAreaElement &&
+      field.selectionStart === field.selectionEnd
+        ? query.slice(0, field.selectionStart).trim()
+        : "";
     if (
       !activeMode &&
       (event.key === "Tab" || event.key === " ") &&
-      trimmed.length > 1 &&
-      (trimmed.startsWith("@") || isFullPaletteModeName(namedModes, trimmed))
+      field instanceof HTMLTextAreaElement &&
+      trigger.length > 1 &&
+      (trigger.startsWith("@") || isFullPaletteModeName(namedModes, trigger))
     ) {
-      const candidate = matchPaletteMode(namedModes, trimmed);
+      const candidate = matchPaletteMode(namedModes, trigger);
       if (candidate) {
         event.preventDefault();
-        enterMode(candidate.id);
+        enterMode(candidate.id, query.slice(field.selectionStart));
         return;
       }
     }
@@ -1104,18 +1379,19 @@ function CommandPaletteContent({
   // Escape closes the overlay (capture-phase so the chat dock's window
   // listener defers to us — same etiquette as Modal). A palette tab
   // ignores Escape, like Chrome's New Tab page.
-  useEffect(() => {
-    if (variant !== "overlay" || !open) return;
+  useLayoutEffect(() => {
+    if (variant !== "overlay" || !open || !active) return;
     const onKeyDown = (event: globalThis.KeyboardEvent) => {
       if (event.key !== "Escape" || event.isComposing) return;
+      if (hasOpenModal()) return;
       event.preventDefault();
-      event.stopPropagation();
+      event.stopImmediatePropagation();
       dismissRef.current();
     };
     window.addEventListener("keydown", onKeyDown, { capture: true });
     return () =>
       window.removeEventListener("keydown", onKeyDown, { capture: true });
-  }, [variant, open]);
+  }, [variant, open, active]);
 
   // The rendered chip: the live mode, or the exiting one mid chip-out.
   const chip = activeMode
@@ -1123,6 +1399,20 @@ function CommandPaletteContent({
     : exitingChip
       ? { ...exitingChip, live: false }
       : null;
+
+  const closeAgentPicker = () => {
+    setPickingAgent(false);
+  };
+  const agentPicker = !agentChoice && agentPickerRequest && (
+    <CommandPalette
+      variant="overlay"
+      open={open && hostActive && pickingAgent}
+      active={hostActive && pickingAgent}
+      modeRequest={agentPickerRequest}
+      agentChoice={draftAgentChoice}
+      onClose={closeAgentPicker}
+    />
+  );
 
   const panel = (
     <PaletteSurface
@@ -1162,6 +1452,7 @@ function CommandPaletteContent({
                   placeholder="Message the agent…"
                   className="block max-h-40 min-h-11 w-full overflow-y-auto px-1 py-3 text-sm"
                   onChange={({ text, pillCount }) => {
+                    recordInput();
                     setQuery(text);
                     setPillCount(pillCount);
                     setSelection(TOP_ROW);
@@ -1174,6 +1465,7 @@ function CommandPaletteContent({
                   ref={inputRef}
                   value={query}
                   onChange={(event) => {
+                    recordInput();
                     setQuery(event.target.value);
                     setSelection(TOP_ROW);
                     if (listRef.current) listRef.current.scrollTop = 0;
@@ -1228,6 +1520,78 @@ function CommandPaletteContent({
               item.group && item.group !== results[index - 1]?.group
                 ? item.group
                 : null;
+            const action = (
+              <OpenResourceButton
+                isResource={item.kind === "navigate"}
+                url={item.url}
+                openOnMouseDown
+                data-item-id={item.id === "mode:agent" ? undefined : item.id}
+                role={item.id === "mode:agent" ? undefined : "option"}
+                aria-selected={
+                  item.id === "mode:agent" ? undefined : isSelected
+                }
+                type="button"
+                aria-disabled={item.disabled || undefined}
+                data-disabled-reason={item.disabled ? item.detail : undefined}
+                onOpen={(mode) =>
+                  commit(
+                    item,
+                    mode === "tab" || mode === "side",
+                    mode === "side",
+                    mode === "floating",
+                  )
+                }
+                // mousedown so the textarea's focus never flickers away.
+                onMouseDown={(event) => {
+                  if (event.button !== 0) return;
+                  event.preventDefault();
+                }}
+                onMouseMove={(event) => {
+                  if (!pointerMoved(event)) return;
+                  pointerChoseRef.current = true;
+                  setSelection({ index, id: item.id });
+                }}
+                className={`flex h-9 min-w-0 w-full flex-1 items-center gap-2.5 rounded-md px-2.5 text-left text-[13px] transition-colors duration-100 ${
+                  item.disabled ? "cursor-default opacity-50" : "cursor-pointer"
+                } ${isSelected ? "bg-bg-overlay text-fg" : "text-fg-muted"}`}
+              >
+                {item.iconNode ?? (
+                  <Icon className="size-4 shrink-0 text-fg-faint" />
+                )}
+                <span className="min-w-0 truncate">{item.label}</span>
+                {/* A long label truncates before a short detail ("Chat",
+                      "Workflow"); a long detail keeps at most half the row. */}
+                {item.detail && item.id !== "mode:agent" && (
+                  <span className="min-w-0 max-w-[45%] shrink-0 truncate text-[12px] text-fg-faint">
+                    {item.detail}
+                  </span>
+                )}
+                {(item.bookmarked || item.current || item.shortcut) && (
+                  <span className="ml-auto flex shrink-0 items-center gap-2 text-[11px] text-fg-faint">
+                    {item.bookmarked && (
+                      <Star
+                        className="size-3.5 fill-current"
+                        aria-label="Bookmarked"
+                      />
+                    )}
+                    {item.current && (
+                      <span
+                        className="flex items-center gap-1"
+                        data-testid="palette-current"
+                      >
+                        <Check className="size-3.5" />
+                        current
+                      </span>
+                    )}
+                    {item.shortcut && (
+                      <kbd className="rounded border border-border bg-bg-inset px-1.5 py-0.5 text-[11px] text-fg-faint">
+                        {item.shortcut}
+                      </kbd>
+                    )}
+                  </span>
+                )}
+              </OpenResourceButton>
+            );
             return (
               <Fragment key={item.id}>
                 {groupLabel && (
@@ -1235,78 +1599,50 @@ function CommandPaletteContent({
                     {groupLabel}
                   </div>
                 )}
-                <OpenResourceButton
-                  isResource={item.kind === "navigate"}
-                  url={item.url}
-                  openOnMouseDown
-                  data-item-id={item.id}
-                  type="button"
-                  role="option"
-                  aria-selected={isSelected}
-                  aria-disabled={item.disabled || undefined}
-                  data-disabled-reason={item.disabled ? item.detail : undefined}
-                  onOpen={(mode) =>
-                    commit(
-                      item,
-                      mode === "tab" || mode === "side",
-                      mode === "side",
-                      mode === "floating",
-                    )
-                  }
-                  // mousedown so the textarea's focus never flickers away.
-                  onMouseDown={(event) => {
-                    if (event.button !== 0) return;
-                    event.preventDefault();
-                  }}
-                  onMouseMove={(event) => {
-                    if (!pointerMoved(event)) return;
-                    pointerChoseRef.current = true;
-                    setSelection({ index, id: item.id });
-                  }}
-                  className={`flex h-9 w-full items-center gap-2.5 rounded-md px-2.5 text-left text-[13px] transition-colors duration-100 ${
-                    item.disabled
-                      ? "cursor-default opacity-50"
-                      : "cursor-pointer"
-                  } ${isSelected ? "bg-bg-overlay text-fg" : "text-fg-muted"}`}
-                >
-                  {item.iconNode ?? (
-                    <Icon className="size-4 shrink-0 text-fg-faint" />
-                  )}
-                  <span className="min-w-0 truncate">{item.label}</span>
-                  {/* A long label truncates before a short detail ("Chat",
-                      "Workflow"); a long detail keeps at most half the row. */}
-                  {item.detail && (
-                    <span
-                      className={`min-w-0 truncate text-[12px] text-fg-faint ${item.id === "mode:agent" ? "" : "max-w-[45%] shrink-0"}`}
-                    >
-                      {item.detail}
-                    </span>
-                  )}
-                  {(item.bookmarked || item.current || item.shortcut) && (
-                    <span className="ml-auto flex shrink-0 items-center gap-2 text-[11px] text-fg-faint">
-                      {item.bookmarked && (
-                        <Star
-                          className="size-3.5 fill-current"
-                          aria-label="Bookmarked"
-                        />
-                      )}
-                      {item.current && (
-                        <span
-                          className="flex items-center gap-1"
-                          data-testid="palette-current"
-                        >
-                          <Check className="size-3.5" />
-                          current
+                {item.id === "mode:agent" ? (
+                  <div
+                    data-item-id={item.id}
+                    role="option"
+                    tabIndex={-1}
+                    aria-selected={isSelected}
+                    className={`flex min-w-0 items-center rounded-md ${isSelected ? "bg-bg-overlay text-fg" : "text-fg-muted"}`}
+                  >
+                    {action}
+                    {item.id === "mode:agent" && (
+                      <button
+                        type="button"
+                        data-testid="palette-choose-agent"
+                        aria-label="Choose agent for this chat"
+                        className="flex h-9 min-w-0 max-w-[75%] cursor-pointer items-center gap-1.5 rounded-md px-2.5 text-xs text-fg-faint transition-colors hover:bg-bg-overlay hover:text-fg"
+                        onMouseDown={(event) => event.preventDefault()}
+                        onClick={() => {
+                          const selection = window.getSelection();
+                          if (selection?.rangeCount) {
+                            const range = selection.getRangeAt(0).cloneRange();
+                            draftSelection.current = {
+                              range,
+                              backward:
+                                selection.anchorNode === range.endContainer &&
+                                selection.anchorOffset === range.endOffset,
+                            };
+                          }
+                          setAgentPickerRequest({
+                            mode: "switch-agent",
+                            nonce: crypto.randomUUID(),
+                          });
+                          setPickingAgent(true);
+                        }}
+                      >
+                        <span className="truncate">
+                          {item.detail ?? "Choose agent"}
                         </span>
-                      )}
-                      {item.shortcut && (
-                        <kbd className="rounded border border-border bg-bg-inset px-1.5 py-0.5 text-[11px] text-fg-faint">
-                          {item.shortcut}
-                        </kbd>
-                      )}
-                    </span>
-                  )}
-                </OpenResourceButton>
+                        <ChevronDown className="size-3 shrink-0" />
+                      </button>
+                    )}
+                  </div>
+                ) : (
+                  action
+                )}
               </Fragment>
             );
           })}
@@ -1355,22 +1691,26 @@ function CommandPaletteContent({
       // the caret back in the input (mousedown + preventDefault so focus
       // never leaves in the first place) — there is nothing else on this
       // page to focus.
-      // biome-ignore lint/a11y/noStaticElementInteractions: background click-to-refocus; the input itself stays keyboard-reachable
-      <div
-        className="flex min-h-0 flex-1 flex-col items-center overflow-y-auto px-6 pb-6 pt-[12vh]"
-        onMouseDown={(event) => {
-          if (event.target === event.currentTarget) {
-            event.preventDefault();
-            focusInput();
-          }
-        }}
-      >
-        {panel}
-        <NewTabShortcutHints
-          keybindings={keybindings}
-          actionAvailability={actionAvailability}
-        />
-      </div>
+      <Fragment>
+        {/* biome-ignore lint/a11y/noStaticElementInteractions: background click-to-refocus; the input itself stays keyboard-reachable */}
+        <div
+          inert={pickingAgent || undefined}
+          className="flex min-h-0 flex-1 flex-col items-center overflow-y-auto px-6 pb-6 pt-[12vh]"
+          onMouseDown={(event) => {
+            if (event.target === event.currentTarget) {
+              event.preventDefault();
+              focusInput();
+            }
+          }}
+        >
+          {panel}
+          <NewTabShortcutHints
+            keybindings={keybindings}
+            actionAvailability={actionAvailability}
+          />
+        </div>
+        {agentPicker}
+      </Fragment>
     );
   }
 
@@ -1378,34 +1718,37 @@ function CommandPaletteContent({
   // stays mounted while closed so Cmd+P/Escape play the same motion in
   // reverse — scale + rise + fade, the chat dock's vocabulary.
   return (
-    <div
-      className={`fixed inset-0 z-[100] flex flex-col items-center px-6 pt-[15vh] ${
-        open ? "" : "pointer-events-none"
-      }`}
-      aria-hidden={!open}
-      inert={!open ? true : undefined}
-    >
-      {/* biome-ignore lint/a11y/noStaticElementInteractions: backdrop click-away; Escape covers keyboard */}
+    <Fragment>
       <div
-        className={`absolute inset-0 bg-black/25 transition-opacity duration-200 ease-standard ${
-          open ? "opacity-100" : "opacity-0"
+        className={`fixed inset-0 z-[100] flex flex-col items-center px-6 pt-[15vh] ${
+          open ? "" : "pointer-events-none"
         }`}
-        onMouseDown={(event) => {
-          if (event.target === event.currentTarget) dismissRef.current();
-        }}
-      />
-      {/* The wrapper spans the full width to center the panel; it must not
+        aria-hidden={!open}
+        inert={!open || pickingAgent ? true : undefined}
+      >
+        {/* biome-ignore lint/a11y/noStaticElementInteractions: backdrop click-away; Escape covers keyboard */}
+        <div
+          className={`absolute inset-0 bg-black/25 transition-opacity duration-200 ease-standard ${
+            open ? "opacity-100" : "opacity-0"
+          }`}
+          onMouseDown={(event) => {
+            if (event.target === event.currentTarget) dismissRef.current();
+          }}
+        />
+        {/* The wrapper spans the full width to center the panel; it must not
           eat clicks beside the panel (the panel re-enables pointer events),
           or click-away only worked above/below the panel's vertical band. */}
-      <div
-        className={`pointer-events-none relative flex w-full origin-top justify-center transition-[opacity,translate,scale] duration-200 ease-standard ${
-          open
-            ? "translate-y-0 scale-100 opacity-100"
-            : "-translate-y-2 scale-[0.98] opacity-0"
-        }`}
-      >
-        {panel}
+        <div
+          className={`pointer-events-none relative flex w-full origin-top justify-center transition-[opacity,translate,scale] duration-200 ease-standard ${
+            open
+              ? "translate-y-0 scale-100 opacity-100"
+              : "-translate-y-2 scale-[0.98] opacity-0"
+          }`}
+        >
+          {panel}
+        </div>
       </div>
-    </div>
+      {agentPicker}
+    </Fragment>
   );
 }

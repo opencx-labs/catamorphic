@@ -1694,8 +1694,8 @@ describe("chat motion", () => {
     })()`);
     await runWait(`
       const mac = /Mac/.test(navigator.platform);
-      return $('[data-setting-id="shortcut.chat-previous-message"] button')?.textContent === (mac ? '⌥↑' : 'Alt+ArrowUp') &&
-        $('[data-setting-id="shortcut.chat-next-message"] button')?.textContent === (mac ? '⌥↓' : 'Alt+ArrowDown');`);
+      return $('[data-setting-id="shortcut.chat-previous-message"] button')?.textContent === (mac ? '⌥\u202f↑' : 'Alt+ArrowUp') &&
+        $('[data-setting-id="shortcut.chat-next-message"] button')?.textContent === (mac ? '⌥\u202f↓' : 'Alt+ArrowDown');`);
     // Opening Settings minimizes the floating chat; restore it normally.
     await app.press("m", process.platform === "darwin" ? 4 : 2);
     await runWait(

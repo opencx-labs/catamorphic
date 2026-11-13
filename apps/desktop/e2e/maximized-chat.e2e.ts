@@ -111,6 +111,22 @@ it("maximizes the floating chat when the chat tab behind it has focus", async ()
       `document.querySelector('[data-chat-local-id="${floatingId}"] [data-composer-input]')?.textContent`,
     ),
   ).toBe("A floating draft survives background focus");
+  // Tab chats are outside Cmd+M's floating-chat cycle.
+  await app.press("m", primary);
+  await app.eval(
+    "new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(() => resolve(true))))",
+  );
+  expect(
+    await app.eval(
+      `document.querySelector('[data-chat-local-id="${floatingId}"]')?.hasAttribute('data-chat-tab') && !document.querySelector('[data-chat-bubble="${floatingId}"]')`,
+    ),
+  ).toBe(true);
+  await app.press("Escape");
+  await app.waitFor(
+    `!!document.querySelector('[data-chat-local-id="${floatingId}"][data-floating-chat]:not([inert])') &&
+      !document.getAnimations().some(animation => animation.playState === 'running' && animation.effect?.getTiming().iterations !== Infinity)`,
+    { label: "the tab explicitly returned to a floating chat" },
+  );
   await app.press("m", primary);
   // Inert starts with the exit tween, before the entry commits to min.
   // Its bubble only returns after that commit; let the motions settle too.

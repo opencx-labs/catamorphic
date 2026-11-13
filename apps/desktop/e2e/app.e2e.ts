@@ -884,16 +884,12 @@ describe("chat flows", () => {
 
     // Cmd+P toggles the overlay. Earlier flows can leave it open; preserve
     // that state instead of turning the searchable palette off.
-    await run(`
-      const input = $$('[aria-label="Search commands, pages, and more"]')
-        .find((el) => !el.closest('[inert]'));
-      if (!input) pressKey('p', { metaKey: true });
-      return true;
-    `);
+    await run(
+      `if (!$('[data-palette="overlay"]:not([inert], [inert] *)')) pressKey('p', { metaKey: true }); return true;`,
+    );
     await runWait(
-      `const input = $$('[aria-label="Search commands, pages, and more"]')
-        .find((el) => !el.closest('[inert]'));
-       if (!input) return false;
+      `const input = $('[data-palette="overlay"] [aria-label="Search commands, pages, and more"]');
+       if (!input || document.activeElement !== input) return false;
        setReactValue(input, 'Session menu');
        return true;`,
       { label: "archive search in the palette" },
@@ -1087,24 +1083,60 @@ describe("chat flows", () => {
     );
     await rename("Launch checklist", "Launch notes");
 
-    // Rename current chat remains findable while the current chat is minimized.
+    // A minimized chat is remembered, but is no longer visibly current.
+    const minimizedId = await run<string>(
+      `return floatingDock().closest('[data-chat-local-id]').dataset.chatLocalId;`,
+    );
     await run(`pressKey('m', { metaKey: true }); return true;`);
-    await runWait(`return !floatingDock();`, {
-      label: "current chat minimized before palette rename",
-    });
-    await run(`
-      const input = $$('[aria-label="Search commands, pages, and more"]')
-        .find((el) => !el.closest('[inert]'));
-      if (!input) pressKey('p', { metaKey: true });
-      return true;
-    `);
+    const minimizedChats = await runWait<
+      Array<{ localId: string; mode: string }>
+    >(
+      `return (async () => { const {chats} = await window.catamorphicDesktop.dockSnapshot();
+       if (floatingDock() || chats.find(chat => chat.entry.localId === ${JSON.stringify(minimizedId)})?.entry.mode !== 'min') return false;
+       return chats.map(({entry}) => ({localId:entry.localId,mode:entry.mode})); })();`,
+      { label: "the named chat committed to minimized" },
+    );
+    await run(`pressKey('p', { metaKey: true }); return true;`);
     await runWait(
-      `const input = $$('[aria-label="Search commands, pages, and more"]')
-        .find((el) => !el.closest('[inert]'));
-       if (!input) return false;
+      `const input = $('[data-palette="overlay"] [aria-label="Search commands, pages, and more"]');
+       if (!input || document.activeElement !== input || input.closest('[inert]')) return false;
+       if (input.closest('[data-palette="overlay"]').parentElement.getAnimations({subtree:true}).some(animation => animation.playState === 'running')) return false;
        setReactValue(input, '>rename current chat');
        return true;`,
       { label: "palette asked for Rename current chat" },
+    );
+    expect(
+      await run<boolean>(`return $$('[role="option"]')
+        .some((el) => !el.closest('[inert]') && el.dataset.itemId === 'action:rename-chat');`),
+    ).toBe(false);
+    expect(
+      await run(
+        `return window.catamorphicDesktop.dockSnapshot().then(({chats}) => chats.map(({entry}) => ({localId:entry.localId,mode:entry.mode})));`,
+      ),
+    ).toEqual(minimizedChats);
+    await app.press("Escape");
+    await runWait(
+      `return !$('[data-palette="overlay"]:not([inert], [inert] *)');`,
+      {
+        label: "palette dismissed before restoring the chat",
+      },
+    );
+    expect(
+      await run(
+        `return window.catamorphicDesktop.dockSnapshot().then(({chats}) => chats.map(({entry}) => ({localId:entry.localId,mode:entry.mode})));`,
+      ),
+    ).toEqual(minimizedChats);
+    await run(`pressKey('m', { metaKey: true }); return true;`);
+    await runWait(`return !!floatingDock();`, {
+      label: "current chat visible again",
+    });
+    await run(`pressKey('p', { metaKey: true }); return true;`);
+    await runWait(
+      `const input = $('[data-palette="overlay"] [aria-label="Search commands, pages, and more"]');
+       if (!input || document.activeElement !== input) return false;
+       setReactValue(input, '>rename current chat');
+       return true;`,
+      { label: "palette targets the visible current chat" },
     );
     await runWait(
       `const option = $$('[role="option"]')
@@ -1139,8 +1171,70 @@ describe("chat flows", () => {
     );
     await run(`byText('[role="menuitem"]', 'Rename…').click(); return true;`);
     await rename("Launch plan", "Launch tab");
+
+    // A visible chat in the other pane is not the current chat.
+    await run(`pressKey('t', { metaKey: true }); return true;`);
+    await runWait(
+      `return !!document.activeElement?.closest('[data-palette="tab"]');`,
+    );
+    await app.insertText("keep this pane");
+    await run(`pressKey('\\\\', { metaKey: true }); return true;`);
+    await runWait(
+      `return !!visibleDock()?.matches('[data-split-slot="right"], [data-split-slot="left"]');`,
+      {
+        label: "chat remains visible in the other split pane",
+      },
+    );
+    await run(`pressKey('p', { metaKey: true }); return true;`);
+    await runWait(`const input = document.activeElement;
+      if (!input?.closest('[data-palette="overlay"]')) return false;
+      setReactValue(input, '>rename current chat'); return true;`);
+    expect(
+      await run(
+        `return $$('[role="option"]').some(el => !el.closest('[inert]') && el.dataset.itemId === 'action:rename-chat');`,
+      ),
+    ).toBe(false);
+    await app.press("Escape");
+    await runWait(
+      `return !$('[data-palette="overlay"]:not([inert], [inert] *)');`,
+    );
+    expect(
+      await run(
+        `return window.catamorphicDesktop.dockSnapshot().then(({chats})=>chats.find(chat=>chat.entry.localId===${JSON.stringify(minimizedId)})?.entry.mode)`,
+      ),
+    ).toBe("tab");
+    await run(`pressKey('w', { metaKey: true }); return true;`);
+    await runWait(
+      `return !!visibleDock() && !document.querySelector('[data-workspace-slot="left"]');`,
+    );
+
+    // A floating resource also owns focus over the chat tab.
+    await run(`pressKey('n', { metaKey: true, altKey: true }); return true;`);
+    await runWait(
+      `return !!document.querySelector('[data-floating-surface^="browser:"]');`,
+    );
+    await run(`pressKey('p', { metaKey: true }); return true;`);
+    await runWait(`const input = document.activeElement;
+      if (!input?.closest('[data-palette="overlay"]')) return false;
+      setReactValue(input, '>rename current chat'); return true;`);
+    expect(
+      await run(
+        `return $$('[role="option"]').some(el => !el.closest('[inert]') && el.dataset.itemId === 'action:rename-chat');`,
+      ),
+    ).toBe(false);
+    await app.press("Escape");
+    await runWait(
+      `return !$('[data-palette="overlay"]:not([inert], [inert] *)');`,
+    );
+    expect(
+      await run(
+        `return window.catamorphicDesktop.dockSnapshot().then(({chats})=>chats.find(chat=>chat.entry.localId===${JSON.stringify(minimizedId)})?.entry.mode)`,
+      ),
+    ).toBe("tab");
+    await run(`pressKey('w', { metaKey: true }); return true;`);
+    await runWait(`return !document.querySelector('[data-floating-surface]');`);
     // Back to floating, as the next tests expect.
-    await run(`pressKey('Escape'); return true;`);
+    await app.press("Escape");
     await runWait(`return !!floatingDock();`, {
       label: "the chat floating again",
     });

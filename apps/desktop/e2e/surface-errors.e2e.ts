@@ -22,7 +22,9 @@ const type = (value: string) =>
   run(`setReactValue(document.activeElement,${JSON.stringify(value)})`);
 const waitForInput = () =>
   app.waitFor(
-    `document.activeElement?.matches(${JSON.stringify(inputSelector)})`,
+    `document.activeElement?.matches(${JSON.stringify(inputSelector)}) &&
+     !document.activeElement.closest('[inert], [data-workspace-visible="false"]') &&
+     document.activeElement.checkVisibility()`,
   );
 const expectFailures = (count: number) => {
   const errors = app.getRendererErrors();
@@ -104,8 +106,15 @@ it("contains a tab render failure to its half of a split and preserves the other
   await shortcut("t");
   await waitForInput();
   await type("keep this draft");
+  const firstKey = await app.eval<string>(
+    `document.activeElement.closest('[data-surface-key]').dataset.surfaceKey`,
+  );
   await shortcut("t");
-  await waitForInput();
+  await app.waitFor(
+    `document.activeElement?.matches(${JSON.stringify(inputSelector)}) &&
+     document.activeElement.closest('[data-surface-key]')?.dataset.surfaceKey !== ${JSON.stringify(firstKey)}`,
+    { label: "the second New Tab has keyboard focus" },
+  );
   await type("second tab");
   await shortcut("\\");
   await app.waitFor(
@@ -206,7 +215,9 @@ it("lets a failed overlay close with Escape and opens a fresh palette", async ()
   await app.press("Escape");
   await app.waitFor(`!document.querySelector('[data-surface-error]')`);
   await shortcut("p");
-  await waitForInput();
+  await app.waitFor(
+    `!!document.activeElement?.closest('[data-palette="overlay"]') && !document.activeElement.closest('[inert]')`,
+  );
   await type("framed content");
   await app.waitFor(
     `[...document.querySelectorAll('[data-workspace-visible="true"] [data-palette="overlay"] [role="option"]')].some(el => el.textContent.includes('Framed content'))`,

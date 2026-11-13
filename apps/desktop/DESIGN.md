@@ -72,6 +72,17 @@ shared surface is a process bug, not a win. See the [historical log](DESIGN-HIST
 
 ## Agent setup and conversation controls
 
+Palette drafts and mode chips share one transient edit history (ADR 0314).
+New Tabs keep their editors while hidden, reuse an empty tab, and open at the
+strip's right end. Rename current chat follows focus; Cmd+M visits floating chats
+only. Shortcut symbols keep a narrow non-breaking gap.
+
+Action dialogs animate conditional fields, repeat entries and errors through the
+shared Collapsible and modal sizing primitives. Departing controls become inert
+and effectively disabled immediately. Tab-group menus begin with their fold action.
+The dock's downloads menu ages out settled entries after three days while the full
+page retains history; viewed completion state persists per profile.
+
 Agent setup shows the shared harness or provider logo where one exists, with the
 generic agent mark otherwise. Names begin as actual editable text. Subsession chips use the same harness or
 provider icon as their chat's status popup, and follow agent changes. Renaming a
@@ -3949,7 +3960,8 @@ Startup reserves every project owner before loading its renderer, validates it
 against the project records, then restores the last focused visible
 workspace. Existing project stores still own their tabs and layout. The palette's
 Close current Work window uses the native close lifecycle, and Rename current
-chat names the current chat through the existing dialog, minimized chats included.
+chat names the visible current chat through the existing dialog. Minimized and
+background chats keep Rename in their own menus.
 See [ADR 0284](../../docs/decisions/0284-workspace-windows-restore-as-one-saved-set.md)
 and [workspace interactions](docs/workspace-interactions.md).
 
@@ -4183,3 +4195,13 @@ error. A missing selected device falls back to the system input.
 A chat read begun before a spoken message committed cannot settle that new
 turn. Keep its working state through delivery and wait for a fresh idle read;
 the same boundary protects an agent finishing voice during delivery.
+
+
+### 2026-11-14: Agent choice belongs to the draft
+
+Ask agent's metadata opens the existing palette agent picker. Each retained draft
+can choose its own agent while its composer and attachments stay mounted. An
+unselected draft follows the live default. Settings starts default-agent edits at
+the current personal project scope and offers Profile and inheritance reset; it
+uses the same resolved identity as the palette. Agent rows close with the shared
+Collapsible and keep their spacing inside that motion.

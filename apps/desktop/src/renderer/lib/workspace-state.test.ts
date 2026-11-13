@@ -5,6 +5,7 @@ import {
   chatToExpand,
   closingTabKeys,
   emptyUtilityWorkspace,
+  floatingChatToToggle,
   hydrateWorkspace,
   newTabInFront,
   openChatInNewTab,
@@ -68,6 +69,41 @@ it("keeps the remembered and newest chat fallbacks when none is floating", () =>
     "newer",
   );
   expect(chatToExpand(emptyUtilityWorkspace())).toBeUndefined();
+});
+
+it("toggles only dock chats even when the remembered chat is in a tab", () => {
+  const ws: Workspace = { ...initial(), activeChatId: "c" };
+  expect(floatingChatToToggle(ws)).toBeUndefined();
+  expect(floatingChatToToggle(emptyUtilityWorkspace())).toBeUndefined();
+  const withBubbles: Workspace = {
+    ...ws,
+    chats: [
+      ...ws.chats,
+      { localId: "old", mode: "min" },
+      { localId: "new", mode: "min" },
+      { localId: "child", mode: "min", parentLocalId: "c" },
+    ],
+  };
+  expect(floatingChatToToggle(withBubbles)?.localId).toBe("new");
+  expect(
+    floatingChatToToggle({ ...withBubbles, activeChatId: "old" })?.localId,
+  ).toBe("old");
+  expect(
+    floatingChatToToggle({
+      ...withBubbles,
+      chats: [...withBubbles.chats, { localId: "visible", mode: "partial" }],
+    })?.localId,
+  ).toBe("visible");
+  const unfocused: Workspace = {
+    ...ws,
+    chats: [...ws.chats, { localId: "floating", mode: "partial" }],
+  };
+  expect(
+    transitionWorkspace(unfocused, {
+      type: "toggle-chat",
+      localId: "floating",
+    }).chats.find((chat) => chat.localId === "floating")?.mode,
+  ).toBe("min");
 });
 
 it.each([false, true])(
@@ -576,6 +612,65 @@ it("keeps a New Tab with typed input, or one still on screen", () => {
     name: "a",
     label: undefined,
   });
+});
+
+it("opens New Tabs at the end and reuses only an empty palette", () => {
+  const ws: Workspace = {
+    ...initial(),
+    tabs: [
+      { kind: "palette", name: "draft", typed: true },
+      { kind: "history", name: "history" },
+    ],
+    tabOrder: ["chat:c", "history:history", "palette:draft"],
+    activeTabKey: "history:history",
+  };
+  const opened = transitionWorkspace(ws, { type: "new-palette", name: "new" });
+  expect(orderedTabKeys(opened)).toEqual([
+    "chat:c",
+    "history:history",
+    "palette:draft",
+    "palette:new",
+  ]);
+  expect(opened.tabs).toContainEqual({
+    kind: "palette",
+    name: "draft",
+    typed: true,
+  });
+  const reused = transitionWorkspace(opened, {
+    type: "new-palette",
+    name: "unused",
+  });
+  expect(reused.tabs).toEqual(opened.tabs);
+  expect(reused.activeTabKey).toBe("palette:new");
+  // An empty palette still visible beside another tab is reusable too.
+  const split = transitionWorkspace(opened, { type: "side", key: "chat:c" });
+  const fromSplit = transitionWorkspace(split, {
+    type: "new-palette",
+    name: "also-unused",
+  });
+  expect(fromSplit.tabs).toEqual(opened.tabs);
+  expect(fromSplit.activeTabKey).toBe("palette:new");
+  expect(fromSplit.split).toBe(null);
+  expect(orderedTabKeys(fromSplit).at(-1)).toBe("palette:new");
+  const attached: Workspace = {
+    ...opened,
+    tabs: opened.tabs.map((tab) =>
+      tab.kind === "palette" && tab.name === "new"
+        ? { ...tab, chatLocalId: "c" }
+        : tab,
+    ),
+  };
+  expect(orderedTabKeys(attached).indexOf("palette:new")).toBeLessThan(
+    orderedTabKeys(attached).indexOf("history:history"),
+  );
+  const detached = transitionWorkspace(attached, {
+    type: "new-palette",
+    name: "unused",
+  });
+  expect(orderedTabKeys(detached).at(-1)).toBe("palette:new");
+  expect(
+    detached.tabs.find((tab) => tab.name === "new")?.chatLocalId,
+  ).toBeUndefined();
 });
 
 it("opens a chat asked for from a New Tab in that tab's place", () => {

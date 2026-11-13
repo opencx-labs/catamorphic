@@ -42,9 +42,14 @@ const BLOCKS = new Set(["DIV", "P", "LI", "PRE", "BLOCKQUOTE"]);
 export function serializeComposer<T>(
   root: WalkableNode,
   resolve: (pillId: string) => T | null,
-  options: { trim?: boolean } = {},
+  options: {
+    trim?: boolean;
+    /** Full-editor reads can discard Chromium's empty caret placeholder. */
+    emptyPlaceholder?: boolean;
+  } = {},
 ): SerializedComposer<T> {
   let out = "";
+  let breaks = 0;
   const attachments: T[] = [];
   const walk = (node: WalkableNode, last: boolean) => {
     if (node.nodeType === TEXT_NODE) {
@@ -62,6 +67,7 @@ export function serializeComposer<T>(
     if (node.nodeType !== ELEMENT_NODE) return;
     const name = node.nodeName;
     if (name === "BR") {
+      breaks++;
       out += "\n";
       return;
     }
@@ -89,7 +95,11 @@ export function serializeComposer<T>(
     const child = children[index];
     if (child) walk(child, index === children.length - 1);
   }
-  const message = options.trim === false ? out : out.trim();
+  // Chromium keeps one BR so an emptied editable can still place its
+  // caret. It is not an authored newline, even in an untrimmed snapshot.
+  // A deliberate blank line creates more than that single placeholder.
+  const placeholder = options.emptyPlaceholder && breaks === 1 && out === "\n";
+  const message = placeholder ? "" : options.trim === false ? out : out.trim();
   return {
     message,
     attachments,

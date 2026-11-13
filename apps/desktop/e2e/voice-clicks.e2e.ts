@@ -7,7 +7,8 @@ let app: AppHandle;
 const api = "window.catamorphicDesktop";
 const mic = "document.querySelector('[data-testid=\"voice-button\"]')";
 const utterance = "This is a held message.";
-const shortcut = process.platform === "darwin" ? "⌘⇧V" : "Ctrl+Shift+V";
+const shortcut =
+  process.platform === "darwin" ? "⌘\u202f⇧\u202fV" : "Ctrl+Shift+V";
 
 beforeAll(async () => {
   app = await launchApp({

@@ -477,8 +477,8 @@ describe("animate-before-unmount", () => {
   it("the mobile pairing modal tweens in and out instead of appearing or vanishing", async () => {
     await run(`pressKey('p', { metaKey: true }); return true;`);
     await runWait(
-      `return !!$$('textarea[aria-label="Search commands, pages, and more"]')
-        .find((el) => !el.closest('[inert]'));`,
+      `return !!$$('[data-palette="overlay"] textarea[aria-label="Search commands, pages, and more"]')
+        .find((el) => !el.closest('[inert]') && document.activeElement === el);`,
       { label: "palette open for mobile pairing" },
     );
     const samples = await run<{
@@ -493,7 +493,7 @@ describe("animate-before-unmount", () => {
       qrAnimation: string;
     }>(`
       return (async () => {
-      const input = $$('textarea[aria-label="Search commands, pages, and more"]')
+      const input = $$('[data-palette="overlay"] textarea[aria-label="Search commands, pages, and more"]')
         .find((el) => !el.closest('[inert]'));
       const enter = [];
       let enterTransition = false;
@@ -657,6 +657,13 @@ describe("animate-before-unmount", () => {
   });
 
   it("closing a workspace tab plays tab-out before removal", async () => {
+    // A second empty New Tab is deliberately reused. Give the first a
+    // draft before requesting the tab whose close motion we measure.
+    await run(`$('button[aria-label="New tab"]').click(); return true;`);
+    await runWait(
+      `return !!document.activeElement?.matches('[data-palette="tab"] textarea');`,
+    );
+    await app.insertText("Retain the first tab");
     await run(`$('button[aria-label="New tab"]').click(); return true;`);
     // Scope to tab-strip elements (bubble close buttons share the
     // "Close …" aria-label prefix).
@@ -1317,7 +1324,7 @@ it("morphs a tab back to floating without replaying its entrance", async () => {
 
 describe("inputs grow by gliding", () => {
   const SHIFT = 8;
-  const paletteInput = `$$('textarea[aria-label="Search commands, pages, and more"]').find((el) => !el.closest('[inert]'))`;
+  const paletteInput = `$$('[data-palette="overlay"] textarea[aria-label="Search commands, pages, and more"]').find((el) => !el.closest('[inert]'))`;
   const composerInput = `visibleDock()?.querySelector('[data-composer-input]')`;
   interface Glide {
     before: number;

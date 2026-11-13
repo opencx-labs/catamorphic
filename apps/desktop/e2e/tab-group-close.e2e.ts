@@ -15,7 +15,8 @@ import { pressNativeMacKey } from "./native-pointer.js";
 let app: AppHandle;
 const api = "window.catamorphicDesktop";
 const visible = '[data-workspace-visible="true"]';
-const group = `${visible} [data-point-key="chat:group"]`;
+let chatId = "";
+let group = "";
 const page = `${visible} webview`;
 async function activatePage(selector: string) {
   const view = `document.querySelector(${JSON.stringify(selector)})`;
@@ -99,6 +100,8 @@ async function openGroup({
     if(!response.ok) throw new Error(await response.text());
     return response.json();
   })()`);
+  chatId = `group-${project.id}`;
+  group = `${visible} [data-point-key="chat:${chatId}"]`;
   const base = `${origin}/${encodeURIComponent(name)}`;
   const profileId = await app.eval<string>(`${api}.windowProfile()`);
   if (editor)
@@ -111,7 +114,7 @@ async function openGroup({
     tabs: [{ kind: "settings", name: "settings" }],
     chats: [
       {
-        localId: "group",
+        localId: chatId,
         mode: "tab",
         sessionId: session.id,
         surfacesCollapsed: true,
@@ -124,7 +127,7 @@ async function openGroup({
       url: `${base}/${index}`,
       title: "Group page",
       faviconUrl: null,
-      chatLocalId: "group",
+      chatLocalId: chatId,
     })),
     editors: editor
       ? [
@@ -132,7 +135,7 @@ async function openGroup({
             localId: "file",
             filePath: "draft.txt",
             dirty: false,
-            chatLocalId: "group",
+            chatLocalId: chatId,
           },
         ]
       : [],
@@ -140,15 +143,15 @@ async function openGroup({
       ? "browser:page"
       : editor
         ? "editor:file"
-        : "chat:group",
-    activeChatId: "group",
+        : `chat:${chatId}`,
+    activeChatId: chatId,
     recentTabKeys: ["settings:settings"],
   };
   await app.eval(
     `${api}.workspaceNavigate({projectId:${JSON.stringify(project.id)}})`,
   );
   // Reload only after the selected project has reached the saved preferences.
-  // Every fixture reuses chat:group, so that key alone cannot identify it.
+  // Give every restored chat its own identity across project runtimes.
   await waitForProjectWorkspace({ app, name });
   await app.eval(
     `${api}.workspaceStateSet(${JSON.stringify(project.id)},${JSON.stringify(snapshot)})`,
@@ -163,6 +166,12 @@ async function openGroup({
   if (activePage)
     await app.waitFor(
       `(() => { try { return document.querySelector('${page}')?.getTitle()==='Group page'; } catch { return false; } })()`,
+    );
+  else if (!editor)
+    await app.waitFor(
+      `document.activeElement?.matches('[data-chat-local-id="${chatId}"] [data-composer-input]') &&
+       document.activeElement.closest('[data-chat-project]')?.dataset.chatProject===${JSON.stringify(project.id)}`,
+      { label: "the restored chat finished its composer focus handoff" },
     );
   return project.id;
 }
@@ -217,7 +226,7 @@ describe("closing folded tab groups", () => {
     await activatePage(page);
     const selectChat = () =>
       app.eval(`document.querySelector('${group} button').click()`);
-    const chat = `section[data-chat-project="${projectId}"][data-chat-local-id="group"]`;
+    const chat = `section[data-chat-project="${projectId}"][data-chat-local-id="${chatId}"]`;
     const close = `document.querySelector('${chat} button[aria-label="Close chat"]').click()`;
     const dialog = `document.querySelector('[data-testid="page-dialog"]:not([inert])')`;
     await selectChat();
@@ -473,18 +482,26 @@ describe("closing folded tab groups", () => {
       await app.waitFor(
         `!document.querySelector('[role="menu"], [data-menu-shield]')`,
       );
-      const point = await app.waitFor<{ x: number; y: number }>(
-        `(() => {
+      const targetPoint = () =>
+        app.waitFor<{ x: number; y: number }>(
+          `(() => {
         const tab=document.querySelector('${visible} [data-point-key="${key}"]:not([aria-hidden])');
         const label=tab?.querySelector('.workspace-tab-label');
         if(!label||label.closest('[inert]')) return false;
         const r=label.getBoundingClientRect(),point={x:r.left+Math.min(8,r.width/2),y:r.top+r.height/2};
         return label.contains(document.elementFromPoint(point.x,point.y)) &&
-          tab.getAnimations({subtree:true}).every(a=>a.playState!=='running'||a.effect?.getTiming().iterations===Infinity) ? point:false;
+          (tab.closest('[data-tab-orientation]')??tab).getAnimations({subtree:true}).every(a=>(a.playState!=='running'&&!a.pending)||a.effect?.getTiming().iterations===Infinity) ? point:false;
       })()`,
-        { label: "the restored tab accepts a context press" },
-      );
-      await app.movePointer(point);
+          { label: "the restored tab accepts a context press" },
+        );
+      await app.movePointer(await targetPoint());
+      const point = await targetPoint();
+      await app.eval(`(()=>{
+        window.__tabMenuPress=null;
+        window.addEventListener('pointerdown',event=>{
+          window.__tabMenuPress={key:event.target.closest?.('[data-point-key]')?.dataset.pointKey,button:event.button,x:event.clientX,y:event.clientY};
+        },{once:true,capture:true});return true;
+      })()`);
       for (const type of ["mousePressed", "mouseReleased"])
         await app.cdp("Input.dispatchMouseEvent", {
           type,
@@ -492,14 +509,24 @@ describe("closing folded tab groups", () => {
           button: "right",
           clickCount: 1,
         });
-      await app.waitFor(
-        `(() => {
+      await app
+        .waitFor(
+          `(() => {
         const panel=document.querySelector('${menu}');
         return !!document.querySelector('[data-menu-shield]') && panel?.contains(document.activeElement) &&
           ${menuItems}.length>0 && panel.getAnimations({subtree:true}).every(a=>a.playState!=='running');
       })()`,
-        { label: "the active tab menu is focused and settled" },
-      );
+          { label: "the active tab menu is focused and settled" },
+        )
+        .catch(async (cause: unknown) => {
+          const diagnostic = await app.eval(`({
+          press:window.__tabMenuPress,focused:document.hasFocus(),active:document.activeElement.outerHTML.slice(0,300),
+          menus:[...document.querySelectorAll('[role="menu"]')].map(menu=>({label:menu.getAttribute('aria-label'),text:menu.textContent.slice(0,300)}))
+        })`);
+          throw new Error(
+            `${String(cause)}; tab menu: ${JSON.stringify(diagnostic)}`,
+          );
+        });
     };
     const closeEntries = () =>
       app.eval<string[]>(
@@ -522,7 +549,7 @@ describe("closing folded tab groups", () => {
 
     it("offers the group's closes and sends its tabs back to the chat", async () => {
       const projectId = await openGroup({ name: "Menu chat tabs" });
-      await openMenu("chat:group");
+      await openMenu(`chat:${chatId}`);
       expect(await closeEntries()).toEqual([
         "Close tabs under chat",
         "Close chat and its tabs",
@@ -547,9 +574,51 @@ describe("closing folded tab groups", () => {
       expect(app.getRendererErrors()).toEqual([]);
     });
 
+    it("offers group folding first on the parent and every attached tab", async () => {
+      const projectId = await openGroup({ name: "Group menu folding" });
+      await openMenu(`chat:${chatId}`);
+      expect(await app.eval(`${menuItems}[0].textContent.trim()`)).toBe(
+        "Expand group",
+      );
+      await pick("Expand group");
+      await app.waitFor(
+        `document.querySelector('${visible} [data-point-key="browser:page"]')?.checkVisibility()`,
+      );
+      await openMenu("browser:page");
+      expect(await app.eval(`${menuItems}[0].textContent.trim()`)).toBe(
+        "Collapse group",
+      );
+      await pick("Collapse group");
+      await app.waitFor(
+        `${state(projectId)}.then(ws=>ws.chats[0]?.surfacesCollapsed===true)`,
+      );
+      await app.waitFor(
+        `!document.querySelector('${visible} [data-point-key="browser:page"]:not([aria-hidden])')`,
+      );
+      expect(app.getRendererErrors()).toEqual([]);
+    });
+
+    it("does nothing for repeated Cmd+M when all chats are tabs", async () => {
+      const projectId = await openGroup({ name: "Only tab chats" });
+      for (let count = 0; count < 3; count++) {
+        await app.eval(
+          `window.dispatchEvent(new KeyboardEvent('keydown',{key:'m',bubbles:true,cancelable:true,...(/Mac/.test(navigator.platform)?{metaKey:true}:{ctrlKey:true})}));true`,
+        );
+      }
+      await app.waitFor(
+        `${state(projectId)}.then(ws=>ws.chats.length===1&&ws.chats[0].mode==='tab'&&ws.activeTabKey===${JSON.stringify(`chat:${chatId}`)})`,
+      );
+      expect(
+        await app.eval(
+          `!!document.querySelector('section[data-floating-chat]')`,
+        ),
+      ).toBe(false);
+      expect(app.getRendererErrors()).toEqual([]);
+    });
+
     it("closes a chat and its tabs together", async () => {
       const projectId = await openGroup({ name: "Menu chat and tabs" });
-      await openMenu("chat:group");
+      await openMenu(`chat:${chatId}`);
       await pick("Close chat and its tabs");
       await app.waitFor(
         `${state(projectId)}.then(ws=>ws.chats.length===0 && ws.browsers.length===0)`,

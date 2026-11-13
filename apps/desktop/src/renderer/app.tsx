@@ -269,6 +269,7 @@ import {
   editorTabKey,
   emptyUtilityWorkspace,
   emptyWorkspace,
+  floatingChatToToggle,
   hydrateWorkspace,
   newChatEntry,
   newTabInFront,
@@ -290,11 +291,7 @@ import {
   type Workspace,
   workspaceLayout,
 } from "./lib/workspace-state.js";
-import {
-  type PaletteHost,
-  PaletteHostProvider,
-  type ProjectAgentTarget,
-} from "./palette/host.js";
+import { type PaletteHost, PaletteHostProvider } from "./palette/host.js";
 import { loadSourceRows } from "./palette/sources.js";
 import type { PaletteChoiceMode, PaletteModeRequest } from "./palette/types.js";
 import { AppScreen } from "./screens/app-screen.js";
@@ -782,6 +779,7 @@ export function App({
     open: boolean;
   } | null>(null);
   const [paletteOpen, setPaletteOpen] = useState(false);
+  const [newTabFocusRequest, setNewTabFocusRequest] = useState(0);
   const closePalette = useCallback(() => setPaletteOpen(false), []);
   const [closingEdits, setClosingEdits] = useState<{
     requestedKey: string;
@@ -2010,8 +2008,15 @@ export function App({
   };
 
   // Chrome's New Tab analog: a fresh tab whose content is the palette.
-  const openPaletteTab = () =>
-    openTab({ kind: "palette", name: crypto.randomUUID(), label: "New Tab" });
+  const openPaletteTab = () => {
+    updateWorkspace((ws) =>
+      transitionWorkspace(ws, {
+        type: "new-palette",
+        name: crypto.randomUUID(),
+      }),
+    );
+    setNewTabFocusRequest((request) => request + 1);
+  };
   // Untyped, a New Tab closes once something else is shown in its place
   // (reconcileWorkspace); typing into it keeps it.
   const markNewTabTyped = (key: string, typed: boolean) =>
@@ -2128,6 +2133,8 @@ export function App({
     // keyboard back after the overlay leaves.
     if (key.startsWith("browser:"))
       browserCommandsRef.current.get(key.slice(8))?.focusPage();
+    if (key.startsWith("palette:"))
+      setNewTabFocusRequest((request) => request + 1);
   };
 
   /** Open a page in a new browser tab (profile session of the workspace). */
@@ -2810,7 +2817,6 @@ export function App({
   // Staged tab-minimize per chat dock — Cmd+M on a fullscreen chat tab
   // must play the dock's collapse before the mode flips, exactly like
   // the dash control (the tween runs before the workspace re-render).
-  const chatMinimizersRef = useRef(new Map<string, () => void>());
   /** Each chat's way to focus its first chip (the focus-chips shortcut). */
   const chipFocusersRef = useRef(new Map<string, () => boolean>());
   // Per-chat "re-pull the editor selection" counters (see addChat).
@@ -3048,7 +3054,6 @@ export function App({
       if (!keys.includes(chatTabKey(chat.localId))) continue;
       closingChatIds.current.delete(chat.localId);
       chatClosersRef.current.delete(chat.localId);
-      chatMinimizersRef.current.delete(chat.localId);
       chatSkillsRef.current.delete(chat.localId);
       composerFocusesRef.current.delete(chat.localId);
     }
@@ -4115,25 +4120,18 @@ export function App({
   // switch immediately, exactly like profile agents.
   const [consentRequest, setConsentRequest] = useState<{
     agent: ProjectAgentInfo;
-    target: ProjectAgentTarget;
+    onApproved: (agentId: string) => void;
   } | null>(null);
-  const applyProjectAgent = (
-    agent: ProjectAgentInfo,
-    target: ProjectAgentTarget,
-  ) => {
-    if (target === "default") pickDefaultAgent(agent.id);
-    else pickSessionAgent(agent.id);
-  };
   const pickProjectAgent = (
     agent: ProjectAgentInfo,
-    target: ProjectAgentTarget,
+    onApproved: (agentId: string) => void,
   ) => {
     if (agent.invalid) return;
     if (agent.consent === "ok" || agent.consent === "not-required") {
-      applyProjectAgent(agent, target);
+      onApproved(agent.id);
       return;
     }
-    setConsentRequest({ agent, target });
+    setConsentRequest({ agent, onApproved });
   };
 
   const pickEffort = (effort: AgentEffort | null) => {
@@ -4611,6 +4609,14 @@ export function App({
   const actionChat = (ws: Workspace) =>
     ws.chats.find((chat) => chat.localId === ws.activeChatId) ??
     ws.chats.at(-1);
+  const chatToRename = (ws: Workspace) =>
+    ws.chats.find(
+      (chat) =>
+        chat.localId === ws.activeChatId &&
+        (chat.mode === "partial" ||
+          (chat.mode === "tab" &&
+            (ws.floatingKey ?? ws.activeTabKey) === chatTabKey(chat.localId))),
+    );
   // Talk to this chat (voice): the chat in front, for its shortcut.
   const frontChatSession = actionChat(workspace)?.sessionId ?? null;
   useEffect(() => {
@@ -4624,20 +4630,8 @@ export function App({
 
   const toggleChatMinimized = () => {
     const ws = workspaceRef.current;
-    const chat = actionChat(ws);
+    const chat = floatingChatToToggle(ws);
     if (!chat) return;
-    // Minimizing the focused fullscreen chat tab goes through the dock's
-    // staged minimize (collapse tween, THEN the mode flip) so Cmd+M reads
-    // exactly like the dash control. Everything else keeps the toggle.
-    const focusedTab =
-      chat.mode === "tab" &&
-      ws.activeChatId === chat.localId &&
-      ws.activeTabKey === chatTabKey(chat.localId);
-    const staged = chatMinimizersRef.current.get(chat.localId);
-    if (focusedTab && staged) {
-      staged();
-      return;
-    }
     toggleChat(chat.localId);
   };
 
@@ -4812,7 +4806,10 @@ export function App({
     "browser-back": () => runBrowserCommand("back"),
     "browser-forward": () => runBrowserCommand("forward"),
     "new-tab": openPaletteTab,
-    "command-palette": () => setPaletteOpen((value) => !value),
+    "command-palette": () => {
+      setModeRequest(null);
+      setPaletteOpen((value) => !value);
+    },
     "check-for-updates": () => void desktopApi.updateCheck(),
     "new-floating-chat": () => addChat(),
     "toggle-floating-terminal": () => toggleFloatingTerminal(),
@@ -4957,7 +4954,7 @@ export function App({
       requestTabFileRename(ws.floatingKey ?? ws.activeTabKey);
     },
     "rename-chat": () => {
-      const chat = actionChat(workspaceRef.current);
+      const chat = chatToRename(workspaceRef.current);
       if (chat?.sessionId) applySessionAction(chat.sessionId, "rename");
     },
     "switch-agent": () => openPalettePicker("switch-agent"),
@@ -6903,7 +6900,7 @@ export function App({
     "new-workflow": !memberShell,
     "new-markdown-file": projectId !== undefined,
     "search-changes": !memberShell,
-    "toggle-chat-minimized": paletteTargetChat !== undefined,
+    "toggle-chat-minimized": floatingChatToToggle(workspace) !== undefined,
     "chat-to-tab":
       paletteTargetChat !== undefined &&
       (paletteTargetChat.mode !== "tab" ||
@@ -6937,8 +6934,7 @@ export function App({
     "open-chat-preview": remoteChatSession(paletteTargetChat?.sessionId),
     "archive-chat":
       focusedSession !== undefined && focusedSession.visibility !== "archived",
-    // The same current chat the handler targets, including a minimized one.
-    "rename-chat": paletteTargetChat?.sessionId !== undefined,
+    "rename-chat": chatToRename(workspace)?.sessionId !== undefined,
     "rename-file": filePathForKey(focusedTabKey) !== null,
     "rename-tab": focusedTabKey?.startsWith("browser:") === true,
     // Project-agent models are committed in their project definition, so
@@ -7825,9 +7821,9 @@ export function App({
               request={consentRequest}
               onClose={() => setConsentRequest(null)}
               onApproved={(agent) => {
-                const target = consentRequest?.target ?? "session";
+                const onApproved = consentRequest?.onApproved;
                 setConsentRequest(null);
-                applyProjectAgent(agent, target);
+                onApproved?.(agent.id);
               }}
             />
             <ActionInputDialog
@@ -8195,12 +8191,13 @@ export function App({
                         onClick={dismissFloating}
                       />
                     )}
-                    {/* Screen-style tabs render whenever they occupy a view
-                    slot — in a split that can be two at once. */}
+                    {/* Workflow and palette drafts stay mounted when hidden.
+                    Other screens render while occupying a view slot. */}
                     {workspace.tabs
                       .filter(
                         (tab) =>
                           tab.kind === "workflow" ||
+                          tab.kind === "palette" ||
                           viewSlots[tabKey(tab)] ||
                           tabKey(tab) === recedingSurface,
                       )
@@ -8291,6 +8288,7 @@ export function App({
                             />
                           ) : tab.kind === "settings" ? (
                             <SettingsScreen
+                              defaultAgentId={effectiveDefaultAgentId}
                               destination={tab.destination}
                               projectId={projectId}
                               profile={activeProfile}
@@ -8353,6 +8351,12 @@ export function App({
                             <CommandPalette
                               key={tabKey(tab)}
                               variant="tab"
+                              focusRequest={newTabFocusRequest}
+                              active={
+                                runtime.visible &&
+                                !paletteOpen &&
+                                focusedTabKey === tabKey(tab)
+                              }
                               onClose={() => closeTab(tabKey(tab))}
                               onTypedChange={(typed) =>
                                 markNewTabTyped(tabKey(tab), typed)
@@ -9007,9 +9011,6 @@ export function App({
                       registerFocusChips={(focus) =>
                         chipFocusersRef.current.set(entry.localId, focus)
                       }
-                      registerMinimize={(minimize) =>
-                        chatMinimizersRef.current.set(entry.localId, minimize)
-                      }
                       registerSend={(send) =>
                         chatSendersRef.current.set(entry.localId, send)
                       }
@@ -9037,6 +9038,7 @@ export function App({
                     renderOnboarding(activeTab)
                   ) : activeTab?.kind === "settings" ? (
                     <SettingsScreen
+                      defaultAgentId={effectiveDefaultAgentId}
                       destination={activeTab.destination}
                       profile={activeProfile}
                       profiles={profilesData}
@@ -9216,6 +9218,7 @@ export function App({
             <CommandPalette
               variant="overlay"
               open={paletteOpen}
+              active={runtime.visible}
               onClose={closePalette}
               modeRequest={modeRequest}
             />

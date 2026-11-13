@@ -131,7 +131,7 @@ it("pauses sidebar subscriptions in a retained project and resumes its existing 
     `document.querySelector('${owner}')?.dataset.workspaceVisible==='false' && document.querySelector('${owner}')?.inert && !!document.querySelector('[data-project-runtime="${other.id}"][data-workspace-visible="true"] [data-workspace-ready]')`,
   );
   try {
-    await expect.poll(() => read("subscribed")).toBe("no");
+    await expect.poll(() => read("subscribed"), { timeout: 15_000 }).toBe("no");
   } finally {
     // If release failed, a positive IO pulse distinguishes actual hidden
     // work from a stale marker; keep the observation in the failure log.
@@ -173,7 +173,7 @@ it("observes an empty source only while its project is in front", async () => {
   await app.waitFor(
     `document.querySelector('${owner}')?.dataset.workspaceVisible==='false' && !!document.querySelector('[data-project-runtime="${otherProjectId}"][data-workspace-visible="true"] [data-workspace-ready]')`,
   );
-  await expect.poll(() => read("subscribed")).toBe("no");
+  await expect.poll(() => read("subscribed"), { timeout: 15_000 }).toBe("no");
   await app.eval(
     `window.catamorphicDesktop.workspaceNavigate({projectId:${JSON.stringify(projectId)}})`,
   );

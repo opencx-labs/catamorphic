@@ -1,5 +1,31 @@
 # Workspace interactions
 
+## Palette modes and current chat
+
+Space or Tab after a mode's trigger enters that mode. The trigger is read from
+the start of the input to the caret, so inserting it before existing text carries
+that text into the mode, including Ask agent. A selection or active text
+composition keeps its normal editing behavior.
+Mode entry and Backspace exit can be undone and redone with the platform's
+Undo and Redo commands. Each palette has one edit history for text, attachments,
+selection and mode changes (ADR 0314).
+
+Rename current chat is offered only while the active chat is visible, as a
+floating chat or the focused chat tab. A minimized or background chat keeps its
+own Rename action in its menu, but is not the palette's current chat.
+
+Cmd+M hides or restores only a root chat in the floating dock. An already
+visible floating chat hides even when a chat tab has focus. With no floating
+chats, including when every chat is in a tab, Cmd+M does nothing.
+
+The dock's downloads menu shows downloads from the last three days and any
+still in progress. The Downloads page retains the full history. Opening the menu
+acknowledges completions, including ones that finish while it stays open. That
+acknowledgement is shared by the profile's windows and survives remounts.
+
+Tab groups offer Collapse group first in the context menu of the chat or any
+attached tab; a collapsed group's parent offers Expand group instead.
+
 ## Opening resources
 
 The palette's History mode searches pages and work opened in the profile. Typed
@@ -103,7 +129,10 @@ its command ends, an open tab keeps the output and says "Command finished".
 chat's current working folder. The finished command stays ended and does not
 run again. A finished terminal has no blinking work indicator or typing cursor.
 
-A New Tab (Cmd+T, the palette as a page) is a way to somewhere, not a place. Once
+A New Tab (Cmd+T or the strip's + button, the palette as a page) opens at the right
+end of the strip. If an empty New Tab exists, that same tab is reused. Typed
+palettes retain their input, mode, attachments and selection when switching tabs
+or opening another New Tab. Once
 something else is shown in its place, a New Tab with nothing in its input closes
 (`reconcileWorkspace`); one with typed text or an entered mode, or one still on
 screen as the other pane of a split, stays. Its input is not restored on relaunch,
@@ -497,10 +526,15 @@ Cmd+Enter (Ctrl+Enter outside macOS) belongs to a focused review comment form on
 while that form is focused; a page or embedded frame keeps it for its own submit
 action. Work's window and navigation shortcuts retain their configured bindings.
 
-The palette's Ask agent mode shows the default agent's harness mark and its name,
-model name and reasoning effort, separated by middle dots. Unpinned models resolve
-from the harness for the current project; focused-chat overrides do not change the
-identity of a new chat. Unsupported reasoning controls are omitted.
+The palette's Ask agent mode shows its agent's harness mark, name, model and
+reasoning effort. Clicking that metadata opens the same agent picker as a chat's
+status popup. The choice belongs to that palette draft; another draft, the saved
+default and an existing chat keep their own agents. Choosing or cancelling keeps
+the mounted multiline composer, attachments, pending transfers and selection.
+Project agents use the normal approval flow before a choice applies. Until an
+agent is explicitly chosen, a draft follows the live resolved default. Unpinned
+models resolve from the harness for the current project. Unsupported reasoning
+controls are omitted.
 
 ### Profile recovery and shared update messages
 

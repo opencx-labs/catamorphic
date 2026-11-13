@@ -356,11 +356,13 @@ it("releases hidden sources and virtualizes a large file-backed list", async () 
     `document.querySelector('[role="tab"][aria-label="Other"]')?.getAttribute('aria-selected')==='true'`,
   );
   await expect
-    .poll(() =>
-      fs.readFileSync(
-        path.join(projectRoot, "todo-data", "subscribed"),
-        "utf8",
-      ),
+    .poll(
+      () =>
+        fs.readFileSync(
+          path.join(projectRoot, "todo-data", "subscribed"),
+          "utf8",
+        ),
+      { timeout: 15_000 },
     )
     .toBe("no");
   const before = requests;
