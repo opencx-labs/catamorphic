@@ -103,7 +103,7 @@ export async function createTestDatabase(prefix: string): Promise<{
     url: url.toString(),
     drop: async () => {
       try {
-        await admin.query(`DROP DATABASE ${database} WITH (FORCE)`);
+        await dropTestDatabase({ admin, database });
       } finally {
         await admin.end();
       }
