@@ -269,6 +269,7 @@ import {
   editorTabKey,
   emptyUtilityWorkspace,
   emptyWorkspace,
+  floatingChatToToggle,
   hydrateWorkspace,
   newChatEntry,
   newTabInFront,
@@ -2818,7 +2819,6 @@ export function App({
   // Staged tab-minimize per chat dock — Cmd+M on a fullscreen chat tab
   // must play the dock's collapse before the mode flips, exactly like
   // the dash control (the tween runs before the workspace re-render).
-  const chatMinimizersRef = useRef(new Map<string, () => void>());
   /** Each chat's way to focus its first chip (the focus-chips shortcut). */
   const chipFocusersRef = useRef(new Map<string, () => boolean>());
   // Per-chat "re-pull the editor selection" counters (see addChat).
@@ -3056,7 +3056,6 @@ export function App({
       if (!keys.includes(chatTabKey(chat.localId))) continue;
       closingChatIds.current.delete(chat.localId);
       chatClosersRef.current.delete(chat.localId);
-      chatMinimizersRef.current.delete(chat.localId);
       chatSkillsRef.current.delete(chat.localId);
       composerFocusesRef.current.delete(chat.localId);
     }
@@ -4640,20 +4639,8 @@ export function App({
 
   const toggleChatMinimized = () => {
     const ws = workspaceRef.current;
-    const chat = actionChat(ws);
+    const chat = floatingChatToToggle(ws);
     if (!chat) return;
-    // Minimizing the focused fullscreen chat tab goes through the dock's
-    // staged minimize (collapse tween, THEN the mode flip) so Cmd+M reads
-    // exactly like the dash control. Everything else keeps the toggle.
-    const focusedTab =
-      chat.mode === "tab" &&
-      ws.activeChatId === chat.localId &&
-      ws.activeTabKey === chatTabKey(chat.localId);
-    const staged = chatMinimizersRef.current.get(chat.localId);
-    if (focusedTab && staged) {
-      staged();
-      return;
-    }
     toggleChat(chat.localId);
   };
 
@@ -6919,7 +6906,7 @@ export function App({
     "new-workflow": !memberShell,
     "new-markdown-file": projectId !== undefined,
     "search-changes": !memberShell,
-    "toggle-chat-minimized": paletteTargetChat !== undefined,
+    "toggle-chat-minimized": floatingChatToToggle(workspace) !== undefined,
     "chat-to-tab":
       paletteTargetChat !== undefined &&
       (paletteTargetChat.mode !== "tab" ||
@@ -9028,9 +9015,6 @@ export function App({
                       }
                       registerFocusChips={(focus) =>
                         chipFocusersRef.current.set(entry.localId, focus)
-                      }
-                      registerMinimize={(minimize) =>
-                        chatMinimizersRef.current.set(entry.localId, minimize)
                       }
                       registerSend={(send) =>
                         chatSendersRef.current.set(entry.localId, send)

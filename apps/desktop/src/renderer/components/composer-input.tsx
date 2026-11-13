@@ -72,6 +72,9 @@ export interface ComposerInputHandle {
   /** The wire shape: prose with markers + attachments in marker order. */
   read(options?: { trim?: boolean }): SerializedComposer<AgentChatAttachment>;
   snapshot(): ChatDraft;
+  /** Offsets in the serialized draft, counting each pill marker once. */
+  selection(): { anchor: number; focus: number } | undefined;
+  restoreSelection(selection: { anchor: number; focus: number }): void;
   restore(draft: ChatDraft): void;
   /** Drop everything (after send). */
   clear(): void;
@@ -122,6 +125,31 @@ interface PillEntry {
 
 const ZERO_WIDTH = /\u200B|\u200C|\u200D|\uFEFF/g;
 
+/** Exiting pills and the spacer removed with them are already logically gone. */
+function logicalComposerRoot(
+  root: HTMLElement,
+  exiting: ReadonlySet<string>,
+): HTMLElement {
+  if (exiting.size === 0) return root;
+  const clone = root.cloneNode(true);
+  if (!(clone instanceof HTMLElement)) return root;
+  for (const host of clone.querySelectorAll<HTMLElement>(`[${PILL_ATTR}]`)) {
+    if (!exiting.has(host.getAttribute(PILL_ATTR) ?? "")) continue;
+    removeHostAndSpacer(host);
+  }
+  return clone;
+}
+
+function removeHostAndSpacer(host: HTMLElement): void {
+  const next = host.nextSibling;
+  if (
+    next?.nodeType === Node.TEXT_NODE &&
+    /^[ \u00a0]/.test(next.nodeValue ?? "")
+  )
+    next.nodeValue = (next.nodeValue ?? "").slice(1);
+  host.remove();
+}
+
 /** Put the caret at the end of the editable. */
 function caretToEnd(root: HTMLElement) {
   const selection = window.getSelection();
@@ -147,7 +175,7 @@ function removeHost(root: HTMLElement, host: HTMLElement) {
       ? selection.getRangeAt(0).cloneRange()
       : null;
   if (!focused || !selection) {
-    host.remove();
+    removeHostAndSpacer(host);
     return;
   }
   const range = document.createRange();
@@ -165,7 +193,7 @@ function removeHost(root: HTMLElement, host: HTMLElement) {
   selection.addRange(range);
   document.execCommand("delete");
   // Chromium may report success after deleting only an adjacent placeholder.
-  if (host.isConnected) host.remove();
+  if (host.isConnected) removeHostAndSpacer(host);
   if (saved) {
     try {
       selection.removeAllRanges();
@@ -235,7 +263,11 @@ export const ComposerInput = forwardRef<
     (options?: { trim?: boolean }): SerializedComposer<AgentChatAttachment> => {
       const root = rootRef.current;
       if (!root) return { message: "", attachments: [], text: "" };
-      const raw = serializeComposer(root, resolve, options);
+      const raw = serializeComposer(
+        logicalComposerRoot(root, exitingRef.current),
+        resolve,
+        options,
+      );
       return {
         ...raw,
         attachments: raw.attachments.map(({ id: _id, ...rest }) => rest),
@@ -276,14 +308,14 @@ export const ComposerInput = forwardRef<
         );
       return same ? previous : next;
     });
-    const state = serializeComposer(root, resolve, { trim: false });
+    const state = read({ trim: false });
     const empty = state.message.trim() === "" && state.attachments.length === 0;
     root.toggleAttribute("data-empty", empty);
     onChangeRef.current({
       text: state.text,
       pillCount: state.attachments.length,
     });
-  }, [resolve]);
+  }, [read]);
 
   const removePill = useCallback(
     (id: string) => {
@@ -452,13 +484,62 @@ export const ComposerInput = forwardRef<
       snapshot: () => {
         const root = rootRef.current;
         if (!root) return { message: "", attachments: [] };
-        const result = serializeComposer(root, resolve, { trim: false });
+        const result = read({ trim: false });
         return {
           message: result.message,
-          attachments: result.attachments.map(
-            ({ id: _id, ...attachment }) => attachment,
-          ),
+          attachments: result.attachments,
         };
+      },
+      selection: () => {
+        const root = rootRef.current,
+          selected = window.getSelection();
+        if (
+          !root ||
+          !selected?.anchorNode ||
+          !selected.focusNode ||
+          !root.contains(selected.anchorNode) ||
+          !root.contains(selected.focusNode)
+        )
+          return;
+        const offset = (node: Node, at: number) => {
+          const range = document.createRange();
+          range.selectNodeContents(root);
+          range.setEnd(node, at);
+          const fragment = document.createElement("div");
+          fragment.append(range.cloneContents());
+          return serializeComposer(
+            logicalComposerRoot(fragment, exitingRef.current),
+            resolve,
+            { trim: false },
+          ).message.length;
+        };
+        return {
+          anchor: offset(selected.anchorNode, selected.anchorOffset),
+          focus: offset(selected.focusNode, selected.focusOffset),
+        };
+      },
+      restoreSelection: ({ anchor, focus }) => {
+        const root = rootRef.current;
+        if (!root) return;
+        const point = (offset: number): { node: Node; offset: number } => {
+          let remaining = offset;
+          for (const [index, node] of [...root.childNodes].entries()) {
+            if (node instanceof HTMLElement && node.hasAttribute(PILL_ATTR)) {
+              if (remaining === 0) return { node: root, offset: index };
+              remaining--;
+            } else if (node.nodeType === Node.TEXT_NODE) {
+              const length = node.nodeValue?.length ?? 0;
+              if (remaining <= length) return { node, offset: remaining };
+              remaining -= length;
+            }
+          }
+          return { node: root, offset: root.childNodes.length };
+        };
+        const start = point(anchor),
+          end = point(focus);
+        window
+          .getSelection()
+          ?.setBaseAndExtent(start.node, start.offset, end.node, end.offset);
       },
       restore: (draft: ChatDraft) => {
         const root = rootRef.current;

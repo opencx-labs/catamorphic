@@ -53,6 +53,31 @@ const shot = async (name: string) => {
 };
 const type = (text: string) =>
   run(`setReactValue(input(),${JSON.stringify(text)})`);
+const nativeHistory = async (redo = false) => {
+  for (const type of ["keyDown", "keyUp"])
+    await app.cdp("Input.dispatchKeyEvent", {
+      type,
+      key: "z",
+      code: "KeyZ",
+      windowsVirtualKeyCode: 90,
+      modifiers: (process.platform === "darwin" ? 4 : 2) | (redo ? 8 : 0),
+      ...(type === "keyDown" ? { commands: [redo ? "redo" : "undo"] } : {}),
+    });
+};
+const pasteImage = async () => {
+  await app.eval(
+    `(async()=>{const canvas=document.createElement('canvas');canvas.width=8;canvas.height=8;canvas.getContext('2d').fillRect(0,0,8,8);const blob=await new Promise(resolve=>canvas.toBlob(resolve,'image/png'));await navigator.clipboard.write([new ClipboardItem({'image/png':blob})]);})()`,
+  );
+  for (const type of ["keyDown", "keyUp"])
+    await app.cdp("Input.dispatchKeyEvent", {
+      type,
+      key: "v",
+      code: "KeyV",
+      windowsVirtualKeyCode: 86,
+      modifiers: process.platform === "darwin" ? 4 : 2,
+      ...(type === "keyDown" ? { commands: ["paste"] } : {}),
+    });
+};
 const selectStripTab = async (key: string) => {
   const point = await wait<{ x: number; y: number }>(`
     const tab = [...document.querySelectorAll('[data-workspace-visible="true"] [data-tab-orientation] [data-point-key]:not([data-sidebar-item-id])')].find(el => el.dataset.pointKey === ${JSON.stringify(key)});
@@ -1063,7 +1088,7 @@ it("retains independent New Tab drafts, appends new tabs, and reuses an empty ta
   const newTab = async () => {
     await shortcut("t");
     await wait(
-      `return document.activeElement === input() && input().closest('[data-palette="tab"]')`,
+      `return document.activeElement === input() && !!input().closest('[data-palette="tab"]')`,
     );
     return currentKey();
   };
@@ -1123,7 +1148,7 @@ it("retains a selected skill and only accents targets while its palette is activ
   );
   await shortcut("t");
   await wait(
-    `return document.activeElement === input() && input().closest('[data-palette="tab"]')`,
+    `return document.activeElement === input() && !!input().closest('[data-palette="tab"]')`,
   );
   const palette = await run<string>(
     `return input().closest('[data-surface-key]').dataset.surfaceKey`,
@@ -1162,6 +1187,17 @@ it("retains a selected skill and only accents targets while its palette is activ
 it.each(["web", "agent", "tix"])(
   "undoes and redoes entering and leaving %s mode",
   async (trigger) => {
+    const selectAll = async () => {
+      for (const type of ["keyDown", "keyUp"])
+        await app.cdp("Input.dispatchKeyEvent", {
+          type,
+          key: "a",
+          code: "KeyA",
+          windowsVirtualKeyCode: 65,
+          modifiers: process.platform === "darwin" ? 4 : 2,
+          ...(type === "keyDown" ? { commands: ["selectAll"] } : {}),
+        });
+    };
     const history = async (redo = false) => {
       for (const type of ["keyDown", "keyUp"])
         await app.cdp("Input.dispatchKeyEvent", {
@@ -1204,7 +1240,7 @@ it.each(["web", "agent", "tix"])(
     expect(await value()).toBe(text);
     expect(await run(`return chip()`)).toBe(label);
     // Empty the draft through native editing, then Backspace pops the chip.
-    await app.press("a", process.platform === "darwin" ? 4 : 2);
+    await selectAll();
     await app.press("Backspace");
     await wait(`return (input().value ?? input().textContent) === ''`);
     await app.press("Backspace");
@@ -1220,7 +1256,7 @@ it.each(["web", "agent", "tix"])(
     await wait(`return chip() === ${JSON.stringify(label)}`);
     // Deleting back to a boundary is a native edit, not a mode undo.
     await app.insertText("hello");
-    await app.press("a", process.platform === "darwin" ? 4 : 2);
+    await selectAll();
     await app.press("Backspace");
     await history();
     expect(await value()).toBe("hello");
@@ -1242,6 +1278,27 @@ it.each(["web", "agent", "tix"])(
     await history(true);
     expect(await value()).toBe(`${trigger}x`);
     expect(await run(`return chip()`)).toBe(null);
+    await close();
+    await open();
+    await app.insertText(trigger);
+    await app.press("Space");
+    await wait(`return !!chip()`);
+    await app.insertText("hello");
+    await selectAll();
+    await app.press("Backspace");
+    await history();
+    expect(await value()).toBe("hello");
+    await history(true);
+    expect(await value()).toBe("");
+    await history();
+    expect(await value()).toBe("hello");
+    expect(await run(`return chip()`)).toBe(label);
+    await history();
+    expect(await value()).toBe("");
+    await history();
+    await wait(
+      `return chip() === null && input().value === ${JSON.stringify(trigger)}`,
+    );
     await close();
     expect(app.getRendererErrors()).toEqual([]);
   },
@@ -1274,4 +1331,72 @@ it("only consumes a mode trigger before a collapsed caret, outside composition",
   await wait(`return chip() === 'Search web'`);
   expect(await run(`return input().value`)).toBe("query");
   await close();
+});
+
+it("undoes one logical attachment removal after its cleanup runs unfocused", async () => {
+  await open();
+  await app.insertText("agent");
+  await app.press("Space");
+  await wait(
+    `return input()?.isContentEditable && document.activeElement === input()`,
+  );
+  await pasteImage();
+  await wait(
+    `return !!input().querySelector('[data-testid="composer-pill"] img')`,
+  );
+  await run(`window.__paletteOwner=input();return true;`);
+  await app.insertText("tail");
+  await run(
+    `input().querySelector('button[aria-label^="Remove "]').click();input().blur();return true;`,
+  );
+  await wait(`return !input().querySelector('[data-pill-id]')`);
+  await run(`input().focus();return true;`);
+  await nativeHistory();
+  await wait(
+    `return !!input().querySelector('[data-testid="composer-pill"] img')`,
+  );
+  expect(await run(`return input() === window.__paletteOwner`)).toBe(true);
+  await nativeHistory();
+  expect(
+    await run(
+      `return !!input().querySelector('[data-testid="composer-pill"] img')`,
+    ),
+  ).toBe(true);
+  expect(
+    await run(
+      `return [...input().childNodes].filter(node=>node.nodeType===Node.TEXT_NODE).map(node=>node.nodeValue).join('').includes('tail')`,
+    ),
+  ).toBe(false);
+  await nativeHistory();
+  await wait(`return !input().querySelector('[data-pill-id]')`);
+  expect(await run(`return chip()`)).toBe("Ask agent");
+  await close();
+  expect(app.getRendererErrors()).toEqual([]);
+});
+
+it("records a committed composition as one palette undo transaction", async () => {
+  await open();
+  await app.insertText("agent");
+  await app.press("Space");
+  await wait(
+    `return input()?.isContentEditable && document.activeElement === input()`,
+  );
+  await app.cdp("Input.imeSetComposition", {
+    text: "に",
+    selectionStart: 1,
+    selectionEnd: 1,
+  });
+  await app.cdp("Input.imeSetComposition", {
+    text: "日本語",
+    selectionStart: 3,
+    selectionEnd: 3,
+  });
+  await app.insertText("日本語");
+  await wait(`return input().textContent === '日本語'`);
+  await nativeHistory();
+  await wait(`return input().textContent === '' && chip() === 'Ask agent'`);
+  await nativeHistory(true);
+  await wait(`return input().textContent === '日本語'`);
+  await close();
+  expect(app.getRendererErrors()).toEqual([]);
 });

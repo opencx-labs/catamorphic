@@ -127,6 +127,32 @@ describe("downloads", () => {
     );
   });
 
+  it("clears the completion dot when opened and keeps it cleared after a renderer reload", async () => {
+    await app.waitFor(
+      `!!document.querySelector('[data-testid="downloads-unseen"]')`,
+    );
+    await click('[data-testid="downloads-bubble"]');
+    await app.waitFor(
+      `!!document.querySelector('[data-testid="downloads-popover"]') && !document.querySelector('[data-testid="downloads-unseen"]')`,
+    );
+    await click('[data-testid="downloads-bubble"]');
+    await app.waitFor(
+      `!document.querySelector('[data-testid="downloads-popover"]')`,
+    );
+    await app.reload();
+    await app.waitFor(
+      `!!document.querySelector('[data-testid="downloads-bubble"]')`,
+    );
+    expect(
+      await app.eval(
+        `!!document.querySelector('[data-testid="downloads-unseen"]')`,
+      ),
+    ).toBe(false);
+    await app.waitFor(
+      `(()=>{const view=${guest};try{return view?.getTitle()==='Download Lab'&&!view.isLoading()}catch{return false}})()`,
+    );
+  });
+
   it("dragging the strip across a page reaches the middle resting spot", async () => {
     await app.eval(
       `window.catamorphicDesktop.setPrefs({ dockPlacement: 'right' }).then(() => true)`,

@@ -16,7 +16,6 @@ import {
   BUILTIN_ACTIONS,
   type KeybindingAction,
 } from "../../shared/actions.js";
-import type { ChatDraft } from "../../shared/desktop-workspace.js";
 import type { OpenMode as CommitMode } from "../../shared/open-mode.js";
 import {
   EMPTY_PALETTE_SIGNALS,
@@ -36,6 +35,11 @@ import { pointerMoved } from "../lib/pointer-moved.js";
 import { useProjectSkillCatalog } from "../lib/skills.js";
 import { useComposerFiles } from "../lib/use-composer-files.js";
 import { GLIDING_FRAME, useGlidingHeight } from "../lib/use-gliding-height.js";
+import {
+  PaletteHistory,
+  type PaletteSnapshot,
+  samePaletteDraft,
+} from "../palette/history.js";
 import { usePaletteHost } from "../palette/host.js";
 import {
   isFullPaletteModeName,
@@ -159,21 +163,10 @@ function NewTabShortcutHints({
 
 const COMMIT_HINTS = [
   { keycap: "↵", label: "open" },
-  { keycap: "⌘↵", label: "new tab" },
-  { keycap: "⌘⇧↵", label: "side" },
-  { keycap: "⌥↵", label: "floating" },
+  { keycap: "⌘\u202f↵", label: "new tab" },
+  { keycap: "⌘\u202f⇧\u202f↵", label: "side" },
+  { keycap: "⌥\u202f↵", label: "floating" },
 ];
-
-interface ModeSnapshot {
-  mode: string | null;
-  draft: ChatDraft;
-  selection?: { start: number; end: number };
-}
-
-interface ModeEdit {
-  before: ModeSnapshot;
-  after: ModeSnapshot;
-}
 
 function FooterHint({ keycap, label }: { keycap: string; label: string }) {
   return (
@@ -289,11 +282,18 @@ function CommandPaletteContent({
   const agentInputRef = useRef<ComposerInputHandle>(null);
   const currentDraft = useRef({ mode: modeId, query });
   currentDraft.current = { mode: modeId, query };
-  const modeUndo = useRef<ModeEdit[]>([]);
-  const modeRedo = useRef<ModeEdit[]>([]);
-  const nativeEdits = useRef(false);
-  const restoreMode = useRef<ModeSnapshot | null>(null);
-  const snapshotMode = useCallback((): ModeSnapshot => {
+  const editHistory = useRef(new PaletteHistory());
+  const lastSnapshot = useRef<PaletteSnapshot>({
+    mode: null,
+    draft: { message: "", attachments: [] },
+  });
+  const beforeEdit = useRef<PaletteSnapshot | null>(null);
+  const editKind = useRef("change");
+  const composing = useRef(false);
+  const restoringHistory = useRef(false);
+  const restoreMode = useRef<PaletteSnapshot | null>(null);
+  const [, renderHistoryRestore] = useState(0);
+  const snapshotMode = useCallback((): PaletteSnapshot => {
     const current = currentDraft.current;
     const field = inputRef.current;
     return {
@@ -302,23 +302,46 @@ function CommandPaletteContent({
         message: field?.value ?? current.query,
         attachments: [],
       },
-      ...(field
+      selection: field
         ? {
-            selection: { start: field.selectionStart, end: field.selectionEnd },
+            anchor:
+              field.selectionDirection === "backward"
+                ? field.selectionEnd
+                : field.selectionStart,
+            focus:
+              field.selectionDirection === "backward"
+                ? field.selectionStart
+                : field.selectionEnd,
           }
-        : {}),
+        : (agentInputRef.current?.selection() ??
+          lastSnapshot.current.selection),
     };
   }, []);
+  const recordInput = useCallback(() => {
+    if (restoringHistory.current || composing.current) return;
+    const after = snapshotMode();
+    editHistory.current.record({
+      before: beforeEdit.current ?? lastSnapshot.current,
+      after,
+      kind: editKind.current,
+    });
+    lastSnapshot.current = after;
+    beforeEdit.current = null;
+    editKind.current = "change";
+  }, [snapshotMode]);
   const recordMode = useCallback(
     (next: string | null, text: string) => {
       const before = snapshotMode();
       if (before.mode === next) return;
-      modeUndo.current.push({
-        before,
-        after: { mode: next, draft: { message: text, attachments: [] } },
-      });
-      modeRedo.current = [];
-      nativeEdits.current = false;
+      const after = {
+        mode: next,
+        draft: { message: text, attachments: [] },
+        selection: { anchor: text.length, focus: text.length },
+      };
+      editHistory.current.record({ before, after, kind: "mode" });
+      lastSnapshot.current = after;
+      restoreMode.current = after;
+      beforeEdit.current = null;
     },
     [snapshotMode],
   );
@@ -345,21 +368,31 @@ function CommandPaletteContent({
   useLayoutEffect(() => {
     const changed = previousMode.current !== modeId;
     previousMode.current = modeId;
-    if (changed && open && active) {
+    if ((changed || restoreMode.current) && open && active) {
       const restored = restoreMode.current;
       restoreMode.current = null;
+      restoringHistory.current = true;
       if (modeId === "agent") {
         if (restored) agentInputRef.current?.restore(restored.draft);
         else agentInputRef.current?.replaceText(query);
       }
       focusInput();
-      if (restored?.selection)
-        inputRef.current?.setSelectionRange(
-          restored.selection.start,
-          restored.selection.end,
-        );
+      if (restored?.selection) {
+        if (modeId === "agent")
+          agentInputRef.current?.restoreSelection(restored.selection);
+        else
+          inputRef.current?.setSelectionRange(
+            Math.min(restored.selection.anchor, restored.selection.focus),
+            Math.max(restored.selection.anchor, restored.selection.focus),
+            restored.selection.anchor > restored.selection.focus
+              ? "backward"
+              : "forward",
+          );
+      }
+      lastSnapshot.current = snapshotMode();
+      restoringHistory.current = false;
     }
-  }, [modeId, open, active, focusInput, query]);
+  });
   const onAgentPaste = (event: ClipboardEvent<HTMLDivElement>) => {
     const input = agentInputRef.current;
     if (!input || !projectId) return;
@@ -396,10 +429,14 @@ function CommandPaletteContent({
   // modeRequest so an explicit mode can initialize the fresh palette.
   useLayoutEffect(() => {
     const reset = () => {
+      restoringHistory.current = true;
       setQuery("");
-      modeUndo.current = [];
-      modeRedo.current = [];
-      nativeEdits.current = false;
+      editHistory.current.clear();
+      lastSnapshot.current = {
+        mode: null,
+        draft: { message: "", attachments: [] },
+      };
+      beforeEdit.current = null;
       restoreMode.current = null;
       agentInputRef.current?.clear();
       setPillCount(0);
@@ -409,6 +446,7 @@ function CommandPaletteContent({
       setModeId(null);
       setExitingChip(null);
       listMotionRef.current.reset();
+      restoringHistory.current = false;
     };
     if (open) {
       reset();
@@ -585,26 +623,17 @@ function CommandPaletteContent({
     setModeId(next);
   };
   const undoMode = (redo: boolean): boolean => {
-    const source = redo ? modeRedo.current : modeUndo.current;
-    const edit = source.at(-1);
-    if (!edit || nativeEdits.current) return false;
-    const current = snapshotMode();
-    const expected = redo ? edit.before : edit.after;
-    // Text edits still belong to Chromium's native undo stack. Only take
-    // the key at the mode boundary, after those edits have been undone.
-    if (
-      current.mode !== expected.mode ||
-      JSON.stringify(current.draft) !== JSON.stringify(expected.draft)
-    )
-      return false;
-    source.pop();
-    (redo ? modeUndo.current : modeRedo.current).push(edit);
-    const restored = redo ? edit.after : edit.before;
+    const restored = redo
+      ? editHistory.current.redo()
+      : editHistory.current.undo();
+    if (!restored) return true;
     restoreMode.current = restored;
-    nativeEdits.current = false;
+    lastSnapshot.current = restored;
+    beforeEdit.current = null;
     setExitingChip(null);
     setModeId(restored.mode);
     setQuery(restored.draft.message);
+    renderHistoryRestore((epoch) => epoch + 1);
     setSelection(TOP_ROW);
     return true;
   };
@@ -615,36 +644,45 @@ function CommandPaletteContent({
     const beforeInput = (event: InputEvent) => {
       if (event.isComposing) return;
       if (
-        event.inputType !== "historyUndo" &&
-        event.inputType !== "historyRedo"
-      )
-        return;
-      if (undoModeRef.current(event.inputType === "historyRedo"))
+        event.inputType === "historyUndo" ||
+        event.inputType === "historyRedo"
+      ) {
+        undoModeRef.current(event.inputType === "historyRedo");
         event.preventDefault();
+        return;
+      }
+      beforeEdit.current = snapshotMode();
+      editKind.current = event.inputType;
     };
-    const input = (event: Event) => {
-      const history =
-        event instanceof InputEvent &&
-        (event.inputType === "historyUndo" ||
-          event.inputType === "historyRedo");
-      if (!history) modeRedo.current = [];
-      const boundary = modeUndo.current.at(-1)?.after;
+    const selection = () => {
+      if (beforeEdit.current || composing.current || restoringHistory.current)
+        return;
       const current = snapshotMode();
-      // Deleting back to the same text is still an edit. Only a native
-      // history operation can return us to the mode's undo boundary.
-      nativeEdits.current =
-        !history ||
-        !boundary ||
-        current.mode !== boundary.mode ||
-        JSON.stringify(current.draft) !== JSON.stringify(boundary.draft);
+      if (samePaletteDraft(current, lastSnapshot.current))
+        lastSnapshot.current = current;
     };
+    const startComposition = () => {
+      composing.current = true;
+      beforeEdit.current = snapshotMode();
+      editHistory.current.breakGroup();
+    };
+    const endComposition = () =>
+      queueMicrotask(() => {
+        composing.current = false;
+        editKind.current = "composition";
+        recordInput();
+      });
     content?.addEventListener("beforeinput", beforeInput);
-    content?.addEventListener("input", input);
+    content?.addEventListener("compositionstart", startComposition);
+    content?.addEventListener("compositionend", endComposition);
+    document.addEventListener("selectionchange", selection);
     return () => {
       content?.removeEventListener("beforeinput", beforeInput);
-      content?.removeEventListener("input", input);
+      content?.removeEventListener("compositionstart", startComposition);
+      content?.removeEventListener("compositionend", endComposition);
+      document.removeEventListener("selectionchange", selection);
     };
-  }, [snapshotMode]);
+  }, [snapshotMode, recordInput]);
   const modeLoad = usePaletteLoad(
     activeMode?.rows,
     query,
@@ -1319,6 +1357,7 @@ function CommandPaletteContent({
                   placeholder="Message the agent…"
                   className="block max-h-40 min-h-11 w-full overflow-y-auto px-1 py-3 text-sm"
                   onChange={({ text, pillCount }) => {
+                    recordInput();
                     setQuery(text);
                     setPillCount(pillCount);
                     setSelection(TOP_ROW);
@@ -1331,6 +1370,7 @@ function CommandPaletteContent({
                   ref={inputRef}
                   value={query}
                   onChange={(event) => {
+                    recordInput();
                     setQuery(event.target.value);
                     setSelection(TOP_ROW);
                     if (listRef.current) listRef.current.scrollTop = 0;

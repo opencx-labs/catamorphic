@@ -63,6 +63,17 @@ shared surface is a process bug, not a win. See the [historical log](DESIGN-HIST
 
 ## Agent setup and conversation controls
 
+Palette drafts and mode chips share one transient edit history (ADR 0314).
+New Tabs keep their editors while hidden, reuse an empty tab, and open at the
+strip's right end. Rename current chat follows focus; Cmd+M visits floating chats
+only. Shortcut symbols keep a narrow non-breaking gap.
+
+Action dialogs animate conditional fields, repeat entries and errors through the
+shared Collapsible and modal sizing primitives. Departing controls become inert
+and effectively disabled immediately. Tab-group menus begin with their fold action.
+The dock's downloads menu ages out settled entries after three days while the full
+page retains history; viewed completion state persists per profile.
+
 Agent setup shows the shared harness or provider logo where one exists, with the
 generic agent mark otherwise. Names begin as actual editable text. Subsession chips use the same harness or
 provider icon as their chat's status popup, and follow agent changes. Renaming a

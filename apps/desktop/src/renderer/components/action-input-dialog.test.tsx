@@ -97,7 +97,9 @@ it("submits presets and a second custom reminder as typed values, preserving the
   });
   fill("title", "Read proposal");
   const first = control("reminders.0.preset");
-  expect(document.querySelector('[name="reminders.0.amount"]')).toBeNull();
+  expect(
+    control("reminders.0.amount").closest("fieldset[disabled]"),
+  ).not.toBeNull();
   act(() => button("Add reminder").click());
   expect(control("reminders.0.preset")).toBe(first);
   fill("reminders.1.preset", "custom");
@@ -108,6 +110,44 @@ it("submits presets and a second custom reminder as typed values, preserving the
     reminders: [{ preset: "2d" }, { preset: "custom", amount: 3 }],
   });
   expect(close).toHaveBeenCalledOnce();
+});
+
+it("skips retained hidden controls when focusing and wrapping Tab", () => {
+  mount({
+    fields: [
+      {
+        name: "hidden",
+        label: "Hidden",
+        required: true,
+        when: { field: "show", equals: "yes" },
+      },
+      { name: "show", label: "Show", value: "no" },
+    ],
+  });
+  expect(document.activeElement).toBe(control("show"));
+  expect(control("hidden").matches(":disabled")).toBe(true);
+  act(() => button("Save").focus());
+  act(() =>
+    window.dispatchEvent(
+      new KeyboardEvent("keydown", {
+        key: "Tab",
+        bubbles: true,
+        cancelable: true,
+      }),
+    ),
+  );
+  expect(document.activeElement).toBe(control("show"));
+  act(() =>
+    window.dispatchEvent(
+      new KeyboardEvent("keydown", {
+        key: "Tab",
+        shiftKey: true,
+        bubbles: true,
+        cancelable: true,
+      }),
+    ),
+  );
+  expect(document.activeElement).toBe(button("Save"));
 });
 it("keeps edited values and the dialog on action failure; supports checkbox, prose and an absolute local datetime", async () => {
   const instant = "2027-02-05T12:00:00.000Z";

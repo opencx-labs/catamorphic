@@ -318,3 +318,4 @@ Settled design decisions live here as short Architecture Decision Records. They 
 | [0310](0310-linux-ci-on-github-hosted-runners.md) | Linux CI on GitHub-hosted runners | Accepted (amends 0129) |
 | [0312](0312-cloudflare-sandboxes-use-native-containers.md) | Cloudflare sandboxes use native containers | Accepted |
 | [0313](0313-verified-development-toolchains-preserve-data.md) | Verified development toolchains preserve data | Accepted |
+| [0314](0314-palette-edits-share-one-history.md) | Palette edits share one history | Accepted |

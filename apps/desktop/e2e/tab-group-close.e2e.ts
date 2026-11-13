@@ -547,6 +547,48 @@ describe("closing folded tab groups", () => {
       expect(app.getRendererErrors()).toEqual([]);
     });
 
+    it("offers group folding first on the parent and every attached tab", async () => {
+      const projectId = await openGroup({ name: "Group menu folding" });
+      await openMenu("chat:group");
+      expect(await app.eval(`${menuItems}[0].textContent.trim()`)).toBe(
+        "Expand group",
+      );
+      await pick("Expand group");
+      await app.waitFor(
+        `document.querySelector('${visible} [data-point-key="browser:page"]')?.checkVisibility()`,
+      );
+      await openMenu("browser:page");
+      expect(await app.eval(`${menuItems}[0].textContent.trim()`)).toBe(
+        "Collapse group",
+      );
+      await pick("Collapse group");
+      await app.waitFor(
+        `${state(projectId)}.then(ws=>ws.chats[0]?.surfacesCollapsed===true)`,
+      );
+      await app.waitFor(
+        `!document.querySelector('${visible} [data-point-key="browser:page"]:not([aria-hidden])')`,
+      );
+      expect(app.getRendererErrors()).toEqual([]);
+    });
+
+    it("does nothing for repeated Cmd+M when all chats are tabs", async () => {
+      const projectId = await openGroup({ name: "Only tab chats" });
+      for (let count = 0; count < 3; count++) {
+        await app.eval(
+          `window.dispatchEvent(new KeyboardEvent('keydown',{key:'m',bubbles:true,cancelable:true,...(/Mac/.test(navigator.platform)?{metaKey:true}:{ctrlKey:true})}));true`,
+        );
+      }
+      await app.waitFor(
+        `${state(projectId)}.then(ws=>ws.chats.length===1&&ws.chats[0].mode==='tab'&&ws.activeTabKey==='chat:group')`,
+      );
+      expect(
+        await app.eval(
+          `!!document.querySelector('section[data-floating-chat]')`,
+        ),
+      ).toBe(false);
+      expect(app.getRendererErrors()).toEqual([]);
+    });
+
     it("closes a chat and its tabs together", async () => {
       const projectId = await openGroup({ name: "Menu chat and tabs" });
       await openMenu("chat:group");

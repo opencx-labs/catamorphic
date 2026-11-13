@@ -883,16 +883,10 @@ describe("chat flows", () => {
 
     // Cmd+P toggles the overlay. Earlier flows can leave it open; preserve
     // that state instead of turning the searchable palette off.
-    await run(`
-      const input = $$('[aria-label="Search commands, pages, and more"]')
-        .find((el) => !el.closest('[inert]'));
-      if (!input) pressKey('p', { metaKey: true });
-      return true;
-    `);
+    await run(`pressKey('p', { metaKey: true }); return true;`);
     await runWait(
-      `const input = $$('[aria-label="Search commands, pages, and more"]')
-        .find((el) => !el.closest('[inert]'));
-       if (!input) return false;
+      `const input = document.querySelector('[data-palette="overlay"] [aria-label="Search commands, pages, and more"]');
+       if (!input || document.activeElement !== input) return false;
        setReactValue(input, 'Session menu');
        return true;`,
       { label: "archive search in the palette" },
@@ -1048,8 +1042,7 @@ describe("chat flows", () => {
       return true;
     `);
     await runWait(
-      `const input = $$('[aria-label="Search commands, pages, and more"]')
-        .find((el) => !el.closest('[inert]'));
+      `const input = document.querySelector('[data-palette="overlay"] [aria-label="Search commands, pages, and more"]');
        if (!input) return false;
        setReactValue(input, '>rename current chat');
        return true;`,

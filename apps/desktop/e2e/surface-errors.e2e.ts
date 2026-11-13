@@ -202,7 +202,9 @@ it("lets a failed overlay close with Escape and opens a fresh palette", async ()
   await app.press("Escape");
   await app.waitFor(`!document.querySelector('[data-surface-error]')`);
   await shortcut("p");
-  await waitForInput();
+  await app.waitFor(
+    `!!document.activeElement?.closest('[data-palette="overlay"]') && !document.activeElement.closest('[inert]')`,
+  );
   await type("framed content");
   await app.waitFor(
     `[...document.querySelectorAll('[data-workspace-visible="true"] [data-palette="overlay"] [role="option"]')].some(el => el.textContent.includes('Framed content'))`,

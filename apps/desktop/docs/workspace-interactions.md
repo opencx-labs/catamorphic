@@ -7,11 +7,24 @@ the start of the input to the caret, so inserting it before existing text carrie
 that text into the mode, including Ask agent. A selection or active text
 composition keeps its normal editing behavior.
 Mode entry and Backspace exit can be undone and redone with the platform's
-Undo and Redo commands. Text edits within a mode keep their native undo behavior.
+Undo and Redo commands. Each palette has one edit history for text, attachments,
+selection and mode changes (ADR 0314).
 
 Rename current chat is offered only while the active chat is visible, as a
 floating chat or the focused chat tab. A minimized or background chat keeps its
 own Rename action in its menu, but is not the palette's current chat.
+
+Cmd+M hides or restores only a root chat in the floating dock. An already
+visible floating chat hides even when a chat tab has focus. With no floating
+chats, including when every chat is in a tab, Cmd+M does nothing.
+
+The dock's downloads menu shows downloads from the last three days and any
+still in progress. The Downloads page retains the full history. Opening the menu
+acknowledges completions, including ones that finish while it stays open. That
+acknowledgement is shared by the profile's windows and survives remounts.
+
+Tab groups offer Collapse group first in the context menu of the chat or any
+attached tab; a collapsed group's parent offers Expand group instead.
 
 ## Opening resources
 

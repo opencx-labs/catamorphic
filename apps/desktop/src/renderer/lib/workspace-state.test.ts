@@ -5,6 +5,7 @@ import {
   chatToExpand,
   closingTabKeys,
   emptyUtilityWorkspace,
+  floatingChatToToggle,
   hydrateWorkspace,
   newTabInFront,
   openChatInNewTab,
@@ -68,6 +69,41 @@ it("keeps the remembered and newest chat fallbacks when none is floating", () =>
     "newer",
   );
   expect(chatToExpand(emptyUtilityWorkspace())).toBeUndefined();
+});
+
+it("toggles only dock chats even when the remembered chat is in a tab", () => {
+  const ws: Workspace = { ...initial(), activeChatId: "c" };
+  expect(floatingChatToToggle(ws)).toBeUndefined();
+  expect(floatingChatToToggle(emptyUtilityWorkspace())).toBeUndefined();
+  const withBubbles: Workspace = {
+    ...ws,
+    chats: [
+      ...ws.chats,
+      { localId: "old", mode: "min" },
+      { localId: "new", mode: "min" },
+      { localId: "child", mode: "min", parentLocalId: "c" },
+    ],
+  };
+  expect(floatingChatToToggle(withBubbles)?.localId).toBe("new");
+  expect(
+    floatingChatToToggle({ ...withBubbles, activeChatId: "old" })?.localId,
+  ).toBe("old");
+  expect(
+    floatingChatToToggle({
+      ...withBubbles,
+      chats: [...withBubbles.chats, { localId: "visible", mode: "partial" }],
+    })?.localId,
+  ).toBe("visible");
+  const unfocused: Workspace = {
+    ...ws,
+    chats: [...ws.chats, { localId: "floating", mode: "partial" }],
+  };
+  expect(
+    transitionWorkspace(unfocused, {
+      type: "toggle-chat",
+      localId: "floating",
+    }).chats.find((chat) => chat.localId === "floating")?.mode,
+  ).toBe("min");
 });
 
 it.each([false, true])(

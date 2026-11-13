@@ -235,7 +235,7 @@ export const BUILTIN_ACTIONS = [
     label: "Minimize/restore chat",
     icon: "Minimize2",
     description:
-      "minimize the active chat to a bubble, or pop the bubble back open as a floating chat",
+      "hide or restore the last floating chat; do nothing when every chat is in a tab",
     defaultBinding: "Cmd+M",
     keywords: ["chat", "minimize", "restore", "bubble", "collapse", "expand"],
   },

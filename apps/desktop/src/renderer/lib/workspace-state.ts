@@ -444,6 +444,18 @@ export const chatToExpand = (ws: Workspace) =>
   ws.chats.find((chat) => chat.localId === ws.activeChatId) ??
   ws.chats.at(-1);
 
+/** Cmd+M only visits the floating dock, never a chat hosted in a tab. */
+export const floatingChatToToggle = (ws: Workspace) => {
+  const chats = ws.chats.filter(
+    (chat) => chat.mode !== "tab" && !chat.parentLocalId,
+  );
+  return (
+    chats.find((chat) => chat.mode === "partial") ??
+    chats.find((chat) => chat.localId === ws.activeChatId) ??
+    chats.at(-1)
+  );
+};
+
 /** Tab keys attached to a chat, in per-kind order. */
 export const attachedTabKeys = (ws: Workspace, chatLocalId: string) => [
   ...ws.tabs.filter((tab) => tab.chatLocalId === chatLocalId).map(tabKey),
@@ -1362,7 +1374,8 @@ function applyWorkspaceEvent(
       const target = ws.chats.find((chat) => chat.localId === localId);
       if (!target) return ws;
       const isExpandedActive =
-        target.mode !== "min" && ws.activeChatId === localId;
+        target.mode === "partial" ||
+        (target.mode !== "min" && ws.activeChatId === localId);
       // Bubbles reopen as the floating dock, never as a full tab — going
       // to a tab is always an explicit gesture (the expand button).
       const nextMode = isExpandedActive

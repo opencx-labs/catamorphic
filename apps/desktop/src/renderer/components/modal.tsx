@@ -104,7 +104,12 @@ export function Modal({
         panelRef.current.querySelectorAll<HTMLElement>(
           'button:not([disabled]), a[href], input:not([disabled]), textarea:not([disabled]), select:not([disabled]), [tabindex]:not([tabindex="-1"])',
         ),
-      ).filter((element) => !element.hidden);
+      ).filter(
+        (element) =>
+          !element.hidden &&
+          !element.matches(":disabled") &&
+          !element.closest("[inert], [hidden]"),
+      );
       if (focusable.length === 0) {
         event.preventDefault();
         panelRef.current.focus({ preventScroll: true });

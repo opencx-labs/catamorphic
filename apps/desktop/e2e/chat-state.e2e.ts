@@ -26,12 +26,18 @@ async function clickMessageLink(modifiers = 0) {
   await app.eval(
     `Promise.all(document.querySelector('[data-chat-local-id]').getAnimations().map(animation => animation.finished.catch(() => {})))`,
   );
-  const point = await app.eval<{ x: number; y: number }>(`(() => {
+  await app.eval(
+    `document.querySelector('.cat-markdown a[href="${origin}/preview"]').scrollIntoView({block:'center'}); true`,
+  );
+  const point = await app.waitFor<{ x: number; y: number }>(`(() => {
     const link = document.querySelector('.cat-markdown a[href="${origin}/preview"]');
-    link.scrollIntoView({block:'center'});
+    if (!link) return false;
     const r = link.getBoundingClientRect();
-    return {x:r.x+r.width/2,y:r.y+r.height/2};
+    const point={x:r.x+r.width/2,y:r.y+r.height/2};
+    return link.contains(document.elementFromPoint(point.x,point.y)) &&
+      link.closest('[data-chat-local-id]').getAnimations().every(animation=>animation.playState!=='running') && point;
   })()`);
+  await app.movePointer(point);
   for (const type of ["mousePressed", "mouseReleased"]) {
     await app.cdp("Input.dispatchMouseEvent", {
       type,
