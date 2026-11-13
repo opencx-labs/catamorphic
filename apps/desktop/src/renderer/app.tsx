@@ -362,6 +362,17 @@ const truncateLabel = (value: string): string =>
 /** How long the agent-control pill stays before it steps aside. */
 const PILL_QUIET_MS = 4_000;
 
+/** How long a tab picked for a share gets to wake and load its page. */
+const SHARE_TAB_READY_MS = 15_000;
+
+/** A browser tab held for a page's share (ADR 0315). */
+interface SharedBrowser {
+  /** Its page, once ready; null while it wakes or loads. */
+  guestId: number | null;
+  /** The site it is shared with, once the share runs. */
+  sharingWith: string | null;
+}
+
 /** Keep `value` within `low` and `high`. */
 const clamp = (value: number, low: number, high: number) =>
   Math.min(high, Math.max(low, value));
@@ -2093,6 +2104,7 @@ export function App({
         label: browser.label || browser.title || "New Tab",
         faviconUrl: browser.faviconUrl,
         asleep: tabSleep.asleep(browser.localId),
+        sharingWith: sharedBrowsers.get(browser.localId)?.sharingWith ?? null,
         // Hover card: the page's address under its full title.
         detail: browser.url || browser.initialUrl || undefined,
         bookmarkUrl: browser.url || browser.initialUrl || undefined,
@@ -2841,6 +2853,41 @@ export function App({
     setBusyBrowsers(new Set());
   }, [projectId]);
   const browserGuestIdsRef = useRef(new Map<string, number>());
+  // Browser tabs a page in this window shares (ADR 0315), or that the share
+  // picker is readying for one. Like a page an agent works, such a page
+  // stays laid out (transparent while out of sight) and awake, so its
+  // capture keeps painting; main says when the share starts and ends.
+  const [sharedBrowsers, setSharedBrowsers] = useState<
+    ReadonlyMap<string, SharedBrowser>
+  >(new Map());
+  // biome-ignore lint/correctness/useExhaustiveDependencies: shares belong to the mounted project's pages
+  useEffect(() => {
+    setSharedBrowsers(new Map());
+  }, [projectId]);
+  useEffect(
+    () =>
+      desktopApi.onScreenShareTabState(({ guestId, state, origin }) =>
+        setSharedBrowsers((current) => {
+          const next = new Map(current);
+          if (state === "ended") {
+            for (const [localId, entry] of current)
+              if (entry.guestId === guestId) next.delete(localId);
+            return next.size === current.size ? current : next;
+          }
+          for (const [localId, entry] of current)
+            if (entry.guestId === guestId)
+              next.set(localId, { guestId, sharingWith: siteHost(origin) });
+          for (const [localId, id] of browserGuestIdsRef.current)
+            if (id === guestId && !next.has(localId))
+              next.set(localId, { guestId, sharingWith: siteHost(origin) });
+          return next;
+        }),
+      ),
+    [],
+  );
+  /** Kept laid out and awake: an agent works it, or it is shared. */
+  const heldBrowser = (localId: string) =>
+    busyBrowsers.has(localId) || sharedBrowsers.has(localId);
 
   // Browser tabs out of sight for a while sleep (ADR 0194); tabs the
   // workspace mounts with start asleep, so only the shown ones load.
@@ -2863,7 +2910,7 @@ export function App({
         Boolean(browser.incognito) ||
         (runtime.visible &&
           Boolean(sleepSlots[browserTabKey(browser.localId)])) ||
-        busyBrowsers.has(browser.localId),
+        heldBrowser(browser.localId),
       agentControlled: Boolean(browser.agentControlled),
     })),
     setting: prefs?.browserTabSleep,
@@ -3548,6 +3595,67 @@ export function App({
   // Latest workspace for callbacks that outlive a render.
   const workspaceRef = useRef(workspace);
   workspaceRef.current = workspace;
+
+  /** A tab readied for a share that did not happen goes back to normal. */
+  const releaseShareTab = useCallback((localId: string) => {
+    setSharedBrowsers((current) => {
+      const entry = current.get(localId);
+      if (!entry || entry.sharingWith) return current;
+      const next = new Map(current);
+      next.delete(localId);
+      return next;
+    });
+  }, []);
+  /**
+   * Readies a browser tab for a page's share (ADR 0315): held laid out and
+   * awake, woken if it slept, until its page is up. Resolves with the
+   * page's guest id, which the picker hands to main.
+   */
+  const prepareShareTab = useCallback(
+    async (localId: string): Promise<number> => {
+      setSharedBrowsers((current) =>
+        current.has(localId)
+          ? current
+          : new Map(current).set(localId, {
+              guestId: null,
+              sharingWith: null,
+            }),
+      );
+      if (tabAsleepRef.current(localId)) wakeTab(localId);
+      const key = browserTabKey(localId);
+      const deadline = Date.now() + SHARE_TAB_READY_MS;
+      while (Date.now() < deadline) {
+        await new Promise((resolve) => setTimeout(resolve, 100));
+        if (
+          !workspaceRef.current.browsers.some(
+            (browser) => browser.localId === localId,
+          )
+        ) {
+          releaseShareTab(localId);
+          throw new Error("That tab was closed.");
+        }
+        const guestId = browserGuestIdsRef.current.get(localId);
+        const bounds = document
+          .querySelector(`[data-surface-key="${CSS.escape(key)}"] webview`)
+          ?.getBoundingClientRect();
+        if (guestId !== undefined && bounds?.width && bounds.height) {
+          setSharedBrowsers((current) => {
+            const entry = current.get(localId);
+            return entry?.guestId === guestId
+              ? current
+              : new Map(current).set(localId, {
+                  guestId,
+                  sharingWith: entry?.sharingWith ?? null,
+                });
+          });
+          return guestId;
+        }
+      }
+      releaseShareTab(localId);
+      throw new Error("That tab did not load in time. Try again.");
+    },
+    [wakeTab, releaseShareTab],
+  );
 
   const signalsRef = useRef<Record<string, ChatLiveSignals>>({});
   /**
@@ -6562,7 +6670,7 @@ export function App({
     // webview detaches its guest and background pages would stop
     // loading (worse for agent-driven tabs).
     return key.startsWith("browser:")
-      ? `${busyBrowsers.has(key.slice("browser:".length)) ? "opacity-0" : "invisible"} absolute inset-0 flex flex-col`
+      ? `${heldBrowser(key.slice("browser:".length)) ? "opacity-0" : "invisible"} absolute inset-0 flex flex-col`
       : "hidden";
   };
   /** Ratio-driven pane geometry (50/50 until the divider is dragged). */
@@ -7764,7 +7872,18 @@ export function App({
               origin={siteSettingsOrigin}
               onClose={() => setSiteSettingsOrigin(null)}
             />
-            <ScreenShareHost />
+            <ScreenShareHost
+              tabs={workspace.browsers}
+              asleep={tabSleep.asleep}
+              laidOut={(localId) =>
+                (runtime.visible &&
+                  Boolean(viewSlots[browserTabKey(localId)])) ||
+                heldBrowser(localId)
+              }
+              guestIds={browserGuestIdsRef}
+              prepareTab={prepareShareTab}
+              releaseTab={releaseShareTab}
+            />
             <ExtensionPromptHost />
             <PasskeyHost onOpenPasswords={() => openPasswords()} />
             <UpdateBanner
@@ -8447,7 +8566,7 @@ export function App({
                             runtime.visible &&
                             Boolean(viewSlots[browserTabKey(browser.localId)])
                           }
-                          keepAwake={busyBrowsers.has(browser.localId)}
+                          keepAwake={heldBrowser(browser.localId)}
                           asleep={tabSleep.asleep(browser.localId)}
                           onStateChange={(state) =>
                             onBrowserState(browser.localId, state)
@@ -9105,6 +9224,7 @@ export function App({
                               runtime.visible &&
                               Boolean(viewSlots[browserTabKey(browser.localId)])
                             }
+                            keepAwake={heldBrowser(browser.localId)}
                             asleep={tabSleep.asleep(browser.localId)}
                             onStateChange={(state) =>
                               onBrowserState(browser.localId, state)

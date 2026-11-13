@@ -871,6 +871,25 @@ the historical log explains how it arrived here.
 
 ## Design log
 
+### 2026-11-14: A shared tab keeps painting; sound is a choice
+
+"Choose what to share" lists every page of the window, including tabs that
+are asleep (ADR 0315). A shared tab is held like a page an agent works: laid
+out under the shown tab, transparent and inert, told it is visible, never put
+to sleep. A sleeping pick wakes first, while Share shows its pending state.
+While the share runs, the tab's icon wears an accent ring (200 ms opacity, both
+ways, in the icon's own box) and its hover card names the site. The ring and
+the hold go when the share ends.
+
+The picker holds still. The list has a fixed height, so loading, switching
+kinds and arriving thumbnails never resize the dialog. Windows and screens
+show skeletons until listed. Thumbnails fade in over 150 ms in boxes that
+never move. Errors use a reserved status line, and an answered request stays
+drawn while the dialog fades out. Each kind keeps its own pick, and the arrow
+keys move it. When the page asks for sound, a checkbox offers it: tab audio
+(on, as in Chrome), or system audio with a screen (off, since it carries
+everything the computer plays).
+
 ### 2026-11-09: Palette rows follow their data
 
 The overlay keeps its mounted content and reversible close motion. Unrelated

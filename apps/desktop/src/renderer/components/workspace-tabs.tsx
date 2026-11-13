@@ -84,6 +84,8 @@ function tabStatusLine(tab: WorkspaceTab): string | null {
         ? ACTIVITY_LABELS[activity]
         : null;
   if (needs || doing) return [needs, doing].filter(Boolean).join(" · ");
+  if (tab.kind === "browser" && tab.sharingWith)
+    return `Shared with ${tab.sharingWith}. Stays loaded while shared`;
   if (tab.kind === "browser" && tab.asleep)
     return "Asleep to save memory. Opens where you left off";
   if (tab.kind === "browser" && tab.incognito)
@@ -102,6 +104,24 @@ function SleepRing({ tab }: { tab: WorkspaceTab }) {
       aria-hidden="true"
       data-tab-asleep=""
       className="pointer-events-none absolute -inset-[3px] animate-fade-in rounded-full border border-dashed border-fg-muted"
+    />
+  );
+}
+
+/**
+ * A tab a page in this window shares (ADR 0315) wears an accent ring, as
+ * Chrome marks a captured tab. Always mounted for a page, so the ring
+ * fades both ways in the icon's own box.
+ */
+function ShareRing({ tab }: { tab: WorkspaceTab }) {
+  if (tab.kind !== "browser") return null;
+  return (
+    <span
+      aria-hidden="true"
+      data-tab-shared={tab.sharingWith ? "" : undefined}
+      className={`pointer-events-none absolute -inset-[3px] rounded-full border-[1.5px] border-accent transition-opacity duration-200 ease-standard ${
+        tab.sharingWith ? "opacity-100" : "opacity-0"
+      }`}
     />
   );
 }
@@ -803,6 +823,7 @@ function TabStrip({
                       )}
                     </SignalGlyph>
                     <SleepRing tab={tab} />
+                    <ShareRing tab={tab} />
                     {/* An incognito page keeps its site's icon; a ghost on
                       its lower corner says where it lives. */}
                     {tab.kind === "browser" &&

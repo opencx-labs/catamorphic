@@ -157,6 +157,7 @@ mac:
     NSMicrophoneUsageDescription: Work uses your microphone when you talk to it, and when a site you allow asks for it, such as a video call.
     NSSpeechRecognitionUsageDescription: Work uses speech recognition to turn what you say into text while you hold to talk or dictate.
     NSCameraUsageDescription: Work uses your camera when a site you allow asks for it, such as a video call.
+    NSAudioCaptureUsageDescription: Work shares your computer's sound when you share your screen in a call and choose to include it.
   target:
     - target: dmg
       arch:

@@ -52,11 +52,15 @@ import type { PasswordFileImportResult } from "../shared/password-import.js";
 import { PROFILE_SYNC_PARTS } from "../shared/profile-sync.js";
 import {
   type ScreenShareAnswer,
+  type ScreenShareCaptureSources,
+  type ScreenShareChoice,
   type ScreenShareRequest,
   type ScreenShareSource,
-  type ScreenShareSources,
+  type ScreenShareTabState,
   type SystemScreenAccess,
   screenShareAnswerSchema,
+  shareStreams,
+  systemAudioSupported,
   tabSourceWebContentsId,
 } from "../shared/screen-share.js";
 import { type SidebarSectionConfig, sectionModule } from "../shared/sidebar.js";
@@ -82,6 +86,7 @@ import { isVoiceAction } from "../shared/voice.js";
 import { windowImageRequestSchema } from "../shared/window-images.js";
 import type { WorkspaceConfig } from "../shared/workspace-config.js";
 import { pageClosing, registerBrowserDialogs } from "./browser-dialogs.js";
+import { holdCaptureFrames } from "./browser-driver.js";
 import { HistoryStore } from "./browser-history.js";
 import {
   importBrowserCookies,
@@ -179,6 +184,15 @@ const INCOGNITO_END_DELAY_MS = 5_000;
 
 /** How long the share picker waits on a tab's thumbnail before listing it bare. */
 const TAB_THUMBNAIL_TIMEOUT_MS = 750;
+/** How long the OS gets to list its windows or screens for the picker. */
+const CAPTURER_TIMEOUT_MS = 8_000;
+const SHARE_THUMBNAIL_SIZE = { width: 360, height: 225 };
+/** A pick waits this long for the page's share to start with it. */
+const SHARE_PICK_LIFETIME_MS = 30_000;
+/** A shared tab's capture is checked this often, to tell its window. */
+const SHARE_POLL_MS = 1_000;
+/** A tab picked for a share whose capture never starts is let go. */
+const SHARE_START_MS = 15_000;
 
 /**
  * The app a link would open, named for the prompt ("wants to open Slack").
@@ -1796,6 +1810,7 @@ export function registerBrowserSupport(
         if (entry.guest === contents) guestNotifications.delete(id);
       const ids = permissionBroker.withdrawGuest(contents.id);
       const shareIds = screenShareBroker.withdrawGuest(contents.id);
+      pendingShares.delete(contents.id);
       if (hostForWithdrawal && !hostForWithdrawal.isDestroyed()) {
         if (ids.length > 0)
           hostForWithdrawal.send("catamorphic:site-permission-withdrawn", {
@@ -1893,36 +1908,172 @@ export function registerBrowserSupport(
   };
 
   /**
-   * The app's picker for a page's getDisplayMedia. Chromium asks the
-   * permission handler first (a `display-capture` request) and the
+   * The app's picker for a page's getDisplayMedia (ADRs 0150, 0315).
+   * Chromium asks the permission handler first (a `display-capture`
+   * request, which says whether the page wants audio) and the
    * display-media handler second; picking at the first stage lets a
    * cancel deny the permission, which the page sees as NotAllowedError
    * (Chrome's answer), and the second stage hands over the pick.
    */
-  const pendingShares = new Map<number, Electron.Streams>();
+  const pendingShares = new Map<
+    number,
+    { choice: ScreenShareChoice; tab: WebContents | null; at: number }
+  >();
   const pickShare = async (input: {
     guest: WebContents;
     host: WebContents;
     profileId: string;
     origin: string;
-  }): Promise<Electron.Streams | null> => {
+    audio: boolean;
+  }): Promise<{
+    choice: ScreenShareChoice;
+    tab: WebContents | null;
+  } | null> => {
     const { guest, host } = input;
     const answer = await screenShareBroker.ask(
       input.profileId,
-      { id: randomUUID(), guestId: guest.id, origin: input.origin },
+      {
+        id: randomUUID(),
+        guestId: guest.id,
+        origin: input.origin,
+        audio: input.audio,
+      },
       (prompt) => host.send("catamorphic:screen-share-request", prompt),
     );
     const choice = answer?.choice;
     if (!choice) return null;
+    if (choice.kind !== "tab")
+      return guest.isDestroyed() ? null : { choice, tab: null };
     const tabId = tabSourceWebContentsId(choice.id);
-    if (choice.kind === "tab" && tabId !== null) {
-      const tab = webContents.fromId(tabId);
-      // Only a tab of the same window: the picker listed exactly those.
-      if (!tab || tab.isDestroyed() || tab.hostWebContents !== host)
-        return null;
-      return { video: tab.mainFrame };
+    const tab = tabId === null ? null : webContents.fromId(tabId);
+    // Only a page of the asking tab's window and browsing session: the
+    // picker lists exactly those, and an incognito page stays its own.
+    if (
+      guest.isDestroyed() ||
+      !tab ||
+      tab.isDestroyed() ||
+      tab.getType() !== "webview" ||
+      tab.hostWebContents !== host ||
+      tab.session !== guest.session
+    ) {
+      // The window readied that tab for this pick: it goes back to normal.
+      if (tabId !== null)
+        tellShareState(host, {
+          guestId: tabId,
+          state: "ended",
+          origin: input.origin,
+        });
+      return null;
     }
-    return { video: { id: choice.id, name: choice.name } };
+    watchSharedTab({ tab, host, origin: input.origin });
+    return { choice, tab };
+  };
+
+  /**
+   * Browser tabs handed to a share, until their capture ends. The window
+   * keeps such a tab laid out and awake while it is shared (Chrome keeps
+   * painting a captured tab), so it learns when the share starts and
+   * stops. Electron has no event for either: the capture is polled.
+   */
+  const sharedTabs = new Map<
+    number,
+    {
+      host: WebContents;
+      origin: string;
+      since: number;
+      sharing: boolean;
+      timer: ReturnType<typeof setInterval>;
+      /** Lets the window stop painting while covered, once the share ends. */
+      release?: () => void;
+    }
+  >();
+  const tellShareState = (
+    host: WebContents,
+    update: ScreenShareTabState,
+  ): void => {
+    if (!host.isDestroyed())
+      host.send("catamorphic:screen-share-tab-state", update);
+  };
+  const watchSharedTab = (input: {
+    tab: WebContents;
+    host: WebContents;
+    origin: string;
+  }): void => {
+    const { tab, host, origin } = input;
+    const guestId = tab.id;
+    const known = sharedTabs.get(guestId);
+    if (known) {
+      // Picked again (a second page, or the same page asking again): the
+      // watch starts over, so an earlier share stopping meanwhile does not
+      // end the one about to start. A capture still running says so again.
+      known.since = Date.now();
+      known.sharing = false;
+      known.release?.();
+      known.release = undefined;
+      return;
+    }
+    const end = () => {
+      const entry = sharedTabs.get(guestId);
+      if (!entry) return;
+      clearInterval(entry.timer);
+      sharedTabs.delete(guestId);
+      entry.release?.();
+      tellShareState(host, { guestId, state: "ended", origin: entry.origin });
+    };
+    const timer = setInterval(() => {
+      const entry = sharedTabs.get(guestId);
+      if (!entry) return;
+      if (tab.isDestroyed() || host.isDestroyed()) {
+        end();
+        return;
+      }
+      const captured = tab.isBeingCaptured();
+      if (captured && !entry.sharing) {
+        entry.sharing = true;
+        // The window paints on while its tab is shared, even covered or
+        // minimized, as Chrome paints a captured tab.
+        entry.release = holdCaptureFrames(tab);
+        tellShareState(host, { guestId, state: "sharing", origin });
+      } else if (
+        !captured &&
+        (entry.sharing || Date.now() - entry.since > SHARE_START_MS)
+      )
+        end();
+    }, SHARE_POLL_MS);
+    timer.unref?.();
+    sharedTabs.set(guestId, {
+      host,
+      origin,
+      since: Date.now(),
+      sharing: false,
+      timer,
+    });
+  };
+
+  /** Whether the OS can mix its own sound into an entire screen's share. */
+  let declaresAudioCapture: boolean | undefined;
+  const screenSystemAudio = (): boolean => {
+    if (declaresAudioCapture === undefined) {
+      // macOS records system audio only for an app whose bundle says why
+      // (NSAudioCaptureUsageDescription); without it the track ends at once.
+      try {
+        declaresAudioCapture =
+          process.platform === "darwin" &&
+          fs
+            .readFileSync(
+              path.join(path.dirname(process.execPath), "..", "Info.plist"),
+              "utf8",
+            )
+            .includes("NSAudioCaptureUsageDescription");
+      } catch {
+        declaresAudioCapture = false;
+      }
+    }
+    return systemAudioSupported({
+      platform: process.platform,
+      osVersion: process.getSystemVersion(),
+      declaresAudioCapture,
+    });
   };
 
   sitePermissionPolicy = {
@@ -1942,9 +2093,21 @@ export function registerBrowserSupport(
       if (permission === "display-capture") {
         const host = guest.hostWebContents;
         if (!host || host.isDestroyed()) return false;
-        const streams = await pickShare({ guest, host, profileId, origin });
-        if (!streams) return false;
-        pendingShares.set(guest.id, streams);
+        // A display-capture request names the picture and, when the page
+        // asked for it, its sound.
+        const mediaTypes =
+          "mediaTypes" in details && Array.isArray(details.mediaTypes)
+            ? details.mediaTypes
+            : [];
+        const pick = await pickShare({
+          guest,
+          host,
+          profileId,
+          origin,
+          audio: mediaTypes.includes("audio"),
+        });
+        if (!pick) return false;
+        pendingShares.set(guest.id, { ...pick, at: Date.now() });
         return true;
       }
       // Every device the request opens goes past the OS gate, including
@@ -2019,114 +2182,99 @@ export function registerBrowserSupport(
       }
       const stashed = pendingShares.get(guest.id);
       pendingShares.delete(guest.id);
-      const deliver = (streams: Electron.Streams | null) => {
+      const deliver = (
+        pick: { choice: ScreenShareChoice; tab: WebContents | null } | null,
+      ) => {
+        const tab = pick?.tab;
+        const streams =
+          pick &&
+          shareStreams({
+            choice: pick.choice,
+            tabFrame: tab && !tab.isDestroyed() ? tab.mainFrame : null,
+            audioRequested: request.audioRequested,
+            systemAudio: screenSystemAudio(),
+          });
         if (!streams) {
           callback({});
           return;
         }
         noteCapture(guest);
-        // A shared tab carries its audio when the page asked for audio
-        // (Chrome's default); windows and screens have none to give.
-        const frame =
-          streams.video && !("id" in streams.video) ? streams.video : null;
-        callback(
-          request.audioRequested && frame
-            ? { video: frame, audio: frame, enableLocalEcho: true }
-            : { video: streams.video },
-        );
+        callback(streams);
       };
-      if (stashed) {
+      if (stashed && Date.now() - stashed.at < SHARE_PICK_LIFETIME_MS) {
         deliver(stashed);
         return;
       }
-      void pickShare({ guest, host, profileId, origin }).then(deliver);
+      void pickShare({
+        guest,
+        host,
+        profileId,
+        origin,
+        audio: request.audioRequested,
+      }).then(deliver);
     },
   };
 
   const systemScreenAccess = (): SystemScreenAccess => {
     if (process.platform !== "darwin") return null;
-    const status = systemPreferences.getMediaAccessStatus("screen");
-    if (status === "granted" || status === "not-determined") return status;
-    return status === "unknown" ? null : "denied";
+    // macOS answers only yes or no: "denied" also means never asked, and
+    // the first listing asks.
+    return systemPreferences.getMediaAccessStatus("screen") === "granted"
+      ? "granted"
+      : "denied";
+  };
+
+  /**
+   * The OS's windows and screens. macOS can take seconds to list windows
+   * (and, rarely, never answers), so each kind is asked for on its own and
+   * given up on after a while: the picker never waits forever.
+   */
+  const captureSources = async (
+    kind: "window" | "screen",
+  ): Promise<Electron.DesktopCapturerSource[] | null> => {
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    return Promise.race([
+      desktopCapturer
+        .getSources({
+          types: [kind],
+          thumbnailSize: SHARE_THUMBNAIL_SIZE,
+          fetchWindowIcons: kind === "window",
+        })
+        .catch(() => []),
+      new Promise<null>((resolve) => {
+        timer = setTimeout(() => resolve(null), CAPTURER_TIMEOUT_MS);
+      }),
+    ]).finally(() => clearTimeout(timer));
   };
 
   shellIpcMain.handle(
     "catamorphic:screen-share-sources",
-    async (event, input: unknown): Promise<ScreenShareSources> => {
-      const { guestId, kinds } = z
-        .object({
-          guestId: z.number().int().optional(),
-          kinds: z.array(z.enum(["tab", "window", "screen"])).optional(),
-        })
-        .parse(input ?? {});
-      const wanted = new Set(kinds ?? ["tab", "window", "screen"]);
-      const thumbnailSize = { width: 360, height: 225 };
-      const profileId = windows.profileFor(event.sender);
-      const visits = wanted.has("tab") ? history.siteVisits(profileId) : null;
-      const tabs = wanted.has("tab")
-        ? await Promise.all(
-            webContents
-              .getAllWebContents()
-              .filter(
-                (contents) =>
-                  contents.getType() === "webview" &&
-                  contents.hostWebContents === event.sender &&
-                  /^https?:/i.test(contents.getURL()),
-              )
-              .map(async (contents): Promise<ScreenShareSource> => {
-                // A background tab is a hidden webview, and on macOS its
-                // capture can wait forever on a frame it never paints. It
-                // gets no thumbnail rather than holding back the list.
-                const capture = contents
-                  .capturePage(undefined, { stayHidden: true })
-                  .then((image) =>
-                    image.isEmpty()
-                      ? null
-                      : image
-                          .resize({ width: thumbnailSize.width })
-                          .toDataURL(),
-                  )
-                  .catch(() => null);
-                let timer: NodeJS.Timeout | undefined;
-                const thumbnail = await Promise.race([
-                  capture,
-                  new Promise<null>((resolve) => {
-                    timer = setTimeout(
-                      () => resolve(null),
-                      TAB_THUMBNAIL_TIMEOUT_MS,
-                    );
-                  }),
-                ]).finally(() => clearTimeout(timer));
-                const url = contents.getURL();
-                return {
-                  id: `tab:${contents.id}`,
-                  kind: "tab",
-                  name: contents.getTitle() || url,
-                  thumbnail,
-                  icon: siteIcon(
-                    profileId,
-                    siteOrigin(url) ?? "",
-                    visits?.get(siteOrigin(url) ?? "")?.faviconUrl,
-                  ),
-                  url,
-                  current: contents.id === guestId,
-                };
-              }),
-          )
-        : [];
-      const captureKinds = (["screen", "window"] as const).filter((kind) =>
-        wanted.has(kind),
+    async (_event, input: unknown): Promise<ScreenShareCaptureSources> => {
+      const { kinds } = z
+        .object({ kinds: z.array(z.enum(["window", "screen"])).min(1) })
+        .parse(input);
+      const wanted = new Set(kinds);
+      const [listedScreens, listedWindows] = await Promise.all([
+        wanted.has("screen") ? captureSources("screen") : [],
+        wanted.has("window") ? captureSources("window") : [],
+      ]);
+      // Work's own helper surfaces (the detached dock, the voice bubble,
+      // an extension's popup) are not windows a person shares; its
+      // workspace windows are.
+      const helperWindows = new Set(
+        BrowserWindow.getAllWindows()
+          .filter((window) => {
+            if (window.isDestroyed()) return false;
+            try {
+              return !new URL(window.webContents.getURL()).searchParams.has(
+                "window",
+              );
+            } catch {
+              return true;
+            }
+          })
+          .map((window) => window.getMediaSourceId()),
       );
-      const captured =
-        captureKinds.length > 0
-          ? await desktopCapturer
-              .getSources({
-                types: [...captureKinds],
-                thumbnailSize,
-                fetchWindowIcons: true,
-              })
-              .catch(() => [])
-          : [];
       const toSource = (
         source: Electron.DesktopCapturerSource,
         kind: "screen" | "window",
@@ -2142,12 +2290,13 @@ export function registerBrowserSupport(
             ? source.appIcon.resize({ width: 32 }).toDataURL()
             : null,
       });
-      let screens = captured
+      let screens = (listedScreens ?? [])
         .filter((source) => source.id.startsWith("screen:"))
         .map((source) => toSource(source, "screen"));
       // macOS lists no screens when Screen Recording access is stale or
-      // missing; the displays still exist and their ids are what the
-      // capturer would have used, so sharing can still be attempted.
+      // missing, or when it does not answer; the displays still exist and
+      // their ids are what the capturer would have used, so sharing can
+      // still be attempted.
       if (wanted.has("screen") && screens.length === 0) {
         const displays = screen.getAllDisplays();
         screens = displays.map((display, index) => ({
@@ -2159,13 +2308,62 @@ export function registerBrowserSupport(
         }));
       }
       return {
-        tabs,
-        windows: captured
-          .filter((source) => source.id.startsWith("window:"))
+        windows: (listedWindows ?? [])
+          .filter(
+            (source) =>
+              source.id.startsWith("window:") && !helperWindows.has(source.id),
+          )
           .map((source) => toSource(source, "window")),
         screens,
+        timedOut: listedScreens === null || listedWindows === null,
         system: systemScreenAccess(),
+        systemAudio: screenSystemAudio(),
       };
+    },
+  );
+
+  // The picker lists the window's tabs itself (sleeping ones too); live
+  // pages get a picture here.
+  shellIpcMain.handle(
+    "catamorphic:screen-share-thumbnails",
+    async (event, input: unknown): Promise<Record<number, string | null>> => {
+      const { guestIds } = z
+        .object({ guestIds: z.array(z.number().int()).max(200) })
+        .parse(input);
+      const entries = await Promise.all(
+        guestIds.map(async (guestId): Promise<[number, string | null]> => {
+          const contents = webContents.fromId(guestId);
+          if (
+            !contents ||
+            contents.isDestroyed() ||
+            contents.getType() !== "webview" ||
+            contents.hostWebContents !== event.sender
+          )
+            return [guestId, null];
+          // A background tab is a hidden webview, and on macOS its capture
+          // can wait forever on a frame it never paints. It gets no
+          // thumbnail rather than holding back the list.
+          const capture = contents
+            .capturePage(undefined, { stayHidden: true })
+            .then((image) =>
+              image.isEmpty()
+                ? null
+                : image
+                    .resize({ width: SHARE_THUMBNAIL_SIZE.width })
+                    .toDataURL(),
+            )
+            .catch(() => null);
+          let timer: ReturnType<typeof setTimeout> | undefined;
+          const thumbnail = await Promise.race([
+            capture,
+            new Promise<null>((resolve) => {
+              timer = setTimeout(() => resolve(null), TAB_THUMBNAIL_TIMEOUT_MS);
+            }),
+          ]).finally(() => clearTimeout(timer));
+          return [guestId, thumbnail];
+        }),
+      );
+      return Object.fromEntries(entries);
     },
   );
 
