@@ -18,6 +18,12 @@ export interface ScreenShareRequest {
    * a tab's own audio, or the system's with an entire screen.
    */
   audio: boolean;
+  /**
+   * Windows and screens come from the desktop portal (Linux on Wayland),
+   * whose own dialog waits on the person: the picker asks for them only
+   * when the person turns to a window or a screen.
+   */
+  portal: boolean;
 }
 
 /** An application window or a screen the OS can capture. */
@@ -69,11 +75,13 @@ export type ScreenShareAnswer = z.infer<typeof screenShareAnswerSchema>;
 /**
  * A browser tab Work handed to a page's share: `sharing` once its capture
  * runs, `ended` when it stops (or never started). The window keeps the
- * tab laid out and awake in between.
+ * tab laid out and awake in between. `settled` closes one pick only (main
+ * refused it, or a later pick took its place): any share of the tab that
+ * runs goes on.
  */
 export interface ScreenShareTabState {
   guestId: number;
-  state: "sharing" | "ended";
+  state: "sharing" | "ended" | "settled";
   /** The site the tab is shared with. */
   origin: string;
   /** The pick this is about (its request): a later pick is not settled by it. */

@@ -2899,6 +2899,8 @@ export function App({
             if (claim.requestId === requestId)
               shareClaimsRef.current.delete(key);
           syncShareClaims();
+          // A settled pick leaves the tab's own share, if one runs, as it is.
+          if (state === "settled") return;
           setSharedBrowsers((current) => {
             const next = new Map(current);
             for (const [localId, entry] of current)

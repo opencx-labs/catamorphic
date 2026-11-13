@@ -262,49 +262,68 @@ function ScreenSharePicker({
   // fills its own pane as it comes, one listing at a time per kind. Asked
   // to try again, an empty list shows it is looking; a quiet refresh (Work
   // focused again) and a list with something in it keep what they show.
+  // Under the desktop portal (Linux on Wayland) one answer, from the
+  // system's own dialog, fills both panes.
   const listing = useRef({ window: false, screen: false });
   const alive = useRef(true);
-  useEffect(
-    () => () => {
+  useEffect(() => {
+    alive.current = true;
+    return () => {
       alive.current = false;
-    },
-    [],
-  );
+    };
+  }, []);
   const listCapture = useCallback(
     (which: "window" | "screen", quiet = false) => {
-      if (listing.current[which]) return;
-      listing.current[which] = true;
-      const set = which === "window" ? setWindows : setScreens;
-      set((current) =>
-        current.status === "ready" && (quiet || current.items.length > 0)
-          ? current
-          : { status: "loading" },
+      const kinds: Array<"window" | "screen"> = request.portal
+        ? ["window", "screen"]
+        : [which];
+      if (kinds.some((kind) => listing.current[kind])) return;
+      for (const kind of kinds) listing.current[kind] = true;
+      const setters = kinds.map((kind) =>
+        kind === "window" ? setWindows : setScreens,
       );
+      for (const set of setters)
+        set((current) =>
+          current.status === "ready" && (quiet || current.items.length > 0)
+            ? current
+            : { status: "loading" },
+        );
       void desktopApi
-        .screenShareSources({ kinds: [which] })
+        .screenShareSources({ kinds, requestId: request.id })
         .then((next: ScreenShareCaptureSources) => {
           if (!alive.current) return;
           setSystem(next.system);
           setSystemAudio(next.systemAudio);
-          set({
-            status: "ready",
-            items: which === "window" ? next.windows : next.screens,
-            timedOut: next.timedOut,
-          });
+          for (const kind of kinds)
+            (kind === "window" ? setWindows : setScreens)({
+              status: "ready",
+              items: kind === "window" ? next.windows : next.screens,
+              timedOut: next.timedOut,
+            });
         })
         .catch(() => {
-          if (alive.current) set({ status: "failed" });
+          if (alive.current)
+            for (const set of setters) set({ status: "failed" });
         })
         .finally(() => {
-          listing.current[which] = false;
+          for (const kind of kinds) listing.current[kind] = false;
         });
     },
-    [],
+    [request.portal, request.id],
   );
   useEffect(() => {
+    if (request.portal) return;
     listCapture("screen");
     listCapture("window");
-  }, [listCapture]);
+  }, [listCapture, request.portal]);
+  // The portal's dialog opens only for a person who turns to a window or
+  // a screen, once per picker.
+  const portalAsked = useRef(false);
+  useEffect(() => {
+    if (!request.portal || kind === "tab" || portalAsked.current) return;
+    portalAsked.current = true;
+    listCapture(kind);
+  }, [listCapture, request.portal, kind]);
   // Back from System Settings (Screen Recording), the lists are asked
   // for again.
   useEffect(() => {

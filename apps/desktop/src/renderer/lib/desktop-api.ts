@@ -1719,6 +1719,8 @@ export interface CatamorphicDesktopApi {
   ) => () => void;
   screenShareSources: (input: {
     kinds: Array<"window" | "screen">;
+    /** The share request asking: one desktop portal dialog per request. */
+    requestId?: string;
   }) => Promise<ScreenShareCaptureSources>;
   /** Pictures of this window's live tabs, by guest id (null: none). */
   screenShareThumbnails: (input: {

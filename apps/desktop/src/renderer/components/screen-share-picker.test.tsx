@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 
-import { act } from "react";
+import { act, StrictMode } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, expect, it, vi } from "vitest";
 import type { ScreenShareRequest } from "../../shared/screen-share.js";
@@ -22,8 +22,8 @@ const desktop = vi.hoisted(() => ({
     },
   ),
   onScreenShareWithdrawn: vi.fn(() => () => {}),
-  // Windows and screens never answer here: the tabs are what is tested.
-  screenShareSources: vi.fn(() => new Promise(() => {})),
+  // Windows and screens never answer unless a test says otherwise.
+  screenShareSources: vi.fn((): Promise<unknown> => new Promise(() => {})),
   screenShareThumbnails: vi.fn(async () => ({})),
   screenShareAnswer: vi.fn(async () => true),
   windowImage: vi.fn(async () => null),
@@ -48,6 +48,7 @@ afterEach(() => {
   });
   document.body.replaceChildren();
   listeners.request = [];
+  desktop.screenShareSources.mockImplementation(() => new Promise(() => {}));
 });
 
 const page = (localId: string, title: string): BrowserEntry => ({
@@ -71,14 +72,16 @@ function mountProject(input: {
   roots.push(root);
   act(() =>
     root.render(
-      <ScreenShareHost
-        visible={input.visible}
-        tabs={input.tabs}
-        asleep={() => false}
-        laidOut={() => false}
-        guestIds={{ current: new Map(Object.entries(input.guests)) }}
-        prepareTab={vi.fn()}
-      />,
+      <StrictMode>
+        <ScreenShareHost
+          visible={input.visible}
+          tabs={input.tabs}
+          asleep={() => false}
+          laidOut={() => false}
+          guestIds={{ current: new Map(Object.entries(input.guests)) }}
+          prepareTab={vi.fn()}
+        />
+      </StrictMode>,
     ),
   );
 }
@@ -91,6 +94,7 @@ const ask = (guestId: number) =>
         guestId,
         origin: "https://meet.example",
         audio: false,
+        portal: false,
       });
   });
 
@@ -137,4 +141,43 @@ it("gives a page no project holds to the project on screen", () => {
 
   ask(99);
   expect(pickers()).toEqual([[expect.stringContaining("Docs")]]);
+});
+
+it("fills the screen pane under StrictMode, which mounts effects twice", async () => {
+  desktop.screenShareSources.mockImplementation(async () => ({
+    windows: [],
+    screens: [
+      {
+        id: "screen:1:0",
+        kind: "screen",
+        name: "Built-in Display",
+        thumbnail: null,
+        icon: null,
+      },
+    ],
+    timedOut: false,
+    system: null,
+    systemAudio: false,
+  }));
+  mountProject({
+    visible: true,
+    tabs: [page("a1", "Notes")],
+    guests: { a1: 11 },
+  });
+  ask(11);
+  await act(async () => {
+    await Promise.resolve();
+  });
+  act(() =>
+    document
+      .querySelector<HTMLElement>('[data-testid="screen-share-kind-screen"]')
+      ?.click(),
+  );
+  expect(
+    [
+      ...document.querySelectorAll(
+        '[data-testid="screen-share-screens"] [data-testid="screen-share-source"]',
+      ),
+    ].map((card) => [card.textContent, card.getAttribute("aria-selected")]),
+  ).toEqual([["Built-in Display", "true"]]);
 });

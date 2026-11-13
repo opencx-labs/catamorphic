@@ -1909,6 +1909,22 @@ export function registerBrowserSupport(
   };
 
   /**
+   * Linux on Wayland captures through the desktop portal (PipeWire): each
+   * capturer opens the system's own picker and waits on the person, so
+   * windows and screens are asked for once, together, with no time limit.
+   * Both listings of one picker share that request.
+   */
+  const portalCapture =
+    process.platform === "linux" &&
+    /^wayland/i.test(process.env.XDG_SESSION_TYPE ?? "") &&
+    Boolean(process.env.WAYLAND_DISPLAY);
+  /** One portal request per picker (its share request), shared by both panes. */
+  const portalListings = new Map<
+    string,
+    Promise<Electron.DesktopCapturerSource[]>
+  >();
+
+  /**
    * The app's picker for a page's getDisplayMedia (ADRs 0150, 0315).
    * Chromium asks the permission handler first (a `display-capture`
    * request, which says whether the page wants audio) and the
@@ -1939,6 +1955,7 @@ export function registerBrowserSupport(
         guestId: guest.id,
         origin: input.origin,
         audio: input.audio,
+        portal: portalCapture,
       },
       (prompt) => host.send("catamorphic:screen-share-request", prompt),
     );
@@ -1958,11 +1975,12 @@ export function registerBrowserSupport(
       tab.hostWebContents !== host ||
       tab.session !== guest.session
     ) {
-      // The window readied that tab for this pick: it goes back to normal.
+      // The window readied that tab for this pick, which is over; a share
+      // of the tab another page runs goes on.
       if (tabId !== null)
         tellShareState(host, {
           guestId: tabId,
-          state: "ended",
+          state: "settled",
           origin: input.origin,
           requestId,
         });
@@ -2016,7 +2034,7 @@ export function registerBrowserSupport(
       if (!known.sharing)
         tellShareState(host, {
           guestId,
-          state: "ended",
+          state: "settled",
           origin: known.origin,
           requestId: known.requestId,
         });
@@ -2274,35 +2292,36 @@ export function registerBrowserSupport(
     ]).finally(() => clearTimeout(timer));
   };
 
-  /**
-   * Linux on Wayland captures through the desktop portal (PipeWire): each
-   * capturer opens the system's own picker and waits on the person, so
-   * windows and screens are asked for once, together, with no time limit.
-   * Both listings of one picker share that request.
-   */
-  const portalCapture =
-    process.platform === "linux" &&
-    /^wayland/i.test(process.env.XDG_SESSION_TYPE ?? "");
-  let portalListing: Promise<Electron.DesktopCapturerSource[]> | null = null;
-
   shellIpcMain.handle(
     "catamorphic:screen-share-sources",
     async (_event, input: unknown): Promise<ScreenShareCaptureSources> => {
-      const { kinds } = z
-        .object({ kinds: z.array(z.enum(["window", "screen"])).min(1) })
+      const { kinds, requestId } = z
+        .object({
+          kinds: z.array(z.enum(["window", "screen"])).min(1),
+          requestId: z.string().min(1).max(128).optional(),
+        })
         .parse(input);
       const wanted = new Set(kinds);
+      let portalListing: Promise<Electron.DesktopCapturerSource[]> | null =
+        null;
       if (portalCapture) {
-        portalListing ??= desktopCapturer
-          .getSources({
-            types: ["window", "screen"],
-            thumbnailSize: SHARE_THUMBNAIL_SIZE,
-            fetchWindowIcons: true,
-          })
-          .catch(() => [])
-          .finally(() => {
-            portalListing = null;
-          });
+        const key = requestId ?? "";
+        portalListing = portalListings.get(key) ?? null;
+        if (!portalListing) {
+          const listing = desktopCapturer
+            .getSources({
+              types: ["window", "screen"],
+              thumbnailSize: SHARE_THUMBNAIL_SIZE,
+              fetchWindowIcons: true,
+            })
+            .catch(() => [])
+            .finally(() => {
+              if (portalListings.get(key) === listing)
+                portalListings.delete(key);
+            });
+          portalListings.set(key, listing);
+          portalListing = listing;
+        }
       }
       const portal = portalListing ? await portalListing : null;
       const [listedScreens, listedWindows] = portal

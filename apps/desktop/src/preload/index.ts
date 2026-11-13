@@ -1106,8 +1106,10 @@ const api = {
         handler,
       );
   },
-  screenShareSources: (input: { kinds: string[] }): Promise<unknown> =>
-    invoke("catamorphic:screen-share-sources", input),
+  screenShareSources: (input: {
+    kinds: string[];
+    requestId?: string;
+  }): Promise<unknown> => invoke("catamorphic:screen-share-sources", input),
   screenShareThumbnails: (input: { guestIds: number[] }): Promise<unknown> =>
     invoke("catamorphic:screen-share-thumbnails", input),
   screenShareAnswer: (input: {

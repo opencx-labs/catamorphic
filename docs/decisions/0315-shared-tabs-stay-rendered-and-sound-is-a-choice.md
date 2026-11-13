@@ -44,7 +44,8 @@ the shared page's capture each second and tells the window when the share
 starts (the tab's icon gets an accent ring and its hover card names the
 site) and when it ends, which releases the hold. Each pick holds the tab
 on its own and is settled by its own request, so a pick given up never
-releases a later one. A pick whose capture never starts is released after
+releases a later one; a pick main refuses or a later pick replaces is
+settled without touching a share of the tab that still runs. A pick whose capture never starts is released after
 15 seconds. While the share runs, the
 window keeps drawing when covered or minimized, using the same rendering
 hold as agent screenshots.
@@ -62,7 +63,8 @@ Screens come back quickly and fill their pane first. A list that times
 out says so with a retry, and screens fall back to the displays Work
 knows. On Linux under Wayland, capture goes through the desktop portal,
 whose own picker waits on the person: windows and screens are asked for
-once, together, with no time limit. When Screen Recording is not granted,
+once per request, together and with no time limit, only when the person
+turns to a window or a screen. When Screen Recording is not granted,
 the window and screen panes say Work needs it, link to System Settings,
 list again when Work regains focus, and say to reopen Work if access was
 just given. Work's helper surfaces (the detached dock, the voice bubble,
