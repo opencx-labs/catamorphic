@@ -114,7 +114,7 @@ export class ConnectionBroker {
     const { scope, binding, provider, actor } = await this.resolveInvocation({
       ...args,
     });
-    await this.connections.refreshIfNeeded({
+    await this.connections.refreshForUse({
       identity: args.identity,
       connectionId: binding.connectionId,
     });
@@ -221,6 +221,7 @@ export class ConnectionBroker {
           "contained" &&
         !(await this.readsOnly({
           identity: args.identity,
+          actor,
           connectionId: binding.connectionId,
           capabilities: binding.capabilities,
           provider,
@@ -278,7 +279,7 @@ export class ConnectionBroker {
       );
     await requireSandboxing();
     try {
-      await this.connections.refreshIfNeeded({
+      await this.connections.refreshForUse({
         identity: args.identity,
         connectionId: binding.connectionId,
       });
@@ -536,7 +537,7 @@ export class ConnectionBroker {
             "This session is contained and may not push",
           );
         try {
-          await this.connections.refreshIfNeeded({
+          await this.connections.refreshForUse({
             identity: args.identity,
             connectionId: binding.connectionId,
           });
@@ -617,7 +618,7 @@ export class ConnectionBroker {
         metadata: { alias: binding.alias, remoteUrl: args.remoteUrl },
       });
     try {
-      await this.connections.refreshIfNeeded({
+      await this.connections.refreshForUse({
         identity: args.identity,
         connectionId: binding.connectionId,
       });
@@ -694,7 +695,7 @@ export class ConnectionBroker {
           );
         }
         try {
-          await this.connections.refreshIfNeeded({
+          await this.connections.refreshForUse({
             identity: args.identity,
             connectionId: binding.connectionId,
           });
@@ -771,7 +772,7 @@ export class ConnectionBroker {
             "contained"
           : false;
         try {
-          await this.connections.refreshIfNeeded({
+          await this.connections.refreshForUse({
             identity: args.identity,
             connectionId: binding.connectionId,
           });
@@ -1021,7 +1022,7 @@ export class ConnectionBroker {
       (args.agentSessionId &&
         (await this.gateway.sessionOwner?.(args.agentSessionId))) ||
       args.identity.externalUserId;
-    // Every audit row says who acted and how, guards or not.
+    // Every reviewed action's audit row says who acted and how.
     if (this.gateway.guards.length === 0) {
       return { verdict: "allow", metadata: { actor, caller } };
     }
@@ -1088,6 +1089,8 @@ export class ConnectionBroker {
   /** Whether a provider action only reads (ADR 0176). */
   private async readsOnly(args: {
     identity: Identity;
+    /** The member the call acts for, for the provider's context. */
+    actor: Identity;
     connectionId: string;
     capabilities: readonly string[];
     provider: ConnectionProvider;
@@ -1103,7 +1106,7 @@ export class ConnectionBroker {
         listActions({
           material,
           context: this.connections.providerContext({
-            identity: args.identity,
+            identity: args.actor,
             connection,
           }),
           capabilities: args.capabilities,
@@ -1200,10 +1203,7 @@ export class ConnectionBroker {
     ) {
       throw new ConnectionActionDeniedError("Connection permission denied");
     }
-    await this.connections.refreshIfNeeded({
-      identity,
-      connectionId: selected.connectionId,
-    });
+    // resolveSnapshot refreshes before judging expiry (ADR 0316).
     const [binding] = await this.connections
       .resolveSnapshot({
         identity,

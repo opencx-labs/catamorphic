@@ -31,10 +31,10 @@ those connections and nothing else of the project.
 has not connected offers `<alias>__connect`, which returns a single-use
 link (`connections.offerConnection`, hash stored, 15 minutes). The host's
 page (`projectMcp.connectLink`) requires a browser signed in as that member,
-redeems the link, and keeps a browser binding in the HTTP-only cookie
-`__Host-catamorphic_connect` (plain `catamorphic_connect` on loopback);
-the attempt completes only with it, and a callback without it ends the
-attempt. A forwarded link, or a forwarded upstream consent page, connects
+redeems the link, and keeps a browser binding in an HTTP-only cookie named
+for that attempt (`connectBindingCookie`: `__Host-` prefixed unless the
+public address is loopback); the attempt completes only with it, and a
+callback without it ends the attempt. A forwarded link, or a forwarded upstream consent page, connects
 nothing. Device codes are refused for links: anyone handed the code could
 consent. Attempts started through the older authorize API (the desktop and
 PWA) are not browser-bound; they remain as phishable as before and should

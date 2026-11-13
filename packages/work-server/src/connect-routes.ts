@@ -4,8 +4,9 @@ import {
   type Identity,
 } from "@catamorphic/core";
 import {
-  CONNECT_BINDING_COOKIE,
   connectBinding,
+  connectBindingCookie,
+  isLoopbackHost,
 } from "@catamorphic/fastify-plugin";
 import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 import type { WorkAuth } from "./auth/work-auth-types.js";
@@ -32,8 +33,10 @@ export function registerConnectRoutes(
     memberForUser(userId: string): Promise<Identity | null>;
   },
 ): void {
-  const origin = new URL(options.publicBase).origin;
-  const secure = origin.startsWith("https:");
+  const publicUrl = new URL(options.publicBase);
+  const origin = publicUrl.origin;
+  const secure = publicUrl.protocol === "https:";
+  const loopback = isLoopbackHost(publicUrl.hostname);
   const callback = `${options.publicBase}/api/connection-authorizations/callback`;
 
   const member = async (request: FastifyRequest) => {
@@ -78,8 +81,9 @@ export function registerConnectRoutes(
     }
     reply.header(
       "set-cookie",
-      // `__Host-` over HTTPS: only this origin can set it (no Domain).
-      `${secure ? "__Host-" : ""}${CONNECT_BINDING_COOKIE}=${started.browserBinding}; Path=/; HttpOnly; SameSite=Lax; Max-Age=${BINDING_MAX_AGE_SECONDS}${secure ? "; Secure" : ""}`,
+      // One cookie per attempt, `__Host-` unless on loopback: only this
+      // origin can set it (no Domain), and two links never collide.
+      `${connectBindingCookie({ state: started.authorizationId, loopback })}=${started.browserBinding}; Path=/; HttpOnly; SameSite=Lax; Max-Age=${BINDING_MAX_AGE_SECONDS}${secure ? "; Secure" : ""}`,
     );
     const { challenge } = started;
     if (challenge.kind === "url") return reply.redirect(challenge.url, 303);
@@ -111,7 +115,11 @@ export function registerConnectRoutes(
       typeof request.body === "string" ? request.body : "",
     );
     const state = form.get("state") ?? "";
-    const binding = connectBinding(request.headers.cookie);
+    const binding = connectBinding({
+      header: request.headers.cookie,
+      state,
+      loopback,
+    });
     const fields = Object.fromEntries(
       [...form.entries()]
         .filter(([name]) => name.startsWith("field."))

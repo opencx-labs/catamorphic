@@ -35,10 +35,10 @@ const tracker: ConnectionProvider = {
   }),
   completeAuthorization: async ({ callback }) => ({
     material: new TextEncoder().encode(`token-${callback.code}`),
-    capabilities: ["issues.list"],
+    capabilities: ["issues_list"],
   }),
   listActions: async () => [
-    { name: "issues.list", inputSchema: { type: "object" } },
+    { name: "issues_list", inputSchema: { type: "object" } },
   ],
   invoke: async ({ action, context, material }) => ({
     action,
@@ -194,7 +194,7 @@ describe("connecting a member's own account from their agent (ADR 0316)", () => 
       expect(upstream.origin).toBe("https://tracker.test");
       const binding = cookieOf(opened.headers["set-cookie"]);
       // Over HTTPS only this origin can set it.
-      expect(binding).toMatch(/^__Host-catamorphic_connect=/);
+      expect(binding).toMatch(/^__Host-catamorphic_connect_[0-9a-f]{16}=/);
       return {
         binding,
         callback: `/api/connection-authorizations/callback?state=${encodeURIComponent(upstream.searchParams.get("state") ?? "")}&code=granted`,
@@ -251,7 +251,7 @@ describe("connecting a member's own account from their agent (ADR 0316)", () => 
     });
     expect(called.isError).not.toBe(true);
     expect(JSON.parse(called.content[0].text)).toMatchObject({
-      action: "issues.list",
+      action: "issues_list",
       principal: "member",
       stored: "token-granted",
     });

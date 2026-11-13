@@ -244,30 +244,33 @@ export function connectionTools(args: {
 }
 
 /**
- * Give each entry its tool name, `<alias>__<action>`, limited to the
- * characters and length MCP clients accept. Every name that would be too
- * long, ambiguous (an alias containing `__`), or shared by two entries gets
- * a digest of its own alias and action, so no entry's name depends on
- * which others are listed: a name a person approved keeps its meaning.
+ * Give each entry its tool name, `<alias>__<action>`. A plain name is used
+ * only when it is exact: the action needs no character replaced, the alias
+ * contains no `__`, the name fits clients' limit, and no other entry has
+ * the same alias and action. Every other name ends in a digest of its own
+ * alias and action, so plain names cannot collide and no name's meaning
+ * depends on which other tools are listed.
  */
 function named(entries: Entry[]): Entry[] {
   const action = (entry: Entry) => entry.action ?? CONNECT;
-  const base = (entry: Entry) =>
-    `${entry.alias}__${action(entry).replace(/[^A-Za-z0-9_-]/g, "_")}`;
+  const key = (entry: Entry) => `${entry.alias}\u0000${action(entry)}`;
   const counts = new Map<string, number>();
   for (const entry of entries)
-    counts.set(base(entry), (counts.get(base(entry)) ?? 0) + 1);
+    counts.set(key(entry), (counts.get(key(entry)) ?? 0) + 1);
   return entries.map((entry) => {
-    const plain = base(entry);
-    const name =
-      plain.length > MAX_TOOL_NAME ||
-      entry.alias.includes("__") ||
-      (counts.get(plain) ?? 0) > 1
-        ? `${plain.slice(0, MAX_TOOL_NAME - 9)}_${createHash("sha256")
-            .update(`${entry.alias}\u0000${action(entry)}`)
-            .digest("hex")
-            .slice(0, 8)}`
-        : plain;
+    const safe = action(entry).replace(/[^A-Za-z0-9_-]/g, "_");
+    const plain = `${entry.alias}__${safe}`;
+    const exact =
+      safe === action(entry) &&
+      !entry.alias.includes("__") &&
+      plain.length <= MAX_TOOL_NAME &&
+      counts.get(key(entry)) === 1;
+    const name = exact
+      ? plain
+      : `${plain.slice(0, MAX_TOOL_NAME - 9)}_${createHash("sha256")
+          .update(key(entry))
+          .digest("hex")
+          .slice(0, 8)}`;
     return { ...entry, definition: { ...entry.definition, name } };
   });
 }

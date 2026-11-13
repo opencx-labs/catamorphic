@@ -129,7 +129,8 @@ export interface ProjectMcpHost {
    * Where a member's own agent sends its person to connect an account
    * (ADR 0316): a host page that requires a browser signed in as that
    * member, then calls `connections.redeemConnectionOffer` and keeps its
-   * `browserBinding` in the `catamorphic_connect` cookie for the callback.
+   * `browserBinding` in the cookie `connectBindingCookie` names, for the
+   * callback.
    * Without it, connect tools tell the person to connect in Work instead.
    */
   connectLink?: (args: { token: string; projectId: string }) => string;

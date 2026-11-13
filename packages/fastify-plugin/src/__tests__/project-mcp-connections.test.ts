@@ -3,6 +3,11 @@ import {
   ConnectionActionDeniedError,
 } from "@catamorphic/core";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import {
+  connectBinding,
+  connectBindingCookie,
+  isLoopbackHost,
+} from "../routes/connections.js";
 import { createTestApp } from "./test-app.js";
 
 const PROJECT_ID = "a1b2c3d4-e5f6-4890-abcd-ef1234567890";
@@ -34,7 +39,7 @@ function fakeCore(
     if (args.listError) throw args.listError;
     return [
       {
-        name: "issues.list",
+        name: "issues_list",
         description: "List issues",
         inputSchema: { type: "object" },
         annotations: { readOnlyHint: true },
@@ -163,7 +168,7 @@ describe("connections on the project MCP for a member's own agent (ADR 0316)", (
         projectId: PROJECT_ID,
         environment: "company",
         alias: "tracker",
-        action: "issues.list",
+        action: "issues_list",
         input: { state: "open" },
         caller: "member",
       }),
@@ -301,11 +306,11 @@ describe("connections on the project MCP for a member's own agent (ADR 0316)", (
     const names = ((result?.tools ?? []) as Array<{ name: string }>)
       .map((tool) => tool.name)
       .filter((name) => name.startsWith("a__"));
+    // `a` + `x__y` is exact and keeps the plain name; `a__x` + `y` is
+    // ambiguous and always carries its digest, whatever else is listed.
     expect(names).toHaveLength(2);
-    expect(new Set(names).size).toBe(2);
-    expect(names.every((name) => /^a__x__y_[0-9a-f]{8}$/.test(name))).toBe(
-      true,
-    );
+    expect(names).toContain("a__x__y");
+    expect(names.some((name) => /^a__x__y_[0-9a-f]{8}$/.test(name))).toBe(true);
   });
 
   it("serves no connection tools to a Work session, which holds its own grants", async () => {
@@ -321,5 +326,36 @@ describe("connections on the project MCP for a member's own agent (ADR 0316)", (
     );
     expect(names.some((name) => name.startsWith("tracker__"))).toBe(false);
     expect(listActions).not.toHaveBeenCalled();
+  });
+});
+
+describe("connect link browser bindings (ADR 0316)", () => {
+  it("keeps one cookie per attempt and accepts the plain name only on loopback", () => {
+    const first = connectBindingCookie({ state: "state-1", loopback: false });
+    const second = connectBindingCookie({ state: "state-2", loopback: false });
+    expect(first).toMatch(/^__Host-catamorphic_connect_[0-9a-f]{16}$/);
+    expect(second).not.toBe(first);
+    const header = `${second}=b2; ${first}=b1`;
+    expect(connectBinding({ header, state: "state-1", loopback: false })).toBe(
+      "b1",
+    );
+    // A cookie a sibling subdomain could plant never counts over HTTPS.
+    const plain = connectBindingCookie({ state: "state-1", loopback: true });
+    expect(
+      connectBinding({
+        header: `${plain}=planted`,
+        state: "state-1",
+        loopback: false,
+      }),
+    ).toBeUndefined();
+    expect(
+      connectBinding({
+        header: `${plain}=local`,
+        state: "state-1",
+        loopback: true,
+      }),
+    ).toBe("local");
+    expect(isLoopbackHost("127.0.0.1:4700")).toBe(true);
+    expect(isLoopbackHost("work.example.com")).toBe(false);
   });
 });

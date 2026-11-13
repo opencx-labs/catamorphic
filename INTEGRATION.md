@@ -1077,9 +1077,10 @@ Allocation and live authority on every call (ADR 0316). None receives
 upstream credentials. A host serving members' own agents sets
 `projectMcp.connectLink` to a page that requires a browser signed in as the
 member, calls `connections.redeemConnectionOffer`, sets the returned
-`browserBinding` as the HTTP-only `__Host-catamorphic_connect` cookie
-(`catamorphic_connect` on loopback), and redirects to the challenge; the
-plugin's callback route reads it with `connectBinding`. The Work server
+`browserBinding` as an HTTP-only cookie named by
+`connectBindingCookie({ state, loopback })` (one per attempt, `__Host-`
+prefixed unless the public address is loopback), and redirects to the
+challenge; the plugin's callback route reads it with `connectBinding`. The Work server
 ships this page at `/connect/:token`.
 For a shared host, provide `resolveMemberIdentity` so every session connection
 call resolves the member's live authority, including after a human approval.

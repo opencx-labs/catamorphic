@@ -532,14 +532,19 @@ export class ConnectionsService {
     if (!attempt) {
       // A bound attempt's callback in any other browser ends the attempt:
       // its code cannot be replayed from the right browser later.
-      await this.db
+      const ended = await this.db
         .updateTable("connection_authorization_attempts")
         .set({ status: "canceled", completed_at: new Date() })
         .where("tenant_id", "=", args.identity.tenantId)
         .where("state_hash", "=", hashBearer(args.state))
         .where("status", "=", "pending")
         .where("browser_binding_hash", "is not", null)
-        .execute();
+        .returning("private_state_ref")
+        .executeTakeFirst();
+      await this.unseal({
+        tenantId: args.identity.tenantId,
+        ref: ended?.private_state_ref ?? null,
+      });
       throw new ConnectionUnavailableError("authorization", "Attempt expired");
     }
     const subject =
@@ -1326,7 +1331,7 @@ export class ConnectionsService {
       const connection = selected
         ? await this.admissible(args.identity, selected)
         : undefined;
-      if (!connection) {
+      if (!connection || !isReady(connection)) {
         missing.push({ alias, providerKind: binding.provider, principalKinds });
         continue;
       }
@@ -1351,23 +1356,28 @@ export class ConnectionsService {
   }
 
   /**
-   * The selected connection as admission may use it: refreshed first when
-   * its access is expiring, so an expired token with live refresh authority
-   * admits. A refused refresh (or one that cannot run) reads as needing
-   * authorization; a transient failure still admits an unexpired token.
+   * The selected connection as it stands after admission's refresh, judged
+   * by the caller with `isReady`: an expired token with live refresh
+   * authority admits, and a refused refresh leaves it expired (needing
+   * authorization). A transient failure admits a token that has not expired,
+   * and otherwise reads as unavailable, never as a reason to reconnect.
    */
   private async admissible(
     identity: Identity,
     selected: ConnectionRow,
-  ): Promise<ConnectionRow | undefined> {
-    if (selected.status !== "ready") return undefined;
+  ): Promise<ConnectionRow> {
+    if (selected.status !== "ready") return selected;
+    let failure: ConnectionUnavailableError | undefined;
     try {
       await this.refreshIfNeeded({ identity, connectionId: selected.id });
     } catch (error) {
       if (!(error instanceof ConnectionUnavailableError)) throw error;
+      failure = error;
     }
     const current = await this.requireConnection(identity, selected.id);
-    return isReady(current) ? current : undefined;
+    if (failure && current.status === "ready" && !isReady(current))
+      throw failure;
+    return current;
   }
 
   /** Revalidates a trigger's immutable service authorization selection. */
@@ -1406,8 +1416,7 @@ export class ConnectionsService {
         selected.connectionId,
       );
       // Refresh before judging expiry, as admission does (ADR 0316).
-      const connection =
-        (await this.admissible(args.identity, stored)) ?? stored;
+      const connection = await this.admissible(args.identity, stored);
       if (
         !isReady(connection) ||
         connection.provider_kind !== selected.providerKind
@@ -1689,6 +1698,27 @@ export class ConnectionsService {
     };
   }
 
+  /**
+   * Refresh before a call uses the credential. A failed refresh matters only
+   * once the access token no longer works: a transient failure with time
+   * left still lets the call go ahead, as admission does.
+   */
+  async refreshForUse(args: {
+    identity: Identity;
+    connectionId: string;
+  }): Promise<void> {
+    try {
+      await this.refreshIfNeeded(args);
+    } catch (error) {
+      if (!(error instanceof ConnectionUnavailableError)) throw error;
+      const current = await this.requireConnection(
+        args.identity,
+        args.connectionId,
+      );
+      if (!isReady(current)) throw error;
+    }
+  }
+
   async refreshIfNeeded(args: {
     identity: Identity;
     connectionId: string;
@@ -1792,6 +1822,9 @@ export class ConnectionsService {
     }
     let nextRef: { id: string } | null;
     try {
+      // Hold the lease through the host vault's write: a slow vault must not
+      // let a successor spend the refresh token this exchange just rotated.
+      await this.renewRefreshLease(lease);
       nextRef = await this.seal({
         tenantId: args.identity.tenantId,
         providerKind: connection.provider_kind,
@@ -1875,6 +1908,21 @@ export class ConnectionsService {
       .returningAll()
       .executeTakeFirst();
     return row ? { row, holder } : undefined;
+  }
+
+  /** Extend a lease this caller still holds, or fail if it was taken over. */
+  private async renewRefreshLease(lease: {
+    row: ConnectionRow;
+    holder: string;
+  }): Promise<void> {
+    const renewed = await this.db
+      .updateTable("connections")
+      .set({ refresh_lease_until: new Date(Date.now() + REFRESH_LEASE_MS) })
+      .where("id", "=", lease.row.id)
+      .where("refresh_lease_holder", "=", lease.holder)
+      .executeTakeFirst();
+    if (!renewed.numUpdatedRows)
+      throw new Error("The refresh lease was taken over");
   }
 
   /** Release a lease this caller still holds; a successor's stays. */
@@ -2170,15 +2218,27 @@ export class ConnectionsService {
     identity: Identity;
     state: string;
   }): Promise<boolean> {
-    const cancelled = await this.db
-      .updateTable("connection_authorization_attempts")
-      .set({ status: "canceled", completed_at: new Date() })
-      .where("tenant_id", "=", args.identity.tenantId)
-      .where("external_user_id", "=", args.identity.externalUserId)
-      .where("state_hash", "=", hashBearer(args.state))
-      .where("status", "in", ["pending", "completing"])
-      .executeTakeFirst();
-    return Boolean(cancelled.numUpdatedRows);
+    const cancel = (status: "pending" | "completing") =>
+      this.db
+        .updateTable("connection_authorization_attempts")
+        .set({ status: "canceled", completed_at: new Date() })
+        .where("tenant_id", "=", args.identity.tenantId)
+        .where("external_user_id", "=", args.identity.externalUserId)
+        .where("state_hash", "=", hashBearer(args.state))
+        .where("status", "=", status)
+        .returning("private_state_ref")
+        .executeTakeFirst();
+    // A pending attempt never runs again, so its private state goes now; a
+    // completing one is still using it, and its completion releases it.
+    const pending = await cancel("pending");
+    if (pending) {
+      await this.unseal({
+        tenantId: args.identity.tenantId,
+        ref: pending.private_state_ref,
+      });
+      return true;
+    }
+    return Boolean(await cancel("completing"));
   }
 
   /** Publish material and complete its attempt as one database change. */

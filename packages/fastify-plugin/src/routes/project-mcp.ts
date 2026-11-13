@@ -226,7 +226,7 @@ export function registerProjectMcpRoutes(
                     !gatewayTools.some((gateway) => gateway.name === tool.name),
                 )
                 .map(toolDefinition),
-              ...(tools.length > 0 || core.mcpToolKinds.length > 0
+              ...(member && (tools.length > 0 || core.mcpToolKinds.length > 0)
                 ? [POLL_RUN_TOOL_DEFINITION]
                 : []),
               ...surface

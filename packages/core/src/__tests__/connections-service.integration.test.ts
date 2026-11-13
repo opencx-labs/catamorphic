@@ -718,7 +718,7 @@ describe("credential connections", () => {
         .update(JSON.stringify(deniedInput))
         .digest("hex"),
     });
-    // Every audit row names who acted and how (ADR 0316).
+    // A reviewed action's audit row names who acted and how (ADR 0316).
     expect(allowedInvocation?.metadata).toEqual({
       actor: "member",
       caller: "workflow",
