@@ -5,6 +5,14 @@ import {
   GITHUB_CONNECTION_ACTIONS,
 } from "./github-connection-provider.js";
 
+/** Who a provider call is for, as core derives it (ADR 0316). */
+const TEST_CONTEXT = {
+  tenantId: "tenant-1",
+  connectionId: "connection-1",
+  principal: { kind: "service" as const, name: "test" },
+  externalUserId: "member-1",
+};
+
 const TEST_CONNECTION = { id: "connection-1", revision: 1 };
 
 const { privateKey } = generateKeyPairSync("rsa", {
@@ -296,6 +304,7 @@ describe("GitHub connections: App installation (service)", () => {
         }),
       );
       const request = provider.invoke({
+        context: TEST_CONTEXT,
         connection: TEST_CONNECTION,
         material,
         action,
@@ -318,6 +327,7 @@ describe("GitHub connections: App installation (service)", () => {
     const { github, provider } = appProvider();
     const material = await appMaterial(provider);
     const result = await provider.invoke({
+      context: TEST_CONTEXT,
       connection: TEST_CONNECTION,
       material,
       action: "get",
@@ -341,6 +351,7 @@ describe("GitHub connections: App installation (service)", () => {
     expect(request?.authorization).toBe("Bearer ghs_1");
     // The token is cached for the next call on the same repository.
     await provider.invoke({
+      context: TEST_CONTEXT,
       connection: TEST_CONNECTION,
       material,
       action: "get",
@@ -362,6 +373,7 @@ describe("GitHub connections: App installation (service)", () => {
       repositories: readonly string[] | null = REPOS,
     ) =>
       provider.invoke({
+        context: TEST_CONTEXT,
         connection: TEST_CONNECTION,
         material,
         action,
@@ -408,6 +420,7 @@ describe("GitHub connections: App installation (service)", () => {
       unscopedRestPaths: ["/user"],
     });
     await opened.invoke({
+      context: TEST_CONTEXT,
       connection: TEST_CONNECTION,
       material,
       action: "get",
@@ -423,6 +436,7 @@ describe("GitHub connections: App installation (service)", () => {
     const material = await appMaterial(provider);
     const call = (action: string, input: Record<string, unknown>) =>
       provider.invoke({
+        context: TEST_CONTEXT,
         connection: TEST_CONNECTION,
         material,
         action,
@@ -488,6 +502,7 @@ describe("GitHub connections: App installation (service)", () => {
       JSON.stringify({ appId: 12345, privateKey, installationId: "77" }),
     );
     await provider.invoke({
+      context: TEST_CONTEXT,
       connection: TEST_CONNECTION,
       material,
       action: "get",
@@ -498,6 +513,7 @@ describe("GitHub connections: App installation (service)", () => {
     expect(github.calls.at(-1)?.authorization).toBe("Bearer ghs_1");
     await expect(
       provider.invoke({
+        context: TEST_CONTEXT,
         connection: TEST_CONNECTION,
         material: new TextEncoder().encode("{}"),
         action: "get",
@@ -512,6 +528,7 @@ describe("GitHub connections: App installation (service)", () => {
     const { provider } = appProvider();
     const material = await appMaterial(provider);
     const listed = await provider.listActions?.({
+      context: TEST_CONTEXT,
       material,
       capabilities: ["get", "pull_request_files"],
     });
@@ -525,6 +542,7 @@ describe("GitHub connections: App installation (service)", () => {
     });
     await expect(
       provider.invoke({
+        context: TEST_CONTEXT,
         connection: TEST_CONNECTION,
         material,
         action: "post",
@@ -535,6 +553,7 @@ describe("GitHub connections: App installation (service)", () => {
     ).rejects.toThrow(/outside the connection grant/);
     await expect(
       provider.invoke({
+        context: TEST_CONTEXT,
         connection: TEST_CONNECTION,
         material,
         action: "get",
@@ -549,6 +568,7 @@ describe("GitHub connections: App installation (service)", () => {
     const { github, provider } = appProvider();
     const material = await appMaterial(provider);
     const files = await provider.invoke({
+      context: TEST_CONTEXT,
       connection: TEST_CONNECTION,
       material,
       action: "pull_request_files",
@@ -576,6 +596,7 @@ describe("GitHub connections: App installation (service)", () => {
       ],
     });
     const review = await provider.invoke({
+      context: TEST_CONTEXT,
       connection: TEST_CONNECTION,
       material,
       action: "create_review",
@@ -617,6 +638,7 @@ describe("GitHub connections: App installation (service)", () => {
     const { github, provider } = appProvider();
     const material = await appMaterial(provider);
     const run = await provider.invoke({
+      context: TEST_CONTEXT,
       connection: TEST_CONNECTION,
       material,
       action: "create_check_run",
@@ -668,6 +690,7 @@ describe("GitHub connections: App installation (service)", () => {
     });
     await expect(
       provider.invoke({
+        context: TEST_CONTEXT,
         connection: TEST_CONNECTION,
         material,
         action: "issue_comment",
@@ -679,6 +702,7 @@ describe("GitHub connections: App installation (service)", () => {
     // A binding naming a repository beyond the installation still stops there.
     await expect(
       provider.invoke({
+        context: TEST_CONTEXT,
         connection: TEST_CONNECTION,
         material,
         action: "issue_comment",
@@ -689,6 +713,7 @@ describe("GitHub connections: App installation (service)", () => {
     ).rejects.toThrow(/outside the GitHub App installation on octo/);
     await expect(
       provider.invoke({
+        context: TEST_CONTEXT,
         connection: TEST_CONNECTION,
         material,
         action: "create_check_run",
@@ -745,7 +770,7 @@ describe("GitHub connections: App installation (service)", () => {
       remoteUrl: "https://github.com/octo/hello",
       access: "read",
     });
-    await provider.revoke?.({ material });
+    await provider.revoke?.({ context: TEST_CONTEXT, material });
     expect(github.calls.at(-1)).toMatchObject({
       method: "DELETE",
       url: "https://api.github.com/installation/token",
@@ -983,6 +1008,7 @@ describe("GitHub connections: the actions a review poster needs", () => {
     const material = await appMaterial(provider);
     const call = (action: string, input: Record<string, unknown>) =>
       provider.invoke({
+        context: TEST_CONTEXT,
         connection: TEST_CONNECTION,
         material,
         action,
@@ -1013,6 +1039,7 @@ describe("GitHub connections: the actions a review poster needs", () => {
     const material = await appMaterial(provider);
     const call = (action: string, input: Record<string, unknown>) =>
       provider.invoke({
+        context: TEST_CONTEXT,
         connection: TEST_CONNECTION,
         material,
         action,
@@ -1381,6 +1408,7 @@ describe("GitHub connections: the actions a review poster needs", () => {
     const material = await appMaterial(provider);
     const call = (action: string, input: Record<string, unknown>) =>
       provider.invoke({
+        context: TEST_CONTEXT,
         connection: TEST_CONNECTION,
         material,
         action,
@@ -1508,6 +1536,7 @@ describe("GitHub connections: the actions a review poster needs", () => {
     });
     const material = await appMaterial(provider);
     await provider.invoke({
+      context: TEST_CONTEXT,
       connection: TEST_CONNECTION,
       material,
       action: "issue_comment",
@@ -1564,6 +1593,7 @@ describe("GitHub connections: the actions a review poster needs", () => {
     const { provider } = appProvider();
     const material = await appMaterial(provider);
     const listed = await provider.listActions?.({
+      context: TEST_CONTEXT,
       material,
       capabilities: ALL,
     });
@@ -1655,6 +1685,7 @@ describe("GitHub connections: members (user-to-server OAuth)", () => {
     const material = authorized?.material ?? new Uint8Array();
 
     await provider.invoke({
+      context: TEST_CONTEXT,
       connection: TEST_CONNECTION,
       material,
       action: "get",
@@ -1678,9 +1709,13 @@ describe("GitHub connections: members (user-to-server OAuth)", () => {
       expiresAt: new Date(clock + 28_800_000),
     });
 
-    const refreshed = await provider.refresh?.({ material });
+    const refreshed = await provider.refresh?.({
+      context: TEST_CONTEXT,
+      material,
+    });
     const next = refreshed?.material ?? new Uint8Array();
     await provider.invoke({
+      context: TEST_CONTEXT,
       connection: TEST_CONNECTION,
       material: next,
       action: "get",
@@ -1693,6 +1728,7 @@ describe("GitHub connections: members (user-to-server OAuth)", () => {
     clock += 9 * 3_600_000;
     await expect(
       provider.invoke({
+        context: TEST_CONTEXT,
         connection: TEST_CONNECTION,
         material,
         action: "get",
@@ -1745,6 +1781,7 @@ describe("GitHub connections: members (user-to-server OAuth)", () => {
     const material = authorized?.material ?? new Uint8Array();
     await expect(
       provider.invoke({
+        context: TEST_CONTEXT,
         connection: TEST_CONNECTION,
         material,
         action: "get",
@@ -1753,7 +1790,7 @@ describe("GitHub connections: members (user-to-server OAuth)", () => {
         repositories: REPOS,
       }),
     ).rejects.toMatchObject({ code: "connection_authorization_expired" });
-    await provider.revoke?.({ material });
+    await provider.revoke?.({ context: TEST_CONTEXT, material });
     expect(github.calls.at(-1)).toMatchObject({
       method: "DELETE",
       url: "https://api.github.com/applications/Iv1/token",
@@ -1778,6 +1815,7 @@ describe("GitHub connections: members (user-to-server OAuth)", () => {
     });
     // Mona (id 3) connected; ada wrote review 12 and the App review 11.
     const reviews = await provider.invoke({
+      context: TEST_CONTEXT,
       connection: TEST_CONNECTION,
       material,
       action: "list_reviews",
@@ -1793,6 +1831,7 @@ describe("GitHub connections: members (user-to-server OAuth)", () => {
     });
     await expect(
       provider.invoke({
+        context: TEST_CONTEXT,
         connection: TEST_CONNECTION,
         material,
         action: "dismiss_review",
@@ -1828,6 +1867,7 @@ describe("GitHub connections: members (user-to-server OAuth)", () => {
     ).material;
     await expect(
       asAda.invoke({
+        context: TEST_CONTEXT,
         connection: TEST_CONNECTION,
         material: adaMaterial,
         action: "list_reviews",
@@ -1857,6 +1897,7 @@ describe("GitHub connections: members (user-to-server OAuth)", () => {
     ).toThrow(/HTTPS/);
     const material = await appMaterial(provider);
     await provider.invoke({
+      context: TEST_CONTEXT,
       connection: TEST_CONNECTION,
       material,
       action: "resolve_review_thread",

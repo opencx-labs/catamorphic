@@ -26,6 +26,7 @@ import {
   AuthenticationRequiredError,
   ConnectionPermissionDeniedError,
   type ConnectionsService,
+  ConnectionTemporarilyUnavailableError,
   ConnectionUnavailableError,
 } from "./connections-service.js";
 import type { ExecutionAllocationsService } from "./execution-allocations-service.js";
@@ -104,16 +105,17 @@ export class ConnectionBroker {
     private readonly gateway: ConnectionGateway = { guards: [] },
   ) {}
 
-  async listActions(args: {
-    identity: Identity;
-    allocationId: string;
-    alias: string;
-    agentSessionId?: string;
-  }) {
-    const { binding, provider } = await this.resolveInvocation({
+  async listActions(
+    args: {
+      identity: Identity;
+      alias: string;
+      agentSessionId?: string;
+    } & BrokerTarget,
+  ) {
+    const { scope, binding, provider, actor } = await this.resolveInvocation({
       ...args,
     });
-    await this.connections.refreshIfNeeded({
+    await this.connections.refreshForUse({
       identity: args.identity,
       connectionId: binding.connectionId,
     });
@@ -128,9 +130,16 @@ export class ConnectionBroker {
     return this.connections.withCredential({
       identity: args.identity,
       connectionId: binding.connectionId,
-      use: (material) =>
+      use: (material, connection) =>
         listActions({
           material,
+          context: this.connections.providerContext({
+            identity: actor,
+            connection,
+            projectId: scope.projectId,
+            environment: scope.environment,
+            alias: binding.alias,
+          }),
           capabilities: binding.capabilities,
         }),
     });
@@ -144,17 +153,18 @@ export class ConnectionBroker {
     return this.providers.get(providerKind)?.mcp === true;
   }
 
-  async invoke(args: {
-    identity: Identity;
-    allocationId: string;
-    alias: string;
-    action: string;
-    input: Json;
-    caller?: "agent" | "workflow";
-    agentSessionId?: string;
-    signal?: AbortSignal;
-    deadlineAt?: string;
-  }): Promise<Json> {
+  async invoke(
+    args: {
+      identity: Identity;
+      alias: string;
+      action: string;
+      input: Json;
+      caller?: "agent" | "workflow" | "member";
+      agentSessionId?: string;
+      signal?: AbortSignal;
+      deadlineAt?: string;
+    } & BrokerTarget,
+  ): Promise<Json> {
     return withSpan(
       {
         tracer,
@@ -162,7 +172,9 @@ export class ConnectionBroker {
         attributes: {
           "catamorphic.tenant.id": args.identity.tenantId,
           "user.id": args.identity.externalUserId,
-          "catamorphic.allocation.id": args.allocationId,
+          ...("allocationId" in args
+            ? { "catamorphic.allocation.id": args.allocationId }
+            : { "catamorphic.connection.caller": "member" }),
           "catamorphic.connection.alias": args.alias,
           "catamorphic.connection.action": args.action,
         },
@@ -171,19 +183,20 @@ export class ConnectionBroker {
     );
   }
 
-  private async invokeUninstrumented(args: {
-    identity: Identity;
-    allocationId: string;
-    alias: string;
-    action: string;
-    input: Json;
-    caller?: "agent" | "workflow";
-    agentSessionId?: string;
-    signal?: AbortSignal;
-    deadlineAt?: string;
-  }): Promise<Json> {
+  private async invokeUninstrumented(
+    args: {
+      identity: Identity;
+      alias: string;
+      action: string;
+      input: Json;
+      caller?: "agent" | "workflow" | "member";
+      agentSessionId?: string;
+      signal?: AbortSignal;
+      deadlineAt?: string;
+    } & BrokerTarget,
+  ): Promise<Json> {
     args.signal?.throwIfAborted();
-    const { allocation, binding, provider } =
+    const { scope, binding, provider, actor } =
       await this.resolveInvocation(args);
     const digest = createHash("sha256")
       .update(JSON.stringify(args.input))
@@ -191,9 +204,9 @@ export class ConnectionBroker {
     if (!binding.capabilities.includes(args.action)) {
       await this.connections.audit({
         identity: args.identity,
-        projectId: allocation.projectId,
+        projectId: scope.projectId,
         connectionId: binding.connectionId,
-        allocationId: allocation.id,
+        allocationId: scope.allocationId,
         eventType: "connection.invoked",
         outcome: "denied",
         action: args.action,
@@ -209,6 +222,9 @@ export class ConnectionBroker {
           "contained" &&
         !(await this.readsOnly({
           identity: args.identity,
+          actor,
+          scope,
+          alias: binding.alias,
           connectionId: binding.connectionId,
           capabilities: binding.capabilities,
           provider,
@@ -217,9 +233,9 @@ export class ConnectionBroker {
       ) {
         await this.connections.audit({
           identity: args.identity,
-          projectId: allocation.projectId,
+          projectId: scope.projectId,
           connectionId: binding.connectionId,
-          allocationId: allocation.id,
+          allocationId: scope.allocationId,
           eventType: "connection.invoked",
           outcome: "denied",
           action: args.action,
@@ -237,7 +253,7 @@ export class ConnectionBroker {
     await requireSandboxing();
     const review = await this.review({
       ...args,
-      projectId: allocation.projectId,
+      projectId: scope.projectId,
       connection: {
         id: binding.connectionId,
         kind: binding.providerKind,
@@ -247,9 +263,9 @@ export class ConnectionBroker {
     if (review.verdict === "deny") {
       await this.connections.audit({
         identity: args.identity,
-        projectId: allocation.projectId,
+        projectId: scope.projectId,
         connectionId: binding.connectionId,
-        allocationId: allocation.id,
+        allocationId: scope.allocationId,
         eventType: "connection.invoked",
         outcome: "denied",
         action: args.action,
@@ -266,7 +282,7 @@ export class ConnectionBroker {
       );
     await requireSandboxing();
     try {
-      await this.connections.refreshIfNeeded({
+      await this.connections.refreshForUse({
         identity: args.identity,
         connectionId: binding.connectionId,
       });
@@ -279,7 +295,7 @@ export class ConnectionBroker {
               ? undefined
               : await this.gateway.projectRemote?.({
                   tenantId: args.identity.tenantId,
-                  projectId: allocation.projectId,
+                  projectId: scope.projectId,
                 }),
           })
         : undefined;
@@ -301,6 +317,13 @@ export class ConnectionBroker {
             input: args.input,
             capabilities: binding.capabilities,
             connection: { id: connection.id, revision: connection.revision },
+            context: this.connections.providerContext({
+              identity: actor,
+              connection,
+              projectId: scope.projectId,
+              environment: scope.environment,
+              alias: binding.alias,
+            }),
             ...(repositories ? { repositories } : {}),
           });
         },
@@ -308,9 +331,9 @@ export class ConnectionBroker {
       args.signal?.throwIfAborted();
       await this.connections.audit({
         identity: args.identity,
-        projectId: allocation.projectId,
+        projectId: scope.projectId,
         connectionId: binding.connectionId,
-        allocationId: allocation.id,
+        allocationId: scope.allocationId,
         eventType: "connection.invoked",
         outcome: "allowed",
         action: args.action,
@@ -321,9 +344,9 @@ export class ConnectionBroker {
     } catch (cause) {
       await this.connections.audit({
         identity: args.identity,
-        projectId: allocation.projectId,
+        projectId: scope.projectId,
         connectionId: binding.connectionId,
-        allocationId: allocation.id,
+        allocationId: scope.allocationId,
         eventType: "connection.invoked",
         outcome: "error",
         action: args.action,
@@ -334,12 +357,23 @@ export class ConnectionBroker {
         cause instanceof ConnectionUnavailableError ||
         isConnectionAuthorizationExpiredError(cause)
       ) {
-        if (allocation.policy.workflowEnablementId) {
+        // A refresh that could not run now says nothing about authority:
+        // the call fails, the enablement stays on.
+        if (
+          scope.workflowEnablementId &&
+          !(cause instanceof ConnectionTemporarilyUnavailableError)
+        ) {
           await this.workflowEnablements?.().suspendForConnection({
             identity: args.identity,
             connectionId: binding.connectionId,
           });
         }
+        if (cause instanceof ConnectionTemporarilyUnavailableError)
+          throw new ConnectionTemporarilyUnavailableError(
+            args.alias,
+            "Connection is temporarily unavailable",
+            binding.connectionId,
+          );
         throw new ConnectionUnavailableError(
           args.alias,
           isConnectionAuthorizationExpiredError(cause)
@@ -391,14 +425,14 @@ export class ConnectionBroker {
         name: "connection.git",
         attributes: {
           "catamorphic.tenant.id": args.identity.tenantId,
-          "catamorphic.allocation.id": args.allocationId,
+          "catamorphic.scope.allocationId": args.allocationId,
           "catamorphic.connection.alias": args.alias,
           "catamorphic.connection.action":
             args.review?.action ?? `git:${args.access}`,
         },
       },
       async () => {
-        const { allocation, binding, provider } = await this.resolveInvocation({
+        const { scope, binding, provider } = await this.resolveInvocation({
           ...args,
           agentSessionId: args.agentSessionId ?? args.review?.agentSessionId,
         });
@@ -415,9 +449,9 @@ export class ConnectionBroker {
           if (!args.review) return;
           await this.connections.audit({
             identity: args.identity,
-            projectId: allocation.projectId,
+            projectId: scope.projectId,
             connectionId: binding.connectionId,
-            allocationId: allocation.id,
+            allocationId: scope.allocationId,
             eventType: "connection.git",
             outcome,
             action: args.review.action,
@@ -443,7 +477,7 @@ export class ConnectionBroker {
             ? undefined
             : await this.gateway.projectRemote?.({
                 tenantId: args.identity.tenantId,
-                projectId: allocation.projectId,
+                projectId: scope.projectId,
               }),
         });
         const repository = git.remoteBaseUrls
@@ -477,8 +511,8 @@ export class ConnectionBroker {
         const review = args.review
           ? await this.review({
               identity: args.identity,
-              projectId: allocation.projectId,
-              allocationId: allocation.id,
+              projectId: scope.projectId,
+              allocationId: scope.allocationId,
               connection: {
                 id: binding.connectionId,
                 kind: binding.providerKind,
@@ -517,7 +551,7 @@ export class ConnectionBroker {
             "This session is contained and may not push",
           );
         try {
-          await this.connections.refreshIfNeeded({
+          await this.connections.refreshForUse({
             identity: args.identity,
             connectionId: binding.connectionId,
           });
@@ -598,7 +632,7 @@ export class ConnectionBroker {
         metadata: { alias: binding.alias, remoteUrl: args.remoteUrl },
       });
     try {
-      await this.connections.refreshIfNeeded({
+      await this.connections.refreshForUse({
         identity: args.identity,
         connectionId: binding.connectionId,
       });
@@ -643,13 +677,12 @@ export class ConnectionBroker {
         name: "connection.model.resolve",
         attributes: {
           "catamorphic.tenant.id": args.identity.tenantId,
-          "catamorphic.allocation.id": args.allocationId,
+          "catamorphic.scope.allocationId": args.allocationId,
           "catamorphic.connection.alias": args.alias,
         },
       },
       async () => {
-        const { allocation, binding, provider } =
-          await this.resolveInvocation(args);
+        const { scope, binding, provider } = await this.resolveInvocation(args);
         const endpoint = provider.model;
         if (!endpoint) {
           throw new ConnectionActionRefusedError(
@@ -659,9 +692,9 @@ export class ConnectionBroker {
         if (!binding.capabilities.includes(MODEL_CAPABILITY)) {
           await this.connections.audit({
             identity: args.identity,
-            projectId: allocation.projectId,
+            projectId: scope.projectId,
             connectionId: binding.connectionId,
-            allocationId: allocation.id,
+            allocationId: scope.allocationId,
             eventType: "connection.model",
             outcome: "denied",
             metadata: {
@@ -676,7 +709,7 @@ export class ConnectionBroker {
           );
         }
         try {
-          await this.connections.refreshIfNeeded({
+          await this.connections.refreshForUse({
             identity: args.identity,
             connectionId: binding.connectionId,
           });
@@ -689,7 +722,7 @@ export class ConnectionBroker {
             endpoint,
             headers,
             binding,
-            projectId: allocation.projectId,
+            projectId: scope.projectId,
           };
         } catch (cause) {
           if (
@@ -736,13 +769,12 @@ export class ConnectionBroker {
         name: "connection.http.resolve",
         attributes: {
           "catamorphic.tenant.id": args.identity.tenantId,
-          "catamorphic.allocation.id": args.allocationId,
+          "catamorphic.scope.allocationId": args.allocationId,
           "catamorphic.connection.alias": args.alias,
         },
       },
       async () => {
-        const { allocation, binding, provider } =
-          await this.resolveInvocation(args);
+        const { scope, binding, provider } = await this.resolveInvocation(args);
         const endpoint = provider.http;
         if (!endpoint) {
           throw new ConnectionActionRefusedError(
@@ -754,7 +786,7 @@ export class ConnectionBroker {
             "contained"
           : false;
         try {
-          await this.connections.refreshIfNeeded({
+          await this.connections.refreshForUse({
             identity: args.identity,
             connectionId: binding.connectionId,
           });
@@ -767,7 +799,7 @@ export class ConnectionBroker {
             endpoint,
             headers,
             binding,
-            projectId: allocation.projectId,
+            projectId: scope.projectId,
             // Reading is the provider's call; without one, GET reads.
             reads: binding.capabilities.filter(
               (capability) =>
@@ -986,11 +1018,11 @@ export class ConnectionBroker {
   private async review(args: {
     identity: Identity;
     projectId: string;
-    allocationId: string;
+    allocationId?: string;
     connection: { id: string; kind: string; alias: string };
     action: string;
     input: Json;
-    caller?: "agent" | "workflow";
+    caller?: "agent" | "workflow" | "member";
     agentSessionId?: string;
     /** The member acting, when the caller already knows it. */
     actor?: string;
@@ -998,15 +1030,16 @@ export class ConnectionBroker {
     | { verdict: "allow"; metadata: Json }
     | { verdict: "deny"; reason: string; metadata: Json }
   > {
-    if (this.gateway.guards.length === 0) {
-      return { verdict: "allow", metadata: {} };
-    }
     const caller = args.caller ?? "workflow";
     const actor =
       args.actor ||
       (args.agentSessionId &&
         (await this.gateway.sessionOwner?.(args.agentSessionId))) ||
       args.identity.externalUserId;
+    // Every reviewed action's audit row says who acted and how.
+    if (this.gateway.guards.length === 0) {
+      return { verdict: "allow", metadata: { actor, caller } };
+    }
     const outcome = await reviewConnectionAction({
       guards: this.gateway.guards,
       ...(this.gateway.guardTimeoutMs
@@ -1018,7 +1051,7 @@ export class ConnectionBroker {
         actor,
         caller,
         ...(args.agentSessionId ? { agentSessionId: args.agentSessionId } : {}),
-        allocationId: args.allocationId,
+        ...(args.allocationId ? { allocationId: args.allocationId } : {}),
         connection: args.connection,
         action: args.action,
         input: args.input,
@@ -1070,6 +1103,10 @@ export class ConnectionBroker {
   /** Whether a provider action only reads (ADR 0176). */
   private async readsOnly(args: {
     identity: Identity;
+    /** The member the call acts for, for the provider's context. */
+    actor: Identity;
+    scope: InvocationScope;
+    alias: string;
     connectionId: string;
     capabilities: readonly string[];
     provider: ConnectionProvider;
@@ -1081,8 +1118,18 @@ export class ConnectionBroker {
     const actions = await this.connections.withCredential({
       identity: args.identity,
       connectionId: args.connectionId,
-      use: (material) =>
-        listActions({ material, capabilities: args.capabilities }),
+      use: (material, connection) =>
+        listActions({
+          material,
+          context: this.connections.providerContext({
+            identity: args.actor,
+            connection,
+            projectId: args.scope.projectId,
+            environment: args.scope.environment,
+            alias: args.alias,
+          }),
+          capabilities: args.capabilities,
+        }),
     });
     const annotations = actions.find(
       (candidate) => candidate.name === args.action,
@@ -1095,12 +1142,20 @@ export class ConnectionBroker {
     );
   }
 
-  private async resolveInvocation(args: {
-    identity: Identity;
-    allocationId: string;
-    alias: string;
-    agentSessionId?: string;
-  }) {
+  private async resolveInvocation(
+    args: {
+      identity: Identity;
+      alias: string;
+      agentSessionId?: string;
+    } & BrokerTarget,
+  ): Promise<{
+    scope: InvocationScope;
+    binding: ResolvedConnectionBinding;
+    provider: ConnectionProvider;
+    /** The member the call acts for, resolved live: never a grant id. */
+    actor: Identity;
+  }> {
+    if (!("allocationId" in args)) return this.resolveMemberInvocation(args);
     const allocation = await this.allocations.get({
       identity: args.identity,
       allocationId: args.allocationId,
@@ -1149,7 +1204,13 @@ export class ConnectionBroker {
           identity: args.identity,
           enablementId: allocation.policy.workflowEnablementId,
         });
-      } catch {
+      } catch (error) {
+        if (error instanceof ConnectionTemporarilyUnavailableError)
+          throw new ConnectionTemporarilyUnavailableError(
+            args.alias,
+            "Connection is temporarily unavailable",
+            selected.connectionId,
+          );
         throw new ConnectionUnavailableError(
           args.alias,
           "Workflow enablement authority is unavailable",
@@ -1167,10 +1228,7 @@ export class ConnectionBroker {
     ) {
       throw new ConnectionActionDeniedError("Connection permission denied");
     }
-    await this.connections.refreshIfNeeded({
-      identity,
-      connectionId: selected.connectionId,
-    });
+    // resolveSnapshot refreshes before judging expiry (ADR 0316).
     const [binding] = await this.connections
       .resolveSnapshot({
         identity,
@@ -1195,8 +1253,97 @@ export class ConnectionBroker {
       );
     const provider = this.providers.get(binding.providerKind);
     if (!provider) throw new Error("Connection provider is unavailable");
-    return { allocation, binding, provider };
+    return {
+      scope: {
+        projectId: allocation.projectId,
+        environment: allocation.environmentName,
+        allocationId: allocation.id,
+        ...(allocation.policy.workflowEnablementId
+          ? { workflowEnablementId: allocation.policy.workflowEnablementId }
+          : {}),
+      },
+      binding,
+      provider,
+      actor: identity,
+    };
   }
+
+  /**
+   * A signed-in member's own agent, with no Work session or Allocation
+   * (ADR 0316): the request's identity is already the member's live one,
+   * and the binding resolves from current authority on every call, so a
+   * detach, revocation, or narrowed role takes effect at once. A missing
+   * account surfaces as `AuthenticationRequiredError` for the caller to
+   * offer a connect link.
+   */
+  private async resolveMemberInvocation(args: {
+    identity: Identity;
+    alias: string;
+    projectId: string;
+    environment: string;
+  }) {
+    if (isProjectPrincipal(args.identity.externalUserId))
+      throw new ConnectionActionDeniedError(
+        "Connection authority is unavailable",
+      );
+    // Re-resolve on every call, as the session path does: a role narrowed
+    // while a guard deliberated applies to the re-check after it.
+    const identity = this.gateway.resolveMemberIdentity
+      ? await this.gateway.resolveMemberIdentity({
+          tenantId: args.identity.tenantId,
+          projectId: args.projectId,
+          externalUserId: args.identity.externalUserId,
+        })
+      : args.identity;
+    if (
+      !identity ||
+      identity.tenantId !== args.identity.tenantId ||
+      identity.externalUserId !== args.identity.externalUserId
+    )
+      throw new ConnectionActionDeniedError(
+        "Connection authority is unavailable",
+      );
+    const [binding] = await this.connections
+      .resolve({
+        identity,
+        projectId: args.projectId,
+        environment: args.environment,
+        aliases: [args.alias],
+      })
+      .catch((error: unknown) => {
+        if (error instanceof ConnectionPermissionDeniedError)
+          throw new ConnectionActionDeniedError("Connection permission denied");
+        throw error;
+      });
+    if (!binding)
+      throw new ConnectionActionDeniedError(
+        "Connection authority is unavailable",
+      );
+    const provider = this.providers.get(binding.providerKind);
+    if (!provider) throw new Error("Connection provider is unavailable");
+    return {
+      scope: { projectId: args.projectId, environment: args.environment },
+      binding,
+      provider,
+      actor: identity,
+    };
+  }
+}
+
+/**
+ * Where a brokered call comes from: an existing Allocation (an agent
+ * session or a workflow run), or a signed-in member's own agent naming the
+ * project and Environment it works in (ADR 0316).
+ */
+export type BrokerTarget =
+  | { allocationId: string }
+  | { projectId: string; environment: string };
+
+interface InvocationScope {
+  projectId: string;
+  environment: string;
+  allocationId?: string;
+  workflowEnablementId?: string;
 }
 
 function jsonObject(value: Json | undefined): JsonObject {

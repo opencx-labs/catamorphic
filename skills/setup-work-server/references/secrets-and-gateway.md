@@ -4,8 +4,9 @@ Use this when a Work server should let agents or workflows act on company
 systems: APIs, a production database, internal MCP tools (ADRs 0162, 0163),
 or when developers' remote Environments need the variables they have on their
 laptops (ADR 0206). The rule for company systems: workloads get permission to
-act, never the credential. The Work server holds credentials in its vault and
-makes each call itself, after any guards the company added review it.
+act, never the credential. The Work server holds credentials in its vault (or
+the host's own, see below) and makes each call itself, after any guards the
+company added review it.
 
 Simple servers need none of this. Add it when a project needs a system that
 holds company data.
@@ -14,11 +15,11 @@ holds company data.
 
 | Need | Use |
 | --- | --- |
-| An HTTP API with a key (billing, CRM, internal service) that agents call | An `http` gateway connection |
-| An HTTP API with a shared key that code in a sandbox calls (a dev server or tests reading a logging cluster) | The same `http` gateway connection, reached at `WORK_HTTP_<ALIAS>`: [HTTP APIs from sandboxes](#http-apis-from-sandboxes-through-the-gateway) |
-| Reading a production database | A `postgres` gateway connection to a read-only replica role |
-| Tools behind an MCP server | An `mcp` gateway connection |
-| Git with a company remote from agents' sandboxes (fetch, push a fix branch) | A Git-capable connection (`git` gateway entry, or the GitHub provider) bound with `git` rules |
+| An HTTP API with a key (billing, CRM, internal service) that agents call | An HTTP API connection (`defineHttpApiConnectionProvider`) |
+| An HTTP API with a shared key that code in a sandbox calls (a dev server or tests reading a logging cluster) | The same HTTP API connection, reached at `WORK_HTTP_<ALIAS>`: [HTTP APIs from sandboxes](#http-apis-from-sandboxes-through-the-gateway) |
+| Reading a production database | A Postgres connection (`definePostgresConnectionProvider`) to a read-only replica role |
+| Tools behind an MCP server | An MCP connection (`defineMcpConnectionProvider`) |
+| Git with a company remote from agents' sandboxes (fetch, push a fix branch) | A Git-capable connection (`defineGitConnectionProvider`, or the built-in GitHub provider) bound with `git` rules |
 | A value a workflow's own code must read (a webhook signing secret, a non-sensitive token) | A project secret (`defineSecrets`), sealed in the vault |
 | A variable developers' code needs in remote Environments (a Sentry DSN, a test Stripe key) | A project secret listed on the Environment: [Secrets in Environments](#secrets-in-environments) |
 | A key each engineer has their own of (a ClickHouse key issued per person) | The same, with a value per member, set by them, an admin, or an onboarding workflow |
@@ -45,6 +46,37 @@ matters.
   the deployment already uses, or it refuses to start.
 - A custom server can fetch keys from a key management service at boot with
   the `vaultKeys` hook of `@catamorphic/work-server`.
+- Or keep credentials out of Work entirely: pass your own `CredentialVault`
+  (a company secret manager, an HSM) as `hooks.credentialVault` (ADR 0315).
+  Work then stores every connection key, OAuth token and project secret
+  there, writes no vault key or credentials directory, and refuses to start
+  if `WORK_VAULT_KEY` or the `vaultKeys` hook is also set: the vault you
+  supply keeps its own keys.
+- Several stores at once: every write tells the vault its `placement`
+  (purpose such as `connection`, `project-secret` or `personal-file`, the
+  owner, and the project), and `routeCredentialVaults` from
+  `@catamorphic/server-sdk` sends each write to the store your function
+  picks. Each stored ref remembers its store, so changing the function moves
+  only new writes (ADR 0316):
+
+  ```ts
+  credentialVault: routeCredentialVaults({
+    vaults: { members: memberTokensVault, company: companySecretsVault },
+    fallback: "company",
+    select: ({ placement }) =>
+      placement.owner.kind === "member" ? "members" : "company",
+  }),
+  ```
+
+  Moving an existing deployment onto your own vaults: name the vault that
+  already holds its records as `fallback` (refs written before routing go
+  there), or enter every credential again.
+- A connection can also keep nothing at all: a provider that declares
+  `keepsNoCredential: true` is stored as connected with no record, and each
+  action call's `context` (tenant, project, Environment, alias, principal,
+  acting member) lets it fetch or issue its credential from your own
+  systems at that moment. Such a provider cannot serve the gateway's Git,
+  model or sandbox HTTP routes, which forward a stored credential.
 
 Store all of these with the deployment's secret mechanism. Never commit them,
 print them, or pass them to agents.
@@ -65,42 +97,93 @@ The callback state never grants root identity. Request, step and run
 payloads are durable application data: never send credential values as workflow
 inputs or return them as outputs.
 
-## The gateway configuration
+## Connections are host code
 
-`WORK_GATEWAY_CONFIG` names a JSON file read at startup:
+The gateway brokers GitHub and the `anthropic` and `openai` model APIs
+built in, plus the connection providers your server passes as
+`hooks.connectionProviders` (ADRs 0294, 0315). There is no connection file:
+each provider is a function call in your server's entry point, and a vendor
+Work does not know is a provider you write.
 
-```json
-{
-  "connections": [
-    { "type": "postgres", "kind": "prod-replica", "displayName": "Production (replica)",
-      "maxRows": 500, "maxCost": 100000, "statementTimeoutMs": 10000, "poolSize": 4 },
-    { "type": "http", "kind": "billing", "displayName": "Billing API",
-      "baseUrl": "https://api.billing.example/v1", "paths": ["/invoices", "/customers"] },
-    { "type": "http", "kind": "logs-cluster", "displayName": "Logs (ClickHouse)",
-      "baseUrl": "https://logs.example.com:8443", "auth": { "basic": true } },
-    { "type": "http", "kind": "slack", "displayName": "Slack", "baseUrl": "https://slack.com/api",
-      "actions": [
-        { "name": "conversations.replies", "method": "get", "path": "/conversations.replies" },
-        { "name": "chat.postMessage", "method": "post", "path": "/chat.postMessage" }
-      ] },
-    { "kind": "company", "displayName": "Company tools",
-      "url": "https://tools.example.com/mcp" },
-    { "kind": "slack-mcp", "displayName": "Slack (as yourself)", "url": "https://mcp.slack.com/mcp",
-      "oauth": { "client": { "id": "1234.5678", "secretEnv": "SLACK_CLIENT_SECRET" } } },
-    { "type": "git", "kind": "company-git", "displayName": "Company Git",
-      "baseUrl": "https://git.example.com/" }
-  ]
-}
+```ts
+// apps/server/custom/server.ts
+import {
+  createWorkServer,
+  defineGitConnectionProvider,
+  defineHttpApiConnectionProvider,
+  defineMcpConnectionProvider,
+  definePostgresConnectionProvider,
+  workServerConfigFromEnv,
+} from "@catamorphic/work-server";
+
+const server = await createWorkServer({
+  config: workServerConfigFromEnv(process.env),
+  hooks: {
+    connectionProviders: [
+      definePostgresConnectionProvider({
+        kind: "prod-replica",
+        displayName: "Production (replica)",
+        maxRows: 500,
+        maxCost: 100_000,
+        statementTimeoutMs: 10_000,
+        poolSize: 4,
+      }),
+      defineHttpApiConnectionProvider({
+        kind: "billing",
+        displayName: "Billing API",
+        baseUrl: "https://api.billing.example/v1",
+        paths: ["/invoices", "/customers"],
+      }),
+      defineHttpApiConnectionProvider({
+        kind: "logs-cluster",
+        displayName: "Logs (ClickHouse)",
+        baseUrl: "https://logs.example.com:8443",
+        auth: { basic: true },
+      }),
+      defineHttpApiConnectionProvider({
+        kind: "slack",
+        displayName: "Slack",
+        baseUrl: "https://slack.com/api",
+        actions: [
+          { name: "conversations.replies", method: "get", path: "/conversations.replies" },
+          { name: "chat.postMessage", method: "post", path: "/chat.postMessage" },
+        ],
+      }),
+      defineMcpConnectionProvider({
+        kind: "company",
+        displayName: "Company tools",
+        server: { transport: "http", url: "https://tools.example.com/mcp" },
+      }),
+      defineMcpConnectionProvider({
+        kind: "slack-mcp",
+        displayName: "Slack (as yourself)",
+        server: { transport: "http", url: "https://mcp.slack.com/mcp" },
+        oauth: {
+          client: {
+            clientId: "1234.5678",
+            clientSecret: process.env.SLACK_CLIENT_SECRET,
+          },
+        },
+      }),
+      defineGitConnectionProvider({
+        kind: "company-git",
+        displayName: "Company Git",
+        baseUrl: "https://git.example.com/",
+      }),
+    ],
+  },
+});
 ```
 
-Connection kinds become connection providers: what a connection can reach
-and how. The file declares mechanics (limits, paths, named actions), not
-review policy, and holds no credential; guards are code in a custom server
-([Guards are host code](#guards-are-host-code)). GitHub
-is built in as the `github` kind ([Connect GitHub](connect-github.md)); do
-not declare it here.
+A provider says what a connection can reach and how: mechanics (limits,
+paths, named actions), not review policy, and no credential; credentials are
+stored per connection in the vault, and guards are code too
+([Guards are host code](#guards-are-host-code)). GitHub is built in as the
+`github` kind ([Connect GitHub](connect-github.md)); do not declare it. The
+helpers refuse limits above their ceilings when the server starts. A
+provider exposing `close()` (Postgres pools) is closed at shutdown.
 
-- `http`: `maxResponseBytes` (at most 16 MiB, default 1 MiB) is the largest
+- `defineHttpApiConnectionProvider`: `maxResponseBytes` (at most 16 MiB, default 1 MiB) is the largest
   part of a body one call returns, and `timeoutMs` (at most 120000, default
   30000) bounds each request. A larger GET body is read in parts: the result
   carries `range.nextOffset` and `range.totalBytes`, and the agent asks for
@@ -114,13 +197,13 @@ not declare it here.
   a named action passes `query`, `headers`, and `body`, never a path.
   [Connect Slack](connect-slack.md) is the worked example. `auth` says how
   the stored key goes upstream: `Authorization: Bearer <key>` by default,
-  `{ "header": "X-Api-Key" }` (with an optional `scheme`), or
-  `{ "basic": true }`, where the service connection stores `user:password`
-  and the gateway sends HTTP Basic. An entry without `actions` is also
+  `{ header: "X-Api-Key" }` (with an optional `scheme`), or
+  `{ basic: true }`, where the service connection stores `user:password`
+  and the gateway sends HTTP Basic. A provider without `actions` is also
   reachable by code in sandboxes
   ([HTTP APIs from sandboxes](#http-apis-from-sandboxes-through-the-gateway));
   one with `actions` is not, since a raw route would reach past them.
-- `postgres`: each service connection keeps up to `poolSize` sessions (at most
+- `definePostgresConnectionProvider`: each service connection keeps up to `poolSize` sessions (at most
   16, default 4), closed after `poolIdleTimeoutMs` idle and at once when the
   credential rotates or is revoked. Every call still gets its own read-only
   transaction, timeouts, cost ceiling, and cursor budget. Workflow calls also
@@ -129,18 +212,17 @@ not declare it here.
   then destroys the borrowed socket; no broader role is required. If the
   database cannot be reached for cancellation, its statement timeout remains
   the backstop.
-- `mcp`: `oauth.client` names a client registered in advance with the MCP
+- `defineMcpConnectionProvider`: `oauth.client` names a client registered in advance with the MCP
   server's authorization server, for servers that do not register clients
   dynamically (Slack's). Register the redirect URI
-  `<WORK_PUBLIC_URL>/api/connection-authorizations/callback`; put a
-  confidential client's secret in the variable `secretEnv` names. A custom
-  server building `config.gateway` in code passes the value as
-  `oauth.client.secret` instead.
-- `git`: any Git host over HTTPS. Its service connection stores a username and
+  `<WORK_PUBLIC_URL>/api/connection-authorizations/callback`; pass a
+  confidential client's secret as `clientSecret`, read from wherever your
+  server keeps secrets.
+- `defineGitConnectionProvider`: any Git host over HTTPS. Its service connection stores a username and
   a password or access token (a form); the gateway uses it for sandboxes'
   fetches and pushes. Code-host providers that serve Git (GitHub) need no
-  entry here.
-- `model`: a model API (`"api": "anthropic"` or `"openai"`, with a
+  provider here.
+- `defineModelConnectionProvider`: a model API (`api: "anthropic"` or `"openai"`, with a
   `baseUrl` for OpenRouter or a self-hosted server) that Claude Code and
   Codex reach from sandboxes through `/api/gateway/model/<alias>/…`, which
   passes any path below the base URL through with the stored key.
@@ -245,7 +327,7 @@ listener, then administrators promote others in the app:
 
 Connect a service connection (the operator routes mirror the API):
 
-1. `GET /_work/operator/connection-providers` lists the kinds from the file.
+1. `GET /_work/operator/connection-providers` lists the provider kinds.
 2. `POST /_work/operator/service-connections` with
    `{ "name": "prod-replica", "providerKind": "prod-replica" }` creates it,
    pending. Names are lowercase; add `"principalKind": "project_service"` and
@@ -286,8 +368,10 @@ use, and which service connection backs each by name:
 }
 ```
 
-`principal` is `member` (each person's own account), `service` (the named
-service connection), or `either`. `capabilities` narrows the alias; leave it
+`principal` is `member` (each person's own account) or `service` (the named
+service connection), never both: to offer both, declare two aliases, such as
+`github` for members and `github-bot` for the service. `capabilities` narrows
+the alias; leave it
 out to keep what the connection allows. Agents and workflows name the alias
 (`"connections": ["prod"]` in an agent definition); roles grant it. Changing a
 binding is a reviewed change to the project, published like any other.
@@ -298,8 +382,7 @@ of the same name wins over the organization's.
 
 A guard reviews each action on the connection kinds it names, from agents and
 workflows alike, and answers `allow`, `deny`, or `escalate`. What a company
-allows is its own policy, so Work ships no guards and the gateway file
-declares none (ADR 0183): a guard is a few lines of code in a custom server.
+allows is its own policy, so Work ships no guards (ADR 0183): a guard is a few lines of code in a custom server.
 The library supplies no company guards; the connection's limits, bindings,
 capabilities, and Git push rules still apply.
 
@@ -450,7 +533,7 @@ credential, and after closing the chat its grant is refused.
 
 Code running in a chat's sandbox (a dev server, a CLI, an SDK, a test suite)
 often needs a company API with a shared key: a logging cluster's HTTP
-interface, an internal service. Bind an `http` gateway connection instead of
+interface, an internal service. Bind an HTTP API connection instead of
 listing the key as a secret (ADR 0212): the code gets the session's grant,
 never the key.
 
@@ -467,7 +550,7 @@ never the key.
   (`"connections": [{ "environment": "dev", "alias": "logs" }]`). Terminals
   in that chat's workspace see the same aliases.
 - The capabilities are the HTTP methods the alias may send (`get` also
-  allows HEAD); leave them out to keep the connection's own. The entry's
+  allows HEAD); leave them out to keep the connection's own. The provider's
   `paths`, when set, bound what may be reached. A contained agent's chat
   only reads (GET and HEAD).
 - Each turn writes `.work-session/env/gateway.sh` beside the project folder:

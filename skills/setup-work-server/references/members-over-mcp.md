@@ -33,6 +33,7 @@ does not allow:
 
 | Member holds | Tools |
 | --- | --- |
+| A role granting connections | `<alias>__<action>` for each granted alias, or `<alias>__connect` until the member connects their own account |
 | Any role | `project_overview`, `documents_*` (reads what the role may read; writes and deletes only the `store/` paths it may write), `list_skills` / `read_skill`, `ask_agent` for their agents, `workflow_run` / `workflow_runs` / `run_details` for their workflows, every deployed `ai.tool-call` workflow as its own tool, `propose_change`, and the share tools (which need `publications:write`, or `publications:read` for `shares_list`) |
 | `program:write` | `program_files`, `program_write`, `program_check` (their private draft) |
 | `program:write` and `program:publish` | `program_deploy` |
@@ -73,9 +74,35 @@ team or shared machine; pass `environment` to choose another Environment
 Continue a conversation with its `sessionId`; the same chat appears in the
 Work app. Server agents reach connected systems, such as a read-only
 production database, through the gateway, reviewed by any guards the
-company added ([secrets and the gateway](secrets-and-gateway.md)). A member's own client
-never receives those credentials; ask a project agent instead. An action a
-guard escalates waits for approval in the Work app.
+company added ([secrets and the gateway](secrets-and-gateway.md)). An
+action a guard escalates waits for approval in the Work app.
+
+## The project's connections as tools
+
+A member's own client also calls the project's connections directly (ADR
+0316). Each alias the member's role grants in the Environment appears as
+native tools named `<alias>__<action>`, with the upstream tool's schema and
+annotations, so the client's own per-tool permissions apply. Add
+`?environment=<name>` to the address to work in another Environment; the
+default is the project's default Environment.
+
+- An alias that acts with each member's own account, not yet connected,
+  lists one `<alias>__connect` tool. It returns a link that works once, for
+  that member only, in a browser signed in to Work as them; after
+  connecting, reconnect the server in the client (`/mcp` in Claude Code) to
+  see the alias's tools. A provider that signs in with a device code
+  connects only in the Work app.
+- An alias that acts with a service connection works once an administrator
+  has authorized it.
+- A role that grants only connections opens this address for those
+  connections and nothing else of the project.
+- Every call checks the member's current roles and the company's guards;
+  removing a role or disconnecting an account takes effect on the next call.
+  An action a guard escalates is refused here, because there is no Work chat
+  to ask in.
+
+The client never receives a credential. The connect page needs the server's
+public address, so a custom server keeps `projectMcp.connectLink`.
 
 ## Sharing with customers
 

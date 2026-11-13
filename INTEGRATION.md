@@ -1044,15 +1044,44 @@ for the current limitations and required evidence. Custom hosts continue to
 inject their own infrastructure and auth.
 
 Pass `credentialVault` and `connectionProviders` to `createCatamorphic` when
-external systems are enabled. The host vault stores opaque encrypted material using an injected store and key.
+external systems are enabled. Both are host code, never configuration (ADR
+0315): the provider helpers are functions a host calls, and the vault may be
+Work's `EncryptedCredentialVault` or any `CredentialVault` over the host's
+own secret manager; a Work server takes them as `hooks.connectionProviders`
+and `hooks.credentialVault`. Work's own `EncryptedCredentialVault` stores
+opaque encrypted material using an injected store and key.
+
+Every vault write carries a trusted `placement` (`purpose`, `owner`,
+`projectId`), set by core, so host code can route it:
+`routeCredentialVaults({ vaults, select, fallback })` sends each write to the
+vault `select` names, keeps each ref on the vault that wrote it, and reads
+refs written before routing from `fallback`. A host adopting its own vault on
+an existing deployment must keep its old records readable this way, or enter
+every credential again. Provider action calls (`invoke`, `listActions`,
+`refresh`, `revoke`) receive a `ConnectionCallContext`: tenant, connection,
+principal, project, Environment, alias, and the live acting member. A
+provider that declares `keepsNoCredential` stores nothing in any vault and
+obtains its credential from that context on each call; it cannot also serve
+the gateway's Git, model or sandbox HTTP routes. Empty material from any
+other provider is refused (ADR 0316).
 Storing project secret values also requires `credentialVault` (ADR 0281),
 even without connection providers. No plaintext storage or automatic legacy
 import exists. Keep production wrapping keys outside the database; use
 `MemoryCredentialVault` only for tests or ephemeral hosts.
 `EncryptedCredentialVault` can use `PostgresObjectStore` or a host store; the
 wrapping key remains outside the database. Provider code runs in the control plane. Workflows call
-`context.connections.<alias>.<action>(args)` and agents use allocation-bound
-Catamorphic MCP grants. Neither receives upstream credentials.
+`context.connections.<alias>.<action>(args)`, Work-hosted agents use
+allocation-bound Catamorphic MCP grants, and members' own agents call the
+project MCP's `<alias>__<action>` tools as caller `member`, with no
+Allocation and live authority on every call (ADR 0316). None receives
+upstream credentials. A host serving members' own agents sets
+`projectMcp.connectLink` to a page that requires a browser signed in as the
+member, calls `connections.redeemConnectionOffer`, sets the returned
+`browserBinding` as an HTTP-only cookie named by
+`connectBindingCookie({ state, loopback })` (one per attempt, `__Host-`
+prefixed unless the public address is loopback), and redirects to the
+challenge; the plugin's callback route reads it with `connectBinding`. The Work server
+ships this page at `/connect/:token`.
 For a shared host, provide `resolveMemberIdentity` so every session connection
 call resolves the member's live authority, including after a human approval.
 The same resolver supplies live identity for OAuth callbacks; `projectId` is
@@ -1107,9 +1136,12 @@ administrators.
 
 Environment bindings are committed in `.work/project.json`:
 `environments.<name>.connections.<alias>` is
-`{ provider, principal: "member" | "service" | "either", service?, capabilities? }`,
+`{ provider, principal: "member" | "service", service?, capabilities? }`,
 where `service` names a service connection (the project's own name first,
-then the tenant's) and `capabilities` narrows the alias. Core reads them with
+then the tenant's) and `capabilities` narrows the alias. An alias acts with
+one authority, never both: a project that wants a member's own account and
+a shared one declares two aliases, and workflows and agents name the alias
+they need (ADR 0316). Core reads them with
 the Environment on demand; there is no binding table or API. A host may offer
 extra aliases beside the committed ones with the `connectionBindings` option
 of `createCatamorphic` (the desktop offers its profile MCP servers this way);

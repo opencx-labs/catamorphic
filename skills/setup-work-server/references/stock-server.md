@@ -39,7 +39,6 @@ Environment variables parsed by `workServerConfigFromEnv` in
 | `DATABASE_URL` | Network Postgres instead of PGlite; then `WORK_SECRET`, `WORK_VAULT_KEY`, `WORK_OPERATOR_SECRET`, and a public URL are required, and the server is a disposable replica (see [replicas](cluster-deployment.md#add-a-control-plane-replica)). |
 | `WORK_SECRET` | Deployment secret for sign-in state. Generated under the data directory when absent (PGlite only). |
 | `WORK_VAULT_KEY`, `WORK_VAULT_PREVIOUS_KEYS` | Credential vault keys (32 bytes, base64); see [secrets and the gateway](secrets-and-gateway.md). |
-| `WORK_GATEWAY_CONFIG` | Connections the gateway brokers (MCP, HTTP APIs, databases, Git hosts, model APIs); see [secrets and the gateway](secrets-and-gateway.md). Guards are host hooks. |
 | `WORK_SANDBOX` and budget variables | `auto` (default), `microsandbox`, `container`, or trusted `local-process`; see the machines reference. |
 | `WORK_IMAGE_BUILDER`, `WORK_SANDBOX_CONTAINERS` | Microsandbox: build project Dockerfiles with `docker` or `podman`; `0` turns off Docker inside sandboxes. See [images, containers, and egress](cluster-deployment.md#images-containers-and-egress). |
 | `WORK_DOCKER_SOCKET`, `WORK_DOCKER_CLI_PLUGINS`, `WORK_UNENFORCED_EGRESS` | Local-process: give sandboxes filtered Docker access through this daemon socket; `accept` runs restricted-egress Environments without enforcement. |
@@ -124,16 +123,17 @@ deployment-owned entry point and image built on the pinned
 data and its `hooks` are code (ADR 0183):
 
 - `workServerConfigFromEnv(process.env)` is the only code that reads `WORK_*`
-  variables and files. It turns the sign-in file into `config.auth` and
-  `WORK_GATEWAY_CONFIG` into `config.gateway`, with the secrets the file names
-  by variable resolved into values. `createWorkServer` reads no config file.
+  variables and files. It turns the sign-in file into `config.auth`.
+  `createWorkServer` reads no config file.
 - A server that keeps configuration in a secret manager builds `config.auth`
-  and `config.gateway` in code instead, in the same shape as the files, and
-  they are validated by the same rules at boot. A Google Workspace directory
+  in code instead, in the same shape as the file, validated by the same
+  rules at boot. A Google Workspace directory
   then takes its service account key inline (`"credentials": { "key": … }`)
   rather than as a file.
-- Guards, directories, and providers go in `hooks`; see
-  [Guards are host code](secrets-and-gateway.md#guards-are-host-code).
+- Connection providers, guards, directories, and a credential vault of your
+  own go in `hooks` (ADR 0315); see
+  [Connections are host code](secrets-and-gateway.md#connections-are-host-code)
+  and [Guards are host code](secrets-and-gateway.md#guards-are-host-code).
 - Generated state stays under the data directory: the vault key, generated
   secrets, the host id, and worker credentials. A server on `DATABASE_URL`
   generates none of these: its configuration supplies every secret, and its

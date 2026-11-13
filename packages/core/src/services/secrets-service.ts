@@ -350,6 +350,13 @@ export class SecretsService {
     const sealed = await vault.put({
       tenantId: args.tenantId,
       material: new TextEncoder().encode(args.value),
+      placement: {
+        purpose: "project-secret",
+        projectId: args.projectId,
+        owner: args.member
+          ? { kind: "member", externalUserId: args.member }
+          : { kind: "project" },
+      },
     });
     const columns = { credential_ref: sealed.id };
     let previous: string | null | undefined;
@@ -1082,7 +1089,12 @@ export class SecretsService {
     const released = await this.db.transaction().execute(async (trx) => {
       const row = await trx
         .selectFrom("agent_sessions")
-        .select(["secrets_held_at", "secrets_delivered_ref"])
+        .select([
+          "secrets_held_at",
+          "secrets_delivered_ref",
+          "project_id",
+          "external_user_id",
+        ])
         .where("id", "=", opts.sessionId)
         .where((eb) =>
           eb.exists(
@@ -1114,6 +1126,11 @@ export class SecretsService {
         ? await vault.put({
             tenantId: opts.tenantId,
             material: new TextEncoder().encode(JSON.stringify(next)),
+            placement: {
+              purpose: "session-secrets",
+              projectId: row.project_id,
+              owner: { kind: "member", externalUserId: row.external_user_id },
+            },
           })
         : undefined;
       await trx

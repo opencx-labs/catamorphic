@@ -3,6 +3,14 @@ import pg from "pg";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { definePostgresConnectionProvider } from "./postgres-connection-provider.js";
 
+/** Who a provider call is for, as core derives it (ADR 0316). */
+const TEST_CONTEXT = {
+  tenantId: "tenant-1",
+  connectionId: "connection-1",
+  principal: { kind: "service" as const, name: "test" },
+  externalUserId: "member-1",
+};
+
 const databaseUrl = process.env.DATABASE_URL;
 const suffix = randomBytes(4).toString("hex");
 const schema = `gateway_${suffix}`;
@@ -92,6 +100,7 @@ describe.skipIf(!databaseUrl)("database gateway connections (ADR 0163)", () => {
     const material = await authorize(provider, urlFor(reader));
     const abort = new AbortController();
     const operation = provider.invoke({
+      context: TEST_CONTEXT,
       material,
       action: "query",
       input: { sql: "SELECT pg_sleep(10)", purpose: "Test cancellation" },
@@ -141,6 +150,7 @@ describe.skipIf(!databaseUrl)("database gateway connections (ADR 0163)", () => {
     });
     const material = await authorize(provider, urlFor(reader));
     const result = await provider.invoke({
+      context: TEST_CONTEXT,
       material,
       action: "query",
       input: {
@@ -173,6 +183,7 @@ describe.skipIf(!databaseUrl)("database gateway connections (ADR 0163)", () => {
     const material = await authorize(provider, urlFor(reader));
     const query = (sql: string) =>
       provider.invoke({
+        context: TEST_CONTEXT,
         material,
         action: "query",
         input: { sql, purpose: "test" },
@@ -205,6 +216,7 @@ describe.skipIf(!databaseUrl)("database gateway connections (ADR 0163)", () => {
     const smallMaterial = await authorize(small, urlFor(reader));
     await expect(
       small.invoke({
+        context: TEST_CONTEXT,
         material: smallMaterial,
         action: "query",
         input: { sql: "SELECT repeat('x', 5000) AS big", purpose: "test" },
@@ -238,6 +250,7 @@ describe.skipIf(!databaseUrl)("database gateway connections (ADR 0163)", () => {
     const connection = { id: `pooled-${suffix}`, revision: 1 };
     const backend = async (revision: number) => {
       const result = await provider.invoke({
+        context: TEST_CONTEXT,
         material,
         action: "query",
         input: { sql: "SELECT pg_backend_pid() AS pid", purpose: "test" },
@@ -268,6 +281,7 @@ describe.skipIf(!databaseUrl)("database gateway connections (ADR 0163)", () => {
     // Every per-call step still applies on a reused session.
     await expect(
       provider.invoke({
+        context: TEST_CONTEXT,
         material,
         action: "query",
         input: { sql: `DELETE FROM ${schema}.orders`, purpose: "test" },
@@ -276,6 +290,7 @@ describe.skipIf(!databaseUrl)("database gateway connections (ADR 0163)", () => {
       }),
     ).rejects.toThrow("only one SELECT");
     const settings = await provider.invoke({
+      context: TEST_CONTEXT,
       material,
       action: "query",
       input: {
@@ -290,6 +305,7 @@ describe.skipIf(!databaseUrl)("database gateway connections (ADR 0163)", () => {
     // must not carry it into the next call.
     const lockKey = Number.parseInt(suffix, 16);
     await provider.invoke({
+      context: TEST_CONTEXT,
       material,
       action: "query",
       input: {
@@ -330,6 +346,7 @@ describe.skipIf(!databaseUrl)("database gateway connections (ADR 0163)", () => {
     });
     const material = await authorize(provider, urlFor(reader));
     const described = await provider.invoke({
+      context: TEST_CONTEXT,
       material,
       action: "schema",
       input: { schema },

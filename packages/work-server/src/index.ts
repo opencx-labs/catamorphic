@@ -2,7 +2,8 @@
  * The Work server as a library (ADRs 0160, 0294). A deployment owns its
  * entry point and image, calling `createWorkServer({ config, hooks })`.
  * `apps/server/src/index.ts` is reference source; config is typed data,
- * hooks are code (ADR 0183).
+ * hooks are code (ADR 0183), connections and the vault among them (ADR
+ * 0315).
  */
 // What a company's own server file needs (ADR 0261), from one package.
 export {
@@ -11,9 +12,13 @@ export {
   ConnectionActionRefusedError,
   type ConnectionGuardVerdict,
   type ConnectionProvider,
+  type CredentialMaterial,
+  type CredentialRef,
+  type CredentialVault,
   type ModelRequest,
   type ModelRequestRewrite,
 } from "@catamorphic/core";
+export { defineMcpConnectionProvider } from "@catamorphic/mcp";
 export {
   defineCapability,
   defineGitConnectionProvider,
@@ -40,11 +45,6 @@ export {
   type WorkExecutionSettings,
   type WorkSandboxBackend,
 } from "./execution-config.js";
-export {
-  type GatewayConfig,
-  GatewayConfigSchema,
-  type GatewayConnectionConfig,
-} from "./gateway/gateway-config.js";
 export type { AccountStanding } from "./identity/account-lifecycle.js";
 export {
   type DirectoryAccountStatus,

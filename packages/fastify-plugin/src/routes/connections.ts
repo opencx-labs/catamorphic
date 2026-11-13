@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import {
   CONNECTION_ALIAS_PATTERN,
   CONNECTION_NAME_PATTERN,
@@ -430,6 +431,13 @@ export function registerConnectionRoutes(
             "Authorization was declined",
           );
         }
+        const browserBinding = connectBinding({
+          header: request.headers.cookie,
+          state: request.query.state,
+          // The public address the browser uses decides the name, not the
+          // address a proxy forwarded the request to.
+          loopback: isLoopbackHost(new URL(apiBase(request)).hostname),
+        });
         return reply.send(
           await connections.completeAuthorizationCallback({
             state: request.query.state,
@@ -437,6 +445,7 @@ export function registerConnectionRoutes(
               ...(request.query.code ? { code: request.query.code } : {}),
               ...(request.query.iss ? { iss: request.query.iss } : {}),
             },
+            ...(browserBinding ? { browserBinding } : {}),
           }),
         );
       } catch (error) {
@@ -491,4 +500,48 @@ function handleConnectionError(
     return reply.status(409).send({ error: error.message });
   }
   throw error;
+}
+
+/**
+ * The cookie a host's connect page sets when a member redeems a connect
+ * link (ADR 0316); an attempt started there completes only with it.
+ */
+export const CONNECT_BINDING_COOKIE = "catamorphic_connect";
+
+/**
+ * The binding cookie's name for one attempt, keyed by its state so several
+ * links redeemed in one browser never overwrite each other. Over HTTPS it
+ * carries the `__Host-` prefix, which no sibling subdomain can set; only a
+ * loopback host uses the plain name.
+ */
+export function connectBindingCookie(args: {
+  state: string;
+  loopback: boolean;
+}): string {
+  const key = createHash("sha256")
+    .update(args.state)
+    .digest("hex")
+    .slice(0, 16);
+  return `${args.loopback ? "" : "__Host-"}${CONNECT_BINDING_COOKIE}_${key}`;
+}
+
+/** The binding the connect page set for this attempt, if any. */
+export function connectBinding(args: {
+  header: string | undefined;
+  state: string;
+  loopback: boolean;
+}): string | undefined {
+  const wanted = connectBindingCookie(args);
+  for (const part of args.header?.split(";") ?? []) {
+    const [name = "", ...value] = part.trim().split("=");
+    if (name === wanted) return value.join("=") || undefined;
+  }
+  return undefined;
+}
+
+/** Whether a request reached a loopback address, where cookies cannot be `__Host-`. */
+export function isLoopbackHost(hostname: string): boolean {
+  return /^(localhost|127(?:\.\d{1,3}){3}|\[::1\]|::1)$/i.test(
+    hostname.replace(/:\d+$/, ""),
+  );
 }

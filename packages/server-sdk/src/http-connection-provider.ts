@@ -51,8 +51,9 @@ export interface HttpApiConnectionOptions {
    */
   actions?: readonly HttpApiAction[];
   /**
-   * Largest part of a response body returned by one call. Default 1 MiB.
-   * A larger GET body is read in byte ranges across calls (`range`).
+   * Largest part of a response body returned by one call. Default 1 MiB,
+   * at most {@link HTTP_MAX_RESPONSE_BYTES}. A larger GET body is read in
+   * byte ranges across calls (`range`).
    */
   maxResponseBytes?: number;
   /**
@@ -60,11 +61,16 @@ export interface HttpApiConnectionOptions {
    * and counting its size. Default 64 MiB.
    */
   maxBodyBytes?: number;
+  /** Per upstream call. Default 30 seconds, at most {@link HTTP_MAX_TIMEOUT_MS}. */
   timeoutMs?: number;
   fetch?: (input: string, init: RequestInit) => Promise<Response>;
 }
 
 const DEFAULT_MAX_RESPONSE_BYTES = 1024 * 1024;
+/** Ceiling on `maxResponseBytes`: what one call may bring into a context. */
+export const HTTP_MAX_RESPONSE_BYTES = 16 * 1024 * 1024;
+/** Ceiling on `timeoutMs`: how long one call may hold the gateway. */
+export const HTTP_MAX_TIMEOUT_MS = 120_000;
 const DEFAULT_MAX_BODY_BYTES = 64 * 1024 * 1024;
 
 /**
@@ -86,6 +92,7 @@ export function defineHttpApiConnectionProvider(
     throw new Error(`${options.kind}: baseUrl must use HTTPS`);
   }
   const basePath = base.pathname.replace(/\/+$/, "");
+  checkLimits(options);
   const auth = keyAuth(options.auth);
   const header = auth.header;
   const maxBytes = options.maxResponseBytes ?? DEFAULT_MAX_RESPONSE_BYTES;
@@ -248,6 +255,25 @@ function keyAuth(auth: HttpApiAuth | undefined): {
 
 function methodNamed(value: string): HttpMethod | undefined {
   return METHODS.find((method) => method === value);
+}
+
+/** Limits within the host's ceilings, and paths below the base URL. */
+function checkLimits(options: HttpApiConnectionOptions): void {
+  const within = (name: string, value: number | undefined, max: number) => {
+    if (
+      value !== undefined &&
+      !(Number.isSafeInteger(value) && value > 0 && value <= max)
+    )
+      throw new Error(
+        `${options.kind}: ${name} must be a whole number from 1 to ${max}`,
+      );
+  };
+  within("maxResponseBytes", options.maxResponseBytes, HTTP_MAX_RESPONSE_BYTES);
+  within("maxBodyBytes", options.maxBodyBytes, Number.MAX_SAFE_INTEGER);
+  within("timeoutMs", options.timeoutMs, HTTP_MAX_TIMEOUT_MS);
+  for (const path of options.paths ?? [])
+    if (!path.startsWith("/"))
+      throw new Error(`${options.kind}: path '${path}' must start with '/'`);
 }
 
 /** Validated named actions, or undefined for the generic method actions. */

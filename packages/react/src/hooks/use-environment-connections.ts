@@ -16,8 +16,8 @@ export interface EnvironmentConnectionBinding {
   environment: string;
   alias: string;
   provider: string;
-  /** Whose authority the alias accepts. */
-  principal: "member" | "service" | "either";
+  /** Whose authority the alias acts with: one, never both (ADR 0316). */
+  principal: "member" | "service";
   /** The service connection's name; shown to connection administrators. */
   service: string | null;
   /** What the binding narrows the alias to; null keeps the connection's own. */

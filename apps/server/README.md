@@ -39,8 +39,8 @@ holding only a machine credential exchanged once for an operator's single-use en
 dial out to the control plane over HTTPS and run agent sandboxes; workflow runs
 and every credential stay on the control plane. For availability, run
 control-plane replicas on shared Postgres with the same `WORK_SECRET`,
-`WORK_VAULT_KEY`, `WORK_OPERATOR_SECRET`, public origin, and sign-in and
-gateway configuration. Replicas are disposable (ADR 0190): each start is a new
+`WORK_VAULT_KEY`, `WORK_OPERATOR_SECRET`, public origin, sign-in
+configuration, and entry point with its connection providers. Replicas are disposable (ADR 0190): each start is a new
 machine, a stopped or lost replica's workflow runs and chats move to the
 others, `/readyz` answers 503 while its lease is not renewing, and
 `/healthz` answers 503 once its lease is lost for good. Workers own their
@@ -123,12 +123,15 @@ Postgres installs store encrypted records in shared object storage under
 `WORK_VAULT_PREVIOUS_KEYS` keeps older keys readable during a rotation. Back up
 the database and protect the key separately. Losing the key makes provider
 connections and project secrets unrecoverable. Project secrets are sealed in
-the same vault; their database rows hold only references.
+the same vault; their database rows hold only references. A deployment that
+keeps secrets in its own secret manager passes it as the `credentialVault`
+hook instead; Work then holds no vault key or records (ADR 0315).
 
-Agents and workflows reach company systems through the connection gateway:
-`WORK_GATEWAY_CONFIG` declares MCP endpoints, HTTP APIs, Git hosts, model APIs,
-and read-only database connections. Add company guards and model routing
-policy in the hooks of your own entry point (ADRs 0183, 0294;
+Agents and workflows reach company systems through the connection gateway.
+MCP endpoints, HTTP APIs, Git hosts, model APIs, and read-only database
+connections are providers your own entry point passes as
+`hooks.connectionProviders`, beside company guards and model routing policy
+(ADRs 0183, 0294, 0315;
 reference source: [`src/index.ts`](src/index.ts);
 [your own image](../../packages/work-server/README.md#your-own-image)). See
 [secrets and the gateway](../../skills/setup-work-server/references/secrets-and-gateway.md).
@@ -153,11 +156,11 @@ Projects commit which Environment may use which named connection in
 API. Members see an Environment's aliases and authorize their own accounts at
 `/api/projects/:id/environments/:environment/connections`.
 
-Provider drivers and OAuth application details are deployment configuration.
+Connection providers and OAuth application details are host code (ADR 0315).
 The library does not supply a shared Slack or Google OAuth identity. Register
-your own provider applications (an `mcp` gateway entry takes a pre-registered
-`oauth.client`), configure their HTTPS callback URLs, and inject further
-connection providers with the `connectionProviders` hook. Service accounts
+your own provider applications (`defineMcpConnectionProvider` takes a
+pre-registered `oauth.client`), configure their HTTPS callback URLs, and pass
+providers with the `connectionProviders` hook. Service accounts
 are explicit project or tenant service connections and are never inferred from
 a member login. Unattended workflows use the connections authorized by their
 explicit enablement, including member connections for member-owned enablements.

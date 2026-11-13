@@ -1,6 +1,6 @@
 # 0183 — Guards are host code; Work server config is typed data
 
-- **Status:** Accepted
+- **Status:** Accepted (amended by [0315](0315-connections-and-vaults-are-host-code.md): connections are provider code and `config.gateway` is gone)
 - **Date:** 2026-09-27
 - **Amends:** 0160, 0162, 0163
 

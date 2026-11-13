@@ -152,7 +152,7 @@ describe("project Environment policy", () => {
               capabilities: ["query", "explain", "schema"],
             },
             mail: { provider: "mail", principal: "member" },
-            docs: { provider: "docs", principal: "either", service: "docs" },
+            docs: { provider: "docs", principal: "service", service: "docs" },
           },
         },
         default: { workloads: ["agent", "workflow"] },
@@ -173,7 +173,7 @@ describe("project Environment policy", () => {
         capabilities: ["query", "explain", "schema"],
       },
       mail: { provider: "mail", principal: "member" },
-      docs: { provider: "docs", principal: "either", service: "docs" },
+      docs: { provider: "docs", principal: "service", service: "docs" },
     });
     expect(parsed.environments.default?.connections).toBeUndefined();
   });
@@ -192,6 +192,11 @@ describe("project Environment policy", () => {
     [
       "an unknown principal",
       { provider: "mail", principal: "robot" },
+      "principal",
+    ],
+    [
+      "an alias that accepts both a member and a service (ADR 0316)",
+      { provider: "docs", principal: "either", service: "docs" },
       "principal",
     ],
     [

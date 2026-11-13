@@ -21,6 +21,11 @@ export type AuthorizationChallenge =
     };
 
 export interface ConnectionAuthorizationResult {
+  /**
+   * What Work keeps for the connection, in the host's vault. A provider
+   * that `keepsNoCredential` returns it empty; for any other provider empty
+   * material is an error (ADR 0316).
+   */
   material: Uint8Array;
   account?: Json;
   scopes?: readonly string[];
@@ -142,6 +147,28 @@ export interface ConnectionHttpEndpoint {
   headers(args: { material: Uint8Array }): Record<string, string>;
 }
 
+/**
+ * Who and what a provider call is for, derived by core from the
+ * connection and its caller, never from tool arguments (ADR 0316). A
+ * provider may use it to mint or fetch a credential per call, scope an
+ * upstream session, or tag the upstream audit trail.
+ */
+export interface ConnectionCallContext {
+  tenantId: string;
+  connectionId: string;
+  /** Whose authority the connection carries. */
+  principal:
+    | { kind: "member"; externalUserId: string }
+    | { kind: "service"; name: string | null };
+  /** The project of the call; absent for a tenant-wide maintenance call. */
+  projectId?: string;
+  /** The Environment and alias the call came through, when it did. */
+  environment?: string;
+  alias?: string;
+  /** The member the call acts for: an agent's person, a run's caller. */
+  externalUserId: string;
+}
+
 export interface ConnectionProvider {
   readonly kind: string;
   readonly displayName: string;
@@ -162,6 +189,14 @@ export interface ConnectionProvider {
    */
   readonly mcp?: boolean;
   /**
+   * The provider obtains its credential itself on each call, from the
+   * call's `context` (a host secret manager, a token service), so Work
+   * stores nothing for its connections and its calls receive empty
+   * material (ADR 0316). Not available with `git`, `model` or `http`,
+   * whose gateway routes forward stored credentials.
+   */
+  readonly keepsNoCredential?: boolean;
+  /**
    * Start authorizing a member's or a service connection. `projectId` is
    * absent for a tenant service connection; `externalUserId` is whoever
    * authorizes (the member, or the administrator for a service).
@@ -176,6 +211,9 @@ export interface ConnectionProvider {
      * e.g. GitHub asks a person to sign in but an administrator for an App.
      */
     principal: "member" | "service";
+    /** The Environment and alias a member connects through, when known. */
+    environment?: string;
+    alias?: string;
     redirectUri: string;
     state: string;
   }): Promise<{ challenge: AuthorizationChallenge; privateState?: Uint8Array }>;
@@ -184,6 +222,9 @@ export interface ConnectionProvider {
     projectId?: string;
     externalUserId: string;
     principal: "member" | "service";
+    /** The Environment and alias a member connects through, when known. */
+    environment?: string;
+    alias?: string;
     callback: Readonly<Record<string, string>>;
     privateState?: Uint8Array;
   }): Promise<ConnectionAuthorizationResult>;
@@ -193,6 +234,7 @@ export interface ConnectionProvider {
     /** Absolute ISO deadline of the workflow attempt, when invoked by one. */
     deadlineAt?: string;
     material: Uint8Array;
+    context: ConnectionCallContext;
     action: string;
     input: Json;
     capabilities: readonly string[];
@@ -212,6 +254,7 @@ export interface ConnectionProvider {
   }): Promise<Json>;
   listActions?(args: {
     material: Uint8Array;
+    context: ConnectionCallContext;
     capabilities: readonly string[];
   }): Promise<readonly ConnectionActionDefinition[]>;
   /**
@@ -222,8 +265,14 @@ export interface ConnectionProvider {
   readOnly?(action: string): boolean;
   refresh?(args: {
     material: Uint8Array;
+    context: ConnectionCallContext;
+    /** Aborts an exchange that would outlive the refresh lease. */
+    signal?: AbortSignal;
   }): Promise<ConnectionAuthorizationResult>;
-  revoke?(args: { material: Uint8Array }): Promise<void>;
+  revoke?(args: {
+    material: Uint8Array;
+    context: ConnectionCallContext;
+  }): Promise<void>;
   /**
    * Drop anything held for a connection's earlier credentials (pooled
    * sessions). Called after rotation, refresh, and revocation.
@@ -245,6 +294,14 @@ export class ConnectionProviderRegistry {
     for (const provider of providers) {
       if (!/^[a-z0-9][a-z0-9._-]*$/.test(provider.kind)) {
         throw new Error(`Invalid connection provider kind '${provider.kind}'`);
+      }
+      if (
+        provider.keepsNoCredential &&
+        (provider.git || provider.model || provider.http)
+      ) {
+        throw new Error(
+          `Connection provider '${provider.kind}' keeps no credential but serves a gateway route that forwards one`,
+        );
       }
       if (this.providers.has(provider.kind)) {
         throw new Error(`Duplicate connection provider '${provider.kind}'`);

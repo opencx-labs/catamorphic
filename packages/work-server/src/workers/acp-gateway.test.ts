@@ -5,6 +5,7 @@ import net from "node:net";
 import os from "node:os";
 import path from "node:path";
 import type { Identity } from "@catamorphic/core";
+import { defineModelConnectionProvider } from "@catamorphic/server-sdk";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { executionSettingsFromEnv } from "../execution-config.js";
 import {
@@ -127,21 +128,6 @@ beforeAll(async () => {
     { mode: 0o755 },
   );
 
-  const gatewayFile = path.join(root, "gateway.json");
-  fs.writeFileSync(
-    gatewayFile,
-    JSON.stringify({
-      connections: [
-        {
-          type: "model",
-          kind: "openrouter",
-          displayName: "OpenRouter",
-          api: "openai",
-          baseUrl: `http://127.0.0.1:${upstreamAddress.port}/api/v1`,
-        },
-      ],
-    }),
-  );
   const port = await freePort();
   base = `http://127.0.0.1:${port}`;
   server = await createWorkServer({
@@ -151,11 +137,18 @@ beforeAll(async () => {
       env: {
         WORK_FAKE_AGENT: "1",
         WORK_CONTROL_PLANE_WORKLOADS: "workflow",
-        WORK_GATEWAY_CONFIG: gatewayFile,
         PATH: process.env.PATH,
       },
     }),
     hooks: {
+      connectionProviders: [
+        defineModelConnectionProvider({
+          kind: "openrouter",
+          displayName: "OpenRouter",
+          api: "openai",
+          baseUrl: `http://127.0.0.1:${upstreamAddress.port}/api/v1`,
+        }),
+      ],
       // The server's own code (ADR 0261): it names the project to
       // OpenRouter and pins the providers it may route to, with zero data
       // retention, whatever an agent asks.

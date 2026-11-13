@@ -56,29 +56,27 @@ a repository, or a command line an agent can read:
 - **Signing Secret** (Basic Information, App Credentials): the project secret
   `SLACK_SIGNING_SECRET`.
 
-## 2. Declare the gateway entry
+## 2. Add the Slack provider
 
-Add Slack to the file `WORK_GATEWAY_CONFIG` names and restart the server. Each
-Web API method is a named action with a fixed method and path, so bindings
-grant methods, not "any POST":
+Add Slack to your server's `hooks.connectionProviders` and restart it ([connections are host
+code](secrets-and-gateway.md#connections-are-host-code)). Each Web API method
+is a named action with a fixed method and path, so bindings grant methods,
+not "any POST":
 
-```json
-{
-  "connections": [
-    {
-      "type": "http", "kind": "slack", "displayName": "Slack",
-      "baseUrl": "https://slack.com/api",
-      "actions": [
-        { "name": "conversations.history", "method": "get", "path": "/conversations.history", "description": "Read a conversation's messages" },
-        { "name": "conversations.replies", "method": "get", "path": "/conversations.replies", "description": "Read a thread" },
-        { "name": "chat.postMessage", "method": "post", "path": "/chat.postMessage", "description": "Post a message or a thread reply" },
-        { "name": "chat.getPermalink", "method": "get", "path": "/chat.getPermalink", "description": "Link to one message" },
-        { "name": "users.info", "method": "get", "path": "/users.info", "description": "Look up a person" },
-        { "name": "search.messages", "method": "get", "path": "/search.messages", "description": "Search messages (user token only)" }
-      ]
-    }
-  ]
-}
+```ts
+defineHttpApiConnectionProvider({
+  kind: "slack",
+  displayName: "Slack",
+  baseUrl: "https://slack.com/api",
+  actions: [
+    { name: "conversations.history", method: "get", path: "/conversations.history", description: "Read a conversation's messages" },
+    { name: "conversations.replies", method: "get", path: "/conversations.replies", description: "Read a thread" },
+    { name: "chat.postMessage", method: "post", path: "/chat.postMessage", description: "Post a message or a thread reply" },
+    { name: "chat.getPermalink", method: "get", path: "/chat.getPermalink", description: "Link to one message" },
+    { name: "users.info", method: "get", path: "/users.info", description: "Look up a person" },
+    { name: "search.messages", method: "get", path: "/search.messages", description: "Search messages (user token only)" },
+  ],
+});
 ```
 
 To have an agent ask its person before posting anywhere, add a guard in a
@@ -110,8 +108,9 @@ Members may instead connect their own token when a binding says
 `"principal": "member"`, for their own chats only.
 
 **Slack's MCP server** is an alternative for people rather than automations:
-an `mcp` entry (`"url": "https://mcp.slack.com/mcp"`) with Slack's
-pre-registered client in `oauth.client`, bound with `"principal": "member"`.
+a `defineMcpConnectionProvider` provider (`server: { transport: "http",
+url: "https://mcp.slack.com/mcp" }`) with Slack's pre-registered client in
+`oauth.client`, bound to its own alias with `"principal": "member"`.
 Register `<WORK_PUBLIC_URL>/api/connection-authorizations/callback` as its
 redirect URL.
 

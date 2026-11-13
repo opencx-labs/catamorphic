@@ -9,10 +9,6 @@ import {
   type WorkExecutionSettings,
 } from "./execution-config.js";
 import {
-  type GatewayConfig,
-  gatewayConfigFromFile,
-} from "./gateway/gateway-config.js";
-import {
   type MachinesConfig,
   machineClassesProblem,
   machinesConfigFromFile,
@@ -39,8 +35,8 @@ export interface WorkAgentSettings {
  * validated at boot by the same schemas as the image's files (ADR 0183). The
  * image derives it from `WORK_*` variables and files with
  * {@link workServerConfigFromEnv}, the only code that knows either; a custom
- * server may construct it in code. Code, such as connection guards, goes in
- * `hooks`.
+ * server may construct it in code. Code, such as connection providers,
+ * connection guards and a credential vault, goes in `hooks` (ADR 0315).
  */
 export interface WorkServerConfig {
   /**
@@ -95,12 +91,6 @@ export interface WorkServerConfig {
   execution: WorkExecutionSettings;
   agent: WorkAgentSettings;
   /**
-   * Connections the gateway brokers (MCP endpoints, HTTP APIs, databases,
-   * Git hosts, model APIs) with their secrets resolved (ADRs 0162, 0163).
-   * The image reads it from `WORK_GATEWAY_CONFIG`.
-   */
-  gateway?: GatewayConfig;
-  /**
    * How long one of `hooks.connectionGuards` may take before its action
    * goes to a person (default 30 seconds, ADR 0183).
    */
@@ -139,6 +129,12 @@ export interface WorkServerConfig {
 export function workServerConfigFromEnv(
   env: Record<string, string | undefined>,
 ): WorkServerConfig {
+  if (env.WORK_GATEWAY_CONFIG) {
+    // Refuse rather than ignore: the connections it named would vanish.
+    throw new Error(
+      "WORK_GATEWAY_CONFIG is no longer read. Pass connection providers as code in hooks.connectionProviders (ADR 0315).",
+    );
+  }
   const port = Number(env.PORT ?? 4700);
   const publicUrl = env.WORK_PUBLIC_URL?.replace(/\/+$/, "");
   if (publicUrl && !isSecurePublicUrl(publicUrl)) {
@@ -186,14 +182,6 @@ export function workServerConfigFromEnv(
     machineLabels: parseMachineLabels(env.WORK_MACHINE_LABELS),
     execution: executionSettingsFromEnv(env),
     agent: agentSettingsFromEnv(env),
-    ...(env.WORK_GATEWAY_CONFIG
-      ? {
-          gateway: gatewayConfigFromFile({
-            path: env.WORK_GATEWAY_CONFIG,
-            env,
-          }),
-        }
-      : {}),
     ...(env.WORK_WEB_PUSH_SUBJECT
       ? { webPushSubject: env.WORK_WEB_PUSH_SUBJECT }
       : {}),

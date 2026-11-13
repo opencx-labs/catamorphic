@@ -6,7 +6,11 @@ export type ConnectionPrincipalKind =
   | "project_service"
   | "tenant_service";
 export type ConnectionStatus = "pending" | "ready" | "expired" | "revoked";
-export type ConnectionRequirementPrincipal = "member" | "service" | "either";
+/**
+ * Whose authority an alias acts with (ADR 0316): each member's own account,
+ * or one named service connection. Never both, so no precedence exists.
+ */
+export type ConnectionBindingPrincipal = "member" | "service";
 
 export const CONNECTION_ALIAS_PATTERN = /^[A-Za-z0-9][A-Za-z0-9_-]*$/;
 
@@ -20,7 +24,6 @@ export function assertConnectionAlias(alias: string): void {
 
 export interface ConnectionRequirement {
   alias: string;
-  principal?: ConnectionRequirementPrincipal;
   capabilities?: string[];
   optional?: boolean;
 }
@@ -56,7 +59,7 @@ export interface ConnectionRecord {
  */
 export interface EnvironmentConnectionBinding {
   provider: string;
-  principal: ConnectionRequirementPrincipal;
+  principal: ConnectionBindingPrincipal;
   /** A service connection's name; required when `principal` is `service`. */
   service?: string;
   /** Narrows what the alias may do; absent keeps the connection's own. */
@@ -132,11 +135,11 @@ export type ConnectionBindingSource = (args: {
 
 /** The connection principals a binding's `principal` accepts. */
 export function bindingPrincipalKinds(
-  principal: ConnectionRequirementPrincipal,
+  principal: ConnectionBindingPrincipal,
 ): ConnectionPrincipalKind[] {
-  if (principal === "member") return ["member"];
-  if (principal === "service") return ["project_service", "tenant_service"];
-  return ["member", "project_service", "tenant_service"];
+  return principal === "member"
+    ? ["member"]
+    : ["project_service", "tenant_service"];
 }
 
 export interface ResolvedConnectionBinding {

@@ -8,6 +8,7 @@ import path from "node:path";
 import { promisify } from "node:util";
 import type { Identity } from "@catamorphic/core";
 import { readConnectionGrant } from "@catamorphic/sandbox";
+import { defineGitConnectionProvider } from "@catamorphic/server-sdk";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { executionSettingsFromEnv } from "../execution-config.js";
 import {
@@ -188,20 +189,6 @@ beforeAll(async () => {
     throw new Error("No upstream address");
   upstreamBase = `http://127.0.0.1:${upstreamAddress.port}/`;
 
-  const gatewayFile = path.join(root, "gateway.json");
-  fs.writeFileSync(
-    gatewayFile,
-    JSON.stringify({
-      connections: [
-        {
-          type: "git",
-          kind: "upstream-git",
-          displayName: "Upstream Git",
-          baseUrl: upstreamBase,
-        },
-      ],
-    }),
-  );
   const port = await freePort();
   base = `http://127.0.0.1:${port}`;
   server = await createWorkServer(
@@ -211,8 +198,16 @@ beforeAll(async () => {
       env: {
         WORK_FAKE_AGENT: "1",
         WORK_CONTROL_PLANE_WORKLOADS: "workflow",
-        WORK_GATEWAY_CONFIG: gatewayFile,
         PATH: process.env.PATH,
+      },
+      hooks: {
+        connectionProviders: [
+          defineGitConnectionProvider({
+            kind: "upstream-git",
+            displayName: "Upstream Git",
+            baseUrl: upstreamBase,
+          }),
+        ],
       },
     }),
   );

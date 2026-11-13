@@ -448,6 +448,21 @@ export function mayUseProject(identity: Identity, projectId: string): boolean {
   );
 }
 
+/**
+ * Whether a caller may open the project MCP: a project member, or someone
+ * whose roles grant only connections, who uses those connections from
+ * their own agent and nothing else of the project (ADR 0316).
+ */
+export function mayUseProjectConnections(
+  identity: Identity,
+  projectId: string,
+): boolean {
+  return (
+    mayUseProject(identity, projectId) ||
+    (identity.connectionScope ?? []).some((ref) => ref.projectId === projectId)
+  );
+}
+
 /** Structural equality on the fields that identify an artifact. */
 export function sameArtifact(a: ArtifactRef, b: ArtifactRef): boolean {
   if (a.kind !== b.kind || a.projectId !== b.projectId) return false;
