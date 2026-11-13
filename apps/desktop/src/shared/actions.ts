@@ -702,24 +702,26 @@ export const BUILTIN_ACTIONS = [
       "ghost",
     ],
   },
-  // Voice (ADR 0236): every shortcut toggles when tapped and talks while
-  // held, in every app once Work may watch the keys.
+  // Voice: hold to capture and release to send, in every app once allowed.
   {
     id: "dictate",
     label: "Dictate",
     icon: "Mic",
     description:
-      "type what you say where your cursor is: tap to start or stop, hold to dictate while held",
+      "hold to dictate where your cursor is; release to insert your words",
     defaultBinding: "Alt+Space",
+    // These actions need a held key or microphone, not a palette click.
+    hiddenInPalette: true,
     keywords: ["dictation", "dictate", "speech to text", "voice", "type"],
   },
   {
     id: "talk-to-work",
     label: "Talk to Work",
     icon: "Mic",
-    description:
-      "talk with your assistant: tap to start or stop, hold to talk while held",
+    description: "hold to talk with your assistant; release to send",
     defaultBinding: "Cmd+Shift+Space",
+    // These actions need a held key or microphone, not a palette click.
+    hiddenInPalette: true,
     keywords: ["voice", "microphone", "mic", "talk", "speak", "assistant"],
   },
   {
@@ -727,8 +729,10 @@ export const BUILTIN_ACTIONS = [
     label: "Talk to this chat",
     icon: "Mic",
     description:
-      "talk with the agent of the chat in front of you: tap to start or stop, hold to talk while held",
+      "hold to talk with the agent of the chat in front of you; release to send",
     defaultBinding: null,
+    // These actions need a held key or microphone, not a palette click.
+    hiddenInPalette: true,
     keywords: ["voice", "microphone", "talk", "chat", "agent"],
   },
   {

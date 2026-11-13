@@ -1,6 +1,6 @@
 # 0267 — Voice waits for the person to finish
 
-- **Status:** Accepted
+- **Status:** Superseded by [0311](0311-native-macos-speech-and-push-to-talk.md)
 - **Date:** 2026-10-20
 - **Amends:** 0216 (voice), 0265 (voice yields to the person)
 

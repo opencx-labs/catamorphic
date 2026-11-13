@@ -136,44 +136,28 @@ describe("VoiceQuiet", () => {
   });
 
   it("keeps other audio lowered while voice listens or waits, never while the agent speaks", () => {
-    expect([...QUIET_PHASES].sort()).toEqual([
-      "hearing",
-      "listening",
-      "thinking",
-    ]);
+    expect([...QUIET_PHASES].sort()).toEqual(["hearing", "thinking"]);
   });
 
-  it("keeps dictation and voice learning from lowering other audio", () => {
+  it("keeps dictation from lowering other audio", () => {
     for (const phase of QUIET_PHASES) {
       expect(
         quietForConversation({
           phase,
           target: { kind: "dictation" },
-          learning: false,
         }),
       ).toBe(false);
-      expect(
-        quietForConversation({ phase, target: null, learning: false }),
-      ).toBe(false);
+      expect(quietForConversation({ phase, target: null })).toBe(false);
       expect(
         quietForConversation({
           phase,
           target: { kind: "assistant" },
-          learning: true,
-        }),
-      ).toBe(false);
-      expect(
-        quietForConversation({
-          phase,
-          target: { kind: "assistant" },
-          learning: false,
         }),
       ).toBe(true);
       expect(
         quietForConversation({
           phase,
           target: { kind: "chat", projectId: "p", sessionId: "s" },
-          learning: false,
         }),
       ).toBe(true);
     }
@@ -181,14 +165,12 @@ describe("VoiceQuiet", () => {
       quietForConversation({
         phase: "speaking",
         target: { kind: "assistant" },
-        learning: false,
       }),
     ).toBe(false);
     expect(
       quietForConversation({
         phase: "off",
         target: { kind: "assistant" },
-        learning: false,
       }),
     ).toBe(false);
   });

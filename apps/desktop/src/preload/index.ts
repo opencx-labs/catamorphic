@@ -89,6 +89,7 @@ import {
   VOICE_PORT_MESSAGE,
   VOICE_REST_MESSAGE,
   type VoiceBubbleState,
+  type VoiceCaptureCommand,
   type VoiceDictation,
   type VoiceKeysState,
   type VoiceLevels,
@@ -97,6 +98,7 @@ import {
   type VoiceReadAloud,
   type VoiceRestMessage,
   type VoiceStatus,
+  type VoiceTranscript,
   type VoiceWindowChoice,
 } from "../shared/voice.js";
 import type {
@@ -1729,16 +1731,12 @@ const api = {
     invoke("catamorphic:voice-read-aloud", input),
   voicePress: (press: VoicePress): Promise<void> =>
     invoke("catamorphic:voice-press", press),
-  voiceRelease: (input?: { heldMs?: number }): Promise<void> =>
-    invoke("catamorphic:voice-release", input),
+  voiceRelease: (heldMs?: number): Promise<void> =>
+    invoke("catamorphic:voice-release", heldMs),
   voiceFrontChat: (chat: { projectId: string; sessionId: string } | null) =>
     ipcRenderer.send("catamorphic:voice-front-chat", chat),
   voiceReset: (): Promise<void> => invoke("catamorphic:voice-reset"),
   voiceOpenChat: (): Promise<void> => invoke("catamorphic:voice-open-chat"),
-  voiceLearn: (input: {
-    projectId?: string;
-    sessionId?: string;
-  }): Promise<void> => invoke("catamorphic:voice-learn", input),
   onVoiceStatus: (listener: (status: VoiceStatus) => void) => {
     const handler = (_event: Electron.IpcRendererEvent, value: VoiceStatus) =>
       listener(value);
@@ -1779,6 +1777,15 @@ const api = {
     ipcRenderer.on("catamorphic:voice-dictation", handler);
     return () =>
       ipcRenderer.removeListener("catamorphic:voice-dictation", handler);
+  },
+  onVoiceTranscript: (listener: (transcript: VoiceTranscript) => void) => {
+    const handler = (
+      _event: Electron.IpcRendererEvent,
+      value: VoiceTranscript,
+    ) => listener(value);
+    ipcRenderer.on("catamorphic:voice-transcript", handler);
+    return () =>
+      ipcRenderer.removeListener("catamorphic:voice-transcript", handler);
   },
   // --- workspace config (sidebars, palette modes) ---
   workspaceConfigGet: (projectId?: string): Promise<unknown> =>
@@ -1837,7 +1844,9 @@ ipcRenderer.on(VOICE_REST_MESSAGE, () => {
 });
 
 // Main owns capture intent independently of recognition and playback.
-ipcRenderer.on(VOICE_CAPTURE_MESSAGE, (_event, listening: unknown) => {
-  if (typeof listening === "boolean")
-    window.postMessage({ type: VOICE_CAPTURE_MESSAGE, listening }, "*");
-});
+ipcRenderer.on(
+  VOICE_CAPTURE_MESSAGE,
+  (_event, command: VoiceCaptureCommand) => {
+    window.postMessage({ type: VOICE_CAPTURE_MESSAGE, command }, "*");
+  },
+);

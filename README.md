@@ -14,7 +14,7 @@ contains the framework and Work's reference applications.
 
 ## Install Work
 
-Work supports Apple silicon Macs running macOS 12 or newer. The current
+Work supports Apple silicon Macs running macOS 13 or newer. The current
 preview is the download on [work.software](https://work.software/), or:
 
 ```bash
@@ -49,6 +49,11 @@ your default app. Text and code open in the current project's editor, or as plai
 text in a browser tab when no project is open; other supported files open in a
 browser tab. Reopening an editor file reuses its tab; browser files follow the
 **Switch to a page's open tab** preference.
+
+Voice uses push to talk: hold a microphone or shortcut, then release to send.
+macOS uses Apple's native speech recognition; Linux keeps local Parakeet.
+Replies use local Kokoro voices. macOS 26 uses SpeechAnalyzer where supported;
+older Macs use SFSpeechRecognizer, which may need Apple's servers.
 
 ## One system, three ways to use it
 

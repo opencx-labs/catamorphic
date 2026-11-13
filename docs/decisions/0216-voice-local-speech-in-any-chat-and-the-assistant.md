@@ -3,6 +3,8 @@
 - **Status:** Proposed (experimental); session notes are task notifications by [0217](0217-only-people-write-user-messages.md); hearing, push to talk and dictation amended by [0236](0236-voice-hears-the-person-and-dictates-anywhere.md); talking over the agent, what agents see of the screen and the assistant's place amended by [0265](0265-voice-yields-to-the-person-and-keeps-what-they-saw.md); when a turn ends and replies ready while the person talks amended by [0267](0267-voice-waits-for-the-person-to-finish.md); other apps' audio lowered and replies read aloud by [0268](0268-voice-lowers-other-audio-and-reads-replies-aloud.md); the assistant's delegation routes became grants, and it starts sessions with `spawn_subsession` in place of `start_session`, by [0271](0271-agents-delegate-by-naming-an-agent-and-its-settings.md)
 - **Date:** 2026-10-02
 
+Native recognition and push-to-talk-only input now follow [0311](0311-native-macos-speech-and-push-to-talk.md); it supersedes automatic listening and speaker identification described below.
+
 ## Context
 
 People want to talk to Work and hear it answer, the way OpenAI's realtime

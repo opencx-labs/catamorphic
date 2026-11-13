@@ -1035,7 +1035,7 @@ function VoiceSection({
           .join(", ")
           .replace(/^./, (first) => first.toUpperCase())}${
           dictateKeys || talkKeys ? ". " : ""
-        }Tap one to start or stop; hold it to talk while you hold it. ${
+        }Hold a shortcut to talk or dictate; release it to finish. ${
           keys === "everywhere"
             ? "They work in any app."
             : keys === "needs-permission"
@@ -1057,7 +1057,7 @@ function VoiceSection({
       <SettingRow
         id="voiceDictation"
         label="Dictation only"
-        description="A microphone's click dictates where you type, a chat's into its message box, instead of talking. Nothing is sent or read aloud: edit it and send it as you would typed text."
+        description="Hold a microphone to dictate where you type, a chat's into its message box. Release it to finish, then edit and send the text."
       >
         <input
           id="setting-voiceDictation"
@@ -1121,27 +1121,6 @@ function VoiceSection({
             void update({ voiceInChats: event.target.checked })
           }
         />
-      </SettingRow>
-      <SettingRow
-        id="voiceprint"
-        label="Only listen to me"
-        control={false}
-        description={
-          prefs.voiceprint
-            ? "Voice knows your voice and ignores other people's."
-            : "Learn your voice from a microphone's menu, and voice ignores other people's."
-        }
-      >
-        {prefs.voiceprint && (
-          <button
-            id="setting-voiceprint"
-            type="button"
-            className="btn rounded-md px-3 py-1.5 text-xs"
-            onClick={() => void update({ voiceprint: null })}
-          >
-            Forget my voice
-          </button>
-        )}
       </SettingRow>
     </section>
   );

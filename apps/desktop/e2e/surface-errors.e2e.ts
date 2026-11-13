@@ -84,8 +84,12 @@ afterAll(async () => {
 
 it("keeps repeated-space fuzzy queries usable in the real palette", async () => {
   await shortcut("p");
-  await waitForInput();
-  await type("frmd  co");
+  await app.waitFor(
+    `document.activeElement?.matches(${JSON.stringify(inputSelector)}) &&
+     !!document.activeElement.closest('[data-workspace-visible="true"] [data-palette="overlay"]:not([inert])')`,
+    { label: "the overlay search field has keyboard focus" },
+  );
+  await app.insertText("frmd  co");
   await app.waitFor(
     `[...document.querySelectorAll('[data-workspace-visible="true"] [data-palette="overlay"] [role="option"]')].some(el => el.textContent.includes('Framed content'))`,
   );

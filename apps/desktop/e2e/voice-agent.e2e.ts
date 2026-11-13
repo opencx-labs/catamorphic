@@ -11,22 +11,10 @@ import {
 } from "./harness.js";
 
 /**
- * Voice (ADR 0216), end to end with scripted speech: the audio page
- * captures the (fake) microphone and streams it to the speech worker,
- * which "hears" one utterance per start. The dock's microphone talks to
- * the assistant, a real session on Work's built-in assistant over the fake
- * agent: it hands the work to a session on the fake agent itself, speaks
- * the result when that session delivers it, and has the assistant's
- * session tools. The microphone's menu opens its chat, picks the voice and
- * the assistant; a reset closes the chat so the next start makes another.
- * A session's question that arrives while voice is off shows on the
- * microphone, and the next start says it first. A chat's own microphone
- * talks to that chat's agent, which hears that the person talks by voice
- * until they type again. An agent can stop listening, and voice turns off
- * once its goodbye is said. The dock's microphone can leave the dock, and its
- * shortcut turns it on and off with a tap; held, it hears only while held,
- * even in a web page. What was on screen as the person started speaking
- * reaches the agent's turn, and its picture loads when the agent asks.
+ * Push-to-talk through the audio page and speech worker, end to end with
+ * scripted recognition: capture while held, final words on release, then
+ * a spoken reply with the microphone closed. Session tools, notifications,
+ * chat targeting, read aloud and screen context follow their normal paths.
  */
 
 const UTTERANCES = [
@@ -77,6 +65,17 @@ const helpers = `
   ${workspaceDomHelpersJs}
   const byText = (selector, text) =>
     $$(selector).find((el) => el.textContent?.includes(text));
+  // A visible control can still be moving, or covered by the dock.
+  const hitPoint = (element) => {
+    if (!element?.checkVisibility({opacityProperty:true,visibilityProperty:true}) || element.disabled) return false;
+    const box = element.getBoundingClientRect();
+    const scope = element.closest('[role="menu"], [data-dock-rail], [data-chat-local-id]') ?? element;
+    if (scope.getAnimations({subtree:true}).some(animation =>
+      (animation.playState === 'running' || animation.pending) && animation.effect?.getTiming().iterations !== Infinity
+    )) return false;
+    const point = {x:box.x+box.width/2,y:box.y+box.height/2};
+    return element.contains(document.elementFromPoint(point.x,point.y)) && point;
+  };
   const mic = () => $('[data-testid="voice-button"]');
   const chatOf = (localId) => $('[data-chat-local-id="' + localId + '"]');
   const chatMic = (localId) => chatOf(localId)?.querySelector('[data-testid="chat-voice-button"]');
@@ -101,11 +100,11 @@ const helpers = `
     return body;
   };
   /** Types a message into a chat, as its composer would send it. */
-  const sendText = async (ref, text) => {
+  const sendText = async (ref, text, dispatch) => {
     const { url } = await api.getServerState();
     await fetch(url + '/api/projects/' + ref.projectId + '/agent/sessions/' + ref.sessionId + '/commands', {
       method: 'POST', headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ type: 'send', commandId: crypto.randomUUID(), text }),
+      body: JSON.stringify({ type: 'send', commandId: crypto.randomUUID(), text, ...(dispatch ? { dispatch } : {}) }),
     });
   };
   ${setReactValueJs}
@@ -127,6 +126,21 @@ interface Ref {
 const recordPhases = () =>
   run(`
     window.__voicePhases = [mic().dataset.phase];
+    window.__voiceStatusLog = [];
+    window.__voiceInputLog = [];
+    if (!window.__voiceInputWatched) {
+      window.__voiceInputWatched = true;
+      for (const type of ['pointerdown', 'pointerup', 'pointercancel', 'lostpointercapture', 'keydown', 'keyup', 'blur', 'focus'])
+        window.addEventListener(type, event => {
+          const button = event.target instanceof Element ? event.target.closest('button') : null;
+          window.__voiceInputLog.push({type,at:Date.now(),key:event.key,
+            target:button?.dataset.testid,label:button?.getAttribute('aria-label'),
+            trusted:event.isTrusted,focused:document.hasFocus(),x:event.clientX,y:event.clientY});
+          window.__voiceInputLog = window.__voiceInputLog.slice(-20);
+        }, true);
+    }
+    window.__voiceUnsubscribe?.();
+    window.__voiceUnsubscribe = api.onVoiceStatus(status => window.__voiceStatusLog.push({phase:status.phase,at:Date.now()}));
     window.__voiceLoudest = 0;
     window.__voiceObserver?.disconnect();
     window.__voiceObserver = new MutationObserver(() => {
@@ -138,24 +152,6 @@ const recordPhases = () =>
     window.__voiceObserver.observe(document.body, { subtree: true, attributes: true, attributeFilter: ['data-phase', 'style'] });
     return true;
   `);
-
-/**
- * Taps Talk to Work's default keys (Cmd is Ctrl off a Mac) in the web
- * page: the main process reads them on their way in, which keys sent over
- * DevTools never take.
- */
-async function tapTalkKeys() {
-  const cmd = process.platform === "darwin" ? "meta" : "control";
-  // Queue both edges in one renderer call. A round trip between them can
-  // exceed TAP_MS on a busy native runner and turn this tap into a hold.
-  await app.eval(`(() => {
-    const view = document.querySelector('webview');
-    view.focus();
-    for (const type of ['keyDown', 'keyUp'])
-      view.sendInputEvent({ type, keyCode: 'Space', modifiers: ['${cmd}', 'shift'] });
-    return true;
-  })()`);
-}
 
 /**
  * Talk to Work's default keys going down or up in the web page: through
@@ -201,41 +197,246 @@ async function openPage() {
   );
 }
 
-/** Opens the microphone's menu, as a right click does. */
-const openMenu = () =>
-  run(`
-    const bounds = mic().getBoundingClientRect();
-    mic().dispatchEvent(new MouseEvent('contextmenu', {
-      bubbles: true, cancelable: true, button: 2,
-      clientX: bounds.left + bounds.width / 2, clientY: bounds.top + bounds.height / 2,
-    }));
+/** Open a menu through real input, keeping native hover and focus in step. */
+async function openMenu(target = "mic()") {
+  await focusWindow(app);
+  const point = await runWait<{ x: number; y: number }>(
+    `return hitPoint(${target});`,
+    { label: "the voice menu's hit target" },
+  );
+  await app.movePointer(point);
+  await run(`
+    window.__voiceMenuPress = null;
+    document.addEventListener('pointerdown', event => {
+      const button = event.target instanceof Element ? event.target.closest('button') : null;
+      window.__voiceMenuPress = {label:button?.getAttribute('aria-label'),arrows:button?.hasAttribute('data-dock-arrows'),testid:button?.dataset.testid,x:event.clientX,y:event.clientY};
+    }, {once:true,capture:true});
     return true;
   `);
+  for (const type of ["mousePressed", "mouseReleased"])
+    await app.cdp("Input.dispatchMouseEvent", {
+      type,
+      ...point,
+      button: "right",
+      clickCount: 1,
+    });
+  await runWait(`return !!$('[role="menu"]');`, {
+    label: "voice menu after the right press",
+  }).catch(async (cause: unknown) => {
+    const detail = await run(`return {
+      press:window.__voiceMenuPress,status:await api.voiceStatus(),
+      target:${target}?.getBoundingClientRect().toJSON()
+    };`);
+    throw new Error(`${String(cause)}; menu input: ${JSON.stringify(detail)}`);
+  });
+}
+
+/** A DOM click leaves the real pointer over a different submenu's row. */
+async function clickMenuItem(expression: string, label: string) {
+  const point = await runWait<{ x: number; y: number }>(
+    `return hitPoint(${expression});`,
+    { label },
+  );
+  await app.clickPointer(point);
+}
+
+/** Press or release a microphone through Chromium's actual pointer path. */
+async function microphone(
+  type: "mousePressed" | "mouseReleased",
+  button = "mic()",
+) {
+  if (type === "mousePressed") await focusWindow(app);
+  const point = await runWait<{ x: number; y: number }>(
+    `const button = ${button};
+     if (!button) return false;
+     if (${JSON.stringify(type)} === 'mousePressed') return hitPoint(button);
+     const box = button.getBoundingClientRect();
+     return { x: box.x + box.width / 2, y: box.y + box.height / 2 };`,
+    { label: "the microphone's hit target" },
+  );
+  if (type === "mousePressed") await app.movePointer(point);
+  await app.cdp("Input.dispatchMouseEvent", {
+    type,
+    button: "left",
+    clickCount: 1,
+    ...point,
+  });
+}
+
+/** A complete scripted utterance needs at least 1.5 seconds of captured audio. */
+async function capturedSpeech() {
+  const audio = await app.connectToFrame("voice.html");
+  try {
+    const before = await audio.eval<number>(`(() => {
+      if (window.__voiceCapturedSeconds === undefined) {
+        window.__voiceCapturedSeconds = 0;
+        const post = MessagePort.prototype.postMessage;
+        MessagePort.prototype.postMessage = function(message, ...args) {
+          if (message?.type === 'frame')
+            window.__voiceCapturedSeconds += message.samples.length / message.sampleRate;
+          return Reflect.apply(post, this, [message, ...args]);
+        };
+      }
+            return window.__voiceCapturedSeconds;
+    })()`);
+    await audio.waitFor(`window.__voiceCapturedSeconds >= ${before + 1.7}`, {
+      timeoutMs: 30_000,
+      label: "the full scripted phrase captured",
+    });
+  } finally {
+    audio.close();
+  }
+}
 
 /** Talk once: the assistant's chat holds the utterance and the spoken reply. */
-async function talk(utterance: string, reply: string): Promise<Ref> {
+async function talk(
+  utterance: string,
+  reply: string,
+  key?: "Space" | "Enter",
+): Promise<Ref> {
   await recordPhases();
-  await run(`mic().click(); return true;`);
+  const input = async (held: boolean) => {
+    if (!key) {
+      await microphone(held ? "mousePressed" : "mouseReleased");
+      return;
+    }
+    if (held) await run(`mic().focus(); return true;`);
+    await app.cdp("Input.dispatchKeyEvent", {
+      type: held ? "keyDown" : "keyUp",
+      key: key === "Space" ? " " : key,
+      code: key,
+      windowsVirtualKeyCode: key === "Space" ? 32 : 13,
+    });
+  };
+  const captureProbe = await app.connectToFrame("voice.html");
+  await captureProbe.eval(`(() => {
+    if (!window.__captureTimingInstalled) {
+      window.__captureTimingInstalled = true;
+      // Keep device startup separate from Work's press-to-capture handoff.
+      window.addEventListener('message', event => {
+        if (event.source === window && event.ports.length)
+          window.__captureStages.portAt = Date.now();
+      });
+      const getUserMedia = navigator.mediaDevices.getUserMedia.bind(navigator.mediaDevices);
+      navigator.mediaDevices.getUserMedia = async (...args) => {
+        const stages = window.__captureStages;
+        stages.inputRequestedAt = Date.now();
+        const stream = await getUserMedia(...args);
+        stages.inputOpenedAt = Date.now();
+        return stream;
+      };
+      const Node = AudioWorkletNode;
+      window.AudioWorkletNode = new Proxy(Node, {
+        construct(target, args) {
+          window.__captureStages.processorRequestedAt = Date.now();
+          const node = Reflect.construct(target, args);
+          window.__captureStages.processorCreatedAt = Date.now();
+          return node;
+        },
+      });
+      const resume = AudioContext.prototype.resume;
+      AudioContext.prototype.resume = async function(...args) {
+        const stages = window.__captureStages;
+        if (this.sampleRate === 16000) stages.graphRequestedAt ??= Date.now();
+        await Reflect.apply(resume, this, args);
+        if (this.sampleRate === 16000) stages.graphResumedAt ??= Date.now();
+      };
+      const post = MessagePort.prototype.postMessage;
+      MessagePort.prototype.postMessage = function(message, ...args) {
+        if (message?.type === 'capturing' && !window.__captureFirstAt)
+          window.__captureFirstAt = Date.now();
+        if (message?.type === 'drained') window.__lastVoiceDrainedAt = Date.now();
+        return Reflect.apply(post, this, [message, ...args]);
+      };
+    }
+    window.__captureStages = {};
+    window.__captureFirstAt = 0;
+    window.__lastVoiceDrainedAt = 0;
+    return true;
+  })()`);
+  // Readiness and pointer positioning happen before the press, not in its latency.
+  await run(`
+    window.__voicePressedAt = 0;
+    window.addEventListener(${JSON.stringify(key ? "keydown" : "pointerdown")}, () => {
+      window.__voicePressedAt = Date.now();
+    }, {once:true,capture:true});
+    return true;
+  `);
+  await input(true);
   const ref = await runWait<Ref>(
     `const status = await api.voiceStatus();
      const prefs = await api.getPrefs();
-     return status.phase !== 'off' && status.phase !== 'preparing' && prefs.assistantSession;`,
-    { timeoutMs: 30_000, label: "voice listening in the assistant's chat" },
+     return status.phase === 'hearing' && prefs.assistantSession;`,
+    {
+      timeoutMs: 30_000,
+      label: "the assistant hearing while the microphone is held",
+    },
+  ).catch(async (cause: unknown) => {
+    const detail = await run(`return {
+      status:await api.voiceStatus(),inputs:window.__voiceInputLog,
+      phases:window.__voicePhases,focused:document.hasFocus(),
+      button:mic()?.getBoundingClientRect().toJSON()
+    };`);
+    const capture = await captureProbe.eval("window.__captureStages");
+    captureProbe.close();
+    throw new Error(
+      `${String(cause)}; held input: ${JSON.stringify({ detail, capture })}`,
+    );
+  });
+  await capturedSpeech();
+  const pressedAt = await run<number>("return window.__voicePressedAt;");
+  const capturedAt = await captureProbe.eval<number>("window.__captureFirstAt");
+  expect(pressedAt).toBeGreaterThan(0);
+  const captureDelay = capturedAt - pressedAt;
+  const stages = await captureProbe.eval<Record<string, number>>(
+    "window.__captureStages",
   );
+  const timing = {
+    ...Object.fromEntries(
+      Object.entries(stages).map(([stage, at]) => [stage, at - pressedAt]),
+    ),
+    firstFrame: captureDelay,
+  };
+  // Print before asserting so a slow native runner retains its startup stages.
+  console.info(
+    "Voice capture startup (ms from press):",
+    JSON.stringify(timing),
+  );
+  expect(captureDelay).toBeGreaterThanOrEqual(0);
+  expect(captureDelay, JSON.stringify(timing)).toBeLessThan(500);
+  await input(false);
   await runWait(
     `const detail = await session(${JSON.stringify(ref)});
      return detail.messages?.some((m) => m.role === 'user' && m.content === ${JSON.stringify(utterance)}) &&
        detail.messages.some((m) => m.role === 'assistant' && m.content.startsWith(${JSON.stringify(reply)}));`,
     {
       timeoutMs: 30_000,
-      label: "the utterance and its answer in the assistant's chat",
+      label: "the released utterance and its answer in the assistant's chat",
     },
   );
   await runWait(
     `const phases = window.__voicePhases;
-     return phases.includes('speaking') && phases.at(-1) === 'listening';`,
-    { timeoutMs: 30_000, label: "the answer spoken, then listening again" },
+     return phases.includes('speaking') && phases.at(-1) === 'off';`,
+    { timeoutMs: 30_000, label: "the answer spoken, then voice off" },
   );
+  const lastDrainedAt = await captureProbe.eval<number>(
+    "window.__lastVoiceDrainedAt",
+  );
+  captureProbe.close();
+  const statusLog = await run<{ phase: string; at: number }[]>(
+    "return window.__voiceStatusLog;",
+  );
+  const settledAt =
+    statusLog.filter((entry) => entry.phase === "off").at(-1)?.at ?? 0;
+  expect(lastDrainedAt).toBeGreaterThan(0);
+  expect(settledAt - lastDrainedAt).toBeGreaterThanOrEqual(0);
+  expect(settledAt - lastDrainedAt).toBeLessThan(750);
+  expect(statusLog.map((entry) => entry.phase)).not.toContain("listening");
+  const phases = statusLog
+    .filter((entry) => entry.at >= pressedAt)
+    .map((entry) => entry.phase);
+  // Becoming idle and handing over the same observation's reply is one update.
+  expect(phases.slice(0, phases.lastIndexOf("speaking"))).not.toContain("off");
   return ref;
 }
 
@@ -266,15 +467,16 @@ describe("voice", () => {
 
   let first: Ref;
 
-  it("lights up, hears the person, hands the work to a session and speaks", async () => {
+  it("holds the focused microphone with Space, hears the person and speaks", async () => {
     first = await talk(
       UTTERANCES[0] ?? "",
       "It's started. I'll tell you when it's done.",
+      "Space",
     );
     const phases = await run<string[]>(`return window.__voicePhases;`);
     expect(phases.slice(0, 2)).toEqual(["off", "preparing"]);
     expect(phases).toEqual(
-      expect.arrayContaining(["hearing", "thinking", "speaking", "listening"]),
+      expect.arrayContaining(["hearing", "thinking", "speaking", "off"]),
     );
     // The bars followed the voice as it was heard, well above the working
     // wave's dots.
@@ -283,7 +485,7 @@ describe("voice", () => {
     );
     expect(
       await run<boolean>(
-        `return mic().getAttribute('aria-pressed') === 'true';`,
+        `return !mic().hasAttribute('aria-pressed') && mic().getAttribute('aria-label')?.startsWith('Hold to talk');`,
       ),
     ).toBe(true);
     const prefs = await run<{ assistantSession: Ref | null }>(
@@ -316,14 +518,13 @@ describe("voice", () => {
         label: "the delegated result answered in the assistant's chat",
       },
     );
-    await runWait(`return mic().dataset.phase === 'listening';`, {
+    await runWait(`return mic().dataset.phase === 'off';`, {
       timeoutMs: 30_000,
-      label: "listening again after the result",
+      label: "voice off after the result",
     });
   }, 120_000);
 
-  it("a second click stops listening and keeps the chat for next time", async () => {
-    await run(`mic().click(); return true;`);
+  it("release closes capture and keeps the chat for next time", async () => {
     await runWait(`return mic().dataset.phase === 'off';`, {
       label: "microphone off",
     });
@@ -331,15 +532,26 @@ describe("voice", () => {
       `return api.getPrefs();`,
     );
     expect(prefs.assistantSession).toEqual(first);
+    const audio = await app.connectToFrame("voice.html");
+    try {
+      await audio.eval("window.__voiceWarmMarker = 'kept'; true");
+      const captured = await audio.eval<number>(
+        "window.__voiceCapturedSeconds",
+      );
+      // Wait a few frame intervals with voice off: capture must stay closed.
+      await audio.eval("new Promise(resolve => setTimeout(resolve, 200))");
+      expect(await audio.eval("window.__voiceCapturedSeconds")).toBe(captured);
+    } finally {
+      audio.close();
+    }
   }, 60_000);
 
   it("the microphone's menu opens the assistant's chat and picks the voice and microphone", async () => {
     // Voices are a submenu, named, with who they are beside the name.
     await openMenu();
-    await runWait(
-      `const item = byText('[role="menuitem"][data-submenu]', 'Voice');
-       if (!item) return false; item.click(); return true;`,
-      { label: "open the Voice submenu" },
+    await clickMenuItem(
+      `byText('[role="menuitem"][data-submenu]', 'Voice')`,
+      "open the Voice submenu",
     );
     const voices = await runWait<{ label: string; checked: string }[]>(
       `const items = $$('[role="menu"][aria-label="Voice"] [role="menuitemradio"]');
@@ -354,8 +566,9 @@ describe("voice", () => {
       { label: "MichaelAmerican man", checked: "false" },
       { label: "FenrirAmerican man", checked: "false" },
     ]);
-    await run(
-      `byText('[role="menuitemradio"]', 'Michael').click(); return true;`,
+    await clickMenuItem(
+      `byText('[role="menuitemradio"]', 'Michael')`,
+      "choose Michael",
     );
     // The built-in assistant speaks in the default voice.
     await runWait(
@@ -365,10 +578,9 @@ describe("voice", () => {
     );
     // Microphones too: the system's, then each one the machine has.
     await openMenu();
-    await runWait(
-      `const item = byText('[role="menuitem"][data-submenu]', 'Microphone');
-       if (!item) return false; item.click(); return true;`,
-      { label: "open the Microphone submenu" },
+    await clickMenuItem(
+      `byText('[role="menuitem"][data-submenu]', 'Microphone')`,
+      "open the Microphone submenu",
     );
     const microphones = await runWait<string[]>(
       `const items = $$('[role="menu"][aria-label="Microphone"] [role="menuitemradio"]');
@@ -376,8 +588,9 @@ describe("voice", () => {
       { label: "the microphones in the submenu" },
     );
     expect(microphones[0]).toBe("System default:true");
-    await run(
-      `$$('[role="menu"][aria-label="Microphone"] [role="menuitemradio"]')[1].click(); return true;`,
+    await clickMenuItem(
+      `$$('[role="menu"][aria-label="Microphone"] [role="menuitemradio"]')[1]`,
+      "choose the microphone",
     );
     await runWait(
       `const prefs = await api.getPrefs();
@@ -385,10 +598,9 @@ describe("voice", () => {
       { label: "the chosen microphone kept" },
     );
     await openMenu();
-    await runWait(
-      `const item = byText('[role="menuitem"]', 'Open assistant chat');
-       if (!item) return false; item.click(); return true;`,
-      { label: "open the assistant's chat from the menu" },
+    await clickMenuItem(
+      `byText('[role="menuitem"]', 'Open assistant chat')`,
+      "open the assistant's chat from the menu",
     );
     // It opens like any chat, with what was said and answered.
     await runWait(
@@ -398,12 +610,11 @@ describe("voice", () => {
     );
   }, 60_000);
 
-  it("reset closes the assistant's chat, and the next click starts a new one", async () => {
+  it("reset closes the assistant's chat, and holding Enter starts a new one", async () => {
     await openMenu();
-    await runWait(
-      `const item = byText('[role="menuitem"]', 'Reset assistant chat');
-       if (!item || item.disabled) return false; item.click(); return true;`,
-      { label: "reset from the microphone's menu" },
+    await clickMenuItem(
+      `byText('[role="menuitem"]', 'Reset assistant chat')`,
+      "reset from the microphone's menu",
     );
     await runWait(
       `const prefs = await api.getPrefs();
@@ -413,7 +624,13 @@ describe("voice", () => {
     );
     // The new chat has the person's agent's tools, with the assistant's
     // session tools in place of Work's project-only ones.
-    const second = await talk(UTTERANCES[1] ?? "", "Tools: ");
+    const second = await talk(UTTERANCES[1] ?? "", "Tools: ", "Enter");
+    const audio = await app.connectToFrame("voice.html");
+    try {
+      expect(await audio.eval("window.__voiceWarmMarker")).toBe("kept");
+    } finally {
+      audio.close();
+    }
     const tools = await run<string[]>(
       `const detail = await session(${JSON.stringify(second)});
        const reply = detail.messages.find((m) => m.role === 'assistant' && m.content.startsWith('Tools: '));
@@ -434,7 +651,6 @@ describe("voice", () => {
     expect(tools).not.toContain("wait_for_subsessions");
     expect(second.sessionId).not.toBe(first.sessionId);
     expect(second.projectId).toBe(first.projectId);
-    await run(`mic().click(); return true;`);
     await runWait(`return mic().dataset.phase === 'off';`, {
       label: "microphone off again",
     });
@@ -475,7 +691,6 @@ describe("voice", () => {
        return detail.messages?.some((m) => m.role === 'inbound' && m.content === 'add a changelog entry');`,
       { label: "the person's own chat got the assistant's message" },
     );
-    await run(`mic().click(); return true;`);
     await runWait(`return mic().dataset.phase === 'off';`, {
       label: "microphone off at the end",
     });
@@ -581,10 +796,18 @@ describe("voice", () => {
       UTTERANCES[3] ?? "",
       "Started. It may have a question for you.",
     );
-    await run(`mic().click(); return true;`);
     await runWait(`return mic().dataset.phase === 'off';`, {
       label: "microphone off before the question",
     });
+    const docs = await runWait<Ref>(
+      `const children = await session(${JSON.stringify(ref)}, '/subsessions');
+       const child = children.find((c) => c.session.title === 'Docs pages');
+       return child && { projectId: ${JSON.stringify(ref.projectId)}, sessionId: child.session.id };`,
+      { label: "the session waiting to ask" },
+    );
+    await run(
+      `await sendText(${JSON.stringify(docs)}, 'Ask which pages now', 'steer'); return true;`,
+    );
     // The question wakes the assistant, which answers like any chat...
     await runWait(
       `const detail = await session(${JSON.stringify(ref)});
@@ -600,7 +823,13 @@ describe("voice", () => {
     // Starting speaks the news before the person says anything, then
     // passes their answer back to the session that asked.
     await recordPhases();
-    await run(`mic().click(); return true;`);
+    await microphone("mousePressed");
+    await runWait(`return mic().dataset.phase === 'hearing';`, {
+      timeoutMs: 30_000,
+      label: "holding the microphone for the answer",
+    });
+    await capturedSpeech();
+    await microphone("mouseReleased");
     // What the person says meanwhile waits for the news (the main
     // process hands it over once the chat has caught them up).
     await runWait(`return window.__voicePhases.includes('speaking');`, {
@@ -608,18 +837,11 @@ describe("voice", () => {
       label: "the news spoken as voice starts",
     });
     expect(await run(`return mic().dataset.pending ?? null;`)).toBe(null);
-    const docs = await runWait<Ref>(
-      `const children = await session(${JSON.stringify(ref)}, '/subsessions');
-       const child = children.find((c) => c.session.title === 'Docs pages');
-       return child && { projectId: ${JSON.stringify(ref.projectId)}, sessionId: child.session.id };`,
-      { label: "the session that asked" },
-    );
     await runWait(
       `const detail = await session(${JSON.stringify(docs)});
        return detail.messages?.some((m) => m.role === 'inbound' && m.content === 'Keep the new ones.');`,
       { timeoutMs: 30_000, label: "the answer passed back to it" },
     );
-    await run(`mic().click(); return true;`);
     await runWait(`return mic().dataset.phase === 'off';`, {
       label: "microphone off at the very end",
     });
@@ -653,8 +875,11 @@ describe("voice", () => {
       `return [...chatOf(${JSON.stringify(localId)}).querySelectorAll('.cat-markdown')].some((el) => el.textContent.trim() === 'By text.');`,
       { timeoutMs: 30_000, label: "a typed answer" },
     );
-    // Its microphone sits in the composer; the dock's stays off.
-    await run(`chatMic(${JSON.stringify(localId)}).click(); return true;`);
+    // Its microphone previews into the composer without consuming typed prose.
+    await run(
+      `setReactValue(chatOf(${JSON.stringify(localId)}).querySelector('[data-composer-input]'), 'Keep this draft'); return true;`,
+    );
+    await microphone("mousePressed", `chatMic(${JSON.stringify(localId)})`);
     const ref = await runWait<Ref>(
       `const status = await api.voiceStatus();
        return status.phase !== 'off' && status.phase !== 'preparing' &&
@@ -663,6 +888,13 @@ describe("voice", () => {
       { timeoutMs: 30_000, label: "voice on in the chat" },
     );
     expect(await run(`return mic().dataset.phase;`)).toBe("off");
+    await capturedSpeech();
+    await runWait(
+      `const input = chatOf(${JSON.stringify(localId)}).querySelector('[data-composer-input]'); return input.textContent.includes('how am i talking to you') && !!input.querySelector('[data-dictation]');`,
+      { label: "live words in the composer before release" },
+    );
+    expect(await answers("By voice.")).toBe(0);
+    await microphone("mouseReleased", `chatMic(${JSON.stringify(localId)})`);
     // What the person says is the chat's next message, and the agent knows
     // they talk by voice: it answers so.
     await runWait(
@@ -675,8 +907,11 @@ describe("voice", () => {
       `return session(${JSON.stringify(ref)});`,
     );
     expect(detail.agentId).not.toMatch(/assistant:/);
+    await runWait(
+      `return chatOf(${JSON.stringify(localId)}).querySelector('[data-composer-input]').textContent.trim() === 'Keep this draft';`,
+      { label: "only the voice preview removed after sending" },
+    );
     // Off again, the conversation carries on in text.
-    await run(`chatMic(${JSON.stringify(localId)}).click(); return true;`);
     await runWait(
       `return (await api.voiceStatus()).phase === 'off' && chatMic(${JSON.stringify(localId)}).dataset.phase === 'off';`,
       { label: "voice off in the chat" },
@@ -711,10 +946,9 @@ describe("voice", () => {
       await run<{ assistantSession: Ref | null }>(`return api.getPrefs();`)
     ).assistantSession;
     await openMenu();
-    await runWait(
-      `const item = byText('[role="menuitem"][data-submenu]', 'Assistant');
-       if (!item) return false; item.click(); return true;`,
-      { label: "open the Assistant submenu" },
+    await clickMenuItem(
+      `byText('[role="menuitem"][data-submenu]', 'Assistant')`,
+      "open the Assistant submenu",
     );
     const choices = await runWait<string[]>(
       `const items = $$('[role="menu"][aria-label="Assistant"] [role="menuitemradio"], [role="menu"][aria-label="Assistant"] [role="menuitem"]');
@@ -725,8 +959,9 @@ describe("voice", () => {
     expect(choices).toEqual(
       expect.arrayContaining(["Fake Agent", "Other Fake", "Create agent…"]),
     );
-    await run(
-      `byText('[role="menuitemradio"]', 'Other Fake').click(); return true;`,
+    await clickMenuItem(
+      `byText('[role="menuitemradio"]', 'Other Fake')`,
+      "choose Other Fake",
     );
     await runWait(
       `return (await api.getPrefs()).voiceAssistant === ${JSON.stringify(other.id)};`,
@@ -738,13 +973,13 @@ describe("voice", () => {
       `return !!byText('[role="menuitem"][data-submenu]', 'Assistant')?.textContent.includes('Other Fake');`,
       { label: "the menu naming the new assistant" },
     );
-    await runWait(
-      `const item = byText('[role="menuitem"][data-submenu]', 'Voice');
-       if (!item) return false; item.click(); return true;`,
-      { label: "open the Voice submenu" },
+    await clickMenuItem(
+      `byText('[role="menuitem"][data-submenu]', 'Voice')`,
+      "open the Voice submenu",
     );
-    await run(
-      `byText('[role="menuitemradio"]', 'Bella').click(); return true;`,
+    await clickMenuItem(
+      `byText('[role="menuitemradio"]', 'Bella')`,
+      "choose Bella",
     );
     await runWait(
       `const prefs = await api.getPrefs();
@@ -759,7 +994,6 @@ describe("voice", () => {
       `return session(${JSON.stringify(ref)});`,
     );
     expect(detail.agentId).toBe(`assistant:${other.id}`);
-    await run(`mic().click(); return true;`);
     await runWait(`return mic().dataset.phase === 'off';`, {
       label: "microphone off after the new assistant",
     });
@@ -792,9 +1026,12 @@ describe("voice", () => {
     await openMenu();
     await runWait(
       `const item = byText('[role="menuitemcheckbox"]', 'Show voice in dock');
-       if (!item || item.getAttribute('aria-checked') !== 'true') return false;
-       item.click(); return true;`,
+       return item?.getAttribute('aria-checked') === 'true';`,
       { label: "hide from the microphone's menu" },
+    );
+    await clickMenuItem(
+      `byText('[role="menuitemcheckbox"]', 'Show voice in dock')`,
+      "hide from the microphone's menu",
     );
     await runWait(
       `const prefs = await api.getPrefs();
@@ -803,37 +1040,33 @@ describe("voice", () => {
     );
     // Its shortcut still turns voice on, and the microphone shows meanwhile.
     await openPage();
-    await tapTalkKeys();
+    await holdTalkKeys("keyDown");
     // The previous test changed assistants. Preparing precedes its chat's
     // creation; stopping then can leave the next test reading the old
     // assistantSession while the replacement is still being created.
     await runWait(
-      `return dockVoice() === 'shown' && mic().dataset.phase === 'listening';`,
+      `return dockVoice() === 'shown' && mic().dataset.phase === 'hearing';`,
       {
         timeoutMs: 30_000,
-        label: "voice listening by its shortcut, the microphone back",
+        label: "voice held by its shortcut, the microphone back",
       },
     );
-    await tapTalkKeys();
+    await capturedSpeech();
+    await holdTalkKeys("keyUp");
     await runWait(`return dockVoice() === 'hidden';`, {
       timeoutMs: 30_000,
       label: "voice off by its shortcut, the microphone gone again",
     });
     // The arrows' menu always offers it.
-    await run(`
-      const arrows = $('[data-dock-arrows]');
-      const bounds = arrows.getBoundingClientRect();
-      arrows.dispatchEvent(new MouseEvent('contextmenu', {
-        bubbles: true, cancelable: true, button: 2,
-        clientX: bounds.left + bounds.width / 2, clientY: bounds.top + bounds.height / 2,
-      }));
-      return true;
-    `);
+    await openMenu("$('[data-dock-arrows]')");
     await runWait(
       `const item = byText('[role="menuitemcheckbox"]', 'Show voice in dock');
-       if (!item || item.getAttribute('aria-checked') !== 'false') return false;
-       item.click(); return true;`,
+       return item?.getAttribute('aria-checked') === 'false';`,
       { label: "show from the arrows' menu" },
+    );
+    await clickMenuItem(
+      `byText('[role="menuitemcheckbox"]', 'Show voice in dock')`,
+      "show from the arrows' menu",
     );
     await runWait(
       `const prefs = await api.getPrefs();
@@ -889,7 +1122,7 @@ describe("voice", () => {
         label: "hearing while the keys are down",
       });
       // Hearing reports the held intent. Wait for enough real capture to
-      // exceed the scripted speech, which detection would otherwise take.
+      // exceed the scripted speech before recognition starts on release.
       await audio.waitFor("window.__heldAudioSeconds>=2.5", {
         timeoutMs: 30_000,
         label: "scripted speech captured while held",
@@ -927,15 +1160,17 @@ describe("voice", () => {
     }
   }, 120_000);
 
-  it("stops listening when its agent says so, once its goodbye is said", async () => {
+  it("ends after its agent says goodbye", async () => {
     await recordPhases();
-    await run(`mic().click(); return true;`);
+    await microphone("mousePressed");
     const ref = await runWait<Ref>(
       `const status = await api.voiceStatus();
        const prefs = await api.getPrefs();
        return status.phase !== 'off' && status.phase !== 'preparing' && prefs.assistantSession;`,
       { timeoutMs: 30_000, label: "voice on in the assistant's chat" },
     );
+    await capturedSpeech();
+    await microphone("mouseReleased");
     await runWait(
       `const detail = await session(${JSON.stringify(ref)});
        return detail.messages.some((m) => m.role === 'user' && m.content === ${JSON.stringify(UTTERANCES[9])}) &&
@@ -944,7 +1179,15 @@ describe("voice", () => {
         timeoutMs: 30_000,
         label: "the agent stopped listening and said goodbye",
       },
-    );
+    ).catch(async (cause: unknown) => {
+      const diagnostic =
+        await run(`const detail = await session(${JSON.stringify(ref)});
+        return { status: await api.voiceStatus(), phases: window.__voicePhases,
+          messages: detail.messages?.slice(-15), focused: document.hasFocus() };`);
+      throw new Error(
+        `${String(cause)}; voice state: ${JSON.stringify(diagnostic)}`,
+      );
+    });
     await runWait(`return mic().dataset.phase === 'off';`, {
       timeoutMs: 30_000,
       label: "voice off once the goodbye is said",
@@ -980,8 +1223,8 @@ describe("voice", () => {
       timeoutMs: 30_000,
       label: "hearing while the keys are down",
     });
-    // Longer than a tap, which would leave voice listening on its own.
-    await new Promise((resolve) => setTimeout(resolve, 1_000));
+    // The empty scripted phrase still traverses actual microphone capture.
+    await capturedSpeech();
     await holdTalkKeys("keyUp");
     const letGo = performance.now();
     await runWait(`return mic().dataset.phase === 'off';`, {
@@ -1076,7 +1319,6 @@ describe("voice", () => {
     // Work in front: the picture is its window, as on any machine.
     await focusWindow(app);
     await talk(UTTERANCES[11] ?? "", "Saw 1 picture in Work, as you began.");
-    await run(`mic().click(); return true;`);
     await runWait(`return mic().dataset.phase === 'off';`, {
       timeoutMs: 30_000,
       label: "voice off again",

@@ -5,10 +5,8 @@ import {
 import {
   DEFAULT_VOICE,
   type VoiceId,
-  type Voiceprint,
   type VoiceSessionRef,
   voiceIdOf,
-  voiceprintOf,
 } from "./voice.js";
 
 export const CODE_THEMES = [
@@ -126,11 +124,6 @@ export interface AppPrefs {
   agentVoices: Record<string, VoiceId>;
   /** The microphone voice listens with; null follows the system's. */
   voiceMicrophone: string | null;
-  /**
-   * The person's voice, taught on purpose: voice ignores everyone else,
-   * however near (ADR 0216, 0236).
-   */
-  voiceprint: Voiceprint | null;
   /** The microphone in the dock; voice still works by its shortcut. */
   voiceInDock: boolean;
   /** A microphone in every chat's composer, to talk to that chat's agent. */
@@ -141,7 +134,7 @@ export interface AppPrefs {
    */
   voiceBubbleSpot: "left" | "center" | "right";
   /**
-   * Dictation only: a microphone's click dictates into the text field the
+   * Dictation only: holding a microphone dictates into the text field the
    * person is in, rather than talking with an agent (ADR 0236).
    */
   voiceDictation: boolean;
@@ -192,7 +185,6 @@ export const DEFAULT_PREFS: AppPrefs = {
   agentVoices: {},
   voiceId: DEFAULT_VOICE,
   voiceMicrophone: null,
-  voiceprint: null,
   voiceInDock: true,
   voiceInChats: true,
   voiceBubbleSpot: "center",
@@ -327,7 +319,6 @@ export function normalizePrefs(raw: unknown): AppPrefs {
         : null,
     voiceId: voiceIdOf(record.voiceId),
     agentVoices: agentVoicesOf(record.agentVoices),
-    voiceprint: voiceprintOf(record.voiceprint),
     voiceMicrophone:
       typeof record.voiceMicrophone === "string" && record.voiceMicrophone
         ? record.voiceMicrophone

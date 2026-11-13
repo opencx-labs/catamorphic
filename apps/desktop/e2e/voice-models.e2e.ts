@@ -15,7 +15,7 @@ import {
 /**
  * Voice on the real speech models (ADR 0216): the app's own
  * voice records a spoken request, the synthetic microphone plays it, and the app must
- * hear it with Silero and Parakeet, send it to the assistant, and speak
+ * hear it after release, send it to the assistant, and speak
  * the answer with Kokoro. Opt-in: set CATAMORPHIC_VOICE_MODELS_DIR to an
  * installed models directory (the desktop test runner mounts it).
  */
@@ -24,6 +24,7 @@ const REQUEST = "Start a session that checks the build.";
 
 let app: AppHandle;
 let recording: string;
+let recordingSeconds: number;
 
 /** 16-bit mono PCM WAV, which Chromium's file-backed microphone reads. */
 function writeWav(file: string, samples: Float32Array, sampleRate: number) {
@@ -50,7 +51,7 @@ function writeWav(file: string, samples: Float32Array, sampleRate: number) {
   fs.writeFileSync(file, Buffer.concat([header, data]));
 }
 
-async function recordRequest(modelsDir: string): Promise<string> {
+async function recordRequest(modelsDir: string) {
   // Loaded only when the suite runs: a skipped suite never needs the addon.
   const { loadSherpaSpeech } = await import(
     "../src/main/voice/sherpa-speech.js"
@@ -69,7 +70,7 @@ async function recordRequest(modelsDir: string): Promise<string> {
     "request.wav",
   );
   writeWav(file, padded, sampleRate);
-  return file;
+  return { file, seconds: padded.length / sampleRate };
 }
 
 const helpers = `
@@ -105,7 +106,9 @@ const runWait = <T = unknown>(
 
 describe.skipIf(!MODELS)("voice agent on the real speech models", () => {
   beforeAll(async () => {
-    recording = await recordRequest(MODELS ?? "");
+    const request = await recordRequest(MODELS ?? "");
+    recording = request.file;
+    recordingSeconds = request.seconds;
     app = await launchApp({ fakeAudioCapture: recording });
   }, 180_000);
 
@@ -142,16 +145,60 @@ describe.skipIf(!MODELS)("voice agent on the real speech models", () => {
         const phase = mic()?.dataset.phase;
         if (phase && window.__voicePhases.at(-1) !== phase) window.__voicePhases.push(phase);
       }).observe(document.body, { subtree: true, attributes: true, attributeFilter: ['data-phase'] });
-      mic().click();
       return true;
     `);
+    const point = await runWait<{ x: number; y: number }>(
+      `const button = mic(); if (!button) return false;
+       const box = button.getBoundingClientRect();
+       return { x: box.x + box.width / 2, y: box.y + box.height / 2 };`,
+      { label: "the microphone's hit target" },
+    );
+    await app.cdp("Input.dispatchMouseEvent", {
+      type: "mousePressed",
+      button: "left",
+      clickCount: 1,
+      ...point,
+    });
     const ref = await runWait<{ projectId: string; sessionId: string }>(
       `const status = await api.voiceStatus();
        if (status.phase === 'off' && status.error) throw new Error(status.error);
        const prefs = await api.getPrefs();
-       return status.phase !== 'off' && status.phase !== 'preparing' && prefs.assistantSession;`,
+       return status.phase === 'hearing' && prefs.assistantSession;`,
       { timeoutMs: 60_000, label: "the models loaded and voice listening" },
     );
+    const audio = await app.connectToFrame("voice.html");
+    try {
+      await audio.eval(`(() => {
+        window.__requestAudioSeconds = 0;
+        const post = MessagePort.prototype.postMessage;
+        MessagePort.prototype.postMessage = function(message, ...args) {
+          if (message?.type === 'frame')
+            window.__requestAudioSeconds += message.samples.length / message.sampleRate;
+          return Reflect.apply(post, this, [message, ...args]);
+        };
+        return true;
+      })()`);
+      await audio.waitFor(
+        `window.__requestAudioSeconds >= ${recordingSeconds - 1}`,
+        {
+          timeoutMs: 30_000,
+          label: "the spoken request captured while held",
+        },
+      );
+    } finally {
+      audio.close();
+    }
+    expect(
+      await run(
+        `return (await session(${JSON.stringify(ref)})).messages.filter((m) => m.role === 'user').length;`,
+      ),
+    ).toBe(0);
+    await app.cdp("Input.dispatchMouseEvent", {
+      type: "mouseReleased",
+      button: "left",
+      clickCount: 1,
+      ...point,
+    });
     const heard = await runWait<string>(
       `const detail = await session(${JSON.stringify(ref)});
        return detail.messages?.find((m) => m.role === 'user')?.content;`,
@@ -170,10 +217,9 @@ describe.skipIf(!MODELS)("voice agent on the real speech models", () => {
     );
     await runWait(
       `const phases = window.__voicePhases;
-       return phases.includes('speaking') && phases.at(-1) === 'listening';`,
-      { timeoutMs: 60_000, label: "the answer spoken, then listening again" },
+       return phases.includes('speaking') && phases.at(-1) === 'off';`,
+      { timeoutMs: 60_000, label: "the answer spoken, then voice off" },
     );
-    await run(`mic().click(); return true;`);
     await runWait(`return mic().dataset.phase === 'off';`, {
       label: "microphone off",
     });

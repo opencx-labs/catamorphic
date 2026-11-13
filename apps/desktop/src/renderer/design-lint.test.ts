@@ -304,12 +304,18 @@ describe("design lint", () => {
         reason: "the hover inspector primitive",
       },
       "components/shortcut-hint.tsx": {
-        count: 3,
-        reason: "tooltips hide on any press or key",
+        count: 4,
+        reason:
+          "tooltips hide on presses; Escape also dismisses an action hint while focus stays in the composer, and disabled-control hints keep their own key listener",
       },
       "components/sidebar-item-row.tsx": {
         count: 1,
         reason: "Escape closes a row's hover preview",
+      },
+      "components/voice-button.tsx": {
+        count: 2,
+        reason:
+          "a held microphone key cannot type or send after focus moves, and its release ends capture",
       },
       "screens/settings-screen.tsx": {
         count: 2,

@@ -353,7 +353,7 @@ describe("downloads", () => {
       label: "microphone in the dock",
     });
     await levelWith(
-      ["Downloads", "Voice", "Collapse chat bubbles"],
+      ["Downloads", "Hold to talk to Work", "Collapse chat bubbles"],
       "open strip measured",
     );
     await click("[data-dock-arrows]");
@@ -362,7 +362,7 @@ describe("downloads", () => {
       { label: "strip folded" },
     );
     await levelWith(
-      ["Downloads", "Voice", "Expand chat bubbles"],
+      ["Downloads", "Hold to talk to Work", "Expand chat bubbles"],
       "folded strip measured",
     );
     await click('[aria-label="Expand chat bubbles"]');

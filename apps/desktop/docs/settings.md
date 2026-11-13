@@ -100,7 +100,7 @@ checkout selection are runtime state, separate from presentation preferences.
 | Workspace (`workspace.js`: sidebars, palette modes) | Built-in, profile, shared project, personal project; whole document |
 | Theme | Profile, shared project, personal project; sparse selection, token and font overrides |
 | Default agent | Profile, shared project, personal project |
-| Voice (`voiceAssistant`, `voiceId`, `agentVoices`, `voiceMicrophone`, `voiceDictation`, `voiceShortcutsAsked`, `voiceInDock`, `voiceInChats`, `voiceBubbleSpot`, `voiceprint`) | Profile only, in `prefs.json`; a live voice follows edits from anywhere (ADR 0216, 0236) |
+| Voice (`voiceAssistant`, `voiceId`, `agentVoices`, `voiceMicrophone`, `voiceDictation`, `voiceShortcutsAsked`, `voiceInDock`, `voiceInChats`, `voiceBubbleSpot`) | Profile only, in `prefs.json`; a live voice follows edits from anywhere (ADR 0216, 0236) |
 | Runtime state | Explicit owner, not inherited appearance configuration |
 
 App-themed terminals use the nearest resolved project theme and its monospace

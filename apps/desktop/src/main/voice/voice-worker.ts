@@ -36,12 +36,20 @@ const WAIT_SECONDS = 30;
 const emit = (event: VoiceWorkerEvent) => process.parentPort.postMessage(event);
 
 function onAudio(data: VoiceAudioUp): void {
+  if (data.type === "control") {
+    forEngine(data.command);
+    return;
+  }
   if (engine) {
     engine.onAudio(data);
     return;
   }
   // Which microphone it is matters before the models are loaded too.
-  if (data.type === "microphone") {
+  if (
+    data.type === "microphone" ||
+    data.type === "capturing" ||
+    data.type === "capture-opening"
+  ) {
     emit(data);
     return;
   }
@@ -72,17 +80,14 @@ function forEngine(command: VoiceWorkerCommand): void {
     return;
   }
   switch (command.type) {
-    case "hands-free":
-      engine.setHandsFree(command.enabled);
-      return;
     case "dictation":
       engine.setDictation(command.enabled);
       return;
     case "hold": {
       const held = engine;
       held.hold(command.held, {
-        discard: command.discard === true,
         release: command.release,
+        discard: command.discard,
       });
       const release = command.release;
       if (!command.held && release !== undefined)
@@ -94,21 +99,8 @@ function forEngine(command: VoiceWorkerCommand): void {
     case "stop-listening":
       engine.stopListening();
       return;
-    case "learn":
-      engine.learn();
-      return;
-    case "finish": {
-      const ending = engine;
-      void ending.finish().then(() => {
-        if (engine === ending) emit({ type: "finished" });
-      });
-      return;
-    }
     case "forget":
       engine.forget();
-      return;
-    case "voiceprint":
-      engine.setVoiceprint(command.voiceprint);
       return;
     case "speak":
       engine.speak(command.id, command.text);
@@ -162,8 +154,6 @@ process.parentPort.on("message", (message) => {
 
 async function start({
   speech,
-  voiceprint,
-  handsFree,
   dictation,
 }: Extract<VoiceWorkerCommand, { type: "start" }>): Promise<void> {
   const mine = ++starts;
@@ -191,7 +181,11 @@ async function start({
     if (mine !== starts) return;
     // A warm worker may have only dictated so far. A conversation (or a
     // reply read aloud) prepares speech before reporting ready too.
-    if (!dictation) await parts.prepareSynthesis?.();
+    if (
+      !dictation &&
+      (speech.kind === "fake" || speech.paths.recognition.kind !== "native")
+    )
+      await parts.prepareSynthesis?.();
     // Voice went off, or started again, while the models loaded.
     if (mine !== starts) return;
     if (speech.kind === "models") parts.setVoice?.(speech.voice);
@@ -200,8 +194,6 @@ async function start({
     const next = new VoiceEngine(parts, emit, (message) =>
       audio?.postMessage(message),
     );
-    next.setVoiceprint(voiceprint);
-    next.setHandsFree(handsFree);
     next.setDictation(dictation);
     engine = next;
     // What was heard and pressed while loading, in the order it came.
@@ -226,10 +218,13 @@ function isAudioUp(value: unknown): value is VoiceAudioUp {
     typeof value === "object" &&
     value !== null &&
     "type" in value &&
-    (value.type === "frame" ||
+    (value.type === "capture-opening" ||
+      value.type === "control" ||
+      value.type === "frame" ||
       value.type === "drained" ||
       value.type === "levels" ||
       value.type === "failed" ||
-      value.type === "microphone")
+      value.type === "microphone" ||
+      value.type === "capturing")
   );
 }

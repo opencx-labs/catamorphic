@@ -140,6 +140,7 @@ import type {
   VoicePress,
   VoiceReadAloud,
   VoiceStatus,
+  VoiceTranscript,
   VoiceWindowChoice,
 } from "../../shared/voice.js";
 import type {
@@ -2252,12 +2253,11 @@ export interface CatamorphicDesktopApi {
   voiceReadAloud: (input: VoiceReadAloud) => Promise<void>;
   /**
    * A microphone or a voice shortcut went down (ADR 0236): voice hears the
-   * person from now. Released soon after, it was a tap, and voice turns on
-   * there, or off when it already was; held, it talked while held.
+   * person while the microphone or shortcut is held.
    */
   voicePress: (press: VoicePress) => Promise<void>;
-  /** The press came up; `heldMs` is how long it was down, as measured here. */
-  voiceRelease: (input?: { heldMs?: number }) => Promise<void>;
+  /** The held microphone or shortcut was released. */
+  voiceRelease: (heldMs?: number) => Promise<void>;
   /** The chat in front of this window, for "Talk to this chat". */
   voiceFrontChat: (
     chat: { projectId: string; sessionId: string } | null,
@@ -2266,17 +2266,15 @@ export interface CatamorphicDesktopApi {
   voiceReset: () => Promise<void>;
   /** Open the profile's assistant chat in its owning workspace window. */
   voiceOpenChat: () => Promise<void>;
-  /** Learn the person's voice now, starting voice when it is off. */
-  voiceLearn: (input: {
-    projectId?: string;
-    sessionId?: string;
-  }) => Promise<void>;
   onVoiceStatus: (listener: (status: VoiceStatus) => void) => () => void;
   /** How each sentence voice says sounds, as it is scheduled. */
   onVoiceLevels: (listener: (levels: VoiceLevels) => void) => () => void;
   /** Dictation's words for this window's text field, as they are said. */
   onVoiceDictation: (
     listener: (dictation: VoiceDictation) => void,
+  ) => () => void;
+  onVoiceTranscript: (
+    listener: (transcript: VoiceTranscript) => void,
   ) => () => void;
   /** A text field here has focus: dictation writes into this window. */
   voiceFieldFocus: () => void;
@@ -2331,6 +2329,9 @@ export const desktopApi: CatamorphicDesktopApi = {
   onVoiceLevels: shareEvent((publish) => nativeApi.onVoiceLevels(publish)),
   onVoiceDictation: shareEvent((publish) =>
     nativeApi.onVoiceDictation(publish),
+  ),
+  onVoiceTranscript: shareEvent((publish) =>
+    nativeApi.onVoiceTranscript(publish),
   ),
   onVoiceKeys: shareEvent((publish) => nativeApi.onVoiceKeys(publish)),
   // Every chat's microphone and settings view reads prefs.

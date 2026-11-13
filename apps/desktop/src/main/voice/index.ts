@@ -24,10 +24,10 @@ import {
   sameVoiceTarget,
   VOICE_ACTIONS,
   VOICE_CAPTURE_MESSAGE,
+  VOICE_HOLD_MS,
   VOICE_OFF,
   VOICE_PORT_MESSAGE,
   VOICE_REST_MESSAGE,
-  VOICEPRINT_MODEL,
   type VoiceAction,
   type VoiceDictation,
   type VoiceId,
@@ -37,6 +37,7 @@ import {
   type VoiceSessionRef,
   type VoiceStatus,
   type VoiceTarget,
+  type VoiceTranscript,
   type VoiceWindowChoice,
   type VoiceWorkerCommand,
   type VoiceWorkerEvent,
@@ -79,23 +80,10 @@ import {
 } from "./voice-keys.js";
 import { quietForConversation, VoiceQuiet } from "./voice-quiet.js";
 
-/** What voice says when it starts learning the person's voice. */
-const LEARN_PROMPT =
-  "Let me learn your voice. Talk to me for a few seconds, about anything, the way you normally would.";
-const LEARNED_REPLY =
-  "Got it. I know your voice now, and I'll only listen to you.";
-
 /** How often the assistant's chat is checked for news while voice is off. */
 const NEWS_POLL_MS = 5_000;
-/** A press shorter than this is a tap: voice on, or off (ADR 0236). */
-const TAP_MS = 300;
-/** A voice started by holding turns off once it has been idle this long. */
-const HELD_IDLE_MS = 4_000;
-
 /** The speech models stay loaded this long after voice stops. */
 const WARM_MS = 15 * 60_000;
-/** Dictation turned off writes what it still hears for at most this long. */
-const FINISH_MS = 4_000;
 /** Speech starting again this soon was seen as the stretch before it. */
 const SIGHT_REUSE_MS = 1_000;
 /** Sights of stretches whose words are not heard yet, at most. */
@@ -132,14 +120,13 @@ function targetOf(request: VoiceRequest): VoiceTarget {
 /** What a live voice is doing. */
 type LiveStatus = Pick<
   VoiceStatus,
-  "phase" | "target" | "download" | "learning" | "dictation" | "handsFree"
+  "phase" | "target" | "download" | "dictation"
 >;
 
 /** The stored choices a live voice runs with. */
 interface Applied {
   voice: VoiceId;
   microphone: string | null;
-  voiceprint: number[] | null;
   assistant: string | null;
 }
 
@@ -147,7 +134,6 @@ function appliedOf(stored: AppPrefs, voiceOf: string | null): Applied {
   return {
     voice: agentVoice(stored, voiceOf),
     microphone: stored.voiceMicrophone,
-    voiceprint: stored.voiceprint?.vector ?? null,
     assistant: stored.voiceAssistant,
   };
 }
@@ -195,6 +181,7 @@ interface ActiveVoice {
   /** Whose voice it speaks in: an agent's, or null for the default voice. */
   voiceOf: string | null;
   hearing: boolean;
+  preview: { workerSegment: number; words: VoiceTranscript } | null;
   speaking: Set<string>;
   busy: boolean;
   /**
@@ -202,8 +189,6 @@ interface ActiveVoice {
    * over and said.
    */
   ending: boolean;
-  /** Listening on its own; else only while held, and off once idle. */
-  handsFree: boolean;
   /**
    * Heard before voice reached its chat and the chat caught the person up
    * (its news said first): handed over then.
@@ -222,14 +207,11 @@ interface ActiveVoice {
    */
   window: number | null;
   windowPicked: boolean;
-  idle: ReturnType<typeof setTimeout> | undefined;
   /**
    * A hold came up and its words are still being recognized: voice stays
    * on for them however long that takes, rather than going idle first.
    */
   awaitingWords: number | null;
-  /** Dictation turned off, writing what it still heard: then it stops. */
-  finishing: ReturnType<typeof setTimeout> | undefined;
   live: LiveStatus;
   applied: Applied;
   /** Microphone moves, one at a time: each opens the audio page anew. */
@@ -263,8 +245,6 @@ const readAloudSchema = z.object({
 interface Press {
   profileId: string;
   at: number;
-  /** It pressed what voice was already doing: a tap turns it off. */
-  wasOn: boolean;
   /** It was a shortcut pressed in Work: the first may ask for every app. */
   key: boolean;
   /** The helper read it, in any app: its release comes from the helper. */
@@ -276,8 +256,7 @@ interface Press {
  * for one profile: it owns the speech worker and the hidden audio window
  * (the microphone and speakers), and either talks with one chat, the
  * assistant's or any chat's, or dictates into the text field the person
- * is in. Microphones and shortcuts press it: a tap turns it on or off, a
- * hold talks while held. Its settings are the profile's prefs, wherever
+ * is in. Microphones and shortcuts capture while held and send on release. Its settings are the profile's prefs, wherever
  * they change: a live voice follows them. The assistant's chat is kept
  * there too, until a reset or another assistant replaces it.
  */
@@ -318,6 +297,27 @@ export function registerVoiceSupport(deps: {
     rootDir:
       process.env.CATAMORPHIC_VOICE_MODELS_DIR ??
       path.join(app.getPath("userData"), "voice-models"),
+    ...(process.platform === "darwin"
+      ? {
+          nativeRecognition: {
+            helperPath: app.isPackaged
+              ? path.join(
+                  process.resourcesPath,
+                  "..",
+                  "MacOS",
+                  "speech-recognition",
+                )
+              : path.join(
+                  app.getAppPath(),
+                  "native",
+                  "speech-recognition",
+                  "bin",
+                  "speech-recognition",
+                ),
+            locale: app.getLocale(),
+          },
+        }
+      : {}),
   });
   // E2E: scripted speech instead of models and a microphone (a JSON list
   // of what the person "says", one utterance per start, in turn).
@@ -352,19 +352,7 @@ export function registerVoiceSupport(deps: {
         })
       : null;
   const wantsMicrophone = (voice: ActiveVoice) =>
-    active === voice &&
-    !voice.ending &&
-    (voice.handsFree || press?.profileId === voice.profileId);
-  const settleCapture = () => {
-    const voice = active;
-    const page = voice?.audioWindow;
-    if (!voice || voice.capturing === null || !page || page.isDestroyed())
-      return;
-    const wanted = wantsMicrophone(voice);
-    if (voice.capturing === wanted) return;
-    voice.capturing = wanted;
-    page.webContents.send(VOICE_CAPTURE_MESSAGE, wanted);
-  };
+    active === voice && !voice.ending && press?.profileId === voice.profileId;
   const connectVoiceAudio = (
     voice: ActiveVoice,
     page: BrowserWindow,
@@ -505,7 +493,6 @@ export function registerVoiceSupport(deps: {
   };
 
   const publish = () => {
-    settleCapture();
     settleQuiet();
     // The bubble first: it may read another profile's status from now.
     refreshBubble();
@@ -519,51 +506,72 @@ export function registerVoiceSupport(deps: {
     }
   };
 
-  /** A voice started by holding goes off when nothing is left to do. */
-  const settleIdle = (voice: ActiveVoice) => {
-    clearTimeout(voice.idle);
-    if (
-      voice.handsFree ||
-      voice.ending ||
-      voice.awaitingWords ||
-      press?.profileId === voice.profileId ||
-      voice.live.phase !== "listening"
-    )
-      return;
-    voice.idle = setTimeout(() => {
-      if (active === voice && !press && voice.live.phase === "listening")
-        void stop();
-    }, HELD_IDLE_MS);
-  };
-
   const update = (voice: ActiveVoice, patch: Partial<LiveStatus> = {}) => {
     if (active !== voice) return;
-    const phase =
-      voice.live.phase === "preparing" && !connected(voice)
+    const phase = voice.hearing
+      ? "hearing"
+      : wantsMicrophone(voice) || !connected(voice)
         ? "preparing"
-        : voice.hearing
-          ? "hearing"
-          : voice.speaking.size > 0
-            ? "speaking"
-            : voice.busy || voice.ending
-              ? "thinking"
-              : "listening";
+        : voice.speaking.size > 0
+          ? "speaking"
+          : voice.busy ||
+              voice.ending ||
+              voice.awaitingWords !== null ||
+              voice.catchingUp !== null ||
+              voice.early.length > 0
+            ? "thinking"
+            : "off";
     voice.live = {
       ...voice.live,
       phase,
-      handsFree: voice.handsFree,
       ...patch,
     };
-    settleIdle(voice);
-    publish();
+    // A chat observation reports idle before handing over its replies.
+    // Publish idle only if the whole observation leaves nothing to speak.
+    if (voice.live.phase === "off")
+      queueMicrotask(() => {
+        if (active === voice && voice.live.phase === "off") void stop();
+      });
+    else publish();
   };
 
   /** Voice talks with its chat, or dictates: it is ready. */
   const connected = (voice: ActiveVoice) =>
     voice.conversation !== null || voice.dictating !== null;
 
+  const broadcastTranscript = (voice: ActiveVoice, words: VoiceTranscript) => {
+    for (const window of BrowserWindow.getAllWindows())
+      if (
+        !window.isDestroyed() &&
+        !isAudioWindow(window) &&
+        shellProfileFor(window.webContents) === voice.profileId
+      )
+        window.webContents.send("catamorphic:voice-transcript", words);
+  };
+  const clearTranscript = (voice: ActiveVoice) => {
+    if (!voice.preview) return;
+    broadcastTranscript(voice, {
+      ...voice.preview.words,
+      text: "",
+      final: true,
+    });
+    voice.preview = null;
+  };
+
   const send = (voice: ActiveVoice, command: VoiceWorkerCommand) => {
-    if (active === voice) voice.worker.postMessage(command);
+    if (active !== voice) return;
+    const page = voice.audioWindow;
+    if (
+      voice.capturing !== null &&
+      page &&
+      !page.isDestroyed() &&
+      (command.type === "hold" ||
+        command.type === "forget" ||
+        command.type === "dictation")
+    ) {
+      if (command.type === "hold") voice.capturing = command.held;
+      page.webContents.send(VOICE_CAPTURE_MESSAGE, command);
+    } else voice.worker.postMessage(command);
   };
 
   /**
@@ -576,19 +584,41 @@ export function registerVoiceSupport(deps: {
     audio: BrowserWindow | null;
     timer: ReturnType<typeof setTimeout>;
   } | null = null;
+  let preparedAudio: BrowserWindow | null = null;
+  let openingAudio: Promise<BrowserWindow> | null = null;
   /** An audio page whose renderer went: it can hear nothing more. */
   const audioGone = (window: BrowserWindow) => {
+    if (preparedAudio === window) preparedAudio = null;
     if (resting?.audio === window) resting.audio = null;
     if (reading?.borrowed?.audio === window) endReading();
     if (active?.audioWindow === window)
       void stop("The microphone stopped. Turn voice on again.");
   };
+  const prepareAudioPage = (): Promise<BrowserWindow> => {
+    if (preparedAudio && !preparedAudio.isDestroyed())
+      return Promise.resolve(preparedAudio);
+    openingAudio ??= openAudioWindow(audioGone)
+      .then((window) => {
+        if (disposed) {
+          window.destroy();
+          throw new Error("Voice stopped.");
+        }
+        preparedAudio = window;
+        return window;
+      })
+      .finally(() => {
+        openingAudio = null;
+      });
+    return openingAudio;
+  };
+  // The page and worklet are ready before the first press; no microphone opens.
+  void prepareAudioPage().catch(() => {});
   /** Workers that stopped: one not yet started is not among them. */
   const exited = new WeakSet<UtilityProcess>();
   const letGo = (warm: NonNullable<typeof resting>) => {
     clearTimeout(warm.timer);
     warm.worker.kill();
-    if (warm.audio && !warm.audio.isDestroyed()) warm.audio.destroy();
+    // Its unloaded worker can go; the input-free audio page stays ready.
   };
   const takeWarm = (): {
     worker: UtilityProcess;
@@ -639,12 +669,10 @@ export function registerVoiceSupport(deps: {
     const voice = active;
     if (!voice) return;
     active = null;
+    clearTranscript(voice);
     // A reply it was reading goes with it.
     if (reading && !reading.borrowed) reading = null;
-    clearTimeout(voice.idle);
-    clearTimeout(voice.finishing);
     settleDictation(voice);
-    watchSend();
     voice.conversation?.stop();
     voice.detach();
     rest(voice.worker, voice.audioWindow);
@@ -736,11 +764,8 @@ export function registerVoiceSupport(deps: {
     try {
       const paths = fakeUtterances ? null : await models.ensure(() => {});
       if (reading !== mine) return;
-      const window = warm.audio ?? (await openAudioWindow(audioGone));
-      if (reading !== mine) {
-        if (window !== warm.audio) window.destroy();
-        return;
-      }
+      const window = warm.audio ?? (await prepareAudioPage());
+      if (reading !== mine) return;
       borrowed.audio = window;
       // The page and its port first: the speech plays as soon as it is made.
       connectAudio(window, warm.worker, { microphone: null, listen: false });
@@ -753,8 +778,6 @@ export function registerVoiceSupport(deps: {
               voice: agentVoice(prefs(profileId).load(), input.agentId),
             }
           : { kind: "fake", utterance: "" },
-        voiceprint: null,
-        handsFree: false,
         dictation: false,
       } satisfies VoiceWorkerCommand);
       warm.worker.postMessage({
@@ -798,7 +821,7 @@ export function registerVoiceSupport(deps: {
     voice.ending = true;
     voice.hearing = false;
     send(voice, { type: "stop-listening" });
-    update(voice, { learning: false });
+    update(voice);
     conversation.finish(() => {
       if (active === voice) void stop();
     });
@@ -949,7 +972,6 @@ export function registerVoiceSupport(deps: {
     if (!resolved) {
       voice.dictating = { stretches: new Map(), typedInApp: 0 };
       update(voice, { target: targetOf(request), dictation: true });
-      watchSend();
       handOver(voice);
       await follow(voice, prefs(profileId).load());
       return;
@@ -1016,6 +1038,7 @@ export function registerVoiceSupport(deps: {
         : {}),
     });
     if (assistant) news.delete(profileId);
+    voice.catchingUp = voice.conversation;
     update(voice, { target: targetOf(request), dictation: false });
     // What the person missed is said first; what they said meanwhile
     // goes to the chat after it.
@@ -1064,10 +1087,6 @@ export function registerVoiceSupport(deps: {
     voice.applied = now;
     if (now.voice !== was.voice)
       send(voice, { type: "voice", voice: now.voice });
-    if (JSON.stringify(now.voiceprint) !== JSON.stringify(was.voiceprint)) {
-      send(voice, { type: "voiceprint", voiceprint: now.voiceprint });
-      if (!now.voiceprint) update(voice, { learning: false });
-    }
     const last = lastRequests.get(voice.profileId);
     if (
       now.assistant !== was.assistant &&
@@ -1086,12 +1105,46 @@ export function registerVoiceSupport(deps: {
         if (voice.awaitingWords === event.release) voice.awaitingWords = null;
         break;
       case "speech-start":
-        voice.hearing = true;
         see(voice, event.segment);
         break;
       case "speech-end":
         voice.hearing = false;
         break;
+      case "capturing":
+        voice.hearing = wantsMicrophone(voice);
+        break;
+      case "capture-opening":
+        voice.hearing = false;
+        break;
+      case "transcript": {
+        const ref = voice.conversation?.ref;
+        if (!ref) {
+          if (!connected(voice)) {
+            voice.early = voice.early.filter(
+              (prior) => prior.type !== "transcript",
+            );
+            voice.early.push(event);
+          }
+          return;
+        }
+        if (event.final) {
+          if (voice.preview?.workerSegment === event.segment)
+            clearTranscript(voice);
+          return;
+        }
+        const words: VoiceTranscript = {
+          ...ref,
+          segment:
+            voice.preview?.workerSegment === event.segment
+              ? voice.preview.words.segment
+              : ++stretches,
+          text: event.text,
+          final: false,
+        };
+        voice.preview = { workerSegment: event.segment, words };
+        broadcastTranscript(voice, words);
+        return;
+      }
       case "utterance":
         if (!voice.conversation || voice.catchingUp) {
           if (!connected(voice) || voice.catchingUp) voice.early.push(event);
@@ -1142,23 +1195,11 @@ export function registerVoiceSupport(deps: {
               ...(event.reset ? { reset: true } : {}),
             });
         return;
-      case "learned":
-        voice.applied.voiceprint = event.voiceprint;
-        prefs(voice.profileId).save({
-          voiceprint: { model: VOICEPRINT_MODEL, vector: event.voiceprint },
-        });
-        send(voice, { type: "speak", id: "learned", text: LEARNED_REPLY });
-        update(voice, { learning: false });
-        return;
-      case "finished":
-        if (voice.finishing !== undefined) void stop();
-        return;
       case "unheard":
         if (event.release === voice.awaitingWords) voice.awaitingWords = null;
         // A voice started by holding, held again and let go with nothing
         // said, has nothing left to do: it goes now rather than idling.
         if (
-          !voice.handsFree &&
           voice.awaitingWords === null &&
           !voice.busy &&
           !voice.ending &&
@@ -1169,7 +1210,6 @@ export function registerVoiceSupport(deps: {
           return;
         }
         break;
-      case "ignored":
       case "barge-in":
       case "ready":
         break;
@@ -1186,7 +1226,7 @@ export function registerVoiceSupport(deps: {
    * no chat hears of it.
    */
   const see = (voice: ActiveVoice, segment: number) => {
-    if (voice.dictating || voice.live.dictation || voice.live.learning) return;
+    if (voice.dictating || voice.live.dictation) return;
     const latest = [...voice.sights.values()].at(-1);
     if (latest && Date.now() - latest.at < SIGHT_REUSE_MS) {
       voice.sights.set(segment, latest);
@@ -1365,53 +1405,6 @@ export function registerVoiceSupport(deps: {
   };
 
   /**
-   * Voice turns off where it was on. Dictation first hears what the
-   * person is still saying and writes it (ADR 0236), then stops.
-   */
-  const turnOff = (voice: ActiveVoice) => {
-    if (!voice.dictating || voice.finishing !== undefined) {
-      void stop();
-      return;
-    }
-    voice.ending = true;
-    voice.finishing = setTimeout(() => {
-      if (active === voice) void stop();
-    }, FINISH_MS);
-    send(voice, { type: "finish" });
-    update(voice);
-  };
-
-  /**
-   * The person sent what they dictated (ADR 0236): dictation listening on
-   * its own ends with it. A held voice ends as it is let go.
-   */
-  const dictationSent = () => {
-    const voice = active;
-    if (voice?.dictating && voice.handsFree) void stop();
-  };
-  const onDictationSent = (event: Electron.IpcMainEvent) => {
-    const context = voiceFrameContext({
-      event,
-      profileFor: profileForContents,
-    });
-    if (!context || active?.profileId !== context.profileId) return;
-    const { frame, profileId } = context;
-    const field = lastFields.get(profileId);
-    if (field && sameFrame(field, frame)) dictationSent();
-  };
-  ipcMain.on("catamorphic:voice-dictation-sent", onDictationSent);
-
-  /**
-   * Learning the voice print: a spoken prompt, then the next few seconds
-   * the person speaks (never the prompt itself) are their voice.
-   */
-  const beginLearning = (voice: ActiveVoice) => {
-    send(voice, { type: "speak", id: "learn", text: LEARN_PROMPT });
-    send(voice, { type: "learn" });
-    update(voice, { learning: true });
-  };
-
-  /**
    * Voice starts. Nothing the person says is lost to loading (ADR 0236):
    * the microphone opens as the models load, and the worker keeps what it
    * hears, and the presses that came with it, until it can hear them.
@@ -1419,7 +1412,7 @@ export function registerVoiceSupport(deps: {
   const start = async (
     profileId: string,
     request: VoiceRequest,
-    options: { handsFree: boolean; learn?: boolean; window?: number },
+    options: { window?: number } = {},
   ) => {
     errors.delete(profileId);
     if (request.kind !== "dictation") lastRequests.set(profileId, request);
@@ -1439,25 +1432,21 @@ export function registerVoiceSupport(deps: {
       dictating: null,
       voiceOf: null,
       hearing: false,
+      preview: null,
       speaking: new Set(),
       busy: false,
       ending: false,
-      handsFree: options.handsFree,
       early: [],
       catchingUp: null,
       sights: new Map(),
       window: options.window ?? windowFor(profileId)?.id ?? null,
       windowPicked: options.window !== undefined,
-      idle: undefined,
       awaitingWords: null,
-      finishing: undefined,
       live: {
         phase: "preparing",
         target: targetOf(request),
         download: null,
-        learning: false,
         dictation: request.kind === "dictation",
-        handsFree: options.handsFree,
       },
       applied: appliedOf(prefs(profileId).load(), null),
       moving: Promise.resolve(),
@@ -1494,43 +1483,45 @@ export function registerVoiceSupport(deps: {
       const fake = fakeUtterances
         ? fakeUtterances[fakeStarts++ % fakeUtterances.length]
         : undefined;
-      const paths =
-        fake === undefined
-          ? await models.ensure((download) => update(voice, { download }))
-          : null;
-      if (!live()) return;
-      update(voice, { download: null });
       const stored = prefs(profileId).load();
-      voice.applied = appliedOf(stored, null);
-      send(voice, {
-        type: "start",
-        speech: paths
-          ? { kind: "models", paths, voice: voice.applied.voice }
-          : { kind: "fake", utterance: fake ?? "" },
-        voiceprint: voice.applied.voiceprint,
-        handsFree: voice.handsFree,
-        dictation: request.kind === "dictation",
-      });
       // The microphone opens while the models load and the chat is found.
       const microphone = (async () => {
         if (fake === undefined) await ensureMicrophone();
         if (!live()) return;
-        const window = voice.audioWindow ?? (await openAudioWindow(audioGone));
+        const window = voice.audioWindow ?? (await prepareAudioPage());
         if (!live()) {
-          if (window !== voice.audioWindow) window.destroy();
           return;
         }
         voice.audioWindow = window;
         connectVoiceAudio(voice, window, stored.voiceMicrophone);
       })();
+      // Attach a rejection handler immediately while model installation runs.
+      const prepared = (async () => {
+        const paths =
+          fake === undefined
+            ? await models.ensure((download) => update(voice, { download }), {
+                dictation: request.kind === "dictation",
+              })
+            : null;
+        if (!live()) return;
+        update(voice, { download: null });
+        voice.applied = appliedOf(stored, null);
+        send(voice, {
+          type: "start",
+          speech: paths
+            ? { kind: "models", paths, voice: voice.applied.voice }
+            : { kind: "fake", utterance: fake ?? "" },
+          dictation: request.kind === "dictation",
+        });
+        await ready;
+      })();
       const [resolved] = await Promise.all([
         resolve(profileId, request),
         microphone,
-        ready,
+        prepared,
       ]);
       if (!live()) return;
       await connect(voice, request, resolved);
-      if (options.learn) beginLearning(voice);
     } catch (cause) {
       if (live())
         await stop(cause instanceof Error ? cause.message : String(cause));
@@ -1539,6 +1530,7 @@ export function registerVoiceSupport(deps: {
 
   /** A live voice moves to another chat, or to dictation: the models stay. */
   const retarget = async (voice: ActiveVoice, request: VoiceRequest) => {
+    clearTranscript(voice);
     if (request.kind !== "dictation")
       lastRequests.set(voice.profileId, request);
     send(voice, { type: "stop-speaking" });
@@ -1566,8 +1558,7 @@ export function registerVoiceSupport(deps: {
   /**
    * A microphone or a shortcut went down (ADR 0236): voice hears the
    * person from now. Pressed where voice is already on, it holds; pressed
-   * elsewhere, voice moves there, or starts, hearing only while held until
-   * the press turns out to be a tap.
+   * elsewhere, voice moves there, or starts, hearing only while held.
    */
   const pressDown = (
     profileId: string,
@@ -1575,23 +1566,11 @@ export function registerVoiceSupport(deps: {
     { key = false, helper = false }: { key?: boolean; helper?: boolean } = {},
   ) => {
     if (press) return;
-    // Dictation writing its last words is off already: a press there
-    // stops it at once, and starts nothing.
-    if (
-      active?.profileId === profileId &&
-      active.finishing !== undefined &&
-      sameVoiceTarget(active.live.target, targetOf(request))
-    ) {
-      press = { profileId, at: Date.now(), wasOn: true, key, helper };
-      void stop();
-      return;
-    }
     const voice =
       active?.profileId === profileId && !active.ending ? active : null;
     const same =
       !!voice && sameVoiceTarget(voice.live.target, targetOf(request));
-    press = { profileId, at: Date.now(), wasOn: same, key, helper };
-    if (voice) clearTimeout(voice.idle);
+    press = { profileId, key, helper, at: performance.now() };
     if (voice && same) {
       send(voice, { type: "hold", held: true });
       update(voice);
@@ -1602,41 +1581,49 @@ export function registerVoiceSupport(deps: {
       send(voice, { type: "forget" });
       // What it was still recognizing is dropped, so nothing is awaited.
       voice.awaitingWords = null;
-      voice.handsFree = false;
-      send(voice, { type: "hands-free", enabled: false });
+      send(voice, { type: "dictation", enabled: request.kind === "dictation" });
       send(voice, { type: "hold", held: true });
       void retarget(voice, request);
       return;
     }
-    void stop().then(() => start(profileId, request, { handsFree: false }));
+    const held = press;
+    if (!active) {
+      void start(profileId, request);
+      return;
+    }
+    void stop().then(() => {
+      if (press === held) return start(profileId, request);
+    });
   };
 
-  /**
-   * The press came up. A tap turns voice on, listening on its own, or off
-   * where it already was; a hold is heard at once, and a voice started by
-   * it goes off once idle.
-   */
-  const pressUp = ({ heldMs }: { heldMs?: number } = {}) => {
+  /** Release closes capture; a quick click cancels instead of recognizing. */
+  const pressUp = (heldMs?: number) => {
     const done = press;
     press = null;
     if (!done) return;
     if (done.key) askForEveryApp(done.profileId);
     const voice = active?.profileId === done.profileId ? active : null;
     if (!voice) return;
-    const tap = (heldMs ?? Date.now() - done.at) < TAP_MS;
-    if (tap && done.wasOn) {
-      turnOff(voice);
+    voice.hearing = false;
+    const duration =
+      typeof heldMs === "number" && Number.isFinite(heldMs) && heldMs >= 0
+        ? heldMs
+        : performance.now() - done.at;
+    if (duration < VOICE_HOLD_MS) {
+      send(voice, { type: "hold", held: false, discard: true });
+      if (
+        !voice.busy &&
+        !voice.ending &&
+        voice.speaking.size === 0 &&
+        voice.awaitingWords === null &&
+        voice.early.length === 0
+      )
+        void stop();
+      else update(voice);
       return;
     }
-    if (tap) {
-      send(voice, { type: "hold", held: false, discard: true });
-      voice.handsFree = true;
-      send(voice, { type: "hands-free", enabled: true });
-      watchSend();
-    } else {
-      voice.awaitingWords = ++releases;
-      send(voice, { type: "hold", held: false, release: voice.awaitingWords });
-    }
+    voice.awaitingWords = ++releases;
+    send(voice, { type: "hold", held: false, release: voice.awaitingWords });
     update(voice);
   };
 
@@ -1747,7 +1734,7 @@ export function registerVoiceSupport(deps: {
 
   // The audio page outlives no workspace: closing the last window stops
   // voice, though a workspace window only hides on close. Hiding Work or
-  // minimizing it keeps voice going, hands-free.
+  // minimizing it keeps any pending transcription and reply going.
   const onWindowCreated = (_event: unknown, window: BrowserWindow) => {
     const stopUnlessShown = () => {
       if (isAudioWindow(window) || bubble.owns(window)) return;
@@ -1805,36 +1792,8 @@ export function registerVoiceSupport(deps: {
       pressFrom(windows.profileFor(event.sender), pressed);
     },
   );
-  // A microphone measures its own press: the main process may answer late.
-  shellIpcMain.handle("catamorphic:voice-release", (_event, input: unknown) =>
-    pressUp({ heldMs: heldMsOf(input) }),
-  );
-  // Learning starts voice when it is off: it needs the microphone.
-  shellIpcMain.handle(
-    "catamorphic:voice-learn",
-    async (event, input: { projectId?: string; sessionId?: string }) => {
-      const profileId = windows.profileFor(event.sender);
-      const voice = active;
-      if (voice?.profileId === profileId && connected(voice) && !voice.ending) {
-        beginLearning(voice);
-        return;
-      }
-      if (voice?.profileId === profileId && !voice.ending) return;
-      const request = requestOf(profileId, {
-        action: input.sessionId ? "talk-to-chat" : "talk-to-work",
-        ...input,
-      });
-      if (!request) {
-        errors.set(profileId, {
-          message: "Open a project to talk to Work.",
-          target: null,
-        });
-        publish();
-        return;
-      }
-      await stop();
-      void start(profileId, request, { handsFree: true, learn: true });
-    },
+  shellIpcMain.handle("catamorphic:voice-release", (_event, heldMs?: number) =>
+    pressUp(heldMs),
   );
 
   /** The chat in front of each window, for "Talk to this chat". */
@@ -2046,7 +2005,7 @@ export function registerVoiceSupport(deps: {
     await start(
       assistant.profileId,
       { kind: "assistant", projectId: assistant.home },
-      { handsFree: voice.handsFree, window: windowId },
+      { window: windowId },
     );
   };
 
@@ -2068,11 +2027,8 @@ export function registerVoiceSupport(deps: {
                 "voice-keys",
               ),
           onEvent: (event) => {
-            // Work's own pages say when what they dictated is sent.
-            if (event.type === "send") {
-              if (!workInFront() && active?.dictating?.typedInApp)
-                dictationSent();
-            } else if (event.type === "up") pressUp();
+            if (event.type === "send") return;
+            if (event.type === "up") pressUp();
             else {
               const action = VOICE_ACTIONS.find(
                 (candidate) => candidate === event.name,
@@ -2125,7 +2081,6 @@ export function registerVoiceSupport(deps: {
       return;
     }
     systemKeys.watch(shortcuts);
-    watchSend();
     setKeysState("everywhere");
   };
   /**
@@ -2138,9 +2093,6 @@ export function registerVoiceSupport(deps: {
     prefs(profileId).save({ voiceShortcutsAsked: true });
     systemPreferences.isTrustedAccessibilityClient(true);
   };
-  /** Return in the app in front ends dictation listening on its own. */
-  const watchSend = () =>
-    systemKeys?.watchSend(!!active?.dictating && active.handsFree);
   shellIpcMain.handle("catamorphic:voice-keys-status", () => keysState);
 
   // The bubble's page asks what it shows as it starts, and which windows'
@@ -2253,6 +2205,9 @@ export function registerVoiceSupport(deps: {
   return {
     dispose: async () => {
       disposed = true;
+      if (preparedAudio && !preparedAudio.isDestroyed())
+        preparedAudio.destroy();
+      preparedAudio = null;
       spoken.clear();
       app.off("browser-window-created", onWindowCreated);
       app.off("browser-window-created", onKeysWindow);
@@ -2266,7 +2221,6 @@ export function registerVoiceSupport(deps: {
       systemKeys?.stop();
       quiet?.stop();
       ipcMain.off("catamorphic:voice-field-focus", onFieldFocus);
-      ipcMain.off("catamorphic:voice-dictation-sent", onDictationSent);
       shellIpcMain.off("catamorphic:voice-front-chat", onFrontChat);
       for (const channel of [
         "catamorphic:voice-get-status",
@@ -2275,7 +2229,6 @@ export function registerVoiceSupport(deps: {
         "catamorphic:voice-release",
         "catamorphic:voice-reset",
         "catamorphic:voice-open-chat",
-        "catamorphic:voice-learn",
         "catamorphic:voice-keys-status",
         "catamorphic:voice-keys-allow",
         "catamorphic:voice-bubble-menu",
@@ -2321,16 +2274,6 @@ function sameFrame(a: WebFrameMain, b: WebFrameMain): boolean {
       a.processId === b.processId &&
       a.routingId === b.routingId)
   );
-}
-
-/** How long a press was held, as the page that saw it measured it. */
-function heldMsOf(input: unknown): number | undefined {
-  if (typeof input !== "object" || input === null || !("heldMs" in input))
-    return undefined;
-  const { heldMs } = input;
-  return typeof heldMs === "number" && Number.isFinite(heldMs) && heldMs >= 0
-    ? heldMs
-    : undefined;
 }
 
 /** Audio pages, live, resting or opening: the person never sees them. */

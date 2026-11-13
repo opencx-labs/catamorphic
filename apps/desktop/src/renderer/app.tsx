@@ -4984,8 +4984,8 @@ export function App({
       const chat = actionChat(workspaceRef.current);
       if (chat?.sessionId) askChatPreview(chat.sessionId);
     },
-    // Voice's shortcuts from the palette are taps: on, or off. Their keys
-    // never come here: the main process reads them, to hear them held.
+    // Voice actions are hidden in the palette: only a held key or microphone
+    // captures audio. A programmatic action is an empty press and release.
     dictate: () => void voiceTap({ action: "dictate", projectId }),
     "talk-to-work": () => void voiceTap({ action: "talk-to-work", projectId }),
     // With no chat to talk to, voice says so, as for its keys.
@@ -5102,7 +5102,7 @@ export function App({
               ([, id]) => id === guestId,
             )?.[0];
       try {
-        // Voice's keys are the main process's, held or tapped (ADR 0236).
+        // The main process owns voice's key press and release.
         if (action && isVoiceAction(action)) return true;
         if (action) actionHandlersRef.current[action]();
         else if (macro) runTerminalMacroRef.current(macro);

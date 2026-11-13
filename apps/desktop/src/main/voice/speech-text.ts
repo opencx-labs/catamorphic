@@ -2,7 +2,7 @@
  * Chat replies are Markdown written for reading. Spoken, the syntax is
  * noise: code is unspeakable, URLs are long, list markers and emphasis
  * mean nothing aloud. These functions turn a reply into the sentences
- * worth saying, and recognize the person's own words from an echo of them.
+ * worth saying and handle short spoken commands.
  */
 
 const FENCE = /```[\s\S]*?(```|$)/g;
@@ -55,50 +55,6 @@ function words(text: string): string[] {
 /** A transcript worth sending: words beyond hesitation sounds. */
 export function meaningfulUtterance(text: string): boolean {
   return words(text).some((word) => !FILLERS.has(word));
-}
-
-/**
- * Words compared by their stem: recognition of the agent's own voice
- * often drops or adds an ending ("payments" heard as "payment").
- */
-function stem(word: string): string {
-  return word.length > 3 ? word.replace(/('s|ing|ed|es|s)$/, "") : word;
-}
-
-/** Fewer words are the person's: short commands ("stop", "wait"). */
-const ECHO_MIN_WORDS = 3;
-
-/**
- * Whether a transcript is the agent hearing itself through the speakers:
- * a few words at least, nearly all of them from what it just said.
- */
-export function isEcho(transcript: string, recentlySpoken: string): boolean {
-  const heard = words(transcript).map(stem);
-  if (heard.length < ECHO_MIN_WORDS) return false;
-  const said = new Set(words(recentlySpoken).map(stem));
-  const matched = heard.filter((word) => said.has(word)).length;
-  return matched / heard.length >= 0.8;
-}
-
-/**
- * Saying "yeah" or "okay" while someone talks says go on (ADR 0265): a
- * listener's acknowledgement, not a turn of their own. Answers that carry
- * a decision ("yes", "no") are not among them.
- */
-const ACKNOWLEDGEMENTS =
-  /^((yeah|yep|yup|okay|ok|right|sure|alright|all right|cool|nice|great|true|exactly|totally|uh huh|i see|got it|makes sense|fair enough|thanks|thank you)\s?){1,3}$/;
-
-/**
- * A listener's acknowledgement alone, which says go on: "Oh, okay." as
- * much as "Okay.", hesitation sounds aside.
- */
-export function isAcknowledgement(transcript: string): boolean {
-  const all = words(transcript);
-  const said = all.filter((word) => !FILLERS.has(word));
-  return (
-    ACKNOWLEDGEMENTS.test(all.join(" ")) ||
-    (said.length > 0 && ACKNOWLEDGEMENTS.test(said.join(" ")))
-  );
 }
 
 /** A short spoken command to stop the agent, not a message for it. */
