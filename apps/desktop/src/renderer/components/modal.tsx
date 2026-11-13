@@ -6,6 +6,7 @@ import {
   useState,
 } from "react";
 import { createPortal } from "react-dom";
+import { canFocusFormControl } from "../lib/form-focus.js";
 import { themeStyle, useTheme } from "../lib/theme.js";
 
 export function Modal({
@@ -104,12 +105,7 @@ export function Modal({
         panelRef.current.querySelectorAll<HTMLElement>(
           'button:not([disabled]), a[href], input:not([disabled]), textarea:not([disabled]), select:not([disabled]), [tabindex]:not([tabindex="-1"])',
         ),
-      ).filter(
-        (element) =>
-          !element.hidden &&
-          !element.matches(":disabled") &&
-          !element.closest("[inert], [hidden]"),
-      );
+      ).filter(canFocusFormControl);
       if (focusable.length === 0) {
         event.preventDefault();
         panelRef.current.focus({ preventScroll: true });

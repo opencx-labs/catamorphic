@@ -883,7 +883,9 @@ describe("chat flows", () => {
 
     // Cmd+P toggles the overlay. Earlier flows can leave it open; preserve
     // that state instead of turning the searchable palette off.
-    await run(`pressKey('p', { metaKey: true }); return true;`);
+    await run(
+      `if (!document.querySelector('[data-palette="overlay"]:not([inert], [inert] *)')) pressKey('p', { metaKey: true }); return true;`,
+    );
     await runWait(
       `const input = document.querySelector('[data-palette="overlay"] [aria-label="Search commands, pages, and more"]');
        if (!input || document.activeElement !== input) return false;
@@ -1035,15 +1037,10 @@ describe("chat flows", () => {
     await runWait(`return !floatingDock();`, {
       label: "current chat minimized before checking palette availability",
     });
-    await run(`
-      const input = $$('[aria-label="Search commands, pages, and more"]')
-        .find((el) => !el.closest('[inert]'));
-      if (!input) pressKey('p', { metaKey: true });
-      return true;
-    `);
+    await run(`pressKey('p', { metaKey: true }); return true;`);
     await runWait(
       `const input = document.querySelector('[data-palette="overlay"] [aria-label="Search commands, pages, and more"]');
-       if (!input) return false;
+       if (!input || document.activeElement !== input || input.closest('[inert]')) return false;
        setReactValue(input, '>rename current chat');
        return true;`,
       { label: "palette asked for Rename current chat" },
@@ -1065,8 +1062,7 @@ describe("chat flows", () => {
     });
     await run(`pressKey('p', { metaKey: true }); return true;`);
     await runWait(
-      `const input = $$('[aria-label="Search commands, pages, and more"]')
-        .find((el) => !el.closest('[inert]'));
+      `const input = document.querySelector('[data-palette="overlay"] [aria-label="Search commands, pages, and more"]');
        if (!input || document.activeElement !== input) return false;
        setReactValue(input, '>rename current chat');
        return true;`,

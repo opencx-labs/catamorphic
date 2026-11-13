@@ -9,6 +9,7 @@ import type {
   SidebarInputField,
   SidebarInputValues,
 } from "../../shared/sidebar.js";
+import { canFocusFormControl } from "../lib/form-focus.js";
 import { motionMs } from "../lib/motion.js";
 import { Collapsible } from "./collapsible.js";
 import { Modal } from "./modal.js";
@@ -232,7 +233,7 @@ function ActionInputForm({
       ...(form.current?.querySelectorAll<
         HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement
       >("input,textarea,select") ?? []),
-    ].find((field) => !field.matches(":disabled") && !field.closest("[inert]"));
+    ].find(canFocusFormControl);
     first?.focus({ preventScroll: true });
     if (
       selectInitialValue &&
@@ -524,9 +525,11 @@ function RepeatedFields({
       const selector =
         focusNew.current === "add"
           ? "[data-repeat-add]"
-          : `[data-repeat-key="${keys.at(-1)}"] input,[data-repeat-key="${keys.at(-1)}"] select`;
+          : `[data-repeat-key="${keys.at(-1)}"] input,[data-repeat-key="${keys.at(-1)}"] select,[data-repeat-key="${keys.at(-1)}"] textarea`;
       focusNew.current = null;
-      root.current?.querySelector<HTMLElement>(selector)?.focus();
+      [...(root.current?.querySelectorAll<HTMLElement>(selector) ?? [])]
+        .find(canFocusFormControl)
+        ?.focus();
     }
   }, [keys, entered]);
   return (

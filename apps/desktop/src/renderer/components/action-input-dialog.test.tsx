@@ -149,6 +149,38 @@ it("skips retained hidden controls when focusing and wrapping Tab", () => {
   );
   expect(document.activeElement).toBe(button("Save"));
 });
+
+it("focuses the first usable textarea in a newly added repeat row", async () => {
+  mount({
+    fields: [
+      {
+        name: "rows",
+        label: "Rows",
+        type: "repeat",
+        minItems: 0,
+        addLabel: "Add entry",
+        fields: [
+          {
+            name: "hidden",
+            label: "Hidden",
+            required: true,
+            when: { field: "show", equals: "yes" },
+          },
+          { name: "show", label: "Show", type: "textarea", value: "no" },
+        ],
+      },
+    ],
+  });
+  await act(async () => {
+    button("Add entry").click();
+  });
+  await act(
+    async () =>
+      new Promise<void>((resolve) => requestAnimationFrame(() => resolve())),
+  );
+  expect(document.activeElement).toBe(control("rows.0.show"));
+  expect(control("rows.0.hidden").matches(":disabled")).toBe(true);
+});
 it("keeps edited values and the dialog on action failure; supports checkbox, prose and an absolute local datetime", async () => {
   const instant = "2027-02-05T12:00:00.000Z";
   const { run, close } = mount(
