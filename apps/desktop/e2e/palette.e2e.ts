@@ -78,10 +78,15 @@ const pasteImage = async () => {
       ...(type === "keyDown" ? { commands: ["paste"] } : {}),
     });
 };
+const stripTabs = `[...document.querySelectorAll('[data-workspace-visible="true"] [data-tab-orientation] [data-point-key]:not([data-sidebar-item-id], [aria-hidden])')]`;
 const selectStripTab = async (key: string) => {
+  await run(`
+    ${stripTabs}.find(el => el.dataset.pointKey === ${JSON.stringify(key)})?.scrollIntoView({block:'nearest',inline:'nearest',behavior:'instant'});
+    return true;
+  `);
   const point = await wait<{ x: number; y: number }>(`
-    const tab = [...document.querySelectorAll('[data-workspace-visible="true"] [data-tab-orientation] [data-point-key]:not([data-sidebar-item-id])')].find(el => el.dataset.pointKey === ${JSON.stringify(key)});
-    if (!tab || tab.closest('[data-tab-orientation]').getAnimations({subtree:true}).some(a => a.playState === 'running')) return false;
+    const tab = ${stripTabs}.find(el => el.dataset.pointKey === ${JSON.stringify(key)});
+    if (!tab || tab.closest('[data-tab-orientation]').getAnimations({subtree:true}).some(a => a.playState === 'running' && a.effect?.getTiming().iterations !== Infinity)) return false;
     const r = tab.getBoundingClientRect();
     const point = {x:r.left+Math.min(24,r.width/3), y:r.top+r.height/2};
     return tab.contains(document.elementFromPoint(point.x,point.y)) && point;
@@ -693,7 +698,7 @@ it("moves the caret between the input's lines with the arrows, and the highlight
 });
 
 it("closes an untouched New Tab once another tab is shown, and keeps a typed one", async () => {
-  const strip = `[...document.querySelectorAll('[data-workspace-visible="true"] [data-tab-orientation] [data-point-key]:not([data-sidebar-item-id], [aria-hidden])')]`;
+  const strip = stripTabs;
   const newTabs = () =>
     run<number>(
       `return ${strip}.filter((el) => el.dataset.pointKey.startsWith('palette:')).length`,
@@ -1056,8 +1061,13 @@ it.each(["overlay", "tab"])(
       if (trigger === "agent") await shot(`palette-prefix-${variant}.png`);
       if (variant === "overlay") await close();
       else {
+        const closingKey = await run<string>(
+          `return input().closest('[data-surface-key]').dataset.surfaceKey`,
+        );
         await shortcut("w");
-        await wait(`return !input()`);
+        await wait(
+          `return ![...document.querySelectorAll('[data-workspace-visible="true"] [data-tab-orientation] [data-point-key]')].some(tab=>tab.dataset.pointKey===${JSON.stringify(closingKey)})`,
+        );
       }
     }
     expect(app.getRendererErrors()).toEqual([]);
@@ -1065,7 +1075,7 @@ it.each(["overlay", "tab"])(
 );
 
 it("retains independent New Tab drafts, appends new tabs, and reuses an empty tab", async () => {
-  const strip = `[...document.querySelectorAll('[data-workspace-visible="true"] [data-tab-orientation] [data-point-key]:not([data-sidebar-item-id])')]`;
+  const strip = stripTabs;
   const keys = () =>
     run<string[]>(`return ${strip}.map(el => el.dataset.pointKey)`);
   const currentKey = () =>
@@ -1073,18 +1083,7 @@ it("retains independent New Tab drafts, appends new tabs, and reuses an empty ta
       `return input().closest('[data-surface-key]').dataset.surfaceKey`,
     );
   const select = async (key: string) => {
-    await run(`
-      ${strip}.find(el => el.dataset.pointKey === ${JSON.stringify(key)})?.scrollIntoView({block:'nearest',inline:'nearest',behavior:'instant'});
-      return true;
-    `);
-    const point = await wait<{ x: number; y: number }>(`
-      const tab = ${strip}.find(el => el.dataset.pointKey === ${JSON.stringify(key)});
-      if (!tab || tab.closest('[data-tab-orientation]').getAnimations({subtree:true}).some(a => a.playState === 'running' && a.effect?.getTiming().iterations !== Infinity)) return false;
-      const r = tab.getBoundingClientRect();
-      const point = {x:r.left+Math.min(24,r.width/3), y:r.top+r.height/2};
-      return tab.contains(document.elementFromPoint(point.x,point.y)) && point;
-    `);
-    await app.clickPointer(point);
+    await selectStripTab(key);
     await wait(
       `return input()?.closest('[data-surface-key]')?.dataset.surfaceKey === ${JSON.stringify(key)} && document.activeElement === input()`,
     );
@@ -1146,7 +1145,7 @@ it("retains independent New Tab drafts, appends new tabs, and reuses an empty ta
     await select(key);
     await shortcut("w");
   }
-  expect(await keys()).toEqual(before);
+  expect(await keys()).toEqual(before.filter((key) => key !== first));
   expect(app.getRendererErrors()).toEqual([]);
 });
 

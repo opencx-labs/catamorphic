@@ -1114,7 +1114,7 @@ describe("chat flows", () => {
         `return window.catamorphicDesktop.dockSnapshot().then(({chats}) => chats.map(({entry}) => ({localId:entry.localId,mode:entry.mode})));`,
       ),
     ).toEqual(minimizedChats);
-    await run(`pressKey('Escape'); return true;`);
+    await app.press("Escape");
     await runWait(
       `return !$('[data-palette="overlay"]:not([inert], [inert] *)');`,
       {

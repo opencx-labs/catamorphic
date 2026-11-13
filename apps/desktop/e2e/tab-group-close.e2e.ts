@@ -167,7 +167,7 @@ async function openGroup({
   else if (!editor)
     await app.waitFor(
       `document.activeElement?.matches('[data-chat-local-id="group"] [data-composer-input]') &&
-       !!document.activeElement.closest('[data-workspace-visible="true"]')`,
+       document.activeElement.closest('[data-chat-project]')?.dataset.chatProject===${JSON.stringify(project.id)}`,
       { label: "the restored chat finished its composer focus handoff" },
     );
   return project.id;
