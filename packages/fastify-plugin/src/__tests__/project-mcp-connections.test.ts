@@ -175,7 +175,7 @@ describe("connections on the project MCP for a member's own agent (ADR 0316)", (
     const { core, offerConnection } = fakeCore({ memberReady: false });
     const served = app(core);
     const listed = await rpc(served, "tools/list");
-    const names = (listed.result?.tools as Array<{ name: string }>).map(
+    const names = ((listed.result?.tools ?? []) as Array<{ name: string }>).map(
       (tool) => tool.name,
     );
     expect(names).toContain("tracker__connect");
