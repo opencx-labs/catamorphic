@@ -1299,18 +1299,18 @@ function CommandPaletteContent({
   // Escape closes the overlay (capture-phase so the chat dock's window
   // listener defers to us — same etiquette as Modal). A palette tab
   // ignores Escape, like Chrome's New Tab page.
-  useEffect(() => {
-    if (variant !== "overlay" || !open) return;
+  useLayoutEffect(() => {
+    if (variant !== "overlay" || !open || !active) return;
     const onKeyDown = (event: globalThis.KeyboardEvent) => {
       if (event.key !== "Escape" || event.isComposing) return;
       event.preventDefault();
-      event.stopPropagation();
+      event.stopImmediatePropagation();
       dismissRef.current();
     };
     window.addEventListener("keydown", onKeyDown, { capture: true });
     return () =>
       window.removeEventListener("keydown", onKeyDown, { capture: true });
-  }, [variant, open]);
+  }, [variant, open, active]);
 
   // The rendered chip: the live mode, or the exiting one mid chip-out.
   const chip = activeMode

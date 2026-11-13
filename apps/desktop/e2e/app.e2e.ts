@@ -1109,6 +1109,11 @@ describe("chat flows", () => {
       await run<boolean>(`return $$('[role="option"]')
         .some((el) => !el.closest('[inert]') && el.dataset.itemId === 'action:rename-chat');`),
     ).toBe(false);
+    expect(
+      await run(
+        `return window.catamorphicDesktop.dockSnapshot().then(({chats}) => chats.map(({entry}) => ({localId:entry.localId,mode:entry.mode})));`,
+      ),
+    ).toEqual(minimizedChats);
     await run(`pressKey('Escape'); return true;`);
     await runWait(
       `return !$('[data-palette="overlay"]:not([inert], [inert] *)');`,

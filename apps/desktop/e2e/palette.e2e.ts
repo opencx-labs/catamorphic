@@ -693,7 +693,7 @@ it("moves the caret between the input's lines with the arrows, and the highlight
 });
 
 it("closes an untouched New Tab once another tab is shown, and keeps a typed one", async () => {
-  const strip = `[...document.querySelectorAll('[data-workspace-visible="true"] [data-tab-orientation] [data-point-key]:not([data-sidebar-item-id])')]`;
+  const strip = `[...document.querySelectorAll('[data-workspace-visible="true"] [data-tab-orientation] [data-point-key]:not([data-sidebar-item-id], [aria-hidden])')]`;
   const newTabs = () =>
     run<number>(
       `return ${strip}.filter((el) => el.dataset.pointKey.startsWith('palette:')).length`,

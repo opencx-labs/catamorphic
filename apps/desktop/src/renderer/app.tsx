@@ -9222,6 +9222,7 @@ export function App({
             <CommandPalette
               variant="overlay"
               open={paletteOpen}
+              active={runtime.visible}
               onClose={closePalette}
               modeRequest={modeRequest}
             />

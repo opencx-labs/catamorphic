@@ -164,6 +164,12 @@ async function openGroup({
     await app.waitFor(
       `(() => { try { return document.querySelector('${page}')?.getTitle()==='Group page'; } catch { return false; } })()`,
     );
+  else if (!editor)
+    await app.waitFor(
+      `document.activeElement?.matches('[data-chat-local-id="group"] [data-composer-input]') &&
+       !!document.activeElement.closest('[data-workspace-visible="true"]')`,
+      { label: "the restored chat finished its composer focus handoff" },
+    );
   return project.id;
 }
 
