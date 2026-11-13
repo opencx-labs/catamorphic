@@ -126,3 +126,47 @@ it("explains a native disabled control and animates its hint away", async () => 
     Reflect.set(globalThis, "IS_REACT_ACT_ENVIRONMENT", false);
   }
 });
+
+it("lets a hint go when its control is enabled under a still pointer", async () => {
+  vi.useFakeTimers();
+  Reflect.set(globalThis, "IS_REACT_ACT_ENVIRONMENT", true);
+  const container = document.createElement("div");
+  document.body.append(container);
+  const root = createRoot(container);
+  const render = (disabled: boolean, reason: string) =>
+    root.render(
+      <>
+        <DisabledControlHints />
+        <button disabled={disabled} data-disabled-reason={reason} type="button">
+          Share
+        </button>
+      </>,
+    );
+  try {
+    await act(async () => render(true, "Pick a tab first"));
+    await act(async () => {
+      container
+        .querySelector("button")
+        ?.dispatchEvent(new Event("pointerover", { bubbles: true }));
+      await vi.advanceTimersByTimeAsync(800);
+    });
+    expect(document.querySelector('[role="tooltip"]')?.textContent).toBe(
+      "Pick a tab first",
+    );
+    await act(async () => render(true, "Pick a screen first"));
+    expect(document.querySelector('[role="tooltip"]')?.textContent).toBe(
+      "Pick a screen first",
+    );
+    await act(async () => render(false, "Pick a screen first"));
+    expect(document.querySelector('[role="tooltip"]')?.className).toContain(
+      "opacity-0",
+    );
+    await act(async () => vi.advanceTimersByTimeAsync(200));
+    expect(document.querySelector('[role="tooltip"]')).toBeNull();
+  } finally {
+    act(() => root.unmount());
+    container.remove();
+    vi.useRealTimers();
+    Reflect.set(globalThis, "IS_REACT_ACT_ENVIRONMENT", false);
+  }
+});

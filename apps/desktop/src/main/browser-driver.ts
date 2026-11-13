@@ -94,13 +94,17 @@ const EVALUATE_RESULT_LIMIT = 20_000;
 const EVALUATE_MS = 30_000;
 const FILE_CHOOSER_MS = 6000;
 const CAPTURE_MS = 10_000;
-/** Captures in different guests share their window's short rendering hold. */
+/**
+ * Captures in different guests share their window's rendering hold: an
+ * agent's screenshot, and a tab shared into a call (browser.ts), which
+ * must keep painting while its window is covered or minimized.
+ */
 const captureFrames = new WeakMap<
   WebContents,
   { count: number; throttled: boolean }
 >();
 
-function holdCaptureFrames(guest: WebContents): () => void {
+export function holdCaptureFrames(guest: WebContents): () => void {
   const host = guest.hostWebContents ?? guest;
   const held = captureFrames.get(host);
   const entry = held ?? { count: 0, throttled: host.getBackgroundThrottling() };

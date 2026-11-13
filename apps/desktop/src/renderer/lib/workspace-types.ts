@@ -87,6 +87,8 @@ export type WorkspaceTab = (
       faviconUrl?: string | null;
       /** The page is unloaded to save memory until the tab is shown. */
       asleep?: boolean;
+      /** A page in this window shares this tab: the site it goes to. */
+      sharingWith?: string | null;
       /** The page waits on its dialog (ADR 0227). */
       pageDialog?: boolean;
       /** The page is in the profile's incognito session (ADR 0303). */
