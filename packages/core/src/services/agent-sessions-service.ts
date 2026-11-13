@@ -674,6 +674,10 @@ export class AgentNotConfiguredError extends Error {
   }
 }
 
+/** What a turn on a chat whose agent no longer exists fails with. */
+export const AGENT_MISSING_MESSAGE =
+  "The agent this chat used was deleted. Choose another agent to continue.";
+
 /** The session has a turn executing right now; retry after it settles. */
 export class AgentTurnInProgressError extends Error {
   constructor(readonly sessionId: string) {
@@ -4823,12 +4827,30 @@ export class AgentSessionsService {
         const agent = await this.resolveAgent(
           session.agent_id,
           session.project_id,
-        );
+        ).catch((error: unknown) => {
+          // The chat's own agent was removed: it stops until the person
+          // chooses another (ADR 0314), rather than switching on its own.
+          if (error instanceof AgentNotConfiguredError && error.agentId)
+            return undefined;
+          throw error;
+        });
+        if (!agent)
+          return {
+            harness: "",
+            agentId: session.agent_id,
+            recovery: "stop" as const,
+            unavailable: {
+              message: AGENT_MISSING_MESSAGE,
+              kind: "agent_missing" as const,
+            },
+          };
         return {
           harness: harnessIdOf(agent),
           agentId: session.agent_id,
           recovery: agent.recovery ?? "continue",
-          ...(agent.unavailable ? { unavailable: agent.unavailable } : {}),
+          ...(agent.unavailable
+            ? { unavailable: { message: agent.unavailable } }
+            : {}),
         };
       },
       prepare: (input) => this.prepareAttempt(input),
@@ -10995,6 +11017,52 @@ export class AgentSessionsService {
         activeWatcherCount > 0 ||
         activeProcessCount > 0,
     };
+  }
+
+  /**
+   * The host removed one of its agents (ADR 0314). Its subsessions belong
+   * to work another agent started, so they are archived; the person's own
+   * chats on it stay, and stop until they choose another agent.
+   */
+  async archiveSubsessionsOnAgent(
+    identity: Identity,
+    input: { agentId: string },
+  ): Promise<{ archivedSessionIds: string[] }> {
+    const rows = await this.db
+      .selectFrom("agent_sessions")
+      .innerJoin("projects", "projects.id", "agent_sessions.project_id")
+      .leftJoin("agent_session_views", (join) =>
+        join
+          .onRef("agent_session_views.session_id", "=", "agent_sessions.id")
+          .on("agent_session_views.tenant_id", "=", identity.tenantId)
+          .on(
+            "agent_session_views.external_user_id",
+            "=",
+            identity.externalUserId,
+          ),
+      )
+      .select(["agent_sessions.id", "agent_sessions.project_id"])
+      .where("projects.tenant_id", "=", identity.tenantId)
+      .where("agent_sessions.external_user_id", "=", identity.externalUserId)
+      .where("agent_sessions.agent_id", "=", input.agentId)
+      .where("agent_sessions.parent_session_id", "is not", null)
+      .where((eb) =>
+        eb.or([
+          eb("agent_session_views.visibility", "is", null),
+          eb("agent_session_views.visibility", "!=", "archived"),
+        ]),
+      )
+      .execute();
+    const archivedSessionIds: string[] = [];
+    for (const row of rows) {
+      // An earlier one's tree may already have taken it along.
+      if (archivedSessionIds.includes(row.id)) continue;
+      const { impact } = await this.archive(identity, row.project_id, row.id, {
+        confirmStop: true,
+      });
+      archivedSessionIds.push(...impact.sessionIds);
+    }
+    return { archivedSessionIds };
   }
 
   /** Stop and hide one session tree. The caller confirms only live work. */

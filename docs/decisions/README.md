@@ -319,3 +319,4 @@ Settled design decisions live here as short Architecture Decision Records. They 
 | [0311](0311-native-macos-speech-and-push-to-talk.md) | Native macOS speech and push to talk | Accepted (amends 0216, 0236, 0265, 0268, 0297; supersedes 0267) |
 | [0312](0312-cloudflare-sandboxes-use-native-containers.md) | Cloudflare sandboxes use native containers | Accepted |
 | [0313](0313-verified-development-toolchains-preserve-data.md) | Verified development toolchains preserve data | Accepted |
+| [0314](0314-a-chat-whose-agent-is-removed-stops.md) | A chat whose agent is removed stops until another is chosen | Accepted |

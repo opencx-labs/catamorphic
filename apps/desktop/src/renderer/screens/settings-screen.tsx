@@ -41,6 +41,7 @@ import { DockIconSetting } from "../components/dock-icon-setting.js";
 import { Modal } from "../components/modal.js";
 import { PendingButton } from "../components/pending-button.js";
 import { SyncedNote } from "../components/profile-settings-sync.js";
+import { RemoveAgentDialog } from "../components/remove-agent-dialog.js";
 import { ShortcutHint } from "../components/shortcut-hint.js";
 import { useProfileAgents, useVoiceKeys } from "../components/voice-button.js";
 import {
@@ -515,6 +516,9 @@ function AgentsSection({
   const [data, setData] = useState<AgentsData | null>(null);
   const [loginOk, setLoginOk] = useState<Record<string, boolean>>({});
   const [login, setLogin] = useState<Record<string, AgentLoginUi>>({});
+  const [removing, setRemoving] = useState<{ id: string; name: string } | null>(
+    null,
+  );
 
   useEffect(() => {
     void desktopApi.agentsList().then(setData);
@@ -645,7 +649,7 @@ function AgentsSection({
                   <button
                     type="button"
                     onClick={() =>
-                      void desktopApi.agentsRemove(agent.id).then(refresh)
+                      setRemoving({ id: agent.id, name: agent.name })
                     }
                     className="row-reveal grid size-6 shrink-0 cursor-pointer place-items-center rounded text-fg-faint transition-colors hover:text-danger"
                     aria-label={`Remove ${agent.name}`}
@@ -734,6 +738,11 @@ function AgentsSection({
           })}
         </div>
       )}
+      <RemoveAgentDialog
+        agent={removing}
+        onClose={() => setRemoving(null)}
+        onRemove={(id) => desktopApi.agentsRemove(id).then(refresh)}
+      />
     </section>
   );
 }

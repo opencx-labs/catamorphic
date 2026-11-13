@@ -1439,7 +1439,13 @@ const TurnErrorSchema = describes<TurnError>()(
   z.object({
     message: z.string(),
     kind: z
-      .enum(["auth", "rate_limit", "unavailable", "model_incompat"])
+      .enum([
+        "auth",
+        "rate_limit",
+        "unavailable",
+        "model_incompat",
+        "agent_missing",
+      ])
       .optional(),
     retrySafe: z.boolean().optional(),
   }),

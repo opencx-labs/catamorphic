@@ -171,7 +171,7 @@ export interface TurnEngineHost {
     agentId: string | null;
     recovery: "continue" | "stop";
     /** Why the agent cannot run now: the turn fails with it. */
-    unavailable?: string;
+    unavailable?: Omit<TurnError, "retrySafe">;
   }>;
   prepare(input: {
     identity: Identity;
@@ -1000,7 +1000,9 @@ export class TurnEngine {
       .select("harness")
       .where("id", "=", turn.sessionId)
       .executeTakeFirstOrThrow();
-    const refusal = local.refusal ?? harness.unavailable ?? null;
+    const refusal = local.refusal
+      ? { message: local.refusal }
+      : (harness.unavailable ?? null);
     if (refusal !== null) {
       await this.settle(local, {
         identity: ctx.identity,
@@ -1008,7 +1010,7 @@ export class TurnEngine {
         turn,
         attempt: { ...attempt, status: "failed", completedAt: now() },
         status: "failed",
-        error: { message: refusal },
+        error: refusal,
         outcome: turn.outcome ?? { changedFiles: [] },
         checkpointAfter: null,
       });
