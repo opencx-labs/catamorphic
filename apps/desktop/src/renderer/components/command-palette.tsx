@@ -553,11 +553,8 @@ function CommandPaletteContent({
   }, [open, active, variant, focusInput, focusRequest]);
 
   // Commands run from anywhere open the overlay already inside their mode.
-  const consumedModeRequest = useRef<string | null>(null);
   useEffect(() => {
     if (variant !== "overlay" || !open || !modeRequest) return;
-    if (consumedModeRequest.current === modeRequest.nonce) return;
-    consumedModeRequest.current = modeRequest.nonce;
     if (modeRequest.mode === "section") setSectionSearch(modeRequest);
     enterMode(modeRequest.mode);
     // This temporary picker can undo its search, but its entry belongs to

@@ -267,8 +267,20 @@ it("deleting an agent collapses its row before it disappears", async () => {
     `return shown(${JSON.stringify(selector)}).getBoundingClientRect().height;`,
   );
   // Observe real frame heights while using the row's native Remove action.
-  await run(`window.__removeHeights=[];window.__removePositions=[];window.__removeInert=false;const row=shown(${JSON.stringify(selector)});const frame=row.closest('[data-collapsible]');const sibling=shown('[data-agent-id="${otherId}"]');
-    const until=performance.now()+1200;const sample=()=>{window.__removeHeights.push(frame.getBoundingClientRect().height);window.__removePositions.push(sibling.getBoundingClientRect().top);window.__removeInert ||= !!row.closest('[inert]');if(performance.now()<until) requestAnimationFrame(sample);};requestAnimationFrame(sample);`);
+  await run(`window.__removeHeights=[];window.__removePositions=[];window.__removeInert=false;window.__removeDone=false;window.__removeTimedOut=false;
+    const row=shown(${JSON.stringify(selector)}),frame=row.closest('[data-collapsible]'),card=row.closest('.settings-card'),sibling=shown('[data-agent-id="${otherId}"]');
+    row.querySelector('[aria-label="Remove Fake Agent"]').addEventListener('pointerdown',()=>{
+      const deadline=performance.now()+15000;let previousTop,settledFrames=0;
+      const sample=()=>{
+        const top=sibling.getBoundingClientRect().top;
+        window.__removeHeights.push(frame.getBoundingClientRect().height);window.__removePositions.push(top);window.__removeInert ||= !!row.closest('[inert]');
+        const moving=card.getAnimations({subtree:true}).some(a=>a.effect?.getTiming().iterations!==Infinity&&(a.pending||a.playState==='running'));
+        settledFrames=!row.isConnected&&!moving&&previousTop!==undefined&&Math.abs(top-previousTop)<0.25?settledFrames+1:0;previousTop=top;
+        if(settledFrames>=3)window.__removeDone=true;
+        else if(performance.now()>=deadline)window.__removeTimedOut=true;
+        else requestAnimationFrame(sample);
+      };sample();
+    },{once:true});`);
   await click('[aria-label="Remove Fake Agent"]');
   await wait(
     `return !document.querySelector(${JSON.stringify(selector)});`,
@@ -280,9 +292,10 @@ it("deleting an agent collapses its row before it disappears", async () => {
     ),
   ).toBe(true);
   await wait(
-    `return window.__removePositions.length>10;`,
-    "sibling motion sampled",
+    `return window.__removeDone||window.__removeTimedOut;`,
+    "deletion and sibling motion settled",
   );
+  expect(await run(`return window.__removeDone;`)).toBe(true);
   expect(
     await run(
       `const positions=window.__removePositions;const start=positions[0],end=positions.at(-1);return start-end>${height}-2&&positions.some(y=>y<start-1&&y>end+1);`,

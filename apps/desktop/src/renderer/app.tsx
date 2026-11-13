@@ -4806,7 +4806,10 @@ export function App({
     "browser-back": () => runBrowserCommand("back"),
     "browser-forward": () => runBrowserCommand("forward"),
     "new-tab": openPaletteTab,
-    "command-palette": () => setPaletteOpen((value) => !value),
+    "command-palette": () => {
+      setModeRequest(null);
+      setPaletteOpen((value) => !value);
+    },
     "check-for-updates": () => void desktopApi.updateCheck(),
     "new-floating-chat": () => addChat(),
     "toggle-floating-terminal": () => toggleFloatingTerminal(),

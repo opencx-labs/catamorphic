@@ -1153,6 +1153,17 @@ it("retains independent New Tab drafts, appends new tabs, and reuses an empty ta
 });
 
 it("retains a selected skill and only accents targets while its palette is active", async () => {
+  if (
+    await app.eval<boolean>(
+      `!!document.querySelector('section[data-floating-chat] [data-composer-input]')`,
+    )
+  ) {
+    await shortcut("m");
+    await wait(
+      `return !document.querySelector('section[data-floating-chat] [data-composer-input]')`,
+      "floating chats minimized before tab targeting",
+    );
+  }
   const strip = `[...document.querySelectorAll('[data-workspace-visible="true"] [data-tab-orientation] [data-point-key]:not([data-sidebar-item-id])')]`;
   const browser = await run<string>(
     `return ${strip}.find(el => el.dataset.pointKey.startsWith('browser:')).dataset.pointKey`,
@@ -1164,7 +1175,11 @@ it("retains a selected skill and only accents targets while its palette is activ
   const palette = await run<string>(
     `return input().closest('[data-surface-key]').dataset.surfaceKey`,
   );
-  await app.insertText(">close current tab");
+  await app.insertText(">close tab");
+  await wait(
+    `return rows().find(row=>row.getAttribute('aria-selected')==='true')?.dataset.itemId==='action:close-tab'`,
+    "close-tab command selected",
+  );
   await wait(
     `return ${strip}.some(el => el.dataset.pointKey === ${JSON.stringify(palette)} && el.dataset.paletteTarget)`,
   );
@@ -1173,6 +1188,10 @@ it("retains a selected skill and only accents targets while its palette is activ
   await selectStripTab(palette);
   await wait(
     `return ${strip}.some(el => el.dataset.pointKey === ${JSON.stringify(palette)} && el.dataset.paletteTarget)`,
+  );
+  await wait(
+    `return document.activeElement===input()`,
+    "retained palette input focused",
   );
   await type("skills");
   await app.press("Space");

@@ -1194,10 +1194,15 @@ describe("chat flows", () => {
         `return $$('[role="option"]').some(el => !el.closest('[inert]') && el.dataset.itemId === 'action:rename-chat');`,
       ),
     ).toBe(false);
-    await run(`pressKey('Escape'); return true;`);
+    await app.press("Escape");
     await runWait(
       `return !$('[data-palette="overlay"]:not([inert], [inert] *)');`,
     );
+    expect(
+      await run(
+        `return window.catamorphicDesktop.dockSnapshot().then(({chats})=>chats.find(chat=>chat.entry.localId===${JSON.stringify(minimizedId)})?.entry.mode)`,
+      ),
+    ).toBe("tab");
     await run(`pressKey('w', { metaKey: true }); return true;`);
     await runWait(
       `return !!visibleDock() && !document.querySelector('[data-workspace-slot="left"]');`,
@@ -1217,14 +1222,19 @@ describe("chat flows", () => {
         `return $$('[role="option"]').some(el => !el.closest('[inert]') && el.dataset.itemId === 'action:rename-chat');`,
       ),
     ).toBe(false);
-    await run(`pressKey('Escape'); return true;`);
+    await app.press("Escape");
     await runWait(
       `return !$('[data-palette="overlay"]:not([inert], [inert] *)');`,
     );
+    expect(
+      await run(
+        `return window.catamorphicDesktop.dockSnapshot().then(({chats})=>chats.find(chat=>chat.entry.localId===${JSON.stringify(minimizedId)})?.entry.mode)`,
+      ),
+    ).toBe("tab");
     await run(`pressKey('w', { metaKey: true }); return true;`);
     await runWait(`return !document.querySelector('[data-floating-surface]');`);
     // Back to floating, as the next tests expect.
-    await run(`pressKey('Escape'); return true;`);
+    await app.press("Escape");
     await runWait(`return !!floatingDock();`, {
       label: "the chat floating again",
     });
