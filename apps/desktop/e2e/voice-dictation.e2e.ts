@@ -2,6 +2,7 @@ import http from "node:http";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import {
   type AppHandle,
+  focusWindow,
   launchApp,
   openProjectSwitcher,
   setReactValueJs,
@@ -10,12 +11,9 @@ import {
 } from "./harness.js";
 
 /**
- * Dictation and voice's keys (ADR 0216, 0236), end to end with scripted
- * speech. With "Dictation only" on, a chat's microphone writes what the
- * person says into its composer while they say it, and sends nothing: the
- * person sends it as typed text, the agent reads it as text, and dictation
- * ends with the send. Dictate's keys write into the text field the person
- * is in, a web page's too: tapped, until it is sent; held, while held.
+ * Dictation writes final words when its microphone or shortcut is released.
+ * Holding shows provisional words without sending a chat message.
+ * Browser shortcuts use the page's native input path.
  */
 
 const UTTERANCES = [
@@ -49,6 +47,17 @@ const helpers = `
   ${workspaceDomHelpersJs}
   const byText = (selector, text) =>
     $$(selector).find((el) => el.textContent?.includes(text));
+  // A visible control can still be moving, or covered by the dock.
+  const hitPoint = (element) => {
+    if (!element?.checkVisibility({opacityProperty:true,visibilityProperty:true}) || element.disabled) return false;
+    const box = element.getBoundingClientRect();
+    const scope = element.closest('[role="menu"], [data-dock-rail], [data-chat-local-id]') ?? element;
+    if (scope.getAnimations({subtree:true}).some(animation =>
+      (animation.playState === 'running' || animation.pending) && animation.effect?.getTiming().iterations !== Infinity
+    )) return false;
+    const point = {x:box.x+box.width/2,y:box.y+box.height/2};
+    return element.contains(document.elementFromPoint(point.x,point.y)) && point;
+  };
   const mic = () => $('[data-testid="voice-button"]');
   const chatOf = (localId) => $('[data-chat-local-id="' + localId + '"]');
   const chatMic = (localId) => chatOf(localId)?.querySelector('[data-testid="chat-voice-button"]');
@@ -93,17 +102,47 @@ const dictateKeys = (type: "keyDown" | "keyUp") =>
     return true;
   `);
 
-/** Opens a microphone's menu, as a right click does. */
-const openMenu = (button: string) =>
-  run(`
-    const button = ${button};
-    const bounds = button.getBoundingClientRect();
-    button.dispatchEvent(new MouseEvent('contextmenu', {
-      bubbles: true, cancelable: true, button: 2,
-      clientX: bounds.left + bounds.width / 2, clientY: bounds.top + bounds.height / 2,
-    }));
-    return true;
-  `);
+/** Open the microphone menu with the same pointer input as a person. */
+async function openMenu(button: string) {
+  await focusWindow(app);
+  const point = await runWait<{ x: number; y: number }>(
+    `return hitPoint(${button});`,
+    { label: "the microphone menu's hit target" },
+  );
+  await app.movePointer(point);
+  for (const type of ["mousePressed", "mouseReleased"])
+    await app.cdp("Input.dispatchMouseEvent", {
+      type,
+      ...point,
+      button: "right",
+      clickCount: 1,
+    });
+}
+
+/** Wait for enough microphone samples to recognize the complete scripted phrase. */
+async function capturedSpeech() {
+  const audio = await app.connectToFrame("voice.html");
+  try {
+    const before = await audio.eval<number>(`(() => {
+      if (window.__dictationAudioSeconds === undefined) {
+        window.__dictationAudioSeconds = 0;
+        const post = MessagePort.prototype.postMessage;
+        MessagePort.prototype.postMessage = function(message, ...args) {
+          if (message?.type === 'frame')
+            window.__dictationAudioSeconds += message.samples.length / message.sampleRate;
+          return Reflect.apply(post, this, [message, ...args]);
+        };
+      }
+      return window.__dictationAudioSeconds;
+    })()`);
+    await audio.waitFor(`window.__dictationAudioSeconds >= ${before + 1.7}`, {
+      timeoutMs: 30_000,
+      label: "the full scripted phrase captured",
+    });
+  } finally {
+    audio.close();
+  }
+}
 
 describe("dictation and voice's keys", () => {
   it("boots into a project", async () => {
@@ -130,7 +169,7 @@ describe("dictation and voice's keys", () => {
     });
   }, 180_000);
 
-  it("writes what the person says into the composer as they say it, and ends when it is sent", async () => {
+  it("writes final words into the composer on release and sends them as text", async () => {
     const before = await run<string[]>(
       `return $$('[data-chat-local-id]').map((el) => el.dataset.chatLocalId);`,
     );
@@ -145,67 +184,86 @@ describe("dictation and voice's keys", () => {
       { timeoutMs: 30_000, label: "a new chat with a microphone" },
     );
     const id = JSON.stringify(localId);
-    // "Dictation only", from the composer's microphone menu.
     await openMenu(`chatMic(${id})`);
-    await runWait(
+    const dictationToggle = await runWait<{ x: number; y: number }>(
       `const item = byText('[role="menuitemcheckbox"]', 'Dictation only');
-       if (!item || item.getAttribute('aria-checked') !== 'false') return false;
-       item.click(); return true;`,
+       if (item?.getAttribute('aria-checked') !== 'false') return false;
+       return hitPoint(item);`,
       { label: "dictation only in the menu" },
     );
-    // Saved, and the microphone knows: a click dictates now.
+    await app.clickPointer(dictationToggle);
     await runWait(
       `return (await api.getPrefs()).voiceDictation === true &&
          chatMic(${id})?.dataset.action === 'dictate';`,
       { label: "dictation on" },
     );
-    // The words still being said show in the composer, muted, then stay.
+    const point = await runWait<{ x: number; y: number }>(
+      `return hitPoint(chatMic(${id}));`,
+      { label: "the composer's microphone" },
+    );
+    await app.movePointer(point);
     await run(`
-      window.__dictationShown = [];
-      window.__dictationObserver?.disconnect();
-      window.__dictationObserver = new MutationObserver(() => {
-        const live = composerOf(${id})?.querySelector('[data-dictation]');
-        const text = live?.textContent.trim();
-        if (text && window.__dictationShown.at(-1) !== text) window.__dictationShown.push(text);
-      });
-      window.__dictationObserver.observe(document.body, { subtree: true, childList: true, characterData: true });
+      window.__dictationPress = null;
+      document.addEventListener('pointerdown', event => {
+        const button = event.target instanceof Element ? event.target.closest('button') : null;
+        window.__dictationPress = {testid:button?.dataset.testid,place:button?.dataset.place,label:button?.getAttribute('aria-label')};
+      }, {once:true,capture:true});
       return true;
     `);
-    await run(`chatMic(${id}).click(); return true;`);
+    await app.cdp("Input.dispatchMouseEvent", {
+      type: "mousePressed",
+      button: "left",
+      clickCount: 1,
+      ...point,
+    });
     const ref = await runWait<Ref>(
       `const status = await api.voiceStatus();
        const { lastProjectId } = await api.getPrefs();
-       return status.dictation && status.target?.kind === 'dictation' &&
-         status.target.sessionId && chatMic(${id})?.dataset.lit === 'true' &&
+       return status.dictation && status.phase === 'hearing' &&
+         status.target?.kind === 'dictation' && status.target.sessionId &&
          { projectId: lastProjectId, sessionId: status.target.sessionId };`,
-      { timeoutMs: 30_000, label: "dictating in the chat" },
+      { timeoutMs: 30_000, label: "dictating while the microphone is held" },
+    ).catch(async (cause: unknown) => {
+      const detail = await run(`return {
+        status:await api.voiceStatus(),press:window.__dictationPress,
+        chat:{...chatOf(${id})?.dataset},
+        microphone:chatMic(${id})?.getAttribute('aria-description')
+      };`);
+      throw new Error(
+        `${String(cause)}; dictation input: ${JSON.stringify(detail)}`,
+      );
+    });
+    await capturedSpeech();
+    expect(await run(`return composerOf(${id}).textContent.trim();`)).toBe(
+      UTTERANCES[0],
     );
+    expect(
+      await run(
+        `return !!composerOf(${id}).querySelector('[data-dictation]');`,
+      ),
+    ).toBe(true);
+    await app.cdp("Input.dispatchMouseEvent", {
+      type: "mouseReleased",
+      button: "left",
+      clickCount: 1,
+      ...point,
+    });
     await runWait(
       `return composerOf(${id}).textContent.trim() === ${JSON.stringify(UTTERANCES[0])} &&
          !composerOf(${id}).querySelector('[data-dictation]');`,
-      { timeoutMs: 30_000, label: "the words in the composer" },
+      { timeoutMs: 30_000, label: "the final words in the composer" },
     );
-    const shown = await run<string[]>(`return window.__dictationShown;`);
-    expect(shown.length).toBeGreaterThan(0);
-    // Each showing was the start of what was said, as it was being said.
-    for (const words of shown) expect(UTTERANCES[0]).toContain(words);
-    // Nothing reached the chat, and nothing was read aloud.
+    await runWait(`return (await api.voiceStatus()).phase === 'off';`, {
+      timeoutMs: 30_000,
+      label: "dictation off after release",
+    });
     const quiet = await run<{ messages: unknown[] }>(
       `return session(${JSON.stringify(ref)});`,
     );
     expect(quiet.messages).toEqual([]);
-    expect(await run(`return chatMic(${id}).dataset.phase;`)).toMatch(
-      /listening|hearing/,
-    );
-    // The person sends it as typed text: dictation ends, and the agent
-    // reads it as text.
     await run(
       `composerOf(${id}).closest('form').requestSubmit(); return true;`,
     );
-    await runWait(`return (await api.voiceStatus()).phase === 'off';`, {
-      timeoutMs: 30_000,
-      label: "dictation over once sent",
-    });
     await runWait(
       `const detail = await session(${JSON.stringify(ref)});
        return detail.messages.some((m) => m.role === 'user' && m.content === ${JSON.stringify(UTTERANCES[0])}) &&
@@ -213,18 +271,19 @@ describe("dictation and voice's keys", () => {
       { timeoutMs: 30_000, label: "sent and answered as text" },
     );
     await openMenu(`chatMic(${id})`);
-    await runWait(
+    const dictationOff = await runWait<{ x: number; y: number }>(
       `const item = byText('[role="menuitemcheckbox"]', 'Dictation only');
        if (!item || item.getAttribute('aria-checked') !== 'true') return false;
-       item.click(); return true;`,
+       return hitPoint(item);`,
       { label: "dictation off in the menu" },
     );
+    await app.clickPointer(dictationOff);
     await runWait(`return (await api.getPrefs()).voiceDictation === false;`, {
       label: "dictation off",
     });
   }, 120_000);
 
-  it("dictates into a web page's field from a tap of its keys, until it is sent", async () => {
+  it("dictates into a web page's focused field when its keys are released", async () => {
     const address = page.address();
     if (!address || typeof address === "string") throw new Error("No page");
     await run(`window.dispatchEvent(new KeyboardEvent('keydown', {
@@ -251,54 +310,47 @@ describe("dictation and voice's keys", () => {
       `return (await $('webview').executeJavaScript("document.activeElement?.id")) === 'note';`,
       { label: "the page's field focused" },
     );
-    // Dictate's keys (Option+Space), tapped: on, listening on its own.
     await dictateKeys("keyDown");
+    await runWait(
+      `const status = await api.voiceStatus(); return status.phase === 'hearing' && status.dictation;`,
+      { timeoutMs: 30_000, label: "dictating while the keys are down" },
+    );
+    await capturedSpeech();
+    expect(await page_(`document.getElementById('note').value`)).toBe(
+      UTTERANCES[1],
+    );
     await dictateKeys("keyUp");
     await runWait(
       `return (await $('webview').executeJavaScript("document.getElementById('note').value")) === ${JSON.stringify(UTTERANCES[1])};`,
-      { timeoutMs: 30_000, label: "the words typed into the page" },
+      { timeoutMs: 30_000, label: "the final words typed into the page" },
     );
-    const status = await run<{ dictation: boolean; handsFree: boolean }>(
-      `return api.voiceStatus();`,
-    );
-    expect(status).toMatchObject({ dictation: true, handsFree: true });
-    // Return in the field it wrote into sends it: dictation ends.
-    await run(`
-      $('webview').sendInputEvent({ type: 'keyDown', keyCode: 'Return' });
-      $('webview').sendInputEvent({ type: 'keyUp', keyCode: 'Return' });
-      return true;
-    `);
     await runWait(`return (await api.voiceStatus()).phase === 'off';`, {
       timeoutMs: 30_000,
-      label: "dictation over once sent",
+      label: "dictation off after release",
     });
   }, 120_000);
 
-  it("dictates while its keys are held, and goes off after", async () => {
+  it("reuses dictation on a second hold and shows words before release", async () => {
     await page_(
       `const note = document.getElementById('note'); note.value = ''; note.focus(); true`,
     );
     await dictateKeys("keyDown");
     await runWait(
-      `const status = await api.voiceStatus();
-       return status.phase === 'hearing' && status.dictation && !status.handsFree;`,
-      { timeoutMs: 30_000, label: "dictating while the keys are down" },
+      `const status = await api.voiceStatus(); return status.phase === 'hearing' && status.dictation;`,
+      { timeoutMs: 30_000, label: "dictating on the next hold" },
     );
-    // While held, the words show in the page's field as they are said.
-    await runWait(
-      `return (await $('webview').executeJavaScript("document.getElementById('note').value")).length > 0;`,
-      { timeoutMs: 30_000, label: "words showing in the page" },
+    await capturedSpeech();
+    expect(await page_(`document.getElementById('note').value`)).toBe(
+      UTTERANCES[2],
     );
-    await new Promise((resolve) => setTimeout(resolve, 1_500));
     await dictateKeys("keyUp");
     await runWait(
       `return (await $('webview').executeJavaScript("document.getElementById('note').value")) === ${JSON.stringify(UTTERANCES[2])};`,
-      { timeoutMs: 30_000, label: "the words typed into the page" },
+      { timeoutMs: 30_000, label: "the second hold's final words" },
     );
-    // Started by holding, it goes off once it has nothing left to do.
     await runWait(`return (await api.voiceStatus()).phase === 'off';`, {
       timeoutMs: 30_000,
-      label: "voice off once idle",
+      label: "dictation off again",
     });
   }, 120_000);
 });

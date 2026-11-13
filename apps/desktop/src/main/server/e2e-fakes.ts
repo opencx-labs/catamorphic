@@ -1316,8 +1316,13 @@ async function* fakeScript(turn: FakeTurn): AsyncGenerator<FakeStep> {
       turn.message,
     )?.[1];
     if (!assistantChat) throw new Error("The brief names no assistant chat");
-    // Asks a while in, after the person has turned voice off.
-    await turn.pause(8_000);
+    // The voice test releases this only after capture and playback are off.
+    // A timer can race the assistant's response and the idle timeout.
+    while (!turn.interrupted()) {
+      const signal = await turn.steerWithin(30_000);
+      if (signal?.text.includes("Ask which pages now")) break;
+    }
+    if (turn.interrupted()) return;
     await turn.tool("send_project_session_message", {
       session_id: assistantChat,
       message: "Docs pages: Which pages should I keep?",

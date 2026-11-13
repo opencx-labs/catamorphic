@@ -33,6 +33,11 @@ const HELPERS = [
     name: "Voice quiet helper",
     protocol: "work-voice-quiet 1",
   },
+  {
+    file: "speech-recognition",
+    name: "Speech recognition helper",
+    protocol: "work-speech-recognition 1",
+  },
 ] as const;
 
 // Electron's V1 wire schema: https://www.electronjs.org/docs/latest/tutorial/fuses

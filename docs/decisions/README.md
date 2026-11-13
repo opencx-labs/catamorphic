@@ -273,7 +273,7 @@ Settled design decisions live here as short Architecture Decision Records. They 
 | [0264](0264-a-wait-ends-when-something-reaches-the-agent.md) | A wait ends when something reaches the agent: one signal on every host tool call, one way to wait | Accepted (refines 0155, 0240) |
 | [0265](0265-voice-yields-to-the-person-and-keeps-what-they-saw.md) | Voice yields to the person, and keeps what they saw as they spoke | Accepted (amends 0216, 0236; amended by 0267) |
 | [0266](0266-resources-list-what-work-runs.md) | Resources lists what Work runs, by who it runs for: CPU and memory per chat, tab, terminal and module, with End | Accepted (builds on 0102, 0140, 0234) |
-| [0267](0267-voice-waits-for-the-person-to-finish.md) | Voice waits for the person to finish: 0.8 s of silence ends a turn, and a reply ready while they talk plays after them | Accepted (amends 0216, 0265) |
+| [0267](0267-voice-waits-for-the-person-to-finish.md) | Voice waits for the person to finish: 0.8 s of silence ends a turn, and a reply ready while they talk plays after them | Superseded by 0311 |
 | [0268](0268-voice-lowers-other-audio-and-reads-replies-aloud.md) | Voice lowers other apps' audio while it listens, and any reply can be read aloud from its button | Accepted (amends 0216, 0236) |
 | [0269](0269-a-turn-that-failed-on-sign-in-while-away-runs-again-on-return.md) | A turn that failed on its sign-in while the person was away runs again when they return; a chat's own task's turns too | Accepted (amends 0228; diagnosis corrected by 0275) |
 | [0270](0270-skills-live-in-the-palette.md) | Skills live in the palette: "/" opens them from a chat, Enter applies one here, ⌘↵ in a new chat | Accepted (supersedes 0052's composer menu; builds on 0186; the composer's "/" superseded by 0274) |
@@ -316,5 +316,6 @@ Settled design decisions live here as short Architecture Decision Records. They 
 | [0308](0308-customization-forms-and-inspectors.md) | Customization forms and inspectors | Accepted (amends 0234, 0239, 0307) |
 | [0309](0309-render-failures-stay-with-their-surface.md) | Render failures stay with their surface | Accepted |
 | [0310](0310-linux-ci-on-github-hosted-runners.md) | Linux CI on GitHub-hosted runners | Accepted (amends 0129) |
+| [0311](0311-native-macos-speech-and-push-to-talk.md) | Native macOS speech and push to talk | Accepted (amends 0216, 0236, 0265, 0268, 0297; supersedes 0267) |
 | [0312](0312-cloudflare-sandboxes-use-native-containers.md) | Cloudflare sandboxes use native containers | Accepted |
 | [0313](0313-verified-development-toolchains-preserve-data.md) | Verified development toolchains preserve data | Accepted |

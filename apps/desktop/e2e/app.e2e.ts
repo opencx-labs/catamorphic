@@ -4,6 +4,7 @@ import path from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import {
   type AppHandle,
+  focusWindow,
   launchApp,
   openProjectSwitcher,
   setReactValueJs,
@@ -940,6 +941,63 @@ describe("chat flows", () => {
       `[...document.querySelectorAll('aside [data-session-id]')].find((row) => row.textContent.includes(${JSON.stringify(text)}))`;
     const dockBubble = (text: string) =>
       `[...document.querySelectorAll('[data-chat-bubble][data-session-id]')].find((row) => !row.closest('aside') && row.querySelector(${JSON.stringify(`button[aria-label*="${text}"]`)}))`;
+    const openRename = async (anchor: string) => {
+      await focusWindow(app);
+      await runWait(
+        `return !document.querySelector('[role="menu"], [data-menu-shield]');`,
+        { label: "the preceding menu finished closing" },
+      );
+      const point = await runWait<{ x: number; y: number }>(
+        `const anchor = ${anchor};
+         if (!anchor || anchor.closest('[inert]')) return false;
+         const scope = anchor.closest('[data-dock-rail]') ?? anchor.closest('[data-session-id]') ?? anchor;
+         if (scope.getAnimations({subtree:true}).some(animation =>
+           (animation.playState === 'running' || animation.pending) && animation.effect?.getTiming().iterations !== Infinity)) return false;
+         const box = anchor.getBoundingClientRect();
+         const point = {x:box.x+box.width/2,y:box.y+box.height/2};
+         return anchor.contains(document.elementFromPoint(point.x,point.y)) && point;`,
+        { label: "the rename menu's control accepts input" },
+      );
+      await app.movePointer(point);
+      await run(`
+        window.__renameMenuPress = null;
+        window.addEventListener('pointerdown', event => {
+          const button = event.target instanceof Element ? event.target.closest('button') : null;
+          window.__renameMenuPress = {label:button?.getAttribute('aria-label'),button:event.button,x:event.clientX,y:event.clientY};
+        }, {once:true,capture:true});
+        return true;
+      `);
+      for (const type of ["mousePressed", "mouseReleased"])
+        await app.cdp("Input.dispatchMouseEvent", {
+          type,
+          ...point,
+          button: "right",
+          clickCount: 1,
+        });
+      const renamePoint = await runWait<{ x: number; y: number }>(
+        `const menu = [...document.querySelectorAll('[role="menu"]:not(.animate-pop-out)')]
+           .find(panel => panel.contains(document.activeElement));
+         if (!menu || !document.querySelector('[data-menu-shield]') ||
+           menu.getAnimations({subtree:true}).some(animation => animation.playState === 'running' || animation.pending)) return false;
+         const item = [...menu.querySelectorAll('[role="menuitem"]')]
+           .find(item => item.textContent.trim() === 'Rename…');
+         if (!item || item.disabled) return false;
+         const box = item.getBoundingClientRect();
+         const point = {x:box.x+box.width/2,y:box.y+box.height/2};
+         return item.contains(document.elementFromPoint(point.x,point.y)) && point;`,
+        { label: "Rename in the active settled menu accepts a press" },
+      ).catch(async (cause: unknown) => {
+        const diagnostic = await run(`return {
+          press:window.__renameMenuPress,focused:document.hasFocus(),
+          active:document.activeElement?.outerHTML.slice(0,300),
+          menus:[...document.querySelectorAll('[role="menu"]')].map(menu=>({label:menu.getAttribute('aria-label'),classes:menu.className,text:menu.textContent.slice(0,300)}))
+        };`);
+        throw new Error(
+          `${String(cause)}; menu input: ${JSON.stringify(diagnostic)}`,
+        );
+      });
+      await app.clickPointer(renamePoint);
+    };
     // The rename form (ADR 0234's action input) opens with the name it had.
     const rename = async (from: string, to: string) => {
       await runWait(
@@ -984,16 +1042,7 @@ describe("chat flows", () => {
       timeoutMs: 30_000,
       label: "the agent's own title in the sidebar",
     });
-    await run(`
-      ${sidebarRow("Private marker")}.firstElementChild.dispatchEvent(
-        new MouseEvent('contextmenu', { bubbles: true, cancelable: true, clientX: 210, clientY: 360 }),
-      );
-      return true;
-    `);
-    await runWait(`return !!byText('[role="menuitem"]', 'Rename…');`, {
-      label: "rename in the sidebar row's menu",
-    });
-    await run(`byText('[role="menuitem"]', 'Rename…').click(); return true;`);
+    await openRename(`${sidebarRow("Private marker")}?.firstElementChild`);
     await rename("Private marker", "Launch checklist");
 
     // The agent titles every reply; the person's name stays.
@@ -1018,22 +1067,24 @@ describe("chat flows", () => {
     ).toBe(true);
 
     // The dock's bubble offers the same verb.
-    await runWait(`return !document.querySelector('[data-sidebar-menu]');`, {
-      label: "sidebar menu dismissed",
-    });
-    await runWait(
-      `const bubble = ${dockBubble("Launch checklist")};
-       if (!bubble) return false;
-       bubble.querySelector('button').dispatchEvent(
-         new MouseEvent('contextmenu', { bubbles: true, cancelable: true, clientX: 420, clientY: 500 }),
-       );
-       return true;`,
-      { label: "dock bubble named by the person" },
+    if (
+      await run<boolean>(
+        `return !!${dockBubble("Launch checklist")}?.closest('[inert]');`,
+      )
+    ) {
+      const expand = await runWait<{ x: number; y: number }>(
+        `const button = document.querySelector('[data-dock-collapsed="true"] button[aria-label="Expand chat bubbles"]');
+         if (!button) return false;
+         const box = button.getBoundingClientRect();
+         const point = {x:box.x+box.width/2,y:box.y+box.height/2};
+         return button.contains(document.elementFromPoint(point.x,point.y)) && point;`,
+        { label: "the folded dock's expand control accepts input" },
+      );
+      await app.clickPointer(expand);
+    }
+    await openRename(
+      `${dockBubble("Launch checklist")}?.querySelector('button')`,
     );
-    await runWait(`return !!byText('[role="menuitem"]', 'Rename…');`, {
-      label: "rename in the dock bubble's menu",
-    });
-    await run(`byText('[role="menuitem"]', 'Rename…').click(); return true;`);
     await rename("Launch checklist", "Launch notes");
 
     // Rename current chat remains findable while the current chat is minimized.

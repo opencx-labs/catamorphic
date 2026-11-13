@@ -1,6 +1,7 @@
 import {
   type CSSProperties,
   type ReactNode,
+  useCallback,
   useEffect,
   useLayoutEffect,
   useRef,
@@ -25,6 +26,7 @@ export function ShortcutHint({
   shortcut,
   side = "bottom",
   delay = SHOW_DELAY_MS,
+  showImmediately,
   children,
   className = "",
 }: {
@@ -40,6 +42,8 @@ export function ShortcutHint({
    * "which one is this" immediately.
    */
   delay?: number;
+  /** Request a hint after an action; normal hover and focus still work. */
+  showImmediately?: boolean;
   children: ReactNode;
   className?: string;
 }) {
@@ -112,29 +116,43 @@ export function ShortcutHint({
     }, delay);
   };
 
-  const showFromFocus = () => {
+  const showFromFocus = useCallback(() => {
     clearTimeout(timerRef.current);
     const anchor = anchorRef.current;
     if (!anchor) return;
     const rect = anchor.getBoundingClientRect();
+    const computed = getComputedStyle(anchor);
+    setThemeTokens(
+      Object.fromEntries(
+        ["bg-overlay", "fg-muted", "fg-faint", "border"].map((token) => [
+          `--color-${token}`,
+          computed.getPropertyValue(`--color-${token}`),
+        ]),
+      ),
+    );
     setPosition({
       x: rect.x + rect.width / 2,
       y: side === "bottom" ? rect.bottom + 7 : rect.top - 7,
     });
     frameRef.current = requestAnimationFrame(() => setVisible(true));
-  };
+  }, [side]);
 
-  const hide = () => {
+  const hide = useCallback(() => {
     clearTimeout(timerRef.current);
     cancelAnimationFrame(frameRef.current);
     setVisible(false);
-  };
+  }, []);
+
+  useEffect(() => {
+    if (showImmediately === undefined) return;
+    if (showImmediately) showFromFocus();
+    else hide();
+  }, [showImmediately, showFromFocus, hide]);
 
   // The anchor's own leave event is not enough: a drag, a scroll, a row that
   // re-renders or turns inert under the pointer, or the pointer leaving the
   // window can all skip it. While a hint shows, anything that moves the
   // pointer elsewhere or shifts the page hides it.
-  // biome-ignore lint/correctness/useExhaustiveDependencies: hide is a stable closure over refs; the listeners live only while a hint is positioned.
   useEffect(() => {
     if (!position) return;
     const outside = (event: Event) => {
@@ -147,6 +165,11 @@ export function ShortcutHint({
         hide();
     };
     const away = () => hide();
+    const key = (event: KeyboardEvent) => {
+      if (event.key !== "Escape" || !visible) return;
+      hide();
+      // Hints are nonmodal: the focused menu or dialog still owns Escape.
+    };
     document.addEventListener("pointerover", outside, true);
     document.addEventListener("pointerdown", away, true);
     document.addEventListener("dragstart", away, true);
@@ -154,6 +177,7 @@ export function ShortcutHint({
     document.addEventListener("wheel", away, { capture: true, passive: true });
     document.documentElement.addEventListener("mouseleave", away);
     window.addEventListener("blur", away);
+    document.addEventListener("keydown", key, true);
     return () => {
       document.removeEventListener("pointerover", outside, true);
       document.removeEventListener("pointerdown", away, true);
@@ -162,8 +186,9 @@ export function ShortcutHint({
       document.removeEventListener("wheel", away, { capture: true });
       document.documentElement.removeEventListener("mouseleave", away);
       window.removeEventListener("blur", away);
+      document.removeEventListener("keydown", key, true);
     };
-  }, [position]);
+  }, [position, visible, hide]);
 
   return (
     // biome-ignore lint/a11y/noStaticElementInteractions: hover-only hint anchor; the wrapped control stays the interactive element
@@ -190,7 +215,8 @@ export function ShortcutHint({
       // context menu that opened before the delay elapsed.
       onPointerDownCapture={hide}
       onContextMenuCapture={hide}
-      onClickCapture={hide}
+      // A hint requested by this activation must survive its trailing click.
+      onClickCapture={showImmediately ? undefined : hide}
     >
       {children}
       {position &&

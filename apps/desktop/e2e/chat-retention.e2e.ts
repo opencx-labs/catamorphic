@@ -43,6 +43,32 @@ afterAll(async () => {
   await app?.stop();
 });
 
+/** Wheel the visible conversation after its native window and pointer agree. */
+async function scrollBackFromFollowing() {
+  await focusWindow(app);
+  const point = await app.waitFor<{ x: number; y: number }>(
+    `(() => {
+      const scroller=window.__stepScroller,box=scroller.getBoundingClientRect();
+      const left=Math.max(0,box.left),right=Math.min(innerWidth,box.right);
+      const top=Math.max(0,box.top),bottom=Math.min(innerHeight,box.bottom);
+      if(right<=left||bottom<=top)return false;
+      const point={x:(left+right)/2,y:(top+bottom)/2};
+      return scroller.contains(document.elementFromPoint(point.x,point.y))&&point;
+    })()`,
+    { label: "the conversation's wheel target" },
+  );
+  await app.movePointer(point);
+  const position = await app.eval<number>("window.__stepScroller.scrollTop");
+  if (position <= 0) return;
+  await app.cdp("Input.dispatchMouseEvent", {
+    type: "mouseWheel",
+    ...point,
+    deltaX: 0,
+    deltaY: -240,
+  });
+  await app.waitFor(`window.__stepScroller.scrollTop<${position}-1`);
+}
+
 it("releases a large folded log and closed details while preserving choices and collapse motion", async () => {
   const count = (selector: string) =>
     app.eval<number>(
@@ -73,19 +99,7 @@ it("releases a large folded log and closed details while preserving choices and 
   await app.waitFor(
     `(()=>{const list=document.querySelector(${JSON.stringify(front)}).querySelector('[data-testid="chat-step-list"]');return list.getBoundingClientRect().height>10000&&!list.getAnimations().some(a=>a.playState==='running')})()`,
   );
-  const followingPosition = await app.eval<number>(
-    "window.__stepScroller.scrollTop",
-  );
-  if (followingPosition > 0) {
-    await app.cdp("Input.dispatchMouseEvent", {
-      type: "mouseWheel",
-      x: 600,
-      y: 300,
-      deltaX: 0,
-      deltaY: -240,
-    });
-    await app.waitFor(`window.__stepScroller.scrollTop<${followingPosition}-1`);
-  }
+  await scrollBackFromFollowing();
   await app.eval(
     `(()=>{const list=document.querySelector(${JSON.stringify(front)}).querySelector('[data-testid="chat-step-window"]'),s=window.__stepScroller;s.scrollTop+=list.getBoundingClientRect().top-s.getBoundingClientRect().top;})()`,
   );
@@ -165,17 +179,7 @@ it("bounds scrolling headers and preserves details, selection and native Tab ord
   await app.waitFor(
     `(()=>{const list=${chat}.querySelector('[data-testid="chat-step-list"]');return list.getBoundingClientRect().height>10000&&!list.getAnimations().some(a=>a.playState==='running')})()`,
   );
-  const position = await app.eval<number>("window.__stepScroller.scrollTop");
-  if (position > 0) {
-    await app.cdp("Input.dispatchMouseEvent", {
-      type: "mouseWheel",
-      x: 600,
-      y: 300,
-      deltaX: 0,
-      deltaY: -240,
-    });
-    await app.waitFor(`window.__stepScroller.scrollTop<${position}-1`);
-  }
+  await scrollBackFromFollowing();
   for (const fraction of [0, 0.25, 0.5, 0.9, 1, 0.5, 0]) {
     await app.eval(`(()=>{
       const list=${chat}.querySelector('[data-testid="chat-step-window"]'),s=window.__stepScroller;
@@ -321,17 +325,7 @@ it("settles fractional scroller geometry without repeatedly rewriting gaps", asy
 });
 
 it("fills the next main-thread frame after a jump beyond overscan", async () => {
-  const position = await app.eval<number>("window.__stepScroller.scrollTop");
-  if (position > 0) {
-    await app.cdp("Input.dispatchMouseEvent", {
-      type: "mouseWheel",
-      x: 600,
-      y: 300,
-      deltaX: 0,
-      deltaY: -240,
-    });
-    await app.waitFor(`window.__stepScroller.scrollTop<${position}-1`);
-  }
+  await scrollBackFromFollowing();
   const visible = await app.eval<number>(`new Promise(resolve=>{
     const s=window.__stepScroller,list=document.querySelector(${JSON.stringify(front)}).querySelector('[data-testid="chat-step-window"]');
     document.activeElement.blur();

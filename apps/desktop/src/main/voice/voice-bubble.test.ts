@@ -109,19 +109,19 @@ describe("floating microphone preference scope", () => {
       { agentVoices: { agent: "am_michael" } },
       { voiceMicrophone: null },
       { voiceMicrophone: "microphone-id" },
-      { voiceprint: null },
       { voiceDictation: true },
       { voiceInDock: false },
     ])
       expect(voiceMenuPrefsPatchSchema.parse(patch)).toEqual(patch);
   });
-  it("rejects unrelated settings, forged voiceprints and invalid option values", () => {
+  it("rejects unrelated settings, removed voice learning and invalid option values", () => {
     for (const patch of [
       { githubCliEnabled: true },
       { terminalMacros: [] },
       { lastProjectId: "other" },
       { assistantSession: { projectId: "other", sessionId: "other-chat" } },
       { voiceDictation: true, chatQueueMessages: false },
+      { voiceprint: null },
       { voiceprint: { model: "fake", vector: [1] } },
       { voiceId: "fake" },
       { agentVoices: { agent: "fake" } },
@@ -200,7 +200,6 @@ describe("createVoiceBubble", () => {
         "catamorphic:agents-list",
         "catamorphic:prefs-get",
         "catamorphic:prefs-set",
-        "catamorphic:voice-learn",
         "catamorphic:voice-reset",
         "catamorphic:voice-open-chat",
         "catamorphic:voice-bubble-menu",
@@ -211,6 +210,7 @@ describe("createVoiceBubble", () => {
       "catamorphic:voice-bubble-spots-state",
     ]);
     for (const channel of [
+      "catamorphic:voice-learn",
       "catamorphic:agents-create",
       "catamorphic:workspace-navigate",
       "catamorphic:terminal-create",

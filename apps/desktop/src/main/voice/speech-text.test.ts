@@ -1,7 +1,5 @@
 import { describe, expect, it } from "vitest";
 import {
-  isAcknowledgement,
-  isEcho,
   isStopCommand,
   meaningfulUtterance,
   speakableText,
@@ -37,32 +35,6 @@ describe("what the person said", () => {
     expect(meaningfulUtterance("Um.")).toBe(false);
     expect(meaningfulUtterance("Uh, hmm")).toBe(false);
     expect(meaningfulUtterance("Um, check the build")).toBe(true);
-  });
-
-  it("recognizes an echo of the agent's own words", () => {
-    const said = "I started a session to fix the failing tests.";
-    expect(isEcho("started a session to fix the failing", said)).toBe(true);
-    expect(isEcho("what about the docs though", said)).toBe(false);
-    // Recognition drops endings of the agent's own words.
-    expect(isEcho("to fix the failing test", said)).toBe(true);
-    // Short commands are the person's, even in the agent's words.
-    expect(isEcho("fix the", said)).toBe(false);
-  });
-
-  it("knows a listener's acknowledgement from an answer or a request", () => {
-    expect(isAcknowledgement("Yeah.")).toBe(true);
-    expect(isAcknowledgement("Okay, okay.")).toBe(true);
-    expect(isAcknowledgement("Uh-huh.")).toBe(true);
-    expect(isAcknowledgement("Got it.")).toBe(true);
-    // The recognizer often writes the sound before it.
-    expect(isAcknowledgement("Oh, okay.")).toBe(true);
-    expect(isAcknowledgement("Um, yeah.")).toBe(true);
-    expect(isAcknowledgement("Okay, thanks.")).toBe(true);
-    expect(isAcknowledgement("Hmm.")).toBe(false);
-    expect(isAcknowledgement("Yes.")).toBe(false);
-    expect(isAcknowledgement("No.")).toBe(false);
-    expect(isAcknowledgement("Yeah, open it.")).toBe(false);
-    expect(isAcknowledgement("Okay, stop.")).toBe(false);
   });
 
   it("knows a stop command from a request", () => {

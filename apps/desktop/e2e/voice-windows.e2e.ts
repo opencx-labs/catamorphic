@@ -57,8 +57,7 @@ describe("voice across project windows", () => {
     const modifier = process.platform === "darwin" ? "meta" : "control";
     await app.eval(`(() => {
       const view=document.querySelector('webview'); view.focus();
-      for(const type of ['keyDown','keyUp'])
-        view.sendInputEvent({type,keyCode:'Space',modifiers:['${modifier}','shift']});
+      view.sendInputEvent({type:'keyDown',keyCode:'Space',modifiers:['${modifier}','shift']});
     })()`);
     const session = await app.waitFor<{ projectId: string; sessionId: string }>(
       `${api}.getPrefs().then(prefs => prefs.assistantSession)`,
@@ -66,11 +65,12 @@ describe("voice across project windows", () => {
     );
     expect(session.projectId).toBe(here);
     await app.waitFor(
-      `${api}.voiceStatus().then(status => status.phase === 'listening')`,
+      `${api}.voiceStatus().then(status => status.phase === 'hearing')`,
     );
-    await app.eval(
-      `${api}.voicePress({action:'talk-to-work',projectId:${JSON.stringify(here)}}).then(()=>${api}.voiceRelease({heldMs:0}))`,
-    );
+    await app.eval(`(() => {
+      const view=document.querySelector('webview');
+      view.sendInputEvent({type:'keyUp',keyCode:'Space',modifiers:['${modifier}','shift']});
+    })()`);
     await app.waitFor(
       `${api}.voiceStatus().then(status => status.phase === 'off')`,
     );
@@ -136,10 +136,10 @@ describe("voice across project windows", () => {
 
   it("admits the floating microphone's open action and restores the owning window", async () => {
     await app.eval(
-      `${api}.voicePress({action:'talk-to-work',projectId:${JSON.stringify(here)}}).then(()=>${api}.voiceRelease({heldMs:0}))`,
+      `${api}.voicePress({action:'talk-to-work',projectId:${JSON.stringify(here)}})`,
     );
     await app.waitFor(
-      `${api}.voiceStatus().then(status=>status.phase==='listening')`,
+      `${api}.voiceStatus().then(status=>status.phase==='hearing')`,
     );
     await other.eval(`${api}.devWindow('minimize')`);
     await app.eval(`${api}.devWindow('minimize')`);
@@ -158,9 +158,7 @@ describe("voice across project windows", () => {
       expect(bubble.getRendererErrors()).toEqual([]);
     } finally {
       bubble.close();
-      await app.eval(
-        `${api}.voicePress({action:'talk-to-work',projectId:${JSON.stringify(here)}}).then(()=>${api}.voiceRelease({heldMs:0}))`,
-      );
+      await app.eval(`${api}.voiceRelease()`);
       await other.eval(`${api}.devWindow('restore')`);
     }
   });

@@ -2,7 +2,6 @@ import type { FakeSpeechScript } from "../../shared/voice.js";
 import { SPEECH_SAMPLE_RATE } from "../../shared/voice.js";
 import { chime, type SpeechParts } from "./engine.js";
 
-const SPEECH_STARTS_AFTER = SPEECH_SAMPLE_RATE / 2;
 const SPEECH_ENDS_AFTER = SPEECH_SAMPLE_RATE * 1.5;
 
 /**
@@ -14,33 +13,42 @@ const SPEECH_ENDS_AFTER = SPEECH_SAMPLE_RATE * 1.5;
  * person is still talking. Synthesis is a quiet tone as long as the words.
  */
 export function fakeSpeech(script: FakeSpeechScript): SpeechParts {
-  let samples = 0;
-  let heard = false;
-  const segments: Float32Array[] = [];
+  const textAt = (samples: number) => {
+    const words = script.utterance.split(/\s+/).filter(Boolean);
+    return words
+      .slice(
+        0,
+        Math.ceil(words.length * Math.min(1, samples / SPEECH_ENDS_AFTER)),
+      )
+      .join(" ");
+  };
   return {
-    activity: {
-      windowSize: 512,
-      accept: (window) => {
-        samples += window.length;
-        if (!heard && samples >= SPEECH_ENDS_AFTER) {
-          heard = true;
-          segments.push(
-            new Float32Array(SPEECH_ENDS_AFTER - SPEECH_STARTS_AFTER),
-          );
-        }
-      },
-      detected: () =>
-        !heard && samples >= SPEECH_STARTS_AFTER && samples < SPEECH_ENDS_AFTER,
-      takeSegments: () => segments.splice(0),
-      reset: () => {
-        segments.length = 0;
-      },
+    startRecognition: (onPartial) => {
+      let samples = 0;
+      let text = "";
+      let canceled = false;
+      return {
+        write: (frame) => {
+          if (canceled) return;
+          samples += frame.length;
+          const next = textAt(samples);
+          if (next !== text) {
+            text = next;
+            onPartial(text);
+          }
+        },
+        finish: async () => ({
+          text: canceled ? "" : textAt(samples),
+          confidence: 0,
+        }),
+        cancel: () => {
+          canceled = true;
+        },
+      };
     },
     recognize: async (heard) => {
-      const words = script.utterance.split(/\s+/).filter(Boolean);
-      const share = Math.min(1, heard.length / SPEECH_ENDS_AFTER);
       return {
-        text: words.slice(0, Math.ceil(words.length * share)).join(" "),
+        text: textAt(heard.length),
         confidence: 0,
       };
     },
@@ -55,7 +63,5 @@ export function fakeSpeech(script: FakeSpeechScript): SpeechParts {
       return { samples, sampleRate };
     },
     cue: () => chime(24_000),
-    // One voice for everyone: a learned voice print always matches.
-    voiceprint: () => [1],
   };
 }

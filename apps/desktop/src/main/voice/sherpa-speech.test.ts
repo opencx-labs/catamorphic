@@ -7,39 +7,37 @@ import { loadSherpaSpeech } from "./sherpa-speech.js";
 
 const native = vi.hoisted(() => ({
   recognize: vi.fn(),
+  prepareNative: vi.fn(),
+  recognizeNative: vi.fn(),
+  cancelNative: vi.fn(),
+  disposeNative: vi.fn(),
   loadRecognition: vi.fn(),
+  importRuntime: vi.fn(),
   loadSynthesis: vi.fn<() => Promise<OfflineTts>>(),
   generate: vi.fn<OfflineTts["generateAsync"]>(),
 }));
 
-vi.mock("sherpa-onnx-node", () => ({
-  default: {
-    OfflineRecognizer: { createAsync: native.loadRecognition },
-    OfflineTts: { createAsync: native.loadSynthesis },
-    GenerationConfig: class {
-      constructor(readonly options: { sid: number; silenceScale: number }) {}
-    },
-    SpeakerEmbeddingExtractor: class {
-      createStream() {
-        return { acceptWaveform() {}, inputFinished() {} };
-      }
-      compute() {
-        return new Float32Array([3, 4]);
-      }
-    },
-    Vad: class {
-      acceptWaveform() {}
-      isDetected() {
-        return false;
-      }
-      isEmpty() {
-        return true;
-      }
-      clear() {}
-      reset() {}
-    },
+vi.mock("./native-recognition.js", () => ({
+  NativeRecognition: class {
+    prepare = native.prepareNative;
+    recognize = native.recognizeNative;
+    cancel = native.cancelNative;
+    dispose = native.disposeNative;
   },
 }));
+
+vi.mock("sherpa-onnx-node", () => {
+  native.importRuntime();
+  return {
+    default: {
+      OfflineRecognizer: { createAsync: native.loadRecognition },
+      OfflineTts: { createAsync: native.loadSynthesis },
+      GenerationConfig: class {
+        constructor(readonly options: { sid: number; silenceScale: number }) {}
+      },
+    },
+  };
+});
 
 const tts: OfflineTts = {
   sampleRate: 24_000,
@@ -76,6 +74,41 @@ beforeEach(() => {
 });
 
 describe("speech model demand loading", () => {
+  it("uses Apple recognition on macOS without constructing local STT or requesting speech for read aloud", async () => {
+    native.recognizeNative.mockResolvedValue({
+      text: "native words",
+      confidence: 0,
+    });
+    const parts = await loadSherpaSpeech({
+      paths: {
+        ...paths,
+        recognition: {
+          kind: "native",
+          helperPath: "/app/speech-recognition",
+          locale: "en-US",
+        },
+      },
+      voice: "af_heart",
+      speaking: true,
+    });
+    expect(native.importRuntime).not.toHaveBeenCalled();
+    expect(native.loadSynthesis).not.toHaveBeenCalled();
+    expect(native.loadRecognition).not.toHaveBeenCalled();
+    expect(native.prepareNative).not.toHaveBeenCalled();
+    await expect(parts.recognize(sentence)).resolves.toEqual({
+      text: "native words",
+      confidence: 0,
+    });
+    expect(native.prepareNative).toHaveBeenCalledOnce();
+    expect(native.recognizeNative).toHaveBeenCalledWith(sentence);
+    expect(native.importRuntime).not.toHaveBeenCalled();
+    await parts.synthesize("Read this reply.");
+    parts.cancelRecognition?.();
+    expect(native.cancelNative).toHaveBeenCalledOnce();
+    parts.dispose?.();
+    expect(native.disposeNative).toHaveBeenCalledOnce();
+  });
+
   it("prepares conversation and read-aloud synthesis alongside recognition", async () => {
     const loading = pendingSynthesis();
     native.loadSynthesis.mockReturnValue(loading.promise);
@@ -86,8 +119,10 @@ describe("speech model demand loading", () => {
       speaking: true,
     });
     void parts.then(ready);
-    expect(native.loadRecognition).toHaveBeenCalledOnce();
-    expect(native.loadSynthesis).toHaveBeenCalledOnce();
+    await vi.waitFor(() => {
+      expect(native.loadRecognition).toHaveBeenCalledOnce();
+      expect(native.loadSynthesis).toHaveBeenCalledOnce();
+    });
     await new Promise((resolve) => setTimeout(resolve, 0));
     expect(ready).not.toHaveBeenCalled();
     loading.resolve(tts);
@@ -97,7 +132,7 @@ describe("speech model demand loading", () => {
     expect(native.loadSynthesis).toHaveBeenCalledOnce();
   });
 
-  it("can dictate, recognize speakers and play a cue without loading synthesis", async () => {
+  it("can dictate and play a cue without loading synthesis", async () => {
     const parts = await loadSherpaSpeech({
       paths,
       voice: "af_heart",
@@ -110,7 +145,6 @@ describe("speech model demand loading", () => {
       () => {},
     );
     engine.setDictation(true);
-    engine.setHandsFree(false);
     engine.hold(true);
     engine.onAudio({
       type: "frame",
@@ -125,7 +159,6 @@ describe("speech model demand loading", () => {
       text: "write these words",
       final: true,
     });
-    expect(parts.voiceprint?.(sentence)).toEqual([0.6, 0.8]);
     expect(parts.cue().samples.length).toBeGreaterThan(0);
     expect(native.loadRecognition).toHaveBeenCalledOnce();
     expect(native.loadSynthesis).not.toHaveBeenCalled();
@@ -346,7 +379,7 @@ describe("speech model demand loading", () => {
   });
 
   it.each(["dictation", "close", "failure"])(
-    "prepares speech on a live dictation handoff and handles %s during loading",
+    "starts synthesis only for the first reply after dictation and handles %s during loading",
     async (ending) => {
       const loading = pendingSynthesis();
       native.loadSynthesis.mockReturnValueOnce(loading.promise);
@@ -364,6 +397,8 @@ describe("speech model demand loading", () => {
       engine.setDictation(true);
       expect(native.loadSynthesis).not.toHaveBeenCalled();
       engine.setDictation(false);
+      expect(native.loadSynthesis).not.toHaveBeenCalled();
+      engine.speak("reply", "Read this reply.");
       expect(native.loadSynthesis).toHaveBeenCalledOnce();
       if (ending === "dictation") engine.setDictation(true);
       if (ending === "close") {

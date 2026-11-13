@@ -9,15 +9,32 @@ declare function registerProcessor(
   processor: new () => AudioWorkletProcessor,
 ): void;
 
-/** 20 ms chunks: small enough for prompt detection, few enough messages. */
+/** 20 ms chunks: prompt delivery without excessive messages. */
 const CHUNK_SECONDS = 0.02;
 
 class VoiceCapture extends AudioWorkletProcessor {
   private readonly size = Math.round(sampleRate * CHUNK_SECONDS);
   private chunk = new Float32Array(this.size);
   private filled = 0;
+  private ended = false;
+
+  constructor() {
+    super();
+    this.port.onmessage = (event: MessageEvent<string>) => {
+      if (event.data !== "flush") return;
+      this.ended = true;
+      if (this.filled > 0) {
+        const tail = this.chunk.slice(0, this.filled);
+        this.port.postMessage(tail, [tail.buffer]);
+        this.filled = 0;
+      }
+      // Same port as the samples: the owner sees every frame before this edge.
+      this.port.postMessage("flushed");
+    };
+  }
 
   process(inputs: Float32Array[][]): boolean {
+    if (this.ended) return false;
     const channel = inputs[0]?.[0];
     if (!channel) return true;
     let offset = 0;

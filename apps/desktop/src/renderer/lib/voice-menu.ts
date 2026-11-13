@@ -38,8 +38,7 @@ export function voiceWindowEntries(
 }
 
 /**
- * What a press of a microphone that shows a voice asks: that voice, so a
- * tap turns it off and a hold talks to it.
+ * What a held microphone that shows a voice asks: talk to that voice.
  */
 export function voicePressFor(
   target: VoiceTarget,

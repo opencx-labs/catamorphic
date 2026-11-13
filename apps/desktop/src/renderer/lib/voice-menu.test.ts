@@ -56,7 +56,7 @@ describe("voiceWindowEntries", () => {
 });
 
 describe("voicePressFor", () => {
-  it("presses the voice a microphone shows, so a tap turns it off", () => {
+  it("presses the voice a microphone shows", () => {
     expect(voicePressFor({ kind: "dictation" }, "p")).toEqual({
       action: "dictate",
     });

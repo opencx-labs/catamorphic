@@ -17,20 +17,12 @@ const speech = vi.hoisted(() => ({
 vi.mock("./sherpa-speech.js", () => ({ loadSherpaSpeech: speech.load }));
 vi.mock("./fake-speech.js", () => ({
   fakeSpeech: (): SpeechParts => ({
-    activity: {
-      windowSize: 16000,
-      accept() {},
-      detected: () => false,
-      takeSegments: () => [],
-      reset() {},
-    },
     recognize: speech.recognize,
     synthesize: async () => ({
       samples: new Float32Array(),
       sampleRate: 24000,
     }),
     cue: () => ({ samples: new Float32Array(), sampleRate: 24000 }),
-    voiceprint: () => [1],
   }),
 }));
 
@@ -43,13 +35,6 @@ beforeEach(() => {
     sampleRate: 24000,
   });
   speech.load.mockResolvedValue({
-    activity: {
-      windowSize: 512,
-      accept() {},
-      detected: () => false,
-      takeSegments: () => [],
-      reset() {},
-    },
     recognize: speech.recognize,
     synthesize: speech.synthesize,
     prepareSynthesis: speech.prepare,
@@ -75,12 +60,71 @@ async function worker() {
         paths: voiceModelPaths("/models"),
         voice: "af_heart",
       },
-      voiceprint: null,
-      handsFree: false,
       dictation,
     });
-  return { events, command, start };
+  const input = () => {
+    const port = Object.assign(new EventEmitter(), {
+      start() {},
+      close() {},
+      postMessage() {},
+    });
+    parent.emit("message", { data: { type: "audio" }, ports: [port] });
+    return (data: VoiceAudioUp) => port.emit("message", { data });
+  };
+  return { events, command, start, input };
 }
+
+it("recognizes every frame before its audio-port release, including holds buffered during startup", async () => {
+  const voice = await worker();
+  let ready!: (parts: SpeechParts) => void;
+  speech.load.mockReturnValueOnce(
+    new Promise((resolve) => {
+      ready = resolve;
+    }),
+  );
+  speech.recognize.mockImplementation(async (samples: Float32Array) => ({
+    text: `Captured ${samples.length} samples`,
+    confidence: 0,
+  }));
+  const audio = voice.input();
+  voice.start(true);
+  await vi.waitFor(() => expect(ready).toBeTypeOf("function"));
+  for (const release of [1, 2]) {
+    audio({ type: "control", command: { type: "hold", held: true } });
+    audio({
+      type: "frame",
+      sampleRate: 16000,
+      samples: new Float32Array([0.1, 0.2]),
+    });
+    audio({
+      type: "frame",
+      sampleRate: 16000,
+      samples: new Float32Array([0.3]),
+    });
+    audio({ type: "control", command: { type: "hold", held: false, release } });
+  }
+  ready({
+    recognize: speech.recognize,
+    synthesize: speech.synthesize,
+    cue: () => ({ samples: new Float32Array(), sampleRate: 24000 }),
+  });
+  await vi.waitFor(() =>
+    expect(voice.events).toContainEqual({
+      type: "hold-recognized",
+      release: 2,
+    }),
+  );
+  expect(speech.recognize).toHaveBeenCalledTimes(2);
+  for (const [samples] of speech.recognize.mock.calls)
+    expect(samples).toEqual(new Float32Array([0.1, 0.2, 0.3]));
+  expect(
+    voice.events.filter((event) => event.type === "dictation"),
+  ).toMatchObject([
+    { text: "Captured 3 samples", final: true },
+    { text: "Captured 3 samples", final: true },
+  ]);
+  voice.command({ type: "rest" });
+});
 
 it("prepares cached dictation parts before a conversation or read-aloud is ready", async () => {
   const voice = await worker();
@@ -214,8 +258,6 @@ it("acknowledges a released hold only after every dictated piece, including its 
   command({
     type: "start",
     speech: { kind: "fake", utterance: "unused" },
-    voiceprint: null,
-    handsFree: false,
     dictation: true,
   });
   command({ type: "hold", held: true });

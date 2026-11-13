@@ -22,9 +22,18 @@ Waiting watches use an hourglass across task rows and chat activity signals,
 including tabs, chips and bubbles. Status summaries use a centered dot, and
 expandable task rows place their disclosure before the icon and label.
 
-Voice capture ends when push-to-talk is released or listening is turned off,
-including the macOS audio-lowering input. Buffered transcription and playback
-finish separately, and long held dictation retains its last words (ADR 0297).
+Voice uses push to talk only: hold a microphone or shortcut and release to send.
+Pauses do not end a turn. macOS uses Apple's speech APIs; Linux keeps local
+Parakeet. No voice activity detector or speaker model runs on either platform.
+Pressing stops playback; a reply arriving during a hold waits for its release.
+The audio page and input worklet stay prepared with the microphone closed.
+The listening indicator follows the first captured frame. On macOS, provisional
+recognition appears in the composer's existing dictation preview while held.
+Release sends one final voice message and removes the preview, preserving any
+typed draft. Dictation keeps the final words for the person to edit and send.
+Capture and the macOS audio-lowering input stop on release, while buffered
+transcription and playback finish separately (ADR 0311, superseding automatic
+turn-taking in the earlier voice design entries below).
 The palette's Ask agent input shares the chat composer's pills, previews and
 file preparation, including image paste and agent capability checks.
 
@@ -4139,3 +4148,38 @@ in front. Its lists release their view subscriptions while inactive, including
 the observation that lets an empty list appear again. Returning reacquires the
 existing collection and reads current data. Project visibility uses the same
 subscription lifetime as a hidden sidebar; it does not dispose the workspace.
+
+### 2026-11-11: Held voice follows capture and playback
+
+A quiet microphone never ends a held message. Only a capture API failure or an
+ended input track produces a device error. Opening an input shows preparation;
+its first frame lights the microphone. Recognition and the agent's turn show work,
+playback shows speech, and the microphone settles as soon as those finish, with
+no active idle timer. The input-free audio page stays prepared between holds.
+On macOS the local inference runtime loads only for a reply, and successful Apple
+permission/asset checks are reused without retaining a native helper or model.
+See ADR 0311.
+
+A short click teaches holding through the shared shortcut hint, with the person's
+configured voice shortcut. Releases before 250 ms cancel recognition and clear
+provisional words; they never submit a message or wait in the thinking state.
+Holding still opens capture immediately. A new chat finishing setup after release
+cannot start a late microphone.
+
+Capture controls and samples use one ordered audio port. Release closes the
+physical input immediately, drains the worklet's last partial frame, then sends
+the release behind those samples; the next press follows that boundary too.
+The microphone's visual layers remain mounted. A stopped spinner or pulse holds
+its current position while fading, and speech bars ease down throughout their
+exit before their animation loop stops. Rapid state changes keep the current
+levels instead of restarting the waveform from zero.
+
+If a held input disconnects, drain its samples and make one bounded attempt to
+open the current system microphone, keeping the same held transcript. Show
+preparing until replacement samples arrive. Release cancels recovery immediately;
+a late device result is closed. A second disconnection remains an actionable
+error. A missing selected device falls back to the system input.
+
+A chat read begun before a spoken message committed cannot settle that new
+turn. Keep its working state through delivery and wait for a fresh idle read;
+the same boundary protects an agent finishing voice during delivery.
