@@ -1144,6 +1144,9 @@ it("retains independent New Tab drafts, appends new tabs, and reuses an empty ta
   for (const key of [first, second]) {
     await select(key);
     await shortcut("w");
+    await wait(
+      `return ![...document.querySelectorAll('[data-workspace-visible="true"] [data-tab-orientation] [data-point-key]')].some(tab=>tab.dataset.pointKey===${JSON.stringify(key)})`,
+    );
   }
   expect(await keys()).toEqual(before.filter((key) => key !== first));
   expect(app.getRendererErrors()).toEqual([]);
