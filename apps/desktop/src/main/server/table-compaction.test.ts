@@ -93,7 +93,7 @@ describe("table compaction", () => {
     // A full disk: the rewrite fails, and so does recording that it did.
     const full = () => Promise.reject(new Error("No space left on device"));
     const failing: Pick<PGlite, "query" | "exec"> = {
-      query: <T,>(sql: string, params?: unknown[]) =>
+      query: <T>(sql: string, params?: unknown[]) =>
         sql.trimStart().startsWith("INSERT INTO desktop.table_compactions") &&
         params?.[0] === "desktop.workspace_states"
           ? full()
