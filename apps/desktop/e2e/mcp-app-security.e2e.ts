@@ -1,4 +1,8 @@
-import http from "node:http";
+import { execFileSync } from "node:child_process";
+import fs from "node:fs";
+import http, { type ServerResponse } from "node:http";
+import https from "node:https";
+import os from "node:os";
 import path from "node:path";
 import { Server } from "@modelcontextprotocol/sdk/server/index.js";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
@@ -22,7 +26,9 @@ const FIXTURE = "mcp-security-native-fixture";
 const INPUT = { seed: "original chat input" };
 const RESULT = { content: [{ type: "text", text: "original chat result" }] };
 const LATE_RESULT = "private-late-response-for-replaced-document";
-const HTML = `<!doctype html><html><head><title>MCP security fixture</title></head><body>
+const HTML = (
+  gateUrl: string,
+) => `<!doctype html><html><head><title>MCP security fixture</title></head><body>
 <main style="font:16px system-ui;padding:28px;max-width:620px">
 <h1>MCP security fixture</h1><p id="initialized">Waiting for the host</p>
 <p>Input: <output id="input">Waiting</output></p><p>Result: <output id="result">Waiting</output></p>
@@ -47,9 +53,14 @@ document.querySelector('#allowed').onclick=()=>send('allowed','tools/call',{name
 document.querySelector('#denied').onclick=()=>send('denied','tools/call',{name:'denied',arguments:{}});
 document.querySelector('#slow').onclick=()=>send('slow','tools/call',{name:'slow',arguments:{}});
 for(const button of document.querySelectorAll('button')) button.addEventListener('click',event=>probe.clicks.push({id:button.id,trusted:event.isTrusted}));
+const replacement=new URL(location.href).searchParams.has('replacement');
+if(replacement){
+  const gate=document.createElement('img');gate.loading='eager';gate.width=1;gate.height=1;
+  gate.src=${JSON.stringify(gateUrl)};document.body.append(gate);
+}
 report('started');
 send('initialize','ui/initialize',{protocolVersion:'2026-01-26',appCapabilities:{},appInfo:{name:'security-fixture',version:'1'}});
-if(new URL(location.href).searchParams.has('replacement')) send('replacement-call','tools/call',{name:'allowed',arguments:{value:'replacement'}});
+if(replacement) send('replacement-call','tools/call',{name:'allowed',arguments:{value:'replacement'}});
 </script></body></html>`;
 
 const tools = [
@@ -88,6 +99,12 @@ const tools = [
 let app: AppHandle | undefined;
 let guest: FrameHandle | undefined;
 let fixtureServer: http.Server | undefined;
+let gateServer: https.Server | undefined;
+let gateCertificates: string | undefined;
+let gateOrigin: string;
+let gateResponse: ServerResponse | undefined;
+let gateDeadline: ReturnType<typeof setTimeout> | undefined;
+let gateExpired = false;
 let toolKey: string;
 let projectId: string;
 let localId: string;
@@ -106,6 +123,17 @@ function mounted(): FrameHandle {
 function completeSlow(): void {
   finishSlow?.({ content: [{ type: "text", text: LATE_RESULT }] });
   finishSlow = undefined;
+}
+
+function releaseReplacementLoad(): void {
+  clearTimeout(gateDeadline);
+  const response = gateResponse;
+  gateResponse = undefined;
+  if (!response || response.destroyed) return;
+  response.writeHead(200, { "content-type": "image/svg+xml" });
+  response.end(
+    '<svg xmlns="http://www.w3.org/2000/svg" width="1" height="1"/>',
+  );
 }
 
 async function serve(
@@ -137,8 +165,10 @@ async function serve(
         {
           uri: RESOURCE,
           mimeType: "text/html;profile=mcp-app",
-          text: HTML,
-          _meta: { ui: { prefersBorder: true } },
+          text: HTML(`${gateOrigin}/replacement.svg`),
+          _meta: {
+            ui: { prefersBorder: true, csp: { resourceDomains: [gateOrigin] } },
+          },
         },
       ],
     };
@@ -200,6 +230,50 @@ async function clickGuest(id: string): Promise<void> {
 }
 
 beforeAll(async () => {
+  // A replacement-only pending image keeps its real load event behind the
+  // startup/call observations. Otherwise revocation can destroy that iframe
+  // before its asynchronous postMessage reaches the parent.
+  gateCertificates = fs.mkdtempSync(path.join(os.tmpdir(), "mcp-reload-tls-"));
+  execFileSync(
+    "openssl",
+    [
+      "req",
+      "-x509",
+      "-newkey",
+      "rsa:2048",
+      "-nodes",
+      "-keyout",
+      path.join(gateCertificates, "key.pem"),
+      "-out",
+      path.join(gateCertificates, "cert.pem"),
+      "-days",
+      "1",
+      "-subj",
+      "/CN=MCP reload fixture",
+    ],
+    { stdio: "ignore" },
+  );
+  gateServer = https.createServer(
+    {
+      key: fs.readFileSync(path.join(gateCertificates, "key.pem")),
+      cert: fs.readFileSync(path.join(gateCertificates, "cert.pem")),
+    },
+    (_request, response) => {
+      gateResponse = response;
+      gateDeadline = setTimeout(() => {
+        gateExpired = true;
+        response.destroy();
+      }, 15_000);
+      gateDeadline.unref();
+    },
+  );
+  await new Promise<void>((resolve) =>
+    gateServer?.listen(0, "127.0.0.1", resolve),
+  );
+  const gateAddress = gateServer.address();
+  if (!gateAddress || typeof gateAddress === "string")
+    throw new Error("No reload gate port");
+  gateOrigin = `https://127.0.0.1:${gateAddress.port}`;
   fixtureServer = http.createServer((request, response) => {
     void serve(request, response).catch((cause: unknown) => {
       fixtureErrors.push(String(cause));
@@ -215,6 +289,9 @@ beforeAll(async () => {
     throw new Error("No MCP fixture port");
   app = await launchApp({ sandboxedRenderers: true });
   const handle = running();
+  // The disposable loopback certificate is accepted only in this private
+  // renderer, as in remote-image.e2e.ts; the fixture CSP names only its origin.
+  await handle.cdp("Security.setIgnoreCertificateErrors", { ignore: true });
   await handle.waitFor("!!document.querySelector('[data-sidebar=\"left\"]')");
   const project = await createProjectWorkspace({
     app: handle,
@@ -280,8 +357,12 @@ beforeAll(async () => {
     { label: "UI chat bound to the real session" },
   );
   await handle.eval(`(() => {
-    window.__mcpFixtureMessages=[];
-    window.__stopMcpFixtureMessages=event=>{if(event.data?.fixture===${JSON.stringify(FIXTURE)})window.__mcpFixtureMessages.push(event.data)};
+    window.__mcpFixtureMessages=[];window.__mcpReplacementCalls=[];
+    window.__stopMcpFixtureMessages=event=>{
+      if(event.data?.fixture===${JSON.stringify(FIXTURE)})window.__mcpFixtureMessages.push(event.data);
+      if(event.source===window.__mcpReplacementSource&&event.data?.id==='replacement-call')
+        window.__mcpReplacementCalls.push(event.data);
+    };
     addEventListener('message',window.__stopMcpFixtureMessages);return true;
   })()`);
   // The normal dock command invokes ChatRegistration's actual onOpenMcpApp callback.
@@ -306,16 +387,35 @@ afterEach(async (context) => {
   }
 });
 afterAll(async () => {
+  releaseReplacementLoad();
   completeSlow();
   guest?.close();
-  await app?.stop();
+  const failures: unknown[] = [];
+  try {
+    await app?.stop();
+  } catch (error) {
+    failures.push(error);
+  }
   app = undefined;
-  fixtureServer?.closeAllConnections();
-  await new Promise<void>((resolve, reject) =>
-    fixtureServer
-      ? fixtureServer.close((error) => (error ? reject(error) : resolve()))
-      : resolve(),
-  );
+  const close = (server: http.Server | https.Server | undefined) =>
+    new Promise<void>((resolve, reject) => {
+      if (!server) return resolve();
+      server.closeAllConnections();
+      server.close((error) => (error ? reject(error) : resolve()));
+    });
+  for (const result of await Promise.allSettled([
+    close(fixtureServer),
+    close(gateServer),
+  ]))
+    if (result.status === "rejected") failures.push(result.reason);
+  try {
+    if (gateCertificates)
+      fs.rmSync(gateCertificates, { recursive: true, force: true });
+  } catch (error) {
+    failures.push(error);
+  }
+  if (failures.length)
+    throw new AggregateError(failures, "MCP fixture cleanup failed");
 });
 
 it("initializes the real opaque-origin MCP app and seeds it through its document MessagePort", async () => {
@@ -374,17 +474,49 @@ it("revokes a reloaded iframe and never delivers its old in-flight result to the
   await expect
     .poll(() => executions.filter((call) => call.name === "slow").length)
     .toBe(1);
-  await running().eval(
-    "(() => {const frame=document.querySelector('iframe[title^=\"mcp-app-\"]');const url=new URL(frame.src);url.searchParams.set('replacement','1');frame.src=url.href;return true})()",
-  );
-  await running().waitFor(
-    "document.body.innerText.includes('This app navigated away')",
-    { label: "MCP app reload revoked its mounted document" },
-  );
-  await running().waitFor(
-    `window.__mcpFixtureMessages.some(message=>message.kind==='started' && message.documentId!==${JSON.stringify(original)})`,
-    { label: "a replacement opaque-origin document started" },
-  );
+  try {
+    await running().eval(
+      "(() => {const frame=document.querySelector('iframe[title^=\"mcp-app-\"]');window.__mcpReplacementSource=frame.contentWindow;const url=new URL(frame.src);url.searchParams.set('replacement','1');frame.src=url.href;return true})()",
+    );
+    await expect
+      .poll(
+        () =>
+          Boolean(
+            gateResponse &&
+              !gateResponse.destroyed &&
+              !gateResponse.writableEnded,
+          ) && !gateExpired,
+        { timeout: 15_000 },
+      )
+      .toBe(true);
+    await running().waitFor(
+      `window.__mcpFixtureMessages.some(message=>message.kind==='started' && message.documentId!==${JSON.stringify(original)}) && window.__mcpReplacementCalls.length===1`,
+      {
+        label:
+          "replacement document started and attempted its call before load revocation",
+      },
+    );
+    expect(
+      await running().eval(`(() => {
+      const frame=document.querySelector('iframe[title^="mcp-app-"]');
+      return !!frame && frame.contentWindow===window.__mcpReplacementSource &&
+        new URL(frame.src).searchParams.get('replacement')==='1';
+    })()`),
+    ).toBe(true);
+    expect(gateExpired).toBe(false);
+    expect(gateResponse?.destroyed).toBe(false);
+    expect(gateResponse?.writableEnded).toBe(false);
+    expect(executions.filter((call) => call.name === "allowed")).toEqual([
+      { name: "allowed", arguments: { value: "clicked" } },
+    ]);
+    releaseReplacementLoad();
+    await running().waitFor(
+      "document.body.innerText.includes('This app navigated away')",
+      { label: "MCP app reload revoked its mounted document" },
+    );
+  } finally {
+    releaseReplacementLoad();
+  }
   completeSlow();
   await expect
     .poll(() => running().getOutput())
