@@ -300,6 +300,14 @@ export class PersonalEnvironmentService {
             // A plain copy: a Buffer's slices share its memory, and vaults
             // zero what they hand out.
             material: new Uint8Array(entry.content),
+            placement: {
+              purpose: "personal-file",
+              projectId,
+              owner: {
+                kind: "member",
+                externalUserId: identity.externalUserId,
+              },
+            },
           });
           sealed.push(record.id);
           await trx

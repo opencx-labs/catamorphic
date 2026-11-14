@@ -63,6 +63,7 @@ const READ_STATEMENT = /^(select|with|values|table)\b/i;
 export function definePostgresConnectionProvider(
   options: PostgresConnectionOptions,
 ): PostgresConnectionProvider {
+  checkCeilings(options);
   const limits = { ...LIMITS, ...definedLimits(options) };
   const connect = async (material: Uint8Array) => {
     const { connectionString } = parseMaterial(material);
@@ -329,6 +330,51 @@ export function definePostgresConnectionProvider(
       })),
     close: () => closePools(() => false),
   };
+}
+
+/**
+ * The most a host may configure (ADR 0163): enough for any legitimate
+ * read, short of letting one call hold the database or the gateway.
+ */
+export const POSTGRES_CONNECTION_CEILINGS = {
+  maxRows: 10_000,
+  statementTimeoutMs: 120_000,
+  lockTimeoutMs: 30_000,
+  poolSize: 16,
+  poolIdleTimeoutMs: 600_000,
+};
+
+function checkCeilings(options: PostgresConnectionOptions): void {
+  const whole = (name: string, value: number | undefined, max: number) => {
+    if (
+      value !== undefined &&
+      !(Number.isSafeInteger(value) && value > 0 && value <= max)
+    )
+      throw new Error(
+        `${options.kind}: ${name} must be a whole number from 1 to ${max}`,
+      );
+  };
+  const ceilings = POSTGRES_CONNECTION_CEILINGS;
+  whole("maxRows", options.maxRows, ceilings.maxRows);
+  whole("maxResultBytes", options.maxResultBytes, Number.MAX_SAFE_INTEGER);
+  whole(
+    "statementTimeoutMs",
+    options.statementTimeoutMs,
+    ceilings.statementTimeoutMs,
+  );
+  whole("lockTimeoutMs", options.lockTimeoutMs, ceilings.lockTimeoutMs);
+  whole("poolSize", options.poolSize, ceilings.poolSize);
+  whole(
+    "poolIdleTimeoutMs",
+    options.poolIdleTimeoutMs,
+    ceilings.poolIdleTimeoutMs,
+  );
+  const positive = (name: string, value: number | undefined) => {
+    if (value !== undefined && !(Number.isFinite(value) && value > 0))
+      throw new Error(`${options.kind}: ${name} must be a positive number`);
+  };
+  positive("maxCost", options.maxCost);
+  positive("maxPlanRows", options.maxPlanRows);
 }
 
 function definedLimits(

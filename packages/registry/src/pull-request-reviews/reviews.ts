@@ -229,7 +229,6 @@ export const postReviews = defineWorkflow(({ defineBoundary }) => ({
   connections: [
     {
       alias: "github",
-      principal: "service",
       capabilities: [
         "get",
         "pull_request_files",

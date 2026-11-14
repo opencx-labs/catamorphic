@@ -7,7 +7,10 @@ import type { RuntimeInvocationReceipt } from "@catamorphic/sandbox";
 import { MAX_CARRIED_STATE_BYTES } from "@catamorphic/workflow";
 import type { Kysely } from "kysely";
 import type { Identity } from "../identity.js";
-import { ConnectionUnavailableError } from "./connections-service.js";
+import {
+  ConnectionTemporarilyUnavailableError,
+  ConnectionUnavailableError,
+} from "./connections-service.js";
 import type { ExecutionJob } from "./execution-jobs-service.js";
 import {
   ExecutionJobDeferredError,
@@ -453,8 +456,11 @@ export class BoundaryExecutionHandler {
         });
       } catch (error) {
         requireAttemptTime(args);
+        // A refresh that could not run now fails this attempt, which the
+        // boundary retries; parking would wait for a reconnect nobody owes.
         if (
           error instanceof ConnectionUnavailableError &&
+          !(error instanceof ConnectionTemporarilyUnavailableError) &&
           error.connectionId &&
           this.deps.parkConnectionCall
         ) {

@@ -19,7 +19,7 @@ import {
   type DirectoryProvider,
   DirectoryUnavailableError,
 } from "./identity/directory.js";
-import type { WorkServerOptions } from "./server.js";
+import type { WorkServerHooks, WorkServerOptions } from "./server.js";
 
 /**
  * A directory (ADR 0161) governing Better Auth's local "credential"
@@ -59,8 +59,10 @@ export function testServerOptions(args: {
   dataDir: string;
   publicBases?: string[];
   env: Record<string, string | undefined>;
+  hooks?: WorkServerHooks;
 }): WorkServerOptions {
   return {
+    ...(args.hooks ? { hooks: args.hooks } : {}),
     config: {
       ...workServerConfigFromEnv({
         WORK_DATA_DIR: args.dataDir,

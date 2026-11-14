@@ -35,6 +35,7 @@ export {
   isProjectPrincipal,
   isScoped,
   mayUseProject,
+  mayUseProjectConnections,
   narrowIdentity,
   PROJECT_PERMISSION_GRANT_PATTERN,
   PROJECT_PERMISSION_PATTERN,
@@ -257,13 +258,13 @@ export {
   bindingPrincipalKinds,
   CONNECTION_ALIAS_PATTERN,
   CONNECTION_NAME_PATTERN,
+  type ConnectionBindingPrincipal,
   type ConnectionBindingSource,
   type ConnectionGitPolicy,
   type ConnectionModelPolicy,
   type ConnectionPrincipalKind,
   type ConnectionRecord,
   type ConnectionRequirement,
-  type ConnectionRequirementPrincipal,
   type ConnectionStatus,
   connectionMcpServerName,
   type EnvironmentConnectionBinding,
@@ -282,14 +283,19 @@ export {
   ConnectionNotFoundError,
   ConnectionPermissionDeniedError,
   ConnectionsService,
+  ConnectionTemporarilyUnavailableError,
   ConnectionUnavailableError,
   type EnvironmentConnectionStatus,
 } from "./services/connections-service.js";
 export {
   type CredentialMaterial,
+  type CredentialOwner,
+  type CredentialPlacement,
+  type CredentialPurpose,
   type CredentialRef,
   type CredentialVault,
   MemoryCredentialVault,
+  routeCredentialVaults,
 } from "./services/credential-vault.js";
 export { DbSandboxStore } from "./services/db-sandbox-store.js";
 export {

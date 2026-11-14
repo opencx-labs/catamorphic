@@ -11,13 +11,14 @@ This project's Slack threads are its own code, installed from the
 connection the server holds (the bot token never reaches a workflow or an
 agent's machine), a signed `slack` webhook with project trigger kinds, and
 workflows that give each Slack thread its own project chat. Creating the
-Slack app, the gateway entry, and the service connection are server setup:
+Slack app, the `slack` connection provider in the server's code, and the
+service connection are server setup:
 point whoever runs the server to the Work server guide's "Connect Slack".
 Use `writing-workflows` for workflow shape and `session-workflows` for chats.
 
 ## The connection
 
-The gateway's `slack` entry names Slack Web API methods as actions, so a
+The server's `slack` provider names Slack Web API methods as actions, so a
 binding grants exactly the methods it lists; `.work/project.json` binds it
 per Environment (`slack`, and `slackSearch` for search). A workflow calls `context.connections.slack.conversations.replies({ query:
 { channel, ts } })`: `query` for reading methods, `body` for
@@ -33,8 +34,9 @@ that sees the right channels) or each member's own (`"principal": "member"`,
 usable only in that member's chats). Leave the alias out when nobody has
 set it up.
 
-Slack's hosted MCP server is the alternative for people: an `mcp` gateway
-entry with Slack's pre-registered client (`oauth.client`), bound with
+Slack's hosted MCP server is the alternative for people: a
+`defineMcpConnectionProvider` with Slack's pre-registered client
+(`oauth.client`), bound to its own alias with
 `"principal": "member"`, acts as each person who authorizes it. Automations
 and project chats have nobody to authorize and refuse personal connections,
 so they use the bot-token connection above.

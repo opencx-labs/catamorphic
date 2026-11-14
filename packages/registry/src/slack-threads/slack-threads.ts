@@ -15,7 +15,6 @@ export const answerSlackMentions = defineWorkflow(({ defineBoundary }) => ({
   connections: [
     {
       alias: "slack",
-      principal: "service",
       capabilities: [
         "conversations.history",
         "conversations.replies",
@@ -75,7 +74,6 @@ export const postSlackReplies = defineWorkflow(({ defineBoundary }) => ({
   connections: [
     {
       alias: "slack",
-      principal: "service",
       capabilities: ["chat.postMessage"],
     },
   ],

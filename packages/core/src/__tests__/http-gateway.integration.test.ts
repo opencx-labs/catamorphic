@@ -326,7 +326,6 @@ describe("HTTP APIs through the gateway (ADR 0212)", () => {
       projectId,
       environment: "dev",
       aliases: ["logs", "billing"],
-      principalsByAlias: { logs: "service", billing: "service" },
     });
     session.allocationId = (
       await allocations.create({

@@ -17,6 +17,7 @@ export {
 export {
   defineMcpConnectionProvider,
   type McpConnectionCredential,
+  type McpConnectionJson,
   mcpToolActions,
 } from "./connection-provider.js";
 export {

@@ -5,7 +5,6 @@
   "connections": [
     {
       "alias": "slack",
-      "principal": "service",
       "capabilities": [
         "conversations.history",
         "conversations.replies",
@@ -13,6 +12,6 @@
         "chat.getPermalink"
       ]
     },
-    { "alias": "slackSearch", "principal": "service", "optional": true }
+    { "alias": "slackSearch", "optional": true }
   ]
 }

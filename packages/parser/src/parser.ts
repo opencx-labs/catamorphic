@@ -2768,18 +2768,14 @@ function parseWorkflowConnections(
       throw new Error("Workflow connection entries require an alias");
     }
     assertWorkflowConnectionAlias(alias);
-    const principal = "principal" in value ? value.principal : undefined;
+    if ("principal" in value) {
+      throw new Error(
+        `Workflow connection '${alias}' cannot choose a principal: the Environment's binding decides whether the alias is a member's own account or a service connection`,
+      );
+    }
     const capabilities =
       "capabilities" in value ? value.capabilities : undefined;
     const optional = "optional" in value ? value.optional : undefined;
-    if (
-      principal !== undefined &&
-      !["member", "service", "either"].includes(String(principal))
-    ) {
-      throw new Error(
-        `Workflow connection '${alias}' has an invalid principal`,
-      );
-    }
     if (
       capabilities !== undefined &&
       (!Array.isArray(capabilities) ||
@@ -2796,12 +2792,6 @@ function parseWorkflowConnections(
     }
     return {
       alias,
-      ...(typeof principal === "string"
-        ? {
-            principal:
-              principal as import("./types.js").WorkflowConnectionRequirement["principal"],
-          }
-        : {}),
       ...(Array.isArray(capabilities) ? { capabilities } : {}),
       ...(typeof optional === "boolean" ? { optional } : {}),
     };

@@ -20,6 +20,12 @@ export {
   errorLogFields,
   requestLogFields,
 } from "./request-logging.js";
+export {
+  CONNECT_BINDING_COOKIE,
+  connectBinding,
+  connectBindingCookie,
+  isLoopbackHost,
+} from "./routes/connections.js";
 export { PREVIEW_REFUSAL_HEADER } from "./routes/session-previews.js";
 export { pwaManifestWithLaunch, serveSpaDist } from "./spa.js";
 export { instrumentHttpServer } from "./telemetry.js";

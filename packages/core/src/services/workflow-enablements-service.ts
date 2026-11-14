@@ -15,6 +15,7 @@ import type { ResolvedConnectionBinding } from "./connection-types.js";
 import {
   AuthenticationRequiredError,
   ConnectionPermissionDeniedError,
+  ConnectionTemporarilyUnavailableError,
   ConnectionUnavailableError,
 } from "./connections-service.js";
 import type { DeploymentArtifact } from "./deployment-artifacts-service.js";
@@ -689,6 +690,9 @@ export class WorkflowEnablementsService {
         );
       }
     } catch (error) {
+      // A refresh that could not run now leaves authority intact: this
+      // attempt fails and may be retried; the enablement stays on.
+      if (error instanceof ConnectionTemporarilyUnavailableError) throw error;
       const reason: WorkflowEnablementSuspensionReason =
         error instanceof ConnectionPermissionDeniedError
           ? "connection_permission_denied"

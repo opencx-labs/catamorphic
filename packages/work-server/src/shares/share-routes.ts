@@ -461,7 +461,7 @@ window.addEventListener("message", async (event) => {
 });`;
 }
 
-function sendPage(
+export function sendPage(
   reply: FastifyReply,
   page: { title: string; body: string; script?: string; wide?: boolean },
 ) {
@@ -506,7 +506,7 @@ ${page.script ? `<script nonce="${nonce}">${page.script}</script>` : ""}
 </html>`);
 }
 
-function escapeHtml(value: string): string {
+export function escapeHtml(value: string): string {
   return value
     .replaceAll("&", "&amp;")
     .replaceAll("<", "&lt;")

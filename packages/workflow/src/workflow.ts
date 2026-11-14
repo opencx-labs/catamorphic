@@ -266,7 +266,6 @@ export interface HostNamespace {
 
 export interface WorkflowConnectionRequirement {
   readonly alias: string;
-  readonly principal?: "member" | "service" | "either";
   readonly capabilities?: readonly string[];
   readonly optional?: boolean;
 }

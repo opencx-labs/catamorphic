@@ -1,6 +1,6 @@
 # 0166 — Members work from their own agents over the project MCP
 
-- **Status:** Accepted
+- **Status:** Accepted (members call connections directly, amended by [0318](0318-members-agents-use-connections-and-hosts-route-custody.md))
 - **Date:** 2026-09-25
 - **Refines:** 0042, 0055, 0164, 0165
 

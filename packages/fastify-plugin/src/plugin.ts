@@ -125,6 +125,24 @@ export interface ProjectMcpHost {
     identity: Identity;
     projectId: string;
   }) => ProjectMcpHostTool[];
+  /**
+   * Where a member's own agent sends its person to connect an account
+   * (ADR 0318): a host page that requires a browser signed in as that
+   * member, then calls `connections.redeemConnectionOffer` and keeps its
+   * `browserBinding` in the cookie `connectBindingCookie` names, for the
+   * callback.
+   * Without it, connect tools tell the person to connect in Work instead.
+   * Set `publicApiBase` with it: the callback names the binding cookie from
+   * the public address, which a proxy's rewritten `Host` would misstate.
+   */
+  connectLink?: (args: { token: string; projectId: string }) => string;
+  /**
+   * Serve the project's connections to members' own agents as
+   * `<alias>__<action>` tools (ADR 0318). Off unless the host opts in: a
+   * host whose own surfaces probe this endpoint (the desktop's agent
+   * editor) would otherwise start every connected server to list it.
+   */
+  memberConnections?: boolean;
 }
 
 export interface ProjectMcpHostTool {

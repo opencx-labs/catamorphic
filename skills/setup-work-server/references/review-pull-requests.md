@@ -80,20 +80,25 @@ workflows are on (step 5), and store its webhook secret as the project secret
 
 ## 2. Connect the replica and Slack
 
-Declare them in the gateway file (`WORK_GATEWAY_CONFIG`, see [Secrets and the
-gateway](secrets-and-gateway.md)):
+Pass their providers in your server's `hooks.connectionProviders` (see
+[Connections are host code](secrets-and-gateway.md#connections-are-host-code)):
 
-```json
-{
-  "connections": [
-    { "type": "postgres", "kind": "prod-replica", "displayName": "Production (replica)" },
-    { "type": "http", "kind": "slack", "displayName": "Slack", "baseUrl": "https://slack.com/api",
-      "actions": [
-        { "name": "conversations.replies", "method": "get", "path": "/conversations.replies" },
-        { "name": "search.messages", "method": "get", "path": "/search.messages" }
-      ] }
-  ]
-}
+```ts
+connectionProviders: [
+  definePostgresConnectionProvider({
+    kind: "prod-replica",
+    displayName: "Production (replica)",
+  }),
+  defineHttpApiConnectionProvider({
+    kind: "slack",
+    displayName: "Slack",
+    baseUrl: "https://slack.com/api",
+    actions: [
+      { name: "conversations.replies", method: "get", path: "/conversations.replies" },
+      { name: "search.messages", method: "get", path: "/search.messages" },
+    ],
+  }),
+],
 ```
 
 To review each query before it runs (refusing queries that select email,

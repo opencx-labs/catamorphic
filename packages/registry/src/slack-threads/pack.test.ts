@@ -137,7 +137,6 @@ it("the Slack library parses as three project kinds on one signed webhook", () =
   expect(workflows.answerSlackMentions?.graph.connections).toEqual([
     {
       alias: "slack",
-      principal: "service",
       capabilities: [
         "conversations.history",
         "conversations.replies",
@@ -149,7 +148,6 @@ it("the Slack library parses as three project kinds on one signed webhook", () =
   expect(workflows.postSlackReplies?.graph.connections).toEqual([
     {
       alias: "slack",
-      principal: "service",
       capabilities: ["chat.postMessage"],
     },
   ]);

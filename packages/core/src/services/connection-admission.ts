@@ -70,9 +70,6 @@ export class ConnectionAdmissionService {
             projectId: args.projectId,
             environment: args.environment,
             aliases: [requirement.alias],
-            principalsByAlias: requirement.principal
-              ? { [requirement.alias]: requirement.principal }
-              : undefined,
             unattended: args.unattended,
           })),
         );
@@ -91,17 +88,6 @@ export class ConnectionAdmissionService {
       const requirement = active.find(
         (candidate) => candidate.alias === binding.alias,
       );
-      if (
-        requirement?.principal &&
-        requirement.principal !== "either" &&
-        (requirement.principal === "member"
-          ? binding.principalKind !== "member"
-          : binding.principalKind === "member")
-      ) {
-        throw new Error(
-          `Connection '${binding.alias}' requires principal '${requirement.principal}'`,
-        );
-      }
       const requested = requirement?.capabilities;
       return requested
         ? {

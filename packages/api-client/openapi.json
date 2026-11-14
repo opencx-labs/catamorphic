@@ -10610,7 +10610,7 @@
                       },
                       "principal": {
                         "type": "string",
-                        "enum": ["member", "service", "either"]
+                        "enum": ["member", "service"]
                       },
                       "service": {
                         "nullable": true,
@@ -11842,10 +11842,6 @@
                         "properties": {
                           "alias": {
                             "type": "string"
-                          },
-                          "principal": {
-                            "type": "string",
-                            "enum": ["member", "service", "either"]
                           },
                           "capabilities": {
                             "type": "array",
@@ -30290,10 +30286,6 @@
                                     "alias": {
                                       "type": "string"
                                     },
-                                    "principal": {
-                                      "type": "string",
-                                      "enum": ["member", "service", "either"]
-                                    },
                                     "capabilities": {
                                       "type": "array",
                                       "items": {
@@ -43299,10 +43291,6 @@
                         "properties": {
                           "alias": {
                             "type": "string"
-                          },
-                          "principal": {
-                            "type": "string",
-                            "enum": ["member", "service", "either"]
                           },
                           "capabilities": {
                             "type": "array",

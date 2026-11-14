@@ -680,7 +680,14 @@ contract while using the same resolved permission vocabulary.
 
 Workflow code declares provider-neutral requirements in its top-level
 \`connections\` array. Roles decide who may use those aliases; the host decides
-which concrete providers satisfy them. Each member opens the workflow's
+which concrete providers satisfy them. Each Environment binds its aliases in
+\`.work/project.json\` (\`environments.<name>.connections.<alias>\`): a
+\`provider\` kind and \`principal\` \`"member"\` (each person's own account) or
+\`"service"\` (with \`service\` naming the connection an administrator
+authorized), never both; for both, declare two aliases. Workflows and agents
+name only the alias. On a Work server, members' own agents (Claude Code,
+Codex) see the aliases their roles grant as tools on the project MCP and
+connect their own accounts from a link the tools return. Each member opens the workflow's
 automatic runs from its status, chooses **Enable for me**, reviews the pinned
 revision, Environment, actions, and triggers, then authenticates anything
 missing. When the member initiated that

@@ -25,15 +25,21 @@ creates the service connection and enters the key through the form (see
    `{ "authorizationId", "fields": { "apiKey": "…" } }`.
 
 For OpenRouter, a self-hosted OpenAI-compatible server, or a provider at
-another base URL, declare the kind in `WORK_GATEWAY_CONFIG` first:
+another base URL, add its provider to your server's
+`hooks.connectionProviders` first ([connections are host
+code](secrets-and-gateway.md#connections-are-host-code)):
 
-```json
-{ "type": "model", "kind": "openrouter", "displayName": "OpenRouter",
-  "api": "openai", "baseUrl": "https://openrouter.ai/api/v1" }
+```ts
+defineModelConnectionProvider({
+  kind: "openrouter",
+  displayName: "OpenRouter",
+  api: "openai",
+  baseUrl: "https://openrouter.ai/api/v1",
+});
 ```
 
 `api` is `anthropic` (Messages, for Claude Code) or `openai` (Responses and
-Chat Completions, for Codex and most ACP agents). An entry with kind
+Chat Completions, for Codex and most ACP agents). A provider with kind
 `anthropic` or `openai` replaces the built-in one. The server's own
 `OPENROUTER_API_KEY` serves only its built-in assistant on the control
 plane, and the server's own `ANTHROPIC_API_KEY` (and the other key

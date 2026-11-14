@@ -24,6 +24,20 @@ class McpAuthorizationExpiredError extends Error {
   }
 }
 
+/** A JSON value, as connection actions take and return them. */
+export type McpConnectionJson =
+  | boolean
+  | number
+  | string
+  | null
+  | McpConnectionJson[]
+  | { [key: string]: McpConnectionJson | undefined };
+
+/** A plain JSON copy: what crosses the gateway is data, never live objects. */
+function jsonCopy(value: unknown): McpConnectionJson {
+  return JSON.parse(JSON.stringify(value) ?? "null");
+}
+
 type HostMcpServerConfig =
   | Omit<Extract<AgentMcpServerConfig, { url: string }>, "headers">
   | Omit<Extract<AgentMcpServerConfig, { command: string }>, "env">;
@@ -31,7 +45,9 @@ type HostMcpServerConfig =
 /**
  * Host-side connection driver for one configured MCP endpoint. The endpoint is
  * host policy; vault material contains only authorization state and is opened
- * for the duration of list/call.
+ * for the duration of list/call. Hosts pass the result as a connection
+ * provider (`createCatamorphic({ connectionProviders })`, or a Work server's
+ * `hooks.connectionProviders`).
  */
 export function defineMcpConnectionProvider(args: {
   kind: string;
@@ -100,7 +116,12 @@ export function defineMcpConnectionProvider(args: {
         return mcpToolActions({
           tools: server.tools,
           capabilities: input.capabilities,
-        });
+        }).map(({ inputSchema, outputSchema, annotations, ...action }) => ({
+          ...action,
+          inputSchema: jsonCopy(inputSchema),
+          ...(outputSchema ? { outputSchema: jsonCopy(outputSchema) } : {}),
+          ...(annotations ? { annotations: jsonCopy(annotations) } : {}),
+        }));
       } finally {
         await server.close().catch(() => {});
       }
@@ -111,7 +132,7 @@ export function defineMcpConnectionProvider(args: {
       input: unknown;
       capabilities: readonly string[];
       signal?: AbortSignal;
-    }): Promise<unknown> {
+    }): Promise<McpConnectionJson> {
       if (!input.capabilities.includes(input.action)) {
         throw new Error(
           `MCP tool '${input.action}' is outside the connection grant`,
@@ -131,7 +152,7 @@ export function defineMcpConnectionProvider(args: {
             ? (input.input as Record<string, unknown>)
             : {};
         const result = await server.callToolRaw(input.action, callArgs);
-        return JSON.parse(JSON.stringify(result));
+        return jsonCopy(result);
       } finally {
         await server.close().catch(() => {});
       }

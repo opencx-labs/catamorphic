@@ -158,6 +158,7 @@ function registrationStore(args: {
       const ref = await vault.put({
         tenantId,
         material: new TextEncoder().encode(JSON.stringify(app)),
+        placement: { purpose: "host-setup", owner: { kind: "host" } },
       });
       await db
         .updateTable("work_github_app_registrations")

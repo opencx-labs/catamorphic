@@ -58,6 +58,7 @@ Start small and add only what the situation needs:
 | A Work server deployment or `apps/server` | [Work server](references/stock-server.md) |
 | Company sign-in through Google Workspace, deprovisioning, groups as roles, onboarding and offboarding automations | [Company identity](references/company-identity.md) |
 | Credentials, API keys, a production database, query review, vault keys | [Secrets and the gateway](references/secrets-and-gateway.md) |
+| A system the helpers do not fit: credentials issued per call or kept in the company's secret manager, per-person access across many accounts | [Connection providers in the server's code](references/connection-providers.md) |
 | GitHub: a GitHub App, company repositories, pull requests, webhooks | [Connect GitHub](references/connect-github.md) |
 | Slack: a project answering mentions in threads, reading and searching Slack | [Connect Slack](references/connect-slack.md) |
 | Code and security review of every pull request on a dedicated review pool | [Review pull requests with Work](references/review-pull-requests.md) |

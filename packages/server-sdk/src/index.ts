@@ -15,6 +15,11 @@ export type {
   ConnectionProvider,
   ConnectionRequirement,
   CreateProjectInput,
+  CredentialMaterial,
+  CredentialOwner,
+  CredentialPlacement,
+  CredentialPurpose,
+  CredentialRef,
   CredentialVault,
   DeploymentRuntimeCleanupResult,
   DeploymentRuntimeHealthResult,
@@ -148,9 +153,11 @@ export {
   EncryptedCredentialVault,
   EnvironmentCapacityError,
   LOST_NODE_GRACE_MS,
+  MemoryCredentialVault,
   ProjectDeprovisioningError,
   ProjectProvisioningError,
   ReservedCapabilityEnvError,
+  routeCredentialVaults,
   TriggerBindingsInvalidError,
   TriggerKindNotRegisteredError,
   TriggerModeNotAllowedError,
@@ -241,6 +248,8 @@ export {
 } from "./github-connection-provider.js";
 export {
   defineHttpApiConnectionProvider,
+  HTTP_MAX_RESPONSE_BYTES,
+  HTTP_MAX_TIMEOUT_MS,
   type HttpApiAction,
   type HttpApiAuth,
   type HttpApiConnectionOptions,
@@ -253,6 +262,7 @@ export {
 } from "./model-connection-provider.js";
 export {
   definePostgresConnectionProvider,
+  POSTGRES_CONNECTION_CEILINGS,
   type PostgresConnectionLimits,
   type PostgresConnectionOptions,
   type PostgresConnectionProvider,

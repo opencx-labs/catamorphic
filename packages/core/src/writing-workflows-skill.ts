@@ -160,8 +160,9 @@ until enabled, and enablements pin a revision. An \`ai.tool-call\` trigger
 needs no enablement: once deployed, the workflow is a tool on the project MCP
 for every caller whose role grants it, and it runs as that caller.
 
-Declare required provider aliases, principal policy, and actions in an inline
-\`connections\` array. Roles and the host's enablement flow resolve access and
+Declare required provider aliases and actions in an inline \`connections\`
+array. The Environment's binding decides whose account an alias acts with (a
+member's own, or a service connection), so a workflow never chooses one. Roles and the host's enablement flow resolve access and
 credentials; see \`workflow-lifecycle\`. Brokered calls such as
 \`context.connections.gmail.search(...)\` are returned host transitions, not
 ordinary promises; pass \`{ state }\` as a second argument to keep data across
