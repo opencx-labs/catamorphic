@@ -72,7 +72,7 @@ shared surface is a process bug, not a win. See the [historical log](DESIGN-HIST
 
 ## Agent setup and conversation controls
 
-Palette drafts and mode chips share one transient edit history (ADR 0314).
+Palette drafts and mode chips share one transient edit history (ADR 0317).
 New Tabs keep their editors while hidden, reuse an empty tab, and open at the
 strip's right end. Rename current chat follows focus; Cmd+M visits floating chats
 only. Shortcut symbols keep a narrow non-breaking gap.

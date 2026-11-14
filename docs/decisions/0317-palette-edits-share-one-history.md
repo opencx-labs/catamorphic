@@ -1,4 +1,4 @@
-# 0314: Palette edits share one history
+# 0317: Palette edits share one history
 
 - **Status:** Accepted
 - **Date:** 2026-11-13

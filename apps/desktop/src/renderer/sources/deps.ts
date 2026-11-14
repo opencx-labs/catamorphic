@@ -29,6 +29,8 @@ export interface WorkSourceHost {
   activeTabKey?: string;
   unreadSessionIds: ReadonlySet<string>;
   agentName: (agentId: string | null | undefined) => string | undefined;
+  /** The profile agent a chat names was deleted (ADR 0314). */
+  agentDeleted: (agentId: string) => boolean;
   closeTab: (key: string, scope?: TabCloseScope) => void;
   /** Move a tab before another in the strip (null: to the end). */
   reorderTab: (key: string, beforeKey: string | null) => void;

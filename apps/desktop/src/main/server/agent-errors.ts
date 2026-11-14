@@ -94,6 +94,9 @@ export function rewriteAgentError(
         `${said}. This usually happens after switching models mid-conversation. ` +
         `Retry repairs the history and continues.`
       );
+    // Core's own words, about the chat rather than a provider (ADR 0314).
+    case "agent_missing":
+      return original;
   }
 }
 

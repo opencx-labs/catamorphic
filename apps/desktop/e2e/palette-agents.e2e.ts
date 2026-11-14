@@ -39,7 +39,7 @@ async function click(selector: string) {
     `(() => {${helpers}
     const el=shown(${JSON.stringify(selector)}); if(!el || el.matches(':disabled')) return false;
     el.scrollIntoView({block:'nearest',inline:'nearest'});
-    const surface=el.closest('[data-palette],.settings-card');
+    const surface=el.closest('[data-palette],.settings-card,[role="dialog"]');
     if(surface?.getAnimations({subtree:true}).some(a=>a.effect?.getTiming().iterations!==Infinity&&(a.pending||a.playState==='running')))return false;
     const r=el.getBoundingClientRect(),x=r.x+r.width/2,y=r.y+r.height/2;
     return el.contains(document.elementFromPoint(x,y))?{x,y}:false;
@@ -266,14 +266,22 @@ it("deleting an agent collapses its row before it disappears", async () => {
   const height = await run<number>(
     `return shown(${JSON.stringify(selector)}).getBoundingClientRect().height;`,
   );
-  // Observe real frame heights while using the row's native Remove action.
+  await run(
+    `window.__removeRow=shown(${JSON.stringify(selector)});window.__removeSibling=shown('[data-agent-id="${otherId}"]');`,
+  );
+  await click('[aria-label="Remove Fake Agent"]');
+  await wait(
+    `return !!shown('[data-testid="remove-agent-confirm"]') && window.__removeRow.isConnected;`,
+    "removal asks for confirmation before changing the list",
+  );
+  // Observe real frame heights from the confirmation's native press.
   await run(`window.__removeHeights=[];window.__removePositions=[];window.__removeInert=false;window.__removeDone=false;window.__removeTimedOut=false;
-    const row=shown(${JSON.stringify(selector)}),frame=row.closest('[data-collapsible]'),card=row.closest('.settings-card'),sibling=shown('[data-agent-id="${otherId}"]');
-    row.querySelector('[aria-label="Remove Fake Agent"]').addEventListener('pointerdown',()=>{
+    const row=window.__removeRow,frame=row.closest('[data-collapsible]'),card=row.closest('.settings-card'),sibling=window.__removeSibling;
+    shown('[data-testid="remove-agent-confirm"]').addEventListener('pointerdown',()=>{
       const deadline=performance.now()+15000;let previousTop,settledFrames=0;
       const sample=()=>{
         const top=sibling.getBoundingClientRect().top;
-        window.__removeHeights.push(frame.getBoundingClientRect().height);window.__removePositions.push(top);window.__removeInert ||= !!row.closest('[inert]');
+        window.__removeHeights.push(frame.getBoundingClientRect().height);window.__removePositions.push(top);const inert=row.closest('[inert]');window.__removeInert ||= !!inert&&frame.contains(inert);
         const moving=card.getAnimations({subtree:true}).some(a=>a.effect?.getTiming().iterations!==Infinity&&(a.pending||a.playState==='running'));
         settledFrames=!row.isConnected&&!moving&&previousTop!==undefined&&Math.abs(top-previousTop)<0.25?settledFrames+1:0;previousTop=top;
         if(settledFrames>=3)window.__removeDone=true;
@@ -281,7 +289,7 @@ it("deleting an agent collapses its row before it disappears", async () => {
         else requestAnimationFrame(sample);
       };sample();
     },{once:true});`);
-  await click('[aria-label="Remove Fake Agent"]');
+  await click('[data-testid="remove-agent-confirm"]');
   await wait(
     `return !document.querySelector(${JSON.stringify(selector)});`,
     "removed row leaves after collapsing",

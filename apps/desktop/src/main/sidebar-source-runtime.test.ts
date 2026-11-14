@@ -498,6 +498,38 @@ it("releases subscriptions and retires idle processes", async () => {
   expect(await load()).not.toEqual(first);
 });
 
+it.each([
+  { lease: "released", releaseLease: true, activations: "0" },
+  { lease: "retained", releaseLease: false, activations: "1" },
+])(
+  "replays only retained subscriptions after worker reload ($lease)",
+  async ({ releaseLease, activations }) => {
+    const { root, runtime, load } = setup(
+      `import {writeFileSync} from 'node:fs'; let activations=0; export default {async load(){return {items:[{id:String(process.pid),label:String(activations)}]}}, subscribe(){activations++;writeFileSync('watching','yes');return()=>writeFileSync('watching','no')}}`,
+    );
+    const release = runtime.subscribe(() => {});
+    const page = sanitizeSidebarSourcePage(await load());
+    const pid = Number(page.items[0]?.id);
+    expect(pid).toBeGreaterThan(0);
+    expect(() => process.kill(pid, 0)).not.toThrow();
+    await eventually(() =>
+      expect(fs.readFileSync(path.join(root, "watching"), "utf8")).toBe("yes"),
+    );
+    expect(sanitizeSidebarSourcePage(await load()).items[0]?.label).toBe("1");
+    runtime.reload();
+    if (releaseLease) release();
+    await eventually(() => expect(() => process.kill(pid, 0)).toThrow());
+    expect(runtime.inspect().running).toBe(false);
+    // A leaked lease would subscribe the replacement. Read once to complete
+    // startup and again after its subscription queue has had a turn.
+    await load();
+    const replacement = sanitizeSidebarSourcePage(await load());
+    expect(replacement.items[0]?.id).not.toBe(String(pid));
+    expect(replacement.items[0]?.label).toBe(activations);
+    release();
+  },
+);
+
 it("rejects malformed pages and preserves executable actions and display fields", () => {
   expect(() =>
     sanitizeSidebarSourcePage({

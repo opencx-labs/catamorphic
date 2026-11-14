@@ -8,7 +8,7 @@ that text into the mode, including Ask agent. A selection or active text
 composition keeps its normal editing behavior.
 Mode entry and Backspace exit can be undone and redone with the platform's
 Undo and Redo commands. Each palette has one edit history for text, attachments,
-selection and mode changes (ADR 0314).
+selection and mode changes (ADR 0317).
 
 Rename current chat is offered only while the active chat is visible, as a
 floating chat or the focused chat tab. A minimized or background chat keeps its

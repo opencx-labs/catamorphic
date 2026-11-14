@@ -351,20 +351,53 @@ it("retains HTTP rows during refresh, reports failure, and retries without reope
   expect(requests - beforeRetry).toBe(1);
 });
 it("releases hidden sources and virtualizes a large file-backed list", async () => {
+  const workers = () =>
+    app.eval<{ children: boolean; pids: number[] }>(
+      `window.catamorphicDesktop.resourcesRead().then(snapshot=>({children:snapshot.children,pids:snapshot.groups.filter(group=>group.owner.kind==='module'&&group.owner.modulePath===${JSON.stringify(path.join(".work", "todos", "index.ts"))}).flatMap(group=>group.processes.map(process=>process.pid))}))`,
+    );
+  const tracksChildren =
+    process.platform === "darwin" || process.platform === "linux";
+  if (tracksChildren)
+    await expect
+      .poll(
+        async () => {
+          const sample = await workers();
+          return sample.children ? sample.pids.length : 0;
+        },
+        { timeout: 15_000 },
+      )
+      .toBeGreaterThan(0);
   await click('[role="tab"][aria-label="Other"]');
   await app.waitFor(
     `document.querySelector('[role="tab"][aria-label="Other"]')?.getAttribute('aria-selected')==='true'`,
   );
-  await expect
-    .poll(
-      () =>
-        fs.readFileSync(
-          path.join(projectRoot, "todo-data", "subscribed"),
-          "utf8",
-        ),
-      { timeout: 15_000 },
-    )
-    .toBe("no");
+  if (tracksChildren) {
+    // A retired worker cannot run subscription cleanup, so its last file
+    // write is not a liveness signal. Assert the real process is gone after
+    // the runtime's 30-second idle retirement, including a worker replaced
+    // just before the tab switch. A leaked subscription prevents retirement.
+    await expect
+      .poll(
+        async () => {
+          const sample = await workers();
+          return sample.children ? sample.pids : null;
+        },
+        { timeout: 45_000 },
+      )
+      .toEqual([]);
+  } else {
+    // Platforms without process inventory retain the live-worker probe.
+    await expect
+      .poll(
+        () =>
+          fs.readFileSync(
+            path.join(projectRoot, "todo-data", "subscribed"),
+            "utf8",
+          ),
+        { timeout: 15_000 },
+      )
+      .toBe("no");
+  }
   const before = requests;
   fs.writeFileSync(
     path.join(projectRoot, "todo-data", "todos.json"),

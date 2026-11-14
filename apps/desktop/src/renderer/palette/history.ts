@@ -29,7 +29,7 @@ export const samePaletteDraft = (a: PaletteSnapshot, b: PaletteSnapshot) =>
   a.draft.message === b.draft.message &&
   sameValue(a.draft.attachments, b.draft.attachments);
 
-/** One ordered history across the palette's editors and mode chips (ADR 0314). */
+/** One ordered history across the palette's editors and mode chips (ADR 0317). */
 export class PaletteHistory {
   private edits: Edit[] = [];
   private cursor = 0;
