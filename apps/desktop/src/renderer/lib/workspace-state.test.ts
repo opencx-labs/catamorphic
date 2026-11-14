@@ -1195,3 +1195,133 @@ it("keeps a browser tab name through snapshots, close/reopen and later page meta
   expect(updated.label).toBe("Team chat");
   expect(updated.faviconUrl).toBe("https://other.test/new.ico");
 });
+
+describe("pinned tabs", () => {
+  const strip = (): Workspace => ({
+    ...emptyUtilityWorkspace(),
+    tabs: [
+      { kind: "settings", name: "settings" },
+      { kind: "palette", name: "a" },
+      { kind: "app", name: "attached", chatLocalId: "c" },
+    ],
+    chats: [{ localId: "c", mode: "tab", sessionId: "session" }],
+    terminals: [{ localId: "t", title: "zsh", ptySessionId: "pty" }],
+    activeTabKey: "palette:a",
+  });
+  const pin = (ws: Workspace, key: string, pinned = true) =>
+    transitionWorkspace(ws, { type: "pin", key, pinned });
+
+  it("lead the strip in the order they were pinned", () => {
+    const ws = pin(pin(strip(), "terminal:t"), "settings:settings");
+    expect(ws.pinnedTabKeys).toEqual(["terminal:t", "settings:settings"]);
+    expect(orderedTabKeys(ws)).toEqual([
+      "terminal:t",
+      "settings:settings",
+      "palette:a",
+      "chat:c",
+      "app:attached",
+    ]);
+  });
+
+  it("stay ahead when an unpinned tab is dragged before them", () => {
+    const ws = transitionWorkspace(pin(strip(), "terminal:t"), {
+      type: "reorder",
+      key: "palette:a",
+      beforeKey: "terminal:t",
+    });
+    expect(orderedTabKeys(ws)[0]).toBe("terminal:t");
+  });
+
+  it("go back to the start of the unpinned tabs when unpinned", () => {
+    const pinned = pin(pin(strip(), "terminal:t"), "settings:settings");
+    const ws = pin(pinned, "terminal:t", false);
+    expect(ws.pinnedTabKeys).toEqual(["settings:settings"]);
+    expect(orderedTabKeys(ws).slice(0, 2)).toEqual([
+      "settings:settings",
+      "terminal:t",
+    ]);
+  });
+
+  it("take a pinned chat's group along, and leave a chat to be pinned", () => {
+    const chat = pin(strip(), "chat:c");
+    expect(orderedTabKeys(chat).slice(0, 2)).toEqual([
+      "chat:c",
+      "app:attached",
+    ]);
+    const page = pin(strip(), "app:attached");
+    expect(
+      page.tabs.find((tab) => tab.name === "attached")?.chatLocalId,
+    ).toBeUndefined();
+    expect(orderedTabKeys(page)[0]).toBe("app:attached");
+  });
+
+  it("never include a New Tab, which closes once left", () => {
+    expect(pin(strip(), "palette:a").pinnedTabKeys).toEqual([]);
+  });
+
+  it("cannot take a page an agent holds out of its chat", () => {
+    const ws: Workspace = {
+      ...strip(),
+      browsers: [
+        {
+          localId: "agent",
+          profileId: "p",
+          initialUrl: "https://example.com",
+          url: "https://example.com",
+          title: "Example",
+          faviconUrl: null,
+          chatLocalId: "c",
+          agentControlled: true,
+        },
+      ],
+    };
+    expect(pin(ws, "browser:agent").pinnedTabKeys).toEqual([]);
+  });
+
+  it("are left when everything else closes", () => {
+    const ws = pin(strip(), "settings:settings");
+    expect(closingTabKeys(ws, "palette:a", "all")).not.toContain(
+      "settings:settings",
+    );
+    const closed = transitionWorkspace(ws, {
+      type: "close",
+      key: "palette:a",
+      scope: "all",
+    });
+    expect(orderedTabKeys(closed)).toEqual(["settings:settings"]);
+  });
+
+  it("lose their pin when closed, so the same tab opens unpinned", () => {
+    const ws = transitionWorkspace(pin(strip(), "settings:settings"), {
+      type: "close",
+      key: "settings:settings",
+    });
+    expect(ws.pinnedTabKeys).toEqual([]);
+  });
+
+  it("keep a chat's pin while it floats", () => {
+    const ws = transitionWorkspace(pin(strip(), "chat:c"), {
+      type: "toggle-chat",
+      localId: "c",
+    });
+    expect(ws.pinnedTabKeys).toEqual(["chat:c"]);
+  });
+
+  it("come back after a restart, a pinned shell as a fresh one", () => {
+    const ws = pin(pin(strip(), "terminal:t"), "settings:settings");
+    const restored = hydrateWorkspace(serializeWorkspace(ws));
+    expect(restored?.pinnedTabKeys).toEqual([
+      "terminal:t",
+      "settings:settings",
+    ]);
+    expect(restored?.terminals).toEqual([{ localId: "t", title: "zsh" }]);
+    expect(orderedTabKeys(restored ?? strip()).slice(0, 2)).toEqual([
+      "terminal:t",
+      "settings:settings",
+    ]);
+    // An unpinned shell still ends with the app.
+    expect(hydrateWorkspace(serializeWorkspace(strip()))?.terminals).toEqual(
+      [],
+    );
+  });
+});

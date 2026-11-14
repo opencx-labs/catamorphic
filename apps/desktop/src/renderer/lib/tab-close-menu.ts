@@ -1,5 +1,6 @@
 import type { ContextMenuEntry } from "../components/menu.js";
 import type { TabCloseScope } from "./workspace-state.js";
+import { tabKey, type WorkspaceTab } from "./workspace-types.js";
 
 interface TabGroupShape {
   parentKey: string;
@@ -13,22 +14,60 @@ const groupOf = (key: string, groups: readonly TabGroupShape[]) =>
   );
 
 /**
+ * Pinning from a tab's menu, wherever the tab is listed (ADR 0318). A tab an
+ * agent holds under its chat says why it cannot be pinned.
+ */
+export function tabPinEntries({
+  key,
+  pinned,
+  blocker,
+}: {
+  key: string;
+  pinned: boolean;
+  /** Why the tab cannot be pinned, from `pinBlocker`. */
+  blocker?: string;
+}): ContextMenuEntry[] {
+  // A New Tab closes once left: there is nothing to keep.
+  if (key.startsWith("palette:") && !pinned) return [];
+  const noun = key.startsWith("chat:") ? "chat" : "tab";
+  return [
+    pinned
+      ? { label: `Unpin ${noun}`, action: "unpin-tab" }
+      : {
+          label: `Pin ${noun}`,
+          action: "pin-tab",
+          ...(blocker ? { disabledReason: blocker } : {}),
+        },
+  ];
+}
+
+/** Whether a picked entry pins (true) or unpins (false); undefined otherwise. */
+export const tabPinRequest = (action: string): boolean | undefined =>
+  action === "pin-tab" ? true : action === "unpin-tab" ? false : undefined;
+
+/**
  * The ways to close from a tab's menu, wherever the tab is listed. A chat
  * and each tab under it offer the group's. A folded chat has no "Close chat":
  * its close takes what is folded behind it, as "Close chat and its tabs" says.
+ * With tabs pinned, closing everything leaves them, and says so.
  */
 export function tabCloseEntries({
   key,
-  tabCount,
+  tabs,
   groups,
 }: {
   key: string;
   /** The tabs listed beside this one, itself included. */
-  tabCount: number;
+  tabs: readonly WorkspaceTab[];
   groups: readonly TabGroupShape[];
 }): ContextMenuEntry[] {
   const group = groupOf(key, groups);
   const isChat = key.startsWith("chat:");
+  const pinned = tabs.filter((tab) => tab.pinned);
+  const unpinned = tabs.length - pinned.length;
+  const closesOthers = pinned.some((tab) => tabKey(tab) === key)
+    ? unpinned > 0
+    : unpinned > 1 || Boolean(group);
   return [
     ...(isChat && group?.collapsed
       ? []
@@ -39,8 +78,13 @@ export function tabCloseEntries({
           { label: "Close chat and its tabs", action: "close-chat-and-tabs" },
         ]
       : []),
-    ...(tabCount > 1 || group
-      ? [{ label: "Close all tabs", action: "close-all-tabs" }]
+    ...(closesOthers
+      ? [
+          {
+            label: pinned.length > 0 ? "Close unpinned tabs" : "Close all tabs",
+            action: "close-all-tabs",
+          },
+        ]
       : []),
   ];
 }

@@ -118,6 +118,8 @@ function view(projectId = "paged") {
       agentName: () => "Claude",
       agentDeleted: () => false,
       closeTab: () => {},
+      pinTab: () => {},
+      pinBlocker: () => undefined,
       reorderTab: () => {},
       attachTab: () => {},
       sessionAction: mocks.actions,

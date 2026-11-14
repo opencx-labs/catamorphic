@@ -144,6 +144,12 @@ export interface Workspace {
    */
   tabOrder: string[];
   /**
+   * Pinned tabs: first in the strip, in `tabOrder`'s order, shown by their
+   * icon. Cmd+W and "Close unpinned tabs" leave them; they come back after
+   * a restart, a pinned shell as a fresh one in its place.
+   */
+  pinnedTabKeys: string[];
+  /**
    * Open tabs the person left, newest last: when the tab in front closes,
    * the newest one still open comes back to the front.
    */
@@ -180,6 +186,7 @@ export const emptyWorkspace = (): Workspace => {
     editors: [],
     split: null,
     tabOrder: [],
+    pinnedTabKeys: [],
     recentTabKeys: [],
     closedTabs: [],
   };
@@ -198,6 +205,7 @@ export const emptyUtilityWorkspace = (): Workspace => ({
   editors: [],
   split: null,
   tabOrder: [],
+  pinnedTabKeys: [],
   recentTabKeys: [],
   closedTabs: [],
 });
@@ -207,6 +215,13 @@ export const browserTabKey = (localId: string) => `browser:${localId}`;
 export const terminalTabKey = (localId: string) => `terminal:${localId}`;
 export const editorTabKey = (localId: string) => `editor:${localId}`;
 
+/** A shell of the person's own, pinned: it opens again after a restart. */
+const pinnedShell = (ws: Workspace, terminal: TerminalEntry) =>
+  ws.pinnedTabKeys.includes(terminalTabKey(terminal.localId)) &&
+  !terminal.attachSessionId &&
+  !terminal.chatLocalId &&
+  !terminal.chat?.remote;
+
 /**
  * The restart-surviving projection of a workspace, persisted per project
  * (desktop.workspace_states) so a relaunch lands where the user left off.
@@ -214,7 +229,8 @@ export const editorTabKey = (localId: string) => `editor:${localId}`;
  * app), sessionless chats (nothing to reopen), unsent composer state,
  * agent-setup tabs (they re-open themselves), and mcpapp tabs (their tool
  * results are runtime data), and incognito pages (ADR 0303: they end with
- * the app). Editor tabs lose unsaved buffers; browser
+ * the app). A pinned shell of the person's own comes back as a fresh one in
+ * its place (ADR 0318). Editor tabs lose unsaved buffers; browser
  * tabs reopen on their last URL. Workflow tabs retain their draft source and
  * baseline so returning to a project can detect external conflicts.
  *
@@ -297,7 +313,17 @@ export const serializeWorkspace = (
           },
         ];
       })
-    : [];
+    : ws.terminals.flatMap((terminal) =>
+        pinnedShell(ws, terminal)
+          ? [
+              {
+                localId: terminal.localId,
+                title: terminal.title,
+                ...(terminal.chat ? { chat: terminal.chat } : {}),
+              },
+            ]
+          : [],
+      );
   const tabs = ws.tabs
     .filter((tab) => tab.kind !== "agent-setup" && tab.kind !== "mcpapp")
     // A New Tab's input is not restored, so neither is its typed mark.
@@ -341,6 +367,7 @@ export const serializeWorkspace = (
         ? ws.split
         : null,
     tabOrder: ws.tabOrder.filter((key) => keys.has(key)),
+    pinnedTabKeys: ws.pinnedTabKeys.filter((key) => keys.has(key)),
     recentTabKeys: ws.recentTabKeys.filter((key) => keys.has(key)),
     closedTabs: ws.closedTabs.filter(
       (record) =>
@@ -361,6 +388,9 @@ export const hydrateWorkspace = (
 ): Workspace | null => {
   if (typeof raw !== "object" || raw === null) return null;
   const snapshot = raw as Partial<Workspace>;
+  const pinnedTabKeys = Array.isArray(snapshot.pinnedTabKeys)
+    ? snapshot.pinnedTabKeys
+    : [];
   const ws: Workspace = {
     tabs: Array.isArray(snapshot.tabs)
       ? snapshot.tabs.filter(
@@ -372,18 +402,20 @@ export const hydrateWorkspace = (
     browsers: Array.isArray(snapshot.browsers)
       ? snapshot.browsers.filter((browser) => moved || !browser.incognito)
       : [],
-    terminals:
-      moved && Array.isArray(snapshot.terminals)
-        ? snapshot.terminals.filter(
-            (terminal) =>
-              terminal.adoptSessionId ||
+    // A pinned shell starts again; only a moving project brings others.
+    terminals: Array.isArray(snapshot.terminals)
+      ? snapshot.terminals.filter((terminal) =>
+          moved
+            ? terminal.adoptSessionId ||
               terminal.attachSessionId ||
-              terminal.chat?.remote,
-          )
-        : [],
+              terminal.chat?.remote
+            : pinnedTabKeys.includes(terminalTabKey(terminal.localId)),
+        )
+      : [],
     editors: Array.isArray(snapshot.editors) ? snapshot.editors : [],
     split: snapshot.split ?? null,
     tabOrder: Array.isArray(snapshot.tabOrder) ? snapshot.tabOrder : [],
+    pinnedTabKeys,
     recentTabKeys: Array.isArray(snapshot.recentTabKeys)
       ? snapshot.recentTabKeys
       : [],
@@ -470,6 +502,28 @@ export const attachedTabKeys = (ws: Workspace, chatLocalId: string) => [
     .map((editor) => editorTabKey(editor.localId)),
 ];
 
+/** The chat a tab is under, if any. */
+const tabOwner = (ws: Workspace, key: string): string | undefined => {
+  const localId = key.slice(key.indexOf(":") + 1);
+  if (key.startsWith("browser:"))
+    return ws.browsers.find((entry) => entry.localId === localId)?.chatLocalId;
+  if (key.startsWith("terminal:"))
+    return ws.terminals.find((entry) => entry.localId === localId)?.chatLocalId;
+  if (key.startsWith("editor:"))
+    return ws.editors.find((entry) => entry.localId === localId)?.chatLocalId;
+  return ws.tabs.find((tab) => tabKey(tab) === key)?.chatLocalId;
+};
+
+/**
+ * Why a tab cannot be pinned, in a sentence; undefined when it can. A tab
+ * under a chat leaves it to be pinned, unless what holds it there is an
+ * agent's.
+ */
+export const pinBlocker = (ws: Workspace, key: string): string | undefined =>
+  !key.startsWith("chat:") && tabOwner(ws, key) !== undefined
+    ? attachBlocker(ws, key, null)
+    : undefined;
+
 /**
  * How much a close takes along. Without one it is the tab alone, and a folded
  * chat with what is hidden behind it. A tab's menu asks for the others.
@@ -483,7 +537,10 @@ export function closingTabKeys(
   scope?: TabCloseScope,
 ): string[] {
   if (scope === "all") {
-    const keys = orderedTabKeys(ws, { includeCollapsed: true });
+    // Pinned tabs stay; a pinned chat's tabs go back to its chips.
+    const keys = orderedTabKeys(ws, { includeCollapsed: true }).filter(
+      (candidate) => !ws.pinnedTabKeys.includes(candidate),
+    );
     const isChat = (candidate: string) => candidate.startsWith("chat:");
     return [
       ...keys.filter((candidate) => !isChat(candidate)),
@@ -560,7 +617,7 @@ export const attachBlocker = (
 /**
  * Tab-strip order, the single source for the strip AND keyboard cycling:
  * `tabOrder` (drag-arranged) first, unknown keys appended in per-kind
- * order — then tabs attached to a tab-mode chat are pulled out and
+ * order, pinned tabs ahead of the rest — then tabs attached to a tab-mode chat are pulled out and
  * clustered right after their chat (the group), unless collapsed.
  */
 export const orderedTabKeys = (
@@ -580,9 +637,15 @@ export const orderedTabKeys = (
     ...tabChats.map((chat) => chatTabKey(chat.localId)),
   ];
   const naturalSet = new Set(natural);
-  const order = [
+  const arranged = [
     ...ws.tabOrder.filter((key) => naturalSet.has(key)),
     ...natural.filter((key) => !ws.tabOrder.includes(key)),
+  ];
+  // Pinned tabs lead, each pinned chat with its group.
+  const pinned = new Set(ws.pinnedTabKeys);
+  const order = [
+    ...arranged.filter((key) => pinned.has(key)),
+    ...arranged.filter((key) => !pinned.has(key)),
   ];
   const result: string[] = [];
   for (const key of order) {
@@ -653,6 +716,8 @@ export type WorkspaceEvent =
   | { type: "reveal-chat"; localId: string }
   | { type: "cycle-chat"; direction: -1 | 1; exclude?: readonly string[] }
   | { type: "reorder"; key: string; beforeKey: string | null }
+  /** Pin a tab to the strip's start (leaving its chat), or unpin it. */
+  | { type: "pin"; key: string; pinned: boolean }
   /** A tab joins a tab chat's group (or, with null, leaves its chat). */
   | {
       type: "attach";
@@ -743,6 +808,25 @@ function closeLeftNewTabs(previous: Workspace, updated: Workspace): Workspace {
 }
 
 /**
+ * A closed tab's pin goes with it, so a tab opened later under the same key
+ * (Settings, a workflow) is not pinned. A chat keeps its pin while it floats.
+ */
+function unpinClosed(ws: Workspace): Workspace {
+  if (ws.pinnedTabKeys.length === 0) return ws;
+  const live = new Set([
+    ...ws.tabs.map(tabKey),
+    ...ws.browsers.map((browser) => browserTabKey(browser.localId)),
+    ...ws.terminals.map((terminal) => terminalTabKey(terminal.localId)),
+    ...ws.editors.map((editor) => editorTabKey(editor.localId)),
+    ...ws.chats.map((chat) => chatTabKey(chat.localId)),
+  ]);
+  const pinnedTabKeys = ws.pinnedTabKeys.filter((key) => live.has(key));
+  return pinnedTabKeys.length === ws.pinnedTabKeys.length
+    ? ws
+    : { ...ws, pinnedTabKeys };
+}
+
+/**
  * The New Tab in front of `ws`, if that is what the person is looking at:
  * not behind a floating surface.
  */
@@ -788,7 +872,7 @@ export function reconcileWorkspace(
   changed: Workspace,
 ): Workspace {
   if (previous === changed) return previous;
-  const updated = closeLeftNewTabs(previous, changed);
+  const updated = unpinClosed(closeLeftNewTabs(previous, changed));
   const keys = orderedTabKeys(updated, { includeCollapsed: true });
   const floatingKey =
     updated.floatingKey &&
@@ -1460,6 +1544,41 @@ function applyWorkspaceEvent(
         ...ws,
         tabOrder: tabOrderWith(ws, event.key, event.beforeKey),
       };
+    case "pin": {
+      const { key, pinned } = event;
+      if (ws.pinnedTabKeys.includes(key) === pinned) return original;
+      // A New Tab is a way to somewhere, gone once left: nothing to pin.
+      if (pinned && key.startsWith("palette:")) return original;
+      if (!orderedTabKeys(ws, { includeCollapsed: true }).includes(key))
+        return original;
+      // A pinned tab stands on its own: one under a chat leaves it first.
+      const owned =
+        pinned && !key.startsWith("chat:") && tabOwner(ws, key) !== undefined;
+      if (owned && pinBlocker(ws, key)) return original;
+      const standing = owned
+        ? applyWorkspaceEvent(ws, {
+            type: "attach",
+            key,
+            chatLocalId: null,
+            beforeKey: null,
+          })
+        : ws;
+      const pinnedTabKeys = pinned
+        ? [...standing.pinnedTabKeys, key]
+        : standing.pinnedTabKeys.filter((candidate) => candidate !== key);
+      // It lands where the pinned tabs end: last of them, or first after.
+      const firstUnpinned = orderedTabKeys(standing).find(
+        (candidate) =>
+          candidate !== key &&
+          !pinnedTabKeys.includes(candidate) &&
+          tabOwner(standing, candidate) === undefined,
+      );
+      return {
+        ...standing,
+        pinnedTabKeys,
+        tabOrder: tabOrderWith(standing, key, firstUnpinned ?? null),
+      };
+    }
     case "attach": {
       const { key, chatLocalId, beforeKey } = event;
       if (attachBlocker(ws, key, chatLocalId)) return original;
@@ -1491,7 +1610,14 @@ function applyWorkspaceEvent(
             : chat,
         ),
       };
-      return { ...attached, tabOrder: tabOrderWith(attached, key, beforeKey) };
+      return {
+        ...attached,
+        // A tab that joins a chat goes with its group, unpinned.
+        pinnedTabKeys: chatLocalId
+          ? attached.pinnedTabKeys.filter((candidate) => candidate !== key)
+          : attached.pinnedTabKeys,
+        tabOrder: tabOrderWith(attached, key, beforeKey),
+      };
     }
     case "float": {
       const { key } = event;

@@ -233,7 +233,12 @@ import {
   surfaceLocation,
   visitSurface,
 } from "./lib/surface-history.js";
-import { tabCloseEntries, tabCloseRequest } from "./lib/tab-close-menu.js";
+import {
+  tabCloseEntries,
+  tabCloseRequest,
+  tabPinEntries,
+  tabPinRequest,
+} from "./lib/tab-close-menu.js";
 import { useTabSleep } from "./lib/tab-sleep.js";
 import { useAppPreferences } from "./lib/use-app-preferences.js";
 import { useDesktopProjects } from "./lib/use-desktop-projects.js";
@@ -276,6 +281,7 @@ import {
   nextActiveTabKey,
   openChatInNewTab,
   orderedTabKeys,
+  pinBlocker,
   reconcileWorkspace,
   serializeWorkspace,
   stripTravel,
@@ -3916,7 +3922,15 @@ export function App({
       closeDispatchPendingRef.current = false;
       const ws = workspaceRef.current;
       if (ws.floatingKey) {
-        closeTabRef.current(ws.floatingKey);
+        // A pinned tab floating over another goes back to its place.
+        const key = ws.floatingKey;
+        if (ws.pinnedTabKeys.includes(key))
+          floatingMotionRef.current.dismiss(() =>
+            updateWorkspace((current) =>
+              transitionWorkspace(current, { type: "dismiss-floating", key }),
+            ),
+          );
+        else closeTabRef.current(key);
         return;
       }
       const focusedChat = ws.chats.find(
@@ -3953,12 +3967,12 @@ export function App({
             chat.surfacesCollapsed &&
             attachedTabKeys(ws, chat.localId).includes(ws.activeTabKey ?? ""),
         );
-        closeTabRef.current(
-          group ? chatTabKey(group.localId) : ws.activeTabKey,
-        );
+        const closing = group ? chatTabKey(group.localId) : ws.activeTabKey;
+        // Cmd+W leaves a pinned tab: it closes from its menu (ADR 0318).
+        if (!ws.pinnedTabKeys.includes(closing)) closeTabRef.current(closing);
       }
     }, 25);
-  }, []);
+  }, [updateWorkspace]);
   useEffect(() => {
     return desktopApi.onCloseSurface(() => {
       if (visibleRef.current) closeActiveSurface();
@@ -4489,6 +4503,15 @@ export function App({
     updateWorkspace((ws) =>
       transitionWorkspace(ws, { type: "reorder", key, beforeKey }),
     );
+
+  /** Pin a tab to the strip's start, or unpin it (ADR 0318). */
+  const pinTab = (key: string, pinned: boolean) => {
+    const blocker = pinned ? pinBlocker(workspaceRef.current, key) : undefined;
+    if (blocker) throw new Error(blocker);
+    updateWorkspace((ws) =>
+      transitionWorkspace(ws, { type: "pin", key, pinned }),
+    );
+  };
 
   /** Drag a tab onto a chat (or off it): it joins or leaves that chat. */
   const attachTab = (
@@ -6505,7 +6528,14 @@ export function App({
       const tab = tabByKey.get(key);
       if (!tab) return null;
       const groupId = groupOfKey.get(key);
-      return groupId ? { ...tab, groupId } : tab;
+      const pinned = workspace.pinnedTabKeys.includes(key);
+      return groupId || pinned
+        ? {
+            ...tab,
+            ...(groupId ? { groupId } : {}),
+            ...(pinned ? { pinned } : {}),
+          }
+        : tab;
     })
     .filter((tab): tab is WorkspaceTab => tab !== null);
   const _activeChatTabId = focusedTabKey?.startsWith("chat:")
@@ -7541,6 +7571,8 @@ export function App({
         !agentId.startsWith("project:") &&
         !agentsData.agents.some((agent) => agent.id === rosterAgentId(agentId)),
       closeTab: (key, scope) => closeTab(key, { scope }),
+      pinTab,
+      pinBlocker: (key) => pinBlocker(workspaceRef.current, key),
       reorderTab,
       attachTab,
       sessionAction: applySessionAction,
@@ -7812,15 +7844,18 @@ export function App({
         return {
           entries: menuGroups<ContextMenuEntry>(
             verbs?.entries ?? [],
-            tabCloseEntries({
+            tabPinEntries({
               key,
-              tabCount: allTabs.length,
-              groups: tabGroups,
+              pinned: workspace.pinnedTabKeys.includes(key),
+              blocker: pinBlocker(workspace, key),
             }),
+            tabCloseEntries({ key, tabs: allTabs, groups: tabGroups }),
           ),
           onAction: (action) => {
+            const pin = tabPinRequest(action);
             const close = tabCloseRequest({ action, key, groups: tabGroups });
-            if (close) closeTab(close.key, { scope: close.scope });
+            if (pin !== undefined) pinTab(key, pin);
+            else if (close) closeTab(close.key, { scope: close.scope });
             else verbs?.onAction(action);
           },
         };

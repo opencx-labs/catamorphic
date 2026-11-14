@@ -539,7 +539,7 @@ describe("floating surfaces", () => {
       "[...document.querySelectorAll('aside [data-point-key^=\"browser:\"]')].find(e=>e.textContent.includes('Anchor page')).querySelector('button').dispatchEvent(new MouseEvent('contextmenu',{bubbles:true,cancelable:true,clientX:100,clientY:200}))",
     );
     await app.waitFor(
-      "document.querySelectorAll('[data-sidebar-menu] [role=menuitem]').length===6",
+      "document.querySelectorAll('[data-sidebar-menu] [role=menuitem]').length===7",
     );
     expect(
       await run(
@@ -550,6 +550,7 @@ describe("floating surfaces", () => {
       "Open in new tab",
       "Open to the side",
       "Open floating",
+      "Pin tab",
       "Close tab",
       "Close all tabs",
     ]);

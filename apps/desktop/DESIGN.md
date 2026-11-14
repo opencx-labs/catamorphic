@@ -4217,7 +4217,6 @@ A chat read begun before a spoken message committed cannot settle that new
 turn. Keep its working state through delivery and wait for a fresh idle read;
 the same boundary protects an agent finishing voice during delivery.
 
-
 ### 2026-11-14: Agent choice belongs to the draft
 
 Ask agent's metadata opens the existing palette agent picker. Each retained draft
@@ -4226,3 +4225,10 @@ unselected draft follows the live default. Settings starts default-agent edits a
 the current personal project scope and offers Profile and inheritance reset; it
 uses the same resolved identity as the palette. Agent rows close with the shared
 Collapsible and keep their spacing inside that motion.
+
+### 2026-11-14: Pinned tabs
+
+Right-click a tab and choose Pin tab (Pin chat on a chat) to keep it: it moves
+to the start of the strip and shrinks to its icon, as in Chrome, with no close
+button to hit by accident. Cmd+W leaves it and Close unpinned tabs passes over
+it; its menu closes or unpins it. Pins come back after a restart (ADR 0318).
