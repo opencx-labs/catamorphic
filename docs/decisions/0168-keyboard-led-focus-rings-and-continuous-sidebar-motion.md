@@ -76,3 +76,8 @@ which the shell re-exports, and `Tree` takes its timing from
   changes or nested height motion.
 - `Tree` hosts rendering exiting rows receive their last placement, not a
   live index. Rows that were never rendered leave without a fade.
+- A folder the person opens or closes discloses its rows as a
+  `Collapsible` does: they stay in their slots, revealed or covered by an
+  edge riding the row below the branch. `renderItem` also draws rows a
+  closing folder is covering, inert and hidden from assistive technology,
+  whose `toggle` does nothing. (Amended 2026-11-14.)

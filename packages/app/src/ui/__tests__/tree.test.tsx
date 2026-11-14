@@ -5,6 +5,7 @@ import {
   screen,
   waitFor,
 } from "@testing-library/react";
+import { StrictMode } from "react";
 import { describe, expect, it, vi } from "vitest";
 import { type CollectionPage, createCollection } from "../../collection.js";
 import { CollectionItemView } from "../collection-item.js";
@@ -151,6 +152,74 @@ describe("public collection presentation", () => {
     );
     expect(screen.getByText("parent open")).toBeTruthy();
     expect(screen.getByText("child closed")).toBeTruthy();
+  });
+  it("reveals a folder's children as its edge passes, and covers them again", async () => {
+    const { animated, restore } = recordAnimations();
+    try {
+      const view = (
+        items: { id: string; parentId?: string; hasChildren?: boolean }[],
+      ) => (
+        <StrictMode>
+          <Tree
+            items={items}
+            label="Tree"
+            defaultExpanded={false}
+            motionClasses={{ enter: "enter", exit: "exit" }}
+            renderItem={(item, context) => (
+              <button type="button" onClick={context.toggle}>
+                {item.id}
+              </button>
+            )}
+          />
+        </StrictMode>
+      );
+      const children = [
+        { id: "one", parentId: "folder" },
+        { id: "two", parentId: "folder" },
+      ];
+      const closed = [{ id: "folder", hasChildren: true }, { id: "after" }];
+      const { container, rerender } = render(view(closed));
+      fireEvent.click(screen.getByText("folder"));
+      // The source answers after the structural beat: the beat waits for it.
+      await new Promise((resolve) => setTimeout(resolve, 300));
+      rerender(
+        view([
+          { id: "folder", hasChildren: true },
+          ...children,
+          { id: "after" },
+        ]),
+      );
+      // Each stays in its slot, hidden below the folder's edge, and is
+      // revealed as the edge moves to the end of the branch.
+      const hidden = "inset(0 0 28px 0)";
+      const shown = "inset(0 0 0px 0)";
+      expect(animated()).toEqual([
+        { key: "one", from: hidden, to: shown, opacity: 0, fill: undefined },
+        { key: "two", from: hidden, to: shown, opacity: 0, fill: undefined },
+      ]);
+      expect(container.querySelector(".enter")).toBeNull();
+
+      fireEvent.click(screen.getByText("folder"));
+      const folding = [
+        ...container.querySelectorAll<HTMLElement>("[data-tree-folding]"),
+      ];
+      expect(folding.map((row) => row.dataset.treeFolding)).toEqual([
+        "one",
+        "two",
+      ]);
+      expect(folding.every((row) => row.hasAttribute("inert"))).toBe(true);
+      expect(animated().slice(2)).toEqual([
+        { key: "one", from: shown, to: hidden, opacity: 1, fill: "forwards" },
+        { key: "two", from: shown, to: hidden, opacity: 1, fill: "forwards" },
+      ]);
+      // Gone once the beat is over.
+      await waitFor(() =>
+        expect(container.querySelector("[data-tree-folding]")).toBeNull(),
+      );
+      expect(screen.queryByText("one")).toBeNull();
+    } finally {
+      restore();
+    }
   });
   it("distinguishes overflow, right-click and inline actions", async () => {
     const inline = vi.fn();
@@ -882,3 +951,30 @@ describe("keyboard focus in a tree", () => {
     visible.mockRestore();
   });
 });
+
+/** Every Web Animation the tree starts, by the row it moves. */
+function recordAnimations() {
+  const animate = vi.fn<HTMLElement["animate"]>();
+  const original = HTMLElement.prototype.animate;
+  HTMLElement.prototype.animate = animate;
+  return {
+    animated: () =>
+      animate.mock.calls.map(([frames, timing], index) => {
+        const element = animate.mock.contexts[index];
+        const list = Array.isArray(frames) ? frames : [];
+        return {
+          key:
+            element instanceof HTMLElement
+              ? (element.dataset.treeId ?? element.dataset.treeFolding)
+              : undefined,
+          from: list[0]?.clipPath,
+          to: list.at(-1)?.clipPath,
+          opacity: list[0]?.opacity,
+          fill: typeof timing === "object" ? timing.fill : undefined,
+        };
+      }),
+    restore: () => {
+      HTMLElement.prototype.animate = original;
+    },
+  };
+}
