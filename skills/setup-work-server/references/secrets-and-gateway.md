@@ -76,7 +76,8 @@ matters.
   action call's `context` (tenant, project, Environment, alias, principal,
   acting member) lets it fetch or issue its credential from your own
   systems at that moment. Such a provider cannot serve the gateway's Git,
-  model or sandbox HTTP routes, which forward a stored credential.
+  model or sandbox HTTP routes, which forward a stored credential. Writing
+  one: [connection providers in the server's code](connection-providers.md).
 
 Store all of these with the deployment's secret mechanism. Never commit them,
 print them, or pass them to agents.

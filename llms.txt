@@ -83,6 +83,7 @@ We built Work because we believe one well-built piece of software can replace mo
 - Extending the Work server with your own code: packages/work-server/README.md
 - Composing services, external runners and Postgres state, with current guarantees and recovery tests: skills/setup-work-server/references/workflow-composition.md
 - Working on a Work server project from Claude Code or any MCP client: skills/setup-work-server/references/members-over-mcp.md
+- Writing connection providers: credentials kept in your own secret manager or issued per call, and per-person access across many accounts: skills/setup-work-server/references/connection-providers.md
 - Connecting a project to Slack: skills/setup-work-server/references/connect-slack.md
 - Reviewing pull requests with Work: skills/setup-work-server/references/review-pull-requests.md
 - Ready-made packs an agent installs into a project (pull request reviews, Slack threads, UI components): packages/registry/README.md

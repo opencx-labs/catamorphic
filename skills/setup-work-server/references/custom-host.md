@@ -15,6 +15,7 @@ change it. Catamorphic is mounted as libraries in the host process.
 | Project files | explicit filesystem or remote storage backend |
 | Execution | explicit sandbox/environment provider |
 | UI session | host cookies or authorization transport on the API client |
+| Credentials and external systems | `connectionProviders` and `credentialVault` passed as code ([connection providers](connection-providers.md)) |
 
 Inspect the actual session verification function and membership lookup. The
 identity resolver must use verified server-side values, never tenant or user
@@ -35,6 +36,10 @@ Read `INTEGRATION.md` for current construction and mounting examples,
 `packages/server-sdk/README.md` for the SDK surface, and
 `packages/fastify-plugin/README.md` for request identity. The desktop boot at
 `apps/desktop/src/main/server/boot.ts` is the reference embedded host.
+
+To let members' own agents use the project's connections, also set
+`projectMcp.memberConnections`, a `projectMcp.connectLink` page that requires
+the host's browser session, and `publicApiBase` (`INTEGRATION.md`).
 
 Verify signed-out rejection, cross-tenant isolation, revoked membership,
 schema migration, storage persistence, and the selected execution provider.

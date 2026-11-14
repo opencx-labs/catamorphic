@@ -12,7 +12,7 @@ Inspect the installed contracts before describing a limitation as a blocker.
 | --- | --- |
 | Events, webhooks, schedules, retries, durable progress | Project TypeScript workflows, immutable deployed revisions, boundaries and returned transitions |
 | Calling an ordinary external API | An npm SDK or HTTP inside a step helper, within the workflow's declared network and secret policy |
-| Service credentials and reviewed access | A connection provider through `hooks.connectionProviders`; workflow `connections` and Environment bindings |
+| Service credentials and reviewed access | A connection provider through `hooks.connectionProviders`; workflow `connections` and Environment bindings ([connection providers](connection-providers.md)) |
 | Privileged host operations without giving credentials to the workflow | SDK capability providers through `hooks.capabilityProviders`; returned `context.host` calls |
 | Authenticated callbacks or application HTTP endpoints | `hooks.routes`; verify the sender and persist acceptance before acknowledging |
 | Jobs, desired state, receipts, inboxes, publication effects | Application-owned Postgres tables in a separate schema or database |
