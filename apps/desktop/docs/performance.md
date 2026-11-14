@@ -891,3 +891,48 @@ project's source still received a named file-watch event in the same worker.
 The regression covers release, fresh rows on return, retained DOM identity, and
 an empty list becoming available again. This establishes avoidable background
 source work; it does not attribute a measured percentage of whole-app CPU to it.
+
+## Sending in large folders and long-used profiles (2026-11-14)
+
+A profile used daily for months beachballed on sending a message. The
+embedded server runs on the main process, so its work on a send competes with
+the window. Measured on an isolated production build with the fake agent and
+a 141,402-file plain folder (six nested repositories, `node_modules`, a
+`.venv`), plus replays against a copy of the affected profile's database:
+
+| On a new chat | Before | After |
+| --- | ---: | ---: |
+| Walks of the whole project folder | 15 concurrent | 0 |
+| Walks of a `.work/` folder | 0 | 11 (one shared), each immediate |
+| Database queries | 322 | 226 |
+
+Sending to an existing chat went from one whole-tree walk and 155 queries to
+none and 137. Each whole-tree walk of the fixture took 1.1 to 1.6 s while 15
+ran together. The causes and their fixes:
+
+- A folder without Git listed a prefix by walking the whole tree and
+  filtering. `NativeProjectRepo.listFiles` now walks only the folder the
+  prefix names, applying the ignore rules, ignored and private folders,
+  nested repositories and links on the way down exactly as the whole walk
+  would. Concurrent identical walks share one result. The workflow source
+  scan lists only the folder its globs start in, and the apps list only the
+  apps folder.
+- Every window, open chat, palette and inspector listed the project's agents
+  on its own beat; a new chat set several off at once. The main-process
+  handler shares a listing in flight.
+- `ProjectRootsStore.get` queried the table on every call (94 times for one
+  new chat) although the store keeps a complete in-memory mirror.
+
+The same profile's database held 1.97 GB of dead row versions in three
+tables (ADR 0319). With the compactor, the first launch reclaims them in
+1.3 s and later passes take 3 ms; the chat-list scan drops from 40 to 196 ms
+to 3 to 5 ms. The renderer also stops rewriting an unchanged workspace
+snapshot: it wrote the table whenever the workspace object changed, even
+when nothing that survives a restart had.
+
+What this does not settle: with the fixes, a new chat still blocked the main
+process for up to 154 ms in this fixture, and the affected profile's 3.6 GB
+main process and the multi-second freezes were not reproduced in isolation.
+A replay of a send's queries against that database cost 130 to 170 ms with or
+without compaction, because those queries are indexed. The freeze itself
+needs a recording from the affected machine.

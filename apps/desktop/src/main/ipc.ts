@@ -885,29 +885,45 @@ export function registerIpcHandlers(
     };
   };
 
+  // Every window, open chat, palette and inspector asks for the roster on
+  // its own beat, and a new chat sets several of them off at once. Requests
+  // that arrive while a listing is in flight share it: its answer is as
+  // fresh as theirs would be, and the project's files are walked once.
+  const projectAgentsInFlight = new Map<string, Promise<ProjectAgentsData>>();
   ipcMain.handle(
     "catamorphic:project-agents-list",
-    async (_event, projectId: string): Promise<ProjectAgentsData> => {
-      const server = state.current;
-      if (!server) return { agents: [], projectDefaultSlug: null };
-      const rootPath = server.projectRoots.getSync(projectId);
-      const projectDefaultSlug =
-        (rootPath ? projectDefaultAgentSlug(rootPath) : undefined) ?? null;
-      try {
-        const entries = await server.catamorphic.core.agentDefinitions.list(
-          { tenantId: DESKTOP_TENANT_ID, externalUserId: DESKTOP_USER_ID },
-          projectId,
-        );
-        return {
-          agents: entries.map((entry) => projectAgentInfo(projectId, entry)),
-          projectDefaultSlug,
-        };
-      } catch {
-        // Unknown/deleted project: no agents rather than a broken palette.
-        return { agents: [], projectDefaultSlug };
-      }
+    (_event, projectId: string): Promise<ProjectAgentsData> => {
+      const inFlight = projectAgentsInFlight.get(projectId);
+      if (inFlight) return inFlight;
+      const listing = listProjectAgents(projectId).finally(() =>
+        projectAgentsInFlight.delete(projectId),
+      );
+      projectAgentsInFlight.set(projectId, listing);
+      return listing;
     },
   );
+  const listProjectAgents = async (
+    projectId: string,
+  ): Promise<ProjectAgentsData> => {
+    const server = state.current;
+    if (!server) return { agents: [], projectDefaultSlug: null };
+    const rootPath = server.projectRoots.getSync(projectId);
+    const projectDefaultSlug =
+      (rootPath ? projectDefaultAgentSlug(rootPath) : undefined) ?? null;
+    try {
+      const entries = await server.catamorphic.core.agentDefinitions.list(
+        { tenantId: DESKTOP_TENANT_ID, externalUserId: DESKTOP_USER_ID },
+        projectId,
+      );
+      return {
+        agents: entries.map((entry) => projectAgentInfo(projectId, entry)),
+        projectDefaultSlug,
+      };
+    } catch {
+      // Unknown/deleted project: no agents rather than a broken palette.
+      return { agents: [], projectDefaultSlug };
+    }
+  };
 
   // The project's committed default (ADR 0056 layer 2): a slug into the
   // project's own agents/, written to `.work/project.json` — a

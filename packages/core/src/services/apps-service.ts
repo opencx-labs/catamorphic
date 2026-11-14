@@ -1327,7 +1327,9 @@ export class AppsService {
       externalUserId: args.identity.externalUserId,
     });
     try {
-      const files = await repo.listFiles();
+      // Only manifests under the apps folder name an app: list that folder,
+      // not the whole project, which may be a large folder of anything.
+      const files = await repo.listFiles({ prefix: `${PROJECT_APPS_DIR}/` });
       const names = new Set<string>();
       for (const file of files) {
         const name = appWorkspaceName(file);

@@ -4,6 +4,13 @@ import { serializeWorkspace, type Workspace } from "./workspace-state.js";
 
 const savers = new Map<symbol, () => Promise<void>>();
 const writes = new Map<string, Promise<void>>();
+/**
+ * The last snapshot written or being written, per project. The workspace
+ * object changes far more often than what survives a restart (a title, a
+ * running chat); an unchanged snapshot is not written again, since every
+ * write leaves a dead row version in the embedded database.
+ */
+const written = new Map<string, string>();
 
 /** Keep an older in-flight write ahead of the latest shutdown snapshot. */
 export function saveWorkspace({
@@ -14,9 +21,18 @@ export function saveWorkspace({
   workspace: Workspace;
 }): Promise<void> {
   const snapshot = serializeWorkspace(workspace);
+  const text = JSON.stringify(snapshot);
+  if (written.get(projectId) === text)
+    return writes.get(projectId) ?? Promise.resolve();
+  written.set(projectId, text);
   const write = (writes.get(projectId) ?? Promise.resolve())
     .catch(() => {})
     .then(() => desktopApi.workspaceStateSet(projectId, snapshot))
+    .catch((error: unknown) => {
+      // Not stored: the same snapshot must be written again next time.
+      if (written.get(projectId) === text) written.delete(projectId);
+      throw error;
+    })
     .finally(() => {
       if (writes.get(projectId) === write) writes.delete(projectId);
     });

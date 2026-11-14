@@ -323,3 +323,4 @@ Settled design decisions live here as short Architecture Decision Records. They 
 | [0315](0315-shared-tabs-stay-rendered-and-sound-is-a-choice.md) | Shared tabs stay rendered, and sound is a choice | Accepted (amends 0150) |
 | [0317](0317-palette-edits-share-one-history.md) | Palette edits share one history | Accepted |
 | [0318](0318-pinned-tabs.md) | Pinned tabs | Accepted |
+| [0319](0319-the-desktop-compacts-rewritten-tables.md) | The desktop compacts the tables it rewrites | Accepted |

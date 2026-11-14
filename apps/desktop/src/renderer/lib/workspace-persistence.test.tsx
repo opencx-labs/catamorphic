@@ -95,6 +95,30 @@ describe("workspace save handoff", () => {
     expect(write).not.toHaveBeenCalled();
   });
 
+  it("does not write a snapshot again while it is unchanged", async () => {
+    render(named("Steady"));
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(500);
+    });
+    // A new workspace object that serializes the same: nothing to store.
+    render(named("Steady"));
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(500);
+    });
+    await flushWorkspaceSaves();
+    expect(write).toHaveBeenCalledOnce();
+    render(named("Changed"));
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(500);
+    });
+    expect(write).toHaveBeenCalledTimes(2);
+    render(named("Steady"));
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(500);
+    });
+    expect(write).toHaveBeenCalledTimes(3);
+  });
+
   it("reports a failed flush and permits saving the current snapshot on retry", async () => {
     render(named("Latest"));
     write.mockRejectedValueOnce(new Error("Database write failed"));
