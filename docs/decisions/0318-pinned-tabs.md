@@ -23,6 +23,10 @@ A pinned tab shows only its icon (its hover card names it) and has no close
 button. Cmd+W leaves it, as Arc does; Close tab in its menu closes it. With
 tabs pinned, Close all tabs reads Close unpinned tabs and leaves them.
 
+Pinning moves a tab, so it does not jump: a copy of the tab collapses where it
+stood, as a closed tab does, and the tab then grows in among the pins as its
+icon. Unpinning plays the same pair the other way.
+
 A pinned tab stands on its own: pinning a tab under a chat takes it out of the
 chat first, unless an agent holds it there, and attaching a pinned tab to a
 chat unpins it. A pinned chat keeps its group after it. A closed tab loses its

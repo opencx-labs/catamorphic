@@ -1,4 +1,5 @@
 import { Clock, Puzzle } from "lucide-react";
+import { mergeRendered, type RenderedTab } from "../lib/rendered-tabs.js";
 import { tabKey, type WorkspaceTab } from "../lib/workspace-types.js";
 
 export {
@@ -231,34 +232,6 @@ function PageIcon({
   );
 }
 
-interface RenderedTab {
-  tab: WorkspaceTab;
-  exiting: boolean;
-}
-
-/**
- * Merge incoming tabs with the previous render list so removed tabs stay
- * mounted (near their old position) while their exit animation plays. The
- * width collapse of an exiting tab is what slides its neighbors over.
- * Surviving tabs follow the INCOMING order — drag-reordering must move
- * them, not freeze them at their first-render positions.
- */
-function mergeRendered(
-  previous: RenderedTab[],
-  tabs: WorkspaceTab[],
-): RenderedTab[] {
-  const incoming = new Set(tabs.map((tab) => tabKey(tab)));
-  const merged: RenderedTab[] = tabs.map((tab) => ({ tab, exiting: false }));
-  previous.forEach((entry, index) => {
-    if (incoming.has(tabKey(entry.tab))) return;
-    merged.splice(Math.min(index, merged.length), 0, {
-      tab: entry.tab,
-      exiting: true,
-    });
-  });
-  return merged;
-}
-
 /**
  * A tab's close button takes no room in the strip: it rides over the end of
  * the tab's label (`.workspace-tab-close` in styles.css), showing while the
@@ -407,10 +380,37 @@ function TabStrip({
   const [rendered, setRendered] = useState<RenderedTab[]>(() =>
     mergeRendered([], tabs),
   );
+  // Tabs whose entrance has played. They drop its class, and the clip it
+  // needs while the width grows, so a group's eyebrow can sit above them.
+  const [entered, setEntered] = useState<ReadonlySet<string>>(() => new Set());
+  // The tabs as last drawn: a departing tab collapses from its real width.
+  const tabElementsRef = useRef(new Map<string, HTMLElement>());
   const prevTabsRef = useRef(tabs);
   if (prevTabsRef.current !== tabs) {
+    const pinned = new Map(
+      prevTabsRef.current.map((tab) => [tabKey(tab), Boolean(tab.pinned)]),
+    );
+    const repinned = tabs.flatMap((tab) => {
+      const was = pinned.get(tabKey(tab));
+      return was !== undefined && was !== Boolean(tab.pinned)
+        ? [tabKey(tab)]
+        : [];
+    });
     prevTabsRef.current = tabs;
-    setRendered((previous) => mergeRendered(previous, tabs));
+    setRendered((previous) =>
+      mergeRendered(
+        previous,
+        tabs,
+        (id) => tabElementsRef.current.get(id)?.getBoundingClientRect().width,
+      ),
+    );
+    // A pinned or unpinned tab arrives again at its new place.
+    if (repinned.length > 0)
+      setEntered((previous) =>
+        repinned.some((key) => previous.has(key))
+          ? new Set([...previous].filter((key) => !repinned.includes(key)))
+          : previous,
+      );
   }
   const [dragKey, setDragKey] = useState<string | null>(null);
   // Where a dragged tab would land: before a tab, or inside a chat's.
@@ -455,19 +455,16 @@ function TabStrip({
       .map((group) => [group.memberKeys.at(-1) as string, group]),
   );
 
-  // Tabs whose entrance has played. They drop its class, and the clip it
-  // needs while the width grows, so a group's eyebrow can sit above them.
-  const [entered, setEntered] = useState<ReadonlySet<string>>(() => new Set());
-  const removeExited = (key: string) =>
+  const removeExited = (id: string) =>
     setRendered((previous) =>
-      previous.filter((entry) => !(entry.exiting && tabKey(entry.tab) === key)),
+      previous.filter((entry) => !(entry.exiting && entry.id === id)),
     );
   // Hidden or occluded Chromium windows can pause CSS animations and omit
   // animationend. Keep the event as the precise visible-window path, with a
   // clock fallback beyond tab-out's 180ms duration so ghost tabs cannot stay
   // mounted forever after their underlying surface has closed.
   const exitingKeys = JSON.stringify(
-    rendered.filter((entry) => entry.exiting).map((entry) => tabKey(entry.tab)),
+    rendered.filter((entry) => entry.exiting).map((entry) => entry.id),
   );
   useEffect(() => {
     const keys: string[] = JSON.parse(exitingKeys);
@@ -482,9 +479,7 @@ function TabStrip({
     const timer = window.setTimeout(
       () =>
         setRendered((previous) =>
-          previous.filter(
-            (entry) => !(entry.exiting && exiting.has(tabKey(entry.tab))),
-          ),
+          previous.filter((entry) => !(entry.exiting && exiting.has(entry.id))),
         ),
       TAB_EXIT_FALLBACK_MS,
     );
@@ -571,8 +566,10 @@ function TabStrip({
       }}
     >
       {alignment === "center" && windowHandle("start")}
-      {rendered.map(({ tab, exiting }, index) => {
+      {rendered.map(({ id, tab, exiting, width }, index) => {
         const key = tabKey(tab);
+        // A pinned or unpinned tab's departing copy: the tab lives on.
+        const ghost = id !== key;
         const active = !exiting && key === activeKey;
         // A group wears the accent while it holds the tab in front (or its
         // split companion); left behind, its eyebrow and chevrons go quiet,
@@ -641,10 +638,20 @@ function TabStrip({
             ? { starts: !sameGroup(rendered[index - 1]), end: eyebrowEnd }
             : undefined;
         return (
-          <Fragment key={key}>
+          <Fragment key={id}>
             <div
+              ref={(element) => {
+                if (!element) {
+                  tabElementsRef.current.delete(id);
+                  return;
+                }
+                tabElementsRef.current.set(id, element);
+                // tab-out collapses from here (styles.css).
+                if (exiting && width !== undefined)
+                  element.style.setProperty("--tab-width", `${width}px`);
+              }}
               data-palette-target={highlighted || undefined}
-              data-point-key={key}
+              data-point-key={ghost ? undefined : key}
               // Anywhere on the tab (its close button over the label's end,
               // its padding) opens the menu its label opens.
               onContextMenu={(event) => {
@@ -728,8 +735,11 @@ function TabStrip({
               }}
               onAnimationEnd={(event) => {
                 if (event.target !== event.currentTarget) return;
-                if (event.animationName === "tab-out") removeExited(key);
-                if (event.animationName === "tab-in")
+                if (event.animationName === "tab-out") removeExited(id);
+                if (
+                  event.animationName === "tab-in" ||
+                  event.animationName === "tab-pin-in"
+                )
                   setEntered((previous) =>
                     previous.has(key) ? previous : new Set(previous).add(key),
                   );
@@ -751,7 +761,9 @@ function TabStrip({
                   ? "animate-tab-out pointer-events-none"
                   : entered.has(key)
                     ? ""
-                    : "animate-tab-in"
+                    : tab.pinned
+                      ? "animate-tab-pin-in"
+                      : "animate-tab-in"
               } ${
                 // The tab in front wears the theme's accent, as an open
                 // chat's bubble does: a neutral border on the strip's near
