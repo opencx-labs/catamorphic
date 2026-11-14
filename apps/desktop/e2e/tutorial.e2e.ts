@@ -1,3 +1,5 @@
+import os from "node:os";
+import path from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import {
   type AppHandle,
@@ -46,7 +48,17 @@ async function palette(query: string) {
 }
 
 beforeAll(async () => {
-  app = await launchApp({ firstLaunch: true });
+  app = await launchApp({
+    firstLaunch: true,
+    // A sign-in file that is never written: a Claude Code or Codex agent
+    // made here is one whose sign-in was left unfinished.
+    env: {
+      CATAMORPHIC_E2E_AGENT_CREDENTIALS: path.join(
+        os.tmpdir(),
+        `catamorphic-e2e-no-sign-in-${process.pid}.json`,
+      ),
+    },
+  });
 });
 afterAll(async () => {
   await app?.stop();
