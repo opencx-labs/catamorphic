@@ -616,6 +616,13 @@ export class AgentsStore {
     const before = this.data.agents.length;
     this.data.agents = this.data.agents.filter((agent) => agent.id !== id);
     if (this.data.agents.length === before) return false;
+    // No agent may still start it as a subsession.
+    for (const agent of this.data.agents)
+      if (agent.delegation?.agents.some((grant) => grant.agent === id))
+        agent.delegation = {
+          ...agent.delegation,
+          agents: agent.delegation.agents.filter((grant) => grant.agent !== id),
+        };
     if (this.data.defaultAgentId === id) {
       this.data.defaultAgentId = this.data.agents[0]?.id;
     }

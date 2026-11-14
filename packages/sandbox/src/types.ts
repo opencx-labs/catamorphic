@@ -481,13 +481,15 @@ export interface AgentQuestion {
  * `auth` offers a re-connect path, `rate_limit`/`unavailable` explain a
  * provider outage (retry requires a separate safety signal), `model_incompat` (e.g. reasoning blocks signed by another
  * model after a mid-conversation switch) retries with sanitized history.
- * Unclassified errors just offer a manual retry.
+ * `agent_missing`: the chat's agent no longer exists, so the person
+ * chooses another to continue. Unclassified errors just offer a manual retry.
  */
 export type AgentErrorKind =
   | "auth"
   | "rate_limit"
   | "unavailable"
-  | "model_incompat";
+  | "model_incompat"
+  | "agent_missing";
 
 /**
  * Per-turn token/cost accounting reported by a harness (ADR 0057). All
