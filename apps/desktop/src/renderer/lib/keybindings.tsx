@@ -76,12 +76,12 @@ const KEY_SYMBOLS: Record<string, string> = {
   ArrowDown: "↓",
 };
 
-/** "Cmd+Shift+T" → "⌘⇧T" for ShortcutHint display. */
+/** Display Mac key symbols with a narrow, non-breaking gap between keys. */
 export function formatBinding(binding: string): string {
   const mac = /Mac/.test(navigator.platform);
   if (!mac) return binding.replaceAll("Cmd", "Ctrl");
   return binding
     .split("+")
     .map((part) => MOD_SYMBOLS[part] ?? KEY_SYMBOLS[part] ?? part.toUpperCase())
-    .join("");
+    .join("\u202f");
 }

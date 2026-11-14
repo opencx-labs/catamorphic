@@ -321,3 +321,4 @@ Settled design decisions live here as short Architecture Decision Records. They 
 | [0313](0313-verified-development-toolchains-preserve-data.md) | Verified development toolchains preserve data | Accepted |
 | [0314](0314-a-chat-whose-agent-is-removed-stops.md) | A chat whose agent is removed stops until another is chosen | Accepted |
 | [0315](0315-shared-tabs-stay-rendered-and-sound-is-a-choice.md) | Shared tabs stay rendered, and sound is a choice | Accepted (amends 0150) |
+| [0317](0317-palette-edits-share-one-history.md) | Palette edits share one history | Accepted |

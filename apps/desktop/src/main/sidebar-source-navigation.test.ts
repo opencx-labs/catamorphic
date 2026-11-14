@@ -31,7 +31,7 @@ const { registerSidebarSources } = await import("./sidebar-source-ipc.js");
 const { SidebarSourceRuntime } = await import("./sidebar-source-runtime.js");
 const { projectWorkspaceFile } = await import("./workspace-config.js");
 
-it("releases a first subscription lookup that crosses renderer navigation", async () => {
+it("releases outgoing-document subscriptions and lookups through navigation commit", async () => {
   host.root = fs.mkdtempSync(path.join(os.tmpdir(), "sidebar-navigation-"));
   const paths = resolveDataPaths();
   const profiles = new ProfilesStore(paths.profilesFile);
@@ -102,15 +102,24 @@ it("releases a first subscription lookup that crosses renderer navigation", asyn
     await pending;
     expect(subscribe).not.toHaveBeenCalled();
     expect(release).not.toHaveBeenCalled();
-    // The new document can subscribe, and only its own main-frame
-    // navigation releases that new listener.
+    // The outgoing document can still send during unload, after start-time
+    // cleanup but before commit. Release an already-installed late lease.
     await handle(
       { sender },
-      { projectId: "project", sectionId: "probe", leaseId: "new" },
+      { projectId: "project", sectionId: "probe", leaseId: "late-old" },
     );
     expect(subscribe).toHaveBeenCalledOnce();
-    sender.emit("did-start-navigation", {}, "frame", false, false);
-    expect(release).not.toHaveBeenCalled();
+    sender.emit("did-navigate", {}, "work-internal://shell");
+    expect(release).toHaveBeenCalledOnce();
+    // A late old lookup can instead remain pending across commit. Clearing
+    // its placeholder must prevent it installing a listener afterwards.
+    let resolveLate!: (root: string) => void;
+    rootFor.mockImplementationOnce(
+      () =>
+        new Promise<string>((resolve) => {
+          resolveLate = resolve;
+        }),
+    );
     sender.emit(
       "did-start-navigation",
       {},
@@ -118,7 +127,40 @@ it("releases a first subscription lookup that crosses renderer navigation", asyn
       false,
       true,
     );
+    const late = handle(
+      { sender },
+      { projectId: "project", sectionId: "probe", leaseId: "late-lookup" },
+    );
+    sender.emit("did-navigate", {}, "work-internal://shell");
+    resolveLate(host.root);
+    await late;
+    expect(subscribe).toHaveBeenCalledOnce();
     expect(release).toHaveBeenCalledOnce();
+    // The new document can subscribe, and only its own main-frame
+    // navigation releases that new listener.
+    await handle(
+      { sender },
+      { projectId: "project", sectionId: "probe", leaseId: "new" },
+    );
+    expect(subscribe).toHaveBeenCalledTimes(2);
+    sender.emit("did-start-navigation", {}, "frame", false, false);
+    expect(release).toHaveBeenCalledOnce();
+    sender.emit(
+      "did-start-navigation",
+      {},
+      "work-internal://shell#anchor",
+      true,
+      true,
+    );
+    expect(release).toHaveBeenCalledOnce();
+    sender.emit(
+      "did-start-navigation",
+      {},
+      "work-internal://shell",
+      false,
+      true,
+    );
+    expect(release).toHaveBeenCalledTimes(2);
   } finally {
     dispose();
     subscribe.mockRestore();

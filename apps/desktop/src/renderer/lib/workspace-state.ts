@@ -140,7 +140,7 @@ export interface Workspace {
   /**
    * User-arranged strip order (drag to reorder). Keys not listed append
    * in their natural per-kind order; stale keys are ignored — only drag
-   * mutations write it.
+   * mutations and explicit end placement write it.
    */
   tabOrder: string[];
   /**
@@ -444,6 +444,18 @@ export const chatToExpand = (ws: Workspace) =>
   ws.chats.find((chat) => chat.localId === ws.activeChatId) ??
   ws.chats.at(-1);
 
+/** Cmd+M only visits the floating dock, never a chat hosted in a tab. */
+export const floatingChatToToggle = (ws: Workspace) => {
+  const chats = ws.chats.filter(
+    (chat) => chat.mode !== "tab" && !chat.parentLocalId,
+  );
+  return (
+    chats.find((chat) => chat.mode === "partial") ??
+    chats.find((chat) => chat.localId === ws.activeChatId) ??
+    chats.at(-1)
+  );
+};
+
 /** Tab keys attached to a chat, in per-kind order. */
 export const attachedTabKeys = (ws: Workspace, chatLocalId: string) => [
   ...ws.tabs.filter((tab) => tab.chatLocalId === chatLocalId).map(tabKey),
@@ -632,6 +644,7 @@ export type WorkspaceEvent =
       scope?: TabCloseScope;
     }
   | { type: "reopen"; localId: string }
+  | { type: "new-palette"; name: string }
   | { type: "select"; key: string }
   | { type: "focus"; key: string }
   | { type: "side"; key: string; previous?: string; side?: "left" | "right" }
@@ -862,6 +875,27 @@ function applyWorkspaceEvent(
       ? materializeSurface(original, event.key)
       : original;
   switch (event.type) {
+    case "new-palette": {
+      const existing = ws.tabs.find(
+        (candidate) => candidate.kind === "palette" && !candidate.typed,
+      );
+      const tab: WorkspaceTab = existing
+        ? { ...existing, chatLocalId: undefined }
+        : { kind: "palette", name: event.name, label: "New Tab" };
+      const key = tabKey(tab);
+      return {
+        ...ws,
+        tabs: existing
+          ? ws.tabs.map((candidate) =>
+              candidate === existing ? tab : candidate,
+            )
+          : [...ws.tabs, tab],
+        activeTabKey: key,
+        floatingKey: undefined,
+        split: null,
+        tabOrder: tabOrderWith(ws, key, null),
+      };
+    }
     case "close": {
       const { key, force, discardDraft, scope } = event;
       const opts = { force, discardDraft };
@@ -1340,7 +1374,8 @@ function applyWorkspaceEvent(
       const target = ws.chats.find((chat) => chat.localId === localId);
       if (!target) return ws;
       const isExpandedActive =
-        target.mode !== "min" && ws.activeChatId === localId;
+        target.mode === "partial" ||
+        (target.mode !== "min" && ws.activeChatId === localId);
       // Bubbles reopen as the floating dock, never as a full tab — going
       // to a tab is always an explicit gesture (the expand button).
       const nextMode = isExpandedActive

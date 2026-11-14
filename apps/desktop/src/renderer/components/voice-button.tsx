@@ -559,12 +559,14 @@ export function VoiceButton({
         return false;
       });
   };
-  const pressUp = (teach = true) => {
+  const pressUp = (teach = true, at = performance.now()) => {
     const press = pressing.current;
     if (!press) return;
     pressing.current = null;
     press.released = true;
-    const heldMs = performance.now() - press.at;
+    // Input can wait behind rendering work. Its timestamp measures the
+    // person's hold without turning a queued short release into speech.
+    const heldMs = Math.max(0, at - press.at);
     if (mounted.current) {
       setStarting(false);
       if (teach && heldMs < VOICE_HOLD_MS) setTapHint(true);
@@ -583,14 +585,14 @@ export function VoiceButton({
   const gesture = useRef<BubblePress>({ kind: "idle" });
   const still = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
   const [dragging, setDragging] = useState(false);
-  const step = (event: BubblePressEvent) => {
+  const step = (event: BubblePressEvent, at = performance.now()) => {
     const next = bubblePress(gesture.current, event);
     gesture.current = next.press;
     if (next.press.kind !== "waiting") clearTimeout(still.current);
     setDragging(next.press.kind === "dragging");
     for (const effect of next.effects) {
       if (effect.kind === "press") pressDown(effect.at);
-      else if (effect.kind === "release") pressUp();
+      else if (effect.kind === "release") pressUp(event.kind !== "cancel", at);
       else
         void desktopApi
           .voiceBubbleDrag({
@@ -604,20 +606,20 @@ export function VoiceButton({
   // Session creation may move focus into the new composer while Space is
   // still held. The physical release belongs to the window, not its old button.
   const heldInput = useRef({
-    release: (_focus: boolean) => {},
-    blur: () => {},
+    release: (_focus: boolean, _at: number) => {},
+    blur: (_at: number) => {},
   });
   heldInput.current = {
-    release: (focus) => {
+    release: (focus, at) => {
       const keyboard = pressedKey.current !== null;
       pressedKey.current = null;
-      pressUp();
+      pressUp(true, at);
       if (keyboard && focus && prefs.voiceDictation) chat?.focusComposer();
     },
-    blur: () => {
-      step({ kind: "cancel" });
+    blur: (at) => {
+      step({ kind: "cancel" }, at);
       pressedKey.current = null;
-      pressUp(false);
+      pressUp(false, at);
     },
   };
   useEffect(() => {
@@ -630,9 +632,9 @@ export function VoiceButton({
     const up = (event: KeyboardEvent) => {
       if (event.key !== pressedKey.current) return;
       event.preventDefault();
-      heldInput.current.release(true);
+      heldInput.current.release(true, event.timeStamp);
     };
-    const blur = () => heldInput.current.blur();
+    const blur = (event: FocusEvent) => heldInput.current.blur(event.timeStamp);
     window.addEventListener("keydown", down, true);
     window.addEventListener("keyup", up, true);
     window.addEventListener("blur", blur);
@@ -752,10 +754,10 @@ export function VoiceButton({
             event.preventDefault();
             event.currentTarget.setPointerCapture(event.pointerId);
             if (!bubble) {
-              pressDown();
+              pressDown(event.timeStamp);
               return;
             }
-            step({ kind: "down", x: event.screenX, at: performance.now() });
+            step({ kind: "down", x: event.screenX, at: event.timeStamp });
             clearTimeout(still.current);
             still.current = setTimeout(
               () => step({ kind: "still" }),
@@ -770,14 +772,18 @@ export function VoiceButton({
               step({ kind: "move", x: event.screenX });
           }}
           onPointerUp={(event) =>
-            bubble ? step({ kind: "up", x: event.screenX }) : pressUp()
+            bubble
+              ? step({ kind: "up", x: event.screenX }, event.timeStamp)
+              : pressUp(true, event.timeStamp)
           }
-          onPointerCancel={() =>
-            bubble ? step({ kind: "cancel" }) : pressUp(false)
+          onPointerCancel={(event) =>
+            bubble
+              ? step({ kind: "cancel" }, event.timeStamp)
+              : pressUp(false, event.timeStamp)
           }
-          onLostPointerCapture={() => {
-            if (bubble) step({ kind: "cancel" });
-            else pressUp(false);
+          onLostPointerCapture={(event) => {
+            if (bubble) step({ kind: "cancel" }, event.timeStamp);
+            else pressUp(false, event.timeStamp);
           }}
           onKeyDown={(event) => {
             if (
@@ -791,7 +797,7 @@ export function VoiceButton({
             event.preventDefault();
             if (event.repeat || pressedKey.current) return;
             pressedKey.current = event.key;
-            pressDown();
+            pressDown(event.timeStamp);
           }}
           onContextMenu={openMenu}
           aria-label={

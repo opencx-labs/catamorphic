@@ -33,6 +33,8 @@ import {
 
 /** A resource's own verbs, after the ways to open it (a chat's Rename…). */
 export interface ResourceActions {
+  /** Structural actions that precede navigation, such as folding a tab group. */
+  leading?: readonly (ContextMenuEntry | MenuSeparator)[];
   entries: readonly (ContextMenuEntry | MenuSeparator)[];
   onAction: (action: string) => void;
 }
@@ -92,6 +94,7 @@ function useResourceMenu() {
         at={menu.at}
         label={menu.opens ? "Open" : "Link"}
         entries={menuGroups<ContextMenuEntry>(
+          menu.actions?.leading ?? [],
           menu.opens ? OPEN_ACTIONS : [],
           menu.file ? fileMenuFor(menu.file) : [],
           menu.url ? [{ label: "Copy link", action: "copy-link" }] : [],
@@ -106,11 +109,11 @@ function useResourceMenu() {
           else if (entry.action === "copy-link" && menu.url)
             void navigator.clipboard.writeText(menu.url);
           else if (
-            own?.entries.some(
+            [...(own?.leading ?? []), ...(own?.entries ?? [])].some(
               (item) => !isMenuSeparator(item) && item.action === entry.action,
             )
           )
-            pending.current = () => own.onAction(entry.action);
+            pending.current = () => own?.onAction(entry.action);
           else if (menu.file) {
             const file = menu.file;
             void actOnFile(entry.action, file).catch((cause: unknown) =>

@@ -358,6 +358,37 @@ describe("VoiceConversation", () => {
     expect(finished).toHaveLength(1);
   });
 
+  it.each(["speech", "turn"] as const)(
+    "finishes immediately after both speech and turn end, with %s ending first",
+    async (first) => {
+      vi.useFakeTimers();
+      const reply = message("a", "Done.");
+      const voice = harness(detail([], { busy: true }));
+      await voice.conversation.start();
+      const finished = vi.fn();
+      voice.conversation.finish(finished);
+      voice.set(detail([reply], { busy: true }));
+      await vi.advanceTimersByTimeAsync(0);
+      expect(voice.spoken).toEqual(["Done."]);
+      if (first === "speech") voice.conversation.said("a");
+      else {
+        voice.set(detail([reply]));
+        await vi.advanceTimersByTimeAsync(250);
+      }
+      // Either prerequisite can legitimately outlast an end-to-end latency
+      // budget. Neither one alone may finish voice early.
+      await vi.advanceTimersByTimeAsync(1_000);
+      expect(finished).not.toHaveBeenCalled();
+      if (first === "speech") {
+        voice.set(detail([reply]));
+        await vi.advanceTimersByTimeAsync(250);
+      } else voice.conversation.said("a");
+      // No extra timer or poll after the second prerequisite is observed.
+      expect(finished).toHaveBeenCalledOnce();
+      voice.conversation.stop();
+    },
+  );
+
   it("finishes at once when the turn ends with nothing left to say", async () => {
     vi.useFakeTimers();
     const voice = harness(detail([message("a", "Done.")], { busy: true }));

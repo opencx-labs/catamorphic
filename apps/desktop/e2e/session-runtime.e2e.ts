@@ -835,7 +835,17 @@ it("folds the strip into its corner in one motion, beside a leaving chat or alon
         Math.abs(frame.width - to.width) < 1,
     );
     expect(landed).toBeGreaterThanOrEqual(start);
-    expect((frames[landed]?.t ?? Infinity) - from.t).toBeLessThan(700);
+    expect(
+      (frames[landed]?.t ?? Infinity) - from.t,
+      JSON.stringify(
+        frames.map((frame) => ({
+          t: Math.round(frame.t - from.t),
+          folded: frame.folded,
+          right: frame.right,
+          width: frame.width,
+        })),
+      ),
+    ).toBeLessThan(700);
   };
   /** Folded beside a chat that leaves: it folds while the chat goes. */
   const foldsWithChat = async (frames: Frame[]) => {

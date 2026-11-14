@@ -1,4 +1,5 @@
 import { spawn } from "node:child_process";
+import { randomUUID } from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -61,47 +62,60 @@ function alive(pid: number): boolean {
 
 describe("shellSandboxProcesses", () => {
   it("starts, reads by cursor, waits, and reports the exit code", async () => {
+    const release = path.join(root, `continue-counting-${randomUUID()}`);
     const started = await processes.startProcess({
       sandboxId,
-      command: 'echo "one $GREETING"; sleep 0.4; echo two; exit 3',
-      env: { GREETING: "hé llo" },
+      command:
+        'echo "one $GREETING"; while [ ! -f "$COUNTING_RELEASE" ]; do sleep 0.02; done; echo two; exit 3',
+      env: { GREETING: "hé llo", COUNTING_RELEASE: release },
       name: "Counting",
     });
-    expect(started).toMatchObject({
-      status: "running",
-      name: "Counting",
-      cwd: root,
-    });
-    const first = await processes.readProcessOutput({
-      sandboxId,
-      processId: started.processId,
-      maxBytes: Buffer.byteLength("one hé llo\n"),
-      waitMs: 5_000,
-    });
-    expect(first.chunk).toBe("one hé llo\n");
-    expect(first.nextCursor).toBe(Buffer.byteLength("one hé llo\n"));
-    const rest = await followProcess({
-      processes,
-      sandboxId,
-      processId: started.processId,
-      cursor: first.nextCursor,
-      timeoutMs: 10_000,
-    });
-    expect(rest).toMatchObject({
-      output: "two\n",
-      status: "exited",
-      exitCode: 3,
-      timedOut: false,
-    });
-    const [listed] = (await processes.listProcesses({ sandboxId })).filter(
-      (entry) => entry.processId === started.processId,
-    );
-    expect(listed).toMatchObject({ status: "exited", exitCode: 3 });
-    expect(listed?.endedAt).not.toBeNull();
-    // The environment never stays behind on disk.
-    expect(
-      fs.readdirSync(path.join(root, "state", started.processId)).sort(),
-    ).toEqual(["boot", "ended", "exit", "meta.json", "output", "pid"]);
+    try {
+      expect(started).toMatchObject({
+        status: "running",
+        name: "Counting",
+        cwd: root,
+      });
+      const first = await processes.readProcessOutput({
+        sandboxId,
+        processId: started.processId,
+        maxBytes: Buffer.byteLength("one hé llo\n"),
+        waitMs: 5_000,
+      });
+      expect(first.chunk).toBe("one hé llo\n");
+      expect(first.nextCursor).toBe(Buffer.byteLength("one hé llo\n"));
+      fs.writeFileSync(release, "");
+      const rest = await followProcess({
+        processes,
+        sandboxId,
+        processId: started.processId,
+        cursor: first.nextCursor,
+        timeoutMs: 10_000,
+      });
+      expect(rest).toMatchObject({
+        output: "two\n",
+        status: "exited",
+        exitCode: 3,
+        timedOut: false,
+      });
+      const [listed] = (await processes.listProcesses({ sandboxId })).filter(
+        (entry) => entry.processId === started.processId,
+      );
+      expect(listed).toMatchObject({ status: "exited", exitCode: 3 });
+      expect(listed?.endedAt).not.toBeNull();
+      // The environment never stays behind on disk.
+      expect(
+        fs.readdirSync(path.join(root, "state", started.processId)).sort(),
+      ).toEqual(["boot", "ended", "exit", "meta.json", "output", "pid"]);
+    } finally {
+      fs.writeFileSync(release, "");
+      await processes.signalProcess({
+        sandboxId,
+        processId: started.processId,
+        signal: "SIGTERM",
+      });
+      fs.rmSync(release, { force: true });
+    }
   }, 20_000);
 
   it("waits for a line, then stops the whole process group", async () => {

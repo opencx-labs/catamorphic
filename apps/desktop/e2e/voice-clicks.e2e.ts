@@ -7,7 +7,8 @@ let app: AppHandle;
 const api = "window.catamorphicDesktop";
 const mic = "document.querySelector('[data-testid=\"voice-button\"]')";
 const utterance = "This is a held message.";
-const shortcut = process.platform === "darwin" ? "⌘⇧V" : "Ctrl+Shift+V";
+const shortcut =
+  process.platform === "darwin" ? "⌘\u202f⇧\u202fV" : "Ctrl+Shift+V";
 
 beforeAll(async () => {
   app = await launchApp({
@@ -53,7 +54,17 @@ async function point() {
     { label: "the settled microphone hit target" },
   );
   await app.movePointer(value);
-  return value;
+  return app.waitFor<{ x: number; y: number }>(
+    `(()=>{
+      const button=${mic};
+      if(!button?.checkVisibility({opacityProperty:true,visibilityProperty:true}))return false;
+      const rail=button.closest('[data-dock-rail]');
+      if(rail?.getAnimations({subtree:true}).some(a=>(a.playState==='running'||a.pending)&&a.effect?.getTiming().iterations!==Infinity))return false;
+      const box=button.getBoundingClientRect(),point={x:box.x+box.width/2,y:box.y+box.height/2};
+      return button.contains(document.elementFromPoint(point.x,point.y))&&point;
+    })()`,
+    { label: "the microphone hit target after native hover settles" },
+  );
 }
 
 async function recordPhases() {
@@ -81,22 +92,48 @@ async function click() {
   await app.eval(`(()=>{
     window.__quickClickTimes=[];
     for(const type of ['pointerdown','pointerup'])
-      window.addEventListener(type,event=>window.__quickClickTimes.push(event.timeStamp),{once:true,capture:true});
+      window.addEventListener(type,event=>window.__quickClickTimes.push({
+        type,at:event.timeStamp,handledAt:performance.now(),
+        microphone:!!event.target.closest('[data-testid="voice-button"]')
+      }),{once:true,capture:true});
     return true;
   })()`);
   // One OS click: two CDP round trips can turn a short click into a hold.
   await app.clickPointer(target);
-  const times = await app.eval<number[]>("window.__quickClickTimes");
+  // Quartz posts the edges asynchronously; the helper exiting does not
+  // mean Chromium has received the release yet.
+  const times = await app.waitFor<
+    { at: number; handledAt: number; microphone: boolean }[]
+  >("window.__quickClickTimes.length===2 && window.__quickClickTimes", {
+    label: "both edges of the native short click delivered",
+  });
   expect(times).toHaveLength(2);
-  expect(times[1]! - times[0]!).toBeGreaterThanOrEqual(0);
-  expect(times[1]! - times[0]!).toBeLessThan(VOICE_HOLD_MS);
+  expect(
+    times.every((event) => event.microphone),
+    JSON.stringify(times),
+  ).toBe(true);
+  expect(times[1]!.at - times[0]!.at).toBeGreaterThanOrEqual(0);
+  expect(times[1]!.at - times[0]!.at).toBeLessThan(VOICE_HOLD_MS);
   await app.waitFor(`${api}.voiceStatus().then(status=>status.phase==='off')`, {
     label: "a short click cancelled",
   });
-  const tooltip = await app.waitFor<string>(
-    `[...document.querySelectorAll('[role="tooltip"]')].find(t=>t.textContent.includes('Press and hold to speak')&&getComputedStyle(t).opacity==='1')?.textContent`,
-    { label: "the hold instruction after a click" },
-  );
+  let tooltip: string;
+  try {
+    tooltip = await app.waitFor<string>(
+      `[...document.querySelectorAll('[role="tooltip"]')].find(t=>t.textContent.includes('Press and hold to speak')&&getComputedStyle(t).opacity==='1')?.textContent`,
+      { label: "the hold instruction after a click" },
+    );
+  } catch (error) {
+    const state = await app.eval(`(async()=>({
+      events:window.__quickClickTimes,phases:window.__clickPhases,
+      description:${mic}?.getAttribute('aria-description'),
+      hints:[...document.querySelectorAll('[role="tooltip"]')].map(t=>({text:t.textContent,opacity:getComputedStyle(t).opacity})),
+      status:await ${api}.voiceStatus()
+    }))()`);
+    throw new Error(
+      `${String(error)}; click diagnostics: ${JSON.stringify(state)}`,
+    );
+  }
   expect(tooltip).toContain(shortcut);
   expect(await app.eval<string[]>("window.__clickPhases")).not.toContain(
     "thinking",
@@ -110,6 +147,9 @@ async function click() {
 it("teaches a cold short click without submitting a message", async () => {
   await click();
   expect(await messageCount()).toBe(0);
+  const artifacts = process.env.CATAMORPHIC_E2E_ARTIFACTS_DIR;
+  if (artifacts)
+    await app.screenshot(path.join(artifacts, "voice-short-click-hint.png"));
 });
 
 it("still captures and sends the next held message", async () => {

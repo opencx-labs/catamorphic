@@ -53,6 +53,46 @@ const shot = async (name: string) => {
 };
 const type = (text: string) =>
   run(`setReactValue(input(),${JSON.stringify(text)})`);
+const nativeHistory = async (redo = false) => {
+  for (const type of ["keyDown", "keyUp"])
+    await app.cdp("Input.dispatchKeyEvent", {
+      type,
+      key: "z",
+      code: "KeyZ",
+      windowsVirtualKeyCode: 90,
+      modifiers: (process.platform === "darwin" ? 4 : 2) | (redo ? 8 : 0),
+      ...(type === "keyDown" ? { commands: [redo ? "redo" : "undo"] } : {}),
+    });
+};
+const pasteImage = async () => {
+  await app.eval(
+    `(async()=>{const canvas=document.createElement('canvas');canvas.width=8;canvas.height=8;canvas.getContext('2d').fillRect(0,0,8,8);const blob=await new Promise(resolve=>canvas.toBlob(resolve,'image/png'));await navigator.clipboard.write([new ClipboardItem({'image/png':blob})]);})()`,
+  );
+  for (const type of ["keyDown", "keyUp"])
+    await app.cdp("Input.dispatchKeyEvent", {
+      type,
+      key: "v",
+      code: "KeyV",
+      windowsVirtualKeyCode: 86,
+      modifiers: process.platform === "darwin" ? 4 : 2,
+      ...(type === "keyDown" ? { commands: ["paste"] } : {}),
+    });
+};
+const stripTabs = `[...document.querySelectorAll('[data-workspace-visible="true"] [data-tab-orientation] [data-point-key]:not([data-sidebar-item-id], [aria-hidden])')]`;
+const selectStripTab = async (key: string) => {
+  await run(`
+    ${stripTabs}.find(el => el.dataset.pointKey === ${JSON.stringify(key)})?.scrollIntoView({block:'nearest',inline:'nearest',behavior:'instant'});
+    return true;
+  `);
+  const point = await wait<{ x: number; y: number }>(`
+    const tab = ${stripTabs}.find(el => el.dataset.pointKey === ${JSON.stringify(key)});
+    if (!tab || tab.closest('[data-tab-orientation]').getAnimations({subtree:true}).some(a => a.playState === 'running' && a.effect?.getTiming().iterations !== Infinity)) return false;
+    const r = tab.getBoundingClientRect();
+    const point = {x:r.left+Math.min(24,r.width/3), y:r.top+r.height/2};
+    return tab.contains(document.elementFromPoint(point.x,point.y)) && point;
+  `);
+  await app.clickPointer(point);
+};
 /** Where the chats are and what has focus, for a wait that timed out. */
 const chatState = `JSON.stringify({
   floating: [...document.querySelectorAll('section[data-floating-chat]')].map((el) => el.dataset.chatLocalId),
@@ -658,7 +698,7 @@ it("moves the caret between the input's lines with the arrows, and the highlight
 });
 
 it("closes an untouched New Tab once another tab is shown, and keeps a typed one", async () => {
-  const strip = `[...document.querySelectorAll('[data-workspace-visible="true"] [data-tab-orientation] [data-point-key]:not([data-sidebar-item-id])')]`;
+  const strip = stripTabs;
   const newTabs = () =>
     run<number>(
       `return ${strip}.filter((el) => el.dataset.pointKey.startsWith('palette:')).length`,
@@ -981,3 +1021,412 @@ it.each([false, true])(
     expect(app.getRendererErrors()).toEqual([]);
   },
 );
+
+it.each(["overlay", "tab"])(
+  "keeps existing text when a mode trigger is inserted at its beginning (%s)",
+  async (variant) => {
+    const text = "  Keep this query\nexactly as typed.  ";
+    for (const { trigger, label } of [
+      { trigger: "web", label: "Search web" },
+      { trigger: "@hist", label: "History" },
+      { trigger: "file", label: "Files" },
+      { trigger: "tix", label: "Tickets" },
+      { trigger: "agent", label: "Ask agent" },
+    ]) {
+      if (variant === "overlay") await open();
+      else {
+        await shortcut("t");
+        await wait(`return document.activeElement === input()`);
+      }
+      await app.insertText(text);
+      await run(`input().setSelectionRange(0, 0); return true;`);
+      await app.insertText(trigger);
+      await app.press("Space");
+      await wait(`return chip() === ${JSON.stringify(label)}`);
+      const value = () =>
+        run<string>(
+          `return input().isContentEditable ? input().textContent : input().value`,
+        );
+      expect(await value()).toBe(text);
+      expect(await run(`return document.activeElement === input()`)).toBe(true);
+      // The handoff into Ask agent must reach the actual editable, so
+      // continued typing edits the retained draft rather than replacing it.
+      await run(`
+        const field = input();
+        if (field instanceof HTMLTextAreaElement) field.setSelectionRange(field.value.length, field.value.length);
+        return true;
+      `);
+      await app.insertText("more");
+      expect(await value()).toBe(`${text}more`);
+      if (trigger === "agent") await shot(`palette-prefix-${variant}.png`);
+      if (variant === "overlay") await close();
+      else {
+        const closingKey = await run<string>(
+          `return input().closest('[data-surface-key]').dataset.surfaceKey`,
+        );
+        await shortcut("w");
+        await wait(
+          `return ![...document.querySelectorAll('[data-workspace-visible="true"] [data-tab-orientation] [data-point-key]')].some(tab=>tab.dataset.pointKey===${JSON.stringify(closingKey)})`,
+        );
+      }
+    }
+    expect(app.getRendererErrors()).toEqual([]);
+  },
+);
+
+it("retains independent New Tab drafts, appends new tabs, and reuses an empty tab", async () => {
+  const strip = stripTabs;
+  const keys = () =>
+    run<string[]>(`return ${strip}.map(el => el.dataset.pointKey)`);
+  const currentKey = () =>
+    run<string>(
+      `return input().closest('[data-surface-key]').dataset.surfaceKey`,
+    );
+  const select = async (key: string) => {
+    await selectStripTab(key);
+    await wait(
+      `return input()?.closest('[data-surface-key]')?.dataset.surfaceKey === ${JSON.stringify(key)} && document.activeElement === input()`,
+    );
+  };
+  const newTab = async () => {
+    await shortcut("t");
+    await wait(
+      `return input() instanceof HTMLTextAreaElement && input().value === '' && document.activeElement === input() && !!input().closest('[data-palette="tab"]')`,
+    );
+    return currentKey();
+  };
+  const before = await keys();
+  const first = await newTab();
+  expect((await keys()).at(-1)).toBe(first);
+  await app.insertText("first draft");
+  await run(`input().setSelectionRange(0, 5); return true;`);
+  const second = await newTab();
+  expect(second).not.toBe(first);
+  expect((await keys()).at(-1)).toBe(second);
+  await app.insertText("agent");
+  await app.press("Space");
+  await wait(
+    `return input()?.isContentEditable && document.activeElement === input()`,
+  );
+  await app.insertText("second draft\nwith another line");
+  await select(first);
+  expect(
+    await run(
+      `return [input().value,input().selectionStart,input().selectionEnd]`,
+    ),
+  ).toEqual(["first draft", 0, 5]);
+  await select(second);
+  expect(await run(`return [chip(),input().innerText]`)).toEqual([
+    "Ask agent",
+    "second draft\nwith another line",
+  ]);
+  const empty = await newTab();
+  expect((await keys()).at(-1)).toBe(empty);
+  expect(await newTab()).toBe(empty);
+  // The + button shares Cmd+T's reuse and focus handoff.
+  await run(
+    `document.querySelector('[data-workspace-visible="true"] button[aria-label="New tab"]').click(); return true;`,
+  );
+  await wait(`return document.activeElement === input()`);
+  expect(await currentKey()).toBe(empty);
+  expect(await keys()).toEqual([
+    ...before.filter((key) => key !== first),
+    first,
+    second,
+    empty,
+  ]);
+  await select(first);
+  expect(await run(`return input().value`)).toBe("first draft");
+  // Leaving an empty tab still closes it; both drafts survive that cleanup.
+  await wait(
+    `return !${strip}.some(el => el.dataset.pointKey === ${JSON.stringify(empty)})`,
+  );
+  for (const key of [first, second]) {
+    await select(key);
+    await shortcut("w");
+    await wait(
+      `return ![...document.querySelectorAll('[data-workspace-visible="true"] [data-tab-orientation] [data-point-key]')].some(tab=>tab.dataset.pointKey===${JSON.stringify(key)})`,
+    );
+  }
+  expect(await keys()).toEqual(before.filter((key) => key !== first));
+  expect(app.getRendererErrors()).toEqual([]);
+});
+
+it("retains a selected skill and only accents targets while its palette is active", async () => {
+  if (
+    await app.eval<boolean>(
+      `!!document.querySelector('section[data-floating-chat] [data-composer-input]')`,
+    )
+  ) {
+    await shortcut("m");
+    await wait(
+      `return !document.querySelector('section[data-floating-chat] [data-composer-input]')`,
+      "floating chats minimized before tab targeting",
+    );
+  }
+  const strip = `[...document.querySelectorAll('[data-workspace-visible="true"] [data-tab-orientation] [data-point-key]:not([data-sidebar-item-id])')]`;
+  const browser = await run<string>(
+    `return ${strip}.find(el => el.dataset.pointKey.startsWith('browser:')).dataset.pointKey`,
+  );
+  await shortcut("t");
+  await wait(
+    `return document.activeElement === input() && !!input().closest('[data-palette="tab"]')`,
+  );
+  const palette = await run<string>(
+    `return input().closest('[data-surface-key]').dataset.surfaceKey`,
+  );
+  await app.insertText(">close tab");
+  await wait(
+    `return rows().find(row=>row.getAttribute('aria-selected')==='true')?.dataset.itemId==='action:close-tab'`,
+    "close-tab command selected",
+  );
+  await wait(
+    `return ${strip}.some(el => el.dataset.pointKey === ${JSON.stringify(palette)} && el.dataset.paletteTarget)`,
+  );
+  await selectStripTab(browser);
+  await wait(`return !${strip}.some(el => el.dataset.paletteTarget)`);
+  await selectStripTab(palette);
+  await wait(
+    `return ${strip}.some(el => el.dataset.pointKey === ${JSON.stringify(palette)} && el.dataset.paletteTarget)`,
+  );
+  await wait(
+    `return document.activeElement===input()`,
+    "retained palette input focused",
+  );
+  await type("skills");
+  await app.press("Space");
+  await wait(`return chip() === 'Skills' && rows().length > 1`);
+  await app.press("ArrowDown");
+  const selected = await run<string>(
+    `return rows().find(el => el.getAttribute('aria-selected') === 'true').dataset.itemId`,
+  );
+  await selectStripTab(browser);
+  await selectStripTab(palette);
+  await wait(
+    `return document.activeElement === input() && chip() === 'Skills'`,
+  );
+  expect(
+    await run(
+      `return rows().find(el => el.getAttribute('aria-selected') === 'true').dataset.itemId`,
+    ),
+  ).toBe(selected);
+  await shortcut("w");
+  expect(app.getRendererErrors()).toEqual([]);
+});
+
+it.each(["web", "agent", "tix"])(
+  "undoes and redoes entering and leaving %s mode",
+  async (trigger) => {
+    const selectAll = async () => {
+      for (const type of ["keyDown", "keyUp"])
+        await app.cdp("Input.dispatchKeyEvent", {
+          type,
+          key: "a",
+          code: "KeyA",
+          windowsVirtualKeyCode: 65,
+          modifiers: process.platform === "darwin" ? 4 : 2,
+          ...(type === "keyDown" ? { commands: ["selectAll"] } : {}),
+        });
+    };
+    const history = async (redo = false) => {
+      for (const type of ["keyDown", "keyUp"])
+        await app.cdp("Input.dispatchKeyEvent", {
+          type,
+          key: "z",
+          code: "KeyZ",
+          windowsVirtualKeyCode: 90,
+          modifiers: (process.platform === "darwin" ? 4 : 2) | (redo ? 8 : 0),
+          ...(type === "keyDown" ? { commands: [redo ? "redo" : "undo"] } : {}),
+        });
+    };
+    await open();
+    const text = "retained draft";
+    await app.insertText(text);
+    await run(`input().setSelectionRange(0,0); return true;`);
+    await app.insertText(trigger);
+    await app.press("Space");
+    await wait(`return !!chip()`);
+    const label = await run<string>(`return chip()`);
+    const value = () =>
+      run<string>(
+        `return input().isContentEditable ? input().textContent : input().value`,
+      );
+    await history();
+    await wait(
+      `return chip() === null && input().value === ${JSON.stringify(trigger + text)}`,
+    );
+    expect(
+      await run(`return [input().selectionStart,input().selectionEnd]`),
+    ).toEqual([trigger.length, trigger.length]);
+    await history(true);
+    await wait(`return chip() === ${JSON.stringify(label)}`);
+    expect(await value()).toBe(text);
+    await run(
+      `if(input() instanceof HTMLTextAreaElement) input().setSelectionRange(input().value.length,input().value.length); return true;`,
+    );
+    await app.insertText(" extra");
+    expect(await value()).toBe(`${text} extra`);
+    await history();
+    expect(await value()).toBe(text);
+    expect(await run(`return chip()`)).toBe(label);
+    // Empty the draft through native editing, then Backspace pops the chip.
+    await selectAll();
+    await app.press("Backspace");
+    await wait(`return (input().value ?? input().textContent) === ''`);
+    await app.press("Backspace");
+    await wait(`return chip() === null`);
+    await history();
+    await wait(
+      `return chip() === ${JSON.stringify(label)} && document.activeElement === input()`,
+    );
+    expect(await value()).toBe("");
+    await history(true);
+    await wait(`return chip() === null`);
+    await history();
+    await wait(`return chip() === ${JSON.stringify(label)}`);
+    // Deleting back to a boundary is a native edit, not a mode undo.
+    await app.insertText("hello");
+    await selectAll();
+    await app.press("Backspace");
+    await history();
+    expect(await value()).toBe("hello");
+    expect(await run(`return chip()`)).toBe(label);
+    await close();
+
+    await open();
+    await app.insertText(trigger);
+    await app.press("Space");
+    await wait(`return !!chip()`);
+    await history();
+    await wait(
+      `return chip() === null && input().value === ${JSON.stringify(trigger)}`,
+    );
+    // A new edit after mode undo starts a new redo branch.
+    await app.insertText("x");
+    await history();
+    expect(await value()).toBe(trigger);
+    await history(true);
+    expect(await value()).toBe(`${trigger}x`);
+    expect(await run(`return chip()`)).toBe(null);
+    await close();
+    await open();
+    await app.insertText(trigger);
+    await app.press("Space");
+    await wait(`return !!chip()`);
+    await app.insertText("hello");
+    await selectAll();
+    await app.press("Backspace");
+    await history();
+    expect(await value()).toBe("hello");
+    await history(true);
+    expect(await value()).toBe("");
+    await history();
+    expect(await value()).toBe("hello");
+    expect(await run(`return chip()`)).toBe(label);
+    await history();
+    expect(await value()).toBe("");
+    await history();
+    await wait(
+      `return chip() === null && input().value === ${JSON.stringify(trigger)}`,
+    );
+    await close();
+    expect(app.getRendererErrors()).toEqual([]);
+  },
+);
+
+it("only consumes a mode trigger before a collapsed caret, outside composition", async () => {
+  await open();
+  for (const [text, start, end] of [
+    ["unknownquery", 7, 7],
+    ["@squery", 2, 2],
+    ["find webquery", 8, 8],
+    ["webquery", 0, 3],
+  ] as const) {
+    await type(text);
+    await run(`input().setSelectionRange(${start}, ${end}); return true;`);
+    await app.press("Space");
+    expect(await run(`return chip()`)).toBe(null);
+    expect(await run(`return input().value`)).toBe(
+      `${text.slice(0, start)} ${text.slice(end)}`,
+    );
+  }
+  await type("webquery");
+  await run(
+    `input().setSelectionRange(3, 3); key(' ', {isComposing:true}); return true;`,
+  );
+  expect(await run(`return chip()`)).toBe(null);
+  expect(await run(`return input().value`)).toBe("webquery");
+  // Tab supports the same prefix handoff as Space.
+  await app.press("Tab");
+  await wait(`return chip() === 'Search web'`);
+  expect(await run(`return input().value`)).toBe("query");
+  await close();
+});
+
+it("undoes one logical attachment removal after its cleanup runs unfocused", async () => {
+  await open();
+  await app.insertText("agent");
+  await app.press("Space");
+  await wait(
+    `return input()?.isContentEditable && document.activeElement === input()`,
+  );
+  await pasteImage();
+  await wait(
+    `return !!input().querySelector('[data-testid="composer-pill"] img')`,
+  );
+  await run(`window.__paletteOwner=input();return true;`);
+  await app.insertText("tail");
+  await run(
+    `input().querySelector('button[aria-label^="Remove "]').click();input().blur();return true;`,
+  );
+  await wait(`return !input().querySelector('[data-pill-id]')`);
+  await run(`input().focus();return true;`);
+  await nativeHistory();
+  await wait(
+    `return !!input().querySelector('[data-testid="composer-pill"] img')`,
+  );
+  expect(await run(`return input() === window.__paletteOwner`)).toBe(true);
+  await nativeHistory();
+  expect(
+    await run(
+      `return !!input().querySelector('[data-testid="composer-pill"] img')`,
+    ),
+  ).toBe(true);
+  expect(
+    await run(
+      `return [...input().childNodes].filter(node=>node.nodeType===Node.TEXT_NODE).map(node=>node.nodeValue).join('').includes('tail')`,
+    ),
+  ).toBe(false);
+  await nativeHistory();
+  await wait(`return !input().querySelector('[data-pill-id]')`);
+  expect(await run(`return chip()`)).toBe("Ask agent");
+  await close();
+  expect(app.getRendererErrors()).toEqual([]);
+});
+
+it("records a committed composition as one palette undo transaction", async () => {
+  await open();
+  await app.insertText("agent");
+  await app.press("Space");
+  await wait(
+    `return input()?.isContentEditable && document.activeElement === input()`,
+  );
+  await app.cdp("Input.imeSetComposition", {
+    text: "に",
+    selectionStart: 1,
+    selectionEnd: 1,
+  });
+  await app.cdp("Input.imeSetComposition", {
+    text: "日本語",
+    selectionStart: 3,
+    selectionEnd: 3,
+  });
+  await app.insertText("日本語");
+  await wait(`return input().textContent === '日本語'`);
+  await nativeHistory();
+  await wait(`return input().textContent === '' && chip() === 'Ask agent'`);
+  await nativeHistory(true);
+  await wait(`return input().textContent === '日本語'`);
+  await close();
+  expect(app.getRendererErrors()).toEqual([]);
+});

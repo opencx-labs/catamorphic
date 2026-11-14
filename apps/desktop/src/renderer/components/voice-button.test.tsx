@@ -4,6 +4,7 @@ import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { DEFAULT_PREFS } from "../../shared/app-prefs.js";
 import {
+  VOICE_HOLD_MS,
   VOICE_OFF,
   type VoiceLevels,
   type VoiceStatus,
@@ -184,8 +185,9 @@ it("keeps a keyboard hold across composer focus and ends it on the matching keyu
 });
 
 it("teaches a quick pointer click with the shortcut, then allows an ordinary hold", async () => {
-  let now = 0;
+  let now = 1000;
   vi.spyOn(performance, "now").mockImplementation(() => now);
+  vi.spyOn(Event.prototype, "timeStamp", "get").mockImplementation(() => now);
   const button = await render(VOICE_OFF, "s");
   button.setPointerCapture = vi.fn();
   await act(async () => {
@@ -193,7 +195,7 @@ it("teaches a quick pointer click with the shortcut, then allows an ordinary hol
       new MouseEvent("pointerdown", { button: 0, bubbles: true }),
     );
   });
-  now = 100;
+  now = 1100;
   await act(async () => {
     button.dispatchEvent(
       new MouseEvent("pointerup", { button: 0, bubbles: true }),
@@ -218,7 +220,7 @@ it("teaches a quick pointer click with the shortcut, then allows an ordinary hol
   expect(document.querySelector('[role="tooltip"]')?.textContent).not.toContain(
     "Press and hold",
   );
-  now = 600;
+  now = 1600;
   await act(async () => {
     button.dispatchEvent(
       new MouseEvent("pointerup", { button: 0, bubbles: true }),
@@ -227,9 +229,73 @@ it("teaches a quick pointer click with the shortcut, then allows an ordinary hol
   expect(api.voiceRelease).toHaveBeenLastCalledWith(500);
 });
 
+it.each([
+  { input: "pointer", heldMs: 115, handlerGap: 500 },
+  { input: "keyboard", heldMs: 115, handlerGap: 500 },
+  { input: "pointer", heldMs: 400, handlerGap: 10 },
+  { input: "keyboard", heldMs: 400, handlerGap: 10 },
+])(
+  "measures a $heldMs ms $input press when handlers run $handlerGap ms apart",
+  async ({ input, heldMs, handlerGap }) => {
+    let now = 1500;
+    vi.spyOn(performance, "now").mockImplementation(() => now);
+    const button = await render(VOICE_OFF, "s");
+    button.setPointerCapture = vi.fn();
+    const edge = (down: boolean, at: number) => {
+      const event =
+        input === "pointer"
+          ? new MouseEvent(down ? "pointerdown" : "pointerup", {
+              button: 0,
+              bubbles: true,
+            })
+          : new KeyboardEvent(down ? "keydown" : "keyup", {
+              key: " ",
+              bubbles: true,
+              cancelable: true,
+            });
+      Object.defineProperty(event, "timeStamp", { value: at });
+      button.dispatchEvent(event);
+    };
+    await act(async () => edge(true, 1000));
+    expect(api.voicePress).toHaveBeenCalledOnce();
+    // Input timestamps and time spent waiting on the renderer are independent.
+    now += handlerGap;
+    await act(async () => edge(false, 1000 + heldMs));
+    expect(api.voiceRelease).toHaveBeenCalledWith(heldMs);
+    expect(
+      button.getAttribute("aria-description") === "Press and hold to speak",
+    ).toBe(heldMs < VOICE_HOLD_MS);
+  },
+);
+
+it.each(["pointercancel", "lostpointercapture", "blur"])(
+  "uses the physical %s timestamp without teaching a cancelled click",
+  async (type) => {
+    let now = 1500;
+    vi.spyOn(performance, "now").mockImplementation(() => now);
+    const button = await render(VOICE_OFF, "s");
+    button.setPointerCapture = vi.fn();
+    const down = new MouseEvent("pointerdown", { button: 0, bubbles: true });
+    Object.defineProperty(down, "timeStamp", { value: 1000 });
+    await act(async () => button.dispatchEvent(down));
+    expect(api.voicePress).toHaveBeenCalledOnce();
+    now = 1510;
+    const cancel = new Event(type, { bubbles: true });
+    Object.defineProperty(cancel, "timeStamp", { value: 1115 });
+    await act(async () =>
+      (type === "blur" ? window : button).dispatchEvent(cancel),
+    );
+    expect(api.voiceRelease).toHaveBeenCalledWith(115);
+    expect(button.getAttribute("aria-description")).not.toBe(
+      "Press and hold to speak",
+    );
+  },
+);
+
 it("never starts voice when a new chat finishes creation after a quick click", async () => {
-  let now = 0;
+  let now = 1000;
   vi.spyOn(performance, "now").mockImplementation(() => now);
+  vi.spyOn(Event.prototype, "timeStamp", "get").mockImplementation(() => now);
   let resolve!: (session: string) => void;
   const session = new Promise<string>((yes) => {
     resolve = yes;
@@ -241,7 +307,7 @@ it("never starts voice when a new chat finishes creation after a quick click", a
       new MouseEvent("pointerdown", { button: 0, bubbles: true }),
     );
   });
-  now = 100;
+  now = 1100;
   await act(async () => {
     button.dispatchEvent(
       new MouseEvent("pointerup", { button: 0, bubbles: true }),
