@@ -511,23 +511,29 @@ describe("plain local folders", () => {
     const gate = new Promise<void>((resolve) => {
       release = resolve;
     });
+    let held = false;
     const readdir = vi
       .spyOn(fs, "readdir")
-      // The first walk's read of the root waits for the gate.
-      .mockImplementationOnce(
-        async (...args: Parameters<typeof fs.readdir>) => {
+      // The first walk reads `src/`, then waits before it finishes.
+      .mockImplementation(async (...args: Parameters<typeof fs.readdir>) => {
+        const entries = await original(...args);
+        if (!held && args[0] === path.join(root, "src")) {
+          held = true;
           await gate;
-          return original(...args);
-        },
-      );
+        }
+        return entries;
+      });
     try {
-      const held = repo.listFiles();
-      // Written after that walk started: a listing asked for now must see it.
+      const first = repo.listFiles();
+      await vi.waitFor(() => expect(held).toBe(true));
+      // Written after that walk read `src/`: a listing asked for now must
+      // see it, which the walk in progress cannot.
       await fs.writeFile(path.join(root, "src/added.ts"), "added");
       const later = Array.from({ length: 4 }, () => repo.listFiles());
+      // Let them reach the walk in progress (each first checks for Git).
+      await new Promise((resolve) => setTimeout(resolve, 100));
       release();
-      // It read the root before the write; whether it saw the file is chance.
-      expect(await held).toContain("src/flow.ts");
+      expect(await first).toEqual(["notes.md", "src/flow.ts"]);
       for (const listing of await Promise.all(later))
         expect(listing).toEqual(["notes.md", "src/added.ts", "src/flow.ts"]);
       // One walk running, one shared by the four that asked during it.

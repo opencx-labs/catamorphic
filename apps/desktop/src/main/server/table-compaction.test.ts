@@ -90,11 +90,17 @@ describe("table compaction", () => {
       INSERT INTO desktop.other VALUES (1, 'x');
     `);
     const log: string[] = [];
+    // A full disk: the rewrite fails, and so does recording that it did.
+    const full = () => Promise.reject(new Error("No space left on device"));
     const failing: Pick<PGlite, "query" | "exec"> = {
-      query: pglite.query.bind(pglite),
+      query: <T,>(sql: string, params?: unknown[]) =>
+        sql.trimStart().startsWith("INSERT INTO desktop.table_compactions") &&
+        params?.[0] === "desktop.workspace_states"
+          ? full()
+          : pglite.query<T>(sql, params),
       exec: (sql: string) =>
         sql.startsWith("VACUUM FULL desktop.workspace_states")
-          ? Promise.reject(new Error("No space left on device"))
+          ? full()
           : pglite.exec(sql),
     };
     const compactor = new TableCompactor(failing, {
@@ -104,9 +110,11 @@ describe("table compaction", () => {
     });
     const passes = await compactor.compact();
     expect(passes.map((pass) => pass.table)).toEqual(["desktop.other"]);
-    expect(log).toContain(
+    expect(log).toEqual([
+      "Could not record the compaction of desktop.workspace_states: No space left on device",
       "Could not compact desktop.workspace_states: No space left on device",
-    );
+      expect.stringMatching(/^Compacted desktop\.other: /),
+    ]);
     // Not retried at the next pass: it has not grown.
     log.length = 0;
     expect(await compactor.compact()).toEqual([]);

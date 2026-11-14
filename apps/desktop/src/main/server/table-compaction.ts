@@ -86,42 +86,54 @@ export class TableCompactor {
     const compactedBytes = await this.loadCompactedBytes();
     const done: TableCompaction[] = [];
     for (const table of this.options.tables ?? COMPACTED_TABLES) {
-      const bytesBefore = await this.size(table);
-      if (bytesBefore === null) continue;
-      const compacted = compactedBytes.get(table);
-      if (
-        bytesBefore <= (this.options.floorBytes ?? SIZE_FLOOR_BYTES) ||
-        (compacted !== undefined && bytesBefore <= compacted * GROWTH_FACTOR)
-      ) {
-        // Small: a baseline for this run. Only rewrites are recorded.
-        if (compacted === undefined) compactedBytes.set(table, bytesBefore);
-        continue;
-      }
-      const started = performance.now();
+      // One table's failure (a full disk) never stops the others.
       try {
-        // A listed, schema-qualified name: never interpolated from input.
-        await this.pglite.exec(`VACUUM FULL ${table}`);
+        const compaction = await this.compactTable(table, compactedBytes);
+        if (compaction) done.push(compaction);
       } catch (error) {
-        // Not again until it grows as far once more: a failing rewrite
-        // (a full disk) must not stall every pass, nor stop the others.
-        await this.record(compactedBytes, table, bytesBefore);
         this.options.log?.(`Could not compact ${table}: ${message(error)}`);
-        continue;
       }
-      const bytesAfter = (await this.size(table)) ?? 0;
-      await this.record(compactedBytes, table, bytesAfter);
-      const compaction = {
-        table,
-        bytesBefore,
-        bytesAfter,
-        ms: Math.round(performance.now() - started),
-      };
-      this.options.log?.(
-        `Compacted ${table}: ${megabytes(bytesBefore)} to ${megabytes(bytesAfter)} in ${compaction.ms} ms`,
-      );
-      done.push(compaction);
     }
     return done;
+  }
+
+  private async compactTable(
+    table: string,
+    compactedBytes: Map<string, number>,
+  ): Promise<TableCompaction | null> {
+    const bytesBefore = await this.size(table);
+    if (bytesBefore === null) return null;
+    const compacted = compactedBytes.get(table);
+    if (
+      bytesBefore <= (this.options.floorBytes ?? SIZE_FLOOR_BYTES) ||
+      (compacted !== undefined && bytesBefore <= compacted * GROWTH_FACTOR)
+    ) {
+      // Small: a baseline for this run. Only rewrites are recorded.
+      if (compacted === undefined) compactedBytes.set(table, bytesBefore);
+      return null;
+    }
+    const started = performance.now();
+    try {
+      // A listed, schema-qualified name: never interpolated from input.
+      await this.pglite.exec(`VACUUM FULL ${table}`);
+    } catch (error) {
+      // Not retried until it grows four times past the size it failed at:
+      // a failing rewrite must not stall every pass.
+      await this.record(compactedBytes, table, bytesBefore);
+      throw error;
+    }
+    const bytesAfter = (await this.size(table)) ?? 0;
+    await this.record(compactedBytes, table, bytesAfter);
+    const compaction = {
+      table,
+      bytesBefore,
+      bytesAfter,
+      ms: Math.round(performance.now() - started),
+    };
+    this.options.log?.(
+      `Compacted ${table}: ${megabytes(bytesBefore)} to ${megabytes(bytesAfter)} in ${compaction.ms} ms`,
+    );
+    return compaction;
   }
 
   private async loadCompactedBytes(): Promise<Map<string, number>> {
@@ -152,13 +164,21 @@ export class TableCompactor {
     bytes: number,
   ): Promise<void> {
     compactedBytes.set(table, bytes);
-    await this.pglite.query(
-      `INSERT INTO desktop.table_compactions (table_name, compacted_bytes)
+    // Best effort: this run keeps the size either way; a launch after a
+    // failed write (the disk that failed the rewrite) checks again.
+    await this.pglite
+      .query(
+        `INSERT INTO desktop.table_compactions (table_name, compacted_bytes)
        VALUES ($1, $2)
        ON CONFLICT (table_name)
        DO UPDATE SET compacted_bytes = EXCLUDED.compacted_bytes, compacted_at = now()`,
-      [table, bytes],
-    );
+        [table, bytes],
+      )
+      .catch((error: unknown) =>
+        this.options.log?.(
+          `Could not record the compaction of ${table}: ${message(error)}`,
+        ),
+      );
   }
 
   /** Bytes on disk with indexes and TOAST, or null when the table is absent. */

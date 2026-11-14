@@ -29,7 +29,8 @@ exceeds both 16 MB and four times its size after its last rewrite. That size
 is recorded in `desktop.table_compactions`, so a later launch does not rewrite
 a table whose live data alone is past the floor. A rewrite that fails is
 logged and recorded at the size it failed at: the other tables still run, and
-it is not retried until the table grows that far again. One pass runs at boot,
+it is not retried until the table grows four times past that size. Recording
+is best effort; if it fails too, the next launch checks the table again. One pass runs at boot,
 after migrations and before windows read the tables, and then every 30
 minutes; shutdown clears the timer before its slow steps. On the profile
 above, the first pass took 1.3 s and later passes 3 ms.

@@ -915,8 +915,8 @@ ran together. The causes and their fixes:
   prefix names, applying the ignore rules, ignored and private folders,
   nested repositories and links on the way down exactly as the whole walk
   would. A listing never shares a walk that started before it asked; those
-  arriving during a walk share the single next one, so a burst costs at most
-  two. The workflow source scan lists only the folder its globs start in,
+  arriving during a walk share the single next one. The workflow source scan
+  lists only the folder its globs start in,
   and the apps list only the apps folder.
 - Every window, open chat, palette and inspector listed the project's agents
   on its own beat; a new chat set several off at once. The main-process
