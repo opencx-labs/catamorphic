@@ -29,13 +29,17 @@ export interface TableCompaction {
  * disk, and every read of the table scans past them on the main process.
  * This rewrites a listed table (`VACUUM FULL`) once its size, with indexes
  * and TOAST, passes both the floor and {@link GROWTH_FACTOR} times its size
- * after its last rewrite. A compacted table is a few megabytes, so later
- * rewrites take milliseconds; the first one on an old profile reclaims what
- * it accumulated.
+ * after its last rewrite, which is recorded across launches. A compacted
+ * table is a few megabytes, so later rewrites take milliseconds; the first
+ * one on an old profile reclaims what it accumulated.
  */
 export class TableCompactor {
-  /** Each table's size right after its last rewrite (or when first seen small). */
-  private readonly compactedBytes = new Map<string, number>();
+  /**
+   * Each table's size right after its last rewrite, or after a rewrite that
+   * failed. Kept in `desktop.table_compactions` so a launch does not rewrite
+   * a table whose live data alone is past the floor.
+   */
+  private compactedBytes: Map<string, number> | null = null;
   private running: Promise<TableCompaction[]> | null = null;
   private timer: ReturnType<typeof setInterval> | null = null;
 
@@ -62,15 +66,16 @@ export class TableCompactor {
     if (this.timer) return;
     this.timer = setInterval(() => {
       void this.compact().catch((error: unknown) =>
-        this.options.log?.(
-          `Table compaction failed: ${error instanceof Error ? error.message : String(error)}`,
-        ),
+        this.options.log?.(`Table compaction failed: ${message(error)}`),
       );
     }, intervalMs);
     this.timer.unref?.();
   }
 
-  /** Stop checking and wait for a rewrite in progress. */
+  /**
+   * Stop checking at once, then wait for a rewrite in progress. The timer is
+   * cleared before the first await, so a caller need not await to stop it.
+   */
   async stop(): Promise<void> {
     if (this.timer) clearInterval(this.timer);
     this.timer = null;
@@ -78,24 +83,33 @@ export class TableCompactor {
   }
 
   private async compactTables(): Promise<TableCompaction[]> {
+    const compactedBytes = await this.loadCompactedBytes();
     const done: TableCompaction[] = [];
     for (const table of this.options.tables ?? COMPACTED_TABLES) {
       const bytesBefore = await this.size(table);
       if (bytesBefore === null) continue;
-      const compacted = this.compactedBytes.get(table);
+      const compacted = compactedBytes.get(table);
       if (
         bytesBefore <= (this.options.floorBytes ?? SIZE_FLOOR_BYTES) ||
         (compacted !== undefined && bytesBefore <= compacted * GROWTH_FACTOR)
       ) {
-        if (compacted === undefined)
-          this.compactedBytes.set(table, bytesBefore);
+        // Small: a baseline for this run. Only rewrites are recorded.
+        if (compacted === undefined) compactedBytes.set(table, bytesBefore);
         continue;
       }
       const started = performance.now();
-      // A listed, schema-qualified name: never interpolated from input.
-      await this.pglite.exec(`VACUUM FULL ${table}`);
+      try {
+        // A listed, schema-qualified name: never interpolated from input.
+        await this.pglite.exec(`VACUUM FULL ${table}`);
+      } catch (error) {
+        // Not again until it grows as far once more: a failing rewrite
+        // (a full disk) must not stall every pass, nor stop the others.
+        await this.record(compactedBytes, table, bytesBefore);
+        this.options.log?.(`Could not compact ${table}: ${message(error)}`);
+        continue;
+      }
       const bytesAfter = (await this.size(table)) ?? 0;
-      this.compactedBytes.set(table, bytesAfter);
+      await this.record(compactedBytes, table, bytesAfter);
       const compaction = {
         table,
         bytesBefore,
@@ -110,6 +124,43 @@ export class TableCompactor {
     return done;
   }
 
+  private async loadCompactedBytes(): Promise<Map<string, number>> {
+    if (this.compactedBytes) return this.compactedBytes;
+    await this.pglite.exec(`
+      CREATE SCHEMA IF NOT EXISTS desktop;
+      CREATE TABLE IF NOT EXISTS desktop.table_compactions (
+        table_name      text PRIMARY KEY,
+        compacted_bytes bigint NOT NULL,
+        compacted_at    timestamptz NOT NULL DEFAULT now()
+      );
+    `);
+    const rows = await this.pglite.query<{
+      table_name: string;
+      compacted_bytes: string;
+    }>(
+      "SELECT table_name, compacted_bytes::text FROM desktop.table_compactions",
+    );
+    this.compactedBytes = new Map(
+      rows.rows.map((row) => [row.table_name, Number(row.compacted_bytes)]),
+    );
+    return this.compactedBytes;
+  }
+
+  private async record(
+    compactedBytes: Map<string, number>,
+    table: string,
+    bytes: number,
+  ): Promise<void> {
+    compactedBytes.set(table, bytes);
+    await this.pglite.query(
+      `INSERT INTO desktop.table_compactions (table_name, compacted_bytes)
+       VALUES ($1, $2)
+       ON CONFLICT (table_name)
+       DO UPDATE SET compacted_bytes = EXCLUDED.compacted_bytes, compacted_at = now()`,
+      [table, bytes],
+    );
+  }
+
   /** Bytes on disk with indexes and TOAST, or null when the table is absent. */
   private async size(table: string): Promise<number | null> {
     const result = await this.pglite.query<{ bytes: string | null }>(
@@ -119,6 +170,10 @@ export class TableCompactor {
     const bytes = result.rows[0]?.bytes;
     return bytes == null ? null : Number(bytes);
   }
+}
+
+function message(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
 }
 
 function megabytes(bytes: number): string {

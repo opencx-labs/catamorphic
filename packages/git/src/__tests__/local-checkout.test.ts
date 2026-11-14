@@ -502,28 +502,103 @@ describe("plain local folders", () => {
     ).toEqual(["src/deep/step.ts", "src/flow.ts"]);
   });
 
-  it("shares one walk among concurrent listings of the same folder", async () => {
+  it("shares walks among concurrent listings, never one that started before a caller asked", async () => {
     await fs.mkdir(path.join(root, "src"), { recursive: true });
     await fs.writeFile(path.join(root, "src/flow.ts"), "flow");
     const repo = new NativeProjectRepo(project, root, async () => {});
-    const readdir = vi.spyOn(fs, "readdir");
-    try {
-      const listings = await Promise.all(
-        Array.from({ length: 5 }, () => repo.listFiles()),
+    const original = fs.readdir.bind(fs);
+    let release = () => {};
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const readdir = vi
+      .spyOn(fs, "readdir")
+      // The first walk's read of the root waits for the gate.
+      .mockImplementationOnce(
+        async (...args: Parameters<typeof fs.readdir>) => {
+          await gate;
+          return original(...args);
+        },
       );
-      for (const listing of listings)
-        expect(listing).toEqual(["notes.md", "src/flow.ts"]);
-      const rootReads = readdir.mock.calls.filter(([dir]) => dir === root);
-      expect(rootReads).toHaveLength(1);
-      // Finished walks are not reused: the next listing sees new files.
+    try {
+      const held = repo.listFiles();
+      // Written after that walk started: a listing asked for now must see it.
       await fs.writeFile(path.join(root, "src/added.ts"), "added");
+      const later = Array.from({ length: 4 }, () => repo.listFiles());
+      release();
+      // It read the root before the write; whether it saw the file is chance.
+      expect(await held).toContain("src/flow.ts");
+      for (const listing of await Promise.all(later))
+        expect(listing).toEqual(["notes.md", "src/added.ts", "src/flow.ts"]);
+      // One walk running, one shared by the four that asked during it.
+      expect(readdir.mock.calls.filter(([dir]) => dir === root)).toHaveLength(
+        2,
+      );
+      readdir.mockClear();
       expect(await repo.listFiles({ prefix: "src/" })).toEqual([
         "src/added.ts",
         "src/flow.ts",
       ]);
+      // A prefix walks its folder only.
+      expect(readdir.mock.calls.map(([dir]) => dir)).toEqual([
+        path.join(root, "src"),
+      ]);
     } finally {
       readdir.mockRestore();
     }
+  });
+
+  it("decides negated ignores on the way down as the whole walk does", async () => {
+    for (const directory of ["a/keep/inner", "a/drop", "kept/x", "other"])
+      await fs.mkdir(path.join(root, directory), { recursive: true });
+    for (const file of [
+      "a/keep/inner/one.ts",
+      "a/drop/two.ts",
+      "kept/x/three.ts",
+      "other/four.ts",
+    ])
+      await fs.writeFile(path.join(root, file), "x");
+    await fs.writeFile(path.join(root, ".gitignore"), "*/\n!kept/\n!a/\n");
+    await fs.writeFile(path.join(root, "a/.gitignore"), "*\n!keep/\n");
+    const repo = new NativeProjectRepo(project, root, async () => {});
+    const all = await repo.listFiles();
+    for (const prefix of [
+      "a/",
+      "a/keep/",
+      "a/keep/inner/",
+      "a/drop/",
+      "kept/x/",
+      "other/",
+      "a/../",
+      "./",
+    ])
+      expect(await repo.listFiles({ prefix })).toEqual(
+        all.filter((file) => file.startsWith(prefix)),
+      );
+  });
+
+  it("fails as the whole walk does when a folder inside cannot be read", async () => {
+    await fs.mkdir(path.join(root, "src/deep"), { recursive: true });
+    await fs.writeFile(path.join(root, "src/deep/flow.ts"), "flow");
+    const repo = new NativeProjectRepo(project, root, async () => {});
+    const original = fs.readdir.bind(fs);
+    const readdir = vi
+      .spyOn(fs, "readdir")
+      .mockImplementation(async (...args: Parameters<typeof fs.readdir>) => {
+        if (args[0] === path.join(root, "src/deep"))
+          throw Object.assign(new Error("gone"), { code: "ENOENT" });
+        return original(...args);
+      });
+    try {
+      await expect(repo.listFiles()).rejects.toThrow("gone");
+      await expect(repo.listFiles({ prefix: "src/" })).rejects.toThrow("gone");
+      // The folder asked for is missing: nothing, as before.
+      expect(await repo.listFiles({ prefix: "missing/" })).toEqual([]);
+    } finally {
+      readdir.mockRestore();
+    }
+    await fs.rm(root, { recursive: true });
+    await expect(repo.listFiles({ prefix: "src/" })).rejects.toThrow();
   });
 
   it("initializes Git only for an explicit commit and immediately supports external Git initialization", async () => {

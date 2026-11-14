@@ -4,6 +4,7 @@ import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   flushWorkspaceSaves,
+  forgetWorkspaceSave,
   useWorkspacePersistence,
 } from "./workspace-persistence.js";
 import { emptyWorkspace, type Workspace } from "./workspace-state.js";
@@ -117,6 +118,41 @@ describe("workspace save handoff", () => {
       await vi.advanceTimersByTimeAsync(500);
     });
     expect(write).toHaveBeenCalledTimes(3);
+  });
+
+  it("writes an unchanged snapshot again once the window forgets the project", async () => {
+    render(named("Moved away and back"));
+    await flushWorkspaceSaves();
+    expect(write).toHaveBeenCalledOnce();
+    // Another window may have written the project in between.
+    forgetWorkspaceSave("project");
+    await flushWorkspaceSaves();
+    expect(write).toHaveBeenCalledTimes(2);
+  });
+
+  it("writes an unchanged snapshot again at quit when its write in flight fails", async () => {
+    let fail = (_error: Error) => {};
+    write.mockImplementationOnce(
+      () =>
+        new Promise<void>((_resolve, reject) => {
+          fail = reject;
+        }),
+    );
+    render(named("In flight"));
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(500);
+    });
+    expect(write).toHaveBeenCalledOnce();
+    const flushed = flushWorkspaceSaves();
+    fail(new Error("Database write failed"));
+    await expect(flushed).resolves.toBeUndefined();
+    expect(write).toHaveBeenCalledTimes(2);
+    expect(write).toHaveBeenLastCalledWith(
+      "project",
+      expect.objectContaining({
+        tabs: [{ kind: "settings", name: "settings", label: "In flight" }],
+      }),
+    );
   });
 
   it("reports a failed flush and permits saving the current snapshot on retry", async () => {

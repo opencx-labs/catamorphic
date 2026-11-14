@@ -903,7 +903,7 @@ a 141,402-file plain folder (six nested repositories, `node_modules`, a
 | On a new chat | Before | After |
 | --- | ---: | ---: |
 | Walks of the whole project folder | 15 concurrent | 0 |
-| Walks of a `.work/` folder | 0 | 11 (one shared), each immediate |
+| Walks of a `.work/` folder | 0 | about a dozen, each immediate |
 | Database queries | 322 | 226 |
 
 Sending to an existing chat went from one whole-tree walk and 155 queries to
@@ -914,12 +914,13 @@ ran together. The causes and their fixes:
   filtering. `NativeProjectRepo.listFiles` now walks only the folder the
   prefix names, applying the ignore rules, ignored and private folders,
   nested repositories and links on the way down exactly as the whole walk
-  would. Concurrent identical walks share one result. The workflow source
-  scan lists only the folder its globs start in, and the apps list only the
-  apps folder.
+  would. A listing never shares a walk that started before it asked; those
+  arriving during a walk share the single next one, so a burst costs at most
+  two. The workflow source scan lists only the folder its globs start in,
+  and the apps list only the apps folder.
 - Every window, open chat, palette and inspector listed the project's agents
   on its own beat; a new chat set several off at once. The main-process
-  handler shares a listing in flight.
+  handler coalesces them the same way.
 - `ProjectRootsStore.get` queried the table on every call (94 times for one
   new chat) although the store keeps a complete in-memory mirror.
 

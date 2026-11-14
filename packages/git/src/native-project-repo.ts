@@ -21,11 +21,17 @@ import {
 import type { BranchInfo, CommitInfo, DiffEntry, RepoStatus } from "./types.js";
 
 /**
- * Walks of folders without Git, in flight, by root and folder. A new chat
- * asks for the same listing from several services at once (agents, skills,
- * apps, workflows); they share one walk instead of each walking the tree.
+ * Walks of folders without Git, by root and folder: the one running and the
+ * one queued behind it. A new chat asks for the same listing from several
+ * services at once (agents, skills, apps, workflows). A caller never shares
+ * a walk that started before it asked, so it sees every file written before
+ * its call; callers arriving during a walk share the single next one.
  */
-const unversionedWalks = new Map<string, Promise<string[]>>();
+interface UnversionedWalk {
+  running: Promise<string[]>;
+  queued: Promise<string[]> | null;
+}
+const unversionedWalks = new Map<string, UnversionedWalk>();
 
 /**
  * Every file under `folder` (relative, `""` for the whole tree, else ending
@@ -34,58 +40,75 @@ const unversionedWalks = new Map<string, Promise<string[]>>();
  */
 function walkUnversioned(root: string, folder: string): Promise<string[]> {
   const key = `${root}\0${folder}`;
-  const inFlight = unversionedWalks.get(key);
-  if (inFlight) return inFlight;
-  const walk = (async () => {
-    // What the whole-tree walk would decide on the way down to `folder`:
-    // its ignore rules, ignored and private directories, nested repositories.
-    const rules: Array<{ base: string; matcher: Ignore }> = [];
-    let current = root;
-    for (const segment of folder.split("/").filter(Boolean)) {
-      const content = await fs
-        .readFile(path.join(current, ".gitignore"), "utf8")
-        .catch(() => "");
-      if (content)
-        rules.push({ base: current, matcher: ignore().add(content) });
-      const next = path.join(current, segment);
-      if (
-        WALK_SKIPPED_DIRS.has(segment) ||
-        isPersonalFile(path.relative(root, next)) ||
-        isIgnoredDirectory(rules, next)
+  const current = unversionedWalks.get(key);
+  if (!current) return startWalk(key, root, folder);
+  current.queued ??= current.running
+    .catch(() => {})
+    .then(() => startWalk(key, root, folder));
+  return current.queued;
+}
+
+function startWalk(
+  key: string,
+  root: string,
+  folder: string,
+): Promise<string[]> {
+  const entry: UnversionedWalk = {
+    running: walkFolder(root, folder),
+    queued: null,
+  };
+  unversionedWalks.set(key, entry);
+  void entry.running
+    .finally(() => {
+      if (unversionedWalks.get(key) === entry) unversionedWalks.delete(key);
+    })
+    .catch(() => {});
+  return entry.running;
+}
+
+async function walkFolder(root: string, folder: string): Promise<string[]> {
+  const rules: Array<{ base: string; matcher: Ignore }> = [];
+  const options = {
+    includeHidden: true,
+    excludeNestedRepositories: true,
+    tracked: new Set<string>(),
+    trackedDirectories: new Set<string>(),
+    rules,
+  };
+  // A missing project folder fails as the whole-tree walk does.
+  if (!folder || !(await fs.stat(root)).isDirectory())
+    return walkDirectory(root, root, options);
+  // What the whole-tree walk would decide on the way down to `folder`:
+  // its ignore rules, ignored and private directories, nested repositories.
+  // A folder it would never reach, or that does not exist, lists nothing.
+  let current = root;
+  for (const segment of folder.slice(0, -1).split("/")) {
+    if (!segment || segment === "." || segment === "..") return [];
+    const content = await fs
+      .readFile(path.join(current, ".gitignore"), "utf8")
+      .catch(() => "");
+    if (content) rules.push({ base: current, matcher: ignore().add(content) });
+    const next = path.join(current, segment);
+    if (
+      WALK_SKIPPED_DIRS.has(segment) ||
+      isPersonalFile(path.relative(root, next)) ||
+      isIgnoredDirectory(rules, next)
+    )
+      return [];
+    // The whole-tree walk lists a linked folder as an entry, never its files.
+    const stat = await fs.lstat(next).catch(() => undefined);
+    if (!stat?.isDirectory()) return [];
+    current = next;
+    if (
+      await fs.stat(path.join(current, ".git")).then(
+        () => true,
+        () => false,
       )
-        return [];
-      // The whole-tree walk lists a linked folder as an entry, never its files.
-      const stat = await fs.lstat(next).catch(() => undefined);
-      if (!stat?.isDirectory()) return [];
-      current = next;
-      if (
-        await fs.stat(path.join(current, ".git")).then(
-          () => true,
-          () => false,
-        )
-      )
-        return [];
-    }
-    try {
-      return await walkDirectory(current, root, {
-        includeHidden: true,
-        excludeNestedRepositories: true,
-        tracked: new Set(),
-        trackedDirectories: new Set(),
-        rules,
-      });
-    } catch (error) {
-      if (
-        error instanceof Error &&
-        "code" in error &&
-        (error.code === "ENOENT" || error.code === "ENOTDIR")
-      )
-        return [];
-      throw error;
-    }
-  })().finally(() => unversionedWalks.delete(key));
-  unversionedWalks.set(key, walk);
-  return walk;
+    )
+      return [];
+  }
+  // Errors inside the folder propagate, as from a whole-tree walk.
+  return walkDirectory(current, root, options);
 }
 
 function isIgnoredDirectory(

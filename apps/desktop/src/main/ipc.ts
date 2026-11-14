@@ -886,20 +886,40 @@ export function registerIpcHandlers(
   };
 
   // Every window, open chat, palette and inspector asks for the roster on
-  // its own beat, and a new chat sets several of them off at once. Requests
-  // that arrive while a listing is in flight share it: its answer is as
-  // fresh as theirs would be, and the project's files are walked once.
-  const projectAgentsInFlight = new Map<string, Promise<ProjectAgentsData>>();
+  // its own beat, and a new chat sets several of them off at once. A request
+  // never shares a listing that started before it (a default just set, an
+  // agent file just written, must show); requests arriving while one runs
+  // share the single listing queued behind it.
+  const projectAgentListings = new Map<
+    string,
+    {
+      running: Promise<ProjectAgentsData>;
+      queued: Promise<ProjectAgentsData> | null;
+    }
+  >();
+  const startProjectAgentListing = (projectId: string) => {
+    const entry = {
+      running: listProjectAgents(projectId),
+      queued: null,
+    };
+    projectAgentListings.set(projectId, entry);
+    void entry.running
+      .finally(() => {
+        if (projectAgentListings.get(projectId) === entry)
+          projectAgentListings.delete(projectId);
+      })
+      .catch(() => {});
+    return entry.running;
+  };
   ipcMain.handle(
     "catamorphic:project-agents-list",
     (_event, projectId: string): Promise<ProjectAgentsData> => {
-      const inFlight = projectAgentsInFlight.get(projectId);
-      if (inFlight) return inFlight;
-      const listing = listProjectAgents(projectId).finally(() =>
-        projectAgentsInFlight.delete(projectId),
-      );
-      projectAgentsInFlight.set(projectId, listing);
-      return listing;
+      const current = projectAgentListings.get(projectId);
+      if (!current) return startProjectAgentListing(projectId);
+      current.queued ??= current.running
+        .catch(() => {})
+        .then(() => startProjectAgentListing(projectId));
+      return current.queued;
     },
   );
   const listProjectAgents = async (

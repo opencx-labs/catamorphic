@@ -1912,6 +1912,8 @@ export async function startEmbeddedServer(
       clearInterval(notificationTimer);
       clearInterval(sessionMailboxTimer);
       clearInterval(sessionMirrorTimer);
+      // Before the slow steps below: no rewrite may start during shutdown.
+      const compactionStopped = tableCompactor.stop();
       const sessionImports = externalSessions.dispose();
       sessionHints.dispose();
       sessionsListeners.clear();
@@ -1942,7 +1944,7 @@ export async function startEmbeddedServer(
           { name: "previews", dispose: () => remotePreviews.close() },
           { name: "HTTP server", dispose: () => app.close() },
           { name: "framework services", dispose: () => catamorphic.close() },
-          { name: "table compaction", dispose: () => tableCompactor.stop() },
+          { name: "table compaction", dispose: () => compactionStopped },
           // After the turns stopped: the harnesses kept warm for their chats.
           { name: "warm harnesses", dispose: () => agentRegistry.dispose() },
           // The host owns Kysely. Always attempt its WAL flush last and report

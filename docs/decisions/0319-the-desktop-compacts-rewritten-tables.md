@@ -25,10 +25,14 @@ a rewrite of the bloated tables does.
 The desktop host keeps a short list of tables its own code rewrites in place
 (`TableCompactor`, `apps/desktop/src/main/server/table-compaction.ts`). It
 rewrites one with `VACUUM FULL` when the table's size with indexes and TOAST
-exceeds both 16 MB and four times its size after its last rewrite. One pass
-runs at boot, after migrations and before windows read the tables, and then
-every 30 minutes. On the profile above, the first pass took 1.3 s and later
-passes 3 ms.
+exceeds both 16 MB and four times its size after its last rewrite. That size
+is recorded in `desktop.table_compactions`, so a later launch does not rewrite
+a table whose live data alone is past the floor. A rewrite that fails is
+logged and recorded at the size it failed at: the other tables still run, and
+it is not retried until the table grows that far again. One pass runs at boot,
+after migrations and before windows read the tables, and then every 30
+minutes; shutdown clears the timer before its slow steps. On the profile
+above, the first pass took 1.3 s and later passes 3 ms.
 
 A new table joins the list when measurement shows it rewritten in place.
 Writers still avoid needless updates: the renderer no longer writes an

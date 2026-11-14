@@ -22,8 +22,18 @@ export function saveWorkspace({
 }): Promise<void> {
   const snapshot = serializeWorkspace(workspace);
   const text = JSON.stringify(snapshot);
-  if (written.get(projectId) === text)
-    return writes.get(projectId) ?? Promise.resolve();
+  if (written.get(projectId) === text) {
+    const pending = writes.get(projectId);
+    // The same snapshot is being written: if that write fails, this one
+    // (perhaps the flush at quit) writes it again.
+    return pending
+      ? pending.catch(() =>
+          written.has(projectId)
+            ? writes.get(projectId)
+            : saveWorkspace({ projectId, workspace }),
+        )
+      : Promise.resolve();
+  }
   written.set(projectId, text);
   const write = (writes.get(projectId) ?? Promise.resolve())
     .catch(() => {})
@@ -38,6 +48,14 @@ export function saveWorkspace({
     });
   writes.set(projectId, write);
   return write;
+}
+
+/**
+ * Forget what this window last wrote for a project: another window may have
+ * written it since (the project moved), so the next save must not be skipped.
+ */
+export function forgetWorkspaceSave(projectId: string): void {
+  written.delete(projectId);
 }
 
 /** Quit/update acknowledges only after every mounted project's save settles. */
