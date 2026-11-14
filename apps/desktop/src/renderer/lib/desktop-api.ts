@@ -103,9 +103,9 @@ import type {
 import type { ResourceSnapshot } from "../../shared/resources.js";
 import type {
   ScreenShareAnswer,
-  ScreenShareKind,
+  ScreenShareCaptureSources,
   ScreenShareRequest,
-  ScreenShareSources,
+  ScreenShareTabState,
 } from "../../shared/screen-share.js";
 import type {
   SettingsPatch,
@@ -1718,15 +1718,24 @@ export interface CatamorphicDesktopApi {
     listener: (downloads: DownloadRecord[]) => void,
   ) => () => void;
   screenShareSources: (input: {
-    guestId?: number;
-    kinds?: ScreenShareKind[];
-  }) => Promise<ScreenShareSources>;
+    kinds: Array<"window" | "screen">;
+    /** The share request asking: one desktop portal dialog per request. */
+    requestId?: string;
+  }) => Promise<ScreenShareCaptureSources>;
+  /** Pictures of this window's live tabs, by guest id (null: none). */
+  screenShareThumbnails: (input: {
+    guestIds: number[];
+  }) => Promise<Record<number, string | null>>;
   screenShareAnswer: (answer: ScreenShareAnswer) => Promise<boolean>;
   onScreenShareRequest: (
     listener: (request: ScreenShareRequest) => void,
   ) => () => void;
   onScreenShareWithdrawn: (
     listener: (payload: { ids: string[] }) => void,
+  ) => () => void;
+  /** A tab handed to a share started being shared, or stopped. */
+  onScreenShareTabState: (
+    listener: (update: ScreenShareTabState) => void,
   ) => () => void;
   extensionsState: () => Promise<ExtensionsState>;
   extensionsSetEnabled: (input: {

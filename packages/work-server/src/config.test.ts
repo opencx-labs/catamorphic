@@ -136,7 +136,7 @@ it("reads machine classes, the Hetzner token and the worker image (ADR 0205)", (
   ).toBe("registry.example.com/work:pinned");
 });
 
-it("refuses WORK_GATEWAY_CONFIG instead of dropping its connections (ADR 0315)", () => {
+it("refuses WORK_GATEWAY_CONFIG instead of dropping its connections (ADR 0316)", () => {
   expect(() =>
     workServerConfigFromEnv({
       WORK_DATA_DIR: dir,

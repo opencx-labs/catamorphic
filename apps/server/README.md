@@ -125,13 +125,13 @@ the database and protect the key separately. Losing the key makes provider
 connections and project secrets unrecoverable. Project secrets are sealed in
 the same vault; their database rows hold only references. A deployment that
 keeps secrets in its own secret manager passes it as the `credentialVault`
-hook instead; Work then holds no vault key or records (ADR 0315).
+hook instead; Work then holds no vault key or records (ADR 0316).
 
 Agents and workflows reach company systems through the connection gateway.
 MCP endpoints, HTTP APIs, Git hosts, model APIs, and read-only database
 connections are providers your own entry point passes as
 `hooks.connectionProviders`, beside company guards and model routing policy
-(ADRs 0183, 0294, 0315;
+(ADRs 0183, 0294, 0316;
 reference source: [`src/index.ts`](src/index.ts);
 [your own image](../../packages/work-server/README.md#your-own-image)). See
 [secrets and the gateway](../../skills/setup-work-server/references/secrets-and-gateway.md).
@@ -156,7 +156,7 @@ Projects commit which Environment may use which named connection in
 API. Members see an Environment's aliases and authorize their own accounts at
 `/api/projects/:id/environments/:environment/connections`.
 
-Connection providers and OAuth application details are host code (ADR 0315).
+Connection providers and OAuth application details are host code (ADR 0316).
 The library does not supply a shared Slack or Google OAuth identity. Register
 your own provider applications (`defineMcpConnectionProvider` takes a
 pre-registered `oauth.client`), configure their HTTPS callback URLs, and pass

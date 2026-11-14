@@ -3,7 +3,7 @@
  * entry point and image, calling `createWorkServer({ config, hooks })`.
  * `apps/server/src/index.ts` is reference source; config is typed data,
  * hooks are code (ADR 0183), connections and the vault among them (ADR
- * 0315).
+ * 0316).
  */
 // What a company's own server file needs (ADR 0261), from one package.
 export {

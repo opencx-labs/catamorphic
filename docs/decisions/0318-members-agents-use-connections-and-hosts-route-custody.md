@@ -1,6 +1,6 @@
-# 0316: Members' own agents use connections; hosts route custody
+# 0318: Members' own agents use connections; hosts route custody
 
-- **Status:** Accepted (amends 0065, 0166, 0172; builds on 0315)
+- **Status:** Accepted (amends 0065, 0166, 0172; builds on 0316)
 - **Date:** 2026-11-14
 
 ## Context

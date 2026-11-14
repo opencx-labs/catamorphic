@@ -1,4 +1,4 @@
--- One refresher at a time per connection, across every replica (ADR 0316).
+-- One refresher at a time per connection, across every replica (ADR 0318).
 -- Single-use refresh tokens are spent by the first exchange, so a second
 -- concurrent exchange fails, and reuse detection can revoke the first. The
 -- holder sets these before calling the provider and clears them when it

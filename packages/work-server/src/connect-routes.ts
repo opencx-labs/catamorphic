@@ -17,7 +17,7 @@ const BINDING_MAX_AGE_SECONDS = 15 * 60;
 
 /**
  * Where a member's own agent sends its person to connect an account
- * (ADR 0316). The page needs a browser signed in to Work as the member the
+ * (ADR 0318). The page needs a browser signed in to Work as the member the
  * link was made for; it redeems the link, binds the attempt to this browser
  * with an HTTP-only cookie, and continues to the provider. A link forwarded
  * to someone else opens nothing, and an upstream consent page forwarded

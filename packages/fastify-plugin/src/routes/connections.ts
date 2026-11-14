@@ -504,7 +504,7 @@ function handleConnectionError(
 
 /**
  * The cookie a host's connect page sets when a member redeems a connect
- * link (ADR 0316); an attempt started there completes only with it.
+ * link (ADR 0318); an attempt started there completes only with it.
  */
 export const CONNECT_BINDING_COOKIE = "catamorphic_connect";
 

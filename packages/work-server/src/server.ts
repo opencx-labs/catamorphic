@@ -159,7 +159,7 @@ export interface WorkServerHooks {
   capabilityProviders?: CreateCatamorphicConfig["capabilityProviders"];
   /**
    * The connections the gateway brokers beside the built-in GitHub and
-   * model providers (ADR 0315): host code built with
+   * model providers (ADR 0316): host code built with
    * `defineHttpApiConnectionProvider`, `definePostgresConnectionProvider`,
    * `defineModelConnectionProvider`, `defineGitConnectionProvider` (from
    * `@catamorphic/server-sdk`), `defineMcpConnectionProvider` (from
@@ -203,7 +203,7 @@ export interface WorkServerHooks {
   vaultKeys?: () => Promise<Uint8Array[]>;
   /**
    * Where every stored credential lives, replacing Work's own encrypted
-   * vault (ADR 0315): a company secret manager, an HSM, or any store that
+   * vault (ADR 0316): a company secret manager, an HSM, or any store that
    * implements `CredentialVault`. Work then creates no vault key and no
    * credentials directory, and boot fails if `vaultKeys` (here or in
    * config) is also given, since the supplied vault keeps its own keys.
@@ -453,7 +453,7 @@ async function createWorkServerInner(
   // The credential vault key is its own secret (ADR 0162): never derived
   // from the sign-in secret, and supplied by a key service through a hook
   // when the deployment has one.
-  // A host may instead supply the whole vault, keys and all (ADR 0315).
+  // A host may instead supply the whole vault, keys and all (ADR 0316).
   const credentialVault: CredentialVault =
     hooks.credentialVault ??
     workCredentialVault({
@@ -491,7 +491,7 @@ async function createWorkServerInner(
   }
   // Vault keys rotate (ADR 0162): an instance must open at least one key
   // the deployment already knows; its current key then joins the set. A
-  // vault the host supplies keeps and rotates its own keys (ADR 0315).
+  // vault the host supplies keeps and rotates its own keys (ADR 0316).
   const keyed =
     hooks.credentialVault === undefined &&
     credentialVault instanceof EncryptedCredentialVault
@@ -597,7 +597,7 @@ async function createWorkServerInner(
   // backed by the `github` service connection an administrator connects.
   const github = defineGithubConnectionProvider(hooks.github);
 
-  // Connections are host code (ADR 0315); pooled ones close on shutdown.
+  // Connections are host code (ADR 0316); pooled ones close on shutdown.
   const hostConnectionProviders = hooks.connectionProviders ?? [];
   disposers.push(() =>
     Promise.all(hostConnectionProviders.map((provider) => provider.close?.())),

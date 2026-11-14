@@ -1228,7 +1228,7 @@ export class ConnectionBroker {
     ) {
       throw new ConnectionActionDeniedError("Connection permission denied");
     }
-    // resolveSnapshot refreshes before judging expiry (ADR 0316).
+    // resolveSnapshot refreshes before judging expiry (ADR 0318).
     const [binding] = await this.connections
       .resolveSnapshot({
         identity,
@@ -1270,7 +1270,7 @@ export class ConnectionBroker {
 
   /**
    * A signed-in member's own agent, with no Work session or Allocation
-   * (ADR 0316): the request's identity is already the member's live one,
+   * (ADR 0318): the request's identity is already the member's live one,
    * and the binding resolves from current authority on every call, so a
    * detach, revocation, or narrowed role takes effect at once. A missing
    * account surfaces as `AuthenticationRequiredError` for the caller to
@@ -1333,7 +1333,7 @@ export class ConnectionBroker {
 /**
  * Where a brokered call comes from: an existing Allocation (an agent
  * session or a workflow run), or a signed-in member's own agent naming the
- * project and Environment it works in (ADR 0316).
+ * project and Environment it works in (ADR 0318).
  */
 export type BrokerTarget =
   | { allocationId: string }

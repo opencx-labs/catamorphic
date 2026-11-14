@@ -18,7 +18,7 @@ import {
 
 /**
  * A signed-in member's own agent uses the project's connections over the
- * project MCP (ADR 0316): each alias the member may use in the Environment
+ * project MCP (ADR 0318): each alias the member may use in the Environment
  * appears as native tools, `<alias>__<action>`, called through the broker
  * with the member's live authority. No Work session or Allocation is
  * involved, and no credential reaches the client. An alias acting with the

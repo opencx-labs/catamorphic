@@ -47,7 +47,7 @@ matters.
 - A custom server can fetch keys from a key management service at boot with
   the `vaultKeys` hook of `@catamorphic/work-server`.
 - Or keep credentials out of Work entirely: pass your own `CredentialVault`
-  (a company secret manager, an HSM) as `hooks.credentialVault` (ADR 0315).
+  (a company secret manager, an HSM) as `hooks.credentialVault` (ADR 0316).
   Work then stores every connection key, OAuth token and project secret
   there, writes no vault key or credentials directory, and refuses to start
   if `WORK_VAULT_KEY` or the `vaultKeys` hook is also set: the vault you
@@ -57,7 +57,7 @@ matters.
   owner, and the project), and `routeCredentialVaults` from
   `@catamorphic/server-sdk` sends each write to the store your function
   picks. Each stored ref remembers its store, so changing the function moves
-  only new writes (ADR 0316):
+  only new writes (ADR 0318):
 
   ```ts
   credentialVault: routeCredentialVaults({
@@ -102,7 +102,7 @@ inputs or return them as outputs.
 
 The gateway brokers GitHub and the `anthropic` and `openai` model APIs
 built in, plus the connection providers your server passes as
-`hooks.connectionProviders` (ADRs 0294, 0315). There is no connection file:
+`hooks.connectionProviders` (ADRs 0294, 0316). There is no connection file:
 each provider is a function call in your server's entry point, and a vendor
 Work does not know is a provider you write.
 

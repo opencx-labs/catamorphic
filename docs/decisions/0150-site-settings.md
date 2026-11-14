@@ -1,8 +1,14 @@
 # 0150: Site settings
 
-- **Status:** Accepted
+- **Status:** Accepted (amended by 0235, 0315)
 - **Date:** 2026-09-22
 - **Builds on:** 0062 (session privacy), 0147 (uniform sidebar sections)
+
+> Amended by [0315](0315-shared-tabs-stay-rendered-and-sound-is-a-choice.md):
+> the picker lists every tab of the window, sleeping ones too; a shared tab
+> stays rendered and awake while it is shared; the page's request for sound
+> becomes a checkbox (tab audio, or system audio with a screen where the OS
+> allows it).
 
 ## Context
 

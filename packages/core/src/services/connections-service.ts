@@ -104,7 +104,7 @@ export class ConnectionUnavailableError extends Error {
  * The connection's refresh could not run just now (offline, the provider
  * failed to answer, another replica still refreshing): nothing says its
  * authority is gone, so the call may be retried and nothing is suspended
- * or sent to reconnect (ADR 0316).
+ * or sent to reconnect (ADR 0318).
  */
 export class ConnectionTemporarilyUnavailableError extends ConnectionUnavailableError {
   readonly transient = true;
@@ -519,7 +519,7 @@ export class ConnectionsService {
     state: string;
     callback: Readonly<Record<string, string>>;
     /**
-     * The browser binding an offered attempt was redeemed with (ADR 0316).
+     * The browser binding an offered attempt was redeemed with (ADR 0318).
      * An attempt that has one completes only with it.
      */
     browserBinding?: string;
@@ -727,7 +727,7 @@ export class ConnectionsService {
   async completeAuthorizationCallback(args: {
     state: string;
     callback: Readonly<Record<string, string>>;
-    /** The redeeming browser's binding, from its cookie (ADR 0316). */
+    /** The redeeming browser's binding, from its cookie (ADR 0318). */
     browserBinding?: string;
   }): Promise<ConnectionRecord> {
     const attempt = await this.db
@@ -762,7 +762,7 @@ export class ConnectionsService {
 
   /**
    * A single-use link for a member's own agent to hand its person, to
-   * connect their account for one alias (ADR 0316). Redeeming it needs a
+   * connect their account for one alias (ADR 0318). Redeeming it needs a
    * browser signed in as this member; the token is returned once and only
    * its hash is kept.
    */
@@ -1451,7 +1451,7 @@ export class ConnectionsService {
         args.identity,
         selected.connectionId,
       );
-      // Refresh before judging expiry, as admission does (ADR 0316).
+      // Refresh before judging expiry, as admission does (ADR 0318).
       const connection = await this.admissible(args.identity, stored);
       if (
         !isReady(connection) ||
@@ -1659,7 +1659,7 @@ export class ConnectionsService {
   /**
    * Open what Work keeps for a connection. A connection whose provider
    * obtains its own credential stores nothing, and its calls receive
-   * empty material (ADR 0316).
+   * empty material (ADR 0318).
    */
   private withStoredMaterial<T>(args: {
     tenantId: string;
@@ -1676,7 +1676,7 @@ export class ConnectionsService {
 
   /**
    * Seal provider material in the host's vault, or nothing for a provider
-   * that keeps no credential (ADR 0316). Empty material from any other
+   * that keeps no credential (ADR 0318). Empty material from any other
    * provider is a defect, never a silent "store nothing".
    */
   private async seal(args: {
@@ -1707,7 +1707,7 @@ export class ConnectionsService {
     if (id) await this.vault.delete({ tenantId: args.tenantId, ref: { id } });
   }
 
-  /** The trusted context of a provider call (ADR 0316). */
+  /** The trusted context of a provider call (ADR 0318). */
   providerContext(args: {
     identity: Identity;
     connection: ConnectionRow;
@@ -1794,7 +1794,7 @@ export class ConnectionsService {
     }
     // One refresher per connection across every replica: a refresh token
     // is often single-use, so a second exchange fails and reuse detection
-    // can revoke the first (ADR 0316).
+    // can revoke the first (ADR 0318).
     const lease = await this.takeRefreshLease(connection);
     if (!lease) {
       const settled = await this.awaitRefresh(args.identity, connection);

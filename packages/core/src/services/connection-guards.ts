@@ -12,7 +12,7 @@ export interface ConnectionActionContext {
   /**
    * An agent session can ask a person; a workflow run cannot. `member` is a
    * signed-in member's own agent over the project MCP, with no Work session
-   * (ADR 0316); its escalations are refused.
+   * (ADR 0318); its escalations are refused.
    */
   caller: "agent" | "workflow" | "member";
   agentSessionId?: string;

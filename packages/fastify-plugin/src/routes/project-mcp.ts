@@ -63,7 +63,7 @@ import {
  */
 const TOOL_SYNC_BUDGET_MS = 30_000;
 
-/** What a member's own agent is told about connection tools (ADR 0316). */
+/** What a member's own agent is told about connection tools (ADR 0318). */
 const CONNECTION_INSTRUCTIONS =
   "- Connections: tools named <alias>__<action> call the project's connected systems as you, under your roles and the company's checks; no credential reaches you. An <alias>__connect tool returns a link for the person to connect their own account in their browser; afterwards, reconnect this server in your client (in Claude Code, /mcp) to see its tools.";
 
@@ -105,12 +105,12 @@ export function registerProjectMcpRoutes(
     const { sessionId, allocationId, environment } = request.query as {
       sessionId?: string;
       allocationId?: string;
-      /** The Environment a member's own agent works in (ADR 0316). */
+      /** The Environment a member's own agent works in (ADR 0318). */
       environment?: string;
     };
     const identity = resolveIdentity(request);
     // Someone the project grants nothing sees no project here at all; a
-    // role granting only connections sees only those (ADR 0316).
+    // role granting only connections sees only those (ADR 0318).
     const member = mayUseProject(identity, projectId);
     if (
       !member &&
@@ -157,7 +157,7 @@ export function registerProjectMcpRoutes(
         ];
 
     // A Work session reaches connections through its own grants; a member's
-    // own agent reaches them here, with live authority (ADR 0316).
+    // own agent reaches them here, with live authority (ADR 0318).
     const connections =
       sessionId || !ctx.projectMcp?.memberConnections
         ? undefined

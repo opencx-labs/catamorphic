@@ -7,7 +7,7 @@ export type ConnectionPrincipalKind =
   | "tenant_service";
 export type ConnectionStatus = "pending" | "ready" | "expired" | "revoked";
 /**
- * Whose authority an alias acts with (ADR 0316): each member's own account,
+ * Whose authority an alias acts with (ADR 0318): each member's own account,
  * or one named service connection. Never both, so no precedence exists.
  */
 export type ConnectionBindingPrincipal = "member" | "service";

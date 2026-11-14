@@ -125,7 +125,7 @@ function app(core: unknown, memberConnections = true) {
   return created;
 }
 
-describe("connections on the project MCP for a member's own agent (ADR 0316)", () => {
+describe("connections on the project MCP for a member's own agent (ADR 0318)", () => {
   it("lists each usable alias's actions as native tools, in the default Environment", async () => {
     const { core, listActions } = fakeCore();
     const { result } = await rpc(app(core), "tools/list");
@@ -338,7 +338,7 @@ describe("connections on the project MCP for a member's own agent (ADR 0316)", (
   });
 });
 
-describe("connect link browser bindings (ADR 0316)", () => {
+describe("connect link browser bindings (ADR 0318)", () => {
   it("keeps one cookie per attempt and accepts the plain name only on loopback", () => {
     const first = connectBindingCookie({ state: "state-1", loopback: false });
     const second = connectBindingCookie({ state: "state-2", loopback: false });

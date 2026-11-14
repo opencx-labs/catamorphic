@@ -24,7 +24,7 @@ export interface ConnectionAuthorizationResult {
   /**
    * What Work keeps for the connection, in the host's vault. A provider
    * that `keepsNoCredential` returns it empty; for any other provider empty
-   * material is an error (ADR 0316).
+   * material is an error (ADR 0318).
    */
   material: Uint8Array;
   account?: Json;
@@ -149,7 +149,7 @@ export interface ConnectionHttpEndpoint {
 
 /**
  * Who and what a provider call is for, derived by core from the
- * connection and its caller, never from tool arguments (ADR 0316). A
+ * connection and its caller, never from tool arguments (ADR 0318). A
  * provider may use it to mint or fetch a credential per call, scope an
  * upstream session, or tag the upstream audit trail.
  */
@@ -192,7 +192,7 @@ export interface ConnectionProvider {
    * The provider obtains its credential itself on each call, from the
    * call's `context` (a host secret manager, a token service), so Work
    * stores nothing for its connections and its calls receive empty
-   * material (ADR 0316). Not available with `git`, `model` or `http`,
+   * material (ADR 0318). Not available with `git`, `model` or `http`,
    * whose gateway routes forward stored credentials.
    */
   readonly keepsNoCredential?: boolean;

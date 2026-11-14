@@ -11,7 +11,7 @@ import {
 import { oauthAccessToken, testServerOptions } from "./test-support.js";
 
 /**
- * A member's own agent connects the member's account (ADR 0316): the
+ * A member's own agent connects the member's account (ADR 0318): the
  * project MCP offers a link, only a browser signed in as that member
  * redeems it, and only that browser completes the provider's callback.
  */
@@ -171,7 +171,7 @@ afterAll(async () => {
   fs.rmSync(dataDir, { recursive: true, force: true });
 });
 
-describe("connecting a member's own account from their agent (ADR 0316)", () => {
+describe("connecting a member's own account from their agent (ADR 0318)", () => {
   it("offers a link only the member's own signed-in browser can complete", async () => {
     const ada = tokens.ada ?? "";
     expect(await toolNames(ada)).toContain("tracker__connect");

@@ -80,7 +80,7 @@ action a guard escalates waits for approval in the Work app.
 ## The project's connections as tools
 
 A member's own client also calls the project's connections directly (ADR
-0316). Each alias the member's role grants in the Environment appears as
+0318). Each alias the member's role grants in the Environment appears as
 native tools named `<alias>__<action>`, with the upstream tool's schema and
 annotations, so the client's own per-tool permissions apply. Add
 `?environment=<name>` to the address to work in another Environment; the

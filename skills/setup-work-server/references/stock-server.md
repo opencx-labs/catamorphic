@@ -131,7 +131,7 @@ data and its `hooks` are code (ADR 0183):
   then takes its service account key inline (`"credentials": { "key": … }`)
   rather than as a file.
 - Connection providers, guards, directories, and a credential vault of your
-  own go in `hooks` (ADR 0315); see
+  own go in `hooks` (ADR 0316); see
   [Connections are host code](secrets-and-gateway.md#connections-are-host-code)
   and [Guards are host code](secrets-and-gateway.md#guards-are-host-code).
 - Generated state stays under the data directory: the vault key, generated

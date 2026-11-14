@@ -18,7 +18,7 @@ import {
 } from "./test-support.js";
 
 /**
- * A host's own vault (ADR 0315): a company secret manager stands in for
+ * A host's own vault (ADR 0316): a company secret manager stands in for
  * Work's encrypted vault, holds every stored credential, and Work keeps no
  * key or credential of its own on disk.
  */
@@ -91,7 +91,7 @@ afterAll(async () => {
   fs.rmSync(root, { recursive: true, force: true });
 });
 
-describe("a host-supplied credential vault (ADR 0315)", () => {
+describe("a host-supplied credential vault (ADR 0316)", () => {
   it("holds a stored credential, and Work keeps no vault of its own", async () => {
     const operatorSecret = fs
       .readFileSync(path.join(dataDir, "operator-secret"), "utf8")

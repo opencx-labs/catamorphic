@@ -1,4 +1,4 @@
--- A member's own agent asks Work for a link to connect an account (ADR 0316).
+-- A member's own agent asks Work for a link to connect an account (ADR 0318).
 -- The offer names who may redeem it and for which alias; it is redeemed
 -- once, in a browser signed in as that member. Only its hash is stored.
 CREATE TABLE connection_connect_offers (

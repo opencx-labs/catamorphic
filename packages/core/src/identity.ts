@@ -451,7 +451,7 @@ export function mayUseProject(identity: Identity, projectId: string): boolean {
 /**
  * Whether a caller may open the project MCP: a project member, or someone
  * whose roles grant only connections, who uses those connections from
- * their own agent and nothing else of the project (ADR 0316).
+ * their own agent and nothing else of the project (ADR 0318).
  */
 export function mayUseProjectConnections(
   identity: Identity,

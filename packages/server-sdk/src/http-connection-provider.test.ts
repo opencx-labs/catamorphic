@@ -7,7 +7,7 @@ import {
   type HttpApiConnectionOptions,
 } from "./http-connection-provider.js";
 
-/** Who a provider call is for, as core derives it (ADR 0316). */
+/** Who a provider call is for, as core derives it (ADR 0318). */
 const TEST_CONTEXT = {
   tenantId: "tenant-1",
   connectionId: "connection-1",
@@ -487,7 +487,7 @@ describe("brokered HTTP API connections (ADR 0162)", () => {
     ).toThrow("invalid action name");
   });
 
-  it("holds limits within the host ceilings (ADR 0315)", () => {
+  it("holds limits within the host ceilings (ADR 0316)", () => {
     const define = (overrides: Partial<HttpApiConnectionOptions>) => () =>
       defineHttpApiConnectionProvider({
         kind: "billing",

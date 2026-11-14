@@ -1,4 +1,4 @@
-# 0315: Connections and vaults are host code
+# 0316: Connections and vaults are host code
 
 - **Status:** Accepted (amends 0162, 0163, 0183, 0256)
 - **Date:** 2026-11-14
@@ -55,4 +55,4 @@ entry point to offer the same providers. Hosts may keep credentials in
 their own secret manager without any record inside Work. A supplied vault
 must also read the records an existing deployment already wrote (for
 example `routeCredentialVaults` with Work's vault as its `fallback`, ADR
-0316), or every stored credential must be entered again.
+0318), or every stored credential must be entered again.

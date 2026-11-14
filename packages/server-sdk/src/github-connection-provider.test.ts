@@ -5,7 +5,7 @@ import {
   GITHUB_CONNECTION_ACTIONS,
 } from "./github-connection-provider.js";
 
-/** Who a provider call is for, as core derives it (ADR 0316). */
+/** Who a provider call is for, as core derives it (ADR 0318). */
 const TEST_CONTEXT = {
   tenantId: "tenant-1",
   connectionId: "connection-1",

@@ -28,7 +28,7 @@ import {
   POSTGRES_CONNECTION_CEILINGS,
 } from "./postgres-connection-provider.js";
 
-/** Who a provider call is for, as core derives it (ADR 0316). */
+/** Who a provider call is for, as core derives it (ADR 0318). */
 const TEST_CONTEXT = {
   tenantId: "tenant-1",
   connectionId: "connection-1",
@@ -160,7 +160,7 @@ describe("Postgres transaction-pool cancellation", () => {
   });
 });
 
-describe("Postgres connection ceilings (ADR 0315)", () => {
+describe("Postgres connection ceilings (ADR 0316)", () => {
   const define = (limits: Record<string, number>) => () =>
     definePostgresConnectionProvider({
       kind: "prod-db",

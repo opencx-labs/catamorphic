@@ -5,7 +5,7 @@ export interface CredentialRef {
 export type CredentialMaterial = Uint8Array;
 
 /**
- * What a stored record is for (ADR 0316). Core names every writer, so a
+ * What a stored record is for (ADR 0318). Core names every writer, so a
  * host vault can route each kind to its own store.
  */
 export type CredentialPurpose =
@@ -31,7 +31,7 @@ export type CredentialOwner =
 
 /**
  * Trusted context for one write, set by core and never by a caller of a
- * public API (ADR 0316). Reads and deletes take only the ref, so a ref must
+ * public API (ADR 0318). Reads and deletes take only the ref, so a ref must
  * identify the store that wrote it.
  */
 export interface CredentialPlacement {
@@ -43,7 +43,7 @@ export interface CredentialPlacement {
 
 /**
  * Credential custody. Hosts may supply any implementation: Work never
- * requires that a secret be stored by Work itself (ADR 0316).
+ * requires that a secret be stored by Work itself (ADR 0318).
  */
 export interface CredentialVault {
   put(args: {
@@ -107,7 +107,7 @@ function key(tenantId: string, ref: CredentialRef): string {
 const ROUTE_KEY = /^[a-z0-9][a-z0-9-]{0,31}$/;
 
 /**
- * One vault over several, chosen per write by host code (ADR 0316). Each ref
+ * One vault over several, chosen per write by host code (ADR 0318). Each ref
  * carries the key of the vault that wrote it, so reads, refreshes and
  * deletes reach that vault even after `select` changes; changing `select`
  * only moves new writes. Keys are lowercase letters, digits and hyphens.

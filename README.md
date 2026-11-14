@@ -249,7 +249,7 @@ agents consume MCP connectors (registry search, plugin marketplaces,
 elicitation via `@catamorphic/mcp`), and a project's workflows, and on a
 Work server its connections, are served *as* MCP tools to any MCP client:
 each member connects their own accounts from a browser-bound link and calls
-them under their roles and the company's guards (ADR 0316). In the desktop, agents also drive the
+them under their roles and the company's guards (ADR 0318). In the desktop, agents also drive the
 workspace itself: browser tabs (real input, uploads, downloads, and a page's
 console and network for web development), terminals, `open_surface`,
 `point_at`. Local harnesses get the person's login-shell PATH, so they reach

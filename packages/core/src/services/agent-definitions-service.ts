@@ -347,7 +347,7 @@ export function agentDefinitionSchema(opts?: { allowE2eFake?: boolean }) {
           z.union([
             z.string().regex(CONNECTION_ALIAS_PATTERN),
             // Strict: whose account an alias uses is the Environment's
-            // binding, never the agent's (ADR 0316).
+            // binding, never the agent's (ADR 0318).
             z.strictObject({
               alias: z.string().regex(CONNECTION_ALIAS_PATTERN),
               capabilities: z.array(z.string().min(1)).optional(),

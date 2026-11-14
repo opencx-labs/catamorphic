@@ -141,7 +141,7 @@ const committed: Record<string, EnvironmentConnectionBinding> = {
   sloppy: { provider: "careless", principal: "service", service: "sloppy" },
 };
 
-describe("host-owned connections (ADR 0316)", () => {
+describe("host-owned connections (ADR 0318)", () => {
   const vault = new RecordingVault();
   const providers = new ConnectionProviderRegistry([
     oauth,

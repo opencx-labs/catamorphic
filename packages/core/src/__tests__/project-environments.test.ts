@@ -195,7 +195,7 @@ describe("project Environment policy", () => {
       "principal",
     ],
     [
-      "an alias that accepts both a member and a service (ADR 0316)",
+      "an alias that accepts both a member and a service (ADR 0318)",
       { provider: "docs", principal: "either", service: "docs" },
       "principal",
     ],

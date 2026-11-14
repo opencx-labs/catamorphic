@@ -148,7 +148,7 @@ function EnvironmentConnectionRow({
           </button>
         )}
       </div>
-      {/* An alias acts with one authority, so only that one shows (ADR 0316). */}
+      {/* An alias acts with one authority, so only that one shows (ADR 0318). */}
       <div className="mt-2 grid gap-1.5">
         {binding.principal === "member" ? (
           <PrincipalLine label="Personal" principal={personal} />

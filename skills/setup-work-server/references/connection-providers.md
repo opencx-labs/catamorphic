@@ -4,8 +4,8 @@ Use this when a Work server should broker a system that the built-in helpers
 do not fit as they are: credentials issued per call, secrets kept in the
 company's own manager, per-person access the company decides, or an MCP server
 reached through company logic. A provider is ordinary TypeScript the
-deployment's entry point passes in `hooks.connectionProviders` (ADRs 0315,
-0316). There is no configuration format; write code, and put any recipe for a
+deployment's entry point passes in `hooks.connectionProviders` (ADRs 0316,
+0318). There is no configuration format; write code, and put any recipe for a
 specific vendor in a project or server skill, not in Work.
 
 Start from a helper when one fits (`defineHttpApiConnectionProvider`,

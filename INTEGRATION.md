@@ -1045,7 +1045,7 @@ inject their own infrastructure and auth.
 
 Pass `credentialVault` and `connectionProviders` to `createCatamorphic` when
 external systems are enabled. Both are host code, never configuration (ADR
-0315): the provider helpers are functions a host calls, and the vault may be
+0316): the provider helpers are functions a host calls, and the vault may be
 Work's `EncryptedCredentialVault` or any `CredentialVault` over the host's
 own secret manager; a Work server takes them as `hooks.connectionProviders`
 and `hooks.credentialVault`. Work's own `EncryptedCredentialVault` stores
@@ -1063,7 +1063,7 @@ principal, project, Environment, alias, and the live acting member. A
 provider that declares `keepsNoCredential` stores nothing in any vault and
 obtains its credential from that context on each call; it cannot also serve
 the gateway's Git, model or sandbox HTTP routes. Empty material from any
-other provider is refused (ADR 0316).
+other provider is refused (ADR 0318).
 Storing project secret values also requires `credentialVault` (ADR 0281),
 even without connection providers. No plaintext storage or automatic legacy
 import exists. Keep production wrapping keys outside the database; use
@@ -1073,7 +1073,7 @@ wrapping key remains outside the database. Provider code runs in the control pla
 `context.connections.<alias>.<action>(args)`, Work-hosted agents use
 allocation-bound Catamorphic MCP grants, and members' own agents call the
 project MCP's `<alias>__<action>` tools as caller `member`, with no
-Allocation and live authority on every call (ADR 0316). None receives
+Allocation and live authority on every call (ADR 0318). None receives
 upstream credentials. A host serving members' own agents opts in with
 `projectMcp.memberConnections: true` and sets `projectMcp.connectLink` to a page that requires a browser signed in as the
 member, calls `connections.redeemConnectionOffer`, sets the returned
@@ -1141,7 +1141,7 @@ where `service` names a service connection (the project's own name first,
 then the tenant's) and `capabilities` narrows the alias. An alias acts with
 one authority, never both: a project that wants a member's own account and
 a shared one declares two aliases, and workflows and agents name the alias
-they need (ADR 0316). Core reads them with
+they need (ADR 0318). Core reads them with
 the Environment on demand; there is no binding table or API. A host may offer
 extra aliases beside the committed ones with the `connectionBindings` option
 of `createCatamorphic` (the desktop offers its profile MCP servers this way);

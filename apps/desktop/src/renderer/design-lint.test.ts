@@ -174,6 +174,8 @@ describe("design lint", () => {
         "Chrome's password bubble: it waits for an answer",
       "components/composer-menu.tsx":
         "bound to the composer's word, closing as the caret leaves it, on Escape or blur",
+      "components/screen-share-picker.tsx":
+        "its source lists are not popups: they sit in the share dialog, which closes on Escape and the backdrop",
     };
     const unclosed = appSources()
       .filter(({ file }) => !(file in ownDismissal))

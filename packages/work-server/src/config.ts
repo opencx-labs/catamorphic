@@ -36,7 +36,7 @@ export interface WorkAgentSettings {
  * image derives it from `WORK_*` variables and files with
  * {@link workServerConfigFromEnv}, the only code that knows either; a custom
  * server may construct it in code. Code, such as connection providers,
- * connection guards and a credential vault, goes in `hooks` (ADR 0315).
+ * connection guards and a credential vault, goes in `hooks` (ADR 0316).
  */
 export interface WorkServerConfig {
   /**
@@ -132,7 +132,7 @@ export function workServerConfigFromEnv(
   if (env.WORK_GATEWAY_CONFIG) {
     // Refuse rather than ignore: the connections it named would vanish.
     throw new Error(
-      "WORK_GATEWAY_CONFIG is no longer read. Pass connection providers as code in hooks.connectionProviders (ADR 0315).",
+      "WORK_GATEWAY_CONFIG is no longer read. Pass connection providers as code in hooks.connectionProviders (ADR 0316).",
     );
   }
   const port = Number(env.PORT ?? 4700);

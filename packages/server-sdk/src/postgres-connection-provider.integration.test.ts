@@ -3,7 +3,7 @@ import pg from "pg";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { definePostgresConnectionProvider } from "./postgres-connection-provider.js";
 
-/** Who a provider call is for, as core derives it (ADR 0316). */
+/** Who a provider call is for, as core derives it (ADR 0318). */
 const TEST_CONTEXT = {
   tenantId: "tenant-1",
   connectionId: "connection-1",
