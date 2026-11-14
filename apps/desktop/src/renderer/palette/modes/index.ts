@@ -33,11 +33,15 @@ export function usePaletteModes({
   projectAgents,
   skillModes,
   agentModeActive,
+  agentId,
+  agentChoice,
 }: {
   picker: PaletteChoiceMode | null;
   /** Skills and a chosen skill's instructions (modes/skills.tsx). */
   skillModes: readonly PaletteMode[];
   agentModeActive: boolean;
+  agentId?: string | null;
+  agentChoice?: import("../types.js").PaletteAgentChoice;
   projectAgents: readonly ProjectAgentInfo[];
   historyRow: (entry: HistoryEntry) => PaletteItem;
   settingItems: readonly PaletteItem[];
@@ -54,11 +58,11 @@ export function usePaletteModes({
     onError,
   } = usePaletteHost();
   const sources = useWorkSourcesContext();
-  const choices = useChoiceModes({ picker, projectAgents });
+  const choices = useChoiceModes({ picker, projectAgents, agentChoice });
   const history = useHistoryMode(historyRow);
   const files = useFileModes();
   const sites = useSitesMode();
-  const input = useInputModes({ projectAgents, agentModeActive });
+  const input = useInputModes({ projectAgents, agentModeActive, agentId });
   const errorRef = useRef(onError);
   errorRef.current = onError;
   const customModes = useMemo(

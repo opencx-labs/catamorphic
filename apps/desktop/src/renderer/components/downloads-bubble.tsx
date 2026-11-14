@@ -23,6 +23,8 @@ import { ShortcutHint } from "./shortcut-hint.js";
  */
 const dismissedKey = (profileId: string) =>
   `downloads-bubble-dismissed-at:${profileId}`;
+const seenKey = (profileId: string) => `downloads-seen-at:${profileId}`;
+const RECENT_DOWNLOAD_AGE = 3 * 24 * 60 * 60 * 1000;
 function readDismissedAt(key: string): number {
   try {
     return Number(localStorage.getItem(key)) || 0;
@@ -63,6 +65,7 @@ export function DownloadsBubble({
   // until the popover has gone.
   const [showing, setShowing] = useState(false);
   const [seenAt, setSeenAt] = useState(0);
+  const [now, setNow] = useState(Date.now);
   const [profileId, setProfileId] = useState<string | null>(null);
   const [dismissedAt, setDismissedAt] = useState(0);
   // Closing: when the close was pressed, kept until the exit has played.
@@ -76,6 +79,7 @@ export function DownloadsBubble({
         if (!current) return;
         setProfileId(id);
         setDismissedAt(readDismissedAt(dismissedKey(id)));
+        setSeenAt(readDismissedAt(seenKey(id)));
       });
     return () => {
       current = false;
@@ -87,10 +91,53 @@ export function DownloadsBubble({
     const key = dismissedKey(profileId);
     const onStorage = (event: StorageEvent) => {
       if (event.key === key) setDismissedAt(readDismissedAt(key));
+      if (event.key === seenKey(profileId))
+        setSeenAt(readDismissedAt(seenKey(profileId)));
     };
     window.addEventListener("storage", onStorage);
     return () => window.removeEventListener("storage", onStorage);
   }, [profileId]);
+  // biome-ignore lint/correctness/useExhaustiveDependencies: newly delivered history advances the age cutoff
+  useEffect(() => setNow(Date.now()), [downloads]);
+  useEffect(() => {
+    const expiry = downloads
+      .filter((record) => !isActiveDownload(record))
+      .map(
+        (record) =>
+          (record.finishedAt ?? record.startedAt) + RECENT_DOWNLOAD_AGE,
+      )
+      .filter((at) => at > now)
+      .sort((a, b) => a - b)[0];
+    if (expiry === undefined) return;
+    const timer = setTimeout(
+      () => setNow(Date.now()),
+      Math.max(0, expiry - Date.now()),
+    );
+    return () => clearTimeout(timer);
+  }, [downloads, now]);
+  const recentDownloads = downloads.filter(
+    (record) =>
+      isActiveDownload(record) ||
+      (record.finishedAt ?? record.startedAt) > now - RECENT_DOWNLOAD_AGE,
+  );
+  const newestCompletion = recentDownloads.reduce(
+    (latest, record) =>
+      record.state === "completed"
+        ? Math.max(latest, record.finishedAt ?? 0)
+        : latest,
+    0,
+  );
+  // A view acknowledges completed items even when one finishes while the
+  // menu is open. Persist it so remounts and the other dock stay in sync.
+  useEffect(() => {
+    if (!open || profileId === null || newestCompletion <= seenAt) return;
+    try {
+      localStorage.setItem(seenKey(profileId), String(newestCompletion));
+    } catch {
+      /* Keep the acknowledgement for this mounted dock. */
+    }
+    setSeenAt(newestCompletion);
+  }, [open, profileId, newestCompletion, seenAt]);
   const rootRef = useRef<HTMLDivElement>(null);
   const active = downloads.filter(isActiveDownload);
   const dismissed =
@@ -123,7 +170,7 @@ export function DownloadsBubble({
     onOpenChangeRef.current?.((open || showing) && !hidden);
   }, [open, showing, hidden]);
   useEffect(() => () => onOpenChangeRef.current?.(false), []);
-  const unseen = downloads.some(
+  const unseen = recentDownloads.some(
     (record) =>
       record.state === "completed" &&
       (record.finishedAt ?? 0) > seenAt &&
@@ -149,7 +196,7 @@ export function DownloadsBubble({
   });
 
   if (hidden) return null;
-  const recent = downloads.slice(0, 5);
+  const recent = recentDownloads.slice(0, 5);
   // A download that starts while the bubble leaves brings it back.
   const dismiss = (at: number) => {
     try {
@@ -162,7 +209,6 @@ export function DownloadsBubble({
   };
   const toggle = () => {
     setOpen((value) => !value);
-    setSeenAt(Date.now());
   };
   const circumference = 2 * Math.PI * 16;
   return (

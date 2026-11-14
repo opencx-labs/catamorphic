@@ -9,6 +9,9 @@ import type {
   SidebarInputField,
   SidebarInputValues,
 } from "../../shared/sidebar.js";
+import { canFocusFormControl } from "../lib/form-focus.js";
+import { motionMs } from "../lib/motion.js";
+import { Collapsible } from "./collapsible.js";
 import { Modal } from "./modal.js";
 import { PendingButton } from "./pending-button.js";
 
@@ -82,6 +85,7 @@ export function ActionInputDialog({
       onClose={onClose}
       width={440}
       labelledBy={titleId}
+      animateSize
     >
       {shown && (
         <ActionInputForm
@@ -221,11 +225,15 @@ function ActionInputForm({
   );
   const [pending, setPending] = useState(false),
     [error, setError] = useState<string>();
+  const lastError = useRef(error);
+  if (error) lastError.current = error;
   useEffect(() => {
     if (!active) return;
-    const first = form.current?.querySelector<
-      HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement
-    >("input,textarea,select");
+    const first = [
+      ...(form.current?.querySelectorAll<
+        HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement
+      >("input,textarea,select") ?? []),
+    ].find(canFocusFormControl);
     first?.focus({ preventScroll: true });
     if (
       selectInitialValue &&
@@ -282,18 +290,18 @@ function ActionInputForm({
       <h2 id={titleId} className="text-base font-semibold text-balance">
         {request.input.title ?? request.label}
       </h2>
-      <fieldset disabled={pending} className="flex min-w-0 flex-col gap-4">
+      <fieldset disabled={pending} className="flex min-w-0 flex-col">
         <Fields
           fields={request.input.fields}
           values={values}
           onChange={setValues}
         />
+        <Collapsible open={Boolean(error)}>
+          <p role="alert" className="pt-4 text-sm text-danger">
+            {lastError.current}
+          </p>
+        </Collapsible>
       </fieldset>
-      {error && (
-        <p role="alert" className="text-sm text-danger">
-          {error}
-        </p>
-      )}
       <div className="flex justify-end gap-2">
         <button type="button" onClick={onClose} className="button-ghost">
           Cancel
@@ -323,17 +331,27 @@ function Fields({
 }) {
   return (
     <>
-      {fields
-        .filter((f) => inputFieldVisible(f, values))
-        .map((f) => (
-          <Field
-            key={f.name}
-            field={f}
-            value={values[f.name]}
-            onChange={(value) => onChange({ ...values, [f.name]: value })}
-            name={`${prefix}${f.name}`}
-          />
-        ))}
+      {fields.map((f, index) => (
+        <Collapsible key={f.name} open={inputFieldVisible(f, values)}>
+          <fieldset
+            disabled={!inputFieldVisible(f, values)}
+            className={
+              fields
+                .slice(0, index)
+                .some((field) => inputFieldVisible(field, values))
+                ? "min-w-0 pt-4"
+                : "min-w-0"
+            }
+          >
+            <Field
+              field={f}
+              value={values[f.name]}
+              onChange={(value) => onChange({ ...values, [f.name]: value })}
+              name={`${prefix}${f.name}`}
+            />
+          </fieldset>
+        </Collapsible>
+      ))}
     </>
   );
 }
@@ -478,63 +496,96 @@ function RepeatedFields({
 }) {
   const next = useRef(0),
     [keys, setKeys] = useState(() => values.map(() => next.current++));
+  const [entered, setEntered] = useState(() => new Set(keys));
+  const [leaving, setLeaving] = useState<
+    Array<{ key: number; value: SidebarInputValues; index: number }>
+  >([]);
+  useEffect(() => {
+    const frame = requestAnimationFrame(() => setEntered(new Set(keys)));
+    return () => cancelAnimationFrame(frame);
+  }, [keys]);
+  useEffect(() => {
+    if (!leaving.length) return;
+    const timer = setTimeout(() => setLeaving([]), motionMs(200) + 32);
+    return () => clearTimeout(timer);
+  }, [leaving]);
+  const entries = [
+    ...values.flatMap((value, index) => {
+      const key = keys[index];
+      return key === undefined ? [] : [{ key, value, index, leaving: false }];
+    }),
+    ...leaving.map((entry) => ({ ...entry, leaving: true })),
+  ].sort((a, b) => a.key - b.key);
   const root = useRef<HTMLFieldSetElement>(null),
     focusNew = useRef<"entry" | "add" | null>(null);
-  // biome-ignore lint/correctness/useExhaustiveDependencies: new entry keys commit the controls before focus moves.
   useEffect(() => {
     if (focusNew.current) {
+      if (focusNew.current === "entry" && !entered.has(keys.at(-1) ?? -1))
+        return;
       const selector =
         focusNew.current === "add"
           ? "[data-repeat-add]"
-          : "[data-repeat-entry]:last-of-type input,[data-repeat-entry]:last-of-type select";
+          : `[data-repeat-key="${keys.at(-1)}"] input,[data-repeat-key="${keys.at(-1)}"] select,[data-repeat-key="${keys.at(-1)}"] textarea`;
       focusNew.current = null;
-      root.current?.querySelector<HTMLElement>(selector)?.focus();
+      [...(root.current?.querySelectorAll<HTMLElement>(selector) ?? [])]
+        .find(canFocusFormControl)
+        ?.focus();
     }
-  }, [keys]);
+  }, [keys, entered]);
   return (
-    <fieldset ref={root} className="flex min-w-0 flex-col gap-3">
+    <fieldset ref={root} className="flex min-w-0 flex-col">
       <legend className="mb-2 text-sm font-medium">{field.label}</legend>
       {field.description && (
         <p className="text-xs text-fg-muted">{field.description}</p>
       )}
-      {values.map((entry, index) => (
-        <div
-          data-repeat-entry
-          key={keys[index]}
-          className="flex min-w-0 flex-col gap-3 rounded-md border border-border p-3"
-        >
-          <div className="flex items-center justify-between gap-2">
-            <span className="text-xs text-fg-muted">
-              {field.label} {index + 1}
-            </span>
-            <button
-              type="button"
-              className="button-ghost text-xs"
-              disabled={values.length <= (field.minItems ?? 0)}
-              aria-label={`Remove ${field.label.toLowerCase()} ${index + 1}`}
-              onClick={(event) => {
-                const button = event.currentTarget;
-                onChange(values.filter((_, i) => i !== index));
-                setKeys(keys.filter((_, i) => i !== index));
-                if (
-                  button.contains(document.activeElement) ||
-                  button === document.activeElement
-                )
-                  focusNew.current = "add";
-              }}
+      {entries.map(({ key, value: entry, index, leaving: exiting }) => (
+        <Collapsible key={key} open={!exiting && entered.has(key)}>
+          <fieldset disabled={exiting} className="min-w-0 pb-3">
+            <div
+              data-repeat-entry
+              data-repeat-key={key}
+              className="flex min-w-0 flex-col rounded-md border border-border p-3"
             >
-              Remove
-            </button>
-          </div>
-          <Fields
-            fields={field.fields}
-            values={entry}
-            onChange={(changed) =>
-              onChange(values.map((v, i) => (i === index ? changed : v)))
-            }
-            prefix={`${name}.${index}.`}
-          />
-        </div>
+              <div className="mb-3 flex items-center justify-between gap-2">
+                <span className="text-xs text-fg-muted">
+                  {field.label} {index + 1}
+                </span>
+                <button
+                  type="button"
+                  className="button-ghost text-xs"
+                  disabled={values.length <= (field.minItems ?? 0)}
+                  aria-label={`Remove ${field.label.toLowerCase()} ${index + 1}`}
+                  onClick={(event) => {
+                    const button = event.currentTarget;
+                    setLeaving((rows) => [
+                      ...rows,
+                      { key, value: entry, index },
+                    ]);
+                    onChange(values.filter((_, i) => i !== index));
+                    setKeys(keys.filter((_, i) => i !== index));
+                    if (
+                      button.contains(document.activeElement) ||
+                      button === document.activeElement
+                    )
+                      focusNew.current = "add";
+                  }}
+                >
+                  Remove
+                </button>
+              </div>
+              <Fields
+                fields={field.fields}
+                values={entry}
+                onChange={(changed) =>
+                  onChange(values.map((v, i) => (i === index ? changed : v)))
+                }
+                prefix={
+                  exiting ? `${name}.exiting-${key}.` : `${name}.${index}.`
+                }
+              />
+            </div>
+          </fieldset>
+        </Collapsible>
       ))}
       <button
         data-repeat-add

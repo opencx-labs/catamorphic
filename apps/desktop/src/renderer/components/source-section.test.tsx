@@ -174,8 +174,9 @@ async function mount({
       visible = next;
       await act(async () => render());
     },
-    context: async (next: SidebarSurface) => {
+    context: async (next: SidebarSurface, nextVisible = visible) => {
       shownSurface = next;
+      visible = nextVisible;
       await act(async () => render());
     },
     row: (id: string) =>
@@ -1013,6 +1014,54 @@ describe("every list draws one way (ADR 0234)", () => {
       "s2",
       "none",
     ]);
+  });
+
+  it("releases every owner when hiding with a context change and ignores a late load", async () => {
+    let active = 0;
+    let finish: ((page: { items: SidebarSourceItem[] }) => void) | undefined;
+    let holdNext = false;
+    const source = memorySource([], {
+      subscribe: () => {
+        active += 1;
+        return () => {
+          active -= 1;
+        };
+      },
+      load: async () => {
+        if (holdNext) {
+          holdNext = false;
+          return new Promise((resolve) => {
+            finish = resolve;
+          });
+        }
+        return { items: [{ id: "row", label: "Current row" }] };
+      },
+    });
+    const view = await mount({ source, surface: { kind: "browser" } });
+    try {
+      const row = view.row("row");
+      expect(active).toBe(1);
+      holdNext = true;
+      chat.fields = { id: "s1", title: "Chat", metadata: {} };
+      await view.context({ kind: "chat", sessionId: "s1" });
+      expect(finish).toBeTypeOf("function");
+      expect(active).toBe(1);
+      await view.context({ kind: "browser" }, false);
+      expect(active).toBe(0);
+      await act(async () =>
+        finish?.({ items: [{ id: "row", label: "Obsolete row" }] }),
+      );
+      expect(active).toBe(0);
+      expect(view.row("row")).toBe(row);
+      expect(view.node.textContent).not.toContain("Obsolete row");
+      await view.show(true);
+      expect(active).toBe(1);
+      expect(view.row("row")).toBe(row);
+      expect(view.row("row")?.textContent).toBe("Current row");
+    } finally {
+      await view.cleanup();
+    }
+    expect(active).toBe(0);
   });
 
   it("keeps explicit session-scoped collections apart while the next chat's fields load", async () => {

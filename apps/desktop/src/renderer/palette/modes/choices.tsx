@@ -178,9 +178,11 @@ const asAnswer = (row: PaletteItem): PaletteItem =>
 export function useChoiceModes({
   picker,
   projectAgents,
+  agentChoice,
 }: {
   picker: PaletteChoiceMode | null;
   projectAgents: readonly ProjectAgentInfo[];
+  agentChoice?: import("../types.js").PaletteAgentChoice;
 }) {
   const {
     projectId,
@@ -609,7 +611,10 @@ export function useChoiceModes({
                       : picker === "default-agent"
                         ? agent.id === defaultAgentId
                         : agent.id ===
-                          ((focusedChat?.agentId ?? defaultAgentId) || "");
+                          ((agentChoice?.currentId ??
+                            focusedChat?.agentId ??
+                            defaultAgentId) ||
+                            "");
                   return {
                     id: `pick:agent:${agent.id}`,
                     icon: picker === "configure-agent" ? Settings2 : Bot,
@@ -637,7 +642,9 @@ export function useChoiceModes({
                         ? onPickDefaultAgent(agent.id)
                         : picker === "configure-agent"
                           ? onConfigureAgent(agent.id)
-                          : onPickSessionAgent(agent.id),
+                          : agentChoice
+                            ? agentChoice.onPick(agent.id)
+                            : onPickSessionAgent(agent.id),
                   };
                 }),
                 // The active project's committed agents (ADR 0050), under
@@ -653,7 +660,10 @@ export function useChoiceModes({
                       : picker === "default-agent"
                         ? agent.id === defaultAgentId
                         : agent.id ===
-                          ((focusedChat?.agentId ?? defaultAgentId) || "");
+                          ((agentChoice?.currentId ??
+                            focusedChat?.agentId ??
+                            defaultAgentId) ||
+                            "");
                   return {
                     id: `pick:agent:${agent.id}`,
                     icon: picker === "configure-agent" ? Settings2 : Bot,
@@ -663,6 +673,11 @@ export function useChoiceModes({
                     keywords: [agent.name, agent.slug, "project", agent.kind],
                     kind: "action" as const,
                     group: "Project agents",
+                    // Keep the draft picker behind consent. Cancelling
+                    // returns here; approval completes the original pick.
+                    ...(agentChoice && picker === "switch-agent"
+                      ? { commit: "stay" as const }
+                      : {}),
                     ...(isCurrent ? { current: true } : {}),
                     ...(agent.invalid && picker !== "configure-agent"
                       ? { disabled: true }
@@ -675,7 +690,9 @@ export function useChoiceModes({
                       if (agent.invalid) return;
                       onPickProjectAgent(
                         agent,
-                        picker === "default-agent" ? "default" : "session",
+                        picker === "default-agent"
+                          ? onPickDefaultAgent
+                          : (agentChoice?.onPick ?? onPickSessionAgent),
                       );
                     },
                   };
@@ -720,6 +737,7 @@ export function useChoiceModes({
     return build().map(asAnswer);
   }, [
     picker,
+    agentChoice,
     targetAgent,
     focusedChat,
     effortModel,
@@ -752,7 +770,7 @@ export function useChoiceModes({
       rows,
       // The chat a choice changes glows while its question is open.
       highlight:
-        id === "switch-agent"
+        id === "switch-agent" && !agentChoice
           ? "chat"
           : id === "model" || id === "effort" || id === "permission-mode"
             ? "chat-if-focused"
@@ -804,6 +822,7 @@ export function useChoiceModes({
     ];
   }, [
     agents.length,
+    agentChoice,
     defaultAgentId,
     actionAvailability,
     modelRows,

@@ -15,6 +15,7 @@ import {
  * removed from the list.
  */
 let app: AppHandle;
+let projectId: string;
 let origin: string;
 let downloadsDir: string;
 const BODY = "hello from the download\n".repeat(2000);
@@ -53,11 +54,12 @@ beforeAll(async () => {
   downloadsDir = fs.mkdtempSync(path.join(fs.realpathSync("/tmp"), "work-dl-"));
   app = await launchApp({ env: { CATAMORPHIC_DOWNLOADS_DIR: downloadsDir } });
   // The dock lives with a project; open the lab page inside one.
-  await createProjectWorkspace({
+  const project = await createProjectWorkspace({
     app,
     name: "Downloads lab",
     rootPath: `${app.userDataDir}/downloads-lab`,
   });
+  projectId = project.id;
   // The new project becomes the workspace on the next load.
   await app.reload();
   await app.waitFor(`document.body?.innerText.includes('Downloads lab')`, {
@@ -124,6 +126,36 @@ describe("downloads", () => {
     );
     expect(fs.readFileSync(path.join(downloadsDir, "notes.txt"), "utf8")).toBe(
       BODY,
+    );
+  });
+
+  it("clears the completion dot when opened and keeps it cleared after a renderer reload", async () => {
+    await app.waitFor(
+      `!!document.querySelector('[data-testid="downloads-unseen"]')`,
+    );
+    await click('[data-testid="downloads-bubble"]');
+    await app.waitFor(
+      `!!document.querySelector('[data-testid="downloads-popover"]') && !document.querySelector('[data-testid="downloads-unseen"]')`,
+    );
+    await click('[data-testid="downloads-bubble"]');
+    await app.waitFor(
+      `!document.querySelector('[data-testid="downloads-popover"]')`,
+    );
+    await app.waitFor(
+      `window.catamorphicDesktop.workspaceStateGet(${JSON.stringify(projectId)}).then(state=>state?.browsers?.some(browser=>browser.url===${JSON.stringify(`${origin}/lab`)}))`,
+      { label: "lab navigation persisted before renderer reload" },
+    );
+    await app.reload();
+    await app.waitFor(
+      `!!document.querySelector('[data-testid="downloads-bubble"]')`,
+    );
+    expect(
+      await app.eval(
+        `!!document.querySelector('[data-testid="downloads-unseen"]')`,
+      ),
+    ).toBe(false);
+    await app.waitFor(
+      `(()=>{const view=${guest};try{return view?.getTitle()==='Download Lab'&&!view.isLoading()}catch{return false}})()`,
     );
   });
 

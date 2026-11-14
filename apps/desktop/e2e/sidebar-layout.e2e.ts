@@ -28,6 +28,61 @@ const run = <T>(body: string) =>
   app.eval<T>(
     `(() => { ${setReactValueJs}\n ${workspaceDomHelpersJs} const button = text => $$('button').find(b => b.textContent.trim() === text); ${body} })()`,
   );
+
+/** Keep artificial unavailability on the same clock as the focus request. */
+async function delayAddressUntil(mode: "frames" | "tab" | "settings") {
+  await run(`
+    const style=document.createElement('style');
+    style.id='address-not-ready';
+    style.textContent='aside input[aria-label="Address and search bar"] {visibility:hidden!important}';
+    document.head.append(style);
+    window.__addressUnavailable=null;
+    window.__addressUnexpectedFocus=0;
+    let started=null,frame=0,hiddenFrames=0,released=false;
+    const input=()=>$('aside input[aria-label="Address and search bar"]');
+    const release=()=>{
+      if(started===null||released)return;
+      released=true;
+      window.__addressUnavailable={hiddenFrames,focused:document.activeElement===input(),elapsedMs:performance.now()-started};
+      style.remove();
+    };
+    const check=()=>{
+      if($('aside')?.getAttribute('aria-hidden')==='false'&&input()&&!input().checkVisibility({visibilityProperty:true})){
+        hiddenFrames++;
+        if(hiddenFrames===2){release();return;}
+      }
+      frame=requestAnimationFrame(check);
+    };
+    const down=event=>{
+      if(started===null&&event.key.toLowerCase()==='l'&&(event.ctrlKey||event.metaKey)){
+        started=performance.now();
+        if(${JSON.stringify(mode)}==='frames')frame=requestAnimationFrame(check);
+      }
+    };
+    const up=event=>{
+      if(${JSON.stringify(mode)}==='tab'&&started!==null&&event.key==='Tab'){
+        document.activeElement.dataset.e2eFocusOwner='kept';
+        release();
+      }
+    };
+    const click=event=>{
+      if(${JSON.stringify(mode)}==='settings'&&started!==null&&event.target.closest('button')?.textContent.trim()==='Settings')frame=requestAnimationFrame(release);
+    };
+    const focused=event=>{if(released&&event.target===input())window.__addressUnexpectedFocus++;};
+    window.addEventListener('keydown',down,true);
+    window.addEventListener('keyup',up,true);
+    window.addEventListener('click',click,true);
+    window.addEventListener('focusin',focused,true);
+    if(${JSON.stringify(mode)}==='tab')$('button[aria-label="Collapse sidebar"]').focus();
+    window.__addressUnavailableCancel=()=>{
+      cancelAnimationFrame(frame);style.remove();
+      window.removeEventListener('keydown',down,true);
+      window.removeEventListener('keyup',up,true);
+      window.removeEventListener('click',click,true);
+      window.removeEventListener('focusin',focused,true);
+    };
+  `);
+}
 /**
  * What draws a sidebar row's keyboard ring, as page script: the row itself,
  * or in a list (the kit tree) the list's one ring on its focused row.
@@ -673,25 +728,21 @@ describe("configurable browser workspace", () => {
       "document.querySelector('[data-workspace-visible=true] aside').getAttribute('aria-hidden') === 'true' && document.querySelector('[data-workspace-visible=true] aside').dataset.motion === 'closed' && document.querySelector('[data-workspace-visible=true] aside').dataset.settled === 'true'",
     );
     // Hold the address unavailable across frames, as while its sidebar
-    // arrives. One scheduled focus attempt cannot complete this handoff.
-    await run(
-      "const style = document.createElement('style'); style.id = 'address-not-ready'; style.textContent = 'aside input[aria-label=\"Address and search bar\"] { visibility: hidden !important; }'; document.head.append(style)",
-    );
+    // arrives. Release it on the renderer's clock: host/CDP round trips
+    // must not consume the app's bounded focus handoff while we hide it.
+    await delayAddressUntil("frames");
     try {
       await app.press("l", process.platform === "darwin" ? 4 : 2);
-      await app.waitFor(
-        "document.querySelector('[data-workspace-visible=true] aside').getAttribute('aria-hidden') === 'false'",
+      const observation = await app.waitFor<{ elapsedMs: number }>(
+        "window.__addressUnavailable",
       );
-      await app.eval(
-        "new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)))",
-      );
-      expect(
-        await run(
-          "return document.activeElement === $('aside input[aria-label=\"Address and search bar\"]')",
-        ),
-      ).toBe(false);
+      expect(observation).toMatchObject({
+        hiddenFrames: 2,
+        focused: false,
+      });
+      expect(observation.elapsedMs).toBeLessThan(1500);
     } finally {
-      await run("$('#address-not-ready')?.remove()");
+      await run("window.__addressUnavailableCancel?.()");
     }
     await app.waitFor(
       "(() => { const input = document.querySelector('[data-workspace-visible=true] aside input[aria-label=\"Address and search bar\"]'); return document.activeElement === input && input.selectionStart === 0 && input.selectionEnd === input.value.length; })()",
@@ -707,16 +758,17 @@ describe("configurable browser workspace", () => {
     await app.press("Escape");
     // A pending request yields when the person tabs somewhere else. Making
     // the field available later must not take that focus back.
-    await run(
-      "const style = document.createElement('style'); style.id = 'address-not-ready'; style.textContent = 'aside input[aria-label=\"Address and search bar\"] { visibility: hidden !important; }'; document.head.append(style)",
-    );
+    await delayAddressUntil("tab");
     try {
       await app.press("l", process.platform === "darwin" ? 4 : 2);
-      await run("$('button[aria-label=\"Collapse sidebar\"]').focus()");
       await app.press("Tab");
-      await run("document.activeElement.dataset.e2eFocusOwner = 'kept'");
+      const observation = await app.waitFor<{ elapsedMs: number }>(
+        "window.__addressUnavailable",
+      );
+      expect(observation.elapsedMs).toBeLessThan(1500);
+      expect(await app.eval("window.__addressUnexpectedFocus")).toBe(0);
     } finally {
-      await run("$('#address-not-ready')?.remove()");
+      await run("window.__addressUnavailableCancel?.()");
     }
     await app.eval(
       "new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)))",
@@ -731,20 +783,23 @@ describe("configurable browser workspace", () => {
     );
     // A programmatic foreground change is not another key or pointer
     // action. Cancel before paint rather than relying on that input guard.
-    await run(
-      "const style = document.createElement('style'); style.id = 'address-not-ready'; style.textContent = 'aside input[aria-label=\"Address and search bar\"] { visibility: hidden !important; }'; document.head.append(style)",
-    );
+    await delayAddressUntil("settings");
     try {
       await app.press("l", process.platform === "darwin" ? 4 : 2);
       await run("button('Settings').click()");
+      const observation = await app.waitFor<{ elapsedMs: number }>(
+        "window.__addressUnavailable",
+      );
+      expect(observation.elapsedMs).toBeLessThan(1500);
       await app.waitFor(
         "!!document.querySelector('select[name=tabPlacement]')",
       );
       await run(
         "$('select[name=tabPlacement]').focus(); document.activeElement.dataset.e2eFocusOwner = 'settings'",
       );
+      expect(await app.eval("window.__addressUnexpectedFocus")).toBe(0);
     } finally {
-      await run("$('#address-not-ready')?.remove()");
+      await run("window.__addressUnavailableCancel?.()");
     }
     await app.eval(
       "new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)))",

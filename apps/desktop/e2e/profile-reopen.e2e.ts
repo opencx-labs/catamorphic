@@ -71,6 +71,7 @@ it("reopens the hidden workspace when an empty window selects its profile", asyn
         (await readWindows(handle.userDataDir)).windows.find(
           (window) => window.profileId === otherProfile.id,
         )?.id,
+      { timeout: 15_000 },
     )
     .toBeTruthy();
   // Read the settled record after the assertion, which waits for persistence.

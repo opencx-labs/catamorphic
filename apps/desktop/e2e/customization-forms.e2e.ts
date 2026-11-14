@@ -26,7 +26,7 @@ async function capture(name: string) {
 }
 async function click(selector: string) {
   const box = await app.waitFor<{ x: number; y: number }>(
-    `(()=>{const el=document.querySelector(${json(selector)});if(!el)return false;if(el.closest('[data-sidebar]')?.getAnimations({subtree:true}).some(a=>a.playState==='running'&&a.effect?.getTiming().iterations!==Infinity))return false;const r=el.getBoundingClientRect();const x=r.x+r.width/2,y=r.y+r.height/2;return el.contains(document.elementFromPoint(x,y))?{x,y}:false})()`,
+    `(()=>{const el=document.querySelector(${json(selector)});if(!el||el.closest('[inert]')||el.matches(':disabled'))return false;el.scrollIntoView({block:'nearest',inline:'nearest'});const surface=el.closest('[role="dialog"], [data-sidebar]');if(surface?.getAnimations({subtree:true}).some(a=>a.playState==='running'&&a.effect?.getTiming().iterations!==Infinity))return false;const r=el.getBoundingClientRect();const x=r.x+r.width/2,y=r.y+r.height/2;return el.contains(document.elementFromPoint(x,y))?{x,y}:false})()`,
   );
   await app.clickPointer(box);
 }
@@ -63,9 +63,21 @@ async function select(name: string, value: string) {
   );
   expect(target).toBeGreaterThanOrEqual(0);
   await click(selector);
+  await app.waitFor(
+    `document.querySelector(${json(selector)})?.matches(':open')`,
+    {
+      label: `${name} picker opened`,
+    },
+  );
   for (let i = 0; i < Math.abs(target - current); i++)
     await app.press(target < current ? "ArrowUp" : "ArrowDown");
   await app.press("Enter");
+  await app.waitFor(
+    `!document.querySelector(${json(selector)})?.matches(':open')`,
+    {
+      label: `${name} picker closed`,
+    },
+  );
   await app.waitFor(
     `document.querySelector(${json(selector)})?.value===${json(value)}`,
     { label: `${name} selected ${value}` },
@@ -206,7 +218,27 @@ it("adds tasks with presets and repeated custom reminders through native control
   await app.waitFor(`document.body.innerText.includes('Plan launch')`);
   await openAdd();
   await fill("title", "Send reminder");
+  await app.eval(`(()=>{
+    window.__conditionalMotion=[];window.__conditionalMotionDone=false;
+    const control=document.querySelector('select[name="reminders.0.preset"]');
+    const dialog=control.closest('[role="dialog"]');
+    window.__conditionalMotion.push(dialog.getBoundingClientRect().height);
+    control.addEventListener('change',()=>{
+      const start=performance.now();
+      const sample=()=>{window.__conditionalMotion.push(dialog.getBoundingClientRect().height);
+        if(performance.now()-start<600)requestAnimationFrame(sample);else window.__conditionalMotionDone=true;};
+      requestAnimationFrame(sample);
+    },{once:true});return true;
+  })()`);
   await select("reminders.0.preset", "custom");
+  await app.waitFor(`window.__conditionalMotionDone===true`);
+  const heights = await app.eval<number[]>(`window.__conditionalMotion`);
+  const first = heights[0] ?? 0,
+    last = heights.at(-1) ?? 0;
+  expect(last).toBeGreaterThan(first + 20);
+  expect(
+    heights.some((height) => height > first + 1 && height < last - 1),
+  ).toBe(true);
   await fill("reminders.0.amount", "30");
   await capture("modal-custom");
   await select("reminders.0.unit", "seconds");

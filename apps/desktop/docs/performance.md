@@ -881,6 +881,10 @@ Project workspaces stay mounted when another project is selected. Their sidebar
 lists use project visibility as well as the sidebar's own visibility to acquire
 subscriptions. Empty-list observation follows the same rule. Returning to a
 project refreshes its existing collection without replacing its retained view.
+Document navigation releases source leases at both start and commit: outgoing
+document code can still subscribe during unload after start-time cleanup. A
+pending lookup from that document cannot attach after commit. In-page navigation
+keeps the current document's subscriptions.
 
 A fixture reproduced the previous gap: after switching projects, the inactive
 project's source still received a named file-watch event in the same worker.

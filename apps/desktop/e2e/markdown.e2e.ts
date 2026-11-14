@@ -447,10 +447,17 @@ describe("markdown editor", () => {
       { timeoutMs: 30_000, label: "blocks.md in Files palette" },
     );
     await runWait(
-      `return $('.cat-mdedit h1')?.textContent === 'Heading one'
-        && !!${HANDLE_TARGETS["empty paragraph"]};`,
+      `return $('.cat-mdedit h1')?.textContent === 'Heading one';`,
       { timeoutMs: 60_000, label: "blocks document open" },
     );
+    // TrailingNode normalizes transactions, not mounting. Autofocus may
+    // legitimately be skipped, so explicitly normalize this block fixture
+    // rather than depend on an incidental focus transaction.
+    await run(`const editor=mdHandle().editor;
+      editor.view.dispatch(editor.state.tr.setMeta('addToHistory',false));return true;`);
+    await runWait(`return !!${HANDLE_TARGETS["empty paragraph"]};`, {
+      label: "the normalized fixture includes an empty paragraph",
+    });
 
     const offsets: Record<string, number> = {};
     for (const [label, target] of Object.entries(HANDLE_TARGETS)) {

@@ -288,7 +288,8 @@ describe("the Work tutorial", () => {
     await app.eval(
       `window.catamorphicDesktop.setKeybindings({...${JSON.stringify(original)},'new-tab':'Cmd+Shift+Y'})`,
     );
-    const expected = process.platform === "darwin" ? "⌘⇧Y" : "Ctrl+Shift+Y";
+    const expected =
+      process.platform === "darwin" ? "⌘\u202f⇧\u202fY" : "Ctrl+Shift+Y";
     await app.waitFor(
       `document.querySelector('.onboarding-copy')?.textContent.includes(${JSON.stringify(expected)})`,
     );
@@ -542,7 +543,8 @@ describe("the Work tutorial", () => {
     await app.eval(
       `window.catamorphicDesktop.setKeybindings({...${JSON.stringify(original)},'new-floating-chat':'Cmd+Shift+J'})`,
     );
-    const label = process.platform === "darwin" ? "⌘⇧J" : "Ctrl+Shift+J";
+    const label =
+      process.platform === "darwin" ? "⌘\u202f⇧\u202fJ" : "Ctrl+Shift+J";
     await app.waitFor(
       `document.querySelector('.onboarding-copy')?.textContent.includes(${JSON.stringify(label)})`,
     );
