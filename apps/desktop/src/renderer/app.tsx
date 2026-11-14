@@ -7404,10 +7404,16 @@ export function App({
       agentName: (agentId) => {
         const id = agentId ?? effectiveDefaultAgentId;
         return (
-          agentsData?.agents.find((agent) => agent.id === id)?.name ??
-          (id ? projectAgentNames[id] : undefined)
+          agentsData?.agents.find(
+            (agent) => agent.id === rosterAgentId(id ?? ""),
+          )?.name ?? (id ? projectAgentNames[id] : undefined)
         );
       },
+      // Only once the roster is in; committed agents load apart (ADR 0314).
+      agentDeleted: (agentId) =>
+        agentsData !== null &&
+        !agentId.startsWith("project:") &&
+        !agentsData.agents.some((agent) => agent.id === rosterAgentId(agentId)),
       closeTab: (key, scope) => closeTab(key, { scope }),
       reorderTab,
       attachTab,

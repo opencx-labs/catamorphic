@@ -19235,7 +19235,7 @@ export interface components {
                 error: {
                     message: string;
                     /** @enum {string} */
-                    kind?: "auth" | "rate_limit" | "unavailable" | "model_incompat";
+                    kind?: "auth" | "rate_limit" | "unavailable" | "model_incompat" | "agent_missing";
                 };
                 attempt: number | null;
                 maxAttempts: number | null;
@@ -19249,7 +19249,7 @@ export interface components {
             error: {
                 message: string;
                 /** @enum {string} */
-                kind?: "auth" | "rate_limit" | "unavailable" | "model_incompat";
+                kind?: "auth" | "rate_limit" | "unavailable" | "model_incompat" | "agent_missing";
                 retrySafe?: boolean;
             } | null;
             outcome: {
@@ -19308,7 +19308,7 @@ export interface components {
             error: {
                 message: string;
                 /** @enum {string} */
-                kind?: "auth" | "rate_limit" | "unavailable" | "model_incompat";
+                kind?: "auth" | "rate_limit" | "unavailable" | "model_incompat" | "agent_missing";
                 retrySafe?: boolean;
             } | null;
             createdAt: string;
@@ -20120,7 +20120,7 @@ export interface components {
                 error: {
                     message: string;
                     /** @enum {string} */
-                    kind?: "auth" | "rate_limit" | "unavailable" | "model_incompat";
+                    kind?: "auth" | "rate_limit" | "unavailable" | "model_incompat" | "agent_missing";
                 };
                 attempt: number | null;
                 maxAttempts: number | null;
@@ -20134,7 +20134,7 @@ export interface components {
             error: {
                 message: string;
                 /** @enum {string} */
-                kind?: "auth" | "rate_limit" | "unavailable" | "model_incompat";
+                kind?: "auth" | "rate_limit" | "unavailable" | "model_incompat" | "agent_missing";
                 retrySafe?: boolean;
             } | null;
             outcome: {
@@ -20193,7 +20193,7 @@ export interface components {
             error: {
                 message: string;
                 /** @enum {string} */
-                kind?: "auth" | "rate_limit" | "unavailable" | "model_incompat";
+                kind?: "auth" | "rate_limit" | "unavailable" | "model_incompat" | "agent_missing";
                 retrySafe?: boolean;
             } | null;
             createdAt: string;

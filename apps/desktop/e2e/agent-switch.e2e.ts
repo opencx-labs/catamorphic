@@ -401,6 +401,71 @@ describe("picking a chat's agent", () => {
       "edited project agent icon",
     );
   });
+
+  it("stops a chat whose agent is deleted until another is chosen (ADR 0314)", async () => {
+    await run(`const doomed = await window.catamorphicDesktop.agentsCreate({name:'Doomed Fake',harness:'ai-sdk'});
+      const {base,id}=window.__switch;
+      window.__switch.doomed = doomed.id;
+      const patch=await fetch(base+'/'+id,{method:'PATCH',headers:{'content-type':'application/json'},body:JSON.stringify({agentId:doomed.id})});
+      if(!patch.ok) throw new Error(await patch.text());
+      // A subsession its agent started (ADR 0271): archived with the agent.
+      const child=await fetch(base+'/'+id+'/subsessions',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({task:'Doomed child',title:'Doomed child'})});
+      if(!child.ok) throw new Error(await child.text());
+      window.__switch.doomedChild=(await child.json()).session.id;
+    `);
+    await inspector();
+    await shownAgent("Doomed Fake");
+    await run(
+      `document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));`,
+    );
+    await run(
+      `await window.catamorphicDesktop.agentsRemove(window.__switch.doomed);`,
+    );
+
+    // Before anything is sent, the chat says so and offers the choice.
+    await wait(
+      `return !!dock()?.querySelector('[data-testid="agent-missing-banner"]');`,
+      "deleted agent banner",
+    );
+    await inspector();
+    await shownAgent("Deleted agent");
+    await run(
+      `document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));`,
+    );
+    // Its subsessions are archived; the chat itself stays.
+    expect(
+      await run(`const {base,id,doomedChild}=window.__switch;
+        const archived=await fetch(base+'?visibility=archived').then(r=>r.json());
+        const listed=await fetch(base+'?limit=100').then(r=>r.json());
+        return {archived: archived.items.some(item=>item.id===doomedChild), kept: listed.items.some(item=>item.id===id)};`),
+    ).toEqual({ archived: true, kept: true });
+
+    // A message sent anyway stops with a choice, not a Retry.
+    await run(
+      `const input = dock().querySelector('[data-composer-input]'); setReactValue(input, 'after deletion'); input.closest('form').requestSubmit();`,
+    );
+    await wait(
+      `const card = [...dock().querySelectorAll('[data-testid="chat-error-card"]')].at(-1);
+       return !!card && card.textContent.includes('The agent this chat used was deleted.') &&
+         !!card.querySelector('[data-testid="chat-choose-agent"]') && !card.querySelector('[data-testid="chat-retry"]');`,
+      "choose-an-agent card",
+    );
+    await app.screenshot(
+      path.join(
+        process.env.CATAMORPHIC_E2E_ARTIFACTS_DIR ?? os.tmpdir(),
+        "deleted-agent-card.png",
+      ),
+    );
+    await run(
+      `[...dock().querySelectorAll('[data-testid="chat-choose-agent"]')].at(-1).click();`,
+    );
+    await pick("Other Fake");
+    // The stopped message runs again on the chosen agent.
+    await wait(
+      `return dock()?.textContent.includes('You said: after deletion') && !dock().querySelector('[data-testid="agent-missing-banner"]');`,
+      "stopped message continues on the chosen agent",
+    );
+  });
 });
 
 import fs from "node:fs";

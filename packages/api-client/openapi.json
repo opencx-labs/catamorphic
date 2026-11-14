@@ -725,7 +725,8 @@
                       "auth",
                       "rate_limit",
                       "unavailable",
-                      "model_incompat"
+                      "model_incompat",
+                      "agent_missing"
                     ]
                   }
                 },
@@ -781,7 +782,13 @@
               },
               "kind": {
                 "type": "string",
-                "enum": ["auth", "rate_limit", "unavailable", "model_incompat"]
+                "enum": [
+                  "auth",
+                  "rate_limit",
+                  "unavailable",
+                  "model_incompat",
+                  "agent_missing"
+                ]
               },
               "retrySafe": {
                 "type": "boolean"
@@ -989,7 +996,13 @@
               },
               "kind": {
                 "type": "string",
-                "enum": ["auth", "rate_limit", "unavailable", "model_incompat"]
+                "enum": [
+                  "auth",
+                  "rate_limit",
+                  "unavailable",
+                  "model_incompat",
+                  "agent_missing"
+                ]
               },
               "retrySafe": {
                 "type": "boolean"
@@ -4102,7 +4115,8 @@
                       "auth",
                       "rate_limit",
                       "unavailable",
-                      "model_incompat"
+                      "model_incompat",
+                      "agent_missing"
                     ]
                   }
                 },
@@ -4160,7 +4174,13 @@
               },
               "kind": {
                 "type": "string",
-                "enum": ["auth", "rate_limit", "unavailable", "model_incompat"]
+                "enum": [
+                  "auth",
+                  "rate_limit",
+                  "unavailable",
+                  "model_incompat",
+                  "agent_missing"
+                ]
               },
               "retrySafe": {
                 "type": "boolean"
@@ -4377,7 +4397,13 @@
               },
               "kind": {
                 "type": "string",
-                "enum": ["auth", "rate_limit", "unavailable", "model_incompat"]
+                "enum": [
+                  "auth",
+                  "rate_limit",
+                  "unavailable",
+                  "model_incompat",
+                  "agent_missing"
+                ]
               },
               "retrySafe": {
                 "type": "boolean"

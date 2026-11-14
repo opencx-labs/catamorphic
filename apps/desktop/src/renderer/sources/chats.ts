@@ -118,7 +118,13 @@ export function chatRow({
         ...(imported ? [{ label: "From", value: imported }] : []),
         {
           label: "Agent",
-          value: host.agentName(session.agentId) ?? "Unknown agent",
+          value:
+            host.agentName(session.agentId) ??
+            (session.agentId &&
+            !deps.remote &&
+            host.agentDeleted(session.agentId)
+              ? "Deleted agent"
+              : "Unknown agent"),
         },
         ...(session.owner === "project"
           ? [{ label: "Belongs to", value: "The project" }]
