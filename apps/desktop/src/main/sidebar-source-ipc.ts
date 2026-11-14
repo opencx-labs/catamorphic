@@ -350,6 +350,11 @@ export function registerSidebarSources(deps: {
   const cleanup = (sender: number) => {
     for (const [key, release] of leases)
       if (key.startsWith(`${sender}:`)) {
+        if (
+          process.env.CATAMORPHIC_E2E_DATA_DIR &&
+          process.env.CATAMORPHIC_E2E_TRACE_SIDEBAR === "1"
+        )
+          console.info("Sidebar lease window released", { key });
         release();
         leases.delete(key);
       }
@@ -505,10 +510,14 @@ export function registerSidebarSources(deps: {
       });
       event.sender.on(
         "did-start-navigation",
-        (_event, _url, _inPlace, mainFrame) => {
-          if (mainFrame) cleanup(senderId);
+        (_event, _url, inPlace, mainFrame) => {
+          if (mainFrame && !inPlace) cleanup(senderId);
         },
       );
+      // The old document can still subscribe while unloading, after the
+      // start-time cleanup. Commit retires those leases and placeholders
+      // before the replacement document establishes its own subscriptions.
+      event.sender.on("did-navigate", () => cleanup(senderId));
     }
     const profileId = deps.windows.profileFor(event.sender);
     if (deps.profiles.profileForProject(input.projectId).id !== profileId)
@@ -799,10 +808,16 @@ export function registerSidebarSources(deps: {
       leases.get(key)?.();
       const placeholder = () => {};
       leases.set(key, placeholder);
+      const trace =
+        Boolean(process.env.CATAMORPHIC_E2E_DATA_DIR) &&
+        process.env.CATAMORPHIC_E2E_TRACE_SIDEBAR === "1";
+      if (trace) console.info("Sidebar lease lookup", { key, ...input });
       try {
         const { runtime } = await resolve(event, input);
-        if (leases.get(key) !== placeholder || event.sender.isDestroyed())
+        if (leases.get(key) !== placeholder || event.sender.isDestroyed()) {
+          if (trace) console.info("Sidebar lease lookup released", { key });
           return;
+        }
         leases.set(
           key,
           runtime.subscribe((error) => {
@@ -813,6 +828,7 @@ export function registerSidebarSources(deps: {
               });
           }),
         );
+        if (trace) console.info("Sidebar lease installed", { key, ...input });
       } catch (cause) {
         if (leases.get(key) === placeholder) leases.delete(key);
         throw cause;
@@ -823,6 +839,14 @@ export function registerSidebarSources(deps: {
     "catamorphic:sidebar-source-unsubscribe",
     (event, id: string) => {
       const key = keyFor(event.sender.id, id);
+      if (
+        process.env.CATAMORPHIC_E2E_DATA_DIR &&
+        process.env.CATAMORPHIC_E2E_TRACE_SIDEBAR === "1"
+      )
+        console.info("Sidebar lease release requested", {
+          key,
+          found: leases.has(key),
+        });
       leases.get(key)?.();
       leases.delete(key);
     },

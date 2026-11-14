@@ -11,8 +11,42 @@ let app: AppHandle;
 let projectRoot: string;
 let projectId: string;
 let otherProjectId: string;
+let ownershipBeforeHide: unknown;
 const read = (name: string) =>
   fs.readFileSync(path.join(projectRoot, "probe-data", name), "utf8");
+
+/** Diagnostic only: React internals never decide whether the test passes. */
+async function collectionOwnership() {
+  return app
+    .eval(`(() => {
+    const node=document.getElementById('root');
+    const key=node&&Object.keys(node).find(key=>key.startsWith('__reactContainer$'));
+    const root=key&&node[key]?.stateNode?.current;
+    if(!root)return {supported:false};
+    const remembered=window.__sidebarCollections??=new Map();
+    const views=[];
+    const pending=[root];
+    while(pending.length){
+      const fiber=pending.pop(),props=fiber.memoizedProps,collection=props?.collection;
+      if(collection&&typeof collection.isAcquired==='function'){
+        if(!remembered.has(collection))remembered.set(collection,remembered.size);
+        let project,section;
+        for(let parent=fiber;parent;parent=parent.return){
+          project??=parent.memoizedProps?.['data-project-runtime'];
+          section??=parent.memoizedProps?.['data-sidebar-source'];
+        }
+        views.push({collection:remembered.get(collection),project,section,active:props.active,label:props.label});
+      }
+      if(fiber.child)pending.push(fiber.child);
+      if(fiber.sibling)pending.push(fiber.sibling);
+    }
+    return {supported:true,views,collections:[...remembered].map(([collection,id])=>({id,acquired:collection.isAcquired()}))};
+  })()`)
+    .catch((error: unknown) => ({
+      supported: false,
+      error: String(error),
+    }));
+}
 
 async function probePulse(value: string) {
   await expect
@@ -27,7 +61,7 @@ async function probePulse(value: string) {
 }
 
 beforeAll(async () => {
-  app = await launchApp();
+  app = await launchApp({ env: { CATAMORPHIC_E2E_TRACE_SIDEBAR: "1" } });
   projectRoot = path.join(app.userDataDir, "sidebar-owner-project");
   const project = await createProjectWorkspace({
     app,
@@ -101,7 +135,15 @@ afterAll(async () => {
       fs.writeFileSync(
         path.join(artifacts, "sidebar-project-visibility.json"),
         JSON.stringify(
-          { capturedAt, projectId, otherProjectId, files, projects },
+          {
+            capturedAt,
+            projectId,
+            otherProjectId,
+            files,
+            projects,
+            ownershipBeforeHide,
+            ownership: await collectionOwnership(),
+          },
           null,
           2,
         ),
@@ -121,6 +163,7 @@ it("pauses sidebar subscriptions in a retained project and resumes its existing 
     `window.__sidebarOwner=document.querySelector(${JSON.stringify(owner)});window.__sidebarRow=document.querySelector('${owner} [data-sidebar-item-id="row"]');undefined`,
   );
   await probePulse("visible");
+  ownershipBeforeHide = await collectionOwnership();
   const other = await createProjectWorkspace({
     app,
     name: "Other project",
@@ -137,8 +180,19 @@ it("pauses sidebar subscriptions in a retained project and resumes its existing 
     // work from a stale marker; keep the observation in the failure log.
     if (read("subscribed") === "yes") {
       fs.writeFileSync(path.join(projectRoot, "probe-data", "pulse"), "hidden");
-      await expect.poll(() => read("events")).toContain('"pulse:hidden"');
-      console.info("Inactive sidebar probe", read("events"));
+      const pulsed = await expect
+        .poll(() => read("events"))
+        .toContain('"pulse:hidden"')
+        .then(
+          () => true,
+          () => false,
+        );
+      console.info("Inactive sidebar probe", {
+        pulsed,
+        events: read("events"),
+        ownershipBeforeHide,
+        ownership: await collectionOwnership(),
+      });
     }
   }
   fs.writeFileSync(

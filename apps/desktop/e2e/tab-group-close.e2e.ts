@@ -157,6 +157,9 @@ async function openGroup({
     `${api}.workspaceStateSet(${JSON.stringify(project.id)},${JSON.stringify(snapshot)})`,
   );
   await app.reload();
+  // Server authority and workspace restoration have the shared startup
+  // budget; the folded-group assertion below measures the restored UI.
+  await waitForProjectWorkspace({ app, name });
   await app.waitFor(
     `document.querySelector('${visible}')?.dataset.projectRuntime===${JSON.stringify(project.id)} &&
       !!document.querySelector('${visible} [data-workspace-ready]') &&

@@ -34,6 +34,11 @@ const START_TIMEOUT_MS = 30_000;
 const MAX_WORK_CALLS = 8;
 const MAX_DEPENDENCIES = 512;
 
+/** Explicit, disposable-profile diagnostics for intermittent lease failures. */
+const traceLeases = () =>
+  Boolean(process.env.CATAMORPHIC_E2E_DATA_DIR) &&
+  process.env.CATAMORPHIC_E2E_TRACE_SIDEBAR === "1";
+
 function within(root: string, file: string): boolean {
   const relative = path.relative(root, file);
   return (
@@ -425,6 +430,19 @@ export class SidebarSourceRuntime {
     });
   }
   private send(value: unknown) {
+    if (
+      traceLeases() &&
+      typeof value === "object" &&
+      value !== null &&
+      "method" in value &&
+      (value.method === "subscribe" || value.method === "unsubscribe")
+    )
+      console.info("Sidebar lease send", {
+        module: this.opts.modulePath,
+        pid: this.child?.pid,
+        listeners: this.listeners.size,
+        method: value.method,
+      });
     this.child?.stdin?.write(`${JSON.stringify(value)}\n`);
   }
   private scheduleIdle() {
@@ -535,6 +553,12 @@ export class SidebarSourceRuntime {
   }
   subscribe(listener: (error?: string) => void): () => void {
     this.listeners.add(listener);
+    if (traceLeases())
+      console.info("Sidebar lease acquired", {
+        module: this.opts.modulePath,
+        pid: this.child?.pid,
+        listeners: this.listeners.size,
+      });
     clearTimeout(this.idle);
     if (this.listeners.size === 1) {
       this.send({ method: "subscribe" });
@@ -603,6 +627,12 @@ export class SidebarSourceRuntime {
     }
     return () => {
       this.listeners.delete(listener);
+      if (traceLeases())
+        console.info("Sidebar lease released", {
+          module: this.opts.modulePath,
+          pid: this.child?.pid,
+          listeners: this.listeners.size,
+        });
       if (!this.listeners.size) {
         this.send({ method: "unsubscribe" });
         this.watcher?.close();

@@ -4175,6 +4175,8 @@ See ADR 0311.
 A short click teaches holding through the shared shortcut hint, with the person's
 configured voice shortcut. Releases before 250 ms cancel recognition and clear
 provisional words; they never submit a message or wait in the thinking state.
+Pointer and focused-key holds use the input events' timestamps, including
+cancellation and blur, so queued event handling cannot turn a click into a hold.
 Holding still opens capture immediately. A new chat finishing setup after release
 cannot start a late microphone.
 
