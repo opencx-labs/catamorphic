@@ -27,6 +27,8 @@ interface TabIndicators {
   awaitingInput?: boolean;
   /** Chat group this tab belongs to (parent chat or attached surface). */
   groupId?: string;
+  /** Pinned: first in the strip, shown by its icon, kept by Cmd+W. */
+  pinned?: boolean;
   /** Secondary hover-card line: URL, file path, agent name … */
   detail?: string;
   bookmarkUrl?: string;

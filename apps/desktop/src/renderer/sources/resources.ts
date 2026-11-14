@@ -9,7 +9,12 @@ import {
   type FileTreeNode,
   isVisibleProjectFile,
 } from "../lib/project-file-tree.js";
-import { tabCloseEntries, tabCloseRequest } from "../lib/tab-close-menu.js";
+import {
+  tabCloseEntries,
+  tabCloseRequest,
+  tabPinEntries,
+  tabPinRequest,
+} from "../lib/tab-close-menu.js";
 import { tabKey, type WorkspaceTab } from "../lib/workspace-types.js";
 import {
   capabilitiesOf,
@@ -198,7 +203,8 @@ export function tabsSource(deps: WorkSourceDeps): SectionSource {
     empty: "No open tabs.",
     capabilities: () => capabilitiesOf(source),
     load: async ({ parentId }) => {
-      const { tabs, activeTabKey, tabGroups } = deps.host();
+      const host = deps.host();
+      const { tabs, activeTabKey, tabGroups } = host;
       const parentOf = new Map(
         tabGroups.flatMap((group) =>
           group.memberKeys.map((key): [string, string] => [
@@ -254,20 +260,22 @@ export function tabsSource(deps: WorkSourceDeps): SectionSource {
               url: id,
               ...(signal ? { signal } : {}),
               ...(activity ? { activity } : {}),
-              // Close on hover, and in its menus beside the open modes.
-              actions: [
-                { label: `Close ${label}`, action: "close", icon: "X" },
-              ],
+              // Close on hover, and in its menus beside the open modes. A
+              // pinned tab closes from its menu only, as in the strip.
+              actions: tab.pinned
+                ? []
+                : [{ label: `Close ${label}`, action: "close", icon: "X" }],
               menu: [
                 // A chat's tab is named as the chat is (ADR 0247).
                 ...(tab.kind === "chat" && tab.sessionId
                   ? [{ label: "Rename…", action: "rename" }]
                   : []),
-                ...tabCloseEntries({
+                ...tabPinEntries({
                   key: id,
-                  tabCount: tabs.length,
-                  groups: tabGroups,
+                  pinned: Boolean(tab.pinned),
+                  blocker: host.pinBlocker(id),
                 }),
+                ...tabCloseEntries({ key: id, tabs, groups: tabGroups }),
               ],
               data: {
                 kind: tab.kind,
@@ -280,6 +288,7 @@ export function tabsSource(deps: WorkSourceDeps): SectionSource {
                     : null,
                 attention: Boolean(tab.attention || tab.awaitingInput),
                 unread: Boolean(tab.unread),
+                pinned: Boolean(tab.pinned),
                 ...(tab.groupId ? { groupId: tab.groupId } : {}),
                 ...(tab.kind === "browser"
                   ? { url: tab.bookmarkUrl, faviconUrl: tab.faviconUrl ?? null }
@@ -305,6 +314,11 @@ export function tabsSource(deps: WorkSourceDeps): SectionSource {
       const sessionId = tab?.kind === "chat" ? tab.sessionId : undefined;
       if (action === "rename" && sessionId) {
         host.sessionAction(sessionId, "rename");
+        return undefined;
+      }
+      const pin = tabPinRequest(action);
+      if (pin !== undefined) {
+        host.pinTab(itemId, pin);
         return undefined;
       }
       const close = tabCloseRequest({

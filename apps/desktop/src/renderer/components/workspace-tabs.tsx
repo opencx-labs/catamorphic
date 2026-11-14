@@ -795,8 +795,11 @@ function TabStrip({
                     }
                   }}
                   onMouseLeave={disarmHoverCard}
-                  className="workspace-tab-label flex min-w-0 cursor-pointer items-center gap-1.5 self-stretch px-2.5"
+                  // A pinned tab is its icon: the hover card names it.
+                  className={`workspace-tab-label flex min-w-0 cursor-pointer items-center gap-1.5 self-stretch ${tab.pinned ? "px-2" : "px-2.5"}`}
                   aria-current={active || undefined}
+                  aria-label={tab.pinned ? (tab.label ?? tab.name) : undefined}
+                  data-tab-pinned={tab.pinned || undefined}
                 >
                   {/* Same signal vocabulary as the chat bubbles: a spinner
                   on the icon's lower corner while working, or what it waits
@@ -863,17 +866,22 @@ function TabStrip({
                       />
                     </span>
                   </span>
-                  <AnimatedTitle
-                    text={tab.label ?? tab.name}
-                    className="workspace-tab-title min-w-3 max-w-40"
-                  />
+                  {!tab.pinned && (
+                    <AnimatedTitle
+                      text={tab.label ?? tab.name}
+                      className="workspace-tab-title min-w-3 max-w-40"
+                    />
+                  )}
                 </OpenResourceButton>
-                {/* ⌘W closes the ACTIVE tab, so only its X advertises it. */}
-                <CloseButton
-                  hint={active}
-                  label={`Close ${tab.label ?? tab.name}`}
-                  onClick={() => onClose(key)}
-                />
+                {/* ⌘W closes the ACTIVE tab, so only its X advertises it. A
+                  pinned tab closes from its menu only. */}
+                {!tab.pinned && (
+                  <CloseButton
+                    hint={active}
+                    label={`Close ${tab.label ?? tab.name}`}
+                    onClick={() => onClose(key)}
+                  />
+                )}
               </span>
               {/* Collapsed group parent: expand its folded surfaces. It
                 sits over the label's last 4px, where the tab's padding was,

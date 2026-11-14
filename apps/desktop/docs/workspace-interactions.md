@@ -189,6 +189,13 @@ closes with them are closed for good. A chat floating or in a bubble is not a
 tab, so Close all tabs leaves it and sends its tabs back to its chips. A folded
 chat's close already takes its tabs, so its menu has no separate Close chat.
 
+The same menu pins a tab (Pin tab, Pin chat) and unpins it (ADR 0318). Pinned
+tabs lead the strip, shown by their icon with no close button, and come back
+after a restart, a pinned shell as a fresh one. Cmd+W leaves a pinned tab, and
+with tabs pinned Close all tabs reads Close unpinned tabs and leaves them;
+Close tab in its menu closes one. A tab under a chat leaves it to be pinned,
+unless an agent holds it there. A New Tab cannot be pinned.
+
 ## Chat presentation and visibility
 
 Wait, watch, background, and notification disclosures align their chevrons with
