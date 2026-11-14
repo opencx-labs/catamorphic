@@ -32,6 +32,10 @@ export interface WorkSourceHost {
   /** The profile agent a chat names was deleted (ADR 0314). */
   agentDeleted: (agentId: string) => boolean;
   closeTab: (key: string, scope?: TabCloseScope) => void;
+  /** Pin a tab (or unpin it). Throws, in a sentence, when it cannot pin. */
+  pinTab: (key: string, pinned: boolean) => void;
+  /** Why a tab cannot be pinned; undefined when it can. */
+  pinBlocker: (key: string) => string | undefined;
   /** Move a tab before another in the strip (null: to the end). */
   reorderTab: (key: string, beforeKey: string | null) => void;
   /**

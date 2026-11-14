@@ -105,6 +105,8 @@ function deps(host: Partial<WorkSourceHost> = {}): WorkSourceDeps {
     agentName: () => undefined,
     agentDeleted: () => false,
     closeTab: vi.fn(),
+    pinTab: vi.fn(),
+    pinBlocker: () => undefined,
     reorderTab: vi.fn(),
     attachTab: vi.fn(),
     sessionAction: vi.fn(),
