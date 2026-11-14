@@ -52,13 +52,16 @@ export const AGENT_EFFORT_LEVELS = [
  * Classified failure category. `auth` offers a re-connect path,
  * `rate_limit`/`unavailable` explain a provider outage (retrying needs a
  * separate safety signal), `model_incompat` retries with sanitized
- * reasoning history. Unclassified errors offer a manual retry.
+ * reasoning history, `agent_missing` means the chat's agent no longer
+ * exists: the person chooses another to continue. Unclassified errors
+ * offer a manual retry.
  */
 export type AgentErrorKind =
   | "auth"
   | "rate_limit"
   | "unavailable"
-  | "model_incompat";
+  | "model_incompat"
+  | "agent_missing";
 
 /**
  * Per-turn token and cost accounting (ADR 0057). Every field is optional:

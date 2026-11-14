@@ -165,13 +165,18 @@ export interface FinalizedTurn {
 export interface TurnEngineHost {
   /** The identity a session's work runs as (its owner, ADR 0173). */
   owner(session: SessionRow): Promise<Identity | null>;
+  /**
+   * What a failure outside the protocol means, when the host knows (its
+   * agent was removed, say); otherwise the turn fails with its message.
+   */
+  failureOf?(error: unknown): TurnError | undefined;
   /** The harness the session's agent runs on and how its turns recover. */
   harnessOf(input: { identity: Identity; session: SessionRow }): Promise<{
     harness: string;
     agentId: string | null;
     recovery: "continue" | "stop";
     /** Why the agent cannot run now: the turn fails with it. */
-    unavailable?: string;
+    unavailable?: Omit<TurnError, "retrySafe">;
   }>;
   prepare(input: {
     identity: Identity;
@@ -1000,7 +1005,9 @@ export class TurnEngine {
       .select("harness")
       .where("id", "=", turn.sessionId)
       .executeTakeFirstOrThrow();
-    const refusal = local.refusal ?? harness.unavailable ?? null;
+    const refusal = local.refusal
+      ? { message: local.refusal }
+      : (harness.unavailable ?? null);
     if (refusal !== null) {
       await this.settle(local, {
         identity: ctx.identity,
@@ -1008,7 +1015,7 @@ export class TurnEngine {
         turn,
         attempt: { ...attempt, status: "failed", completedAt: now() },
         status: "failed",
-        error: { message: refusal },
+        error: refusal,
         outcome: turn.outcome ?? { changedFiles: [] },
         checkpointAfter: null,
       });
@@ -3664,7 +3671,7 @@ export class TurnEngine {
       turn,
       attempt,
       status: "failed",
-      error: {
+      error: this.deps.host.failureOf?.(error) ?? {
         message: error instanceof Error ? error.message : String(error),
       },
       outcome: turn.outcome ?? { changedFiles: [] },

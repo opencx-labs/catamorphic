@@ -1322,7 +1322,14 @@ function ChatDockContent({
     defaultAgentId: string | null;
     /** Committed agents whose definition fails: listed, never picked. */
     invalidIds: string[];
-  }>({ agents: [], defaultAgentId: null, invalidIds: [] });
+    /** Which lists arrived: an agent absent from one that did not is unknown, not deleted. */
+    loaded: { profile: boolean; project: boolean };
+  }>({
+    agents: [],
+    defaultAgentId: null,
+    invalidIds: [],
+    loaded: { profile: false, project: false },
+  });
   // Refetched when the session's agent changes (a switch may involve an
   // agent created after this dock mounted) and on agents-changed
   // broadcasts (a new default agent must reach already-open docks).
@@ -1340,16 +1347,18 @@ function ChatDockContent({
     // name and capabilities wherever profile agents show theirs.
     void Promise.all([
       desktopApi.agentsList(),
-      desktopApi.projectAgentsList(projectId).catch(() => ({ agents: [] })),
+      desktopApi.projectAgentsList(projectId).catch(() => null),
     ])
       .then(([data, project]) => {
         if (cancelled) return;
+        const committed = project?.agents ?? [];
         setRoster({
-          agents: [...data.agents, ...project.agents.map(projectAgentAsInfo)],
+          agents: [...data.agents, ...committed.map(projectAgentAsInfo)],
           defaultAgentId: data.defaultAgentId,
-          invalidIds: project.agents
+          invalidIds: committed
             .filter((agent) => agent.invalid)
             .map((agent) => agent.id),
+          loaded: { profile: true, project: project !== null },
         });
       })
       .catch(() => {});
@@ -1413,6 +1422,18 @@ function ChatDockContent({
               "",
           ),
       );
+  // The chat's own agent was deleted (ADR 0314): it stops until the person
+  // chooses another. Only said once the list it would be in has arrived.
+  const chatAgentId = chat.session?.agentId ?? entry.agentId;
+  const agentMissing =
+    !authority &&
+    Boolean(chatAgentId) &&
+    (chatAgentId?.startsWith("project:")
+      ? roster.loaded.project
+      : roster.loaded.profile) &&
+    !roster.agents.some(
+      (agent) => agent.id === rosterAgentId(chatAgentId ?? ""),
+    );
   // Any available agent can continue this chat, with context handed to
   // its harness. Connected projects use their server's agent catalog.
   const otherAgents = authority
@@ -2006,6 +2027,44 @@ function ChatDockContent({
   // The chat's own commands, offered when the inspector offers them.
   const turnBusy = Boolean(chat.isSending || chat.session?.running);
   const editAgent = turnBusy || otherAgents === 0 ? undefined : onEditAgent;
+  // The turn that stopped on a deleted agent runs again once the person
+  // has chosen another for the chat, while it is still the latest: the
+  // latest turn, past notes after it (the agent switch adds one).
+  const lastTurn = [...chat.timeline]
+    .reverse()
+    .find((group) => group.turn)?.turn;
+  const [resume, setResume] = useState<{
+    turnId: string;
+    fromAgentId: string | null | undefined;
+  } | null>(null);
+  const retryRef = useRef(chat.retry);
+  retryRef.current = chat.retry;
+  useEffect(() => {
+    if (!resume) return;
+    if (lastTurn?.id !== resume.turnId) {
+      setResume(null);
+      return;
+    }
+    if (
+      agentMissing ||
+      !sessionAgentId ||
+      sessionAgentId === resume.fromAgentId
+    )
+      return;
+    setResume(null);
+    void retryRef.current(resume.turnId);
+  }, [resume, lastTurn?.id, agentMissing, sessionAgentId]);
+  const chooseAgent =
+    agentMissing && editAgent
+      ? () => {
+          if (
+            lastTurn?.status === "failed" &&
+            lastTurn.error?.kind === "agent_missing"
+          )
+            setResume({ turnId: lastTurn.id, fromAgentId: sessionAgentId });
+          editAgent();
+        }
+      : undefined;
   const editModel = turnBusy || !activeAgent ? undefined : onEditModel;
   const editEffort =
     turnBusy || supportedEfforts(activeAgent, effortModel).length === 0
@@ -2987,7 +3046,8 @@ function ChatDockContent({
                           agent.id ===
                           (chat.session?.agentId ?? selectedAgentId),
                       )?.name ?? "Project agent")
-                    : (activeAgent?.name ?? "Unknown agent")
+                    : (activeAgent?.name ??
+                      (agentMissing ? "Deleted agent" : "Unknown agent"))
                 }
                 model={
                   (selectedModel &&
@@ -3306,6 +3366,7 @@ function ChatDockContent({
               onLoadOlder={chat.loadOlder}
               onReauth={reauth?.run}
               reauthLabel={reauth?.label}
+              onChooseAgent={chooseAgent}
               resolveAgentName={resolveAgentName}
               renderAgentIcon={renderAgentIcon}
               sourceHref={sourceHref}
@@ -3573,6 +3634,27 @@ function ChatDockContent({
               projectId={projectId}
               checkNonce={remoteCheckNonce}
             />
+            {agentMissing && (
+              <div
+                data-testid="agent-missing-banner"
+                className="mx-3 mb-1 flex shrink-0 animate-fade-in items-center gap-2 rounded-lg border border-warning/40 bg-warning/10 py-1.5 pl-3 pr-1.5 text-xs text-fg"
+              >
+                <span className="min-w-0 flex-1 truncate">
+                  {chooseAgent
+                    ? "This chat's agent was deleted."
+                    : "This chat's agent was deleted. Add an agent in Settings to continue."}
+                </span>
+                {chooseAgent && (
+                  <button
+                    type="button"
+                    onClick={chooseAgent}
+                    className="shrink-0 cursor-pointer rounded-md bg-warning/20 px-2 py-1 font-medium transition-colors duration-150 hover:bg-warning/30"
+                  >
+                    Choose an agent
+                  </button>
+                )}
+              </div>
+            )}
             {/* Proactive auth banner: the session is knowably dead
               (probe on focus/wake) — offer the re-login BEFORE a send
               fails. Dismissible; a health change re-arms it. */}

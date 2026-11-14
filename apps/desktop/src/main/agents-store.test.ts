@@ -505,6 +505,26 @@ describe("AgentsStore — layered defaults (ADR 0056)", () => {
   });
 });
 
+it("removes a deleted agent from other agents' subsession grants (ADR 0314)", () => {
+  const store = new AgentsStore(storeFile());
+  const removed = store.create({ harness: "codex" });
+  const lead = store.create({
+    harness: "claude-code",
+    delegation: {
+      enabled: true,
+      maxConcurrentChildren: 10,
+      agents: [
+        { agent: "self", model: "any", effort: "any", delegate: true },
+        { agent: removed.id, model: "any", effort: "any", delegate: false },
+      ],
+    },
+  });
+  store.remove(removed.id);
+  expect(store.get(lead.id)?.delegation?.agents).toEqual([
+    { agent: "self", model: "any", effort: "any", delegate: true },
+  ]);
+});
+
 it("advertises the native Codex attachment path to the composer", () => {
   const store = new AgentsStore(storeFile());
   expect(toPublicAgent(store.create({ harness: "codex" })).accepts).toEqual([

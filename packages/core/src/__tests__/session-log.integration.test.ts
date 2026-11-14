@@ -31,7 +31,10 @@ import { pgcrypto } from "@electric-sql/pglite/contrib/pgcrypto";
 import { Kysely, PGliteDialect, sql, WithSchemaPlugin } from "kysely";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import type { Identity } from "../identity.js";
-import { AgentSessionsService } from "../services/agent-sessions-service.js";
+import {
+  AGENT_MISSING_MESSAGE,
+  AgentSessionsService,
+} from "../services/agent-sessions-service.js";
 import type { RegisteredCodingAgent } from "../services/coding-agent-registry.js";
 import { ExecutionAllocationsService } from "../services/execution-allocations-service.js";
 import { ExecutionEnvironmentsService } from "../services/execution-environments-service.js";
@@ -2324,6 +2327,114 @@ describe("session log", () => {
       agentId: "elsewhere",
     });
     expect(moved.agentId).toBe("elsewhere");
+  });
+
+  it("stops a chat whose agent was removed until another is chosen", async () => {
+    const { projectId, sessionId } = await chat("Removed agent");
+    await db
+      .updateTable("agent_sessions")
+      .set({ agent_id: "removed" })
+      .where("id", "=", sessionId)
+      .execute();
+    const { turn: failed } = await sessions.sendMessage(
+      identity,
+      projectId,
+      sessionId,
+      "hello",
+    );
+    expect(failed.status).toBe("failed");
+    expect(failed.error).toEqual({
+      message: AGENT_MISSING_MESSAGE,
+      kind: "agent_missing",
+    });
+    // Choosing another agent and running the same message continues it.
+    await sessions.update(identity, projectId, sessionId, { agentId: "echo" });
+    const retried = await sessions.command(
+      identity,
+      projectId,
+      sessionId,
+      { type: "retry", commandId: randomUUID(), turnId: failed.id },
+      { ifLatestTurnId: failed.id },
+    );
+    expect(retried.status).toBe("accepted");
+    await vi.waitFor(
+      async () => {
+        const after = await sessions.get(identity, projectId, sessionId);
+        expect(
+          orderedTurns(sessionStateFromSnapshot(after.snapshot)).at(-1)?.status,
+        ).toBe("completed");
+      },
+      { timeout: 10_000 },
+    );
+  });
+
+  it("stops a resting chat whose agent was removed rather than leaving it queued", async () => {
+    const { projectId, sessionId } = await chat("Removed agent at rest");
+    // Its workspace was given back while it rested (ADR 0193).
+    await db
+      .updateTable("agent_sessions")
+      .set({ agent_id: "removed", allocation_id: null })
+      .where("id", "=", sessionId)
+      .execute();
+    const { turn } = await sessions.sendMessage(
+      identity,
+      projectId,
+      sessionId,
+      "hello",
+    );
+    expect(turn.status).toBe("failed");
+    expect(turn.error?.kind).toBe("agent_missing");
+  });
+
+  it("archives the subsessions of a removed agent, not the person's own chats", async () => {
+    const parent = await chat("Removed agent parent");
+    const child = {
+      sessionId: (await sessions.create(identity, parent.projectId)).id,
+    };
+    const own = {
+      sessionId: (await sessions.create(identity, parent.projectId)).id,
+    };
+    // A subsession the person keeps in their list, and a fork: theirs.
+    const pinned = (await sessions.create(identity, parent.projectId)).id;
+    const fork = (await sessions.create(identity, parent.projectId)).id;
+    await db
+      .updateTable("agent_sessions")
+      .set({ agent_id: "retired", parent_session_id: parent.sessionId })
+      .where("id", "in", [child.sessionId, pinned, fork])
+      .execute();
+    await db
+      .updateTable("agent_sessions")
+      .set({ forked_from_session_id: parent.sessionId })
+      .where("id", "=", fork)
+      .execute();
+    // An agent starts its subsessions out of the person's list.
+    await db
+      .updateTable("agent_session_views")
+      .set({ visibility: "latent", previous_visibility: "latent" })
+      .where("session_id", "in", [child.sessionId, fork])
+      .execute();
+    await db
+      .updateTable("agent_sessions")
+      .set({ agent_id: "retired" })
+      .where("id", "=", own.sessionId)
+      .execute();
+    const { archivedSessionIds } = await sessions.archiveSubsessionsOnAgent(
+      identity,
+      { agentId: "retired" },
+    );
+    expect(archivedSessionIds).toEqual([child.sessionId]);
+    const archived = await sessions.list(identity, parent.projectId, {
+      visibility: "archived",
+    });
+    expect(archived.items.map((session) => session.id)).toEqual([
+      child.sessionId,
+    ]);
+    // Already archived: a second removal finds nothing.
+    expect(
+      await sessions.archiveSubsessionsOnAgent(identity, {
+        agentId: "retired",
+      }),
+    ).toEqual({ archivedSessionIds: [] });
   });
 
   it("streams the gap after a cursor, then live events, in order", async () => {

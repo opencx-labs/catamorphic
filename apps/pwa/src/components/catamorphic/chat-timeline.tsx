@@ -21,6 +21,7 @@ import {
   waitsToRun,
 } from "@catamorphic/react";
 import {
+  Bot,
   Check,
   ChevronRight,
   ClipboardType,
@@ -200,6 +201,11 @@ export interface ChatTimelineProps {
    */
   onReauth?: (turnId: string) => void;
   reauthLabel?: string;
+  /**
+   * Choose another agent for a chat whose agent was deleted, offered on the
+   * turn that stopped on it; the host runs that turn again once it is set.
+   */
+  onChooseAgent?: (turnId: string) => void;
   /**
    * "Restore to here": undo a turn and every later one, files included,
    * from the person's message. Offered on a settled turn once nothing
@@ -582,6 +588,7 @@ export function ChatTimeline(props: ChatTimelineProps) {
     onInterrupt,
     onReauth,
     reauthLabel,
+    onChooseAgent,
     onRollback,
     onFork,
     onReadAloud,
@@ -861,6 +868,7 @@ export function ChatTimeline(props: ChatTimelineProps) {
           onInterrupt={onInterrupt}
           onReauth={onReauth}
           reauthLabel={reauthLabel}
+          onChooseAgent={onChooseAgent}
         />,
       );
   });
@@ -2674,6 +2682,7 @@ function renderTurnOutcome({
   onInterrupt,
   onReauth,
   reauthLabel,
+  onChooseAgent,
 }: {
   turn: Turn;
   group: TimelineTurn;
@@ -2684,10 +2693,15 @@ function renderTurnOutcome({
   onInterrupt?: (turnId?: string) => void;
   onReauth?: (turnId: string) => void;
   reauthLabel?: string;
+  onChooseAgent?: (turnId: string) => void;
 }) {
   const retrying =
     (turn.status === "queued" || turn.status === "held") &&
     turn.attemptCount > 0;
+  // Its agent is gone: while the host offers another, that replaces Retry;
+  // once the chat has an agent again, Retry runs it there.
+  const chooseAgent =
+    latest && turn.error?.kind === "agent_missing" ? onChooseAgent : undefined;
   if (turn.status === "failed" || retrying)
     return (
       <ErrorCard
@@ -2699,7 +2713,9 @@ function renderTurnOutcome({
         // A turn waiting to retry counts down, and stops, wherever it is.
         retryAt={retrying ? (turn.retryAt ?? "") : null}
         onRetry={
-          latest && !retrying && onRetry ? () => onRetry(turn.id) : undefined
+          latest && !retrying && !chooseAgent && onRetry
+            ? () => onRetry(turn.id)
+            : undefined
         }
         onStop={
           retrying && onInterrupt ? () => onInterrupt(turn.id) : undefined
@@ -2710,6 +2726,7 @@ function renderTurnOutcome({
             : undefined
         }
         reauthLabel={reauthLabel}
+        onChooseAgent={chooseAgent ? () => chooseAgent(turn.id) : undefined}
       />
     );
   if (turn.status !== "interrupted") return null;
@@ -2773,7 +2790,8 @@ function changedFileNames(paths: string[]): string {
 /**
  * A failed turn: the friendly explanation plus whatever gets the person
  * unstuck: Retry (in place, no re-typing), a re-connect flow for auth
- * failures, and the countdown while a transient failure retries itself.
+ * failures, another agent for a chat whose agent was deleted, and the
+ * countdown while a transient failure retries itself.
  */
 function ErrorCard({
   message,
@@ -2783,6 +2801,7 @@ function ErrorCard({
   onStop,
   onReauth,
   reauthLabel,
+  onChooseAgent,
 }: {
   message: string;
   kind?: TurnError["kind"];
@@ -2792,6 +2811,7 @@ function ErrorCard({
   onStop?: () => void;
   onReauth?: () => void;
   reauthLabel?: string;
+  onChooseAgent?: () => void;
 }) {
   const nextAtMs =
     retryAt === null ? undefined : retryAt ? Date.parse(retryAt) : 0;
@@ -2807,7 +2827,7 @@ function ErrorCard({
       <div className="whitespace-pre-wrap break-words leading-6 text-fg">
         {message}
       </div>
-      {(onRetry || onReauth || counting || onStop) && (
+      {(onRetry || onReauth || onChooseAgent || counting || onStop) && (
         <div className="mt-2 flex flex-wrap items-center gap-2">
           {onRetry && (
             <button
@@ -2829,6 +2849,17 @@ function ErrorCard({
             >
               <KeyRound className="size-3" />
               {reauthLabel ?? "Reconnect"}
+            </button>
+          )}
+          {onChooseAgent && (
+            <button
+              type="button"
+              onClick={onChooseAgent}
+              className="flex cursor-pointer items-center gap-1.5 rounded-md bg-accent px-2.5 py-1 text-xs font-medium text-accent-fg transition-opacity duration-100 hover:opacity-90"
+              data-testid="chat-choose-agent"
+            >
+              <Bot className="size-3" />
+              Choose an agent
             </button>
           )}
           {counting && <AutoRetryCountdown nextAtMs={nextAtMs} />}
