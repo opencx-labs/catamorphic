@@ -109,14 +109,19 @@ it("keeps the agent it finished with", async () => {
   expect(api.agentsRemove).not.toHaveBeenCalled();
 });
 
-it("marks the choices the profile has an agent from, as they stood on opening", async () => {
+it("marks the choices the profile has a signed-in agent from, as they stood on opening", async () => {
   const agents = [
-    { harness: "claude-code", auth: "local" },
-    { harness: "ai-sdk", provider: "openrouter", auth: "account" },
-    { harness: "ai-sdk", provider: "openai", auth: "api-key" },
-    { harness: "acp", acp: { command: ["another-agent"] }, auth: "local" },
+    { id: "claude", harness: "claude-code", auth: "local" },
+    { id: "free", harness: "ai-sdk", provider: "openrouter", auth: "account" },
+    { id: "key", harness: "ai-sdk", provider: "openai", auth: "api-key" },
+    { id: "other", harness: "acp", acp: { command: ["another-agent"] } },
+    // Its sign-in was left unfinished: an agent, but not one that is added.
+    { id: "unfinished", harness: "codex", auth: "account" },
   ];
   api.agentsList.mockResolvedValue({ agents });
+  api.agentLoginStatus.mockImplementation(
+    async (id: string) => id !== "unfinished",
+  );
   await act(async () =>
     root.render(
       <AgentWizard variant="tab" onClose={() => {}} onDone={() => {}} />,
@@ -132,10 +137,8 @@ it("marks the choices the profile has an agent from, as they stood on opening", 
     "agent-wizard-free",
   ];
   await vi.waitFor(() => expect(added()).toEqual(marked));
-  // A sign-in creates its agent before it finishes: that one is not added yet.
-  api.agentsList.mockResolvedValue({
-    agents: [...agents, { harness: "codex", auth: "account" }],
-  });
+  // A sign-in under way is read no sooner than the wizard next opens.
+  api.agentLoginStatus.mockResolvedValue(true);
   await press('[data-testid="agent-wizard-codex"]');
   await pressText("Sign in with ChatGPT");
   await press('[data-testid="agent-wizard-back"]');

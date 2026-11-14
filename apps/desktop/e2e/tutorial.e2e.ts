@@ -672,6 +672,28 @@ describe("the Work tutorial", () => {
       ),
     ).toBe(1);
     expect(await app.eval(label)).toBe("Add another agent");
+
+    // An agent whose sign-in was left unfinished says so instead of showing
+    // a tick, and the wizard does not count it as added.
+    const unfinished = await app.eval<string>(
+      `window.catamorphicDesktop.agentsCreate({ harness: 'claude-code', auth: 'account', name: 'Unfinished', connections: { mode: 'all' } }).then(agent => agent.id)`,
+    );
+    await app.waitFor(
+      `document.querySelector('.onboarding-agent[data-signed-in="false"]')?.textContent === 'UnfinishedNot signed in'`,
+    );
+    expect(
+      await app.eval(
+        `document.querySelectorAll('.onboarding-agent[data-signed-in="true"]').length`,
+      ),
+    ).toBe(1);
+    await click(setup);
+    await app.waitFor(`${added} === 'agent-wizard-free'`);
+    await app.press("Escape");
+    await app.waitFor(`!document.querySelector('${free}')`);
+    await app.eval(
+      `window.catamorphicDesktop.agentsRemove(${JSON.stringify(unfinished)})`,
+    );
+    await app.waitFor(`${listed} === 'OpenRouter'`);
     await app.waitFor(
       `document.querySelector('[data-dock-host] [data-dock-rail]')?.dataset.dockCollapsed === 'true'`,
     );

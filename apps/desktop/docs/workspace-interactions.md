@@ -578,8 +578,9 @@ and both sidebars expanding and collapsing. Reduced motion shows it statically. 
 the existing wizard as a modal, retains the tutorial and its step, and shows a
 list of the profile's agents beneath its button once the wizard closes. The
 button then reads Add another agent and opens the same wizard, which marks each
-choice the profile already has an agent from as Added. Hovering or focusing a
-listed agent turns its tick into the button that removes it. The dock is already visible before setup; its walkthrough uses the real bubble strip and an animated
+choice the profile already has a signed-in agent from as Added. Hovering or
+focusing a listed agent turns its tick into the button that removes it. An agent
+whose sign-in was left unfinished reads Not signed in instead of a tick. The dock is already visible before setup; its walkthrough uses the real bubble strip and an animated
 cursor, expanding from the right corner into the center of the window, with a
 static illustration under reduced motion. Expanding the real dock reserves bottom
 space in onboarding over 250ms so the copy and navigation remain clear; the

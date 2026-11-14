@@ -527,6 +527,13 @@
     opacity 150ms var(--ease-standard),
     scale 150ms var(--ease-standard);
 }
+/* No mark until the agent's sign-in is known. */
+.onboarding-agent-check {
+  opacity: 0;
+}
+.onboarding-agent[data-signed-in] .onboarding-agent-check {
+  opacity: 1;
+}
 .onboarding-agent-remove {
   opacity: 0;
   scale: 0.8;

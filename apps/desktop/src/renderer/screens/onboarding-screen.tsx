@@ -4,6 +4,7 @@ import {
   ArrowUp,
   Check,
   ChevronDown,
+  CircleAlert,
   Folder,
   Globe,
   Keyboard,
@@ -46,6 +47,7 @@ import {
   type WorkspaceTab,
   WorkspaceTabBar,
 } from "../components/workspace-tabs.js";
+import { desktopApi } from "../lib/desktop-api.js";
 import { formatBinding, useKeybindings } from "../lib/keybindings.js";
 import { motionMs } from "../lib/motion.js";
 
@@ -72,6 +74,39 @@ const NO_AGENTS: readonly ConfiguredAgent[] = [];
 const PROJECT_AGENT: readonly ConfiguredAgent[] = [
   { id: "project", name: "Agent configured" },
 ];
+
+/**
+ * Which agents are signed in, once known. A sign-in creates its agent before
+ * it finishes, so one left unfinished is an agent that cannot run yet.
+ */
+function useSignedIn(agents: readonly ConfiguredAgent[]) {
+  const [signedIn, setSignedIn] = useState<Record<string, boolean>>({});
+  useEffect(() => {
+    let cancelled = false;
+    void Promise.all(
+      agents.map(
+        async (agent) =>
+          [
+            agent.id,
+            await desktopApi.agentLoginStatus(agent.id).catch(() => true),
+          ] as const,
+      ),
+    ).then((entries) => {
+      if (!cancelled) setSignedIn(Object.fromEntries(entries));
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [agents]);
+  useEffect(
+    () =>
+      desktopApi.onAgentLoginFinished(({ agentId, ok }) =>
+        setSignedIn((known) => ({ ...known, [agentId]: ok })),
+      ),
+    [],
+  );
+  return signedIn;
+}
 
 export function OnboardingScreen({
   active = true,
@@ -128,6 +163,7 @@ export function OnboardingScreen({
   )
     setSettled({ agents, hasAgents });
   const removable = settled.agents.length > 0;
+  const signedIn = useSignedIn(settled.agents);
   const configured = removable
     ? settled.agents
     : settled.hasAgents
@@ -228,40 +264,59 @@ export function OnboardingScreen({
           aria-label="Configured agents"
           data-testid="onboarding-agents"
         >
-          {configured.map((agent) => (
-            <li
-              key={agent.id}
-              className="onboarding-agent animate-fade-in"
-              data-removable={removable || undefined}
-            >
-              <HarnessIcon harness={agent.harness} provider={agent.provider} />
-              <span className="onboarding-agent-name">{agent.name}</span>
-              {/* The tick's place is also the remove button's, shown while
-                  the agent is hovered or holds keyboard focus. */}
-              <span className="onboarding-agent-state">
-                <Check
-                  className="onboarding-agent-check size-3.5 text-success"
-                  aria-label="set up"
+          {configured.map((agent) => {
+            // A server's agent is ready; the profile's own say so once known.
+            const ready = removable ? signedIn[agent.id] : true;
+            return (
+              <li
+                key={agent.id}
+                className="onboarding-agent animate-fade-in"
+                data-removable={removable || undefined}
+                data-signed-in={ready}
+              >
+                <HarnessIcon
+                  harness={agent.harness}
+                  provider={agent.provider}
                 />
-                {removable && (
-                  <ShortcutHint
-                    label={`Remove ${agent.name}`}
-                    className="onboarding-agent-remove"
-                  >
-                    <button
-                      type="button"
-                      aria-label={`Remove ${agent.name}`}
-                      onClick={() => onRemoveAgent(agent.id)}
-                      data-testid="onboarding-remove-agent"
-                      className="relative grid size-3.5 cursor-pointer place-items-center rounded-sm text-fg-muted transition-colors duration-150 after:absolute after:-inset-1.5 after:content-[''] hover:text-danger"
-                    >
-                      <X className="size-3.5" />
-                    </button>
-                  </ShortcutHint>
+                <span className="onboarding-agent-name">{agent.name}</span>
+                {ready === false && (
+                  <span className="text-fg-muted">Not signed in</span>
                 )}
-              </span>
-            </li>
-          ))}
+                {/* The mark's place is also the remove button's, shown while
+                  the agent is hovered or holds keyboard focus. */}
+                <span className="onboarding-agent-state">
+                  {ready === false ? (
+                    <CircleAlert
+                      className="onboarding-agent-check size-3.5 text-warning"
+                      aria-hidden="true"
+                    />
+                  ) : (
+                    <Check
+                      className="onboarding-agent-check size-3.5 text-success"
+                      aria-label={ready ? "set up" : undefined}
+                      aria-hidden={!ready}
+                    />
+                  )}
+                  {removable && (
+                    <ShortcutHint
+                      label={`Remove ${agent.name}`}
+                      className="onboarding-agent-remove"
+                    >
+                      <button
+                        type="button"
+                        aria-label={`Remove ${agent.name}`}
+                        onClick={() => onRemoveAgent(agent.id)}
+                        data-testid="onboarding-remove-agent"
+                        className="relative grid size-3.5 cursor-pointer place-items-center rounded-sm text-fg-muted transition-colors duration-150 after:absolute after:-inset-1.5 after:content-[''] hover:text-danger"
+                      >
+                        <X className="size-3.5" />
+                      </button>
+                    </ShortcutHint>
+                  )}
+                </span>
+              </li>
+            );
+          })}
         </ul>
       </div>
     </Step>,

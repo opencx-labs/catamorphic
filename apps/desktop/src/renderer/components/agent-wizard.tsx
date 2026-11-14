@@ -82,13 +82,23 @@ function optionOf(agent: AgentInfo): OptionId | null {
   return agent.provider === "openrouter" ? "free" : null;
 }
 
-/** The choices this profile already has an agent from. */
+/**
+ * The choices this profile already has a signed-in agent from. A sign-in
+ * creates its agent before it finishes, and one left unfinished is not added.
+ */
 const addedOptions = (): Promise<ReadonlySet<OptionId>> =>
   desktopApi
     .agentsList()
-    .then(
-      ({ agents }) => new Set(agents.flatMap((agent) => optionOf(agent) ?? [])),
+    .then(({ agents }) =>
+      Promise.all(
+        agents.map(async (agent) =>
+          (await desktopApi.agentLoginStatus(agent.id).catch(() => true))
+            ? optionOf(agent)
+            : null,
+        ),
+      ),
     )
+    .then((options) => new Set(options.flatMap((option) => option ?? [])))
     .catch(() => new Set());
 
 export function AgentWizard({
@@ -120,8 +130,7 @@ export function AgentWizard({
   const [busyFlow, setBusyFlow] = useState<Flow | null>(null);
   const [error, setError] = useState<string | null>(null);
   // Choices this profile already has an agent from, as they stood when the
-  // wizard opened: a sign-in creates its agent before it finishes, and that
-  // one is not added yet.
+  // wizard opened.
   const [added, setAdded] = useState<ReadonlySet<OptionId>>(new Set());
 
   // Each detail step starts with an editable name, submitted as shown.
