@@ -529,9 +529,21 @@ describe("plain local folders", () => {
       // Written after that walk read `src/`: a listing asked for now must
       // see it, which the walk in progress cannot.
       await fs.writeFile(path.join(root, "src/added.ts"), "added");
+      const originalLstat = fs.lstat.bind(fs);
+      let gitChecks = 0;
+      const lstat = vi
+        .spyOn(fs, "lstat")
+        .mockImplementation(async (...args: Parameters<typeof fs.lstat>) => {
+          try {
+            return await originalLstat(...args);
+          } finally {
+            if (args[0] === path.join(root, ".git")) gitChecks += 1;
+          }
+        });
       const later = Array.from({ length: 4 }, () => repo.listFiles());
-      // Let them reach the walk in progress (each first checks for Git).
-      await new Promise((resolve) => setTimeout(resolve, 100));
+      // Each checks for Git first; once all four have, they reached the walk.
+      await vi.waitFor(() => expect(gitChecks).toBe(4));
+      lstat.mockRestore();
       release();
       expect(await first).toEqual(["notes.md", "src/flow.ts"]);
       for (const listing of await Promise.all(later))
