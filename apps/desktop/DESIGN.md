@@ -517,6 +517,7 @@ screen, or under reduced motion.
 | Tab strip `translate` (the horizontal strip slides with the left sidebar's panel, to where the settle puts it) | 200ms, the panel's easing and item wait | the panel's own slide; dropped without a transition when the content settles |
 | `.tabbed-sidebar[data-push]` width (the sidebar's place growing or shrinking with its panel beside content Work draws, so that content rides the panel's edge) | 200ms, the panel's easing and item wait | the panel's own slide, reversing with it |
 | `.chrome-toggle-slot` fold (the chrome's sidebar toggle folding away as a pushing panel arrives and unfolding as it leaves, its gap with it; `@starting-style` for arrival) | 200ms, the panel's easing and item wait | the panel's own slide; gone or at its own width once the panel is still |
+| Folder disclosure in a tree (Web Animations in `packages/app/src/ui/tree.tsx`: the folder's rows stay in their slots, revealed or covered by a clip whose edge rides the row below the branch, fading in or out; an opened folder's beat starts when its rows arrive) | 200ms (`--cat-motion-base`) | the rows below and the tree's height, on one curve; pressed again mid-beat, each row turns from where it is drawn over the share of the beat left |
 | `[data-tree-focus]` glide (a list's keyboard ring following focus from row to row: its `top` and `left`, only while it moves between rows, `data-glide`; arriving in a list it appears in place, and otherwise it rides its row's own 200ms slide when rows move under it) | 150ms | itself: the ring turns from where it is when the arrows outpace it |
 | `[data-menu-focus]` glide (one keyboard ring following enabled menu rows, each submenu in its own scroller) | 150ms | itself, reversing from its current place; first entry appears in place |
 | `.overlay-scrollbar` fade (the scroll position of the sidebar's panel, on its outer edge, and of a section's list that asks for a thumb, `scrollbar: true`, a lane in, while it scrolls or the pointer nears that edge) | 150ms | itself: one transition both ways, fading 900ms after the last scroll |
@@ -4232,3 +4233,20 @@ Right-click a tab and choose Pin tab (Pin chat on a chat) to keep it: it moves
 to the start of the strip and shrinks to its icon, as in Chrome, with no close
 button to hit by accident. Cmd+W leaves it and Close unpinned tabs passes over
 it; its menu closes or unpins it. Pins come back after a restart (ADR 0318).
+
+### 2026-11-14: A folder opens like a section
+
+Opening or closing a folder slid the rows below it, but its own children
+took the generic row motion in place: a source that loads children on
+opening faded them in over the rows still sliding down, and closing faded
+them where they stood while those rows slid up through them. A folder now
+discloses its rows as a Collapsible discloses a section: they stay in
+their slots and are revealed, or covered again, by an edge that rides the
+row below the branch on the same beat, fading as they go
+(`packages/app/src/ui/tree.tsx`). Nothing draws over anything else: not
+the rows below, not the folder, not each other (sliding the rows out from
+under the folder was tried first; mid-slide their labels stacked). An
+opened folder's beat starts when its rows arrive, so children a source
+loads take the same motion. Pressed again mid-beat, each row turns back
+from where it is drawn over the share of the beat left, as the CSS slide
+of the rows below does. Reduced motion keeps the instant change.
