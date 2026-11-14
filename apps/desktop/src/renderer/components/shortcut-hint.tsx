@@ -60,6 +60,9 @@ export function ShortcutHint({
   // Drives the enter/exit transition; the element unmounts after the exit
   // transition ends, not when the pointer leaves.
   const [visible, setVisible] = useState(false);
+  // A new request mounts hidden until its reveal frame. An older exit can
+  // end in that gap; it must not remove the hint that is about to appear.
+  const wantedRef = useRef(false);
 
   useEffect(
     () => () => {
@@ -97,6 +100,7 @@ export function ShortcutHint({
     timerRef.current = setTimeout(() => {
       const anchor = anchorRef.current;
       if (!anchor) return;
+      wantedRef.current = true;
       const rect = anchor.getBoundingClientRect();
       const computed = getComputedStyle(anchor);
       setThemeTokens(
@@ -120,6 +124,7 @@ export function ShortcutHint({
     clearTimeout(timerRef.current);
     const anchor = anchorRef.current;
     if (!anchor) return;
+    wantedRef.current = true;
     const rect = anchor.getBoundingClientRect();
     const computed = getComputedStyle(anchor);
     setThemeTokens(
@@ -138,6 +143,7 @@ export function ShortcutHint({
   }, [side]);
 
   const hide = useCallback(() => {
+    wantedRef.current = false;
     clearTimeout(timerRef.current);
     cancelAnimationFrame(frameRef.current);
     setVisible(false);
@@ -232,7 +238,7 @@ export function ShortcutHint({
                 side === "top" ? window.innerHeight - position.y : undefined,
             }}
             onTransitionEnd={() => {
-              if (!visible) setPosition(null);
+              if (!visible && !wantedRef.current) setPosition(null);
             }}
             className={`pointer-events-none fixed z-[400] w-max max-w-[calc(100vw-1rem)] -translate-x-1/2 break-words rounded-md bg-bg-overlay px-2 py-1 text-[11px] text-fg-muted shadow-lg ring-1 ring-border transition-[opacity,translate] duration-200 ease-standard ${
               visible

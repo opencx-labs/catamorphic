@@ -61,7 +61,10 @@ const place = async (index: number) => {
 };
 const observe = () =>
   app.eval(`window.__arrowFrames=[{at:performance.now(),...${sample}}];window.__arrowDone=new Promise(resolve=>{
-  const start=performance.now();const frame=()=>{window.__arrowFrames.push({at:performance.now(),...${sample}});if(performance.now()-start<400)requestAnimationFrame(frame);else resolve(window.__arrowFrames)};requestAnimationFrame(frame);
+  // Start at the renderer's input edge, not before a host/CDP round trip.
+  window.addEventListener('keydown',()=>{
+    const start=performance.now();const frame=()=>{window.__arrowFrames.push({at:performance.now(),...${sample}});if(performance.now()-start<400)requestAnimationFrame(frame);else resolve(window.__arrowFrames)};requestAnimationFrame(frame);
+  },{once:true,capture:true});
 });true`);
 const frames = () => app.eval<Frame[]>("window.__arrowDone");
 const visible = () =>
@@ -133,6 +136,9 @@ it("reveals the next row progressively while its ring reaches the lower edge", a
   let movement: Frame[] = [];
   try {
     await observe();
+    // The recorder stays armed even if delivery takes longer than the
+    // complete motion. Its 400ms observation still begins with the key.
+    await app.eval("new Promise(resolve=>setTimeout(resolve,600))");
     await app.press("ArrowDown");
     movement = await frames();
   } finally {
@@ -230,7 +236,9 @@ it("follows the ring at the upper edge and when only the outer panel scrolls", a
     const outer = await frames();
     const end = outer.at(-1);
     if (!end) throw Error("No panel frames");
-    expect(end.panel).toBeGreaterThan(start.panel);
+    expect(end.panel, JSON.stringify({ edge, start, outer })).toBeGreaterThan(
+      start.panel,
+    );
     expect(
       outer.some(
         (frame) => frame.panel > start.panel && frame.panel < end.panel,

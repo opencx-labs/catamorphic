@@ -100,9 +100,13 @@ async function click() {
   })()`);
   // One OS click: two CDP round trips can turn a short click into a hold.
   await app.clickPointer(target);
-  const times = await app.eval<
+  // Quartz posts the edges asynchronously; the helper exiting does not
+  // mean Chromium has received the release yet.
+  const times = await app.waitFor<
     { at: number; handledAt: number; microphone: boolean }[]
-  >("window.__quickClickTimes");
+  >("window.__quickClickTimes.length===2 && window.__quickClickTimes", {
+    label: "both edges of the native short click delivered",
+  });
   expect(times).toHaveLength(2);
   expect(
     times.every((event) => event.microphone),
@@ -143,6 +147,9 @@ async function click() {
 it("teaches a cold short click without submitting a message", async () => {
   await click();
   expect(await messageCount()).toBe(0);
+  const artifacts = process.env.CATAMORPHIC_E2E_ARTIFACTS_DIR;
+  if (artifacts)
+    await app.screenshot(path.join(artifacts, "voice-short-click-hint.png"));
 });
 
 it("still captures and sends the next held message", async () => {
