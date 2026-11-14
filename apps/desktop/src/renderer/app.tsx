@@ -7400,6 +7400,7 @@ export function App({
       }
       onChooseTheme={() => setThemePicker({ open: true })}
       onConfigureAgent={() => setWizardModalOpen(true)}
+      onRemoveAgent={(agentId) => void desktopApi.agentsRemove(agentId)}
       canConfigureAgent={Boolean(projectId)}
       onFinish={() => {
         closeTab(tabKey(tab));
@@ -7407,7 +7408,8 @@ export function App({
       }}
       profileId={activeProfile?.id}
       importCompleted={Boolean(activeProfile?.browserImportCompletedAt)}
-      agentCount={hasAgents ? Math.max(1, agentsData?.agents.length ?? 0) : 0}
+      agents={agentsData?.agents}
+      hasAgents={hasAgents}
       agentSetupOpen={wizardModalOpen}
     />
   );

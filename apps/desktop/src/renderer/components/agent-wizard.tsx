@@ -1,8 +1,9 @@
-import { ArrowLeft, Bot, ChevronRight } from "lucide-react";
+import { ArrowLeft, Bot, Check, ChevronRight } from "lucide-react";
 import { type FormEvent, useEffect, useRef, useState } from "react";
-import { HERMES } from "../../shared/acp-agents.js";
+import { HERMES, runsHermes } from "../../shared/acp-agents.js";
 import {
   type AgentConnectionsSetting,
+  type AgentInfo,
   type ConnectionInfo,
   desktopApi,
 } from "../lib/desktop-api.js";
@@ -36,8 +37,10 @@ const primaryActionClass =
 const secondaryActionClass =
   "min-h-9 w-full cursor-pointer rounded-md border border-border px-3 py-2 text-sm text-fg-muted transition-[background-color,border-color,color,opacity,transform] duration-150 hover:border-border-strong hover:bg-bg-overlay hover:text-fg active:scale-[0.98] motion-reduce:transition-none motion-reduce:active:scale-100 disabled:cursor-not-allowed disabled:opacity-50";
 
+type OptionId = "claude-code" | "codex" | "hermes" | "api-key" | "free";
+
 const OPTIONS: Array<{
-  id: "claude-code" | "codex" | "hermes" | "api-key" | "free";
+  id: OptionId;
   title: string;
   description: string;
 }> = [
@@ -68,6 +71,26 @@ const OPTIONS: Array<{
   },
 ];
 
+/** The choice an agent was set up through, so the list can mark it. */
+function optionOf(agent: AgentInfo): OptionId | null {
+  if (agent.harness === "claude-code" || agent.harness === "codex")
+    return agent.harness;
+  if (agent.harness === "acp")
+    return runsHermes(agent.acp?.command) ? "hermes" : null;
+  if (agent.harness !== "ai-sdk") return null;
+  if (agent.auth === "api-key") return "api-key";
+  return agent.provider === "openrouter" ? "free" : null;
+}
+
+/** The choices this profile already has an agent from. */
+const addedOptions = (): Promise<ReadonlySet<OptionId>> =>
+  desktopApi
+    .agentsList()
+    .then(
+      ({ agents }) => new Set(agents.flatMap((agent) => optionOf(agent) ?? [])),
+    )
+    .catch(() => new Set());
+
 export function AgentWizard({
   variant,
   open,
@@ -96,6 +119,10 @@ export function AgentWizard({
   // two-choice step shows its pending label.
   const [busyFlow, setBusyFlow] = useState<Flow | null>(null);
   const [error, setError] = useState<string | null>(null);
+  // Choices this profile already has an agent from, as they stood when the
+  // wizard opened: a sign-in creates its agent before it finishes, and that
+  // one is not added yet.
+  const [added, setAdded] = useState<ReadonlySet<OptionId>>(new Set());
 
   // Each detail step starts with an editable name, submitted as shown.
   const [name, setName] = useState("");
@@ -167,6 +194,7 @@ export function AgentWizard({
 
   useEffect(() => {
     void desktopApi.agentSetupStatus().then(setStatus);
+    void addedOptions().then(setAdded);
   }, []);
 
   // Reopening the modal starts the wizard over (and re-checks the machine).
@@ -185,6 +213,7 @@ export function AgentWizard({
     setProvider("anthropic");
     waitingRef.current = null;
     void desktopApi.agentSetupStatus().then(setStatus);
+    void addedOptions().then(setAdded);
   }, [modalOpen]);
 
   useEffect(() => {
@@ -500,6 +529,15 @@ export function AgentWizard({
                           : option.description}
                       </span>
                     </span>
+                    {added.has(option.id) && (
+                      <span
+                        data-agent-added
+                        className="flex shrink-0 animate-fade-in items-center gap-1 text-[12px] text-fg-muted"
+                      >
+                        <Check className="size-3.5 text-success" />
+                        Added
+                      </span>
+                    )}
                     <ChevronRight className="size-3.5 shrink-0 text-fg-faint transition-colors duration-150 group-hover:text-fg-muted" />
                   </button>
                 </li>

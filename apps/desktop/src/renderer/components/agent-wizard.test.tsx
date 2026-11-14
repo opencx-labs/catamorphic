@@ -6,6 +6,7 @@ import { AgentWizard } from "./agent-wizard";
 
 const api = vi.hoisted(() => ({
   agentSetupStatus: vi.fn(),
+  agentsList: vi.fn(),
   connectionsList: vi.fn(),
   onAgentLoginFinished: vi.fn(),
   onAgentLoginProgress: vi.fn(),
@@ -25,6 +26,7 @@ beforeEach(() => {
   root = createRoot(container);
   for (const mock of Object.values(api)) mock.mockReset();
   api.agentSetupStatus.mockResolvedValue({ claudeCode: true, codex: false });
+  api.agentsList.mockResolvedValue({ agents: [] });
   api.connectionsList.mockResolvedValue([]);
   api.onAgentLoginFinished.mockReturnValue(() => {});
   api.onAgentLoginProgress.mockReturnValue(() => {});
@@ -105,4 +107,37 @@ it("keeps the agent it finished with", async () => {
   await pressText("Use existing setup");
   await vi.waitFor(() => expect(onDone).toHaveBeenCalledOnce());
   expect(api.agentsRemove).not.toHaveBeenCalled();
+});
+
+it("marks the choices the profile has an agent from, as they stood on opening", async () => {
+  const agents = [
+    { harness: "claude-code", auth: "local" },
+    { harness: "ai-sdk", provider: "openrouter", auth: "account" },
+    { harness: "ai-sdk", provider: "openai", auth: "api-key" },
+    { harness: "acp", acp: { command: ["another-agent"] }, auth: "local" },
+  ];
+  api.agentsList.mockResolvedValue({ agents });
+  await act(async () =>
+    root.render(
+      <AgentWizard variant="tab" onClose={() => {}} onDone={() => {}} />,
+    ),
+  );
+  const added = () =>
+    [...container.querySelectorAll("[data-agent-added]")].map(
+      (mark) => mark.closest("button")?.dataset.testid,
+    );
+  const marked = [
+    "agent-wizard-claude-code",
+    "agent-wizard-api-key",
+    "agent-wizard-free",
+  ];
+  await vi.waitFor(() => expect(added()).toEqual(marked));
+  // A sign-in creates its agent before it finishes: that one is not added yet.
+  api.agentsList.mockResolvedValue({
+    agents: [...agents, { harness: "codex", auth: "account" }],
+  });
+  await press('[data-testid="agent-wizard-codex"]');
+  await pressText("Sign in with ChatGPT");
+  await press('[data-testid="agent-wizard-back"]');
+  expect(added()).toEqual(marked);
 });

@@ -476,18 +476,75 @@
 .onboarding-browser-actions > [data-setting-id] {
   max-width: 260px;
 }
-/* The setup action over the one that adds more. Both hold one width, so a
-   growing count and the second action's arrival move nothing. */
+/* The setup action over the agents it has added. The button holds one size
+   and the list's first line is reserved, so setting up an agent moves nothing. */
 .onboarding-agent-actions {
   display: flex;
   flex-direction: column;
   align-items: center;
-  gap: 12px;
+  gap: 16px;
   margin-top: 24px;
 }
 .onboarding-agent-actions > button {
   width: 208px;
   height: 36px;
+}
+.onboarding-agents {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 8px;
+  max-width: 540px;
+  min-height: 28px;
+}
+.onboarding-agent {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  height: 28px;
+  padding: 0 10px;
+  border-radius: var(--radius-md);
+  font-size: 12px;
+  color: var(--color-fg);
+  background: var(--color-bg-raised);
+}
+.onboarding-agent-name {
+  max-width: 160px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+/* The tick and the remove button share one place, as a tab's title and its
+   close button do: hover or keyboard focus turns one into the other. */
+.onboarding-agent-state {
+  display: grid;
+  place-items: center;
+}
+.onboarding-agent-check,
+.onboarding-agent-remove {
+  grid-area: 1 / 1;
+  transition:
+    opacity 150ms var(--ease-standard),
+    scale 150ms var(--ease-standard);
+}
+.onboarding-agent-remove {
+  opacity: 0;
+  scale: 0.8;
+  pointer-events: none;
+}
+.onboarding-agent[data-removable]:hover .onboarding-agent-remove,
+:root:not([data-focus-modality="pointer"])
+  .onboarding-agent[data-removable]:has(:focus-visible)
+  .onboarding-agent-remove {
+  opacity: 1;
+  scale: 1;
+  pointer-events: auto;
+}
+.onboarding-agent[data-removable]:hover .onboarding-agent-check,
+:root:not([data-focus-modality="pointer"])
+  .onboarding-agent[data-removable]:has(:focus-visible)
+  .onboarding-agent-check {
+  opacity: 0;
 }
 .theme-agent-link {
   display: flex;

@@ -602,17 +602,17 @@ describe("the Work tutorial", () => {
         `document.querySelector('.onboarding-copy h1')?.textContent`,
       ),
     ).toBe("Where AI agents can do wonders");
-    const actions = `JSON.stringify(['setup', 'add'].map(name => document.querySelector('[data-testid="onboarding-' + name + '-agent"]').getBoundingClientRect().toJSON()))`;
-    const placed = await app.eval<string>(actions);
-    expect(
-      await app.eval(
-        `(() => { const add = document.querySelector('[data-testid="onboarding-add-agent"]'); return add.inert && getComputedStyle(add).opacity === '0'; })()`,
-      ),
-    ).toBe(true);
-    await click('[data-testid="onboarding-setup-agent"]');
-    await app.waitFor(
-      `!!document.querySelector('[role="dialog"] [data-testid="agent-wizard-free"]')`,
-    );
+    const setup = '[data-testid="onboarding-setup-agent"]';
+    const free = '[role="dialog"] [data-testid="agent-wizard-free"]';
+    const placed = `JSON.stringify(document.querySelector('${setup}').getBoundingClientRect().toJSON())`;
+    const label = `[...document.querySelectorAll('${setup} [aria-hidden="false"]')].map(label => label.textContent).join()`;
+    const listed = `[...document.querySelectorAll('[data-testid="onboarding-agents"] li')].map(agent => agent.textContent).join()`;
+    const added = `[...document.querySelectorAll('[role="dialog"] [data-agent-added]')].map(mark => mark.closest('button').dataset.testid).join()`;
+    await app.waitFor(`${label} === 'Configure an agent' && ${listed} === ''`);
+    await settled();
+    const before = await app.eval<string>(placed);
+    await click(setup);
+    await app.waitFor(`!!document.querySelector('${free}')`);
     expect(
       await app.eval(
         `document.querySelector('[data-testid="onboarding"]')?.dataset.onboardingStep`,
@@ -623,22 +623,21 @@ describe("the Work tutorial", () => {
         `!document.querySelector('[data-point-key^="agent-setup:"]')`,
       ),
     ).toBe(true);
-    await click('[role="dialog"] [data-testid="agent-wizard-free"]');
+    expect(await app.eval(added)).toBe("");
+    await click(free);
     await app.waitFor(
-      `document.querySelector('[data-testid="onboarding-setup-agent"]')?.dataset.actionState === 'done' && !document.querySelector('[role="dialog"] [data-testid="agent-wizard-free"]')`,
+      `${listed} === 'OpenRouter' && !document.querySelector('${free}')`,
     );
-    const shown = `[...document.querySelectorAll('[data-testid="onboarding-setup-agent"] [aria-hidden="false"]')].map(label => label.textContent).join()`;
-    expect(await app.eval(shown)).toBe("Agent configured");
+    expect(await app.eval(label)).toBe("Add another agent");
 
-    // The same wizard adds another, and the step counts it once it closes.
-    await click('[data-testid="onboarding-add-agent"]');
+    // The same wizard adds another. It marks what the profile already has,
+    // and the step lists the new agent once the wizard closes.
+    await click(setup);
+    await app.waitFor(`${added} === 'agent-wizard-free'`);
+    expect(await app.eval(listed)).toBe("OpenRouter");
+    await click(free);
     await app.waitFor(
-      `!!document.querySelector('[role="dialog"] [data-testid="agent-wizard-free"]')`,
-    );
-    expect(await app.eval(shown)).toBe("Agent configured");
-    await click('[role="dialog"] [data-testid="agent-wizard-free"]');
-    await app.waitFor(
-      `${shown} === '2 agents configured' && !document.querySelector('[role="dialog"] [data-testid="agent-wizard-free"]')`,
+      `${listed} === 'OpenRouter,OpenRouter' && !document.querySelector('${free}')`,
     );
     expect(
       await app.eval(
@@ -646,12 +645,33 @@ describe("the Work tutorial", () => {
       ),
     ).toBe(2);
     await settled();
-    expect(await app.eval<string>(actions)).toBe(placed);
+    expect(await app.eval<string>(placed)).toBe(before);
     expect(
       await app.eval(
         `document.querySelector('[data-testid="onboarding"]')?.dataset.onboardingStep`,
       ),
     ).toBe("2");
+
+    // Hovering an agent turns its tick into the button that removes it.
+    const shown = (part: string) =>
+      `getComputedStyle(document.querySelector('.onboarding-agent-${part}')).opacity`;
+    expect(await app.eval(shown("remove"))).toBe("0");
+    const agent = await app.eval<{ x: number; y: number }>(`(() => {
+      const rect = document.querySelector('.onboarding-agent').getBoundingClientRect();
+      return { x: rect.x + rect.width / 2, y: rect.y + rect.height / 2 };
+    })()`);
+    await app.cdp("Input.dispatchMouseEvent", { type: "mouseMoved", ...agent });
+    await app.waitFor(
+      `${shown("remove")} === '1' && ${shown("check")} === '0'`,
+    );
+    await click('[data-testid="onboarding-remove-agent"]');
+    await app.waitFor(`${listed} === 'OpenRouter'`);
+    expect(
+      await app.eval(
+        `window.catamorphicDesktop.agentsList().then(data => data.agents.length)`,
+      ),
+    ).toBe(1);
+    expect(await app.eval(label)).toBe("Add another agent");
     await app.waitFor(
       `document.querySelector('[data-dock-host] [data-dock-rail]')?.dataset.dockCollapsed === 'true'`,
     );

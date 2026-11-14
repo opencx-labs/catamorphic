@@ -16,6 +16,7 @@ import {
   Settings,
   Sparkles,
   Star,
+  X,
 } from "lucide-react";
 import {
   memo,
@@ -35,9 +36,11 @@ import { ChatBubbles } from "../components/chat-bubbles.js";
 import { ChatGlyph } from "../components/chat-icon.js";
 import { ComposerInput } from "../components/composer-input.js";
 import { DefaultBrowserButton } from "../components/default-browser.js";
+import { HarnessIcon } from "../components/harness-icon.js";
 import { OpenResourceButton } from "../components/open-resource-button.js";
 import { PaletteSurface } from "../components/palette-surface.js";
 import { PendingButton } from "../components/pending-button.js";
+import { ShortcutHint } from "../components/shortcut-hint.js";
 import { SidebarItemRow } from "../components/sidebar-item-row.js";
 import {
   type WorkspaceTab,
@@ -57,17 +60,32 @@ export const ONBOARDING_STEPS = [
   "Browser setup",
 ];
 
+/** What the agents step shows of an agent that is set up. */
+interface ConfiguredAgent {
+  id: string;
+  name: string;
+  harness?: string;
+  provider?: string;
+}
+const NO_AGENTS: readonly ConfiguredAgent[] = [];
+/** A server's agents have no names here: the step still says one is ready. */
+const PROJECT_AGENT: readonly ConfiguredAgent[] = [
+  { id: "project", name: "Agent configured" },
+];
+
 export function OnboardingScreen({
   active = true,
   step,
   onStepChange,
   onChooseTheme,
   onConfigureAgent,
+  onRemoveAgent,
   canConfigureAgent,
   onFinish,
   profileId,
   importCompleted,
-  agentCount,
+  agents = NO_AGENTS,
+  hasAgents,
   agentSetupOpen,
 }: {
   active?: boolean;
@@ -75,14 +93,17 @@ export function OnboardingScreen({
   onStepChange: (step: number) => void;
   onChooseTheme: () => void;
   onConfigureAgent: () => void;
+  onRemoveAgent: (agentId: string) => void;
   canConfigureAgent: boolean;
   onFinish: () => void;
   profileId?: string;
   importCompleted: boolean;
-  /** Agents this person can chat with here. */
-  agentCount: number;
+  /** This profile's agents, once they are known. */
+  agents?: readonly ConfiguredAgent[];
+  /** A chat can start here: the profile's agents, or a server's. */
+  hasAgents: boolean;
   /** The setup wizard is open. A sign-in creates its agent before it
-   * finishes, so the step keeps its count until the wizard closes. */
+   * finishes, so the step keeps its list until the wizard closes. */
   agentSetupOpen: boolean;
 }) {
   const current = Math.max(0, Math.min(step, ONBOARDING_STEPS.length - 1));
@@ -100,10 +121,20 @@ export function OnboardingScreen({
   }, [previous]);
   const [importOpen, setImportOpen] = useState(false);
   const [justImported, setJustImported] = useState(false);
-  const [configuredAgents, setConfiguredAgents] = useState(agentCount);
-  if (!agentSetupOpen && configuredAgents !== agentCount)
-    setConfiguredAgents(agentCount);
-  const hasAgents = configuredAgents > 0;
+  const [settled, setSettled] = useState({ agents, hasAgents });
+  if (
+    !agentSetupOpen &&
+    (settled.agents !== agents || settled.hasAgents !== hasAgents)
+  )
+    setSettled({ agents, hasAgents });
+  const removable = settled.agents.length > 0;
+  const configured = removable
+    ? settled.agents
+    : settled.hasAgents
+      ? PROJECT_AGENT
+      : NO_AGENTS;
+  const agentLabel = (shown: boolean) =>
+    `col-start-1 row-start-1 inline-flex items-center gap-1.5 transition-opacity duration-150 motion-reduce:transition-none ${shown ? "opacity-100" : "opacity-0"}`;
   const bindings = useKeybindings();
   const navigate = (next: number) => {
     setPrevious(current);
@@ -166,41 +197,72 @@ export function OnboardingScreen({
         <Sparkles strokeWidth={1} />
       </div>
       <div className="onboarding-agent-actions">
-        <PendingButton
-          type="button"
-          pending={false}
-          pendingLabel="Opening agent setup…"
-          done={hasAgents}
-          doneLabel={
-            <span className="inline-flex items-center gap-2">
-              <Check className="size-3.5" />
-              {configuredAgents > 1
-                ? `${configuredAgents} agents configured`
-                : "Agent configured"}
-            </span>
-          }
-          onClick={onConfigureAgent}
-          disabled={!canConfigureAgent}
-          data-disabled-reason="Preparing your workspace"
-          className="button-primary browser-setup-action"
-          data-testid="onboarding-setup-agent"
-        >
-          Configure an agent
-        </PendingButton>
-        {/* Always laid out, so its arrival moves nothing. */}
         <button
           type="button"
-          className={`button-primary ${hasAgents ? "" : "opacity-0"}`}
-          inert={!hasAgents}
-          aria-hidden={!hasAgents}
+          className="button-primary"
           onClick={onConfigureAgent}
           disabled={!canConfigureAgent}
           data-disabled-reason="Preparing your workspace"
-          data-testid="onboarding-add-agent"
+          data-testid="onboarding-setup-agent"
         >
-          <Plus className="size-3.5" />
-          Add another agent
+          {/* Both labels share one cell, so the button keeps its size. */}
+          <span className="grid place-items-center">
+            <span
+              aria-hidden={configured.length > 0}
+              className={agentLabel(configured.length === 0)}
+            >
+              Configure an agent
+            </span>
+            <span
+              aria-hidden={configured.length === 0}
+              className={agentLabel(configured.length > 0)}
+            >
+              <Plus className="size-3.5" />
+              Add another agent
+            </span>
+          </span>
         </button>
+        {/* Its first line is held from the start, so agents arrive in place. */}
+        <ul
+          className="onboarding-agents"
+          aria-label="Configured agents"
+          data-testid="onboarding-agents"
+        >
+          {configured.map((agent) => (
+            <li
+              key={agent.id}
+              className="onboarding-agent animate-fade-in"
+              data-removable={removable || undefined}
+            >
+              <HarnessIcon harness={agent.harness} provider={agent.provider} />
+              <span className="onboarding-agent-name">{agent.name}</span>
+              {/* The tick's place is also the remove button's, shown while
+                  the agent is hovered or holds keyboard focus. */}
+              <span className="onboarding-agent-state">
+                <Check
+                  className="onboarding-agent-check size-3.5 text-success"
+                  aria-label="set up"
+                />
+                {removable && (
+                  <ShortcutHint
+                    label={`Remove ${agent.name}`}
+                    className="onboarding-agent-remove"
+                  >
+                    <button
+                      type="button"
+                      aria-label={`Remove ${agent.name}`}
+                      onClick={() => onRemoveAgent(agent.id)}
+                      data-testid="onboarding-remove-agent"
+                      className="relative grid size-3.5 cursor-pointer place-items-center rounded-sm text-fg-muted transition-colors duration-150 after:absolute after:-inset-1.5 after:content-[''] hover:text-danger"
+                    >
+                      <X className="size-3.5" />
+                    </button>
+                  </ShortcutHint>
+                )}
+              </span>
+            </li>
+          ))}
+        </ul>
       </div>
     </Step>,
     <Step
