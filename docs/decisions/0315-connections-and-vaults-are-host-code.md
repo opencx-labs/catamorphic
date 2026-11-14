@@ -50,9 +50,7 @@ growing as a vendor-neutral DSL.
 
 ## Consequences
 
-Deployments that used `WORK_GATEWAY_CONFIG` move its entries into their
-entry point, one helper call each; MCP client secrets come from the host's
-own secret source instead of `secretEnv`. Every replica must run the same
+Every replica must run the same
 entry point to offer the same providers. Hosts may keep credentials in
 their own secret manager without any record inside Work. A supplied vault
 must also read the records an existing deployment already wrote (for

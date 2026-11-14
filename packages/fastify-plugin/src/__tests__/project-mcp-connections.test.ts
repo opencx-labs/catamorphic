@@ -112,17 +112,14 @@ async function rpc(
   };
 }
 
-function app(core: unknown, connectLink = true) {
+function app(core: unknown, memberConnections = true) {
   const created = createTestApp({
     core: core as never,
-    ...(connectLink
-      ? {
-          projectMcp: {
-            connectLink: ({ token }: { token: string }) =>
-              `https://work.test/connect/${token}`,
-          },
-        }
-      : {}),
+    projectMcp: {
+      memberConnections,
+      connectLink: ({ token }: { token: string }) =>
+        `https://work.test/connect/${token}`,
+    },
   });
   apps.push(created);
   return created;
@@ -236,6 +233,7 @@ describe("connections on the project MCP for a member's own agent (ADR 0316)", (
     const { core } = fakeCore();
     const served = createTestApp({
       core: core as never,
+      projectMcp: { memberConnections: true },
       identity: () => ({
         tenantId: "tenant-1",
         externalUserId: "member-1",
@@ -258,6 +256,7 @@ describe("connections on the project MCP for a member's own agent (ADR 0316)", (
     expect(String(init.result?.instructions)).not.toContain("project_overview");
     const outsider = createTestApp({
       core: core as never,
+      projectMcp: { memberConnections: true },
       identity: () => ({
         tenantId: "tenant-1",
         externalUserId: "x",
@@ -311,6 +310,16 @@ describe("connections on the project MCP for a member's own agent (ADR 0316)", (
     expect(names).toHaveLength(2);
     expect(names).toContain("a__x__y");
     expect(names.some((name) => /^a__x__y_[0-9a-f]{8}$/.test(name))).toBe(true);
+  });
+
+  it("serves no connection tools unless the host opts in", async () => {
+    const { core, listActions } = fakeCore();
+    const { result } = await rpc(app(core, false), "tools/list");
+    const names = ((result?.tools ?? []) as Array<{ name: string }>).map(
+      (tool) => tool.name,
+    );
+    expect(names.some((name) => name.startsWith("tracker__"))).toBe(false);
+    expect(listActions).not.toHaveBeenCalled();
   });
 
   it("serves no connection tools to a Work session, which holds its own grants", async () => {

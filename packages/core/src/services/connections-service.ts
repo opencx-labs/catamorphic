@@ -1830,8 +1830,11 @@ export class ConnectionsService {
           this.withStoredMaterial({
             tenantId: args.identity.tenantId,
             ref: credentialRef,
-            use: (material) =>
-              refresh({
+            use: async (material) => {
+              // The vault read may have been slow: restart the lease so
+              // the exchange's own deadline sits well inside it.
+              await this.renewRefreshLease(lease);
+              return refresh({
                 material,
                 // Finish well inside the lease, so no one takes it over
                 // while this exchange can still succeed.
@@ -1840,7 +1843,8 @@ export class ConnectionsService {
                   identity: args.identity,
                   connection,
                 }),
-              }),
+              });
+            },
           }),
       );
       if (!provider.keepsNoCredential && refreshed.material.byteLength === 0)
@@ -1850,7 +1854,10 @@ export class ConnectionsService {
       // connection) or that it failed to answer (a server error) says
       // nothing about the grant: the connection stays ready and its next
       // use refreshes again. Refused, it is spent.
-      const passing = transient(error);
+      // Losing the lease is temporary too: its successor refreshes.
+      const passing =
+        transient(error) ||
+        error instanceof ConnectionTemporarilyUnavailableError;
       if (!passing && connection.expires_at <= new Date()) {
         await this.markExpiredHolding(lease);
       }
@@ -1964,7 +1971,10 @@ export class ConnectionsService {
       .where("refresh_lease_holder", "=", lease.holder)
       .executeTakeFirst();
     if (!renewed.numUpdatedRows)
-      throw new Error("The refresh lease was taken over");
+      throw new ConnectionTemporarilyUnavailableError(
+        lease.row.id,
+        "Refresh in progress",
+      );
   }
 
   /** Release a lease this caller still holds; a successor's stays. */

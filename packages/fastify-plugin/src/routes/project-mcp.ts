@@ -112,7 +112,13 @@ export function registerProjectMcpRoutes(
     // Someone the project grants nothing sees no project here at all; a
     // role granting only connections sees only those (ADR 0316).
     const member = mayUseProject(identity, projectId);
-    if (!member && !mayUseProjectConnections(identity, projectId)) {
+    if (
+      !member &&
+      !(
+        ctx.projectMcp?.memberConnections &&
+        mayUseProjectConnections(identity, projectId)
+      )
+    ) {
       return reply.status(404).send({ error: "Project not found" });
     }
     const abort = new AbortController();
@@ -152,17 +158,18 @@ export function registerProjectMcpRoutes(
 
     // A Work session reaches connections through its own grants; a member's
     // own agent reaches them here, with live authority (ADR 0316).
-    const connections = sessionId
-      ? undefined
-      : connectionTools({
-          core,
-          identity,
-          projectId,
-          ...(environment ? { environment } : {}),
-          ...(ctx.projectMcp?.connectLink
-            ? { connectLink: ctx.projectMcp.connectLink }
-            : {}),
-        });
+    const connections =
+      sessionId || !ctx.projectMcp?.memberConnections
+        ? undefined
+        : connectionTools({
+            core,
+            identity,
+            projectId,
+            ...(environment ? { environment } : {}),
+            ...(ctx.projectMcp?.connectLink
+              ? { connectLink: ctx.projectMcp.connectLink }
+              : {}),
+          });
 
     return handleMcpPost(reply, request.body, async (method, params) => {
       switch (method) {

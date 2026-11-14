@@ -136,6 +136,13 @@ export interface ProjectMcpHost {
    * the public address, which a proxy's rewritten `Host` would misstate.
    */
   connectLink?: (args: { token: string; projectId: string }) => string;
+  /**
+   * Serve the project's connections to members' own agents as
+   * `<alias>__<action>` tools (ADR 0316). Off unless the host opts in: a
+   * host whose own surfaces probe this endpoint (the desktop's agent
+   * editor) would otherwise start every connected server to list it.
+   */
+  memberConnections?: boolean;
 }
 
 export interface ProjectMcpHostTool {

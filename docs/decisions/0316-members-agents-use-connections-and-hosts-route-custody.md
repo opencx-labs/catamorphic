@@ -16,8 +16,9 @@ stored, and concurrent refreshes spent single-use refresh tokens twice.
 
 ## Decision
 
-**Members' own agents call connections over the project MCP.** Without a
-Work session, the endpoint lists each alias the member may use in its
+**Members' own agents call connections over the project MCP.** On a host
+that opts in (`projectMcp.memberConnections`; the Work server does), and
+without a Work session, the endpoint lists each alias the member may use in its
 Environment (`?environment=`, else the project default) as native tools,
 `<alias>__<action>`, with the upstream schemas and annotations, and MCP
 results unchanged (ADR 0225). Calls go through the broker's ordinary guards

@@ -1137,6 +1137,7 @@ async function createWorkServerInner(
       instructions:
         "- Share with people outside the company: share_create gives a document, folder, or app its own sign-in link; shares_list and share_revoke manage them.",
       tools: (scope) => shareTools(shares, scope),
+      memberConnections: true,
       connectLink: ({ token }) => `${publicBase}/connect/${token}`,
     },
     // Webhook URLs name the public origin when one is configured; without

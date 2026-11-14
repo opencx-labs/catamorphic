@@ -1074,8 +1074,8 @@ wrapping key remains outside the database. Provider code runs in the control pla
 allocation-bound Catamorphic MCP grants, and members' own agents call the
 project MCP's `<alias>__<action>` tools as caller `member`, with no
 Allocation and live authority on every call (ADR 0316). None receives
-upstream credentials. A host serving members' own agents sets
-`projectMcp.connectLink` to a page that requires a browser signed in as the
+upstream credentials. A host serving members' own agents opts in with
+`projectMcp.memberConnections: true` and sets `projectMcp.connectLink` to a page that requires a browser signed in as the
 member, calls `connections.redeemConnectionOffer`, sets the returned
 `browserBinding` as an HTTP-only cookie named by
 `connectBindingCookie({ state, loopback })` (one per attempt, `__Host-`
