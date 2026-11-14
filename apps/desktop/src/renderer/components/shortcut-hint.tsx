@@ -276,11 +276,15 @@ export function DisabledControlHints() {
     let shown = false;
     let showTimer: ReturnType<typeof setTimeout> | undefined;
     let exitTimer: ReturnType<typeof setTimeout> | undefined;
+    /** The shown hint's control, for a change under a still pointer. */
+    let watch: MutationObserver | undefined;
     const hide = () => {
       // Scrolls and presses reach this all the time (a chat following its
       // answer scrolls every frame): with no hint coming or shown, nothing
       // to do.
       if (!target && !shown) return;
+      watch?.disconnect();
+      watch = undefined;
       shown = false;
       clearTimeout(showTimer);
       setVisible(false);
@@ -321,6 +325,31 @@ export function DisabledControlHints() {
         });
         shown = true;
         setVisible(true);
+        // Enabled under a still pointer (a pick made from the keyboard),
+        // the control's hint goes; a new reason replaces the old one.
+        watch = new MutationObserver(() => {
+          if (
+            !anchor.isConnected ||
+            !anchor.matches("[disabled], [aria-disabled=true]")
+          )
+            hide();
+          else
+            setHint(
+              (current) =>
+                current && {
+                  ...current,
+                  label: anchor.dataset.disabledReason ?? "",
+                },
+            );
+        });
+        watch.observe(anchor, {
+          attributes: true,
+          attributeFilter: [
+            "disabled",
+            "aria-disabled",
+            "data-disabled-reason",
+          ],
+        });
       }, SHOW_DELAY_MS);
     };
     const key = (event: KeyboardEvent) => {
@@ -346,6 +375,7 @@ export function DisabledControlHints() {
     return () => {
       clearTimeout(showTimer);
       clearTimeout(exitTimer);
+      watch?.disconnect();
       document.removeEventListener("pointerover", move, true);
       document.removeEventListener("focusin", move, true);
       document.removeEventListener("pointerdown", hide, true);
