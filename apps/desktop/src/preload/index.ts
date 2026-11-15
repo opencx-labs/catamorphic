@@ -1295,6 +1295,17 @@ const api = {
     return () =>
       ipcRenderer.removeListener("catamorphic:browser-guest-key", handler);
   },
+  onBrowserGuestKeyUp: (
+    listener: (key: { meta: boolean; control: boolean; alt: boolean }) => void,
+  ): (() => void) => {
+    const handler = (
+      _event: unknown,
+      payload: Parameters<typeof listener>[0],
+    ) => listener(payload);
+    ipcRenderer.on("catamorphic:browser-guest-key-up", handler);
+    return () =>
+      ipcRenderer.removeListener("catamorphic:browser-guest-key-up", handler);
+  },
   onBrowserNavigate: (
     listener: (command: {
       webContentsId: number | null;

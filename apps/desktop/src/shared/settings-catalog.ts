@@ -78,6 +78,9 @@ export const SETTINGS_CATALOG: readonly SettingsEntry[] = [
         ...(key === "switchToOpenTab"
           ? ["existing", "duplicate", "reuse", "already open", "links", "tabs"]
           : []),
+        ...(key === "tabSwitchOrder"
+          ? ["switch", "cycle", "recent", "mru", "ctrl tab", "shortcut", "tabs"]
+          : []),
         ...(key === "contentFrame"
           ? ["border", "rounded", "inset", "window", "frame"]
           : []),

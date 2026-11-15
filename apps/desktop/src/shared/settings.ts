@@ -159,6 +159,14 @@ export const SETTINGS = {
     scopes: profileScope,
     valid: boolean,
   },
+  tabSwitchOrder: {
+    label: "Next and previous tab",
+    description:
+      "Recently used goes to the tab you looked at last, then the one before it, for as long as you hold the shortcut's modifier key. Release it to stay on a tab.",
+    scopes: profileScope,
+    valid: oneOf("strip", "recent"),
+    options: { strip: "Tab order", recent: "Recently used" },
+  },
   browserTabSleep: {
     label: "Sleep unused tabs",
     description:

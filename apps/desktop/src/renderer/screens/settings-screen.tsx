@@ -257,7 +257,7 @@ export function SettingsScreen({
       id: "workspace",
       label: "Workspace",
       keywords:
-        "layout sidebar tabs header address bookmarks links preview floating border frame window buttons traffic lights default browser http https sleep memory chat responses steps reasoning notes collapse fold queue steer interrupt messages",
+        "layout sidebar tabs switching recent header address bookmarks links preview floating border frame window buttons traffic lights default browser http https sleep memory chat responses steps reasoning notes collapse fold queue steer interrupt messages",
       content: (
         <>
           <section className="settings-card mt-4">
@@ -272,6 +272,7 @@ export function SettingsScreen({
             keys={["switchToOpenTab", "browserTabSleep"]}
           />
           <LayoutSection projectId={projectId} />
+          <LayoutSection heading="Tab switching" keys={["tabSwitchOrder"]} />
           {/Mac/.test(navigator.platform) && (
             <LayoutSection heading="Window" keys={["windowButtons"]} />
           )}

@@ -4250,3 +4250,12 @@ opened folder's beat starts when its rows arrive, so children a source
 loads take the same motion. Pressed again mid-beat, each row turns back
 from where it is drawn over the share of the beat left, as the CSS slide
 of the rows below does. Reduced motion keeps the instant change.
+
+### 2026-11-15: Tab shortcuts can follow recency
+
+Settings > Workspace > Tab switching chooses what Next tab and Previous tab go
+through: the strip (the default) or the tabs by how recently you looked at
+them, as Arc and Dia do with Ctrl+Tab. In the second, hold the shortcut's
+modifier and press again to reach older tabs; releasing it settles on the tab
+in front, and the tabs passed on the way do not count as visits. There is no
+switcher overlay: the tabs themselves show where you are (ADR 0319).

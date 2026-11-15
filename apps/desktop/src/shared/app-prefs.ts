@@ -90,6 +90,11 @@ export interface AppPrefs {
    * another app) goes to that tab; a new tab asked for on purpose stays new.
    */
   switchToOpenTab: boolean;
+  /**
+   * What the next and previous tab shortcuts go through: the strip, or the
+   * tabs by how recently the person looked at them.
+   */
+  tabSwitchOrder: "strip" | "recent";
   /** How long a browser tab stays out of sight before it sleeps. */
   browserTabSleep: BrowserTabSleep;
   terminalMacros: TerminalMacro[];
@@ -168,6 +173,7 @@ export const DEFAULT_PREFS: AppPrefs = {
   linkOpenMode: "tab",
   previewLinksWithAlt: true,
   switchToOpenTab: true,
+  tabSwitchOrder: "strip",
   browserTabSleep: "1h",
   terminalMacros: [],
   terminalAppearance: "app",
@@ -300,6 +306,7 @@ export function normalizePrefs(raw: unknown): AppPrefs {
       typeof record.switchToOpenTab === "boolean"
         ? record.switchToOpenTab
         : DEFAULT_PREFS.switchToOpenTab,
+    tabSwitchOrder: record.tabSwitchOrder === "recent" ? "recent" : "strip",
     browserTabSleep:
       BROWSER_TAB_SLEEP.find((value) => value === record.browserTabSleep) ??
       DEFAULT_PREFS.browserTabSleep,

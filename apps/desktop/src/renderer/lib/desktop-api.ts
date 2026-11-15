@@ -1957,6 +1957,13 @@ export interface CatamorphicDesktopApi {
       shift: boolean;
     }) => void,
   ) => () => void;
+  /**
+   * A modifier key released inside a page, with the modifiers still down:
+   * the page keeps its key events, so the window never sees this one.
+   */
+  onBrowserGuestKeyUp: (
+    listener: (key: { meta: boolean; control: boolean; alt: boolean }) => void,
+  ) => () => void;
   onBrowserNavigate: (
     listener: (command: {
       webContentsId: number | null;
