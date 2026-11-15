@@ -44,6 +44,7 @@
       "!**/dist",
       "!**/apps/desktop/out",
       "!**/apps/desktop/release",
+      "!**/apps/desktop/src/main/translation/vendor",
       "!**/*.icon",
       "!**/.next",
       "!**/.turbo",
