@@ -158,6 +158,12 @@ newest one still open (`recentTabKeys`, kept with the workspace): Cmd+W on a pag
 opened from a chat's link returns to that chat. Closing one pane of a split lands
 on the other pane first.
 
+Next tab and Previous tab follow the strip, or that same recency when
+`tabSwitchOrder` is `recent`: the tab looked at last, then older ones while the
+shortcut's modifier stays down. The order is fixed for the hold, and releasing
+the modifier makes the tab in front the newest; tabs passed on the way keep
+their place (`renderer/lib/tab-recency.ts`, ADR 0319).
+
 The mouse's back and forward buttons move between the places a project's
 workspace was at: the focused tab and the chat or surface floating over it
 (ADR 0188, `lib/surface-history.ts`), selecting tabs as a click would. A

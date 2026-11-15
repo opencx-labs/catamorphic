@@ -246,9 +246,9 @@ describe("design lint", () => {
     // you remove one).
     const allowed: Record<string, { count: number; reason: string }> = {
       "app.tsx": {
-        count: 5,
+        count: 6,
         reason:
-          "workspace shortcuts, mouse back and forward buttons, the split divider's drag, which floating chat was last pressed and a chat's step-down handoff",
+          "workspace shortcuts, the release that ends a pass through recent tabs, mouse back and forward buttons, the split divider's drag, which floating chat was last pressed and a chat's step-down handoff",
       },
       "components/chat-dock.tsx": {
         count: 3,

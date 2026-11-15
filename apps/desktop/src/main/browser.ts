@@ -1643,6 +1643,21 @@ export function registerBrowserSupport(
       );
     });
     contents.on("before-input-event", (event, input) => {
+      // A shortcut held across presses (a pass through recent tabs) ends
+      // when its modifier is released, wherever the focus is by then.
+      if (
+        input.type === "keyUp" &&
+        (input.key === "Control" || input.key === "Meta" || input.key === "Alt")
+      ) {
+        const window = contents.hostWebContents;
+        if (window && !window.isDestroyed())
+          window.send("catamorphic:browser-guest-key-up", {
+            meta: input.meta,
+            control: input.control,
+            alt: input.alt,
+          });
+        return;
+      }
       if (input.type !== "keyDown") return;
       const browserDirection =
         input.key === "BrowserBack"

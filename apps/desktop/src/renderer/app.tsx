@@ -239,6 +239,14 @@ import {
   tabPinEntries,
   tabPinRequest,
 } from "./lib/tab-close-menu.js";
+import {
+  type HeldModifiers,
+  holdsModifier,
+  settledTabWalk,
+  stepTabWalk,
+  stillHeld,
+  type TabWalk,
+} from "./lib/tab-recency.js";
 import { useTabSleep } from "./lib/tab-sleep.js";
 import { useAppPreferences } from "./lib/use-app-preferences.js";
 import { useDesktopProjects } from "./lib/use-desktop-projects.js";
@@ -4383,7 +4391,76 @@ export function App({
     if (performance.now() <= arrival.until) playArrival(arrival, workspace);
   }, [workspace.activeTabKey]);
 
+  // A pass through the tabs by recency (`tabSwitchOrder`), open while the
+  // modifier of the shortcut that started it stays down.
+  const tabWalkRef = useRef<{ walk: TabWalk; held: HeldModifiers } | null>(
+    null,
+  );
+  /** The keys of the shortcut being dispatched; none for a palette command. */
+  const shortcutKeysRef = useRef<HeldModifiers | null>(null);
+  const settleTabWalk = () => {
+    const open = tabWalkRef.current;
+    if (!open) return;
+    tabWalkRef.current = null;
+    updateWorkspace((current) => settledTabWalk(current, open.walk));
+  };
+  const settleTabWalkRef = useRef(settleTabWalk);
+  settleTabWalkRef.current = settleTabWalk;
+  // Another tab came to the front by other means: the pass is over, and
+  // that tab is the newest as any visit is.
+  useLayoutEffect(() => {
+    const open = tabWalkRef.current;
+    if (open && open.walk.order[open.walk.index] !== workspace.activeTabKey)
+      tabWalkRef.current = null;
+  }, [workspace.activeTabKey]);
+  useEffect(() => {
+    const release = (event: HeldModifiers) => {
+      const open = tabWalkRef.current;
+      if (open && !stillHeld(open.held, event)) settleTabWalkRef.current();
+    };
+    const settle = () => settleTabWalkRef.current();
+    window.addEventListener("keyup", release, true);
+    window.addEventListener("blur", settle);
+    // A modifier released inside a page never reaches this window.
+    const unsubscribe = desktopApi.onBrowserGuestKeyUp((key) =>
+      release({
+        metaKey: key.meta,
+        ctrlKey: key.control,
+        altKey: key.alt,
+      }),
+    );
+    return () => {
+      window.removeEventListener("keyup", release, true);
+      window.removeEventListener("blur", settle);
+      unsubscribe();
+    };
+  }, []);
+
+  const cycleRecentTab = (direction: -1 | 1) => {
+    const walk = stepTabWalk({
+      ws: workspaceRef.current,
+      walk: tabWalkRef.current?.walk ?? null,
+      direction,
+    });
+    const next = walk?.order[walk.index];
+    if (!walk || !next) return;
+    const held = tabWalkRef.current?.held ?? shortcutKeysRef.current;
+    tabWalkRef.current = held && holdsModifier(held) ? { walk, held } : null;
+    if (next !== workspaceRef.current.activeTabKey)
+      playPaneMotion(direction === 1 ? "right" : "left");
+    updateWorkspace((current) =>
+      transitionWorkspace(current, { type: "focus", key: next }),
+    );
+    // Nothing held (a palette command, a bare key): each press is a pass.
+    if (!tabWalkRef.current)
+      updateWorkspace((current) => settledTabWalk(current, walk));
+  };
+
   const cycleTab = (direction: -1 | 1) => {
+    if (prefsRef.current?.tabSwitchOrder === "recent") {
+      cycleRecentTab(direction);
+      return;
+    }
     const ws = workspaceRef.current;
     const keys = orderedTabKeys(ws);
     if (keys.length < 2) return;
@@ -5181,6 +5258,10 @@ export function App({
       guestId?: number,
     ): boolean => {
       const bindings = keybindingsRef.current;
+      // A release Work never saw (in another app, say): the next key
+      // pressed without the modifier ends the pass before it is handled.
+      const pass = tabWalkRef.current;
+      if (pass && !stillHeld(pass.held, event)) settleTabWalkRef.current();
       const action = KEYBINDING_ACTIONS.find(
         (candidate) =>
           (!(
@@ -5248,6 +5329,7 @@ export function App({
           : [...browserGuestIdsRef.current].find(
               ([, id]) => id === guestId,
             )?.[0];
+      shortcutKeysRef.current = event;
       try {
         // The main process owns voice's key press and release.
         if (action && isVoiceAction(action)) return true;
@@ -5255,6 +5337,7 @@ export function App({
         else if (macro) runTerminalMacroRef.current(macro);
       } finally {
         browserShortcutTargetRef.current = undefined;
+        shortcutKeysRef.current = null;
       }
       return true;
     };
