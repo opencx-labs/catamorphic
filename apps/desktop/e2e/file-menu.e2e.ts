@@ -64,7 +64,7 @@ afterAll(async () => {
 
 /** Where the open menu rests, once it has popped in; false before. */
 // The window's only tab here: "Close all tabs" comes with a second.
-const TAB_MENU = [...MENU, "Rename…", "Close tab"];
+const TAB_MENU = [...MENU, "Rename…", "Pin tab", "Close tab"];
 
 const MENU_AT_REST = `(() => { const menu = document.querySelector('[role="menuitem"]')?.closest('[role="menu"]'); return !!menu && menu.getAnimations().every((a) => a.playState !== 'running') && JSON.stringify(menu.getBoundingClientRect()); })()`;
 
@@ -369,6 +369,7 @@ it("renames a local browser file from its tab", async () => {
     "Copy link",
     "Rename file…",
     "Rename tab…",
+    "Pin tab",
     "Close tab",
     "Close all tabs",
   ];

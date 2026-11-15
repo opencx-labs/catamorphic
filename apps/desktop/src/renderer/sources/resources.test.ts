@@ -70,6 +70,8 @@ function deps(host: Partial<WorkSourceHost> = {}, writesProgram = true) {
     agentName: () => undefined,
     agentDeleted: () => false,
     closeTab: vi.fn(),
+    pinTab: vi.fn(),
+    pinBlocker: () => undefined,
     reorderTab: vi.fn(),
     attachTab: vi.fn(),
     sessionAction: vi.fn(),
@@ -145,12 +147,14 @@ it("renames a chat's tab as its chat, in the window's one rename dialog", async 
   const roots = await source.load({ parentId: null, signal });
   expect(roots.items[1]?.menu?.map((entry) => entry.action)).toEqual([
     "rename",
+    "pin-tab",
     "close",
     "close-chat-tabs",
     "close-chat-and-tabs",
     "close-all-tabs",
   ]);
   expect(roots.items[0]?.menu?.map((entry) => entry.action)).toEqual([
+    "pin-tab",
     "close",
     "close-all-tabs",
   ]);
@@ -165,6 +169,37 @@ it("renames a chat's tab as its chat, in the window's one rename dialog", async 
   await expect(
     source.action?.({ itemId: "browser:b1", action: "rename", signal }),
   ).rejects.toThrow("This tab does not support that action");
+});
+
+it("pins from a tab's menu, and a pinned tab closes from its menu only", async () => {
+  const pinnedTabs = tabs.map((tab) =>
+    tab.name === "b1" ? { ...tab, pinned: true } : tab,
+  );
+  const { value, host } = deps({
+    tabs: pinnedTabs,
+    pinBlocker: (key) =>
+      key === "browser:b2" ? "An agent is using this page." : undefined,
+  });
+  const source = tabsSource(value);
+  const roots = await source.load({ parentId: null, signal });
+  expect(roots.items[0]).toMatchObject({
+    actions: [],
+    data: { pinned: true },
+  });
+  expect(roots.items[0]?.menu?.map((entry) => entry.label)).toEqual([
+    "Unpin tab",
+    "Close tab",
+    "Close unpinned tabs",
+  ]);
+  const [held] = (await source.load({ parentId: "chat:c1", signal })).items;
+  expect(held?.menu?.[0]).toMatchObject({
+    label: "Pin tab",
+    disabledReason: "An agent is using this page.",
+  });
+  await source.action?.({ itemId: "chat:c2", action: "pin-tab", signal });
+  expect(host.pinTab).toHaveBeenCalledWith("chat:c2", true);
+  await source.action?.({ itemId: "browser:b1", action: "unpin-tab", signal });
+  expect(host.pinTab).toHaveBeenCalledWith("browser:b1", false);
 });
 
 it("follows the window's tabs, a chat's pages included", () => {

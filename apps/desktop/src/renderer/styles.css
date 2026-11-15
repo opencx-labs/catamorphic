@@ -1584,11 +1584,13 @@ kbd {
 }
 
 /* Workspace tab departure: width collapse slides neighbors into place.
-   The trailing negative margin swallows the flex gap so the strip closes
-   fully instead of leaving a 4px hole. */
+   It starts from the width the tab had (--tab-width, measured as it
+   leaves), so a short tab or a pin starts closing at once. The trailing
+   negative margin swallows the flex gap so the strip closes fully instead
+   of leaving a 4px hole. */
 @keyframes tab-out {
   from {
-    max-width: 202px;
+    max-width: var(--tab-width, 202px);
     opacity: 1;
     transform: translateY(0);
     margin-left: 0;
@@ -1606,6 +1608,35 @@ kbd {
 .animate-tab-out {
   animation: tab-out 180ms cubic-bezier(0.2, 0, 0, 1) forwards;
   overflow: hidden;
+}
+
+/* A tab just pinned arrives as its icon once its old place has mostly
+   closed (tab-out above), so it reads as leaving and coming back: its
+   slot opens to a pin's width (32px: icon, padding, border) as the icon
+   settles from a smaller size. Unpinning plays the same pair the other
+   way, with tab-in. */
+@keyframes tab-pin-in {
+  from {
+    max-width: 0;
+    opacity: 0;
+    transform: scale(0.6);
+  }
+  to {
+    max-width: 32px;
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+
+.animate-tab-pin-in {
+  animation: tab-pin-in 240ms cubic-bezier(0.2, 0, 0, 1) 120ms backwards;
+  overflow: hidden;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .animate-tab-pin-in {
+    animation-delay: 0s;
+  }
 }
 
 /* Every section's refresh indicator gives back its place as it fades.

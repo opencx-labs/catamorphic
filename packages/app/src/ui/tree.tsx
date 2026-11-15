@@ -184,6 +184,108 @@ function revealRing(ring: HTMLElement, viewport: HTMLElement) {
   }
 }
 
+const STANDARD_EASING = "cubic-bezier(0.2, 0, 0, 1)";
+
+/** The structural tween rows slide on, as the scroller resolves it. */
+function structuralTiming(node: HTMLElement) {
+  const style = getComputedStyle(node);
+  const base = style.getPropertyValue("--cat-motion-base").trim();
+  const duration = base.endsWith("ms")
+    ? Number.parseFloat(base)
+    : base.endsWith("s")
+      ? Number.parseFloat(base) * 1000
+      : Number.NaN;
+  return {
+    duration: Number.isFinite(duration) ? duration : 200,
+    easing: style.getPropertyValue("--ease-standard").trim() || STANDARD_EASING,
+  };
+}
+
+/** A Web Animation; a curve the API rejects takes the standard one. */
+function play(
+  element: HTMLElement,
+  keyframes: Keyframe[],
+  timing: KeyframeAnimationOptions,
+) {
+  if (typeof element.animate !== "function") return;
+  try {
+    element.animate(keyframes, timing);
+  } catch {
+    element.animate(keyframes, { ...timing, easing: STANDARD_EASING });
+  }
+}
+
+/**
+ * How long an opened folder waits for children its source loads: those
+ * arriving later simply appear.
+ */
+const DISCLOSURE_LOAD_MS = 1000;
+
+/** How opaque a row is drawn now, mid-fade included. */
+function drawnOpacity(element: Element | undefined) {
+  if (!element) return undefined;
+  const opacity = Number.parseFloat(getComputedStyle(element).opacity);
+  return Number.isFinite(opacity) ? opacity : undefined;
+}
+
+/**
+ * A folder's row revealed or covered by the edge where its branch ends,
+ * which the row below the branch rides on the same beat. The row stays in
+ * its slot, clipped below the edge, as a Collapsible reveals what it
+ * holds: nothing draws over anything else.
+ */
+function behindEdge({
+  top,
+  height,
+  from,
+  to,
+}: {
+  top: number;
+  height: number;
+  from: { edge: number; opacity: number };
+  to: { edge: number; opacity: number };
+}): Keyframe[] {
+  const at = (progress: number): Keyframe => {
+    const edge = from.edge + (to.edge - from.edge) * progress;
+    return {
+      offset: progress,
+      opacity: from.opacity + (to.opacity - from.opacity) * progress,
+      clipPath: `inset(0 0 ${Math.min(height, Math.max(0, top + height - edge))}px 0)`,
+    };
+  };
+  // The clip is still while the edge is past either end of the row; a
+  // keyframe where it crosses each keeps it exact.
+  const crossings = [top, top + height]
+    .map((edge) => (edge - from.edge) / (to.edge - from.edge))
+    .filter((progress) => progress > 0 && progress < 1)
+    .sort((a, b) => a - b);
+  return [0, ...crossings, 1].map(at);
+}
+
+/** The slot after a branch's last descendant in a layout. */
+function branchEnd(slots: readonly TreeSlot[], index: number) {
+  const depth = (slot: TreeSlot | undefined) =>
+    slot?.kind === "row" ? slot.row.depth : (slot?.depth ?? 0);
+  const own = depth(slots[index]);
+  let end = index + 1;
+  while (end < slots.length && depth(slots[end]) > own) end += 1;
+  return end;
+}
+
+/** A row a closing folder hid, drawn until the folder's edge covers it. */
+type TreeFold<T> = {
+  item: T;
+  placed: {
+    top: number;
+    depth: number;
+    expanded: boolean;
+    hasChildren: boolean;
+  };
+  keyframes: Keyframe[];
+  duration: number;
+  until: number;
+};
+
 type TreeRow = ReturnType<typeof indexTree>["rows"][number];
 type TreeSlot =
   | { kind: "row"; key: string; row: TreeRow }
@@ -497,9 +599,19 @@ export function Tree<T extends TreeItem>({
     for (const id of placements.current.keys())
       if (!motion.has(id)) placements.current.delete(id);
   }, [motion]);
-  // Only a row on screen in the last commit fades where it stood; one that
-  // was scrolled away or folded into a collapsed parent simply leaves, since
-  // its remembered place may now belong to another row.
+  // Rows a closing folder hid, drawn until they finish sliding under it.
+  const folding = useRef(new Map<string, TreeFold<T>>());
+  const foldsAnimated = useRef(new Set<string>());
+  // The tree's content box, and its height as last committed.
+  const content = useRef<HTMLDivElement>(null);
+  const committedHeight = useRef(0);
+  // Rows that arrived with a folder, kept from the generic enter motion.
+  const arrived = useRef(new Set<string>());
+  const [, setFoldsDone] = useState(0);
+  // Only a row on screen in the last commit fades where it stood (or folds
+  // under the folder the person just closed); one that was scrolled away or
+  // hidden in a collapsed parent simply leaves, since its remembered place
+  // may now belong to another row.
   const onScreen = useRef<ReadonlySet<string>>(new Set());
   const renderedNow = new Set<string>();
   useLayoutEffect(() => {
@@ -658,23 +770,11 @@ export function Tree<T extends TreeItem>({
     const timer = setTimeout(() => setSettling(null), 600);
     return () => clearTimeout(timer);
   }, [settling, settleMoved]);
-  const toggle = (id: string) => {
-    const next = new Set(expanded);
-    if (next.has(id)) next.delete(id);
-    else {
-      next.add(id);
-      loadChildren?.(id);
-      // Opening a branch is the person moving the list.
-      allowReads();
-    }
-    if (controlled) onExpandedChange?.(next);
-    else setOverrides((current) => new Map(current).set(id, next.has(id)));
-  };
   const contentHeight = layout.slots.length * rowHeight;
   const actualHeight = Math.min(height, contentHeight);
   // Expanding or collapsing a folder moves every row below it. Rows are
   // absolutely placed, so without this they (and the tree's own height)
-  // jump while only the folder's children fade: the rest must slide.
+  // jump: they slide, and the folder's own rows with them (below).
   const slide = useMemo(
     () =>
       typeof matchMedia === "function" &&
@@ -685,6 +785,47 @@ export function Tree<T extends TreeItem>({
           "var(--cat-motion-base, 200ms) var(--ease-standard, cubic-bezier(0.2, 0, 0, 1))",
     [],
   );
+  // A folder opened or closed by the person owns its descendants' motion
+  // for one structural beat: they slide out from under it, or back under
+  // it, while the rows below slide with them. In place, they would fade
+  // over the rows still sliding past (children a source loads on opening,
+  // or drops on closing, would take the generic enter and exit). An opened
+  // folder's beat starts when its rows arrive.
+  const disclosures = useRef(
+    new Map<
+      string,
+      {
+        open: boolean;
+        until: number;
+        duration: number;
+        /** Its rows are moving; until then it awaits them (a source loading). */
+        started: boolean;
+        scrollTop: number;
+      }
+    >(),
+  );
+  const toggle = (id: string) => {
+    const next = new Set(expanded);
+    if (next.has(id)) next.delete(id);
+    else {
+      next.add(id);
+      loadChildren?.(id);
+      // Opening a branch is the person moving the list.
+      allowReads();
+    }
+    const timing =
+      slide && viewport.current && structuralTiming(viewport.current);
+    if (timing)
+      disclosures.current.set(id, {
+        open: next.has(id),
+        until: performance.now() + timing.duration + DISCLOSURE_LOAD_MS,
+        duration: timing.duration,
+        started: false,
+        scrollTop: viewport.current?.scrollTop ?? 0,
+      });
+    if (controlled) onExpandedChange?.(next);
+    else setOverrides((current) => new Map(current).set(id, next.has(id)));
+  };
   const reveal = useCallback(
     (id: string) => {
       cancelReveal();
@@ -828,6 +969,206 @@ export function Tree<T extends TreeItem>({
     layout.slots.length,
     start + Math.ceil(height / rowHeight) + overscan * 2,
   );
+  // The folder a row moves with: opened or closed within this beat, at or
+  // above `parentId`. Render reads the last commit's motion and only
+  // proposes the next, which a layout effect commits: a render React
+  // repeats or discards changes nothing.
+  const now = performance.now();
+  const lookup = (key: string) => byId.get(key) ?? motion.get(key)?.item;
+  const disclosedBy = (parentId: string | null | undefined, open: boolean) => {
+    const seen = new Set<string>();
+    for (
+      let parent = parentId;
+      parent && !seen.has(parent);
+      parent = lookup(parent)?.parentId
+    ) {
+      seen.add(parent);
+      const disclosure = disclosures.current.get(parent);
+      if (disclosure?.open !== open || disclosure.until <= now) continue;
+      const index = layout.indexById.get(parent);
+      // Rows scrolled to after opening simply appear.
+      if (index === undefined || (open && disclosure.scrollTop !== scrollTop))
+        return undefined;
+      return { id: parent, index, open };
+    }
+    return undefined;
+  };
+  // Where each moving folder's edge (the row below its branch) is drawn
+  // now and where it goes, from the content's height mid-slide included.
+  // A turn mid-slide takes only the share of the beat left, as the CSS
+  // slide of the rows below does.
+  const edges = new Map<
+    string,
+    { from: number; to: number; duration: number }
+  >();
+  const edgeOf = (folder: { id: string; index: number; open: boolean }) => {
+    const known = edges.get(folder.id);
+    if (known) return known;
+    const shown = folder.open
+      ? branchEnd(layout.slots, folder.index)
+      : folder.index + 1;
+    const after = (layout.slots.length - shown) * rowHeight;
+    const measured = content.current?.getBoundingClientRect().height ?? 0;
+    const drawnEdge =
+      (measured > 0 ? measured : committedHeight.current) - after;
+    const closedEdge = (folder.index + 1) * rowHeight;
+    const openEdge = folder.open
+      ? shown * rowHeight
+      : Math.max(closedEdge, committedHeight.current - after);
+    const from = Math.min(openEdge, Math.max(closedEdge, drawnEdge));
+    const to = folder.open ? openEdge : closedEdge;
+    const edge = {
+      from,
+      to,
+      duration:
+        openEdge > closedEdge
+          ? (structuralMs * Math.abs(to - from)) / (openEdge - closedEdge)
+          : structuralMs,
+    };
+    edges.set(folder.id, edge);
+    return edge;
+  };
+  const structuralMs =
+    slide && viewport.current ? structuralTiming(viewport.current).duration : 0;
+  const drawnAt = (id: string, ...attributes: string[]) =>
+    drawnOpacity(
+      [
+        ...(viewport.current?.querySelectorAll<HTMLElement>(
+          attributes.map((attribute) => `[${attribute}]`).join(","),
+        ) ?? []),
+      ].find((element) =>
+        attributes.some((attribute) => element.getAttribute(attribute) === id),
+      ),
+    );
+  // Folds still under way, and how opaque rows a press brought back
+  // mid-fold are drawn.
+  const folds = new Map<string, TreeFold<T>>();
+  const resumed = new Map<string, number>();
+  for (const [id, fold] of folding.current) {
+    if (fold.until <= now) continue;
+    if (!layout.indexById.has(id)) folds.set(id, fold);
+    else {
+      const opacity = drawnAt(id, "data-tree-folding");
+      if (opacity !== undefined) resumed.set(id, opacity);
+    }
+  }
+  // Folders whose rows start moving in this commit: their beat starts.
+  const starting = new Set<string>();
+  // Rows on screen last commit that a closing folder just hid stay drawn
+  // in their slots while its edge covers them.
+  for (const id of onScreen.current) {
+    if (layout.indexById.has(id) || folds.has(id)) continue;
+    const item = lookup(id);
+    const placed = placements.current.get(id);
+    const folder = disclosedBy(item?.parentId, false);
+    if (!item || !placed || !folder) continue;
+    const edge = edgeOf(folder);
+    starting.add(folder.id);
+    folds.set(id, {
+      item,
+      placed,
+      keyframes: behindEdge({
+        top: placed.top,
+        height: rowHeight,
+        from: {
+          edge: edge.from,
+          opacity: drawnAt(id, "data-tree-id", "data-tree-exiting") ?? 1,
+        },
+        to: { edge: edge.to, opacity: 0 },
+      }),
+      duration: edge.duration,
+      until: now + edge.duration,
+    });
+  }
+  // Rows and placeholders a just-opened folder shows, revealed in their
+  // slots as its edge passes.
+  const arrivals = new Map<
+    string,
+    { keyframes: Keyframe[]; duration: number }
+  >();
+  const arrive = (
+    key: string,
+    index: number,
+    folder: { id: string; index: number; open: boolean },
+  ) => {
+    const edge = edgeOf(folder);
+    starting.add(folder.id);
+    arrivals.set(key, {
+      keyframes: behindEdge({
+        top: index * rowHeight,
+        height: rowHeight,
+        from: { edge: edge.from, opacity: resumed.get(key) ?? 0 },
+        to: { edge: edge.to, opacity: 1 },
+      }),
+      duration: edge.duration,
+    });
+  };
+  useLayoutEffect(() => {
+    folding.current = folds;
+    committedHeight.current = contentHeight;
+    const time = performance.now();
+    for (const id of starting) {
+      const disclosure = disclosures.current.get(id);
+      if (!disclosure || disclosure.started) continue;
+      disclosure.started = true;
+      disclosure.until = time + disclosure.duration;
+    }
+    for (const [id, disclosure] of disclosures.current)
+      if (disclosure.until <= time) disclosures.current.delete(id);
+    for (const id of arrivals.keys()) arrived.current.add(id);
+    const node = viewport.current;
+    if (!node || (arrivals.size === 0 && folds.size === 0)) return;
+    const { easing } = structuralTiming(node);
+    for (const element of node.querySelectorAll<HTMLElement>(
+      "[data-tree-id],[data-tree-pseudo]",
+    )) {
+      const arrival = arrivals.get(
+        element.dataset.treeId ?? element.dataset.treePseudo ?? "",
+      );
+      if (arrival)
+        play(element, arrival.keyframes, {
+          duration: arrival.duration,
+          easing,
+        });
+    }
+    for (const element of node.querySelectorAll<HTMLElement>(
+      "[data-tree-folding]",
+    )) {
+      const id = element.dataset.treeFolding ?? "";
+      const fold = folds.get(id);
+      if (!fold || foldsAnimated.current.has(id)) continue;
+      foldsAnimated.current.add(id);
+      play(element, fold.keyframes, {
+        duration: fold.duration,
+        easing,
+        fill: "forwards",
+      });
+    }
+  });
+  // Drop each folded row once its edge has covered it.
+  useEffect(() => {
+    for (const id of foldsAnimated.current)
+      if (!folding.current.has(id)) foldsAnimated.current.delete(id);
+    if (folding.current.size === 0) return;
+    const until = Math.min(
+      ...[...folding.current.values()].map((fold) => fold.until),
+    );
+    const timer = setTimeout(
+      () => setFoldsDone((count) => count + 1),
+      Math.max(0, until - performance.now()) + 1,
+    );
+    return () => clearTimeout(timer);
+  });
+  // Rows and placeholders that arrived with a folder keep away from the
+  // generic enter motion while their lists still call them new.
+  useEffect(() => {
+    for (const key of arrived.current)
+      if (
+        !motion.get(key)?.entering &&
+        !pseudoMotion.find((entry) => entry.key === key)?.entering
+      )
+        arrived.current.delete(key);
+  }, [motion, pseudoMotion]);
   // Within one viewport of a branch's end, its next page is read: by the
   // time the person gets there it has usually arrived. Moving focus scrolls
   // too, so arrow keys load like the wheel does.
@@ -1342,6 +1683,7 @@ export function Tree<T extends TreeItem>({
         }}
       >
         <div
+          ref={content}
           style={{
             height: contentHeight,
             position: "relative",
@@ -1404,6 +1746,30 @@ export function Tree<T extends TreeItem>({
                 }}
               />
             )}
+            {[...folds].map(([id, { item, placed }]) => (
+              // Inert copies, clipped where the folder ends (underFolder).
+              <div
+                key={`folding:${id}`}
+                aria-hidden="true"
+                inert
+                data-tree-folding={id}
+                style={{
+                  position: "absolute",
+                  top: placed.top,
+                  height: rowHeight,
+                  left: placed.depth * indent,
+                  right: 0,
+                  pointerEvents: "none",
+                }}
+              >
+                {renderItem(item, {
+                  depth: placed.depth,
+                  expanded: placed.expanded,
+                  hasChildren: placed.hasChildren,
+                  toggle: () => {},
+                })}
+              </div>
+            ))}
             {[
               ...new Set([
                 ...Array.from(
@@ -1424,6 +1790,14 @@ export function Tree<T extends TreeItem>({
                 if (slot.kind === "error" || slot.kind === "paused")
                   return null;
                 if (slot.kind === "placeholder") {
+                  const entering = pseudoMotion.find(
+                    (entry) => entry.key === slot.key,
+                  )?.entering;
+                  const into =
+                    entering && !onScreen.current.has(slot.key)
+                      ? disclosedBy(slot.parentId, true)
+                      : undefined;
+                  if (into) arrive(slot.key, index, into);
                   renderedNow.add(slot.key);
                   pseudoPlacements.current.set(slot.key, index * rowHeight);
                   return (
@@ -1434,8 +1808,7 @@ export function Tree<T extends TreeItem>({
                       rowHeight={rowHeight}
                       slide={slide}
                       className={
-                        pseudoMotion.find((entry) => entry.key === slot.key)
-                          ?.entering
+                        entering && !into && !arrived.current.has(slot.key)
                           ? (motionClasses?.enter ?? "cat-row-enter")
                           : undefined
                       }
@@ -1448,6 +1821,10 @@ export function Tree<T extends TreeItem>({
                 const hasChildren = Boolean(
                   item.hasChildren || tree.children.get(row.id)?.length,
                 );
+                const into = onScreen.current.has(row.id)
+                  ? undefined
+                  : disclosedBy(item.parentId, true);
+                if (into) arrive(row.id, index, into);
                 renderedNow.add(row.id);
                 placements.current.set(row.id, {
                   top: index * rowHeight,
@@ -1460,7 +1837,9 @@ export function Tree<T extends TreeItem>({
                     key={row.id}
                     role="treeitem"
                     className={
-                      motion.get(row.id)?.entering
+                      motion.get(row.id)?.entering &&
+                      !arrivals.has(row.id) &&
+                      !arrived.current.has(row.id)
                         ? (motionClasses?.enter ?? "cat-row-enter")
                         : undefined
                     }
@@ -1526,7 +1905,9 @@ export function Tree<T extends TreeItem>({
                 !leaving ||
                 slot.kind !== "placeholder" ||
                 top === undefined ||
-                !onScreen.current.has(key)
+                !onScreen.current.has(key) ||
+                // Under a closing folder, its edge passes over them.
+                disclosedBy(slot.parentId, false)
               )
                 return null;
               renderedNow.add(key);
@@ -1543,7 +1924,8 @@ export function Tree<T extends TreeItem>({
             })}
             {exiting.map(({ key, item }) => {
               const placed = placements.current.get(key);
-              if (!placed || !onScreen.current.has(key)) return null;
+              if (!placed || !onScreen.current.has(key) || folds.has(key))
+                return null;
               renderedNow.add(key);
               return (
                 <div
@@ -1595,7 +1977,8 @@ export function Tree<T extends TreeItem>({
             if (
               !leaving ||
               (slot.kind !== "error" && slot.kind !== "paused") ||
-              top === undefined
+              top === undefined ||
+              disclosedBy(slot.parentId, false)
             )
               return null;
             return (
@@ -1650,6 +2033,7 @@ function TreePseudoRow({
     <div
       aria-hidden="true"
       data-tree-more="placeholder"
+      data-tree-pseudo={slot.key}
       className={className}
       style={{
         position: "absolute",
