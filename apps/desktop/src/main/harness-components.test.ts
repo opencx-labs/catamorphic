@@ -220,6 +220,40 @@ describe("HarnessComponentStore", () => {
     ).rejects.toThrow();
   });
 
+  it("keeps the pinned version and the newest other one, and removes the rest", async () => {
+    const fixture = await componentFixture();
+    const codex = path.join(fixture.installRoot, "codex");
+    for (const version of [
+      "0.99.0",
+      "0.163.0",
+      "0.164.0",
+      "0.166.0",
+      "0.170.0-alpha.2",
+      ".install-a1",
+    ])
+      await fs.mkdir(path.join(codex, version, "darwin-arm64"), {
+        recursive: true,
+      });
+    // Another component's versions are its own.
+    await fs.mkdir(path.join(fixture.installRoot, "bun", "1.3.14"), {
+      recursive: true,
+    });
+    const store = new HarnessComponentStore({
+      rootDir: fixture.installRoot,
+      artifacts: { codex: { ...fixture.artifact, version: "0.164.0" } },
+      preferInstalled: false,
+    });
+    await store.pruneVersions();
+    expect((await fs.readdir(codex)).sort()).toEqual([
+      ".install-a1",
+      "0.164.0",
+      "0.170.0-alpha.2",
+    ]);
+    expect(await fs.readdir(path.join(fixture.installRoot, "bun"))).toEqual([
+      "1.3.14",
+    ]);
+  });
+
   it("installs the managed Bun runtime through the same verified store", async () => {
     const fixture = await componentFixture();
     const store = new HarnessComponentStore({

@@ -1,3 +1,4 @@
+import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 
@@ -44,6 +45,40 @@ function writeVersion(file: string, version: string): void {
   fs.renameSync(temporary, file);
 }
 
+/**
+ * Copies a directory, as a copy-on-write clone on macOS: the backup shares
+ * the database's blocks until either changes, instead of duplicating
+ * gigabytes. Node cannot clone there (libuv has no clonefile path, so
+ * COPYFILE_FICLONE silently copies), so the system `cp -c` does. Where that
+ * fails, or elsewhere, this is an ordinary copy.
+ */
+export function copyDirectory(source: string, destination: string): void {
+  if (fs.existsSync(destination))
+    throw new Error(`${destination} already exists`);
+  if (process.platform === "darwin") {
+    try {
+      execFileSync("/bin/cp", ["-c", "-R", source, destination], {
+        stdio: "ignore",
+      });
+      return;
+    } catch {
+      fs.rmSync(destination, { recursive: true, force: true });
+    }
+  }
+  try {
+    fs.cpSync(source, destination, {
+      recursive: true,
+      errorOnExist: true,
+      force: false,
+    });
+  } catch (error) {
+    // A partial copy would count as one of the backups kept and could push
+    // out a complete one.
+    fs.rmSync(destination, { recursive: true, force: true });
+    throw error;
+  }
+}
+
 function pruneBackups(root: string): void {
   const backups = fs
     .readdirSync(root, { withFileTypes: true })
@@ -88,11 +123,7 @@ export function prepareVersionBackup(options: {
     root,
     `before-${safeVersion(options.appVersion)}-${timestamp}`,
   );
-  fs.cpSync(options.dbDir, backupPath, {
-    recursive: true,
-    errorOnExist: true,
-    force: false,
-  });
+  copyDirectory(options.dbDir, backupPath);
   fs.chmodSync(backupPath, 0o700);
   pruneBackups(root);
   return { backupPath, markBootSuccessful: complete };
