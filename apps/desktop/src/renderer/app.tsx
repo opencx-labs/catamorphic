@@ -7434,6 +7434,7 @@ export function App({
       }
       onChooseTheme={() => setThemePicker({ open: true })}
       onConfigureAgent={() => setWizardModalOpen(true)}
+      onRemoveAgent={(agentId) => void desktopApi.agentsRemove(agentId)}
       canConfigureAgent={Boolean(projectId)}
       onFinish={() => {
         closeTab(tabKey(tab));
@@ -7441,7 +7442,9 @@ export function App({
       }}
       profileId={activeProfile?.id}
       importCompleted={Boolean(activeProfile?.browserImportCompletedAt)}
-      hasAgents={hasAgents && !wizardModalOpen}
+      agents={agentsData?.agents}
+      hasAgents={hasAgents}
+      agentSetupOpen={wizardModalOpen}
     />
   );
   // "Customize chips" (ADR 0239): a new chat with the request waiting in

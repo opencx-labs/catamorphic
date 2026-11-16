@@ -1,3 +1,5 @@
+import os from "node:os";
+import path from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import {
   type AppHandle,
@@ -46,7 +48,17 @@ async function palette(query: string) {
 }
 
 beforeAll(async () => {
-  app = await launchApp({ firstLaunch: true });
+  app = await launchApp({
+    firstLaunch: true,
+    // A sign-in file that is never written: a Claude Code or Codex agent
+    // made here is one whose sign-in was left unfinished.
+    env: {
+      CATAMORPHIC_E2E_AGENT_CREDENTIALS: path.join(
+        os.tmpdir(),
+        `catamorphic-e2e-no-sign-in-${process.pid}.json`,
+      ),
+    },
+  });
 });
 afterAll(async () => {
   await app?.stop();
@@ -587,7 +599,7 @@ describe("the Work tutorial", () => {
     ).toBe(true);
   });
 
-  it("configures an agent in a modal, keeps the step, and reveals the collapsed dock on the right", async () => {
+  it("configures agents in a modal, keeps the step, and reveals the collapsed dock on the right", async () => {
     await app.eval(
       `window.catamorphicDesktop.agentsList().then(data => Promise.all(data.agents.map(agent => window.catamorphicDesktop.agentsRemove(agent.id))))`,
     );
@@ -602,10 +614,17 @@ describe("the Work tutorial", () => {
         `document.querySelector('.onboarding-copy h1')?.textContent`,
       ),
     ).toBe("Where AI agents can do wonders");
-    await click('[data-testid="onboarding-setup-agent"]');
-    await app.waitFor(
-      `!!document.querySelector('[role="dialog"] [data-testid="agent-wizard-free"]')`,
-    );
+    const setup = '[data-testid="onboarding-setup-agent"]';
+    const free = '[role="dialog"] [data-testid="agent-wizard-free"]';
+    const placed = `JSON.stringify(document.querySelector('${setup}').getBoundingClientRect().toJSON())`;
+    const label = `[...document.querySelectorAll('${setup} [aria-hidden="false"]')].map(label => label.textContent).join()`;
+    const listed = `[...document.querySelectorAll('[data-testid="onboarding-agents"] li')].map(agent => agent.textContent).join()`;
+    const added = `[...document.querySelectorAll('[role="dialog"] [data-agent-added]')].map(mark => mark.closest('button').dataset.testid).join()`;
+    await app.waitFor(`${label} === 'Configure an agent' && ${listed} === ''`);
+    await settled();
+    const before = await app.eval<string>(placed);
+    await click(setup);
+    await app.waitFor(`!!document.querySelector('${free}')`);
     expect(
       await app.eval(
         `document.querySelector('[data-testid="onboarding"]')?.dataset.onboardingStep`,
@@ -616,10 +635,77 @@ describe("the Work tutorial", () => {
         `!document.querySelector('[data-point-key^="agent-setup:"]')`,
       ),
     ).toBe(true);
-    await click('[role="dialog"] [data-testid="agent-wizard-free"]');
+    expect(await app.eval(added)).toBe("");
+    await click(free);
     await app.waitFor(
-      `document.querySelector('[data-testid="onboarding-setup-agent"]')?.textContent.includes('Agent configured') && !document.querySelector('[role="dialog"] [data-testid="agent-wizard-free"]')`,
+      `${listed} === 'OpenRouter' && !document.querySelector('${free}')`,
     );
+    expect(await app.eval(label)).toBe("Add another agent");
+
+    // The same wizard adds another. It marks what the profile already has,
+    // and the step lists the new agent once the wizard closes.
+    await click(setup);
+    await app.waitFor(`${added} === 'agent-wizard-free'`);
+    expect(await app.eval(listed)).toBe("OpenRouter");
+    await click(free);
+    await app.waitFor(
+      `${listed} === 'OpenRouter,OpenRouter' && !document.querySelector('${free}')`,
+    );
+    expect(
+      await app.eval(
+        `window.catamorphicDesktop.agentsList().then(data => data.agents.length)`,
+      ),
+    ).toBe(2);
+    await settled();
+    expect(await app.eval<string>(placed)).toBe(before);
+    expect(
+      await app.eval(
+        `document.querySelector('[data-testid="onboarding"]')?.dataset.onboardingStep`,
+      ),
+    ).toBe("2");
+
+    // Hovering an agent turns its tick into the button that removes it.
+    const shown = (part: string) =>
+      `getComputedStyle(document.querySelector('.onboarding-agent-${part}')).opacity`;
+    expect(await app.eval(shown("remove"))).toBe("0");
+    const agent = await app.eval<{ x: number; y: number }>(`(() => {
+      const rect = document.querySelector('.onboarding-agent').getBoundingClientRect();
+      return { x: rect.x + rect.width / 2, y: rect.y + rect.height / 2 };
+    })()`);
+    await app.cdp("Input.dispatchMouseEvent", { type: "mouseMoved", ...agent });
+    await app.waitFor(
+      `${shown("remove")} === '1' && ${shown("check")} === '0'`,
+    );
+    await click('[data-testid="onboarding-remove-agent"]');
+    await app.waitFor(`${listed} === 'OpenRouter'`);
+    expect(
+      await app.eval(
+        `window.catamorphicDesktop.agentsList().then(data => data.agents.length)`,
+      ),
+    ).toBe(1);
+    expect(await app.eval(label)).toBe("Add another agent");
+
+    // An agent whose sign-in was left unfinished says so instead of showing
+    // a tick, and the wizard does not count it as added.
+    const unfinished = await app.eval<string>(
+      `window.catamorphicDesktop.agentsCreate({ harness: 'claude-code', auth: 'account', name: 'Unfinished', connections: { mode: 'all' } }).then(agent => agent.id)`,
+    );
+    await app.waitFor(
+      `document.querySelector('.onboarding-agent[data-signed-in="false"]')?.textContent === 'UnfinishedNot signed in'`,
+    );
+    expect(
+      await app.eval(
+        `document.querySelectorAll('.onboarding-agent[data-signed-in="true"]').length`,
+      ),
+    ).toBe(1);
+    await click(setup);
+    await app.waitFor(`${added} === 'agent-wizard-free'`);
+    await app.press("Escape");
+    await app.waitFor(`!document.querySelector('${free}')`);
+    await app.eval(
+      `window.catamorphicDesktop.agentsRemove(${JSON.stringify(unfinished)})`,
+    );
+    await app.waitFor(`${listed} === 'OpenRouter'`);
     await app.waitFor(
       `document.querySelector('[data-dock-host] [data-dock-rail]')?.dataset.dockCollapsed === 'true'`,
     );
