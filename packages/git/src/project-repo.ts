@@ -18,7 +18,13 @@ import type {
   RepoStatus,
 } from "./types.js";
 
-const IGNORED_DIRS = new Set(["node_modules", ".git", "dist", ".turbo"]);
+/** Directories a walk never enters. */
+export const WALK_SKIPPED_DIRS: ReadonlySet<string> = new Set([
+  "node_modules",
+  ".git",
+  "dist",
+  ".turbo",
+]);
 // git.add processes array inputs concurrently, even with parallel: false.
 // Bound file reads while amortizing full-index serialization across each batch.
 const STAGING_BATCH_SIZE = 128;
@@ -108,7 +114,7 @@ export async function walkDirectory(
   const results: string[] = [];
 
   for (const entry of entries) {
-    if (IGNORED_DIRS.has(entry.name)) continue;
+    if (WALK_SKIPPED_DIRS.has(entry.name)) continue;
     if (
       !options?.includeHidden &&
       entry.name.startsWith(".") &&

@@ -124,6 +124,7 @@ import { SessionCheckouts, usableCheckout } from "./session-checkouts.js";
 import { SessionNotes } from "./session-notes.js";
 import { mayRunAgain, SignInRecovery } from "./sign-in-recovery.js";
 import { syncReport } from "./sync-report.js";
+import { TableCompactor } from "./table-compaction.js";
 import {
   DESKTOP_MCP_TOOL_KINDS,
   DESKTOP_TRIGGER_KINDS,
@@ -855,6 +856,16 @@ export async function startEmbeddedServer(
   if (applied.length > 0) {
     console.log(`[desktop] Applied migrations: ${applied.join(", ")}`);
   }
+  // PGlite has no autovacuum (ADR 0319). The first pass, before any window
+  // reads the tables, reclaims what an older profile accumulated; later
+  // passes find compacted tables and finish in milliseconds.
+  const tableCompactor = new TableCompactor(pglite, {
+    log: (message) => console.log(`[desktop] ${message}`),
+  });
+  await tableCompactor.compact().catch((error: unknown) => {
+    console.warn("[desktop] Table compaction failed", error);
+  });
+  tableCompactor.start({ intervalMs: 30 * 60_000 });
 
   const desktopIdentity = {
     tenantId: DESKTOP_TENANT_ID,
@@ -1901,6 +1912,8 @@ export async function startEmbeddedServer(
       clearInterval(notificationTimer);
       clearInterval(sessionMailboxTimer);
       clearInterval(sessionMirrorTimer);
+      // Before the slow steps below: no rewrite may start during shutdown.
+      const compactionStopped = tableCompactor.stop();
       const sessionImports = externalSessions.dispose();
       sessionHints.dispose();
       sessionsListeners.clear();
@@ -1931,6 +1944,7 @@ export async function startEmbeddedServer(
           { name: "previews", dispose: () => remotePreviews.close() },
           { name: "HTTP server", dispose: () => app.close() },
           { name: "framework services", dispose: () => catamorphic.close() },
+          { name: "table compaction", dispose: () => compactionStopped },
           // After the turns stopped: the harnesses kept warm for their chats.
           { name: "warm harnesses", dispose: () => agentRegistry.dispose() },
           // The host owns Kysely. Always attempt its WAL flush last and report

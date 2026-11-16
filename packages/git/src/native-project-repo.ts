@@ -5,6 +5,7 @@ import {
   PROJECT_PERSONAL_DIR,
   publishedRef,
 } from "@catamorphic/workflow/project-layout";
+import ignore, { type Ignore } from "ignore";
 import { type FileReadOptions, readFileSnapshot } from "./file-reads.js";
 import { hasLocalGit, nativeGit, nativeGitBytes } from "./native-git.js";
 import {
@@ -14,9 +15,137 @@ import {
 import {
   assertSafePath,
   ProjectRepoImpl,
+  WALK_SKIPPED_DIRS,
   walkDirectory,
 } from "./project-repo.js";
 import type { BranchInfo, CommitInfo, DiffEntry, RepoStatus } from "./types.js";
+
+/**
+ * Walks of folders without Git, by root and folder: the one running and the
+ * one queued behind it. A new chat asks for the same listing from several
+ * services at once (agents, skills, apps, workflows). A caller never shares
+ * a walk that started before it asked, so it sees every file written before
+ * its call; callers arriving during a walk share the single next one.
+ */
+interface UnversionedWalk {
+  running: Promise<string[]>;
+  queued: Promise<string[]> | null;
+}
+const unversionedWalks = new Map<string, UnversionedWalk>();
+
+/**
+ * Every file under `folder` (relative, `""` for the whole tree, else ending
+ * in `/`) of a folder without Git, as a whole-tree walk would list them:
+ * nothing under an ignored directory or a nested repository on the way.
+ */
+function walkUnversioned(root: string, folder: string): Promise<string[]> {
+  const key = `${root}\0${folder}`;
+  const current = unversionedWalks.get(key);
+  if (!current) return startWalk(key, root, folder);
+  current.queued ??= current.running
+    .catch(() => {})
+    .then(() => startWalk(key, root, folder));
+  return current.queued;
+}
+
+function startWalk(
+  key: string,
+  root: string,
+  folder: string,
+): Promise<string[]> {
+  const entry: UnversionedWalk = {
+    running: walkFolder(root, folder),
+    queued: null,
+  };
+  unversionedWalks.set(key, entry);
+  void entry.running
+    .finally(() => {
+      if (unversionedWalks.get(key) === entry) unversionedWalks.delete(key);
+    })
+    .catch(() => {});
+  return entry.running;
+}
+
+async function walkFolder(root: string, folder: string): Promise<string[]> {
+  const rules: Array<{ base: string; matcher: Ignore }> = [];
+  const options = {
+    includeHidden: true,
+    excludeNestedRepositories: true,
+    tracked: new Set<string>(),
+    trackedDirectories: new Set<string>(),
+    rules,
+  };
+  // A missing project folder fails as the whole-tree walk does.
+  if (!folder || !(await fs.stat(root)).isDirectory())
+    return walkDirectory(root, root, options);
+  // What the whole-tree walk would decide on the way down to `folder`:
+  // its ignore rules, ignored and private directories, nested repositories.
+  // A folder it would never reach, or that does not exist, lists nothing.
+  let current = root;
+  for (const segment of folder.slice(0, -1).split("/")) {
+    if (!segment || segment === "." || segment === "..") return [];
+    const content = await fs
+      .readFile(path.join(current, ".gitignore"), "utf8")
+      .catch(() => "");
+    if (content) rules.push({ base: current, matcher: ignore().add(content) });
+    const next = path.join(current, segment);
+    if (
+      WALK_SKIPPED_DIRS.has(segment) ||
+      isPersonalFile(path.relative(root, next)) ||
+      isIgnoredDirectory(rules, next)
+    )
+      return [];
+    // The whole-tree walk lists a linked folder as an entry, never its files.
+    const stat = await fs.lstat(next).catch(() => undefined);
+    if (!stat?.isDirectory()) return [];
+    current = next;
+    if (
+      await fs.stat(path.join(current, ".git")).then(
+        () => true,
+        () => false,
+      )
+    )
+      return [];
+  }
+  // Errors inside the folder propagate, as from a whole-tree walk.
+  return walkDirectory(current, root, options);
+}
+
+function isIgnoredDirectory(
+  rules: ReadonlyArray<{ base: string; matcher: Ignore }>,
+  directory: string,
+): boolean {
+  let ignored = false;
+  for (const rule of rules) {
+    const result = rule.matcher.test(`${path.relative(rule.base, directory)}/`);
+    if (result.ignored) ignored = true;
+    if (result.unignored) ignored = false;
+  }
+  return ignored;
+}
+
+/** The deepest folder a path prefix names entirely: `a/b/` for `a/b/c`. */
+function folderOf(prefix: string): string {
+  const cut = prefix.lastIndexOf("/");
+  return cut < 0 ? "" : prefix.slice(0, cut + 1);
+}
+
+/** The folder every glob starts in before its first wildcard, or `""`. */
+function literalFolder(globs: readonly string[]): string {
+  const folders = globs.map((glob) => {
+    const wild = glob.search(/[*?[{]/);
+    return folderOf(wild < 0 ? glob : glob.slice(0, wild));
+  });
+  if (folders.length === 0) return "";
+  return folders.reduce((common, folder) => {
+    let end = 0;
+    for (let i = 0; i < Math.min(common.length, folder.length); i++) {
+      if (common[i] !== folder[i]) break;
+      if (common[i] === "/") end = i + 1;
+    }
+    return common.slice(0, end);
+  });
+}
 
 /** Local-checkout adapter. File IO stays shared; Git honors the user's repository format and tools. */
 export class NativeProjectRepo extends ProjectRepoImpl {
@@ -48,8 +177,15 @@ export class NativeProjectRepo extends ProjectRepoImpl {
   override async readAllFiles(
     options: FileReadOptions = {},
   ): Promise<Record<string, string>> {
+    return this.readSnapshot(await this.listFiles(), options);
+  }
+
+  private readSnapshot(
+    paths: string[],
+    options: FileReadOptions,
+  ): Promise<Record<string, string>> {
     return readFileSnapshot({
-      paths: await this.listFiles(),
+      paths,
       options: { maxFileBytes: 2 * 1024 * 1024, ...options },
       read: async (file, maxBytes) => {
         const stat = await fs.lstat(path.join(this.repoPath, file));
@@ -68,16 +204,9 @@ export class NativeProjectRepo extends ProjectRepoImpl {
   override async listFiles(opts?: { prefix?: string }): Promise<string[]> {
     if (!(await hasLocalGit({ path: this.repoPath }))) {
       if (opts?.prefix) assertSafePath(opts.prefix);
-      const files = await walkDirectory(this.repoPath, this.repoPath, {
-        includeHidden: true,
-        excludeNestedRepositories: true,
-        tracked: new Set(),
-        trackedDirectories: new Set(),
-        rules: [],
-      });
-      return files
-        .filter((file) => !opts?.prefix || file.startsWith(opts.prefix))
-        .sort();
+      const prefix = opts?.prefix ?? "";
+      const files = await walkUnversioned(this.repoPath, folderOf(prefix));
+      return files.filter((file) => file.startsWith(prefix)).sort();
     }
     const pathspec = opts?.prefix ? ["--", opts.prefix] : [];
     const [output, removed] = await Promise.all([
@@ -115,11 +244,14 @@ export class NativeProjectRepo extends ProjectRepoImpl {
       const excludes = input.globs
         .filter((glob) => glob.startsWith(":!"))
         .map((glob) => glob.slice(2));
-      const files = await this.readAllFiles({
-        filter: (file) =>
-          includes.some((glob) => matches(file, glob)) &&
-          !excludes.some((glob) => matches(file, glob)),
-      });
+      const files = await this.readSnapshot(
+        await this.listFiles({ prefix: literalFolder(includes) }),
+        {
+          filter: (file) =>
+            includes.some((glob) => matches(file, glob)) &&
+            !excludes.some((glob) => matches(file, glob)),
+        },
+      );
       return Object.entries(files)
         .filter(([, content]) => content.includes(input.text))
         .map(([file]) => file);

@@ -1,7 +1,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { CheckoutRemoteBackend } from "../checkout-remote-backend.js";
 import { FsBackend } from "../fs-backend.js";
 import { FsRemoteBackend } from "../fs-remote-backend.js";
@@ -441,6 +441,182 @@ describe("plain local folders", () => {
       }),
     ).toEqual(["src/flow.ts"]);
     expect(await repo.listFiles({ prefix: "src/" })).toEqual(["src/flow.ts"]);
+  });
+
+  it("lists a prefix exactly as the whole-tree walk would, walking only that folder", async () => {
+    for (const directory of [
+      "src/deep",
+      "ignored/deep",
+      "kept/inner",
+      "nested/.git",
+      "node_modules/pkg",
+      ".work/personal",
+      ".venv/lib",
+      "outside",
+    ])
+      await fs.mkdir(path.join(root, directory), { recursive: true });
+    for (const file of [
+      "src/flow.ts",
+      "src/deep/step.ts",
+      "ignored/deep/flow.ts",
+      "kept/inner/a.ts",
+      "kept/inner/b.log",
+      "nested/flow.ts",
+      "node_modules/pkg/index.js",
+      ".work/personal/flow.ts",
+      ".venv/lib/site.py",
+      "outside/real.ts",
+    ])
+      await fs.writeFile(path.join(root, file), "defineWorkflow");
+    await fs.writeFile(path.join(root, ".gitignore"), "ignored/\n");
+    await fs.writeFile(path.join(root, "kept/.gitignore"), "*.log\n");
+    await fs.symlink(path.join(root, "outside"), path.join(root, "link"));
+    const repo = new NativeProjectRepo(project, root, async () => {});
+    const all = await repo.listFiles();
+    expect(all).toContain(".venv/lib/site.py");
+    expect(all).not.toContain("kept/inner/b.log");
+    for (const prefix of [
+      "src/",
+      "src/deep/",
+      "src/fl",
+      "ignored/",
+      "ignored/deep/",
+      "kept/inner/",
+      "nested/",
+      "node_modules/pkg/",
+      ".venv/",
+      "link/",
+      "missing/",
+      "notes.md",
+    ])
+      expect(await repo.listFiles({ prefix })).toEqual(
+        all.filter((file) => file.startsWith(prefix)),
+      );
+    expect(
+      (
+        await repo.findFilesContaining({
+          text: "defineWorkflow",
+          globs: ["src/*.ts", "src/**/*.ts"],
+        })
+      ).sort(),
+    ).toEqual(["src/deep/step.ts", "src/flow.ts"]);
+  });
+
+  it("shares walks among concurrent listings, never one that started before a caller asked", async () => {
+    await fs.mkdir(path.join(root, "src"), { recursive: true });
+    await fs.writeFile(path.join(root, "src/flow.ts"), "flow");
+    const repo = new NativeProjectRepo(project, root, async () => {});
+    const original = fs.readdir.bind(fs);
+    let release = () => {};
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    let held = false;
+    const readdir = vi
+      .spyOn(fs, "readdir")
+      // The first walk reads `src/`, then waits before it finishes.
+      .mockImplementation(async (...args: Parameters<typeof fs.readdir>) => {
+        const entries = await original(...args);
+        if (!held && args[0] === path.join(root, "src")) {
+          held = true;
+          await gate;
+        }
+        return entries;
+      });
+    try {
+      const first = repo.listFiles();
+      await vi.waitFor(() => expect(held).toBe(true));
+      // Written after that walk read `src/`: a listing asked for now must
+      // see it, which the walk in progress cannot.
+      await fs.writeFile(path.join(root, "src/added.ts"), "added");
+      const originalLstat = fs.lstat.bind(fs);
+      let gitChecks = 0;
+      const lstat = vi
+        .spyOn(fs, "lstat")
+        .mockImplementation(async (...args: Parameters<typeof fs.lstat>) => {
+          try {
+            return await originalLstat(...args);
+          } finally {
+            if (args[0] === path.join(root, ".git")) gitChecks += 1;
+          }
+        });
+      const later = Array.from({ length: 4 }, () => repo.listFiles());
+      // Each checks for Git first; once all four have, they reached the walk.
+      await vi.waitFor(() => expect(gitChecks).toBe(4));
+      lstat.mockRestore();
+      release();
+      expect(await first).toEqual(["notes.md", "src/flow.ts"]);
+      for (const listing of await Promise.all(later))
+        expect(listing).toEqual(["notes.md", "src/added.ts", "src/flow.ts"]);
+      // One walk running, one shared by the four that asked during it.
+      expect(readdir.mock.calls.filter(([dir]) => dir === root)).toHaveLength(
+        2,
+      );
+      readdir.mockClear();
+      expect(await repo.listFiles({ prefix: "src/" })).toEqual([
+        "src/added.ts",
+        "src/flow.ts",
+      ]);
+      // A prefix walks its folder only.
+      expect(readdir.mock.calls.map(([dir]) => dir)).toEqual([
+        path.join(root, "src"),
+      ]);
+    } finally {
+      readdir.mockRestore();
+    }
+  });
+
+  it("decides negated ignores on the way down as the whole walk does", async () => {
+    for (const directory of ["a/keep/inner", "a/drop", "kept/x", "other"])
+      await fs.mkdir(path.join(root, directory), { recursive: true });
+    for (const file of [
+      "a/keep/inner/one.ts",
+      "a/drop/two.ts",
+      "kept/x/three.ts",
+      "other/four.ts",
+    ])
+      await fs.writeFile(path.join(root, file), "x");
+    await fs.writeFile(path.join(root, ".gitignore"), "*/\n!kept/\n!a/\n");
+    await fs.writeFile(path.join(root, "a/.gitignore"), "*\n!keep/\n");
+    const repo = new NativeProjectRepo(project, root, async () => {});
+    const all = await repo.listFiles();
+    for (const prefix of [
+      "a/",
+      "a/keep/",
+      "a/keep/inner/",
+      "a/drop/",
+      "kept/x/",
+      "other/",
+      "a/../",
+      "./",
+    ])
+      expect(await repo.listFiles({ prefix })).toEqual(
+        all.filter((file) => file.startsWith(prefix)),
+      );
+  });
+
+  it("fails as the whole walk does when a folder inside cannot be read", async () => {
+    await fs.mkdir(path.join(root, "src/deep"), { recursive: true });
+    await fs.writeFile(path.join(root, "src/deep/flow.ts"), "flow");
+    const repo = new NativeProjectRepo(project, root, async () => {});
+    const original = fs.readdir.bind(fs);
+    const readdir = vi
+      .spyOn(fs, "readdir")
+      .mockImplementation(async (...args: Parameters<typeof fs.readdir>) => {
+        if (args[0] === path.join(root, "src/deep"))
+          throw Object.assign(new Error("gone"), { code: "ENOENT" });
+        return original(...args);
+      });
+    try {
+      await expect(repo.listFiles()).rejects.toThrow("gone");
+      await expect(repo.listFiles({ prefix: "src/" })).rejects.toThrow("gone");
+      // The folder asked for is missing: nothing, as before.
+      expect(await repo.listFiles({ prefix: "missing/" })).toEqual([]);
+    } finally {
+      readdir.mockRestore();
+    }
+    await fs.rm(root, { recursive: true });
+    await expect(repo.listFiles({ prefix: "src/" })).rejects.toThrow();
   });
 
   it("initializes Git only for an explicit commit and immediately supports external Git initialization", async () => {
