@@ -31,7 +31,10 @@ unlisted origins, verifies the complete archive before extraction, extracts
 through a temporary directory, and atomically publishes the verified payload.
 The cached component is reused offline. Harness processes always receive its
 explicit executable path; downloaded JavaScript is never imported into the
-Electron process.
+Electron process. After an install, and at startup, the store removes
+versions earlier pins left behind, keeping the pinned one and the newest
+other one (what processes from before an update may still run, and what a
+downgrade would use).
 
 We rejected fetching floating npm versions, evaluating remotely downloaded
 modules, relying on a system package manager, and silently downloading every

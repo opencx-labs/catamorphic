@@ -35,7 +35,7 @@ import {
 
 /**
  * Seeded into every new project (unless one exists): mirrors the
- * checkpoint walker's IGNORED_DIRS so git status and the walker agree on
+ * checkpoint walker's WALK_SKIPPED_DIRS so git status and the walker agree on
  * what a project's history never contains.
  */
 export const PROJECT_GITIGNORE = `/app-data/

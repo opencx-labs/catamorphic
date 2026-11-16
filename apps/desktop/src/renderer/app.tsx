@@ -257,6 +257,7 @@ import {
   workspaceCustomizationMessage,
 } from "./lib/workspace-customization.js";
 import {
+  forgetWorkspaceSave,
   saveWorkspace,
   useWorkspacePersistence,
 } from "./lib/workspace-persistence.js";
@@ -1888,6 +1889,7 @@ export function App({
   useEffect(() => {
     if (!projectId || workspaceRestoreRef.current.has(projectId)) return;
     workspaceRestoreRef.current.add(projectId);
+    forgetWorkspaceSave(projectId);
     // A project that moved here from another window opens as it was left
     // there; otherwise as it was saved.
     void desktopApi
@@ -1944,6 +1946,8 @@ export function App({
       void saveWorkspace({ projectId: leaving, workspace: left }).catch(
         () => {},
       );
+      // The window it moves to writes it from now on.
+      forgetWorkspaceSave(leaving);
     },
     [],
   );

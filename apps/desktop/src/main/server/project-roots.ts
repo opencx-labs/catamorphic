@@ -12,9 +12,9 @@ import type { PGlite } from "@electric-sql/pglite";
 export class ProjectRootsStore {
   /**
    * In-memory mirror of the table, warmed at init and maintained by
-   * set/delete. Exists for {@link getSync}: the coding-agent registry's
-   * `get(id)` is synchronous (core contract) but project-agent resolution
-   * needs the project's folder to read `.work/agents/<slug>.json`.
+   * set/delete, which every lookup reads. {@link getSync} serves the
+   * coding-agent registry's synchronous `get(id)` (core contract):
+   * project-agent resolution needs the folder to read its agent files.
    */
   private readonly cache = new Map<string, string>();
   private readonly automaticCheckpoints = new Set<string>();
@@ -141,12 +141,12 @@ export class ProjectRootsStore {
     }
   }
 
+  /**
+   * From the mirror: this store is the table's only writer, and opening a
+   * chat resolves its project's folder dozens of times.
+   */
   async get(projectId: string): Promise<string | null> {
-    const result = await this.pglite.query<{ root_path: string }>(
-      "SELECT root_path FROM desktop.project_roots WHERE project_id = $1",
-      [projectId],
-    );
-    return result.rows[0]?.root_path ?? null;
+    return this.cache.get(projectId) ?? null;
   }
 
   /** Every registered project with a folder. */

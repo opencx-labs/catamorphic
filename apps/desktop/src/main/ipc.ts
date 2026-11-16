@@ -885,29 +885,65 @@ export function registerIpcHandlers(
     };
   };
 
+  // Every window, open chat, palette and inspector asks for the roster on
+  // its own beat, and a new chat sets several of them off at once. A request
+  // never shares a listing that started before it (a default just set, an
+  // agent file just written, must show); requests arriving while one runs
+  // share the single listing queued behind it.
+  const projectAgentListings = new Map<
+    string,
+    {
+      running: Promise<ProjectAgentsData>;
+      queued: Promise<ProjectAgentsData> | null;
+    }
+  >();
+  const startProjectAgentListing = (projectId: string) => {
+    const entry = {
+      running: listProjectAgents(projectId),
+      queued: null,
+    };
+    projectAgentListings.set(projectId, entry);
+    void entry.running
+      .finally(() => {
+        if (projectAgentListings.get(projectId) === entry)
+          projectAgentListings.delete(projectId);
+      })
+      .catch(() => {});
+    return entry.running;
+  };
   ipcMain.handle(
     "catamorphic:project-agents-list",
-    async (_event, projectId: string): Promise<ProjectAgentsData> => {
-      const server = state.current;
-      if (!server) return { agents: [], projectDefaultSlug: null };
-      const rootPath = server.projectRoots.getSync(projectId);
-      const projectDefaultSlug =
-        (rootPath ? projectDefaultAgentSlug(rootPath) : undefined) ?? null;
-      try {
-        const entries = await server.catamorphic.core.agentDefinitions.list(
-          { tenantId: DESKTOP_TENANT_ID, externalUserId: DESKTOP_USER_ID },
-          projectId,
-        );
-        return {
-          agents: entries.map((entry) => projectAgentInfo(projectId, entry)),
-          projectDefaultSlug,
-        };
-      } catch {
-        // Unknown/deleted project: no agents rather than a broken palette.
-        return { agents: [], projectDefaultSlug };
-      }
+    (_event, projectId: string): Promise<ProjectAgentsData> => {
+      const current = projectAgentListings.get(projectId);
+      if (!current) return startProjectAgentListing(projectId);
+      current.queued ??= current.running
+        .catch(() => {})
+        .then(() => startProjectAgentListing(projectId));
+      return current.queued;
     },
   );
+  const listProjectAgents = async (
+    projectId: string,
+  ): Promise<ProjectAgentsData> => {
+    const server = state.current;
+    if (!server) return { agents: [], projectDefaultSlug: null };
+    const rootPath = server.projectRoots.getSync(projectId);
+    const projectDefaultSlug =
+      (rootPath ? projectDefaultAgentSlug(rootPath) : undefined) ?? null;
+    try {
+      const entries = await server.catamorphic.core.agentDefinitions.list(
+        { tenantId: DESKTOP_TENANT_ID, externalUserId: DESKTOP_USER_ID },
+        projectId,
+      );
+      return {
+        agents: entries.map((entry) => projectAgentInfo(projectId, entry)),
+        projectDefaultSlug,
+      };
+    } catch {
+      // Unknown/deleted project: no agents rather than a broken palette.
+      return { agents: [], projectDefaultSlug };
+    }
+  };
 
   // The project's committed default (ADR 0056 layer 2): a slug into the
   // project's own agents/, written to `.work/project.json` — a

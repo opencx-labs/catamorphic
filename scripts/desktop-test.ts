@@ -5,11 +5,19 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { writeCliError } from "./cli-error.js";
 import { assertIsolatedDesktopTestHost } from "./desktop-test-environment.js";
+import {
+  DESKTOP_TEST_IMAGE_LABEL,
+  removeStaleDesktopTestImages,
+} from "./desktop-test-images.js";
 import { runLoggedProcess, TestSignalController } from "./test.js";
 import {
   removeTestDirectory,
   withTestProcessCleanup,
 } from "./test-processes.js";
+import {
+  markTestRunDirectory,
+  removeExpiredTestRuns,
+} from "./test-retention.js";
 
 const root = path.resolve(import.meta.dirname, "..");
 
@@ -115,7 +123,9 @@ async function main(): Promise<void> {
   );
   // macOS allows only 103 path bytes plus the terminator for a Unix socket.
   // Chromium adds its own temporary directory and SingletonSocket suffix.
+  await removeExpiredTestRuns();
   const context = await mkdtemp(path.join(tmpdir(), "d"));
+  await markTestRunDirectory(context);
   let succeeded = false;
   let step = 0;
   const run = async (
@@ -201,10 +211,14 @@ async function main(): Promise<void> {
           path.join(context, "Dockerfile"),
         );
         const imageFile = path.join(context, "image-id");
+        // Before building: the disk a full Docker refused builds on.
+        removeStaleDesktopTestImages();
         await run("docker", [
           "build",
           "--tag",
           image,
+          "--label",
+          `${DESKTOP_TEST_IMAGE_LABEL}=${root}`,
           "--iidfile",
           imageFile,
           context,
@@ -283,9 +297,12 @@ async function main(): Promise<void> {
     });
     succeeded = true;
   } finally {
-    if (!native)
+    if (!native) {
       for (const container of containers)
         spawnSync("docker", ["rm", "--force", container], { stdio: "ignore" });
+      // The image this run's build replaced, now untagged.
+      removeStaleDesktopTestImages();
+    }
     signals.close();
     console.log(`Desktop test diagnostics: ${artifacts}`);
     if (succeeded) await removeTestDirectory(context);

@@ -2,7 +2,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { prepareVersionBackup } from "./pre-migration-backup.js";
+import { copyDirectory, prepareVersionBackup } from "./pre-migration-backup.js";
 
 const temporaryDirectories: string[] = [];
 
@@ -50,6 +50,35 @@ describe("prepareVersionBackup", () => {
     expect(
       fs.readFileSync(path.join(dataRoot, "last-successful-version"), "utf8"),
     ).toBe("0.1.0-alpha.2\n");
+  });
+
+  it("keeps the backup as it was while the database changes", () => {
+    const { dataRoot, dbDir } = fixture();
+    fs.mkdirSync(path.join(dbDir, "base", "5"), { recursive: true });
+    fs.writeFileSync(path.join(dbDir, "base", "5", "1259"), "catalog");
+    const backup = prepareVersionBackup({
+      appVersion: "1.2.3",
+      packaged: true,
+      dataRoot,
+      dbDir,
+    });
+    const copied = backup.backupPath ?? "";
+    fs.writeFileSync(path.join(dbDir, "database.bin"), "after migration");
+    fs.rmSync(path.join(dbDir, "base"), { recursive: true });
+    expect(fs.readFileSync(path.join(copied, "database.bin"), "utf8")).toBe(
+      "before migration",
+    );
+    expect(
+      fs.readFileSync(path.join(copied, "base", "5", "1259"), "utf8"),
+    ).toBe("catalog");
+    expect(fs.statSync(copied).mode & 0o777).toBe(0o700);
+  });
+
+  it("refuses to copy over an existing directory", () => {
+    const { dbDir } = fixture();
+    const destination = path.join(path.dirname(dbDir), "existing");
+    fs.mkdirSync(destination);
+    expect(() => copyDirectory(dbDir, destination)).toThrow("already exists");
   });
 
   it("does not copy again after the same version booted successfully", () => {
