@@ -65,11 +65,18 @@ export function copyDirectory(source: string, destination: string): void {
       fs.rmSync(destination, { recursive: true, force: true });
     }
   }
-  fs.cpSync(source, destination, {
-    recursive: true,
-    errorOnExist: true,
-    force: false,
-  });
+  try {
+    fs.cpSync(source, destination, {
+      recursive: true,
+      errorOnExist: true,
+      force: false,
+    });
+  } catch (error) {
+    // A partial copy would count as one of the backups kept and could push
+    // out a complete one.
+    fs.rmSync(destination, { recursive: true, force: true });
+    throw error;
+  }
 }
 
 function pruneBackups(root: string): void {

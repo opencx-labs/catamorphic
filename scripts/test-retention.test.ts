@@ -64,7 +64,7 @@ describe("removeExpiredTestRuns", () => {
     });
     // Younger than six hours: maybe still running, and not counted.
     await run("ct-Now001", ago(hour));
-    await run("dNow0002", ago(2 * hour));
+    await run("dNow002", ago(2 * hour));
     // Not a run's: similar names, other contents.
     await directory("ct-Mno345", ago(30 * 24 * hour), {
       directories: ["logs"],
@@ -90,7 +90,7 @@ describe("removeExpiredTestRuns", () => {
       "ct-Run004",
       "ct-Run005",
       "ct-toolongname",
-      "dNow0002",
+      "dNow002",
       "data12",
     ]);
   });

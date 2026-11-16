@@ -48,12 +48,12 @@ Native desktop CI also receives a private temporary root. Cleanup failures fail
 the command and retain its files for diagnosis.
 
 A failed run keeps its temporary root (`ct-*` for test and check runs, `d*`
-for desktop tests) for diagnosis. When a run starts, roots beyond the five
-newest are removed, and any older than a week. Only roots a run created
-qualify: each holds a `.catamorphic-test-run` marker with the run's process
-id, and older ones are recognized by their layout. A root whose process is
-still alive is never removed (a run suspended with its machine looks old),
-nor is any unmarked root younger than six hours.
+for desktop tests) for diagnosis. When a run starts, no root younger than six
+hours is touched; of the older ones, the five newest stay, and none past a
+week. Only roots a run created qualify: each holds a `.catamorphic-test-run`
+marker with the run's process id, and older ones are recognized by their
+layout. A root whose process is still alive is never removed (a run
+suspended with its machine looks old).
 
 `bun run check` and `bun run dev` also prune Turbo's local cache, which every
 worktree of the repository shares in the main worktree's `.turbo/cache`:

@@ -9,9 +9,9 @@ import { removeTestDirectory } from "./test-processes.js";
  */
 export const TEST_RUN_MARKER = ".catamorphic-test-run";
 
-/** Failed runs whose roots stay for diagnosis, newest first. */
+/** Of the roots past the minimum age, this many newest stay for diagnosis. */
 export const PRESERVED_TEST_RUNS = 5;
-/** Younger unmarked roots are never touched: a run may still be using its own. */
+/** No younger root is touched, marked or not: a run may be using its own. */
 export const TEST_RUN_MIN_AGE_MS = 6 * 60 * 60 * 1000;
 /** Older roots go even among the newest. */
 export const TEST_RUN_RETENTION_MS = 7 * 24 * 60 * 60 * 1000;
@@ -24,12 +24,13 @@ export async function markTestRunDirectory(
 }
 
 /**
- * Removes test-run roots beyond the {@link PRESERVED_TEST_RUNS} newest, and
- * any past {@link TEST_RUN_RETENTION_MS}. A failed check or desktop test run
+ * Removes test-run roots older than {@link TEST_RUN_MIN_AGE_MS} beyond the
+ * {@link PRESERVED_TEST_RUNS} newest of them, and any past
+ * {@link TEST_RUN_RETENTION_MS}. A failed check or desktop test run
  * keeps its root for diagnosis, and nothing removed it later: dozens
  * accumulated in a few days, each with its caches and fixtures. Only roots a
  * run created qualify (marked ones, and unmarked ones from before the marker
- * by their layout), and none younger than {@link TEST_RUN_MIN_AGE_MS}.
+ * by their layout), and never one whose run's process is alive.
  */
 export async function removeExpiredTestRuns(
   input: {
