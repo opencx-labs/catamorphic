@@ -19,6 +19,7 @@ import {
   removeTestDirectory,
   withTestProcessCleanup,
 } from "./test-processes.js";
+import { removeExpiredTestRuns } from "./test-retention.js";
 import { toolRuntime } from "./tool-runtime.js";
 import { pruneCheckoutTurboCache } from "./turbo-cache.js";
 
@@ -32,6 +33,8 @@ async function main(): Promise<void> {
   const repositoryRoot = path.resolve(import.meta.dirname, "..");
   const nonce = randomUUID();
   await pruneCheckoutTurboCache(repositoryRoot);
+  // Failed runs keep their roots for diagnosis; only the newest few stay.
+  await removeExpiredTestRuns();
   const resources = await createTestRunResources({ pid: process.pid, nonce });
   const signals = new TestSignalController();
   const runtime = toolRuntime({ rootPath: repositoryRoot, env: process.env });

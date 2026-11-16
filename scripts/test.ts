@@ -134,8 +134,6 @@ export async function createTestRunResources(_input: {
   pid: number;
   nonce: string;
 }): Promise<TestRunResources> {
-  // Failed runs keep their roots for diagnosis; only the newest few stay.
-  await removeExpiredTestRuns();
   const rootPath = await mkdtemp(path.join(tmpdir(), "ct-"));
   await markTestRunDirectory(rootPath);
   const resources = {
@@ -393,6 +391,8 @@ async function main(): Promise<void> {
     return;
   }
   const nonce = randomUUID();
+  // Failed runs keep their roots for diagnosis; only the newest few stay.
+  await removeExpiredTestRuns();
   const resources = await createTestRunResources({ pid: process.pid, nonce });
   const signals = new TestSignalController();
   const runtime = toolRuntime({ rootPath: repositoryRoot, env: process.env });

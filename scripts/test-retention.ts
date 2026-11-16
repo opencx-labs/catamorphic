@@ -1,20 +1,26 @@
-import { lstat, readdir, writeFile } from "node:fs/promises";
+import { lstat, readdir, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { removeTestDirectory } from "./test-processes.js";
 
-/** Written into each test run's temporary root, so a later run may expire it. */
+/**
+ * Written into each test run's temporary root with the run's process id, so
+ * a later run may expire the root, and never while that process lives.
+ */
 export const TEST_RUN_MARKER = ".catamorphic-test-run";
 
 /** Failed runs whose roots stay for diagnosis, newest first. */
 export const PRESERVED_TEST_RUNS = 5;
-/** Younger roots are never touched: a run may still be using its own. */
+/** Younger unmarked roots are never touched: a run may still be using its own. */
 export const TEST_RUN_MIN_AGE_MS = 6 * 60 * 60 * 1000;
 /** Older roots go even among the newest. */
 export const TEST_RUN_RETENTION_MS = 7 * 24 * 60 * 60 * 1000;
 
-export async function markTestRunDirectory(directory: string): Promise<void> {
-  await writeFile(path.join(directory, TEST_RUN_MARKER), "");
+export async function markTestRunDirectory(
+  directory: string,
+  pid = process.pid,
+): Promise<void> {
+  await writeFile(path.join(directory, TEST_RUN_MARKER), `${pid}\n`);
 }
 
 /**
@@ -50,8 +56,10 @@ export async function removeExpiredTestRuns(
     const directory = path.join(parent, entry.name);
     const stat = await lstat(directory).catch(() => undefined);
     if (!stat?.isDirectory() || now - stat.mtimeMs < minAgeMs) continue;
-    if (await isTestRunDirectory(directory))
-      runs.push({ directory, modifiedAt: stat.mtimeMs });
+    // A run suspended with its machine looks old: its process says otherwise.
+    const owner = await runOwner(directory);
+    if (owner === "alive" || owner === "none") continue;
+    runs.push({ directory, modifiedAt: stat.mtimeMs });
   }
   runs.sort((left, right) => right.modifiedAt - left.modifiedAt);
   const removed: string[] = [];
@@ -67,22 +75,47 @@ export async function removeExpiredTestRuns(
   return removed;
 }
 
-async function isTestRunDirectory(directory: string): Promise<boolean> {
+/**
+ * Whose root this is: a run whose process is `alive`, one that has `ended`,
+ * or `none` (not a test run's). Roots from before the marker are recognized
+ * by their layout and count as ended.
+ */
+async function runOwner(
+  directory: string,
+): Promise<"alive" | "ended" | "none"> {
+  const marker = await readFile(path.join(directory, TEST_RUN_MARKER), "utf8")
+    .then((text) => text.trim())
+    .catch(() => null);
+  if (marker !== null) {
+    const pid = Number(marker);
+    return Number.isInteger(pid) && pid > 0 && processAlive(pid)
+      ? "alive"
+      : "ended";
+  }
   const kind = async (name: string) => {
     const stat = await lstat(path.join(directory, name)).catch(() => undefined);
     return stat?.isDirectory() ? "directory" : stat?.isFile() ? "file" : null;
   };
-  if ((await kind(TEST_RUN_MARKER)) === "file") return true;
   const run = await Promise.all(
     ["logs", "tmp", "bun-cache", "turbo-cache", "xdg-cache"].map(kind),
   );
-  if (run.every((found) => found === "directory")) return true;
+  if (run.every((found) => found === "directory")) return "ended";
   const desktop = await Promise.all(
     ["source", "manifests", "Dockerfile"].map(kind),
   );
-  return (
-    desktop[0] === "directory" &&
+  return desktop[0] === "directory" &&
     desktop[1] === "directory" &&
     desktop[2] === "file"
-  );
+    ? "ended"
+    : "none";
+}
+
+function processAlive(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (error) {
+    // EPERM: it exists, as another user's.
+    return error instanceof Error && "code" in error && error.code === "EPERM";
+  }
 }

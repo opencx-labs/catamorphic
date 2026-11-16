@@ -228,6 +228,7 @@ describe("HarnessComponentStore", () => {
       "0.163.0",
       "0.164.0",
       "0.166.0",
+      "0.170.0-alpha.2",
       ".install-a1",
     ])
       await fs.mkdir(path.join(codex, version, "darwin-arm64"), {
@@ -246,7 +247,7 @@ describe("HarnessComponentStore", () => {
     expect((await fs.readdir(codex)).sort()).toEqual([
       ".install-a1",
       "0.164.0",
-      "0.166.0",
+      "0.170.0-alpha.2",
     ]);
     expect(await fs.readdir(path.join(fixture.installRoot, "bun"))).toEqual([
       "1.3.14",

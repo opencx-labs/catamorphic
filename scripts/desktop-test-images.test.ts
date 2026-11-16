@@ -6,10 +6,13 @@ import {
 } from "./desktop-test-images.js";
 
 const runner = ["bun", "scripts/desktop-test.ts", "--native"];
+const now = Date.parse("2026-11-16T12:00:00Z");
+const hour = 60 * 60 * 1000;
 const image = (overrides: Partial<DockerImage> & { id: string }) => ({
   tags: [],
   labels: {},
   entrypoint: runner,
+  createdAt: now - 2 * hour,
   ...overrides,
 });
 
@@ -42,8 +45,10 @@ describe("staleDesktopTestImages", () => {
           // Not the runner's at all, tagged or not.
           image({ id: "other", entrypoint: ["docker-entrypoint.sh"] }),
           image({ id: "bun-base", entrypoint: ["bun"] }),
+          // Just built: another run may be about to start it.
+          image({ id: "just-built", createdAt: now - 5 * 60 * 1000 }),
         ],
-        { exists },
+        { exists, now },
       ),
     ).toEqual(["replaced", "replaced-labelled", "orphaned"]);
   });

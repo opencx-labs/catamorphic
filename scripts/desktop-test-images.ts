@@ -16,7 +16,15 @@ export interface DockerImage {
   tags: string[];
   labels: Record<string, string>;
   entrypoint: string[];
+  /** Milliseconds since the epoch. */
+  createdAt: number;
 }
+
+/**
+ * An untagged image this young stays: another run in the same worktree may
+ * have built it and not yet started its container when a rebuild took the tag.
+ */
+const UNTAGGED_GRACE_MS = 60 * 60 * 1000;
 
 /**
  * This runner's images that nothing will run again: untagged ones (a rebuild
@@ -26,9 +34,10 @@ export interface DockerImage {
  */
 export function staleDesktopTestImages(
   images: readonly DockerImage[],
-  input: { exists?: (path: string) => boolean } = {},
+  input: { exists?: (path: string) => boolean; now?: number } = {},
 ): string[] {
   const exists = input.exists ?? existsSync;
+  const now = input.now ?? Date.now();
   return images
     .filter((image) => {
       const worktree = image.labels[DESKTOP_TEST_IMAGE_LABEL];
@@ -39,9 +48,9 @@ export function staleDesktopTestImages(
             (part, index) => part === DESKTOP_TEST_ENTRYPOINT[index],
           ));
       if (!ours) return false;
-      return (
-        image.tags.length === 0 || (worktree !== undefined && !exists(worktree))
-      );
+      if (image.tags.length === 0)
+        return now - image.createdAt >= UNTAGGED_GRACE_MS;
+      return worktree !== undefined && !exists(worktree);
     })
     .map((image) => image.id);
 }
@@ -63,12 +72,14 @@ export function removeStaleDesktopTestImages(): void {
       .split("\n")
       .filter(Boolean);
     if (ids.length > 0) {
-      const inspected: unknown = JSON.parse(
-        execFileSync("docker", ["image", "inspect", ...new Set(ids)], {
-          encoding: "utf8",
-          maxBuffer: 64 * 1024 * 1024,
-        }),
+      // An image removed between listing and inspecting fails the command,
+      // which still prints the others.
+      const inspection = spawnSync(
+        "docker",
+        ["image", "inspect", ...new Set(ids)],
+        { encoding: "utf8", maxBuffer: 64 * 1024 * 1024 },
       );
+      const inspected: unknown = JSON.parse(inspection.stdout || "[]");
       const stale = staleDesktopTestImages(
         Array.isArray(inspected) ? inspected.flatMap(dockerImage) : [],
       );
@@ -109,6 +120,8 @@ function dockerImage(value: unknown): DockerImage[] {
           typeof label === "string" ? [[key, label]] : [],
         ),
       ),
+      createdAt:
+        typeof value.Created === "string" ? Date.parse(value.Created) || 0 : 0,
       entrypoint: Array.isArray(config.Entrypoint)
         ? config.Entrypoint.filter(
             (part): part is string => typeof part === "string",

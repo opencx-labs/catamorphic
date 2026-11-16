@@ -42,9 +42,11 @@ describe("removeExpiredTestRuns", () => {
     await utimes(root, modified, modified);
     return root;
   };
-  const run = async (name: string, modified: Date) => {
+  /** A run that has ended: no process has this id. */
+  const ENDED = 999_999_999;
+  const run = async (name: string, modified: Date, pid = ENDED) => {
     const root = await directory(name, modified);
-    await markTestRunDirectory(root);
+    await markTestRunDirectory(root, pid);
     await utimes(root, modified, modified);
   };
 
@@ -98,6 +100,13 @@ describe("removeExpiredTestRuns", () => {
     await run("ct-Day002", ago(24 * hour));
     const removed = await removeExpiredTestRuns({ parent, now });
     expect(removed.map((root) => path.basename(root))).toEqual(["ct-Week01"]);
+  });
+
+  it("never removes the root of a run whose process is alive", async () => {
+    // Suspended with its machine overnight: old, but still running.
+    await run("ct-Live01", ago(TEST_RUN_RETENTION_MS + hour), process.pid);
+    expect(await removeExpiredTestRuns({ parent, now, keep: 0 })).toEqual([]);
+    expect(await readdir(parent)).toEqual(["ct-Live01"]);
   });
 
   it("does nothing when the parent folder is missing", async () => {

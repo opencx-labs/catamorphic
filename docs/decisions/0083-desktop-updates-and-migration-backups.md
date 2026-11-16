@@ -38,9 +38,10 @@ an agent or terminal is active. A manual **Check for Updates** action remains
 available in the Help menu. Prerelease builds stay on their prerelease channel.
 
 Before a packaged app version first boots the embedded server, it copies the
-closed PGlite directory into a versioned migration backup, as a copy-on-write
-clone where the filesystem supports one (APFS): the backup shares the
-database's blocks until either changes. Startup stops if
+closed PGlite directory into a versioned migration backup. On macOS the copy
+is a copy-on-write clone made with the system `cp -c` (Node cannot clone
+there), so the backup shares the database's blocks until either changes;
+where cloning fails, and on other platforms, it is an ordinary copy. Startup stops if
 that copy cannot be made. The version is marked successful only after
 migrations and server startup finish, and the app retains the two newest
 pre-migration copies. Schema migrations remain forward-only; restoration is a

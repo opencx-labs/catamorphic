@@ -30,7 +30,8 @@ Delete old diagnostics when no longer needed.
 Each image is tagged per worktree and labelled with its path. Before building
 and after each run, the runner removes its own images that nothing will run
 again: untagged ones a rebuild replaced, and ones from worktrees that no
-longer exist. Removal is never forced, so an image a running test uses stays.
+longer exist. Removal is never forced, so an image a running test uses stays,
+and an untagged image under an hour old stays for a run about to start it.
 When Docker's disk has less than 10 GB free, it also prunes build cache no
 image uses. Before this, every rebuild left a 4 GB image behind until Docker's
 disk filled and builds failed. Missing Docker is an error;
@@ -47,10 +48,12 @@ Native desktop CI also receives a private temporary root. Cleanup failures fail
 the command and retain its files for diagnosis.
 
 A failed run keeps its temporary root (`ct-*` for test and check runs, `d*`
-for desktop tests) for diagnosis. When a run starts, roots older than six
-hours beyond the five newest are removed, and any older than a week. Only
-roots a run created qualify: each holds a `.catamorphic-test-run` marker, and
-older ones are recognized by their layout.
+for desktop tests) for diagnosis. When a run starts, roots beyond the five
+newest are removed, and any older than a week. Only roots a run created
+qualify: each holds a `.catamorphic-test-run` marker with the run's process
+id, and older ones are recognized by their layout. A root whose process is
+still alive is never removed (a run suspended with its machine looks old),
+nor is any unmarked root younger than six hours.
 
 `bun run check` and `bun run dev` also prune Turbo's local cache, which every
 worktree of the repository shares in the main worktree's `.turbo/cache`:

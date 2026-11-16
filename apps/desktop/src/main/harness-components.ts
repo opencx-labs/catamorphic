@@ -314,7 +314,10 @@ export class HarnessComponentStore {
             entry.name !== artifact.version,
         )
         .map((entry) => entry.name)
-        .sort(compareVersions);
+        // Natural order: 0.99.0 < 0.163.0, and a pre-release name sorts too.
+        .sort((left, right) =>
+          left.localeCompare(right, "en", { numeric: true }),
+        );
       for (const version of others.slice(0, -1))
         await fsPromises.rm(path.join(dir, version), {
           recursive: true,
