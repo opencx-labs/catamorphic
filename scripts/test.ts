@@ -15,6 +15,10 @@ import {
   settleTestProcesses,
   withTestProcessCleanup,
 } from "./test-processes.js";
+import {
+  markTestRunDirectory,
+  removeExpiredTestRuns,
+} from "./test-retention.js";
 import { repositoryNodePath, toolRuntime } from "./tool-runtime.js";
 
 const TURBO_CONCURRENCY = 2;
@@ -130,7 +134,10 @@ export async function createTestRunResources(_input: {
   pid: number;
   nonce: string;
 }): Promise<TestRunResources> {
+  // Failed runs keep their roots for diagnosis; only the newest few stay.
+  await removeExpiredTestRuns();
   const rootPath = await mkdtemp(path.join(tmpdir(), "ct-"));
+  await markTestRunDirectory(rootPath);
   const resources = {
     rootPath,
     tempPath: path.join(rootPath, "tmp"),

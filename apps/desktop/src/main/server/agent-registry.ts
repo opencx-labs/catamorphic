@@ -345,6 +345,8 @@ export class DesktopAgentRegistry implements CodingAgentRegistry {
         ? { installedClaudeCode: deps.installedClaudeCode }
         : {}),
     });
+    // Versions earlier pins left behind (the newest of them stays).
+    void this.harnessComponents.pruneVersions().catch(() => {});
     // The first look reads the login shell's PATH (about a second); do it
     // now rather than in the first chat's turn.
     if (deps.installedClaudeCode)

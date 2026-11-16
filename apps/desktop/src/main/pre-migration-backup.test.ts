@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { prepareVersionBackup } from "./pre-migration-backup.js";
 
 const temporaryDirectories: string[] = [];
@@ -50,6 +50,33 @@ describe("prepareVersionBackup", () => {
     expect(
       fs.readFileSync(path.join(dataRoot, "last-successful-version"), "utf8"),
     ).toBe("0.1.0-alpha.2\n");
+  });
+
+  it("clones the database where it can, and the backup stays as it was", () => {
+    const { dataRoot, dbDir } = fixture();
+    const cpSync = vi.spyOn(fs, "cpSync");
+    try {
+      const backup = prepareVersionBackup({
+        appVersion: "1.2.3",
+        packaged: true,
+        dataRoot,
+        dbDir,
+      });
+      expect(cpSync).toHaveBeenCalledWith(
+        dbDir,
+        backup.backupPath,
+        expect.objectContaining({ mode: fs.constants.COPYFILE_FICLONE }),
+      );
+      fs.writeFileSync(path.join(dbDir, "database.bin"), "after migration");
+      expect(
+        fs.readFileSync(
+          path.join(backup.backupPath ?? "", "database.bin"),
+          "utf8",
+        ),
+      ).toBe("before migration");
+    } finally {
+      cpSync.mockRestore();
+    }
   });
 
   it("does not copy again after the same version booted successfully", () => {

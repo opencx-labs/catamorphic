@@ -92,6 +92,10 @@ export function prepareVersionBackup(options: {
     recursive: true,
     errorOnExist: true,
     force: false,
+    // A copy-on-write clone where the filesystem supports one (APFS): the
+    // backup shares the database's blocks until either changes, instead of
+    // duplicating gigabytes. Elsewhere this is an ordinary copy.
+    mode: fs.constants.COPYFILE_FICLONE,
   });
   fs.chmodSync(backupPath, 0o700);
   pruneBackups(root);

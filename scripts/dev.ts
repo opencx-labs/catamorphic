@@ -23,6 +23,7 @@ import {
   terminateDevProcessGroup,
 } from "./dev-runtime.js";
 import { toolRuntime } from "./tool-runtime.js";
+import { pruneCheckoutTurboCache } from "./turbo-cache.js";
 
 /** The msb binary of the microsandbox SDK the workspace depends on. */
 function bundledMsbPath(rootPath: string): string | undefined {
@@ -176,6 +177,9 @@ if (import.meta.main) {
     "ports.json",
   );
 
+  // In the background: startup does not wait, and removing old entries
+  // does not disturb the tasks about to read and write the cache.
+  if (!printOnly) void pruneCheckoutTurboCache(rootPath);
   if (printOnly) {
     const allocatorAbort = new AbortController();
     const abortAllocator = (signal: NodeJS.Signals): void =>

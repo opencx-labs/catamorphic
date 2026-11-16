@@ -13,6 +13,11 @@ export type { ClaudeCodeInstallStatus };
 
 export type DownloadableHarness = "claude-code" | "codex";
 export type DownloadableComponent = DownloadableHarness | "bun";
+const DOWNLOADABLE_COMPONENTS: readonly DownloadableComponent[] = [
+  "claude-code",
+  "codex",
+  "bun",
+];
 
 export interface HarnessExecutable {
   executablePath: string;
@@ -286,6 +291,38 @@ export class HarnessComponentStore {
     return installing;
   }
 
+  /**
+   * Removes downloaded versions no longer pinned. The current version stays,
+   * and so does the newest other one: what processes started before an
+   * update may still run, and what a downgrade would use. Without this,
+   * every pin change left a few hundred megabytes behind for good.
+   */
+  async pruneVersions(
+    harnesses: readonly DownloadableComponent[] = DOWNLOADABLE_COMPONENTS,
+  ): Promise<void> {
+    for (const harness of harnesses) {
+      const artifact = this.artifacts[harness];
+      if (!artifact) continue;
+      const dir = path.join(this.rootDir, harness);
+      const others = (
+        await fsPromises.readdir(dir, { withFileTypes: true }).catch(() => [])
+      )
+        .filter(
+          (entry) =>
+            entry.isDirectory() &&
+            !entry.name.startsWith(".") &&
+            entry.name !== artifact.version,
+        )
+        .map((entry) => entry.name)
+        .sort(compareVersions);
+      for (const version of others.slice(0, -1))
+        await fsPromises.rm(path.join(dir, version), {
+          recursive: true,
+          force: true,
+        });
+    }
+  }
+
   private componentDir(
     harness: DownloadableComponent,
     artifact: HarnessArtifact,
@@ -394,6 +431,7 @@ export class HarnessComponentStore {
       console.info(
         `[desktop] Installed ${artifact.displayName} ${artifact.version} optional component`,
       );
+      await this.pruneVersions([harness]).catch(() => {});
       return executableAt(finalDir, artifact, "downloaded");
     } catch (cause) {
       const reason = stall.signal.aborted

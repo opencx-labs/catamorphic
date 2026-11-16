@@ -20,6 +20,7 @@ import {
   withTestProcessCleanup,
 } from "./test-processes.js";
 import { toolRuntime } from "./tool-runtime.js";
+import { pruneCheckoutTurboCache } from "./turbo-cache.js";
 
 function logFileName(input: { index: number; label: string }): string {
   const label = input.label.toLowerCase().replace(/[^a-z0-9]+/g, "-");
@@ -30,6 +31,7 @@ async function main(): Promise<void> {
   const options = checkOptions(process.argv.slice(2));
   const repositoryRoot = path.resolve(import.meta.dirname, "..");
   const nonce = randomUUID();
+  await pruneCheckoutTurboCache(repositoryRoot);
   const resources = await createTestRunResources({ pid: process.pid, nonce });
   const signals = new TestSignalController();
   const runtime = toolRuntime({ rootPath: repositoryRoot, env: process.env });
