@@ -263,6 +263,11 @@ it("deleting an agent collapses its row before it disappears", async () => {
     "agent settings shown",
   );
   const selector = `[data-agent-id="${firstId}"]`;
+  // The section shows before its agents load; measure their rows once drawn.
+  await wait(
+    `return !!shown(${JSON.stringify(selector)}) && !!shown('[data-agent-id="${otherId}"]');`,
+    "agent rows shown",
+  );
   const height = await run<number>(
     `return shown(${JSON.stringify(selector)}).getBoundingClientRect().height;`,
   );
