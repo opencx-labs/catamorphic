@@ -1045,6 +1045,12 @@ interface AgentSessionsDeps {
   /** Source-host presence window before a mirrored session is shown paused. */
   authorityLeaseMs?: number;
   /**
+   * How long a claim on a workspace (making, setting up or syncing it, ADR
+   * 0322) lasts between renewals; work under it stops once it could be
+   * lost. Default 120 seconds.
+   */
+  workspaceClaimSeconds?: number;
+  /**
    * This process's hints that turns or session events may be waiting, and
    * how often its pollers look when none came (ADR 0229).
    */
@@ -1190,6 +1196,7 @@ export class AgentSessionsService {
   readonly hostId: string;
   private readonly workerNode?: { id: string; token: string };
   readonly authorityLeaseMs: number;
+  private readonly workspaceClaimSeconds: number;
   private readonly wakeups?: WorkWakeups;
   private readonly idlePollMs?: number;
   private readonly projectManager: ProjectManager;
@@ -1654,6 +1661,7 @@ export class AgentSessionsService {
     this.hostId = deps.hostId;
     this.workerNode = deps.workerNode;
     this.authorityLeaseMs = deps.authorityLeaseMs ?? 90_000;
+    this.workspaceClaimSeconds = deps.workspaceClaimSeconds ?? 120;
     this.mailboxes = new SessionMailboxesService(db, deps.hostId);
     this.wakeups = deps.wakeups;
     this.idlePollMs = deps.idlePollMs;
@@ -5477,7 +5485,11 @@ export class AgentSessionsService {
     const nativeSetup = this.nativeAgentCheckout?.setup?.bind(
       this.nativeAgentCheckout,
     );
-    const prepareWorkspace = async () => {
+    // Work under the setup claim stops once the claim could be lost.
+    const prepareWorkspace = async (claim?: AbortSignal) => {
+      const signal = claim
+        ? AbortSignal.any([input.signal, claim])
+        : input.signal;
       workspace = await this.ensureWorkspace(
         identity,
         projectId,
@@ -5551,7 +5563,7 @@ export class AgentSessionsService {
                 provider: runtime.provider,
                 sandboxProviderId,
                 ownerAuthored,
-                signal: input.signal,
+                signal,
               })
             : undefined;
         // The log's tail may print a secret the setup named, or one an
@@ -5676,7 +5688,7 @@ export class AgentSessionsService {
                 environment: runtime.setup,
                 personalAllowed:
                   runtime.personalCredentials === true && ownerAuthored,
-                signal: input.signal,
+                signal,
               });
         const setupNote = setup?.note
           ? new SecretMask(await secretValuesOfChat()).text(setup.note)
@@ -5703,7 +5715,7 @@ export class AgentSessionsService {
           setupGate &&
           !reused &&
           (setup !== undefined || widened !== undefined) &&
-          !input.signal.aborted
+          !signal.aborted
         )
           await this.recordSetupOutcome({
             allocationId: setupGate.allocationId,
@@ -5743,7 +5755,7 @@ export class AgentSessionsService {
           environment: runtime.setup,
           personalAllowed:
             runtime.personalCredentials === true && ownerAuthored,
-          signal: input.signal,
+          signal,
         });
         if (setup.note) notes.push(setup.note);
       }
@@ -5752,14 +5764,14 @@ export class AgentSessionsService {
       await withReplicaClaim({
         db: this.db,
         name: `workspace-setup:${setupGate.allocationId}`,
-        ttlSeconds: 120,
+        ttlSeconds: this.workspaceClaimSeconds,
         // A setup may run twice its timeout: on its own network, then the rest.
         waitMs:
           ((runtime.setup?.timeoutMinutes ?? DEFAULT_SETUP_TIMEOUT_MINUTES) *
             2 +
             5) *
           60_000,
-        operation: () => prepareWorkspace(),
+        operation: ({ signal }) => prepareWorkspace(signal),
       });
     else await prepareWorkspace();
 
@@ -6094,7 +6106,7 @@ export class AgentSessionsService {
     );
     // A shared subsession's changes are its workspace session's (ADR 0322).
     const copyId = workspaceCopyId(session);
-    const saved = await this.oneSyncPerWorkspace(session, async () => {
+    const saved = await this.oneSyncPerWorkspace(session, async (held) => {
       let workspaceSyncError: string | undefined;
       const changedFiles: SyncedFileChange[] = keepsChangesInSandbox
         ? []
@@ -6125,6 +6137,7 @@ export class AgentSessionsService {
               this.usesSessionCopy(session),
             )
           : null;
+      held();
       if (storeDir && !keepsChangesInSandbox) {
         try {
           const report = await shipRemoteProject(
@@ -6150,6 +6163,7 @@ export class AgentSessionsService {
       }
       let failure: TurnError | undefined;
       let checkpointAfter: string | null = null;
+      held();
       if (
         !keepsChangesInSandbox &&
         (agent.topology === "native" || changedFiles.length > 0)
@@ -6234,15 +6248,16 @@ export class AgentSessionsService {
    */
   private async oneSyncPerWorkspace<T>(
     session: Pick<SessionRow, "id" | "workspace_session_id">,
-    work: () => Promise<T>,
+    /** `held` throws once the claim could be lost: call it before each write. */
+    work: (held: () => void) => Promise<T>,
   ): Promise<T> {
-    if (!(await this.sharesWorkspace(session))) return work();
+    if (!(await this.sharesWorkspace(session))) return work(() => {});
     return withReplicaClaim({
       db: this.db,
       name: `workspace-sync:${workspaceCopyId(session)}`,
-      ttlSeconds: 120,
+      ttlSeconds: this.workspaceClaimSeconds,
       waitMs: WORKSPACE_SYNC_WAIT_MS,
-      operation: () => work(),
+      operation: ({ signal }) => work(() => signal.throwIfAborted()),
     });
   }
 
@@ -7931,8 +7946,8 @@ export class AgentSessionsService {
     provider: SandboxProvider;
     sandboxProviderId: string;
   }): Promise<string | undefined> {
-    return this.oneSyncPerWorkspace(input.session, () =>
-      this.saveSandboxChangesNow(input),
+    return this.oneSyncPerWorkspace(input.session, (held) =>
+      this.saveSandboxChangesNow({ ...input, held }),
     );
   }
 
@@ -7942,6 +7957,7 @@ export class AgentSessionsService {
     session: SessionRow;
     provider: SandboxProvider;
     sandboxProviderId: string;
+    held: () => void;
   }): Promise<string | undefined> {
     const { identity, projectId, session } = input;
     const sessionCopy = this.usesSessionCopy(session);
@@ -7958,6 +7974,7 @@ export class AgentSessionsService {
         return `[Workspace] This workspace was made again to run its setup, and what changed in it since the last turn could not be saved first: ${error.message}`;
       },
     );
+    input.held();
     if (sessionCopy)
       await this.projectManager.checkpointSession({
         tenantId: identity.tenantId,
@@ -12838,9 +12855,9 @@ export class AgentSessionsService {
       return withReplicaClaim({
         db: this.db,
         name: `workspace-make:${first.id}`,
-        ttlSeconds: 120,
+        ttlSeconds: this.workspaceClaimSeconds,
         waitMs: WORKSPACE_SYNC_WAIT_MS,
-        operation: async () =>
+        operation: async ({ signal }) =>
           this.useOrMakeSandbox({
             identity,
             projectId,
@@ -12848,6 +12865,7 @@ export class AgentSessionsService {
             owner: await readOwner(),
             runtime: { ...runtime, provider, devSandboxes },
             populate: options.populate ?? true,
+            signal,
           }),
       });
     return this.useOrMakeSandbox({
@@ -12942,6 +12960,8 @@ export class AgentSessionsService {
       devSandboxes: DevSandboxService;
     };
     populate: boolean;
+    /** The claim it runs under, when another session may make it too. */
+    signal?: AbortSignal;
   }): Promise<{
     workingDirectory: string;
     sandboxProviderId?: string;
@@ -12986,6 +13006,7 @@ export class AgentSessionsService {
       owner,
       input.populate,
     );
+    input.signal?.throwIfAborted();
     await this.db
       .updateTable("agent_sessions")
       .set({ sandbox_id: handle.id, base_commit_sha: baseCommitSha })

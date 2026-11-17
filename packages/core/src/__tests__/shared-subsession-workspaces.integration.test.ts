@@ -115,6 +115,8 @@ describe("subagents of a server agent (ADR 0322)", () => {
   let stamps: string;
   /** Present: the setup fails. */
   let broken: string;
+  /** Present: the setup takes a while longer. */
+  let slow: string;
   let projectId: string;
   let sessions: AgentSessionsService;
   let machine: LocalProcessSandboxProvider;
@@ -194,6 +196,7 @@ describe("subagents of a server agent (ADR 0322)", () => {
     runs = path.join(tmpDir, "setup.log");
     stamps = path.join(tmpDir, "setup-times.log");
     broken = path.join(tmpDir, "setup-broken");
+    slow = path.join(tmpDir, "setup-slow");
     // The project's linked remote, with the pull request's code.
     const seed = path.join(tmpDir, "seed");
     await fs.mkdir(seed);
@@ -234,6 +237,7 @@ describe("subagents of a server agent (ADR 0322)", () => {
                   `echo setup >> '${runs}'`,
                   `echo "start $(date +%s)" >> '${stamps}'`,
                   "sleep 2",
+                  `if [ -f '${slow}' ]; then sleep 6; fi`,
                   `echo "end $(date +%s)" >> '${stamps}'`,
                   `if [ -f '${broken}' ]; then echo "lockfile is stale"; exit 3; fi`,
                 ].join("\n"),
@@ -323,6 +327,8 @@ describe("subagents of a server agent (ADR 0322)", () => {
     const agents = [agent, publisher, sealed];
     sessions = new AgentSessionsService(db, {
       hostId: "shared-subsessions-host",
+      // Short, so a claim another replica takes is noticed at once.
+      workspaceClaimSeconds: 3,
       projectManager,
       executionEnvironments: new ExecutionEnvironmentsService(
         projectEnvironments,
@@ -485,6 +491,45 @@ describe("subagents of a server agent (ADR 0322)", () => {
         expect((await replies(id))[0]).toContain("exit code 3");
     } finally {
       await fs.rm(broken, { force: true });
+    }
+  }, 120_000);
+
+  it("stops a setup whose claim another replica took", async () => {
+    await fs.writeFile(slow, "");
+    const lastStamp = async () =>
+      (await fs.readFile(stamps, "utf8").catch(() => ""))
+        .trim()
+        .split("\n")
+        .at(-1) ?? "";
+    try {
+      const parent = await sessions.create(identity, projectId, {
+        workspace: { ref: "pr" },
+      });
+      const sent = sessions
+        .sendMessage(identity, projectId, parent.id, "Set up")
+        .catch((error: unknown) => error);
+      await until("setup runs", async () =>
+        (await lastStamp()).startsWith("start"),
+      );
+      // Another replica holds the workspace's setup claim now.
+      await db
+        .updateTable("replica_claims")
+        .set({
+          holder: "another-replica",
+          expires_at: new Date(Date.now() + 3_600_000),
+        })
+        .where("name", "like", "workspace-setup:%")
+        .execute();
+      await sent;
+      // Longer than the setup would have taken: it never ended.
+      await new Promise((resolve) => setTimeout(resolve, 9_000));
+      expect(await lastStamp()).toMatch(/^start /);
+    } finally {
+      await fs.rm(slow, { force: true });
+      await db
+        .deleteFrom("replica_claims")
+        .where("holder", "=", "another-replica")
+        .execute();
     }
   }, 120_000);
 
