@@ -24,9 +24,18 @@ checks over them.
 may carry `"results": { "<name>": <JSON Schema> }`. Names are lowercase
 (`^[a-z][a-z0-9_-]{0,63}$`), at most 16; the schemas together stay under
 64 KiB and must compile as JSON Schema 2020-12 (Ajv, already in the
-dependency tree), or the definition is invalid. Results name the agent's
-output, not its authority, so they stay outside the consent hash, like
-`skills`.
+dependency tree), or the definition is invalid. Each schema compiles in an
+Ajv of its own, so a reused `$id` neither collides with nor resolves
+another definition's; a core keeps a bounded cache of compiled schemas keyed
+by digest (replica memory (b), ADR 0193). Patterns run on agent-submitted
+values in the server's process, so a definition whose `pattern` or
+`patternProperties` key could backtrack without bound is refused when it
+loads: `safe-regex2` (the check Fastify uses for route patterns) refuses
+nested and over-repeated quantifiers, and Work also refuses quantified
+alternation, backreferences and patterns over 1,000 characters. A
+linear-time engine would need a dependency the tree lacks; refusing at load
+also shows the author why. Results name the agent's output, not its
+authority, so they stay outside the consent hash, like `skills`.
 
 **`submit_result { name, value }` is a Work tool.** Core offers it beside
 `ask_user` and `close_questions` to every turn of an agent that declares
@@ -36,8 +45,13 @@ description lists each name with its schema. The value is validated
 against the named schema; a rejected call stores nothing and answers, as
 the tool's error, each failing field's path and message, so the agent
 corrects it in the same turn. A string value that fails but decodes once
-as JSON to a valid value is accepted decoded. Values are bounded to
-256 KiB of JSON and 1,000 results per chat.
+as JSON to a valid value is accepted decoded; one that decodes to a value
+that still fails is reported with the decoded value's fields, saying it
+arrived as text. Only the attempt that runs a working turn records: the
+tool checks, under the session's lock, that its calling attempt is still
+the turn's active one, so a call that finishes after a takeover or after
+the turn ended records nothing. Values are bounded to 256 KiB of JSON and
+1,000 results per chat.
 
 **An accepted result is an item.** `result` joins the item kinds of the
 session log (ADR 0197): `name`, `value`, `input` (the id, position and
@@ -51,7 +65,8 @@ are, and a fork copies them as its own history like every item.
 **A result is current until a new request arrives.** A result is `current`
 while no new request reached the chat after its `input`: a person's
 message, or words a workflow, an assistant or a session outside the chat's
-own subsessions (at every depth) sent. Task notifications (a command
+own subsessions (at every depth) sent, unless its turn was cancelled or
+rolled back. Task notifications (a command
 finishing, a watch firing) and messages from its own subsessions are the
 agent's own work reporting back, so they leave it current; otherwise a
 coordinator's final result would go stale whenever a late child update or
@@ -63,7 +78,8 @@ name?, family?, afterInput?, limit? })` answers newest first, each result
 with its source session; `family: true` includes the chat's subsessions at
 every depth; `afterInput` keeps the named chat's results whose input is
 that input or a later one, and subsessions' results recorded after it
-arrived. The same operation is `session_results` on the project MCP and
+arrived. A subsession's results reach only callers who may read that
+subsession, in `results` as in `list` and `wait`. The same operation is `session_results` on the project MCP and
 `GET …/agent/sessions/:id/results` over REST. Results of rolled back turns
 are left out. A parent agent reads its children's latest result of each
 name in `list` and `wait` outputs and in the message a finished child
@@ -75,6 +91,15 @@ carries the result in its detail and the session snapshot, with
 `payload.session.key`, so a workflow acts on it the moment it is recorded,
 mid-turn. The database trigger that publishes session events emits it, so
 both hosts do.
+
+**A mirrored result is the pusher's word.** A desktop pushing its chat to a
+server (ADR 0197) carries its result items. The server checks each against
+its own definition of the chat's agent; one it does not accept is kept as
+`failed` (the log stays whole) and no reader counts it. A pushed
+`session.result-recorded` is kept only for an accepted item, with that
+item's own fields, and names the pusher as its actor, never the agent.
+So a mirrored result is as trustworthy as the member who pushed it: valid
+by this server's schema, not proof that an agent produced it.
 
 **The timeline shows that a result exists.** A result is a step of the
 turn's work: one row naming it, expanding to its value.

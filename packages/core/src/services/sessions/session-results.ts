@@ -56,6 +56,16 @@ export class SessionInputNotFoundError extends Error {
   }
 }
 
+/** The submitting attempt no longer runs its turn: a takeover, or the turn ended. */
+export class SessionResultAttemptError extends Error {
+  constructor() {
+    super(
+      "This attempt no longer runs its turn, so its result does not count.",
+    );
+    this.name = "SessionResultAttemptError";
+  }
+}
+
 export class SessionResultLimitError extends Error {
   constructor() {
     super(
@@ -66,6 +76,9 @@ export class SessionResultLimitError extends Error {
 }
 
 const INPUT_KINDS = [...INPUT_ITEM_KINDS];
+
+/** Statuses of a turn whose attempt may still submit: it is working. */
+const SUBMITTING_TURN_STATUSES = ["running", "waiting"];
 
 /** Statuses of a turn whose input the agent has not taken in. */
 const UNSTARTED = ["queued", "held", "cancelled"];
@@ -162,10 +175,12 @@ async function newestRequests(
       .select(["item.id", "item.position", "item.kind"])
       .where("item.session_id", "=", sessionId)
       .where("item.kind", "in", ["user_message", "inbound_message"])
+      // A request withdrawn before it ran, or undone by a rollback, asks
+      // for nothing any more.
       .where((eb) =>
         eb.or([
           eb("turn.status", "is", null),
-          eb("turn.status", "<>", "cancelled"),
+          eb("turn.status", "not in", ["cancelled", "rolled_back"]),
         ]),
       )
       .where((eb) =>
@@ -207,6 +222,8 @@ export async function recordResult(
   input: {
     sessionId: string;
     turnId: string;
+    /** The attempt whose runner submitted it: it must still run the turn. */
+    attemptId: string;
     name: string;
     value: JsonValue;
   },
@@ -222,16 +239,23 @@ export async function recordResult(
     throw new SessionResultLimitError();
   const turn = await trx
     .selectFrom("agent_turns")
-    .select(["active_attempt_id", "checkpoint_before"])
+    .select(["active_attempt_id", "checkpoint_before", "status"])
     .where("id", "=", input.turnId)
     .where("session_id", "=", input.sessionId)
     .executeTakeFirstOrThrow();
+  // Checked under the session's lock: a call that finishes after a
+  // takeover, or after its turn ended, records nothing.
+  if (
+    turn.active_attempt_id !== input.attemptId ||
+    !SUBMITTING_TURN_STATUSES.includes(turn.status)
+  )
+    throw new SessionResultAttemptError();
   const now = new Date().toISOString();
   const item: ResultItem = {
     id: randomUUID(),
     sessionId: input.sessionId,
     turnId: input.turnId,
-    attemptId: turn.active_attempt_id,
+    attemptId: input.attemptId,
     parentItemId: null,
     position: 0,
     status: "completed",
@@ -279,6 +303,8 @@ export async function readResults(
     .select(["item.payload", "item.session_id"])
     .where("item.session_id", "in", [...input.sessionIds])
     .where("item.kind", "=", "result")
+    // A result this side did not accept (a mirror's, ADR 0323) is no result.
+    .where("item.status", "=", "completed")
     .where((eb) =>
       eb.or([
         eb("turn.status", "is", null),
@@ -386,6 +412,8 @@ export async function latestResults(
     .distinctOn(["item.session_id", sql`item.payload->>'name'`])
     .where("item.session_id", "in", [...sessionIds])
     .where("item.kind", "=", "result")
+    // A result this side did not accept (a mirror's, ADR 0323) is no result.
+    .where("item.status", "=", "completed")
     .where((eb) =>
       eb.or([
         eb("turn.status", "is", null),

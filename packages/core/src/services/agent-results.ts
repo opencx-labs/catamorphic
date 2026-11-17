@@ -5,6 +5,7 @@ import {
   type ErrorObject,
   type ValidateFunction,
 } from "ajv/dist/2020.js";
+import safeRegex from "safe-regex2";
 import { z } from "zod";
 
 /*
@@ -75,34 +76,135 @@ export const ResultSchemasSchema = z
     }
   });
 
-const ajv = new Ajv2020({
-  allErrors: true,
-  allowUnionTypes: true,
-  // Formats would need ajv-formats; an unknown one is accepted unchecked.
-  validateFormats: false,
-  strict: "log",
-  logger: false,
-});
+/**
+ * An Ajv of its own for every schema: a schema's `$id` registers in the
+ * instance that compiles it, so a shared one would refuse a definition
+ * edited with the same `$id`, and let two projects' schemas collide or
+ * resolve each other's `$ref`.
+ */
+function compileSchema(schema: JsonSchemaObject): ValidateFunction {
+  return new Ajv2020({
+    allErrors: true,
+    allowUnionTypes: true,
+    // Formats would need ajv-formats; an unknown one is accepted unchecked.
+    validateFormats: false,
+    strict: "log",
+    logger: false,
+  }).compile(schema);
+}
 
-/** Compiled validators by the schema's digest: definitions reload often. */
-const compiled = new Map<string, ValidateFunction>();
+/** The longest `pattern` a schema may hold. */
+const PATTERN_MAX = 1_000;
 
-function validatorFor(schema: JsonSchemaObject): ValidateFunction {
-  const key = createHash("sha256").update(JSON.stringify(schema)).digest("hex");
-  const known = compiled.get(key);
-  if (known) return known;
-  const validate = ajv.compile(schema);
-  if (compiled.size >= 512) compiled.clear();
-  compiled.set(key, validate);
-  return validate;
+/**
+ * Why a regular expression could take time that grows faster than its
+ * input, or undefined. Patterns run on agent-submitted values in the
+ * server's process, so a definition holding one is refused when it loads:
+ * `safe-regex2` (the check Fastify uses for route patterns) refuses nested
+ * and over-repeated quantifiers, and this refuses what it does not see,
+ * quantified alternation (`(a|a)*`) and backreferences.
+ */
+export function unsafePattern(pattern: string): string | undefined {
+  if (pattern.length > PATTERN_MAX)
+    return `it is over ${PATTERN_MAX.toLocaleString("en-US")} characters`;
+  if (/\\[1-9]|\\k</.test(pattern)) return "it uses a backreference";
+  if (!safeRegex(pattern)) return "it nests or over-repeats quantifiers";
+  if (quantifiedAlternation(pattern))
+    return "it repeats a group that has alternatives";
+  return undefined;
+}
+
+/** A group with `|` directly inside it, followed by a quantifier. */
+function quantifiedAlternation(pattern: string): boolean {
+  const groups: boolean[] = [];
+  let inClass = false;
+  for (let index = 0; index < pattern.length; index++) {
+    const char = pattern[index];
+    if (char === "\\") {
+      index++;
+      continue;
+    }
+    if (inClass) {
+      if (char === "]") inClass = false;
+      continue;
+    }
+    if (char === "[") inClass = true;
+    else if (char === "(") groups.push(false);
+    else if (char === "|" && groups.length > 0)
+      groups[groups.length - 1] = true;
+    else if (char === ")") {
+      const alternates = groups.pop() ?? false;
+      if (alternates && /[*+?{]/.test(pattern[index + 1] ?? "")) return true;
+    }
+  }
+  return false;
+}
+
+/** Every regular expression a schema holds: `pattern`s and `patternProperties` keys. */
+function schemaPatterns(node: unknown, found: string[] = []): string[] {
+  if (Array.isArray(node))
+    for (const entry of node) schemaPatterns(entry, found);
+  else if (node && typeof node === "object")
+    for (const [key, value] of Object.entries(node)) {
+      if (key === "pattern" && typeof value === "string") found.push(value);
+      if (key === "patternProperties" && value && typeof value === "object")
+        found.push(...Object.keys(value));
+      schemaPatterns(value, found);
+    }
+  return found;
 }
 
 function schemaProblem(schema: JsonSchemaObject): string | undefined {
+  for (const pattern of schemaPatterns(schema)) {
+    const unsafe = unsafePattern(pattern);
+    if (unsafe)
+      return `pattern ${JSON.stringify(pattern)} is refused: ${unsafe}`;
+  }
   try {
-    validatorFor(schema);
+    compileSchema(schema);
     return undefined;
   } catch (error) {
     return error instanceof Error ? error.message : String(error);
+  }
+}
+
+/**
+ * Compiled validators of one core, bounded: definitions reload on every
+ * turn, so recompiling each submission's schema would waste the work.
+ */
+export class ResultValidators {
+  /**
+   * Replica memory (b): compiled validators keyed by the schema's digest,
+   * the least recently used dropped past the limit.
+   */
+  private readonly compiled = new Map<string, ValidateFunction>();
+
+  constructor(private readonly limit = 256) {}
+
+  check(input: {
+    schema: JsonSchemaObject;
+    value: unknown;
+  }): { value: JsonValue } | { errors: ResultFieldError[] } {
+    return checkWith(this.validator(input.schema), input.value);
+  }
+
+  private validator(schema: JsonSchemaObject): ValidateFunction {
+    const key = createHash("sha256")
+      .update(JSON.stringify(schema))
+      .digest("hex");
+    const known = this.compiled.get(key);
+    if (known) {
+      this.compiled.delete(key);
+      this.compiled.set(key, known);
+      return known;
+    }
+    const validate = compileSchema(schema);
+    this.compiled.set(key, validate);
+    for (const oldest of this.compiled.keys()) {
+      if (this.compiled.size <= this.limit) break;
+      this.compiled.delete(oldest);
+    }
+    return validate;
   }
 }
 
@@ -129,29 +231,43 @@ function fieldErrors(
 }
 
 /**
- * Check a submitted value against its schema. A string that does not
- * match but decodes once as JSON to a value that does is accepted decoded:
- * models often send objects and arrays as JSON text.
+ * Check a submitted value against its schema, compiling it afresh (a
+ * core checks submissions through its {@link ResultValidators}). A string
+ * that does not match but decodes once as JSON to a value that does is
+ * accepted decoded: models often send objects and arrays as JSON text.
  */
 export function checkResultValue(input: {
   schema: JsonSchemaObject;
   value: unknown;
 }): { value: JsonValue } | { errors: ResultFieldError[] } {
-  const validate = validatorFor(input.schema);
-  const asJson = (value: unknown): JsonValue | undefined => {
-    const text = JSON.stringify(value);
-    return text === undefined ? undefined : (JSON.parse(text) as JsonValue);
-  };
-  const value = asJson(input.value);
-  if (value === undefined)
+  return checkWith(compileSchema(input.schema), input.value);
+}
+
+function checkWith(
+  validate: ValidateFunction,
+  submitted: unknown,
+): { value: JsonValue } | { errors: ResultFieldError[] } {
+  const text = JSON.stringify(submitted);
+  if (text === undefined)
     return { errors: [{ path: "", message: "must be a JSON value" }] };
+  const value = JSON.parse(text) as JsonValue;
   if (validate(value)) return { value };
   const errors = fieldErrors(validate.errors);
-  if (typeof value === "string") {
-    const decoded = decodeOnce(value);
-    if (decoded !== undefined && validate(decoded)) return { value: decoded };
-  }
-  return { errors };
+  if (typeof value !== "string") return { errors };
+  const decoded = decodeOnce(value);
+  if (decoded === undefined || typeof decoded === "string") return { errors };
+  if (validate(decoded)) return { value: decoded };
+  // It was the right kind of value sent as text: say so, and what to fix in it.
+  return {
+    errors: [
+      {
+        path: "",
+        message:
+          "arrived as JSON text; decoded once, it still does not match. Send it as JSON, and fix",
+      },
+      ...fieldErrors(validate.errors),
+    ],
+  };
 }
 
 function decodeOnce(text: string): JsonValue | undefined {

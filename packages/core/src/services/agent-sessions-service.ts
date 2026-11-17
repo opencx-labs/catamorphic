@@ -124,8 +124,8 @@ import {
   parseProjectAgentId,
 } from "./agent-definitions-service.js";
 import {
-  checkResultValue,
   RESULT_LIMITS,
+  ResultValidators,
   resultValueFits,
   submitResultDescription,
   submitResultInputSchema,
@@ -317,6 +317,7 @@ import {
   resultLines,
   SessionInputNotFoundError,
   type SessionResult,
+  SessionResultAttemptError,
   sessionFamily,
 } from "./sessions/session-results.js";
 import {
@@ -1288,6 +1289,8 @@ const FINALIZING_WAIT_MS = 20_000;
 
 export class AgentSessionsService {
   readonly mailboxes: SessionMailboxesService;
+  /** This core's compiled result schemas (ADR 0323). */
+  private readonly resultValidators = new ResultValidators();
   /** The session event log (ADR 0197). */
   readonly log: SessionLog;
   readonly queue: TurnQueue;
@@ -2710,24 +2713,7 @@ export class AgentSessionsService {
       .where("project_id", "=", projectId)
       .where("id", "in", family.slice(1))
       .execute();
-    const readable = new Set(
-      rows
-        .filter((row) => {
-          try {
-            assertAgentSessionAccess({
-              identity,
-              projectId,
-              externalUserId: row.external_user_id,
-              agentId: row.agent_id,
-              intent: "read",
-            });
-            return true;
-          } catch {
-            return false;
-          }
-        })
-        .map((row) => row.id),
-    );
+    const readable = new Set(readableSessions(identity, projectId, rows));
     return family.filter((id, index) => index === 0 || readable.has(id));
   }
 
@@ -5417,14 +5403,19 @@ export class AgentSessionsService {
       parameters: submitResultInputSchema.shape,
       execute: async (args, context) => {
         const turnId = context.turnId;
-        if (!turnId) return refuse("Results are submitted during a turn.");
+        const attemptId = context.attemptId;
+        if (!turnId || !attemptId)
+          return refuse("Results are submitted during a turn.");
         const name = typeof args.name === "string" ? args.name : "";
         const schema = Object.hasOwn(schemas, name) ? schemas[name] : undefined;
         if (schema === undefined)
           return refuse(
             `No result is named ${JSON.stringify(name)}. Declared: ${Object.keys(schemas).sort().join(", ")}.`,
           );
-        const checked = checkResultValue({ schema, value: args.value });
+        const checked = this.resultValidators.check({
+          schema,
+          value: args.value,
+        });
         if ("errors" in checked)
           return refuse(
             [
@@ -5438,15 +5429,22 @@ export class AgentSessionsService {
           return refuse(
             `The value is over ${RESULT_LIMITS.valueBytes / 1024} KiB as JSON.`,
           );
-        const item = await this.db.transaction().execute((trx) =>
-          recordResult(trx, this.log, {
-            sessionId,
-            turnId,
-            name,
-            value: checked.value,
-          }),
-        );
-        return `Recorded the ${name} result (${item.id}).`;
+        try {
+          const item = await this.db.transaction().execute((trx) =>
+            recordResult(trx, this.log, {
+              sessionId,
+              turnId,
+              attemptId,
+              name,
+              value: checked.value,
+            }),
+          );
+          return `Recorded the ${name} result (${item.id}).`;
+        } catch (error) {
+          if (error instanceof SessionResultAttemptError)
+            return refuse(error.message);
+          throw error;
+        }
       },
     };
   }
@@ -5539,6 +5537,7 @@ export class AgentSessionsService {
     identity: Identity;
     session: SessionRow;
     turn: Turn;
+    attempt: Attempt;
     name: string;
     input: JsonValue;
     stopWaiting: AbortSignal;
@@ -5565,6 +5564,7 @@ export class AgentSessionsService {
       projectId: input.session.project_id,
       sessionId: input.session.id,
       turnId: input.turn.id,
+      attemptId: input.attempt.id,
       workingDirectory: this.workingDirectories.get(input.turn.id) ?? "",
       caller: {
         tenantId: input.identity.tenantId,
@@ -8960,6 +8960,12 @@ export class AgentSessionsService {
             : mirrorAdmission
               ? []
               : undefined;
+        // A pushed result counts here only if this side's definition of
+        // the chat's agent accepts it (ADR 0323).
+        const resultSchemas = (
+          mirrorAgent ??
+          (await this.resolveAgent(agentId, projectId).catch(() => undefined))
+        )?.results;
         const written = await writeSessionMirror({
           db: this.db,
           log: this.log,
@@ -8969,6 +8975,22 @@ export class AgentSessionsService {
           sessionId,
           input,
           agentId,
+          acceptsResult: (item) => {
+            const schema =
+              resultSchemas && Object.hasOwn(resultSchemas, item.name)
+                ? resultSchemas[item.name]
+                : undefined;
+            if (schema === undefined) return false;
+            const checked = this.resultValidators.check({
+              schema,
+              value: item.value,
+            });
+            return (
+              "value" in checked &&
+              resultValueFits(checked.value) &&
+              JSON.stringify(checked.value) === JSON.stringify(item.value)
+            );
+          },
           ...(mirrorAdmission ? { mirrorAdmission } : {}),
           ...(mirrorConnections ? { mirrorConnections } : {}),
         });
@@ -10453,9 +10475,11 @@ export class AgentSessionsService {
     const running = await this.runningSessionIds(
       sessions.map((session) => session.id),
     );
+    // A child's results reach only callers who may read that child, as
+    // `results({ family: true })` does.
     const results = await latestResults(
       this.db,
-      sessions.map((session) => session.id),
+      readableSessions(identity, projectId, sessions),
     );
     return delegations.flatMap((delegation) => {
       const session = sessionsById.get(delegation.target_session_id);
@@ -14754,6 +14778,34 @@ const GRANT_RENEWAL_MS = 20 * 60_000;
  * mode travels as a turn default the harness reads. Aliases name the
  * Environment's connection servers.
  */
+/** The ids of the chats the caller may read, of those given. */
+function readableSessions(
+  identity: Identity,
+  projectId: string,
+  rows: ReadonlyArray<{
+    id: string;
+    external_user_id: string;
+    agent_id: string | null;
+  }>,
+): string[] {
+  return rows
+    .filter((row) => {
+      try {
+        assertAgentSessionAccess({
+          identity,
+          projectId,
+          externalUserId: row.external_user_id,
+          agentId: row.agent_id,
+          intent: "read",
+        });
+        return true;
+      } catch {
+        return false;
+      }
+    })
+    .map((row) => row.id);
+}
+
 function withDefinitionPolicy(
   agent: RegisteredCodingAgent,
   definition: AgentDefinition,

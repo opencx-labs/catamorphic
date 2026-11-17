@@ -199,6 +199,8 @@ export interface TurnEngineHost {
     identity: Identity;
     session: SessionRow;
     turn: Turn;
+    /** The attempt whose runner called the tool. */
+    attempt: Attempt;
     name: string;
     input: JsonValue;
     /** Fires when the agent should stop waiting (ADR 0264). */
@@ -2614,6 +2616,7 @@ export class TurnEngine {
             identity: ctx.identity,
             session: ctx.session,
             turn: ctx.turn,
+            attempt: ctx.attempt,
             name: call.name,
             input: call.input,
             stopWaiting: AbortSignal.any([

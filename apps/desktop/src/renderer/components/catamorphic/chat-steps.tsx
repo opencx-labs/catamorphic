@@ -872,7 +872,10 @@ function stepOf(
         key,
         kind: "result",
         finished: true,
-        label: `Submitted the ${item.name} result`,
+        label:
+          item.status === "failed"
+            ? `The ${item.name} result was not accepted here`
+            : `Submitted the ${item.name} result`,
         detail: stepDetailText(item.value),
         detailMono: true,
       };
