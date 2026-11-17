@@ -7830,16 +7830,28 @@ export class AgentSessionsService {
     };
     const workflowName =
       runner.kind === "sandbox" ? environment?.workflow : undefined;
+    // The workspace's own session, whichever session's turn sets it up
+    // (ADR 0322): a shared subsession that arrived first sets up its
+    // workspace session's workspace, so the workflow runs, is stamped and
+    // is recorded for that session.
+    const setUpFor =
+      workflowName && session.workspace_session_id
+        ? await this.db
+            .selectFrom("agent_sessions")
+            .selectAll()
+            .where("id", "=", session.workspace_session_id)
+            .executeTakeFirstOrThrow()
+        : session;
     const workflow = workflowName
       ? {
           name: workflowName,
-          rebuilt: session.workspace_generation > 1,
+          rebuilt: setUpFor.workspace_generation > 1,
           moved: input.moved === true,
           run: ({ reason }: { reason: SetupWorkflowReason }) =>
             this.runSetupWorkflow({
               identity: input.identity,
               projectId: input.projectId,
-              session,
+              session: setUpFor,
               workflowName,
               reason,
               network: Boolean(widening),
@@ -12025,7 +12037,9 @@ export class AgentSessionsService {
         )
         .where("id", "=", sessionId)
         .execute();
-      if (session.sandbox_id)
+      // A shared subsession leaves its workspace session's workspace in
+      // place (ADR 0322): nothing was given back.
+      if (session.sandbox_id && !session.workspace_session_id)
         await recordWorkspaceGone({
           db: trx,
           sessionId,

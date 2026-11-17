@@ -50,7 +50,9 @@ Spawn takes `workspace: "shared" | "own"`, default `shared`, on every host.
   a session that arrived meanwhile reuses it and starts once it ends, instead
   of running it again. It waits as long as every part the step may run
   (following an earlier run, the command, the setup workflow, the owner's
-  part), each bounded by the setup's timeout. Idle release counts the workspace in use while any session
+  part), each bounded by the setup's timeout. The step is the workspace
+  session's whoever runs it: a setup workflow (ADR 0324) runs and is
+  stamped for that session, and the workspace's events name it. Idle release counts the workspace in use while any session
   in it works; a child whose workspace was released admits it again for
   that session. Closing or archiving the child gives back only its own
   grants and state; closing the parent closes it as before. A shared

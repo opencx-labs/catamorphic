@@ -3,7 +3,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
-import type { DB } from "@catamorphic/db";
+import type { DB, Json } from "@catamorphic/db";
 import { migrateToLatest } from "@catamorphic/db";
 import { FsBackend, ProjectManager } from "@catamorphic/git";
 import { LocalProcessSandboxProvider } from "@catamorphic/local-process";
@@ -22,6 +22,7 @@ import {
   AgentDelegationDeniedError,
   AgentDelegationSettingsError,
   AgentSessionsService,
+  type SetupRunFact,
 } from "../services/agent-sessions-service.js";
 import type { RegisteredCodingAgent } from "../services/coding-agent-registry.js";
 import { ConnectionAdmissionService } from "../services/connection-admission.js";
@@ -232,6 +233,11 @@ describe("subagents of a server agent (ADR 0322)", () => {
                   `if [ -f '${broken}' ]; then echo "lockfile is stale"; exit 3; fi`,
                 ].join("\n"),
               },
+            },
+            // One whose setup is a command and a workflow (ADR 0324).
+            prepared: {
+              workloads: ["agent"],
+              setup: { command: "true", workflow: "prepareReview" },
             },
           },
           defaultEnvironment: "review",
@@ -533,6 +539,102 @@ describe("subagents of a server agent (ADR 0322)", () => {
       { cwd: "/workspace/project" },
     );
     expect(readme.result.trim()).toBe("pull request");
+  }, 120_000);
+
+  it("sets its workspace session's workspace up when a shared child's turn makes it", async () => {
+    const calls: Array<{
+      setupFor: SetupRunFact;
+      input: Json;
+      /** The chats recording a setup run while it ran. */
+      recordedOn: string[];
+    }> = [];
+    sessions.setSetupWorkflowRunner({
+      run: async (args) => {
+        const recordedOn = (
+          await db
+            .selectFrom("agent_sessions")
+            .select("id")
+            .where("project_id", "=", projectId)
+            .where("setup_run", "is not", null)
+            .execute()
+        ).map((row) => row.id);
+        calls.push({ setupFor: args.setupFor, input: args.input, recordedOn });
+        return { status: "succeeded" };
+      },
+    });
+    const parent = await sessions.create(identity, projectId, {
+      workspace: { ref: "pr" },
+      environment: "prepared",
+    });
+    await sessions.sendMessage(identity, projectId, parent.id, "Look around");
+    const child = await sessions.createSubsession(
+      identity,
+      projectId,
+      parent.id,
+      { task: "First look" },
+    );
+    await until(
+      "both rest",
+      async () => (await idle(parent.id)) && (await idle(child.session.id)),
+    );
+    expect(calls).toHaveLength(1);
+    const before = await session(parent.id);
+    await allocations.release({
+      identity,
+      allocationId: before.allocation_id ?? "",
+      reason: "idle",
+    });
+    // The child's turn comes first and makes the workspace again.
+    await sessions.notify(identity, projectId, child.session.id, {
+      task: {
+        type: "background_command",
+        id: "typecheck",
+        title: "Typecheck",
+        status: "completed",
+      },
+      summary: "Typecheck finished",
+      idempotencyKey: "typecheck-finished",
+    });
+    await until(
+      "the child's later turn ran",
+      async () => (await replies(child.session.id)).length >= 2,
+    );
+    await until(
+      "both rest",
+      async () => (await idle(parent.id)) && (await idle(child.session.id)),
+    );
+    // The setup workflow ran for the parent's workspace, not the child.
+    expect(calls).toHaveLength(2);
+    const again = calls[1];
+    expect(again?.setupFor.sessionId).toBe(parent.id);
+    expect(again?.input).toMatchObject({
+      sessionId: parent.id,
+      agentId: "reviewer",
+      reason: "rebuilt",
+    });
+    expect(again?.recordedOn).toEqual([parent.id]);
+    // The workspace's changes are the parent's: made, then made again.
+    const changes = (
+      await db
+        .selectFrom("project_events")
+        .select("payload")
+        .where("project_id", "=", projectId)
+        .where("kind", "=", "session.workspace-changed")
+        .orderBy("sequence")
+        .execute()
+    ).map(
+      (event) =>
+        event.payload as { sessionId: string; detail: { change: string } },
+    );
+    expect(
+      changes.filter((payload) => payload.sessionId === child.session.id),
+    ).toEqual([]);
+    expect(
+      changes
+        .filter((payload) => payload.sessionId === parent.id)
+        .map((payload) => payload.detail.change),
+    ).toEqual(["ready", "rebuilt"]);
+    expect((await session(parent.id)).workspace_generation).toBe(2);
   }, 120_000);
 
   it("starts a child that asks for its own workspace at the parent's base", async () => {

@@ -721,12 +721,16 @@ export class NodeRecoveryService {
         .set({ sandbox_id: null })
         .where("allocation_id", "=", args.allocation.id)
         .where("sandbox_id", "is not", null)
-        .returning("id")
+        .returning(["id", "workspace_session_id"])
         .execute();
-      for (const session of lost)
+      // One workspace lost, its own session's, however many sessions
+      // shared it (ADR 0322).
+      for (const sessionId of new Set(
+        lost.map((session) => session.workspace_session_id ?? session.id),
+      ))
         await recordWorkspaceGone({
           db: trx,
-          sessionId: session.id,
+          sessionId,
           change: "lost",
           reason: "machine-lost",
         });

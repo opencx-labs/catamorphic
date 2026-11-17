@@ -296,6 +296,8 @@ and the turn waits for it. Its input is { sessionId, key, agentId, reason:
 null }. It runs through its project enablement, so enable it for the project
 with the permissions it declares (sessions:write for exec); one not enabled
 fails the setup and the agent is told, as when a step fails or it times out.
+A workspace subsessions share is their parent's: its setup workflow and its
+events name the parent, whichever chat's turn made it.
 
 session.workspace-changed reports detail.change: "ready" (its first workspace),
 "rebuilt" (made again), "moved" (a new base), "released" (given back) or "lost"

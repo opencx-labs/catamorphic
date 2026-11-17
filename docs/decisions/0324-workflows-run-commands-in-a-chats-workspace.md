@@ -88,7 +88,11 @@ and a `reason`, with `payload.session.key` like every session event: ready
 or rebuilt when a new workspace is made (its setup runs before the next
 turn), moved after a base move, released when given back (idle, closed,
 its connection ended), lost with its machine. Workflows react without
-blocking the turn.
+blocking the turn. A workspace that subsessions share (ADR 0322) is its
+workspace session's: whichever session's turn makes or sets it up, the
+setup workflow runs for that session, its run and record name it, and its
+events do too; a shared subsession's close gives nothing back and reports
+nothing.
 
 Considered: a declarative workspace spec (Work would own the procedure),
 widening a used sandbox for installs (ADR 0257's leak), polling a command
