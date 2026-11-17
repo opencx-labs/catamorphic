@@ -387,32 +387,41 @@ export const postReviews = defineWorkflow(({ defineBoundary }) => ({
       >) => {
         if (input.state.post === "nothing")
           return { result: null, state: input.state };
-        // The review this turn submitted (ADR 0323), while it still answers
-        // the chat's newest request. No result means no pass.
+        // The newest review this turn submitted (ADR 0323), from any of its
+        // attempts (one whose sandbox was lost after submitting counts),
+        // while it still answers the chat's newest request. Results come
+        // newest first. No result means no pass.
         const submitted = (input.result?.results ?? []).find(
           (result) =>
             result.turnId === input.state.turnId &&
             result.sessionId === input.state.sessionId &&
             result.current,
         );
+        const head = input.state.commit ?? "";
         const checked = input.state.failed
           ? "The review turn failed."
-          : submitted
-            ? checkWorkReview(submitted.value)
-            : "The turn submitted no current review result.";
-        const review = typeof checked === "string" ? null : checked;
+          : !submitted
+            ? "The turn submitted no current review result."
+            : checkWorkReview(submitted.value);
+        // Two commits must both be the head being posted for: the one the
+        // agent says it reviewed, and the one Work recorded its turn began
+        // on. Either one elsewhere refuses the review, and says which.
+        const refused =
+          typeof checked === "string" || !submitted
+            ? null
+            : checked.reviewedCommit !== head
+              ? `The review names commit ${checked.reviewedCommit.slice(0, 7)}, not the head ${head.slice(0, 7)}.`
+              : submitted.commit !== head
+                ? submitted.commit
+                  ? `The review's turn began on commit ${submitted.commit.slice(0, 7)}, not the head ${head.slice(0, 7)}.`
+                  : "Work recorded no commit for the review's turn."
+                : null;
+        const review = typeof checked === "string" || refused ? null : checked;
         const publication: Publication = {
           ...input.state,
           review,
-          problem: typeof checked === "string" ? checked : null,
-          // A report for another commit is stale: the chat has moved, and
-          // its next turn reviews the new head.
-          post:
-            review && review.reviewedCommit !== input.state.commit
-              ? "nothing"
-              : review
-                ? "review"
-                : "missing",
+          problem: typeof checked === "string" ? checked : refused,
+          post: review ? "review" : "missing",
         };
         if (publication.post === "nothing")
           return { result: null, state: publication };

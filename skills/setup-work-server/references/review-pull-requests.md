@@ -210,8 +210,8 @@ a manifest already uses.
    in `.work-session/setup.log`. When its turn ends, a `postReviews` run posts the
    commit-bound review with inline comments and a "Work review" check run.
    The description and earlier change requests remain under human control.
-2. Push to the branch: the same chat moves to the new head. A stale report
-   posts nothing. Each commit's check only holds or tightens, so an overlapping
+2. Push to the branch: the same chat moves to the new head. Nothing posts for
+   a head the chat has not reached yet. Each commit's check only holds or tightens, so an overlapping
    passing report cannot replace a failure on that commit.
 3. Comment `@work is this migration safe on production?`: the answer arrives
    as a reply, with no new review when nothing else changed.
@@ -229,8 +229,9 @@ rule's `problem` and `failure` in `GET /_work/operator/machine-rules`). A
 review that never reaches GitHub shows in `postReviews`' runs: a turn that
 submitted no current `review` result (none, or one made before a later push
 or question reached the chat) marks the commit `action_required`
-with the reason (when no review marked it yet), and a report for a commit
-the chat no longer stands on posts nothing at all.
+with the reason (when no review marked it yet), and so does a review whose
+named commit, or the commit its turn began on, is not the head. Nothing posts
+while GitHub's head is past the chat's commit.
 
 Model access through the gateway lasts only for the exact review turn attempt
 and its live lease (ADR 0293). Background code cannot start model requests with

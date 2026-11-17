@@ -192,12 +192,17 @@ Each boundary returns one call and carries the publication to the next:
 1. Inspect the chat: only the reviewer's project chat in `review` that
    `reviewPullRequests` started posts anything. Its workspace commit, and
    what earlier publications recorded on it, come from the chat itself.
-2. Read the turn's `review` result (`results`, ADR 0323): the one this turn
-   submitted while it still answered the chat's newest request. No result,
-   or a failed turn, means no pass. A report for another commit is stale and
-   posts nothing.
-3. Read the pull request: nothing posts unless it is open and GitHub's head
-   is the reviewed commit.
+2. Read the turn's `review` result (`results`, ADR 0323): the newest one the
+   turn submitted, from any of its attempts (a sandbox lost after the review
+   was submitted does not lose it), while it still answered the chat's newest
+   request. No result, or a failed turn, means no pass. Two commits must both
+   be the head it posts for: the one the review names (`reviewedCommit`) and
+   the one Work recorded the turn began on (the result's `commit`). Either
+   one elsewhere refuses the review: the commit is marked `action_required`
+   with which one differed.
+3. Read the pull request: nothing posts once it is closed or GitHub's head
+   has moved past the chat's commit (the chat's next turn reviews the new
+   head).
 4. Hold or tighten the commit's verdict, then record it on the chat before
    anything else posts: `action_required`, `success`, then `failure`. The
    verdict so far is the strongest of what the chat recorded and this App's
@@ -263,8 +268,9 @@ means the secret differs), the workflow's runs (a filtered-out event starts
 none), and the chat's placement (no machine in the pool, or one not opened to
 the project). When the chat reviewed but nothing reached GitHub, open the
 `postReviews` run, and the "Work review" check: an `action_required`
-run's summary says why a report was unusable, and a stale report (the chat
-had moved to a newer push) posts nothing.
+run's summary says why a report was unusable (no result, a failed turn, or
+a review of another commit), and nothing posts while GitHub's head is past
+the chat's commit.
 
 To see the queue at work, open the pull request chat's runs of
 `postReviews`: while one publishes, a later turn's run shows as `queued`

@@ -15,6 +15,10 @@ export interface FakeReview {
   reviewedCommit: string;
   reply?: { inReplyTo?: number; body: string } | null;
   comments?: Array<{ path: string; line: number; side?: string; body: string }>;
+  /** The attempt that submitted it; the turn may have later attempts. */
+  attemptId?: string;
+  /** The commit Work recorded the turn began on; the chat's commit when absent. */
+  turnCommit?: string | null;
 }
 
 export function fakeWorld(input: { head: string }) {
@@ -189,11 +193,14 @@ export function fakeWorld(input: { head: string }) {
     submit(turnId: string, review: FakeReview | null) {
       if (!review) return;
       chat.results.unshift({
-        id: `result-${turnId}`,
+        id: `result-${turnId}-${chat.results.length}`,
         sessionId: "session-1",
         turnId,
+        attemptId: review.attemptId ?? `${turnId}-attempt-1`,
         name: "review",
         current: true,
+        commit:
+          review.turnCommit === undefined ? chat.commit : review.turnCommit,
         value: {
           reviewedCommit: review.reviewedCommit,
           verdict: review.verdict,
