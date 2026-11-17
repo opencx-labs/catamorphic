@@ -40,14 +40,23 @@ as JSON to a valid value is accepted decoded. Values are bounded to
 256 KiB of JSON and 1,000 results per chat.
 
 **An accepted result is an item.** `result` joins the item kinds of the
-session log (ADR 0197): `name`, `value`, `input` (the id and position of
-the newest input the chat had taken in when it was submitted, or null),
+session log (ADR 0197): `name`, `value`, `input` (the id, position and
+kind of the newest input the chat had taken in when it was submitted, or
+null),
 and `commit` (the workspace commit the turn began on, or null), beside the
 item's own session, turn, attempt and time. Results are never rewritten:
 a context hand-off, compaction or harness change leaves them where they
-are, and a fork copies them as its own history like every item. A reader
-decides whether a result answers the newest input from `input`: a result
-is `current` when its input is the chat's newest input.
+are, and a fork copies them as its own history like every item.
+
+**A result is current until a new request arrives.** A result is `current`
+while no new request reached the chat after its `input`: a person's
+message, or words a workflow, an assistant or a session outside the chat's
+own subsessions (at every depth) sent. Task notifications (a command
+finishing, a watch firing) and messages from its own subsessions are the
+agent's own work reporting back, so they leave it current; otherwise a
+coordinator's final result would go stale whenever a late child update or
+a command's notification arrived after it. A reader that wants a stricter
+rule applies it to `input.kind` itself.
 
 **Readers are code.** The session operation `results({ sessionId | key,
 name?, family?, afterInput?, limit? })` answers newest first, each result

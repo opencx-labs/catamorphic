@@ -239,7 +239,7 @@ Every GitHub call goes through `core.connectionBroker.invoke`, retaining the
 Environment's binding, authorization and audit. It reads the actual persisted
 session and its results, verifies the project review chat and latest settled
 turn, selects the latest `review` result that turn's latest completed attempt
-recorded and that still answers the chat's newest input, and compares its commit with GitHub's current open
+recorded and that no later push or question made stale, and compares its commit with GitHub's current open
 head before each write. Caller-supplied reports or result-message ids are never trusted.
 
 A transaction row lock serializes the complete publication for a project,

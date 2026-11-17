@@ -20,7 +20,7 @@ it("shows an accepted result as one row, and a refused submission as a tool step
     kind: "result",
     name: "review",
     value: { verdict: "COMMENT", score: 4 },
-    input: { itemId: "input-1", position: 1 },
+    input: { itemId: "input-1", position: 1, kind: "user_message" },
     commit: null,
   };
   const refused = submitted("call-0", {

@@ -683,10 +683,15 @@ export interface ResultItem extends ItemCommon {
   name: string;
   value: JsonValue;
   /**
-   * The newest input the chat had taken in when this was submitted, or
-   * null: a result answers the chat's newest input only when this is it.
+   * The newest input the chat had taken in when this was submitted, and its
+   * kind, or null. The result is current while no new request (a person's,
+   * a workflow's, an outside session's words) arrived after it.
    */
-  input: { itemId: string; position: number } | null;
+  input: {
+    itemId: string;
+    position: number;
+    kind: InputItem["kind"];
+  } | null;
   /** The workspace commit the turn began on, when the chat has a workspace. */
   commit: string | null;
 }

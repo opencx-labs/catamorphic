@@ -257,8 +257,8 @@ chat that never starts a turn usually has no review machine available to the
 project (check the chat's placement, `GET /_work/operator/machines`, and the
 rule's `problem` and `failure` in `GET /_work/operator/machine-rules`). A
 review that never reaches GitHub shows in `postReviews`' runs: a turn that
-submitted no current `review` result (none, or one made before the chat's
-newest message) marks the commit `action_required`
+submitted no current `review` result (none, or one made before a later push
+or question reached the chat) marks the commit `action_required`
 with the reason (when no review marked it yet), and a report for a commit
 the chat no longer stands on posts nothing at all.
 

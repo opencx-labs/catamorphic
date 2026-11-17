@@ -400,9 +400,12 @@ sandboxes need it.
   and only a value its schema accepts is recorded, so read results, never
   parse a reply. Each result names its chat (family: true adds subsessions at
   every depth), turn, input (the newest message the chat had taken in when it
-  was submitted), commit and recordedAt, and current says whether that input is
-  still the chat's newest: pass afterInput: <the messageId your deliver
-  returned> to keep only results that answer it. session.result-recorded fires
+  was submitted, with its kind), commit and recordedAt. current is true while
+  no new request reached the chat since: a person's message, or words from a
+  workflow or a session outside the chat's own subsessions. Task notifications
+  and its subsessions' messages are its own work and keep it current. Pass
+  afterInput: <the messageId your deliver returned> to keep only results that
+  answer it. session.result-recorded fires
   the moment one is recorded, mid-turn, with the result in input.payload.detail
   (name, value, turnId, input, commit); select { names: ["review"] }. Compute
   final checks (votes, coverage) in code over results, not in an agent.
