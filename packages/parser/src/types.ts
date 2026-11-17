@@ -335,6 +335,11 @@ export interface ProjectTriggerKind {
   /** The kind it builds on, as written in `from: trigger(...)`. */
   from: { kind: string; config: unknown; where?: unknown };
   where?: unknown;
+  /**
+   * Workflows may record this kind's events although a kind it builds on
+   * verifies senders (ADR 0326).
+   */
+  recordable?: true;
   sourceRange: SourceRange;
 }
 
@@ -349,6 +354,8 @@ export interface ResolvedTriggerBinding {
   where: unknown[];
   /** The project kind the workflow bound, kept for display. */
   projectKind?: string;
+  /** A kind along the chain lets workflows record its events (ADR 0326). */
+  recordable?: true;
 }
 
 export interface WorkflowGraph {

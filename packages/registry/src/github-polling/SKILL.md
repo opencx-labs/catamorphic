@@ -19,10 +19,10 @@ never know the difference.
 
 | Kind | When | Event id |
 | --- | --- | --- |
-| `github.pull_request` `opened` | A pull request created after polling began | `pull_request:<number>:opened:<head sha>` |
+| `github.pull_request` `opened` | A pull request created after polling began | `pull_request:<number>:opened` |
 | `github.pull_request` `synchronize` | A known open pull request's head changed (`before` and `after` set) | `pull_request:<number>:synchronize:<head sha>` |
 | `github.pull_request` `ready_for_review` | A known draft is no longer a draft | `pull_request:<number>:ready_for_review:<head sha>` |
-| `github.pull_request` `reopened` | A known closed pull request is open again | `pull_request:<number>:reopened:<updated_at>` |
+| `github.pull_request` `reopened` | A known closed pull request is open again | `pull_request:<number>:reopened:<when it had closed>` |
 | `github.pull_request` `closed` | A known open pull request closed or merged (`merged` says which) | `pull_request:<number>:closed:<closed_at>` |
 | `github.issue_comment` `created` | A person commented on a known pull request's conversation | `issue_comment:<comment id>` |
 | `github.pull_request_review_comment` `created` | A person commented on a known pull request's diff | `pull_request_review_comment:<comment id>` |
@@ -37,7 +37,11 @@ enablementId }`; a trigger that must accept only signed webhook deliveries
 filters on `origin: { type: "request" }`.
 
 An id is recorded once: a retried poll, an overlapping one, or a comment
-edited later records nothing new. Comments by accounts whose GitHub `type`
+edited later records nothing new. Ids name the change from what the cursor
+remembered, never the pull request's state after it, so a poll that recorded
+and then lost its cursor write records nothing twice when the next poll
+finds the same change: a push in between is folded into that `opened` (the
+review checks out the pull request's current head). Comments by accounts whose GitHub `type`
 is `Bot` (including the App itself) are skipped by type, never by login.
 Comments on plain issues are skipped too: GitHub's comment lists do not say
 whether an issue is a pull request or its state, and the poller records
@@ -66,7 +70,9 @@ write fails and the next poll picks up anything it missed. It holds:
   `since`, the next poll reads the next page until it reaches what was
   seen, then starts again from the top.
 - `issueComments.since`, `reviewComments.since`: comments are read oldest
-  change first from GitHub's `since`, `COMMENT_PAGE` at a time.
+  change first from GitHub's `since`, `COMMENT_PAGE` at a time. While a
+  sweep is behind they stay where they are: a comment on a pull request the
+  sweep has not reached was skipped, and is recorded once it has.
 
 To start over, delete the document: the next poll is a baseline again.
 
@@ -87,9 +93,11 @@ late and arrive in the order the poll finds them, not GitHub's.
 - `.work/project.json`: the `github-poller` Environment, for workflows only,
   binds the `github` service connection with just `get`.
 - `.work/triggers/github.ts`: the GitHub trigger library (the same file the
-  `pull-request-reviews` pack and `writing-workflows` ship). Its webhook stays
-  declared, so the same kinds also fire if the server ever receives GitHub's
-  webhook; with both, filter on `origin` to avoid acting twice.
+  `pull-request-reviews` pack and `writing-workflows` ship). Its webhook
+  verifies GitHub's signature, so `github.delivery` says `recordable: true`:
+  without it the host refuses every recorded event of its kinds. The webhook
+  stays declared, so the same kinds also fire if the server ever receives
+  GitHub's webhook; with both, filter on `origin` to avoid acting twice.
 - `.work/workflows/src/github-polling.ts`: `REPOSITORY` and `CURSOR_PATH` at
   the top, `planPoll` (pure: the comparison and the events), and the
   workflow's steps (read the cursor, list pull requests, conversation and

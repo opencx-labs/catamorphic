@@ -22,6 +22,7 @@ export function resolveTriggerBinding(input: {
   const where: unknown[] =
     input.binding.where === undefined ? [] : [input.binding.where];
   const chain: string[] = [];
+  let recordable = false;
   let current: { kind: string; config: unknown } = input.binding;
   for (
     let kind = kinds.get(current.kind);
@@ -41,6 +42,7 @@ export function resolveTriggerBinding(input: {
       };
     }
     chain.push(kind.name);
+    if (kind.recordable) recordable = true;
     if (kind.where !== undefined) where.push(kind.where);
     if (kind.from.where !== undefined) where.push(kind.from.where);
     current = kind.from;
@@ -52,6 +54,7 @@ export function resolveTriggerBinding(input: {
       config: current.config,
       where,
       ...(chain[0] ? { projectKind: chain[0] } : {}),
+      ...(recordable ? { recordable: true as const } : {}),
     },
   };
 }

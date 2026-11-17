@@ -90,7 +90,21 @@ import { defineTrigger, trigger } from "@catamorphic/workflow";
 
 export const delivery = defineTrigger({
   name: "github.delivery",
-  from: trigger("webhook", { name: "github" }),
+  from: trigger("webhook", {
+    name: "github",
+    verify: { scheme: "hmac", secret: "GITHUB_WEBHOOK_SECRET", header: "x-hub-signature-256", prefix: "sha256=" },
+  }),
+  // Its events may also be recorded by a workflow, unsigned.
+  recordable: true,
+});
+
+// A verified webhook that never opted in: only signed requests fire it.
+export const payment = defineTrigger({
+  name: "stripe.payment",
+  from: trigger("webhook", {
+    name: "stripe",
+    verify: { scheme: "token", secret: "STRIPE_TOKEN", header: "x-stripe-token" },
+  }),
 });
 
 export const pullRequest = defineTrigger({
@@ -279,7 +293,7 @@ describeIf("catamorphic.events host calls (ADR 0326)", () => {
       .selectFrom("project_events")
       .select(["id", "external_id", "kind", "source", "payload"])
       .where("project_id", "=", projectId)
-      .where("external_id", "like", "recorded:%")
+      .where("external_id", "like", "recorded/%")
       .orderBy("sequence")
       .execute();
 
@@ -392,7 +406,7 @@ describeIf("catamorphic.events host calls (ADR 0326)", () => {
     });
     const [stored] = await recordedEvents();
     expect(stored).toMatchObject({
-      external_id: "recorded:github.pull_request:pull_request:7:opened:abc",
+      external_id: "recorded/github.pull_request/pull_request:7:opened:abc",
       kind: "webhook",
       source: "webhook",
       payload: {
@@ -472,7 +486,7 @@ describeIf("catamorphic.events host calls (ADR 0326)", () => {
     });
     expect(
       (await recordedEvents()).filter((stored) =>
-        stored.external_id.endsWith(":pull_request:8:opened:def"),
+        stored.external_id.endsWith("/pull_request:8:opened:def"),
       ),
     ).toHaveLength(1);
   });
@@ -497,6 +511,20 @@ describeIf("catamorphic.events host calls (ADR 0326)", () => {
       "a project kind over another host kind",
       { kind: "ticket.urgent", payload: { ticketId: "T-1" } },
       "builds on 'ticket.created'",
+    ],
+    [
+      "a kind whose webhook verifies senders and did not opt in",
+      {
+        kind: "stripe.payment",
+        payload: {
+          name: "stripe",
+          headers: {},
+          query: {},
+          contentType: "application/json",
+          body: { type: "payment_intent.succeeded" },
+        },
+      },
+      "only signed requests fire 'stripe.payment'",
     ],
     [
       "a payload its kind would not deliver",
@@ -542,6 +570,32 @@ describeIf("catamorphic.events host calls (ADR 0326)", () => {
     expect(outcome.status).toBe("failed");
     if (outcome.status === "failed") expect(outcome.error).toContain(message);
     expect(await recordedEvents()).toHaveLength(before);
+  });
+
+  it("keeps recorded ids apart from a webhook's delivery ids", async () => {
+    // What a delivery to a webhook named "recorded" would have stored.
+    await db
+      .insertInto("project_events")
+      .values({
+        project_id: projectId,
+        source: "webhook",
+        kind: "webhook",
+        external_id: "recorded:github.pull_request:pull_request:11:opened",
+        occurred_at: new Date(),
+        payload: { ...pullRequest("opened"), name: "recorded" },
+      })
+      .execute();
+    const outcome = await record([
+      {
+        kind: "github.pull_request",
+        id: "pull_request:11:opened",
+        payload: pullRequest("opened"),
+      },
+    ]);
+    expect(outcome).toMatchObject({
+      status: "completed",
+      output: { events: [expect.objectContaining({ created: true })] },
+    });
   });
 
   it("records only for a workflow that declared events:write", async () => {
