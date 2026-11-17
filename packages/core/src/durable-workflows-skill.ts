@@ -90,8 +90,10 @@ is. For a chat, that is its session metadata: \`inspect\` returns
 \`metadata\`, and \`host["catamorphic.sessions"].setMetadata({ sessionId, set:
 { "review.verdicts": verdicts } })\` records it (null removes a key; at most 32
 keys, 16 KB a value, 64 KB in all). Prefix the keys a workflow owns with its
-purpose (\`review.\`): agents and people write metadata too. Record a verdict
-before the writes that depend on it, and model allowed transitions
+purpose (\`review.\`): agents and people write metadata too. So when an agent
+can write the record (its own chat's metadata), decide from the destination
+(the check runs GitHub shows) and keep the record as a cache, written last;
+a planted entry must never suppress a write. Model allowed transitions
 explicitly; an old success must not overwrite a newer failure.
 
 Give every external write a stable identity (the turn or event and what it

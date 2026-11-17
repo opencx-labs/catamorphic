@@ -13,8 +13,9 @@ compose the same primitives rather than requiring a native integration or
 forcing this recipe onto the application. See [workflow composition](workflow-composition.md).
 Nothing installs into the server: publication is the pack's `postReviews`
 workflow. It queues per pull request chat (ADR 0325), so overlapping turns
-publish one at a time, keeps each commit's verdict and what it posted in the
-chat's metadata, and writes through the GitHub connection's typed actions
+publish one at a time, decides from what GitHub shows (the chat's metadata
+holds a record of each commit's verdict and what it posted, never trusted
+for what to post), and writes through the GitHub connection's typed actions
 with stamps, so a retry after a lost answer finds the write instead of
 posting again.
 
@@ -225,8 +226,8 @@ the open pull requests as they are.
    in `.work-session/setup.log`. When its turn ends, a `postReviews` run posts the
    commit-bound review with inline comments and a "Work review" check run.
    The description and earlier change requests remain under human control.
-2. Push to the branch: the same chat moves to the new head. A stale report
-   posts nothing. Each commit's check only holds or tightens, so an overlapping
+2. Push to the branch: the same chat moves to the new head. Nothing posts for
+   a head the chat has not reached yet. Each commit's check only holds or tightens, so an overlapping
    passing report cannot replace a failure on that commit.
 3. Comment `@work is this migration safe on production?`: the answer arrives
    as a reply, with no new review when nothing else changed.
@@ -244,8 +245,9 @@ rule's `problem` and `failure` in `GET /_work/operator/machine-rules`). A
 review that never reaches GitHub shows in `postReviews`' runs: a turn that
 submitted no current `review` result (none, or one made before a later push
 or question reached the chat) marks the commit `action_required`
-with the reason (when no review marked it yet), and a report for a commit
-the chat no longer stands on posts nothing at all.
+with the reason (when no review marked it yet), and so does a review whose
+named commit, or the commit its turn began on, is not the head. Nothing posts
+while GitHub's head is past the chat's commit.
 
 Model access through the gateway lasts only for the exact review turn attempt
 and its live lease (ADR 0293). Background code cannot start model requests with

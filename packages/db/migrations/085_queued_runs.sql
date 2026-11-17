@@ -11,6 +11,15 @@ ALTER TABLE workflow_runs ADD COLUMN queued_at timestamp with time zone;
 -- What starting a queued run needs that the run does not otherwise record:
 -- the requested Environment, its enablement, and the commit it was asked at.
 ALTER TABLE workflow_runs ADD COLUMN enrollment jsonb;
+-- Starting a queued run that could not start yet: how often it was tried,
+-- when last (for backoff), and whether it waits for room (woken when any run
+-- settles) or after an error (failed after a bound). Its last error is `error`.
+ALTER TABLE workflow_runs ADD COLUMN queue_attempts integer DEFAULT 0 NOT NULL;
+ALTER TABLE workflow_runs ADD COLUMN queue_attempted_at timestamp with time zone;
+ALTER TABLE workflow_runs ADD COLUMN queue_blocked character varying(10);
+ALTER TABLE workflow_runs ADD CONSTRAINT chk_workflow_run_queue_blocked CHECK (
+  queue_blocked IS NULL OR queue_blocked IN ('room', 'error')
+);
 ALTER TABLE workflow_runs ADD CONSTRAINT chk_workflow_run_queued CHECK (
   status <> 'queued' OR (queued_at IS NOT NULL AND correlation_key IS NOT NULL AND allocation_id IS NULL)
 );

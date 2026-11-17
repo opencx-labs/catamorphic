@@ -238,8 +238,9 @@ const VERDICTS = ["action_required", "success", "failure"] as const;
 type Verdict = (typeof VERDICTS)[number];
 
 /**
- * What this workflow keeps on the review chat (ADR 0325). Its keys carry
- * the `review.` prefix: agents and people write metadata too.
+ * What this workflow records on the review chat (ADR 0325), for people and
+ * agents to read: never trusted for what to post, since the reviewer can
+ * write its own chat's metadata. Its keys carry the `review.` prefix.
  */
 const VERDICTS_KEY = "review.verdicts";
 const POSTED_KEY = "review.posted";
@@ -387,32 +388,41 @@ export const postReviews = defineWorkflow(({ defineBoundary }) => ({
       >) => {
         if (input.state.post === "nothing")
           return { result: null, state: input.state };
-        // The review this turn submitted (ADR 0323), while it still answers
-        // the chat's newest request. No result means no pass.
+        // The newest review this turn submitted (ADR 0323), from any of its
+        // attempts (one whose sandbox was lost after submitting counts),
+        // while it still answers the chat's newest request. Results come
+        // newest first. No result means no pass.
         const submitted = (input.result?.results ?? []).find(
           (result) =>
             result.turnId === input.state.turnId &&
             result.sessionId === input.state.sessionId &&
             result.current,
         );
+        const head = input.state.commit ?? "";
         const checked = input.state.failed
           ? "The review turn failed."
-          : submitted
-            ? checkWorkReview(submitted.value)
-            : "The turn submitted no current review result.";
-        const review = typeof checked === "string" ? null : checked;
+          : !submitted
+            ? "The turn submitted no current review result."
+            : checkWorkReview(submitted.value);
+        // Two commits must both be the head being posted for: the one the
+        // agent says it reviewed, and the one Work recorded its turn began
+        // on. Either one elsewhere refuses the review, and says which.
+        const refused =
+          typeof checked === "string" || !submitted
+            ? null
+            : checked.reviewedCommit !== head
+              ? `The review names commit ${checked.reviewedCommit.slice(0, 7)}, not the head ${head.slice(0, 7)}.`
+              : submitted.commit !== head
+                ? submitted.commit
+                  ? `The review's turn began on commit ${submitted.commit.slice(0, 7)}, not the head ${head.slice(0, 7)}.`
+                  : "Work recorded no commit for the review's turn."
+                : null;
+        const review = typeof checked === "string" || refused ? null : checked;
         const publication: Publication = {
           ...input.state,
           review,
-          problem: typeof checked === "string" ? checked : null,
-          // A report for another commit is stale: the chat has moved, and
-          // its next turn reviews the new head.
-          post:
-            review && review.reviewedCommit !== input.state.commit
-              ? "nothing"
-              : review
-                ? "review"
-                : "missing",
+          problem: typeof checked === "string" ? checked : refused,
+          post: review ? "review" : "missing",
         };
         if (publication.post === "nothing")
           return { result: null, state: publication };
@@ -460,17 +470,14 @@ export const postReviews = defineWorkflow(({ defineBoundary }) => ({
         const state = input.state;
         if (state.post === "nothing" || !state.commit)
           return { result: null, state };
-        // The commit's verdict so far: what this chat recorded, and the
-        // App's own check runs (another app's alike-named run does not count).
+        // The commit's verdict so far is the App's own check runs on it:
+        // GitHub decides, not the chat's record, which its reviewer can
+        // write too; another app's alike-named run does not count.
         const shown = list(record(input.result).runs)
           .map(record)
           .filter((run) => run.own === true)
           .map((run) => strength(run.conclusion));
-        const held = Math.max(
-          -1,
-          strength(state.verdicts[state.commit]),
-          ...shown,
-        );
+        const held = Math.max(-1, ...shown);
         const proposed = strength(
           !state.review
             ? "action_required"
@@ -515,41 +522,6 @@ export const postReviews = defineWorkflow(({ defineBoundary }) => ({
         );
       },
     }),
-    /** @displayname Record the verdict on the chat */
-    defineBoundary({
-      retry: RETRY,
-      run: ({
-        input,
-        host,
-      }: BoundaryContext<Carried<unknown, Publication>>) => {
-        const state = input.state;
-        if (state.post === "nothing" || !state.commit || !state.verdict)
-          return { result: null, state };
-        const id = receiptId(input.result);
-        const publication: Publication = {
-          ...state,
-          verdicts: withEntry(state.verdicts, state.commit, state.verdict),
-          posted:
-            id === null
-              ? state.posted
-              : withEntry(state.posted, effect(state, "check"), id),
-        };
-        // Recorded before anything else posts: the next publication for
-        // this chat, queued behind this one, reads it.
-        return host["catamorphic.sessions"].setMetadata(
-          {
-            sessionId: state.sessionId,
-            set: {
-              [VERDICTS_KEY]: Object.entries(publication.verdicts).map(
-                ([commit, verdict]) => ({ commit, verdict }),
-              ),
-              [POSTED_KEY]: postedList(publication.posted),
-            },
-          },
-          { state: publication },
-        );
-      },
-    }),
     /** @displayname Read the diff */
     defineBoundary({
       retry: RETRY,
@@ -557,11 +529,28 @@ export const postReviews = defineWorkflow(({ defineBoundary }) => ({
         input,
         connections,
       }: BoundaryContext<Carried<unknown, Publication>>) => {
-        if (input.state.post !== "review")
-          return { result: null, state: input.state };
+        const state = input.state;
+        const id = receiptId(input.result);
+        const publication: Publication =
+          state.post === "nothing" || !state.commit || !state.verdict
+            ? state
+            : {
+                ...state,
+                verdicts: withEntry(
+                  state.verdicts,
+                  state.commit,
+                  state.verdict,
+                ),
+                posted:
+                  id === null
+                    ? state.posted
+                    : withEntry(state.posted, effect(state, "check"), id),
+              };
+        if (publication.post !== "review")
+          return { result: null, state: publication };
         return connections.github.pull_request_files(
-          { repository: REVIEWED_REPOSITORY, number: input.state.number },
-          { state: input.state },
+          { repository: REVIEWED_REPOSITORY, number: publication.number },
+          { state: publication },
         );
       },
     }),
@@ -618,8 +607,9 @@ export const postReviews = defineWorkflow(({ defineBoundary }) => ({
             (entry.state === "CHANGES_REQUESTED" ||
               (review.verdict === "COMMENT" && entry.state === "COMMENTED")),
         );
+        // What the chat's record says was posted is not trusted: the stamp
+        // finds this turn's review on GitHub if it was.
         if (
-          state.posted[effect(state, "review")] !== undefined ||
           (state.verdict === "failure" && review.verdict === "COMMENT") ||
           (stands && review.comments.length === 0 && state.outside.length === 0)
         )
@@ -676,12 +666,7 @@ export const postReviews = defineWorkflow(({ defineBoundary }) => ({
       }: BoundaryContext<Carried<unknown, Publication>>) => {
         const state = input.state;
         const reply = state.review?.reply;
-        if (
-          state.post !== "review" ||
-          !reply ||
-          state.posted[effect(state, "reply")] !== undefined
-        )
-          return { result: null, state };
+        if (state.post !== "review" || !reply) return { result: null, state };
         // An inline comment of this pull request gets its answer in its
         // thread; anything else, in the conversation.
         const asked = list(record(input.result).threads)
@@ -711,7 +696,7 @@ export const postReviews = defineWorkflow(({ defineBoundary }) => ({
             );
       },
     }),
-    /** @displayname Record what it posted */
+    /** @displayname Record what it did on the chat */
     defineBoundary({
       retry: RETRY,
       run: ({
@@ -729,11 +714,20 @@ export const postReviews = defineWorkflow(({ defineBoundary }) => ({
           verdict: state.verdict,
           problem: state.problem,
         };
-        if (state.post !== "review") return { result: null, state: outcome };
+        if (state.post === "nothing" || !state.verdict)
+          return { result: null, state: outcome };
+        // A record for people and agents, written last: everything was
+        // already posted from GitHub's state. A chat that refuses it (an
+        // agent filled its metadata) fails this step, and the run says so.
         return host["catamorphic.sessions"].setMetadata(
           {
             sessionId: state.sessionId,
-            set: { [POSTED_KEY]: postedList(posted) },
+            set: {
+              [VERDICTS_KEY]: Object.entries(state.verdicts).map(
+                ([commit, verdict]) => ({ commit, verdict }),
+              ),
+              [POSTED_KEY]: postedList(posted),
+            },
           },
           { state: outcome },
         );

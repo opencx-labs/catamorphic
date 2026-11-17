@@ -1358,6 +1358,9 @@ export interface WorkflowRuns {
   phase: Generated<string>;
   project_id: string;
   provenance: Json;
+  queue_attempted_at: Timestamp | null;
+  queue_attempts: Generated<number>;
+  queue_blocked: string | null;
   queued_at: Timestamp | null;
   result: Json | null;
   session_artifact_id: string | null;

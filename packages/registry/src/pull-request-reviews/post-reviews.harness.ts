@@ -15,6 +15,10 @@ export interface FakeReview {
   reviewedCommit: string;
   reply?: { inReplyTo?: number; body: string } | null;
   comments?: Array<{ path: string; line: number; side?: string; body: string }>;
+  /** The attempt that submitted it; the turn may have later attempts. */
+  attemptId?: string;
+  /** The commit Work recorded the turn began on; the chat's commit when absent. */
+  turnCommit?: string | null;
 }
 
 export function fakeWorld(input: { head: string }) {
@@ -46,6 +50,8 @@ export function fakeWorld(input: { head: string }) {
     metadata: {} as Record<string, Json>,
     results: [] as Array<Record<string, Json>>,
     commit: input.head,
+    /** Why a metadata write is refused (the cap an agent filled), if it is. */
+    refuseMetadata: null as string | null,
   };
   const answered = (action: string, value: Json) => {
     if (github.loseNextAnswer.delete(action))
@@ -157,6 +163,7 @@ export function fakeWorld(input: { head: string }) {
     }),
     results: () => ({ results: structuredClone(chat.results) }),
     setMetadata: ({ set }: { set: Record<string, Json> }) => {
+      if (chat.refuseMetadata) throw new Error(chat.refuseMetadata);
       for (const [key, value] of Object.entries(set)) {
         if (value === null) delete chat.metadata[key];
         else chat.metadata[key] = structuredClone(value);
@@ -189,11 +196,14 @@ export function fakeWorld(input: { head: string }) {
     submit(turnId: string, review: FakeReview | null) {
       if (!review) return;
       chat.results.unshift({
-        id: `result-${turnId}`,
+        id: `result-${turnId}-${chat.results.length}`,
         sessionId: "session-1",
         turnId,
+        attemptId: review.attemptId ?? `${turnId}-attempt-1`,
         name: "review",
         current: true,
+        commit:
+          review.turnCommit === undefined ? chat.commit : review.turnCommit,
         value: {
           reviewedCommit: review.reviewedCommit,
           verdict: review.verdict,

@@ -269,28 +269,39 @@ Each boundary returns one call and carries the publication to the next:
 1. Inspect the chat: only the reviewer's project chat in `review` that
    `reviewPullRequests` started posts anything. Its workspace commit, and
    what earlier publications recorded on it, come from the chat itself.
-2. Read the turn's `review` result (`results`, ADR 0323): the one this turn
-   submitted while it still answered the chat's newest request. No result,
-   or a failed turn, means no pass. A report for another commit is stale and
-   posts nothing.
-3. Read the pull request: nothing posts unless it is open and GitHub's head
-   is the reviewed commit.
-4. Hold or tighten the commit's verdict, then record it on the chat before
-   anything else posts: `action_required`, `success`, then `failure`. The
-   verdict so far is the strongest of what the chat recorded and this App's
-   own "Work review" runs on the commit (another app's alike-named run does
-   not count). A failure stands until the next push, a success gives way only
-   to a failure, and no review marks a commit only while nothing has.
+2. Read the turn's `review` result (`results`, ADR 0323): the newest one the
+   turn submitted, from any of its attempts (a sandbox lost after the review
+   was submitted does not lose it), while it still answered the chat's newest
+   request. No result, or a failed turn, means no pass. Two commits must both
+   be the head it posts for: the one the review names (`reviewedCommit`) and
+   the one Work recorded the turn began on (the result's `commit`). Either
+   one elsewhere refuses the review: the commit is marked `action_required`
+   with which one differed.
+3. Read the pull request: nothing posts once it is closed or GitHub's head
+   has moved past the chat's commit (the chat's next turn reviews the new
+   head).
+4. Hold or tighten the commit's verdict: `action_required`, `success`, then
+   `failure`. The verdict so far is the strongest of this App's own "Work
+   review" runs on the commit, read from GitHub (another app's alike-named
+   run does not count). A failure stands until the next push, a success gives
+   way only to a failure, and no review marks a commit only while nothing
+   has.
 5. Post the review with inline comments on lines the diff has (the rest move
    into its body). A turn that only answers a question adds no review while
    one of the App's stands for the commit, and a passing review is never
    posted on a commit whose verdict is a failure. No approval is ever posted.
 6. Answer the question: in its thread when it came from an inline comment of
    this pull request, otherwise in the conversation.
-7. Record what it posted on the chat.
+7. Record what it did on the chat.
 
-The chat's metadata holds the state, under keys that start with `review.`
-(agents and people write metadata too, and leave these alone):
+GitHub is the authority on what was posted and what a commit carries; the
+chat's metadata is a record of it for people and agents, never trusted for
+what to post: the reviewer can write its own chat's metadata, and the pull
+request's content can steer it. So a write the record lists is still made
+through its stamp (which finds it if it exists), and a chat that refuses the
+record (an agent filled its metadata to the limit) fails only the last step,
+after everything was posted; the run's error says so. The record sits under
+keys that start with `review.`:
 `review.verdicts` (a list of `{ commit, verdict }`, each commit's strongest
 verdict) and `review.posted` (a list of `{ effect, id }`: each write's identity,
 `work-review:<turn>:<check|review|reply>`, and GitHub's id for it), the
@@ -340,8 +351,9 @@ means the secret differs), the workflow's runs (a filtered-out event starts
 none), and the chat's placement (no machine in the pool, or one not opened to
 the project). When the chat reviewed but nothing reached GitHub, open the
 `postReviews` run, and the "Work review" check: an `action_required`
-run's summary says why a report was unusable, and a stale report (the chat
-had moved to a newer push) posts nothing.
+run's summary says why a report was unusable (no result, a failed turn, or
+a review of another commit), and nothing posts while GitHub's head is past
+the chat's commit.
 
 To see the queue at work, open the pull request chat's runs of
 `postReviews`: while one publishes, a later turn's run shows as `queued`

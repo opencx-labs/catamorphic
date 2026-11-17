@@ -1265,6 +1265,25 @@ export class RunCoordinator {
     }
   }
 
+  /**
+   * End a queued run that cannot start (ADR 0325) through the ordinary
+   * failure path. It holds no work, so only its row changes; its key is
+   * free for the next run.
+   */
+  async failQueued(args: { runId: string; error: string }): Promise<void> {
+    await this.db.transaction().execute(async (trx) => {
+      const run = await lockRun({ trx, runId: args.runId });
+      if (run?.status !== "queued") return;
+      await this.failRun({
+        trx,
+        runId: args.runId,
+        error: args.error,
+        now: await databaseNow(trx),
+        statuses: ["queued"],
+      });
+    });
+  }
+
   async handleExhaustedJob(args: {
     job: ExecutionJob;
     error: string;
