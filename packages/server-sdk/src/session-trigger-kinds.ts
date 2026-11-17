@@ -47,6 +47,9 @@ export const SESSION_TRIGGER_KINDS = [
   "session.state-changed",
   "session.work-changed",
   "session.authority-changed",
+  // A chat's workspace was made, made again, moved, given back or lost
+  // (ADR 0324); `detail.change` is what happened.
+  "session.workspace-changed",
 ].map((name) =>
   defineTriggerKind({
     name,
@@ -69,7 +72,11 @@ export const SESSION_TRIGGER_KINDS = [
           config.workStatus === value.session.workStatus) &&
         (!config.statuses ||
           config.statuses.includes(
-            String(value.detail.status ?? value.session.status),
+            String(
+              value.detail.change ??
+                value.detail.status ??
+                value.session.status,
+            ),
           ))
       );
     },

@@ -329,12 +329,19 @@ import { temporaryVolumes, temporaryVolumesNote } from "./volume-holds.js";
 import { PollPacer, type WorkWakeups } from "./work-wakeups.js";
 import { EnvironmentCapacityError } from "./worker-capacity.js";
 import {
+  recordWorkspaceChange,
+  recordWorkspaceGone,
+  recordWorkspaceMade,
+} from "./workspace-events.js";
+import {
   environmentSetupDue,
   narrowSandboxEgress,
   readSetupRecord,
   runWorkspaceSetup,
   SetupNetworkError,
   type SetupNetworkRefusal,
+  type SetupWorkflowOutcome,
+  type SetupWorkflowReason,
   sessionDirectory,
   type WorkspaceSetupOutcome,
   workspaceSetupFailedNote,
@@ -343,6 +350,61 @@ import {
 } from "./workspace-setup.js";
 
 export type { SessionMessageAuthor } from "@catamorphic/agent-protocol";
+
+/**
+ * Runs an Environment's setup workflow for one chat (ADR 0324) through
+ * the workflow's project enablement, and waits for its end.
+ */
+export interface SetupWorkflowRunner {
+  run(input: {
+    tenantId: string;
+    projectId: string;
+    workflowName: string;
+    /** Names the run as the chat's setup; its commands may run in setup. */
+    correlationKey: string;
+    input: Json;
+    timeoutMs: number;
+    signal: AbortSignal;
+  }): Promise<SetupWorkflowOutcome>;
+}
+
+/**
+ * The correlation key of a chat's setup run (ADR 0324): its session and a
+ * secret only the run Work started carries.
+ */
+export function setupRunCorrelationKey(input: {
+  sessionId: string;
+  nonce: string;
+}): string {
+  return `work-setup:${input.sessionId}:${input.nonce}`;
+}
+
+/** A chat's setup run while it runs, as `agent_sessions.setup_run` holds it. */
+export interface SetupRunRecord {
+  nonce: string;
+  /** Its commands `in: "setup"` run on the setup's own network (ADR 0257). */
+  network: boolean;
+  /** The owner wrote the turn being prepared, so their secrets may reach it. */
+  ownerAuthored: boolean;
+}
+
+/** The base a chat's workspace stands on, as workflows read it. */
+function workspaceJsonOrNull(value: Json | null): Json {
+  const base = parseWorkspaceBase(value);
+  return base ? { ref: base.ref, commit: base.commit } : null;
+}
+
+export function parseSetupRun(value: Json | null): SetupRunRecord | null {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+  const { nonce, network, ownerAuthored } = value;
+  return typeof nonce === "string"
+    ? {
+        nonce,
+        network: network === true,
+        ownerAuthored: ownerAuthored === true,
+      }
+    : null;
+}
 
 /** How a delivered input was taken: the protocol's dispatch, or `message_only`. */
 export interface SessionDeliveryReceipt {
@@ -1737,6 +1799,12 @@ export class AgentSessionsService {
   /** Late-bound because WatchersService itself depends on this service. */
   setArchiveResourcesHandler(handler: ArchiveSessionResourcesHandler): void {
     this.archiveResources = handler;
+  }
+
+  private setupWorkflows?: SetupWorkflowRunner;
+  /** Late-bound: runs are a sibling service (ADR 0324). */
+  setSetupWorkflowRunner(runner: SetupWorkflowRunner): void {
+    this.setupWorkflows = runner;
   }
 
   private sessionActionHandler?: (
@@ -5319,6 +5387,8 @@ export class AgentSessionsService {
               provider: runtime.provider,
               sandboxProviderId,
               ownerAuthored,
+              moved:
+                baseBefore !== parseWorkspaceBase(session.workspace)?.commit,
               signal: input.signal,
             })
           : undefined;
@@ -5440,6 +5510,9 @@ export class AgentSessionsService {
               environment: runtime.setup,
               personalAllowed:
                 runtime.personalCredentials === true && ownerAuthored,
+              ownerAuthored,
+              moved:
+                baseBefore !== parseWorkspaceBase(session.workspace)?.commit,
               signal: input.signal,
             });
       if (setup?.note)
@@ -6519,6 +6592,15 @@ export class AgentSessionsService {
         pin: basePin(session.id),
       });
     await settleMove(outcome.status === "moved" ? to : undefined);
+    if (outcome.status === "moved") {
+      await recordWorkspaceChange({
+        db: this.db,
+        sessionId: session.id,
+        change: "moved",
+        reason: update,
+      });
+      this.wakeups?.notify("events");
+    }
     return workspaceMoveNote({
       from: current,
       to,
@@ -7015,6 +7097,10 @@ export class AgentSessionsService {
     environment?: AdmittedSetup;
     /** The placement may hold the owner's credentials and the owner wrote the turn. */
     personalAllowed: boolean;
+    /** The owner wrote the turn (setup secrets may reach its workflow). */
+    ownerAuthored?: boolean;
+    /** This preparation moved the workspace's base (ADR 0178). */
+    moved?: boolean;
     signal: AbortSignal;
   }): Promise<{ note?: string; settled: boolean }> {
     const { session, runner } = input;
@@ -7043,6 +7129,11 @@ export class AgentSessionsService {
       ? workspaceSetupNetworkRefusedNote({ reason: refusal })
       : undefined;
     const environment = refused ? undefined : input.environment;
+    // A setup workflow runs its commands in a sandbox (ADR 0324).
+    const workflowSkipped =
+      environment?.workflow && runner.kind === "native"
+        ? `[Workspace] The Environment's setup workflow ${environment.workflow} did not run: this chat works in a folder on this computer, and a setup workflow runs its commands in a sandbox.`
+        : undefined;
     if (!environment && !personal)
       return { ...(refused ? { note: refused } : {}), settled: true };
     const timeoutMinutes =
@@ -7059,10 +7150,33 @@ export class AgentSessionsService {
       });
     };
     const commands = {
-      ...(environment ? { environment: environment.command } : {}),
+      ...(environment?.command !== undefined
+        ? { environment: environment.command }
+        : {}),
       ...(personal ? { personal } : {}),
       ...(base ? { base } : {}),
     };
+    const workflowName =
+      runner.kind === "sandbox" ? environment?.workflow : undefined;
+    const workflow = workflowName
+      ? {
+          name: workflowName,
+          rebuilt: session.workspace_generation > 1,
+          moved: input.moved === true,
+          run: ({ reason }: { reason: SetupWorkflowReason }) =>
+            this.runSetupWorkflow({
+              identity: input.identity,
+              projectId: input.projectId,
+              session,
+              workflowName,
+              reason,
+              network: Boolean(widening),
+              ownerAuthored: input.ownerAuthored === true,
+              timeoutMinutes,
+              signal: input.signal,
+            }),
+        }
+      : undefined;
     const unavailable = (error: unknown) => ({
       // The turn goes on without it, as after a failed command (ADR 0208).
       status: "unavailable" as const,
@@ -7110,6 +7224,7 @@ export class AgentSessionsService {
           personalAllowed,
           timeoutMinutes,
           ...(widening ? { network: widening } : {}),
+          ...(workflow ? { workflow } : {}),
           signal: input.signal,
           onRun,
         }).then(
@@ -7136,11 +7251,82 @@ export class AgentSessionsService {
         : outcome.status === "failed"
           ? workspaceSetupFailedNote({ outcome, timeoutMinutes, logPath })
           : undefined;
-    const notes = [refused, note].filter(Boolean).join("\n\n");
+    const notes = [refused, workflowSkipped, note].filter(Boolean).join("\n\n");
     return {
       ...(notes ? { note: notes } : {}),
       settled: outcome.status === "succeeded" || outcome.status === "current",
     };
+  }
+
+  /**
+   * Run the Environment's setup workflow for this chat (ADR 0324) and wait
+   * for it. While it runs, the chat records it, so its commands may run in
+   * the workspace being set up, `in: "setup"` included; never after.
+   */
+  private async runSetupWorkflow(input: {
+    identity: Identity;
+    projectId: string;
+    session: SessionRow;
+    workflowName: string;
+    reason: SetupWorkflowReason;
+    network: boolean;
+    ownerAuthored: boolean;
+    timeoutMinutes: number;
+    signal: AbortSignal;
+  }): Promise<SetupWorkflowOutcome> {
+    const runner = this.setupWorkflows;
+    if (!runner)
+      return {
+        status: "failed",
+        timedOut: false,
+        error: "This host does not run setup workflows",
+      };
+    const { session } = input;
+    const nonce = randomUUID();
+    const record: SetupRunRecord = {
+      nonce,
+      network: input.network,
+      ownerAuthored: input.ownerAuthored,
+    };
+    await this.db
+      .updateTable("agent_sessions")
+      .set({ setup_run: record as unknown as Json })
+      .where("id", "=", session.id)
+      .execute();
+    try {
+      return await runner.run({
+        tenantId: input.identity.tenantId,
+        projectId: input.projectId,
+        workflowName: input.workflowName,
+        correlationKey: setupRunCorrelationKey({
+          sessionId: session.id,
+          nonce,
+        }),
+        input: {
+          sessionId: session.id,
+          key: session.chat_key,
+          agentId: session.agent_id,
+          reason: input.reason,
+          workspace: workspaceJsonOrNull(session.workspace),
+        },
+        timeoutMs: input.timeoutMinutes * 60_000,
+        signal: input.signal,
+      });
+    } catch (error) {
+      if (input.signal.aborted) return { status: "aborted" };
+      return {
+        status: "failed",
+        timedOut: false,
+        error: error instanceof Error ? error.message : String(error),
+      };
+    } finally {
+      await this.db
+        .updateTable("agent_sessions")
+        .set({ setup_run: null })
+        .where("id", "=", session.id)
+        .where(sql<boolean>`setup_run->>'nonce' = ${nonce}`)
+        .execute();
+    }
   }
 
   /**
@@ -7187,6 +7373,7 @@ export class AgentSessionsService {
     provider: SandboxProvider;
     sandboxProviderId: string;
     ownerAuthored: boolean;
+    moved: boolean;
     signal: AbortSignal;
   }): Promise<{ note?: string; settled: boolean }> {
     const { identity, projectId, session, provider } = input;
@@ -7231,6 +7418,8 @@ export class AgentSessionsService {
       },
       environment: input.setup,
       personalAllowed: false,
+      ownerAuthored: input.ownerAuthored,
+      moved: input.moved,
       signal: input.signal,
     }).catch(async (error: unknown) => {
       // A sandbox that may still be wide fails the attempt (ADR 0257).
@@ -7345,7 +7534,10 @@ export class AgentSessionsService {
       input.widens &&
       runtime.setup &&
       environmentSetupDue({
-        environment: runtime.setup.command,
+        ...(runtime.setup.command !== undefined
+          ? { environment: runtime.setup.command }
+          : {}),
+        ...(runtime.setup.workflow ? { workflow: runtime.setup.workflow } : {}),
         base: input.widens.base,
         recorded: await readSetupRecord({
           provider,
@@ -9853,6 +10045,12 @@ export class AgentSessionsService {
         .set({ sandbox_id: null })
         .where("id", "=", session.id)
         .execute();
+      await recordWorkspaceGone({
+        db: trx,
+        sessionId: session.id,
+        change: "released",
+        reason: "connection-ended",
+      });
       return true;
     });
     if (released)
@@ -10245,6 +10443,106 @@ export class AgentSessionsService {
     );
   }
 
+  /**
+   * Where a workflow's command runs in a chat (ADR 0324). From the chat's
+   * own setup run (its correlation key carries the secret the chat holds
+   * while that run runs), the workspace being set up as it stands, with
+   * the setup's network and secrets for a command `in: "setup"`. From any
+   * other run, the workspace a person would reach, started as its next
+   * turn would start it; access is the caller's to have settled.
+   */
+  async commandWorkspace(input: {
+    tenantId: string;
+    projectId: string;
+    sessionId: string;
+    /** The calling run's correlation key. */
+    correlationKey: string | null;
+    in: "session" | "setup";
+    start: boolean;
+    /** The run's caller, whose access to the chat was settled. */
+    caller?: Identity;
+  }): Promise<{
+    handle: SessionWorkspaceHandle;
+    /** Present for the chat's own setup run. */
+    setup?: {
+      network?: { egress: SandboxEgress; env: Record<string, string> };
+    };
+  }> {
+    const session = await this.db
+      .selectFrom("agent_sessions")
+      .selectAll()
+      .where("id", "=", input.sessionId)
+      .where("project_id", "=", input.projectId)
+      .executeTakeFirst();
+    if (!session) throw new AgentSessionNotFoundError(input.sessionId);
+    const setupRun = parseSetupRun(session.setup_run);
+    const fromSetup =
+      setupRun !== null &&
+      input.correlationKey ===
+        setupRunCorrelationKey({
+          sessionId: session.id,
+          nonce: setupRun.nonce,
+        });
+    if (!fromSetup) {
+      if (input.in === "setup")
+        throw new Error(
+          'A command runs `in: "setup"` only from the chat\'s setup workflow while Work sets its workspace up: a sandbox in use is never given the setup\'s network (ADR 0257). Run it `in: "session"`, or move the workspace so setup runs again.',
+        );
+      // Whom a person's workspace is for decides (ADR 0209): the caller.
+      const identity = input.caller ?? (await this.ownerOf(session));
+      if (!identity) throw new AccessDeniedError();
+      return {
+        handle: await this.personWorkspace({
+          identity,
+          projectId: input.projectId,
+          sessionId: session.id,
+          start: input.start,
+        }),
+      };
+    }
+    const owner = await this.ownerOf(session);
+    if (!owner) throw new AccessDeniedError();
+    const allocation = session.allocation_id
+      ? await this.executionAllocations.get({
+          identity: owner,
+          allocationId: session.allocation_id,
+        })
+      : undefined;
+    if (allocation?.status !== "active" || !session.sandbox_id)
+      throw new SessionWorkspaceUnavailableError(
+        "not_running",
+        "The workspace being set up is gone.",
+      );
+    const handle = await this.liveWorkspace({
+      owner,
+      session,
+      allocation,
+      start: false,
+    });
+    if (input.in !== "setup" || !setupRun?.network)
+      return { handle, setup: {} };
+    // The setup's own network and the secrets it names (ADR 0257).
+    const agent = await this.resolveAgent(session.agent_id, input.projectId);
+    const runtime = await this.resolveExecutionRuntime(
+      owner,
+      input.projectId,
+      session,
+      agent,
+    );
+    const egress = allocation.policy.sandbox?.setupEgress;
+    if (!egress || !runtime.setup?.network)
+      throw new Error("This workspace's setup has no network of its own");
+    const env = await this.setupSecretValues({
+      identity: owner,
+      projectId: input.projectId,
+      session,
+      runtime,
+      names: runtime.setup.secrets ?? [],
+      ownerAuthored: setupRun.ownerAuthored,
+    });
+    return { handle, setup: { network: { egress, env } } };
+  }
+
   /** The running workspace of a chat, through its Allocation's machine. */
   private async liveWorkspace(input: {
     owner: Identity;
@@ -10578,6 +10876,12 @@ export class AgentSessionsService {
         .set({ sandbox_id: null })
         .where("id", "=", sessionId)
         .execute();
+      await recordWorkspaceGone({
+        db: trx,
+        sessionId,
+        change: "released",
+        reason: "idle",
+      });
       return true;
     });
     if (!released) return false;
@@ -10828,6 +11132,13 @@ export class AgentSessionsService {
         .set({ sandbox_id: null })
         .where("id", "=", sessionId)
         .execute();
+      if (session.sandbox_id)
+        await recordWorkspaceGone({
+          db: trx,
+          sessionId,
+          change: "released",
+          reason: "closed",
+        });
       return session;
     });
     if (!row) return;
@@ -12080,11 +12391,16 @@ export class AgentSessionsService {
       session,
       options.populate ?? true,
     );
-    await this.db
-      .updateTable("agent_sessions")
-      .set({ sandbox_id: handle.id, base_commit_sha: baseCommitSha })
-      .where("id", "=", session.id)
-      .execute();
+    await this.db.transaction().execute(async (trx) => {
+      await trx
+        .updateTable("agent_sessions")
+        .set({ sandbox_id: handle.id, base_commit_sha: baseCommitSha })
+        .where("id", "=", session.id)
+        .execute();
+      // A new workspace for the chat, its first or made again (ADR 0324).
+      await recordWorkspaceMade({ db: trx, sessionId: session.id });
+    });
+    this.wakeups?.notify("events");
     return {
       workingDirectory: this.projectDir(runtime.provider),
       sandboxProviderId: handle.providerId,

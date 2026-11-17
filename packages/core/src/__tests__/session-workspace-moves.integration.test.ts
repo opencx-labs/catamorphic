@@ -143,6 +143,20 @@ describe("workspace moves in native checkouts (ADR 0178)", () => {
     return { projectId: project.id, sessionId: session.id };
   }
 
+  /** The `session.workspace-changed` details recorded for a chat. */
+  async function workspaceChanges(sessionId: string) {
+    const rows = await db
+      .selectFrom("project_events")
+      .select("payload")
+      .where("kind", "=", "session.workspace-changed")
+      .orderBy("sequence")
+      .execute();
+    return rows
+      .map((row) => row.payload as { sessionId?: string; detail?: unknown })
+      .filter((payload) => payload.sessionId === sessionId)
+      .map((payload) => payload.detail);
+  }
+
   async function settled(input: { projectId: string; sessionId: string }) {
     await vi.waitFor(
       async () => {
@@ -188,6 +202,8 @@ describe("workspace moves in native checkouts (ADR 0178)", () => {
       .where("id", "=", sessionId)
       .executeTakeFirstOrThrow();
     expect(row).toEqual({ workspace: null, workspace_move: null });
+    // Nothing moved, so nothing is reported.
+    expect(await workspaceChanges(sessionId)).toEqual([]);
   }, 30_000);
 
   it("gives a chat in the person's folder its own worktree at the new base", async () => {
@@ -230,6 +246,15 @@ describe("workspace moves in native checkouts (ADR 0178)", () => {
       workspace: { ref: "feature", commit: featureCommit },
       workspace_move: null,
     });
+    // Workflows hear that it moved (ADR 0324).
+    expect(await workspaceChanges(sessionId)).toEqual([
+      {
+        change: "moved",
+        reason: "reset",
+        workspace: { ref: "feature", commit: featureCommit },
+        generation: 0,
+      },
+    ]);
   }, 30_000);
 
   it("keeps a move delivered while an earlier one was applied", async () => {

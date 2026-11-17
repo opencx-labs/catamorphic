@@ -38,6 +38,7 @@ import type {
 } from "./placement-waits.js";
 import type { RunCoordinator } from "./run-coordinator.js";
 import { EnvironmentCapacityError } from "./worker-capacity.js";
+import { recordWorkspaceGone } from "./workspace-events.js";
 
 const tracer = getTracer("@catamorphic/core");
 
@@ -715,11 +716,20 @@ export class NodeRecoveryService {
       await retireAllocation({ trx, allocationId: args.allocation.id });
       // The sandbox and any runner in it died with the machine;
       // the next turn starts both again, as after an idle release.
-      await trx
+      const lost = await trx
         .updateTable("agent_sessions")
         .set({ sandbox_id: null })
         .where("allocation_id", "=", args.allocation.id)
+        .where("sandbox_id", "is not", null)
+        .returning("id")
         .execute();
+      for (const session of lost)
+        await recordWorkspaceGone({
+          db: trx,
+          sessionId: session.id,
+          change: "lost",
+          reason: "machine-lost",
+        });
       return "released";
     });
   }
@@ -924,6 +934,7 @@ async function workflowAllocationWork(args: {
     .select("id")
     .where("workflow_run_id", "in", runs)
     .where("status", "=", "running")
+    .where("kind", "!=", "host_call_wait")
     .limit(1)
     .executeTakeFirst();
   const invocations = await args.trx
@@ -939,7 +950,7 @@ async function workflowAllocationWork(args: {
     .where("run.allocation_id", "=", args.allocationId)
     .where("run.status", "in", ["pending", "running", "waiting"])
     .where("job.status", "=", "pending")
-    .where("job.kind", "!=", "durable_pause_timeout")
+    .where("job.kind", "not in", ["durable_pause_timeout", "host_call_wait"])
     .where("job.available_at", "<=", sql<Date>`clock_timestamp()`)
     .limit(1)
     .executeTakeFirst();
@@ -951,11 +962,15 @@ async function workflowAllocationWork(args: {
 }
 
 function allocationJobs(db: Kysely<DB>, allocationId: string) {
-  return db
-    .selectFrom("execution_jobs as job")
-    .innerJoin("workflow_runs as run", "run.id", "job.workflow_run_id")
-    .select("job.id")
-    .where("run.allocation_id", "=", sql<string>`${sql.ref(allocationId)}`);
+  return (
+    db
+      .selectFrom("execution_jobs as job")
+      .innerJoin("workflow_runs as run", "run.id", "job.workflow_run_id")
+      .select("job.id")
+      .where("run.allocation_id", "=", sql<string>`${sql.ref(allocationId)}`)
+      // Following a host call (ADR 0324) needs none of the run's capacity.
+      .where("job.kind", "!=", "host_call_wait")
+  );
 }
 
 function runnableAllocationJobs(db: Kysely<DB>, allocationId: string) {
