@@ -53,9 +53,9 @@ runs unkeyed). A host caller's explicit key and policy win.
 
 **Delivery ids are delivery keys.** Trigger kinds return `deliveryKey`
 (renamed from `correlationKey`), and schedules and the project event
-dispatcher pass theirs the same way. A run's `delivery_key` is unique per
-workflow for all time: a repeated delivery returns the run it started, in
-any status. Correlation keys now only name subjects.
+dispatcher pass theirs the same way, each scoped by the enablement or
+activation it starts. A run's `delivery_key` is unique per workflow for all
+time: a repeated delivery returns the run it started, in any status. Correlation keys now only name subjects.
 
 **Workflows read and write session metadata.** `inspect` and `find`
 snapshots carry `metadata`. `setMetadata({ sessionId | key (+ audience),
@@ -74,20 +74,34 @@ fails retryably as it always did.
 **The review publisher is workflow code.** `postReviews` declares
 `concurrency: { key: "payload.session.key", onConflict: "queue" }`, so one
 publication per pull request chat runs at a time, in turn order. It reads
-the reviewer's typed `review` result (ADR 0323), keeps each commit's
-strongest verdict (`review.verdicts`) and every write's identity and GitHub
-id (`review.posted`, `work-review:<turn>:<check|review|reply>`) as lists in
-the chat's metadata, records the verdict before the writes that depend on
-it, and writes only through the connection's typed actions with stamps
-(ADR 0259), which find an earlier accepted write on retry. The
-server module, its SQL schema, the `company.review-publication` hook and
-their install steps are removed. ADR 0292's policies stay: commit-bound
-reviews and checks, a commit's verdict only holds or tightens, no
-unattended dismissal, description edits or thread resolution. What remains
-uncertain: a write GitHub accepted after the attempt timed out is found by
-its stamp on the retry, but one GitHub's lists do not show yet can be sent
-again by that retry; the queue keeps any other publication for the pull
-request from writing meanwhile.
+the turn's newest current `review` result (ADR 0323) from any of its
+attempts, and refuses it, saying which, when the commit it names or the
+commit Work recorded its turn began on is not the head. GitHub is the
+authority: a commit's verdict holds or tightens over the App's own check
+runs, and every write goes through the connection's typed actions with a
+stamp (ADR 0259), which finds an earlier accepted write on retry. The chat's
+`review.verdicts` and `review.posted` metadata is a record written last,
+never trusted for what to post, since the reviewer can write its own chat's
+metadata; a chat that refuses it fails only that last step. The server
+module, its SQL schema, the `company.review-publication` hook and their
+install steps are removed. ADR 0292's policies stay: commit-bound reviews
+and checks, a commit's verdict only holds or tightens, no unattended
+dismissal, description edits or thread resolution. What remains uncertain: a
+write GitHub accepted after the attempt timed out is found by its stamp on
+the retry, but one GitHub's lists do not show yet can be sent again by that
+retry; the queue keeps any other publication for the pull request from
+writing meanwhile.
+
+**Queued starts are bounded and fair.** A head that cannot start for a
+reason that will not change fails at once; anything else retries with
+backoff (`queue_attempts`, `queue_attempted_at`, the last error in `error`)
+and fails after 8 tries, freeing the key. Waiting for room has no bound and
+is retried every 5 to 30 seconds, and at once when any run settles. The
+sweep pages by tenant. A member's queued run without an enablement starts
+as the member is now, narrowed to what the enrolling identity held; a
+project principal's, as the principal it enrolled as. Kind-derived delivery
+keys are scoped by the enablement they start, and interactive fires carry
+none.
 
 Considered: a promotion inside the settling transaction (it cannot admit,
 which is IO, and every terminal path would need it); a Postgres trigger

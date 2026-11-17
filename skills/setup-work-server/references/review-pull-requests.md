@@ -13,8 +13,9 @@ compose the same primitives rather than requiring a native integration or
 forcing this recipe onto the application. See [workflow composition](workflow-composition.md).
 Nothing installs into the server: publication is the pack's `postReviews`
 workflow. It queues per pull request chat (ADR 0325), so overlapping turns
-publish one at a time, keeps each commit's verdict and what it posted in the
-chat's metadata, and writes through the GitHub connection's typed actions
+publish one at a time, decides from what GitHub shows (the chat's metadata
+holds a record of each commit's verdict and what it posted, never trusted
+for what to post), and writes through the GitHub connection's typed actions
 with stamps, so a retry after a lost answer finds the write instead of
 posting again.
 

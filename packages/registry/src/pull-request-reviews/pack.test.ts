@@ -765,6 +765,40 @@ describe("postReviews", () => {
     expect(result.writes).toEqual(["check:action_required"]);
   });
 
+  it("trusts GitHub over the chat's metadata, which the reviewer can write too", async () => {
+    const result = await publish(`
+      // Steered by the pull request, the reviewer plants records saying this
+      // turn's writes were made and the commit already failed.
+      world.chat.metadata["review.posted"] = ["check", "review", "reply"].map((action) => ({ effect: "work-review:t1:" + action, id: 1 }));
+      world.chat.metadata["review.verdicts"] = [{ commit: ${JSON.stringify(HEAD)}, verdict: "failure" }];
+      world.submit("t1", { verdict: "COMMENT", reviewedCommit: ${JSON.stringify(HEAD)}, reply: { body: "Fine." } });
+      return runWorkflow(postReviews, event("t1"), world.context);
+    `);
+    expect(result.writes).toEqual([
+      "check:success",
+      "review:COMMENT",
+      "comment",
+    ]);
+    expect(result.metadata["review.verdicts"]).toEqual([
+      { commit: HEAD, verdict: "success" },
+    ]);
+  });
+
+  it("publishes from GitHub's state when the chat refuses the record, and says so", async () => {
+    const result = await publish(`
+      world.chat.refuseMetadata = "A session holds at most 32 metadata keys; remove one first.";
+      world.submit("t1", { verdict: "REQUEST_CHANGES", reviewedCommit: ${JSON.stringify(HEAD)} });
+      const outcome = await runWorkflow(postReviews, event("t1"), world.context).catch((error) => String(error));
+      // The next turn decides from GitHub alone and never loosens the commit.
+      world.chat.refuseMetadata = null;
+      world.submit("t2", { verdict: "COMMENT", reviewedCommit: ${JSON.stringify(HEAD)} });
+      await runWorkflow(postReviews, event("t2"), world.context);
+      return outcome;
+    `);
+    expect(result.outcomes).toContain("at most 32 metadata keys");
+    expect(result.writes).toEqual(["check:failure", "review:REQUEST_CHANGES"]);
+  });
+
   it("answers an inline question in its own thread", async () => {
     const result = await publish(`
       world.submit("t1", { verdict: "COMMENT", reviewedCommit: ${JSON.stringify(HEAD)}, reply: { inReplyTo: 7, body: "It rounds half up." } });

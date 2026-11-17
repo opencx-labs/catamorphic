@@ -50,6 +50,8 @@ export function fakeWorld(input: { head: string }) {
     metadata: {} as Record<string, Json>,
     results: [] as Array<Record<string, Json>>,
     commit: input.head,
+    /** Why a metadata write is refused (the cap an agent filled), if it is. */
+    refuseMetadata: null as string | null,
   };
   const answered = (action: string, value: Json) => {
     if (github.loseNextAnswer.delete(action))
@@ -161,6 +163,7 @@ export function fakeWorld(input: { head: string }) {
     }),
     results: () => ({ results: structuredClone(chat.results) }),
     setMetadata: ({ set }: { set: Record<string, Json> }) => {
+      if (chat.refuseMetadata) throw new Error(chat.refuseMetadata);
       for (const [key, value] of Object.entries(set)) {
         if (value === null) delete chat.metadata[key];
         else chat.metadata[key] = structuredClone(value);
