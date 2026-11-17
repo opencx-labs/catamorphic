@@ -511,6 +511,8 @@ interface PreparedSource {
   files: Record<string, string>;
   workflowFile: string;
   graph: WorkflowGraph;
+  /** The run secrets the project declares, which every run receives. */
+  secretNames: string[];
   commitSha: string | null;
   workflowPackage?: WorkflowPackagePayload;
 }
@@ -1472,6 +1474,7 @@ export class RunsService {
     artifact: DeploymentArtifact;
     requirements: WorkflowGraph["connections"];
     permissions: WorkflowGraph["permissions"];
+    secrets: string[];
     remoteBranch?: string;
   }> {
     await this.requireProject(args.identity, args.projectId);
@@ -1510,6 +1513,7 @@ export class RunsService {
       remoteBranch: retained?.remote_branch ?? args.remoteBranch,
       requirements: source.graph.connections,
       permissions: source.graph.permissions,
+      secrets: source.secretNames,
     };
   }
 
@@ -2668,6 +2672,10 @@ async function prepareSource(args: {
     files: prepared.files,
     workflowFile: prepared.graph.filePath,
     graph: prepared.graph,
+    secretNames: prepared.secrets
+      .filter((secret) => secret.use === "run")
+      .map((secret) => secret.name)
+      .sort(),
     commitSha: args.commitSha,
     workflowPackage: await resolveWorkflowPackageFallback({
       packageJson: workflowPackageJson(files),

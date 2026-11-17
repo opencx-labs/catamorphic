@@ -1252,6 +1252,7 @@ export interface WorkflowEnablementEvents {
 }
 
 export interface WorkflowEnablements {
+  authority_digest: string | null;
   capabilities: Generated<Json>;
   commit_sha: string;
   consent_digest: string;

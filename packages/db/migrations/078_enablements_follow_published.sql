@@ -4,7 +4,10 @@
 
 ALTER TABLE workflow_enablements
   ADD COLUMN follow boolean NOT NULL DEFAULT false,
-  ADD COLUMN followed_sequence bigint;
+  ADD COLUMN followed_sequence bigint,
+  -- What the owner agreed to apart from the code: connections, permissions,
+  -- Environment, triggers and secret names (ADR 0330). Null until known.
+  ADD COLUMN authority_digest char(64);
 
 -- Deploying by merging to main just works for the project's automations.
 -- A member's own automation uses their connections, so it follows only once

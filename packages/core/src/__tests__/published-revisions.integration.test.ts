@@ -15,6 +15,7 @@ import {
 } from "../services/published-revisions-service.js";
 import type { Run } from "../services/runs-service.js";
 import { WorkflowEnablementsService } from "../services/workflow-enablements-service.js";
+import { projectAdmin } from "./project-admin.js";
 
 const pglite = new PGlite({ extensions: { pgcrypto } });
 const schema = "catamorphic_published_revisions";
@@ -31,7 +32,12 @@ const sha = (letters: string) => letters.repeat(40).slice(0, 40);
 /** What each commit's workflows build to, per workflow name. */
 const targets = new Map<
   string,
-  { permissions: string[]; fails?: string; artifactId: string }
+  {
+    permissions: string[];
+    secrets: string[];
+    fails?: string;
+    artifactId: string;
+  }
 >();
 /** `.work/project.json` per commit. */
 const manifests = new Map<string, string>();
@@ -57,7 +63,14 @@ let revisions: PublishedRevisionsService;
 
 async function addCommit(
   commitSha: string,
-  options: { permissions?: string[]; fails?: string } = {},
+  options: {
+    permissions?: string[];
+    fails?: string;
+    /** The secret names the project declares at this commit. */
+    secrets?: string[];
+    /** watchInbox's triggers at this commit. */
+    triggers?: Array<{ kind: string; config: unknown; where?: unknown }>;
+  } = {},
 ) {
   const artifactId = crypto.randomUUID();
   await db
@@ -72,8 +85,29 @@ async function addCommit(
       transform_version: "test",
     })
     .execute();
+  if (options.triggers?.length)
+    await db
+      .insertInto("trigger_definition_scans")
+      .values({ project_id: projectId, commit_sha: commitSha })
+      .execute();
+  for (const [index, trigger] of (options.triggers ?? []).entries())
+    await db
+      .insertInto("trigger_definitions")
+      .values({
+        project_id: projectId,
+        commit_sha: commitSha,
+        workflow_name: "watchInbox",
+        binding_index: index,
+        trigger_kind: trigger.kind,
+        config: JSON.stringify(trigger.config),
+        where_filters: JSON.stringify(trigger.where ?? []),
+        input_parameters: JSON.stringify([]),
+        can_suspend: false,
+      })
+      .execute();
   targets.set(commitSha, {
     permissions: options.permissions ?? [],
+    secrets: options.secrets ?? [],
     ...(options.fails ? { fails: options.fails } : {}),
     artifactId,
   });
@@ -234,6 +268,7 @@ beforeAll(async () => {
           lastUsedAt: artifact.created_at.toISOString(),
         },
         requirements: [],
+        secrets: target.secrets,
         permissions: target.permissions,
       };
     },
@@ -682,5 +717,73 @@ describe("the project's deploy workflow (ADR 0331)", () => {
     await expect(
       revisions.retry({ identity: owner, projectId }),
     ).rejects.toBeInstanceOf(PublishedRevisionNotRetryableError);
+  });
+});
+
+describe("what following never does on its own (ADR 0330)", () => {
+  const admin: Identity = {
+    tenantId,
+    externalUserId: "admin",
+    ...projectAdmin(projectId),
+  };
+  let watcher: string;
+
+  it("lets only the member turn following on for their own automation", async () => {
+    const mine = await enable("memberReport", {
+      type: "member",
+      externalUserId: "owner",
+    });
+    await expect(
+      enablements.setFollow({
+        identity: admin,
+        enablementId: mine.id,
+        follow: true,
+      }),
+    ).rejects.toBeInstanceOf(AccessDeniedError);
+    await expect(
+      enablements.setFollow({
+        identity: owner,
+        enablementId: mine.id,
+        follow: true,
+      }),
+    ).resolves.toMatchObject({ follow: true });
+    // Anyone who may manage it may stop it following.
+    await expect(
+      enablements.setFollow({
+        identity: admin,
+        enablementId: mine.id,
+        follow: false,
+      }),
+    ).resolves.toMatchObject({ follow: false });
+    await enablements.disable({ identity: owner, enablementId: mine.id });
+  });
+
+  it("needs consent when a revision changes the workflow's triggers", async () => {
+    watcher = (await enablements.list({ identity: owner, projectId })).find(
+      (item) => item.workflowName === "watchInbox",
+    )!.id;
+    const before = await commitOf(watcher);
+    await addCommit(sha("fa"), {
+      triggers: [{ kind: "webhook", config: { path: "public" } }],
+    });
+    await publish(sha("fa"));
+    await revisions.advance();
+    expect(await commitOf(watcher)).toBe(before);
+    expect(notifications).toEqual([
+      expect.objectContaining({ kind: "automation_update_needs_consent" }),
+    ]);
+  });
+
+  it("needs consent when a revision declares new secrets", async () => {
+    const before = await commitOf(watcher);
+    await addCommit(sha("fb"), { secrets: ["PAYMENTS_KEY"] });
+    await publish(sha("fb"));
+    await revisions.advance();
+    expect(await commitOf(watcher)).toBe(before);
+    // Every run of the project receives its declared secrets.
+    expect(notifications.map((notice) => notice.title).sort()).toEqual([
+      "migrate needs your consent to update",
+      "watchInbox needs your consent to update",
+    ]);
   });
 });
