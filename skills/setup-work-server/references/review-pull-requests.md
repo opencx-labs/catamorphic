@@ -133,8 +133,10 @@ demand](cluster-deployment.md#machines-on-demand)):
 1. Declare a class in `WORK_MACHINES_CONFIG` with `"sandbox": "container"`:
    a `hetzner-cloud` server type (`"review": { "platform": "hetzner-cloud",
    "serverType": "cpx42", "location": "nbg1", "image": "ubuntu-24.04",
-   "sandbox": "container" }`) or a `custom` class your server's provisioner
-   creates on your cloud. Its machines run the
+   "sandbox": "container" }`), a `workflow` class whose machines a
+   project's workflows create on your cloud (on AWS, install the
+   `machines-ec2` pack; its skill has the IAM policy and the class), or a
+   `custom` class your server's provisioner creates. Its machines run the
    [install script](cluster-deployment.md#the-install-script), which
    installs Docker and gVisor and starts the worker on the container
    backend, even where KVM would give microVMs.

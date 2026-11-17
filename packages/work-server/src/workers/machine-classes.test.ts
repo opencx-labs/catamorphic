@@ -83,6 +83,49 @@ describe("machine classes (ADR 0205)", () => {
     ])
       expect(MachinesConfigSchema.safeParse({ classes }).success).toBe(false);
   });
+
+  it("name a project's create and destroy workflows by their exports (ADR 0327)", () => {
+    const project = "0f6a2c55-5b0b-4d64-9b4a-6c1f5a1f4f0e";
+    const fleet = {
+      platform: "workflow",
+      project,
+      create: "createMachine",
+      destroy: "destroyMachine",
+    };
+    const { classes } = MachinesConfigSchema.parse({
+      classes: {
+        fleet: {
+          ...fleet,
+          options: { instanceType: "r7i.2xlarge", subnets: ["a"] },
+          sandbox: "container",
+        },
+      },
+    });
+    expect(classes.fleet).toEqual({
+      ...fleet,
+      options: { instanceType: "r7i.2xlarge", subnets: ["a"] },
+      sandbox: "container",
+    });
+    // Neither a token nor a hook: the server runs the project's workflows.
+    expect(
+      machineClassesProblem({
+        classes,
+        hetznerToken: false,
+        provisioner: false,
+      }),
+    ).toBeUndefined();
+    for (const wrong of [
+      { ...fleet, project: "not-a-project" },
+      { ...fleet, create: "create-machine" },
+      { ...fleet, destroy: "machines.ts#destroy" },
+      { ...fleet, create: "" },
+      { ...fleet, destroy: undefined },
+      { ...fleet, token: "never here" },
+    ])
+      expect(
+        MachinesConfigSchema.safeParse({ classes: { fleet: wrong } }).success,
+      ).toBe(false);
+  });
 });
 
 describe("machine rules", () => {

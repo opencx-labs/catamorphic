@@ -118,7 +118,8 @@ calls require the turn's exact attempt and live lease; Git and HTTP
 background access keep their normal grant lifetime. The gateway
 can pin the providers an aggregator routes to; work that needs a machine can
 wait for one, and machine rules can create machines on demand and remove
-them when idle. See
+them when idle, on Hetzner Cloud or on any cloud through two workflows of a
+project (an EC2 recipe ships as a pack). See
 [the machine setup and recovery model](skills/setup-work-server/references/cluster-deployment.md).
 The Work server is single-tenant because its local-process execution can access
 the host machine. Run one trusted organization or household per deployment.

@@ -301,7 +301,7 @@ the JSON file `WORK_MACHINES_CONFIG` names:
   `firewalls` and `networks` (ids) and extra server `labels` are optional;
   `snapshot: true` keeps an image of a machine's disk when it is destroyed.
   The API token is `WORK_HETZNER_TOKEN` (read and write), never the file.
-- `sandbox` (Hetzner and custom classes): the backend the machines run,
+- `sandbox` (Hetzner, custom and workflow classes): the backend the machines run,
   passed to the [install script](#the-install-script) as `--sandbox`:
   `auto` (default), `microsandbox`, or `container`, which runs gVisor even
   where KVM is usable. Give `container` to classes for Environments whose
@@ -325,9 +325,29 @@ the JSON file `WORK_MACHINES_CONFIG` names:
   (a hash of the code) as the platform's idempotency token,
   never the name, which a later machine of the rule reuses. A server with
   the hook and no classes file treats every class as custom.
+- `workflow`: a project's own workflows create and destroy them (ADR 0327),
+  so a cloud Work does not ship needs no server code:
+  `"review": { "platform": "workflow", "project": "<project id>", "create": "createMachine", "destroy": "destroyMachine", "options": { ... } }`.
+  `create` binds the `machine.create` trigger kind and gets what the hook's
+  `create` gets; it returns `{ ref }`, or `{ refused }` when the platform
+  made nothing. `destroy` binds `machine.destroy`, gets
+  `{ name, class, rule, ref, options }` (`ref` null when none is known),
+  and returns `{ done }`. Both must be turned on **for the project**: Work
+  runs only the project's automation, in its Environment with its consented
+  connections and secrets. Work never waits on a run: it records the
+  machine's intent, starts `create` once per enrollment, and reads the
+  answer on later passes; a failed run is an uncertain create, so the code
+  waits for the machine to enroll and a machine that never does is
+  destroyed by name. Destroy runs again on later passes until it answers
+  `{ done: true }`. The project also hears `machine.created`,
+  `machine.connected`, `machine.lost`, `machine.released` and
+  `machine.destroyed` as project events. Its create runs carry enrollment
+  codes, so keep it to administrators. The `machines-ec2` pack
+  (`registry.read`) is the EC2 recipe, with a tag-scoped IAM policy.
 
 The server refuses to start when a class needs what it lacks (a Hetzner
-class without the token, a custom class without the hook), and refuses a
+class without the token, a custom class without the hook; a workflow class
+needs neither), and refuses a
 rule that names a class it does not know.
 
 ### Hetzner Cloud
@@ -430,7 +450,7 @@ work such as [pull request reviews](review-pull-requests.md):
   several projects, must isolate its agents (microsandbox or gVisor) unless
   the rule says `"trusted": true`; such a rule is refused when it is written
   if machines of its class are known to run plain processes.
-- Only `hetzner-cloud` and `custom` classes scale; a pool class is refused.
+- Only `hetzner-cloud`, `custom` and `workflow` classes scale; a pool class is refused.
 - A machine is revoked only while nothing holds it: the drain and a new
   Allocation take the same lock, so work never lands on a machine being
   destroyed. One holding workspaces goes anyway only once it has been

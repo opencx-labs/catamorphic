@@ -47,7 +47,7 @@ Environment variables parsed by `workServerConfigFromEnv` in
 | `WORK_MACHINE_NAME`, `WORK_MACHINE_LABELS` | This machine's name and labels (`pool=agents,class=large`) that Environment pools select; see the machines reference. |
 | `WORK_WEBHOOK_MAX_BYTES` | Largest webhook body any endpoint may accept (default 1 MiB, at most 64 MiB); a binding opts in with `maxBodyBytes`. |
 | `WORK_CONTROL_PLANE_WORKLOADS` | What the server runs itself: `agent,workflow` (default), `workflow`, or empty. Agents then run on enrolled workers. |
-| `WORK_MACHINES_CONFIG` | Path to the machine classes file that machine rules name: Hetzner Cloud servers, pools of enrolled machines; see [a machine for every person or team](cluster-deployment.md#a-machine-for-every-person-or-team). |
+| `WORK_MACHINES_CONFIG` | Path to the machine classes file that machine rules name: Hetzner Cloud servers, pools of enrolled machines, machines a project's workflows create (any cloud, such as EC2); see [a machine for every person or team](cluster-deployment.md#a-machine-for-every-person-or-team). |
 | `WORK_HETZNER_TOKEN` | Hetzner Cloud API token (read and write) for `hetzner-cloud` classes. Never in the classes file. |
 | `WORK_WORKER_IMAGE` | Your pinned worker image, required explicitly when using machine installation or provisioning. |
 | `OTEL_EXPORTER_OTLP_ENDPOINT` | Telemetry export (`OBSERVABILITY.md`). |

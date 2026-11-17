@@ -60,7 +60,8 @@ and `where`, `session-workflows` keyed chats and workspaces.
 
 In `review`, `pool` places the chats on machines
 enrolled with the label `pool=review` (opened to this project), which a
-machine rule can create on demand. The image brings Git, Node, Bun, pnpm,
+machine rule can create on demand (on AWS, the `machines-ec2` pack makes
+them through a `workflow` machine class). The image brings Git, Node, Bun, pnpm,
 and Docker; `containers` lets the agent run the change's services with
 Docker Compose inside its own sandbox. The agent's sandbox reaches only the
 control plane's gateway (`egress: gateway`): GitHub and the other

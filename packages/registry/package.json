@@ -22,6 +22,7 @@
     "react-dom": "^18.2 || ^19"
   },
   "devDependencies": {
+    "@aws-sdk/client-ec2": "3.1171.0",
     "@catamorphic/agent-protocol": "workspace:*",
     "@catamorphic/api-client": "workspace:*",
     "@catamorphic/core": "workspace:*",
