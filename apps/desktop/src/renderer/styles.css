@@ -950,6 +950,16 @@ kbd {
   white-space: nowrap;
   color: var(--color-fg-faint);
   pointer-events: none;
+  /* Back as the last character goes, or the draft is sent: it fades in
+     while the frame glides to one line. Typing puts the text in its place
+     at once. */
+  animation: composer-placeholder-in 150ms var(--ease-standard);
+}
+
+@keyframes composer-placeholder-in {
+  from {
+    opacity: 0;
+  }
 }
 
 .cat-pill-host {

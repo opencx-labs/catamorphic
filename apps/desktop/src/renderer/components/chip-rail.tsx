@@ -47,6 +47,7 @@ import { EASE_STANDARD, motionMs } from "../lib/motion.js";
 import { usePopoverDismiss } from "../lib/popover-dismiss.js";
 import { themeStyle, useTheme } from "../lib/theme.js";
 import { TONE_TEXT } from "../lib/tones.js";
+import { OWN_FOCUS_ATTR } from "../lib/use-composer-focus-return.js";
 import type { SectionSource, SourceAccess } from "../sources/contract.js";
 import { runRowAction } from "../sources/run.js";
 import { AccessRequest } from "./access-request.js";
@@ -1421,6 +1422,8 @@ export const ChipRail = memo(function ChipRail({
       ref={railRef}
       className="relative mx-3"
       data-testid="chip-rail"
+      // The chips move focus among themselves and their group (onRailBlur).
+      {...{ [OWN_FOCUS_ATTR]: "" }}
       data-unfolded={unfolded ?? undefined}
       onFocus={(event) => {
         lastFocusedRef.current = event.target;

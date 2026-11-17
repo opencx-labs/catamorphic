@@ -2182,6 +2182,12 @@ function RestoreToHere({
   const [confirming, setConfirming] = useState(false);
   const [busy, setBusy] = useState(false);
   const [failed, setFailed] = useState(false);
+  // Asking takes the place of the button that asked, and the focus it had:
+  // on Cancel, so a key pressed next is never the one that undoes.
+  const cancelRef = useRef<HTMLButtonElement>(null);
+  useLayoutEffect(() => {
+    if (confirming) cancelRef.current?.focus({ preventScroll: true });
+  }, [confirming]);
   const confirm = async () => {
     setBusy(true);
     setFailed(false);
@@ -2226,6 +2232,7 @@ function RestoreToHere({
             Restore
           </button>
           <button
+            ref={cancelRef}
             type="button"
             disabled={busy}
             onClick={() => {

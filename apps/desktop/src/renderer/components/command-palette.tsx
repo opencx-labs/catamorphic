@@ -330,7 +330,11 @@ function CommandPaletteContent({
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const inputFrameRef = useRef<HTMLDivElement>(null);
   const inputContentRef = useRef<HTMLDivElement>(null);
-  useGlidingHeight({ content: inputContentRef, frame: inputFrameRef });
+  useGlidingHeight({
+    content: inputContentRef,
+    frame: inputFrameRef,
+    scroller: inputRef,
+  });
   const agentInputRef = useRef<ComposerInputHandle>(null);
   const currentDraft = useRef({ mode: modeId, query });
   currentDraft.current = { mode: modeId, query };

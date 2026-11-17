@@ -136,6 +136,10 @@ import { useBackgroundCommands } from "../lib/use-background-commands";
 import { useChips } from "../lib/use-chips.js";
 import { useComposerDraft } from "../lib/use-composer-draft.js";
 import { MAX_ATTACHMENTS, useComposerFiles } from "../lib/use-composer-files";
+import {
+  OWN_FOCUS_ATTR,
+  useComposerFocusReturn,
+} from "../lib/use-composer-focus-return.js";
 import { useQueueMessages } from "../lib/use-queue-messages.js";
 import { useSessionCheckout } from "../lib/use-session-checkout.js";
 import { useVoiceReading } from "../lib/use-voice-reading.js";
@@ -2593,6 +2597,15 @@ function ChatDockContent({
   const focusComposerInternally = useCallback(() => {
     moveFocusAsApp(() => composerRef.current?.focus());
   }, []);
+  // An action taken in the chat (Retry, an approval, a question's answers
+  // sent, a queued message sent now) gives the composer its keys back.
+  useComposerFocusReturn({
+    section: sectionRef,
+    composer: () => composerRef.current?.element() ?? null,
+    focusComposer: () => composerRef.current?.focusToType(),
+    canReturn: () =>
+      expandedRef.current && !sectionRef.current?.closest("[inert]"),
+  });
   // Restore to here (ADR 0197): undo the turn and every later one, files
   // included, then hand the person their words back in the composer so
   // they can say it differently straight away.
@@ -2705,6 +2718,12 @@ function ChatDockContent({
     return () => window.removeEventListener("keydown", onWindowKeyDown);
   }, [escapeTarget, focusComposerInternally]);
 
+  // The agent works and there is nothing to send: the send button stops it.
+  const stopsTurn =
+    chat.isWorking &&
+    !awaitingInput &&
+    !draftRef.current.trim() &&
+    pillCount === 0;
   // In a split, a tabbed chat occupies only its (ratio-sized) share of
   // the view; floating chats always overlay the full area.
   const splitPane = presentsAsTab && tabActive && slot !== "full";
@@ -2917,6 +2936,8 @@ function ChatDockContent({
           and its controls float over the timeline's top-right corner. */}
         <div
           data-testid="chat-status-chrome"
+          // Its controls open popovers that keep focus while they are open.
+          {...{ [OWN_FOCUS_ATTR]: "" }}
           className={`flex shrink-0 items-center gap-2 border-b px-3 transition-[height,border-color] duration-250 ease-standard ${presentsAsTab ? "h-0 border-transparent" : "h-12 border-border"}`}
         >
           <header
@@ -3878,50 +3899,53 @@ function ChatDockContent({
                   />
                 )}
                 {/* Nothing to send while the agent works: the button stops
-                  the running turn instead. */}
-                {chat.isWorking &&
-                !awaitingInput &&
-                !draftRef.current.trim() &&
-                pillCount === 0 ? (
-                  <ShortcutHint label="Stop">
-                    {/* The send button's place and colour: the theme's
-                        accent, only its glyph changing while the agent works. */}
-                    <button
-                      type="button"
-                      className="button-primary size-8 rounded-[calc(var(--composer-radius)-var(--composer-inset))] p-0"
-                      onClick={() => void chat.interrupt()}
-                      aria-label="Stop the agent"
-                      data-testid="chat-stop"
-                    >
-                      <Square className="size-3 fill-current" />
-                    </button>
-                  </ShortcutHint>
-                ) : (
-                  <ShortcutHint
-                    label={
-                      // A message during a blocking question reaches the
-                      // agent at once (ADR 0195); otherwise it reaches it
-                      // at its next step, or queues (ADR 0240).
-                      chat.isWorking && !awaitingInput
+                  the running turn instead. One button in the send button's
+                  place and colour, the theme's accent: only its glyph
+                  changes, crossing over, and its dimming eases. */}
+                <ShortcutHint
+                  label={
+                    stopsTurn
+                      ? "Stop"
+                      : // A message during a blocking question reaches the
+                        // agent at once (ADR 0195); otherwise it reaches it
+                        // at its next step, or queues (ADR 0240).
+                        chat.isWorking && !awaitingInput
                         ? `${queueMessages ? "Queue" : "Send"} (${/Mac/.test(navigator.platform) ? "⌘↵" : "Ctrl+Enter"} ${queueMessages ? "sends now" : "stops and sends"})`
                         : "Send"
+                  }
+                  shortcut={stopsTurn ? undefined : "↵"}
+                >
+                  <button
+                    type={stopsTurn ? "button" : "submit"}
+                    className="button-primary size-8 rounded-[calc(var(--composer-radius)-var(--composer-inset))] p-0 disabled:opacity-35"
+                    onClick={
+                      stopsTurn ? () => void chat.interrupt() : undefined
                     }
-                    shortcut="↵"
+                    disabled={
+                      !stopsTurn &&
+                      (pendingTransfers > 0 ||
+                        (!draftRef.current.trim() && pillCount === 0))
+                    }
+                    data-disabled-reason={
+                      stopsTurn
+                        ? undefined
+                        : "Write a message or attach a file first"
+                    }
+                    aria-label={stopsTurn ? "Stop the agent" : "Send message"}
+                    data-testid={stopsTurn ? "chat-stop" : undefined}
                   >
-                    <button
-                      type="submit"
-                      className="button-primary size-8 rounded-[calc(var(--composer-radius)-var(--composer-inset))] p-0 disabled:opacity-35"
-                      disabled={
-                        pendingTransfers > 0 ||
-                        (!draftRef.current.trim() && pillCount === 0)
-                      }
-                      data-disabled-reason="Write a message or attach a file first"
-                      aria-label="Send message"
-                    >
-                      <ArrowUp className="size-4" />
-                    </button>
-                  </ShortcutHint>
-                )}
+                    <span className="grid place-items-center *:col-start-1 *:row-start-1 *:transition-[opacity,scale] *:duration-150 *:ease-standard">
+                      <ArrowUp
+                        aria-hidden="true"
+                        className={`size-4 ${stopsTurn ? "scale-50 opacity-0" : ""}`}
+                      />
+                      <Square
+                        aria-hidden="true"
+                        className={`size-3 fill-current ${stopsTurn ? "" : "scale-50 opacity-0"}`}
+                      />
+                    </span>
+                  </button>
+                </ShortcutHint>
               </div>
             </form>
           </div>
