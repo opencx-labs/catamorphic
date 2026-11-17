@@ -192,6 +192,7 @@ export interface AgentSessions {
   work_status: Generated<string>;
   workspace: Json | null;
   workspace_move: Json | null;
+  workspace_session_id: string | null;
 }
 
 export interface AgentSessionViews {

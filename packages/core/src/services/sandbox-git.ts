@@ -335,6 +335,11 @@ export async function configureSandboxGateway(input: {
     grant: string;
     publicationRevision: string;
     modelAttemptId?: string;
+    /**
+     * Published only under its attempt: a shared subsession's model grant
+     * (ADR 0322), never where the workspace's Git and HTTP read theirs.
+     */
+    modelOnly?: boolean;
   }[];
   gitAliases: readonly SandboxGitAlias[];
   httpAliases?: readonly SandboxHttpAlias[];
@@ -379,9 +384,9 @@ export async function configureSandboxGateway(input: {
     "",
   ].join("\n");
   const files = input.grants.flatMap((grant) => {
-    const revisions: [string, string][] = [
-      [`grants/${grant.alias}/${grant.publicationRevision}`, grant.grant],
-    ];
+    const revisions: [string, string][] = grant.modelOnly
+      ? []
+      : [[`grants/${grant.alias}/${grant.publicationRevision}`, grant.grant]];
     if (grant.modelAttemptId)
       revisions.push([
         `model-grants/${grant.modelAttemptId}/${grant.alias}/${grant.publicationRevision}`,
@@ -420,6 +425,7 @@ export async function configureSandboxGateway(input: {
         // A conflict or any other publication failure must still fail preparation.
         `ln ${shellQuote(`${stage}/${file}`)} ${shellQuote(file)} 2>/dev/null || { [ -f ${shellQuote(file)} ] && cmp -s ${shellQuote(`${stage}/${file}`)} ${shellQuote(file)} || { echo ${shellQuote(`Could not publish immutable grant ${file}`)} >&2; exit 1; }; }`,
       ]),
+      "mkdir -p grants",
       "chmod 700 grants",
       ...(input.grants.some((grant) => grant.modelAttemptId)
         ? ["chmod 700 model-grants"]

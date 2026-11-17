@@ -61,6 +61,7 @@ import type { PluginResolver } from "@catamorphic/plugins";
 import {
   type AgentAttachment,
   type AgentEffort,
+  type AgentExecutionTopology,
   type AgentMcpServerConfig,
   type AgentTurnUsage,
   ATTACHMENT_MARKER,
@@ -103,7 +104,7 @@ import {
   AGENT_COMMIT_AUTHOR,
   PROJECT_MANIFEST_PATH,
 } from "@catamorphic/workflow/project-layout";
-import { type Kysely, sql, type Transaction } from "kysely";
+import { type Insertable, type Kysely, sql, type Transaction } from "kysely";
 import { z } from "zod";
 import {
   type AgentRef,
@@ -312,6 +313,12 @@ import {
   waitingNotificationTurn,
 } from "./sessions/session-rows.js";
 import {
+  SUBSESSION_TOOL_NAMES,
+  type SubsessionRequest,
+  type SubsessionWorkspace,
+  subsessionTools,
+} from "./sessions/subsession-tools.js";
+import {
   type FinalizedTurn,
   type OwnerOnlyCause,
   type PreparedAttempt,
@@ -446,6 +453,11 @@ export interface AgentSession {
   imported: ImportedSession | null;
   /** Immediate parent in the visible session hierarchy, if any. */
   parentSessionId: string | null;
+  /**
+   * The session whose workspace this one works in: a subsession sharing
+   * its parent's (ADR 0322). Null for a session with a workspace of its own.
+   */
+  workspaceSessionId: string | null;
   /** Per-user navigation state. Archived sessions remain readable. */
   visibility: SessionVisibility;
   archivedAt: string | null;
@@ -560,6 +572,8 @@ export interface AgentSessionPeer {
   title: string | null;
   agentId: string | null;
   parentSessionId: string | null;
+  /** The session whose workspace it works in (ADR 0322), if not its own. */
+  workspaceSessionId: string | null;
   forkedFromSessionId: string | null;
   visibility: SessionVisibility;
   status: "active" | "closed";
@@ -576,6 +590,8 @@ export interface AgentSubsession {
   task: string;
   contextMode: "fresh" | "inherit";
   allowFurtherDelegation: boolean;
+  /** Where it works: its parent's workspace, or one of its own (ADR 0322). */
+  workspace: SubsessionWorkspace;
   status: "running" | "completed" | "failed" | "interrupted" | "archived";
   session: AgentSession;
 }
@@ -654,6 +670,19 @@ export class AgentDelegationSettingsError extends Error {
   constructor(message: string) {
     super(message);
     this.name = "AgentDelegationSettingsError";
+  }
+}
+
+/**
+ * A delivery asked a shared subsession's workspace to move (ADR 0322): it
+ * is its workspace session's, which moves it for everyone working there.
+ */
+export class SharedWorkspaceMoveError extends Error {
+  constructor(readonly workspaceSessionId: string) {
+    super(
+      `This chat works in the workspace of session ${workspaceSessionId}, so it cannot move to another base on its own. Deliver the move to that session.`,
+    );
+    this.name = "SharedWorkspaceMoveError";
   }
 }
 
@@ -932,6 +961,12 @@ export interface NativeAgentCheckout {
     projectId: string;
     sessionId: string;
     /**
+     * The session whose checkout this one works in: a shared subsession's
+     * parent (ADR 0322). Its checkout as it stands, never one of its own
+     * and never moved for it.
+     */
+    sharedWith?: string;
+    /**
      * The base the session stands on, or the one a pending delivery asked
      * it to move to (ADR 0178). A session without its own checkout gets a
      * new one started at `commit`, which the host's mirror at `repository`
@@ -945,6 +980,12 @@ export interface NativeAgentCheckout {
       pin: string;
     };
   }): Promise<NativeCheckout | undefined> | NativeCheckout | undefined;
+  /**
+   * Give a new chat a checkout of its own, made at its first turn: a
+   * subsession that asked for its own workspace and whose parent stands on
+   * no base (ADR 0322). Without it, such a chat works where any new one does.
+   */
+  plan?(input: { projectId: string; sessionId: string }): Promise<unknown>;
   checkpoint?(input: {
     projectId: string;
     sessionId: string;
@@ -2141,6 +2182,7 @@ export class AgentSessionsService {
       title: row.title,
       agentId: row.agent_id,
       parentSessionId: row.parent_session_id,
+      workspaceSessionId: row.workspace_session_id,
       forkedFromSessionId: row.forked_from_session_id,
       visibility: presentations.get(row.id)?.visibility ?? "promoted",
       status: row.status as "active" | "closed",
@@ -4671,6 +4713,23 @@ export class AgentSessionsService {
     commit: string;
     expectedHead: string | null;
   }): Promise<"restored" | string> {
+    // Files several sessions work on are no one's to rewind (ADR 0322).
+    if (input.session.workspace_session_id)
+      return "This chat works in its parent's workspace, so its files cannot be rewound on their own. Fork the chat instead.";
+    const sharers = await this.db
+      .selectFrom("agent_sessions")
+      .select("id")
+      .where("workspace_session_id", "=", input.session.id)
+      .where("status", "=", "active")
+      .execute();
+    if (
+      (
+        await this.sessionsWithRunningTurns({
+          sessionIds: sharers.map((row) => row.id),
+        })
+      ).size > 0
+    )
+      return "Subagents are working in this chat's workspace, so its files cannot be rewound until they stop.";
     const agent = await this.resolveAgent(
       input.session.agent_id,
       input.session.project_id,
@@ -4748,7 +4807,7 @@ export class AgentSessionsService {
    */
   private async drainSession(sessionId: string): Promise<void> {
     while (!this.stoppingTurns) {
-      const session = await this.db
+      let session = await this.db
         .selectFrom("agent_sessions")
         .selectAll()
         .where("id", "=", sessionId)
@@ -4765,6 +4824,22 @@ export class AgentSessionsService {
         return;
       }
       if (session.handoff_status !== "none") return;
+      // A shared subsession works where its workspace session's workspace
+      // is now (ADR 0322), admitting it again if it was given back.
+      if (session.workspace_session_id) {
+        const followed = await this.followWorkspace({ identity, session });
+        if (followed.kind === "waiting") return;
+        if (followed.kind === "refused") {
+          const refused = await this.engine.runNext({
+            sessionId,
+            ...(this.workerNode ? { localNode: this.workerNode } : {}),
+            ...(followed.reason ? { refusal: followed.reason } : {}),
+          });
+          if (!refused) return;
+          continue;
+        }
+        session = followed.session;
+      }
       const allocation = session.allocation_id
         ? await this.executionAllocations.get({
             identity,
@@ -4809,6 +4884,96 @@ export class AgentSessionsService {
       });
       if (!ran) return;
     }
+  }
+
+  /**
+   * Bring a shared subsession to where its workspace session's workspace
+   * is (ADR 0322): its Allocation, sandbox, Environment and base. A
+   * workspace given back while idle is admitted again for that session when
+   * the subsession has a turn due, as that session's own turn would; the
+   * wait, if any, is the subsession's. A workspace session that closed
+   * leaves the subsession a workspace of its own from then on.
+   */
+  private async followWorkspace(input: {
+    identity: Identity;
+    session: SessionRow;
+  }): Promise<
+    | { kind: "followed"; session: SessionRow }
+    | { kind: "waiting" }
+    | { kind: "refused"; reason?: string }
+  > {
+    const { identity } = input;
+    const workspaceSessionId = input.session.workspace_session_id;
+    if (!workspaceSessionId)
+      return { kind: "followed", session: input.session };
+    const read = (id: string) =>
+      this.db
+        .selectFrom("agent_sessions")
+        .selectAll()
+        .where("id", "=", id)
+        .executeTakeFirst();
+    let host = await read(workspaceSessionId);
+    if (host?.status !== "active") {
+      await this.db
+        .updateTable("agent_sessions")
+        .set({ workspace_session_id: null })
+        .where("id", "=", input.session.id)
+        .execute();
+      const own = await read(input.session.id);
+      return own ? { kind: "followed", session: own } : { kind: "refused" };
+    }
+    const allocation = host.allocation_id
+      ? await this.executionAllocations.get({
+          identity,
+          allocationId: host.allocation_id,
+        })
+      : undefined;
+    if (allocation?.status !== "active") {
+      const due = await this.db
+        .selectFrom("agent_turns")
+        .select("id")
+        .where("session_id", "=", input.session.id)
+        .where("status", "=", "queued")
+        .where("available_at", "<=", sql<Date>`now()`)
+        .executeTakeFirst();
+      if (!due) return { kind: "followed", session: input.session };
+      const placed = await this.placeWaiting(identity, input.session, {
+        workspace: host,
+      });
+      if (placed.kind === "waiting") return { kind: "waiting" };
+      if (placed.kind === "expired")
+        return { kind: "refused", reason: placed.reason };
+      if (placed.kind === "agent_missing") return { kind: "refused" };
+      host = (await read(workspaceSessionId)) ?? host;
+    }
+    const follows = {
+      allocation_id: host.allocation_id,
+      sandbox_id: host.sandbox_id,
+      environment_name: host.environment_name,
+      placement: host.placement,
+      workspace: host.workspace,
+      base_commit_sha: host.base_commit_sha,
+    };
+    const same =
+      input.session.allocation_id === follows.allocation_id &&
+      input.session.sandbox_id === follows.sandbox_id &&
+      input.session.environment_name === follows.environment_name &&
+      input.session.base_commit_sha === follows.base_commit_sha &&
+      JSON.stringify(input.session.placement) ===
+        JSON.stringify(follows.placement) &&
+      JSON.stringify(input.session.workspace) ===
+        JSON.stringify(follows.workspace);
+    if (same) return { kind: "followed", session: input.session };
+    const followed = await this.db
+      .updateTable("agent_sessions")
+      .set(follows)
+      .where("id", "=", input.session.id)
+      .where("status", "=", "active")
+      .returningAll()
+      .executeTakeFirst();
+    return followed
+      ? { kind: "followed", session: followed }
+      : { kind: "refused" };
   }
 
   /** The identity a session's work runs as: its owner (ADR 0173). */
@@ -4974,10 +5139,10 @@ export class AgentSessionsService {
     turnId: string;
     workingDirectory?: string;
   }): Promise<ExtraTool[]> {
-    const hosted =
-      input.agent.harness.placement === "host"
-        ? (input.agent.harness.hostTools ?? [])
-        : [];
+    const hosted = this.servedTools({
+      identity: input.identity,
+      agent: input.agent,
+    });
     const own = [
       // A read-only chat keeps the host's tools that only read, and its
       // subagents, which read only too (ADR 0271).
@@ -5002,6 +5167,41 @@ export class AgentSessionsService {
       ...agentCapabilityTools(gateway, new AbortController().signal).filter(
         (tool) => !names.has(tool.name),
       ),
+    ];
+  }
+
+  /**
+   * The tools the agent's host serves it, and Work's subsession tools
+   * where the host serves none of them (ADR 0322): an agent in a sandbox,
+   * or a host that leaves delegation to core. A host serving any of them
+   * (the desktop, its assistant's briefed spawn) decides the set.
+   */
+  private servedTools(input: {
+    identity: Identity;
+    agent: RegisteredCodingAgent;
+  }): ExtraTool[] {
+    const hosted =
+      input.agent.harness.placement === "host"
+        ? (input.agent.harness.hostTools ?? [])
+        : [];
+    if (hosted.some((tool) => SUBSESSION_TOOLS.has(tool.name)))
+      return [...hosted];
+    const { identity } = input;
+    return [
+      ...hosted,
+      ...subsessionTools({
+        spawn: ({ projectId, sessionId, request }) =>
+          this.createSubsession(identity, projectId, sessionId, request),
+        waitFor: ({ projectId, sessionId, ...wait }) =>
+          this.waitForSubsessions(identity, projectId, sessionId, wait),
+        interrupt: ({ projectId, sessionId, childSessionId }) =>
+          this.interruptSubsession(
+            identity,
+            projectId,
+            sessionId,
+            childSessionId,
+          ),
+      }),
     ];
   }
 
@@ -5157,6 +5357,9 @@ export class AgentSessionsService {
         identity: input.identity,
         projectId: input.session.project_id,
         sessionId: input.session.id,
+        ...(input.session.workspace_session_id
+          ? { workspaceSessionId: input.session.workspace_session_id }
+          : {}),
         allocationId: allocation.id,
         provider,
         sandboxProviderId: input.location.sandboxId,
@@ -5200,6 +5403,7 @@ export class AgentSessionsService {
     const projectId = session.project_id;
     const sessionId = session.id;
     const agent = await this.resolveAgent(session.agent_id, projectId);
+    await this.resumeDelegation({ session, turn });
     const runtime = await this.resolveExecutionRuntime(
       identity,
       projectId,
@@ -5421,8 +5625,11 @@ export class AgentSessionsService {
       // The rest of setup, once the sandbox is narrow and holds the
       // session's work: the owner's own, or all of it without a network of
       // its own. A widened setup that did not succeed runs again next turn.
+      // A shared subsession sets up only a workspace its own turn made
+      // (ADR 0322): the one it shares is its workspace session's to set up.
       const setup =
-        widened && !widened.settled
+        (widened && !widened.settled) ||
+        (session.workspace_session_id && !fresh)
           ? undefined
           : await this.prepareWorkspaceSetup({
               identity,
@@ -5449,6 +5656,9 @@ export class AgentSessionsService {
           identity,
           projectId,
           sessionId,
+          ...(session.workspace_session_id
+            ? { workspaceSessionId: session.workspace_session_id }
+            : {}),
           allocationId: session.allocation_id,
           modelTurn: {
             turnId: turn.id,
@@ -5602,7 +5812,10 @@ export class AgentSessionsService {
             named: agent.harness.stateDirectory?.({ projectId, sessionId }),
             sessionId,
           })
-        : `${runtime.provider?.workspaceRoot ?? ""}/${SESSION_DIRECTORY}`;
+        : session.workspace_session_id
+          ? // Beside its workspace session's, in the sandbox they share.
+            `${runtime.provider?.workspaceRoot ?? ""}/${SESSION_DIRECTORY}/${SHARED_RUNNER_STATE}/${sessionId}`
+          : `${runtime.provider?.workspaceRoot ?? ""}/${SESSION_DIRECTORY}`;
     const configured = agent.defaults?.harnessPermissions ?? {};
     // A read-only chat runs in its harness's read-only mode (ADR 0271).
     const harnessPermissions = session.read_only
@@ -5788,6 +6001,9 @@ export class AgentSessionsService {
             await this.nativeAgentCheckout.resolve({
               projectId,
               sessionId,
+              ...(session.workspace_session_id
+                ? { sharedWith: session.workspace_session_id }
+                : {}),
               bindingId: runtime.bindingId,
               environmentName: runtime.environmentName,
             })
@@ -5801,85 +6017,103 @@ export class AgentSessionsService {
     const keepsChangesInSandbox = Boolean(
       sandboxProviderId && agent.sandboxing === "contained",
     );
-    let workspaceSyncError: string | undefined;
-    const changedFiles: SyncedFileChange[] = keepsChangesInSandbox
-      ? []
-      : sandboxProviderId && runtime.provider
-        ? await this.syncBackChanges(
-            runtime.provider,
-            identity,
-            projectId,
-            sandboxProviderId,
-            this.usesSessionCopy(session) ? sessionId : undefined,
-          ).catch((error: unknown) => {
-            if (!(error instanceof SandboxSyncError)) throw error;
-            console.warn(
-              `[catamorphic] Session ${sessionId}: ${error.message}`,
-            );
-            workspaceSyncError = error.message;
-            return [];
-          })
-        : await this.changedFilesOfTurn(turn.id, workingDirectory);
-    let storeSync: JsonObject | undefined;
-    const storeDir =
-      sandboxProviderId && !parseWorkspaceBase(session.workspace)
-        ? await this.storeSyncDir(
-            identity,
-            projectId,
-            { sandboxProviderId },
-            sessionId,
-            this.usesSessionCopy(session),
+    // A shared subsession's changes are its workspace session's (ADR 0322).
+    const copyId = workspaceCopyId(session);
+    const saved = await this.oneSyncPerWorkspace(session, async () => {
+      let workspaceSyncError: string | undefined;
+      const changedFiles: SyncedFileChange[] = keepsChangesInSandbox
+        ? []
+        : sandboxProviderId && runtime.provider
+          ? await this.syncBackChanges(
+              runtime.provider,
+              identity,
+              projectId,
+              sandboxProviderId,
+              this.usesSessionCopy(session) ? copyId : undefined,
+            ).catch((error: unknown) => {
+              if (!(error instanceof SandboxSyncError)) throw error;
+              console.warn(
+                `[catamorphic] Session ${sessionId}: ${error.message}`,
+              );
+              workspaceSyncError = error.message;
+              return [];
+            })
+          : await this.changedFilesOfTurn(turn.id, workingDirectory);
+      let storeSync: JsonObject | undefined;
+      const storeDir =
+        sandboxProviderId && !parseWorkspaceBase(session.workspace)
+          ? await this.storeSyncDir(
+              identity,
+              projectId,
+              { sandboxProviderId },
+              copyId,
+              this.usesSessionCopy(session),
+            )
+          : null;
+      if (storeDir && !keepsChangesInSandbox) {
+        try {
+          const report = await shipRemoteProject(
+            storeDir,
+            documentsClientFor(this.storeSync!.documents, identity, projectId, {
+              source: "store",
+            }),
+          );
+          if (
+            report.shipped.length +
+              report.deleted.length +
+              report.conflicts.length +
+              report.notShippable.length +
+              report.failed.length >
+            0
           )
-        : null;
-    if (storeDir && !keepsChangesInSandbox) {
-      try {
-        const report = await shipRemoteProject(
-          storeDir,
-          documentsClientFor(this.storeSync!.documents, identity, projectId, {
-            source: "store",
-          }),
-        );
-        if (
-          report.shipped.length +
-            report.deleted.length +
-            report.conflicts.length +
-            report.notShippable.length +
-            report.failed.length >
-          0
-        )
-          storeSync = protocolJson(report) as JsonObject;
-      } catch (error) {
-        storeSync = {
-          error: error instanceof Error ? error.message : String(error),
-        };
+            storeSync = protocolJson(report) as JsonObject;
+        } catch (error) {
+          storeSync = {
+            error: error instanceof Error ? error.message : String(error),
+          };
+        }
       }
-    }
-    let failure: TurnError | undefined;
-    let checkpointAfter: string | null = null;
-    if (
-      !keepsChangesInSandbox &&
-      (agent.topology === "native" || changedFiles.length > 0)
-    ) {
-      try {
-        checkpointAfter = await this.checkpointTurn(
-          identity,
-          projectId,
-          input.inputText,
-          {
-            sessionId,
-            workingDirectory,
-            nativeExecution: agent.topology === "native",
-            // A native agent's checkout is the host's: no session copy there.
-            sessionCopy:
-              agent.topology !== "native" && this.usesSessionCopy(session),
-          },
-        );
-      } catch (error) {
-        failure = {
-          message: error instanceof Error ? error.message : String(error),
-        };
+      let failure: TurnError | undefined;
+      let checkpointAfter: string | null = null;
+      if (
+        !keepsChangesInSandbox &&
+        (agent.topology === "native" || changedFiles.length > 0)
+      ) {
+        try {
+          checkpointAfter = await this.checkpointTurn(
+            identity,
+            projectId,
+            input.inputText,
+            {
+              sessionId: copyId,
+              workingDirectory,
+              nativeExecution: agent.topology === "native",
+              // A native agent's checkout is the host's: no session copy there.
+              sessionCopy:
+                agent.topology !== "native" && this.usesSessionCopy(session),
+            },
+          );
+        } catch (error) {
+          failure = {
+            message: error instanceof Error ? error.message : String(error),
+          };
+        }
       }
-    }
+      return {
+        changedFiles,
+        workspaceSyncError,
+        storeSync,
+        failure,
+        checkpointAfter,
+      };
+    });
+    const {
+      changedFiles,
+      workspaceSyncError,
+      storeSync,
+      failure,
+      checkpointAfter,
+    } = saved;
     let usage = turn.outcome?.usage;
     if (!usage && agent.modelConnection)
       usage = await this.sandboxGateway
@@ -5916,6 +6150,25 @@ export class AgentSessionsService {
       checkpointAfter,
       ...(failure ? { failure } : {}),
     };
+  }
+
+  /**
+   * Run a turn's sync and checkpoint of a workspace that several sessions
+   * share one at a time, on any replica (ADR 0322), so two never copy or
+   * commit its changes at once; a workspace of one session runs at once.
+   */
+  private async oneSyncPerWorkspace<T>(
+    session: Pick<SessionRow, "id" | "workspace_session_id">,
+    work: () => Promise<T>,
+  ): Promise<T> {
+    if (!(await this.sharesWorkspace(session))) return work();
+    return withReplicaClaim({
+      db: this.db,
+      name: `workspace-sync:${workspaceCopyId(session)}`,
+      ttlSeconds: 120,
+      waitMs: WORKSPACE_SYNC_WAIT_MS,
+      operation: () => work(),
+    });
   }
 
   /** Files a native turn changed, from its file change items. */
@@ -5974,6 +6227,7 @@ export class AgentSessionsService {
         identity: input.identity,
         projectId: input.session.project_id,
         sessionId: input.session.id,
+        turnId: turn.id,
         resultMessageId:
           input.reply?.id ?? input.turn.inputItemId ?? input.turn.id,
         status: turn.status === "completed" ? "completed" : "failed",
@@ -6133,6 +6387,10 @@ export class AgentSessionsService {
       /** Run in the harness's read-only mode (a subsession, ADR 0271). */
       readOnly?: boolean;
       workspace?: SessionWorkspaceRequest;
+      /** Work in this session's workspace, admitting nothing (ADR 0322). */
+      sharedWorkspace?: SessionRow;
+      /** Start a workspace of its own at this base, pinned for it. */
+      startAt?: SessionWorkspaceBase;
     },
   ): Promise<PreparedSessionCreate> {
     await this.requireProject(identity, projectId);
@@ -6196,6 +6454,34 @@ export class AgentSessionsService {
     ]
       .filter((part): part is string => Boolean(part))
       .join("\n\n");
+    // A shared subsession takes its workspace session's as it stands: no
+    // admission, Allocation or base of its own (ADR 0322).
+    const shared = input.sharedWorkspace;
+    if (shared) {
+      const visibility = input.visibility ?? "promoted";
+      return {
+        visibility,
+        insert: (transaction: Transaction<DB>) =>
+          this.insertSession(transaction, {
+            identity,
+            projectId,
+            sessionId,
+            input,
+            selectedAgentId,
+            systemPrompt,
+            visibility,
+            values: {
+              allocation_id: shared.allocation_id,
+              sandbox_id: shared.sandbox_id,
+              environment_name: shared.environment_name,
+              placement: shared.placement,
+              workspace: shared.workspace,
+              base_commit_sha: shared.base_commit_sha,
+              workspace_session_id: shared.id,
+            },
+          }),
+      };
+    }
     // With no machine free, a chat in an Environment that lets work wait
     // starts without a workspace and its first turn waits (ADR 0258).
     const placed = await this.executionEnvironments.admitOrWait({
@@ -6244,7 +6530,20 @@ export class AgentSessionsService {
           pin: basePin(sessionId),
           bindings: connections,
         })
-      : null;
+      : input.startAt
+        ? {
+            // The commit is in the mirror already: pinned, never fetched.
+            ...(await this.requireWorkspaces().fetch({
+              identity,
+              projectId,
+              sessionId,
+              ref: input.startAt.commit,
+              pin: basePin(sessionId),
+              bindings: connections,
+            })),
+            ref: input.startAt.ref,
+          }
+        : null;
     input.signal?.throwIfAborted();
     if (workspace && agent.topology !== "native")
       await this.projectManager.setSessionBase({
@@ -6300,19 +6599,15 @@ export class AgentSessionsService {
             transaction,
           });
         input.signal?.throwIfAborted();
-        const session = await transaction
-          .insertInto("agent_sessions")
-          .values({
-            id: sessionId,
-            source_action_id: input.sourceActionId ?? null,
-            project_id: projectId,
-            external_user_id: identity.externalUserId,
-            source: input.source ?? "api",
-            agent_id: selectedAgentId ?? null,
-            model: input.model || null,
-            model_effort: input.effort ?? null,
-            read_only: input.readOnly === true,
-            system_prompt: systemPrompt || null,
+        return this.insertSession(transaction, {
+          identity,
+          projectId,
+          sessionId,
+          input,
+          selectedAgentId,
+          systemPrompt,
+          visibility,
+          values: {
             sandbox_id: null,
             allocation_id: allocation?.id ?? null,
             environment_name: environmentName,
@@ -6320,33 +6615,90 @@ export class AgentSessionsService {
               allocation && admitted
                 ? toPlacementJson(placementOf(admitted))
                 : null,
-            status: "active",
-            title: input.title ?? null,
-            chat_key: input.chatKey ?? null,
-            chat_workflows: input.chatWorkflow ? [input.chatWorkflow] : [],
-            parent_session_id: input.parentSessionId ?? null,
-            forked_from_session_id: input.forkedFromSessionId ?? null,
             base_commit_sha: null,
             workspace: workspace ? workspaceJson(workspace) : null,
-            authority_host_id: this.hostId,
-            authority_revision: 1,
-          })
-          .returningAll()
-          .executeTakeFirstOrThrow();
-        await transaction
-          .insertInto("agent_session_views")
-          .values({
-            session_id: sessionId,
-            tenant_id: identity.tenantId,
-            external_user_id: identity.externalUserId,
-            visibility,
-            previous_visibility: visibility,
-          })
-          .execute();
-        input.signal?.throwIfAborted();
-        return session;
+            workspace_session_id: null,
+          },
+        });
       },
     };
+  }
+
+  /** A new chat's row and its creator's view of it. */
+  private async insertSession(
+    transaction: Transaction<DB>,
+    input: {
+      identity: Identity;
+      projectId: string;
+      sessionId: string;
+      input: {
+        signal?: AbortSignal;
+        sourceActionId?: string;
+        model?: string;
+        effort?: AgentEffort;
+        readOnly?: boolean;
+        title?: string;
+        chatKey?: string;
+        chatWorkflow?: string;
+        source?: AgentSessionSource;
+        parentSessionId?: string;
+        forkedFromSessionId?: string;
+      };
+      selectedAgentId: string | undefined;
+      systemPrompt: string;
+      visibility: Exclude<SessionVisibility, "archived">;
+      /** Where it works. */
+      values: Pick<
+        Insertable<DB["agent_sessions"]>,
+        | "sandbox_id"
+        | "allocation_id"
+        | "environment_name"
+        | "placement"
+        | "base_commit_sha"
+        | "workspace"
+        | "workspace_session_id"
+      >;
+    },
+  ): Promise<SessionRow> {
+    const { identity, sessionId, input: create } = input;
+    create.signal?.throwIfAborted();
+    const session = await transaction
+      .insertInto("agent_sessions")
+      .values({
+        id: sessionId,
+        source_action_id: create.sourceActionId ?? null,
+        project_id: input.projectId,
+        external_user_id: identity.externalUserId,
+        source: create.source ?? "api",
+        agent_id: input.selectedAgentId ?? null,
+        model: create.model || null,
+        model_effort: create.effort ?? null,
+        read_only: create.readOnly === true,
+        system_prompt: input.systemPrompt || null,
+        status: "active",
+        title: create.title ?? null,
+        chat_key: create.chatKey ?? null,
+        chat_workflows: create.chatWorkflow ? [create.chatWorkflow] : [],
+        parent_session_id: create.parentSessionId ?? null,
+        forked_from_session_id: create.forkedFromSessionId ?? null,
+        authority_host_id: this.hostId,
+        authority_revision: 1,
+        ...input.values,
+      })
+      .returningAll()
+      .executeTakeFirstOrThrow();
+    await transaction
+      .insertInto("agent_session_views")
+      .values({
+        session_id: sessionId,
+        tenant_id: identity.tenantId,
+        external_user_id: identity.externalUserId,
+        visibility: input.visibility,
+        previous_visibility: input.visibility,
+      })
+      .execute();
+    create.signal?.throwIfAborted();
+    return session;
   }
 
   /**
@@ -6366,6 +6718,8 @@ export class AgentSessionsService {
     const session = await this.requireSession(identity, projectId, sessionId);
     if (session.status !== "active")
       throw new AgentSessionClosedError(sessionId);
+    if (session.workspace_session_id)
+      throw new SharedWorkspaceMoveError(session.workspace_session_id);
     const target = await this.requireWorkspaces().fetch({
       identity,
       projectId,
@@ -6554,15 +6908,17 @@ export class AgentSessionsService {
   }): Promise<readonly SandboxModelGateway[]> {
     const row = await this.db
       .selectFrom("agent_sessions")
-      .select(["workspace", "allocation_id"])
+      .select(["id", "workspace", "allocation_id", "workspace_session_id"])
       .where("id", "=", input.sessionId)
       .executeTakeFirstOrThrow();
     const base = parseWorkspaceBase(row.workspace);
+    // A shared subsession's checkout is its workspace session's (ADR 0322).
+    const copyId = workspaceCopyId(row);
     if (base) {
       const copy = await this.projectManager.openSession({
         tenantId: input.identity.tenantId,
         projectId: input.projectId,
-        sessionId: input.sessionId,
+        sessionId: copyId,
       });
       try {
         await seedSandboxRepository({
@@ -6572,7 +6928,7 @@ export class AgentSessionsService {
           sessionCopyPath: copy.repoPath,
           head: await copy.resolveRef("HEAD"),
           base: base.commit,
-          branch: `work/${input.sessionId.replaceAll("-", "").slice(0, 8)}`,
+          branch: `work/${copyId.replaceAll("-", "").slice(0, 8)}`,
           originUrl: await this.linkedRemoteUrl(
             input.identity,
             input.projectId,
@@ -6591,6 +6947,9 @@ export class AgentSessionsService {
       identity: input.identity,
       projectId: input.projectId,
       sessionId: input.sessionId,
+      ...(row.workspace_session_id
+        ? { workspaceSessionId: row.workspace_session_id }
+        : {}),
       allocationId: row.allocation_id,
       ...(input.modelTurn ? { modelTurn: input.modelTurn } : {}),
       provider: input.provider,
@@ -6616,6 +6975,13 @@ export class AgentSessionsService {
     identity: Identity;
     projectId: string;
     sessionId: string;
+    /**
+     * The session whose workspace a shared subsession works in (ADR 0322):
+     * the workspace's grants are issued in its name, so a subsession that
+     * closes never leaves the newest grant there dead; the subsession's
+     * model grant is its own attempt's.
+     */
+    workspaceSessionId?: string;
     allocationId: string;
     modelTurn?: { turnId: string; attemptId: string; leaseToken: string };
     provider: SandboxProvider;
@@ -6664,13 +7030,24 @@ export class AgentSessionsService {
     // The previous grants stay live until the sandbox holds the new ones,
     // so a harness reading its grant file between the two still has a live
     // one (ADR 0255); then they are revoked.
-    const issued = [];
+    const issued: {
+      alias: string;
+      grant: string;
+      id: string;
+      publicationRevision: string;
+      modelAttemptId?: string;
+      modelOnly?: boolean;
+      sessionId: string;
+    }[] = [];
+    const workspaceSessionId = input.workspaceSessionId;
     for (const binding of bindings) {
       const grant = await grants.issue({
         identity: input.identity,
         allocationId: input.allocationId,
-        agentSessionId: input.sessionId,
-        ...(input.modelTurn ? { modelTurn: input.modelTurn } : {}),
+        agentSessionId: workspaceSessionId ?? input.sessionId,
+        ...(input.modelTurn && !workspaceSessionId
+          ? { modelTurn: input.modelTurn }
+          : {}),
         alias: binding.alias,
         ttlSeconds: 3600,
         channel: "sandbox",
@@ -6681,10 +7058,34 @@ export class AgentSessionsService {
         grant: grant.token,
         id: grant.id,
         publicationRevision: grant.publicationRevision,
-        ...(binding.api && input.modelTurn
+        sessionId: workspaceSessionId ?? input.sessionId,
+        ...(binding.api && input.modelTurn && !workspaceSessionId
           ? { modelAttemptId: input.modelTurn.attemptId }
           : {}),
       });
+      // A shared subsession's model calls are its own turn's (ADR 0293),
+      // published only where its attempt reads them.
+      if (binding.api && input.modelTurn && workspaceSessionId) {
+        const model = await grants.issue({
+          identity: input.identity,
+          allocationId: input.allocationId,
+          agentSessionId: input.sessionId,
+          modelTurn: input.modelTurn,
+          alias: binding.alias,
+          ttlSeconds: 3600,
+          channel: "sandbox",
+          keepPrevious: true,
+        });
+        issued.push({
+          alias: binding.alias,
+          grant: model.token,
+          id: model.id,
+          publicationRevision: model.publicationRevision,
+          sessionId: input.sessionId,
+          modelAttemptId: input.modelTurn.attemptId,
+          modelOnly: true,
+        });
+      }
     }
     await configureSandboxGateway({
       provider: input.provider,
@@ -6705,7 +7106,7 @@ export class AgentSessionsService {
     });
     for (const grant of issued)
       await grants.revokeOthers({
-        agentSessionId: input.sessionId,
+        agentSessionId: grant.sessionId,
         alias: grant.alias,
         channel: "sandbox",
         keepId: grant.id,
@@ -7353,7 +7754,9 @@ export class AgentSessionsService {
           projectDir: this.projectDir(provider),
         }),
       });
-    if (!due || !session.sandbox_id)
+    // A shared subsession never rebuilds the workspace it shares (ADR
+    // 0322): its workspace session's own turn does.
+    if (!due || !session.sandbox_id || session.workspace_session_id)
       return { sandboxProviderId: input.sandboxProviderId, fresh: false };
     // Marked first, so a preparation that stops midway is finished by the
     // next one rather than left pointing at a sandbox that is gone.
@@ -7443,6 +7846,18 @@ export class AgentSessionsService {
    * note for the agent when the changes could not be read.
    */
   private async saveSandboxChanges(input: {
+    identity: Identity;
+    projectId: string;
+    session: SessionRow;
+    provider: SandboxProvider;
+    sandboxProviderId: string;
+  }): Promise<string | undefined> {
+    return this.oneSyncPerWorkspace(input.session, () =>
+      this.saveSandboxChangesNow(input),
+    );
+  }
+
+  private async saveSandboxChangesNow(input: {
     identity: Identity;
     projectId: string;
     session: SessionRow;
@@ -9051,10 +9466,12 @@ export class AgentSessionsService {
       readOnly?: boolean;
       /** False keeps the child from starting its own; always allowed. */
       delegate?: boolean;
+      /** Its parent's workspace (default) or its own (ADR 0322). */
+      workspace?: SubsessionWorkspace;
       task: string;
       contextMode?: "fresh" | "inherit";
       title?: string;
-    },
+    } & SubsessionRequest,
   ): Promise<AgentSubsession> {
     const source = await this.requireSession(
       identity,
@@ -9237,6 +9654,28 @@ export class AgentSessionsService {
     if (!task) throw new Error("A subsession task is required");
     const contextMode = input.contextMode ?? "fresh";
     const allowFurtherDelegation = grant.delegate && input.delegate !== false;
+    // The cap first: a refused spawn admits, fetches and makes nothing.
+    await this.assertChildCapacity({
+      executor: this.db,
+      sourceSessionId,
+      maxConcurrentChildren: policy.maxConcurrentChildren,
+    });
+    const workspace = input.workspace ?? "shared";
+    const sharedWorkspace =
+      workspace === "shared"
+        ? await this.sharedWorkspaceFor({
+            identity,
+            projectId,
+            source,
+            targetAgentId,
+            targetAgent,
+          })
+        : undefined;
+    // A workspace of its own starts where the parent's started (ADR 0178).
+    const startAt =
+      workspace === "own"
+        ? (parseWorkspaceBase(source.workspace) ?? undefined)
+        : undefined;
     input.signal?.throwIfAborted();
     const childInput = {
       signal: input.signal,
@@ -9247,9 +9686,17 @@ export class AgentSessionsService {
       parentSessionId: sourceSessionId,
       visibility: "latent" as const,
       title: input.title ?? summarizeSessionTask(task) ?? "Subsession",
-      systemPrompt:
+      systemPrompt: [
         "Complete the delegated task independently. Your settled result is delivered to the parent automatically.",
+        sharedWorkspace
+          ? "You work in your parent's workspace: the files you see are theirs, as they are now, and its other subagents may work there too. Change only what your task asks for."
+          : undefined,
+      ]
+        .filter(Boolean)
+        .join("\n"),
       allowFurtherDelegation,
+      ...(sharedWorkspace ? { sharedWorkspace } : {}),
+      ...(startAt ? { startAt } : {}),
     };
     const preparedChild = await this.prepareSessionCreate(
       identity,
@@ -9298,17 +9745,12 @@ export class AgentSessionsService {
           "This subsession is not allowed to delegate further",
         );
       }
-      const active = await transaction
-        .selectFrom("agent_delegations")
-        .select(({ fn }) => fn.countAll<number>().as("count"))
-        .where("source_session_id", "=", sourceSessionId)
-        .where("status", "=", "running")
-        .executeTakeFirstOrThrow();
-      if (Number(active.count) >= policy.maxConcurrentChildren) {
-        throw new AgentDelegationDeniedError(
-          `This agent already has ${policy.maxConcurrentChildren} active subsessions`,
-        );
-      }
+      // Again under the parent's lock: two spawns racing take one slot.
+      await this.assertChildCapacity({
+        executor: transaction,
+        sourceSessionId,
+        maxConcurrentChildren: policy.maxConcurrentChildren,
+      });
 
       input.signal?.throwIfAborted();
       const child = await this.createInner(identity, projectId, {
@@ -9364,6 +9806,17 @@ export class AgentSessionsService {
       input.signal?.throwIfAborted();
       return { child, delegation, receipt };
     });
+    // A child in a folder that asked for its own gets a checkout of its own
+    // before its first turn; one at the parent's base is started there.
+    if (workspace === "own" && !startAt && targetAgent.topology === "native")
+      await this.nativeAgentCheckout
+        ?.plan?.({ projectId, sessionId: created.child.id })
+        .catch((error: unknown) =>
+          console.warn(
+            `[catamorphic] Subsession ${created.child.id} works where a new chat does: no checkout of its own`,
+            error,
+          ),
+        );
     if (created.receipt.turnId) {
       void this.scheduleDrain(created.child.id).catch(() => {
         // The durable child turn remains inspectable if execution fails.
@@ -9376,9 +9829,121 @@ export class AgentSessionsService {
       task: delegation.task,
       contextMode,
       allowFurtherDelegation: delegation.allow_further_delegation,
+      workspace: child.workspaceSessionId ? "shared" : "own",
       status: "running",
       session: child,
     };
+  }
+
+  /**
+   * Refuse a child past the parent's limit of running subsessions, saying
+   * how many it has and how to free one.
+   */
+  private async assertChildCapacity(input: {
+    executor: Kysely<DB> | Transaction<DB>;
+    sourceSessionId: string;
+    maxConcurrentChildren: number;
+  }): Promise<void> {
+    const active = await input.executor
+      .selectFrom("agent_delegations")
+      .select(({ fn }) => fn.countAll<number>().as("count"))
+      .where("source_session_id", "=", input.sourceSessionId)
+      .where("status", "=", "running")
+      .executeTakeFirstOrThrow();
+    if (Number(active.count) >= input.maxConcurrentChildren)
+      throw new AgentDelegationDeniedError(
+        `This agent already has ${input.maxConcurrentChildren} active subsessions, its limit. Wait for one to finish (wait_for_subsessions) or stop one (interrupt_subsession), then start the next.`,
+      );
+  }
+
+  /**
+   * The session whose workspace a shared child works in (ADR 0322): its
+   * parent's, or the one its parent shares. Refused, naming `own`, when
+   * the child's agent cannot run there: a workspace of another kind, a
+   * contained one for an agent whose changes leave its sandbox, or an
+   * Environment or connection that workspace was not admitted with.
+   */
+  private async sharedWorkspaceFor(input: {
+    identity: Identity;
+    projectId: string;
+    source: SessionRow;
+    targetAgentId: string;
+    targetAgent: RegisteredCodingAgent;
+  }): Promise<SessionRow> {
+    const { identity, projectId, targetAgent, targetAgentId } = input;
+    const host = input.source.workspace_session_id
+      ? await this.db
+          .selectFrom("agent_sessions")
+          .selectAll()
+          .where("id", "=", input.source.workspace_session_id)
+          .executeTakeFirst()
+      : input.source;
+    if (host?.status !== "active")
+      throw new AgentSessionClosedError(
+        input.source.workspace_session_id ?? input.source.id,
+      );
+    const refuse = (why: string) =>
+      new AgentDelegationSettingsError(
+        `${why} Start it with workspace: "own" to give it a workspace of its own.`,
+      );
+    const hostAgentId =
+      host.agent_id ?? this.codingAgents.defaultAgentId(projectId) ?? null;
+    const hostAgent = await this.resolveAgent(hostAgentId, projectId);
+    // A folder on a machine and a sandbox are different workspaces.
+    if (
+      (targetAgent.topology === "native") !==
+      (hostAgent.topology === "native")
+    )
+      throw refuse(
+        `${targetAgentId} works ${workspacePlace(targetAgent.topology)}, and this chat ${workspacePlace(hostAgent.topology)}, so it cannot work in this chat's workspace.`,
+      );
+    // A contained workspace's changes never leave its sandbox (ADR 0182):
+    // a child whose changes do would carry them out.
+    if (
+      hostAgent.topology !== "native" &&
+      hostAgent.sandboxing === "contained" &&
+      targetAgent.sandboxing !== "contained"
+    )
+      throw refuse(
+        `${targetAgentId} copies what it changes out of its sandbox, and this chat's workspace is contained, so it cannot work there.`,
+      );
+    if (hostAgentId === targetAgentId || !host.allocation_id) return host;
+    // Another agent runs on the machine as the workspace was admitted there.
+    const allocation = await this.executionAllocations.get({
+      identity,
+      allocationId: host.allocation_id,
+    });
+    if (allocation?.status !== "active") return host;
+    const fit = await this.admitOnAllocation({
+      identity,
+      projectId,
+      owner: placementOwner(host.external_user_id),
+      allocation,
+      agent: targetAgent,
+    }).catch((error: unknown) => ({
+      refused: error instanceof Error ? error.message : String(error),
+    }));
+    if ("refused" in fit)
+      throw refuse(
+        `${targetAgentId} cannot run in this chat's workspace: ${fit.refused}`,
+      );
+    if (fit.mismatch)
+      throw refuse(
+        `${targetAgentId} needs ${fit.mismatch === "resources" ? "other resources" : "another machine binding"} than this chat's workspace was admitted with.`,
+      );
+    const bound = new Set(
+      (allocation.policy.connections ?? []).map((binding) => binding.alias),
+    );
+    const missing = (targetAgent.connectionRequirements ?? [])
+      .map((requirement) =>
+        typeof requirement === "string" ? requirement : requirement.alias,
+      )
+      .filter((alias) => !bound.has(alias));
+    if (missing.length > 0)
+      throw refuse(
+        `${targetAgentId} needs the connection${missing.length === 1 ? "" : "s"} ${missing.join(", ")}, which this chat's workspace was not given.`,
+      );
+    return host;
   }
 
   async listSubsessions(
@@ -9423,6 +9988,7 @@ export class AgentSessionsService {
           task: delegation.task,
           contextMode: delegation.context_mode as "fresh" | "inherit",
           allowFurtherDelegation: delegation.allow_further_delegation,
+          workspace: session.workspace_session_id ? "shared" : "own",
           status: delegation.status as AgentSubsession["status"],
           session: mapSession(
             session,
@@ -9871,17 +10437,25 @@ export class AgentSessionsService {
   private async placeWaiting(
     identity: Identity,
     session: SessionRow,
+    options: {
+      /**
+       * The session whose workspace is admitted, when it is not this one's
+       * own: a shared subsession's (ADR 0322). The wait stays this one's.
+       */
+      workspace?: SessionRow;
+    } = {},
   ): Promise<
     | { kind: "admitted" }
     | { kind: "waiting" }
     | { kind: "expired"; reason: string }
     | { kind: "agent_missing" }
   > {
+    const target = options.workspace ?? session;
     const wait = await this.placementWaits.get({ rootWorkloadId: session.id });
     if (wait?.expired)
       return { kind: "expired", reason: placementWaitExpired(wait) };
     if (wait && !wait.due) return { kind: "waiting" };
-    const placed = await this.readmit(identity, session.project_id, session, {
+    const placed = await this.readmit(identity, target.project_id, target, {
       wait: true,
     }).catch((error: unknown) => {
       // Its Environment cannot take it at all (gone, refused, invalid):
@@ -9904,12 +10478,12 @@ export class AgentSessionsService {
       const current = await trx
         .selectFrom("agent_sessions")
         .select(["status", "allocation_id"])
-        .where("id", "=", session.id)
+        .where("id", "=", target.id)
         .forShare()
         .executeTakeFirst();
       if (
         current?.status !== "active" ||
-        current.allocation_id !== session.allocation_id
+        current.allocation_id !== target.allocation_id
       )
         return undefined;
       return this.placementWaits.record({
@@ -10101,6 +10675,13 @@ export class AgentSessionsService {
           externalUserId: first.external_user_id,
           agentId: first.agent_id,
         });
+        // A shared subsession's workspace is its workspace session's, and
+        // so is the use that keeps it (ADR 0322).
+        if (first.workspace_session_id)
+          return this.personWorkspace({
+            ...input,
+            sessionId: first.workspace_session_id,
+          });
         const agent = await this.resolveAgent(first.agent_id, projectId);
         if (agent.topology === "native")
           throw new SessionWorkspaceUnavailableError(
@@ -10332,11 +10913,17 @@ export class AgentSessionsService {
         "allocation.created_at as allocated_at",
         "allocation.sandbox_provider_id",
       ])
+      // Every session working in the workspace keeps it (ADR 0322).
       .select((eb) =>
         eb
           .selectFrom("agent_turns")
+          .innerJoin(
+            "agent_sessions as sharer",
+            "sharer.id",
+            "agent_turns.session_id",
+          )
           .select((turn) => turn.fn.max("agent_turns.updated_at").as("at"))
-          .whereRef("agent_turns.session_id", "=", "session.id")
+          .whereRef("sharer.allocation_id", "=", "allocation.id")
           .as("last_turn_at"),
       )
       // A person at a terminal or a preview there keeps it too (ADR 0209).
@@ -10348,6 +10935,8 @@ export class AgentSessionsService {
           .as("last_used_at"),
       )
       .where("session.status", "=", "active")
+      // A shared subsession holds no workspace to give back (ADR 0322).
+      .where("session.workspace_session_id", "is", null)
       .where("allocation.status", "=", "active")
       .where((node) =>
         node.or([
@@ -10359,8 +10948,13 @@ export class AgentSessionsService {
         not(
           exists(
             selectFrom("agent_turns")
+              .innerJoin(
+                "agent_sessions as sharer",
+                "sharer.id",
+                "agent_turns.session_id",
+              )
               .select("agent_turns.id")
-              .whereRef("agent_turns.session_id", "=", "session.id")
+              .whereRef("sharer.allocation_id", "=", "allocation.id")
               .where("agent_turns.status", "in", [
                 "queued",
                 "held",
@@ -10797,11 +11391,30 @@ export class AgentSessionsService {
     signal: AbortSignal;
   }): Promise<void> {
     const { identity, projectId, sessionId, signal } = input;
+    // A workspace stays while any session working in it runs a turn: its
+    // shared subsessions too (ADR 0322).
+    const inWorkspace = [
+      sessionId,
+      ...(
+        await this.db
+          .selectFrom("agent_sessions")
+          .select("id")
+          .where("workspace_session_id", "=", sessionId)
+          .execute()
+      ).map((row) => row.id),
+    ];
     const running = await this.sessionsWithRunningTurns({
-      sessionIds: [sessionId],
+      sessionIds: inWorkspace,
     });
     if (running.size > 0) return;
-    await this.withdrawFromSessionSandbox({ identity, projectId, sessionId });
+    const closing = await this.db
+      .selectFrom("agent_sessions")
+      .select("workspace_session_id")
+      .where("id", "=", sessionId)
+      .executeTakeFirst();
+    // A shared subsession's logins are its workspace session's (ADR 0322).
+    if (!closing?.workspace_session_id)
+      await this.withdrawFromSessionSandbox({ identity, projectId, sessionId });
     signal.throwIfAborted();
     const row = await this.db.transaction().execute(async (trx) => {
       const session = await trx
@@ -10813,11 +11426,13 @@ export class AgentSessionsService {
         .executeTakeFirst();
       if (!session) return undefined;
       const busy = await this.sessionsWithRunningTurns({
-        sessionIds: [sessionId],
+        sessionIds: inWorkspace,
         executor: trx,
       });
       if (busy.size > 0) return undefined;
-      if (session.allocation_id)
+      // A shared subsession holds its workspace session's Allocation, which
+      // is not its to release: it lets go of it instead.
+      if (session.allocation_id && !session.workspace_session_id)
         await this.executionAllocations.release({
           identity,
           allocationId: session.allocation_id,
@@ -10825,7 +11440,11 @@ export class AgentSessionsService {
         });
       await trx
         .updateTable("agent_sessions")
-        .set({ sandbox_id: null })
+        .set(
+          session.workspace_session_id
+            ? { sandbox_id: null, allocation_id: null }
+            : { sandbox_id: null },
+        )
         .where("id", "=", sessionId)
         .execute();
       return session;
@@ -10969,11 +11588,14 @@ export class AgentSessionsService {
     projectId: string;
     session: Pick<
       SessionRow,
-      "id" | "agent_id" | "allocation_id" | "workspace"
+      "id" | "agent_id" | "allocation_id" | "workspace" | "workspace_session_id"
     >;
   }): Promise<void> {
     const { session } = input;
-    if (session.allocation_id)
+    if (session.workspace_session_id)
+      // Its own grants only: the workspace's are its workspace session's.
+      await this.revokeSessionGrants(session.id);
+    else if (session.allocation_id)
       await this.connectionGrants
         ?.revokeAllocation({ allocationId: session.allocation_id })
         .catch(() => {});
@@ -10989,7 +11611,7 @@ export class AgentSessionsService {
       projectId: input.projectId,
       sessionId: session.id,
     });
-    if (this.usesSessionCopy(session))
+    if (this.usesSessionCopy(session) && !session.workspace_session_id)
       await this.projectManager
         .deleteSession({
           tenantId: input.identity.tenantId,
@@ -11002,6 +11624,14 @@ export class AgentSessionsService {
             error,
           ),
         );
+  }
+
+  /** End a session's own grants, on every channel. */
+  private async revokeSessionGrants(sessionId: string): Promise<void> {
+    for (const channel of ["sandbox", "mcp"] as const)
+      await this.connectionGrants
+        ?.revokeSession({ agentSessionId: sessionId, channel })
+        .catch(() => {});
   }
 
   async archiveImpact(
@@ -11185,10 +11815,16 @@ export class AgentSessionsService {
         // A turn that did not stop keeps its workspace: it is never taken
         // from under a running turn, on any replica. Idle release gives it
         // back once the chat rests (ADR 0193).
-        const busy = await this.sessionsWithRunningTurns({
-          sessionIds: impact.sessionIds,
-          executor: transaction,
-        });
+        const busy = new Set(
+          await this.sessionsWithRunningTurns({
+            sessionIds: impact.sessionIds,
+            executor: transaction,
+          }),
+        );
+        // A workspace is as busy as the sessions working in it (ADR 0322).
+        for (const row of resources)
+          if (row.workspace_session_id && busy.has(row.id))
+            busy.add(row.workspace_session_id);
         const idle = impact.sessionIds.filter((id) => !busy.has(id));
         const archived = [
           ...(idle.length > 0
@@ -11214,7 +11850,12 @@ export class AgentSessionsService {
         ];
         const now = new Date();
         for (const row of archived) {
-          if (row.allocation_id && !busy.has(row.id)) {
+          // A shared subsession's Allocation is its workspace session's.
+          if (
+            row.allocation_id &&
+            !row.workspace_session_id &&
+            !busy.has(row.id)
+          ) {
             const allocation = await transaction
               .selectFrom("execution_allocations")
               .select("worker_node_id")
@@ -11266,7 +11907,8 @@ export class AgentSessionsService {
     });
 
     for (const row of resourceRows) {
-      if (row.allocation_id) {
+      if (row.workspace_session_id) await this.revokeSessionGrants(row.id);
+      else if (row.allocation_id) {
         await this.connectionGrants
           ?.revokeAllocation({ allocationId: row.allocation_id })
           .catch(() => {});
@@ -11682,14 +12324,11 @@ export class AgentSessionsService {
     sourceAgent: RegisteredCodingAgent,
     allowFurtherDelegation: boolean | undefined,
   ): Promise<string> {
-    // Only an agent this host gives spawn_subsession hears about it: one
-    // without it (a server's agent keeps its harness's own subagents)
-    // would be pointed at a tool it does not have.
-    const offered =
-      sourceAgent.harness.placement === "host" &&
-      (sourceAgent.harness.hostTools ?? []).some(
-        (tool) => tool.name === "spawn_subsession",
-      );
+    // Only an agent that is served spawn_subsession hears about it: a host
+    // may serve the other subsession tools without it.
+    const offered = this.servedTools({ identity, agent: sourceAgent }).some(
+      (tool) => tool.name === "spawn_subsession",
+    );
     if (!offered) return "";
     if (allowFurtherDelegation === false) {
       return "Delegation is disabled for this subsession. Do not call spawn_subsession.";
@@ -11699,7 +12338,7 @@ export class AgentSessionsService {
       return "Delegation is disabled for this agent. Do not call spawn_subsession.";
     }
     return [
-      `Subsessions are your subagents. spawn_subsession starts one on a bounded, self-contained task that runs in parallel with you, at most ${policy.maxConcurrentChildren} at a time: use it wherever you would use a subagent or a Task tool, such as parallel research or exploration, independent reviews, or work to keep out of this conversation. Its result arrives here as a message from it, during your turn while you still work. A copy of yourself starts on this chat's model and effort, another agent on its own; set model or effort to run a subagent stronger or cheaper, naming the model as that agent's harness does (one it does not offer is refused with the list). read_only and delegate: false need no grant. read_only runs a subagent that changes nothing, where its harness has a read-only mode (Claude Code: plan mode, without a shell; Codex: its read-only sandbox), with only those of Work's tools that read.`,
+      `Subsessions are your subagents. spawn_subsession starts one on a bounded, self-contained task that runs in parallel with you, at most ${policy.maxConcurrentChildren} at a time: use it wherever you would use a subagent or a Task tool, such as parallel research or exploration, independent reviews, or work to keep out of this conversation. Its result arrives here as a message from it, during your turn while you still work, and so does anything it reports later. By default a subagent works in your workspace: your files as they are now, with nothing to set up again, its commands running beside yours. One that writes edits those same files, so give subagents that write in parallel workspace: own, a workspace of their own started where yours started. A copy of yourself starts on this chat's model and effort, another agent on its own; set model or effort to run a subagent stronger or cheaper, naming the model as that agent's harness does (one it does not offer is refused with the list). read_only and delegate: false need no grant. read_only runs a subagent that changes nothing, where its harness has a read-only mode (Claude Code: plan mode, without a shell; Codex: its read-only sandbox), with only those of Work's tools that read.`,
       await this.delegationChoices(identity, projectId, sourceAgent),
     ].join("\n");
   }
@@ -11884,36 +12523,22 @@ export class AgentSessionsService {
     if (allocation?.status !== "active") {
       throw new Error("The session's execution Allocation is no longer active");
     }
-    const admitted = await this.executionEnvironments.admit({
+    const { admitted, mismatch } = await this.admitOnAllocation({
       identity,
       projectId,
       // The session owner's work, whoever sends this turn (ADR 0167).
       owner: placementOwner(session.external_user_id),
-      environment: allocation.environmentName,
-      workerNodeId: allocation.workerNodeId ?? undefined,
-      allocationBindingId: allocation.bindingId,
-      allowed: agent.environment?.allowed,
-      requirements: {
-        ...agent.environment?.requirements,
-        workload: "agent",
-        topology: agent.topology,
-      },
-      ...(agent.signIn ? { signIn: agent.signIn } : {}),
+      allocation,
+      agent,
     });
-    for (const key of ["cpuMillis", "memoryMb", "storageMb", "gpu"] as const) {
-      const required = admitted.effectiveRequirements.resources?.[key];
-      const reserved = allocation.policy.requirements.resources?.[key];
-      if (required !== undefined && required !== reserved) {
-        throw new Error(
-          "This agent's resource policy changed. Move the session to apply its new workspace limits.",
-        );
-      }
-    }
-    if (admitted.binding.id !== allocation.bindingId) {
+    if (mismatch === "resources")
+      throw new Error(
+        "This agent's resource policy changed. Move the session to apply its new workspace limits.",
+      );
+    if (mismatch === "binding")
       throw new Error(
         "This Environment's binding changed. Move the session explicitly before continuing.",
       );
-    }
     if (agent.topology === "native") {
       return {
         bindingId: allocation.bindingId,
@@ -11974,10 +12599,54 @@ export class AgentSessionsService {
         provider,
         store: new DbSandboxStore(this.db, allocation.id),
         resources: allocation.policy.requirements.resources,
-        ...(this.usesSessionCopy(session) ? { sessionId: session.id } : {}),
+        ...(this.usesSessionCopy(session)
+          ? { sessionId: workspaceCopyId(session) }
+          : {}),
         ...(signIn ? { signIns: [signIn] } : {}),
       }),
     };
+  }
+
+  /**
+   * Admit an agent's work on an Allocation it already has, and whether the
+   * Allocation still fits it: the resources it reserved and the binding it
+   * was placed on.
+   */
+  private async admitOnAllocation(input: {
+    identity: Identity;
+    projectId: string;
+    owner: string | null;
+    allocation: ExecutionAllocation;
+    agent: RegisteredCodingAgent;
+  }): Promise<{
+    admitted: EnvironmentAdmission;
+    mismatch?: "resources" | "binding";
+  }> {
+    const { allocation, agent } = input;
+    const admitted = await this.executionEnvironments.admit({
+      identity: input.identity,
+      projectId: input.projectId,
+      owner: input.owner,
+      environment: allocation.environmentName,
+      workerNodeId: allocation.workerNodeId ?? undefined,
+      allocationBindingId: allocation.bindingId,
+      allowed: agent.environment?.allowed,
+      requirements: {
+        ...agent.environment?.requirements,
+        workload: "agent",
+        topology: agent.topology,
+      },
+      ...(agent.signIn ? { signIn: agent.signIn } : {}),
+    });
+    for (const key of ["cpuMillis", "memoryMb", "storageMb", "gpu"] as const) {
+      const required = admitted.effectiveRequirements.resources?.[key];
+      const reserved = allocation.policy.requirements.resources?.[key];
+      if (required !== undefined && required !== reserved)
+        return { admitted, mismatch: "resources" };
+    }
+    if (admitted.binding.id !== allocation.bindingId)
+      return { admitted, mismatch: "binding" };
+    return { admitted };
   }
 
   /**
@@ -12045,21 +12714,101 @@ export class AgentSessionsService {
       );
       return { workingDirectory: checkout.path, checkout };
     }
-    if (!runtime.provider || !runtime.devSandboxes)
+    const { provider, devSandboxes } = runtime;
+    if (!provider || !devSandboxes)
       throw new Error(
         "The selected Environment has no agent workspace provider",
       );
-    if (session.sandbox_id) {
+    // A shared subsession's sandbox is its workspace session's (ADR 0322):
+    // used as it stands, or made for that session when it has none, by one
+    // of the sessions working there at a time.
+    const readOwner = async () =>
+      (await this.db
+        .selectFrom("agent_sessions")
+        .selectAll()
+        .where("id", "=", session.workspace_session_id ?? session.id)
+        .where("allocation_id", "=", session.allocation_id)
+        .executeTakeFirst()) ?? session;
+    const first = session.workspace_session_id ? await readOwner() : session;
+    if (!first.sandbox_id && (await this.sharesWorkspace(first)))
+      return withReplicaClaim({
+        db: this.db,
+        name: `workspace-make:${first.id}`,
+        ttlSeconds: 120,
+        waitMs: WORKSPACE_SYNC_WAIT_MS,
+        operation: async () =>
+          this.useOrMakeSandbox({
+            identity,
+            projectId,
+            session,
+            owner: await readOwner(),
+            runtime: { ...runtime, provider, devSandboxes },
+            populate: options.populate ?? true,
+          }),
+      });
+    return this.useOrMakeSandbox({
+      identity,
+      projectId,
+      session,
+      owner: first,
+      runtime: { ...runtime, provider, devSandboxes },
+      populate: options.populate ?? true,
+    });
+  }
+
+  /** Whether other sessions work in this session's workspace (ADR 0322). */
+  private async sharesWorkspace(
+    session: Pick<SessionRow, "id" | "workspace_session_id">,
+  ): Promise<boolean> {
+    if (session.workspace_session_id) return true;
+    return (
+      (await this.db
+        .selectFrom("agent_sessions")
+        .select("id")
+        .where("workspace_session_id", "=", session.id)
+        .limit(1)
+        .executeTakeFirst()) !== undefined
+    );
+  }
+
+  /**
+   * The sandbox of a session's workspace, `owner`'s: the one it has, or one
+   * made for it (a shared subsession's row follows).
+   */
+  private async useOrMakeSandbox(input: {
+    identity: Identity;
+    projectId: string;
+    session: SessionRow;
+    owner: SessionRow;
+    runtime: AgentExecutionRuntime & {
+      provider: SandboxProvider;
+      devSandboxes: DevSandboxService;
+    };
+    populate: boolean;
+  }): Promise<{
+    workingDirectory: string;
+    sandboxProviderId?: string;
+    created?: boolean;
+  }> {
+    const { identity, projectId, session, owner, runtime } = input;
+    const holders = [...new Set([owner.id, session.id])];
+    if (owner.sandbox_id) {
       const replaced = await this.replacedSandbox({
-        session,
-        sandboxId: session.sandbox_id,
+        session: owner,
+        sandboxId: owner.sandbox_id,
         runtime,
       });
       if (!replaced) {
         const sandboxProviderId = await this.resolveSandboxProviderId(
-          session,
+          owner,
           runtime.provider,
         );
+        if (session.sandbox_id !== owner.sandbox_id)
+          await this.db
+            .updateTable("agent_sessions")
+            .set({ sandbox_id: owner.sandbox_id })
+            .where("id", "=", session.id)
+            .execute();
         return {
           workingDirectory: this.projectDir(runtime.provider),
           sandboxProviderId,
@@ -12067,9 +12816,9 @@ export class AgentSessionsService {
       }
       // An earlier preparation stopped while replacing it (ADR 0257).
       await this.finishReplacingSandbox({
-        session,
+        session: owner,
         runtime,
-        sandboxId: session.sandbox_id,
+        sandboxId: owner.sandbox_id,
         providerId: replaced.providerId,
       });
     }
@@ -12077,13 +12826,13 @@ export class AgentSessionsService {
       { provider: runtime.provider, devSandboxes: runtime.devSandboxes },
       identity,
       projectId,
-      session,
-      options.populate ?? true,
+      owner,
+      input.populate,
     );
     await this.db
       .updateTable("agent_sessions")
       .set({ sandbox_id: handle.id, base_commit_sha: baseCommitSha })
-      .where("id", "=", session.id)
+      .where("id", "in", holders)
       .execute();
     return {
       workingDirectory: this.projectDir(runtime.provider),
@@ -12196,6 +12945,9 @@ export class AgentSessionsService {
     const checkout = await this.nativeAgentCheckout?.resolve({
       projectId,
       sessionId: session.id,
+      ...(session.workspace_session_id
+        ? { sharedWith: session.workspace_session_id }
+        : {}),
       bindingId: runtime.bindingId,
       environmentName: runtime.environmentName,
       ...(start && this.workspaces
@@ -12849,6 +13601,7 @@ export class AgentSessionsService {
           identity,
           projectId: child.project_id,
           sessionId: child.id,
+          turnId: turn.id,
           resultMessageId: reply?.id ?? turn.inputItemId ?? turn.id,
           status,
           content:
@@ -12865,10 +13618,38 @@ export class AgentSessionsService {
     }
   }
 
+  /**
+   * A child working again for anything but a person (its parent, its own
+   * background command, a watcher, a workflow) is running for its parent
+   * again, so this turn's result reaches it as the first did (ADR 0322). A
+   * turn a person starts in the child's chat is theirs.
+   */
+  private async resumeDelegation(input: {
+    session: Pick<SessionRow, "id" | "parent_session_id">;
+    turn: Turn;
+  }): Promise<void> {
+    if (!input.session.parent_session_id || !input.turn.inputItemId) return;
+    const row = await this.db
+      .selectFrom("agent_items")
+      .select("payload")
+      .where("id", "=", input.turn.inputItemId)
+      .executeTakeFirst();
+    const item = row ? itemFromRow(row) : null;
+    if (!item || item.kind === "user_message") return;
+    await this.db
+      .updateTable("agent_delegations")
+      .set({ status: "running", completed_at: null })
+      .where("target_session_id", "=", input.session.id)
+      .where("status", "in", ["completed", "failed", "interrupted"])
+      .execute();
+  }
+
   private async settleDelegation(input: {
     identity: Identity;
     projectId: string;
     sessionId: string;
+    /** The child's turn the result is of: each reports once (ADR 0322). */
+    turnId: string;
     resultMessageId: string;
     status: AgentTurnSettledEvent["status"];
     content: string;
@@ -12889,6 +13670,7 @@ export class AgentSessionsService {
     identity: Identity;
     projectId: string;
     sessionId: string;
+    turnId: string;
     resultMessageId: string;
     status: AgentTurnSettledEvent["status"];
     content: string;
@@ -12914,7 +13696,7 @@ export class AgentSessionsService {
         .where(
           "idempotency_key",
           "=",
-          `delegation:${delegation.id}:awaiting-input`,
+          `delegation:${delegation.id}:awaiting-input:${input.turnId}`,
         )
         .executeTakeFirst();
       if (delivered) return;
@@ -12939,7 +13721,7 @@ export class AgentSessionsService {
           detail:
             "It waits on a question or an approval. The person answers it in that chat.",
           source: { kind: "session", sessionId: input.sessionId },
-          idempotencyKey: `delegation:${delegation.id}:awaiting-input`,
+          idempotencyKey: `delegation:${delegation.id}:awaiting-input:${input.turnId}`,
         },
       );
       return;
@@ -12965,7 +13747,7 @@ export class AgentSessionsService {
           status === "completed" ? `${title} finished` : `${title} failed`,
         detail: input.content.trim(),
         source: { kind: "session", sessionId: input.sessionId },
-        idempotencyKey: `delegation:${delegation.id}:result`,
+        idempotencyKey: `delegation:${delegation.id}:result:${input.turnId}`,
       },
     );
     await this.db
@@ -13151,6 +13933,7 @@ function mapSession(
     forkedFromSessionId: row.forked_from_session_id,
     imported: importedSessionFromRow(row.imported),
     parentSessionId: row.parent_session_id,
+    workspaceSessionId: row.workspace_session_id,
     visibility: presentation?.visibility ?? "promoted",
     archivedAt: presentation?.archivedAt?.toISOString() ?? null,
     activity: row.activity,
@@ -13259,18 +14042,26 @@ function sessionVisibility(value: string): SessionVisibility {
 }
 
 /**
- * The host's subsession tools: a read-only chat's children read only.
+ * The subsession tools: a read-only chat's children read only.
  * Replica memory (c): fixed names, the same on every replica.
  */
-const SUBSESSION_TOOLS = new Set([
-  "spawn_subsession",
-  "wait_for_subsessions",
-  "interrupt_subsession",
-]);
+const SUBSESSION_TOOLS: ReadonlySet<string> = new Set(SUBSESSION_TOOL_NAMES);
+
+/**
+ * Where a shared subsession's runner keeps its state in the sandbox it
+ * shares (ADR 0322): beside its workspace session's, never in it.
+ */
+const SHARED_RUNNER_STATE = "subsessions";
 
 /** What a read-only chat is told about itself (ADR 0271). */
 const READ_ONLY_NOTE =
   "This chat runs read-only: read, search and report, but change nothing. Any subsession it starts reads only too.";
+
+/**
+ * How long a turn of a shared workspace waits for another session's sync
+ * of it to finish (ADR 0322).
+ */
+const WORKSPACE_SYNC_WAIT_MS = 10 * 60_000;
 
 /** How long a spawn waits on a harness's model catalog (ADR 0271). */
 const MODEL_CATALOG_WAIT_MS = 5_000;
@@ -13328,6 +14119,21 @@ function withAgentLayers(
   for (const [server, layers] of Object.entries(own))
     merged[server] = [...(merged[server] ?? []), ...layers];
   return merged;
+}
+
+/**
+ * The session whose workspace copy a session's changes go to: its own, or
+ * the one a shared subsession works in (ADR 0322).
+ */
+function workspaceCopyId(
+  session: Pick<SessionRow, "id" | "workspace_session_id">,
+): string {
+  return session.workspace_session_id ?? session.id;
+}
+
+/** Where an agent of a topology works, as a refusal says it. */
+function workspacePlace(topology: AgentExecutionTopology | undefined): string {
+  return topology === "native" ? "in a folder on its machine" : "in a sandbox";
 }
 
 function sandboxingRank(sandboxing: Sandboxing | undefined): number {

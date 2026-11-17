@@ -6228,6 +6228,8 @@ export interface paths {
                                 imported: components["schemas"]["ImportedSession"] | null;
                                 /** Format: uuid */
                                 parentSessionId: string | null;
+                                /** Format: uuid */
+                                workspaceSessionId: string | null;
                                 /** @enum {string} */
                                 visibility: "latent" | "promoted" | "archived";
                                 /** Format: date-time */
@@ -6374,6 +6376,8 @@ export interface paths {
                             imported: components["schemas"]["ImportedSession"] | null;
                             /** Format: uuid */
                             parentSessionId: string | null;
+                            /** Format: uuid */
+                            workspaceSessionId: string | null;
                             /** @enum {string} */
                             visibility: "latent" | "promoted" | "archived";
                             /** Format: date-time */
@@ -6592,6 +6596,8 @@ export interface paths {
                             imported: components["schemas"]["ImportedSession"] | null;
                             /** Format: uuid */
                             parentSessionId: string | null;
+                            /** Format: uuid */
+                            workspaceSessionId: string | null;
                             /** @enum {string} */
                             visibility: "latent" | "promoted" | "archived";
                             /** Format: date-time */
@@ -6729,6 +6735,8 @@ export interface paths {
                             imported: components["schemas"]["ImportedSession"] | null;
                             /** Format: uuid */
                             parentSessionId: string | null;
+                            /** Format: uuid */
+                            workspaceSessionId: string | null;
                             /** @enum {string} */
                             visibility: "latent" | "promoted" | "archived";
                             /** Format: date-time */
@@ -6875,6 +6883,8 @@ export interface paths {
                             imported: components["schemas"]["ImportedSession"] | null;
                             /** Format: uuid */
                             parentSessionId: string | null;
+                            /** Format: uuid */
+                            workspaceSessionId: string | null;
                             /** @enum {string} */
                             visibility: "latent" | "promoted" | "archived";
                             /** Format: date-time */
@@ -7397,6 +7407,8 @@ export interface paths {
                             imported: components["schemas"]["ImportedSession"] | null;
                             /** Format: uuid */
                             parentSessionId: string | null;
+                            /** Format: uuid */
+                            workspaceSessionId: string | null;
                             /** @enum {string} */
                             visibility: "latent" | "promoted" | "archived";
                             /** Format: date-time */
@@ -7653,6 +7665,8 @@ export interface paths {
                                 imported: components["schemas"]["ImportedSession"] | null;
                                 /** Format: uuid */
                                 parentSessionId: string | null;
+                                /** Format: uuid */
+                                workspaceSessionId: string | null;
                                 /** @enum {string} */
                                 visibility: "latent" | "promoted" | "archived";
                                 /** Format: date-time */
@@ -7896,6 +7910,8 @@ export interface paths {
                             imported: components["schemas"]["ImportedSession"] | null;
                             /** Format: uuid */
                             parentSessionId: string | null;
+                            /** Format: uuid */
+                            workspaceSessionId: string | null;
                             /** @enum {string} */
                             visibility: "latent" | "promoted" | "archived";
                             /** Format: date-time */
@@ -8021,6 +8037,8 @@ export interface paths {
                             /** Format: uuid */
                             parentSessionId: string | null;
                             /** Format: uuid */
+                            workspaceSessionId: string | null;
+                            /** Format: uuid */
                             forkedFromSessionId: string | null;
                             /** @enum {string} */
                             visibility: "latent" | "promoted" | "archived";
@@ -8100,6 +8118,8 @@ export interface paths {
                             contextMode: "fresh" | "inherit";
                             allowFurtherDelegation: boolean;
                             /** @enum {string} */
+                            workspace: "shared" | "own";
+                            /** @enum {string} */
                             status: "running" | "completed" | "failed" | "interrupted" | "archived";
                             session: {
                                 /** @enum {string} */
@@ -8133,6 +8153,8 @@ export interface paths {
                                 imported: components["schemas"]["ImportedSession"] | null;
                                 /** Format: uuid */
                                 parentSessionId: string | null;
+                                /** Format: uuid */
+                                workspaceSessionId: string | null;
                                 /** @enum {string} */
                                 visibility: "latent" | "promoted" | "archived";
                                 /** Format: date-time */
@@ -8238,6 +8260,8 @@ export interface paths {
                         effort?: "low" | "medium" | "high" | "xhigh" | "max";
                         readOnly?: boolean;
                         delegate?: boolean;
+                        /** @enum {string} */
+                        workspace?: "shared" | "own";
                         task: string;
                         /** @enum {string} */
                         contextMode?: "fresh" | "inherit";
@@ -8260,6 +8284,8 @@ export interface paths {
                             /** @enum {string} */
                             contextMode: "fresh" | "inherit";
                             allowFurtherDelegation: boolean;
+                            /** @enum {string} */
+                            workspace: "shared" | "own";
                             /** @enum {string} */
                             status: "running" | "completed" | "failed" | "interrupted" | "archived";
                             session: {
@@ -8294,6 +8320,8 @@ export interface paths {
                                 imported: components["schemas"]["ImportedSession"] | null;
                                 /** Format: uuid */
                                 parentSessionId: string | null;
+                                /** Format: uuid */
+                                workspaceSessionId: string | null;
                                 /** @enum {string} */
                                 visibility: "latent" | "promoted" | "archived";
                                 /** Format: date-time */
@@ -8461,6 +8489,8 @@ export interface paths {
                             contextMode: "fresh" | "inherit";
                             allowFurtherDelegation: boolean;
                             /** @enum {string} */
+                            workspace: "shared" | "own";
+                            /** @enum {string} */
                             status: "running" | "completed" | "failed" | "interrupted" | "archived";
                             session: {
                                 /** @enum {string} */
@@ -8494,6 +8524,8 @@ export interface paths {
                                 imported: components["schemas"]["ImportedSession"] | null;
                                 /** Format: uuid */
                                 parentSessionId: string | null;
+                                /** Format: uuid */
+                                workspaceSessionId: string | null;
                                 /** @enum {string} */
                                 visibility: "latent" | "promoted" | "archived";
                                 /** Format: date-time */
@@ -8719,6 +8751,8 @@ export interface paths {
                             imported: components["schemas"]["ImportedSession"] | null;
                             /** Format: uuid */
                             parentSessionId: string | null;
+                            /** Format: uuid */
+                            workspaceSessionId: string | null;
                             /** @enum {string} */
                             visibility: "latent" | "promoted" | "archived";
                             /** Format: date-time */
@@ -9147,6 +9181,8 @@ export interface paths {
                             imported: components["schemas"]["ImportedSession"] | null;
                             /** Format: uuid */
                             parentSessionId: string | null;
+                            /** Format: uuid */
+                            workspaceSessionId: string | null;
                             /** @enum {string} */
                             visibility: "latent" | "promoted" | "archived";
                             /** Format: date-time */
@@ -9297,6 +9333,8 @@ export interface paths {
                             imported: components["schemas"]["ImportedSession"] | null;
                             /** Format: uuid */
                             parentSessionId: string | null;
+                            /** Format: uuid */
+                            workspaceSessionId: string | null;
                             /** @enum {string} */
                             visibility: "latent" | "promoted" | "archived";
                             /** Format: date-time */
@@ -9597,6 +9635,8 @@ export interface paths {
                                 imported: components["schemas"]["ImportedSession"] | null;
                                 /** Format: uuid */
                                 parentSessionId: string | null;
+                                /** Format: uuid */
+                                workspaceSessionId: string | null;
                                 /** @enum {string} */
                                 visibility: "latent" | "promoted" | "archived";
                                 /** Format: date-time */
@@ -9776,6 +9816,8 @@ export interface paths {
                             imported: components["schemas"]["ImportedSession"] | null;
                             /** Format: uuid */
                             parentSessionId: string | null;
+                            /** Format: uuid */
+                            workspaceSessionId: string | null;
                             /** @enum {string} */
                             visibility: "latent" | "promoted" | "archived";
                             /** Format: date-time */
@@ -11401,6 +11443,8 @@ export interface paths {
                             imported: components["schemas"]["ImportedSession"] | null;
                             /** Format: uuid */
                             parentSessionId: string | null;
+                            /** Format: uuid */
+                            workspaceSessionId: string | null;
                             /** @enum {string} */
                             visibility: "latent" | "promoted" | "archived";
                             /** Format: date-time */

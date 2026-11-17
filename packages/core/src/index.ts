@@ -792,6 +792,15 @@ export {
   type TranscriptMessage,
 } from "./services/sessions/session-reads.js";
 export {
+  SUBSESSION_TOOL_NAMES,
+  SUBSESSION_WORKSPACES,
+  type SubsessionOperations,
+  type SubsessionRequest,
+  type SubsessionWorkspace,
+  subsessionSummary,
+  subsessionTools,
+} from "./services/sessions/subsession-tools.js";
+export {
   CONTINUATION_PROMPT,
   steeredTurnId,
 } from "./services/sessions/turn-engine.js";

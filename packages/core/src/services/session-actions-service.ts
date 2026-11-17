@@ -16,6 +16,7 @@ import {
   keyedChatOwnerId,
 } from "./chat-delivery.js";
 import { SessionWorkspaceRequestSchema } from "./session-workspaces.js";
+import { SUBSESSION_WORKSPACES } from "./sessions/subsession-tools.js";
 import type { WatchersService } from "./watchers-service.js";
 
 /**
@@ -84,6 +85,8 @@ export const SESSION_ACTION_SCHEMAS = {
     effort: z.enum(["low", "medium", "high", "xhigh", "max"]).optional(),
     readOnly: z.boolean().optional(),
     delegate: z.boolean().optional(),
+    /** Its parent's workspace (default) or its own (ADR 0322). */
+    workspace: z.enum(SUBSESSION_WORKSPACES).optional(),
     title: z.string().max(500).optional(),
     contextMode: z.enum(["fresh", "inherit"]).optional(),
   }),
