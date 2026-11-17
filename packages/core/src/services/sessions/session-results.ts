@@ -5,7 +5,7 @@ import {
   type JsonValue,
   type ResultItem,
 } from "@catamorphic/agent-protocol";
-import type { DB } from "@catamorphic/db";
+import type { DB, Json } from "@catamorphic/db";
 import { type Kysely, sql, type Transaction } from "kysely";
 import { RESULT_LIMITS } from "../agent-results.js";
 import type { SessionLog } from "./session-log.js";
@@ -160,6 +160,67 @@ export async function ownFamilies(
  * the chat's own family sent. Task notifications, and messages its own
  * subsessions send, are the agent's own work reporting back.
  */
+/**
+ * A chat's requests, as a result's `current` counts them (ADR 0323): a
+ * person's message, or words from a workflow or a session outside the
+ * chat's own family (`own`, from {@link ownFamilies}). Task notifications
+ * and its subsessions' reports are its own work; a request withdrawn
+ * before it ran, or undone by a rollback, asks for nothing any more.
+ * Hand-offs list the same requests (ADR 0328). Newest first.
+ */
+export async function readRequests(
+  db: Executor,
+  input: {
+    sessionId: string;
+    own: readonly string[];
+    /** Only requests of these turns. */
+    turnIds?: readonly string[];
+    /** Only requests after this position. */
+    after?: number;
+    limit?: number;
+  },
+): Promise<
+  Array<{ id: string; position: number; kind: string; payload: Json }>
+> {
+  if (input.turnIds?.length === 0) return [];
+  const rows = await db
+    .selectFrom("agent_items as item")
+    .leftJoin("agent_turns as turn", "turn.id", "item.turn_id")
+    .select(["item.id", "item.position", "item.kind", "item.payload"])
+    .where("item.session_id", "=", input.sessionId)
+    .where("item.kind", "in", ["user_message", "inbound_message"])
+    .where((eb) =>
+      eb.or([
+        eb("turn.status", "is", null),
+        eb("turn.status", "not in", ["cancelled", "rolled_back"]),
+      ]),
+    )
+    .where((eb) =>
+      eb.or([
+        eb("item.author_kind", "is", null),
+        eb("item.author_kind", "<>", "agent"),
+        eb(sql<string>`item.author_payload->>'sessionId'`, "not in", [
+          ...input.own,
+        ]),
+      ]),
+    )
+    .$if(input.turnIds !== undefined, (query) =>
+      query.where("item.turn_id", "in", [...(input.turnIds ?? [])]),
+    )
+    .$if(input.after !== undefined, (query) =>
+      query.where("item.position", ">", String(input.after ?? -1)),
+    )
+    .$if(input.limit !== undefined, (query) => query.limit(input.limit ?? 1))
+    .orderBy("item.position", "desc")
+    .execute();
+  return rows.map((row) => ({
+    id: row.id,
+    position: Number(row.position),
+    kind: row.kind,
+    payload: row.payload,
+  }));
+}
+
 async function newestRequests(
   db: Executor,
   sessionIds: readonly string[],
@@ -169,30 +230,7 @@ async function newestRequests(
   const families = await ownFamilies(db, sessionIds);
   for (const sessionId of sessionIds) {
     const own = [...(families.get(sessionId) ?? [sessionId])];
-    const row = await db
-      .selectFrom("agent_items as item")
-      .leftJoin("agent_turns as turn", "turn.id", "item.turn_id")
-      .select(["item.id", "item.position", "item.kind"])
-      .where("item.session_id", "=", sessionId)
-      .where("item.kind", "in", ["user_message", "inbound_message"])
-      // A request withdrawn before it ran, or undone by a rollback, asks
-      // for nothing any more.
-      .where((eb) =>
-        eb.or([
-          eb("turn.status", "is", null),
-          eb("turn.status", "not in", ["cancelled", "rolled_back"]),
-        ]),
-      )
-      .where((eb) =>
-        eb.or([
-          eb("item.author_kind", "is", null),
-          eb("item.author_kind", "<>", "agent"),
-          eb(sql<string>`item.author_payload->>'sessionId'`, "not in", own),
-        ]),
-      )
-      .orderBy("item.position", "desc")
-      .limit(1)
-      .executeTakeFirst();
+    const [row] = await readRequests(db, { sessionId, own, limit: 1 });
     if (row)
       newest.set(sessionId, {
         itemId: row.id,

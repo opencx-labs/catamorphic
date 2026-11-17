@@ -7,7 +7,11 @@ import {
 } from "@catamorphic/agent-protocol";
 import type { DB } from "@catamorphic/db";
 import { type Kysely, sql, type Transaction } from "kysely";
-import { LATEST_RESULT_VALUE_BYTES, ownFamilies } from "./session-results.js";
+import {
+  LATEST_RESULT_VALUE_BYTES,
+  ownFamilies,
+  readRequests,
+} from "./session-results.js";
 import { itemFromRow } from "./session-rows.js";
 
 /** About 16k tokens: enough to carry a conversation, small enough to stay cheap. */
@@ -234,44 +238,23 @@ async function keptSections(input: {
   const own = [
     ...((await ownFamilies(db, [sessionId])).get(sessionId) ?? [sessionId]),
   ];
-  const requestQuery = db
-    .selectFrom("agent_items as item")
-    .leftJoin("agent_turns as turn", "turn.id", "item.turn_id")
-    .select(["item.payload", "item.position"])
-    .where("item.session_id", "=", sessionId)
-    .where("item.kind", "in", ["user_message", "inbound_message"])
-    // A request withdrawn before it ran, or undone by a rollback, asks for
-    // nothing any more.
-    .where((eb) =>
-      eb.or([
-        eb("turn.status", "is", null),
-        eb("turn.status", "not in", ["cancelled", "rolled_back"]),
-      ]),
-    )
-    .where((eb) =>
-      eb.or([
-        eb("item.author_kind", "is", null),
-        eb("item.author_kind", "<>", "agent"),
-        eb(sql<string>`item.author_payload->>'sessionId'`, "not in", own),
-      ]),
-    )
-    .orderBy("item.position", "desc");
   const requestRows =
     turnIds.length > 0
-      ? await requestQuery
-          .where("item.turn_id", "in", turnIds)
-          .$if(newest !== undefined, (query) =>
-            query.where(
-              "item.position",
-              ">",
-              String(newest?.input?.position ?? -1),
-            ),
-          )
-          .$if(newest === undefined, (query) => query.limit(LATEST_REQUESTS))
-          .execute()
+      ? await readRequests(db, {
+          sessionId,
+          own,
+          turnIds,
+          ...(newest !== undefined
+            ? { after: newest.input?.position ?? -1 }
+            : { limit: LATEST_REQUESTS }),
+        })
       : [];
   // The chat's newest request: a result whose request is older is stale.
-  const newestRequest = await requestQuery.limit(1).executeTakeFirst();
+  const [newestRequest] = await readRequests(db, {
+    sessionId,
+    own,
+    limit: 1,
+  });
   const newestRequestAt =
     newestRequest === undefined ? undefined : Number(newestRequest.position);
   const answeredRows =
