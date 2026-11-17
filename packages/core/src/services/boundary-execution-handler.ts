@@ -13,6 +13,10 @@ import {
   ExecutionJobDeferredError,
   type ExecutionWorkerService,
 } from "./execution-worker-service.js";
+import {
+  type HostCallFollowers,
+  HostCallParkedError,
+} from "./host-call-waits.js";
 import type {
   RateBucketKey,
   RateLimit,
@@ -34,6 +38,9 @@ import type { TenantPoliciesService } from "./tenant-policies-service.js";
 
 /** Backstop only: `resume` wakes parked jobs explicitly. */
 const PAUSED_RUN_PARK_MS = 60 * 60 * 1_000;
+
+/** How long one claim of a `host_call_wait` job follows its work. */
+const HOST_CALL_FOLLOW_SLICE_MS = 120_000;
 
 interface BoundaryRuntimeContext {
   identity: Identity;
@@ -120,6 +127,8 @@ export class BoundaryExecutionHandler {
         action: string;
         input: Json;
       }): Promise<Json>;
+      /** Follow host calls that outlive their attempt (ADR 0324). */
+      hostCallFollowers?: HostCallFollowers;
       parkConnectionCall?(args: {
         caller: Identity;
         projectId: string;
@@ -142,6 +151,55 @@ export class BoundaryExecutionHandler {
         signal.throwIfAborted();
         return deps.coordinator.resolvePauseTimeout({ job });
       },
+    });
+    deps.worker.registerHandler({
+      kind: "host_call_wait",
+      handler: ({ job, signal }) => this.followHostCall({ job, signal }),
+    });
+  }
+
+  /**
+   * One slice of following a host call that outlived its attempt (ADR
+   * 0324): its result resolves the step as the call's own; a failure fails
+   * the step, whose retry policy applies; anything else follows on.
+   */
+  private async followHostCall(args: {
+    job: ExecutionJob;
+    signal: AbortSignal;
+  }): Promise<void> {
+    const payload = jsonRecord(args.job.payload);
+    const pauseId = stringValue(payload.pauseId);
+    const waitKey = stringValue(payload.waitKey);
+    if (!pauseId || !waitKey) throw new Error("Host call wait job is invalid");
+    if (!(await this.deps.coordinator.hostCallWaitOpen({ pauseId }))) return;
+    const followers = this.deps.hostCallFollowers;
+    const outcome = followers
+      ? await followers.follow({
+          waitKey,
+          signal: args.signal,
+          sliceMs: HOST_CALL_FOLLOW_SLICE_MS,
+        })
+      : {
+          status: "failed" as const,
+          error: "Nothing on this host follows host calls",
+        };
+    args.signal.throwIfAborted();
+    if (outcome.status === "pending")
+      throw new ExecutionJobDeferredError(
+        new Date(Date.now() + (outcome.retryAfterMs ?? 0)),
+      );
+    if (outcome.status === "done") {
+      await this.deps.coordinator.resolveHostCallWait({
+        job: args.job,
+        pauseId,
+        output: outcome.output,
+      });
+      return;
+    }
+    await this.deps.coordinator.failHostCallWait({
+      job: args.job,
+      pauseId,
+      error: outcome.error,
     });
   }
 
@@ -390,6 +448,17 @@ export class BoundaryExecutionHandler {
         });
       } catch (error) {
         requireAttemptTime(args);
+        // Work that outlives the attempt: the step waits for it, holding
+        // none of the run's capacity (ADR 0324).
+        if (error instanceof HostCallParkedError) {
+          await this.deps.coordinator.suspendForHostCall({
+            workflowStepAttemptId: context.workflowStepAttemptId,
+            job: args.job,
+            transition,
+            waitKey: error.waitKey,
+          });
+          return;
+        }
         await this.deps.coordinator.failStep({
           workflowStepAttemptId: context.workflowStepAttemptId,
           job: args.job,

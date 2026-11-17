@@ -11,6 +11,7 @@ import type { WorkWakeups } from "./work-wakeups.js";
 export type ExecutionJobKind =
   | "durable_boundary"
   | "durable_pause_timeout"
+  | "host_call_wait"
   | "batch_source"
   | "batch_item"
   | "batch_step"
@@ -1240,6 +1241,7 @@ function parseExecutionJobKind(value: string): ExecutionJobKind {
   if (
     value === "durable_boundary" ||
     value === "durable_pause_timeout" ||
+    value === "host_call_wait" ||
     value === "batch_source" ||
     value === "batch_item" ||
     value === "batch_step" ||

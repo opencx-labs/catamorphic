@@ -2651,7 +2651,8 @@ function mapRun(args: {
     args.row.phase === "source" ||
     args.row.phase === "process" ||
     args.row.phase === "sink";
-  const openPause = args.pause?.status === "open";
+  // A host-call wait (ADR 0324) takes no input: its call's result ends it.
+  const openPause = args.pause?.status === "open" && !args.pause.host_call;
   return {
     id: args.row.id,
     projectId: args.row.project_id,
