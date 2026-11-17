@@ -65,15 +65,17 @@ CREATE TABLE project_cleanups (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
   tenant_id uuid NOT NULL,
   project_id uuid NOT NULL,
-  -- The hook's place among the host's project hooks.
-  hook_index integer NOT NULL,
+  -- The hook's name among the host's project hooks.
+  hook_name text NOT NULL,
   project jsonb NOT NULL,
   identity jsonb NOT NULL,
   attempts integer NOT NULL DEFAULT 0,
   last_error text,
   next_attempt_at timestamptz NOT NULL DEFAULT now(),
+  -- The attempt holding it; renewed while the hook runs.
+  claimed_by uuid,
   created_at timestamptz NOT NULL DEFAULT now(),
-  UNIQUE (project_id, hook_index)
+  UNIQUE (project_id, hook_name)
 );
 
 CREATE INDEX idx_project_cleanups_due ON project_cleanups(next_attempt_at);

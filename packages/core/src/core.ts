@@ -373,9 +373,10 @@ export interface CatamorphicCoreConfig {
    */
   capabilityProviders?: readonly CapabilityProviderRuntime[];
   /**
-   * Host-side project lifecycle hooks (ADR 0046). `onProjectCreated`
-   * failures roll the create back; `onProjectDeleted` failures abort the
-   * delete. Hooks must be idempotent.
+   * Host-side project lifecycle hooks (ADRs 0046, 0331), each uniquely
+   * named. `onProjectCreated` failures roll the create back and queue the
+   * cleanup of hooks that already ran; `onProjectDeleted` never blocks the
+   * delete and is retried until it reports done. Hooks must be idempotent.
    */
   projectHooks?: readonly ProjectLifecycleHooks[];
   /**

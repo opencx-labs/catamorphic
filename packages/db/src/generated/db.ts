@@ -718,8 +718,9 @@ export interface PlacementWaits {
 
 export interface ProjectCleanups {
   attempts: Generated<number>;
+  claimed_by: string | null;
   created_at: Generated<Timestamp>;
-  hook_index: number;
+  hook_name: string;
   id: Generated<string>;
   identity: Json;
   last_error: string | null;

@@ -150,6 +150,11 @@ export async function requireTenantProject(
  */
 export interface ProjectLifecycleHooks {
   /**
+   * Names the hook among the host's hooks, unique and stable across
+   * restarts: a cleanup still owed after a restart finds its hook by it.
+   */
+  name: string;
+  /**
    * Runs after the project row and repo exist. A throw fails the create and
    * rolls both back — a project whose provisioning failed never half-exists.
    * It may return `secrets` (ADR 0331): Work keeps each as the project's
@@ -234,6 +239,7 @@ export class ProjectFileNotTextError extends Error {
  */
 export class ProjectsService {
   private readonly seedFiles: Record<string, string>;
+  private readonly cleanupClaimMs: number;
   private readonly storeHostSecrets?: (args: {
     tenantId: string;
     projectId: string;
@@ -250,6 +256,11 @@ export class ProjectsService {
        * framework's `SEED_SKILLS`.
        */
       seedFiles?: Record<string, string>;
+      /**
+       * How long one cleanup call holds its claim between renewals. Default
+       * five minutes; renewed while the hook runs.
+       */
+      cleanupClaimMs?: number;
       /** Keeps secrets a create hook returns (ADR 0331). */
       storeHostSecrets?: (args: {
         tenantId: string;
@@ -259,6 +270,15 @@ export class ProjectsService {
     } = {},
   ) {
     this.storeHostSecrets = doctrine.storeHostSecrets;
+    this.cleanupClaimMs = doctrine.cleanupClaimMs ?? CLEANUP_CLAIM_MS;
+    const names = new Set<string>();
+    for (const hook of hooks) {
+      if (names.has(hook.name))
+        throw new Error(
+          `Two project hooks are named '${hook.name}'; each needs its own name`,
+        );
+      names.add(hook.name);
+    }
     this.seedFiles = doctrine.seedFiles ?? SEED_SKILLS;
   }
 
@@ -352,10 +372,13 @@ export class ProjectsService {
     // rolls both back: the host must never observe a project whose
     // infrastructure was not provisioned (ADR 0046). Hooks are idempotent
     // by contract, so a retried create may safely re-run them.
+    // Hooks that already provisioned, cleaned up if a later one fails.
+    const provisioned: ProjectLifecycleHooks[] = [];
     for (const hook of this.hooks) {
       if (!hook.onProjectCreated) continue;
       try {
         const result = await hook.onProjectCreated({ project, identity });
+        provisioned.push(hook);
         const secrets = result?.secrets ?? {};
         if (Object.keys(secrets).length > 0) {
           if (!this.storeHostSecrets)
@@ -370,9 +393,19 @@ export class ProjectsService {
         }
       } catch (cause) {
         await this.db
-          .deleteFrom("projects")
-          .where("id", "=", projectId)
-          .execute()
+          .transaction()
+          .execute(async (trx) => {
+            await trx
+              .deleteFrom("projects")
+              .where("id", "=", projectId)
+              .execute();
+            await this.owe(trx, {
+              project,
+              identity,
+              hooks: provisioned,
+              dueNow: true,
+            });
+          })
           .catch(() => {});
         await this.projectManager.delete(tenantId, projectId).catch(() => {});
         throw new ProjectProvisioningError({ projectId, cause });
@@ -508,14 +541,17 @@ export class ProjectsService {
         // A host's cleanup never blocks the delete: one that fails or is
         // still underway is kept and retried until it reports done (ADR
         // 0331), so nothing it made outlives the project unnoticed.
-        const pending: Array<{ index: number; error: string | null }> = [];
-        for (const [index, hook] of this.hooks.entries()) {
+        const pending: Array<{
+          hook: ProjectLifecycleHooks;
+          error: string | null;
+        }> = [];
+        for (const hook of this.hooks) {
           if (!hook.onProjectDeleted) continue;
           try {
             const result = await hook.onProjectDeleted({ project, identity });
-            if (result?.done === false) pending.push({ index, error: null });
+            if (result?.done === false) pending.push({ hook, error: null });
           } catch (cause) {
-            pending.push({ index, error: errorMessage(cause) });
+            pending.push({ hook, error: errorMessage(cause) });
           }
         }
 
@@ -525,25 +561,8 @@ export class ProjectsService {
             .where("id", "=", projectId)
             .where("tenant_id", "=", identity.tenantId)
             .execute();
-          if (pending.length === 0) return;
-          await trx
-            .insertInto("project_cleanups")
-            .values(
-              pending.map(({ index, error }) => ({
-                tenant_id: identity.tenantId,
-                project_id: projectId,
-                hook_index: index,
-                project: toJson(project),
-                identity: toJson(identity),
-                attempts: 1,
-                last_error: error,
-                next_attempt_at: new Date(Date.now() + cleanupBackoffMs(1)),
-              })),
-            )
-            .onConflict((conflict) =>
-              conflict.columns(["project_id", "hook_index"]).doNothing(),
-            )
-            .execute();
+          for (const { hook, error } of pending)
+            await this.owe(trx, { project, identity, hooks: [hook], error });
         });
 
         await this.projectManager
@@ -559,11 +578,14 @@ export class ProjectsService {
    * replicas never call one hook at once. Returns how many finished.
    */
   async retryCleanups(input: { limit?: number } = {}): Promise<number> {
+    const claim = crypto.randomUUID();
+    const hold = () => new Date(Date.now() + this.cleanupClaimMs);
     const due = await this.db
       .updateTable("project_cleanups")
       .set((eb) => ({
         attempts: eb("attempts", "+", 1),
-        next_attempt_at: new Date(Date.now() + CLEANUP_CLAIM_MS),
+        claimed_by: claim,
+        next_attempt_at: hold(),
       }))
       .where("id", "in", (eb) =>
         eb
@@ -579,19 +601,50 @@ export class ProjectsService {
       .execute();
     let finished = 0;
     for (const row of due) {
-      const hook = this.hooks[row.hook_index];
+      const hook = this.hooks.find(
+        (candidate) => candidate.name === row.hook_name,
+      );
+      if (!hook?.onProjectDeleted) {
+        console.warn(
+          `[catamorphic] No project hook named '${row.hook_name}' cleans up project ${row.project_id}; keeping the cleanup until one does`,
+        );
+        await this.db
+          .updateTable("project_cleanups")
+          .set({
+            last_error: `No project hook named '${row.hook_name}'`,
+            next_attempt_at: new Date(
+              Date.now() + cleanupBackoffMs(row.attempts),
+            ),
+          })
+          .where("id", "=", row.id)
+          .execute();
+        continue;
+      }
+      // Renewed while the hook runs, so no other replica calls it at once.
+      const renewal = setInterval(
+        () =>
+          void this.db
+            .updateTable("project_cleanups")
+            .set({ next_attempt_at: hold() })
+            .where("id", "=", row.id)
+            .where("claimed_by", "=", claim)
+            .execute()
+            .catch(() => {}),
+        Math.max(50, Math.floor(this.cleanupClaimMs / 3)),
+      );
+      renewal.unref();
       let error: string | null = null;
-      let done = !hook?.onProjectDeleted;
-      if (hook?.onProjectDeleted) {
-        try {
-          const result = await hook.onProjectDeleted({
-            project: row.project as unknown as Project,
-            identity: row.identity as unknown as Identity,
-          });
-          done = result?.done !== false;
-        } catch (cause) {
-          error = errorMessage(cause);
-        }
+      let done = false;
+      try {
+        const result = await hook.onProjectDeleted({
+          project: row.project as unknown as Project,
+          identity: row.identity as unknown as Identity,
+        });
+        done = result?.done !== false;
+      } catch (cause) {
+        error = errorMessage(cause);
+      } finally {
+        clearInterval(renewal);
       }
       if (done) {
         await this.db
@@ -601,10 +654,15 @@ export class ProjectsService {
         finished += 1;
         continue;
       }
+      if (row.attempts >= CLEANUP_WARN_ATTEMPTS)
+        console.warn(
+          `[catamorphic] Project ${row.project_id}'s cleanup by '${row.hook_name}' has not finished after ${row.attempts} attempts${error ? `: ${error}` : ""}`,
+        );
       await this.db
         .updateTable("project_cleanups")
         .set({
           last_error: error,
+          claimed_by: null,
           next_attempt_at: new Date(
             Date.now() + cleanupBackoffMs(row.attempts),
           ),
@@ -613,6 +671,70 @@ export class ProjectsService {
         .execute();
     }
     return finished;
+  }
+
+  /**
+   * Host cleanups of deleted projects not done yet, most attempted first,
+   * for a host to watch (ADR 0331).
+   */
+  async listCleanups(input: { minAttempts?: number } = {}): Promise<
+    Array<{
+      projectId: string;
+      hookName: string;
+      attempts: number;
+      lastError: string | null;
+      nextAttemptAt: string;
+    }>
+  > {
+    const rows = await this.db
+      .selectFrom("project_cleanups")
+      .selectAll()
+      .where("attempts", ">=", input.minAttempts ?? 0)
+      .orderBy("attempts", "desc")
+      .limit(200)
+      .execute();
+    return rows.map((row) => ({
+      projectId: row.project_id,
+      hookName: row.hook_name,
+      attempts: row.attempts,
+      lastError: row.last_error,
+      nextAttemptAt: row.next_attempt_at.toISOString(),
+    }));
+  }
+
+  /** Keep a cleanup each of `hooks` owes for a project that is gone. */
+  private async owe(
+    trx: Transaction<DB>,
+    input: {
+      project: Project;
+      identity: Identity;
+      hooks: readonly ProjectLifecycleHooks[];
+      error?: string | null;
+      dueNow?: boolean;
+    },
+  ): Promise<void> {
+    const owing = input.hooks.filter((hook) => hook.onProjectDeleted);
+    if (owing.length === 0) return;
+    await trx
+      .insertInto("project_cleanups")
+      .values(
+        owing.map((hook) => ({
+          tenant_id: input.identity.tenantId,
+          project_id: input.project.id,
+          hook_name: hook.name,
+          project: toJson(input.project),
+          identity: toJson(input.identity),
+          attempts: input.dueNow ? 0 : 1,
+          last_error: input.error ?? null,
+          next_attempt_at: input.dueNow
+            ? new Date()
+            : new Date(Date.now() + cleanupBackoffMs(1)),
+        })),
+      )
+      .onConflict((conflict) =>
+        conflict.columns(["project_id", "hook_name"]).doNothing(),
+      )
+      .execute();
   }
 
   async listFiles(
@@ -996,6 +1118,9 @@ export function remoteOwnership(value: string | null): RemoteOwnership | null {
 
 /** How long a claimed cleanup attempt may run before another may start. */
 const CLEANUP_CLAIM_MS = 5 * 60_000;
+
+/** From this many attempts, each one still not done is logged. */
+const CLEANUP_WARN_ATTEMPTS = 5;
 
 /** 30 seconds after the first attempt, doubling, at most an hour. */
 function cleanupBackoffMs(attempts: number): number {
