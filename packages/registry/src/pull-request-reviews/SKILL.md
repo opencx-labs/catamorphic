@@ -142,6 +142,14 @@ reviewer: the doctrine comes from `reviewer.md` alone. Which providers serve
 the prompts, with no fallbacks and no data retention, is the server's: a
 rewrite in its own image (the Work server guide's "Harnesses on the server").
 
+Add `"effort"` to `reviewer.json` to pick among the model's variants (the
+chat says so when the model has no such level). OpenCode keeps its session in
+the sandbox, so a chat whose sandbox was replaced (idle release, a lost
+machine) starts a new OpenCode session: its hand-off carries the `review`
+results the chat already submitted and the pushes and comments no result
+answers yet, verbatim (ADR 0328), so nothing the reviewer must act on is
+summarized away.
+
 ## .work/workflows/src/reviews.ts
 
 Every trigger's `where` names the repository this project is attached to,

@@ -176,7 +176,10 @@ adds:
 - `.work/triggers/github.ts`: the GitHub trigger library.
 - `.work/agents/reviewer.json` and `reviewer.md`: the reviewer and its
   review doctrine. The `pull-request-reviews-opencode` pack runs OpenCode
-  over ACP on a model connection instead, such as OpenRouter, with
+  over ACP on a model connection instead (its `effort`, if set, chosen
+  among the model's variants; a chat whose sandbox was replaced continues
+  from a hand-off that keeps its submitted reviews and the pushes and
+  comments they do not answer yet, ADR 0328), such as OpenRouter, with
   the providers that may serve the prompts pinned by a rewrite in the
   company's own server image
   ([Harnesses on the server](harnesses.md#pin-what-requests-carry-your-own-server-image)).

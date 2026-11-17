@@ -941,9 +941,9 @@ Direction, not shipped. Tracked in [`TODO.md`](TODO.md):
 
 - **More desktop platforms**: Intel Mac validation, then signed Windows and
   Linux packages.
-- **ACP beyond the desktop**: the desktop runs a project's local ACP agents
-  (`kind: "acp"` with `acp.command`, such as Hermes); the remote endpoint
-  transport and ACP agents on the Work server are next.
+- **ACP, the rest**: ACP agents run on the desktop and in a Work server's
+  sandbox; the remote endpoint transport, a warm process between turns,
+  and carrying an agent's own session store across sandboxes are next.
 - **TS `defineAgent`**: a typed authoring layer that compiles to the
   committed `.work/agents/<slug>.json` substrate.
 - **Review-mode collaboration**: PR-first sync for shared projects, invites,
