@@ -271,6 +271,12 @@ export function defineTrigger(
 export const WORKFLOW_PACKAGE_VERSION = packageJson.version;
 
 export type {
+  EventHostOperations,
+  RecordableTriggerKind,
+  RecordedEvent,
+  RecordedEventInput,
+} from "./event-operations.js";
+export type {
   SecretHostOperations,
   SecretStatusEntry,
 } from "./secret-operations.js";

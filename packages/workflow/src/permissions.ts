@@ -25,6 +25,11 @@ export const PROJECT_PERMISSIONS = [
   "automations:read",
   /** Turn project automations on, pause them, update them. */
   "automations:write",
+  /**
+   * Record events of the project's own trigger kinds, which start the
+   * workflows bound to them as a webhook delivery would (ADR 0326).
+   */
+  "events:write",
   /** Webhook URLs, which are credentials. */
   "webhooks:read",
   /** Replace webhook URLs. */

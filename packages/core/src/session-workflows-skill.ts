@@ -56,8 +56,11 @@ library in writing-workflows. A host without a public webhook URL (the desktop)
 can observe for it instead: pass the host's event source to create_watcher
 (eventSource: "github"). The host polls the repository with your GitHub
 connection from the watcher's start and records events shaped like the webhook's
-deliveries, with payload.hostVerified true in place of a signature, so the same
-trigger kinds and where filters match on every host.
+deliveries, with payload.origin { type: "host" } in place of a signature, so the
+same trigger kinds and where filters match on every host. A server without a
+public URL feeds those kinds for the whole project instead with a workflow that
+polls and records them (writing-workflows, "Recording events"; the
+github-polling pack).
 
 Events are normalized Project Events. input.payload.session is the snapshot at
 the transition; input.payload.detail contains the message/turn/visibility change.

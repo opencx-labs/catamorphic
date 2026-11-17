@@ -222,6 +222,8 @@ export class WebhooksService {
             ),
             contentType,
             body,
+            // A request to the URL, checked as the binding declares (ADR 0326).
+            origin: { type: "request" },
           } satisfies JsonObject,
         });
         return { type: "event", eventId: event.id, duplicate: !created };

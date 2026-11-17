@@ -2,6 +2,7 @@
 
 - **Status:** Accepted
 - **Date:** 2026-09-23
+- **Amended by:** 0326 (workflows record webhook-kind events; `payload.origin` on every delivery)
 - **Supersedes:** 0087 (member-only wake)
 - **Refines:** 0068, 0074, 0138, 0148, 0155
 - **Refined by:** 0171 (webhook verification schemes, handshakes, body limits,

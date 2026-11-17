@@ -1085,6 +1085,7 @@ export interface TriggerDefinitions {
 export interface TriggerDefinitionScans {
   commit_sha: string;
   project_id: string;
+  project_kinds: Generated<Json>;
   scanned_at: Generated<Timestamp>;
 }
 

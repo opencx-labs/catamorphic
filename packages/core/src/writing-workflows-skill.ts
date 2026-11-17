@@ -108,10 +108,13 @@ Filter in \`where\` rather than in code, so unrelated events never start runs.
 Webhooks use \`trigger("webhook", { name: "github" })\`: a lowercase name that
 becomes the project's URL segment. The server stores each request durably and
 answers 202 before the workflow runs, so a redelivery (same delivery id header) runs
-once. The payload's \`payload\` holds \`{ name, headers, query, contentType, body }\`,
-with JSON and form bodies parsed, and \`hostVerified: true\` when the host fetched
-the event itself instead of receiving a signed request (the desktop's GitHub
-poller). The config declares how the endpoint checks senders, always with a
+once. The payload's \`payload\` holds \`{ name, headers, query, contentType, body,
+origin }\`, with JSON and form bodies parsed. \`origin\` says where it came from:
+\`{ type: "request" }\` for a request to the URL, checked as \`verify\` declares;
+\`{ type: "host" }\` when the host fetched it itself (the desktop's GitHub poller);
+\`{ type: "workflow", workflowName, runId, enablementId? }\` when a workflow
+recorded it (below). A binding that must act only on signed requests adds
+\`where: { payload: { origin: { type: "request" } } }\`. The config declares how the endpoint checks senders, always with a
 project secret's name:
 
 - \`verify: { scheme: "hmac", secret, header, prefix?, encoding?: "hex" | "base64",
@@ -204,7 +207,27 @@ Ready-made automations are packs: \`registry.read\` lists them, and fetches
 one with its files and docs to copy into the project and adapt. The
 \`slack-threads\` pack has the Slack library (\`slack.event\`, \`slack.mention\`,
 \`slack.message\`) and a chat per thread; the \`pull-request-reviews\` pack is a
-code and security review of every pull request, built on this library.
+code and security review of every pull request, built on this library; the
+\`github-polling\` pack feeds this library on a server GitHub cannot reach.
+
+**Recording events.** When no webhook can arrive (a private server), a
+workflow polls the source itself and records what it finds as events of the
+project's own kinds: \`host["catamorphic.events"].record({ events: [{ kind, id,
+payload, occurredAt? }] })\`, returned from a boundary like any host call, up
+to 100 events per call. The workflow declares \`permissions: ["events:write"]\`.
+\`kind\` must be a project kind built on \`webhook\` (host kinds such as
+\`session.*\`, \`schedule\` or \`webhook\` itself are refused), and \`payload\` is
+what the kind's events carry, \`{ name, headers, query, contentType, body }\`:
+the host refuses one its kind's \`where\` filters would not deliver, and one
+over the webhook body limit (1 MiB). Recorded events start every workflow
+bound to the kind exactly as a delivery would, except the recorder itself:
+the host adds \`origin\` and the run's causation, so a workflow never starts
+itself through its own events. \`id\` is the change's stable identity
+(\`pull_request:42:synchronize:<sha>\`): an id the project already has for the
+kind is a no-op returning the existing event, so retried polls are safe.
+Keep the poll's cursor in a store document written with \`ifVersion\`, and
+record nothing on the first poll (a baseline), or the existing backlog
+arrives as new events. The \`github-polling\` pack is a complete poller.
 
 A workflow that runs only for merged pull requests:
 

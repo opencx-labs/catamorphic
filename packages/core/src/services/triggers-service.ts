@@ -101,6 +101,17 @@ export interface StoredTriggerActivation extends StoredTriggerBinding {
   environment: string;
 }
 
+/**
+ * A project trigger kind as a scan resolved it (ADR 0326): the host kind
+ * that fires it, that kind's config, and every filter along its chain.
+ */
+export interface ResolvedProjectKind {
+  name: string;
+  kind: string;
+  config: Json;
+  where: Json[];
+}
+
 export type TriggerSuspensionReason = RunSuspensionReason;
 
 export type TriggerFireOutcome =
@@ -260,6 +271,61 @@ export class TriggersService {
   kindInfo(name: string): TriggerKindInfo | null {
     const kind = this.registry.get(name);
     return kind ? triggerKindInfo(kind) : null;
+  }
+
+  /** Whether the host registers `name` itself. */
+  isHostKind(name: string): boolean {
+    return this.registry.has(name);
+  }
+
+  /**
+   * The project's own trigger kinds at a revision, resolved (ADR 0326),
+   * scanning the revision the first time it is seen.
+   */
+  async projectKindsAtCommit(args: {
+    identity: Identity;
+    projectId: string;
+    commitSha: string;
+    remoteBranch: string;
+  }): Promise<ResolvedProjectKind[]> {
+    await this.ensureScanAtCommit(args);
+    const scan = await this.db
+      .selectFrom("trigger_definition_scans")
+      .select("project_kinds")
+      .where("project_id", "=", args.projectId)
+      .where("commit_sha", "=", args.commitSha)
+      .executeTakeFirst();
+    const kinds = scan?.project_kinds;
+    return Array.isArray(kinds)
+      ? kinds.flatMap((value) => {
+          const kind = resolvedKindFromJson(value);
+          return kind ? [kind] : [];
+        })
+      : [];
+  }
+
+  /**
+   * Why the host would not deliver `event` as the project kind `kind`
+   * (ADR 0326): the root kind's payload schema and `matches`, then every
+   * filter along the chain. Empty when it would.
+   */
+  recordedEventErrors(args: {
+    kind: ResolvedProjectKind;
+    event: Json;
+  }): string[] {
+    const root = this.registry.get(args.kind.kind);
+    if (!root) return [`it builds on unknown trigger kind '${args.kind.kind}'`];
+    const check = root.validatePayload(args.event);
+    if (!check.ok) return check.errors;
+    // Matched as the dispatcher will read it back from its row.
+    const payload = storedJson(args.event);
+    if (root.matches && !root.matches({ config: args.kind.config, payload }))
+      return [
+        `it does not match the '${root.name}' config of '${args.kind.name}'`,
+      ];
+    if (!matchesAllWhere(args.kind.where, payload))
+      return [`it does not match the filters of '${args.kind.name}'`];
+    return [];
   }
 
   /**
@@ -1014,6 +1080,7 @@ export class TriggersService {
       );
     }
     errors.push(...this.projectKindErrors(parsed.triggerKinds));
+    const projectKinds = this.resolvedProjectKinds(parsed.triggerKinds);
     const bindings: Array<
       TriggerBindingInfo & {
         connectionRequirements: Json;
@@ -1148,7 +1215,11 @@ export class TriggersService {
     await this.db.transaction().execute(async (trx) => {
       await trx
         .insertInto("trigger_definition_scans")
-        .values({ project_id: args.projectId, commit_sha: args.commitSha })
+        .values({
+          project_id: args.projectId,
+          commit_sha: args.commitSha,
+          project_kinds: jsonColumn(toJson(projectKinds)),
+        })
         .onConflict((oc) =>
           oc.columns(["project_id", "commit_sha"]).doNothing(),
         )
@@ -1191,6 +1262,28 @@ export class TriggersService {
     return bindings.map(
       ({ connectionRequirements: _, bindingIndex: __, ...binding }) => binding,
     );
+  }
+
+  /** Every project kind that resolves to a registered host kind. */
+  private resolvedProjectKinds(
+    kinds: readonly ProjectTriggerKind[],
+  ): ResolvedProjectKind[] {
+    return kinds.flatMap((kind) => {
+      if (this.registry.has(kind.name)) return [];
+      const resolved = resolveTriggerBinding({
+        binding: { kind: kind.name, config: {} },
+        projectKinds: kinds,
+      });
+      if (!resolved.ok || !this.registry.has(resolved.binding.kind)) return [];
+      return [
+        storedJson({
+          name: kind.name,
+          kind: resolved.binding.kind,
+          config: resolved.binding.config as Json,
+          where: resolved.binding.where as Json[],
+        }),
+      ];
+    });
   }
 
   /**
@@ -1251,5 +1344,17 @@ function bindingFromRow(row: {
     inputParameters: (row.input_parameters ?? []) as unknown as ParameterInfo[],
     inputSchema: row.input_schema ?? {},
     outputSchema: row.output_schema ?? {},
+  };
+}
+
+function resolvedKindFromJson(value: Json): ResolvedProjectKind | null {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+  const { name, kind, config, where } = value;
+  if (typeof name !== "string" || typeof kind !== "string") return null;
+  return {
+    name,
+    kind,
+    config: config ?? {},
+    where: Array.isArray(where) ? where : [],
   };
 }

@@ -264,6 +264,8 @@ describe("WebhooksService", () => {
       },
       query: { source: "ci" },
       body: { status: "green" },
+      // A request to the URL, as recorded and polled events are not.
+      origin: { type: "request" },
     });
     // Only declared handshakes answer GET.
     await expect(
@@ -563,6 +565,7 @@ describe("WebhooksService", () => {
       },
       query: {},
       body: { object_kind: "push" },
+      origin: { type: "request" },
     });
   });
 
