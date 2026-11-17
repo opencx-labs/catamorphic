@@ -20,7 +20,7 @@ import {
 import { PROJECT_MANIFEST_PATH } from "@catamorphic/workflow/project-layout";
 import { PGlite } from "@electric-sql/pglite";
 import { pgcrypto } from "@electric-sql/pglite/contrib/pgcrypto";
-import { Kysely, PGliteDialect, WithSchemaPlugin } from "kysely";
+import { Kysely, PGliteDialect, sql, WithSchemaPlugin } from "kysely";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { type Identity, PROJECT_PRINCIPAL_ID } from "../identity.js";
 import {
@@ -763,6 +763,57 @@ describe("subagents of a server agent (ADR 0322)", () => {
     // With no other turn there, the next one runs it.
     await sessions.sendMessage(identity, projectId, parent.id, "And now");
     expect(calls).toBe(2);
+  }, 120_000);
+
+  it("delivers nothing more to a sandbox once its workspace claim could be lost", async () => {
+    const service = sessions as unknown as {
+      prepareSandboxGit(input: unknown): Promise<unknown>;
+      prepareSandboxSecrets(input: unknown): Promise<unknown>;
+    };
+    const git = vi
+      .spyOn(service, "prepareSandboxGit")
+      .mockImplementationOnce(async () => {
+        // Another replica takes the workspace's claim meanwhile, and this
+        // one's renewal finds it gone.
+        await db
+          .updateTable("replica_claims")
+          .set({
+            holder: "another-replica",
+            expires_at: sql<Date>`now() + interval '1 hour'`,
+          })
+          .where("name", "like", "workspace-setup:%")
+          .execute();
+        await new Promise((resolve) => setTimeout(resolve, 2_000));
+        // As for an agent on its own sign-in: no turn-bound grant to stop it.
+        return [
+          {
+            alias: "model",
+            api: "anthropic",
+            baseUrl: "http://work.acme.test/gateway/model/model",
+            grantDirectory: "/workspace/.work-session/model-grants/x/model",
+          },
+        ];
+      });
+    const secrets = vi.spyOn(service, "prepareSandboxSecrets");
+    try {
+      const parent = await sessions.create(identity, projectId, {
+        workspace: { ref: "pr" },
+      });
+      await sessions
+        .sendMessage(identity, projectId, parent.id, "Look around")
+        .catch(() => undefined);
+      // The abandoned preparation would go on in the background.
+      await new Promise((resolve) => setTimeout(resolve, 8_000));
+      expect(git).toHaveBeenCalled();
+      expect(secrets).not.toHaveBeenCalled();
+    } finally {
+      git.mockRestore();
+      secrets.mockRestore();
+      await db
+        .deleteFrom("replica_claims")
+        .where("holder", "=", "another-replica")
+        .execute();
+    }
   }, 120_000);
 
   it("starts a child that asks for its own workspace at the parent's base", async () => {

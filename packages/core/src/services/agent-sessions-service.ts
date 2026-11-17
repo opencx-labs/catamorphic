@@ -5920,6 +5920,9 @@ export class AgentSessionsService {
           ? new SecretMask(await secretValuesOfChat()).text(early.note)
           : undefined;
         if (earlyNote) notes.push(earlyNote);
+        // Nothing more reaches the sandbox once the claim could be lost:
+        // another replica may have withdrawn what this would deliver.
+        signal.throwIfAborted();
         const models = await this.prepareSandboxGit({
           identity,
           projectId,
@@ -5975,6 +5978,7 @@ export class AgentSessionsService {
             : [];
         const besideOthers = others.some((other) => !other.ownerAuthored);
         const credentialsAllowed = ownerAuthored && !besideOthers;
+        signal.throwIfAborted();
         const delivery = await this.prepareSandboxSecrets({
           identity,
           projectId,
@@ -5992,6 +5996,7 @@ export class AgentSessionsService {
           ownerOnlyBecause ??= "credentials";
         }
         secrets = delivery.values;
+        signal.throwIfAborted();
         const files = await this.preparePersonalFiles({
           identity,
           projectId,
@@ -6116,6 +6121,7 @@ export class AgentSessionsService {
               .filter(Boolean)
               .join("\n\n"),
           });
+        signal.throwIfAborted();
         if (session.allocation_id)
           this.startGrantRenewal({
             identity,
