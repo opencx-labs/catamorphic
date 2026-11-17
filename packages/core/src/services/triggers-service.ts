@@ -586,7 +586,11 @@ export class TriggersService {
     if (!payloadCheck.ok) {
       throw new TriggerPayloadInvalidError(kind.name, payloadCheck.errors);
     }
-    const deliveryKey = args.deliveryKey ?? kind.deliveryKey?.(args.payload);
+    // A person's own fire (a tool call, a test of a fixed payload) runs
+    // every time; a delivery's id dedupes only what systems deliver.
+    const kindDeliveryKey = args.interactive
+      ? undefined
+      : kind.deliveryKey?.(args.payload);
 
     return withSpan(
       {
@@ -747,7 +751,14 @@ export class TriggersService {
               mode,
               correlationKey: args.correlationKey,
               onConflict: args.onConflict,
-              deliveryKey,
+              // One delivery starts one run for each enablement it reaches:
+              // a member's and the project's enablement of a workflow each
+              // get theirs (ADR 0325). A caller's own key is already scoped.
+              deliveryKey:
+                args.deliveryKey ??
+                (kindDeliveryKey && enablementId
+                  ? `${enablementId}:${kindDeliveryKey}`
+                  : undefined),
               deadline,
               commitSha: scanned.commitSha,
               triggerKind: binding.kind,
