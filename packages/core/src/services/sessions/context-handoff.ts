@@ -1,6 +1,5 @@
 import {
   type ContextHandoffStrategy,
-  INPUT_ITEM_KINDS,
   type InboundSender,
   type InputItem,
   type Item,
@@ -8,7 +7,7 @@ import {
 } from "@catamorphic/agent-protocol";
 import type { DB } from "@catamorphic/db";
 import { type Kysely, sql, type Transaction } from "kysely";
-import { LATEST_RESULT_VALUE_BYTES } from "./session-results.js";
+import { LATEST_RESULT_VALUE_BYTES, ownFamilies } from "./session-results.js";
 import { itemFromRow } from "./session-rows.js";
 
 /** About 16k tokens: enough to carry a conversation, small enough to stay cheap. */
@@ -199,18 +198,35 @@ async function keptSections(input: {
     ),
   ];
   const covered = [...ordinals.keys()];
+  // Requests as a result's `current` counts them (ADR 0323): a person's
+  // message, or words from outside the chat's own family. Task
+  // notifications and its subsessions' messages are its own work.
+  const own = [
+    ...((await ownFamilies(db, [sessionId])).get(sessionId) ?? [sessionId]),
+  ];
   const requestRows =
     covered.length > 0
       ? await db
-          .selectFrom("agent_items")
-          .select("payload")
-          .where("session_id", "=", sessionId)
-          .where("kind", "in", [...INPUT_ITEM_KINDS])
-          .where("turn_id", "in", covered)
-          .$if(newest !== undefined, (query) =>
-            query.where("position", ">", String(newest?.input?.position ?? -1)),
+          .selectFrom("agent_items as item")
+          .select("item.payload")
+          .where("item.session_id", "=", sessionId)
+          .where("item.kind", "in", ["user_message", "inbound_message"])
+          .where("item.turn_id", "in", covered)
+          .where((eb) =>
+            eb.or([
+              eb("item.author_kind", "is", null),
+              eb("item.author_kind", "<>", "agent"),
+              eb(sql<string>`item.author_payload->>'sessionId'`, "not in", own),
+            ]),
           )
-          .orderBy("position", "desc")
+          .$if(newest !== undefined, (query) =>
+            query.where(
+              "item.position",
+              ">",
+              String(newest?.input?.position ?? -1),
+            ),
+          )
+          .orderBy("item.position", "desc")
           .$if(newest === undefined, (query) => query.limit(LATEST_REQUESTS))
           .execute()
       : [];

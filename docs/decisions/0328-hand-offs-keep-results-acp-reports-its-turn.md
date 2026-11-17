@@ -28,9 +28,11 @@ sections verbatim, outside the summary's trimming:
   with its turn, the input it answers (quoted briefly), and whether a newer
   input arrived since. A value above 8 KiB is cut to an excerpt that names
   the result id to read whole with `session_results`.
-- *Requests you have not answered with a result*: the inputs of the
-  covered turns after the newest result's input, newest kept when cut. A
-  chat with no result carries its latest three inputs instead.
+- *Requests you have not answered with a result*: the requests of the
+  covered turns after the newest result's input, as a result's `current`
+  counts them (ADR 0323: a person's message, or words from outside the
+  chat's own family; not task notifications or its subsessions' reports),
+  newest kept when cut. A chat with no result carries its latest three.
 
 Both share half of the hand-off budget (32,000 of 64,000 characters), the
 summary takes what they leave, and each says how many it left out and

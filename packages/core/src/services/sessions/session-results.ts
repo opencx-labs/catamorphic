@@ -111,7 +111,7 @@ function inputKind(kind: string): InputItem["kind"] {
 }
 
 /** Each chat with its subsessions at every depth: its own work. */
-async function ownFamilies(
+export async function ownFamilies(
   db: Executor,
   sessionIds: readonly string[],
 ): Promise<Map<string, Set<string>>> {
