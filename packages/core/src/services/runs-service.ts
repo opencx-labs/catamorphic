@@ -30,7 +30,10 @@ import {
   hasProjectPermission,
   type Identity,
   identityCovers,
+  identityMayUseConnection,
+  identityMayUseEnvironment,
   intersectProjectPermissions,
+  intersectScope,
   isProjectPrincipal,
 } from "../identity.js";
 import { assertAgentSessionAccess } from "./agent-session-access.js";
@@ -91,6 +94,7 @@ import {
 import { EnvironmentCapacityError } from "./worker-capacity.js";
 import type { WorkflowEnablement } from "./workflow-enablement-types.js";
 import {
+  WorkflowEnablementNotFoundError,
   WorkflowEnablementSuspendedError,
   type WorkflowEnablementsService,
 } from "./workflow-enablements-service.js";
@@ -465,6 +469,72 @@ export class RunEnrollmentConflictError extends Error {
 /** A key holds at most this many queued runs (ADR 0325). */
 export const MAX_QUEUED_RUNS_PER_KEY = 100;
 
+/**
+ * Starts a queued run tries before an unexpected failure fails it, so a
+ * broken head cannot hold its key for ever (ADR 0325). Waiting for room has
+ * no bound: the run waits as long as it is queued.
+ */
+export const MAX_QUEUED_START_ATTEMPTS = 8;
+
+interface QueuedHead {
+  id: string;
+  project_id: string;
+  workflow_name: string;
+  correlation_key: string | null;
+  external_user_id: string | null;
+  caller_scope: Json | null;
+  input: Json | null;
+  enrollment: Json | null;
+  queue_attempts: number;
+  tenant_id: string;
+}
+
+/**
+ * Why a queued run did not start: not its turn yet, no room (a full or
+ * offline machine, the tenant's run limit), a refusal that will not change
+ * (lost authority, a removed workflow or enablement, a broken source or
+ * policy), or anything else, retried with backoff.
+ */
+function queuedStartOutcome(
+  error: unknown,
+): "not_ready" | "room" | "refused" | "retry" {
+  if (
+    error instanceof QueuedRunNotReadyError ||
+    isCorrelationKeyConflict(error)
+  )
+    return "not_ready";
+  if (
+    error instanceof EnvironmentCapacityError ||
+    error instanceof EnvironmentBindingUnavailableError ||
+    error instanceof TenantActiveRunLimitError ||
+    error instanceof ExecutionAllocationConflictError
+  )
+    return "room";
+  if (
+    error instanceof AccessDeniedError ||
+    error instanceof WorkflowEnablementSuspendedError ||
+    error instanceof WorkflowEnablementNotFoundError ||
+    error instanceof WorkflowNotFoundError ||
+    error instanceof RunEnrollmentConflictError ||
+    error instanceof RunInputInvalidError ||
+    error instanceof ProductionDeploymentNotFoundError ||
+    error instanceof ProjectNotFoundError ||
+    error instanceof EnvironmentNotFoundError ||
+    error instanceof EnvironmentAccessDeniedError ||
+    error instanceof EnvironmentIncompatibleError ||
+    error instanceof EnvironmentPolicyInvalidError ||
+    error instanceof NoCompatibleEnvironmentError ||
+    error instanceof AuthenticationRequiredError ||
+    error instanceof ConnectionPermissionDeniedError ||
+    error instanceof ConnectionUnavailableError ||
+    error instanceof ConnectionNotFoundError ||
+    error instanceof PluginSecretsMissingError ||
+    error instanceof SandboxProviderNotConfiguredError
+  )
+    return "refused";
+  return "retry";
+}
+
 export class RunQueueFullError extends Error {
   constructor(
     readonly workflowName: string,
@@ -551,6 +621,82 @@ interface QueuedEnrollment {
   enablementId?: string;
   commitSha?: string;
   remoteBranch?: string;
+  /** The enrolling identity's narrowing; absent for the host root. */
+  owner?: OwnerNarrowing;
+}
+
+/** What a scoped identity may reach, as it enrolled a queued run. */
+type OwnerNarrowing = Pick<
+  Identity,
+  "scope" | "executionScope" | "connectionScope" | "projectPermissions"
+>;
+
+function ownerNarrowing(identity: Identity): OwnerNarrowing | undefined {
+  if (identity.scope === undefined) return undefined;
+  return {
+    scope: identity.scope,
+    ...(identity.executionScope
+      ? { executionScope: identity.executionScope }
+      : {}),
+    ...(identity.connectionScope
+      ? { connectionScope: identity.connectionScope }
+      : {}),
+    ...(identity.projectPermissions
+      ? { projectPermissions: identity.projectPermissions }
+      : {}),
+  };
+}
+
+/**
+ * Who starts a queued run that has no enablement (ADR 0325): the host root
+ * as it was; the project principal as it enrolled (host-issued, never a
+ * membership); a member as they are now, narrowed to what the enrolling
+ * identity held (an app guest, an agent's narrower scopes). Null when the
+ * member may no longer act.
+ */
+export function queuedRunOwner(input: {
+  tenantId: string;
+  externalUserId: string;
+  owner: OwnerNarrowing | undefined;
+  live: Identity | null | undefined;
+}): Identity | null {
+  const { tenantId, externalUserId, owner, live } = input;
+  if (!owner) return { tenantId, externalUserId };
+  if (isProjectPrincipal(externalUserId))
+    return { tenantId, externalUserId, ...owner };
+  if (
+    !live ||
+    live.tenantId !== tenantId ||
+    live.externalUserId !== externalUserId
+  )
+    return null;
+  return {
+    ...live,
+    scope: intersectScope(owner.scope ?? [], live),
+    ...(owner.executionScope
+      ? {
+          executionScope: owner.executionScope.filter((ref) =>
+            identityMayUseEnvironment(live, ref.projectId, ref.name),
+          ),
+        }
+      : {}),
+    ...(owner.connectionScope
+      ? {
+          connectionScope: owner.connectionScope.filter((ref) =>
+            identityMayUseConnection(
+              live,
+              ref.projectId,
+              ref.environment,
+              ref.alias,
+            ),
+          ),
+        }
+      : {}),
+    projectPermissions: intersectProjectPermissions(
+      owner.projectPermissions ?? [],
+      live,
+    ),
+  };
 }
 
 function queuedEnrollment(value: unknown): QueuedEnrollment {
@@ -561,12 +707,17 @@ function queuedEnrollment(value: unknown): QueuedEnrollment {
   const enablementId = text("enablementId");
   const commitSha = text("commitSha");
   const remoteBranch = text("remoteBranch");
+  const owner = jsonRecord(record.owner);
   return {
     ...(environment ? { environment } : {}),
     ...(record.unattended === true ? { unattended: true } : {}),
     ...(enablementId ? { enablementId } : {}),
     ...(commitSha ? { commitSha } : {}),
     ...(remoteBranch ? { remoteBranch } : {}),
+    // Written by this service from an Identity (as enablements store theirs).
+    ...(Array.isArray(owner.scope)
+      ? { owner: owner as unknown as OwnerNarrowing }
+      : {}),
   };
 }
 
@@ -1449,11 +1600,12 @@ export class RunsService {
 
   /**
    * Start the next queued run of each key whose runs ahead have all settled
-   * (ADR 0325). With `runId`, only that run's key; with a key, only it;
-   * otherwise up to `limit` keys across the installation, the worker's
-   * maintenance sweep. Any replica may call it: the start transaction
-   * rechecks the head under the key's lock, and the active-key index stays
-   * the authority, so a race starts one run and the others find it started.
+   * (ADR 0325). With `runId` (a run whose job just settled), its root's key,
+   * and, once that root has settled, heads waiting for the room it freed;
+   * with a key, only that key; otherwise a fair page of due heads across
+   * tenants and keys, the worker's maintenance sweep. Any replica may call
+   * it: the start transaction rechecks the head under the key's lock, and
+   * the active-key index stays the authority.
    */
   async startQueuedRuns(
     args: {
@@ -1464,88 +1616,134 @@ export class RunsService {
       limit?: number;
     } = {},
   ): Promise<void> {
-    let key =
-      args.projectId && args.workflowName && args.correlationKey
-        ? {
-            projectId: args.projectId,
-            workflowName: args.workflowName,
-            correlationKey: args.correlationKey,
-          }
-        : undefined;
     if (args.runId) {
-      const run = await this.db
-        .selectFrom("workflow_runs")
-        .select(["project_id", "workflow_name", "correlation_key"])
-        .where("id", "=", args.runId)
-        .where("parent_run_id", "is", null)
-        .executeTakeFirst();
-      if (!run?.correlation_key) return;
-      key = {
-        projectId: run.project_id,
-        workflowName: run.workflow_name,
-        correlationKey: run.correlation_key,
-      };
+      // A child's job can settle its root; the root's key is the one freed.
+      const root = await sql<{
+        tenant_id: string;
+        project_id: string;
+        workflow_name: string;
+        correlation_key: string | null;
+        status: string;
+      }>`
+        WITH RECURSIVE up AS (
+          SELECT id, parent_run_id, 0 AS depth FROM workflow_runs WHERE id = ${args.runId}
+          UNION ALL
+          SELECT parent.id, parent.parent_run_id, up.depth + 1
+          FROM workflow_runs AS parent JOIN up ON parent.id = up.parent_run_id
+          WHERE up.depth < 64
+        )
+        SELECT projects.tenant_id, run.project_id, run.workflow_name,
+               run.correlation_key, run.status
+        FROM up
+        JOIN workflow_runs AS run ON run.id = up.id
+        JOIN projects ON projects.id = run.project_id
+        WHERE up.parent_run_id IS NULL
+      `.execute(this.db);
+      const settled = root.rows[0];
+      if (!settled) return;
+      if (settled.correlation_key)
+        await this.startQueuedHeads({
+          key: {
+            projectId: settled.project_id,
+            workflowName: settled.workflow_name,
+            correlationKey: settled.correlation_key,
+          },
+        });
+      // A settled root gave its room back: heads that waited for room
+      // try now, without waiting out their backoff.
+      if (["completed", "failed", "canceled"].includes(settled.status))
+        await this.startQueuedHeads({
+          tenantId: settled.tenant_id,
+          waitingForRoom: true,
+          limit: 5,
+        });
+      return;
     }
-    // A head that cannot start (its owner lost access) fails and frees the
-    // key, so the next one is tried at once, a bounded number of times.
-    for (let round = 0; round < (key ? 10 : 1); round += 1) {
-      const heads = await this.db
-        .selectFrom("workflow_runs as queued")
-        .innerJoin("projects", "projects.id", "queued.project_id")
-        .select([
-          "queued.id",
-          "queued.project_id",
-          "queued.workflow_name",
-          "queued.correlation_key",
-          "queued.external_user_id",
-          "queued.caller_scope",
-          "queued.input",
-          "queued.enrollment",
-          "projects.tenant_id",
-        ])
-        .where("queued.status", "=", "queued")
-        .$if(key !== undefined, (query) =>
-          query
-            .where("queued.project_id", "=", key?.projectId ?? "")
-            .where("queued.workflow_name", "=", key?.workflowName ?? "")
-            .where("queued.correlation_key", "=", key?.correlationKey ?? ""),
+    await this.startQueuedHeads({
+      ...(args.projectId && args.workflowName && args.correlationKey
+        ? {
+            key: {
+              projectId: args.projectId,
+              workflowName: args.workflowName,
+              correlationKey: args.correlationKey,
+            },
+          }
+        : {}),
+      ...(args.limit ? { limit: args.limit } : {}),
+    });
+  }
+
+  private async startQueuedHeads(args: {
+    key?: { projectId: string; workflowName: string; correlationKey: string };
+    tenantId?: string;
+    /** Only heads that last waited for room, due or not. */
+    waitingForRoom?: boolean;
+    limit?: number;
+  }): Promise<void> {
+    const limit = args.limit ?? 20;
+    // A head that cannot start (its owner lost access) fails and frees its
+    // key, so a key's next head is tried at once, a bounded number of times.
+    for (let round = 0; round < (args.key ? 10 : 3); round += 1) {
+      const key = args.key;
+      const heads = await sql<QueuedHead>`
+        WITH heads AS (
+          SELECT queued.id, queued.project_id, queued.workflow_name,
+                 queued.correlation_key, queued.external_user_id,
+                 queued.caller_scope, queued.input, queued.enrollment,
+                 queued.queue_attempts, queued.queued_at,
+                 queued.queue_attempted_at, projects.tenant_id,
+                 row_number() OVER (
+                   PARTITION BY projects.tenant_id
+                   ORDER BY queued.queue_attempted_at NULLS FIRST, queued.queued_at, queued.id
+                 ) AS tenant_rank
+          FROM workflow_runs AS queued
+          JOIN projects ON projects.id = queued.project_id
+          WHERE queued.status = 'queued'
+            ${key ? sql`AND queued.project_id = ${key.projectId} AND queued.workflow_name = ${key.workflowName} AND queued.correlation_key = ${key.correlationKey}` : sql``}
+            ${args.tenantId ? sql`AND projects.tenant_id = ${args.tenantId}` : sql``}
+            ${
+              args.waitingForRoom
+                ? sql`AND queued.queue_blocked = 'room'`
+                : key
+                  ? sql``
+                  : // Room comes back with teardown as well as with settling
+                    // runs: retry it every 5 seconds more, up to 30. Errors
+                    // back off exponentially, up to 5 minutes.
+                    sql`AND (queued.queue_attempted_at IS NULL OR queued.queue_attempted_at
+                      + make_interval(secs => CASE WHEN queued.queue_blocked = 'room'
+                          THEN least(30, 5 * queued.queue_attempts)
+                          ELSE least(300, 5 * power(2, least(queued.queue_attempts, 6))) END) <= now())`
+            }
+            AND NOT EXISTS (
+              SELECT 1 FROM workflow_runs AS ahead
+              WHERE ahead.project_id = queued.project_id
+                AND ahead.workflow_name = queued.workflow_name
+                AND ahead.correlation_key = queued.correlation_key
+                AND ahead.id <> queued.id
+                AND (ahead.status NOT IN ('queued', 'completed', 'failed', 'canceled')
+                  OR (ahead.status = 'queued'
+                    AND (ahead.queued_at, ahead.id) < (queued.queued_at, queued.id)))
+            )
         )
-        .where(
-          sql<boolean>`NOT EXISTS (
-            SELECT 1 FROM workflow_runs AS ahead
-            WHERE ahead.project_id = queued.project_id
-              AND ahead.workflow_name = queued.workflow_name
-              AND ahead.correlation_key = queued.correlation_key
-              AND ahead.id <> queued.id
-              AND (ahead.status NOT IN ('queued', 'completed', 'failed', 'canceled')
-                OR (ahead.status = 'queued'
-                  AND (ahead.queued_at, ahead.id) < (queued.queued_at, queued.id)))
-          )`,
-        )
-        .orderBy("queued.queued_at")
-        .orderBy("queued.id")
-        .limit(args.limit ?? 20)
-        .execute();
-      if (heads.length === 0) return;
+        SELECT * FROM heads
+        -- Each tenant's few oldest first, then deeper: one tenant's blocked
+        -- heads never fill the page.
+        WHERE tenant_rank <= ${Math.max(1, Math.ceil(limit / 4))}
+        ORDER BY tenant_rank, queue_attempted_at NULLS FIRST, queued_at, id
+        LIMIT ${limit}
+      `.execute(this.db);
+      if (heads.rows.length === 0) return;
       let failed = false;
-      for (const head of heads) {
+      for (const head of heads.rows) {
         if ((await this.startQueuedRun(head)) === "failed") failed = true;
       }
       if (!failed) return;
     }
   }
 
-  private async startQueuedRun(head: {
-    id: string;
-    project_id: string;
-    workflow_name: string;
-    correlation_key: string | null;
-    external_user_id: string | null;
-    caller_scope: Json | null;
-    input: Json | null;
-    enrollment: Json | null;
-    tenant_id: string;
-  }): Promise<"started" | "waiting" | "failed"> {
+  private async startQueuedRun(
+    head: QueuedHead,
+  ): Promise<"started" | "waiting" | "failed"> {
     return withSpan(
       {
         tracer,
@@ -1598,16 +1796,20 @@ export class RunsService {
               unattended: true,
             });
           } else {
-            const identity =
-              head.caller_scope === null
-                ? mechanics
-                : await this.deps.resolveOwner?.({
+            const member =
+              enrollment.owner && !isProjectPrincipal(mechanics.externalUserId);
+            const identity = queuedRunOwner({
+              ...mechanics,
+              owner: enrollment.owner,
+              live: member
+                ? await this.deps.resolveOwner?.({
                     tenantId: head.tenant_id,
                     projectId: head.project_id,
                     externalUserId: mechanics.externalUserId,
-                  });
-            if (!identity || isProjectPrincipal(mechanics.externalUserId))
-              throw new AccessDeniedError();
+                  })
+                : undefined,
+            });
+            if (!identity) throw new AccessDeniedError();
             await this.triggerInner({
               ...common,
               identity,
@@ -1626,50 +1828,37 @@ export class RunsService {
           span.setAttribute("catamorphic.run.queue.outcome", "started");
           return "started";
         } catch (error) {
+          const outcome = queuedStartOutcome(error);
+          span.setAttribute("catamorphic.run.queue.outcome", outcome);
+          if (outcome === "not_ready") return "waiting";
+          const message =
+            error instanceof Error ? error.message : String(error);
+          // Database or transport trouble retries with backoff, a bounded
+          // number of times; room retries for as long as the run is queued.
           if (
-            error instanceof QueuedRunNotReadyError ||
-            error instanceof EnvironmentCapacityError ||
-            error instanceof EnvironmentBindingUnavailableError ||
-            error instanceof TenantActiveRunLimitError ||
-            error instanceof ExecutionAllocationConflictError ||
-            isCorrelationKeyConflict(error)
+            outcome === "refused" ||
+            (outcome === "retry" &&
+              head.queue_attempts + 1 >= MAX_QUEUED_START_ATTEMPTS)
           ) {
-            span.setAttribute("catamorphic.run.queue.outcome", "waiting");
-            return "waiting";
-          }
-          if (
-            error instanceof AccessDeniedError ||
-            error instanceof WorkflowEnablementSuspendedError ||
-            error instanceof RunInputInvalidError ||
-            error instanceof ProductionDeploymentNotFoundError ||
-            error instanceof EnvironmentNotFoundError ||
-            error instanceof EnvironmentAccessDeniedError ||
-            error instanceof EnvironmentIncompatibleError ||
-            error instanceof EnvironmentPolicyInvalidError ||
-            error instanceof NoCompatibleEnvironmentError ||
-            error instanceof AuthenticationRequiredError ||
-            error instanceof ConnectionPermissionDeniedError ||
-            error instanceof ConnectionUnavailableError ||
-            error instanceof ConnectionNotFoundError
-          ) {
-            // A refusal is definitive: the run ends and frees its key.
-            await this.db
-              .updateTable("workflow_runs")
-              .set({
-                status: "failed",
-                error: `The queued run cannot start: ${error.message}`,
-                completed_at: sql<Date>`now()`,
-                updated_at: sql<Date>`now()`,
-              })
-              .where("id", "=", head.id)
-              .where("status", "=", "queued")
-              .execute();
-            span.setAttribute("catamorphic.run.queue.outcome", "failed");
+            await this.deps.coordinator.failQueued({
+              runId: head.id,
+              error: `The queued run cannot start: ${message}`,
+            });
             return "failed";
           }
-          // Database or transport trouble: the next sweep tries again.
-          console.warn("[catamorphic] A queued run could not start", error);
-          span.setAttribute("catamorphic.run.queue.outcome", "retry");
+          await this.db
+            .updateTable("workflow_runs")
+            .set({
+              queue_attempts: sql<number>`queue_attempts + 1`,
+              queue_attempted_at: sql<Date>`now()`,
+              queue_blocked: outcome === "room" ? "room" : "error",
+              error: message,
+            })
+            .where("id", "=", head.id)
+            .where("status", "=", "queued")
+            .execute();
+          if (outcome === "retry")
+            console.warn("[catamorphic] A queued run could not start", error);
           return "waiting";
         }
       },
@@ -2387,6 +2576,9 @@ export class RunsService {
         : {}),
       commitSha: source.commitSha,
       ...(args.remoteBranch ? { remoteBranch: args.remoteBranch } : {}),
+      ...(ownerNarrowing(args.identity)
+        ? { owner: ownerNarrowing(args.identity) }
+        : {}),
     };
     {
       const artifact = await this.deps.deploymentArtifacts.ensure({
