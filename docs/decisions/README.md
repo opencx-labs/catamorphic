@@ -192,7 +192,7 @@ Settled design decisions live here as short Architecture Decision Records. They 
 | [0177](0177-github-is-a-connection.md) | GitHub is a connection | Accepted |
 | [0178](0178-session-workspaces-at-a-ref.md) | Session workspaces at a ref of the project's remote | Accepted (member drafts are origin refs per 0191) |
 | [0179](0179-integrations-from-project-code-slack.md) | Integrations from project code: named HTTP operations and declared delivery ids | Accepted (session event keys in 0181; the `slack-threads` pack by 0262) |
-| [0180](0180-harnesses-run-in-the-sandbox-models-through-the-gateway.md) | Harnesses run in the sandbox; models through the gateway | Accepted (control loop superseded by 0198; amended by 0184, 0199, 0256) |
+| [0180](0180-harnesses-run-in-the-sandbox-models-through-the-gateway.md) | Harnesses run in the sandbox; models through the gateway | Accepted (control loop superseded by 0198; amended by 0184, 0199, 0256, 0329) |
 | [0181](0181-project-chats-use-their-environments-bindings.md) | Project chats use their Environment's bindings; session events carry keys | Accepted (the `pull-request-reviews` pack by 0262) |
 | [0182](0182-sandboxing-and-permission-modes-are-different-settings.md) | Sandboxing and permission modes are different settings | Accepted |
 | [0183](0183-guards-are-host-code-work-server-config-is-typed-data.md) | Guards are host code; Work server config is typed data | Accepted |
@@ -298,7 +298,7 @@ Settled design decisions live here as short Architecture Decision Records. They 
 | [0290](0290-restarts-commit-cancellation-and-replacement-together.md) | Restarts commit cancellation and replacement together | Accepted (amends 0027) |
 | [0291](0291-named-signals-buffer-within-a-run-generation.md) | Named signals buffer within one run generation | Accepted (amends 0027) |
 | [0292](0292-review-publication-is-serialized-application-code.md) | Review publication is serialized application code | Accepted |
-| [0293](0293-model-grants-end-with-their-turn-attempt.md) | Model grants end with their turn attempt | Accepted (amends 0180, 0255) |
+| [0293](0293-model-grants-end-with-their-turn-attempt.md) | Model grants end with their turn attempt | Accepted (amends 0180, 0255; amended by 0329) |
 | [0294](0294-work-server-deployments-compose-libraries-and-workflows.md) | Work server deployments compose libraries and workflows; no stock image | Accepted (supersedes 0261; amends 0059, 0159, 0160, 0285) |
 | [0295](0295-boundary-attempts-bound-host-and-connection-calls.md) | Boundary attempts bound host and connection calls | Accepted |
 | [0296](0296-one-oauth-token-endpoint.md) | One OAuth token endpoint | Accepted (supersedes 0287's runtime compatibility provisions) |
@@ -326,3 +326,4 @@ Settled design decisions live here as short Architecture Decision Records. They 
 | [0319](0319-the-desktop-compacts-rewritten-tables.md) | The desktop compacts the tables it rewrites | Accepted |
 | [0320](0320-pages-translate-on-the-device.md) | Pages translate on the device | Accepted |
 | [0321](0321-runner-state-stays-out-of-the-checkout.md) | Runner state stays out of the checkout | Accepted (amends 0198) |
+| [0329](0329-model-usage-is-telemetry-and-a-session-read.md) | Model usage is telemetry and a session read | Accepted (amends 0180 and 0293) |

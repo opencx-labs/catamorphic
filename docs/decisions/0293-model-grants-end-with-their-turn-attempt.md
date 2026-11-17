@@ -1,6 +1,6 @@
 # 0293: Model grants end with their turn attempt
 
-- **Status:** Accepted (amends 0180 and 0255)
+- **Status:** Accepted (amends 0180 and 0255; amended by [0329](0329-model-usage-is-telemetry-and-a-session-read.md))
 - **Date:** 2026-10-28
 
 ## Context
@@ -53,4 +53,5 @@ Idle and abandoned sandbox processes cannot start fresh model requests with
 an earlier bearer. This intentionally breaks ADR 0180's between-turn model
 access. A sandbox remains one trust boundary: processes able to read a future
 turn's new grants share that turn's authority. Resource isolation and independent
-cleanup remain necessary. No second token mechanism or built-in budget is added.
+cleanup remain necessary. No second token mechanism or built-in budget is added: spend limits stay
+project or host policy, built on the usage Work records and exposes (ADR 0329).
