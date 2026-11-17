@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { chmod, lstat, mkdir, mkdtemp, rm } from "node:fs/promises";
+import { lstat, mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import {
@@ -164,10 +164,12 @@ function temporaryStateFolder(): Promise<string> {
 
 /**
  * Where an in-process runner keeps its own and its harness's state for one
- * session (pasted media, Codex's home): the folder its host names, or one
- * in a private temporary folder of this process. Never the checkout, where
- * it would show in Git status, turn checkpoints and remote sync (ADR 0321).
- * Private (0700) before the runner starts.
+ * session (copies of pasted media): the absolute folder its host names, or
+ * one in a private temporary folder of this process. Never the checkout,
+ * where it would show in Git status, turn checkpoints and remote sync (ADR
+ * 0321). Nothing is made for the session here: a harness that keeps state
+ * makes its own folders, private, so an attempt whose harness keeps none
+ * leaves nothing behind.
  */
 export async function hostRunnerStateDirectory(input: {
   /** The host's folder for this session, when it names one. */
@@ -176,28 +178,20 @@ export async function hostRunnerStateDirectory(input: {
 }): Promise<string> {
   if (!SESSION_ID.test(input.sessionId))
     throw new Error("This session id cannot name a folder.");
-  if (input.named !== undefined) {
-    if (!path.isAbsolute(input.named))
-      throw new Error(
-        `A runner's state folder must be an absolute path, not "${input.named}".`,
-      );
-    await mkdir(input.named, { recursive: true, mode: 0o700 });
-    // mkdir leaves a folder that was already there as it was.
-    await chmod(input.named, 0o700);
-    return input.named;
-  }
-  const directory = path.join(await temporaryStateFolder(), input.sessionId);
-  await mkdir(directory, { mode: 0o700 }).catch((error: unknown) => {
-    if (!(error instanceof Error && "code" in error && error.code === "EEXIST"))
-      throw error;
-  });
-  return directory;
+  if (input.named === undefined)
+    return path.join(await temporaryStateFolder(), input.sessionId);
+  if (!path.isAbsolute(input.named))
+    throw new Error(
+      `A runner's state folder must be an absolute path, not "${input.named}".`,
+    );
+  return input.named;
 }
 
 /**
- * Drops what a chat's runner kept in this process's temporary folder, once
- * the chat rests (archived or closed). Its next turn starts a new one: the
- * harness's thread comes back from the session's stored native state.
+ * Drops what a chat's runner kept in this process's temporary folder when
+ * core releases the resting chat (archived or closed). Its next turn starts
+ * afresh: the harness's thread comes back from the session's stored native
+ * state.
  */
 export async function removeTemporaryRunnerState(input: {
   sessionId: string;

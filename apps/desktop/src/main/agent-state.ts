@@ -4,8 +4,8 @@ import path from "node:path";
 const ID = /^[A-Za-z0-9_-]+$/;
 
 /**
- * Where the runner of one chat keeps its harness's state (pasted media,
- * Codex's home): `<agentStateDir>/<projectId>/<sessionId>`. Host storage,
+ * Where the runner of one chat keeps its harness's state (copies of pasted
+ * media): `<agentStateDir>/<projectId>/<sessionId>`. Host storage,
  * so none of it lands in the chat's checkout, its Git status, turn
  * checkpoints or remote sync.
  */

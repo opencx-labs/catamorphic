@@ -1,4 +1,4 @@
-import { chmod, mkdir, mkdtemp, rm, stat } from "node:fs/promises";
+import { chmod, mkdir, rm, stat } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterAll, describe, expect, it } from "vitest";
@@ -8,8 +8,9 @@ import {
 } from "../services/sessions/runner-channels.js";
 
 /**
- * Where an in-process runner keeps a chat's state (ADR 0321): host storage
- * it names, or a private temporary folder of this process, never shared.
+ * Where an in-process runner keeps a chat's state (ADR 0321): the host
+ * folder it names, or a folder in a private temporary folder of this
+ * process, never shared with anyone else.
  */
 
 const posix = process.platform !== "win32";
@@ -32,23 +33,16 @@ describe("host runner state", () => {
     ).rejects.toThrow("must be an absolute path");
   });
 
-  it.skipIf(!posix)(
-    "makes a folder the host names private, even one already there",
-    async () => {
-      const root = await mkdtemp(path.join(os.tmpdir(), "named-state-"));
-      made.push(root);
-      const named = path.join(root, "project-1", "chat-1");
-      await mkdir(named, { recursive: true, mode: 0o755 });
-      await chmod(named, 0o755);
-      await expect(
-        hostRunnerStateDirectory({ named, sessionId: "chat-1" }),
-      ).resolves.toBe(named);
-      expect(await mode(named)).toBe(0o700);
-    },
-  );
+  it("uses the folder the host names as it is, making nothing", async () => {
+    const named = path.join(os.tmpdir(), "named-state-unmade", "chat-1");
+    await expect(
+      hostRunnerStateDirectory({ named, sessionId: "chat-1" }),
+    ).resolves.toBe(named);
+    await expect(stat(named)).rejects.toThrow();
+  });
 
   it.skipIf(!posix)(
-    "keeps each chat's state in one private temporary folder, made anew when someone replaced it",
+    "names each chat a folder in one private temporary folder, made anew when someone replaced it",
     async () => {
       const first = await hostRunnerStateDirectory({
         named: undefined,
@@ -56,9 +50,11 @@ describe("host runner state", () => {
       });
       const root = path.dirname(first);
       made.push(root);
+      expect(path.basename(first)).toBe("chat-a");
       expect(path.basename(root)).toMatch(/^catamorphic-agent-state-/);
       expect(await mode(root)).toBe(0o700);
-      expect(await mode(first)).toBe(0o700);
+      // The harness makes what it keeps: nothing for the session yet.
+      await expect(stat(first)).rejects.toThrow();
       await expect(
         hostRunnerStateDirectory({ named: undefined, sessionId: "chat-a" }),
       ).resolves.toBe(first);
@@ -87,6 +83,9 @@ describe("host runner state", () => {
       sessionId: "chat-dropped",
     });
     made.push(path.dirname(kept));
+    // What a harness keeps (its copies of pasted media).
+    for (const folder of [kept, dropped])
+      await mkdir(path.join(folder, "attachments"), { recursive: true });
     await removeTemporaryRunnerState({ sessionId: "chat-dropped" });
     await expect(stat(dropped)).rejects.toThrow();
     expect((await stat(kept)).isDirectory()).toBe(true);

@@ -749,14 +749,18 @@ export async function startEmbeddedServer(
       // A chat's own worktree is set up like a new workspace and put away
       // with the chat (ADR 0215).
       setup: (input) => sessionCheckouts.setup(input),
-      // ...and with it what its runner kept (ADR 0321).
+      // ...and with it what its runner kept (ADR 0321), even when the
+      // checkout could not be put away.
       release: async (input) => {
-        await sessionCheckouts.putAway(input);
-        await removeAgentState({
-          agentStateDir: paths.agentStateDir,
-          ...input,
-        });
-        broadcastGitChanged(input.projectId);
+        try {
+          await sessionCheckouts.putAway(input);
+          broadcastGitChanged(input.projectId);
+        } finally {
+          await removeAgentState({
+            agentStateDir: paths.agentStateDir,
+            ...input,
+          });
+        }
       },
     },
     appBundleStore: new FsBundleStore(paths.appBundles),

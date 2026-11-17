@@ -50,11 +50,12 @@ export type AgentHarness =
       env?: Record<string, string>;
       /**
        * Host storage for the runner's and harness's state for one session
-       * (pasted media, Codex's home): an absolute path outside every
-       * checkout, made private (0700) before each attempt. The host removes
+       * (copies of pasted media): an absolute path outside every checkout.
+       * The harness makes what it keeps there, private; the host removes
        * it, for instance when `NativeAgentCheckout.release` puts the chat
        * away. Absent, it lives in a private temporary folder of this
-       * process, removed when the chat is archived or closed (ADR 0321).
+       * process, which core empties when it releases the resting chat
+       * (ADR 0321).
        */
       stateDirectory?: (session: {
         projectId: string;
