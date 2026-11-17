@@ -70,18 +70,37 @@ class FakeWorkflows implements MachineWorkflows {
   events: Array<Parameters<MachineWorkflows["record"]>[0]> = [];
   /** Why the project would start nothing, when set. */
   refuse: string | undefined;
-  /** A start that fails without saying whether a run began. */
+  /** A start that fails before it stores a run. */
   lost: string | undefined;
+  /** A start that fails after its run began. */
+  lostAfterStart: string | undefined;
+  canceled: string[] = [];
 
   async start(args: Started) {
     if (this.refuse) throw new MachineProvisioningRefusedError(this.refuse);
     if (this.lost) throw new Error(this.lost);
     this.started.push(args);
-    this.runs.set(args.correlationKey, { status: "active" });
+    this.runs.set(args.correlationKey, { status: "active", ageMs: 0 });
+    if (this.lostAfterStart) throw new Error(this.lostAfterStart);
   }
 
   async latest(args: { correlationKey: string }) {
     return this.runs.get(args.correlationKey);
+  }
+
+  async cancel(args: { correlationKey: string }) {
+    this.canceled.push(args.correlationKey);
+    this.fail(args.correlationKey, "canceled");
+  }
+
+  fail(correlationKey: string, error: string, endedForMs = 0) {
+    const previous = this.runs.get(correlationKey);
+    this.runs.set(correlationKey, {
+      status: "failed",
+      error,
+      endedForMs,
+      failures: (previous?.status === "failed" ? previous.failures : 0) + 1,
+    });
   }
 
   async record(args: Parameters<MachineWorkflows["record"]>[0]) {
@@ -116,7 +135,7 @@ let authorityId: string;
 
 const db = () => server.catamorphic.core.db;
 
-function setup() {
+function setup(options: { now?: () => number } = {}) {
   const workflows = new FakeWorkflows();
   const reconciler: MachineReconciler = new MachineReconciler({
     db: db(),
@@ -124,6 +143,7 @@ function setup() {
     workers: registry(),
     classes,
     workflows,
+    ...(options.now ? { now: options.now } : {}),
     install: installTarget({
       publicBase: PUBLIC,
       workerImage: "ghcr.io/acme/work-server:test",
@@ -346,32 +366,91 @@ describe("workflow machine classes (ADR 0327)", () => {
     await reconciler.deleteRule("fleet-c");
   });
 
-  it("keeps the code when a start failed without saying whether a run began", async () => {
+  it("tries again at once when a start stored no run", async () => {
     const { workflows, reconciler, pass } = setup();
-    workflows.lost = "connection reset";
+    workflows.lost = "TenantActiveRunLimitError: too many runs";
     await reconciler.setRule(shared("fleet-h"));
     const name = sharedName("fleet-h", "fleet", ENG, 1);
     expect((await pass()).failed).toEqual([
-      expect.objectContaining({ name, error: "connection reset" }),
+      expect.objectContaining({
+        name,
+        error: expect.stringContaining("did not start"),
+      }),
     ]);
-    const pending = await machine(name);
-    const key = pending?.ref?.replace("creating:", "");
-    expect(pending?.state).toBe("pending");
-    // No run is found: the machine may still be coming up, so its code
-    // stays and nothing is started again.
+    // Nothing ran: the code is withdrawn instead of waiting enrollMinutes.
+    expect(await machine(name)).toBeUndefined();
     workflows.lost = undefined;
+    await pass();
+    expect(workflows.creates(name)).toHaveLength(1);
+  });
+
+  it("keeps the code when the start failed after its run began", async () => {
+    const { workflows, reconciler, pass } = setup();
+    workflows.lostAfterStart = "connection reset";
+    await reconciler.setRule(shared("fleet-i"));
+    const name = sharedName("fleet-i", "fleet", ENG, 1);
+    expect((await pass()).failed).toEqual([]);
+    const [create] = workflows.creates(name);
+    expect(await machine(name)).toMatchObject({
+      state: "pending",
+      ref: `creating:${create?.input.enrollment.idempotencyKey}`,
+    });
+  });
+
+  it("withdraws a code whose run was never stored once no pass can still be starting it", async () => {
+    const { workflows, reconciler, pass } = setup();
+    await reconciler.setRule(shared("fleet-j"));
+    const name = sharedName("fleet-j", "fleet", ENG, 1);
+    await pass();
+    const [create] = workflows.creates(name);
+    if (!create) throw new Error("No create was started");
+    // The pass that started it ended before its run was stored.
+    workflows.runs.delete(create.correlationKey);
+    expect((await pass()).failed).toEqual([]);
+    expect((await machine(name))?.state).toBe("pending");
+    await sql`
+      UPDATE work_worker_enrollments
+      SET created_at = created_at - interval '5 minutes'
+      WHERE name = ${name}
+    `.execute(db());
     expect((await pass()).failed).toEqual([
       expect.objectContaining({
         name,
-        error: expect.stringContaining("no run for this machine"),
+        error: expect.stringContaining("never started"),
       }),
     ]);
-    expect(await machine(name)).toMatchObject({
-      state: "pending",
-      ref: `unknown:${key}`,
-    });
+    expect(await machine(name)).toBeUndefined();
+  });
+
+  it("backs off a platform that keeps refusing", async () => {
+    let clock = Date.now();
+    const { workflows, reconciler, pass } = setup({ now: () => clock });
+    await reconciler.setRule(shared("fleet-k"));
+    const name = sharedName("fleet-k", "fleet", ENG, 1);
+    const refuseLatest = () => {
+      const latest = workflows.creates(name).at(-1);
+      if (!latest) throw new Error("No create was started");
+      workflows.answer(latest.correlationKey, { refused: "VcpuLimitExceeded" });
+    };
     await pass();
-    expect(workflows.creates(name)).toEqual([]);
+    refuseLatest();
+    await pass();
+    // A first refusal tries again on the next pass.
+    await pass();
+    expect(workflows.creates(name)).toHaveLength(2);
+    refuseLatest();
+    await pass();
+    // A second waits a minute, and says so.
+    expect((await pass()).failed).toEqual([
+      expect.objectContaining({
+        name,
+        error: expect.stringContaining("refused this machine 2 times"),
+      }),
+    ]);
+    expect(workflows.creates(name)).toHaveLength(2);
+    clock += 61_000;
+    await pass();
+    expect(workflows.creates(name)).toHaveLength(3);
   });
 
   it("treats a failed create as uncertain and asks destroy until it is done", async () => {
@@ -382,10 +461,7 @@ describe("workflow machine classes (ADR 0327)", () => {
     const [create] = workflows.creates(name);
     if (!create) throw new Error("No create was started");
     const key = create.input.enrollment.idempotencyKey;
-    workflows.runs.set(create.correlationKey, {
-      status: "failed",
-      error: "RequestTimeout",
-    });
+    workflows.fail(create.correlationKey, "RequestTimeout");
     const failed = await pass();
     expect(failed.failed).toEqual([
       expect.objectContaining({
@@ -408,12 +484,15 @@ describe("workflow machine classes (ADR 0327)", () => {
       project: PROVISIONER,
       workflow: "destroyMachine",
       kind: "machine.destroy",
-      // No ref is known: destroy finds the machine by its name.
+      // No ref is known: destroy finds the machine by its name and the
+      // key it was launched with.
       input: {
         name,
         class: "fleet",
         rule: "fleet-d",
         ref: null,
+        idempotencyKey: key,
+        requestedAt: expect.any(String),
         options: OPTIONS,
       },
       correlationKey: `machine-destroy:${name}:unknown:${key}`,
@@ -429,6 +508,66 @@ describe("workflow machine classes (ADR 0327)", () => {
     expect((await pass()).removed).toEqual([name]);
     expect(await machine(name)).toBeUndefined();
     expect(workflows.kinds(name)).toEqual(["machine.destroyed"]);
+  });
+
+  it("backs off a destroy that keeps failing", async () => {
+    const { workflows, reconciler, pass } = setup();
+    await reconciler.setRule(shared("fleet-l"));
+    const name = sharedName("fleet-l", "fleet", ENG, 1);
+    await pass();
+    const [create] = workflows.creates(name);
+    if (!create) throw new Error("No create was started");
+    workflows.answer(create.correlationKey, { ref: "i-0lll" });
+    await pass();
+    await reconciler.deleteRule("fleet-l");
+    await pass();
+    const [destroy] = workflows.destroys();
+    if (!destroy) throw new Error("No destroy was started");
+    workflows.fail(destroy.correlationKey, "UnauthorizedOperation");
+    expect((await pass()).failed).toEqual([
+      expect.objectContaining({
+        name,
+        error: expect.stringContaining("runs again in 1 minutes"),
+      }),
+    ]);
+    expect(workflows.destroys()).toHaveLength(1);
+    workflows.fail(destroy.correlationKey, "UnauthorizedOperation", 0);
+    workflows.fail(destroy.correlationKey, "UnauthorizedOperation", 121_000);
+    // Three failures: it waits four minutes after the latest.
+    await pass();
+    expect(workflows.destroys()).toHaveLength(1);
+    workflows.runs.set(destroy.correlationKey, {
+      status: "failed",
+      error: "UnauthorizedOperation",
+      endedForMs: 5 * 60_000,
+      failures: 3,
+    });
+    await pass();
+    expect(workflows.destroys()).toHaveLength(2);
+  });
+
+  it("cancels a create run that never finishes, and destroys the machine by name", async () => {
+    const { workflows, reconciler, pass } = setup();
+    await reconciler.setRule(shared("fleet-m"));
+    const name = sharedName("fleet-m", "fleet", ENG, 1);
+    await pass();
+    const [create] = workflows.creates(name);
+    if (!create) throw new Error("No create was started");
+    const key = create.input.enrollment.idempotencyKey;
+    await reconciler.deleteRule("fleet-m");
+    // A create run paused or stuck retrying for 31 minutes.
+    workflows.runs.set(create.correlationKey, {
+      status: "active",
+      ageMs: 31 * 60_000,
+    });
+    await pass();
+    expect(workflows.canceled).toEqual([create.correlationKey]);
+    expect(workflows.destroys()).toEqual([
+      expect.objectContaining({
+        input: expect.objectContaining({ ref: null, idempotencyKey: key }),
+        correlationKey: `machine-destroy:${name}:unknown:${key}`,
+      }),
+    ]);
   });
 
   it("waits for a create still running before destroying what it made", async () => {
@@ -451,6 +590,11 @@ describe("workflow machine classes (ADR 0327)", () => {
     if (!destroy) throw new Error("No destroy was started");
     workflows.answer(destroy.correlationKey, { done: true });
     expect((await pass()).removed).toEqual([name]);
+    // Its answer was first read by destroy, and still told the project.
+    expect(workflows.kinds(name)).toEqual([
+      "machine.created",
+      "machine.destroyed",
+    ]);
   });
 
   it("tells the provisioner's project when a machine connects, is released and is destroyed", async () => {

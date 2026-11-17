@@ -245,6 +245,13 @@ export interface MachineWorkflows {
     workflow: string;
     correlationKey: string;
   }): Promise<MachineWorkflowRun | undefined>;
+  /** Cancel the run under `correlationKey` that is still going, if any. */
+  cancel(args: {
+    project: string;
+    workflow: string;
+    correlationKey: string;
+    reason: string;
+  }): Promise<void>;
   /** Record a machine lifecycle event in the project. */
   record(args: {
     project: string;
@@ -254,9 +261,25 @@ export interface MachineWorkflows {
 
 /** A provisioner run as the reconciler reads it. */
 export type MachineWorkflowRun =
-  | { status: "active" }
+  /** Still going; `ageMs` since it was created. */
+  | { status: "active"; ageMs: number }
   | { status: "completed"; output: unknown }
-  | { status: "failed"; error: string };
+  /**
+   * Failed or canceled `endedForMs` ago; `failures` counts the runs under
+   * its key that did.
+   */
+  | { status: "failed"; error: string; endedForMs: number; failures: number };
+
+/**
+ * How long a create run may go before a destroy that waits for it cancels
+ * it and finds the machine by name instead (ADR 0327).
+ */
+export const CREATE_RUN_LIMIT_MS = 30 * 60_000;
+
+/** Minutes before the next try after `count` failures: 0, 1, 2, 4 ... 30. */
+function backoffMs(count: number): number {
+  return count < 2 ? 0 : Math.min(30, 2 ** (count - 2)) * 60_000;
+}
 
 /**
  * Refs Work keeps for a `workflow` class's machine until its create run
@@ -271,6 +294,13 @@ function creatingKey(ref: string | null): string | undefined {
   return ref?.startsWith(CREATING_REF)
     ? ref.slice(CREATING_REF.length)
     : undefined;
+}
+
+/** The idempotency key in one of Work's own markers. */
+function markerKey(ref: string | null): string | undefined {
+  for (const prefix of [CREATING_REF, UNKNOWN_REF])
+    if (ref?.startsWith(prefix)) return ref.slice(prefix.length);
+  return undefined;
 }
 
 /** The ref a platform gave, or null for Work's own markers. */
@@ -424,6 +454,24 @@ const HETZNER_REF = "hcloud:";
 export class MachineReconciler {
   private running: Promise<ReconcileSummary> | undefined;
   private readonly holder = randomUUID();
+  /**
+   * Refusals in a row by machine name, so a workflow class its platform
+   * keeps refusing does not start a refused run every pass. Per replica:
+   * it only paces.
+   */
+  private readonly refusals = new Map<string, { count: number; at: number }>();
+
+  private now(): number {
+    return (this.deps.now ?? Date.now)();
+  }
+
+  private refused(name: string): void {
+    const previous = this.refusals.get(name);
+    this.refusals.set(name, {
+      count: (previous?.count ?? 0) + 1,
+      at: this.now(),
+    });
+  }
 
   constructor(
     private readonly deps: {
@@ -438,6 +486,8 @@ export class MachineReconciler {
       hetzner?: HetznerCloudMachines;
       /** For workflow classes (ADR 0327). */
       workflows?: MachineWorkflows;
+      /** The clock refusal back-off reads (tests move it). */
+      now?: () => number;
       /** What machines install, or why they cannot. */
       install: { target: InstallTarget } | { unavailable: string };
       controlPlaneUrl: string;
@@ -958,6 +1008,14 @@ export class MachineReconciler {
       "unavailable" in this.deps.install
     )
       throw new Error(this.deps.install.unavailable);
+    const refusals = this.refusals.get(machine.name);
+    if (refusals) {
+      const waitMs = backoffMs(refusals.count) - (this.now() - refusals.at);
+      if (waitMs > 0)
+        throw new Error(
+          `Its platform refused this machine ${refusals.count} times in a row; Work asks again in ${Math.ceil(waitMs / 60_000)} minutes`,
+        );
+    }
     await args.fence();
     const enrollment = await this.deps.workers.createMachineEnrollment({
       name: machine.name,
@@ -983,13 +1041,17 @@ export class MachineReconciler {
         code: enrollment.code,
         ref,
       });
+      this.refusals.delete(machine.name);
       args.summary.created.push(machine.name);
     } catch (error) {
       if (
         (error instanceof HetznerCloudError && error.definite) ||
         error instanceof MachineProvisioningRefusedError
-      )
+      ) {
         await this.deps.workers.cancelEnrollments({ name: machine.name });
+        // A workflow's refusal costs a run each time; pace those.
+        if (machineClass?.platform === "workflow") this.refused(machine.name);
+      }
       throw error;
     }
   }
@@ -1247,13 +1309,27 @@ export class MachineReconciler {
       code: args.code,
       ref: `${CREATING_REF}${idempotencyKey}`,
     });
-    await workflows.start({
+    const run = {
       project: args.machineClass.project,
       workflow: args.machineClass.create,
-      kind: "machine.create",
-      input: this.createRequest(args),
       correlationKey: createKey(idempotencyKey),
-    });
+    };
+    try {
+      await workflows.start({
+        ...run,
+        kind: "machine.create",
+        input: this.createRequest(args),
+      });
+    } catch (error) {
+      if (error instanceof MachineProvisioningRefusedError) throw error;
+      // No run under the key means nothing ran (a run limit, a dispatch
+      // that failed before it stored one): a new code tries again. A run
+      // that exists is read on later passes.
+      if (await workflows.latest(run)) return;
+      throw new MachineProvisioningRefusedError(
+        `Workflow ${args.machineClass.create} did not start: ${message(error)}`,
+      );
+    }
   }
 
   /**
@@ -1278,6 +1354,20 @@ export class MachineReconciler {
     });
     const from = `${CREATING_REF}${key}`;
     if (run?.status === "active") return;
+    if (!run) {
+      // Its start never stored a run (the pass that started it ended
+      // first). Once no pass can still be starting it, nothing ran.
+      if (
+        machine.state !== "pending" ||
+        (machine.enrollment?.issuedForMs ?? 0) < this.leaseMs
+      )
+        return;
+      await args.fence();
+      await this.deps.workers.cancelEnrollments({ name: machine.name });
+      throw new Error(
+        `Workflow ${machineClass.create} never started for this machine; a new one is made`,
+      );
+    }
     const result =
       run?.status === "completed" ? machineCreateResult(run.output) : undefined;
     if (
@@ -1293,6 +1383,7 @@ export class MachineReconciler {
         to: result.ref,
       });
       machine.ref = result.ref;
+      this.refusals.delete(machine.name);
       args.summary.created.push(machine.name);
       await this.recordEvent({ kind: "machine.created", machine });
       return;
@@ -1300,6 +1391,7 @@ export class MachineReconciler {
     if (result && "refused" in result && machine.state === "pending") {
       await args.fence();
       await this.deps.workers.cancelEnrollments({ name: machine.name });
+      this.refused(machine.name);
       throw new MachineProvisioningRefusedError(
         `Workflow ${machineClass.create} refused: ${result.refused}`,
       );
@@ -1313,15 +1405,12 @@ export class MachineReconciler {
       to: `${UNKNOWN_REF}${key}`,
     });
     machine.ref = `${UNKNOWN_REF}${key}`;
-    // No run at all: its start failed without saying whether one began.
     throw new Error(
-      !run
-        ? `Workflow ${machineClass.create} has no run for this machine; it may still enroll`
-        : run.status === "failed"
-          ? `Workflow ${machineClass.create} failed: ${run.error}`
-          : result && "refused" in result
-            ? `Workflow ${machineClass.create} refused, and its machine enrolled anyway`
-            : `Workflow ${machineClass.create} returned neither { ref } nor { refused }`,
+      run.status === "failed"
+        ? `Workflow ${machineClass.create} failed: ${run.error}`
+        : result && "refused" in result
+          ? `Workflow ${machineClass.create} refused, and its machine enrolled anyway`
+          : `Workflow ${machineClass.create} returned neither { ref } nor { refused }`,
     );
   }
 
@@ -1340,27 +1429,38 @@ export class MachineReconciler {
       throw new Error("This server runs no workflows for machine classes");
     const key = creatingKey(machine.ref);
     if (key !== undefined) {
-      const created = await workflows.latest({
+      const create = {
         project: machineClass.project,
         workflow: machineClass.create,
         correlationKey: createKey(key),
-      });
-      if (created?.status === "active") return false;
+      };
+      const created = await workflows.latest(create);
+      if (created?.status === "active") {
+        // Its code no longer works; a run this old is stuck (paused,
+        // retrying), so it goes and destroy finds the machine by name.
+        if (created.ageMs < CREATE_RUN_LIMIT_MS) return false;
+        await workflows.cancel({
+          ...create,
+          reason: "Its machine is being destroyed",
+        });
+      }
       // Settle the ref before destroy is keyed by it.
       const result =
         created?.status === "completed"
           ? machineCreateResult(created.output)
           : undefined;
-      const to =
+      const made =
         result && "ref" in result && platformRef(result.ref) === result.ref
           ? result.ref
-          : `${UNKNOWN_REF}${key}`;
+          : undefined;
+      const to = made ?? `${UNKNOWN_REF}${key}`;
       await this.deps.workers.replaceMachineRef({
         name: machine.name,
         from: `${CREATING_REF}${key}`,
         to,
       });
       machine.ref = to;
+      if (made) await this.recordEvent({ kind: "machine.created", machine });
     }
     const ref = platformRef(machine.ref);
     const correlationKey = `machine-destroy:${machine.name}:${machine.ref ?? "none"}`;
@@ -1375,6 +1475,16 @@ export class MachineReconciler {
       machineDestroyResult(run.output)?.done === true
     )
       return true;
+    if (run?.status === "failed") {
+      // One failing run per pass would never end; wait longer each time.
+      const waitMs = backoffMs(run.failures + 1) - run.endedForMs;
+      if (waitMs > 0)
+        throw new Error(
+          `Workflow ${machineClass.destroy} failed ${run.failures} times: ${run.error}; it runs again in ${Math.ceil(waitMs / 60_000)} minutes`,
+        );
+    }
+    const launchKey =
+      machine.enrollment?.idempotencyKey ?? markerKey(machine.ref);
     await workflows.start({
       project: machineClass.project,
       workflow: machineClass.destroy,
@@ -1384,6 +1494,8 @@ export class MachineReconciler {
         class: machine.placement.labels.class ?? "",
         rule: machine.rule,
         ref,
+        idempotencyKey: launchKey ?? null,
+        requestedAt: machine.enrollment?.issuedAt.toISOString() ?? null,
         ...(machineClass.options ? { options: machineClass.options } : {}),
       },
       correlationKey,

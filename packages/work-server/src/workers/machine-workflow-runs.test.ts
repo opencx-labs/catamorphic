@@ -25,7 +25,7 @@ import { WorkWorkerRegistry } from "./worker-registry.js";
 const PUBLIC = "https://brain.example.test";
 const ENG = "eng@example.com";
 
-const PROVISIONER = `import { type BoundaryContext, defineWorkflow, trigger } from "@catamorphic/workflow";
+const PROVISIONER = `import { type BoundaryContext, defineWorkflow, type PauseResult, trigger } from "@catamorphic/workflow";
 
 type Create = { name: string; rule: string; options?: { prefix?: string }; enrollment: { idempotencyKey: string } };
 type Destroy = { name: string; ref: string | null };
@@ -40,6 +40,22 @@ export const createMachine = defineWorkflow(({ defineBoundary }) => ({
         input.rule === "refused"
           ? { refused: "no capacity" }
           : { ref: \`\${input.options?.prefix ?? "vm"}-\${input.enrollment.idempotencyKey.slice(0, 8)}\` },
+    }),
+  ],
+}));
+
+/** @displayname Create machine slowly */
+export const stuckMachine = defineWorkflow(({ defineBoundary }) => ({
+  triggers: [trigger("machine.create")],
+  steps: [
+    /** @displayname Wait for a platform that never answers */
+    defineBoundary({
+      run: ({ input, pause }: BoundaryContext<Create>) =>
+        pause<{ ok: boolean }, Create>({ timeout: "24h", state: input }),
+    }),
+    /** @displayname Answer late */
+    defineBoundary({
+      run: (_: BoundaryContext<PauseResult<{ ok: boolean }, Create>>) => ({ ref: "vm-late" }),
     }),
   ],
 }));
@@ -106,7 +122,11 @@ beforeAll(async () => {
     },
   );
   expect(deployed.status, JSON.stringify(deployed)).toBe("deployed");
-  for (const workflowName of ["createMachine", "destroyMachine"]) {
+  for (const workflowName of [
+    "createMachine",
+    "destroyMachine",
+    "stuckMachine",
+  ]) {
     const request = {
       identity: setup,
       projectId,
@@ -199,6 +219,47 @@ it("refuses a member firing a machine kind, so only the reconciler makes or remo
     .where("project_id", "=", projectId)
     .execute();
   expect(runs).toEqual([]);
+});
+
+it("cancels a create run that never finishes", async () => {
+  const workflows = new ProjectMachineWorkflows({
+    core: server.catamorphic.core,
+    tenantId: SERVER_TENANT_ID,
+  });
+  const run = {
+    project: projectId,
+    workflow: "stuckMachine",
+    correlationKey: `machine-create:${"a".repeat(64)}`,
+  };
+  await workflows.start({
+    ...run,
+    kind: "machine.create",
+    input: {
+      name: "stuck-1",
+      class: "fleet",
+      rule: "stuck",
+      labels: {},
+      enrollment: {
+        controlPlaneUrl: PUBLIC,
+        code: "wke_stuck",
+        idempotencyKey: "a".repeat(64),
+      },
+    },
+  });
+  await waitFor("the run to wait on its pause", async () => {
+    const row = await server.catamorphic.core.db
+      .selectFrom("workflow_runs")
+      .select("status")
+      .where("correlation_key", "=", run.correlationKey)
+      .executeTakeFirst();
+    return row?.status === "waiting" ? true : undefined;
+  });
+  expect(await workflows.latest(run)).toMatchObject({ status: "active" });
+  await workflows.cancel({ ...run, reason: "Its machine is being destroyed" });
+  expect(await workflows.latest(run)).toMatchObject({
+    status: "failed",
+    failures: 1,
+  });
 });
 
 it("creates and destroys machines through the project's own workflows", async () => {
