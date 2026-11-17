@@ -254,16 +254,19 @@ holders of `webhooks:write` rotate one with
 Enablements belong to a member or to the project (`owner: { type: "project"
 }`). A project enablement runs as the project principal with shared
 connections. A project automation of `main` follows the published program
-by default; a member's own follows only once the member turns it on, since it
-uses their connections (`follow`, ADR 0330; `POST <api>/projects/:projectId/workflow-enablements/:enablementId/follow`
+by default; a member's own follows only once that member turns it on, since
+it uses their connections (`follow`, ADR 0330; `POST <api>/projects/:projectId/workflow-enablements/:enablementId/follow`
 with `{ follow }` changes it): every publication (a deploy, a code-host sync
 that receives commits) is recorded in `published_revisions`, and the event
 dispatch pass (`startEventDispatcher`, which every host already runs) moves
 each follower to it when the workflow builds there and its authority digest
 (the consent digest without the artifact) is unchanged. Otherwise it stays
 on its commit with `updateAvailable` and its owner gets a user notification.
-Only a parse, missing-workflow or trigger-registration failure skips a
-revision; other errors are retried with backoff.
+The digest also covers each trigger's kind, configuration and filters and the
+project's declared run secret names. Only a parse, missing-workflow or
+trigger-registration failure skips a revision; other errors are retried with
+backoff. Revisions are recorded only by deploys and the code-host sync, and
+only when the commit is what `main` points to then.
 A project's deploy workflow (`.work/project.json` `deploy.workflow`) runs
 once at each revision, through its own project automation, before anything
 moves; a failure moves nothing (ADR 0331). `GET <api>/projects/:projectId/published-revisions`
@@ -764,8 +767,11 @@ Run-time env resolves through one bindings chain:
   project's shared secrets without reading them (a workflow uses one once it
   declares the name with `defineSecrets`). `onProjectDeleted` never blocks
   the delete: one that throws or returns `{ done: false }` is retried with
-  backoff from the event dispatch pass until it reports done. Hooks must be
-  idempotent.
+  backoff from the event dispatch pass until it reports done. Each hook has a
+  unique `name` (a plugin's defaults to the plugin's) that owed cleanups find
+  it by after restarts; a create rolled back after some hooks ran queues
+  their cleanups, and `core.projects.listCleanups()` shows the ones that keep
+  failing. Hooks must be idempotent.
 
 ```ts
 import {
@@ -808,6 +814,7 @@ Work feature; Work never interprets the secret:
 
 ```ts
 const projectDatabases: ProjectLifecycleHooks = {
+  name: "project-databases",
   async onProjectCreated({ project }) {
     const name = `project_${project.id.replaceAll("-", "")}`;
     const password = randomBytes(24).toString("base64url");

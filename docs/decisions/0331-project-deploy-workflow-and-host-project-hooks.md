@@ -29,7 +29,12 @@ create and are retried on delete until they report done.**
   consented to; the run uses that enablement's authority at the new commit
   only when the authority is unchanged there. None, several, or changed
   authority fail the revision. The deploy enablement itself follows like any
-  other once the revision applies.
+  other once the revision applies. Each try is one run found again by a
+  per-attempt correlation key, so a restart never starts a second. A run
+  that cannot start for a reason that may clear (full machines, a run limit,
+  the database) waits with backoff; one past the deploy timeout (an hour by
+  default) is canceled and fails the revision, and one running past 15
+  minutes is reported once.
 - **Failure stops the move.** A failed, canceled, or unstartable deploy leaves
   every enablement where it was, marks the revision `failed` with the reason,
   and notifies the people who manage project automations. The next published
@@ -45,15 +50,19 @@ create and are retried on delete until they report done.**
   correlation key. Work does not know what the workflow does: migrations with
   any tool, or nothing.
 - **Host project hooks.** `projectHooks` (`createCatamorphic`, plugins, and
-  now `WorkServerHooks.projectHooks`): `onProjectCreated` may return
+  now `WorkServerHooks.projectHooks`), each with a unique, stable `name` (a
+  plugin's defaults to the plugin's): `onProjectCreated` may return
   `{ secrets: Record<NAME, string> }`; Work stores each as the project's
   shared secret value (ADR 0206 store, vault-sealed, names follow the
   Environment secret rule, set by `host`), without interpreting it. A workflow
   reads one once it declares the name with `defineSecrets`. `onProjectDeleted`
   no longer blocks the delete: the project is deleted, and a hook that throws
-  or returns `{ done: false }` is recorded in `project_cleanups` and retried
-  with backoff from the dispatch pass until it returns done, like a machine
-  provisioner's destroy.
+  or returns `{ done: false }` is recorded in `project_cleanups` by hook name
+  and retried with backoff from the dispatch pass until it returns done,
+  like a machine provisioner's destroy; its claim is renewed while it runs,
+  and cleanups that keep failing are logged and listed
+  (`projects.listCleanups`). A create rolled back after some hooks ran
+  queues their cleanups at once.
 
 ## Consequences
 

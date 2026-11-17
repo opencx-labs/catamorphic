@@ -29,35 +29,45 @@ there and the authority the owner consented to is unchanged.**
   consent gates authority, not code (ADR 0158). It defaults to `false` for a
   member's own automation, which runs with that member's connections: code
   someone else merged should not start using them before the member sees it,
-  so the member turns following on. Temporary enablements, session-retained
+  so only that member may turn following on (anyone who manages it may turn
+  it off). Temporary enablements, session-retained
   source and other branches never follow. Existing lasting project
   automations of `main` follow after the migration; members' stay pinned.
-- **Published revisions are recorded.** Every publication (a local deploy, a
-  server draft deploy, a code-host sync that receives commits, and the trigger
-  scan as a catch-all) records one `published_revisions` row under a lock on
-  the project row, skipping a commit equal to the latest one. A newer
-  revision supersedes older ones still `pending`.
+- **Published revisions are recorded** only by the paths that move the
+  published ref (a local deploy, a server draft deploy, a code-host sync that
+  receives commits), under a lock on the project row, and only when the
+  commit is what `main` points to at that moment; a slow or stale caller can
+  never make an older commit the newest revision. A newer revision
+  supersedes older ones still `pending`. Creating an enablement or pointing
+  it at a commit stamps the latest recorded revision on it, so no older one
+  moves it, and a follower never moves to a commit older than one a later
+  revision carries.
 - **Moving is the existing update.** For each follower Work previews the
   enablement at the revision as its owner (the member, or for a project
   automation the member who consented, resolved again through memberships),
   which builds the artifact and registers trigger definitions exactly as
-  enabling does. If the preview's authority digest (Environment, owner,
-  connections, capabilities, permissions: the consent digest without the
-  artifact digest) equals the enablement's, the enablement takes the new
-  commit, artifact and triggers in one transaction (`followed` event).
+  enabling does. If the preview's authority digest equals the one stored
+  when the owner consented, the enablement takes the new commit, artifact
+  and triggers in one transaction (`followed` event). The authority digest
+  is the consent digest without the artifact digest plus what starts the
+  workflow (each trigger's kind, configuration and filters) and the run
+  secret names the project declares, so a merge cannot add a public webhook,
+  a broader filter, a frequent schedule or a new secret without consent.
   Otherwise it stays, is marked `update_available`, and its owner (for a
   project automation, everyone who manages project automations) is notified
   through user notifications. Only a deterministic failure of that workflow at
   that revision skips it (its source does not parse, it is gone, its triggers
   do not register): that is reported the same way, and it follows again at
   the next good revision. Any other failure (the database, the network,
-  capacity, a timeout) never skips: the revision stays applying for that
+  capacity, a timeout, a machine or connection unavailable for now) never
+  skips: the revision stays applying for that
   enablement and is tried again with backoff (15 seconds, doubling, at most
   15 minutes), until a newer revision takes the enablement over. Runs in
   flight keep the commit they started on (ADR 0040).
 - **Order and replicas.** Revisions advance in publication order, one step at a
   time per project, from the event dispatch pass every host already runs. A
-  step holds the replica claim `published-revisions:<projectId>` (ADR 0193);
+  step holds the replica claim `published-revisions:<projectId>` (ADR 0193),
+  ready projects before ones waiting to try again;
   status changes are compare-and-set; a partial unique index allows one
   `deploying` or `applying` revision per project; and each enablement records
   the sequence it last followed and never moves to an earlier one. Two
