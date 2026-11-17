@@ -43,9 +43,10 @@ option (`session/set_config_option`), after the model, since an agent's
 effort levels follow its model (OpenCode offers its model variants as an
 "effort" option). A value or name equal to the level is set. An agent that
 offers no such option, not that level, or refuses it, gets the turn as is,
-and the turn says so in a `setting_not_applied` notice, as an unknown or
-refused model now does too. Harnesses may now report `notice` items for
-this.
+and the turn says so: the adapter reports `setting.unapplied` (setting,
+requested value, its words), a runner event any harness may use, and Work
+writes it as a `setting_not_applied` notice. An unknown or refused model
+is reported the same way; both were diagnostics nobody saw.
 
 **ACP usage and provider retries.** The prompt answer's `usage` (unstable
 in ACP; OpenCode sends it) becomes the turn's usage: input, output,
