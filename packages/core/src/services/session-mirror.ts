@@ -1,6 +1,8 @@
 import {
   type AgentTodo,
   assertSessionMetadata,
+  type Item,
+  type ResultItem,
   type SessionSnapshot,
   type StoredSessionEvent,
 } from "@catamorphic/agent-protocol";
@@ -21,6 +23,7 @@ import {
   type ExecutionEnvironmentsService,
 } from "./execution-environments-service.js";
 import { type SessionLog, SessionLogGapError } from "./sessions/session-log.js";
+import { itemFromRow } from "./sessions/session-rows.js";
 
 /**
  * The session was continued on THIS backend: its authority moved here, so
@@ -91,6 +94,7 @@ export async function writeSessionMirror({
   sessionId,
   input,
   agentId,
+  acceptsResult,
   mirrorAdmission,
   mirrorConnections,
 }: {
@@ -102,6 +106,11 @@ export async function writeSessionMirror({
   sessionId: string;
   input: SessionMirrorInput;
   agentId: string | null;
+  /**
+   * Whether this side's definition of the chat's agent accepts a pushed
+   * result (ADR 0323). One it does not is kept as `failed`: readers skip it.
+   */
+  acceptsResult: (item: ResultItem) => boolean;
   mirrorAdmission?: Awaited<ReturnType<ExecutionEnvironmentsService["admit"]>>;
   mirrorConnections?: Awaited<ReturnType<ConnectionAdmissionService["admit"]>>;
 }): Promise<{ session: Selectable<DB["agent_sessions"]>; sequence: number }> {
@@ -196,6 +205,14 @@ export async function writeSessionMirror({
     // The source's native threads live on its machine: the copy keeps them
     // for the turns that name them, as unavailable, so a turn here starts a
     // thread of its own and is handed the history (ADR 0198).
+    // A pushed result is the pusher's word: it counts only if this side's
+    // schema accepts it.
+    const checked = (item: Item): Item =>
+      item.kind === "result" &&
+      item.status === "completed" &&
+      !acceptsResult(item)
+        ? { ...item, status: "failed" }
+        : item;
     const away = <T extends { status: string }>(thread: T): T => ({
       ...thread,
       status: "unavailable",
@@ -209,6 +226,7 @@ export async function writeSessionMirror({
         sessionId,
         snapshot: {
           ...input.base,
+          items: input.base.items.map(checked),
           providerThreads: input.base.providerThreads.map(away),
         },
       });
@@ -229,7 +247,13 @@ export async function writeSessionMirror({
             ...stored,
             event: { ...stored.event, thread: away(stored.event.thread) },
           }
-        : stored,
+        : stored.event.type === "item.added" ||
+            stored.event.type === "item.changed"
+          ? {
+              ...stored,
+              event: { ...stored.event, item: checked(stored.event.item) },
+            }
+          : stored,
     );
     let sequence: number;
     try {
@@ -264,6 +288,38 @@ export async function writeSessionMirror({
       )
         throw new AccessDeniedError();
       const snapshot = event.payload.session;
+      // A recorded result is announced only for an item this side accepted,
+      // with that item's own fields, and as the pusher's doing.
+      let detail = event.payload.detail;
+      if (event.kind === "session.result-recorded") {
+        const resultId =
+          detail && typeof detail === "object" && !Array.isArray(detail)
+            ? detail.resultId
+            : undefined;
+        const stored =
+          typeof resultId === "string"
+            ? await trx
+                .selectFrom("agent_items")
+                .select("payload")
+                .where("session_id", "=", sessionId)
+                .where("id", "=", resultId)
+                .where("kind", "=", "result")
+                .where("status", "=", "completed")
+                .executeTakeFirst()
+            : undefined;
+        const item = stored ? itemFromRow(stored) : undefined;
+        if (item?.kind !== "result") continue;
+        detail = {
+          resultId: item.id,
+          name: item.name,
+          value: item.value,
+          turnId: item.turnId,
+          attemptId: item.attemptId,
+          input: item.input,
+          commit: item.commit,
+          recordedAt: item.createdAt,
+        };
+      }
       await trx
         .insertInto("project_events")
         .values({
@@ -277,10 +333,14 @@ export async function writeSessionMirror({
             ...event.payload,
             // Automations act on who did it: only the pusher, this chat's
             // own agent or Work may be named; anyone else is the pusher.
-            actor: mirroredActor(event.payload.actor, {
-              sessionId,
-              externalUserId: identity.externalUserId,
-            }),
+            ...(detail === undefined ? {} : { detail }),
+            actor:
+              event.kind === "session.result-recorded"
+                ? { kind: "user", externalUserId: identity.externalUserId }
+                : mirroredActor(event.payload.actor, {
+                    sessionId,
+                    externalUserId: identity.externalUserId,
+                  }),
             sessionId,
             externalUserId: identity.externalUserId,
             agentId: session.agent_id,

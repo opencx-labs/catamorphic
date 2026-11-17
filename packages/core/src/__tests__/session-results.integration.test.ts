@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import {
   orderedTurns,
+  type ResultItem,
   type SessionState,
   sessionStateFromSnapshot,
 } from "@catamorphic/agent-protocol";
@@ -25,6 +26,12 @@ import { ExecutionEnvironmentsService } from "../services/execution-environments
 import { ProjectEnvironmentsService } from "../services/project-environments-service.js";
 import { ProjectsService } from "../services/projects-service.js";
 import { SessionActionsService } from "../services/session-actions-service.js";
+import { copySettledHistory } from "../services/sessions/session-copy.js";
+import { readFullSnapshot } from "../services/sessions/session-reads.js";
+import {
+  recordResult,
+  SessionResultAttemptError,
+} from "../services/sessions/session-results.js";
 import { testEnvironmentProvider } from "./test-environment.js";
 
 /*
@@ -476,5 +483,223 @@ describe("typed results", () => {
       },
       { timeout: 15_000 },
     );
+  });
+
+  it("refuses a submission from an attempt that no longer runs its turn", async () => {
+    const project = await projects.create(identity, { name: "Attempts" });
+    const session = await sessions.create(identity, project.id);
+    const state = await turn(project.id, session.id, "Hello.");
+    const [settled] = orderedTurns(state);
+    const submit = (attemptId: string) =>
+      db.transaction().execute((trx) =>
+        recordResult(trx, sessions.log, {
+          sessionId: session.id,
+          turnId: settled?.id ?? "",
+          attemptId,
+          name: "review",
+          value: { verdict: "COMMENT", score: 1 },
+        }),
+      );
+    // The turn ended: its own attempt's late call records nothing.
+    await expect(submit(settled?.activeAttemptId ?? "")).rejects.toThrow(
+      SessionResultAttemptError,
+    );
+    // Running, it takes only the attempt that runs it, never a superseded one.
+    await db
+      .updateTable("agent_turns")
+      .set({ status: "running" })
+      .where("id", "=", settled?.id ?? "")
+      .execute();
+    await expect(submit(randomUUID())).rejects.toThrow(
+      SessionResultAttemptError,
+    );
+    const accepted = await submit(settled?.activeAttemptId ?? "");
+    expect(accepted.attemptId).toBe(settled?.activeAttemptId);
+    await db
+      .updateTable("agent_turns")
+      .set({ status: "completed" })
+      .where("id", "=", settled?.id ?? "")
+      .execute();
+  });
+
+  it("is current again once the request after it is rolled back", async () => {
+    const project = await projects.create(identity, { name: "Rolled back" });
+    const session = await sessions.create(identity, project.id);
+    await turn(
+      project.id,
+      session.id,
+      tool("submit_result", {
+        name: "review",
+        value: { verdict: "COMMENT", score: 3 },
+      }),
+    );
+    const state = await turn(project.id, session.id, "Look again.");
+    expect(
+      (await sessions.results(identity, project.id, session.id))[0],
+    ).toMatchObject({ current: false });
+    const [, later] = orderedTurns(state);
+    await db
+      .updateTable("agent_turns")
+      .set({ status: "rolled_back" })
+      .where("id", "=", later?.id ?? "")
+      .execute();
+    expect(
+      (await sessions.results(identity, project.id, session.id))[0],
+    ).toMatchObject({ current: true });
+  });
+
+  it("shows a child's results in list and wait only to callers who may read that child", async () => {
+    const project = await projects.create(identity, { name: "Readers" });
+    const parent = await sessions.create(identity, project.id);
+    const child = await sessions.createSubsession(
+      identity,
+      project.id,
+      parent.id,
+      {
+        task: tool("submit_result", {
+          name: "review",
+          value: { verdict: "COMMENT", score: 2 },
+        }),
+      },
+    );
+    await vi.waitFor(
+      async () => {
+        const [entry] = await sessions.listSubsessions(
+          identity,
+          project.id,
+          parent.id,
+        );
+        expect(entry?.results).toHaveLength(1);
+      },
+      { timeout: 15_000 },
+    );
+    // The child now belongs to someone else; the parent stays the caller's.
+    await db
+      .updateTable("agent_sessions")
+      .set({ external_user_id: "someone-else" })
+      .where("id", "=", child.session.id)
+      .execute();
+    const scoped: Identity = {
+      ...identity,
+      scope: [{ kind: "agent", projectId: project.id, name: "*" }],
+    };
+    const [listed] = await sessions.listSubsessions(
+      scoped,
+      project.id,
+      parent.id,
+    );
+    expect(listed?.results).toEqual([]);
+    const [waited] = await sessions.waitForSubsessions(
+      scoped,
+      project.id,
+      parent.id,
+      {
+        sessionIds: [child.session.id],
+        timeoutMs: 0,
+        stopWaiting: new AbortController().signal,
+      },
+    );
+    expect(waited?.results).toEqual([]);
+    expect(
+      await sessions.results(scoped, project.id, parent.id, { family: true }),
+    ).toEqual([]);
+  });
+
+  it("keeps a mirrored result only if this side's schema accepts it, announced as the pusher's", async () => {
+    const project = await projects.create(identity, { name: "Mirror" });
+    const source = await sessions.create(identity, project.id);
+    await turn(
+      project.id,
+      source.id,
+      tool("submit_result", {
+        name: "review",
+        value: { verdict: "COMMENT", score: 5 },
+      }),
+    );
+    const sessionId = randomUUID();
+    const copy = copySettledHistory({
+      snapshot: await readFullSnapshot({ db, sessionId: source.id }),
+      sessionId,
+    });
+    if (!copy) throw new Error("Expected a copy");
+    await sessions.mirror(identity, project.id, sessionId, {
+      authority: { hostId: "desktop-origin", revision: 1 },
+      todos: [],
+      base: copy.snapshot,
+      events: [],
+    });
+    const now = new Date().toISOString();
+    const pushed = (value: unknown): ResultItem => ({
+      id: randomUUID(),
+      sessionId,
+      turnId: null,
+      attemptId: null,
+      parentItemId: null,
+      position: 0,
+      status: "completed",
+      nativeRef: null,
+      createdAt: now,
+      updatedAt: now,
+      startedAt: now,
+      endedAt: now,
+      kind: "result",
+      name: "review",
+      value: value as ResultItem["value"],
+      input: null,
+      commit: null,
+    });
+    const forged = pushed({ verdict: "APPROVE", score: 5 });
+    const valid = pushed({ verdict: "REQUEST_CHANGES", score: 1 });
+    const announce = (item: ResultItem) => ({
+      id: randomUUID(),
+      kind: "session.result-recorded",
+      occurredAt: now,
+      payload: {
+        sessionId,
+        actor: { kind: "agent", sessionId },
+        causation: [],
+        // Claims a value its item does not hold.
+        detail: { resultId: item.id, name: "review", value: { verdict: "X" } },
+        session: { id: sessionId, key: null },
+      },
+    });
+    await sessions.mirror(identity, project.id, sessionId, {
+      authority: { hostId: "desktop-origin", revision: 1 },
+      events: [forged, valid].map((item, index) => ({
+        sessionId,
+        sequence: copy.snapshot.sequence + 1 + index,
+        at: now,
+        commandId: null,
+        event: { type: "item.added", item },
+      })),
+      projectEvents: [announce(forged), announce(valid)],
+    });
+    const results = await sessions.results(identity, project.id, sessionId);
+    expect(results.map((result) => result.value)).toEqual([
+      { verdict: "REQUEST_CHANGES", score: 1 },
+      { verdict: "COMMENT", score: 5 },
+    ]);
+    const stored = await db
+      .selectFrom("agent_items")
+      .select("status")
+      .where("id", "=", forged.id)
+      .executeTakeFirstOrThrow();
+    expect(stored.status).toBe("failed");
+    const events = await db
+      .selectFrom("project_events")
+      .select("payload")
+      .where("project_id", "=", project.id)
+      .where("kind", "=", "session.result-recorded")
+      .where(sql<string>`payload->>'sessionId'`, "=", sessionId)
+      .execute();
+    expect(events.map((event) => event.payload)).toEqual([
+      expect.objectContaining({
+        actor: { kind: "user", externalUserId: identity.externalUserId },
+        detail: expect.objectContaining({
+          resultId: valid.id,
+          value: { verdict: "REQUEST_CHANGES", score: 1 },
+        }),
+      }),
+    ]);
   });
 });
