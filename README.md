@@ -664,13 +664,19 @@ The hook serializes commit-bound reviews, check runs and replies through an
 application Postgres ledger, reconciles uncertain writes, and leaves mutable
 PR descriptions, dismissals and thread resolution to people
 ([Review pull requests](skills/setup-work-server/references/review-pull-requests.md)).
+A server no sender can reach polls instead: a workflow with `events:write`
+records events of the project's own kinds
+(`host["catamorphic.events"].record`), checked against each kind's filters,
+deduplicated by id and dispatched like deliveries; the `github-polling` pack
+feeds the GitHub kinds this way, so the review pack runs on a private server.
 See [`INTEGRATION.md`](INTEGRATION.md) and ADRs
 [0039](docs/decisions/0039-custom-trigger-kinds.md) /
 [0042](docs/decisions/0042-parameterized-trigger-kinds-and-workflow-tools-mcp.md) /
 [0171](docs/decisions/0171-project-trigger-kinds-and-declarative-webhook-ingress.md) /
 [0179](docs/decisions/0179-integrations-from-project-code-slack.md) /
 [0181](docs/decisions/0181-project-chats-use-their-environments-bindings.md) /
-[0259](docs/decisions/0259-reviews-post-from-a-workflow.md).
+[0259](docs/decisions/0259-reviews-post-from-a-workflow.md) /
+[0326](docs/decisions/0326-workflows-record-project-events.md).
 
 ### Long-lived journeys: correlation keys, signals, shared rate budgets
 

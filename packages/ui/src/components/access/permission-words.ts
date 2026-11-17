@@ -7,6 +7,7 @@ const PERMISSION_WORDS: Record<string, string> = {
   "secrets:write": "Set and delete secrets",
   "automations:read": "See the project's automations",
   "automations:write": "Turn project automations on and off",
+  "events:write": "Record events that start the project's automations",
   "webhooks:read": "See webhook addresses",
   "webhooks:write": "Replace webhook addresses",
   "runs:read": "See everyone's runs",

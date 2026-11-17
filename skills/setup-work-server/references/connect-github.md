@@ -112,6 +112,16 @@ deliveries with it, and no run ever receives it. The desktop needs no
 webhook: its watchers poll GitHub with the person's own connection and
 record the same events.
 
+A server GitHub cannot reach (a private company server with no public URL)
+gets the same events by polling instead: install the `github-polling` pack
+(`registry.read`) into the project and turn `pollGithub` on. It reads the
+repository through the `github` service connection every minute and records
+`github.pull_request`, `github.issue_comment` and
+`github.pull_request_review_comment` events shaped like the webhook's
+deliveries (ADR 0326), so workflows bound to those kinds run unchanged. Its
+events carry `origin: { type: "workflow" }` where a webhook's carry
+`{ type: "request" }`; no webhook URL or secret is needed.
+
 An App has one webhook URL, so it feeds one project, and it delivers events
 from every repository the App is installed on. Install a webhook App only on
 the project's repository, or filter on `repository.full_name` in each

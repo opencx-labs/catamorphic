@@ -35,11 +35,23 @@ export const webhook = defineTriggerKind({
       contentType: z.string().nullable(),
       body: z.json(),
       /**
-       * True when the host fetched the event itself from the sender's API
-       * with its own connection instead of receiving a signed request (the
-       * desktop's GitHub poller, ADR 0177): there is no signature to check.
+       * Where the event came from (ADR 0326): a request to the webhook URL,
+       * checked as the binding's `verify` declares; an event the host
+       * fetched itself from the sender's API (the desktop's GitHub poller,
+       * ADR 0177); or one a workflow of the project recorded.
        */
-      hostVerified: z.boolean().optional(),
+      origin: z.discriminatedUnion("type", [
+        z.object({ type: z.literal("request") }),
+        z.object({ type: z.literal("host") }),
+        z.object({
+          type: z.literal("workflow"),
+          workflowName: z.string(),
+          runId: z.string(),
+          enablementId: z.string().optional(),
+        }),
+      ]),
+      /** Enablements whose runs led to a recorded event, oldest first. */
+      causation: z.array(z.string()).optional(),
     }),
   }),
   matches: ({ config, payload }) => payload.payload.name === config.name,

@@ -78,6 +78,7 @@ import {
   type DocumentBlobStore,
   DocumentsService,
 } from "./services/documents-service.js";
+import { eventsCapability } from "./services/events-capability.js";
 import { ExecutionAllocationsService } from "./services/execution-allocations-service.js";
 import { ExecutionEnvironmentsService } from "./services/execution-environments-service.js";
 import { ExecutionJobsService } from "./services/execution-jobs-service.js";
@@ -789,6 +790,14 @@ export class CatamorphicCore {
         workflows: () => this.privateWorkflows,
         artifacts: () => this.sessionArtifacts,
         authorizeWorkflow: (context) => this.authorizeWorkflowHostCall(context),
+      }),
+      eventsCapability({
+        db: this.db,
+        // Constructed further down; resolved per call.
+        events: () => this.projectEvents,
+        triggers: () => this.triggers,
+        maxPayloadBytes: () => this.webhooks.maxBodyBytes,
+        authorize: (context) => this.authorizeWorkflowHostCall(context),
       }),
       secretsCapability({
         // Constructed further down; resolved per call.

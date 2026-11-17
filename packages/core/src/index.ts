@@ -356,6 +356,11 @@ export {
   vaultKeyId,
 } from "./services/encrypted-credential-vault.js";
 export {
+  EVENTS_CAPABILITY,
+  MAX_RECORDED_EVENTS,
+  RecordedEventRefusedError,
+} from "./services/events-capability.js";
+export {
   type AllocationReleaseReason,
   type EnvironmentAllocationPolicy,
   type EnvironmentSandbox,
@@ -852,6 +857,7 @@ export {
   triggerKindInfo,
 } from "./services/trigger-kinds.js";
 export {
+  type ResolvedProjectKind,
   type StoredTriggerBinding,
   type TriggerBindingInfo,
   TriggerBindingsInvalidError,

@@ -20,8 +20,9 @@ safe to repeat a create.
 
 What runs where:
 
-- The **control plane** receives GitHub's signed webhook, runs the
-  workflows, and holds every credential: the App's key, the replica's
+- The **control plane** receives GitHub's signed webhook (or, on a server
+  GitHub cannot reach, polls GitHub with the `github-polling` pack, below),
+  runs the workflows, and holds every credential: the App's key, the replica's
   password, Slack's token. It also **posts**: when a review chat's turn ends,
   the `postReviews` workflow (in the workflow-only `github-poster`
   Environment) returns one host call with the session and turn ids. The hook
@@ -231,6 +232,15 @@ the `default` Environment, and `postReviews` in `github-poster`, with its
 `github` connection consented. The `github` webhook listens once they are on;
 `GET /api/projects/:id/webhooks` shows its URL, which the App registered from
 a manifest already uses.
+
+**A private server.** When GitHub cannot reach the server, install the
+`github-polling` pack beside this one and turn `pollGithub` on in its
+`github-poller` Environment (the person needs `events:write` too). It polls
+the repository every minute and records the same pull request and comment
+events the webhook would deliver (ADR 0326), so the review workflows above
+run unchanged; skip the webhook URL and `GITHUB_WEBHOOK_SECRET`. Events
+arrive up to a minute late, and the first poll records nothing: it remembers
+the open pull requests as they are.
 
 ## 7. Verify
 
