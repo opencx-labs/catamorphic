@@ -23,6 +23,7 @@ import type {
   Project,
   ProjectFileEntry,
   ProjectPermissionRef,
+  PublishedRevision,
   ResumeRunInput,
   ResumeRunPauseInput,
   Run,
@@ -424,6 +425,35 @@ function buildRuns(core: CatamorphicCore, identity: Identity): RunsResource {
   };
 }
 
+/** A project's published revisions and how they went live (ADRs 0330, 0331). */
+export interface PublishedRevisionsResource {
+  list(args: {
+    projectId: string;
+    limit?: number;
+  }): Promise<PublishedRevision[]>;
+  /**
+   * Try the project's latest revision again when it failed: its deploy
+   * workflow runs again, then followers move. Needs `automations:write`.
+   */
+  retry(args: { projectId: string }): Promise<PublishedRevision>;
+}
+
+function buildPublishedRevisions(
+  core: CatamorphicCore,
+  identity: Identity,
+): PublishedRevisionsResource {
+  return {
+    list: (args) =>
+      withIdentity(identity, () =>
+        core.publishedRevisions.list({ ...args, identity }),
+      ),
+    retry: (args) =>
+      withIdentity(identity, () =>
+        core.publishedRevisions.retry({ ...args, identity }),
+      ),
+  };
+}
+
 function buildWorkflowEnablements(
   core: CatamorphicCore,
   identity: Identity,
@@ -484,6 +514,7 @@ export class ScopedClient {
   readonly projects: ProjectsResource;
   readonly workflows: WorkflowsResource;
   readonly workflowEnablements: WorkflowEnablementsResource;
+  readonly publishedRevisions: PublishedRevisionsResource;
   readonly files: FilesResource;
   readonly runs: RunsResource;
   readonly triggers: TriggersResource;
@@ -503,6 +534,7 @@ export class ScopedClient {
     this.projects = buildProjects(core, identity);
     this.workflows = buildWorkflows(core, identity);
     this.workflowEnablements = buildWorkflowEnablements(core, identity);
+    this.publishedRevisions = buildPublishedRevisions(core, identity);
     this.files = buildFiles(core, identity);
     this.runs = buildRuns(core, identity);
     this.triggers = buildTriggers(core, identity);

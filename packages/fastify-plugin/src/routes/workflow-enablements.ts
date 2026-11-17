@@ -9,6 +9,7 @@ import {
   EnvironmentNotFoundError,
   EnvironmentPolicyInvalidError,
   ProductionDeploymentNotFoundError,
+  PublishedRevisionNotRetryableError,
   WorkflowEnablementConflictError,
   WorkflowEnablementConsentRequiredError,
   WorkflowEnablementFollowUnavailableError,
@@ -368,6 +369,47 @@ export function registerWorkflowEnablementRoutes(
           }),
         });
       } catch (error) {
+        return handleEnablementError(error, reply);
+      }
+    },
+  });
+
+  registerPublishedRevisionRetryRoute(app, ctx);
+}
+
+function registerPublishedRevisionRetryRoute(
+  app: FastifyInstance,
+  ctx: RouteContext,
+): void {
+  app.withTypeProvider<ZodTypeProvider>().route({
+    method: "POST",
+    url: "/projects/:projectId/published-revisions/retry",
+    schema: {
+      params: ProjectIdParamsSchema,
+      response: {
+        200: PublishedRevisionSchema,
+        403: ErrorSchema,
+        409: ErrorSchema,
+        503: ErrorSchema,
+      },
+    },
+    handler: async (request, reply) => {
+      const revisions = ctx.core?.publishedRevisions;
+      if (!revisions) {
+        return reply
+          .status(503)
+          .send({ error: "Published revisions unavailable" });
+      }
+      try {
+        return reply.send(
+          await revisions.retry({
+            identity: resolveIdentity(request),
+            projectId: request.params.projectId,
+          }),
+        );
+      } catch (error) {
+        if (error instanceof PublishedRevisionNotRetryableError)
+          return reply.status(409).send({ error: error.message });
         return handleEnablementError(error, reply);
       }
     },

@@ -556,6 +556,7 @@ export {
 export {
   type ProjectDeploy,
   type PublishedRevision,
+  PublishedRevisionNotRetryableError,
   type PublishedRevisionReportEntry,
   type PublishedRevisionStatus,
   PublishedRevisionsService,

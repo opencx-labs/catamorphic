@@ -4997,7 +4997,7 @@ export interface paths {
                                 error: string | null;
                                 report: {
                                     /** @enum {string} */
-                                    kind: "moved" | "needs_consent" | "skipped" | "unchanged";
+                                    kind: "moved" | "needs_consent" | "skipped" | "retry" | "unchanged";
                                     /** Format: uuid */
                                     enablementId: string;
                                     workflowName: string;
@@ -5038,6 +5038,103 @@ export interface paths {
         };
         put?: never;
         post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/projects/{projectId}/published-revisions/retry": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    projectId: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description Default Response */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            /** Format: uuid */
+                            id: string;
+                            sequence: number;
+                            /** Format: uuid */
+                            projectId: string;
+                            commitSha: string;
+                            /** @enum {string} */
+                            status: "pending" | "deploying" | "applying" | "applied" | "superseded" | "failed";
+                            deployWorkflow: string | null;
+                            /** Format: uuid */
+                            deployRunId: string | null;
+                            previousCommitSha: string | null;
+                            error: string | null;
+                            report: {
+                                /** @enum {string} */
+                                kind: "moved" | "needs_consent" | "skipped" | "retry" | "unchanged";
+                                /** Format: uuid */
+                                enablementId: string;
+                                workflowName: string;
+                                commitSha?: string;
+                                reason?: string;
+                            }[];
+                            /** Format: date-time */
+                            createdAt: string;
+                            /** Format: date-time */
+                            settledAt: string | null;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                403: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                409: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                503: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                        };
+                    };
+                };
+            };
+        };
         delete?: never;
         options?: never;
         head?: never;

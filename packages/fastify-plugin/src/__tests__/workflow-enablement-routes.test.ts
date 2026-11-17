@@ -4,6 +4,7 @@ import {
   EnvironmentAccessDeniedError,
   EnvironmentNotFoundError,
   EnvironmentPolicyInvalidError,
+  PublishedRevisionNotRetryableError,
   WorkflowEnablementFollowUnavailableError,
 } from "@catamorphic/core";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -158,9 +159,10 @@ describe("workflow enablement routes", () => {
 
   it("turns following on and off, and refuses it where it cannot follow", async () => {
     const get = vi.fn(async () => enablement);
-    const setFollow = vi.fn(
-      async ({ follow }: { follow: boolean }) => ({ ...enablement, follow }),
-    );
+    const setFollow = vi.fn(async ({ follow }: { follow: boolean }) => ({
+      ...enablement,
+      follow,
+    }));
     const app = createTestApp({
       core: {
         workflowEnablements: { get, setFollow },
@@ -228,5 +230,42 @@ describe("workflow enablement routes", () => {
       projectId: PROJECT_ID,
       limit: 5,
     });
+  });
+
+  it("tries the latest failed revision again, and says when there is none", async () => {
+    const revision = {
+      id: ENABLEMENT_ID,
+      sequence: 8,
+      projectId: PROJECT_ID,
+      commitSha: "c".repeat(40),
+      status: "pending" as const,
+      deployWorkflow: "migrateDatabase",
+      deployRunId: null,
+      previousCommitSha: "b".repeat(40),
+      error: null,
+      report: [],
+      createdAt: "2026-11-17T00:00:00.000Z",
+      settledAt: null,
+    };
+    const retry = vi.fn(async () => revision);
+    const app = createTestApp({
+      core: { publishedRevisions: { retry } } as unknown as CatamorphicCore,
+    });
+    apps.push(app);
+    const url = `/api/projects/${PROJECT_ID}/published-revisions/retry`;
+
+    const response = await app.inject({ method: "POST", url });
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toMatchObject({ status: "pending" });
+    expect(retry).toHaveBeenCalledWith({
+      identity: TEST_IDENTITY,
+      projectId: PROJECT_ID,
+    });
+
+    retry.mockRejectedValueOnce(
+      new PublishedRevisionNotRetryableError("Nothing to try again"),
+    );
+    const none = await app.inject({ method: "POST", url });
+    expect(none.statusCode).toBe(409);
   });
 });

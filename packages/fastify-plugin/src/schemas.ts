@@ -339,7 +339,7 @@ export const PublishedRevisionSchema = z.object({
   /** What following the revision did to each following enablement. */
   report: z.array(
     z.object({
-      kind: z.enum(["moved", "needs_consent", "skipped", "unchanged"]),
+      kind: z.enum(["moved", "needs_consent", "skipped", "retry", "unchanged"]),
       enablementId: z.string().uuid(),
       workflowName: z.string(),
       commitSha: z.string().optional(),

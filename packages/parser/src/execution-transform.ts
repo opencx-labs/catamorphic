@@ -39,12 +39,23 @@ export function prepareWorkflowExecution(opts: {
   return { files: prepared.files, graph: selected.graph };
 }
 
+/**
+ * The project's workflow source does not parse. Deterministic for a given
+ * set of files: the same commit fails the same way every time.
+ */
+export class WorkflowSourceInvalidError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "WorkflowSourceInvalidError";
+  }
+}
+
 export function prepareProjectExecution(opts: {
   files: Record<string, string>;
 }): PreparedProjectExecution {
   const parsed = parseProject(opts.files);
   if (parsed.errors.length > 0) {
-    throw new Error(
+    throw new WorkflowSourceInvalidError(
       parsed.errors
         .map((error) =>
           error.file ? `${error.file}: ${error.message}` : error.message,

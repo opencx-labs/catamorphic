@@ -829,6 +829,8 @@ export interface Publications {
 }
 
 export interface PublishedRevisions {
+  attempts: Generated<number>;
+  auto_retried: Generated<boolean>;
   commit_sha: string;
   created_at: Generated<Timestamp>;
   deploy_enablement_id: string | null;
@@ -839,6 +841,7 @@ export interface PublishedRevisions {
   previous_commit_sha: string | null;
   project_id: string;
   report: Generated<Json>;
+  retry_at: Timestamp | null;
   sequence: Generated<Int8>;
   settled_at: Timestamp | null;
   status: Generated<string>;

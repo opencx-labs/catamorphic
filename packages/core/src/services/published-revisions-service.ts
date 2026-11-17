@@ -1,6 +1,6 @@
 import type { DB } from "@catamorphic/db";
 import { getTracer, withSpan } from "@catamorphic/otel";
-import type { Kysely, Selectable } from "kysely";
+import { type Kysely, type Selectable, sql } from "kysely";
 import { z } from "zod";
 import { type Identity, mayUseProject } from "../identity.js";
 import { AccessDeniedError } from "./artifact-scope.js";
@@ -222,6 +222,9 @@ export class PublishedRevisionsService {
           `[catamorphic] Published revision of project ${projectId} could not advance`,
           error,
         );
+        // A failure that may clear (the database, the network): the same
+        // step runs again after a backoff.
+        await this.defer(projectId).catch(() => {});
       }
     }
     return progressed;
@@ -253,13 +256,19 @@ export class PublishedRevisionsService {
       .orderBy("sequence", "desc")
       .execute();
     const active = open.find((row) => row.status !== "pending");
+    const [next, ...older] = open;
+    const current = active ?? next;
+    if (!current) return false;
+    // A newer revision takes over what an applying one still retries.
+    const newer = active?.status === "applying" && open[0] !== active;
+    if (current.retry_at && current.retry_at > new Date() && !newer)
+      return false;
     // A process that stopped mid-apply left it here; applying is idempotent.
     if (active?.status === "applying") {
-      await this.apply(active);
+      await this.apply(active, { newer });
       return true;
     }
     if (active?.status === "deploying") return this.checkDeploy(active);
-    const [next, ...older] = open;
     if (!next) return false;
     if (older.length > 0)
       await this.db
@@ -420,14 +429,28 @@ export class PublishedRevisionsService {
     return true;
   }
 
-  /** Move every following enablement to the revision, then settle it. */
-  private async apply(row: Row): Promise<void> {
+  /**
+   * Move every following enablement to the revision, then settle it. An
+   * enablement whose preview hit a failure that may clear keeps the
+   * revision applying, tried again after a backoff; once a newer revision
+   * is waiting, that one takes the enablement over instead.
+   */
+  private async apply(
+    row: Row,
+    options: { newer?: boolean } = {},
+  ): Promise<void> {
     const sequence = Number(row.sequence);
     const followers = await this.deps.enablements.followers({
       projectId: row.project_id,
       sequence,
     });
-    const report: PublishedRevisionReportEntry[] = [];
+    const earlier = Array.isArray(row.report)
+      ? (row.report as unknown as PublishedRevisionReportEntry[])
+      : [];
+    const report = new Map(
+      earlier.map((entry) => [entry.enablementId, entry] as const),
+    );
+    let retrying = false;
     for (const follower of followers) {
       const outcome = await this.deps.enablements
         .followRevision({
@@ -437,12 +460,16 @@ export class PublishedRevisionsService {
         })
         .catch(
           (error: unknown): WorkflowEnablementFollowOutcome => ({
-            kind: "skipped",
+            kind: "retry",
             enablementId: follower.id,
             reason: error instanceof Error ? error.message : String(error),
           }),
         );
-      report.push({ ...outcome, workflowName: follower.workflowName });
+      report.set(follower.id, {
+        ...outcome,
+        workflowName: follower.workflowName,
+      });
+      if (outcome.kind === "retry") retrying = true;
       if (outcome.kind === "needs_consent" || outcome.kind === "skipped")
         await this.notifyOutcome(row, follower.workflowName, outcome).catch(
           (error: unknown) =>
@@ -452,17 +479,148 @@ export class PublishedRevisionsService {
             ),
         );
     }
+    if (retrying && !options.newer) {
+      const attempts = row.attempts + 1;
+      await this.db
+        .updateTable("published_revisions")
+        .set({
+          report: toJson([...report.values()]),
+          attempts,
+          retry_at: new Date(Date.now() + retryBackoffMs(attempts)),
+          updated_at: new Date(),
+        })
+        .where("id", "=", row.id)
+        .where("status", "=", "applying")
+        .execute();
+      return;
+    }
     await this.db
       .updateTable("published_revisions")
       .set({
         status: "applied",
-        report: toJson(report),
+        report: toJson([...report.values()]),
+        retry_at: null,
         settled_at: new Date(),
         updated_at: new Date(),
       })
       .where("id", "=", row.id)
       .where("status", "=", "applying")
       .execute();
+  }
+
+  /** Hold a project's open revision back after a failure that may clear. */
+  private async defer(projectId: string): Promise<void> {
+    const row = await this.db
+      .selectFrom("published_revisions")
+      .select(["id", "attempts"])
+      .where("project_id", "=", projectId)
+      .where("status", "in", ["pending", "deploying", "applying"])
+      .orderBy(sql`status = 'pending'`)
+      .orderBy("sequence", "desc")
+      .limit(1)
+      .executeTakeFirst();
+    if (!row) return;
+    const attempts = row.attempts + 1;
+    await this.db
+      .updateTable("published_revisions")
+      .set({
+        attempts,
+        retry_at: new Date(Date.now() + retryBackoffMs(attempts)),
+        updated_at: new Date(),
+      })
+      .where("id", "=", row.id)
+      .execute();
+  }
+
+  /**
+   * Try the project's latest revision again when it failed (ADR 0331): its
+   * deploy workflow runs again at that revision and, if it succeeds, the
+   * following enablements move. Needs `automations:write`.
+   */
+  async retry(input: {
+    identity: Identity;
+    projectId: string;
+  }): Promise<PublishedRevision> {
+    if (
+      !this.deps.enablements.mayManageProjectAutomations({
+        identity: input.identity,
+        projectId: input.projectId,
+      })
+    )
+      throw new AccessDeniedError();
+    const latest = await this.db
+      .selectFrom("published_revisions")
+      .select(["id", "status", "tenant_id"])
+      .where("project_id", "=", input.projectId)
+      .orderBy("sequence", "desc")
+      .limit(1)
+      .executeTakeFirst();
+    if (!latest || latest.tenant_id !== input.identity.tenantId)
+      throw new PublishedRevisionNotRetryableError(
+        "This project has no published revision to try again",
+      );
+    if (!(await this.reopen({ id: latest.id })))
+      throw new PublishedRevisionNotRetryableError(
+        "The project's latest revision did not fail, so there is nothing to try again",
+      );
+    const row = await this.db
+      .selectFrom("published_revisions")
+      .selectAll()
+      .where("id", "=", latest.id)
+      .executeTakeFirstOrThrow();
+    return mapRevision(row);
+  }
+
+  /**
+   * The deploy workflow's project automation was consented to again: its
+   * latest revision, if that failed, is tried once more by itself.
+   */
+  async retryAfterConsent(input: {
+    projectId: string;
+    workflowName: string;
+    ownerKind: "member" | "project";
+  }): Promise<void> {
+    if (input.ownerKind !== "project") return;
+    const latest = await this.db
+      .selectFrom("published_revisions")
+      .select(["id", "status", "deploy_workflow", "auto_retried"])
+      .where("project_id", "=", input.projectId)
+      .orderBy("sequence", "desc")
+      .limit(1)
+      .executeTakeFirst();
+    if (
+      latest?.status !== "failed" ||
+      latest.auto_retried ||
+      latest.deploy_workflow !== input.workflowName
+    )
+      return;
+    await this.reopen({ id: latest.id, automatic: true });
+  }
+
+  /** Put a failed revision back to pending; false when it was not failed. */
+  private async reopen(input: {
+    id: string;
+    automatic?: boolean;
+  }): Promise<boolean> {
+    const result = await this.db
+      .updateTable("published_revisions")
+      .set({
+        status: "pending",
+        error: null,
+        deploy_run_id: null,
+        deploy_enablement_id: null,
+        settled_at: null,
+        attempts: 0,
+        retry_at: null,
+        ...(input.automatic ? { auto_retried: true } : {}),
+        updated_at: new Date(),
+      })
+      .where("id", "=", input.id)
+      .where("status", "=", "failed")
+      .executeTakeFirst();
+    if (result.numUpdatedRows !== 1n) return false;
+    this.deps.wakeups?.notify("events");
+    return true;
   }
 
   private async transition(
@@ -581,6 +739,19 @@ export class PublishedRevisionsService {
 }
 
 type Row = Selectable<DB["published_revisions"]>;
+
+/** There is no failed latest revision to try again (ADR 0331). */
+export class PublishedRevisionNotRetryableError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "PublishedRevisionNotRetryableError";
+  }
+}
+
+/** 15 seconds after the first failure, doubling, at most 15 minutes. */
+function retryBackoffMs(attempts: number): number {
+  return Math.min(15_000 * 2 ** Math.max(0, attempts - 1), 15 * 60_000);
+}
 
 function mapRevision(row: Row): PublishedRevision {
   return {

@@ -1266,6 +1266,8 @@ export class CatamorphicCore {
           ...args,
         }),
       resolveMemberIdentity: this.resolveMember,
+      // Constructed later; read per call.
+      onConsented: (input) => this.publishedRevisions.retryAfterConsent(input),
     });
     this.schedules = new SchedulesService(this.db, this.triggers);
 

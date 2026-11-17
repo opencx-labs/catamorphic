@@ -156,16 +156,21 @@ their roles; a project chat may use any project Environment) and the agent's
 
 ## Following main, and the deploy workflow
 
-An enablement of \`main\` follows the published program by default
+A project automation of \`main\` follows the published program by default
 (\`follow: true\`; set it when enabling, change it later with the enablement's
-\`follow\` action). On each newly published revision, Work moves it there when the
-workflow builds and parses at that revision and the authority consented to is
-unchanged: same Environment, connections, capabilities and permissions. If the
-revision asks for more, the enablement stays on its commit, shows an update, and
-its owner is notified to review it. A revision whose workflow fails to build is
-skipped and reported; the next good one is followed. Runs already going keep the
-commit they started on. Temporary enablements never follow. Turn \`follow\` off to
-pin a workflow to a reviewed commit.
+\`follow\` action). A member's own automation does not follow unless the member
+turns it on, because it runs with their connections and they should see new
+code before it uses them. On each newly published revision, Work moves a
+following enablement there when the workflow builds and parses at that revision
+and the authority consented to is unchanged: same Environment, connections,
+capabilities and permissions. If the revision asks for more, the enablement
+stays on its commit, shows an update, and its owner is notified to review it. A
+revision whose workflow does not parse, is gone, or whose triggers do not
+register is skipped and reported; the next good one is followed. A failure that
+may clear (the database, the network, capacity) is tried again later, never
+skipped. Runs already going keep the commit they started on. Temporary
+enablements never follow. Turn \`follow\` off to pin a workflow to a reviewed
+commit.
 
 A project that keeps its own data (a database reached through a secret) names a
 deploy workflow in \`.work/project.json\`:
@@ -179,7 +184,10 @@ once at the new revision with \`{ commit, previousCommit }\` and waits for it.
 It runs through its own project automation, so turn it on for **The project**
 with the connections and secrets it needs. If it fails, nothing moves, the
 previous revision stays live, the people who manage project automations are told,
-and the next published revision runs its own deploy. One deploy runs per project at
+and the next published revision runs its own deploy. Someone with
+\`automations:write\` can also try the failed revision again (the project's
+\`published-revisions/retry\`), and Work tries it once more by itself when the
+deploy workflow's project automation is consented to again. One deploy runs per project at
 a time, in publication order. What it does is up to the project: run migrations
 with any tool, or nothing.
 

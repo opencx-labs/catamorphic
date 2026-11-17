@@ -1,12 +1,15 @@
 import type { DB } from "@catamorphic/db";
 import { migrateToLatest } from "@catamorphic/db";
+import { WorkflowSourceInvalidError } from "@catamorphic/parser";
 import { PGlite } from "@electric-sql/pglite";
 import { pgcrypto } from "@electric-sql/pglite/contrib/pgcrypto";
 import { Kysely, PGliteDialect, sql, WithSchemaPlugin } from "kysely";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import type { Identity } from "../identity.js";
+import { AccessDeniedError } from "../services/artifact-scope.js";
 import type { ExecutionEnvironmentsService } from "../services/execution-environments-service.js";
 import {
+  PublishedRevisionNotRetryableError,
   PublishedRevisionsService,
   parseProjectDeploy,
 } from "../services/published-revisions-service.js";
@@ -23,7 +26,7 @@ const tenantId = crypto.randomUUID();
 const projectId = crypto.randomUUID();
 /** An unscoped host identity, as on the desktop: it holds every permission. */
 const owner: Identity = { tenantId, externalUserId: "owner" };
-const sha = (letter: string) => letter.repeat(40);
+const sha = (letters: string) => letters.repeat(40).slice(0, 40);
 
 /** What each commit's workflows build to, per workflow name. */
 const targets = new Map<
@@ -37,6 +40,8 @@ const notifications: Array<{ kind: string; to: string; title: string }> = [];
 const deploys: Array<{ runId: string; commit: string; previous: unknown }> = [];
 let maxLiveDeploys = 0;
 let head = sha("a");
+/** A failure that may clear (the database, the network) while set. */
+let transientFailure: string | null = null;
 
 let enablements: WorkflowEnablementsService;
 let revisions: PublishedRevisionsService;
@@ -52,7 +57,7 @@ async function addCommit(
       id: artifactId,
       project_id: projectId,
       commit_sha: commitSha,
-      artifact_digest: `artifact-${commitSha.slice(0, 1)}`,
+      artifact_digest: `artifact-${commitSha}`,
       plugin_digest: "plugins",
       runtime_version: "test",
       transform_version: "test",
@@ -71,6 +76,15 @@ function revisionsService(): PublishedRevisionsService {
     enablements,
     runs: () => ({
       triggerWithEnablementAtRevision: async (args) => {
+        const enablement = await db
+          .selectFrom("workflow_enablements")
+          .select("status")
+          .where("id", "=", args.enablementId)
+          .executeTakeFirstOrThrow();
+        if (enablement.status !== "active")
+          throw new Error(
+            `Workflow enablement is unavailable: ${enablement.status}`,
+          );
         const live = await db
           .selectFrom("workflow_runs")
           .select("id")
@@ -138,18 +152,23 @@ async function settleRun(runId: string, status: "completed" | "failed") {
     .execute();
 }
 
-async function enable(workflowName: string) {
+async function enable(
+  workflowName: string,
+  by: { type: "project" } | { type: "member"; externalUserId: string } = {
+    type: "project",
+  },
+) {
   const preview = await enablements.preview({
     identity: owner,
     projectId,
     workflowName,
-    owner: { type: "project" },
+    owner: by,
   });
   return enablements.create({
     identity: owner,
     projectId,
     workflowName,
-    owner: { type: "project" },
+    owner: by,
     consentDigest: preview.consentDigest,
   });
 }
@@ -183,7 +202,8 @@ beforeAll(async () => {
     resolveTarget: async ({ commitSha }) => {
       const target = targets.get(commitSha ?? head);
       if (!target) throw new Error(`No commit ${commitSha}`);
-      if (target.fails) throw new Error(target.fails);
+      if (target.fails) throw new WorkflowSourceInvalidError(target.fails);
+      if (transientFailure) throw new Error(transientFailure);
       const artifact = await db
         .selectFrom("deployment_artifacts")
         .selectAll()
@@ -209,6 +229,7 @@ beforeAll(async () => {
     },
     ensureTriggerDefinitions: async () => undefined,
     assertWorkflowAccess: async () => undefined,
+    onConsented: (input) => revisions.retryAfterConsent(input),
   });
   revisions = revisionsService();
 });
@@ -313,6 +334,56 @@ describe("following the published program (ADR 0330)", () => {
       }),
     ).resolves.toEqual({ kind: "unchanged", enablementId: watcher });
     expect(await commitOf(watcher)).toBe(sha("e"));
+  });
+
+  it("does not skip a revision on a failure that may clear, and moves once it clears", async () => {
+    await addCommit(sha("0"));
+    transientFailure = "connection reset by peer";
+    await revisions.record({ projectId, commitSha: sha("0") });
+    await revisions.advance();
+    expect(await commitOf(watcher)).toBe(sha("e"));
+    expect((await statuses()).slice(-1)).toEqual(["0:applying"]);
+    expect(notifications).toEqual([]);
+    const [waiting] = await revisions.list({ identity: owner, projectId });
+    expect(waiting?.report).toEqual([
+      expect.objectContaining({
+        kind: "retry",
+        reason: "connection reset by peer",
+      }),
+    ]);
+
+    // Backing off: an immediate pass leaves it alone, even once it clears.
+    transientFailure = null;
+    await revisions.advance();
+    expect(await commitOf(watcher)).toBe(sha("e"));
+
+    await db
+      .updateTable("published_revisions")
+      .set({ retry_at: new Date(Date.now() - 1_000) })
+      .where("project_id", "=", projectId)
+      .where("status", "=", "applying")
+      .execute();
+    await revisions.advance();
+    expect(await commitOf(watcher)).toBe(sha("0"));
+    expect((await statuses()).slice(-1)).toEqual(["0:applied"]);
+  });
+
+  it("leaves a member's own automation where it is unless they turn following on", async () => {
+    const mine = await enable("memberDigest", {
+      type: "member",
+      externalUserId: "owner",
+    });
+    expect(mine.follow).toBe(false);
+    expect(
+      (
+        await enablements.setFollow({
+          identity: owner,
+          enablementId: mine.id,
+          follow: true,
+        })
+      ).follow,
+    ).toBe(true);
+    await enablements.disable({ identity: owner, enablementId: mine.id });
   });
 
   it("records each revision once, and a newer one supersedes one still pending", async () => {
@@ -472,14 +543,82 @@ describe("the project's deploy workflow (ADR 0331)", () => {
   });
 
   it("fails the revision when the deploy workflow is not turned on", async () => {
-    await enablements.disable({ identity: owner, enablementId: migrate });
     await addCommit(sha("9"));
-    manifests.set(sha("9"), deployManifest);
+    manifests.set(
+      sha("9"),
+      JSON.stringify({ deploy: { workflow: "seedData" } }),
+    );
     await revisions.record({ projectId, commitSha: sha("9") });
     await revisions.advance();
     expect((await statuses()).slice(-1)).toEqual(["9:failed"]);
     expect(await commitOf(watcher)).toBe(sha("8"));
     const [failed] = await revisions.list({ identity: owner, projectId });
     expect(failed?.error).toContain("not turned on as a project automation");
+  });
+
+  it("tries a failed revision again once by itself when its deploy workflow is consented to again", async () => {
+    const suspend = () =>
+      db
+        .updateTable("workflow_enablements")
+        .set({
+          status: "suspended",
+          suspension_reason: "connection_unavailable",
+        })
+        .where("id", "=", migrate)
+        .execute();
+    await suspend();
+    await addCommit(sha("ab"));
+    manifests.set(sha("ab"), deployManifest);
+    await revisions.record({ projectId, commitSha: sha("ab") });
+    await revisions.advance();
+    expect((await statuses()).slice(-1)).toEqual(["a:failed"]);
+    const [blocked] = await revisions.list({ identity: owner, projectId });
+    expect(blocked?.error).toContain("could not start");
+
+    // Turning the deploy automation back on tries the revision again.
+    const started = deploys.length;
+    await enablements.reenable({ identity: owner, enablementId: migrate });
+    expect((await statuses()).slice(-1)).toEqual(["a:pending"]);
+    await revisions.advance();
+    expect(deploys.slice(started)).toEqual([
+      expect.objectContaining({ commit: sha("ab"), previous: sha("8") }),
+    ]);
+    await settleRun(deploys.at(-1)?.runId ?? "", "failed");
+    await revisions.advance();
+    expect((await statuses()).slice(-1)).toEqual(["a:failed"]);
+
+    // Only once: consenting again does not start another deploy.
+    await suspend();
+    await enablements.reenable({ identity: owner, enablementId: migrate });
+    expect((await statuses()).slice(-1)).toEqual(["a:failed"]);
+    expect(deploys).toHaveLength(started + 1);
+    expect(await commitOf(watcher)).toBe(sha("8"));
+  });
+
+  it("tries the latest failed revision again on request, for whoever manages project automations", async () => {
+    const viewer: Identity = {
+      tenantId,
+      externalUserId: "viewer",
+      scope: [],
+      projectPermissions: [],
+    };
+    await expect(
+      revisions.retry({ identity: viewer, projectId }),
+    ).rejects.toBeInstanceOf(AccessDeniedError);
+
+    const retried = await revisions.retry({ identity: owner, projectId });
+    expect(retried).toMatchObject({ status: "pending", error: null });
+    await revisions.advance();
+    const run = deploys.at(-1);
+    expect(run).toMatchObject({ commit: sha("ab"), previous: sha("8") });
+    await settleRun(run?.runId ?? "", "completed");
+    await revisions.advance();
+    expect((await statuses()).slice(-1)).toEqual(["a:applied"]);
+    expect(await commitOf(watcher)).toBe(sha("ab"));
+    expect(await commitOf(migrate)).toBe(sha("ab"));
+
+    await expect(
+      revisions.retry({ identity: owner, projectId }),
+    ).rejects.toBeInstanceOf(PublishedRevisionNotRetryableError);
   });
 });

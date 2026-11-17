@@ -6,10 +6,12 @@ ALTER TABLE workflow_enablements
   ADD COLUMN follow boolean NOT NULL DEFAULT false,
   ADD COLUMN followed_sequence bigint;
 
--- Deploying by merging to main just works for what is already enabled.
+-- Deploying by merging to main just works for the project's automations.
+-- A member's own automation uses their connections, so it follows only once
+-- they turn it on.
 UPDATE workflow_enablements
   SET follow = true
-  WHERE temporary = false AND remote_branch = 'main';
+  WHERE temporary = false AND remote_branch = 'main' AND owner_kind = 'project';
 
 -- Every published revision of a project, in publication order.
 CREATE TABLE published_revisions (
@@ -28,6 +30,12 @@ CREATE TABLE published_revisions (
   previous_commit_sha char(40),
   error text,
   report jsonb NOT NULL DEFAULT '[]'::jsonb,
+  -- A step that hit a failure which may clear waits until retry_at.
+  attempts integer NOT NULL DEFAULT 0,
+  retry_at timestamptz,
+  -- A failed revision is tried again once by itself when its deploy
+  -- workflow's automation is consented to again.
+  auto_retried boolean NOT NULL DEFAULT false,
   created_at timestamptz NOT NULL DEFAULT now(),
   updated_at timestamptz NOT NULL DEFAULT now(),
   settled_at timestamptz

@@ -1,6 +1,9 @@
 import type { DB, Json } from "@catamorphic/db";
 import { getTracer, withSpan } from "@catamorphic/otel";
-import type { WorkflowGraph } from "@catamorphic/parser";
+import {
+  type WorkflowGraph,
+  WorkflowSourceInvalidError,
+} from "@catamorphic/parser";
 import type { Kysely, Selectable, Transaction } from "kysely";
 import type { Identity } from "../identity.js";
 import {
@@ -30,6 +33,11 @@ import {
 } from "./execution-environments-service.js";
 import { toJson } from "./run-coordinator.js";
 import {
+  TriggerBindingsInvalidError,
+  TriggerKindNotRegisteredError,
+  TriggerModeNotAllowedError,
+} from "./triggers-service.js";
+import {
   workflowEnablementAuthorityDigest,
   workflowEnablementConsentDigest,
 } from "./workflow-enablement-consent.js";
@@ -44,6 +52,7 @@ import type {
   WorkflowEnablementSuspensionReason,
   WorkflowEnablementTrigger,
 } from "./workflow-enablement-types.js";
+import { WorkflowNotFoundError } from "./workflows-service.js";
 
 const tracer = getTracer("@catamorphic/core");
 
@@ -82,6 +91,15 @@ interface WorkflowEnablementsDeps {
     projectId: string;
     externalUserId: string;
   }): Promise<Identity | null>;
+  /**
+   * Someone consented to an enablement again: created it, updated its
+   * deployment, or turned it back on (ADR 0331 retries a failed deploy).
+   */
+  onConsented?(args: {
+    projectId: string;
+    workflowName: string;
+    ownerKind: "member" | "project";
+  }): Promise<void>;
 }
 
 export class WorkflowEnablementNotFoundError extends Error {
@@ -269,7 +287,9 @@ export class WorkflowEnablementsService {
       expiresAt?: Date;
       /**
        * Move to each newly published revision (ADR 0330). Defaults to true
-       * for a lasting enablement of `main`; a temporary one never follows.
+       * for a project automation of `main`, false for a member's own (it
+       * uses their connections; they turn it on). A temporary one never
+       * follows.
        */
       follow?: boolean;
       /** Attach ownership in the same transaction before triggers become visible. */
@@ -300,6 +320,7 @@ export class WorkflowEnablementsService {
           follow: input.follow,
           temporary: input.temporary ?? false,
           remoteBranch: preview.remoteBranch,
+          owner: preview.owner,
         });
         let created: Selectable<DB["workflow_enablements"]>;
         try {
@@ -383,6 +404,7 @@ export class WorkflowEnablementsService {
           }
           throw error;
         }
+        await this.consented(created);
         return this.hydrate(created);
       },
     );
@@ -478,7 +500,13 @@ export class WorkflowEnablementsService {
       enablementId: input.enablementId,
       allowSuspended: true,
     });
-    return this.setStatus(input, "active", null, "reenabled");
+    const reenabled = await this.setStatus(input, "active", null, "reenabled");
+    await this.consented({
+      project_id: reenabled.projectId,
+      workflow_name: reenabled.workflowName,
+      owner_kind: reenabled.owner.type,
+    });
+    return reenabled;
   }
 
   async updateDeployment(input: {
@@ -536,7 +564,31 @@ export class WorkflowEnablementsService {
         eventType: "deployment_updated",
       });
     });
+    await this.consented({
+      project_id: current.projectId,
+      workflow_name: current.workflowName,
+      owner_kind: current.owner.type,
+    });
     return this.get(input);
+  }
+
+  private async consented(row: {
+    project_id: string;
+    workflow_name: string;
+    owner_kind: string;
+  }): Promise<void> {
+    await this.deps
+      .onConsented?.({
+        projectId: row.project_id,
+        workflowName: row.workflow_name,
+        ownerKind: row.owner_kind === "project" ? "project" : "member",
+      })
+      .catch((error: unknown) =>
+        console.warn(
+          "[catamorphic] Could not report a consented enablement",
+          error,
+        ),
+      );
   }
 
   /** Turn following on or off (ADR 0330). Who may manage it may change it. */
@@ -623,6 +675,7 @@ export class WorkflowEnablementsService {
       }
     | { kind: "needs_consent"; reason: string }
     | { kind: "skipped"; reason: string }
+    | { kind: "retry"; reason: string }
   > {
     const row = await this.db
       .selectFrom("workflow_enablements")
@@ -656,9 +709,11 @@ export class WorkflowEnablementsService {
       });
     } catch (error) {
       const reason = error instanceof Error ? error.message : String(error);
-      return isAuthorityError(error)
-        ? { kind: "needs_consent", reason }
-        : { kind: "skipped", reason };
+      if (isAuthorityError(error)) return { kind: "needs_consent", reason };
+      // Only a failure the same files always produce skips the revision;
+      // a database, network or capacity error is tried again.
+      if (isRevisionBuildError(error)) return { kind: "skipped", reason };
+      return { kind: "retry", reason };
     }
     if (
       workflowEnablementAuthorityDigest(preview) !==
@@ -697,13 +752,26 @@ export class WorkflowEnablementsService {
     )
       return { kind: "unchanged", enablementId };
     const ready = await this.previewAtRevision(input);
+    if (ready.kind === "retry")
+      return { kind: "retry", enablementId, reason: ready.reason };
     if (ready.kind !== "ready") {
       await this.db.transaction().execute(async (trx) => {
+        // Considered at this revision: the next one is what it follows.
         await trx
           .updateTable("workflow_enablements")
-          .set({ update_available: true, updated_at: new Date() })
+          .set({
+            update_available: true,
+            followed_sequence: String(input.sequence),
+            updated_at: new Date(),
+          })
           .where("id", "=", enablementId)
           .where("commit_sha", "!=", input.commitSha)
+          .where((eb) =>
+            eb.or([
+              eb("followed_sequence", "is", null),
+              eb("followed_sequence", "<", String(input.sequence)),
+            ]),
+          )
           .execute();
         await this.recordEvent(
           trx,
@@ -1346,15 +1414,36 @@ const PUBLISHED_BRANCH = "main";
 /** Recorded as the actor of what following does on its own. */
 export const FOLLOW_ACTOR = "work:follow";
 
+/**
+ * A project automation follows by default; a member's own does not, since
+ * it uses the member's connections and they should see new code reach
+ * them first (ADR 0330).
+ */
 function followDefault(input: {
   follow?: boolean;
   temporary: boolean;
   remoteBranch: string;
+  owner: WorkflowEnablementOwner;
 }): boolean {
   const eligible = !input.temporary && input.remoteBranch === PUBLISHED_BRANCH;
   if (input.follow && !eligible)
     throw new WorkflowEnablementFollowUnavailableError();
-  return input.follow ?? eligible;
+  return input.follow ?? (eligible && input.owner.type === "project");
+}
+
+/**
+ * The workflow does not build at that revision: its source does not parse,
+ * it is gone, or its triggers do not register. The same files always fail
+ * the same way.
+ */
+function isRevisionBuildError(error: unknown): boolean {
+  return [
+    WorkflowNotFoundError,
+    WorkflowSourceInvalidError,
+    TriggerBindingsInvalidError,
+    TriggerKindNotRegisteredError,
+    TriggerModeNotAllowedError,
+  ].some((type) => error instanceof type);
 }
 
 /**
