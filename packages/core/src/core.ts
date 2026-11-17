@@ -7,9 +7,13 @@ import type {
   SandboxProvider,
 } from "@catamorphic/sandbox";
 import { instrumentSandboxProvider } from "@catamorphic/sandbox";
-import { PROJECT_SKILLS_DIR } from "@catamorphic/workflow/project-layout";
+import {
+  PROJECT_MANIFEST_PATH,
+  PROJECT_SKILLS_DIR,
+} from "@catamorphic/workflow/project-layout";
 import type { Kysely } from "kysely";
 import {
+  hasProjectPermission,
   type Identity,
   intersectProjectPermissions,
   intersectScope,
@@ -103,6 +107,7 @@ import {
 } from "./services/private-customization-capabilities.js";
 import { PrivateStateService } from "./services/private-state-service.js";
 import { PrivateWorkflowsService } from "./services/private-workflows-service.js";
+import { readProgramFile } from "./services/program-reader.js";
 import { ProjectEnvironmentsService } from "./services/project-environments-service.js";
 import { ProjectEventDispatcher } from "./services/project-event-dispatcher.js";
 import type { ProjectEventSourceProvider } from "./services/project-event-monitors-service.js";
@@ -114,6 +119,7 @@ import {
 } from "./services/projects-service.js";
 import { ProposalsService } from "./services/proposals-service.js";
 import { PublicationsService } from "./services/publications-service.js";
+import { PublishedRevisionsService } from "./services/published-revisions-service.js";
 import { RateReservationsService } from "./services/rate-reservations-service.js";
 import { RemoteSyncService } from "./services/remote-sync-service.js";
 import {
@@ -435,6 +441,8 @@ export class CatamorphicCore {
   readonly runs: RunsService;
   readonly triggers: TriggersService;
   readonly workflowEnablements: WorkflowEnablementsService;
+  /** Published revisions going live in order (ADRs 0330, 0331). */
+  readonly publishedRevisions: PublishedRevisionsService;
   readonly schedules: SchedulesService;
   readonly deployment: DeploymentService;
   readonly deploymentArtifacts: DeploymentArtifactsService;
@@ -777,7 +785,14 @@ export class CatamorphicCore {
       this.db,
       this.projectManager,
       config.projectHooks,
-      { seedFiles: this.seedFiles },
+      {
+        seedFiles: this.seedFiles,
+        // Constructed later; read per call.
+        storeHostSecrets: (args) => {
+          if (!this.secrets) throw new Error("Project secrets are unavailable");
+          return this.secrets.storeHostValues(args);
+        },
+      },
     );
     this.projectEvents = new ProjectEventsService(this.db, this.wakeups);
     this.webhooks = new WebhooksService(this.db, {
@@ -1020,6 +1035,7 @@ export class CatamorphicCore {
       this.db,
       this.projectManager,
       this.codeHosts,
+      (input) => this.published(input),
     );
     this.sessionWorkspaces = new SessionWorkspaces({
       projectManager: this.projectManager,
@@ -1030,7 +1046,7 @@ export class CatamorphicCore {
         Promise.resolve(undefined),
     });
     this.deployment = new DeploymentService(this.projectManager, (input) =>
-      this.workflowEnablements.markUpdateAvailable(input),
+      this.published(input),
     );
     this.deploymentArtifacts = new DeploymentArtifactsService(this.db);
     this.deploymentRuntime = this.sandboxProvider
@@ -1227,6 +1243,7 @@ export class CatamorphicCore {
       projectManager: this.projectManager,
       runs: this.runs,
       workflowEnablements: () => this.workflowEnablements,
+      published: (input) => this.published(input),
     });
     this.workflowEnablements = new WorkflowEnablementsService(this.db, {
       executionEnvironments: this.executionEnvironments,
@@ -1266,6 +1283,25 @@ export class CatamorphicCore {
     );
     this.roles = new RolesService(this.db, this.projectManager);
     this.memberships = new MembershipsService(this.db, this.roles);
+    this.publishedRevisions = new PublishedRevisionsService({
+      db: this.db,
+      enablements: this.workflowEnablements,
+      runs: () => this.runs,
+      readManifest: async ({ tenantId, projectId, commitSha }) => {
+        const repo = await this.projectManager.openPublished({
+          tenantId,
+          projectId,
+        });
+        try {
+          return await readProgramFile(repo, commitSha, PROJECT_MANIFEST_PATH);
+        } finally {
+          await repo.dispose();
+        }
+      },
+      notifications: this.notifications,
+      automationManagers: (input) => this.automationManagers(input),
+      wakeups: this.wakeups,
+    });
     this.documents = new DocumentsService(this.db, {
       projectManager: this.projectManager,
       ...(config.documentBlobStore
@@ -1436,11 +1472,84 @@ export class CatamorphicCore {
    */
   async dispatchEvents(input: { limit?: number } = {}): Promise<number> {
     await this.watchers?.expireDue(input);
-    return new ProjectEventDispatcher(
-      this.db,
-      this.triggers,
-      this.workflowEnablements,
-    ).dispatch(input);
+    // Published revisions go live (ADRs 0330, 0331) and host cleanups of
+    // deleted projects retry here, on whichever replica gets there first.
+    const advanced = await this.publishedRevisions
+      .advance()
+      .catch((error: unknown) => {
+        console.warn(
+          "[catamorphic] Published revisions did not advance",
+          error,
+        );
+        return 0;
+      });
+    const cleaned = await this.projects
+      .retryCleanups()
+      .catch((error: unknown) => {
+        console.warn("[catamorphic] Project cleanups did not run", error);
+        return 0;
+      });
+    return (
+      advanced +
+      cleaned +
+      (await new ProjectEventDispatcher(
+        this.db,
+        this.triggers,
+        this.workflowEnablements,
+      ).dispatch(input))
+    );
+  }
+
+  /**
+   * A revision of `main` was published (ADR 0330): record it so following
+   * enablements move there, and offer the update to the others.
+   */
+  private async published(input: {
+    projectId: string;
+    commitSha: string;
+  }): Promise<void> {
+    await this.publishedRevisions.record(input);
+    await this.workflowEnablements.markUpdateAvailable(input);
+  }
+
+  /**
+   * Who manages a project's automations (`automations:write`), to tell
+   * them about a revision that did not go live (ADR 0331). Hosts without
+   * memberships (the desktop) have none; reports then go to whoever turned
+   * the automation on.
+   */
+  private async automationManagers(input: {
+    tenantId: string;
+    projectId: string;
+  }): Promise<string[]> {
+    const members = await this.db
+      .selectFrom("memberships")
+      .select("external_user_id")
+      .where("project_id", "=", input.projectId)
+      .execute();
+    const managers: string[] = [];
+    for (const member of members) {
+      const identity = await this.memberships.identityFor({
+        tenantId: input.tenantId,
+        projectId: input.projectId,
+        externalUserId: member.external_user_id,
+      });
+      if (
+        identity &&
+        hasProjectPermission(identity, input.projectId, "automations:write")
+      )
+        managers.push(member.external_user_id);
+    }
+    if (managers.length > 0) return managers;
+    return (
+      await this.db
+        .selectFrom("workflow_enablements")
+        .select("created_by_external_user_id")
+        .distinct()
+        .where("project_id", "=", input.projectId)
+        .where("owner_kind", "=", "project")
+        .execute()
+    ).map((row) => row.created_by_external_user_id);
   }
 
   /** Revalidate live run authority and intersect it with the caller's pinned grants. */

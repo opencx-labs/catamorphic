@@ -3940,6 +3940,7 @@ export interface paths {
                                 status: "active" | "suspended" | "disabled";
                                 suspensionReason: string | null;
                                 updateAvailable: boolean;
+                                follow: boolean;
                                 temporary: boolean;
                                 /** Format: date-time */
                                 expiresAt: string | null;
@@ -4004,6 +4005,7 @@ export interface paths {
                             [key: string]: string;
                         };
                         consentDigest: string;
+                        follow?: boolean;
                     };
                 };
             };
@@ -4049,6 +4051,7 @@ export interface paths {
                             status: "active" | "suspended" | "disabled";
                             suspensionReason: string | null;
                             updateAvailable: boolean;
+                            follow: boolean;
                             temporary: boolean;
                             /** Format: date-time */
                             expiresAt: string | null;
@@ -4345,6 +4348,7 @@ export interface paths {
                             status: "active" | "suspended" | "disabled";
                             suspensionReason: string | null;
                             updateAvailable: boolean;
+                            follow: boolean;
                             temporary: boolean;
                             /** Format: date-time */
                             expiresAt: string | null;
@@ -4461,6 +4465,7 @@ export interface paths {
                             status: "active" | "suspended" | "disabled";
                             suspensionReason: string | null;
                             updateAvailable: boolean;
+                            follow: boolean;
                             temporary: boolean;
                             /** Format: date-time */
                             expiresAt: string | null;
@@ -4590,6 +4595,7 @@ export interface paths {
                             status: "active" | "suspended" | "disabled";
                             suspensionReason: string | null;
                             updateAvailable: boolean;
+                            follow: boolean;
                             temporary: boolean;
                             /** Format: date-time */
                             expiresAt: string | null;
@@ -4725,6 +4731,7 @@ export interface paths {
                             status: "active" | "suspended" | "disabled";
                             suspensionReason: string | null;
                             updateAvailable: boolean;
+                            follow: boolean;
                             temporary: boolean;
                             /** Format: date-time */
                             expiresAt: string | null;
@@ -4805,6 +4812,232 @@ export interface paths {
                 };
             };
         };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/projects/{projectId}/workflow-enablements/{enablementId}/follow": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    projectId: string;
+                    enablementId: string;
+                };
+                cookie?: never;
+            };
+            requestBody: {
+                content: {
+                    "application/json": {
+                        follow: boolean;
+                    };
+                };
+            };
+            responses: {
+                /** @description Default Response */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            /** Format: uuid */
+                            projectId: string;
+                            workflowName: string;
+                            /** Format: uuid */
+                            deploymentArtifactId: string;
+                            commitSha: string;
+                            remoteBranch: string;
+                            environment: string;
+                            owner: {
+                                /** @enum {string} */
+                                type: "member";
+                                externalUserId: string;
+                            } | {
+                                /** @enum {string} */
+                                type: "project";
+                            };
+                            connections: {
+                                alias: string;
+                                /** Format: uuid */
+                                connectionId: string;
+                                providerKind: string;
+                                /** @enum {string} */
+                                principalKind: "member" | "project_service" | "tenant_service";
+                                capabilities: string[];
+                            }[];
+                            capabilities: string[];
+                            permissions: string[];
+                            consentDigest: string;
+                            /** Format: uuid */
+                            id: string;
+                            /** @enum {string} */
+                            status: "active" | "suspended" | "disabled";
+                            suspensionReason: string | null;
+                            updateAvailable: boolean;
+                            follow: boolean;
+                            temporary: boolean;
+                            /** Format: date-time */
+                            expiresAt: string | null;
+                            revision: number;
+                            triggers: {
+                                /** Format: uuid */
+                                id: string;
+                                /** Format: uuid */
+                                definitionId: string;
+                                kind: string;
+                                config: unknown;
+                                projectKind?: string;
+                                /** @enum {string} */
+                                status: "active" | "paused";
+                            }[];
+                            /** Format: date-time */
+                            createdAt: string;
+                            /** Format: date-time */
+                            updatedAt: string;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                403: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                409: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                            /** @enum {string} */
+                            reason: "not_published";
+                        } | {
+                            error: string;
+                        };
+                    };
+                };
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/projects/{projectId}/published-revisions": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: {
+            parameters: {
+                query?: {
+                    limit?: number;
+                };
+                header?: never;
+                path: {
+                    projectId: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description Default Response */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            items: {
+                                /** Format: uuid */
+                                id: string;
+                                sequence: number;
+                                /** Format: uuid */
+                                projectId: string;
+                                commitSha: string;
+                                /** @enum {string} */
+                                status: "pending" | "deploying" | "applying" | "applied" | "superseded" | "failed";
+                                deployWorkflow: string | null;
+                                /** Format: uuid */
+                                deployRunId: string | null;
+                                previousCommitSha: string | null;
+                                error: string | null;
+                                report: {
+                                    /** @enum {string} */
+                                    kind: "moved" | "needs_consent" | "skipped" | "unchanged";
+                                    /** Format: uuid */
+                                    enablementId: string;
+                                    workflowName: string;
+                                    commitSha?: string;
+                                    reason?: string;
+                                }[];
+                                /** Format: date-time */
+                                createdAt: string;
+                                /** Format: date-time */
+                                settledAt: string | null;
+                            }[];
+                        };
+                    };
+                };
+                /** @description Default Response */
+                403: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                503: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                        };
+                    };
+                };
+            };
+        };
+        put?: never;
+        post?: never;
         delete?: never;
         options?: never;
         head?: never;
@@ -18554,6 +18787,7 @@ export interface paths {
                             status: "active" | "suspended" | "disabled";
                             suspensionReason: string | null;
                             updateAvailable: boolean;
+                            follow: boolean;
                             temporary: boolean;
                             /** Format: date-time */
                             expiresAt: string | null;

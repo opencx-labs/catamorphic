@@ -118,6 +118,8 @@ export interface WorkflowEnablementsResource {
     consentDigest: string;
     temporary?: boolean;
     expiresAt?: Date;
+    /** Move to each newly published revision (ADR 0330); default true. */
+    follow?: boolean;
   }): Promise<WorkflowEnablement>;
   list(args: {
     projectId: string;
@@ -130,6 +132,11 @@ export interface WorkflowEnablementsResource {
   updateDeployment(args: {
     enablementId: string;
     consentDigest: string;
+  }): Promise<WorkflowEnablement>;
+  /** Turn following the published program on or off (ADR 0330). */
+  setFollow(args: {
+    enablementId: string;
+    follow: boolean;
   }): Promise<WorkflowEnablement>;
 }
 
@@ -449,6 +456,10 @@ function buildWorkflowEnablements(
     updateDeployment: (args) =>
       withIdentity(identity, () =>
         core.workflowEnablements.updateDeployment({ ...args, identity }),
+      ),
+    setFollow: (args) =>
+      withIdentity(identity, () =>
+        core.workflowEnablements.setFollow({ ...args, identity }),
       ),
   };
 }

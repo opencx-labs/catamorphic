@@ -169,6 +169,13 @@ export interface WorkServerHooks {
    * connects.
    */
   github?: GithubConnectionOptions;
+  /**
+   * Host code run when a project is created and deleted (ADRs 0046, 0331):
+   * provision what the project needs (a schema, a bucket) and return its
+   * credentials as project secrets, then clean it up on delete. Work
+   * retries a cleanup until it reports done.
+   */
+  projectHooks?: CreateCatamorphicConfig["projectHooks"];
   /** Replace or extend the files seeded into new projects (ADR 0049). */
   projectSeeds?: (
     defaults: Readonly<Record<string, string>>,
@@ -581,6 +588,7 @@ async function createWorkServerInner(
     ...(hooks.capabilityProviders
       ? { capabilityProviders: hooks.capabilityProviders }
       : {}),
+    ...(hooks.projectHooks ? { projectHooks: hooks.projectHooks } : {}),
     agentCapabilities: workAgentCapabilities({
       core: () => catamorphic.core,
       auth: () => workAuth,

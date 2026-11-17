@@ -4,6 +4,7 @@ import {
   EnvironmentAccessDeniedError,
   EnvironmentNotFoundError,
   EnvironmentPolicyInvalidError,
+  WorkflowEnablementFollowUnavailableError,
 } from "@catamorphic/core";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createTestApp, TEST_IDENTITY } from "./test-app.js";
@@ -31,6 +32,7 @@ const enablement = {
   status: "active" as const,
   suspensionReason: null,
   updateAvailable: false,
+  follow: true,
   temporary: false,
   expiresAt: null,
   revision: 1,
@@ -152,5 +154,79 @@ describe("workflow enablement routes", () => {
 
     expect(response.statusCode).toBe(404);
     expect(disable).not.toHaveBeenCalled();
+  });
+
+  it("turns following on and off, and refuses it where it cannot follow", async () => {
+    const get = vi.fn(async () => enablement);
+    const setFollow = vi.fn(
+      async ({ follow }: { follow: boolean }) => ({ ...enablement, follow }),
+    );
+    const app = createTestApp({
+      core: {
+        workflowEnablements: { get, setFollow },
+      } as unknown as CatamorphicCore,
+    });
+    apps.push(app);
+
+    const response = await app.inject({
+      method: "POST",
+      url: `/api/projects/${PROJECT_ID}/workflow-enablements/${ENABLEMENT_ID}/follow`,
+      payload: { follow: false },
+    });
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toMatchObject({ follow: false });
+    expect(setFollow).toHaveBeenCalledWith({
+      identity: TEST_IDENTITY,
+      enablementId: ENABLEMENT_ID,
+      follow: false,
+    });
+
+    setFollow.mockRejectedValueOnce(
+      new WorkflowEnablementFollowUnavailableError(),
+    );
+    const refused = await app.inject({
+      method: "POST",
+      url: `/api/projects/${PROJECT_ID}/workflow-enablements/${ENABLEMENT_ID}/follow`,
+      payload: { follow: true },
+    });
+    expect(refused.statusCode).toBe(409);
+  });
+
+  it("lists the project's published revisions", async () => {
+    const list = vi.fn(async () => [
+      {
+        id: ENABLEMENT_ID,
+        sequence: 7,
+        projectId: PROJECT_ID,
+        commitSha: "b".repeat(40),
+        status: "failed" as const,
+        deployWorkflow: "migrateDatabase",
+        deployRunId: null,
+        previousCommitSha: "a".repeat(40),
+        error: "The deploy workflow migrateDatabase failed",
+        report: [],
+        createdAt: "2026-11-17T00:00:00.000Z",
+        settledAt: "2026-11-17T00:01:00.000Z",
+      },
+    ]);
+    const app = createTestApp({
+      core: { publishedRevisions: { list } } as unknown as CatamorphicCore,
+    });
+    apps.push(app);
+
+    const response = await app.inject({
+      method: "GET",
+      url: `/api/projects/${PROJECT_ID}/published-revisions?limit=5`,
+    });
+    expect(response.statusCode).toBe(200);
+    expect(response.json().items[0]).toMatchObject({
+      status: "failed",
+      deployWorkflow: "migrateDatabase",
+    });
+    expect(list).toHaveBeenCalledWith({
+      identity: TEST_IDENTITY,
+      projectId: PROJECT_ID,
+      limit: 5,
+    });
   });
 });

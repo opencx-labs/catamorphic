@@ -521,7 +521,8 @@ export {
   type ListProjectsInput,
   type ListProjectsResult,
   type Project,
-  ProjectDeprovisioningError,
+  type ProjectCleanupResult,
+  type ProjectCreatedResult,
   ProjectFileConflictError,
   type ProjectFileEntry,
   ProjectFileNotFoundError,
@@ -552,6 +553,14 @@ export {
   PublicationSlugTakenError,
   PublicationsService,
 } from "./services/publications-service.js";
+export {
+  type ProjectDeploy,
+  type PublishedRevision,
+  type PublishedRevisionReportEntry,
+  type PublishedRevisionStatus,
+  PublishedRevisionsService,
+  parseProjectDeploy,
+} from "./services/published-revisions-service.js";
 export {
   type BlockedRateReservation,
   type GrantedRateReservation,
@@ -681,6 +690,7 @@ export {
   type StepStatus,
   type TriggerPinnedRunInput,
   type TriggerProductionRunInput,
+  WorkflowRevisionUnavailableError,
   type WorkflowStepAttempt,
   type WorkflowStepAttemptStatus,
 } from "./services/runs-service.js";
@@ -892,11 +902,15 @@ export {
   WorkerNodeLeaseHeldError,
   WorkerNodesService,
 } from "./services/worker-nodes-service.js";
-export { workflowEnablementConsentDigest } from "./services/workflow-enablement-consent.js";
+export {
+  workflowEnablementAuthorityDigest,
+  workflowEnablementConsentDigest,
+} from "./services/workflow-enablement-consent.js";
 export type {
   RevalidatedWorkflowEnablement,
   WorkflowEnablement,
   WorkflowEnablementConnection,
+  WorkflowEnablementFollowOutcome,
   WorkflowEnablementOwner,
   WorkflowEnablementPreview,
   WorkflowEnablementStatus,
@@ -906,6 +920,7 @@ export type {
 export {
   WorkflowEnablementConflictError,
   WorkflowEnablementConsentRequiredError,
+  WorkflowEnablementFollowUnavailableError,
   WorkflowEnablementNotFoundError,
   WorkflowEnablementSuspendedError,
   WorkflowEnablementsService,

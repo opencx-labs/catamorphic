@@ -305,12 +305,49 @@ export const WorkflowEnablementSchema = WorkflowEnablementTargetSchema.extend({
   status: z.enum(["active", "suspended", "disabled"]),
   suspensionReason: z.string().nullable(),
   updateAvailable: z.boolean(),
+  /**
+   * Moves to each newly published revision whose workflow builds and whose
+   * authority is unchanged (ADR 0330).
+   */
+  follow: z.boolean(),
   temporary: z.boolean(),
   expiresAt: z.string().datetime().nullable(),
   revision: z.number().int().positive(),
   triggers: z.array(WorkflowEnablementTriggerSchema),
   createdAt: z.string().datetime(),
   updatedAt: z.string().datetime(),
+});
+
+/** One published revision and how it went live (ADRs 0330, 0331). */
+export const PublishedRevisionSchema = z.object({
+  id: z.string().uuid(),
+  sequence: z.number().int(),
+  projectId: z.string().uuid(),
+  commitSha: z.string(),
+  status: z.enum([
+    "pending",
+    "deploying",
+    "applying",
+    "applied",
+    "superseded",
+    "failed",
+  ]),
+  deployWorkflow: z.string().nullable(),
+  deployRunId: z.string().uuid().nullable(),
+  previousCommitSha: z.string().nullable(),
+  error: z.string().nullable(),
+  /** What following the revision did to each following enablement. */
+  report: z.array(
+    z.object({
+      kind: z.enum(["moved", "needs_consent", "skipped", "unchanged"]),
+      enablementId: z.string().uuid(),
+      workflowName: z.string(),
+      commitSha: z.string().optional(),
+      reason: z.string().optional(),
+    }),
+  ),
+  createdAt: z.string().datetime(),
+  settledAt: z.string().datetime().nullable(),
 });
 
 export const WorkflowSummarySchema = z.object({

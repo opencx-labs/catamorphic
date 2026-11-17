@@ -44,3 +44,23 @@ export function workflowEnablementConsentDigest(input: {
   };
   return createHash("sha256").update(canonical(value)).digest("hex");
 }
+
+/**
+ * The consent digest without the code (ADR 0330): only the authority an
+ * owner agreed to. A following enablement moves to a new revision only
+ * while this stays the same.
+ */
+export function workflowEnablementAuthorityDigest(input: {
+  projectId: string;
+  workflowName: string;
+  environment: string;
+  owner: WorkflowEnablementOwner;
+  connections: readonly WorkflowEnablementConnection[];
+  capabilities: readonly string[];
+  permissions: readonly string[];
+}): string {
+  return workflowEnablementConsentDigest({
+    ...input,
+    deploymentArtifactDigest: "",
+  });
+}

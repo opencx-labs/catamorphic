@@ -67,6 +67,14 @@ export class RemoteSyncService {
     private readonly db: Kysely<DB>,
     private readonly projectManager: ProjectManager,
     private readonly codeHosts: CodeHostsService,
+    /**
+     * Told when a sync published commits the code host accepted (ADR
+     * 0330), so following enablements move to them.
+     */
+    private readonly onPublished?: (input: {
+      projectId: string;
+      commitSha: string;
+    }) => Promise<void>,
   ) {}
 
   /**
@@ -139,6 +147,13 @@ export class RemoteSyncService {
             throw error;
           }
           await this.markDiverged({ identity, projectId, diverged: false });
+          await this.onPublished?.({ projectId, commitSha: remoteSha }).catch(
+            (error: unknown) =>
+              console.warn(
+                `[catamorphic] Could not record project ${projectId}'s published revision`,
+                error,
+              ),
+          );
           return { status: "pulled", localSha: remoteSha, remoteSha };
         } finally {
           await dev.dispose();

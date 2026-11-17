@@ -716,6 +716,19 @@ export interface PlacementWaits {
   workload_kind: string;
 }
 
+export interface ProjectCleanups {
+  attempts: Generated<number>;
+  created_at: Generated<Timestamp>;
+  hook_index: number;
+  id: Generated<string>;
+  identity: Json;
+  last_error: string | null;
+  next_attempt_at: Generated<Timestamp>;
+  project: Json;
+  project_id: string;
+  tenant_id: string;
+}
+
 export interface ProjectEventDeliveries {
   activation_id: string;
   attempt_count: Generated<number>;
@@ -813,6 +826,24 @@ export interface Publications {
   project_id: string;
   revoked_at: Timestamp | null;
   slug: string;
+}
+
+export interface PublishedRevisions {
+  commit_sha: string;
+  created_at: Generated<Timestamp>;
+  deploy_enablement_id: string | null;
+  deploy_run_id: string | null;
+  deploy_workflow: string | null;
+  error: string | null;
+  id: Generated<string>;
+  previous_commit_sha: string | null;
+  project_id: string;
+  report: Generated<Json>;
+  sequence: Generated<Int8>;
+  settled_at: Timestamp | null;
+  status: Generated<string>;
+  tenant_id: string;
+  updated_at: Generated<Timestamp>;
 }
 
 export interface PushSubscriptions {
@@ -1226,6 +1257,8 @@ export interface WorkflowEnablements {
   deployment_artifact_id: string;
   environment_name: string;
   expires_at: Timestamp | null;
+  follow: Generated<boolean>;
+  followed_sequence: Int8 | null;
   id: Generated<string>;
   owner_external_user_id: string | null;
   owner_identity: Json;
@@ -1560,6 +1593,7 @@ export interface DB {
   personal_environment_entries: PersonalEnvironmentEntries;
   personal_environment_setups: PersonalEnvironmentSetups;
   placement_waits: PlacementWaits;
+  project_cleanups: ProjectCleanups;
   project_event_deliveries: ProjectEventDeliveries;
   project_event_monitors: ProjectEventMonitors;
   project_events: ProjectEvents;
@@ -1568,6 +1602,7 @@ export interface DB {
   project_secrets: ProjectSecrets;
   projects: Projects;
   publications: Publications;
+  published_revisions: PublishedRevisions;
   push_subscriptions: PushSubscriptions;
   rate_reservation_buckets: RateReservationBuckets;
   remote_operations: RemoteOperations;
