@@ -25,7 +25,9 @@ What runs where:
   password, Slack's token. It also **posts**: when a review chat's turn ends,
   the `postReviews` workflow (in the workflow-only `github-poster`
   Environment) returns one host call with the session and turn ids. The hook
-  reads and validates the actual report, checks its current generation and head,
+  reads the turn's typed `review` result (the reviewer submits it with
+  `submit_result`, and Work records only a value its schema accepts), validates
+  it again, checks its current generation and head,
   then posts a commit-bound review, check run and optional reply through the
   connection broker. The default publisher leaves description edits, dismissal
   of earlier change requests and thread resolution to people.
@@ -174,7 +176,10 @@ adds:
 - `.work/triggers/github.ts`: the GitHub trigger library.
 - `.work/agents/reviewer.json` and `reviewer.md`: the reviewer and its
   review doctrine. The `pull-request-reviews-opencode` pack runs OpenCode
-  over ACP on a model connection instead, such as OpenRouter, with
+  over ACP on a model connection instead (its `effort`, if set, chosen
+  among the model's variants; a chat whose sandbox was replaced continues
+  from a hand-off that keeps its submitted reviews and the pushes and
+  comments they do not answer yet, ADR 0328), such as OpenRouter, with
   the providers that may serve the prompts pinned by a rewrite in the
   company's own server image
   ([Harnesses on the server](harnesses.md#pin-what-requests-carry-your-own-server-image)).
@@ -251,8 +256,9 @@ differs; a draft pull request starts no run until it is ready for review; a
 chat that never starts a turn usually has no review machine available to the
 project (check the chat's placement, `GET /_work/operator/machines`, and the
 rule's `problem` and `failure` in `GET /_work/operator/machine-rules`). A
-review that never reaches GitHub shows in `postReviews`' runs: a turn whose
-reply has no valid `work-review` block marks the commit `action_required`
+review that never reaches GitHub shows in `postReviews`' runs: a turn that
+submitted no current `review` result (none, or one made before a later push
+or question reached the chat) marks the commit `action_required`
 with the reason (when no review marked it yet), and a report for a commit
 the chat no longer stands on posts nothing at all.
 

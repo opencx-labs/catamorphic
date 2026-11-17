@@ -1547,10 +1547,27 @@ function subsessionSummary(child: unknown): Record<string, unknown> {
         modelEffort: z.string().nullable().optional(),
         readOnly: z.boolean().optional(),
       }),
+      results: z
+        .array(
+          z.object({
+            name: z.string(),
+            value: z.unknown(),
+            truncated: z.boolean(),
+            current: z.boolean(),
+          }),
+        )
+        .optional(),
     })
     .safeParse(child);
   if (!parsed.success) return { subsession: child };
   const { session } = parsed.data;
+  // Its typed results, compactly (ADR 0323): a large value is read whole
+  // with session_results.
+  const results = (parsed.data.results ?? []).map((result) => ({
+    name: result.name,
+    ...(result.truncated ? { truncated: true } : { value: result.value }),
+    ...(result.current ? {} : { stale: true }),
+  }));
   return {
     sessionId: session.id,
     title: session.title,
@@ -1559,6 +1576,7 @@ function subsessionSummary(child: unknown): Record<string, unknown> {
     ...(session.model ? { model: session.model } : {}),
     ...(session.modelEffort ? { effort: session.modelEffort } : {}),
     ...(session.readOnly ? { readOnly: true } : {}),
+    ...(results.length > 0 ? { results } : {}),
   };
 }
 

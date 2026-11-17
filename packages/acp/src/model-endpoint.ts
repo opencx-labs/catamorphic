@@ -41,6 +41,27 @@ const DROPPED_RESPONSE_HEADERS = new Set([
   "transfer-encoding",
 ]);
 
+/**
+ * A model answer that refused the call for a reason that passes (rate
+ * limited, overloaded, unavailable), or a gateway that could not be
+ * reached: the agent's provider is not answering (ADR 0328).
+ */
+export interface ModelRefusal {
+  status: number;
+  /** The provider's own words, from its error body when it sent one. */
+  message: string;
+  /** When the provider said to try again (`Retry-After`), if it did. */
+  retryAt: string | null;
+}
+
+/** Answers that refuse a call for now, not for good (ADR 0328). */
+export function passingRefusal(status: number): boolean {
+  return status === 408 || status === 425 || status === 429 || status >= 500;
+}
+
+/** Largest refusal body read for its message. */
+const MAX_REFUSAL_BYTES = 64 * 1024;
+
 /** The gateway's model API, served to an ACP agent on this sandbox's loopback. */
 export interface LoopbackModel {
   /** The API family behind it. */
@@ -61,11 +82,13 @@ export interface LoopbackModel {
  * renewed in between. Paths and answers pass unchanged, answers streamed;
  * a request body is read whole first, so the retry can send it again. An
  * agent that stops waiting stops the call, and closing the endpoint ends
- * every call still running.
+ * every call still running. Each passing refusal is told to `onRefused`
+ * as it passes back to the agent, which may retry it.
  */
 export async function serveLoopbackModel(input: {
   access: Extract<ModelAccess, { kind: "gateway" }>;
   fetch?: typeof fetch;
+  onRefused?: (refusal: ModelRefusal) => void;
 }): Promise<LoopbackModel> {
   const { access } = input;
   const send = input.fetch ?? ((url, init) => fetch(url, init));
@@ -134,6 +157,19 @@ export async function serveLoopbackModel(input: {
       if (!DROPPED_RESPONSE_HEADERS.has(name.toLowerCase()))
         headers[name] = value;
     });
+    if (passingRefusal(answer.status)) {
+      // Small, and read whole for the provider's words before it goes on.
+      const text = (await answer.text()).slice(0, MAX_REFUSAL_BYTES);
+      input.onRefused?.({
+        status: answer.status,
+        message: refusalMessage({ status: answer.status, text }),
+        retryAt: retryAt(answer.headers.get("retry-after")),
+      });
+      if (response.destroyed) return;
+      response.writeHead(answer.status, headers);
+      response.end(text);
+      return;
+    }
     response.writeHead(answer.status, headers);
     if (!answer.body) {
       response.end();
@@ -155,7 +191,13 @@ export async function serveLoopbackModel(input: {
     });
     forward(request, response, call.signal).catch((error: unknown) => {
       if (response.headersSent || response.destroyed) response.destroy();
-      else
+      else {
+        if (!(error instanceof UnreadableGrantError) && !call.signal.aborted)
+          input.onRefused?.({
+            status: 502,
+            message: `The gateway could not be reached: ${error instanceof Error ? error.message : String(error)}`,
+            retryAt: null,
+          });
         refuse({
           response,
           api: access.api,
@@ -165,6 +207,7 @@ export async function serveLoopbackModel(input: {
               ? error.message
               : `The gateway could not be reached: ${error instanceof Error ? error.message : String(error)}`,
         });
+      }
     });
   });
   await new Promise<void>((resolve, reject) => {
@@ -224,6 +267,38 @@ export function loopbackModelHeaders(
   return model.api === "anthropic"
     ? { "x-api-key": model.apiKey }
     : { authorization: `Bearer ${model.apiKey}` };
+}
+
+/** The provider's words in a refusal, in either API's error shape. */
+function refusalMessage(input: { status: number; text: string }): string {
+  try {
+    const body: unknown = JSON.parse(input.text);
+    const error =
+      body && typeof body === "object" && "error" in body
+        ? body.error
+        : undefined;
+    const message =
+      error && typeof error === "object" && "message" in error
+        ? error.message
+        : typeof error === "string"
+          ? error
+          : undefined;
+    if (typeof message === "string" && message.trim()) return message.trim();
+  } catch {
+    // Not JSON: the text itself, when there is some.
+  }
+  const text = input.text.trim().slice(0, 500);
+  return text || `The model answered ${input.status}.`;
+}
+
+/** `Retry-After` (seconds or a date) as the time it names, from now. */
+function retryAt(header: string | null): string | null {
+  if (!header) return null;
+  const seconds = Number(header);
+  const at = Number.isFinite(seconds)
+    ? Date.now() + Math.max(0, seconds) * 1000
+    : Date.parse(header);
+  return Number.isFinite(at) ? new Date(at).toISOString() : null;
 }
 
 function authorized(request: IncomingMessage, apiKey: string): boolean {

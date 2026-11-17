@@ -106,7 +106,8 @@ export async function ingestHarnessEvents(input: {
       if (event.type === "request.opened" || event.type === "request.closed")
         requestIds.add(derivedId(attemptId, `request:${event.key}`));
       else itemIds.add(derivedId(attemptId, event.key));
-    }
+    } else if (event.type === "setting.unapplied")
+      itemIds.add(derivedId(attemptId, `setting:${event.setting}`));
   }
   const items = new Map<string, Item>();
   if (itemIds.size > 0) {
@@ -381,6 +382,27 @@ export async function ingestHarnessEvents(input: {
       case "provider.resumed":
         if (turn.providerRetry) emitTurn({ ...turn, providerRetry: null });
         break;
+      case "setting.unapplied": {
+        const id = derivedId(attemptId, `setting:${event.setting}`);
+        if (items.has(id)) break;
+        const item = newItem({
+          id,
+          draft: {
+            kind: "notice",
+            code: "setting_not_applied",
+            text: mask ? mask.text(event.reason) : event.reason,
+            data: { setting: event.setting, requested: event.requested },
+          },
+          state: { ...state, turn, attempt },
+          parentItemId: null,
+          nativeRef: null,
+          status: "completed",
+          at,
+        });
+        items.set(id, item);
+        out.push({ type: "item.added", item });
+        break;
+      }
       case "status":
         line = activityLine(mask ? mask.text(event.text) : event.text) ?? line;
         break;

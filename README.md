@@ -292,12 +292,18 @@ another agent it is granted, on the model and effort the work needs, or
 read-only for a review (on harnesses with a read-only mode); grants in its
 definition limit whom it may start and what it may choose, and by default it
 may start copies of itself on any model and effort.
+An agent's definition can also declare typed results, each a JSON Schema: the
+agent submits them with `submit_result`, Work records only a value its schema
+accepts and returns field errors to the agent in the same turn, and parents,
+workflows (`results`, `session.result-recorded`), the project MCP and REST read
+them with the chat, turn and input that produced them.
 Archive recursively stops active work only after reporting its impact, while
 keeping the session tree restorable and searchable. Session source records
 whether a conversation began on desktop, mobile, Slack, Claude, MCP, or API.
 (ADRs [0089](docs/decisions/0089-project-shaped-member-shell.md),
 [0090](docs/decisions/0090-first-class-subsessions-and-delegation.md),
-[0271](docs/decisions/0271-agents-delegate-by-naming-an-agent-and-its-settings.md))
+[0271](docs/decisions/0271-agents-delegate-by-naming-an-agent-and-its-settings.md),
+[0323](docs/decisions/0323-agents-submit-typed-results.md))
 
 ## Durable workflows
 
@@ -935,9 +941,9 @@ Direction, not shipped. Tracked in [`TODO.md`](TODO.md):
 
 - **More desktop platforms**: Intel Mac validation, then signed Windows and
   Linux packages.
-- **ACP beyond the desktop**: the desktop runs a project's local ACP agents
-  (`kind: "acp"` with `acp.command`, such as Hermes); the remote endpoint
-  transport and ACP agents on the Work server are next.
+- **ACP, the rest**: ACP agents run on the desktop and in a Work server's
+  sandbox; the remote endpoint transport, a warm process between turns,
+  and carrying an agent's own session store across sandboxes are next.
 - **TS `defineAgent`**: a typed authoring layer that compiles to the
   committed `.work/agents/<slug>.json` substrate.
 - **Review-mode collaboration**: PR-first sync for shared projects, invites,

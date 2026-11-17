@@ -7,6 +7,7 @@ import { promisify } from "node:util";
 import { SESSION_PULL_REQUESTS_CONTRACT } from "@catamorphic/agent-protocol";
 import {
   agentDefinitionSchema,
+  checkResultValue,
   GITHUB_TRIGGER_LIBRARY,
   parseProjectEnvironmentPolicy,
 } from "@catamorphic/core";
@@ -292,6 +293,39 @@ describe("the pull-request-reviews pack", () => {
     ).toHaveLength(3);
   });
 
+  it("declares the review as a typed result both reviewers submit", () => {
+    const review = JSON.parse(file(".work/agents/reviewer.json")).results
+      ?.review;
+    expect(review).toBeDefined();
+    // The OpenCode reviewer replaces this one: it submits the same result.
+    expect(
+      JSON.parse(OPENCODE.files[".work/agents/reviewer.json"] ?? "{}").results,
+    ).toEqual({ review });
+    const report = {
+      reviewedCommit: "a".repeat(40),
+      verdict: "COMMENT",
+      score: 4,
+      summary: "Nothing blocks.",
+      checkSummary: "Ran the tests.",
+      comments: [{ path: "src/a.ts", line: 3, side: null, body: "Nit." }],
+      reply: null,
+    };
+    expect(checkResultValue({ schema: review, value: report })).toEqual({
+      value: report,
+    });
+    const refused = checkResultValue({
+      schema: review,
+      value: { ...report, verdict: "APPROVE", score: 0, origin: "x" },
+    });
+    expect(
+      "errors" in refused && refused.errors.map((error) => error.path),
+    ).toEqual(expect.arrayContaining(["/verdict", "/score", ""]));
+    // The reviewer is told to submit it, never to end with a block.
+    const persona = file(".work/agents/reviewer.md");
+    expect(persona).toContain("`submit_result`, name `review`");
+    expect(persona).not.toContain("work-review");
+  });
+
   it("swaps in a valid OpenCode reviewer on a model connection", () => {
     // It replaces the review pack's image and reviewer, nothing else.
     expect(OPENCODE.manifest.registryDependencies).toEqual([
@@ -529,12 +563,12 @@ describe("the pull-request-reviews pack", () => {
     expect(inline).toContain("on src/orders.ts line 12");
     // An inline question names the comment the answer replies to.
     expect(inline).toContain(
-      "Answer in your work-review block's reply with inReplyTo 7.",
+      "Answer in your review result's reply with inReplyTo 7.",
     );
     expect(inline.endsWith("@work why a loop?")).toBe(true);
     const mention = (result as { mention: { args: { content: string } } })
       .mention.args.content;
-    expect(mention).toContain("Answer in your work-review block's reply. ");
+    expect(mention).toContain("Answer in your review result's reply. ");
   });
 });
 

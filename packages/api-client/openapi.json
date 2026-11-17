@@ -2471,6 +2471,122 @@
               "coveredTurnOrdinals",
               "text"
             ]
+          },
+          {
+            "type": "object",
+            "properties": {
+              "id": {
+                "type": "string"
+              },
+              "sessionId": {
+                "type": "string"
+              },
+              "turnId": {
+                "nullable": true,
+                "type": "string"
+              },
+              "attemptId": {
+                "nullable": true,
+                "type": "string"
+              },
+              "parentItemId": {
+                "nullable": true,
+                "type": "string"
+              },
+              "position": {
+                "type": "integer",
+                "minimum": -9007199254740991,
+                "maximum": 9007199254740991
+              },
+              "status": {
+                "type": "string",
+                "enum": ["in_progress", "completed", "failed", "cancelled"]
+              },
+              "nativeRef": {
+                "nullable": true,
+                "type": "object",
+                "properties": {
+                  "id": {
+                    "type": "string"
+                  },
+                  "strength": {
+                    "type": "string",
+                    "enum": ["strong", "weak", "none"]
+                  }
+                },
+                "required": ["id", "strength"]
+              },
+              "createdAt": {
+                "type": "string"
+              },
+              "updatedAt": {
+                "type": "string"
+              },
+              "startedAt": {
+                "nullable": true,
+                "type": "string"
+              },
+              "endedAt": {
+                "nullable": true,
+                "type": "string"
+              },
+              "kind": {
+                "type": "string",
+                "enum": ["result"]
+              },
+              "name": {
+                "type": "string"
+              },
+              "value": {
+                "$ref": "#/components/schemas/JsonValueInput"
+              },
+              "input": {
+                "nullable": true,
+                "type": "object",
+                "properties": {
+                  "itemId": {
+                    "type": "string"
+                  },
+                  "position": {
+                    "type": "integer",
+                    "minimum": -9007199254740991,
+                    "maximum": 9007199254740991
+                  },
+                  "kind": {
+                    "type": "string",
+                    "enum": [
+                      "user_message",
+                      "inbound_message",
+                      "task_notification"
+                    ]
+                  }
+                },
+                "required": ["itemId", "position", "kind"]
+              },
+              "commit": {
+                "nullable": true,
+                "type": "string"
+              }
+            },
+            "required": [
+              "id",
+              "sessionId",
+              "turnId",
+              "attemptId",
+              "parentItemId",
+              "position",
+              "status",
+              "nativeRef",
+              "createdAt",
+              "updatedAt",
+              "startedAt",
+              "endedAt",
+              "kind",
+              "name",
+              "value",
+              "input",
+              "commit"
+            ]
           }
         ]
       },
@@ -3364,6 +3480,72 @@
           }
         },
         "required": ["commandId", "status", "sequence", "result", "error"]
+      },
+      "SessionResultInput": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "sessionId": {
+            "type": "string"
+          },
+          "turnId": {
+            "nullable": true,
+            "type": "string"
+          },
+          "attemptId": {
+            "nullable": true,
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "value": {
+            "$ref": "#/components/schemas/JsonValueInput"
+          },
+          "input": {
+            "nullable": true,
+            "type": "object",
+            "properties": {
+              "itemId": {
+                "type": "string"
+              },
+              "position": {
+                "type": "integer",
+                "minimum": -9007199254740991,
+                "maximum": 9007199254740991
+              },
+              "kind": {
+                "type": "string",
+                "enum": ["user_message", "inbound_message", "task_notification"]
+              }
+            },
+            "required": ["itemId", "position", "kind"]
+          },
+          "current": {
+            "type": "boolean"
+          },
+          "commit": {
+            "nullable": true,
+            "type": "string"
+          },
+          "recordedAt": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "sessionId",
+          "turnId",
+          "attemptId",
+          "name",
+          "value",
+          "input",
+          "current",
+          "commit",
+          "recordedAt"
+        ]
       },
       "JsonValue": {
         "anyOf": [
@@ -5908,6 +6090,125 @@
               "text"
             ],
             "additionalProperties": false
+          },
+          {
+            "type": "object",
+            "properties": {
+              "id": {
+                "type": "string"
+              },
+              "sessionId": {
+                "type": "string"
+              },
+              "turnId": {
+                "nullable": true,
+                "type": "string"
+              },
+              "attemptId": {
+                "nullable": true,
+                "type": "string"
+              },
+              "parentItemId": {
+                "nullable": true,
+                "type": "string"
+              },
+              "position": {
+                "type": "integer",
+                "minimum": -9007199254740991,
+                "maximum": 9007199254740991
+              },
+              "status": {
+                "type": "string",
+                "enum": ["in_progress", "completed", "failed", "cancelled"]
+              },
+              "nativeRef": {
+                "nullable": true,
+                "type": "object",
+                "properties": {
+                  "id": {
+                    "type": "string"
+                  },
+                  "strength": {
+                    "type": "string",
+                    "enum": ["strong", "weak", "none"]
+                  }
+                },
+                "required": ["id", "strength"],
+                "additionalProperties": false
+              },
+              "createdAt": {
+                "type": "string"
+              },
+              "updatedAt": {
+                "type": "string"
+              },
+              "startedAt": {
+                "nullable": true,
+                "type": "string"
+              },
+              "endedAt": {
+                "nullable": true,
+                "type": "string"
+              },
+              "kind": {
+                "type": "string",
+                "enum": ["result"]
+              },
+              "name": {
+                "type": "string"
+              },
+              "value": {
+                "$ref": "#/components/schemas/JsonValue"
+              },
+              "input": {
+                "nullable": true,
+                "type": "object",
+                "properties": {
+                  "itemId": {
+                    "type": "string"
+                  },
+                  "position": {
+                    "type": "integer",
+                    "minimum": -9007199254740991,
+                    "maximum": 9007199254740991
+                  },
+                  "kind": {
+                    "type": "string",
+                    "enum": [
+                      "user_message",
+                      "inbound_message",
+                      "task_notification"
+                    ]
+                  }
+                },
+                "required": ["itemId", "position", "kind"],
+                "additionalProperties": false
+              },
+              "commit": {
+                "nullable": true,
+                "type": "string"
+              }
+            },
+            "required": [
+              "id",
+              "sessionId",
+              "turnId",
+              "attemptId",
+              "parentItemId",
+              "position",
+              "status",
+              "nativeRef",
+              "createdAt",
+              "updatedAt",
+              "startedAt",
+              "endedAt",
+              "kind",
+              "name",
+              "value",
+              "input",
+              "commit"
+            ],
+            "additionalProperties": false
           }
         ]
       },
@@ -6832,6 +7133,74 @@
         },
         "required": ["commandId", "status", "sequence", "result", "error"],
         "additionalProperties": false
+      },
+      "SessionResult": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "sessionId": {
+            "type": "string"
+          },
+          "turnId": {
+            "nullable": true,
+            "type": "string"
+          },
+          "attemptId": {
+            "nullable": true,
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "value": {
+            "$ref": "#/components/schemas/JsonValue"
+          },
+          "input": {
+            "nullable": true,
+            "type": "object",
+            "properties": {
+              "itemId": {
+                "type": "string"
+              },
+              "position": {
+                "type": "integer",
+                "minimum": -9007199254740991,
+                "maximum": 9007199254740991
+              },
+              "kind": {
+                "type": "string",
+                "enum": ["user_message", "inbound_message", "task_notification"]
+              }
+            },
+            "required": ["itemId", "position", "kind"],
+            "additionalProperties": false
+          },
+          "current": {
+            "type": "boolean"
+          },
+          "commit": {
+            "nullable": true,
+            "type": "string"
+          },
+          "recordedAt": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "sessionId",
+          "turnId",
+          "attemptId",
+          "name",
+          "value",
+          "input",
+          "current",
+          "commit",
+          "recordedAt"
+        ],
+        "additionalProperties": false
       }
     }
   },
@@ -7018,7 +7387,7 @@
                       "properties": {
                         "session": {
                           "type": "number",
-                          "enum": [3]
+                          "enum": [4]
                         },
                         "runner": {
                           "type": "number",
@@ -22540,6 +22909,144 @@
         }
       }
     },
+    "/api/projects/{projectId}/agent/sessions/{sessionId}/results": {
+      "get": {
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 64
+            },
+            "in": "query",
+            "name": "name",
+            "required": false
+          },
+          {
+            "schema": {
+              "type": "string",
+              "enum": ["true", "false"]
+            },
+            "in": "query",
+            "name": "family",
+            "required": false
+          },
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+            },
+            "in": "query",
+            "name": "afterInput",
+            "required": false
+          },
+          {
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 100
+            },
+            "in": "query",
+            "name": "limit",
+            "required": false
+          },
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+            },
+            "in": "path",
+            "name": "projectId",
+            "required": true
+          },
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+            },
+            "in": "path",
+            "name": "sessionId",
+            "required": true
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "results": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/SessionResult"
+                      }
+                    }
+                  },
+                  "required": ["results"],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    }
+                  },
+                  "required": ["error"],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    }
+                  },
+                  "required": ["error"],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    }
+                  },
+                  "required": ["error"],
+                  "additionalProperties": false
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/projects/{projectId}/agent/sessions/{sessionId}/events": {
       "get": {
         "parameters": [
@@ -25476,6 +25983,46 @@
                         "updatedAt"
                       ],
                       "additionalProperties": false
+                    },
+                    "results": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "id": {
+                            "type": "string"
+                          },
+                          "name": {
+                            "type": "string"
+                          },
+                          "value": {
+                            "$ref": "#/components/schemas/JsonValue"
+                          },
+                          "truncated": {
+                            "type": "boolean"
+                          },
+                          "current": {
+                            "type": "boolean"
+                          },
+                          "turnId": {
+                            "nullable": true,
+                            "type": "string"
+                          },
+                          "recordedAt": {
+                            "type": "string"
+                          }
+                        },
+                        "required": [
+                          "id",
+                          "name",
+                          "value",
+                          "truncated",
+                          "current",
+                          "turnId",
+                          "recordedAt"
+                        ],
+                        "additionalProperties": false
+                      }
                     }
                   },
                   "required": [
@@ -25485,7 +26032,8 @@
                     "contextMode",
                     "allowFurtherDelegation",
                     "status",
-                    "session"
+                    "session",
+                    "results"
                   ],
                   "additionalProperties": false
                 }
@@ -26002,6 +26550,46 @@
                           "updatedAt"
                         ],
                         "additionalProperties": false
+                      },
+                      "results": {
+                        "type": "array",
+                        "items": {
+                          "type": "object",
+                          "properties": {
+                            "id": {
+                              "type": "string"
+                            },
+                            "name": {
+                              "type": "string"
+                            },
+                            "value": {
+                              "$ref": "#/components/schemas/JsonValue"
+                            },
+                            "truncated": {
+                              "type": "boolean"
+                            },
+                            "current": {
+                              "type": "boolean"
+                            },
+                            "turnId": {
+                              "nullable": true,
+                              "type": "string"
+                            },
+                            "recordedAt": {
+                              "type": "string"
+                            }
+                          },
+                          "required": [
+                            "id",
+                            "name",
+                            "value",
+                            "truncated",
+                            "current",
+                            "turnId",
+                            "recordedAt"
+                          ],
+                          "additionalProperties": false
+                        }
                       }
                     },
                     "required": [
@@ -26011,7 +26599,8 @@
                       "contextMode",
                       "allowFurtherDelegation",
                       "status",
-                      "session"
+                      "session",
+                      "results"
                     ],
                     "additionalProperties": false
                   }
@@ -26506,6 +27095,46 @@
                           "updatedAt"
                         ],
                         "additionalProperties": false
+                      },
+                      "results": {
+                        "type": "array",
+                        "items": {
+                          "type": "object",
+                          "properties": {
+                            "id": {
+                              "type": "string"
+                            },
+                            "name": {
+                              "type": "string"
+                            },
+                            "value": {
+                              "$ref": "#/components/schemas/JsonValue"
+                            },
+                            "truncated": {
+                              "type": "boolean"
+                            },
+                            "current": {
+                              "type": "boolean"
+                            },
+                            "turnId": {
+                              "nullable": true,
+                              "type": "string"
+                            },
+                            "recordedAt": {
+                              "type": "string"
+                            }
+                          },
+                          "required": [
+                            "id",
+                            "name",
+                            "value",
+                            "truncated",
+                            "current",
+                            "turnId",
+                            "recordedAt"
+                          ],
+                          "additionalProperties": false
+                        }
                       }
                     },
                     "required": [
@@ -26515,7 +27144,8 @@
                       "contextMode",
                       "allowFurtherDelegation",
                       "status",
-                      "session"
+                      "session",
+                      "results"
                     ],
                     "additionalProperties": false
                   }

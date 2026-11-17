@@ -1310,6 +1310,21 @@ export const AgentSubsessionSchema = z.object({
   allowFurtherDelegation: z.boolean(),
   status: z.enum(["running", "completed", "failed", "interrupted", "archived"]),
   session: AgentSessionSchema,
+  /**
+   * The child's latest accepted result of each name (ADR 0323). A large
+   * value is left out (`value` null, `truncated`): read it with results.
+   */
+  results: z.array(
+    z.object({
+      id: z.string(),
+      name: z.string(),
+      value: JsonValueSchema,
+      truncated: z.boolean(),
+      current: z.boolean(),
+      turnId: z.string().nullable(),
+      recordedAt: z.string(),
+    }),
+  ),
 });
 
 export const WaitForAgentSubsessionsSchema = z.object({
@@ -1701,6 +1716,24 @@ export const ItemSchema = describes<Item>()(
         }),
         text: z.string(),
       }),
+      z.object({
+        ...itemCommon,
+        kind: z.literal("result"),
+        name: z.string(),
+        value: JsonValueSchema,
+        input: z
+          .object({
+            itemId: z.string(),
+            position: z.number().int(),
+            kind: z.enum([
+              "user_message",
+              "inbound_message",
+              "task_notification",
+            ]),
+          })
+          .nullable(),
+        commit: z.string().nullable(),
+      }),
     ])
     .meta({ id: "Item" }),
 );
@@ -1957,6 +1990,50 @@ export const SessionItemsQuerySchema = z.object({
 export const SessionItemsPageSchema = z.object({
   items: z.array(ItemSchema),
   olderBefore: z.number().int().nullable(),
+});
+
+/** A typed result an agent submitted and its schema accepted (ADR 0323). */
+export const SessionResultSchema = z
+  .object({
+    id: z.string(),
+    /** The chat that recorded it: the one asked about, or a subsession. */
+    sessionId: z.string(),
+    turnId: z.string().nullable(),
+    attemptId: z.string().nullable(),
+    name: z.string(),
+    value: JsonValueSchema,
+    /** The newest input the chat had taken in when it was submitted. */
+    input: z
+      .object({
+        itemId: z.string(),
+        position: z.number().int(),
+        kind: z.enum(["user_message", "inbound_message", "task_notification"]),
+      })
+      .nullable(),
+    /**
+     * No new request reached the chat since: nothing a person, a workflow or
+     * a session outside its own subsessions sent.
+     */
+    current: z.boolean(),
+    commit: z.string().nullable(),
+    recordedAt: z.string(),
+  })
+  .meta({ id: "SessionResult" });
+
+export const SessionResultsQuerySchema = z.object({
+  name: z.string().min(1).max(64).optional(),
+  /** `true`: the chat's subsessions' results too, at every depth. */
+  family: z
+    .enum(["true", "false"])
+    .transform((value) => value === "true")
+    .optional(),
+  /** An input's message id: results that answer it or a later one. */
+  afterInput: z.string().uuid().optional(),
+  limit: z.coerce.number().int().min(1).max(100).optional(),
+});
+
+export const SessionResultsSchema = z.object({
+  results: z.array(SessionResultSchema),
 });
 
 export const SessionEventsQuerySchema = z.object({

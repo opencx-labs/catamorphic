@@ -209,7 +209,8 @@ speak another API are turned off); the variables `WORK_MODEL_BASE_URL`,
 `WORK_MODEL_API_KEY`, `WORK_MODEL_API` and `WORK_MODEL` (the definition's
 `model`), plus `OPENAI_BASE_URL` and `OPENAI_API_KEY` (or `ANTHROPIC_*`);
 and the definition's `model` chosen through the agent's model option, when
-it offers one (a turn warns when it offers models but not that one).
+it offers one (the chat shows a notice when it offers models but not that
+one).
 Processes the agent starts inherit the variables. For
 OpenCode, a configuration the command names points a provider at them:
 
@@ -230,7 +231,18 @@ OpenCode, a configuration the command names points a provider at them:
 with the file in the image and
 `"command": ["env", "OPENCODE_CONFIG=/etc/opencode/work.json", "OPENCODE_DISABLE_PROJECT_CONFIG=1", "opencode", "acp"]`.
 In a review sandbox the repository is the pull request's, so the agent's
-settings come from the image, not the checkout. On a server
+settings come from the image, not the checkout.
+
+The definition's `effort` (or the chat's, or a delegation's) is set
+through the agent's thought level option after the model, since an agent's
+levels follow its model: OpenCode offers its model's variants as "Effort".
+A level the agent does not offer, or refuses, leaves the turn at the
+agent's own setting, and the chat shows a notice saying which levels it
+offers (ADR 0328). A turn's usage is what the agent reports: its tokens in
+its prompt answer, its context size, and the session cost it reports in
+USD less what it reported before the turn. A model call the provider
+refuses for now (rate limited, overloaded) shows in the chat as the
+provider retrying, until the agent's next output. On a server
 the ACP command needs no member's approval: it runs in the sandbox, which
 is the boundary, wherever the machine isolates; on a trusted local-process
 worker it runs on that machine itself.
@@ -379,5 +391,12 @@ What the machines need:
   proposals); Claude Code and ACP agents have them.
 - An ACP agent runs one process per turn and cannot be steered mid-turn: a
   message sent while it works restarts the turn with it (ADR 0241).
+- An ACP agent's session lives in its sandbox. When the sandbox is
+  replaced (idle release, a lost machine, a new base), the next turn starts
+  a new session handed the conversation: a summary, plus the chat's
+  accepted results and the requests no result answers yet, verbatim, in
+  at most half of it (ADR 0328). Work does not carry the agent's own store.
+- A reopened ACP session reports no cost for the turn unless the agent
+  reported its total before the turn; tokens and context still show.
 - Model usage on a member's own sign-in comes from the harness's reports,
   not from gateway rows.

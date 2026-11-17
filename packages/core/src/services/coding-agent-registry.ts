@@ -19,6 +19,7 @@ import type {
   AgentEnvironmentPolicy,
   ProjectAgentEntry,
 } from "./agent-definitions-service.js";
+import type { ResultSchemas } from "./agent-results.js";
 import type { ConnectionRequirement } from "./connection-types.js";
 
 /** What a host hook knows about the turn it serves (no call to stop waiting). */
@@ -142,6 +143,11 @@ export interface RegisteredCodingAgent {
   systemPrompt?: string;
   /** Explicit source-to-target grants for first-class subsessions. */
   delegation?: AgentDelegationPolicy;
+  /**
+   * The results the agent submits with `submit_result`, by name (ADR
+   * 0323). Core offers the tool only when there is one.
+   */
+  results?: ResultSchemas;
   /**
    * What a turn whose machine stopped does (ADR 0198): `continue` queues a
    * continuation when the native thread can resume exactly; `stop` leaves

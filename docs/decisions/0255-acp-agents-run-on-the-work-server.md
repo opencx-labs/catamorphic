@@ -1,6 +1,6 @@
 # 0255 — ACP agents run on the Work server, their model through the gateway
 
-- **Status:** Accepted (builds on 0180, 0198, 0241; amends 0212: a renewed grant replaces the old one once the sandbox holds it; model grant lifetime amended by [0293](0293-model-grants-end-with-their-turn-attempt.md))
+- **Status:** Accepted (builds on 0180, 0198, 0241; amends 0212: a renewed grant replaces the old one once the sandbox holds it; model grant lifetime amended by [0293](0293-model-grants-end-with-their-turn-attempt.md); amended by [0328](0328-hand-offs-keep-results-acp-reports-its-turn.md): the loopback endpoint reports refused model calls as provider retries)
 - **Date:** 2026-10-18
 
 ## Context

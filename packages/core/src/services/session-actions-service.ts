@@ -64,6 +64,18 @@ export const SESSION_ACTION_SCHEMAS = {
      */
     through: z.string().uuid().optional(),
   }),
+  /**
+   * The chat's accepted results, newest first (ADR 0323). `family` adds
+   * its subsessions' results; `afterInput` (an input's message id) keeps
+   * results that answer that input or a later one.
+   */
+  results: chat({
+    ...target,
+    name: z.string().min(1).max(64).optional(),
+    family: z.boolean().optional(),
+    afterInput: z.string().uuid().optional(),
+    limit: z.number().int().min(1).max(100).optional(),
+  }),
   create: chat({
     ...mutation,
     agentId: z.string().optional(),
@@ -248,6 +260,28 @@ export class SessionActionsService {
           if (through && !messages.some((message) => message.id === through))
             throw new Error("No message in this chat has that id");
           return json({ sessionId: session.id, key: session.key, messages });
+        }
+        if (input.operation === "results") {
+          const results = await this.sessions.results(
+            input.identity,
+            input.projectId,
+            session.id,
+            {
+              ...("name" in args && typeof args.name === "string"
+                ? { name: args.name }
+                : {}),
+              ...("family" in args && args.family === true
+                ? { family: true }
+                : {}),
+              ...("afterInput" in args && typeof args.afterInput === "string"
+                ? { afterInput: args.afterInput }
+                : {}),
+              ...("limit" in args && typeof args.limit === "number"
+                ? { limit: args.limit }
+                : {}),
+            },
+          );
+          return json({ sessionId: session.id, key: session.key, results });
         }
         if (key === undefined) throw new Error("idempotencyKey is required");
         // Everything past this point changes the session: settle access
@@ -611,6 +645,7 @@ function actionLabel(operation: SessionActionOperation): string {
     list: "Listed sessions",
     find: "Found a session by key",
     history: "Read session history",
+    results: "Read session results",
     create: "Created a session",
     fork: "Forked this session",
     spawn: "Created a child session",

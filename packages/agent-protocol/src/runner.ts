@@ -357,6 +357,18 @@ export type HarnessEvent =
   /** A provider request is retrying, without restarting this attempt. */
   | ({ type: "provider.retrying" } & ProviderRetry)
   | { type: "provider.resumed" }
+  /**
+   * A setting the attempt asked for that the harness could not apply (an
+   * effort or model its agent does not offer, or refused): the turn runs
+   * without it, and Work tells the chat in a notice (ADR 0328).
+   */
+  | {
+      type: "setting.unapplied";
+      setting: "model" | "effort";
+      requested: string;
+      /** The harness's words, e.g. which values the agent offers instead. */
+      reason: string;
+    }
   | { type: "title"; text: string }
   | { type: "usage"; usage: AgentTurnUsage }
   | { type: "diagnostic"; level: "info" | "warn" | "error"; message: string }
