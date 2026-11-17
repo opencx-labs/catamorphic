@@ -17,6 +17,7 @@ import { sql } from "kysely";
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
 import { CatamorphicCore } from "../core.js";
 import { cleanupWorkerAllocations } from "../services/allocation-sandbox-provider.js";
+import { EnvironmentCapacityError } from "../services/worker-capacity.js";
 import { WorkerNodesService } from "../services/worker-nodes-service.js";
 
 const ownedSandboxes = new TestSandboxes();
@@ -181,6 +182,8 @@ describe.skipIf(!process.env.DATABASE_URL)(
       await cleanupWorkerAllocations({ db, workerNode: lease, provider });
       return (await core.runs.get({ identity, runId })).status;
     };
+    const statusOnly = async (runId: string) =>
+      (await core.runs.get({ identity, runId })).status;
     const release = async (runId: string, n: number) => {
       await expect
         .poll(() => status(runId), { timeout: 20_000 })
@@ -363,5 +366,78 @@ describe.skipIf(!process.env.DATABASE_URL)(
       expect(await status(next.id)).toBe("pending");
       await core.runs.cancel({ identity, runId: next.id });
     }, 30_000);
+
+    it("full slots leave an automation on: its run retries, and a queued run waits for room", async () => {
+      const enable = async (workflowName: string) => {
+        const preview = await core.workflowEnablements.preview({
+          identity,
+          projectId,
+          workflowName,
+        });
+        return core.workflowEnablements.create({
+          identity,
+          projectId,
+          workflowName,
+          consentDigest: preview.consentDigest,
+        });
+      };
+      const cleanupOn = await enable("cleanup");
+      const publishOn = await enable("publish");
+      // No worker runs, so the blocker keeps the only workspace reserved.
+      const blocker = await core.runs.triggerProduction({
+        identity,
+        projectId,
+        workflowName: "cleanup",
+        input: { id: "blocker" },
+      });
+      await expect(
+        core.runs.triggerWithEnablement({
+          identity,
+          projectId,
+          workflowName: "cleanup",
+          enablementId: cleanupOn.id,
+          input: { id: "automation" },
+        }),
+      ).rejects.toBeInstanceOf(EnvironmentCapacityError);
+      expect(
+        await core.workflowEnablements.get({
+          identity,
+          enablementId: cleanupOn.id,
+        }),
+      ).toMatchObject({ status: "active", suspensionReason: null });
+      await core.runs.cancel({ identity, runId: blocker.id });
+      await cleanupWorkerAllocations({ db, workerNode: lease, provider });
+      const retried = await core.runs.triggerWithEnablement({
+        identity,
+        projectId,
+        workflowName: "cleanup",
+        enablementId: cleanupOn.id,
+        input: { id: "automation" },
+      });
+      expect(retried.status).toBe("pending");
+      await core.runs.cancel({ identity, runId: retried.id });
+      await cleanupWorkerAllocations({ db, workerNode: lease, provider });
+
+      const automated = (n: number) =>
+        core.runs.triggerWithEnablement({
+          identity,
+          projectId,
+          workflowName: "publish",
+          enablementId: publishOn.id,
+          input: { subject: { id: "pr-room" }, n },
+        });
+      const ahead = await automated(1);
+      const behind = await automated(2);
+      expect([ahead.status, behind.status]).toEqual(["pending", "queued"]);
+      // Its turn comes while the ended run's workspace is still held.
+      await core.runs.cancel({ identity, runId: ahead.id });
+      expect(await statusOnly(behind.id)).toBe("queued");
+      await cleanupWorkerAllocations({ db, workerNode: lease, provider });
+      await core.runs.startQueuedRuns();
+      const started = await core.runs.get({ identity, runId: behind.id });
+      expect(started.status).toBe("pending");
+      expect(started.workflowEnablementId).toBe(publishOn.id);
+      await core.runs.cancel({ identity, runId: behind.id });
+    }, 60_000);
   },
 );

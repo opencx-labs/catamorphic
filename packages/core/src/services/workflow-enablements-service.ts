@@ -19,10 +19,12 @@ import {
 } from "./connections-service.js";
 import type { DeploymentArtifact } from "./deployment-artifacts-service.js";
 import {
+  EnvironmentBindingUnavailableError,
   EnvironmentPolicyInvalidError,
   type ExecutionEnvironmentsService,
 } from "./execution-environments-service.js";
 import { toJson } from "./run-coordinator.js";
+import { EnvironmentCapacityError } from "./worker-capacity.js";
 import { workflowEnablementConsentDigest } from "./workflow-enablement-consent.js";
 import type {
   RevalidatedWorkflowEnablement,
@@ -648,15 +650,23 @@ export class WorkflowEnablementsService {
         requirements: { workload: "workflow" },
       });
     } catch (error) {
-      // A broken project policy stops every automation; it is not the
-      // owner losing access.
-      return this.failRevalidation(
-        row,
-        input.identity,
-        error instanceof EnvironmentPolicyInvalidError
-          ? "environment_policy_invalid"
-          : "environment_denied",
-      );
+      // A full or offline machine says nothing about authority: the run's
+      // own admission waits or fails retryably (ADR 0325).
+      if (
+        !(
+          error instanceof EnvironmentCapacityError ||
+          error instanceof EnvironmentBindingUnavailableError
+        )
+      )
+        // A broken project policy stops every automation; it is not the
+        // owner losing access.
+        return this.failRevalidation(
+          row,
+          input.identity,
+          error instanceof EnvironmentPolicyInvalidError
+            ? "environment_policy_invalid"
+            : "environment_denied",
+        );
     }
     if (connections.length > 0 && !this.deps.connectionAdmission) {
       return this.failRevalidation(
