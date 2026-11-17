@@ -5620,6 +5620,20 @@ export class AgentSessionsService {
             grantDirectory: gateway.grantDirectory,
           };
         }
+        // The owner's credentials sit in a workspace only while every turn
+        // working in it is the owner's own (ADRs 0199, 0322): in a shared
+        // one, the other sessions' turns count too.
+        const others =
+          setupGate && placementOwner(session.external_user_id) !== null
+            ? await this.otherWorkspaceTurns({
+                allocationId: setupGate.allocationId,
+                sessionId,
+                projectId,
+                owner: session.external_user_id,
+              })
+            : [];
+        const besideOthers = others.some((other) => !other.ownerAuthored);
+        const credentialsAllowed = ownerAuthored && !besideOthers;
         const delivery = await this.prepareSandboxSecrets({
           identity,
           projectId,
@@ -5628,7 +5642,8 @@ export class AgentSessionsService {
           isolated: runtime.isolated === true,
           provider: runtime.provider,
           sandboxProviderId,
-          ownerAuthored,
+          ownerAuthored: credentialsAllowed,
+          ...(ownerAuthored && besideOthers ? { besideOthers: true } : {}),
         });
         if (delivery.note) notes.push(delivery.note);
         if (delivery.ownerOnly) {
@@ -5643,13 +5658,42 @@ export class AgentSessionsService {
           allowed: runtime.personalCredentials === true,
           provider: runtime.provider,
           sandboxProviderId,
-          ownerAuthored,
+          ownerAuthored: credentialsAllowed,
         });
         if (files.note) notes.push(files.note);
         if (files.delivered) {
           ownerOnly = true;
           ownerOnlyBecause ??= "credentials";
         }
+        if (ownerAuthored && besideOthers && runtime.personalCredentials)
+          notes.push(PERSONAL_FILES_BESIDE_OTHERS_NOTE);
+        // What this turn took out, the owner's own turns working beside it
+        // lost: they are told, as their commands run on without it.
+        if (
+          !credentialsAllowed &&
+          (delivery.listed || runtime.personalCredentials === true)
+        )
+          for (const other of others)
+            if (other.ownerAuthored)
+              await this.notify(identity, projectId, other.sessionId, {
+                task: {
+                  type: "workspace_credentials",
+                  id: setupGate?.allocationId ?? sessionId,
+                  title: "This workspace's secrets and personal files",
+                  status: "update",
+                },
+                summary:
+                  "Work took the secrets and personal files out of this workspace",
+                detail:
+                  "Another chat working in this workspace runs a turn its owner did not write, so Work took the owner's secrets and personal files out of it. Commands from now on run without them; a later turn gets them back once only the owner's turns work here.",
+                mode: "steer",
+                idempotencyKey: `credentials-withdrawn:${turn.id}:${other.sessionId}`,
+              }).catch((error: unknown) =>
+                console.warn(
+                  `[catamorphic] Could not tell session ${other.sessionId} its workspace's credentials were taken out`,
+                  error,
+                ),
+              );
         // A new workspace that could not have an exclusive volume of its own
         // (ADR 0208) says so once.
         if (fresh && runtime.allocation) {
@@ -5687,7 +5731,7 @@ export class AgentSessionsService {
                 },
                 environment: runtime.setup,
                 personalAllowed:
-                  runtime.personalCredentials === true && ownerAuthored,
+                  runtime.personalCredentials === true && credentialsAllowed,
                 signal,
               });
         const setupNote = setup?.note
@@ -7304,14 +7348,21 @@ export class AgentSessionsService {
     sandboxProviderId: string;
     /** The owner wrote everything the turn answers. */
     ownerAuthored: boolean;
+    /**
+     * The owner wrote this turn, but another session's turn in the
+     * workspace is not the owner's (ADR 0322).
+     */
+    besideOthers?: boolean;
   }): Promise<{
     values: Record<string, string>;
     ownerOnly: boolean;
+    /** The Environment lists secrets for this workspace. */
+    listed: boolean;
     note?: string;
   }> {
     const { identity, projectId, session, environment } = input;
     const service = this.secrets;
-    const none = { values: {}, ownerOnly: false };
+    const none = { values: {}, ownerOnly: false, listed: false };
     if (!service) return none;
     const target = {
       provider: input.provider,
@@ -7321,14 +7372,22 @@ export class AgentSessionsService {
     const owner = placementOwner(session.external_user_id);
     // Recorded before any delivery, whichever path made it (a turn, a
     // person opening the workspace), so what one left is always taken out.
+    // In a shared workspace, whichever session's turn delivered them
+    // (ADR 0322): they are the workspace's.
     const held =
-      (
-        await this.db
-          .selectFrom("agent_sessions")
-          .select("secrets_held_at")
-          .where("id", "=", session.id)
-          .executeTakeFirst()
-      )?.secrets_held_at != null;
+      (await this.db
+        .selectFrom("agent_sessions")
+        .select("id")
+        .where((eb) =>
+          eb.or([
+            eb("id", "=", session.id),
+            ...(session.allocation_id
+              ? [eb("allocation_id", "=", session.allocation_id)]
+              : []),
+          ]),
+        )
+        .where("secrets_held_at", "is not", null)
+        .executeTakeFirst()) !== undefined;
     const withdraw = async () => {
       if (held) await removeSandboxSecrets(target);
     };
@@ -7347,9 +7406,12 @@ export class AgentSessionsService {
       await withdraw();
       return {
         ...none,
+        listed: true,
         note: !input.isolated
           ? `Environment '${environment}' lists secrets (${names}), but the machine this chat runs on also runs other people's work as plain processes, so Work did not set them in this workspace. Tell the user if the work needs them: a sandboxed machine, or one only ${owner ? "they use" : "this project uses"}, receives them.`
-          : `Environment '${environment}' lists secrets (${names}), but Work sets them only for turns that answer the chat owner's own messages, so this turn runs without them.`,
+          : input.besideOthers
+            ? `Environment '${environment}' lists secrets (${names}), but another chat working in this workspace now runs a turn its owner did not write, so Work set none of them and this turn runs without them. A later turn gets them once only the owner's turns work here.`
+            : `Environment '${environment}' lists secrets (${names}), but Work sets them only for turns that answer the chat owner's own messages, so this turn runs without them.`,
       };
     }
     const resolved = await service.resolveForSandbox({
@@ -7395,6 +7457,7 @@ export class AgentSessionsService {
       // Set because the owner wrote the input (ADR 0206): only the owner's
       // input may join the turn, as for personal files.
       ownerOnly: owner !== null && resolved.delivered.length > 0,
+      listed: true,
       ...(note ? { note } : {}),
     };
   }
@@ -12878,6 +12941,40 @@ export class AgentSessionsService {
     });
   }
 
+  /**
+   * The turns other sessions run in a workspace now (ADR 0322), and
+   * whether its owner wrote each.
+   */
+  private async otherWorkspaceTurns(input: {
+    allocationId: string;
+    sessionId: string;
+    projectId: string;
+    owner: string;
+  }): Promise<Array<{ sessionId: string; ownerAuthored: boolean }>> {
+    const rows = await this.db
+      .selectFrom("agent_turns")
+      .innerJoin(
+        "agent_sessions",
+        "agent_sessions.id",
+        "agent_turns.session_id",
+      )
+      .selectAll("agent_turns")
+      .where("agent_sessions.allocation_id", "=", input.allocationId)
+      .where("agent_sessions.id", "!=", input.sessionId)
+      .where("agent_turns.status", "in", [...ACTIVE_TURN_STATUSES])
+      .execute();
+    return Promise.all(
+      rows.map(async (row) => ({
+        sessionId: row.session_id,
+        ownerAuthored: await this.ownerAuthoredTurn({
+          projectId: input.projectId,
+          owner: input.owner,
+          turn: turnFromRow(row),
+        }),
+      })),
+    );
+  }
+
   /** The last setup outcome an Allocation's workspace recorded (ADR 0322). */
   private async setupOutcomeOf(
     allocationId: string,
@@ -14247,6 +14344,10 @@ const SHARED_RUNNER_STATE = "subsessions";
 /** What a read-only chat is told about itself (ADR 0271). */
 const READ_ONLY_NOTE =
   "This chat runs read-only: read, search and report, but change nothing. Any subsession it starts reads only too.";
+
+/** What an owner's turn hears when another's turn holds its files back. */
+const PERSONAL_FILES_BESIDE_OTHERS_NOTE =
+  "Work placed none of the user's personal files in this workspace for this turn: another chat working in it now runs a turn its owner did not write. A later turn gets them once only the owner's turns work here.";
 
 /**
  * How long a turn of a shared workspace waits for another session's sync

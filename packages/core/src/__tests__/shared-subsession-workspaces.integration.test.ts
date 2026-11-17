@@ -34,10 +34,12 @@ import { ConnectionAdmissionService } from "../services/connection-admission.js"
 import { ConnectionCapabilityGrantsService } from "../services/connection-capability-grants.js";
 import type { ResolvedConnectionBinding } from "../services/connection-types.js";
 import type { ConnectionsService } from "../services/connections-service.js";
+import { MemoryCredentialVault } from "../services/credential-vault.js";
 import { ExecutionAllocationsService } from "../services/execution-allocations-service.js";
 import { ExecutionEnvironmentsService } from "../services/execution-environments-service.js";
 import { ProjectEnvironmentsService } from "../services/project-environments-service.js";
 import { ProjectsService } from "../services/projects-service.js";
+import { SecretsService } from "../services/secrets-service.js";
 import { SessionWorkspaces } from "../services/session-workspaces.js";
 import { itemFromRow } from "../services/sessions/session-rows.js";
 
@@ -228,9 +230,11 @@ describe("subagents of a server agent (ADR 0322)", () => {
       await repo.writeFile(
         PROJECT_MANIFEST_PATH,
         JSON.stringify({
+          secrets: { REVIEW_TOKEN: {} },
           environments: {
             review: {
               workloads: ["agent"],
+              secrets: ["REVIEW_TOKEN"],
               // Slow enough that a turn starting during it would show.
               setup: {
                 command: [
@@ -287,6 +291,17 @@ describe("subagents of a server agent (ADR 0322)", () => {
       db,
       projectManager,
     );
+    const secrets = new SecretsService({
+      db,
+      vault: new MemoryCredentialVault(),
+      environments: projectEnvironments,
+    });
+    await secrets.upsert({
+      identity,
+      projectId,
+      name: "REVIEW_TOKEN",
+      value: "review-token-value",
+    });
     // As a Work server serves a committed agent: its harness beside the
     // workspace, in the chat's sandbox, its model through the gateway.
     const agent: RegisteredCodingAgent = {
@@ -359,6 +374,7 @@ describe("subagents of a server agent (ADR 0322)", () => {
         modelApi: () => "anthropic",
         servesHttp: () => false,
       },
+      secrets,
     });
   }, 120_000);
 
@@ -836,6 +852,68 @@ describe("subagents of a server agent (ADR 0322)", () => {
       idempotencyKey: "nudge-finished",
     });
     await until("the child rests", () => idle(child.session.id));
+  }, 120_000);
+
+  it("keeps the owner's secrets in a shared workspace only while every turn there is the owner's", async () => {
+    const parent = await sessions.create(identity, projectId, {
+      workspace: { ref: "pr" },
+    });
+    const child = await sessions.createSubsession(
+      identity,
+      projectId,
+      parent.id,
+      { task: "First look" },
+    );
+    await until(
+      "both rest",
+      async () => (await idle(parent.id)) && (await idle(child.session.id)),
+    );
+    const secretsSet = async () =>
+      (
+        await machine.executeCommand(
+          await sandboxOf(parent.id),
+          "cat .work-session/env/secrets.sh 2>/dev/null || true",
+          { cwd: "/workspace" },
+        )
+      ).result.includes("REVIEW_TOKEN");
+    // The owner's own turn works with the secret.
+    const working = sessions.sendMessage(
+      identity,
+      projectId,
+      parent.id,
+      "[[wait 8000]] Working with the token",
+    );
+    await until("the secret is set", secretsSet);
+    // Someone else writes to the child: a turn the owner did not write.
+    const other: Identity = {
+      tenantId: identity.tenantId,
+      externalUserId: "bob",
+      scope: [{ kind: "agent", projectId, name: "*" }],
+      projectPermissions: [{ projectId, permission: "sessions:write" }],
+    };
+    const beside = sessions.sendMessage(
+      other,
+      projectId,
+      child.session.id,
+      "[[wait 15000]] Bob here",
+    );
+    await until("the secret is gone", async () => !(await secretsSet()));
+    // The owner's working turn was told.
+    expect((await working).turn.status).toBe("completed");
+    expect((await replies(parent.id)).at(-1)).toContain(
+      "took the owner's secrets and personal files out",
+    );
+    // Its next turn, beside the other's, runs without them and hears why.
+    await sessions.sendMessage(identity, projectId, parent.id, "Again");
+    expect((await replies(parent.id)).at(-1)).toContain(
+      "runs a turn its owner did not write",
+    );
+    expect(await secretsSet()).toBe(false);
+    await beside;
+    await until(
+      "both rest",
+      async () => (await idle(parent.id)) && (await idle(child.session.id)),
+    );
   }, 120_000);
 
   it("refuses a child past the limit, saying so, and makes nothing", async () => {
