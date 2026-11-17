@@ -401,6 +401,84 @@ describeIf("scoped agent sessions (ADR 0055)", () => {
     expect(allChildren.total).toBe(2);
   });
 
+  it("totals a chat family only over the subsessions the caller may read (ADR 0329)", async () => {
+    const parent = await sessions.create(viewer, projectId, {
+      agentId: csmAgentId,
+      title: "Usage parent",
+    });
+    const own = crypto.randomUUID();
+    const otherAgent = crypto.randomUUID();
+    const otherOwner = crypto.randomUUID();
+    const belowHidden = crypto.randomUUID();
+    if (!db) throw new Error("Missing test database");
+    for (const [id, parentId, owner, agentId] of [
+      [own, parent.id, viewer.externalUserId, csmAgentId],
+      [otherAgent, parent.id, viewer.externalUserId, salesAgentId],
+      [otherOwner, parent.id, "csm-carol", csmAgentId],
+      [belowHidden, otherAgent, viewer.externalUserId, csmAgentId],
+    ] as const)
+      await db
+        .insertInto("agent_sessions")
+        .values({
+          id,
+          project_id: projectId,
+          external_user_id: owner,
+          agent_id: agentId,
+          parent_session_id: parentId,
+        })
+        .execute();
+    for (const [sessionId, model] of [
+      [parent.id, "csm-model"],
+      [own, "csm-model"],
+      [otherAgent, "sales-secret-model"],
+      [otherOwner, "carol-model"],
+      [belowHidden, "csm-model"],
+    ] as const)
+      await db
+        .insertInto("model_usage")
+        .values({
+          tenant_id: viewer.tenantId,
+          project_id: projectId,
+          agent_session_id: sessionId,
+          allocation_id: crypto.randomUUID(),
+          connection_id: crypto.randomUUID(),
+          alias: "openrouter",
+          endpoint: "chat/completions",
+          model,
+          output_tokens: 10,
+          cost_usd: "1",
+          metered: true,
+          settled_at: new Date(),
+        })
+        .execute();
+    const usage = await sessions.usage({
+      identity: viewer,
+      projectId,
+      sessionId: parent.id,
+      family: true,
+    });
+    // A subsession the caller could not read stays out, with its model,
+    // tokens and cost; one below it the caller may read still counts.
+    expect(usage).toMatchObject({
+      sessions: 3,
+      calls: 3,
+      outputTokens: 30,
+      costUsd: 3,
+    });
+    expect(usage.models.map((model) => model.model)).toEqual(["csm-model"]);
+    // Whoever reads every chat sees the whole family.
+    expect(
+      (
+        await sessions.usage({
+          identity: root,
+          projectId,
+          sessionId: parent.id,
+          family: true,
+        })
+      ).calls,
+    ).toBe(5);
+  });
+
   it("persists an agent-owned todo snapshot with stable item ids", async () => {
     const session = await sessions.create(viewer, projectId, {
       agentId: csmAgentId,
