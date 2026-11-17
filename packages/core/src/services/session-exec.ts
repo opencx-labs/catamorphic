@@ -999,11 +999,17 @@ export class SessionExecService {
       `${root}/${staging}`,
     );
     // Renamed whole into place; a copy another start put there first wins.
+    // A start that lost the race between its look and its rename moved its
+    // copy into the winner's folder (permissions do not stop root), so it
+    // takes that copy out again: `mv -T` would refuse, but not every
+    // sandbox's `mv` has it.
+    const nested = `${folder}/${path.posix.basename(staging)}`;
     const placed = await handle.provider.executeCommand(
       handle.sandboxId,
       [
         `chmod -R a-w ${shellQuote(`../${staging}`)}`,
         `if [ -d ${shellQuote(folder)} ]; then chmod -R u+w ${shellQuote(`../${staging}`)} && rm -rf ${shellQuote(`../${staging}`)}; else mv ${shellQuote(`../${staging}`)} ${shellQuote(folder)} || { test -d ${shellQuote(folder)} && chmod -R u+w ${shellQuote(`../${staging}`)} 2>/dev/null; rm -rf ${shellQuote(`../${staging}`)}; }; fi`,
+        `if [ -e ${shellQuote(nested)} ]; then chmod -R u+w ${shellQuote(nested)} 2>/dev/null; rm -rf ${shellQuote(nested)}; fi`,
         `test -d ${shellQuote(folder)}`,
       ].join(" && "),
       { cwd: handle.projectDirectory, timeout: 120 },

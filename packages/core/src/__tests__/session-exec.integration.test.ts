@@ -134,6 +134,8 @@ const network = Object.assign(
   [] as Array<{ kind: "widen" | "narrow"; sandboxId: string; id: string }>,
   { failNarrow: false, stopped: [] as string[] },
 );
+/** While set, another start places the program folder first (a race). */
+const programRace = { placeFirst: false };
 
 describeIf("workflows run commands in a chat's workspace (ADR 0324)", () => {
   let tmpDir: string;
@@ -177,6 +179,33 @@ describeIf("workflows run commands in a chat's workspace (ADR 0324)", () => {
         if (property === "stopSandbox")
           return async (sandboxId: string) => {
             network.stopped.push(sandboxId);
+          };
+        if (property === "executeCommand" && programRace.placeFirst)
+          return async (
+            sandboxId: string,
+            command: string,
+            options: { cwd?: string; timeout?: number },
+          ) => {
+            const racing =
+              /chmod -R a-w '\.\.\/\.work-program\/\.staging-/.test(command)
+                ? /'(\.\.\/\.work-program\/[0-9a-f]{40})'/.exec(command)?.[1]
+                : undefined;
+            const staging =
+              /'(\.\.\/\.work-program\/\.staging-[0-9a-f-]+)'/.exec(
+                command,
+              )?.[1];
+            // It lands between this start's look and its rename; the copy
+            // stays writable, as permissions are to root (review images).
+            return target.executeCommand(
+              sandboxId,
+              racing && staging
+                ? command.replace(
+                    "; else mv ",
+                    `; else mkdir -p '${racing}' && echo first > '${racing}/.work-program-commit' && chmod -R u+w '${staging}' && mv `,
+                  )
+                : command,
+              options,
+            );
           };
         const value: unknown = Reflect.get(target, property, target);
         return typeof value === "function" ? value.bind(target) : value;
@@ -439,6 +468,25 @@ describeIf("workflows run commands in a chat's workspace (ADR 0324)", () => {
     );
     expect(status.result).not.toContain("work-program");
   }, 120_000);
+
+  it("keeps the program folder another start placed first, never nesting its own copy inside", async () => {
+    const sessionId = (await sessions().create(root, projectId)).id;
+    programRace.placeFirst = true;
+    try {
+      const { run } = await runExec({
+        sessionId,
+        in: "session",
+        idempotencyKey: "race",
+        command: 'ls -A "$WORK_PROGRAM"',
+      });
+      expect(run.status).toBe("completed");
+      const { result } = run.result as { result: { stdout: string } };
+      expect(result.stdout).toContain(".work-program-commit");
+      expect(result.stdout).not.toContain(".staging-");
+    } finally {
+      programRace.placeFirst = false;
+    }
+  });
 
   it("parks a command longer than its attempt, holding nothing, and resumes the run with its result", async () => {
     const sessionId = (await sessions().create(root, projectId)).id;
