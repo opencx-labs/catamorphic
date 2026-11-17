@@ -48,16 +48,27 @@ Spawn takes `workspace: "shared" | "own"`, default `shared`, on every host.
   first runs the whole setup step, and its outcome (the build it ran in and
   its note to the agent, failures included) is recorded on the Allocation, so
   a session that arrived meanwhile reuses it and starts once it ends, instead
-  of running it again. Idle release counts the workspace in use while any session
-  in it works; a child whose workspace was released admits it again for
-  that session. Closing or archiving the child gives back only its own
-  grants and state; closing the parent closes it as before. A shared
-  child's files are not rewound, and a delivery cannot move its base. On
+  of running it again; a child that may not rebuild the workspace for a
+  setup on its own network is told that last outcome. Work under these
+  claims stops once its claim could be lost. Idle release counts the
+  workspace in use while any session in it works; a child whose workspace
+  was released admits it again for that session. Closing or archiving the
+  child gives back only its own grants and state; closing the parent closes
+  it as before. A shared child's files are not rewound; the parent's are not
+  while a sharer has queued, held or running work, and a sharer's turns wait
+  while they are. A delivery cannot move a shared child's base. On
   the desktop it works in the parent's checkout: the project folder, as
   every child did, or the parent's own worktree. A child whose agent cannot
   run there (a folder for a sandbox agent or the reverse, a contained
   workspace for an agent whose changes leave its sandbox, an Environment or
   connection the Allocation lacks) is refused, naming `own`.
+- **One owner per shared workspace.** Sharing a workspace is working beside
+  its agent (0209): anyone but the workspace session's owner needs workspace
+  access to start a shared child, and the child is the workspace session's
+  owner's. The owner's secrets, personal files and setup reach the
+  workspace only while every turn working in it was written by that owner;
+  otherwise they are taken out, and the owner's turns working beside are
+  told.
 - `own`: today's admission and workspace, started at the parent's base
   (its ref and commit, pinned for the child, ADR 0178) where it has one.
 
