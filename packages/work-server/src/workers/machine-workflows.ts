@@ -1,4 +1,4 @@
-import type { CatamorphicCore } from "@catamorphic/core";
+import { AccessDeniedError, type CatamorphicCore } from "@catamorphic/core";
 import type { Json } from "@catamorphic/db";
 import { sql } from "kysely";
 import {
@@ -22,6 +22,25 @@ export class ProjectMachineWorkflows implements MachineWorkflows {
   ) {}
 
   async start(args: {
+    project: string;
+    workflow: string;
+    kind: "machine.create" | "machine.destroy";
+    input: Readonly<Record<string, unknown>>;
+    correlationKey: string;
+  }): Promise<void> {
+    // The enablement can move to a new revision (ADR 0330) between reading
+    // its commit and dispatching there, which refuses the dispatch: read
+    // it again and dispatch at its new commit, a few times.
+    for (let attempt = 1; ; attempt += 1) {
+      try {
+        return await this.startOnce(args);
+      } catch (error) {
+        if (!(error instanceof AccessDeniedError) || attempt >= 3) throw error;
+      }
+    }
+  }
+
+  private async startOnce(args: {
     project: string;
     workflow: string;
     kind: "machine.create" | "machine.destroy";

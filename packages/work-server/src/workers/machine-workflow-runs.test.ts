@@ -2,9 +2,9 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import type { Identity } from "@catamorphic/core";
-import { WorkerNodesService } from "@catamorphic/core";
+import { AccessDeniedError, WorkerNodesService } from "@catamorphic/core";
 import { WORKFLOW_PACKAGE_VERSION } from "@catamorphic/workflow";
-import { afterAll, beforeAll, expect, it } from "vitest";
+import { afterAll, beforeAll, expect, it, vi } from "vitest";
 import {
   createWorkServer,
   SERVER_TENANT_ID,
@@ -392,3 +392,51 @@ it("creates and destroys machines through the project's own workflows", async ()
     },
   ]);
 }, 180_000);
+
+it("dispatches again when the provisioner's enablement moves under it, instead of refusing the create", async () => {
+  const core = server.catamorphic.core;
+  // The enablement moved between the read and the dispatch, once.
+  const dispatch = vi
+    .spyOn(core.triggers, "dispatchAtCommit")
+    .mockRejectedValueOnce(new AccessDeniedError());
+  const key = "2".repeat(64);
+  let dispatched = 0;
+  try {
+    await new ProjectMachineWorkflows({
+      core,
+      tenantId: SERVER_TENANT_ID,
+    }).start({
+      project: projectId,
+      workflow: "createMachine",
+      kind: "machine.create",
+      correlationKey: `machine-create:${key}`,
+      input: {
+        name: "moved",
+        class: "fleet",
+        rule: "fleet",
+        options: { prefix: "i" },
+        waiting: { resources: {}, capabilities: [] },
+        labels: {},
+        enrollment: {
+          controlPlaneUrl: PUBLIC,
+          code: "wke_moved",
+          idempotencyKey: key,
+          cloudInit: "#cloud-config\n",
+        },
+      },
+    });
+    dispatched = dispatch.mock.calls.length;
+  } finally {
+    dispatch.mockRestore();
+  }
+  expect(dispatched).toBe(2);
+  const run = await waitFor("the create run", async () =>
+    core.db
+      .selectFrom("workflow_runs")
+      .select("status")
+      .where("project_id", "=", projectId)
+      .where("correlation_key", "=", `machine-create:${key}`)
+      .executeTakeFirst(),
+  );
+  expect(run.status).not.toBe("failed");
+});

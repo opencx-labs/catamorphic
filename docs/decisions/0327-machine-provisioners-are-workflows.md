@@ -35,7 +35,10 @@ can boot their own image with the project's credentials or forge a
 lifecycle event. A workflow bound to a host-only kind also starts only
 through the host's dispatch of that kind: a run a caller starts directly
 (the runs route, an app, a project tool, another workflow's call) is
-refused (`WorkflowHostOnlyError`).
+refused (`WorkflowHostOnlyError`). A dispatch refused because the enablement moved to a new
+revision between reading its commit and dispatching there (ADR 0330) is
+read again and dispatched at the new commit, up to three times, rather
+than taken for a refused create.
 
 **Create gets what the hook gets.** The run's input is the hook's `create`
 argument: `name`, `class`, `rule`, `options`, `waiting` (what the waiting
