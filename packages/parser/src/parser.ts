@@ -209,6 +209,9 @@ const SESSION_OPERATION_LABELS: Record<string, string> = {
   reopen: "Reopen a chat's work",
   stopWatcher: "Stop a watcher",
   stop: "Stop this automation",
+  find: "Find a chat",
+  close: "Close a chat",
+  setMetadata: "Set chat metadata",
 };
 
 /**
