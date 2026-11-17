@@ -12,6 +12,7 @@ import {
   RunInputInvalidError,
   TenantActiveRunLimitError,
   TriggerBindingsInvalidError,
+  TriggerKindHostOnlyError,
   TriggerKindNotRegisteredError,
   TriggerModeNotAllowedError,
   TriggerPayloadInvalidError,
@@ -118,6 +119,7 @@ export function registerTriggerRoutes(app: FastifyInstance, ctx: RouteContext) {
       body: FireTriggerSchema,
       response: {
         200: TriggerFireResultSchema,
+        403: ErrorSchema,
         404: ErrorSchema,
         409: ErrorSchema,
         422: ErrorSchema,
@@ -210,7 +212,10 @@ function handleTriggerError(
       requirements: [...err.requirements],
     });
   }
-  if (err instanceof EnvironmentAccessDeniedError) {
+  if (
+    err instanceof EnvironmentAccessDeniedError ||
+    err instanceof TriggerKindHostOnlyError
+  ) {
     return reply.status(403).send({ error: err.message });
   }
   if (err instanceof EnvironmentNotFoundError) {

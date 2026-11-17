@@ -72,6 +72,11 @@ export function defineTriggerKind<
    * `memberships:read` for events that name people.
    */
   requiredPermissions?: readonly ProjectPermissionName[];
+  /**
+   * Only the host dispatches this kind (`dispatchAtCommit`); members
+   * firing it over HTTP, MCP or a scoped client are refused.
+   */
+  hostOnly?: true;
 }): TriggerKindDefinition<z.output<PayloadSchema>, z.output<ConfigSchema>> {
   // Strict: a kind that declares no config should reject a workflow that
   // passes one — that binding is almost certainly a mistake.
@@ -103,6 +108,7 @@ export function defineTriggerKind<
     ...(args.requiredPermissions?.length
       ? { requiredPermissions: args.requiredPermissions }
       : {}),
+    ...(args.hostOnly ? { hostOnly: true } : {}),
   };
 }
 
