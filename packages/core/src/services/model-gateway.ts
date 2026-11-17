@@ -1,6 +1,12 @@
 import type { DB, Json, JsonObject } from "@catamorphic/db";
-import { getTracer, withSpan } from "@catamorphic/otel";
+import {
+  getTracer,
+  markSpanError,
+  setSpanCorrelation,
+  withSpan,
+} from "@catamorphic/otel";
 import type { AgentTurnUsage } from "@catamorphic/sandbox";
+import { type Attributes, type Span, SpanKind } from "@opentelemetry/api";
 import { type Kysely, sql } from "kysely";
 import type { Identity } from "../identity.js";
 import {
@@ -241,6 +247,20 @@ export interface ModelCallUsage {
   cacheCreationTokens: number;
   outputTokens: number;
   reasoningTokens: number;
+  /**
+   * What the provider said this call cost, in US dollars: the answer's
+   * `usage.cost` (OpenRouter's). Absent when it said nothing; never an
+   * estimate (ADR 0329).
+   */
+  costUsd?: number;
+}
+
+/** A provider-reported cost: a finite, non-negative number, or nothing. */
+function reportedCost(raw: Record<string, unknown>): number | undefined {
+  const cost = raw.cost;
+  return typeof cost === "number" && Number.isFinite(cost) && cost >= 0
+    ? cost
+    : undefined;
 }
 
 function emptyUsage(): ModelCallUsage {
@@ -265,6 +285,8 @@ function mergeAnthropicUsage(
     usage.cacheCreationTokens = count(raw.cache_creation_input_tokens);
   // message_delta carries the cumulative output count.
   if ("output_tokens" in raw) usage.outputTokens = count(raw.output_tokens);
+  const cost = reportedCost(raw);
+  if (cost !== undefined) usage.costUsd = cost;
 }
 
 /** OpenAI Responses (`input_tokens`) and Chat Completions (`prompt_tokens`). */
@@ -286,6 +308,8 @@ function openAiUsage(raw: Record<string, unknown>): ModelCallUsage {
       responses ? raw.output_tokens_details : raw.completion_tokens_details,
     ).reasoning_tokens,
   );
+  const cost = reportedCost(raw);
+  if (cost !== undefined) usage.costUsd = cost;
   return usage;
 }
 
@@ -458,8 +482,8 @@ export interface LiveModelGrant {
   /** The exact turn authorized by this grant, also used for accounting. */
   turnId: string;
   alias: string;
-  /** The grant's session: its owner and whether it is open. */
-  session?: { ownerId: string; active: boolean };
+  /** The grant's session: its owner, whether it is open, and its agent. */
+  session?: { ownerId: string; active: boolean; agentId?: string };
   /** The connection behind the alias: a new revision means a new key. */
   connection: {
     id: string;
@@ -565,6 +589,7 @@ export function dbModelGatewayStore(db: Kysely<DB>): ModelGatewayStore {
           "connection.expires_at as connectionExpiresAt",
           "session.external_user_id as sessionOwnerId",
           "session.status as sessionStatus",
+          "session.agent_id as sessionAgentId",
         ])
         .executeTakeFirst();
       if (!row?.alias) return undefined;
@@ -580,6 +605,7 @@ export function dbModelGatewayStore(db: Kysely<DB>): ModelGatewayStore {
               session: {
                 ownerId: row.sessionOwnerId,
                 active: row.sessionStatus === "active",
+                ...(row.sessionAgentId ? { agentId: row.sessionAgentId } : {}),
               },
             }
           : {}),
@@ -621,6 +647,7 @@ export function dbModelGatewayStore(db: Kysely<DB>): ModelGatewayStore {
             cache_creation_tokens: usage.cacheCreationTokens,
             output_tokens: usage.outputTokens,
             reasoning_tokens: usage.reasoningTokens,
+            cost_usd: usage.costUsd ?? null,
             settled_at: sql<Date>`now()`,
           })
           .where("id", "=", openId)
@@ -644,6 +671,7 @@ export function dbModelGatewayStore(db: Kysely<DB>): ModelGatewayStore {
           cache_creation_tokens: usage.cacheCreationTokens,
           output_tokens: usage.outputTokens,
           reasoning_tokens: usage.reasoningTokens,
+          cost_usd: usage.costUsd ?? null,
           settled_at: sql<Date>`now()`,
         })
         .execute();
@@ -682,11 +710,18 @@ export function dbModelGatewayStore(db: Kysely<DB>): ModelGatewayStore {
           sql<string>`coalesce(sum(output_tokens), 0)`.as("output"),
           sql<string>`coalesce(sum(reasoning_tokens), 0)`.as("reasoning"),
           sql<string | null>`max(model)`.as("model"),
+          sql<string>`count(cost_usd)`.as("priced"),
+          sql<string | null>`sum(cost_usd)`.as("cost"),
         ])
         .executeTakeFirst();
       if (!row || Number(row.calls) === 0) return undefined;
       return {
         ...(row.model ? { model: row.model } : {}),
+        // A cost only when every call reported one: a partial sum would
+        // read as the whole (ADR 0329).
+        ...(Number(row.priced) === Number(row.calls) && row.cost !== null
+          ? { costUsd: Number(row.cost) }
+          : {}),
         inputTokens: Number(row.input),
         cachedInputTokens: Number(row.cached),
         cacheCreationTokens: Number(row.creation),
@@ -704,6 +739,8 @@ interface ModelAccess {
   allocationId: string;
   sessionId: string | null;
   turnId: string;
+  /** The session's agent, when it has one. */
+  agentId?: string;
   alias: string;
   connectionId: string;
   api: ModelApi;
@@ -782,7 +819,7 @@ export class ModelGatewayService {
             "catamorphic.model.path": request.path,
           },
         },
-        () => this.handleUninstrumented(request),
+        (span) => this.handleUninstrumented(request, span),
       );
     } catch (error) {
       return refusalResponse(api, error);
@@ -812,8 +849,13 @@ export class ModelGatewayService {
 
   private async handleUninstrumented(
     request: ModelGatewayRequest,
+    span: Span,
   ): Promise<ModelGatewayResponse> {
     const access = await this.authorize(request);
+    // Whose call this is, inherited by the call's own span (ADR 0329).
+    setSpanCorrelation({ span, attributes: callCorrelation(access) });
+    if (access.agentId)
+      span.setAttribute("catamorphic.agent.id", access.agentId);
     const path = modelRequestPath(request.path);
     const url = path ? upstreamUrl(access.baseUrl, path, request.query) : null;
     if (!path || !url)
@@ -852,6 +894,7 @@ export class ModelGatewayService {
       throw error;
     }
     const { body, rewritten, fields } = reviewed;
+    if (fields.model) span.setAttribute("gen_ai.request.model", fields.model);
     const post = method === "POST";
     const input: JsonObject = {
       provider: access.providerKind,
@@ -885,6 +928,8 @@ export class ModelGatewayService {
     // Authority and usage refer to the grant's attempt, never a newer turn.
     const outgoing = upstreamRequestHeaders(request.headers, access.headers);
     if (rewritten) outgoing.set("content-type", "application/json");
+    // The upstream call, until its answer ends: it carries the usage.
+    const call = startModelCall({ access, path, fields });
     let upstream: Response;
     try {
       upstream = await this.fetch(url, {
@@ -895,6 +940,7 @@ export class ModelGatewayService {
       });
     } catch {
       audit("error", { error: "upstream unreachable" });
+      endModelCall({ span: call, failure: "provider.unreachable" });
       throw new ModelGatewayError(
         502,
         "api_error",
@@ -902,8 +948,14 @@ export class ModelGatewayService {
       );
     }
     const headers = downstreamResponseHeaders(upstream.headers);
+    const refusal = upstream.ok ? undefined : providerRefusal(upstream.status);
+    const answered = {
+      status: upstream.status,
+      ...(refusal ? { refusal } : {}),
+    };
     if (!upstream.body) {
-      audit(upstream.ok ? "allowed" : "error", { status: upstream.status });
+      audit(upstream.ok ? "allowed" : "error", answered);
+      endModelCall({ span: call, status: upstream.status });
       return { status: upstream.status, headers, body: new Uint8Array() };
     }
     if (!upstream.ok || !post) {
@@ -914,11 +966,17 @@ export class ModelGatewayService {
         headers,
         body: relay({
           source: upstream.body,
-          onEnd: (finished) =>
+          onEnd: (finished) => {
             audit(outcome, {
-              status: upstream.status,
+              ...answered,
               ...(finished ? {} : { interrupted: true }),
-            }),
+            });
+            endModelCall({
+              span: call,
+              status: upstream.status,
+              interrupted: !finished,
+            });
+          },
         }),
       };
     }
@@ -944,6 +1002,12 @@ export class ModelGatewayService {
         onEnd: (finished) =>
           setImmediate(() => {
             const usage = tap?.finish() ?? emptyUsage();
+            endModelCall({
+              span: call,
+              status: upstream.status,
+              interrupted: !finished,
+              ...(tap ? { usage } : {}),
+            });
             this.recordUsage({ access, path, fields, usage, opened });
             audit("allowed", {
               status: upstream.status,
@@ -1168,6 +1232,7 @@ export class ModelGatewayService {
       allocationId: grant.allocationId,
       sessionId: grant.agentSessionId,
       turnId: grant.turnId,
+      ...(grant.session?.agentId ? { agentId: grant.session.agentId } : {}),
       alias: grant.alias,
       connectionId: resolved.binding.connectionId,
       api: resolved.endpoint.api,
@@ -1284,6 +1349,105 @@ class RewriteTimeoutError extends Error {}
 
 function isJsonObject(value: unknown): value is JsonObject {
   return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+// --- telemetry (ADR 0329) ---
+
+/** Whose call this is: the correlation every span of the call inherits. */
+function callCorrelation(access: ModelAccess): Attributes {
+  return {
+    "catamorphic.tenant.id": access.identity.tenantId,
+    "catamorphic.project.id": access.projectId,
+    ...(access.sessionId
+      ? {
+          "catamorphic.agent.session.id": access.sessionId,
+          "gen_ai.conversation.id": access.sessionId,
+          "catamorphic.agent.turn.id": access.turnId,
+        }
+      : {}),
+  };
+}
+
+/**
+ * What a provider's refusal means for whoever pays for the call: its own
+ * error still travels unchanged, this only names it on the span and in the
+ * audit, so a host can alert on it.
+ */
+export function providerRefusal(status: number): string | undefined {
+  return status === 401
+    ? "provider.authentication"
+    : status === 402
+      ? "provider.billing"
+      : status === 403
+        ? "provider.permission"
+        : status === 429
+          ? "provider.rate_limit"
+          : undefined;
+}
+
+/** The span of one upstream call (GenAI client conventions, no content). */
+function startModelCall(args: {
+  access: ModelAccess;
+  path: string;
+  fields: RequestFields;
+}): Span {
+  const { access, fields } = args;
+  return tracer.startSpan(fields.model ? `chat ${fields.model}` : "chat", {
+    kind: SpanKind.CLIENT,
+    attributes: {
+      ...callCorrelation(access),
+      "gen_ai.operation.name": "chat",
+      "gen_ai.provider.name": access.providerKind,
+      ...(fields.model ? { "gen_ai.request.model": fields.model } : {}),
+      ...(access.agentId ? { "catamorphic.agent.id": access.agentId } : {}),
+      "catamorphic.connection.alias": access.alias,
+      "catamorphic.model.path": args.path,
+    },
+  });
+}
+
+/**
+ * End a call's span with what its answer said: its status, a refusal's
+ * kind, and its usage. `gen_ai.usage.input_tokens` counts all input, cached
+ * included, as the convention says; `model_usage` keeps them apart.
+ */
+function endModelCall(args: {
+  span: Span;
+  status?: number;
+  usage?: ModelCallUsage;
+  interrupted?: boolean;
+  failure?: string;
+}): void {
+  const { span, status, usage } = args;
+  try {
+    if (status !== undefined)
+      span.setAttribute("http.response.status_code", status);
+    if (args.interrupted)
+      span.setAttribute("catamorphic.model.interrupted", true);
+    if (usage)
+      span.setAttributes({
+        ...(usage.model ? { "gen_ai.response.model": usage.model } : {}),
+        "gen_ai.usage.input_tokens":
+          usage.inputTokens +
+          usage.cachedInputTokens +
+          usage.cacheCreationTokens,
+        "gen_ai.usage.output_tokens": usage.outputTokens,
+        "gen_ai.usage.cache_read.input_tokens": usage.cachedInputTokens,
+        "gen_ai.usage.cache_write.input_tokens": usage.cacheCreationTokens,
+        "gen_ai.usage.reasoning.output_tokens": usage.reasoningTokens,
+        ...(usage.costUsd !== undefined
+          ? { "catamorphic.model.cost_usd": usage.costUsd }
+          : {}),
+      });
+    const failure =
+      args.failure ??
+      (status !== undefined && status >= 400
+        ? (providerRefusal(status) ?? String(status))
+        : undefined);
+    if (failure) markSpanError({ span, errorType: failure });
+  } finally {
+    span.end();
+  }
 }
 
 /** A call's usage row: its session, and the turn running when it began. */
