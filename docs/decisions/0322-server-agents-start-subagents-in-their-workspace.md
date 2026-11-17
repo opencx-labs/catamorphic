@@ -70,7 +70,11 @@ anything but a person (its parent, its own background command, a watcher
 or workflow) makes its delegation running again, and each settled turn
 reports to the parent once, keyed by the turn, through the steer path
 (0278) or as the idle parent's next turn. Turns a person starts in the
-child's chat are theirs and do not report.
+child's chat are theirs and do not report, and a child its parent stopped
+stays stopped. A delegation running again counts against the parent's
+`maxConcurrentChildren`: new spawns are refused while the limit is reached,
+but the child is never refused its own turn, so the count can pass the
+limit until it settles.
 
 Considered: a workspace forked from the parent's per child (a sandbox and
 setup each: what the reviewer avoids); one runner process multiplexing

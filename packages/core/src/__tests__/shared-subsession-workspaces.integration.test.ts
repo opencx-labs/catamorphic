@@ -660,6 +660,49 @@ describe("subagents of a server agent (ADR 0322)", () => {
     ).not.toBe("archived");
   }, 60_000);
 
+  it("keeps a child its parent stopped stopped, even when it wakes on its own", async () => {
+    const parent = await sessions.create(identity, projectId);
+    const child = await sessions.createSubsession(
+      identity,
+      projectId,
+      parent.id,
+      { task: "[[wait 20000]] Long check" },
+    );
+    await until("the child works", async () => !(await idle(child.session.id)));
+    await sessions.interruptSubsession(
+      identity,
+      projectId,
+      parent.id,
+      child.session.id,
+    );
+    await until("the child rests", () => idle(child.session.id));
+    await sessions.notify(identity, projectId, child.session.id, {
+      task: {
+        type: "background_command",
+        id: "watch",
+        title: "Watch the logs",
+        status: "completed",
+      },
+      summary: "Watch the logs finished",
+      idempotencyKey: "watch-finished",
+    });
+    await until("the child's later turn ran", async () =>
+      (await replies(child.session.id)).some((reply) =>
+        reply.includes("Watch the logs"),
+      ),
+    );
+    await until(
+      "both rest",
+      async () => (await idle(parent.id)) && (await idle(child.session.id)),
+    );
+    const [stopped] = await sessions.listSubsessions(
+      identity,
+      projectId,
+      parent.id,
+    );
+    expect(stopped?.status).toBe("interrupted");
+  }, 120_000);
+
   it("refuses a child past the limit, saying so, and makes nothing", async () => {
     const parent = await sessions.create(identity, projectId);
     for (const task of ["[[wait 4000]] one", "[[wait 4000]] two"])

@@ -13760,7 +13760,10 @@ export class AgentSessionsService {
    * A child working again for anything but a person (its parent, its own
    * background command, a watcher, a workflow) is running for its parent
    * again, so this turn's result reaches it as the first did (ADR 0322). A
-   * turn a person starts in the child's chat is theirs.
+   * turn a person starts in the child's chat is theirs, and one its parent
+   * stopped stays stopped. Running again counts against the parent's limit
+   * of running subsessions, which refuses new spawns while it is reached;
+   * the child is never refused its own turn.
    */
   private async resumeDelegation(input: {
     session: Pick<SessionRow, "id" | "parent_session_id">;
@@ -13778,7 +13781,7 @@ export class AgentSessionsService {
       .updateTable("agent_delegations")
       .set({ status: "running", completed_at: null })
       .where("target_session_id", "=", input.session.id)
-      .where("status", "in", ["completed", "failed", "interrupted"])
+      .where("status", "in", ["completed", "failed"])
       .execute();
   }
 
