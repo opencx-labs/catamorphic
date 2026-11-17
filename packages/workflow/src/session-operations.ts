@@ -60,6 +60,37 @@ export interface SessionHistoryMessage {
   /** ISO timestamp of the message. */
   createdAt: string;
 }
+/** Token totals and the cost providers reported for some model calls. */
+export interface ModelUsageTotals {
+  /** Settled calls counted here. */
+  calls: number;
+  /** Uncached input tokens (never includes the cached portion). */
+  inputTokens: number;
+  cachedInputTokens: number;
+  cacheCreationTokens: number;
+  outputTokens: number;
+  /** Subset of `outputTokens`. */
+  reasoningTokens: number;
+  /**
+   * What providers said these calls cost, in US dollars, summed; null when
+   * none said. Never an estimate.
+   */
+  costUsd: number | null;
+  /** Calls whose provider reported no cost: `costUsd` is a lower bound. */
+  unpricedCalls: number;
+}
+/** A chat's model calls through the gateway, as `usage` totals them. */
+export interface SessionUsage extends ModelUsageTotals {
+  sessionId: string;
+  /** Whether the totals include every subsession below the chat. */
+  family: boolean;
+  /** The chats counted. */
+  sessions: number;
+  /** Calls still streaming, not yet in the totals. */
+  openCalls: number;
+  /** The same totals per model; `model` is null when unknown. */
+  models: Array<ModelUsageTotals & { model: string | null }>;
+}
 /** The authoritative host has accepted delivery, but has not applied this action yet. */
 export interface QueuedSessionAction {
   delivery: "queued";
@@ -118,6 +149,12 @@ export interface SessionHostOperations {
       messages: SessionHistoryMessage[];
     }
   >;
+  /**
+   * The chat's model usage through the gateway: tokens per model and the
+   * cost providers reported. `family` adds every subsession below it. A
+   * project builds its own limits and reports on this; Work has none.
+   */
+  usage: Call<Target & { family?: boolean }, SessionUsage>;
   /**
    * Send a message to a chat. Name it by `sessionId`, or by `key`: the
    * project's chat for that key, started on first use and reused by every

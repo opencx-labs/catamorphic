@@ -202,6 +202,7 @@ const SESSION_OPERATION_LABELS: Record<string, string> = {
   inspect: "Look at a chat",
   list: "List chats",
   history: "Read a chat",
+  usage: "Read a chat's model usage",
   archive: "Archive a chat",
   unarchive: "Restore a chat",
   interrupt: "Interrupt a chat",

@@ -442,6 +442,10 @@ export {
   SseUsageReader,
   usageFromJson,
 } from "./services/model-gateway.js";
+export type {
+  ModelUsageTotals,
+  SessionUsage,
+} from "./services/model-usage.js";
 export {
   LOST_NODE_GRACE_MS,
   type NodeRecoveryResult,

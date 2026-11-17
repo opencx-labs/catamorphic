@@ -3420,6 +3420,76 @@ describe("agent session coordination", () => {
     );
   });
 
+  it("totals a chat's model usage for workflows, with its subsessions when asked (ADR 0329)", async () => {
+    const project = await projects.create(identity, { name: "Usage" });
+    const session = await sessions.create(identity, project.id);
+    await db
+      .updateTable("agent_sessions")
+      .set({ chat_key: "pr-42" })
+      .where("id", "=", session.id)
+      .execute();
+    const child = randomUUID();
+    await db
+      .insertInto("agent_sessions")
+      .values({
+        id: child,
+        project_id: project.id,
+        external_user_id: identity.externalUserId,
+        parent_session_id: session.id,
+      })
+      .execute();
+    for (const [sessionId, output, cost] of [
+      [session.id, 10, "0.5"],
+      [child, 20, null],
+    ] as const)
+      await db
+        .insertInto("model_usage")
+        .values({
+          tenant_id: identity.tenantId,
+          project_id: project.id,
+          agent_session_id: sessionId,
+          allocation_id: randomUUID(),
+          connection_id: randomUUID(),
+          alias: "openrouter",
+          endpoint: "chat/completions",
+          model: "opus",
+          output_tokens: output,
+          cost_usd: cost,
+          settled_at: new Date(),
+        })
+        .execute();
+    const actions = new SessionActionsService(db, sessions, () => undefined);
+    const usage = (args: Record<string, unknown>) =>
+      actions.execute({
+        identity,
+        projectId: project.id,
+        operation: "usage",
+        args,
+        author: { kind: "user", externalUserId: identity.externalUserId },
+      });
+    expect(await usage({ sessionId: session.id })).toMatchObject({
+      sessionId: session.id,
+      family: false,
+      sessions: 1,
+      calls: 1,
+      outputTokens: 10,
+      costUsd: 0.5,
+      unpricedCalls: 0,
+    });
+    expect(await usage({ sessionId: session.id, family: true })).toMatchObject({
+      family: true,
+      sessions: 2,
+      calls: 2,
+      outputTokens: 30,
+      costUsd: 0.5,
+      unpricedCalls: 1,
+      models: [{ model: "opus", calls: 2, unpricedCalls: 1 }],
+    });
+    await expect(
+      usage({ sessionId: session.id, family: "yes" }),
+    ).rejects.toThrow();
+  });
+
   it("retries workflow child creation without duplicating a delegated session", async () => {
     const project = await projects.create(identity, {
       name: "Workflow delegation",
