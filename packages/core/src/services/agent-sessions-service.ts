@@ -4716,20 +4716,25 @@ export class AgentSessionsService {
     // Files several sessions work on are no one's to rewind (ADR 0322).
     if (input.session.workspace_session_id)
       return "This chat works in its parent's workspace, so its files cannot be rewound on their own. Fork the chat instead.";
-    const sharers = await this.db
-      .selectFrom("agent_sessions")
-      .select("id")
-      .where("workspace_session_id", "=", input.session.id)
-      .where("status", "=", "active")
-      .execute();
-    if (
-      (
-        await this.sessionsWithRunningTurns({
-          sessionIds: sharers.map((row) => row.id),
-        })
-      ).size > 0
-    )
-      return "Subagents are working in this chat's workspace, so its files cannot be rewound until they stop.";
+    // Nor while a session sharing them has work there, running or waiting
+    // to: its turns are held meanwhile, but it would lose its workspace.
+    const sharersWork = await this.db
+      .selectFrom("agent_turns")
+      .innerJoin(
+        "agent_sessions",
+        "agent_sessions.id",
+        "agent_turns.session_id",
+      )
+      .select("agent_turns.id")
+      .where("agent_sessions.workspace_session_id", "=", input.session.id)
+      .where("agent_turns.status", "in", [
+        "queued",
+        "held",
+        ...ACTIVE_TURN_STATUSES,
+      ])
+      .executeTakeFirst();
+    if (sharersWork)
+      return "Subagents are working in this chat's workspace, or have work waiting there, so its files cannot be rewound until they finish.";
     const agent = await this.resolveAgent(
       input.session.agent_id,
       input.session.project_id,

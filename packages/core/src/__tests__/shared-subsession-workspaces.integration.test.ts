@@ -1,8 +1,13 @@
 import { execFile } from "node:child_process";
+import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
+import {
+  orderedTurns,
+  sessionStateFromSnapshot,
+} from "@catamorphic/agent-protocol";
 import type { DB } from "@catamorphic/db";
 import { migrateToLatest } from "@catamorphic/db";
 import { FsBackend, ProjectManager } from "@catamorphic/git";
@@ -701,6 +706,91 @@ describe("subagents of a server agent (ADR 0322)", () => {
       parent.id,
     );
     expect(stopped?.status).toBe("interrupted");
+  }, 120_000);
+
+  it("holds a shared child's work while its parent rewinds, and refuses a rewind while the child has work waiting", async () => {
+    const parent = await sessions.create(identity, projectId, {
+      workspace: { ref: "pr" },
+    });
+    await sessions.sendMessage(identity, projectId, parent.id, "One");
+    await sessions.sendMessage(identity, projectId, parent.id, "Two");
+    const child = await sessions.createSubsession(
+      identity,
+      projectId,
+      parent.id,
+      { task: "First look" },
+    );
+    await until(
+      "both rest",
+      async () => (await idle(parent.id)) && (await idle(child.session.id)),
+    );
+    const author = {
+      kind: "agent" as const,
+      sessionId: parent.id,
+      agentId: "reviewer",
+    };
+    const queuedTurn = async () =>
+      db
+        .selectFrom("agent_turns")
+        .select("status")
+        .where("session_id", "=", child.session.id)
+        .orderBy("ordinal", "desc")
+        .executeTakeFirstOrThrow();
+    const rewinding = (id: string, on: boolean) =>
+      db
+        .updateTable("agent_sessions")
+        .set({ rewind_until: on ? new Date(Date.now() + 3_600_000) : null })
+        .where("id", "=", id)
+        .execute();
+
+    // While the parent's files are rewound, nothing starts on them.
+    await rewinding(parent.id, true);
+    await sessions.deliver(identity, projectId, child.session.id, {
+      content: "Look again",
+      author,
+      mode: "steer",
+    });
+    await new Promise((resolve) => setTimeout(resolve, 1_500));
+    expect((await queuedTurn()).status).toBe("queued");
+    await rewinding(parent.id, false);
+    await sessions.deliver(identity, projectId, child.session.id, {
+      content: "And once more",
+      author,
+      mode: "queue",
+    });
+    await until("the child rests", () => idle(child.session.id));
+
+    // A child with work waiting there: the parent's files stay as they are.
+    await rewinding(child.session.id, true);
+    await sessions.deliver(identity, projectId, child.session.id, {
+      content: "Later",
+      author,
+      mode: "queue",
+    });
+    expect((await queuedTurn()).status).toBe("queued");
+    // The child's reports have woken the parent meanwhile.
+    await until("the parent rests", () => idle(parent.id));
+    const before = await sessions.get(identity, projectId, parent.id);
+    const second = orderedTurns(sessionStateFromSnapshot(before.snapshot))[1];
+    const receipt = await sessions.command(identity, projectId, parent.id, {
+      type: "rollback",
+      commandId: randomUUID(),
+      turnId: second?.id ?? "",
+    });
+    expect(receipt.status).toBe("rejected");
+    expect(receipt.error?.message).toContain("have work waiting there");
+    await rewinding(child.session.id, false);
+    await sessions.notify(identity, projectId, child.session.id, {
+      task: {
+        type: "background_command",
+        id: "nudge",
+        title: "Nudge",
+        status: "completed",
+      },
+      summary: "Nudge finished",
+      idempotencyKey: "nudge-finished",
+    });
+    await until("the child rests", () => idle(child.session.id));
   }, 120_000);
 
   it("refuses a child past the limit, saying so, and makes nothing", async () => {
