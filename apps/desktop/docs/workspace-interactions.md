@@ -517,8 +517,19 @@ menus, move one explicit Chromium history entry. Automatic full-page and
 same-document navigation remains reachable even without page activation.
 Work does not manufacture entries for a page's `replaceState` operation.
 
-Clicks on empty chat gutters focus the composer. Links, controls, message text,
-code and an active text selection retain their normal behavior.
+Clicks on empty chat gutters focus the composer. Links, message text, code and
+an active text selection retain their normal behavior. A control in the chat
+pressed with the pointer (Retry, an approval, Send or Stop, a disclosure) gives
+the composer its keys back once its action has run, and a focused control that
+goes away (removed, disabled, or inert as its panel closes, answered questions
+included) hands focus to the composer rather than to nowhere, however it was
+pressed. Keys pressing a control that stays keep their place on it. Focus the
+action, or the region it was in, moves elsewhere within two frames stays there:
+a field it opened, a menu, the next question or chip, another surface or
+window. So does the person acting again first, text selected in the chat, and a
+chat out of front. Presses in regions whose controls move focus themselves
+(`data-own-focus`: the chips, a question being answered, the chat's header
+controls) leave it where they put it (`lib/use-composer-focus-return.ts`).
 
 Maximizing and floating a chat animate the conversation and composer's maximum
 width with their padding. A visible tab becoming floating keeps its opacity;
