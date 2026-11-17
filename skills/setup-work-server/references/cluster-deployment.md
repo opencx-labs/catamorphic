@@ -331,15 +331,20 @@ the JSON file `WORK_MACHINES_CONFIG` names:
   `create` binds the `machine.create` trigger kind and gets what the hook's
   `create` gets; it returns `{ ref }`, or `{ refused }` when the platform
   made nothing. `destroy` binds `machine.destroy`, gets
-  `{ name, class, rule, ref, options }` (`ref` null when none is known),
-  and returns `{ done }`. Both must be turned on **for the project**: Work
+  `{ name, class, rule, ref, idempotencyKey, requestedAt, options }` (`ref`
+  null when none is known; find a lost launch by the key, and wait a while
+  after `requestedAt` before calling a missing machine gone), and returns
+  `{ done }`. Only the server dispatches these kinds: members cannot fire
+  them. Both must be turned on **for the project**: Work
   runs only the project's automation, in its Environment with its consented
   connections and secrets. Work never waits on a run: it records the
   machine's intent, starts `create` once per enrollment, and reads the
   answer on later passes; a failed run is an uncertain create, so the code
   waits for the machine to enroll and a machine that never does is
-  destroyed by name. Destroy runs again on later passes until it answers
-  `{ done: true }`. The project also hears `machine.created`,
+  destroyed by name. A start that stored no run tries again with a new
+  code, and repeated refusals wait longer each time. Destroy runs again on
+  later passes until it answers `{ done: true }` (failing runs back off),
+  and a create run stuck for 30 minutes is canceled first. The project also hears `machine.created`,
   `machine.connected`, `machine.lost`, `machine.released` and
   `machine.destroyed` as project events. Its create runs carry enrollment
   codes, so keep it to administrators. The `machines-ec2` pack

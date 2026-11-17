@@ -28,14 +28,21 @@ secrets, as the project principal. A member's enablement of the same
 workflow is never used. With none on, creation is refused with a message
 saying which workflow to turn on, and the rule's status shows it. Workflow
 runs stay on the control plane (worker machines take only agents), so a
-provisioner never waits for a machine it makes.
+provisioner never waits for a machine it makes. The machine kinds are
+**host-only**: a trigger kind may say only the host dispatches it, and a
+member firing one over HTTP, MCP or a scoped client is refused, so nobody
+can boot their own image with the project's credentials or forge a
+lifecycle event.
 
 **Create gets what the hook gets.** The run's input is the hook's `create`
 argument: `name`, `class`, `rule`, `options`, `waiting` (what the waiting
 work needs), `labels`, and `enrollment` (`controlPlaneUrl`, `code`,
 `idempotencyKey`, `cloudInit`). It returns `{ ref }`, or `{ refused }` when
 the platform created nothing. `destroy` gets `{ name, class, rule, ref,
-options }` (`ref` null when none is known) and returns `{ done }`. Both
+idempotencyKey, requestedAt, options }` (`ref` null when none is known;
+the key finds a launch whose answer was lost, `requestedAt` lets a
+platform that lists new machines late wait before calling one gone) and
+returns `{ done }`. Both
 output shapes are part of the trigger kinds, so a workflow that returns
 anything else fails its check.
 
@@ -51,17 +58,23 @@ awaited (ADR 0205):
 | pending, running, waiting | the machine stays pending |
 | `{ ref }` | the ref replaces the provisional one (on the worker too, if it enrolled first) |
 | `{ refused }` | a refused create: the code is withdrawn (as `MachineProvisioningRefusedError`) |
-| failed, canceled, other output, or no run after a start that failed uncertainly | an uncertain create: the code stays, the failure shows in the rule's status, and a machine that never enrolls expires and is destroyed by name |
+| failed, canceled, other output | an uncertain create: the code stays, the failure shows in the rule's status, and a machine that never enrolls expires and is destroyed by name |
+| none | nothing ran (the start failed before storing a run, or its pass ended first): the code is withdrawn at once, or once no pass can still be starting it (the claim's lease) |
 
 A create is never started twice for one enrollment: the key is checked
-before every start, under the reconciler's claim.
+before every start, under the reconciler's claim. A machine its platform
+refuses again and again (a workflow class) waits longer each time (one pass, then 1, 2, 4 up
+to 30 minutes), per replica.
 
 **Destroy is asked until done.** A pass starts `destroy` under
 `machine-destroy:<name>:<ref>` unless a run with that key is active; a run
 that answered `{ done: true }` forgets the machine; `{ done: false }`, a
-failure, or no run starts another on the next pass. While the machine's
-create run is still active, destroy waits for it, so a destroy right after
-a create never misses the machine the create is making.
+failure, or no run starts another on the next pass, a failed one only
+after a wait that grows with the failures under its key. While the
+machine's create run is still active, destroy waits for it, so a destroy
+right after a create never misses the machine the create is making; a
+create run going for 30 minutes is canceled (its code no longer works)
+and destroy finds the machine by name and key.
 
 **Machines report their lifecycle to the provisioner's project.** For a
 `workflow` class, the server records Project Events (source `machines`):
