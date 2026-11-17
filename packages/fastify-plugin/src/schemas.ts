@@ -1266,6 +1266,8 @@ const ModelUsageTotalsShape = {
   costUsd: z.number().nonnegative().nullable(),
   /** Calls whose provider reported no cost: costUsd is a lower bound. */
   unpricedCalls: z.number().int().nonnegative(),
+  /** Calls whose usage could not be read: token totals are a lower bound. */
+  unmeteredCalls: z.number().int().nonnegative(),
 };
 
 /** A chat's model usage through the gateway (ADR 0329). */

@@ -8027,6 +8027,7 @@ export interface paths {
                             reasoningTokens: number;
                             costUsd: number | null;
                             unpricedCalls: number;
+                            unmeteredCalls: number;
                             models: {
                                 model: string | null;
                                 calls: number;
@@ -8037,6 +8038,7 @@ export interface paths {
                                 reasoningTokens: number;
                                 costUsd: number | null;
                                 unpricedCalls: number;
+                                unmeteredCalls: number;
                             }[];
                         };
                     };

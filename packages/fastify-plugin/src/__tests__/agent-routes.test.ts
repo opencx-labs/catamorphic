@@ -127,6 +127,7 @@ describe("agent routes", () => {
       reasoningTokens: 0,
       costUsd: 0.75,
       unpricedCalls: 1,
+      unmeteredCalls: 0,
       models: [
         {
           model: "opus",
@@ -138,6 +139,7 @@ describe("agent routes", () => {
           reasoningTokens: 0,
           costUsd: 0.75,
           unpricedCalls: 1,
+          unmeteredCalls: 0,
         },
       ],
     };

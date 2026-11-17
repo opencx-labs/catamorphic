@@ -24964,6 +24964,11 @@
                       "minimum": 0,
                       "maximum": 9007199254740991
                     },
+                    "unmeteredCalls": {
+                      "type": "integer",
+                      "minimum": 0,
+                      "maximum": 9007199254740991
+                    },
                     "models": {
                       "type": "array",
                       "items": {
@@ -25012,6 +25017,11 @@
                             "type": "integer",
                             "minimum": 0,
                             "maximum": 9007199254740991
+                          },
+                          "unmeteredCalls": {
+                            "type": "integer",
+                            "minimum": 0,
+                            "maximum": 9007199254740991
                           }
                         },
                         "required": [
@@ -25023,7 +25033,8 @@
                           "outputTokens",
                           "reasoningTokens",
                           "costUsd",
-                          "unpricedCalls"
+                          "unpricedCalls",
+                          "unmeteredCalls"
                         ],
                         "additionalProperties": false
                       }
@@ -25042,6 +25053,7 @@
                     "reasoningTokens",
                     "costUsd",
                     "unpricedCalls",
+                    "unmeteredCalls",
                     "models"
                   ],
                   "additionalProperties": false

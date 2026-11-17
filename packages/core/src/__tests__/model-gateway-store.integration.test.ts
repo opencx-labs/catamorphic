@@ -427,6 +427,7 @@ describeIf("the model gateway's store (ADR 0180)", () => {
       cacheCreationTokens: 1,
       outputTokens: 12,
       reasoningTokens: 0,
+      metered: true,
     };
     await store.recordUsage({ record: { ...record, turnId }, usage });
     await store.recordUsage({ record: { ...record, turnId }, usage });
@@ -493,6 +494,7 @@ describeIf("the model gateway's store (ADR 0180)", () => {
       cacheCreationTokens: 0,
       outputTokens: 5,
       reasoningTokens: 0,
+      metered: true,
     };
     await store.recordUsage({ record, usage: { ...usage, costUsd: 0.0125 } });
     const openId = await store.openUsage({ record });
@@ -551,6 +553,7 @@ describeIf("the model gateway's store (ADR 0180)", () => {
       model: string;
       output: number;
       costUsd?: number;
+      metered?: boolean;
     }) =>
       store.recordUsage({
         record: {
@@ -570,12 +573,14 @@ describeIf("the model gateway's store (ADR 0180)", () => {
           cacheCreationTokens: 0,
           outputTokens: args.output,
           reasoningTokens: 1,
+          metered: args.metered ?? true,
           ...(args.costUsd !== undefined ? { costUsd: args.costUsd } : {}),
         },
       });
     await call({ sessionId: root, model: "opus", output: 10, costUsd: 0.5 });
     await call({ sessionId: child, model: "opus", output: 20, costUsd: 0.25 });
-    await call({ sessionId: child, model: "haiku", output: 5 });
+    // Neither priced nor metered: a stream whose usage the gateway never saw.
+    await call({ sessionId: child, model: "haiku", output: 5, metered: false });
     await call({
       sessionId: grandchild,
       model: "haiku",
@@ -614,6 +619,7 @@ describeIf("the model gateway's store (ADR 0180)", () => {
       outputTokens: 42,
       reasoningTokens: 4,
       unpricedCalls: 1,
+      unmeteredCalls: 1,
       openCalls: 1,
     });
     expect(family.costUsd).toBe(0.76);
@@ -624,6 +630,7 @@ describeIf("the model gateway's store (ADR 0180)", () => {
         outputTokens: 12,
         costUsd: 0.01,
         unpricedCalls: 1,
+        unmeteredCalls: 1,
       }),
       expect.objectContaining({
         model: "opus",
@@ -631,6 +638,7 @@ describeIf("the model gateway's store (ADR 0180)", () => {
         outputTokens: 30,
         costUsd: 0.75,
         unpricedCalls: 0,
+        unmeteredCalls: 0,
       }),
     ]);
 
@@ -641,7 +649,12 @@ describeIf("the model gateway's store (ADR 0180)", () => {
       sessionIds: [child],
       family: false,
     });
-    expect(alone).toMatchObject({ calls: 2, costUsd: 0.25, unpricedCalls: 1 });
+    expect(alone).toMatchObject({
+      calls: 2,
+      costUsd: 0.25,
+      unpricedCalls: 1,
+      unmeteredCalls: 1,
+    });
     // Costs whose floating-point sum is inexact (0.1 + 0.2) total exactly.
     const exact = crypto.randomUUID();
     await db

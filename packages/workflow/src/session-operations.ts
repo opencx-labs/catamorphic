@@ -78,6 +78,12 @@ export interface ModelUsageTotals {
   costUsd: number | null;
   /** Calls whose provider reported no cost: `costUsd` is a lower bound. */
   unpricedCalls: number;
+  /**
+   * Calls whose usage could not be read (for example a Chat Completions
+   * stream without `stream_options.include_usage`): they count zero tokens,
+   * so token totals are a lower bound when this is above zero.
+   */
+  unmeteredCalls: number;
 }
 /** A chat's model calls through the gateway, as `usage` totals them. */
 export interface SessionUsage extends ModelUsageTotals {

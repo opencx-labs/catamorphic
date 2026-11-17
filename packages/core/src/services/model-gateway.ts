@@ -253,6 +253,13 @@ export interface ModelCallUsage {
    * estimate (ADR 0329).
    */
   costUsd?: number;
+  /**
+   * Whether the answer's final usage was read. False for a Chat Completions
+   * stream without `stream_options.include_usage`, a stream that ended
+   * before its usage, or an answer too large to scan: its zeros are not a
+   * measurement (ADR 0329).
+   */
+  metered: boolean;
 }
 
 /** A provider-reported cost: a finite, non-negative number, or nothing. */
@@ -270,6 +277,7 @@ function emptyUsage(): ModelCallUsage {
     cacheCreationTokens: 0,
     outputTokens: 0,
     reasoningTokens: 0,
+    metered: false,
   };
 }
 
@@ -310,6 +318,8 @@ function openAiUsage(raw: Record<string, unknown>): ModelCallUsage {
   );
   const cost = reportedCost(raw);
   if (cost !== undefined) usage.costUsd = cost;
+  // Called only with an answer's final usage object.
+  usage.metered = Object.keys(raw).length > 0;
   return usage;
 }
 
@@ -319,7 +329,10 @@ export function usageFromJson(api: ModelApi, body: unknown): ModelCallUsage {
   const model = typeof answer.model === "string" ? answer.model : undefined;
   if (api === "anthropic") {
     const usage = emptyUsage();
-    mergeAnthropicUsage(usage, record(answer.usage));
+    const reported = record(answer.usage);
+    mergeAnthropicUsage(usage, reported);
+    // A complete message's usage holds its output count.
+    usage.metered = "output_tokens" in reported;
     return { ...usage, ...(model ? { model } : {}) };
   }
   return { ...openAiUsage(record(answer.usage)), ...(model ? { model } : {}) };
@@ -385,7 +398,10 @@ export class SseUsageReader implements UsageTap {
         if (typeof message.model === "string") this.usage.model = message.model;
         mergeAnthropicUsage(this.usage, record(message.usage));
       } else if (event.type === "message_delta") {
-        mergeAnthropicUsage(this.usage, record(event.usage));
+        const reported = record(event.usage);
+        mergeAnthropicUsage(this.usage, reported);
+        // The final count; message_start's is only the first token.
+        if ("output_tokens" in reported) this.usage.metered = true;
       }
       return;
     }
@@ -642,6 +658,7 @@ export function dbModelGatewayStore(db: Kysely<DB>): ModelGatewayStore {
           .updateTable("model_usage")
           .set({
             model: usage.model ?? record.model ?? null,
+            metered: usage.metered,
             input_tokens: usage.inputTokens,
             cached_input_tokens: usage.cachedInputTokens,
             cache_creation_tokens: usage.cacheCreationTokens,
@@ -666,6 +683,7 @@ export function dbModelGatewayStore(db: Kysely<DB>): ModelGatewayStore {
           alias: record.alias,
           endpoint: record.endpoint,
           model: usage.model ?? record.model ?? null,
+          metered: usage.metered,
           input_tokens: usage.inputTokens,
           cached_input_tokens: usage.cachedInputTokens,
           cache_creation_tokens: usage.cacheCreationTokens,
@@ -1006,7 +1024,7 @@ export class ModelGatewayService {
               span: call,
               status: upstream.status,
               interrupted: !finished,
-              ...(tap ? { usage } : {}),
+              usage,
             });
             this.recordUsage({ access, path, fields, usage, opened });
             audit("allowed", {
@@ -1424,7 +1442,9 @@ function endModelCall(args: {
       span.setAttribute("http.response.status_code", status);
     if (args.interrupted)
       span.setAttribute("catamorphic.model.interrupted", true);
-    if (usage)
+    if (usage) span.setAttribute("catamorphic.model.metered", usage.metered);
+    // Zeros that measured nothing stay off the span.
+    if (usage?.metered)
       span.setAttributes({
         ...(usage.model ? { "gen_ai.response.model": usage.model } : {}),
         "gen_ai.usage.input_tokens":

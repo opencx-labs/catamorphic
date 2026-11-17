@@ -3455,6 +3455,7 @@ describe("agent session coordination", () => {
           model: "opus",
           output_tokens: output,
           cost_usd: cost,
+          metered: true,
           settled_at: new Date(),
         })
         .execute();
