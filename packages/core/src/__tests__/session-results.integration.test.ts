@@ -92,7 +92,7 @@ describe("typed results", () => {
     const reviewer: RegisteredCodingAgent = {
       ...plain,
       id: "reviewer",
-      results: { review: reviewSchema },
+      results: { review: reviewSchema, notes: { type: "string" } },
     };
     const other: RegisteredCodingAgent = { ...plain, id: "other" };
     // The same echo on another harness: a chat moved to it starts a new
@@ -384,8 +384,11 @@ describe("typed results", () => {
       unanswered.indexOf("- Turn 3, Person: Also check the down migration."),
     );
     expect(unanswered).not.toContain("Review pull request 7");
-    // The turn's own input is its prompt, never repeated.
-    expect(unanswered).not.toContain("Go on.");
+    // The turn's own request is open too, and last.
+    expect(unanswered.trimEnd()).toMatch(
+      /- Turn 4 \(this turn\), Person: Go on\.$/,
+    );
+    expect(kept).toContain("; a newer request has arrived since");
 
     // A small budget: the verbatim sections keep the newest that fits, say
     // what they cut, and the whole hand-off stays near the bound.
@@ -406,6 +409,95 @@ describe("typed results", () => {
       "(1 earlier request is not shown; read it with the session history tool.)",
     );
     expect(small?.text.length).toBeLessThan(2_000 + 300);
+  });
+
+  it("tells a turn's next attempt what an earlier attempt of it submitted, and keeps that turn's request open", async () => {
+    const project = await projects.create(identity, { name: "Earlier" });
+    const session = await sessions.create(identity, project.id);
+    await turn(
+      project.id,
+      session.id,
+      `Review pull request 9. ${tool("submit_result", {
+        name: "review",
+        value: { verdict: "COMMENT", score: 4 },
+      })}`,
+    );
+    await turn(project.id, session.id, "A new push arrived.");
+    // Turn 3's first attempt submits, then its sandbox is lost: its next
+    // attempt starts a new thread, handed turns 1 and 2.
+    const state = await turn(
+      project.id,
+      session.id,
+      `Review the new push. ${tool("submit_result", {
+        name: "review",
+        value: { verdict: "REQUEST_CHANGES", score: 2 },
+      })}`,
+    );
+    const third = orderedTurns(state)[2];
+    if (!third) throw new Error("no third turn");
+    const handoff = await buildContextHandoff({
+      db,
+      sessionId: session.id,
+      fromOrdinal: 1,
+      toOrdinal: 2,
+      strategy: "full",
+      currentTurn: { id: third.id, ordinal: 3 },
+    });
+    const text = handoff?.text ?? "";
+    const [, earlier = ""] = text.split(
+      "Submitted by an earlier attempt of this turn, which did not finish",
+    );
+    expect(earlier).toContain(
+      'answering Person in turn 3 (this turn): "Review the new push.',
+    );
+    expect(earlier).toContain('\n  {"score":2,"verdict":"REQUEST_CHANGES"}');
+    expect(earlier).toContain("submit again if they are still right");
+    const [, accepted = ""] = text.split("Your accepted results");
+    expect(accepted).toContain('{"score":4,"verdict":"COMMENT"}');
+    expect(accepted).toContain(
+      'answering Person in turn 1: "Review pull request 9.',
+    );
+    const [, open = ""] = text.split("which no result answers yet");
+    expect(open).toContain("- Turn 2, Person: A new push arrived.");
+    expect(open).toContain(
+      "- Turn 3 (this turn), Person: Review the new push.",
+    );
+    expect(text).not.toMatch(/do not submit/i);
+  });
+
+  it("keeps the newest request when results fill the budget, cutting a result to an excerpt", async () => {
+    const project = await projects.create(identity, { name: "Room" });
+    const session = await sessions.create(identity, project.id);
+    await turn(
+      project.id,
+      session.id,
+      `Look at it. ${tool("submit_result", { name: "notes", value: "n".repeat(1_300) })}`,
+    );
+    const answering = await buildContextHandoff({
+      db,
+      sessionId: session.id,
+      fromOrdinal: 1,
+      toOrdinal: 1,
+      strategy: "full",
+    });
+    // Nothing newer than its request: the result still answers it.
+    expect(answering?.text).toContain("; it answers the newest request");
+    const ask = `Now the second file, please. ${"Details. ".repeat(40)}`;
+    await turn(project.id, session.id, ask);
+    const small = await buildContextHandoff({
+      db,
+      sessionId: session.id,
+      fromOrdinal: 1,
+      toOrdinal: 2,
+      strategy: "full",
+      budgetChars: 4_000,
+    });
+    const text = small?.text ?? "";
+    expect(text).toContain(`- Turn 2, Person: ${ask.trim()}`);
+    expect(text).not.toContain("request is not shown");
+    expect(text).toMatch(
+      /n{200,}… \(cut here; read the whole value with session_results, result [0-9a-f-]+\)/,
+    );
   });
 
   it("stays current through the agent's own work reporting back, and goes stale on a new request", async () => {
