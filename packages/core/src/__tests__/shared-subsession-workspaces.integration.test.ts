@@ -16,7 +16,7 @@ import { PROJECT_MANIFEST_PATH } from "@catamorphic/workflow/project-layout";
 import { PGlite } from "@electric-sql/pglite";
 import { pgcrypto } from "@electric-sql/pglite/contrib/pgcrypto";
 import { Kysely, PGliteDialect, WithSchemaPlugin } from "kysely";
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { type Identity, PROJECT_PRINCIPAL_ID } from "../identity.js";
 import {
   AgentDelegationDeniedError,
@@ -620,6 +620,45 @@ describe("subagents of a server agent (ADR 0322)", () => {
     expect(child.session.owner).toBe("project");
     await until("the child rests", () => idle(child.session.id));
   }, 120_000);
+
+  it("archives a busy shared child alone, leaving its parent in the person's chats", async () => {
+    const parent = await sessions.create(identity, projectId);
+    const child = await sessions.createSubsession(
+      identity,
+      projectId,
+      parent.id,
+      { task: "Archive me" },
+    );
+    await until("the child rests", () => idle(child.session.id));
+    // Its turn has not stopped when the archive looks (it runs elsewhere).
+    const service = sessions as unknown as {
+      sessionsWithRunningTurns(input: {
+        sessionIds: readonly string[];
+        executor?: unknown;
+      }): Promise<Set<string>>;
+    };
+    const original = service.sessionsWithRunningTurns.bind(sessions);
+    const running = vi
+      .spyOn(service, "sessionsWithRunningTurns")
+      .mockImplementation(async (input) =>
+        input.executor
+          ? new Set(input.sessionIds.filter((id) => id === child.session.id))
+          : original(input),
+      );
+    try {
+      await sessions.archive(identity, projectId, child.session.id, {
+        confirmStop: true,
+      });
+    } finally {
+      running.mockRestore();
+    }
+    expect(
+      (await sessions.get(identity, projectId, child.session.id)).visibility,
+    ).toBe("archived");
+    expect(
+      (await sessions.get(identity, projectId, parent.id)).visibility,
+    ).not.toBe("archived");
+  }, 60_000);
 
   it("refuses a child past the limit, saying so, and makes nothing", async () => {
     const parent = await sessions.create(identity, projectId);

@@ -11891,16 +11891,25 @@ export class AgentSessionsService {
         // A turn that did not stop keeps its workspace: it is never taken
         // from under a running turn, on any replica. Idle release gives it
         // back once the chat rests (ADR 0193).
-        const busy = new Set(
-          await this.sessionsWithRunningTurns({
-            sessionIds: impact.sessionIds,
-            executor: transaction,
-          }),
+        const running = await this.sessionsWithRunningTurns({
+          sessionIds: impact.sessionIds,
+          executor: transaction,
+        });
+        // A workspace is as busy as the sessions working in it (ADR 0322):
+        // one being archived keeps it while a shared subsession runs. Only
+        // the sessions being archived are archived.
+        const busyWorkspaces = new Set(
+          resources.flatMap((row) =>
+            row.workspace_session_id && running.has(row.id)
+              ? [row.workspace_session_id]
+              : [],
+          ),
         );
-        // A workspace is as busy as the sessions working in it (ADR 0322).
-        for (const row of resources)
-          if (row.workspace_session_id && busy.has(row.id))
-            busy.add(row.workspace_session_id);
+        const busy = new Set(
+          impact.sessionIds.filter(
+            (id) => running.has(id) || busyWorkspaces.has(id),
+          ),
+        );
         const idle = impact.sessionIds.filter((id) => !busy.has(id));
         const archived = [
           ...(idle.length > 0
