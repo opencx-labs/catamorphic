@@ -13,6 +13,7 @@ import {
   Bot,
   Brain,
   ChevronRight,
+  ClipboardCheck,
   Hourglass,
   ListChecks,
   type LucideIcon,
@@ -173,7 +174,8 @@ export interface TurnStep {
     | "plan"
     | "request"
     | "notification"
-    | "agent";
+    | "agent"
+    | "result";
   /** Agent activity uses the same harness mark as its chat. */
   agentId?: string | null;
   /** Its own glyph and color (a task notification's), instead of the kind's. */
@@ -233,6 +235,7 @@ const STEP_ICONS = {
   request: MessageCircleQuestionMark,
   notification: Bell,
   agent: Bot,
+  result: ClipboardCheck,
 } as const;
 
 /**
@@ -247,6 +250,7 @@ const TOOL_STEP_LABELS: Record<string, string> = {
   AskUserQuestion: "Asked you a question",
   ask_user: "Asked you a question",
   close_questions: "Closed its questions",
+  submit_result: "Submitted a result",
   TodoWrite: "Updated the plan",
   read_todo_list: "Read the todo list",
   update_todo_list: "Updated the todo list",
@@ -342,6 +346,7 @@ const WORKSPACE_STEP_TOOLS = new Set([
   "request_connection",
   "read_skill",
   "surface_control",
+  "submit_result",
 ]);
 
 /**
@@ -772,6 +777,14 @@ function stepOf(
     case "tool_call": {
       const toolName = stepToolName(item);
       if (HIDDEN_STEP_TOOLS.has(toolName)) return undefined;
+      // An accepted result is its own row (ADR 0323); only a call that
+      // failed stays visible as a tool step.
+      if (
+        toolName === "submit_result" &&
+        !item.error &&
+        item.status !== "failed"
+      )
+        return undefined;
       const started = backgroundStart(toolName, item.input);
       if (started)
         return {
@@ -852,6 +865,17 @@ function stepOf(
       };
     case "request":
       return requestStep(item.id, context.requests[item.requestId], timing);
+    // A typed result the agent submitted (ADR 0323): one row, its value inside.
+    case "result":
+      return {
+        ...timing,
+        key,
+        kind: "result",
+        finished: true,
+        label: `Submitted the ${item.name} result`,
+        detail: stepDetailText(item.value),
+        detailMono: true,
+      };
     // News about a task the agent started that reached it while it worked
     // (ADR 0217): part of the work, like a tool's result.
     case "task_notification": {
