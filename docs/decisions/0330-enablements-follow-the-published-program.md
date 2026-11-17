@@ -50,7 +50,7 @@ there and the authority the owner consented to is unchanged.**
   when the owner consented, the enablement takes the new commit, artifact
   and triggers in one transaction (`followed` event). The authority digest
   is the consent digest without the artifact digest plus what starts the
-  workflow (each trigger's kind, configuration and filters) and the run
+  workflow (each trigger's kind, configuration and filters, and whether workflows may record its project kind, ADR 0326) and the run
   secret names the project declares, so a merge cannot add a public webhook,
   a broader filter, a frequent schedule or a new secret without consent.
   Otherwise it stays, is marked `update_available`, and its owner (for a

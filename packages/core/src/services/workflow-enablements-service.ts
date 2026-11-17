@@ -265,6 +265,34 @@ export class WorkflowEnablementsService {
       ...(project_kind ? { projectKind: project_kind } : {}),
       where: where_filters,
     }));
+    // Which project kinds workflows may record at this commit (ADR 0326):
+    // making a verified kind recordable changes what can start the
+    // workflow, so it is part of the authority (ADR 0330).
+    const scanned = await this.db
+      .selectFrom("trigger_definition_scans")
+      .select("project_kinds")
+      .where("project_id", "=", input.projectId)
+      .where("commit_sha", "=", preview.commitSha)
+      .executeTakeFirst();
+    const recordable = new Set(
+      (Array.isArray(scanned?.project_kinds)
+        ? scanned.project_kinds
+        : []
+      ).flatMap((kind) =>
+        kind &&
+        typeof kind === "object" &&
+        !Array.isArray(kind) &&
+        kind.recordable === true &&
+        typeof kind.name === "string"
+          ? [kind.name]
+          : [],
+      ),
+    );
+    const authorityTriggers = triggers.map((trigger) =>
+      trigger.projectKind && recordable.has(trigger.projectKind)
+        ? { ...trigger, recordable: true as const }
+        : trigger,
+    );
     const labels = connections.length
       ? await this.db
           .selectFrom("connections")
@@ -280,7 +308,7 @@ export class WorkflowEnablementsService {
     const consentDigest = workflowEnablementConsentDigest(preview);
     const authorityDigest = workflowEnablementAuthorityDigest({
       ...preview,
-      triggers,
+      triggers: authorityTriggers,
       secrets: target.secrets ?? [],
     });
     return {

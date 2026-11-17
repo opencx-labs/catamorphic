@@ -80,7 +80,14 @@ async function addCommit(
     /** The secret names the project declares at this commit. */
     secrets?: string[];
     /** watchInbox's triggers at this commit. */
-    triggers?: Array<{ kind: string; config: unknown; where?: unknown }>;
+    triggers?: Array<{
+      kind: string;
+      config: unknown;
+      where?: unknown;
+      projectKind?: string;
+    }>;
+    /** The project's own kinds as the commit's scan resolved them. */
+    projectKinds?: Array<{ name: string; recordable: boolean }>;
   } = {},
 ) {
   const artifactId = crypto.randomUUID();
@@ -99,7 +106,19 @@ async function addCommit(
   if (options.triggers?.length)
     await db
       .insertInto("trigger_definition_scans")
-      .values({ project_id: projectId, commit_sha: commitSha })
+      .values({
+        project_id: projectId,
+        commit_sha: commitSha,
+        project_kinds: JSON.stringify(
+          (options.projectKinds ?? []).map((kind) => ({
+            name: kind.name,
+            kind: "webhook",
+            config: { name: "github" },
+            where: [],
+            recordable: kind.recordable,
+          })),
+        ),
+      })
       .execute();
   for (const [index, trigger] of (options.triggers ?? []).entries())
     await db
@@ -110,6 +129,7 @@ async function addCommit(
         workflow_name: "watchInbox",
         binding_index: index,
         trigger_kind: trigger.kind,
+        project_kind: trigger.projectKind ?? null,
         config: JSON.stringify(trigger.config),
         where_filters: JSON.stringify(trigger.where ?? []),
         input_parameters: JSON.stringify([]),
@@ -804,6 +824,39 @@ describe("what following never does on its own (ADR 0330)", () => {
     expect(notifications).toEqual([
       expect.objectContaining({ kind: "automation_update_needs_consent" }),
     ]);
+  });
+
+  it("needs consent when a revision lets workflows record a verified kind", async () => {
+    const pullRequest = {
+      kind: "webhook",
+      config: { name: "github" },
+      projectKind: "github.pull_request",
+    };
+    await addCommit(sha("f1"), {
+      triggers: [pullRequest],
+      projectKinds: [{ name: "github.pull_request", recordable: false }],
+    });
+    await addCommit(sha("f2"), {
+      triggers: [pullRequest],
+      projectKinds: [{ name: "github.pull_request", recordable: false }],
+    });
+    await addCommit(sha("f3"), {
+      triggers: [pullRequest],
+      projectKinds: [{ name: "github.pull_request", recordable: true }],
+    });
+    const authorityAt = async (commitSha: string) =>
+      (
+        await enablements.preview({
+          identity: owner,
+          projectId,
+          workflowName: "watchInbox",
+          owner: { type: "project" },
+          commitSha,
+        })
+      ).authorityDigest;
+    // The same triggers, the same authority; recording them is not.
+    expect(await authorityAt(sha("f2"))).toBe(await authorityAt(sha("f1")));
+    expect(await authorityAt(sha("f3"))).not.toBe(await authorityAt(sha("f1")));
   });
 
   it("needs consent when a revision declares new secrets", async () => {
