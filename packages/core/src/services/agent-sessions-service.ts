@@ -5683,6 +5683,20 @@ export class AgentSessionsService {
           : undefined;
         if (setupNote) notes.push(setupNote);
         if (reused?.note) notes.push(reused.note);
+        // A shared subsession that may not set this workspace up on its own
+        // network (above) hears how its last setup went, failure included.
+        if (
+          setupGate &&
+          !reused &&
+          !setup &&
+          !widened &&
+          session.workspace_session_id &&
+          setupNetwork.widens
+        ) {
+          const last = await this.setupOutcomeOf(setupGate.allocationId);
+          if (last?.note && last.build === sandboxProviderId)
+            notes.push(last.note);
+        }
         // What this setup told its agent, for those that waited on it: only
         // a setup that ran here, and not one its stopping turn cut short.
         if (
