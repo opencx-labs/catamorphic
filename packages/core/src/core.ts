@@ -1113,13 +1113,23 @@ export class CatamorphicCore {
       resolveOwner: (args) => this.resolveMember(args),
     });
     executionWorker.registerAllocationMaintenance({
-      handler: (args) => this.nodeRecovery.reconcileWorkflowWaits(args),
+      handler: async (args) => {
+        try {
+          await this.nodeRecovery.reconcileWorkflowWaits(args);
+        } finally {
+          // A settled run frees its key; the sweep starts any queued run
+          // whose turn came while no job settled here (ADR 0325).
+          await this.runs.startQueuedRuns(args);
+        }
+      },
     });
     executionWorker.registerExhaustedHandler((args) =>
       coordinator.handleExhaustedJob(args),
     );
     this.runs = new RunsService(this.db, {
       privateSource: (input) => this.sessionArtifacts.privateSource(input),
+      // Read at call time: memberships are constructed further down.
+      resolveOwner: (args) => this.resolveMember(args),
       appPolicies: this.appPolicies,
       projectManager: this.projectManager,
       sandboxProvider: this.sandboxProvider,

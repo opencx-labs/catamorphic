@@ -923,7 +923,31 @@ export class RunCoordinator {
         .select(["workflow_run_id", "invocation_id"])
         .orderBy("created_at")
         .execute();
-      const active = runs.filter((run) => !isTerminalRunStatus(run.status));
+      const now = await databaseNow(trx);
+      // A queued run holds no work and is outside the active-key index, so
+      // it ends at once; passing through `canceling` would claim its key
+      // from the run ahead of it (ADR 0325).
+      const queued = runs.filter((run) => run.status === "queued");
+      if (queued.length > 0)
+        await trx
+          .updateTable("workflow_runs")
+          .set({
+            status: "canceled",
+            cancel_requested_at: now,
+            cancel_reason: args.reason ?? null,
+            completed_at: now,
+            updated_at: now,
+          })
+          .where(
+            "id",
+            "in",
+            queued.map((run) => run.id),
+          )
+          .where("status", "=", "queued")
+          .execute();
+      const active = runs.filter(
+        (run) => run.status !== "queued" && !isTerminalRunStatus(run.status),
+      );
       if (active.length === 0) {
         return {
           invocations: [],
@@ -931,7 +955,6 @@ export class RunCoordinator {
         };
       }
       const activeIds = active.map((run) => run.id);
-      const now = await databaseNow(trx);
       await trx
         .updateTable("workflow_runs")
         .set({

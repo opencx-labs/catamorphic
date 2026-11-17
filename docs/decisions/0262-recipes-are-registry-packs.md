@@ -1,6 +1,6 @@
 # 0262: Recipes are registry packs
 
-- **Status:** Accepted (refines 0126, 0179, 0181)
+- **Status:** Accepted (refines 0126, 0179, 0181; the review recipe installs no server code by [0325](0325-runs-queue-per-key-and-workflows-keep-session-metadata.md))
 - **Date:** 2026-10-19
 
 ## Context

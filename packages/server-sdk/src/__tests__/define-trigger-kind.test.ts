@@ -14,7 +14,7 @@ const ticketCreated = defineTriggerKind({
   config: z.object({
     onlyPriority: z.enum(["low", "high"]).optional(),
   }),
-  correlationKey: (payload) => payload.ticketId,
+  deliveryKey: (payload) => payload.ticketId,
 });
 
 describe("defineTriggerKind", () => {
@@ -33,9 +33,9 @@ describe("defineTriggerKind", () => {
     );
   });
 
-  it("derives correlation keys from validated payloads", () => {
+  it("derives delivery keys from validated payloads", () => {
     expect(
-      ticketCreated.correlationKey?.({ ticketId: "T-9", priority: "low" }),
+      ticketCreated.deliveryKey?.({ ticketId: "T-9", priority: "low" }),
     ).toBe("T-9");
   });
 

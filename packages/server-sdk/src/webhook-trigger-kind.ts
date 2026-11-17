@@ -43,5 +43,5 @@ export const webhook = defineTriggerKind({
     }),
   }),
   matches: ({ config, payload }) => payload.payload.name === config.name,
-  correlationKey: (event) => event.id,
+  deliveryKey: (event) => event.id,
 });

@@ -488,6 +488,7 @@ export const WorkflowDetailSchema = WorkflowGraphSchema.extend({
 
 // --- Runs ---
 export const RunStatusSchema = z.enum([
+  "queued",
   "pending",
   "running",
   "waiting",
@@ -635,6 +636,7 @@ export const EnrollmentConflictPolicySchema = z.enum([
   "ignore",
   "error",
   "restart",
+  "queue",
 ]);
 
 export const TriggerRunSchema = z.object({

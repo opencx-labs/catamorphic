@@ -74,6 +74,7 @@ export const runKeys = {
 
 function shouldPollRun(run: Run): boolean {
   return (
+    run.status === "queued" ||
     run.status === "pending" ||
     run.status === "running" ||
     run.status === "canceling" ||

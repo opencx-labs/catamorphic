@@ -446,15 +446,14 @@ describe("private customizations use ordinary durable services", () => {
           value: {},
         }),
       ).rejects.toBeInstanceOf(AccessDeniedError);
-      if (!run.correlation_key)
-        throw new Error("Missing schedule correlation key");
+      // Access is refused before the key is even compared.
       await expect(
         core.runs.signalByKey({
           identity: caller,
           projectId,
           workflowName: name,
           runId: run.id,
-          correlationKey: run.correlation_key,
+          correlationKey: run.delivery_key ?? "schedule",
           signal: "resume",
           idempotencyKey: "other",
           value: {},

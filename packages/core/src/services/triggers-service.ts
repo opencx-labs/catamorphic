@@ -201,8 +201,14 @@ interface FireArgs {
   enablementIds?: readonly string[];
   /** Narrows to exact activations: a durable delivery names the one it serves. */
   activationIds?: readonly string[];
+  /** The subject's key, overriding the workflow's declared one (ADR 0325). */
   correlationKey?: string;
   onConflict?: EnrollmentConflictPolicy;
+  /**
+   * This delivery's identity; the kind's own `deliveryKey` when absent. One
+   * delivery starts at most one run of each workflow.
+   */
+  deliveryKey?: string;
   budgetMs?: number;
   /** User-initiated tool calls use the caller's live authority. */
   interactive?: boolean;
@@ -580,8 +586,7 @@ export class TriggersService {
     if (!payloadCheck.ok) {
       throw new TriggerPayloadInvalidError(kind.name, payloadCheck.errors);
     }
-    const correlationKey =
-      args.correlationKey ?? kind.correlationKey?.(args.payload);
+    const deliveryKey = args.deliveryKey ?? kind.deliveryKey?.(args.payload);
 
     return withSpan(
       {
@@ -740,8 +745,9 @@ export class TriggersService {
               payload: args.payload,
               environment: args.environment,
               mode,
-              correlationKey,
+              correlationKey: args.correlationKey,
               onConflict: args.onConflict,
+              deliveryKey,
               deadline,
               commitSha: scanned.commitSha,
               triggerKind: binding.kind,
@@ -777,6 +783,7 @@ export class TriggersService {
     mode: TriggerMode;
     correlationKey?: string;
     onConflict?: EnrollmentConflictPolicy;
+    deliveryKey?: string;
     deadline: number;
     commitSha: string | null;
     triggerKind: string;
@@ -797,6 +804,7 @@ export class TriggersService {
       environment: args.environment,
       correlationKey: args.correlationKey,
       onConflict: args.onConflict,
+      deliveryKey: args.deliveryKey,
     };
     const run = args.enablementId
       ? await this.deps.runs.triggerWithEnablement({

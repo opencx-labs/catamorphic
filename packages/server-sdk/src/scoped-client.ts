@@ -208,6 +208,8 @@ export interface TriggersResource {
     workflows?: readonly string[];
     correlationKey?: string;
     onConflict?: EnrollmentConflictPolicy;
+    /** This delivery's identity; the kind's `deliveryKey` when absent. */
+    deliveryKey?: string;
     /** Sync only: wall-clock budget before detaching. Defaults to 30s. */
     budgetMs?: number;
   }): Promise<TriggerFireResult>;
@@ -267,6 +269,7 @@ function buildTriggers(
           workflows: args.workflows,
           correlationKey: args.correlationKey,
           onConflict: args.onConflict,
+          deliveryKey: args.deliveryKey,
           budgetMs: args.budgetMs,
         }),
       ),

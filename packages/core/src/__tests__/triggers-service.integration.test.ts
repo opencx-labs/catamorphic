@@ -59,7 +59,7 @@ const ticketCreated: TriggerKindRuntime = {
     typeof value === "object" && value !== null && !Array.isArray(value)
       ? { ok: true }
       : { ok: false, errors: ["config must be an object"] },
-  correlationKey: (payload) =>
+  deliveryKey: (payload) =>
     (payload as { ticketId?: string }).ticketId ?? undefined,
 };
 
@@ -361,7 +361,7 @@ describeIf("TriggersService end to end", () => {
     ).rejects.toBeInstanceOf(TriggerPayloadInvalidError);
   });
 
-  it("fires async: enrolls runs with the payload as input and a derived correlation key", async () => {
+  it("fires async: enrolls runs with the payload as input, once per delivery", async () => {
     const result = await core.triggers.fire({
       identity,
       projectId,
@@ -378,10 +378,11 @@ describeIf("TriggersService end to end", () => {
     const runId = result.runs[0]?.runId ?? "";
     const run = await core.runs.get({ identity, runId });
     expect(run.input).toEqual({ ticketId: "T-100" });
-    expect(run.correlationKey).toBe("T-100");
+    // A delivery id names the delivery, not a subject (ADR 0325).
+    expect(run.correlationKey).toBeNull();
     expect(run.workflowEnablementId).toMatch(/^[0-9a-f-]{36}$/);
 
-    // Redelivery with the same correlation key is a no-op (default ignore).
+    // Redelivery with the same delivery key returns the run it started.
     const again = await core.triggers.fire({
       identity,
       projectId,
@@ -932,7 +933,7 @@ const webhookKind: TriggerKindRuntime = {
     webhookConfig.safeParse(config).data?.name ===
     z.object({ payload: z.object({ name: z.string() }) }).safeParse(payload)
       .data?.payload.name,
-  correlationKey: (payload) =>
+  deliveryKey: (payload) =>
     z.object({ id: z.string() }).safeParse(payload).data?.id,
 };
 

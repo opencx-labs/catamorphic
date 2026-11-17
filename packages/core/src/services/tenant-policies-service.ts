@@ -184,7 +184,9 @@ export class TenantPoliciesService {
       .innerJoin("projects", "projects.id", "workflow_runs.project_id")
       .where("projects.tenant_id", "=", args.tenantId)
       .where("workflow_runs.parent_run_id", "is", null)
+      // A queued run holds nothing until it starts (ADR 0325).
       .where("workflow_runs.status", "not in", [
+        "queued",
         "completed",
         "failed",
         "canceled",

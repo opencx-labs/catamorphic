@@ -178,7 +178,7 @@ describe("temporary watchers", () => {
             external_user_id: identity.externalUserId,
             workflow_enablement_id: String(input.enablementId),
             provenance: {},
-            correlation_key: String(input.correlationKey),
+            delivery_key: String(input.deliveryKey),
           })
           .execute();
         return { id };
@@ -457,7 +457,7 @@ describe("temporary watchers", () => {
     expect(triggered).toEqual([
       expect.objectContaining({
         enablementId: expect.stringMatching(/^[0-9a-f-]{36}$/),
-        correlationKey: expect.stringMatching(
+        deliveryKey: expect.stringMatching(
           new RegExp(`^event:[0-9a-f-]{36}:${appended.event.id}$`),
         ),
         input: appended.event,
@@ -642,7 +642,7 @@ describe("temporary watchers", () => {
     expect(await dispatchPending()).toBe(1);
     expect(
       triggered.find((entry) =>
-        String(entry.correlationKey).endsWith(`:${appended.event.id}`),
+        String(entry.deliveryKey).endsWith(`:${appended.event.id}`),
       )?.identity,
     ).toEqual(scopedIdentity);
   });
