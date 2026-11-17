@@ -455,9 +455,9 @@ export class MachineReconciler {
   private running: Promise<ReconcileSummary> | undefined;
   private readonly holder = randomUUID();
   /**
-   * Refusals in a row by machine name, so a workflow class its platform
-   * keeps refusing does not start a refused run every pass. Per replica:
-   * it only paces.
+   * Replica memory (a): refusals in a row by machine name, so a workflow
+   * class its platform keeps refusing does not start a refused run every
+   * pass. Per replica, rebuilt as passes run: it only paces.
    */
   private readonly refusals = new Map<string, { count: number; at: number }>();
 
