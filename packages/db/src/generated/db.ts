@@ -1361,6 +1361,7 @@ export interface WorkflowRuns {
   queue_attempted_at: Timestamp | null;
   queue_attempts: Generated<number>;
   queue_blocked: string | null;
+  queue_room_waits: Generated<number>;
   queued_at: Timestamp | null;
   result: Json | null;
   session_artifact_id: string | null;

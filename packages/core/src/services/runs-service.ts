@@ -51,7 +51,6 @@ import {
   AuthenticationRequiredError,
   ConnectionNotFoundError,
   ConnectionPermissionDeniedError,
-  ConnectionUnavailableError,
 } from "./connections-service.js";
 import type {
   DeploymentArtifact,
@@ -516,7 +515,8 @@ interface QueuedHead {
  * Why a queued run did not start: not its turn yet, no room (a full or
  * offline machine, the tenant's run limit), a refusal that will not change
  * (lost authority, a removed workflow or enablement, a broken source or
- * policy), or anything else, retried with backoff.
+ * policy), or anything else, retried with backoff. A connection that is
+ * unavailable for now is the last kind: follow and deploy retry it too.
  */
 function queuedStartOutcome(
   error: unknown,
@@ -549,7 +549,6 @@ function queuedStartOutcome(
     error instanceof NoCompatibleEnvironmentError ||
     error instanceof AuthenticationRequiredError ||
     error instanceof ConnectionPermissionDeniedError ||
-    error instanceof ConnectionUnavailableError ||
     error instanceof ConnectionNotFoundError ||
     error instanceof PluginSecretsMissingError ||
     error instanceof SandboxProviderNotConfiguredError
@@ -1817,7 +1816,7 @@ export class RunsService {
                     // back off exponentially, up to 5 minutes.
                     sql`AND (queued.queue_attempted_at IS NULL OR queued.queue_attempted_at
                       + make_interval(secs => CASE WHEN queued.queue_blocked = 'room'
-                          THEN least(30, 5 * queued.queue_attempts)
+                          THEN least(30, 5 * queued.queue_room_waits)
                           ELSE least(300, 5 * power(2, least(queued.queue_attempts, 6))) END) <= now())`
             }
             AND NOT EXISTS (
@@ -1952,14 +1951,25 @@ export class RunsService {
             });
             return "failed";
           }
+          // Waiting for room is not an error: it never counts toward the
+          // bound, so a head that waited long still has every retry.
           await this.db
             .updateTable("workflow_runs")
-            .set({
-              queue_attempts: sql<number>`queue_attempts + 1`,
-              queue_attempted_at: sql<Date>`now()`,
-              queue_blocked: outcome === "room" ? "room" : "error",
-              error: message,
-            })
+            .set(
+              outcome === "room"
+                ? {
+                    queue_room_waits: sql<number>`queue_room_waits + 1`,
+                    queue_attempted_at: sql<Date>`now()`,
+                    queue_blocked: "room",
+                    error: message,
+                  }
+                : {
+                    queue_attempts: sql<number>`queue_attempts + 1`,
+                    queue_attempted_at: sql<Date>`now()`,
+                    queue_blocked: "error",
+                    error: message,
+                  },
+            )
             .where("id", "=", head.id)
             .where("status", "=", "queued")
             .execute();

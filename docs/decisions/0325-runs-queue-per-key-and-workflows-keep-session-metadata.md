@@ -93,10 +93,12 @@ retry; the queue keeps any other publication for the pull request from
 writing meanwhile.
 
 **Queued starts are bounded and fair.** A head that cannot start for a
-reason that will not change fails at once; anything else retries with
-backoff (`queue_attempts`, `queue_attempted_at`, the last error in `error`)
-and fails after 8 tries, freeing the key. Waiting for room has no bound and
-is retried every 5 to 30 seconds, and at once when any run settles. The
+reason that will not change fails at once; anything else, a connection
+unavailable for now included, retries with backoff (`queue_attempts`,
+`queue_attempted_at`, the last error in `error`) and fails after 8 errors,
+freeing the key. Waiting for room is counted apart (`queue_room_waits`),
+never toward that bound, has no bound of its own, and is retried every 5 to
+30 seconds, and at once when any run settles. The
 sweep pages by tenant. A member's queued run without an enablement starts
 as the member is now, narrowed to what the enrolling identity held; a
 project principal's, as the principal it enrolled as. Kind-derived delivery

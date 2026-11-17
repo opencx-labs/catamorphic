@@ -25,6 +25,7 @@ import {
 } from "vitest";
 import { CatamorphicCore } from "../core.js";
 import { cleanupWorkerAllocations } from "../services/allocation-sandbox-provider.js";
+import { ConnectionUnavailableError } from "../services/connections-service.js";
 import { MAX_QUEUED_START_ATTEMPTS } from "../services/runs-service.js";
 import { EnvironmentCapacityError } from "../services/worker-capacity.js";
 import { WorkerNodesService } from "../services/worker-nodes-service.js";
@@ -550,6 +551,55 @@ describe.skipIf(!process.env.DATABASE_URL)(
         expect(await statusOnly(queued[1]?.id ?? "")).toBe("pending");
         await core.runs.cancel({ identity, runId: queued[1]?.id ?? "" });
       }, 30_000);
+
+      it("counts waits for room apart from errors, and retries a connection that is unavailable for now", async () => {
+        const { first, queued } = await lane("pr-room-then-error", 1);
+        const head = queued[0]?.id ?? "";
+        const due = () =>
+          db
+            .updateTable("workflow_runs")
+            .set({ queue_attempted_at: sql<Date>`now() - interval '1 hour'` })
+            .where("id", "=", head)
+            .execute();
+        // Its turn comes while the ended run's workspace is still held, and
+        // it waits for room many times.
+        await core.runs.cancel({ identity, runId: first.id });
+        for (let wait = 0; wait < MAX_QUEUED_START_ATTEMPTS; wait += 1) {
+          await due();
+          await core.runs.startQueuedRuns();
+        }
+        expect(await queuedRow(head)).toMatchObject({
+          status: "queued",
+          queue_attempts: 0,
+          queue_blocked: "room",
+        });
+        await cleanupWorkerAllocations({ db, workerNode: lease, provider });
+        // Then a connection is unavailable for a moment: an error to retry,
+        // the first one, not a refusal and not past the bound.
+        const ensure = vi
+          .spyOn(core.deploymentArtifacts, "ensure")
+          .mockRejectedValueOnce(
+            new ConnectionUnavailableError(
+              "github",
+              "The broker is restarting",
+            ),
+          );
+        try {
+          await due();
+          await core.runs.startQueuedRuns();
+        } finally {
+          ensure.mockRestore();
+        }
+        expect(await queuedRow(head)).toMatchObject({
+          status: "queued",
+          queue_attempts: 1,
+          queue_blocked: "error",
+        });
+        await due();
+        await core.runs.startQueuedRuns();
+        expect(await statusOnly(head)).toBe("pending");
+        await core.runs.cancel({ identity, runId: head });
+      }, 60_000);
 
       it("wakes a head waiting for room when any run settles, and when a child's job settles its root", async () => {
         const { first, queued } = await lane("pr-room-wake", 1);
