@@ -45,6 +45,7 @@
 //
 //   [[model retry]]                  the same as [[model]], asking again
 //                                    once after a refused answer
+//   [[model retry quiet]]            the same, answering with a tool call only
 import { spawn } from "node:child_process";
 import fs from "node:fs";
 import { Readable, Writable } from "node:stream";
@@ -412,6 +413,20 @@ const handlers = (() => {
           answer = await ask();
         }
         const json = await answer.json();
+        if (words.includes("quiet")) {
+          // Answered again, and its output is a tool call, not words.
+          await connection.notify(acp.methods.client.session.update, {
+            sessionId,
+            update: {
+              sessionUpdate: "tool_call",
+              toolCallId: "call-quiet",
+              title: "Read a file",
+              kind: "read",
+              status: "completed",
+            },
+          });
+          return { stopReason: "end_turn" };
+        }
         await say(
           sessionId,
           "agent_message_chunk",

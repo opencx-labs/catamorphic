@@ -21,23 +21,29 @@ model calls were being refused, so a retrying agent looked busy.
 ## Decision
 
 **A hand-off keeps what must not be summarized.** When a provider thread is
-handed the conversation, on any harness, the hand-off carries two labeled
+handed the conversation, on any harness, the hand-off carries labeled
 sections verbatim, outside the summary's trimming:
 
-- *Your accepted results*: the latest result of each name (newest first),
-  with its turn, the input it answers (quoted briefly), and whether a newer
-  input arrived since. A value above 8 KiB is cut to an excerpt that names
-  the result id to read whole with `session_results`.
+- *Submitted by an earlier attempt of this turn*: the latest result of each
+  name that an earlier attempt of the turn being handed off submitted (a
+  lost sandbox, a restart on a new session). That turn is still open, so
+  they are told to submit again if still right, never that the work is done.
+- *Your accepted results*: the latest result of each name from earlier
+  turns (newest first), with its turn, the request it answers (quoted
+  briefly), and whether a newer request arrived since. A value above 8 KiB,
+  or one that does not fit, is cut to an excerpt that names the result id
+  to read whole with `session_results`.
 - *Requests you have not answered with a result*: the requests of the
   covered turns after the newest result's input, as a result's `current`
   counts them (ADR 0323: a person's message, or words from outside the
   chat's own family; not task notifications or its subsessions' reports),
-  newest kept when cut. A chat with no result carries its latest three.
+  newest kept when cut, the turn's own request last. A chat with no result
+  carries its latest three.
 
-Both share half of the hand-off budget (32,000 of 64,000 characters), the
-summary takes what they leave, and each says how many it left out and
-where to read them. The current turn's own input is the prompt, so it is
-never repeated.
+They share half of the hand-off budget (32,000 of 64,000 characters):
+the newest request first, then results (excerpts when space is short), then
+older requests. The summary takes what they leave, and each section says
+how many it left out and where to read them.
 
 **ACP effort.** The adapter applies the attempt's effort (definition
 default, session override, delegation) through the agent's `thought_level`
@@ -57,10 +63,13 @@ window, and the session cost the agent reports in USD minus what it
 reported before the turn. ACP has no retry notice, and OpenCode keeps its
 retry status to itself, so retries are observed where Work stands: the
 loopback model endpoint (ADR 0255) sees each refused model answer (408,
-425, 429, 5xx, 529). A refused answer is `provider.retrying` with the
-provider's message, no counts, and a deadline only from `Retry-After`; new
-agent output afterwards is `provider.resumed` (ADR 0298). An agent on its
-own sign-in reports no retries.
+425, 429, 500, 502, 503, 504, 529, or the gateway unreachable; not 501 or
+505). A refused answer is `provider.retrying` with the provider's message
+(read from the first 64 KiB; the body reaches the agent whole), no counts,
+and a deadline only from `Retry-After`. The next answered call (below 400)
+or any output of the agent (words, thoughts, a tool call, a plan) is
+`provider.resumed` (ADR 0298). An agent on its own sign-in reports no
+retries.
 
 **Continuity across sandbox replacement stays the hand-off.** Evaluated
 and not built: ACP's `session/load` reopens a session the agent stored and

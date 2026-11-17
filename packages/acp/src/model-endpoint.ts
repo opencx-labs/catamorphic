@@ -54,12 +54,20 @@ export interface ModelRefusal {
   retryAt: string | null;
 }
 
-/** Answers that refuse a call for now, not for good (ADR 0328). */
+/**
+ * Answers that refuse a call for now, not for good (ADR 0328): a timeout,
+ * too early, rate limited, an internal error, a bad or unavailable gateway
+ * or upstream timeout, overloaded. Not 501 or 505, which do not pass.
+ */
+const PASSING_STATUSES: ReadonlySet<number> = new Set([
+  408, 425, 429, 500, 502, 503, 504, 529,
+]);
+
 export function passingRefusal(status: number): boolean {
-  return status === 408 || status === 425 || status === 429 || status >= 500;
+  return PASSING_STATUSES.has(status);
 }
 
-/** Largest refusal body read for its message. */
+/** Largest part of a refusal's body read for its message. */
 const MAX_REFUSAL_BYTES = 64 * 1024;
 
 /** The gateway's model API, served to an ACP agent on this sandbox's loopback. */
@@ -89,6 +97,8 @@ export async function serveLoopbackModel(input: {
   access: Extract<ModelAccess, { kind: "gateway" }>;
   fetch?: typeof fetch;
   onRefused?: (refusal: ModelRefusal) => void;
+  /** A call the model answered (below 400): its provider answers again. */
+  onAnswered?: () => void;
 }): Promise<LoopbackModel> {
   const { access } = input;
   const send = input.fetch ?? ((url, init) => fetch(url, init));
@@ -158,18 +168,48 @@ export async function serveLoopbackModel(input: {
         headers[name] = value;
     });
     if (passingRefusal(answer.status)) {
-      // Small, and read whole for the provider's words before it goes on.
-      const text = (await answer.text()).slice(0, MAX_REFUSAL_BYTES);
+      // The provider's words from its first bytes; the body goes on whole.
+      const reader = answer.body?.getReader();
+      const head: Uint8Array[] = [];
+      let size = 0;
+      let ended = !reader;
+      while (reader && size < MAX_REFUSAL_BYTES) {
+        const chunk = await reader.read();
+        if (chunk.done) {
+          ended = true;
+          break;
+        }
+        head.push(chunk.value);
+        size += chunk.value.length;
+      }
+      const read = Buffer.concat(head);
       input.onRefused?.({
         status: answer.status,
-        message: refusalMessage({ status: answer.status, text }),
+        message: refusalMessage({
+          status: answer.status,
+          text: read.subarray(0, MAX_REFUSAL_BYTES).toString("utf8"),
+        }),
         retryAt: retryAt(answer.headers.get("retry-after")),
       });
-      if (response.destroyed) return;
+      if (response.destroyed) {
+        await reader?.cancel();
+        return;
+      }
       response.writeHead(answer.status, headers);
-      response.end(text);
+      response.write(read);
+      while (reader && !ended) {
+        const chunk = await reader.read();
+        if (chunk.done) break;
+        if (response.destroyed) {
+          await reader.cancel();
+          return;
+        }
+        response.write(chunk.value);
+      }
+      response.end();
       return;
     }
+    if (answer.status < 400) input.onAnswered?.();
     response.writeHead(answer.status, headers);
     if (!answer.body) {
       response.end();
