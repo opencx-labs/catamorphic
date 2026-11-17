@@ -6,6 +6,8 @@ import { readRegistryItem } from "../scripts/item.js";
 interface PackManifest {
   name: string;
   docs?: string;
+  /** npm packages installing the pack adds, pinned by the registry. */
+  dependencies?: string[];
   registryDependencies?: string[];
   files: { path: string; target?: string }[];
 }

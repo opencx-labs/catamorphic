@@ -2,6 +2,7 @@
 import { execFile } from "node:child_process";
 import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
+import { createRequire } from "node:module";
 import os from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
@@ -12,6 +13,7 @@ import {
 import { checkProject, parseProject } from "@catamorphic/parser";
 import { MACHINE_TRIGGER_KINDS } from "@catamorphic/server-sdk";
 import { describe, expect, it } from "vitest";
+import packageJson from "../../package.json";
 import { packFiles } from "../pack-files.js";
 
 const PACK = packFiles("machines-ec2");
@@ -22,6 +24,10 @@ const workflowModule = path.join(root, "packages/workflow/src/index.ts");
 const fakeEc2 = path.join(
   import.meta.dirname,
   "fake-client-ec2.test-support.ts",
+);
+/** The real client, which the recipe typechecks against. */
+const realEc2 = path.dirname(
+  createRequire(import.meta.url).resolve("@aws-sdk/client-ec2/package.json"),
 );
 
 const KEY = createHash("sha256").update("wke_test-code").digest("hex");
@@ -120,7 +126,10 @@ describe("machines-ec2 pack (ADR 0327)", () => {
       "ec2:DescribeInstances",
       "ssm:GetParameters",
     ]);
-    expect(PACK.manifest.docs).toContain("@aws-sdk/client-ec2");
+    // Installing the pack adds the client it typechecks against here.
+    expect(PACK.manifest.dependencies).toEqual([
+      `@aws-sdk/client-ec2@${packageJson.devDependencies["@aws-sdk/client-ec2"]}`,
+    ]);
     for (const content of [skill, PACK.manifest.docs ?? ""])
       expect(content).not.toMatch(/[–—]/);
   });
@@ -141,7 +150,7 @@ describe("machines-ec2 pack (ADR 0327)", () => {
     expect(check.findings).toEqual([]);
   });
 
-  it("typechecks against the machine kinds and the EC2 client's shapes", async () => {
+  it("typechecks against the machine kinds and the real EC2 client", async () => {
     const parsed = parseProject({ [SOURCE]: recipe });
     const directory = await fs.mkdtemp(path.join(os.tmpdir(), "ec2-types-"));
     const sources = path.join(
@@ -172,7 +181,7 @@ describe("machines-ec2 pack (ADR 0327)", () => {
             typeRoots: [path.join(root, "node_modules/@types")],
             paths: {
               "@catamorphic/workflow": [workflowModule],
-              "@aws-sdk/client-ec2": [fakeEc2],
+              "@aws-sdk/client-ec2": [realEc2],
             },
           },
           include: ["*.ts"],
