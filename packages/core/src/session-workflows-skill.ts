@@ -442,7 +442,11 @@ sandboxes need it.
 - spawn starts a copy of the chat's agent unless agentId names another, and
   takes model and effort as the agent's delegation grants allow (a copy keeps
   the chat's model and effort otherwise); readOnly and delegate: false need no
-  grant. Fresh context
+  grant. The child works in the chat's workspace (workspace: "shared", the
+  default: its files as they are, nothing set up again); workspace: "own"
+  gives it one of its own started at the chat's base, for children that
+  write in parallel. Each result the child reaches later, woken by its own
+  background command or a message, reaches the chat too. Fresh context
   is the default. fork explicitly copies transcript history; create makes an
   independent conversation. Do not simulate children as untracked shell agents.
 - attention: "required" on deliver alerts the user to that exact message. It is

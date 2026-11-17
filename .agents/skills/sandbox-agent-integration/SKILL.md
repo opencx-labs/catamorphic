@@ -165,10 +165,14 @@ directory and appends `buildPluginsPreamble` to the attempt's system prompt.
 
 Rules that hold across harnesses:
 
-- **Delegation** is first-class: agent definitions declare routes and a child
+- **Delegation** is first-class: agent definitions declare grants and a child
   concurrency limit; core creates ordinary child sessions (hierarchy separate
-  from fork lineage). A native subagent is only an optimization when it keeps
-  that contract.
+  from fork lineage) and serves the subsession tools as host tools to agents
+  whose host serves none, so a sandboxed adapter only has to carry host tools
+  (ADR 0322). A child shares its parent's workspace by default: its attempts
+  run as their own runner processes in the parent's sandbox, with the
+  runner's state in `.work-session/subsessions/<id>`. A native subagent is
+  only an optimization when it keeps that contract.
 - **Skills** live in `.work/skills/<name>/SKILL.md`; agents read them
   from their checkout. `GET /api/projects/:projectId/skills` lists them.
 - **Connections**: project agents declare aliases in

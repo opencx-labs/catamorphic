@@ -291,13 +291,18 @@ A result starts a new turn if the parent has finished. An agent starts a copy of
 another agent it is granted, on the model and effort the work needs, or
 read-only for a review (on harnesses with a read-only mode); grants in its
 definition limit whom it may start and what it may choose, and by default it
-may start copies of itself on any model and effort.
+may start copies of itself on any model and effort. Agents on a Work server
+delegate the same way, from their sandbox. A subagent works in its parent's
+workspace by default, on the same files with nothing to set up again, or in
+one of its own started where the parent's started; a result it reaches in a
+later turn reaches the parent too.
 Archive recursively stops active work only after reporting its impact, while
 keeping the session tree restorable and searchable. Session source records
 whether a conversation began on desktop, mobile, Slack, Claude, MCP, or API.
 (ADRs [0089](docs/decisions/0089-project-shaped-member-shell.md),
 [0090](docs/decisions/0090-first-class-subsessions-and-delegation.md),
-[0271](docs/decisions/0271-agents-delegate-by-naming-an-agent-and-its-settings.md))
+[0271](docs/decisions/0271-agents-delegate-by-naming-an-agent-and-its-settings.md),
+[0322](docs/decisions/0322-server-agents-start-subagents-in-their-workspace.md))
 
 ## Durable workflows
 
