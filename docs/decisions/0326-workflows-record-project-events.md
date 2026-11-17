@@ -59,7 +59,7 @@ through another workflow that records in turn.
 which the workflow declares (ADR 0158) and its caller must hold, checked
 with the run's live authority like other host calls. The kind is resolved
 against the run's revision: its enablement's commit, else its deployment's.
-Scans record the project's resolved kinds (migration 078,
+Scans record the project's resolved kinds (migration 083,
 `trigger_definition_scans.project_kinds`); a commit scanned before it has
 none and is refused until deployed again.
 
