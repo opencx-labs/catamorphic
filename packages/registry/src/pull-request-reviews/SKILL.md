@@ -45,6 +45,11 @@ and replies. Protect the base branch with a person's
 approval, and if you require the check, require it from the App so a run
 another workflow names alike does not count.
 
+On a server GitHub cannot reach (no public webhook URL), the
+`github-polling` pack's `pollGithub` polls the repository and records the
+same `github.*` events (ADR 0326); every workflow here runs on them
+unchanged, and the webhook secret is not needed.
+
 The server side (the GitHub App and its webhook, the service connections, the
 review machines) is the Work server guide's "Review pull requests with Work";
 point whoever runs the server there. `writing-workflows` explains triggers

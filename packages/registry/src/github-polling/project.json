@@ -1,0 +1,19 @@
+{
+  "environments": {
+    "default": {
+      "workloads": ["agent", "workflow"]
+    },
+    "github-poller": {
+      "description": "Reads the repository's pull requests and comments for the GitHub poller; no agent runs here",
+      "workloads": ["workflow"],
+      "connections": {
+        "github": {
+          "provider": "github",
+          "principal": "service",
+          "service": "github",
+          "capabilities": ["get"]
+        }
+      }
+    }
+  }
+}
