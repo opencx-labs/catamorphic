@@ -6,3 +6,8 @@ ALTER TABLE agent_sessions
 CREATE INDEX agent_sessions_workspace_session_idx
   ON agent_sessions(workspace_session_id)
   WHERE workspace_session_id IS NOT NULL;
+
+-- The last setup run of an Allocation's workspace (ADR 0322): which build
+-- (sandbox) it ran in and what it told its agent, so sessions that arrived
+-- while it ran reuse its outcome instead of running it again.
+ALTER TABLE execution_allocations ADD COLUMN setup_outcome jsonb;

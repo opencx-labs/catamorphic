@@ -105,6 +105,10 @@ async function until(
 describe("subagents of a server agent (ADR 0322)", () => {
   let tmpDir: string;
   let runs: string;
+  /** When each setup run began and ended, in seconds. */
+  let stamps: string;
+  /** Present: the setup fails. */
+  let broken: string;
   let projectId: string;
   let sessions: AgentSessionsService;
   let machine: LocalProcessSandboxProvider;
@@ -182,6 +186,8 @@ describe("subagents of a server agent (ADR 0322)", () => {
     await migrateToLatest({ db, schema: "catamorphic_shared_subsessions" });
     tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "shared-subsessions-"));
     runs = path.join(tmpDir, "setup.log");
+    stamps = path.join(tmpDir, "setup-times.log");
+    broken = path.join(tmpDir, "setup-broken");
     // The project's linked remote, with the pull request's code.
     const seed = path.join(tmpDir, "seed");
     await fs.mkdir(seed);
@@ -216,7 +222,16 @@ describe("subagents of a server agent (ADR 0322)", () => {
           environments: {
             review: {
               workloads: ["agent"],
-              setup: { command: `echo setup >> '${runs}'` },
+              // Slow enough that a turn starting during it would show.
+              setup: {
+                command: [
+                  `echo setup >> '${runs}'`,
+                  `echo "start $(date +%s)" >> '${stamps}'`,
+                  "sleep 2",
+                  `echo "end $(date +%s)" >> '${stamps}'`,
+                  `if [ -f '${broken}' ]; then echo "lockfile is stale"; exit 3; fi`,
+                ].join("\n"),
+              },
             },
           },
           defaultEnvironment: "review",
@@ -407,6 +422,64 @@ describe("subagents of a server agent (ADR 0322)", () => {
       { cwd: "/workspace/project" },
     );
     expect(readme.result.trim()).toBe("pull request");
+  }, 120_000);
+
+  it("sets a fresh shared workspace up once, before either turn starts, and both hear how it went", async () => {
+    await fs.writeFile(broken, "");
+    try {
+      const before = await setupRuns();
+      const parent = await sessions.create(identity, projectId, {
+        workspace: { ref: "pr" },
+      });
+      // A workflow starts the child as the parent's own first turn starts:
+      // both reach a workspace nobody has made or set up yet.
+      const [child, first] = await Promise.all([
+        sessions.createSubsession(identity, projectId, parent.id, {
+          task: "Second look",
+        }),
+        // Still working when the child reports, so its result steers in
+        // rather than starting a turn that would set up again.
+        sessions.sendMessage(
+          identity,
+          projectId,
+          parent.id,
+          "[[wait 4000]] First look",
+        ),
+      ]);
+      expect(first.turn.status).toBe("completed");
+      await until(
+        "both rest",
+        async () => (await idle(parent.id)) && (await idle(child.session.id)),
+      );
+      // One run of setup for this workspace build, not one per session.
+      expect(await setupRuns()).toBe(before + 1);
+      const times = (await fs.readFile(stamps, "utf8"))
+        .trim()
+        .split("\n")
+        .slice(-2);
+      expect(times[0]).toMatch(/^start /);
+      expect(times[1]).toMatch(/^end /);
+      const ended = Number(times[1]?.split(" ")[1]) * 1000;
+      // Each turn's harness started only once setup had ended.
+      const started = await db
+        .selectFrom("agent_turn_attempts")
+        .select(["session_id", "provider_started_at"])
+        .where("session_id", "in", [parent.id, child.session.id])
+        .execute();
+      expect(new Set(started.map((row) => row.session_id))).toEqual(
+        new Set([parent.id, child.session.id]),
+      );
+      for (const row of started)
+        expect(row.provider_started_at?.getTime() ?? 0).toBeGreaterThanOrEqual(
+          ended,
+        );
+      // Both were told it failed, the one that waited from the run it
+      // waited on.
+      for (const id of [parent.id, child.session.id])
+        expect((await replies(id))[0]).toContain("exit code 3");
+    } finally {
+      await fs.rm(broken, { force: true });
+    }
   }, 120_000);
 
   it("follows the parent's workspace when it was given back while idle", async () => {

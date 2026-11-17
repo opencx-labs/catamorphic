@@ -42,7 +42,13 @@ Spawn takes `workspace: "shared" | "own"`, default `shared`, on every host.
   are issued in the workspace session's name, its model grant is its own
   attempt's (0293). Its changes sync into the workspace session's copy and
   its checkpoints are commits there, one workspace's sync at a time under a
-  replica claim. Idle release counts the workspace in use while any session
+  replica claim. Making and setting up a sandbox workspace's build is one
+  session's at a time too, under a replica claim on its Allocation, every
+  sandbox workspace's since a turn cannot know who else will arrive: the
+  first runs the whole setup step, and its outcome (the build it ran in and
+  its note to the agent, failures included) is recorded on the Allocation, so
+  a session that arrived meanwhile reuses it and starts once it ends, instead
+  of running it again. Idle release counts the workspace in use while any session
   in it works; a child whose workspace was released admits it again for
   that session. Closing or archiving the child gives back only its own
   grants and state; closing the parent closes it as before. A shared
@@ -77,7 +83,9 @@ newest grant dead where the parent reads it).
 Server agents delegate as desktop ones do and Claude Code there loses its
 native Agent tool (`hostOwnsSubagents`). Every turn's eager schemas grow by
 about 200 bytes. A review fans out over one
-checkout with one setup and one machine slot. Shared writers interleave
+checkout with one setup and one machine slot. Each sandbox turn's
+preparation takes one claim, uncontended unless another session works
+there; whatever runs in the setup step runs under it. Shared writers interleave
 edits and checkpoints in one history. A rebuild of the workspace (a base
 move, ADR 0257) ends runners beside it; their turns recover as lost
 attempts do (0198). A person's later conversation with a child stays out

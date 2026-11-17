@@ -576,6 +576,7 @@ export interface ExecutionAllocations {
   root_workload_id: string;
   sandbox_creation_started: Generated<boolean>;
   sandbox_provider_id: string | null;
+  setup_outcome: Json | null;
   status: Generated<string>;
   tenant_id: string;
   worker_node_id: string | null;

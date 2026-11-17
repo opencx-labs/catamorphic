@@ -5452,214 +5452,120 @@ export class AgentSessionsService {
     // A setup on its own network (ADR 0257) widens only a sandbox this
     // preparation makes, holding the base checkout alone; why it cannot.
     const setupNetwork = this.setupNetworkOf({ runtime, session });
-    let workspace = await this.ensureWorkspace(
-      identity,
-      projectId,
-      session,
-      agent,
-      runtime,
-      { populate: !setupNetwork.widens },
-    );
-    session = await this.db
-      .selectFrom("agent_sessions")
-      .selectAll()
-      .where("id", "=", sessionId)
-      .executeTakeFirstOrThrow();
-    if (workspaceMove && agent.topology === "native")
-      notes.push(
-        await this.applyWorkspaceMove({
-          identity,
-          projectId,
-          session,
-          move: workspaceMove,
-          native: { checkout: workspace.checkout },
-        }),
-      );
-    await this.keepConnectionGrants(sessionId);
-
+    // Making and setting up a sandbox workspace's build is one session's
+    // at a time, on any replica (ADR 0322): the first runs its setup, and
+    // one that arrived meanwhile (a shared subsession, its parent) reuses
+    // that outcome, its note included, instead of running it again. Every
+    // sandbox workspace takes it: whether another session will arrive is not
+    // known when a turn starts preparing.
+    const setupGate =
+      agent.topology !== "native" && session.allocation_id
+        ? {
+            allocationId: session.allocation_id,
+            seen:
+              (await this.setupOutcomeOf(session.allocation_id))?.run ?? null,
+          }
+        : undefined;
+    let workspace: EnsuredWorkspace = { workingDirectory: "" };
     let modelAccess: AttemptStart["modelAccess"] = { kind: "host" };
     let secrets: Record<string, string> = {};
     const nativeSetup = this.nativeAgentCheckout?.setup?.bind(
       this.nativeAgentCheckout,
     );
-    if (workspace.sandboxProviderId && runtime.provider) {
-      // Before anything reaches the sandbox: narrow, and a new one where a
-      // setup must run on its own network again (ADR 0257).
-      const prepared = await this.prepareSetupSandbox({
+    const prepareWorkspace = async () => {
+      workspace = await this.ensureWorkspace(
         identity,
         projectId,
         session,
         agent,
         runtime,
-        provider: runtime.provider,
-        sandboxProviderId: workspace.sandboxProviderId,
-        created: workspace.created === true,
-        widens: setupNetwork.widens,
-        moved: baseBefore !== parseWorkspaceBase(session.workspace)?.commit,
-      });
-      if (prepared.note) notes.push(prepared.note);
-      const { sandboxProviderId, fresh } = prepared;
-      if (sandboxProviderId !== workspace.sandboxProviderId) {
-        workspace = { ...workspace, sandboxProviderId };
-        session = await this.db
-          .selectFrom("agent_sessions")
-          .selectAll()
-          .where("id", "=", sessionId)
-          .executeTakeFirstOrThrow();
-      }
-      // The Environment's setup on its own network, before Git, grants,
-      // secrets and files reach the sandbox (ADR 0257).
-      const widened =
-        fresh && setupNetwork.widens && runtime.setup
-          ? await this.setUpOnItsNetwork({
-              identity,
-              projectId,
-              session,
-              turn,
-              runtime,
-              setup: runtime.setup,
-              egress: setupNetwork.widens.egress,
-              base: setupNetwork.widens.base,
-              provider: runtime.provider,
-              sandboxProviderId,
-              ownerAuthored,
-              signal: input.signal,
+        { populate: !setupNetwork.widens },
+      );
+      session = await this.db
+        .selectFrom("agent_sessions")
+        .selectAll()
+        .where("id", "=", sessionId)
+        .executeTakeFirstOrThrow();
+      if (workspaceMove && agent.topology === "native")
+        notes.push(
+          await this.applyWorkspaceMove({
+            identity,
+            projectId,
+            session,
+            move: workspaceMove,
+            native: { checkout: workspace.checkout },
+          }),
+        );
+      await this.keepConnectionGrants(sessionId);
+
+      if (workspace.sandboxProviderId && runtime.provider) {
+        // What a setup that ran while this session waited told its agent.
+        const reused = setupGate
+          ? await this.reusableSetup({
+              ...setupGate,
+              build: workspace.sandboxProviderId,
             })
           : undefined;
-      // The log's tail may print a secret the setup named, or one an
-      // earlier workspace held (ADR 0206). Read now, not kept: this turn's
-      // secrets arrive below.
-      if (widened?.note)
-        notes.push(
-          new SecretMask(
-            await this.sessionSecretValues({
-              identity,
-              projectId,
-              sessionId: session.id,
-            }),
-          ).text(widened.note),
-        );
-      const models = await this.prepareSandboxGit({
-        identity,
-        projectId,
-        sessionId,
-        modelTurn: {
-          turnId: turn.id,
-          attemptId: input.attempt.id,
-          leaseToken: input.leaseToken,
-        },
-        provider: runtime.provider,
-        sandboxProviderId,
-        afterSetup: widened !== undefined,
-      });
-      if (agent.signIn) {
-        // The owner's own sign-in, mounted from the machine's disk (ADR 0199).
-        if (!ownerAuthored)
-          throw new Error(
-            `This chat runs on its owner's own ${SIGN_IN_HARNESS_NAMES[agent.signIn]} sign-in, so only they can send it messages.`,
-          );
-        if (!runtime.signInHome)
-          throw new Error(
-            `This machine has no ${SIGN_IN_HARNESS_NAMES[agent.signIn]} sign-in for this chat's owner. Sign in on the machine (work worker sign-in ${agent.signIn}) or move the chat.`,
-          );
-        modelAccess = { kind: "sign_in", home: runtime.signInHome };
-        ownerOnly = true;
-        ownerOnlyBecause = "sign-in";
-      } else if (agent.harness.placement === "sandbox") {
-        const gateway = agent.modelConnection
-          ? models.find((model) => model.alias === agent.modelConnection)
-          : undefined;
-        if (!gateway)
-          throw new Error(
-            "This agent reaches its model through the gateway, and this chat has no model connection: bind one in the agent's Environment and name it in the agent's credentials.",
-          );
-        modelAccess = {
-          kind: "gateway",
-          api: gateway.api,
-          baseUrl: gateway.baseUrl,
-          grantDirectory: gateway.grantDirectory,
-        };
-      }
-      const delivery = await this.prepareSandboxSecrets({
-        identity,
-        projectId,
-        session,
-        environment: runtime.environmentName,
-        isolated: runtime.isolated === true,
-        provider: runtime.provider,
-        sandboxProviderId,
-        ownerAuthored,
-      });
-      if (delivery.note) notes.push(delivery.note);
-      if (delivery.ownerOnly) {
-        ownerOnly = true;
-        ownerOnlyBecause ??= "credentials";
-      }
-      secrets = delivery.values;
-      const files = await this.preparePersonalFiles({
-        identity,
-        projectId,
-        session,
-        allowed: runtime.personalCredentials === true,
-        provider: runtime.provider,
-        sandboxProviderId,
-        ownerAuthored,
-      });
-      if (files.note) notes.push(files.note);
-      if (files.delivered) {
-        ownerOnly = true;
-        ownerOnlyBecause ??= "credentials";
-      }
-      // A new workspace that could not have an exclusive volume of its own
-      // (ADR 0208) says so once.
-      if (fresh && runtime.allocation) {
-        const volumes = temporaryVolumesNote({
-          volumes: await temporaryVolumes({
-            db: this.db,
-            allocation: runtime.allocation,
-          }),
-          projectChat: isProjectPrincipal(session.external_user_id),
+        // Before anything reaches the sandbox: narrow, and a new one where a
+        // setup must run on its own network again (ADR 0257).
+        const prepared = await this.prepareSetupSandbox({
+          identity,
+          projectId,
+          session,
+          agent,
+          runtime,
+          provider: runtime.provider,
+          sandboxProviderId: workspace.sandboxProviderId,
+          created: workspace.created === true,
+          widens: reused ? undefined : setupNetwork.widens,
+          moved: baseBefore !== parseWorkspaceBase(session.workspace)?.commit,
         });
-        if (volumes) notes.push(volumes);
-      }
-      // The rest of setup, once the sandbox is narrow and holds the
-      // session's work: the owner's own, or all of it without a network of
-      // its own. A widened setup that did not succeed runs again next turn.
-      // A shared subsession sets up only a workspace its own turn made
-      // (ADR 0322): the one it shares is its workspace session's to set up.
-      const setup =
-        (widened && !widened.settled) ||
-        (session.workspace_session_id && !fresh)
-          ? undefined
-          : await this.prepareWorkspaceSetup({
-              identity,
-              projectId,
-              session,
-              turn,
-              runner: {
-                kind: "sandbox",
+        if (prepared.note) notes.push(prepared.note);
+        const { sandboxProviderId, fresh } = prepared;
+        if (sandboxProviderId !== workspace.sandboxProviderId) {
+          workspace = { ...workspace, sandboxProviderId };
+          session = await this.db
+            .selectFrom("agent_sessions")
+            .selectAll()
+            .where("id", "=", sessionId)
+            .executeTakeFirstOrThrow();
+        }
+        // The Environment's setup on its own network, before Git, grants,
+        // secrets and files reach the sandbox (ADR 0257).
+        const widened =
+          !reused && fresh && setupNetwork.widens && runtime.setup
+            ? await this.setUpOnItsNetwork({
+                identity,
+                projectId,
+                session,
+                turn,
+                runtime,
+                setup: runtime.setup,
+                egress: setupNetwork.widens.egress,
+                base: setupNetwork.widens.base,
                 provider: runtime.provider,
                 sandboxProviderId,
-                ...(setupNetwork.refusal
-                  ? { networkRefusal: setupNetwork.refusal }
-                  : {}),
-              },
-              environment: runtime.setup,
-              personalAllowed:
-                runtime.personalCredentials === true && ownerAuthored,
-              signal: input.signal,
-            });
-      if (setup?.note)
-        notes.push(new SecretMask(await secretValuesOfChat()).text(setup.note));
-      if (session.allocation_id)
-        this.startGrantRenewal({
+                ownerAuthored,
+                signal: input.signal,
+              })
+            : undefined;
+        // The log's tail may print a secret the setup named, or one an
+        // earlier workspace held (ADR 0206). Read now, not kept: this turn's
+        // secrets arrive below.
+        const widenedNote = widened?.note
+          ? new SecretMask(
+              await this.sessionSecretValues({
+                identity,
+                projectId,
+                sessionId: session.id,
+              }),
+            ).text(widened.note)
+          : undefined;
+        if (widenedNote) notes.push(widenedNote);
+        const models = await this.prepareSandboxGit({
           identity,
           projectId,
           sessionId,
-          ...(session.workspace_session_id
-            ? { workspaceSessionId: session.workspace_session_id }
-            : {}),
-          allocationId: session.allocation_id,
           modelTurn: {
             turnId: turn.id,
             attemptId: input.attempt.id,
@@ -5667,26 +5573,176 @@ export class AgentSessionsService {
           },
           provider: runtime.provider,
           sandboxProviderId,
-          renewOnly: true,
+          afterSetup: widened !== undefined,
         });
-    } else if (workspace.checkout?.owned && nativeSetup) {
-      // A native chat's own worktree is a new workspace too (ADR 0215).
-      const setup = await this.prepareWorkspaceSetup({
-        identity,
-        projectId,
-        session,
-        turn,
-        runner: {
-          kind: "native",
-          setup: nativeSetup,
-          workingDirectory: workspace.workingDirectory,
-        },
-        environment: runtime.setup,
-        personalAllowed: runtime.personalCredentials === true && ownerAuthored,
-        signal: input.signal,
+        if (agent.signIn) {
+          // The owner's own sign-in, mounted from the machine's disk (ADR 0199).
+          if (!ownerAuthored)
+            throw new Error(
+              `This chat runs on its owner's own ${SIGN_IN_HARNESS_NAMES[agent.signIn]} sign-in, so only they can send it messages.`,
+            );
+          if (!runtime.signInHome)
+            throw new Error(
+              `This machine has no ${SIGN_IN_HARNESS_NAMES[agent.signIn]} sign-in for this chat's owner. Sign in on the machine (work worker sign-in ${agent.signIn}) or move the chat.`,
+            );
+          modelAccess = { kind: "sign_in", home: runtime.signInHome };
+          ownerOnly = true;
+          ownerOnlyBecause = "sign-in";
+        } else if (agent.harness.placement === "sandbox") {
+          const gateway = agent.modelConnection
+            ? models.find((model) => model.alias === agent.modelConnection)
+            : undefined;
+          if (!gateway)
+            throw new Error(
+              "This agent reaches its model through the gateway, and this chat has no model connection: bind one in the agent's Environment and name it in the agent's credentials.",
+            );
+          modelAccess = {
+            kind: "gateway",
+            api: gateway.api,
+            baseUrl: gateway.baseUrl,
+            grantDirectory: gateway.grantDirectory,
+          };
+        }
+        const delivery = await this.prepareSandboxSecrets({
+          identity,
+          projectId,
+          session,
+          environment: runtime.environmentName,
+          isolated: runtime.isolated === true,
+          provider: runtime.provider,
+          sandboxProviderId,
+          ownerAuthored,
+        });
+        if (delivery.note) notes.push(delivery.note);
+        if (delivery.ownerOnly) {
+          ownerOnly = true;
+          ownerOnlyBecause ??= "credentials";
+        }
+        secrets = delivery.values;
+        const files = await this.preparePersonalFiles({
+          identity,
+          projectId,
+          session,
+          allowed: runtime.personalCredentials === true,
+          provider: runtime.provider,
+          sandboxProviderId,
+          ownerAuthored,
+        });
+        if (files.note) notes.push(files.note);
+        if (files.delivered) {
+          ownerOnly = true;
+          ownerOnlyBecause ??= "credentials";
+        }
+        // A new workspace that could not have an exclusive volume of its own
+        // (ADR 0208) says so once.
+        if (fresh && runtime.allocation) {
+          const volumes = temporaryVolumesNote({
+            volumes: await temporaryVolumes({
+              db: this.db,
+              allocation: runtime.allocation,
+            }),
+            projectChat: isProjectPrincipal(session.external_user_id),
+          });
+          if (volumes) notes.push(volumes);
+        }
+        // The rest of setup, once the sandbox is narrow and holds the
+        // session's work: the owner's own, or all of it without a network of
+        // its own. A widened setup that did not succeed runs again next turn.
+        // A shared subsession never rebuilds the workspace for a setup on its
+        // own network (ADR 0322): its workspace session's turn does.
+        const setup =
+          reused ||
+          (widened && !widened.settled) ||
+          (session.workspace_session_id && !fresh && setupNetwork.widens)
+            ? undefined
+            : await this.prepareWorkspaceSetup({
+                identity,
+                projectId,
+                session,
+                turn,
+                runner: {
+                  kind: "sandbox",
+                  provider: runtime.provider,
+                  sandboxProviderId,
+                  ...(setupNetwork.refusal
+                    ? { networkRefusal: setupNetwork.refusal }
+                    : {}),
+                },
+                environment: runtime.setup,
+                personalAllowed:
+                  runtime.personalCredentials === true && ownerAuthored,
+                signal: input.signal,
+              });
+        const setupNote = setup?.note
+          ? new SecretMask(await secretValuesOfChat()).text(setup.note)
+          : undefined;
+        if (setupNote) notes.push(setupNote);
+        if (reused?.note) notes.push(reused.note);
+        // What this setup told its agent, for those that waited on it: only
+        // a setup that ran here, and not one its stopping turn cut short.
+        if (
+          setupGate &&
+          !reused &&
+          (setup !== undefined || widened !== undefined) &&
+          !input.signal.aborted
+        )
+          await this.recordSetupOutcome({
+            allocationId: setupGate.allocationId,
+            build: sandboxProviderId,
+            note: [widenedNote, setupNote].filter(Boolean).join("\n\n"),
+          });
+        if (session.allocation_id)
+          this.startGrantRenewal({
+            identity,
+            projectId,
+            sessionId,
+            ...(session.workspace_session_id
+              ? { workspaceSessionId: session.workspace_session_id }
+              : {}),
+            allocationId: session.allocation_id,
+            modelTurn: {
+              turnId: turn.id,
+              attemptId: input.attempt.id,
+              leaseToken: input.leaseToken,
+            },
+            provider: runtime.provider,
+            sandboxProviderId,
+            renewOnly: true,
+          });
+      } else if (workspace.checkout?.owned && nativeSetup) {
+        // A native chat's own worktree is a new workspace too (ADR 0215).
+        const setup = await this.prepareWorkspaceSetup({
+          identity,
+          projectId,
+          session,
+          turn,
+          runner: {
+            kind: "native",
+            setup: nativeSetup,
+            workingDirectory: workspace.workingDirectory,
+          },
+          environment: runtime.setup,
+          personalAllowed:
+            runtime.personalCredentials === true && ownerAuthored,
+          signal: input.signal,
+        });
+        if (setup.note) notes.push(setup.note);
+      }
+    };
+    if (setupGate)
+      await withReplicaClaim({
+        db: this.db,
+        name: `workspace-setup:${setupGate.allocationId}`,
+        ttlSeconds: 120,
+        // A setup may run twice its timeout: on its own network, then the rest.
+        waitMs:
+          ((runtime.setup?.timeoutMinutes ?? DEFAULT_SETUP_TIMEOUT_MINUTES) *
+            2 +
+            5) *
+          60_000,
+        operation: () => prepareWorkspace(),
       });
-      if (setup.note) notes.push(setup.note);
-    }
+    else await prepareWorkspace();
 
     const workingDirectory = workspace.workingDirectory;
     this.workingDirectories.set(turn.id, workingDirectory);
@@ -12756,6 +12812,59 @@ export class AgentSessionsService {
     });
   }
 
+  /** The last setup outcome an Allocation's workspace recorded (ADR 0322). */
+  private async setupOutcomeOf(
+    allocationId: string,
+  ): Promise<{ run: string; build: string; note: string } | null> {
+    const row = await this.db
+      .selectFrom("execution_allocations")
+      .select("setup_outcome")
+      .where("id", "=", allocationId)
+      .executeTakeFirst();
+    const value = row?.setup_outcome;
+    if (!value || typeof value !== "object" || Array.isArray(value))
+      return null;
+    const { run, build, note } = value as Record<string, unknown>;
+    return typeof run === "string" && typeof build === "string"
+      ? { run, build, note: typeof note === "string" ? note : "" }
+      : null;
+  }
+
+  /**
+   * The outcome of a setup of this build that ran after `seen`, while the
+   * caller waited for it; undefined when none did, and the caller sets up.
+   */
+  private async reusableSetup(input: {
+    allocationId: string;
+    seen: string | null;
+    build: string;
+  }): Promise<{ note: string } | undefined> {
+    const outcome = await this.setupOutcomeOf(input.allocationId);
+    return outcome &&
+      outcome.run !== input.seen &&
+      outcome.build === input.build
+      ? { note: outcome.note }
+      : undefined;
+  }
+
+  private async recordSetupOutcome(input: {
+    allocationId: string;
+    build: string;
+    note: string;
+  }): Promise<void> {
+    await this.db
+      .updateTable("execution_allocations")
+      .set({
+        setup_outcome: {
+          run: randomUUID(),
+          build: input.build,
+          note: input.note,
+        },
+      })
+      .where("id", "=", input.allocationId)
+      .execute();
+  }
+
   /** Whether other sessions work in this session's workspace (ADR 0322). */
   private async sharesWorkspace(
     session: Pick<SessionRow, "id" | "workspace_session_id">,
@@ -14046,6 +14155,16 @@ function sessionVisibility(value: string): SessionVisibility {
  * Replica memory (c): fixed names, the same on every replica.
  */
 const SUBSESSION_TOOLS: ReadonlySet<string> = new Set(SUBSESSION_TOOL_NAMES);
+
+/** Where a turn works: a sandbox's checkout, or a folder on a machine. */
+interface EnsuredWorkspace {
+  workingDirectory: string;
+  sandboxProviderId?: string;
+  /** The preparation made the sandbox. */
+  created?: boolean;
+  /** The checkout a native agent works in. */
+  checkout?: NativeCheckout;
+}
 
 /**
  * Where a shared subsession's runner keeps its state in the sandbox it
