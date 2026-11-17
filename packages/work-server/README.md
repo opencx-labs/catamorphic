@@ -102,6 +102,7 @@ current schema. See [ADR 0296](../../docs/decisions/0296-one-oauth-token-endpoin
 | `directories` | Upstream directories (beyond Google Workspace) that keep accounts active or disable them (ADR 0161) |
 | `machineProvisioner` | Creates and destroys worker machines on a platform Work does not ship, for `custom` machine classes, so machine rules give people and teams their own machines, or machines on demand for waiting work. `create` gets the class's `options`, the rule, and what the waiting work needs, and is idempotent per enrollment code (`enrollment.idempotencyKey`); `destroy` removes every machine with the name and answers `{ done }` (ADRs 0167, 0205, 0258) |
 | `hetzner` | Hetzner Cloud API options for `hetzner-cloud` machine classes: another endpoint, or a `fetch` for tests (the token is `WORK_HETZNER_TOKEN`) |
+| `projectHooks` | Code run when a project is created and deleted (ADRs 0046, 0331). `onProjectCreated` may return `{ secrets }`, kept sealed as the project's shared secrets (for example a `DATABASE_URL` for a schema and role it made on the host's Postgres; see `INTEGRATION.md`). `onProjectDeleted` cleans up; one that throws or answers `{ done: false }` is retried with backoff until done, and never blocks the delete |
 | `projectSeeds` | Changes to the files seeded into new projects |
 | `routes` | Extra routes on the public application |
 
