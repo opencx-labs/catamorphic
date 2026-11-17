@@ -353,6 +353,12 @@ export class WorkflowEnablementsService {
                 consent_digest: preview.consentDigest,
                 temporary: input.temporary ?? false,
                 follow: follows,
+                // What it was enabled at supersedes every revision recorded
+                // so far: none of them moves it.
+                followed_sequence: await latestRevisionSequence(
+                  trx,
+                  input.projectId,
+                ),
                 expires_at: input.expiresAt ?? null,
                 created_by_external_user_id: input.identity.externalUserId,
               })
@@ -562,6 +568,7 @@ export class WorkflowEnablementsService {
         preview,
         actor: input.identity,
         eventType: "deployment_updated",
+        followedSequence: await latestRevisionSequence(trx, current.projectId),
       });
     });
     await this.consented({
@@ -741,7 +748,14 @@ export class WorkflowEnablementsService {
     const { enablementId } = input;
     const before = await this.db
       .selectFrom("workflow_enablements")
-      .select(["revision", "follow", "followed_sequence", "status"])
+      .select([
+        "revision",
+        "follow",
+        "followed_sequence",
+        "status",
+        "project_id",
+        "commit_sha",
+      ])
       .where("id", "=", enablementId)
       .executeTakeFirst();
     if (
@@ -751,6 +765,16 @@ export class WorkflowEnablementsService {
         Number(before.followed_sequence) >= input.sequence)
     )
       return { kind: "unchanged", enablementId };
+    // Its commit is a later revision than this one: never move back.
+    const runsLater = await this.db
+      .selectFrom("published_revisions")
+      .select("sequence")
+      .where("project_id", "=", before.project_id)
+      .where("commit_sha", "=", before.commit_sha)
+      .where("sequence", ">", String(input.sequence))
+      .limit(1)
+      .executeTakeFirst();
+    if (runsLater) return { kind: "unchanged", enablementId };
     const ready = await this.previewAtRevision(input);
     if (ready.kind === "retry")
       return { kind: "retry", enablementId, reason: ready.reason };
@@ -850,7 +874,8 @@ export class WorkflowEnablementsService {
     preview: WorkflowEnablementPreview;
     actor: Identity;
     eventType: string;
-    followedSequence?: number;
+    /** The latest revision it now stands for, so none older moves it. */
+    followedSequence?: number | string | null;
     /** Following keeps a suspension; a person's update reactivates. */
     keepStatus?: boolean;
   }): Promise<void> {
@@ -869,7 +894,8 @@ export class WorkflowEnablementsService {
         ...(input.keepStatus
           ? {}
           : { status: "active", suspension_reason: null }),
-        ...(input.followedSequence !== undefined
+        ...(input.followedSequence !== undefined &&
+        input.followedSequence !== null
           ? { followed_sequence: String(input.followedSequence) }
           : {}),
         revision: eb("revision", "+", 1),
@@ -1406,6 +1432,21 @@ export class WorkflowEnablementsService {
       })
       .execute();
   }
+}
+
+/** The sequence of the latest revision recorded for a project, if any. */
+async function latestRevisionSequence(
+  db: Kysely<DB>,
+  projectId: string,
+): Promise<string | null> {
+  const row = await db
+    .selectFrom("published_revisions")
+    .select("sequence")
+    .where("project_id", "=", projectId)
+    .orderBy("sequence", "desc")
+    .limit(1)
+    .executeTakeFirst();
+  return row?.sequence ?? null;
 }
 
 /** The branch published revisions are of (ADR 0330). */

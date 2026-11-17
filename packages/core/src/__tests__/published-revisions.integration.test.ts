@@ -40,6 +40,15 @@ const notifications: Array<{ kind: string; to: string; title: string }> = [];
 const deploys: Array<{ runId: string; commit: string; previous: unknown }> = [];
 let maxLiveDeploys = 0;
 let head = sha("a");
+/** What the project's published main points to. */
+let mainHead: string | null = null;
+
+/** Main moves to `commitSha`, and the publisher records it. */
+async function publish(commitSha: string) {
+  mainHead = commitSha;
+  await revisions.record({ projectId, commitSha });
+}
+
 /** A failure that may clear (the database, the network) while set. */
 let transientFailure: string | null = null;
 
@@ -107,6 +116,7 @@ function revisionsService(): PublishedRevisionsService {
       },
     }),
     readManifest: async ({ commitSha }) => manifests.get(commitSha) ?? null,
+    publishedHead: async () => mainHead,
     notifications: {
       publish: async (input) => {
         notifications.push({
@@ -257,7 +267,7 @@ describe("following the published program (ADR 0330)", () => {
     });
 
     await addCommit(sha("b"));
-    await revisions.record({ projectId, commitSha: sha("b") });
+    await publish(sha("b"));
     await revisions.advance();
 
     const moved = await enablements.get({
@@ -292,7 +302,7 @@ describe("following the published program (ADR 0330)", () => {
 
   it("stays, offers the update and tells its owner when the revision needs new consent", async () => {
     await addCommit(sha("c"), { permissions: ["store:write"] });
-    await revisions.record({ projectId, commitSha: sha("c") });
+    await publish(sha("c"));
     await revisions.advance();
 
     expect(
@@ -309,7 +319,7 @@ describe("following the published program (ADR 0330)", () => {
 
   it("skips a revision whose workflow does not build and follows the next good one", async () => {
     await addCommit(sha("d"), { fails: "Workflow watchInbox does not parse" });
-    await revisions.record({ projectId, commitSha: sha("d") });
+    await publish(sha("d"));
     await revisions.advance();
     expect(await commitOf(watcher)).toBe(sha("b"));
     expect(notifications).toEqual([
@@ -320,7 +330,7 @@ describe("following the published program (ADR 0330)", () => {
     ]);
 
     await addCommit(sha("e"));
-    await revisions.record({ projectId, commitSha: sha("e") });
+    await publish(sha("e"));
     await revisions.advance();
     expect(await commitOf(watcher)).toBe(sha("e"));
   });
@@ -339,7 +349,7 @@ describe("following the published program (ADR 0330)", () => {
   it("does not skip a revision on a failure that may clear, and moves once it clears", async () => {
     await addCommit(sha("0"));
     transientFailure = "connection reset by peer";
-    await revisions.record({ projectId, commitSha: sha("0") });
+    await publish(sha("0"));
     await revisions.advance();
     expect(await commitOf(watcher)).toBe(sha("e"));
     expect((await statuses()).slice(-1)).toEqual(["0:applying"]);
@@ -389,13 +399,44 @@ describe("following the published program (ADR 0330)", () => {
   it("records each revision once, and a newer one supersedes one still pending", async () => {
     await addCommit(sha("f"));
     await addCommit(sha("1"));
-    await revisions.record({ projectId, commitSha: sha("f") });
-    await revisions.record({ projectId, commitSha: sha("f") });
-    await revisions.record({ projectId, commitSha: sha("1") });
+    await publish(sha("f"));
+    await publish(sha("f"));
+    await publish(sha("1"));
     expect((await statuses()).slice(-2)).toEqual(["f:superseded", "1:pending"]);
     await revisions.advance();
     expect((await statuses()).slice(-1)).toEqual(["1:applied"]);
     expect(await commitOf(watcher)).toBe(sha("1"));
+  });
+
+  it("ignores a publication that is no longer what main points to", async () => {
+    const before = await statuses();
+    // A scan or a slow publisher that read main before it moved.
+    await revisions.record({ projectId, commitSha: sha("e") });
+    expect(await statuses()).toEqual(before);
+    await revisions.advance();
+    expect(await commitOf(watcher)).toBe(sha("1"));
+  });
+
+  it("does not move back an enablement a person pointed at a newer commit", async () => {
+    await addCommit(sha("bc"));
+    await addCommit(sha("cd"));
+    await publish(sha("bc"));
+    const preview = await enablements.preview({
+      identity: owner,
+      projectId,
+      workflowName: "watchInbox",
+      owner: { type: "project" },
+      commitSha: sha("cd"),
+    });
+    await enablements.updateDeployment({
+      identity: owner,
+      enablementId: watcher,
+      consentDigest: preview.consentDigest,
+      commitSha: sha("cd"),
+    });
+    await revisions.advance();
+    expect((await statuses()).slice(-1)).toEqual(["b:applied"]);
+    expect(await commitOf(watcher)).toBe(sha("cd"));
   });
 
   it("does not move an enablement that stopped following", async () => {
@@ -405,9 +446,9 @@ describe("following the published program (ADR 0330)", () => {
       follow: false,
     });
     await addCommit(sha("2"));
-    await revisions.record({ projectId, commitSha: sha("2") });
+    await publish(sha("2"));
     await revisions.advance();
-    expect(await commitOf(watcher)).toBe(sha("1"));
+    expect(await commitOf(watcher)).toBe(sha("cd"));
     await enablements.setFollow({
       identity: owner,
       enablementId: watcher,
@@ -417,7 +458,7 @@ describe("following the published program (ADR 0330)", () => {
 
   it("moves an enablement once when two replicas advance together", async () => {
     await addCommit(sha("3"));
-    await revisions.record({ projectId, commitSha: sha("3") });
+    await publish(sha("3"));
     const other = revisionsService();
     await Promise.all([revisions.advance(), other.advance()]);
     await Promise.all([revisions.advance(), other.advance()]);
@@ -434,6 +475,27 @@ describe("following the published program (ADR 0330)", () => {
           (event.metadata as { commitSha?: string }).commitSha === sha("3"),
       ),
     ).toHaveLength(1);
+  });
+
+  it("never moves an enablement to a commit older than the one it runs", async () => {
+    await db
+      .updateTable("workflow_enablements")
+      .set({ followed_sequence: null })
+      .where("id", "=", watcher)
+      .execute();
+    const older = await db
+      .selectFrom("published_revisions")
+      .select("sequence")
+      .where("commit_sha", "=", sha("2"))
+      .executeTakeFirstOrThrow();
+    await expect(
+      enablements.followRevision({
+        enablementId: watcher,
+        commitSha: sha("2"),
+        sequence: Number(older.sequence),
+      }),
+    ).resolves.toEqual({ kind: "unchanged", enablementId: watcher });
+    expect(await commitOf(watcher)).toBe(sha("3"));
   });
 });
 
@@ -465,7 +527,7 @@ describe("the project's deploy workflow (ADR 0331)", () => {
 
     await addCommit(sha("4"));
     manifests.set(sha("4"), deployManifest);
-    await revisions.record({ projectId, commitSha: sha("4") });
+    await publish(sha("4"));
     await revisions.advance();
 
     expect(deploys).toEqual([
@@ -487,7 +549,7 @@ describe("the project's deploy workflow (ADR 0331)", () => {
   it("moves nothing when the deploy fails, and tries again at the next revision", async () => {
     await addCommit(sha("5"));
     manifests.set(sha("5"), deployManifest);
-    await revisions.record({ projectId, commitSha: sha("5") });
+    await publish(sha("5"));
     await revisions.advance();
     await settleRun(deploys[1]!.runId, "failed");
     await revisions.advance();
@@ -507,7 +569,7 @@ describe("the project's deploy workflow (ADR 0331)", () => {
 
     await addCommit(sha("6"));
     manifests.set(sha("6"), deployManifest);
-    await revisions.record({ projectId, commitSha: sha("6") });
+    await publish(sha("6"));
     await revisions.advance();
     // The live revision is still the last one that went live.
     expect(deploys[2]).toMatchObject({ commit: sha("6"), previous: sha("4") });
@@ -521,9 +583,9 @@ describe("the project's deploy workflow (ADR 0331)", () => {
     await addCommit(sha("8"));
     manifests.set(sha("7"), deployManifest);
     manifests.set(sha("8"), deployManifest);
-    await revisions.record({ projectId, commitSha: sha("7") });
+    await publish(sha("7"));
     await revisions.advance();
-    await revisions.record({ projectId, commitSha: sha("8") });
+    await publish(sha("8"));
     await revisions.advance();
     await revisions.advance();
     // 8 waits while 7 deploys.
@@ -548,7 +610,7 @@ describe("the project's deploy workflow (ADR 0331)", () => {
       sha("9"),
       JSON.stringify({ deploy: { workflow: "seedData" } }),
     );
-    await revisions.record({ projectId, commitSha: sha("9") });
+    await publish(sha("9"));
     await revisions.advance();
     expect((await statuses()).slice(-1)).toEqual(["9:failed"]);
     expect(await commitOf(watcher)).toBe(sha("8"));
@@ -569,7 +631,7 @@ describe("the project's deploy workflow (ADR 0331)", () => {
     await suspend();
     await addCommit(sha("ab"));
     manifests.set(sha("ab"), deployManifest);
-    await revisions.record({ projectId, commitSha: sha("ab") });
+    await publish(sha("ab"));
     await revisions.advance();
     expect((await statuses()).slice(-1)).toEqual(["a:failed"]);
     const [blocked] = await revisions.list({ identity: owner, projectId });

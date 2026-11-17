@@ -96,6 +96,11 @@ interface PublishedRevisionsDeps {
   db: Kysely<DB>;
   enablements: WorkflowEnablementsService;
   runs: () => Pick<RunsService, "triggerWithEnablementAtRevision">;
+  /** The commit the project's published `main` points to now. */
+  publishedHead(args: {
+    tenantId: string;
+    projectId: string;
+  }): Promise<string | null>;
   /** `.work/project.json` at a commit, or null when it has none. */
   readManifest(args: {
     tenantId: string;
@@ -128,7 +133,12 @@ export class PublishedRevisionsService {
     return this.deps.db;
   }
 
-  /** Record a revision of `main`; nothing when it is already the latest. */
+  /**
+   * Record a revision of `main` that a publisher just moved it to. Under
+   * the project's lock only the commit main points to now is recorded, so
+   * a late or stale caller (a slow publisher, anything that read main
+   * before it moved) never makes an older commit the newest revision.
+   */
   async record(input: { projectId: string; commitSha: string }): Promise<void> {
     if (!/^[0-9a-f]{40}$/.test(input.commitSha)) return;
     const latest = () =>
@@ -150,6 +160,11 @@ export class PublishedRevisionsService {
         .forUpdate()
         .executeTakeFirst();
       if (!project) return false;
+      const head = await this.deps.publishedHead({
+        tenantId: project.tenant_id,
+        projectId: input.projectId,
+      });
+      if (head !== input.commitSha) return false;
       const current = await trx
         .selectFrom("published_revisions")
         .select("commit_sha")

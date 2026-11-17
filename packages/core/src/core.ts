@@ -1243,7 +1243,6 @@ export class CatamorphicCore {
       projectManager: this.projectManager,
       runs: this.runs,
       workflowEnablements: () => this.workflowEnablements,
-      published: (input) => this.published(input),
     });
     this.workflowEnablements = new WorkflowEnablementsService(this.db, {
       executionEnvironments: this.executionEnvironments,
@@ -1299,6 +1298,15 @@ export class CatamorphicCore {
         } finally {
           await repo.dispose();
         }
+      },
+      publishedHead: async ({ tenantId, projectId }) => {
+        const remote = this.projectManager.remoteBackend;
+        if (!remote) return null;
+        return remote
+          .withOrigin(tenantId, projectId, (origin) =>
+            origin.resolveRef("refs/heads/main"),
+          )
+          .catch(() => null);
       },
       notifications: this.notifications,
       automationManagers: (input) => this.automationManagers(input),
