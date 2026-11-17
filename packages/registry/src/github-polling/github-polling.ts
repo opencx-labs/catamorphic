@@ -81,6 +81,8 @@ interface PullSnapshot {
   title: string;
   url: string;
   updatedAt: string;
+  /** When it last closed: what tells one reopening from the next. */
+  closedAt?: string | null;
 }
 
 /** The cursor document. */
@@ -168,6 +170,7 @@ export function planPoll(args: {
     title: pull.title,
     url: pull.html_url,
     updatedAt: pull.updated_at,
+    closedAt: pull.closed_at,
   });
   const newest = latest(
     args.pulls.map((pull) => pull.updated_at),
@@ -203,12 +206,15 @@ export function planPoll(args: {
     .reverse();
   for (const pull of changed) {
     const before = known[String(pull.number)];
+    // Ids name the change from what was remembered, never what changed
+    // since: a poll that recorded and then lost its cursor write finds the
+    // same change again, with the same id, however the pull request moved on.
     const recordPull = (
       action: string,
-      id: string,
+      key: string | null,
       extra: { before?: string; after?: string } = {},
     ) => {
-      const eventId = `pull_request:${pull.number}:${action}:${id}`;
+      const eventId = `pull_request:${pull.number}:${action}${key === null ? "" : `:${key}`}`;
       events.push({
         kind: "github.pull_request",
         id: eventId,
@@ -230,9 +236,11 @@ export function planPoll(args: {
         recordPull("closed", pull.closed_at ?? pull.updated_at);
     } else if (!before) {
       // Opened since polling began; otherwise only learn its head.
-      if (isNew) recordPull("opened", pull.head.sha);
+      // A pull request opens once.
+      if (isNew) recordPull("opened", null);
     } else if (before.state === "closed") {
-      recordPull("reopened", pull.updated_at);
+      // Once per close it reopens from.
+      recordPull("reopened", before.closedAt ?? before.updatedAt);
     } else {
       if (before.draft && !pull.draft)
         recordPull("ready_for_review", pull.head.sha);
@@ -335,18 +343,25 @@ export function planPoll(args: {
     next: {
       ...cursor,
       pulls: { ...pulls, known },
-      issueComments: {
-        since: latest(
-          args.issueComments.map((comment) => comment.updated_at),
-          cursor.issueComments.since,
-        ),
-      },
-      reviewComments: {
-        since: latest(
-          args.reviewComments.map((comment) => comment.updated_at),
-          cursor.reviewComments.since,
-        ),
-      },
+      // While a sweep is behind, a comment may be on a pull request it has
+      // not reached yet, which was skipped: read the same comments again
+      // until the sweep ends (the ones recorded are not recorded twice).
+      issueComments: full
+        ? cursor.issueComments
+        : {
+            since: latest(
+              args.issueComments.map((comment) => comment.updated_at),
+              cursor.issueComments.since,
+            ),
+          },
+      reviewComments: full
+        ? cursor.reviewComments
+        : {
+            since: latest(
+              args.reviewComments.map((comment) => comment.updated_at),
+              cursor.reviewComments.since,
+            ),
+          },
     },
   };
 }

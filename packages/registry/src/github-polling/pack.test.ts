@@ -234,6 +234,18 @@ it("installs the poller, the GitHub library the reviews use, and a project skill
   expect(workflow?.graph.triggers).toMatchObject([
     { kind: "schedule", config: { cron: "* * * * *", timezone: "UTC" } },
   ]);
+  // The library's webhook verifies senders; its kinds opt in to recording.
+  for (const kind of [
+    "github.pull_request",
+    "github.issue_comment",
+    "github.pull_request_review_comment",
+  ])
+    expect(
+      resolveTriggerBinding({
+        binding: { kind, config: {} },
+        projectKinds: parsed.triggerKinds,
+      }),
+    ).toMatchObject({ ok: true, binding: { recordable: true } });
 });
 
 it("records a baseline first, then a new pull request, a push, comments by people, and a close, advancing its cursor by version", async () => {
@@ -323,7 +335,7 @@ it("records a baseline first, then a new pull request, a push, comments by peopl
     results.map((result) => result.recorded.map((event) => event.id)),
   ).toEqual([
     [],
-    ["pull_request:2:opened:b1"],
+    ["pull_request:2:opened"],
     ["pull_request:1:synchronize:a2"],
     ["issue_comment:101", "pull_request_review_comment:200"],
     [expect.stringMatching(/^pull_request:2:closed:/)],
@@ -412,7 +424,7 @@ it("records a baseline first, then a new pull request, a push, comments by peopl
       result.recorded.map((event) => [event.id, started(event)]),
     ),
   ).toEqual([
-    ["pull_request:2:opened:b1", ["reviewPullRequests"]],
+    ["pull_request:2:opened", ["reviewPullRequests"]],
     ["pull_request:1:synchronize:a2", ["reviewPullRequests"]],
     ["issue_comment:101", ["answerReviewComments"]],
     ["pull_request_review_comment:200", ["answerReviewComments"]],
@@ -438,12 +450,107 @@ it("an overlapping poll leaves the cursor alone, and the next records nothing tw
   ]);
   expect(results[1]?.error).toContain("version conflict");
   expect(results[1]?.recorded.map((event) => event.id)).toEqual([
-    "pull_request:3:opened:c1",
+    "pull_request:3:opened",
   ]);
   // The cursor did not move, so the next poll finds it again; its id is
   // already recorded.
   expect(results[2]?.error).toBeUndefined();
   expect(results[2]?.recorded).toEqual([]);
+});
+
+it("records a pull request's opening and reopening once though a lost cursor write replays them after it changed", async () => {
+  const opened = pull({
+    number: 3,
+    head: "c1",
+    created: "T+10",
+    updated: "T+10",
+  });
+  const pushed = {
+    ...opened,
+    head: { ...opened.head, sha: "c2" },
+    updated_at: "T+20",
+  };
+  const closed = pull({
+    number: 4,
+    head: "d1",
+    created: "T-7200",
+    updated: "T-100",
+    state: "closed",
+    closed: "T-100",
+  });
+  const reopened = {
+    ...closed,
+    state: "open" as const,
+    closed_at: null,
+    updated_at: "T+10",
+  };
+  const touched = { ...reopened, updated_at: "T+20" };
+  const results = await polls([
+    { world: { pulls: [closed], issueComments: [], reviewComments: [] } },
+    // Records, then loses its cursor write.
+    {
+      world: {
+        pulls: [opened, reopened],
+        issueComments: [],
+        reviewComments: [],
+      },
+      overlapped: true,
+    },
+    // Both changed again before the next poll read them.
+    {
+      world: {
+        pulls: [pushed, touched],
+        issueComments: [],
+        reviewComments: [],
+      },
+    },
+  ]);
+  expect(results[1]?.error).toContain("version conflict");
+  expect(
+    results.map((result) => result.recorded.map((event) => event.id)),
+  ).toEqual([
+    [],
+    [
+      expect.stringMatching(/^pull_request:4:reopened:/),
+      "pull_request:3:opened",
+    ],
+    [],
+  ]);
+});
+
+it("keeps comments on pull requests a catch-up sweep has not reached yet", async () => {
+  // A comment on #10, then 24 other pull requests change: #10 is on page 2.
+  const late = pull({ number: 10, head: "l1", created: "T+5", updated: "T+6" });
+  const others = Array.from({ length: 24 }, (_, index) =>
+    pull({
+      number: 20 + index,
+      head: `o${index}`,
+      created: `T+${10 + index}`,
+      updated: `T+${10 + index}`,
+    }),
+  );
+  const world = {
+    pulls: [late, ...others],
+    issueComments: [
+      issueComment({ id: 501, number: 10, at: "T+6" }),
+      // On a pull request the first page reaches.
+      issueComment({ id: 500, number: 30, at: "T+20" }),
+    ],
+    reviewComments: [],
+  };
+  const results = await polls([
+    { world: { pulls: [], issueComments: [], reviewComments: [] } },
+    { world },
+    { world },
+    { world },
+  ]);
+  expect(
+    results.map((result) =>
+      result.recorded
+        .filter((event) => event.kind === "github.issue_comment")
+        .map((event) => event.id),
+    ),
+  ).toEqual([[], ["issue_comment:500"], ["issue_comment:501"], []]);
 });
 
 it("sweeps older pages while a whole page is newer than the cursor", async () => {
