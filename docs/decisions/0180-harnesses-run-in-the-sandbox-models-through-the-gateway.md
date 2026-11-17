@@ -1,6 +1,6 @@
 # 0180: Harnesses run in the sandbox; models through the gateway
 
-- **Status:** Accepted (control loop placement superseded by [0198](0198-agent-runners-run-harnesses-beside-their-workspace.md); amended by [0184](0184-personal-credentials-reach-a-members-own-sessions.md), [0199](0199-subscription-sign-ins-stay-on-the-machine.md) and [0256](0256-the-gateway-rewrites-model-requests.md): a provider may rewrite request bodies; model grant lifetime amended by [0293](0293-model-grants-end-with-their-turn-attempt.md))
+- **Status:** Accepted (control loop placement superseded by [0198](0198-agent-runners-run-harnesses-beside-their-workspace.md); amended by [0184](0184-personal-credentials-reach-a-members-own-sessions.md), [0199](0199-subscription-sign-ins-stay-on-the-machine.md) and [0256](0256-the-gateway-rewrites-model-requests.md): a provider may rewrite request bodies; model grant lifetime amended by [0293](0293-model-grants-end-with-their-turn-attempt.md); usage on spans, reported cost and usage totals in [0329](0329-model-usage-is-telemetry-and-a-session-read.md))
 - **Date:** 2026-09-27
 - **Refines:** 0050, 0057, 0162, 0164, 0174, 0175, 0176
 

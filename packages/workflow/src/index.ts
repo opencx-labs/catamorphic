@@ -281,9 +281,11 @@ export type {
   SecretStatusEntry,
 } from "./secret-operations.js";
 export type {
+  ModelUsageTotals,
   SessionExecResult,
   SessionHistoryMessage,
   SessionHostOperations,
   SessionResult,
   SessionSnapshot,
+  SessionUsage,
 } from "./session-operations.js";

@@ -1,6 +1,13 @@
 import { createHash } from "node:crypto";
 import type { JsonObject } from "@catamorphic/db";
-import { describe, expect, it, vi } from "vitest";
+import { context, SpanStatusCode, trace } from "@opentelemetry/api";
+import { AsyncLocalStorageContextManager } from "@opentelemetry/context-async-hooks";
+import {
+  InMemorySpanExporter,
+  SimpleSpanProcessor,
+  TracerProvider,
+} from "@opentelemetry/sdk-trace";
+import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   ConnectionActionDeniedError,
   ConnectionActionRefusedError,
@@ -92,6 +99,8 @@ function harness(options: {
   paths?: readonly string[];
   /** How long a rewrite may take. */
   rewriteTimeoutMs?: number;
+  /** The session's agent. */
+  agentId?: string;
 }) {
   const binding: ResolvedConnectionBinding = {
     connectionId: "connection-1",
@@ -149,6 +158,7 @@ function harness(options: {
           session: {
             ownerId: "member-1",
             active: options.sessionActive ?? true,
+            ...(options.agentId ? { agentId: options.agentId } : {}),
           },
           connection: {
             id: "connection-1",
@@ -921,7 +931,12 @@ describe("the model gateway", () => {
     expect(response.headers["retry-after"]).toBe("3");
     expect(await bodyText(response)).toContain("slow down");
     await waitFor(() => audits.length === 1);
-    expect(audits).toEqual([{ outcome: "error", metadata: { status: 429 } }]);
+    expect(audits).toEqual([
+      {
+        outcome: "error",
+        metadata: { status: 429, refusal: "provider.rate_limit" },
+      },
+    ]);
     expect(recorded).toHaveLength(0);
   });
 });
@@ -1185,5 +1200,209 @@ describe("model request rewrites (ADR 0256)", () => {
     await bodyText(allowed);
     expect(upstreamCalls).toHaveLength(1);
     expect(refusals).toHaveLength(2);
+  });
+});
+
+describe("model call telemetry (ADR 0329)", () => {
+  const exporter = new InMemorySpanExporter();
+  beforeAll(() => {
+    trace.setGlobalTracerProvider(
+      new TracerProvider({
+        spanProcessors: [new SimpleSpanProcessor({ exporter })],
+      }),
+    );
+    context.setGlobalContextManager(
+      new AsyncLocalStorageContextManager().enable(),
+    );
+  });
+  beforeEach(() => exporter.reset());
+  const span = (name: string) =>
+    exporter.getFinishedSpans().find((each) => each.name === name);
+  const chatCompletions = (body: object) => ({
+    alias: "model",
+    path: "chat/completions",
+    method: "POST",
+    headers: {
+      "content-type": "application/json",
+      authorization: `Bearer ${GRANT}`,
+    },
+    body: encoder.encode(JSON.stringify(body)),
+  });
+  const correlation = {
+    "catamorphic.tenant.id": "tenant-1",
+    "catamorphic.project.id": "project-1",
+    "catamorphic.agent.session.id": "session-1",
+    "gen_ai.conversation.id": "session-1",
+    "catamorphic.agent.turn.id": "turn-1",
+  };
+
+  it("puts a JSON answer's usage and reported cost on the call's span", async () => {
+    const { gateway, recorded } = harness({
+      api: "openai",
+      guarded: true,
+      agentId: "reviewer",
+      upstream: () =>
+        Response.json({
+          model: "openai/gpt-test-0601",
+          choices: [],
+          usage: {
+            prompt_tokens: 50,
+            completion_tokens: 7,
+            prompt_tokens_details: { cached_tokens: 10 },
+            completion_tokens_details: { reasoning_tokens: 3 },
+            cost: 0.0042,
+          },
+        }),
+    });
+    const response = await gateway.handle(
+      chatCompletions({ model: "openai/gpt-test", messages: [] }),
+    );
+    expect(response.status).toBe(200);
+    await bodyText(response);
+    await waitFor(() => span("chat openai/gpt-test") !== undefined);
+    const call = span("chat openai/gpt-test");
+    const gatewaySpan = span("gateway.model");
+    expect(gatewaySpan?.attributes).toMatchObject({
+      ...correlation,
+      "catamorphic.agent.id": "reviewer",
+      "gen_ai.request.model": "openai/gpt-test",
+    });
+    expect(call?.parentSpanContext?.spanId).toBe(
+      gatewaySpan?.spanContext().spanId,
+    );
+    expect(call?.attributes).toMatchObject({
+      ...correlation,
+      "catamorphic.agent.id": "reviewer",
+      "gen_ai.operation.name": "chat",
+      "gen_ai.provider.name": "openai",
+      "gen_ai.request.model": "openai/gpt-test",
+      "gen_ai.response.model": "openai/gpt-test-0601",
+      "gen_ai.usage.input_tokens": 50,
+      "gen_ai.usage.output_tokens": 7,
+      "gen_ai.usage.cache_read.input_tokens": 10,
+      "gen_ai.usage.cache_write.input_tokens": 0,
+      "gen_ai.usage.reasoning.output_tokens": 3,
+      "catamorphic.model.cost_usd": 0.0042,
+      "http.response.status_code": 200,
+    });
+    await waitFor(() => recorded.length === 1);
+    expect(recorded[0]?.usage).toMatchObject({
+      inputTokens: 40,
+      cachedInputTokens: 10,
+      costUsd: 0.0042,
+    });
+  });
+
+  it("ends a streamed call's span once its final usage chunk has passed", async () => {
+    const stream = `${sse([
+      { model: "gpt-test", choices: [{ delta: { content: "Hi" } }] },
+      {
+        model: "gpt-test",
+        choices: [],
+        usage: { prompt_tokens: 20, completion_tokens: 4, cost: 0.0001 },
+      },
+    ])}data: [DONE]\n\n`;
+    const { gateway, recorded } = harness({
+      api: "openai",
+      upstream: () =>
+        new Response(streamOf(stream), {
+          headers: { "content-type": "text/event-stream" },
+        }),
+    });
+    const response = await gateway.handle(
+      chatCompletions({ model: "gpt-test", stream: true, messages: [] }),
+    );
+    // The answer has not been read: only the gateway's own span ended.
+    expect(span("gateway.model")).toBeDefined();
+    expect(span("chat")).toBeUndefined();
+    expect(await bodyText(response)).toBe(stream);
+    await waitFor(() => span("chat") !== undefined);
+    expect(span("chat")?.attributes).toMatchObject({
+      ...correlation,
+      "gen_ai.response.model": "gpt-test",
+      "gen_ai.usage.input_tokens": 20,
+      "gen_ai.usage.output_tokens": 4,
+      "catamorphic.model.cost_usd": 0.0001,
+    });
+    expect(span("chat")?.attributes).not.toHaveProperty("catamorphic.agent.id");
+    await waitFor(() => recorded.length === 1);
+    expect(recorded[0]?.usage.costUsd).toBe(0.0001);
+  });
+
+  it("records Anthropic usage without a cost it never reported", async () => {
+    const { gateway, recorded } = harness({
+      api: "anthropic",
+      upstream: () =>
+        new Response(streamOf(anthropicStream), {
+          headers: { "content-type": "text/event-stream" },
+        }),
+    });
+    const response = await gateway.handle({
+      alias: "model",
+      path: "v1/messages",
+      method: "POST",
+      headers: { "content-type": "application/json", "x-api-key": GRANT },
+      body: encoder.encode(JSON.stringify({ model: "claude-test-1" })),
+    });
+    await bodyText(response);
+    await waitFor(() => span("chat") !== undefined);
+    const attributes = span("chat")?.attributes;
+    expect(attributes).toMatchObject({
+      "gen_ai.response.model": "claude-test-1",
+      // All input, cached and cache writes included.
+      "gen_ai.usage.input_tokens": 155,
+      "gen_ai.usage.cache_read.input_tokens": 30,
+      "gen_ai.usage.cache_write.input_tokens": 5,
+      "gen_ai.usage.output_tokens": 42,
+    });
+    expect(attributes).not.toHaveProperty("catamorphic.model.cost_usd");
+    await waitFor(() => recorded.length === 1);
+    expect(recorded[0]?.usage).not.toHaveProperty("costUsd");
+  });
+
+  it("names a provider's billing refusal on the span and in the audit, passing it on unchanged", async () => {
+    const refusal = JSON.stringify({
+      error: { code: 402, message: "Insufficient credits" },
+    });
+    const { gateway, audits, recorded } = harness({
+      api: "openai",
+      upstream: () =>
+        new Response(refusal, {
+          status: 402,
+          headers: { "content-type": "application/json" },
+        }),
+    });
+    const response = await gateway.handle(
+      chatCompletions({ model: "gpt-test", messages: [] }),
+    );
+    expect(response.status).toBe(402);
+    expect(await bodyText(response)).toBe(refusal);
+    await waitFor(() => span("chat") !== undefined);
+    expect(span("chat")?.attributes).toMatchObject({
+      "error.type": "provider.billing",
+      "http.response.status_code": 402,
+    });
+    expect(span("chat")?.status.code).toBe(SpanStatusCode.ERROR);
+    await waitFor(() => audits.length === 1);
+    expect(audits[0]).toMatchObject({
+      outcome: "error",
+      metadata: { status: 402, refusal: "provider.billing" },
+    });
+    expect(recorded).toHaveLength(0);
+  });
+
+  it("reads a reported cost from either API's usage, and nothing else as one", () => {
+    expect(
+      usageFromJson("openai", { usage: { prompt_tokens: 1, cost: 0.5 } })
+        .costUsd,
+    ).toBe(0.5);
+    for (const cost of [-1, "0.5", null, Number.NaN])
+      expect(
+        usageFromJson("openai", { usage: { prompt_tokens: 1, cost } }),
+      ).not.toHaveProperty("costUsd");
+    expect(
+      usageFromJson("anthropic", { usage: { input_tokens: 1, cost: 0.2 } })
+        .costUsd,
+    ).toBe(0.2);
   });
 });

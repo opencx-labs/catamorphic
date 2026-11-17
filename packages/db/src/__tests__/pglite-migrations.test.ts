@@ -155,6 +155,7 @@ describe("PGlite migrations", () => {
       "076_private_artifact_lifetimes.sql",
       "077_retained_source_revisions.sql",
       "078_typed_results.sql",
+      "080_model_usage_cost.sql",
     ]);
 
     const rerun = await migrateToLatest({ db });

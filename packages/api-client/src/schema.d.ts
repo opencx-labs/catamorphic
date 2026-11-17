@@ -8064,6 +8064,104 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/projects/{projectId}/agent/sessions/{sessionId}/usage": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: {
+            parameters: {
+                query?: {
+                    family?: "true" | "false";
+                };
+                header?: never;
+                path: {
+                    projectId: string;
+                    sessionId: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description Default Response */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            /** Format: uuid */
+                            sessionId: string;
+                            family: boolean;
+                            sessions: number;
+                            openCalls: number;
+                            calls: number;
+                            inputTokens: number;
+                            cachedInputTokens: number;
+                            cacheCreationTokens: number;
+                            outputTokens: number;
+                            reasoningTokens: number;
+                            costUsd: number | null;
+                            unpricedCalls: number;
+                            models: {
+                                model: string | null;
+                                calls: number;
+                                inputTokens: number;
+                                cachedInputTokens: number;
+                                cacheCreationTokens: number;
+                                outputTokens: number;
+                                reasoningTokens: number;
+                                costUsd: number | null;
+                                unpricedCalls: number;
+                            }[];
+                        };
+                    };
+                };
+                /** @description Default Response */
+                403: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                503: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                        };
+                    };
+                };
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/projects/{projectId}/agent/sessions/{sessionId}/peers": {
         parameters: {
             query?: never;

@@ -644,6 +644,7 @@ export interface ModelUsage {
   cache_creation_tokens: Generated<Int8>;
   cached_input_tokens: Generated<Int8>;
   connection_id: string;
+  cost_usd: Numeric | null;
   created_at: Generated<Timestamp>;
   endpoint: string;
   id: Generated<Int8>;

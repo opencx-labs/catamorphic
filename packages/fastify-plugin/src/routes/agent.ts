@@ -48,6 +48,8 @@ import {
   AgentSessionPeerSchema,
   AgentSessionSchema,
   AgentSessionsQuerySchema,
+  AgentSessionUsageQuerySchema,
+  AgentSessionUsageSchema,
   AgentSubsessionIdParamsSchema,
   AgentSubsessionSchema,
   ArchiveAgentSessionSchema,
@@ -801,6 +803,48 @@ export function registerAgentRoutes(app: FastifyInstance, ctx: RouteContext) {
           return reply.status(404).send({ error: "Session not found" });
         }
         throw err;
+      }
+    },
+  });
+
+  typed.route({
+    method: "GET",
+    url: "/projects/:projectId/agent/sessions/:sessionId/usage",
+    schema: {
+      params: AgentSessionIdParamsSchema,
+      querystring: AgentSessionUsageQuerySchema,
+      response: {
+        200: AgentSessionUsageSchema,
+        403: ErrorSchema,
+        404: ErrorSchema,
+        503: ErrorSchema,
+      },
+    },
+    handler: async (request, reply) => {
+      const agentSessions = ctx.core?.agentSessions;
+      if (!agentSessions) {
+        return reply.status(503).send({ error: "Coding agent not configured" });
+      }
+      try {
+        return reply.send(
+          await agentSessions.usage({
+            identity: resolveIdentity(request),
+            projectId: request.params.projectId,
+            sessionId: request.params.sessionId,
+            family: request.query.family ?? false,
+          }),
+        );
+      } catch (error) {
+        if (
+          error instanceof ProjectNotFoundError ||
+          error instanceof AgentSessionNotFoundError
+        ) {
+          return reply.status(404).send({ error: "Session not found" });
+        }
+        if (error instanceof AccessDeniedError) {
+          return reply.status(403).send({ error: error.message });
+        }
+        throw error;
       }
     },
   });

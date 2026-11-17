@@ -79,8 +79,8 @@ and session_reopen for new work. Observe session.work-changed with
 
 ## Host calls and authoring shape
 
-context.host["catamorphic.sessions"] provides typed inspect, list, history, results,
-deliver, create, fork, spawn, archive, unarchive, interrupt,
+context.host["catamorphic.sessions"] provides typed inspect, list, history,
+results, usage, deliver, create, fork, spawn, archive, unarchive, interrupt,
 complete, reopen, exec, stopWatcher, and stop operations. Every host call is a
 boundary transition: RETURN it. Consume its result as the next boundary's input
 (pass { state } as a second argument to keep data across it; the next boundary
@@ -476,6 +476,12 @@ sandboxes need it.
   the moment one is recorded, mid-turn, with the result in input.payload.detail
   (name, value, turnId, input, commit); select { names: ["review"] }. Compute
   final checks (votes, coverage) in code over results, not in an agent.
+- usage is an authorized read of a chat's model calls through the gateway:
+  tokens per model, the summed cost providers reported (costUsd, US dollars,
+  null when none did), unpricedCalls (so the cost is a lower bound when
+  above zero) and openCalls still streaming. family: true adds every
+  subsession below the chat. Work keeps no prices and no budgets: a project
+  that wants a limit or a report computes it from this.
 - deliver message_only records it without a model turn: people see it at
   once and the agent reads it with its next turn. queue starts work when idle
   or queues behind the active turn; steer adds the message to the turn working

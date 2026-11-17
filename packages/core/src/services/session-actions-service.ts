@@ -76,6 +76,11 @@ export const SESSION_ACTION_SCHEMAS = {
     afterInput: z.string().uuid().optional(),
     limit: z.number().int().min(1).max(100).optional(),
   }),
+  /**
+   * The chat's model usage through the gateway (ADR 0329); `family` adds
+   * every subsession below it.
+   */
+  usage: chat({ ...target, family: z.boolean().optional() }),
   create: chat({
     ...mutation,
     agentId: z.string().optional(),
@@ -245,6 +250,15 @@ export class SessionActionsService {
         }
         const session = detail;
         if (input.operation === "inspect") return json(session);
+        if (input.operation === "usage")
+          return json(
+            await this.sessions.usage({
+              identity: input.identity,
+              projectId: input.projectId,
+              sessionId: session.id,
+              family: "family" in args && args.family === true,
+            }),
+          );
         if (input.operation === "history") {
           const through =
             "through" in args && args.through !== undefined
@@ -646,6 +660,7 @@ function actionLabel(operation: SessionActionOperation): string {
     find: "Found a session by key",
     history: "Read session history",
     results: "Read session results",
+    usage: "Read session usage",
     create: "Created a session",
     fork: "Forked this session",
     spawn: "Created a child session",

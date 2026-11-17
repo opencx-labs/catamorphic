@@ -1170,7 +1170,12 @@ host code (the Work server takes them in its own image, ADR 0261). Guards see ki
 spending rules belong in guards. Usage lands in `model_usage` per session and
 turn, read passively from Anthropic and OpenAI answers (zero when a format is
 not recognized, such as a Chat Completions stream without
-`stream_options.include_usage`). At each sandbox attempt core writes the grant of every model alias into
+`stream_options.include_usage`), with `cost_usd` when the provider reported
+what it charged (ADR 0329). Each call's `chat` span carries the same usage
+under GenAI names with its project, session, turn and agent
+([OBSERVABILITY.md](OBSERVABILITY.md)); `agentSessions.usage({ identity,
+projectId, sessionId, family })` and `GET …/agent/sessions/:sessionId/usage`
+total a chat and its subsessions. At each sandbox attempt core writes the grant of every model alias into
 the sandbox (the same `sandbox`-channel grants as Git), and an agent
 registered with `harness: { placement: "sandbox", id }` and `modelConnection:
 <alias>` gets `AttemptStart.modelAccess = { kind: "gateway", ... }`. Core

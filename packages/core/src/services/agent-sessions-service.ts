@@ -195,6 +195,7 @@ import {
   type PlacementReason,
   placementOwner,
 } from "./execution-environments-service.js";
+import { type SessionUsage, sessionUsageTotals } from "./model-usage.js";
 import {
   deliverPersonalEnvironment,
   removePersonalEnvironment,
@@ -2190,6 +2191,35 @@ export class AgentSessionsService {
    * running an agent ref their scope covers. The project boundary and agent
    * scope remain hard authorization boundaries.
    */
+  /**
+   * A chat's model usage through the gateway (ADR 0329): token totals per
+   * model and the cost providers reported, with every subsession below it
+   * when `family`. Reading the chat is the access check.
+   */
+  async usage(args: {
+    identity: Identity;
+    projectId: string;
+    sessionId: string;
+    family?: boolean;
+  }): Promise<SessionUsage> {
+    await this.requireSession(
+      args.identity,
+      args.projectId,
+      args.sessionId,
+      "read",
+    );
+    const family = args.family ?? false;
+    return sessionUsageTotals({
+      db: this.db,
+      projectId: args.projectId,
+      sessionId: args.sessionId,
+      sessionIds: family
+        ? await this.descendantSessionIds(args.projectId, args.sessionId)
+        : [args.sessionId],
+      family,
+    });
+  }
+
   async listPeers(
     identity: Identity,
     projectId: string,

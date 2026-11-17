@@ -1247,6 +1247,39 @@ export const AgentSessionIdParamsSchema = ProjectIdParamsSchema.extend({
   sessionId: z.string().uuid(),
 });
 
+export const AgentSessionUsageQuerySchema = z.object({
+  /** Include every subsession below the chat. */
+  family: z
+    .enum(["true", "false"])
+    .transform((value) => value === "true")
+    .optional(),
+});
+
+const ModelUsageTotalsShape = {
+  calls: z.number().int().nonnegative(),
+  inputTokens: z.number().int().nonnegative(),
+  cachedInputTokens: z.number().int().nonnegative(),
+  cacheCreationTokens: z.number().int().nonnegative(),
+  outputTokens: z.number().int().nonnegative(),
+  reasoningTokens: z.number().int().nonnegative(),
+  /** Provider-reported cost in US dollars, summed; null when none reported. */
+  costUsd: z.number().nonnegative().nullable(),
+  /** Calls whose provider reported no cost: costUsd is a lower bound. */
+  unpricedCalls: z.number().int().nonnegative(),
+};
+
+/** A chat's model usage through the gateway (ADR 0329). */
+export const AgentSessionUsageSchema = z.object({
+  sessionId: z.string().uuid(),
+  family: z.boolean(),
+  sessions: z.number().int().nonnegative(),
+  openCalls: z.number().int().nonnegative(),
+  ...ModelUsageTotalsShape,
+  models: z.array(
+    z.object({ model: z.string().nullable(), ...ModelUsageTotalsShape }),
+  ),
+});
+
 export const AgentSessionPeerSchema = z.object({
   id: z.string().uuid(),
   projectId: z.string().uuid(),
