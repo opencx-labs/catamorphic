@@ -14903,11 +14903,6 @@ export class AgentSessionsService {
       .executeTakeFirst();
   }
 
-  /**
-   * The session a caller may act on. Every method that changes a session
-   * goes through the default `change` intent; only readers pass `read`, so
-   * an app's sessions ref (ADR 0148) can never reach a mutation by omission.
-   */
   /** A session of the caller's tenant, without checking their access to it. */
   private async sessionInTenant(
     identity: Identity,
@@ -14926,6 +14921,11 @@ export class AgentSessionsService {
     return row;
   }
 
+  /**
+   * The session a caller may act on. Every method that changes a session
+   * goes through the default `change` intent; only readers pass `read`, so
+   * an app's sessions ref (ADR 0148) can never reach a mutation by omission.
+   */
   private async requireSession(
     identity: Identity,
     projectId: string,
@@ -15224,13 +15224,6 @@ const MODEL_CATALOG_WAIT_MS = 5_000;
 /** How often a running turn renews its sandbox grants (they live an hour). */
 const GRANT_RENEWAL_MS = 20 * 60_000;
 
-/**
- * A committed definition's own narrowing (ADR 0054 agent scope), sandboxing
- * and harness permission mode, applied by core whatever harness the host
- * built, so they hold on every host (ADR 0176, ADR 0182). The permission
- * mode travels as a turn default the harness reads. Aliases name the
- * Environment's connection servers.
- */
 /** The ids of the chats the caller may read, of those given. */
 function readableSessions(
   identity: Identity,
@@ -15259,6 +15252,13 @@ function readableSessions(
     .map((row) => row.id);
 }
 
+/**
+ * A committed definition's own narrowing (ADR 0054 agent scope), sandboxing
+ * and harness permission mode, applied by core whatever harness the host
+ * built, so they hold on every host (ADR 0176, ADR 0182). The permission
+ * mode travels as a turn default the harness reads. Aliases name the
+ * Environment's connection servers.
+ */
 function withDefinitionPolicy(
   agent: RegisteredCodingAgent,
   definition: AgentDefinition,
@@ -15483,7 +15483,7 @@ const SIGN_IN_HARNESS_NAMES: Record<SignInHarness, string> = {
 /** A deterministic id for a notice Work writes at most once per session. */
 function derivedNoticeId(sessionId: string, code: string): string {
   const hex = createHash("sha256")
-    .update(`notice ${sessionId} ${code}`)
+    .update(`notice\u0000${sessionId}\u0000${code}`)
     .digest("hex");
   return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-8${hex.slice(13, 16)}-a${hex.slice(17, 20)}-${hex.slice(20, 32)}`;
 }
