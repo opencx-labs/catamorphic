@@ -20,6 +20,13 @@ export interface ModelUsageTotals {
   costUsd: number | null;
   /** Calls whose provider reported no cost: `costUsd` is a lower bound. */
   unpricedCalls: number;
+  /**
+   * Calls whose usage the gateway could not read (a Chat Completions stream
+   * without `stream_options.include_usage`, a stream that ended early, an
+   * answer too large to scan): their tokens count zero, so the token totals
+   * are a lower bound too.
+   */
+  unmeteredCalls: number;
 }
 
 /** A chat's model usage through the gateway, optionally with its subsessions. */
@@ -70,6 +77,9 @@ export async function sessionUsageTotals(args: {
             sql<string>`coalesce(sum(cache_creation_tokens), 0)`.as("creation"),
             sql<string>`coalesce(sum(output_tokens), 0)`.as("output"),
             sql<string>`coalesce(sum(reasoning_tokens), 0)`.as("reasoning"),
+            sql<string>`count(*) FILTER (WHERE settled_at IS NOT NULL AND NOT metered)`.as(
+              "unmetered",
+            ),
             sql<string>`count(cost_usd)`.as("priced"),
             sql<string | null>`sum(cost_usd)`.as("cost"),
             // The whole set's cost, summed exactly in numeric: dollars
@@ -88,6 +98,7 @@ export async function sessionUsageTotals(args: {
       reasoningTokens: Number(row.reasoning),
       costUsd: row.cost === null ? null : Number(row.cost),
       unpricedCalls: Number(row.calls) - Number(row.priced),
+      unmeteredCalls: Number(row.unmetered),
     }))
     .filter((model) => model.calls > 0);
   const sum = (field: keyof Omit<ModelUsageTotals, "costUsd">) =>
@@ -105,6 +116,7 @@ export async function sessionUsageTotals(args: {
     reasoningTokens: sum("reasoningTokens"),
     costUsd: totalCost === null ? null : Number(totalCost),
     unpricedCalls: sum("unpricedCalls"),
+    unmeteredCalls: sum("unmeteredCalls"),
     openCalls: rows.reduce((total, row) => total + Number(row.open), 0),
     models,
   };

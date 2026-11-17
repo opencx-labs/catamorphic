@@ -2274,7 +2274,14 @@ export class AgentSessionsService {
       projectId: args.projectId,
       sessionId: args.sessionId,
       sessionIds: family
-        ? await this.descendantSessionIds(args.projectId, args.sessionId)
+        ? await this.readableSessionIds({
+            identity: args.identity,
+            projectId: args.projectId,
+            sessionIds: await this.descendantSessionIds(
+              args.projectId,
+              args.sessionId,
+            ),
+          })
         : [args.sessionId],
       family,
     });
@@ -12862,6 +12869,42 @@ export class AgentSessionsService {
         presentations.get(row.id),
       ),
     );
+  }
+
+  /**
+   * The sessions of `sessionIds` the caller may read, by the rule that
+   * guards reading each one: a subsession on an agent outside the caller's
+   * scope, or someone else's, is left out.
+   */
+  private async readableSessionIds(args: {
+    identity: Identity;
+    projectId: string;
+    sessionIds: readonly string[];
+  }): Promise<string[]> {
+    if (args.sessionIds.length === 0) return [];
+    const rows = await this.db
+      .selectFrom("agent_sessions")
+      .select(["id", "external_user_id", "agent_id"])
+      .where("project_id", "=", args.projectId)
+      .where("id", "in", [...args.sessionIds])
+      .execute();
+    return rows
+      .filter((row) => {
+        try {
+          assertAgentSessionAccess({
+            identity: args.identity,
+            projectId: args.projectId,
+            externalUserId: row.external_user_id,
+            agentId: row.agent_id,
+            intent: "read",
+          });
+          return true;
+        } catch (error) {
+          if (error instanceof AccessDeniedError) return false;
+          throw error;
+        }
+      })
+      .map((row) => row.id);
   }
 
   private async descendantSessionIds(

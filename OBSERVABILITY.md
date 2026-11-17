@@ -185,7 +185,11 @@ input, cached included), `gen_ai.usage.output_tokens`,
 `catamorphic.connection.alias`, `catamorphic.model.path`, and
 `catamorphic.model.cost_usd` when the provider reported what it charged
 (OpenRouter's `usage.cost`, in US dollars; Work keeps no price table). A
-caller that stopped reading is `catamorphic.model.interrupted`. A provider
+caller that stopped reading is `catamorphic.model.interrupted`.
+`catamorphic.model.metered` is false when the answer's final usage was never
+read (a Chat Completions stream without `stream_options.include_usage`, a
+stream that ended first, an answer too large to scan); such a span carries no
+token counts. A provider
 refusal keeps its own error for the harness and marks the span:
 `error.type` `provider.authentication` (401), `provider.billing` (402),
 `provider.permission` (403), `provider.rate_limit` (429), or the status.

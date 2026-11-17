@@ -268,6 +268,7 @@ describe("model usage", () => {
       cacheCreationTokens: 5,
       outputTokens: 42,
       reasoningTokens: 0,
+      metered: true,
     });
     expect(
       usageFromJson("anthropic", {
@@ -310,6 +311,7 @@ describe("model usage", () => {
       cacheCreationTokens: 0,
       outputTokens: 20,
       reasoningTokens: 8,
+      metered: true,
     });
     const chat = new SseUsageReader("openai");
     chat.push(
@@ -611,6 +613,7 @@ describe("the model gateway", () => {
         model: "gpt-test",
         inputTokens: 11,
         outputTokens: 5,
+        metered: true,
       }),
       {
         inputTokens: 0,
@@ -618,6 +621,8 @@ describe("the model gateway", () => {
         cacheCreationTokens: 0,
         outputTokens: 0,
         reasoningTokens: 0,
+        // An answer it could not read measured nothing.
+        metered: false,
       },
     ]);
   });
@@ -1290,7 +1295,9 @@ describe("model call telemetry (ADR 0329)", () => {
       inputTokens: 40,
       cachedInputTokens: 10,
       costUsd: 0.0042,
+      metered: true,
     });
+    expect(call?.attributes["catamorphic.model.metered"]).toBe(true);
   });
 
   it("ends a streamed call's span once its final usage chunk has passed", async () => {
@@ -1389,6 +1396,67 @@ describe("model call telemetry (ADR 0329)", () => {
       metadata: { status: 402, refusal: "provider.billing" },
     });
     expect(recorded).toHaveLength(0);
+  });
+
+  it("counts a stream whose usage never came as unmetered, not as zero tokens", async () => {
+    // Chat Completions sends usage only when asked to (include_usage).
+    const stream = `${sse([
+      { model: "gpt-test", choices: [{ delta: { content: "Hi" } }] },
+    ])}data: [DONE]\n\n`;
+    const { gateway, recorded } = harness({
+      api: "openai",
+      upstream: () =>
+        new Response(streamOf(stream), {
+          headers: { "content-type": "text/event-stream" },
+        }),
+    });
+    await bodyText(
+      await gateway.handle(
+        chatCompletions({ model: "gpt-test", stream: true, messages: [] }),
+      ),
+    );
+    await waitFor(() => recorded.length === 1);
+    expect(recorded[0]?.usage.metered).toBe(false);
+    await waitFor(() => span("chat") !== undefined);
+    const attributes = span("chat")?.attributes ?? {};
+    expect(attributes["catamorphic.model.metered"]).toBe(false);
+    expect(attributes).not.toHaveProperty("gen_ai.usage.input_tokens");
+    expect(attributes).not.toHaveProperty("gen_ai.usage.output_tokens");
+  });
+
+  it("counts an Anthropic stream that stopped before its final usage as unmetered", async () => {
+    const { gateway, recorded } = harness({
+      api: "anthropic",
+      upstream: () =>
+        new Response(
+          streamOf(
+            sse([
+              {
+                type: "message_start",
+                message: {
+                  model: "claude-test-1",
+                  usage: { input_tokens: 120, output_tokens: 1 },
+                },
+              },
+            ]),
+          ),
+          { headers: { "content-type": "text/event-stream" } },
+        ),
+    });
+    await bodyText(
+      await gateway.handle({
+        alias: "model",
+        path: "v1/messages",
+        method: "POST",
+        headers: { "content-type": "application/json", "x-api-key": GRANT },
+        body: encoder.encode(JSON.stringify({ model: "claude-test-1" })),
+      }),
+    );
+    await waitFor(() => recorded.length === 1);
+    expect(recorded[0]?.usage).toMatchObject({
+      inputTokens: 120,
+      metered: false,
+    });
   });
 
   it("reads a reported cost from either API's usage, and nothing else as one", () => {

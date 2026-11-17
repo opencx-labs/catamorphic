@@ -651,6 +651,7 @@ export interface ModelUsage {
   endpoint: string;
   id: Generated<Int8>;
   input_tokens: Generated<Int8>;
+  metered: Generated<boolean>;
   model: string | null;
   output_tokens: Generated<Int8>;
   project_id: string;
