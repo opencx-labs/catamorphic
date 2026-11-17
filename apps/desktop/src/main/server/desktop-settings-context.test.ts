@@ -26,6 +26,7 @@ function fixture() {
     harnessComponentsDir: `${root}/harness`,
     hostSkillsDir: `${root}/skills`,
     attachmentsDir: `${root}/attachments`,
+    agentStateDir: `${root}/agent-state`,
     bookmarksFile: `${root}/bookmarks.json`,
   };
   const profiles = new ProfilesStore(paths.profilesFile);

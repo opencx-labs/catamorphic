@@ -48,6 +48,19 @@ export type AgentHarness =
       local?: (context: AgentTurnContext) => Record<string, unknown>;
       /** Environment of the harness process: the host's own settings (CLAUDE_CONFIG_DIR). */
       env?: Record<string, string>;
+      /**
+       * Host storage for the runner's and harness's state for one session
+       * (copies of pasted media): an absolute path outside every checkout.
+       * The harness makes what it keeps there, private; the host removes
+       * it, for instance when `NativeAgentCheckout.release` puts the chat
+       * away. Absent, it lives in a private temporary folder of this
+       * process, which core empties when it releases the resting chat
+       * (ADR 0321).
+       */
+      stateDirectory?: (session: {
+        projectId: string;
+        sessionId: string;
+      }) => string;
       /** Tools this host serves the agent beside Work's capability tools. */
       hostTools?: readonly ExtraTool[];
       /** MCP servers this host adds, read at every turn so rotated tokens apply. */

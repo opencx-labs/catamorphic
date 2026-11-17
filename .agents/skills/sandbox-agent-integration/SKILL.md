@@ -113,7 +113,10 @@ is set; without `codingAgent`, session routes answer 503. A
   `local(context)` (host objects, never serialized), `env`, `hostTools`,
   `mcpServers(context)` (read every turn so rotated tokens apply),
   `toolPolicies()`, `toolAnnotations()`, `plugins`, `context(context)` (per-turn
-  facts, ADR 0152), and `instructions`.
+  facts, ADR 0152), `instructions`, and `stateDirectory({ projectId, sessionId })`
+  (an absolute host folder for the runner's state, such as copies of pasted
+  media, outside every checkout; without it, a private temporary folder of the
+  process, ADR 0321).
 - `{ placement: "sandbox", id }`: the runner bundle inside the session's
   sandbox runs the bundled adapter `id` (`claude-code`, `codex`) beside its CLI.
 

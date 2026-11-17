@@ -46,6 +46,7 @@ import { Kysely, PGliteDialect, sql, WithSchemaPlugin } from "kysely";
 import { rosterAgentId } from "../../shared/voice.js";
 import type { WorkspaceBridge } from "../agent-bridge.js";
 import { readAgentCredentials } from "../agent-credentials.js";
+import { removeAgentState } from "../agent-state.js";
 import {
   accessTokenFresh,
   signInRefreshable,
@@ -493,6 +494,7 @@ export async function startEmbeddedServer(
     agentHomesDir: paths.agentHomesDir,
     harnessComponentsDir: paths.harnessComponentsDir,
     attachmentsDir: paths.attachmentsDir,
+    agentStateDir: paths.agentStateDir,
     ...(e2eFakeAgent
       ? {}
       : { installedClaudeCode: new InstalledClaudeCodeFinder() }),
@@ -747,9 +749,18 @@ export async function startEmbeddedServer(
       // A chat's own worktree is set up like a new workspace and put away
       // with the chat (ADR 0215).
       setup: (input) => sessionCheckouts.setup(input),
+      // ...and with it what its runner kept (ADR 0321), even when the
+      // checkout could not be put away.
       release: async (input) => {
-        await sessionCheckouts.putAway(input);
-        broadcastGitChanged(input.projectId);
+        try {
+          await sessionCheckouts.putAway(input);
+          broadcastGitChanged(input.projectId);
+        } finally {
+          await removeAgentState({
+            agentStateDir: paths.agentStateDir,
+            ...input,
+          });
+        }
       },
     },
     appBundleStore: new FsBundleStore(paths.appBundles),

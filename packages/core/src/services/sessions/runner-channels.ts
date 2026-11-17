@@ -1,4 +1,7 @@
 import { randomUUID } from "node:crypto";
+import { lstat, mkdtemp, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import path from "node:path";
 import {
   encodeLine,
   framePayload,
@@ -125,6 +128,78 @@ export async function reattachInProcessRunner(
 }
 
 let bundle: ReturnType<typeof loadRunnerBundle> | undefined;
+
+const SESSION_ID = /^[A-Za-z0-9_-]+$/;
+
+let temporaryStateRoot: Promise<string | undefined> =
+  Promise.resolve(undefined);
+
+/** A folder only this process's user reaches, and not a link to another. */
+async function isPrivateFolder(folder: string): Promise<boolean> {
+  const stats = await lstat(folder).catch(() => undefined);
+  if (!stats?.isDirectory()) return false;
+  // Windows reports no owner and no meaningful mode bits.
+  if (!process.getuid) return true;
+  return stats.uid === process.getuid() && (stats.mode & 0o077) === 0;
+}
+
+/**
+ * This process's private temporary folder for runners' state, made by
+ * mkdtemp and made anew when something removed or replaced it (a temp
+ * cleaner on a long-running server), so a folder someone else made under
+ * that name never receives a chat's state. Calls queue behind each other,
+ * so one of them makes it.
+ */
+function temporaryStateFolder(): Promise<string> {
+  const next = temporaryStateRoot
+    .catch(() => undefined)
+    .then(async (known) =>
+      known && (await isPrivateFolder(known))
+        ? known
+        : mkdtemp(path.join(tmpdir(), "catamorphic-agent-state-")),
+    );
+  temporaryStateRoot = next;
+  return next;
+}
+
+/**
+ * Where an in-process runner keeps its own and its harness's state for one
+ * session (copies of pasted media): the absolute folder its host names, or
+ * one in a private temporary folder of this process. Never the checkout,
+ * where it would show in Git status, turn checkpoints and remote sync (ADR
+ * 0321). Nothing is made for the session here: a harness that keeps state
+ * makes its own folders, private, so an attempt whose harness keeps none
+ * leaves nothing behind.
+ */
+export async function hostRunnerStateDirectory(input: {
+  /** The host's folder for this session, when it names one. */
+  named: string | undefined;
+  sessionId: string;
+}): Promise<string> {
+  if (!SESSION_ID.test(input.sessionId))
+    throw new Error("This session id cannot name a folder.");
+  if (input.named === undefined)
+    return path.join(await temporaryStateFolder(), input.sessionId);
+  if (!path.isAbsolute(input.named))
+    throw new Error(
+      `A runner's state folder must be an absolute path, not "${input.named}".`,
+    );
+  return input.named;
+}
+
+/**
+ * Drops what a chat's runner kept in this process's temporary folder when
+ * core releases the resting chat (archived or closed). Its next turn starts
+ * afresh: the harness's thread comes back from the session's stored native
+ * state.
+ */
+export async function removeTemporaryRunnerState(input: {
+  sessionId: string;
+}): Promise<void> {
+  const root = await temporaryStateRoot.catch(() => undefined);
+  if (!root || !SESSION_ID.test(input.sessionId)) return;
+  await rm(path.join(root, input.sessionId), { recursive: true, force: true });
+}
 
 /**
  * Start the runner in a sandbox as a process with standard input (ADR

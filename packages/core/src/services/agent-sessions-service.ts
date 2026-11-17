@@ -272,8 +272,10 @@ import {
   expiredApprovalReason,
 } from "./sessions/request-policy.js";
 import {
+  hostRunnerStateDirectory,
   type RunnerChannel,
   type RunnerLocation,
+  removeTemporaryRunnerState,
   sandboxChannel,
   startInProcessRunner,
   startSandboxRunner,
@@ -5590,9 +5592,17 @@ export class AgentSessionsService {
       agent,
       workspace,
     }).catch(() => null);
-    const stateDirectory = runtime.provider
-      ? `${runtime.provider.workspaceRoot}/${SESSION_DIRECTORY}`
-      : workingDirectory;
+    // The runner's own and its harness's state: beside it, so in the
+    // sandbox's session folder for a sandboxed runner and in host storage
+    // for one in this process, never in the checkout it works in. (A
+    // sandboxed runner without a sandbox never starts: launch says why.)
+    const stateDirectory =
+      agent.harness.placement === "host"
+        ? await hostRunnerStateDirectory({
+            named: agent.harness.stateDirectory?.({ projectId, sessionId }),
+            sessionId,
+          })
+        : `${runtime.provider?.workspaceRoot ?? ""}/${SESSION_DIRECTORY}`;
     const configured = agent.defaults?.harnessPermissions ?? {};
     // A read-only chat runs in its harness's read-only mode (ADR 0271).
     const harnessPermissions = session.read_only
@@ -10923,11 +10933,21 @@ export class AgentSessionsService {
     }
   }
 
-  /** A resting chat gives back its native checkout (ADR 0215). */
+  /**
+   * A resting chat gives back its native checkout (ADR 0215), and what its
+   * runner kept in this process's temporary folder (ADR 0321).
+   */
   private async releaseNativeCheckout(input: {
     projectId: string;
     sessionId: string;
   }): Promise<void> {
+    await removeTemporaryRunnerState({ sessionId: input.sessionId }).catch(
+      (error: unknown) =>
+        console.warn(
+          `[catamorphic] Could not remove the runner state of session ${input.sessionId}`,
+          error,
+        ),
+    );
     await this.nativeAgentCheckout
       ?.release?.(input)
       .catch((error: unknown) =>
