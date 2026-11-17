@@ -897,7 +897,17 @@ describe("subagents of a server agent (ADR 0322)", () => {
       parent.id,
       { task: "[[wait 20000]] Long check" },
     );
-    await until("the child works", async () => !(await idle(child.session.id)));
+    // Stopped while its turn runs, not while it is still being prepared.
+    await until("the child works", async () =>
+      Boolean(
+        await db
+          .selectFrom("agent_turns")
+          .select("id")
+          .where("session_id", "=", child.session.id)
+          .where("status", "=", "running")
+          .executeTakeFirst(),
+      ),
+    );
     await sessions.interruptSubsession(
       identity,
       projectId,
