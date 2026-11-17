@@ -33,7 +33,13 @@ create and are retried on delete until they report done.**
 - **Failure stops the move.** A failed, canceled, or unstartable deploy leaves
   every enablement where it was, marks the revision `failed` with the reason,
   and notifies the people who manage project automations. The next published
-  revision tries again with its own deploy run. At most one deploy runs per
+  revision tries again with its own deploy run. The project's latest
+  revision, when it failed, can also be tried again on request
+  (`POST …/published-revisions/retry`, `client.publishedRevisions.retry`;
+  `automations:write`), and is tried again once by itself when its deploy
+  workflow's project automation is consented to again (created, updated or
+  turned back on): its deploy runs again at that revision and, on success,
+  followers move. At most one deploy runs per
   project, in publication order, enforced by the revision state machine of
   ADR 0330 (the partial unique index and the per-project claim), not by a run
   correlation key. Work does not know what the workflow does: migrations with

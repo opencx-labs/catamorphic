@@ -253,18 +253,24 @@ holders of `webhooks:write` rotate one with
 
 Enablements belong to a member or to the project (`owner: { type: "project"
 }`). A project enablement runs as the project principal with shared
-connections. An enablement of `main` follows the published program by
-default (`follow`, ADR 0330; `POST <api>/projects/:projectId/workflow-enablements/:enablementId/follow`
+connections. A project automation of `main` follows the published program
+by default; a member's own follows only once the member turns it on, since it
+uses their connections (`follow`, ADR 0330; `POST <api>/projects/:projectId/workflow-enablements/:enablementId/follow`
 with `{ follow }` changes it): every publication (a deploy, a code-host sync
 that receives commits) is recorded in `published_revisions`, and the event
 dispatch pass (`startEventDispatcher`, which every host already runs) moves
 each follower to it when the workflow builds there and its authority digest
 (the consent digest without the artifact) is unchanged. Otherwise it stays
 on its commit with `updateAvailable` and its owner gets a user notification.
+Only a parse, missing-workflow or trigger-registration failure skips a
+revision; other errors are retried with backoff.
 A project's deploy workflow (`.work/project.json` `deploy.workflow`) runs
 once at each revision, through its own project automation, before anything
 moves; a failure moves nothing (ADR 0331). `GET <api>/projects/:projectId/published-revisions`
-lists revisions with their status, deploy run and per-enablement report.
+lists revisions with their status, deploy run and per-enablement report, and
+`POST <api>/projects/:projectId/published-revisions/retry`
+(`automations:write`) tries the latest failed one again; Work also retries it
+once when the deploy workflow's project automation is consented to again.
 Replicas coordinate through a per-project replica claim and compare-and-set
 status changes, so none moves an enablement twice or out of order. Workflows reach chats with one operation,
 `catamorphic.sessions.deliver`, naming the chat by `sessionId` or by a `key`

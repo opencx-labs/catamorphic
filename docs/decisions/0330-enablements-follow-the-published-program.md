@@ -24,11 +24,14 @@ there and the authority the owner consented to is unchanged.**
   later through `POST …/workflow-enablements/:id/follow` (and the server SDK).
   The name matches what it does: the enablement already names its branch
   (`remoteBranch`), and `follow` says it tracks that branch's published head.
-  It defaults to `true` for every enablement of `main` that is not temporary,
-  member automations included: whoever may publish to `main` already decides
-  what that workflow does, and consent gates authority, not code (ADR 0158).
-  Temporary enablements, session-retained source and other branches never
-  follow. Existing non-temporary `main` enablements follow after the migration.
+  It defaults to `true` for a project automation of `main`: whoever may
+  publish to `main` already decides what the project's own workflows do, and
+  consent gates authority, not code (ADR 0158). It defaults to `false` for a
+  member's own automation, which runs with that member's connections: code
+  someone else merged should not start using them before the member sees it,
+  so the member turns following on. Temporary enablements, session-retained
+  source and other branches never follow. Existing lasting project
+  automations of `main` follow after the migration; members' stay pinned.
 - **Published revisions are recorded.** Every publication (a local deploy, a
   server draft deploy, a code-host sync that receives commits, and the trigger
   scan as a catch-all) records one `published_revisions` row under a lock on
@@ -44,9 +47,14 @@ there and the authority the owner consented to is unchanged.**
   commit, artifact and triggers in one transaction (`followed` event).
   Otherwise it stays, is marked `update_available`, and its owner (for a
   project automation, everyone who manages project automations) is notified
-  through user notifications. A workflow that fails to build or parse, or is
-  gone, is skipped and reported the same way; it follows again at the next
-  good revision. Runs in flight keep the commit they started on (ADR 0040).
+  through user notifications. Only a deterministic failure of that workflow at
+  that revision skips it (its source does not parse, it is gone, its triggers
+  do not register): that is reported the same way, and it follows again at
+  the next good revision. Any other failure (the database, the network,
+  capacity, a timeout) never skips: the revision stays applying for that
+  enablement and is tried again with backoff (15 seconds, doubling, at most
+  15 minutes), until a newer revision takes the enablement over. Runs in
+  flight keep the commit they started on (ADR 0040).
 - **Order and replicas.** Revisions advance in publication order, one step at a
   time per project, from the event dispatch pass every host already runs. A
   step holds the replica claim `published-revisions:<projectId>` (ADR 0193);
