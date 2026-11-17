@@ -638,6 +638,66 @@ describe("subagents of a server agent (ADR 0322)", () => {
     expect((await session(parent.id)).workspace_generation).toBe(2);
   }, 120_000);
 
+  it("runs no setup that takes the sandbox's grants while another session's turn runs in it", async () => {
+    let calls = 0;
+    sessions.setSetupWorkflowRunner({
+      run: async () => {
+        calls += 1;
+        return { status: "succeeded" };
+      },
+      end: async () => {},
+    });
+    const parent = await sessions.create(identity, projectId, {
+      workspace: { ref: "pr" },
+      environment: "prepared",
+    });
+    await sessions.sendMessage(identity, projectId, parent.id, "Look around");
+    const child = await sessions.createSubsession(
+      identity,
+      projectId,
+      parent.id,
+      { task: "First look" },
+    );
+    await until(
+      "both rest",
+      async () => (await idle(parent.id)) && (await idle(child.session.id)),
+    );
+    expect(calls).toBe(1);
+    const childTurn = sessions.sendMessage(
+      identity,
+      projectId,
+      child.session.id,
+      "[[wait 5000]] Keep looking",
+    );
+    await until("the child's turn runs", async () =>
+      Boolean(
+        await db
+          .selectFrom("agent_turns")
+          .select("id")
+          .where("session_id", "=", child.session.id)
+          .where("status", "=", "running")
+          .executeTakeFirst(),
+      ),
+    );
+    // The setup is due again, as after an edit to it, while the child works.
+    await machine.executeCommand(
+      await sandboxOf(parent.id),
+      "rm -f .work-session/setup.done",
+      { cwd: "/workspace" },
+    );
+    // Its grants stay: the parent's turn sets nothing up meanwhile.
+    await sessions.sendMessage(identity, projectId, parent.id, "Next");
+    expect(calls).toBe(1);
+    expect((await childTurn).turn.status).toBe("completed");
+    await until(
+      "both rest",
+      async () => (await idle(parent.id)) && (await idle(child.session.id)),
+    );
+    // With no other turn there, the next one runs it.
+    await sessions.sendMessage(identity, projectId, parent.id, "And now");
+    expect(calls).toBe(2);
+  }, 120_000);
+
   it("starts a child that asks for its own workspace at the parent's base", async () => {
     const parent = await sessions.create(identity, projectId, {
       workspace: { ref: "pr" },

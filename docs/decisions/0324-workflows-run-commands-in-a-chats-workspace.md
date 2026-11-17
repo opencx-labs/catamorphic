@@ -104,7 +104,9 @@ blocking the turn. A workspace that subsessions share (ADR 0322) is its
 workspace session's: whichever session's turn makes or sets it up, the
 setup workflow runs for that session, its run and record name it, and its
 events do too; a shared subsession's close gives nothing back and reports
-nothing.
+nothing. A setup due there while another session's turn runs in the
+workspace waits for a turn with no other running, since its part before
+credentials takes every grant out of the sandbox.
 
 Considered: a declarative workspace spec (Work would own the procedure),
 widening a used sandbox for installs (ADR 0257's leak), polling a command

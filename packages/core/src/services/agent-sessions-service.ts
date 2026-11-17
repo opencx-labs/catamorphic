@@ -5864,15 +5864,19 @@ export class AgentSessionsService {
         // checkout before the chat's grants, secrets and the member's files
         // are in the sandbox (ADR 0324), so a project-owned setup run never
         // sees a member's personal values. A setup on its own network did so
-        // above.
+        // above. It takes every grant out of the sandbox, so where another
+        // session's turn runs in the same workspace (ADR 0322) none of the
+        // setup runs: a later turn runs it when no other works there.
         const earlyDue =
           !reused &&
           !widened &&
           !setupNetwork.widens &&
           !setupNetwork.refusal &&
           runtime.setup?.workflow !== undefined;
+        const othersRun =
+          earlyDue && !fresh && (await this.othersRunInWorkspace(session));
         const early =
-          earlyDue && runtime.setup
+          earlyDue && !othersRun && runtime.setup
             ? await this.setUpBeforeCredentials({
                 identity,
                 projectId,
@@ -5982,6 +5986,7 @@ export class AgentSessionsService {
         // own network (ADR 0322): its workspace session's turn does.
         const setup =
           reused ||
+          othersRun ||
           (widened && !widened.settled) ||
           (early && !early.settled) ||
           (session.workspace_session_id && !fresh && setupNetwork.widens)
@@ -13636,6 +13641,32 @@ export class AgentSessionsService {
       })
       .where("id", "=", input.allocationId)
       .execute();
+  }
+
+  /**
+   * Whether another session's turn runs in this session's workspace now
+   * (ADR 0322): past its preparation, its runner using the sandbox's grants.
+   */
+  private async othersRunInWorkspace(
+    session: Pick<SessionRow, "id" | "workspace_session_id">,
+  ): Promise<boolean> {
+    const workspaceSessionId = workspaceCopyId(session);
+    const running = await this.db
+      .selectFrom("agent_turns as turn")
+      .innerJoin("agent_sessions as other", "other.id", "turn.session_id")
+      .select("turn.id")
+      .where((eb) =>
+        eb.or([
+          eb("other.id", "=", workspaceSessionId),
+          eb("other.workspace_session_id", "=", workspaceSessionId),
+        ]),
+      )
+      .where("other.id", "<>", session.id)
+      .where("turn.status", "in", ["running", "waiting", "finalizing"])
+      .where("turn.lease_expires_at", ">", sql<Date>`now()`)
+      .limit(1)
+      .executeTakeFirst();
+    return running !== undefined;
   }
 
   /** Whether other sessions work in this session's workspace (ADR 0322). */
