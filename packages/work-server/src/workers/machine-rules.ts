@@ -12,6 +12,12 @@ import {
 } from "@catamorphic/hetzner";
 import { getTracer, withSpan } from "@catamorphic/otel";
 import { environmentSatisfies, poolMatches } from "@catamorphic/sandbox";
+import {
+  type MachineEventKind,
+  machineCreateResult,
+  machineDestroyResult,
+  machineProjectEvent,
+} from "@catamorphic/server-sdk";
 import { type Kysely, sql } from "kysely";
 import { z } from "zod";
 import {
@@ -23,6 +29,7 @@ import {
   type MachineClass,
   MachineName,
   type MachinePlatform,
+  type WorkflowMachineClass,
 } from "./machine-classes.js";
 import {
   accessGroupsOf,
@@ -218,6 +225,64 @@ export interface MachineProvisioner {
   }>;
 }
 
+/**
+ * Starts and reads the workflows of `workflow` machine classes (ADR 0327).
+ * `start` runs the project's enablement of `workflow` that binds `kind`,
+ * under `correlationKey`, and throws {@link MachineProvisioningRefusedError}
+ * when the project has none turned on. `latest` is the newest run of the
+ * project's automation under that key.
+ */
+export interface MachineWorkflows {
+  start(args: {
+    project: string;
+    workflow: string;
+    kind: "machine.create" | "machine.destroy";
+    input: Readonly<Record<string, unknown>>;
+    correlationKey: string;
+  }): Promise<void>;
+  latest(args: {
+    project: string;
+    workflow: string;
+    correlationKey: string;
+  }): Promise<MachineWorkflowRun | undefined>;
+  /** Record a machine lifecycle event in the project. */
+  record(args: {
+    project: string;
+    event: ReturnType<typeof machineProjectEvent>;
+  }): Promise<void>;
+}
+
+/** A provisioner run as the reconciler reads it. */
+export type MachineWorkflowRun =
+  | { status: "active" }
+  | { status: "completed"; output: unknown }
+  | { status: "failed"; error: string };
+
+/**
+ * Refs Work keeps for a `workflow` class's machine until its create run
+ * answers (`creating:`), and when it ended without one (`unknown:`), each
+ * followed by the enrollment's idempotency key. Neither reaches a
+ * workflow: `destroy` gets `ref: null` and finds the machine by name.
+ */
+const CREATING_REF = "creating:";
+const UNKNOWN_REF = "unknown:";
+
+function creatingKey(ref: string | null): string | undefined {
+  return ref?.startsWith(CREATING_REF)
+    ? ref.slice(CREATING_REF.length)
+    : undefined;
+}
+
+/** The ref a platform gave, or null for Work's own markers. */
+function platformRef(ref: string | null): string | null {
+  return ref?.startsWith(CREATING_REF) || ref?.startsWith(UNKNOWN_REF)
+    ? null
+    : ref;
+}
+
+const createKey = (idempotencyKey: string) =>
+  `machine-create:${idempotencyKey}`;
+
 /** A platform refused to create a machine, and created nothing. */
 export class MachineProvisioningRefusedError extends Error {
   constructor(message: string) {
@@ -342,6 +407,8 @@ interface Desired {
   queued: Map<string, number>;
   /** What keeps rules on demand from serving all their work, by rule. */
   notices: Map<string, string[]>;
+  /** Machines on demand not seen for their rule's `enrollMinutes`. */
+  lost: Set<string>;
 }
 
 /** Marks a ref as a Hetzner Cloud server id. */
@@ -369,6 +436,8 @@ export class MachineReconciler {
       provisioner?: MachineProvisioner;
       /** For hetzner-cloud classes. */
       hetzner?: HetznerCloudMachines;
+      /** For workflow classes (ADR 0327). */
+      workflows?: MachineWorkflows;
       /** What machines install, or why they cannot. */
       install: { target: InstallTarget } | { unavailable: string };
       controlPlaneUrl: string;
@@ -417,7 +486,7 @@ export class MachineReconciler {
       );
     if (machineClass.platform === "pool" && demandOf(rule))
       throw new Error(
-        `Machines on demand are created on a platform, and class '${rule.class}' is a pool of enrolled machines. Use a hetzner-cloud or custom class`,
+        `Machines on demand are created on a platform, and class '${rule.class}' is a pool of enrolled machines. Use a hetzner-cloud, workflow or custom class`,
       );
     // A machine serving several owners must isolate its agents to connect
     // (ADR 0167): refuse a rule whose class's machines are known not to.
@@ -784,6 +853,9 @@ export class MachineReconciler {
                 retainDays,
               });
               summary.released.push(machine.name);
+              if (desired.lost.has(machine.name))
+                await this.recordEvent({ kind: "machine.lost", machine });
+              await this.recordEvent({ kind: "machine.released", machine });
             }
             if (
               !retentionEnded({
@@ -818,6 +890,7 @@ export class MachineReconciler {
           }
           await this.deps.workers.forgetMachine(machine);
           summary.removed.push(machine.name);
+          await this.recordEvent({ kind: "machine.destroyed", machine });
         },
       });
       if (!settled) pendingDestroy.add(machine.name);
@@ -830,12 +903,18 @@ export class MachineReconciler {
           candidate.name === machine.name &&
           (candidate.state === "enrolled" || candidate.state === "pending"),
       );
-      if (current?.state === "pending") continue;
+      const creating = current && creatingKey(current.ref) !== undefined;
+      if (current?.state === "pending" && !creating) continue;
       await this.step({
         summary,
         name: machine.name,
         rule: machine.rule,
         run: async () => {
+          // A create workflow's answer, read on the passes after it started.
+          if (current && creating) {
+            await this.settleCreate({ machine: current, fence, summary });
+            if (current.state === "pending") return;
+          }
           if (current && current.releasedForMs !== null) {
             // Their person or group is back before the machine went.
             await fence();
@@ -890,6 +969,15 @@ export class MachineReconciler {
     // Its machine enrolled or is being created since this pass looked.
     if (!enrollment) return;
     try {
+      if (machineClass?.platform === "workflow") {
+        await this.startCreate({
+          machine,
+          machineClass,
+          code: enrollment.code,
+          fence: args.fence,
+        });
+        return;
+      }
       const ref = await this.provision({ machine, code: enrollment.code });
       await this.deps.workers.recordMachineRef({
         code: enrollment.code,
@@ -1092,6 +1180,314 @@ export class MachineReconciler {
     }
   }
 
+  /** Cloud-init user data installing the worker with `code`, when it can. */
+  private cloudInit(args: {
+    machineClass: MachineClass | undefined;
+    code: string;
+  }): string | undefined {
+    const { machineClass } = args;
+    return "target" in this.deps.install
+      ? workerCloudInit({
+          script: workerInstallScript(this.deps.install.target),
+          code: args.code,
+          ...(machineClass?.platform !== "pool" && machineClass?.sandbox
+            ? { sandbox: machineClass.sandbox }
+            : {}),
+        })
+      : undefined;
+  }
+
+  /**
+   * What a custom provisioner's `create` and a workflow's `machine.create`
+   * run are both given.
+   */
+  private createRequest(args: {
+    machine: DesiredMachine;
+    machineClass: MachineClass | undefined;
+    code: string;
+  }): Parameters<MachineProvisioner["create"]>[0] {
+    const { machine, machineClass, code } = args;
+    const cloudInit = this.cloudInit({ machineClass, code });
+    const options =
+      machineClass?.platform === "custom" ||
+      machineClass?.platform === "workflow"
+        ? machineClass.options
+        : undefined;
+    return {
+      name: machine.name,
+      class: machine.class,
+      rule: machine.rule,
+      ...(options ? { options } : {}),
+      ...(machine.waiting ? { waiting: machine.waiting } : {}),
+      labels: machine.placement.labels,
+      enrollment: {
+        controlPlaneUrl: this.deps.controlPlaneUrl,
+        code,
+        idempotencyKey: idempotencyKeyOf(code),
+        ...(cloudInit ? { cloudInit } : {}),
+      },
+    };
+  }
+
+  /**
+   * Start a workflow class's create run (ADR 0327). The intent is recorded
+   * first, as the machine's provisional ref, so every later pass knows a
+   * run may exist under this enrollment's key; one is started at most once.
+   */
+  private async startCreate(args: {
+    machine: DesiredMachine;
+    machineClass: WorkflowMachineClass;
+    code: string;
+    fence: () => Promise<void>;
+  }): Promise<void> {
+    const workflows = this.workflowsOrRefuse();
+    const idempotencyKey = idempotencyKeyOf(args.code);
+    await args.fence();
+    await this.deps.workers.recordMachineRef({
+      code: args.code,
+      ref: `${CREATING_REF}${idempotencyKey}`,
+    });
+    await workflows.start({
+      project: args.machineClass.project,
+      workflow: args.machineClass.create,
+      kind: "machine.create",
+      input: this.createRequest(args),
+      correlationKey: createKey(idempotencyKey),
+    });
+  }
+
+  /**
+   * Read a workflow class's create run on a later pass: its ref replaces
+   * the provisional one; a refusal withdraws the code; a failure, or no
+   * run at all after a start that failed uncertainly, keeps it, since the
+   * machine may still enroll, and is reported once.
+   */
+  private async settleCreate(args: {
+    machine: ProvisionedMachine;
+    fence: () => Promise<void>;
+    summary: ReconcileSummary;
+  }): Promise<void> {
+    const { machine } = args;
+    const key = creatingKey(machine.ref);
+    const machineClass = this.workflowClassOf(machine);
+    if (key === undefined || !machineClass || !this.deps.workflows) return;
+    const run = await this.deps.workflows.latest({
+      project: machineClass.project,
+      workflow: machineClass.create,
+      correlationKey: createKey(key),
+    });
+    const from = `${CREATING_REF}${key}`;
+    if (run?.status === "active") return;
+    const result =
+      run?.status === "completed" ? machineCreateResult(run.output) : undefined;
+    if (
+      result &&
+      "ref" in result &&
+      result.ref.length > 0 &&
+      platformRef(result.ref) === result.ref
+    ) {
+      await args.fence();
+      await this.deps.workers.replaceMachineRef({
+        name: machine.name,
+        from,
+        to: result.ref,
+      });
+      machine.ref = result.ref;
+      args.summary.created.push(machine.name);
+      await this.recordEvent({ kind: "machine.created", machine });
+      return;
+    }
+    if (result && "refused" in result && machine.state === "pending") {
+      await args.fence();
+      await this.deps.workers.cancelEnrollments({ name: machine.name });
+      throw new MachineProvisioningRefusedError(
+        `Workflow ${machineClass.create} refused: ${result.refused}`,
+      );
+    }
+    // Uncertain: the machine may still enroll. Remember the run ended, so
+    // it is reported once and destroy no longer waits for it.
+    await args.fence();
+    await this.deps.workers.replaceMachineRef({
+      name: machine.name,
+      from,
+      to: `${UNKNOWN_REF}${key}`,
+    });
+    machine.ref = `${UNKNOWN_REF}${key}`;
+    // No run at all: its start failed without saying whether one began.
+    throw new Error(
+      !run
+        ? `Workflow ${machineClass.create} has no run for this machine; it may still enroll`
+        : run.status === "failed"
+          ? `Workflow ${machineClass.create} failed: ${run.error}`
+          : result && "refused" in result
+            ? `Workflow ${machineClass.create} refused, and its machine enrolled anyway`
+            : `Workflow ${machineClass.create} returned neither { ref } nor { refused }`,
+    );
+  }
+
+  /**
+   * Destroy a workflow class's machine (ADR 0327): wait for a create run
+   * still under way, then start `destroy` unless one is running, until a
+   * run answers `{ done: true }`.
+   */
+  private async destroyByWorkflow(args: {
+    machine: ProvisionedMachine;
+    machineClass: WorkflowMachineClass;
+  }): Promise<boolean> {
+    const { machine, machineClass } = args;
+    const workflows = this.deps.workflows;
+    if (!workflows)
+      throw new Error("This server runs no workflows for machine classes");
+    const key = creatingKey(machine.ref);
+    if (key !== undefined) {
+      const created = await workflows.latest({
+        project: machineClass.project,
+        workflow: machineClass.create,
+        correlationKey: createKey(key),
+      });
+      if (created?.status === "active") return false;
+      // Settle the ref before destroy is keyed by it.
+      const result =
+        created?.status === "completed"
+          ? machineCreateResult(created.output)
+          : undefined;
+      const to =
+        result && "ref" in result && platformRef(result.ref) === result.ref
+          ? result.ref
+          : `${UNKNOWN_REF}${key}`;
+      await this.deps.workers.replaceMachineRef({
+        name: machine.name,
+        from: `${CREATING_REF}${key}`,
+        to,
+      });
+      machine.ref = to;
+    }
+    const ref = platformRef(machine.ref);
+    const correlationKey = `machine-destroy:${machine.name}:${machine.ref ?? "none"}`;
+    const run = await workflows.latest({
+      project: machineClass.project,
+      workflow: machineClass.destroy,
+      correlationKey,
+    });
+    if (run?.status === "active") return false;
+    if (
+      run?.status === "completed" &&
+      machineDestroyResult(run.output)?.done === true
+    )
+      return true;
+    await workflows.start({
+      project: machineClass.project,
+      workflow: machineClass.destroy,
+      kind: "machine.destroy",
+      input: {
+        name: machine.name,
+        class: machine.placement.labels.class ?? "",
+        rule: machine.rule,
+        ref,
+        ...(machineClass.options ? { options: machineClass.options } : {}),
+      },
+      correlationKey,
+    });
+    if (run?.status === "failed")
+      throw new Error(
+        `Workflow ${machineClass.destroy} failed: ${run.error}; it runs again`,
+      );
+    return false;
+  }
+
+  /** A machine's workflow class, when it has one. */
+  private workflowClassOf(machine: {
+    placement: WorkerPlacement;
+  }): WorkflowMachineClass | undefined {
+    const name = machine.placement.labels.class;
+    const machineClass = name ? this.classOf(name) : undefined;
+    return machineClass?.platform === "workflow" ? machineClass : undefined;
+  }
+
+  private workflowsOrRefuse(): MachineWorkflows {
+    if (!this.deps.workflows)
+      throw new MachineProvisioningRefusedError(
+        "This server runs no workflows for machine classes",
+      );
+    return this.deps.workflows;
+  }
+
+  /**
+   * Tell a workflow class's project what happened to one of its machines
+   * (ADR 0327). The change already happened, so a failure is only logged.
+   */
+  private async recordEvent(args: {
+    kind: MachineEventKind;
+    machine: {
+      name: string;
+      rule: string;
+      ref: string | null;
+      placement: WorkerPlacement;
+    };
+  }): Promise<void> {
+    const machineClass = this.workflowClassOf(args.machine);
+    const className = args.machine.placement.labels.class;
+    if (!machineClass || !className || !this.deps.workflows) return;
+    await this.recordFor({
+      kind: args.kind,
+      project: machineClass.project,
+      name: args.machine.name,
+      class: className,
+      rule: args.machine.rule,
+      ref: args.machine.ref,
+    });
+  }
+
+  /** A machine of a rule called for the first time (ADR 0327). */
+  async machineConnected(args: {
+    name: string;
+    rule: string;
+    ref: string | null;
+    class: string | null;
+  }): Promise<void> {
+    const machineClass = args.class ? this.classOf(args.class) : undefined;
+    if (machineClass?.platform !== "workflow" || !args.class) return;
+    await this.recordFor({
+      kind: "machine.connected",
+      project: machineClass.project,
+      name: args.name,
+      class: args.class,
+      rule: args.rule,
+      ref: args.ref,
+    });
+  }
+
+  private async recordFor(args: {
+    kind: MachineEventKind;
+    project: string;
+    name: string;
+    class: string;
+    rule: string;
+    ref: string | null;
+  }): Promise<void> {
+    try {
+      await this.deps.workflows?.record({
+        project: args.project,
+        event: {
+          ...machineProjectEvent({
+            kind: args.kind,
+            name: args.name,
+            class: args.class,
+            rule: args.rule,
+            ref: platformRef(args.ref),
+            occurredAt: new Date(),
+          }),
+          // Once per machine: Work's own markers name a machine with no ref.
+          externalId: `${args.kind}:${args.name}:${args.ref ?? "none"}`,
+        },
+      });
+    } catch (error) {
+      this.deps.log?.(
+        `Recording ${args.kind} for machine ${args.name} failed: ${message(error)}`,
+      );
+    }
+  }
+
   /** Create a machine on its class's platform; resolves with its ref. */
   private async provision(args: {
     machine: DesiredMachine;
@@ -1099,17 +1495,7 @@ export class MachineReconciler {
   }): Promise<string> {
     const { machine, code } = args;
     const machineClass = this.classOf(machine.class);
-    const idempotencyKey = createHash("sha256").update(code).digest("hex");
-    const cloudInit =
-      "target" in this.deps.install
-        ? workerCloudInit({
-            script: workerInstallScript(this.deps.install.target),
-            code,
-            ...(machineClass?.platform !== "pool" && machineClass?.sandbox
-              ? { sandbox: machineClass.sandbox }
-              : {}),
-          })
-        : undefined;
+    const cloudInit = this.cloudInit({ machineClass, code });
     if (machineClass?.platform === "hetzner-cloud") {
       if (!this.deps.hetzner)
         throw new MachineProvisioningRefusedError(
@@ -1141,20 +1527,9 @@ export class MachineReconciler {
       return `${HETZNER_REF}${ref}`;
     }
     if (machineClass?.platform === "custom" && this.deps.provisioner) {
-      const { ref } = await this.deps.provisioner.create({
-        name: machine.name,
-        class: machine.class,
-        rule: machine.rule,
-        ...(machineClass.options ? { options: machineClass.options } : {}),
-        ...(machine.waiting ? { waiting: machine.waiting } : {}),
-        labels: machine.placement.labels,
-        enrollment: {
-          controlPlaneUrl: this.deps.controlPlaneUrl,
-          code,
-          idempotencyKey,
-          ...(cloudInit ? { cloudInit } : {}),
-        },
-      });
+      const { ref } = await this.deps.provisioner.create(
+        this.createRequest({ machine, machineClass, code }),
+      );
       return ref;
     }
     throw new MachineProvisioningRefusedError(
@@ -1198,6 +1573,8 @@ export class MachineReconciler {
       });
       return destroyed.done;
     }
+    if (machineClass?.platform === "workflow")
+      return this.destroyByWorkflow({ machine, machineClass });
     if (!this.deps.provisioner)
       throw new Error(
         `No platform destroys machines of class '${className ?? "unknown"}'`,
@@ -1262,6 +1639,7 @@ export class MachineReconciler {
       problems: new Map(),
       queued: new Map(),
       notices: new Map(),
+      lost: new Set(),
     };
     const demand = Object.values(rules).some((rule) => demandOf(rule))
       ? await this.demandState()
@@ -1331,7 +1709,7 @@ export class MachineReconciler {
               definition,
             }),
           ]);
-        for (const machine of demandMachines({
+        const planned = demandMachines({
           rule,
           definition,
           demand: ruleDemand,
@@ -1339,8 +1717,10 @@ export class MachineReconciler {
           loads: demand.loads,
           waits,
           stalled: Boolean(stalled),
-        }))
+        });
+        for (const machine of planned.machines)
           desired.provisioned.set(machine.name, machine);
+        for (const name of planned.lost) desired.lost.add(name);
         continue;
       }
       const group = definition.group ?? "";
@@ -1794,7 +2174,7 @@ function demandMachines(args: {
   loads: ReadonlyMap<string, MachineLoad>;
   waits: readonly DemandWait[];
   stalled: boolean;
-}): DesiredMachine[] {
+}): { machines: DesiredMachine[]; lost: string[] } {
   const { rule, definition, demand } = args;
   const scope: { group: string } | { projects: readonly string[] } =
     definition.projects
@@ -1837,6 +2217,7 @@ function demandMachines(args: {
   /** Kept machines that will take a piece of work once they connect. */
   let coming = 0;
   const idle: Array<{ machine: ProvisionedMachine; idleForMs: number }> = [];
+  const lost: string[] = [];
   for (const machine of own) {
     if (machine.state === "pending") {
       kept.push(machine);
@@ -1846,7 +2227,10 @@ function demandMachines(args: {
     if (machine.state !== "enrolled") continue;
     const load = args.loads.get(machine.name);
     if (!load) continue;
-    if (!load.live && load.unseenForMs >= lostAfter) continue;
+    if (!load.live && load.unseenForMs >= lostAfter) {
+      lost.push(machine.name);
+      continue;
+    }
     if (load.holding > 0) kept.push(machine);
     else if (load.neverConnected) {
       // Enrolled, and still starting its worker.
@@ -1903,7 +2287,15 @@ function demandMachines(args: {
     );
     made += 1;
   }
-  return machines;
+  return { machines, lost };
+}
+
+/**
+ * A hash of an enrollment code: the platform's idempotency token for the
+ * create made with it, and the code's stored hash.
+ */
+function idempotencyKeyOf(code: string): string {
+  return createHash("sha256").update(code).digest("hex");
 }
 
 function digest(value: string, length: number): string {

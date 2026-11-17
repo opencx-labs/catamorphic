@@ -1,6 +1,6 @@
 # 0205 — Machine classes: cloud servers, pooled machines, and retention
 
-- **Status:** Accepted; refined by [0258](0258-machines-on-demand.md): machines on demand, work waiting for a machine, and draining under the node lock
+- **Status:** Accepted; refined by [0258](0258-machines-on-demand.md): machines on demand, work waiting for a machine, and draining under the node lock; [0327](0327-machine-provisioners-are-workflows.md): machine provisioners as project workflows
 - **Date:** 2026-10-06
 - **Refines:** 0164, 0167, 0193
 

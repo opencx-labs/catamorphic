@@ -92,10 +92,37 @@ export const CustomClassSchema = z.strictObject({
   sandbox: MachineSandboxSchema.optional(),
 });
 
+/** An exported workflow's name: a JavaScript identifier. */
+const WorkflowExportName = z
+  .string()
+  .max(128)
+  .regex(
+    /^[A-Za-z_$][A-Za-z0-9_$]*$/,
+    "Name the workflow by its export, such as createMachine",
+  );
+
+/**
+ * Machines a project's workflows create and destroy (ADR 0327): `create`
+ * binds `machine.create` and `destroy` binds `machine.destroy`, both turned
+ * on for the project. `options` reaches both unread.
+ */
+export const WorkflowClassSchema = z.strictObject({
+  platform: z.literal("workflow"),
+  /** The project whose workflows these are. */
+  project: z.uuid(),
+  create: WorkflowExportName,
+  destroy: WorkflowExportName,
+  options: z.record(z.string(), z.json()).optional(),
+  /** The backend `enrollment.cloudInit` installs. */
+  sandbox: MachineSandboxSchema.optional(),
+});
+export type WorkflowMachineClass = z.output<typeof WorkflowClassSchema>;
+
 export const MachineClassSchema = z.discriminatedUnion("platform", [
   HetznerCloudClassSchema,
   PoolClassSchema,
   CustomClassSchema,
+  WorkflowClassSchema,
 ]);
 export type MachineClass = z.output<typeof MachineClassSchema>;
 export type MachinePlatform = MachineClass["platform"];

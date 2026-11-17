@@ -23,6 +23,7 @@ import { z } from "zod";
 import type { CodexSignInRequest } from "./codex-sign-ins.js";
 import {
   accessGroupsOf,
+  NodeLabelsSchema,
   type ScheduledPlacement,
   servesNobody,
   servesOneOwner,
@@ -285,6 +286,16 @@ export class WorkWorkerRegistry {
        * chats waiting for a machine (ADR 0258) again at once.
        */
       connected?: () => void;
+      /**
+       * A machine a rule provisioned called for the first time: its
+       * class's project hears `machine.connected` (ADR 0327).
+       */
+      firstContact?: (machine: {
+        name: string;
+        rule: string;
+        ref: string | null;
+        class: string | null;
+      }) => Promise<void>;
       log?: (line: string) => void;
     },
   ) {
@@ -383,6 +394,37 @@ export class WorkWorkerRegistry {
         ]),
       )
       .execute();
+  }
+
+  /**
+   * The first call a machine ever made: marks it seen, and tells the
+   * reconciler's listener when a rule provisioned it.
+   */
+  private async firstContact(nodeId: string): Promise<void> {
+    if (!this.deps.firstContact) return;
+    const first = await this.deps.db
+      .updateTable("work_workers")
+      .set({ last_seen_at: sql`now()` })
+      .where("node_id", "=", nodeId)
+      .where("last_seen_at", "is", null)
+      .returning(["name", "machine_rule", "machine_ref", "labels", "pool"])
+      .executeTakeFirst();
+    if (!first?.machine_rule || first.pool) return;
+    const labels = NodeLabelsSchema.safeParse(first.labels);
+    await this.deps
+      .firstContact({
+        name: first.name,
+        rule: first.machine_rule,
+        ref: first.machine_ref,
+        class: labels.success ? (labels.data.class ?? null) : null,
+      })
+      .catch((error: unknown) =>
+        this.deps.log?.(
+          `Machine ${first.name} connected, and recording it failed: ${
+            error instanceof Error ? error.message : String(error)
+          }`,
+        ),
+      );
   }
 
   /** Why this epoch's session ended: superseded, or disabled and lapsed. */
@@ -798,6 +840,7 @@ export class WorkWorkerRegistry {
           processes: args.offer.processes,
         },
       });
+      await this.firstContact(args.nodeId);
       await this.seen(args.nodeId);
       if (connected.superseded)
         this.deps.log?.(`Worker ${args.name} restarted and connected`);
@@ -1153,6 +1196,33 @@ export class WorkWorkerRegistry {
         .where("revoked_at", "is", null)
         .where("machine_ref", "is", null)
         .execute();
+  }
+
+  /**
+   * Replace a machine's ref while it is still `from` (ADR 0327): a create
+   * workflow answered, on the enrollment and on the worker if it enrolled
+   * first.
+   */
+  async replaceMachineRef(args: {
+    name: string;
+    from: string;
+    to: string;
+  }): Promise<void> {
+    await this.deps.db
+      .updateTable("work_worker_enrollments")
+      .set({ machine_ref: args.to })
+      .where("tenant_id", "=", this.deps.tenantId)
+      .where("name", "=", args.name)
+      .where("machine_ref", "=", args.from)
+      .execute();
+    await this.deps.db
+      .updateTable("work_workers")
+      .set({ machine_ref: args.to })
+      .where("tenant_id", "=", this.deps.tenantId)
+      .where("name", "=", args.name)
+      .where("machine_ref", "=", args.from)
+      .where("machine_destroyed_at", "is", null)
+      .execute();
   }
 
   /**
