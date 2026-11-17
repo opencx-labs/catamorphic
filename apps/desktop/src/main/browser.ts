@@ -161,6 +161,7 @@ import {
   SitePermissionBroker,
   SiteSettingsStore,
 } from "./site-settings.js";
+import { registerPageTranslation } from "./translation/index.js";
 import { registerTrustedHosts } from "./trusted-hosts.js";
 import { WindowImages } from "./window-images.js";
 import { DEFAULT_WORKSPACE_FILE } from "./workspace-config.js";
@@ -582,6 +583,9 @@ export function registerBrowserSupport(
       hide: (window) => popupSheets.hide(window),
     },
     onVaultChanged: (profileId) => vaultChanged(profileId),
+  });
+  const disposeTranslation = registerPageTranslation({
+    userDataDir: userData,
   });
   const siteIcons = new SiteIcons();
   // Pages pick their icon by the scheme they see, which follows the OS.
@@ -3928,6 +3932,7 @@ export function registerBrowserSupport(
       unwatchBookmarks();
       disposeSidebarSources.dispose();
       disposePasskeys();
+      disposeTranslation();
       disposeSleep();
       disposeDialogs();
       app.removeListener("browser-window-created", attachBrowserCommands);
