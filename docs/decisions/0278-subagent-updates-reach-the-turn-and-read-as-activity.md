@@ -1,6 +1,6 @@
 # 0278 — Subagent updates reach the turn and read as activity
 
-- **Status:** Accepted (extends 0240 and replaces 0250's parent delivery rule; settled folding amended by [0305](0305-completed-work-folds-toward-the-latest-answer.md))
+- **Status:** Accepted (extends 0240 and replaces 0250's parent delivery rule; settled folding amended by [0305](0305-completed-work-folds-toward-the-latest-answer.md); a child's later results reach the parent by [0322](0322-server-agents-start-subagents-in-their-workspace.md))
 - **Date:** 2026-10-23
 
 ## Context

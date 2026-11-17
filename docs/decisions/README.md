@@ -102,7 +102,7 @@ Settled design decisions live here as short Architecture Decision Records. They 
 | [0087](0087-workflow-woken-session-attention.md) | Workflow-woken sessions are the notification record | Superseded by 0156 (who a workflow's chat reaches) |
 | [0088](0088-desktop-web-links-stay-in-workspace.md) | Desktop web links stay in the workspace | Accepted |
 | [0089](0089-project-shaped-member-shell.md) | Project-shaped member shell and durable session provenance | Accepted |
-| [0090](0090-first-class-subsessions-and-delegation.md) | First-class subsessions and explicit delegation grants | Accepted (amended by 0197, 0202, 0271; causation is a typed delivery field by 0219) |
+| [0090](0090-first-class-subsessions-and-delegation.md) | First-class subsessions and explicit delegation grants | Accepted (amended by 0197, 0202, 0271, 0322; causation is a typed delivery field by 0219) |
 | [0091](0091-on-demand-desktop-harness-components.md) | Desktop coding harnesses use verified on-demand components | Accepted |
 | [0092](0092-project-owned-capability-experiences.md) | Project-owned capability experiences | Accepted (`when.builder` superseded by 0158) |
 | [0093](0093-session-model-overrides-and-desktop-toolchain.md) | Session model overrides and the desktop toolchain | Accepted (PATH amended by 0202) |
@@ -214,7 +214,7 @@ Settled design decisions live here as short Architecture Decision Records. They 
 | [0199](0199-subscription-sign-ins-stay-on-the-machine.md) | Subscription sign-ins stay on the machine they were made on | Accepted (amended by 0213: Codex only, on a member's own machine; who delivered an input is a typed field by 0219) |
 | [0200](0200-sidebars-move-first-content-settles-after.md) | Sidebars move first; the content settles after them | Accepted |
 | [0201](0201-work-keeps-passkeys-in-the-profile-vault.md) | Work keeps passkeys in the profile's vault: the sheet saves and signs in, autofill offers them, Bitwarden and KeePassXC files import | Accepted (amends 0185, 0151; browsing windows by 0220) |
-| [0202](0202-agents-see-the-browser-subagents-and-their-path.md) | Agents see the browser, their subagents and their PATH | Accepted (amends 0133, 0090, 0112, 0093) |
+| [0202](0202-agents-see-the-browser-subagents-and-their-path.md) | Agents see the browser, their subagents and their PATH | Accepted (amends 0133, 0090, 0112, 0093; server delegation amended by 0322) |
 | [0203](0203-work-runs-chrome-extensions-from-the-web-store.md) | Work runs Chrome extensions from the Chrome Web Store: a host-owned `chrome.*` API on Electron, verified store installs, Chrome's toolbar, popups, side panel and dialogs | Accepted (amends 0194; amended by 0235) |
 | [0204](0204-sandboxes-on-any-linux-machine.md) | Sandboxes on any Linux machine: the container backend | Accepted |
 | [0205](0205-machine-classes-pools-and-retention.md) | Machine classes: cloud servers, pooled machines, and retention | Accepted (machines on demand by 0258) |
@@ -284,7 +284,7 @@ Settled design decisions live here as short Architecture Decision Records. They 
 | [0275](0275-a-resumed-claude-code-keeps-its-sign-in.md) | A resumed Claude Code keeps its sign-in: the CLI's credential store stays the sign-in's own home, not the SDK's temporary resume home | Accepted (amends 0198, 0228, 0269) |
 | [0276](0276-a-chat-can-switch-agents-and-harnesses.md) | A chat can switch agents and harnesses | Accepted (supersedes 0214; amends 0233) |
 | [0277](0277-agents-reach-trusted-hosts-code-runs-confined-commands-run-as-approved.md) | What agents write reaches only trusted hosts, project code runs confined and declares what it reaches, and commands run as approved | Accepted (amends 0045, 0140, 0148, 0176, 0234, 0239, 0241) |
-| [0278](0278-subagent-updates-reach-the-turn-and-read-as-activity.md) | Subagent updates reach the working turn and read as compact activity | Accepted (extends 0240; replaces 0250's parent delivery rule) |
+| [0278](0278-subagent-updates-reach-the-turn-and-read-as-activity.md) | Subagent updates reach the working turn and read as compact activity | Accepted (extends 0240; replaces 0250's parent delivery rule; a child's later results by 0322) |
 | [0279](0279-public-pull-request-status-needs-no-sign-in.md) | Public pull request status needs no sign-in | Accepted (extends 0239) |
 | [0280](0280-terminals-use-the-project-theme-and-chat-workspace.md) | Terminals use the project theme and chat workspace | Accepted (builds on 0209, 0215) |
 | [0281](0281-secret-storage-has-one-encrypted-format.md) | Secret storage has one encrypted format | Accepted (amends 0162, 0206) |
@@ -326,3 +326,4 @@ Settled design decisions live here as short Architecture Decision Records. They 
 | [0319](0319-the-desktop-compacts-rewritten-tables.md) | The desktop compacts the tables it rewrites | Accepted |
 | [0320](0320-pages-translate-on-the-device.md) | Pages translate on the device | Accepted |
 | [0321](0321-runner-state-stays-out-of-the-checkout.md) | Runner state stays out of the checkout | Accepted (amends 0198) |
+| [0322](0322-server-agents-start-subagents-in-their-workspace.md) | Agents on a server start subagents, which share their workspace by default | Accepted (amends 0090, 0202, 0278) |
