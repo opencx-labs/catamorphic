@@ -114,6 +114,12 @@ function startAttempt(
       retryAt: refusal.retryAt,
     });
   };
+  /** A refused model call answered again: the provider is back. */
+  const providerAnswered = () => {
+    if (!retrying || !items.live) return;
+    retrying = false;
+    host.emit({ type: "provider.resumed" });
+  };
   /** What the agent's `usage_update`s said: before the turn, and since. */
   const spend: {
     context?: { used: number; size: number };
@@ -135,7 +141,11 @@ function startAttempt(
         "ACP agents run on their own sign-in or a model connection, not a Work sign-in.",
       );
     if (access.kind === "gateway")
-      model = await serveLoopbackModel({ access, onRefused: providerRefused });
+      model = await serveLoopbackModel({
+        access,
+        onRefused: providerRefused,
+        onAnswered: providerAnswered,
+      });
     const spawned = spawn(executable, args, {
       cwd: attempt.workingDirectory,
       env: {
@@ -210,16 +220,9 @@ function startAttempt(
               else spend.costBefore = cost;
             }
           }
-          // New output from the model: its provider answers again.
-          if (
-            retrying &&
-            items.live &&
-            (update.sessionUpdate === "agent_message_chunk" ||
-              update.sessionUpdate === "agent_thought_chunk")
-          ) {
-            retrying = false;
-            host.emit({ type: "provider.resumed" });
-          }
+          // New output from the model (words, thoughts, a tool call or a
+          // plan): its provider answers again.
+          if (LIVE_OUTPUT.has(update.sessionUpdate)) providerAnswered();
           items.update(update);
         },
       )
@@ -985,6 +988,15 @@ async function serveHostTools(input: {
     })),
   };
 }
+
+/** Updates that are the model's own output in a turn. */
+const LIVE_OUTPUT: ReadonlySet<string> = new Set([
+  "agent_message_chunk",
+  "agent_thought_chunk",
+  "tool_call",
+  "tool_call_update",
+  "plan",
+]);
 
 /** The conversation updates an agent replays from a session it reopens. */
 const REPLAYED: ReadonlySet<string> = new Set([

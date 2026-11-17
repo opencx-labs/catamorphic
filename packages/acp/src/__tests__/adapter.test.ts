@@ -1262,6 +1262,36 @@ describe("ACP agents on a model connection (ADR 0255)", () => {
     }
   });
 
+  it("reports the provider resumed when the retried call is answered, though its output is a tool call", async () => {
+    const space = workspace();
+    const gateway = await fakeGateway(path.join(space.dir, "grant"));
+    gateway.refuse(1);
+    try {
+      const turn = run({
+        ...gatewayAttempt(space, gateway),
+        input: {
+          itemId: "input",
+          text: "[[model retry quiet]]",
+          attachments: [],
+        },
+      });
+      await turn.finished();
+      expect(turn.completed()).toMatchObject({ status: "completed" });
+      expect(
+        turn
+          .events()
+          .filter(
+            (event) =>
+              event.type === "provider.retrying" ||
+              event.type === "provider.resumed",
+          )
+          .map((event) => event.type),
+      ).toEqual(["provider.retrying", "provider.resumed"]);
+    } finally {
+      await gateway.close();
+    }
+  });
+
   it("applies the effort after the model, through the agent's thought level option", async () => {
     const space = workspace();
     const gateway = await fakeGateway(path.join(space.dir, "grant"));
@@ -1605,6 +1635,84 @@ describe("the loopback model endpoint", () => {
     } finally {
       model.close();
       await upstream.close();
+    }
+  });
+
+  /** An endpoint before an upstream answering `answer()` to every call. */
+  const refusing = async (answer: () => { status: number; body: string }) => {
+    const upstream = await upstreamServer((request, response) => {
+      request.resume();
+      request.on("end", () => {
+        const { status, body } = answer();
+        response.writeHead(status, { "content-type": "application/json" });
+        response.end(body);
+      });
+    });
+    const refusals: Array<{ status: number; message: string }> = [];
+    let answered = 0;
+    const model = await serveLoopbackModel({
+      access: {
+        kind: "gateway",
+        api: "openai",
+        baseUrl: upstream.baseUrl,
+        grantDirectory: grantDirectory(),
+      },
+      onRefused: ({ status, message }) => refusals.push({ status, message }),
+      onAnswered: () => {
+        answered += 1;
+      },
+    });
+    return {
+      refusals,
+      answered: () => answered,
+      call: () =>
+        fetch(`${model.baseUrl}/chat/completions`, {
+          method: "POST",
+          headers: { authorization: `Bearer ${model.apiKey}` },
+          body: "{}",
+        }),
+      close: async () => {
+        model.close();
+        await upstream.close();
+      },
+    };
+  };
+
+  it("reports only refusals that pass: not 501 or 505, but 500, 502, 503, 504 and 529", async () => {
+    let status = 501;
+    const endpoint = await refusing(() => ({
+      status,
+      body: '{"error":{"message":"refused"}}',
+    }));
+    try {
+      for (const code of [501, 505, 500, 502, 503, 504, 529, 200]) {
+        status = code;
+        expect((await endpoint.call()).status).toBe(code);
+      }
+      expect(endpoint.refusals.map((refusal) => refusal.status)).toEqual([
+        500, 502, 503, 504, 529,
+      ]);
+      expect(endpoint.refusals[0]?.message).toBe("refused");
+      expect(endpoint.answered()).toBe(1);
+    } finally {
+      await endpoint.close();
+    }
+  });
+
+  it("hands a refusal's body on whole, however large, reading only its start for the words", async () => {
+    const big = JSON.stringify({
+      error: { message: "Overloaded", detail: "x".repeat(100 * 1024) },
+    });
+    const endpoint = await refusing(() => ({ status: 503, body: big }));
+    try {
+      const overloaded = await endpoint.call();
+      expect(overloaded.status).toBe(503);
+      expect(await overloaded.text()).toBe(big);
+      expect(endpoint.refusals).toEqual([
+        { status: 503, message: expect.any(String) },
+      ]);
+    } finally {
+      await endpoint.close();
     }
   });
 

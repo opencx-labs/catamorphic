@@ -1517,6 +1517,7 @@ export class TurnEngine {
             fromOrdinal: handoffFrom,
             toOrdinal: input.turn.ordinal - 1,
             strategy,
+            currentTurn: { id: input.turn.id, ordinal: input.turn.ordinal },
           })
         : null;
     const turn: Turn = {
