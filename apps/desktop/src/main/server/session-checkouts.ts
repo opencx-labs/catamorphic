@@ -360,10 +360,36 @@ export class SessionCheckouts {
   async resolveForAgent(input: {
     projectId: string;
     sessionId: string;
+    /**
+     * The session whose checkout this chat works in, a shared subsession's
+     * parent (ADR 0322): that checkout as it stands, never isolated from it
+     * or moved for this chat. It is never this chat's own.
+     */
+    sharedWith?: string;
     workspace?: { repository: string; pin: string; commit: string };
     /** Whether the isolation policy keeps this chat out of `checkoutPath`. */
     requiresIsolation(checkoutPath: string): Promise<boolean>;
   }): Promise<{ path: string; owned: boolean }> {
+    if (input.sharedWith) {
+      const shared = usableCheckout(
+        await this.describe({
+          projectId: input.projectId,
+          sessionId: input.sharedWith,
+        }),
+      );
+      // The parent's own worktree comes back as its next turn would bring it.
+      if (shared.kind === "managed" && !shared.present)
+        return {
+          path: (
+            await this.createManaged({
+              projectId: input.projectId,
+              sessionId: input.sharedWith,
+            })
+          ).path,
+          owned: false,
+        };
+      return { path: shared.path, owned: false };
+    }
     // A put-away, bring or discard under way finishes first (ADR 0215); a
     // folder without Git has none.
     const root = this.projectRoot(input.projectId);
