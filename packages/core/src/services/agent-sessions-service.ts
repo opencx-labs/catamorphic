@@ -396,6 +396,18 @@ export interface SetupWorkflowRunner {
     timeoutMs: number;
     signal: AbortSignal;
   }): Promise<SetupWorkflowOutcome>;
+  /**
+   * After the run ended however it ended (ADR 0324): stop every command it
+   * started in the chat's sandbox, and narrow a sandbox it widened, failing
+   * closed. Preparation goes on only once this returned.
+   */
+  end(input: {
+    tenantId: string;
+    projectId: string;
+    sessionId: string;
+    build: string;
+    network: boolean;
+  }): Promise<void>;
 }
 
 /**
@@ -433,6 +445,8 @@ export interface SetupRunRecord {
   network: boolean;
   /** The owner wrote the turn being prepared, so their secrets may reach it. */
   ownerAuthored: boolean;
+  /** When the setup's time is up: its commands end by then. */
+  deadline: string;
 }
 
 /** The base a chat's workspace stands on, as workflows read it. */
@@ -443,12 +457,13 @@ function workspaceJsonOrNull(value: Json | null): Json {
 
 export function parseSetupRun(value: Json | null): SetupRunRecord | null {
   if (!value || typeof value !== "object" || Array.isArray(value)) return null;
-  const { build, network, ownerAuthored } = value;
-  return typeof build === "string"
+  const { build, network, ownerAuthored, deadline } = value;
+  return typeof build === "string" && typeof deadline === "string"
     ? {
         build,
         network: network === true,
         ownerAuthored: ownerAuthored === true,
+        deadline,
       }
     : null;
 }
@@ -5845,6 +5860,38 @@ export class AgentSessionsService {
             ).text(widened.note)
           : undefined;
         if (widenedNote) notes.push(widenedNote);
+        // A setup that names a workflow runs its Environment's part on the
+        // checkout before the chat's grants, secrets and the member's files
+        // are in the sandbox (ADR 0324), so a project-owned setup run never
+        // sees a member's personal values. A setup on its own network did so
+        // above.
+        const earlyDue =
+          !reused &&
+          !widened &&
+          !setupNetwork.widens &&
+          !setupNetwork.refusal &&
+          runtime.setup?.workflow !== undefined;
+        const early =
+          earlyDue && runtime.setup
+            ? await this.setUpBeforeCredentials({
+                identity,
+                projectId,
+                session,
+                turn,
+                runtime,
+                setup: runtime.setup,
+                provider: runtime.provider,
+                sandboxProviderId,
+                ownerAuthored,
+                moved:
+                  baseBefore !== parseWorkspaceBase(session.workspace)?.commit,
+                signal: input.signal,
+              })
+            : undefined;
+        const earlyNote = early?.note
+          ? new SecretMask(await secretValuesOfChat()).text(early.note)
+          : undefined;
+        if (earlyNote) notes.push(earlyNote);
         const models = await this.prepareSandboxGit({
           identity,
           projectId,
@@ -5936,6 +5983,7 @@ export class AgentSessionsService {
         const setup =
           reused ||
           (widened && !widened.settled) ||
+          (early && !early.settled) ||
           (session.workspace_session_id && !fresh && setupNetwork.widens)
             ? undefined
             : await this.prepareWorkspaceSetup({
@@ -5969,13 +6017,17 @@ export class AgentSessionsService {
         if (
           setupGate &&
           !reused &&
-          (setup !== undefined || widened !== undefined) &&
+          (setup !== undefined ||
+            widened !== undefined ||
+            early !== undefined) &&
           !input.signal.aborted
         )
           await this.recordSetupOutcome({
             allocationId: setupGate.allocationId,
             build: sandboxProviderId,
-            note: [widenedNote, setupNote].filter(Boolean).join("\n\n"),
+            note: [widenedNote, earlyNote, setupNote]
+              .filter(Boolean)
+              .join("\n\n"),
           });
         if (session.allocation_id)
           this.startGrantRenewal({
@@ -7258,6 +7310,8 @@ export class AgentSessionsService {
     sandboxProviderId: string;
     /** The sandbox holds its base and what a setup made on it (ADR 0257). */
     afterSetup?: boolean;
+    /** Seed the checkout only: no grant or Git configuration yet (ADR 0324). */
+    seedOnly?: boolean;
   }): Promise<readonly SandboxModelGateway[]> {
     const row = await this.db
       .selectFrom("agent_sessions")
@@ -7295,7 +7349,7 @@ export class AgentSessionsService {
     // Git through the gateway is a convenience of the turn, not a condition
     // of it: the agent still works in its checkout if it cannot be set up.
     // A harness that needs its model says so when it cannot reach it.
-    if (!row.allocation_id) return [];
+    if (!row.allocation_id || input.seedOnly) return [];
     return this.configureSandboxGateway({
       identity: input.identity,
       projectId: input.projectId,
@@ -7758,6 +7812,11 @@ export class AgentSessionsService {
           sandboxProviderId: string;
           /** The setup's own network, in a sandbox holding its base alone. */
           network?: { egress: SandboxEgress; env: Record<string, string> };
+          /**
+           * The Environment's part before the chat's credentials and the
+           * member's files are in the sandbox (ADR 0324).
+           */
+          isolated?: { env: Record<string, string> };
           /** Why its setup's network cannot be given here. */
           networkRefusal?: SetupNetworkRefusal;
         }
@@ -7908,6 +7967,7 @@ export class AgentSessionsService {
           personalAllowed,
           timeoutMinutes,
           ...(widening ? { network: widening } : {}),
+          ...(runner.isolated ? { isolated: runner.isolated } : {}),
           ...(workflow ? { workflow } : {}),
           signal: input.signal,
           onRun,
@@ -7969,10 +8029,12 @@ export class AgentSessionsService {
     // This build of the workspace: the run is stamped with it, and only a
     // run for the build in progress may run commands in setup.
     const build = randomUUID();
+    const timeoutMs = input.timeoutMinutes * 60_000;
     const record: SetupRunRecord = {
       build,
       network: input.network,
       ownerAuthored: input.ownerAuthored,
+      deadline: new Date(Date.now() + timeoutMs).toISOString(),
     };
     await this.db
       .updateTable("agent_sessions")
@@ -7992,7 +8054,7 @@ export class AgentSessionsService {
           reason: input.reason,
           workspace: workspaceJsonOrNull(session.workspace),
         },
-        timeoutMs: input.timeoutMinutes * 60_000,
+        timeoutMs,
         signal: input.signal,
       });
     } catch (error) {
@@ -8003,12 +8065,22 @@ export class AgentSessionsService {
         error: error instanceof Error ? error.message : String(error),
       };
     } finally {
+      // The run is no longer the chat's setup; then nothing it started
+      // goes on, and a sandbox it widened is narrow again, before the
+      // chat's credentials arrive. A failure here fails the preparation.
       await this.db
         .updateTable("agent_sessions")
         .set({ setup_run: null })
         .where("id", "=", session.id)
         .where(sql<boolean>`setup_run->>'build' = ${build}`)
         .execute();
+      await runner.end({
+        tenantId: input.identity.tenantId,
+        projectId: input.projectId,
+        sessionId: session.id,
+        build,
+        network: input.network,
+      });
     }
   }
 
@@ -8111,6 +8183,86 @@ export class AgentSessionsService {
           ?.revokeSession({ agentSessionId: session.id, channel: "sandbox" })
           .catch(() => {});
       throw error;
+    });
+  }
+
+  /**
+   * The Environment's part of a setup that names a workflow (ADR 0324), in
+   * the sandbox the turn uses, with its checkout seeded: when it is due,
+   * the chat's grants, secrets and the member's files are taken out first
+   * and come back after, and it runs with only the secrets the setup
+   * names. Undefined when it is not due.
+   */
+  private async setUpBeforeCredentials(input: {
+    identity: Identity;
+    projectId: string;
+    session: SessionRow;
+    turn: Turn;
+    runtime: AgentExecutionRuntime;
+    setup: AdmittedSetup;
+    provider: SandboxProvider;
+    sandboxProviderId: string;
+    ownerAuthored: boolean;
+    moved: boolean;
+    signal: AbortSignal;
+  }): Promise<{ note?: string; settled: boolean } | undefined> {
+    const { identity, projectId, session, provider, setup } = input;
+    const projectDir = this.projectDir(provider);
+    const due = environmentSetupDue({
+      ...(setup.command !== undefined ? { environment: setup.command } : {}),
+      ...(setup.workflow ? { workflow: setup.workflow } : {}),
+      ...(parseWorkspaceBase(session.workspace)
+        ? { base: parseWorkspaceBase(session.workspace)?.commit }
+        : {}),
+      recorded: await readSetupRecord({
+        provider,
+        sandboxId: input.sandboxProviderId,
+        projectDir,
+      }),
+    });
+    if (!due) return undefined;
+    // The checkout as the turn has it, then nothing of anyone's.
+    await this.prepareSandboxGit({
+      identity,
+      projectId,
+      sessionId: session.id,
+      provider,
+      sandboxProviderId: input.sandboxProviderId,
+      seedOnly: true,
+    });
+    await removeSessionCredentials({
+      provider,
+      sandboxId: input.sandboxProviderId,
+    });
+    await removePersonalEnvironment({
+      provider,
+      sandboxId: input.sandboxProviderId,
+      projectDir,
+    });
+    const env = await this.setupSecretValues({
+      identity,
+      projectId,
+      session,
+      runtime: input.runtime,
+      names: setup.secrets ?? [],
+      ownerAuthored: input.ownerAuthored,
+    });
+    return this.prepareWorkspaceSetup({
+      identity,
+      projectId,
+      session,
+      turn: input.turn,
+      runner: {
+        kind: "sandbox",
+        provider,
+        sandboxProviderId: input.sandboxProviderId,
+        isolated: { env },
+      },
+      environment: setup,
+      personalAllowed: false,
+      ownerAuthored: input.ownerAuthored,
+      moved: input.moved,
+      signal: input.signal,
     });
   }
 
@@ -11358,7 +11510,12 @@ export class AgentSessionsService {
     handle: SessionWorkspaceHandle;
     /** Present for the chat's own setup run. */
     setup?: {
-      network?: { egress: SandboxEgress; env: Record<string, string> };
+      /** The build it sets up, and when the setup's time is up. */
+      build: string;
+      deadline: string;
+      /** The secrets `setup.secrets` names, for a command `in: "setup"`. */
+      env: Record<string, string>;
+      network?: { egress: SandboxEgress };
     };
   }> {
     const session = await this.db
@@ -11410,9 +11567,10 @@ export class AgentSessionsService {
       allocation,
       start: false,
     });
-    if (input.in !== "setup" || !setupRun?.network)
-      return { handle, setup: {} };
-    // The setup's own network and the secrets it names (ADR 0257).
+    if (!setupRun) throw new AccessDeniedError();
+    const setup = { build: setupRun.build, deadline: setupRun.deadline };
+    if (input.in !== "setup") return { handle, setup: { ...setup, env: {} } };
+    // The secrets the setup names, and its own network (ADR 0257).
     const agent = await this.resolveAgent(session.agent_id, input.projectId);
     const runtime = await this.resolveExecutionRuntime(
       owner,
@@ -11420,18 +11578,66 @@ export class AgentSessionsService {
       session,
       agent,
     );
-    const egress = allocation.policy.sandbox?.setupEgress;
-    if (!egress || !runtime.setup?.network)
-      throw new Error("This workspace's setup has no network of its own");
     const env = await this.setupSecretValues({
       identity: owner,
       projectId: input.projectId,
       session,
       runtime,
-      names: runtime.setup.secrets ?? [],
+      names: runtime.setup?.secrets ?? [],
       ownerAuthored: setupRun.ownerAuthored,
     });
-    return { handle, setup: { network: { egress, env } } };
+    if (!setupRun.network) return { handle, setup: { ...setup, env } };
+    const egress = allocation.policy.sandbox?.setupEgress;
+    if (!egress || !runtime.setup?.network)
+      throw new Error("This workspace's setup has no network of its own");
+    return { handle, setup: { ...setup, env, network: { egress } } };
+  }
+
+  /**
+   * A chat's running sandbox as Work itself reaches it, with no caller's
+   * access in question: only to stop what a workflow started there and to
+   * narrow it again (ADR 0324). Undefined when it has none.
+   */
+  async chatSandbox(input: {
+    projectId: string;
+    sessionId: string;
+  }): Promise<SessionWorkspaceHandle | undefined> {
+    const session = await this.db
+      .selectFrom("agent_sessions")
+      .selectAll()
+      .where("id", "=", input.sessionId)
+      .where("project_id", "=", input.projectId)
+      .executeTakeFirst();
+    if (!session?.allocation_id || !session.sandbox_id) return undefined;
+    const owner = await this.ownerOf(session);
+    if (!owner) return undefined;
+    const allocation = await this.executionAllocations.get({
+      identity: owner,
+      allocationId: session.allocation_id,
+    });
+    if (allocation?.status !== "active") return undefined;
+    return this.liveWorkspace({ owner, session, allocation, start: false });
+  }
+
+  /**
+   * What a chat's output masks (ADR 0206): every secret value its
+   * sandboxes received, so a workflow's command never hands one back.
+   */
+  async chatSecretMask(input: {
+    tenantId: string;
+    projectId: string;
+    sessionId: string;
+  }): Promise<SecretMask> {
+    return new SecretMask(
+      await this.sessionSecretValues({
+        identity: {
+          tenantId: input.tenantId,
+          externalUserId: PROJECT_PRINCIPAL_ID,
+        },
+        projectId: input.projectId,
+        sessionId: input.sessionId,
+      }),
+    );
   }
 
   /** The running workspace of a chat, through its Allocation's machine. */

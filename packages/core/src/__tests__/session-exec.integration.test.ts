@@ -5,7 +5,10 @@ import path from "node:path";
 import { createDatabase, migrateToLatest } from "@catamorphic/db";
 import { FsBackend, FsRemoteBackend, ProjectManager } from "@catamorphic/git";
 import { LocalProcessSandboxProvider } from "@catamorphic/local-process";
-import type { RuntimeInvocationReceipt } from "@catamorphic/sandbox";
+import type {
+  RuntimeInvocationReceipt,
+  SandboxProvider,
+} from "@catamorphic/sandbox";
 import {
   cleanupTestResources,
   TestSandboxes,
@@ -69,6 +72,10 @@ export const prepareChat = defineWorkflow(({ defineBoundary }) => ({
 }));
 `;
 
+/** The Environment's setup command: whether the member's file is there. */
+const SETUP_COMMAND =
+  "(test -e notes/personal.env && echo present || echo absent) >> ../personal-seen; echo command >> ../setup-order";
+
 /** What each setup run was started with, in order. */
 const setupInputs: Array<Record<string, unknown>> = [];
 
@@ -116,6 +123,18 @@ function invokeRuntime(invocation: {
   });
 }
 
+/** The setup's own network in these tests (ADR 0257). */
+const SETUP_EGRESS = {
+  mode: "allowlist" as const,
+  allow: ["registry.npmjs.org"],
+};
+
+/** What the machine was asked to do with sandboxes' networks. */
+const network = Object.assign(
+  [] as Array<{ kind: "widen" | "narrow"; sandboxId: string; id: string }>,
+  { failNarrow: false, stopped: [] as string[] },
+);
+
 describeIf("workflows run commands in a chat's workspace (ADR 0324)", () => {
   let tmpDir: string;
   let core: CatamorphicCore;
@@ -140,9 +159,29 @@ describeIf("workflows run commands in a chat's workspace (ADR 0324)", () => {
 
   beforeAll(async () => {
     tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "catamorphic-exec-"));
-    const provider = ownedSandboxes.track(
+    const machine = ownedSandboxes.track(
       new LocalProcessSandboxProvider({ root: path.join(tmpDir, "machine") }),
     );
+    // The machine switches networks as ADR 0257's do; this one records it.
+    const provider = new Proxy(machine, {
+      get(target, property) {
+        if (property === "widenEgress")
+          return async (args: { sandboxId: string; id: string }) => {
+            network.push({ kind: "widen", ...args });
+          };
+        if (property === "narrowEgress")
+          return async (args: { sandboxId: string; id: string }) => {
+            network.push({ kind: "narrow", ...args });
+            if (network.failNarrow) throw new Error("the proxy is gone");
+          };
+        if (property === "stopSandbox")
+          return async (sandboxId: string) => {
+            network.stopped.push(sandboxId);
+          };
+        const value: unknown = Reflect.get(target, property, target);
+        return typeof value === "function" ? value.bind(target) : value;
+      },
+    }) satisfies SandboxProvider;
     db = createDatabase({ connectionString, schema, poolSize: 8 });
     await migrateToLatest({ db, schema });
     const agent = {
@@ -250,6 +289,8 @@ describeIf("workflows run commands in a chat's workspace (ADR 0324)", () => {
     caller: Identity;
     runId: string;
     args: Record<string, unknown>;
+    /** What is left of the attempt, by default all of it. */
+    remainingMs?: number;
   }) =>
     exec().execute({
       caller: input.caller,
@@ -262,9 +303,87 @@ describeIf("workflows run commands in a chat's workspace (ADR 0324)", () => {
       },
       causation: [],
       signal: new AbortController().signal,
-      deadlineAt: new Date(Date.now() + 300_000).toISOString(),
+      deadlineAt: new Date(
+        Date.now() + (input.remainingMs ?? 300_000),
+      ).toISOString(),
       args: input.args,
     });
+
+  /** A project chat with a running workspace, mid-setup for `build`. */
+  async function settingUp(input: { deadlineMs: number; network?: boolean }) {
+    const sessionId = (
+      await sessions().create(
+        projectChatIdentity({ tenantId, projectId }),
+        projectId,
+      )
+    ).id;
+    await runExec({
+      sessionId,
+      in: "session",
+      idempotencyKey: "start",
+      command: "true",
+    });
+    const build = crypto.randomUUID();
+    await db
+      .updateTable("agent_sessions")
+      .set({
+        setup_run: JSON.stringify({
+          build,
+          network: input.network === true,
+          ownerAuthored: true,
+          deadline: new Date(Date.now() + input.deadlineMs).toISOString(),
+        }),
+      })
+      .where("id", "=", sessionId)
+      .execute();
+    const runId = (
+      await core.runs.triggerProduction({
+        identity: root,
+        projectId,
+        workflowName: "execInChat",
+        input: { exec: {} },
+      })
+    ).id;
+    await db
+      .updateTable("workflow_runs")
+      .set({ setup_session_id: sessionId, setup_build: build })
+      .where("id", "=", runId)
+      .execute();
+    const workspace = await sessions().personWorkspace({
+      identity: root,
+      projectId,
+      sessionId,
+      start: false,
+    });
+    return { sessionId, build, runId, workspace };
+  }
+
+  /** The setup's own network, as admission would give it (ADR 0257). */
+  function onSetupNetwork() {
+    const original = sessions().commandWorkspace.bind(sessions());
+    return vi
+      .spyOn(sessions(), "commandWorkspace")
+      .mockImplementation(async (args) => {
+        const found = await original(args);
+        return found.setup && args.in === "setup"
+          ? {
+              ...found,
+              setup: {
+                ...found.setup,
+                network: { egress: SETUP_EGRESS },
+              },
+            }
+          : found;
+      });
+  }
+
+  const actionOf = async (sessionId: string, idempotencyKey: string) =>
+    db
+      .selectFrom("session_actions")
+      .selectAll()
+      .where("session_id", "=", sessionId)
+      .where("idempotency_key", "like", `%${idempotencyKey}%`)
+      .executeTakeFirstOrThrow();
 
   it("runs in the chat's own sandbox, from its checkout, with the program read-only at $WORK_PROGRAM", async () => {
     const sessionId = (await sessions().create(root, projectId)).id;
@@ -467,6 +586,7 @@ describeIf("workflows run commands in a chat's workspace (ADR 0324)", () => {
           build: current,
           network: false,
           ownerAuthored: true,
+          deadline: new Date(Date.now() + 600_000).toISOString(),
         }),
       })
       .where("id", "=", sessionId)
@@ -515,14 +635,280 @@ describeIf("workflows run commands in a chat's workspace (ADR 0324)", () => {
     await core.runs.stopWorkers();
   }, 120_000);
 
+  it("ends a setup command when the setup's time is up, and stops what a setup run started when it ends", async () => {
+    const { sessionId, runId, build, workspace } = await settingUp({
+      deadlineMs: 3_000,
+    });
+    const began = Date.now();
+    await expect(
+      call({
+        caller: root,
+        runId,
+        args: {
+          sessionId,
+          in: "setup",
+          idempotencyKey: "capped",
+          command: "sleep 30",
+          timeoutSeconds: 600,
+        },
+      }),
+    ).resolves.toMatchObject({ exitCode: null, timedOut: true });
+    expect(Date.now() - began).toBeLessThan(20_000);
+
+    await db
+      .updateTable("agent_sessions")
+      .set({
+        setup_run: JSON.stringify({
+          build,
+          network: false,
+          ownerAuthored: true,
+          deadline: new Date(Date.now() + 600_000).toISOString(),
+        }),
+      })
+      .where("id", "=", sessionId)
+      .execute();
+    // Little of its attempt is left: the command parks, still running.
+    await expect(
+      call({
+        caller: root,
+        runId,
+        remainingMs: 21_000,
+        args: {
+          sessionId,
+          in: "setup",
+          idempotencyKey: "left-running",
+          command: "sleep 30; echo late > ../late",
+        },
+      }),
+    ).rejects.toThrow(/waiting for session-exec:/);
+    await exec().endSetup({
+      tenantId,
+      projectId,
+      sessionId,
+      build,
+      network: false,
+    });
+    const stopped = await actionOf(sessionId, "left-running");
+    expect(stopped.status).toBe("completed");
+    expect(stopped.result).toMatchObject({
+      exitCode: null,
+      stderr: expect.stringContaining("The setup ended"),
+    });
+    const processes = await workspace.provider.processes?.listProcesses({
+      sandboxId: workspace.sandboxId,
+    });
+    expect(
+      processes?.find(
+        (process) =>
+          process.name === `work-exec-${stopped.id}` &&
+          process.status === "running",
+      ),
+    ).toBeUndefined();
+  }, 120_000);
+
+  it("narrows after the last of parallel setup commands, refuses session commands while wide, and fails closed", async () => {
+    const spy = onSetupNetwork();
+    try {
+      // The spy gives the setup its network; admission fixed none here.
+      const { sessionId, runId, build, workspace } = await settingUp({
+        deadlineMs: 600_000,
+      });
+      // Admission fixed the setup's egress on the chat's Allocation.
+      await db
+        .updateTable("execution_allocations")
+        .set({
+          policy_snapshot: sql`policy_snapshot || jsonb_build_object('sandbox', coalesce(policy_snapshot->'sandbox', '{}'::jsonb) || jsonb_build_object('setupEgress', ${JSON.stringify(SETUP_EGRESS)}::jsonb))`,
+        })
+        .where(
+          "id",
+          "=",
+          db
+            .selectFrom("agent_sessions")
+            .select("allocation_id")
+            .where("id", "=", sessionId),
+        )
+        .execute();
+      network.length = 0;
+      const setupCommand = (idempotencyKey: string, seconds: number) =>
+        call({
+          caller: root,
+          runId,
+          args: {
+            sessionId,
+            in: "setup",
+            idempotencyKey,
+            command: `sleep ${seconds}`,
+          },
+        });
+      const long = setupCommand("long", 4);
+      await expect.poll(() => network.length, { timeout: 10_000 }).toBe(1);
+      const short = setupCommand("short", 1);
+      await expect.poll(() => network.length, { timeout: 10_000 }).toBe(2);
+      // A command in the session never runs on the setup's network.
+      await expect(
+        call({
+          caller: root,
+          runId,
+          args: {
+            sessionId,
+            in: "session",
+            idempotencyKey: "while-wide",
+            command: "true",
+          },
+        }),
+      ).rejects.toThrow(/setup's network/);
+      await short;
+      // The other still holds its widening: nothing narrowed yet.
+      expect(network.map((entry) => entry.kind)).toEqual(["widen", "widen"]);
+      await long;
+      expect(network.map((entry) => entry.kind)).toEqual([
+        "widen",
+        "widen",
+        "narrow",
+      ]);
+      // A sandbox that cannot be narrowed when the setup ends is stopped,
+      // and the preparation does not go on.
+      network.failNarrow = true;
+      await expect(
+        exec().endSetup({
+          tenantId,
+          projectId,
+          sessionId,
+          build,
+          network: true,
+        }),
+      ).rejects.toThrow(/could not be returned to its Environment's network/);
+      expect(network.stopped).toContain(workspace.sandboxId);
+    } finally {
+      network.failNarrow = false;
+      spy.mockRestore();
+    }
+  }, 120_000);
+
+  it("masks the chat's secret values in what a command prints", async () => {
+    const sessionId = (await sessions().create(root, projectId)).id;
+    if (!core.secrets) throw new Error("secrets not configured");
+    await core.secrets.rememberDelivery({
+      tenantId,
+      sessionId,
+      variables: { DEPLOY_TOKEN: "tok-0123456789abcdef" },
+    });
+    const { run } = await runExec({
+      sessionId,
+      in: "session",
+      idempotencyKey: "leak",
+      command: "echo tok-0123456789abcdef; echo tok-0123456789abcdef >&2",
+    });
+    const { result } = run.result as {
+      result: { stdout: string; stderr: string };
+    };
+    expect(result.stdout).toBe("[secret DEPLOY_TOKEN]\n");
+    expect(result.stderr).toBe("[secret DEPLOY_TOKEN]\n");
+    const stored = await actionOf(sessionId, "leak");
+    expect(JSON.stringify(stored.result)).not.toContain("tok-0123456789abcdef");
+  }, 120_000);
+
+  it("keeps each commit's program in its own folder, and never runs a command twice when a start is taken over", async () => {
+    const sessionId = (await sessions().create(root, projectId)).id;
+    const programOf = async (idempotencyKey: string) => {
+      const { run } = await runExec({
+        sessionId,
+        in: "session",
+        idempotencyKey,
+        command:
+          'basename "$WORK_PROGRAM"; cat "$WORK_PROGRAM/skills/review/SKILL.md"',
+      });
+      return (run.result as { result: { stdout: string } }).result.stdout;
+    };
+    const first = await programOf("program-a");
+    await writeAndDeploy({
+      ".work/skills/review/SKILL.md": "# Review\n\nThe revised procedure.\n",
+    });
+    const second = await programOf("program-b");
+    const [commitA] = first.split("\n");
+    const [commitB] = second.split("\n");
+    expect(commitA).toMatch(/^[0-9a-f]{40}$/);
+    expect(commitB).toMatch(/^[0-9a-f]{40}$/);
+    expect(commitB).not.toBe(commitA);
+    expect(first).toContain("The trusted procedure.");
+    expect(second).toContain("The revised procedure.");
+    const workspace = await sessions().personWorkspace({
+      identity: root,
+      projectId,
+      sessionId,
+      start: false,
+    });
+    const listed = await workspace.provider.executeCommand(
+      workspace.sandboxId,
+      "ls ../.work-program",
+      { cwd: workspace.projectDirectory },
+    );
+    expect(listed.result.split("\n").filter(Boolean).sort()).toEqual(
+      [commitA, commitB].sort(),
+    );
+
+    // A start whose replica died after the process began: the next adopts
+    // the process instead of running the command again.
+    const { runId } = await runExec({
+      sessionId,
+      in: "session",
+      idempotencyKey: "warm",
+      command: "true",
+    });
+    await expect(
+      call({
+        caller: root,
+        runId,
+        remainingMs: 21_000,
+        args: {
+          sessionId,
+          in: "session",
+          idempotencyKey: "once-only",
+          command: "echo ran >> ../adopt.log; sleep 3; echo done",
+        },
+      }),
+    ).rejects.toThrow(/waiting for session-exec:/);
+    const action = await actionOf(sessionId, "once-only");
+    await db
+      .updateTable("session_actions")
+      .set({
+        progress: JSON.stringify({
+          phase: "starting",
+          at: new Date(Date.now() - 600_000).toISOString(),
+        }),
+      })
+      .where("id", "=", action.id)
+      .execute();
+    for (;;) {
+      const outcome = await exec().follow({
+        waitKey: `session-exec:${action.id}`,
+        signal: new AbortController().signal,
+        sliceMs: 10_000,
+      });
+      if (outcome.status === "pending") continue;
+      expect(outcome).toMatchObject({
+        status: "done",
+        output: { stdout: "done\n", exitCode: 0 },
+      });
+      break;
+    }
+    const ran = await workspace.provider.executeCommand(
+      workspace.sandboxId,
+      "wc -l < ../adopt.log",
+      { cwd: workspace.projectDirectory },
+    );
+    expect(ran.result.trim()).toBe("1");
+  }, 120_000);
+
   it("runs a setup workflow before a chat's first turn and again in a workspace made again, and reports the workspace's changes", async () => {
     await writeAndDeploy({
       [PROJECT_MANIFEST_PATH]: JSON.stringify({
         environments: {
           dev: {
             workloads: ["agent", "workflow"],
+            personalCredentials: true,
             setup: {
-              command: "echo command >> ../setup-order",
+              command: SETUP_COMMAND,
               workflow: "prepareChat",
             },
           },
@@ -542,6 +928,19 @@ describeIf("workflows run commands in a chat's workspace (ADR 0324)", () => {
       workflowName: "prepareChat",
       owner: { type: "project" },
       consentDigest: preview.consentDigest,
+    });
+    // The member keeps a personal file; it never meets a setup run.
+    await core.personalEnvironments.replace({
+      identity: root,
+      projectId,
+      input: {
+        files: [
+          {
+            path: "notes/personal.env",
+            content: Buffer.from("PERSONAL=1\n").toString("base64"),
+          },
+        ],
+      },
     });
     startWorkers();
     const sessionId = (await sessions().create(root, projectId)).id;
@@ -564,7 +963,7 @@ describeIf("workflows run commands in a chat's workspace (ADR 0324)", () => {
       "cat TRUSTED.md && cat ../setup-order",
       { cwd: workspace.projectDirectory },
     );
-    expect(read.result).toContain("The trusted procedure.");
+    expect(read.result).toMatch(/The (trusted|revised) procedure\./);
     expect(read.result).toContain("command");
     expect(setupInputs.at(-1)).toMatchObject({
       sessionId,
@@ -598,6 +997,32 @@ describeIf("workflows run commands in a chat's workspace (ADR 0324)", () => {
     const before = setupInputs.length;
     await sessions().sendMessage(root, projectId, sessionId, "Again");
     expect(setupInputs.length).toBe(before);
+
+    // The setup changes: it runs again in this workspace, which holds the
+    // member's file by now; the file is taken out first and back after.
+    await writeAndDeploy({
+      [PROJECT_MANIFEST_PATH]: JSON.stringify({
+        environments: {
+          dev: {
+            workloads: ["agent", "workflow"],
+            personalCredentials: true,
+            setup: {
+              command: `${SETUP_COMMAND}; echo v2 >> ../setup-order`,
+              workflow: "prepareChat",
+            },
+          },
+        },
+        defaultEnvironment: "dev",
+      }),
+    });
+    await sessions().sendMessage(root, projectId, sessionId, "Changed");
+    expect(setupInputs.at(-1)).toMatchObject({ sessionId, reason: "changed" });
+    const seen = await workspace.provider.executeCommand(
+      workspace.sandboxId,
+      "cat ../personal-seen; cat notes/personal.env",
+      { cwd: workspace.projectDirectory },
+    );
+    expect(seen.result).toBe("absent\nabsent\nPERSONAL=1\n");
 
     // The workspace goes with its machine, as node recovery records it:
     // the next is set up again.

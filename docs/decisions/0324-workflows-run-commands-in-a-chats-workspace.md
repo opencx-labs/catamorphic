@@ -23,13 +23,15 @@ command primitive, and leave the procedure to workflow code.
 command, cwd?, env?, in, timeoutSeconds?, idempotencyKey })` is a returned
 transition like every session operation, answering `{ exitCode, stdout,
 stderr, durationMs, timedOut }` with the last 16 000 characters of each
-stream. `cwd` is relative to the checkout. The command runs with bash in the
-chat's sandbox, with `$WORK_PROGRAM` naming a copy of the program the
-calling run executes: the `.work/` folder at its deployed commit, outside the
-checkout (`<workspace root>/.work-program`, `/workspace/.work-program` on
-container and Cloudflare machines), copied once per commit per sandbox with
-its write bits removed. Trusted files are copied from there, never from the
-pull request.
+stream, masked by every secret value the chat received (ADR 0206) before
+they are stored or returned. `cwd` is relative to the checkout. The command
+runs with bash in the chat's sandbox as a process named for its execution,
+with `$WORK_PROGRAM` naming a copy of the program the calling run executes:
+the `.work/` folder at its deployed commit, outside the checkout, in a
+folder of its own per commit (`<workspace root>/.work-program/<commit>`,
+`/workspace/.work-program/<commit>` on container and Cloudflare machines),
+uploaded beside it and renamed whole into place, write bits removed. Trusted
+files are copied from there, never from the pull request.
 
 - `in: "session"` runs as the agent's commands do: the chat's network, its
   grants and secrets. A chat with no running workspace gets one as a person
@@ -37,12 +39,13 @@ pull request.
   machine (ADR 0258) waits within its own timeout, then fails saying why. Its
   setup runs before the next turn, not before the command. A chat in a
   folder on a person's computer is refused.
-- `in: "setup"` runs as the Environment's setup does: with `setup.network`
-  (ADR 0257) widened for the command alone, with only the secrets
-  `setup.secrets` names and no secrets file; without it, in the workspace
-  with its secrets, as ADR 0208's setup. It is accepted only from the chat's own setup
-  workflow while Work builds the workspace, when the sandbox holds the base
-  checkout alone. Elsewhere it is refused: a used sandbox is never widened
+- `in: "setup"` runs as the Environment's setup does: no grants and no
+  secrets file, only the secrets `setup.secrets` names, and with
+  `setup.network` (ADR 0257) the sandbox widened for it. It is accepted only
+  from the chat's own setup workflow while Work builds the workspace, and
+  ends by the setup's own time. Widenings are counted per command: the
+  sandbox narrows once the last one ends; no command `in: "session"` starts
+  while one is wide, and none widens while one runs. Elsewhere it is refused: a used sandbox is never widened
   (ADR 0257), and a second sandbox cannot hand an installed dependency tree
   back. **Installing new dependencies while a turn runs is therefore not
   possible**: the reviewer reuses what setup installed, or moves the
@@ -54,8 +57,9 @@ waits and gives back its capacity as any wait does (ADR 0289), and a
 follower job reads the process to its end and resumes the step with the
 result, carried state included (ADR 0260). The execution is a session
 action, so a retry with the same key returns the same execution's result
-rather than running it twice. Canceling the run stops following; the
-command runs on until its own timeout.
+rather than running it twice; a start taken over from a replica that
+stopped adopts the process or exit it left. Canceling the run stops
+following; the command runs on until its own timeout, except a setup run's.
 
 **Authority.** A project chat answers only the project's automations
 holding `sessions:write`; a member's chat only that member's workflows, as a
@@ -69,7 +73,15 @@ with or instead of `command`. Work runs it at exactly the points it runs
 setup (every new workspace, when the base moves, when the setup changes),
 after the command, and the turn waits for it. Its input is `{ sessionId, key,
 agentId, reason: "created" | "rebuilt" | "base-moved" | "changed",
-workspace: { ref, commit } | null }`. A failure, a timeout or an
+workspace: { ref, commit } | null }`. Without its own network, the
+Environment's part (command and workflow) then runs on the seeded checkout
+after the chat's grants, secrets and the member's files are taken out, and
+they come back once it ended, so a project-owned setup run never sees a
+member's personal values; after a setup on its own network the session's
+work is put back keeping what setup changed in tracked files the work left
+alone. When the run ends, however it ends, every command it started is
+stopped and the sandbox narrowed, failing closed: one that cannot be
+narrowed is stopped, and the preparation fails. A failure, a timeout or an
 unenabled workflow is a failed setup: the agent is told with the error, and
 it runs again before the next turn. It runs through its **project
 enablement**, so its connections and declared permissions are the ones

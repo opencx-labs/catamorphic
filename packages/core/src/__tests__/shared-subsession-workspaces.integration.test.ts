@@ -561,6 +561,7 @@ describe("subagents of a server agent (ADR 0322)", () => {
         calls.push({ setupFor: args.setupFor, input: args.input, recordedOn });
         return { status: "succeeded" };
       },
+      end: async () => {},
     });
     const parent = await sessions.create(identity, projectId, {
       workspace: { ref: "pr" },

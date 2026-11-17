@@ -265,14 +265,16 @@ export const closePullRequestChats = defineWorkflow(({ defineBoundary }) => ({
 ### Commands in a chat's workspace
 
 exec runs a shell command in a chat's workspace and answers { exitCode, stdout,
-stderr, durationMs, timedOut } (the last 16 000 characters of each stream). Name
+stderr, durationMs, timedOut } (the last 16 000 characters of each stream, the
+chat's secret values masked). Name
 the chat by sessionId or key, pass command, in, idempotencyKey, and optionally
 cwd (beneath the checkout), env and timeoutSeconds (default 600, at most 14 400).
 in: "session" runs as the agent's commands do: the chat's network, grants and
 secrets, from its checkout, starting its workspace when it has none. in: "setup"
 runs as the Environment's setup does (on the setup's own network, with only the
-secrets setup.secrets names) and only from the chat's setup workflow while Work
-sets the workspace up; anywhere else it is refused. Installing new dependencies
+secrets setup.secrets names, no grants) and only from the chat's setup workflow
+while Work sets the workspace up, ending by the setup's own time; anywhere else
+it is refused. When the setup run ends, whatever it started there is stopped. Installing new dependencies
 while a turn runs is not possible: a sandbox in use never gets the setup's
 network. Reuse what setup installed, or move the workspace so setup runs again.
 
