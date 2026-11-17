@@ -445,6 +445,76 @@ describeIf("workflows run commands in a chat's workspace (ADR 0324)", () => {
     ).rejects.toThrow(/only from the chat's setup workflow/);
   }, 120_000);
 
+  it("runs in setup only for a run Work stamped as the chat's setup for the build in progress", async () => {
+    const sessionId = (
+      await sessions().create(
+        projectChatIdentity({ tenantId, projectId }),
+        projectId,
+      )
+    ).id;
+    // The chat has a workspace, and Work is setting up its build `current`.
+    await runExec({
+      sessionId,
+      in: "session",
+      idempotencyKey: "start",
+      command: "true",
+    });
+    const current = crypto.randomUUID();
+    await db
+      .updateTable("agent_sessions")
+      .set({
+        setup_run: JSON.stringify({
+          build: current,
+          network: false,
+          ownerAuthored: true,
+        }),
+      })
+      .where("id", "=", sessionId)
+      .execute();
+    const setupArgs = (idempotencyKey: string) => ({
+      sessionId,
+      in: "setup",
+      idempotencyKey,
+      command: "echo in-setup",
+    });
+    const runOf = async (correlationKey?: string) =>
+      (
+        await core.runs.triggerProduction({
+          identity: root,
+          projectId,
+          workflowName: "execInChat",
+          input: { exec: {} },
+          ...(correlationKey ? { correlationKey } : {}),
+        })
+      ).id;
+    // A caller's run labelled like a setup run is an ordinary run.
+    const lookalike = await runOf(`work-setup:${sessionId}:${current}`);
+    await expect(
+      call({ caller: root, runId: lookalike, args: setupArgs("lookalike") }),
+    ).rejects.toThrow(/only from the chat's setup workflow/);
+    // A setup run for an earlier build of the workspace is refused too.
+    const stale = await runOf();
+    await db
+      .updateTable("workflow_runs")
+      .set({ setup_session_id: sessionId, setup_build: crypto.randomUUID() })
+      .where("id", "=", stale)
+      .execute();
+    await expect(
+      call({ caller: root, runId: stale, args: setupArgs("stale") }),
+    ).rejects.toThrow(/only from the chat's setup workflow/);
+    // The run stamped for the build in progress may.
+    const stamped = await runOf();
+    await db
+      .updateTable("workflow_runs")
+      .set({ setup_session_id: sessionId, setup_build: current })
+      .where("id", "=", stamped)
+      .execute();
+    await expect(
+      call({ caller: root, runId: stamped, args: setupArgs("current") }),
+    ).resolves.toMatchObject({ exitCode: 0, stdout: "in-setup\n" });
+    await core.runs.stopWorkers();
+  }, 120_000);
+
   it("runs a setup workflow before a chat's first turn and again in a workspace made again, and reports the workspace's changes", async () => {
     await writeAndDeploy({
       [PROJECT_MANIFEST_PATH]: JSON.stringify({
@@ -510,6 +580,19 @@ describeIf("workflows run commands in a chat's workspace (ADR 0324)", () => {
       .where("id", "=", sessionId)
       .executeTakeFirstOrThrow();
     expect(row).toEqual({ setup_run: null, workspace_generation: 1 });
+    // Work stamped its run with the chat and the build; no label carries it.
+    const setupRuns = await db
+      .selectFrom("workflow_runs")
+      .select(["setup_session_id", "setup_build", "correlation_key"])
+      .where("workflow_name", "=", "prepareChat")
+      .execute();
+    expect(setupRuns).toEqual([
+      {
+        setup_session_id: sessionId,
+        setup_build: expect.any(String),
+        correlation_key: null,
+      },
+    ]);
 
     // A second turn in the same workspace sets nothing up again.
     const before = setupInputs.length;

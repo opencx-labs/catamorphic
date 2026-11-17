@@ -18,8 +18,9 @@ import type { Identity } from "../identity.js";
 import { assertSessionWorkspaceAccess } from "./agent-session-access.js";
 import {
   type AgentSessionsService,
+  isCurrentSetupRun,
   parseSetupRun,
-  setupRunCorrelationKey,
+  type SetupRunFact,
 } from "./agent-sessions-service.js";
 import {
   ChatAudienceSchema,
@@ -206,14 +207,16 @@ export class SessionExecService {
         if (!session) throw new SessionKeyNotFoundError(parsed.key ?? "");
         const run = await this.deps.db
           .selectFrom("workflow_runs")
-          .select("correlation_key")
+          .select(["setup_session_id", "setup_build"])
           .where("id", "=", input.runId)
           .executeTakeFirstOrThrow();
-        const setupRun = parseSetupRun(session.setup_run);
-        const fromSetup =
-          setupRun !== null &&
-          run.correlation_key ===
-            setupRunCorrelationKey({ sessionId, nonce: setupRun.nonce });
+        // Only a run Work stamped as this chat's setup, for the workspace
+        // build in progress, is its setup run: never a caller's label.
+        const fromSetup = isCurrentSetupRun({
+          sessionId,
+          setupRun: parseSetupRun(session.setup_run),
+          run: setupFact(run),
+        });
         // Whom a person's terminal is for (ADR 0209): a project chat for
         // project automations holding sessions:write, a member's chat for
         // that member's workflows. A chat's own setup run reaches it.
@@ -278,7 +281,6 @@ export class SessionExecService {
           Date.parse(input.deadlineAt) - Date.now() - ATTEMPT_MARGIN_MS;
         const outcome = await this.advance({
           actionId: action.id,
-          correlationKey: run.correlation_key,
           sliceMs: Math.max(0, Math.min(budget, 60_000)),
           signal: input.signal,
         });
@@ -300,7 +302,6 @@ export class SessionExecService {
     const actionId = args.waitKey.slice(SESSION_EXEC_WAIT_PREFIX.length);
     return this.advance({
       actionId,
-      correlationKey: undefined,
       sliceMs: args.sliceMs,
       signal: args.signal,
     });
@@ -313,8 +314,6 @@ export class SessionExecService {
    */
   private async advance(input: {
     actionId: string;
-    /** The calling run's, at its first call: whether it is a setup run. */
-    correlationKey: string | null | undefined;
     sliceMs: number;
     signal: AbortSignal;
   }): Promise<HostCallFollowOutcome> {
@@ -347,7 +346,6 @@ export class SessionExecService {
         action,
         args,
         timeoutMs,
-        correlationKey: input.correlationKey,
         claimed: progress,
       }).catch(async (error: unknown) => {
         // Starting, or waiting for a machine (ADR 0258): tried again each
@@ -386,7 +384,6 @@ export class SessionExecService {
     action: ActionRow;
     args: SessionExecInput;
     timeoutMs: number;
-    correlationKey: string | null | undefined;
     claimed: ExecProgress | null;
   }): Promise<{ progress: ExecProgress } | "lost"> {
     const { action, args } = input;
@@ -411,18 +408,14 @@ export class SessionExecService {
       .returning("id")
       .executeTakeFirst();
     if (!claimed) return "lost";
-    // Only the first call knows the run; a follower's start is the same run's.
-    const correlationKey =
-      input.correlationKey === undefined
-        ? await this.correlationKeyOf(action)
-        : input.correlationKey;
+    const setupFor = await this.setupFactOf(action);
     const tenantId = await this.tenantOf(action.project_id);
     const caller = await this.callerOf(action);
     const workspace = await this.deps.sessions.commandWorkspace({
       tenantId,
       projectId: action.project_id,
       sessionId: action.session_id,
-      correlationKey,
+      setupFor,
       in: args.in,
       start: true,
       ...(caller ? { caller } : {}),
@@ -514,7 +507,7 @@ export class SessionExecService {
         tenantId: await this.tenantOf(action.project_id),
         projectId: action.project_id,
         sessionId: action.session_id,
-        correlationKey: await this.correlationKeyOf(action),
+        setupFor: await this.setupFactOf(action),
         in: "session",
         start: false,
         ...(caller ? { caller } : {}),
@@ -808,15 +801,16 @@ export class SessionExecService {
     return identityOfRun({ ...row, external_user_id: row.external_user_id });
   }
 
-  private async correlationKeyOf(action: ActionRow): Promise<string | null> {
+  /** The calling run's setup stamp, when Work started it as a setup. */
+  private async setupFactOf(action: ActionRow): Promise<SetupRunFact | null> {
     const runId = runIdOf(action);
     if (!runId) return null;
     const row = await this.deps.db
       .selectFrom("workflow_runs")
-      .select("correlation_key")
+      .select(["setup_session_id", "setup_build"])
       .where("id", "=", runId)
       .executeTakeFirst();
-    return row?.correlation_key ?? null;
+    return row ? setupFact(row) : null;
   }
 
   private async tenantOf(projectId: string): Promise<string> {
@@ -964,4 +958,13 @@ function identityOfRun(row: {
         }
       : {}),
   };
+}
+
+function setupFact(row: {
+  setup_session_id: string | null;
+  setup_build: string | null;
+}): SetupRunFact | null {
+  return row.setup_session_id && row.setup_build
+    ? { sessionId: row.setup_session_id, build: row.setup_build }
+    : null;
 }

@@ -1312,6 +1312,8 @@ export interface WorkflowRuns {
   provenance: Json;
   result: Json | null;
   session_artifact_id: string | null;
+  setup_build: string | null;
+  setup_session_id: string | null;
   started_at: Timestamp | null;
   state_version: Generated<Int8>;
   status: Generated<string>;

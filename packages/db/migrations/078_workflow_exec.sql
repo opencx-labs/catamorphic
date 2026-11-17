@@ -13,10 +13,19 @@ CREATE UNIQUE INDEX idx_workflow_pauses_open_wait_key
 -- Where a running execution is: its sandbox, process and files.
 ALTER TABLE session_actions ADD COLUMN progress jsonb;
 
--- The setup workflow Work runs for the chat while it runs: the secret its
--- run's correlation key carries, and how its commands may run. Then how
--- many workspaces the chat has had, and why the last one went away.
+-- The workspace build a chat's setup workflow runs for, while it runs, and
+-- how its commands may run. Then how many workspaces the chat has had, and
+-- why the last one went away.
 ALTER TABLE agent_sessions
   ADD COLUMN setup_run jsonb,
   ADD COLUMN workspace_generation integer NOT NULL DEFAULT 0,
   ADD COLUMN workspace_released_reason text;
+
+-- A run Work started as a chat's setup (ADR 0324): the chat and the
+-- workspace build it sets up. Only Work's setup path writes these; no
+-- caller's input or label reaches them.
+ALTER TABLE workflow_runs
+  ADD COLUMN setup_session_id uuid,
+  ADD COLUMN setup_build uuid,
+  ADD CONSTRAINT chk_workflow_run_setup
+    CHECK ((setup_session_id IS NULL) = (setup_build IS NULL));

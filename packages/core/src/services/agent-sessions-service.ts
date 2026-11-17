@@ -360,8 +360,11 @@ export interface SetupWorkflowRunner {
     tenantId: string;
     projectId: string;
     workflowName: string;
-    /** Names the run as the chat's setup; its commands may run in setup. */
-    correlationKey: string;
+    /**
+     * The chat and workspace build the run sets up, stamped on the run by
+     * Work alone: what lets its commands run in setup.
+     */
+    setupFor: SetupRunFact;
     input: Json;
     timeoutMs: number;
     signal: AbortSignal;
@@ -369,19 +372,36 @@ export interface SetupWorkflowRunner {
 }
 
 /**
- * The correlation key of a chat's setup run (ADR 0324): its session and a
- * secret only the run Work started carries.
+ * What a setup run is for (ADR 0324), as `workflow_runs.setup_session_id`
+ * and `setup_build` record it: only Work's setup path writes them.
  */
-export function setupRunCorrelationKey(input: {
+export interface SetupRunFact {
   sessionId: string;
-  nonce: string;
-}): string {
-  return `work-setup:${input.sessionId}:${input.nonce}`;
+  build: string;
+}
+
+/**
+ * Whether a run is the chat's setup for the workspace build in progress:
+ * its stamp names this chat and the build the chat is setting up now. A
+ * run for an earlier build, or any other run, is not.
+ */
+export function isCurrentSetupRun(input: {
+  sessionId: string;
+  setupRun: SetupRunRecord | null;
+  run: SetupRunFact | null;
+}): boolean {
+  return (
+    input.setupRun !== null &&
+    input.run !== null &&
+    input.run.sessionId === input.sessionId &&
+    input.run.build === input.setupRun.build
+  );
 }
 
 /** A chat's setup run while it runs, as `agent_sessions.setup_run` holds it. */
 export interface SetupRunRecord {
-  nonce: string;
+  /** The workspace build being set up; its setup run carries the same. */
+  build: string;
   /** Its commands `in: "setup"` run on the setup's own network (ADR 0257). */
   network: boolean;
   /** The owner wrote the turn being prepared, so their secrets may reach it. */
@@ -396,10 +416,10 @@ function workspaceJsonOrNull(value: Json | null): Json {
 
 export function parseSetupRun(value: Json | null): SetupRunRecord | null {
   if (!value || typeof value !== "object" || Array.isArray(value)) return null;
-  const { nonce, network, ownerAuthored } = value;
-  return typeof nonce === "string"
+  const { build, network, ownerAuthored } = value;
+  return typeof build === "string"
     ? {
-        nonce,
+        build,
         network: network === true,
         ownerAuthored: ownerAuthored === true,
       }
@@ -7282,9 +7302,11 @@ export class AgentSessionsService {
         error: "This host does not run setup workflows",
       };
     const { session } = input;
-    const nonce = randomUUID();
+    // This build of the workspace: the run is stamped with it, and only a
+    // run for the build in progress may run commands in setup.
+    const build = randomUUID();
     const record: SetupRunRecord = {
-      nonce,
+      build,
       network: input.network,
       ownerAuthored: input.ownerAuthored,
     };
@@ -7298,10 +7320,7 @@ export class AgentSessionsService {
         tenantId: input.identity.tenantId,
         projectId: input.projectId,
         workflowName: input.workflowName,
-        correlationKey: setupRunCorrelationKey({
-          sessionId: session.id,
-          nonce,
-        }),
+        setupFor: { sessionId: session.id, build },
         input: {
           sessionId: session.id,
           key: session.chat_key,
@@ -7324,7 +7343,7 @@ export class AgentSessionsService {
         .updateTable("agent_sessions")
         .set({ setup_run: null })
         .where("id", "=", session.id)
-        .where(sql<boolean>`setup_run->>'nonce' = ${nonce}`)
+        .where(sql<boolean>`setup_run->>'build' = ${build}`)
         .execute();
     }
   }
@@ -10445,8 +10464,8 @@ export class AgentSessionsService {
 
   /**
    * Where a workflow's command runs in a chat (ADR 0324). From the chat's
-   * own setup run (its correlation key carries the secret the chat holds
-   * while that run runs), the workspace being set up as it stands, with
+   * own setup run (stamped by Work with this chat and the workspace build
+   * in progress), the workspace being set up as it stands, with
    * the setup's network and secrets for a command `in: "setup"`. From any
    * other run, the workspace a person would reach, started as its next
    * turn would start it; access is the caller's to have settled.
@@ -10455,8 +10474,8 @@ export class AgentSessionsService {
     tenantId: string;
     projectId: string;
     sessionId: string;
-    /** The calling run's correlation key. */
-    correlationKey: string | null;
+    /** The calling run's setup stamp, when Work started it as a setup. */
+    setupFor: SetupRunFact | null;
     in: "session" | "setup";
     start: boolean;
     /** The run's caller, whose access to the chat was settled. */
@@ -10476,13 +10495,11 @@ export class AgentSessionsService {
       .executeTakeFirst();
     if (!session) throw new AgentSessionNotFoundError(input.sessionId);
     const setupRun = parseSetupRun(session.setup_run);
-    const fromSetup =
-      setupRun !== null &&
-      input.correlationKey ===
-        setupRunCorrelationKey({
-          sessionId: session.id,
-          nonce: setupRun.nonce,
-        });
+    const fromSetup = isCurrentSetupRun({
+      sessionId: session.id,
+      setupRun,
+      run: input.setupFor,
+    });
     if (!fromSetup) {
       if (input.in === "setup")
         throw new Error(

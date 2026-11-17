@@ -22,7 +22,8 @@ export async function runSetupWorkflow(input: {
   tenantId: string;
   projectId: string;
   workflowName: string;
-  correlationKey: string;
+  /** The chat and workspace build it sets up, stamped on the run. */
+  setupFor: { sessionId: string; build: string };
   input: Json;
   timeoutMs: number;
   signal: AbortSignal;
@@ -47,13 +48,13 @@ export async function runSetupWorkflow(input: {
     tenantId: input.tenantId,
     externalUserId: enablement.owner_external_user_id ?? "",
   };
-  const run = await input.runs.triggerWithEnablement({
+  const run = await input.runs.triggerSetupRun({
     identity,
     projectId: input.projectId,
     workflowName: input.workflowName,
     input: input.input,
-    correlationKey: input.correlationKey,
     enablementId: enablement.id,
+    setupFor: input.setupFor,
   });
   const deadline = Date.now() + input.timeoutMs;
   const cancel = (reason: string) =>

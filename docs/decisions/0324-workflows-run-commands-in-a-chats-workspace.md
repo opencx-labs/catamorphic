@@ -74,7 +74,12 @@ unenabled workflow is a failed setup: the agent is told with the error, and
 it runs again before the next turn. It runs through its **project
 enablement**, so its connections and declared permissions are the ones
 consented there (ADRs 0068, 0076, 0158); a setup naming a workflow no one
-enabled for the project fails saying so. No second consent path exists. A
+enabled for the project fails saying so. No second consent path exists.
+Work stamps the run with the chat and the workspace build it sets up
+(`workflow_runs.setup_session_id`, `setup_build`), a fact only the setup path
+writes and no caller's input or label reaches; `in: "setup"` needs that stamp
+to name the build in progress, so a look-alike run or one for an earlier
+build is refused. Nothing secret rides in correlation keys, which are labels. A
 chat in a folder on a person's computer does not run it, and is told.
 
 **Workspace events.** `session.workspace-changed` carries `change: "ready" |
