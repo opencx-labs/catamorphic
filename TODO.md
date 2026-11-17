@@ -62,7 +62,9 @@
   dynamic tools instead of the loopback listener. Renew connection MCP
   (`mcp` channel) grants during long sessions. Serve project harness agents
   when the server has no control-plane model (today `/me` reports chat off).
-  A usage view for gateway usage (`model_usage`) per project and member.
+  Gateway usage is on spans and totalled per chat family (ADR 0329); a
+  project-wide usage page per member, and a `billing` failure kind with
+  provider retries surfaced by the ACP adapter, remain.
 - **Dev-shell follow-ups (ADR 0045).** PR review depth on the CodeHost
   seam: inline comments, approvals, merge-from-app; a human-facing worktree
   cleanup surface (agents can create and adopt worktrees, but Catamorphic

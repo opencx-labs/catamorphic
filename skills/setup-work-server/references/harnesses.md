@@ -135,10 +135,17 @@ ids in the binding.
   (`kinds: ["model"]`), action the method and path (`POST v1/messages`,
   `GET v1/models`), with the provider, model, and stream, never the prompt.
   Restrict endpoints or spending there, for example by summing `model_usage`.
+  Work has no budgets or price tables of its own.
 - Usage is read from each answer as it passes: Anthropic Messages, OpenAI
   Responses, and Chat Completions when the harness asks for
   `stream_options.include_usage`. An answer the gateway cannot read counts
-  zero.
+  zero. When the answer says what the provider charged (OpenRouter's
+  `usage.cost`), `model_usage.cost_usd` keeps it; otherwise it is null.
+- Each call's span carries its project, chat, turn, agent, tokens and
+  reported cost under OpenTelemetry's GenAI names (see `OBSERVABILITY.md`).
+  Workflows read a chat's totals, with its subsessions, through
+  `host["catamorphic.sessions"].usage({ key, family: true })`; clients use
+  `GET /api/projects/:projectId/agent/sessions/:sessionId/usage?family=true`.
 
 ## 3. Put the CLI in the image
 
