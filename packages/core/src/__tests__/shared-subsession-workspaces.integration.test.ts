@@ -1,8 +1,13 @@
 import { execFile } from "node:child_process";
+import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
+import {
+  orderedTurns,
+  sessionStateFromSnapshot,
+} from "@catamorphic/agent-protocol";
 import type { DB, Json } from "@catamorphic/db";
 import { migrateToLatest } from "@catamorphic/db";
 import { FsBackend, ProjectManager } from "@catamorphic/git";
@@ -16,23 +21,26 @@ import { PROJECT_MANIFEST_PATH } from "@catamorphic/workflow/project-layout";
 import { PGlite } from "@electric-sql/pglite";
 import { pgcrypto } from "@electric-sql/pglite/contrib/pgcrypto";
 import { Kysely, PGliteDialect, WithSchemaPlugin } from "kysely";
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import type { Identity } from "../identity.js";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
+import { type Identity, PROJECT_PRINCIPAL_ID } from "../identity.js";
 import {
   AgentDelegationDeniedError,
   AgentDelegationSettingsError,
   AgentSessionsService,
   type SetupRunFact,
 } from "../services/agent-sessions-service.js";
+import { projectChatIdentity } from "../services/chat-delivery.js";
 import type { RegisteredCodingAgent } from "../services/coding-agent-registry.js";
 import { ConnectionAdmissionService } from "../services/connection-admission.js";
 import { ConnectionCapabilityGrantsService } from "../services/connection-capability-grants.js";
 import type { ResolvedConnectionBinding } from "../services/connection-types.js";
 import type { ConnectionsService } from "../services/connections-service.js";
+import { MemoryCredentialVault } from "../services/credential-vault.js";
 import { ExecutionAllocationsService } from "../services/execution-allocations-service.js";
 import { ExecutionEnvironmentsService } from "../services/execution-environments-service.js";
 import { ProjectEnvironmentsService } from "../services/project-environments-service.js";
 import { ProjectsService } from "../services/projects-service.js";
+import { SecretsService } from "../services/secrets-service.js";
 import { SessionWorkspaces } from "../services/session-workspaces.js";
 import { itemFromRow } from "../services/sessions/session-rows.js";
 
@@ -110,6 +118,8 @@ describe("subagents of a server agent (ADR 0322)", () => {
   let stamps: string;
   /** Present: the setup fails. */
   let broken: string;
+  /** Present: the setup takes a while longer. */
+  let slow: string;
   let projectId: string;
   let sessions: AgentSessionsService;
   let machine: LocalProcessSandboxProvider;
@@ -189,6 +199,7 @@ describe("subagents of a server agent (ADR 0322)", () => {
     runs = path.join(tmpDir, "setup.log");
     stamps = path.join(tmpDir, "setup-times.log");
     broken = path.join(tmpDir, "setup-broken");
+    slow = path.join(tmpDir, "setup-slow");
     // The project's linked remote, with the pull request's code.
     const seed = path.join(tmpDir, "seed");
     await fs.mkdir(seed);
@@ -220,15 +231,18 @@ describe("subagents of a server agent (ADR 0322)", () => {
       await repo.writeFile(
         PROJECT_MANIFEST_PATH,
         JSON.stringify({
+          secrets: { REVIEW_TOKEN: {} },
           environments: {
             review: {
               workloads: ["agent"],
+              secrets: ["REVIEW_TOKEN"],
               // Slow enough that a turn starting during it would show.
               setup: {
                 command: [
                   `echo setup >> '${runs}'`,
                   `echo "start $(date +%s)" >> '${stamps}'`,
                   "sleep 2",
+                  `if [ -f '${slow}' ]; then sleep 6; fi`,
                   `echo "end $(date +%s)" >> '${stamps}'`,
                   `if [ -f '${broken}' ]; then echo "lockfile is stale"; exit 3; fi`,
                 ].join("\n"),
@@ -283,6 +297,17 @@ describe("subagents of a server agent (ADR 0322)", () => {
       db,
       projectManager,
     );
+    const secrets = new SecretsService({
+      db,
+      vault: new MemoryCredentialVault(),
+      environments: projectEnvironments,
+    });
+    await secrets.upsert({
+      identity,
+      projectId,
+      name: "REVIEW_TOKEN",
+      value: "review-token-value",
+    });
     // As a Work server serves a committed agent: its harness beside the
     // workspace, in the chat's sandbox, its model through the gateway.
     const agent: RegisteredCodingAgent = {
@@ -323,6 +348,8 @@ describe("subagents of a server agent (ADR 0322)", () => {
     const agents = [agent, publisher, sealed];
     sessions = new AgentSessionsService(db, {
       hostId: "shared-subsessions-host",
+      // Short, so a claim another replica takes is noticed at once.
+      workspaceClaimSeconds: 3,
       projectManager,
       executionEnvironments: new ExecutionEnvironmentsService(
         projectEnvironments,
@@ -353,6 +380,7 @@ describe("subagents of a server agent (ADR 0322)", () => {
         modelApi: () => "anthropic",
         servesHttp: () => false,
       },
+      secrets,
     });
   }, 120_000);
 
@@ -485,6 +513,45 @@ describe("subagents of a server agent (ADR 0322)", () => {
         expect((await replies(id))[0]).toContain("exit code 3");
     } finally {
       await fs.rm(broken, { force: true });
+    }
+  }, 120_000);
+
+  it("stops a setup whose claim another replica took", async () => {
+    await fs.writeFile(slow, "");
+    const lastStamp = async () =>
+      (await fs.readFile(stamps, "utf8").catch(() => ""))
+        .trim()
+        .split("\n")
+        .at(-1) ?? "";
+    try {
+      const parent = await sessions.create(identity, projectId, {
+        workspace: { ref: "pr" },
+      });
+      const sent = sessions
+        .sendMessage(identity, projectId, parent.id, "Set up")
+        .catch((error: unknown) => error);
+      await until("setup runs", async () =>
+        (await lastStamp()).startsWith("start"),
+      );
+      // Another replica holds the workspace's setup claim now.
+      await db
+        .updateTable("replica_claims")
+        .set({
+          holder: "another-replica",
+          expires_at: new Date(Date.now() + 3_600_000),
+        })
+        .where("name", "like", "workspace-setup:%")
+        .execute();
+      await sent;
+      // Longer than the setup would have taken: it never ended.
+      await new Promise((resolve) => setTimeout(resolve, 9_000));
+      expect(await lastStamp()).toMatch(/^start /);
+    } finally {
+      await fs.rm(slow, { force: true });
+      await db
+        .deleteFrom("replica_claims")
+        .where("holder", "=", "another-replica")
+        .execute();
     }
   }, 120_000);
 
@@ -744,6 +811,273 @@ describe("subagents of a server agent (ADR 0322)", () => {
       await sessions.listSubsessions(identity, projectId, parent.id),
     ).toEqual([]);
   }, 60_000);
+
+  it("shares a chat's workspace only with those who may work in it, and the child is that chat's", async () => {
+    const chat = await sessions.create(
+      projectChatIdentity({ tenantId: identity.tenantId, projectId }),
+      projectId,
+    );
+    // A member who may message the project chat, not work beside its agent.
+    const member: Identity = {
+      tenantId: identity.tenantId,
+      externalUserId: "bob",
+      // Its agents, the host's own included (`agents: ["*"]`).
+      scope: [{ kind: "agent", projectId, name: "*" }],
+    };
+    await expect(
+      sessions.createSubsession(member, projectId, chat.id, {
+        task: "Read the secrets",
+      }),
+    ).rejects.toThrow(/workspace: "own"/);
+    expect(
+      await sessions.listSubsessions(identity, projectId, chat.id),
+    ).toEqual([]);
+    // One who may work there starts a child that is the project chat's too.
+    const maintainer: Identity = {
+      ...member,
+      externalUserId: "carol",
+      projectPermissions: [{ projectId, permission: "sessions:write" }],
+    };
+    const child = await sessions.createSubsession(
+      maintainer,
+      projectId,
+      chat.id,
+      { task: "Check the build" },
+    );
+    expect(child.workspace).toBe("shared");
+    expect(child.session.externalUserId).toBe(PROJECT_PRINCIPAL_ID);
+    expect(child.session.owner).toBe("project");
+    await until("the child rests", () => idle(child.session.id));
+  }, 120_000);
+
+  it("archives a busy shared child alone, leaving its parent in the person's chats", async () => {
+    const parent = await sessions.create(identity, projectId);
+    const child = await sessions.createSubsession(
+      identity,
+      projectId,
+      parent.id,
+      { task: "Archive me" },
+    );
+    await until("the child rests", () => idle(child.session.id));
+    // Its turn has not stopped when the archive looks (it runs elsewhere).
+    const service = sessions as unknown as {
+      sessionsWithRunningTurns(input: {
+        sessionIds: readonly string[];
+        executor?: unknown;
+      }): Promise<Set<string>>;
+    };
+    const original = service.sessionsWithRunningTurns.bind(sessions);
+    const running = vi
+      .spyOn(service, "sessionsWithRunningTurns")
+      .mockImplementation(async (input) =>
+        input.executor
+          ? new Set(input.sessionIds.filter((id) => id === child.session.id))
+          : original(input),
+      );
+    try {
+      await sessions.archive(identity, projectId, child.session.id, {
+        confirmStop: true,
+      });
+    } finally {
+      running.mockRestore();
+    }
+    expect(
+      (await sessions.get(identity, projectId, child.session.id)).visibility,
+    ).toBe("archived");
+    expect(
+      (await sessions.get(identity, projectId, parent.id)).visibility,
+    ).not.toBe("archived");
+  }, 60_000);
+
+  it("keeps a child its parent stopped stopped, even when it wakes on its own", async () => {
+    const parent = await sessions.create(identity, projectId);
+    const child = await sessions.createSubsession(
+      identity,
+      projectId,
+      parent.id,
+      { task: "[[wait 20000]] Long check" },
+    );
+    await until("the child works", async () => !(await idle(child.session.id)));
+    await sessions.interruptSubsession(
+      identity,
+      projectId,
+      parent.id,
+      child.session.id,
+    );
+    await until("the child rests", () => idle(child.session.id));
+    await sessions.notify(identity, projectId, child.session.id, {
+      task: {
+        type: "background_command",
+        id: "watch",
+        title: "Watch the logs",
+        status: "completed",
+      },
+      summary: "Watch the logs finished",
+      idempotencyKey: "watch-finished",
+    });
+    await until("the child's later turn ran", async () =>
+      (await replies(child.session.id)).some((reply) =>
+        reply.includes("Watch the logs"),
+      ),
+    );
+    await until(
+      "both rest",
+      async () => (await idle(parent.id)) && (await idle(child.session.id)),
+    );
+    const [stopped] = await sessions.listSubsessions(
+      identity,
+      projectId,
+      parent.id,
+    );
+    expect(stopped?.status).toBe("interrupted");
+  }, 120_000);
+
+  it("holds a shared child's work while its parent rewinds, and refuses a rewind while the child has work waiting", async () => {
+    const parent = await sessions.create(identity, projectId, {
+      workspace: { ref: "pr" },
+    });
+    await sessions.sendMessage(identity, projectId, parent.id, "One");
+    await sessions.sendMessage(identity, projectId, parent.id, "Two");
+    const child = await sessions.createSubsession(
+      identity,
+      projectId,
+      parent.id,
+      { task: "First look" },
+    );
+    await until(
+      "both rest",
+      async () => (await idle(parent.id)) && (await idle(child.session.id)),
+    );
+    const author = {
+      kind: "agent" as const,
+      sessionId: parent.id,
+      agentId: "reviewer",
+    };
+    const queuedTurn = async () =>
+      db
+        .selectFrom("agent_turns")
+        .select("status")
+        .where("session_id", "=", child.session.id)
+        .orderBy("ordinal", "desc")
+        .executeTakeFirstOrThrow();
+    const rewinding = (id: string, on: boolean) =>
+      db
+        .updateTable("agent_sessions")
+        .set({ rewind_until: on ? new Date(Date.now() + 3_600_000) : null })
+        .where("id", "=", id)
+        .execute();
+
+    // While the parent's files are rewound, nothing starts on them.
+    await rewinding(parent.id, true);
+    await sessions.deliver(identity, projectId, child.session.id, {
+      content: "Look again",
+      author,
+      mode: "steer",
+    });
+    await new Promise((resolve) => setTimeout(resolve, 1_500));
+    expect((await queuedTurn()).status).toBe("queued");
+    await rewinding(parent.id, false);
+    await sessions.deliver(identity, projectId, child.session.id, {
+      content: "And once more",
+      author,
+      mode: "queue",
+    });
+    await until("the child rests", () => idle(child.session.id));
+
+    // A child with work waiting there: the parent's files stay as they are.
+    await rewinding(child.session.id, true);
+    await sessions.deliver(identity, projectId, child.session.id, {
+      content: "Later",
+      author,
+      mode: "queue",
+    });
+    expect((await queuedTurn()).status).toBe("queued");
+    // The child's reports have woken the parent meanwhile.
+    await until("the parent rests", () => idle(parent.id));
+    const before = await sessions.get(identity, projectId, parent.id);
+    const second = orderedTurns(sessionStateFromSnapshot(before.snapshot))[1];
+    const receipt = await sessions.command(identity, projectId, parent.id, {
+      type: "rollback",
+      commandId: randomUUID(),
+      turnId: second?.id ?? "",
+    });
+    expect(receipt.status).toBe("rejected");
+    expect(receipt.error?.message).toContain("have work waiting there");
+    await rewinding(child.session.id, false);
+    await sessions.notify(identity, projectId, child.session.id, {
+      task: {
+        type: "background_command",
+        id: "nudge",
+        title: "Nudge",
+        status: "completed",
+      },
+      summary: "Nudge finished",
+      idempotencyKey: "nudge-finished",
+    });
+    await until("the child rests", () => idle(child.session.id));
+  }, 120_000);
+
+  it("keeps the owner's secrets in a shared workspace only while every turn there is the owner's", async () => {
+    const parent = await sessions.create(identity, projectId, {
+      workspace: { ref: "pr" },
+    });
+    const child = await sessions.createSubsession(
+      identity,
+      projectId,
+      parent.id,
+      { task: "First look" },
+    );
+    await until(
+      "both rest",
+      async () => (await idle(parent.id)) && (await idle(child.session.id)),
+    );
+    const secretsSet = async () =>
+      (
+        await machine.executeCommand(
+          await sandboxOf(parent.id),
+          "cat .work-session/env/secrets.sh 2>/dev/null || true",
+          { cwd: "/workspace" },
+        )
+      ).result.includes("REVIEW_TOKEN");
+    // The owner's own turn works with the secret.
+    const working = sessions.sendMessage(
+      identity,
+      projectId,
+      parent.id,
+      "[[wait 8000]] Working with the token",
+    );
+    await until("the secret is set", secretsSet);
+    // Someone else writes to the child: a turn the owner did not write.
+    const other: Identity = {
+      tenantId: identity.tenantId,
+      externalUserId: "bob",
+      scope: [{ kind: "agent", projectId, name: "*" }],
+      projectPermissions: [{ projectId, permission: "sessions:write" }],
+    };
+    const beside = sessions.sendMessage(
+      other,
+      projectId,
+      child.session.id,
+      "[[wait 15000]] Bob here",
+    );
+    await until("the secret is gone", async () => !(await secretsSet()));
+    // The owner's working turn was told.
+    expect((await working).turn.status).toBe("completed");
+    expect((await replies(parent.id)).at(-1)).toContain(
+      "took the owner's secrets and personal files out",
+    );
+    // Its next turn, beside the other's, runs without them and hears why.
+    await sessions.sendMessage(identity, projectId, parent.id, "Again");
+    expect((await replies(parent.id)).at(-1)).toContain(
+      "runs a turn its owner did not write",
+    );
+    expect(await secretsSet()).toBe(false);
+    await beside;
+    await until(
+      "both rest",
+      async () => (await idle(parent.id)) && (await idle(child.session.id)),
+    );
+  }, 120_000);
 
   it("refuses a child past the limit, saying so, and makes nothing", async () => {
     const parent = await sessions.create(identity, projectId);

@@ -48,20 +48,32 @@ Spawn takes `workspace: "shared" | "own"`, default `shared`, on every host.
   first runs the whole setup step, and its outcome (the build it ran in and
   its note to the agent, failures included) is recorded on the Allocation, so
   a session that arrived meanwhile reuses it and starts once it ends, instead
-  of running it again. It waits as long as every part the step may run
-  (following an earlier run, the command, the setup workflow, the owner's
-  part), each bounded by the setup's timeout. The step is the workspace
-  session's whoever runs it: a setup workflow (ADR 0324) runs and is
-  stamped for that session, and the workspace's events name it. Idle release counts the workspace in use while any session
-  in it works; a child whose workspace was released admits it again for
-  that session. Closing or archiving the child gives back only its own
-  grants and state; closing the parent closes it as before. A shared
-  child's files are not rewound, and a delivery cannot move its base. On
+  of running it again; a child that may not rebuild the workspace for a
+  setup on its own network is told that last outcome. A session waits for
+  that step as long as every part it may run (following an earlier run,
+  the command, the setup workflow, the owner's part), each bounded by the
+  setup's timeout. The step is the workspace session's whoever runs it: a
+  setup workflow (ADR 0324) runs and is stamped for that session, and the
+  workspace's events name it. Work under these claims stops once its claim
+  could be lost. Idle release counts the workspace in use while any
+  session in it works; a child whose workspace was released admits it
+  again for that session. Closing or archiving the child gives back only
+  its own grants and state; closing the parent closes it as before. A
+  shared child's files are not rewound; the parent's are not while a sharer
+  has queued, held or running work, and a sharer's turns wait while they
+  are. A delivery cannot move a shared child's base. On
   the desktop it works in the parent's checkout: the project folder, as
   every child did, or the parent's own worktree. A child whose agent cannot
   run there (a folder for a sandbox agent or the reverse, a contained
   workspace for an agent whose changes leave its sandbox, an Environment or
   connection the Allocation lacks) is refused, naming `own`.
+- **One owner per shared workspace.** Sharing a workspace is working beside
+  its agent (0209): anyone but the workspace session's owner needs workspace
+  access to start a shared child, and the child is the workspace session's
+  owner's. The owner's secrets, personal files and setup reach the
+  workspace only while every turn working in it was written by that owner;
+  otherwise they are taken out, and the owner's turns working beside are
+  told.
 - `own`: today's admission and workspace, started at the parent's base
   (its ref and commit, pinned for the child, ADR 0178) where it has one.
 
@@ -74,7 +86,11 @@ anything but a person (its parent, its own background command, a watcher
 or workflow) makes its delegation running again, and each settled turn
 reports to the parent once, keyed by the turn, through the steer path
 (0278) or as the idle parent's next turn. Turns a person starts in the
-child's chat are theirs and do not report.
+child's chat are theirs and do not report, and a child its parent stopped
+stays stopped. A delegation running again counts against the parent's
+`maxConcurrentChildren`: new spawns are refused while the limit is reached,
+but the child is never refused its own turn, so the count can pass the
+limit until it settles.
 
 Considered: a workspace forked from the parent's per child (a sandbox and
 setup each: what the reviewer avoids); one runner process multiplexing

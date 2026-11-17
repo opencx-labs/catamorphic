@@ -209,6 +209,23 @@ export class TurnQueue {
             ),
           ),
         )
+        // Nor on the files of the workspace a shared subsession works in
+        // (ADR 0322), while its workspace session rewinds them.
+        .where(({ exists, not, selectFrom }) =>
+          not(
+            exists(
+              selectFrom("agent_sessions as sharer")
+                .innerJoin(
+                  "agent_sessions as rewinding",
+                  "rewinding.id",
+                  "sharer.workspace_session_id",
+                )
+                .select("sharer.id")
+                .whereRef("sharer.id", "=", "turn.session_id")
+                .where("rewinding.rewind_until", ">", sql<Date>`now()`),
+            ),
+          ),
+        )
         .where(({ exists, not, selectFrom }) =>
           not(
             exists(
