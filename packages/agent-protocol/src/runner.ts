@@ -201,7 +201,10 @@ export interface AttemptStart {
   /** The adapter to run, e.g. `claude-code`, `codex`. */
   harness: string;
   workingDirectory: string;
-  /** Directory the runner may use for its own and the harness's state. */
+  /**
+   * Directory the runner may use for its own and the harness's state:
+   * beside the runner, never inside `workingDirectory`.
+   */
   stateDirectory: string;
   thread: ThreadBinding;
   /**

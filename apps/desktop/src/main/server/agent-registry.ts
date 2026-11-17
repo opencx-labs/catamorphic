@@ -52,6 +52,7 @@ import { parseAssistantAgentId } from "../../shared/voice.js";
 import type { WorkspaceBridge } from "../agent-bridge.js";
 import type { AgentSignIn } from "../agent-credentials.js";
 import { agentSearchPath } from "../agent-path.js";
+import { agentStateDirectory } from "../agent-state.js";
 import type { AgentConfig } from "../agents-store.js";
 import { readableAttachments } from "../composer-files.js";
 import type { ConnectorsService } from "../connectors.js";
@@ -169,6 +170,11 @@ export interface DesktopAgentRegistryDeps {
    * built-in agent may read though they sit outside the project.
    */
   attachmentsDir?: string;
+  /**
+   * What each chat's runner keeps (`<agentStateDir>/<projectId>/<sessionId>/`),
+   * outside the chat's checkout.
+   */
+  agentStateDir?: string;
   /** Agents' window into the user's workspace (tabs, browser, terminals). */
   workspaceBridge?: WorkspaceBridge;
   /** Installed connector plugins (Claude Code loads them natively). */
@@ -1144,6 +1150,7 @@ export class DesktopAgentRegistry implements CodingAgentRegistry {
       toolPolicies: () => live().policies,
       toolAnnotations: () => live().annotations,
       ...this.workspaceHooks({ config, profileId, assistant }),
+      ...this.stateDirectory(),
     } satisfies Partial<HostHarness>;
 
     // An ACP agent (ADR 0241) runs its own command in the chat's checkout,
@@ -1381,6 +1388,17 @@ export class DesktopAgentRegistry implements CodingAgentRegistry {
         };
       }
     }
+  }
+
+  /** Each chat's runner keeps its harness's state in host storage. */
+  private stateDirectory(): Pick<HostHarness, "stateDirectory"> {
+    const agentStateDir = this.deps.agentStateDir;
+    return agentStateDir
+      ? {
+          stateDirectory: ({ projectId, sessionId }) =>
+            agentStateDirectory({ agentStateDir, projectId, sessionId }),
+        }
+      : {};
   }
 
   /**

@@ -48,6 +48,15 @@ export type AgentHarness =
       local?: (context: AgentTurnContext) => Record<string, unknown>;
       /** Environment of the harness process: the host's own settings (CLAUDE_CONFIG_DIR). */
       env?: Record<string, string>;
+      /**
+       * Host storage for the runner's and harness's state for one session
+       * (pasted media, Codex's home), outside every checkout. Absent, it
+       * lives in a private temporary folder of this process.
+       */
+      stateDirectory?: (session: {
+        projectId: string;
+        sessionId: string;
+      }) => string;
       /** Tools this host serves the agent beside Work's capability tools. */
       hostTools?: readonly ExtraTool[];
       /** MCP servers this host adds, read at every turn so rotated tokens apply. */

@@ -40,6 +40,12 @@ export interface DataPaths {
    * the project folder or its Git history.
    */
   attachmentsDir: string;
+  /**
+   * What the agents' runners in this process keep for each chat
+   * (`agent-state/<projectId>/<sessionId>/`): their harnesses' copies of
+   * pasted media, Codex's home. Host storage, never the chat's checkout.
+   */
+  agentStateDir: string;
   /** Browser bookmarks, every profile and project (`bookmarks.ts`). */
   bookmarksFile: string;
 }
@@ -59,6 +65,7 @@ export function resolveDataPaths(): DataPaths {
     harnessComponentsDir: path.join(userData, "harness-components"),
     hostSkillsDir: path.join(userData, "host-skills"),
     attachmentsDir: path.join(userData, "attachments"),
+    agentStateDir: path.join(userData, "agent-state"),
     bookmarksFile: path.join(userData, "bookmarks.json"),
   };
 }

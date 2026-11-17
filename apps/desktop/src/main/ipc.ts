@@ -56,6 +56,7 @@ import { rosterAgentId } from "../shared/voice.js";
 import type { BindingAuth } from "./agent-bindings-store.js";
 import { readAgentCredentials } from "./agent-credentials.js";
 import { findOnAgentPath } from "./agent-path.js";
+import { removeAgentState } from "./agent-state.js";
 import {
   type AgentsStore,
   type CreateAgentInput,
@@ -3040,6 +3041,10 @@ export function registerIpcHandlers(
     await server.workspaceStates.delete(input.projectId);
     await removeComposerFiles({
       attachmentsDir: paths.attachmentsDir,
+      projectId: input.projectId,
+    });
+    await removeAgentState({
+      agentStateDir: paths.agentStateDir,
       projectId: input.projectId,
     });
   });

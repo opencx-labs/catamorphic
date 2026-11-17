@@ -185,6 +185,7 @@ describe("desktop theme", () => {
       hostSkillsDir: path.join(root, "host-skills"),
       bookmarksFile: path.join(root, "bookmarks.json"),
       attachmentsDir: path.join(root, "attachments"),
+      agentStateDir: path.join(root, "agent-state"),
     };
     const profiles = new ProfilesStore(paths.profilesFile);
     const systemProfile = profiles.create("System");

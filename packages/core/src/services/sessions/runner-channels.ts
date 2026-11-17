@@ -1,4 +1,7 @@
 import { randomUUID } from "node:crypto";
+import { mkdir, mkdtemp } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import path from "node:path";
 import {
   encodeLine,
   framePayload,
@@ -125,6 +128,39 @@ export async function reattachInProcessRunner(
 }
 
 let bundle: ReturnType<typeof loadRunnerBundle> | undefined;
+
+let temporaryStateRoot: Promise<string> | undefined;
+
+/** This process's private temporary folder for runners' state, made once. */
+function temporaryStateFolder(): Promise<string> {
+  temporaryStateRoot ??= mkdtemp(
+    path.join(tmpdir(), "catamorphic-agent-state-"),
+  ).catch((error: unknown) => {
+    temporaryStateRoot = undefined;
+    throw error;
+  });
+  return temporaryStateRoot;
+}
+
+/**
+ * Where an in-process runner keeps its own and its harness's state for one
+ * session (pasted media, Codex's home): the folder its host names, or one
+ * in a private temporary folder of this process. Never the checkout, where
+ * it would show in Git status, turn checkpoints and remote sync (ADR 0142).
+ * Made private before the runner starts.
+ */
+export async function hostRunnerStateDirectory(input: {
+  /** The host's folder for this session, when it names one. */
+  named: string | undefined;
+  sessionId: string;
+}): Promise<string> {
+  if (!/^[A-Za-z0-9_-]+$/.test(input.sessionId))
+    throw new Error("A runner's state needs a session id.");
+  const directory =
+    input.named ?? path.join(await temporaryStateFolder(), input.sessionId);
+  await mkdir(directory, { recursive: true, mode: 0o700 });
+  return directory;
+}
 
 /**
  * Start the runner in a sandbox as a process with standard input (ADR

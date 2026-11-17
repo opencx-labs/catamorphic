@@ -493,6 +493,7 @@ export async function startEmbeddedServer(
     agentHomesDir: paths.agentHomesDir,
     harnessComponentsDir: paths.harnessComponentsDir,
     attachmentsDir: paths.attachmentsDir,
+    agentStateDir: paths.agentStateDir,
     ...(e2eFakeAgent
       ? {}
       : { installedClaudeCode: new InstalledClaudeCodeFinder() }),

@@ -93,6 +93,22 @@ describe("native checkouts a chat owns (ADR 0215)", () => {
       harness: { placement: "host" as const, adapter },
       topology: "native" as const,
     };
+    // A host that names where its runners keep each chat's state.
+    const keeper = {
+      id: "keeper",
+      harness: {
+        placement: "host" as const,
+        adapter,
+        stateDirectory: (session: { projectId: string; sessionId: string }) =>
+          path.join(
+            tmpDir,
+            "agent-state",
+            session.projectId,
+            session.sessionId,
+          ),
+      },
+      topology: "native" as const,
+    };
     const checkout: NativeAgentCheckout = {
       resolve: ({ sessionId }) => ({
         path: path.join(tmpDir, owned.get(sessionId) ? sessionId : "folder"),
@@ -139,8 +155,8 @@ describe("native checkouts a chat owns (ADR 0215)", () => {
       executionAllocations: new ExecutionAllocationsService(db),
       codingAgents: {
         defaultAgentId: () => agent.id,
-        get: (id) => (id === agent.id ? agent : undefined),
-        list: () => [agent],
+        get: (id) => [agent, keeper].find((known) => known.id === id),
+        list: () => [agent, keeper],
       },
       nativeAgentCheckout: checkout,
     });
@@ -206,6 +222,34 @@ describe("native checkouts a chat owns (ADR 0215)", () => {
     const before = setups.length;
     await sessions.sendMessage(identity, projectId, chat.id, "hello");
     expect(setups).toHaveLength(before);
+  }, 30_000);
+
+  it("keeps the runner's state out of the checkout, in a private folder", async () => {
+    const chat = await sessions.create(identity, projectId);
+    owned.set(chat.id, false);
+    await sessions.sendMessage(identity, projectId, chat.id, "hello");
+    const attempt = adapter.attempts.at(-1);
+    expect(attempt?.workingDirectory).toBe(path.join(tmpDir, "folder"));
+    const state = attempt?.stateDirectory ?? "";
+    expect(state).not.toBe("");
+    expect(path.relative(path.join(tmpDir, "folder"), state)).toMatch(/^\.\./);
+    expect(path.basename(state)).toBe(chat.id);
+    expect((await fs.stat(state)).mode & 0o777).toBe(0o700);
+
+    // The same chat finds the same folder on its next attempt.
+    await sessions.sendMessage(identity, projectId, chat.id, "again");
+    expect(adapter.attempts.at(-1)?.stateDirectory).toBe(state);
+  }, 30_000);
+
+  it("keeps the runner's state where its host names", async () => {
+    const chat = await sessions.create(identity, projectId, {
+      agentId: "keeper",
+    });
+    owned.set(chat.id, true);
+    await sessions.sendMessage(identity, projectId, chat.id, "hello");
+    const state = path.join(tmpDir, "agent-state", projectId, chat.id);
+    expect(adapter.attempts.at(-1)?.stateDirectory).toBe(state);
+    expect((await fs.stat(state)).mode & 0o777).toBe(0o700);
   }, 30_000);
 
   it("gives back the checkout of a chat that is archived or closed", async () => {
