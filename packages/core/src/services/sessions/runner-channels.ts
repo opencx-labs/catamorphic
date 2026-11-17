@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { mkdir, mkdtemp } from "node:fs/promises";
+import { chmod, lstat, mkdir, mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import {
@@ -129,37 +129,82 @@ export async function reattachInProcessRunner(
 
 let bundle: ReturnType<typeof loadRunnerBundle> | undefined;
 
-let temporaryStateRoot: Promise<string> | undefined;
+const SESSION_ID = /^[A-Za-z0-9_-]+$/;
 
-/** This process's private temporary folder for runners' state, made once. */
+let temporaryStateRoot: Promise<string | undefined> =
+  Promise.resolve(undefined);
+
+/** A folder only this process's user reaches, and not a link to another. */
+async function isPrivateFolder(folder: string): Promise<boolean> {
+  const stats = await lstat(folder).catch(() => undefined);
+  if (!stats?.isDirectory()) return false;
+  // Windows reports no owner and no meaningful mode bits.
+  if (!process.getuid) return true;
+  return stats.uid === process.getuid() && (stats.mode & 0o077) === 0;
+}
+
+/**
+ * This process's private temporary folder for runners' state, made by
+ * mkdtemp and made anew when something removed or replaced it (a temp
+ * cleaner on a long-running server), so a folder someone else made under
+ * that name never receives a chat's state. Calls queue behind each other,
+ * so one of them makes it.
+ */
 function temporaryStateFolder(): Promise<string> {
-  temporaryStateRoot ??= mkdtemp(
-    path.join(tmpdir(), "catamorphic-agent-state-"),
-  ).catch((error: unknown) => {
-    temporaryStateRoot = undefined;
-    throw error;
-  });
-  return temporaryStateRoot;
+  const next = temporaryStateRoot
+    .catch(() => undefined)
+    .then(async (known) =>
+      known && (await isPrivateFolder(known))
+        ? known
+        : mkdtemp(path.join(tmpdir(), "catamorphic-agent-state-")),
+    );
+  temporaryStateRoot = next;
+  return next;
 }
 
 /**
  * Where an in-process runner keeps its own and its harness's state for one
  * session (pasted media, Codex's home): the folder its host names, or one
  * in a private temporary folder of this process. Never the checkout, where
- * it would show in Git status, turn checkpoints and remote sync (ADR 0142).
- * Made private before the runner starts.
+ * it would show in Git status, turn checkpoints and remote sync (ADR 0321).
+ * Private (0700) before the runner starts.
  */
 export async function hostRunnerStateDirectory(input: {
   /** The host's folder for this session, when it names one. */
   named: string | undefined;
   sessionId: string;
 }): Promise<string> {
-  if (!/^[A-Za-z0-9_-]+$/.test(input.sessionId))
-    throw new Error("A runner's state needs a session id.");
-  const directory =
-    input.named ?? path.join(await temporaryStateFolder(), input.sessionId);
-  await mkdir(directory, { recursive: true, mode: 0o700 });
+  if (!SESSION_ID.test(input.sessionId))
+    throw new Error("This session id cannot name a folder.");
+  if (input.named !== undefined) {
+    if (!path.isAbsolute(input.named))
+      throw new Error(
+        `A runner's state folder must be an absolute path, not "${input.named}".`,
+      );
+    await mkdir(input.named, { recursive: true, mode: 0o700 });
+    // mkdir leaves a folder that was already there as it was.
+    await chmod(input.named, 0o700);
+    return input.named;
+  }
+  const directory = path.join(await temporaryStateFolder(), input.sessionId);
+  await mkdir(directory, { mode: 0o700 }).catch((error: unknown) => {
+    if (!(error instanceof Error && "code" in error && error.code === "EEXIST"))
+      throw error;
+  });
   return directory;
+}
+
+/**
+ * Drops what a chat's runner kept in this process's temporary folder, once
+ * the chat rests (archived or closed). Its next turn starts a new one: the
+ * harness's thread comes back from the session's stored native state.
+ */
+export async function removeTemporaryRunnerState(input: {
+  sessionId: string;
+}): Promise<void> {
+  const root = await temporaryStateRoot.catch(() => undefined);
+  if (!root || !SESSION_ID.test(input.sessionId)) return;
+  await rm(path.join(root, input.sessionId), { recursive: true, force: true });
 }
 
 /**

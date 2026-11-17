@@ -239,6 +239,10 @@ describe("native checkouts a chat owns (ADR 0215)", () => {
     // The same chat finds the same folder on its next attempt.
     await sessions.sendMessage(identity, projectId, chat.id, "again");
     expect(adapter.attempts.at(-1)?.stateDirectory).toBe(state);
+
+    // A chat at rest keeps nothing there.
+    await sessions.archive(identity, projectId, chat.id);
+    await expect(fs.stat(state)).rejects.toThrow();
   }, 30_000);
 
   it("keeps the runner's state where its host names", async () => {

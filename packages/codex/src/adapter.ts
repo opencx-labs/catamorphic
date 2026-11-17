@@ -760,13 +760,16 @@ class CodexAttempt {
       this.attempt.attemptId,
     );
     const directory = path.join(this.inputDirectory, input.itemId);
-    await mkdir(directory, { recursive: true });
+    // What the person pasted stays theirs: private, like Work's own copy.
+    await mkdir(directory, { recursive: true, mode: 0o700 });
     for (const [index, attachment] of media.entries()) {
       const file = path.join(
         directory,
         `${index}.${EXTENSIONS[attachment.mediaType] ?? "bin"}`,
       );
-      await writeFile(file, Buffer.from(attachment.dataBase64, "base64"));
+      await writeFile(file, Buffer.from(attachment.dataBase64, "base64"), {
+        mode: 0o600,
+      });
       parts.push(
         attachment.kind === "image"
           ? { type: "localImage", path: file }

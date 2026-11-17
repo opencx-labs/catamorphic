@@ -46,6 +46,7 @@ import { Kysely, PGliteDialect, sql, WithSchemaPlugin } from "kysely";
 import { rosterAgentId } from "../../shared/voice.js";
 import type { WorkspaceBridge } from "../agent-bridge.js";
 import { readAgentCredentials } from "../agent-credentials.js";
+import { removeAgentState } from "../agent-state.js";
 import {
   accessTokenFresh,
   signInRefreshable,
@@ -748,8 +749,13 @@ export async function startEmbeddedServer(
       // A chat's own worktree is set up like a new workspace and put away
       // with the chat (ADR 0215).
       setup: (input) => sessionCheckouts.setup(input),
+      // ...and with it what its runner kept (ADR 0321).
       release: async (input) => {
         await sessionCheckouts.putAway(input);
+        await removeAgentState({
+          agentStateDir: paths.agentStateDir,
+          ...input,
+        });
         broadcastGitChanged(input.projectId);
       },
     },

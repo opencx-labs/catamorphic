@@ -275,6 +275,7 @@ import {
   hostRunnerStateDirectory,
   type RunnerChannel,
   type RunnerLocation,
+  removeTemporaryRunnerState,
   sandboxChannel,
   startInProcessRunner,
   startSandboxRunner,
@@ -10932,11 +10933,21 @@ export class AgentSessionsService {
     }
   }
 
-  /** A resting chat gives back its native checkout (ADR 0215). */
+  /**
+   * A resting chat gives back its native checkout (ADR 0215), and what its
+   * runner kept in this process's temporary folder (ADR 0321).
+   */
   private async releaseNativeCheckout(input: {
     projectId: string;
     sessionId: string;
   }): Promise<void> {
+    await removeTemporaryRunnerState({ sessionId: input.sessionId }).catch(
+      (error: unknown) =>
+        console.warn(
+          `[catamorphic] Could not remove the runner state of session ${input.sessionId}`,
+          error,
+        ),
+    );
     await this.nativeAgentCheckout
       ?.release?.(input)
       .catch((error: unknown) =>

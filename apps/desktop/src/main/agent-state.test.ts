@@ -36,6 +36,23 @@ describe("agent state", () => {
       await mkdir(path.join(folder, "attachments"), { recursive: true });
       await writeFile(path.join(folder, "attachments", "shot.png"), "png");
     }
+    const sibling = agentStateDirectory({
+      agentStateDir,
+      projectId: "project-1",
+      sessionId: "session-3",
+    });
+    await mkdir(sibling, { recursive: true });
+
+    // A chat at rest drops its own state only.
+    await removeAgentState({
+      agentStateDir,
+      projectId: "project-1",
+      sessionId: "session-3",
+    });
+    await expect(stat(sibling)).rejects.toThrow();
+    expect((await stat(directory)).isDirectory()).toBe(true);
+
+    // A removed project drops every chat's.
     await removeAgentState({ agentStateDir, projectId: "project-1" });
     await expect(stat(directory)).rejects.toThrow();
     expect((await stat(other)).isDirectory()).toBe(true);
@@ -60,5 +77,12 @@ describe("agent state", () => {
     await expect(
       removeAgentState({ agentStateDir, projectId: "../outside" }),
     ).rejects.toThrow("Invalid project");
+    await expect(
+      removeAgentState({
+        agentStateDir,
+        projectId: "project-1",
+        sessionId: "..",
+      }),
+    ).rejects.toThrow("Invalid session");
   });
 });

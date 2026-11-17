@@ -24,14 +24,17 @@ export async function renderPrompt(input: {
     "attachments",
     input.itemId.replace(/[^\w.-]+/g, "_"),
   );
-  await mkdir(directory, { recursive: true });
+  // What the person pasted stays theirs: private, like Work's own copy.
+  await mkdir(directory, { recursive: true, mode: 0o700 });
   const lines: string[] = [];
   for (const attachment of media) {
     // Names come from the person's clipboard and files: keep them readable
     // but path-safe, and unique beside a same-named sibling.
     const safeName = `${randomUUID().slice(0, 8)}-${attachment.name.replace(/[^\w.-]+/g, "_")}`;
     const filePath = path.join(directory, safeName);
-    await writeFile(filePath, Buffer.from(attachment.dataBase64, "base64"));
+    await writeFile(filePath, Buffer.from(attachment.dataBase64, "base64"), {
+      mode: 0o600,
+    });
     lines.push(
       `- [attachment ${input.attachments.indexOf(attachment) + 1}: ${attachment.name}] ${filePath} (${attachment.mediaType})`,
     );
