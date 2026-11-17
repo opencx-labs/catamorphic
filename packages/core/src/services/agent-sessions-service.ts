@@ -368,6 +368,7 @@ import {
   type SetupWorkflowOutcome,
   type SetupWorkflowReason,
   sessionDirectory,
+  setupClaimWaitMs,
   type WorkspaceSetupOutcome,
   workspaceSetupFailedNote,
   workspaceSetupNetworkRefusedNote,
@@ -6019,12 +6020,14 @@ export class AgentSessionsService {
         db: this.db,
         name: `workspace-setup:${setupGate.allocationId}`,
         ttlSeconds: 120,
-        // A setup may run twice its timeout: on its own network, then the rest.
-        waitMs:
-          ((runtime.setup?.timeoutMinutes ?? DEFAULT_SETUP_TIMEOUT_MINUTES) *
-            2 +
-            5) *
-          60_000,
+        // As long as the parts the holder may run (ADR 0324).
+        waitMs: setupClaimWaitMs({
+          timeoutMinutes:
+            runtime.setup?.timeoutMinutes ?? DEFAULT_SETUP_TIMEOUT_MINUTES,
+          command: runtime.setup?.command,
+          workflow: runtime.setup?.workflow,
+          personalAllowed: runtime.personalCredentials === true,
+        }),
         operation: () => prepareWorkspace(),
       });
     else await prepareWorkspace();

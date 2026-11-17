@@ -48,7 +48,9 @@ Spawn takes `workspace: "shared" | "own"`, default `shared`, on every host.
   first runs the whole setup step, and its outcome (the build it ran in and
   its note to the agent, failures included) is recorded on the Allocation, so
   a session that arrived meanwhile reuses it and starts once it ends, instead
-  of running it again. Idle release counts the workspace in use while any session
+  of running it again. It waits as long as every part the step may run
+  (following an earlier run, the command, the setup workflow, the owner's
+  part), each bounded by the setup's timeout. Idle release counts the workspace in use while any session
   in it works; a child whose workspace was released admits it again for
   that session. Closing or archiving the child gives back only its own
   grants and state; closing the parent closes it as before. A shared

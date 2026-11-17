@@ -15,6 +15,7 @@ import {
   SETUP_PROCESS_NAME,
   SetupNetworkError,
   type SetupWorkflowReason,
+  setupClaimWaitMs,
   setupFingerprint,
   setupRecordAfter,
   workspaceSetupFailedNote,
@@ -366,6 +367,50 @@ describe("planning a workspace's setup", () => {
     expect(refusals[1]).toContain("workspace: { ref }");
     for (const text of [note, timedOut, ...refusals])
       expect(text).not.toMatch(/[–—]/);
+  });
+});
+
+describe("waiting for another session's setup (ADRs 0322, 0324)", () => {
+  const minutes = (ms: number) => ms / 60_000;
+
+  it("waits as long as every part the holder may run, each bounded by the setup's timeout", () => {
+    // Following an earlier run, the command, the workflow and the owner's
+    // part: four times 10 minutes, past the 25 a command alone needs.
+    expect(
+      minutes(
+        setupClaimWaitMs({
+          timeoutMinutes: 10,
+          command: "pnpm install",
+          workflow: "prepareReview",
+          personalAllowed: true,
+        }),
+      ),
+    ).toBe(45);
+    expect(
+      minutes(
+        setupClaimWaitMs({
+          timeoutMinutes: 10,
+          command: "pnpm install",
+          workflow: "prepareReview",
+          personalAllowed: false,
+        }),
+      ),
+    ).toBeGreaterThan(10 * 2 + 5);
+  });
+
+  it("waits no longer than the parts there are", () => {
+    expect(
+      minutes(
+        setupClaimWaitMs({
+          timeoutMinutes: 10,
+          command: "pnpm install",
+          personalAllowed: false,
+        }),
+      ),
+    ).toBe(25);
+    expect(
+      minutes(setupClaimWaitMs({ timeoutMinutes: 10, personalAllowed: false })),
+    ).toBe(15);
   });
 });
 

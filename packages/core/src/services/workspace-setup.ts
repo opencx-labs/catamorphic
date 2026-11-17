@@ -198,6 +198,29 @@ export function planWorkspaceSetup(input: {
   };
 }
 
+/**
+ * How long a session's turn waits for another session's setup of the same
+ * workspace build (ADR 0322) before it gives up. Each part a setup may run
+ * is bounded by the setup's timeout: following a setup an earlier holder
+ * left running, the Environment's command, its setup workflow (ADR 0324)
+ * and the owner's personal setup; five minutes more cover the preparation
+ * around them. A command on its own network (ADR 0257) is the same command,
+ * not another part.
+ */
+export function setupClaimWaitMs(input: {
+  timeoutMinutes: number;
+  command?: string;
+  workflow?: string;
+  personalAllowed: boolean;
+}): number {
+  const parts =
+    1 +
+    (input.command?.trim() ? 1 : 0) +
+    (input.workflow ? 1 : 0) +
+    (input.personalAllowed ? 1 : 0);
+  return (input.timeoutMinutes * parts + 5) * 60_000;
+}
+
 /** The parts a plan runs, in order. */
 export function planParts(plan: WorkspaceSetupPlan): SetupPart[] {
   return [
