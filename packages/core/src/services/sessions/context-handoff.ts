@@ -189,6 +189,8 @@ async function keptSections(input: {
         .distinctOn(sql`item.payload->>'name'`)
         .where("item.session_id", "=", sessionId)
         .where("item.kind", "=", "result")
+        // A result this side did not accept (a mirror's) is no result.
+        .where("item.status", "=", "completed")
         .where((eb) =>
           eb.or([
             eb("turn.status", "is", null),
@@ -238,10 +240,12 @@ async function keptSections(input: {
     .select(["item.payload", "item.position"])
     .where("item.session_id", "=", sessionId)
     .where("item.kind", "in", ["user_message", "inbound_message"])
+    // A request withdrawn before it ran, or undone by a rollback, asks for
+    // nothing any more.
     .where((eb) =>
       eb.or([
         eb("turn.status", "is", null),
-        eb("turn.status", "<>", "cancelled"),
+        eb("turn.status", "not in", ["cancelled", "rolled_back"]),
       ]),
     )
     .where((eb) =>

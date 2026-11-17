@@ -715,6 +715,86 @@ describe("typed results", () => {
     ).toMatchObject({ current: true });
   });
 
+  it("hands off only what results count: no result this side refused, no request a rollback undid", async () => {
+    const project = await projects.create(identity, { name: "Handoff rules" });
+    const handoffOf = async (sessionId: string, toOrdinal: number) => {
+      const handoff = await buildContextHandoff({
+        db,
+        sessionId,
+        fromOrdinal: 1,
+        toOrdinal,
+        strategy: "full",
+        budgetChars: 20_000,
+      });
+      const [, kept] = handoff?.text.split("Your accepted results") ?? [];
+      const [accepted = "", unanswered = ""] =
+        kept?.split("which no result answers yet") ?? [];
+      return { accepted, unanswered };
+    };
+
+    // A result this side did not accept (as a refused mirrored item is).
+    const refused = await sessions.create(identity, project.id);
+    await turn(
+      project.id,
+      refused.id,
+      `Review it. ${tool("submit_result", {
+        name: "review",
+        value: { verdict: "COMMENT", score: 3 },
+      })}`,
+    );
+    await turn(
+      project.id,
+      refused.id,
+      tool("submit_result", {
+        name: "review",
+        value: { verdict: "REQUEST_CHANGES", score: 1 },
+      }),
+    );
+    const [, second] = (
+      await db
+        .selectFrom("agent_items")
+        .select("id")
+        .where("session_id", "=", refused.id)
+        .where("kind", "=", "result")
+        .orderBy("position")
+        .execute()
+    ).map((row) => row.id);
+    await db
+      .updateTable("agent_items")
+      .set({ status: "failed" })
+      .where("id", "=", second ?? "")
+      .execute();
+    const afterRefusal = await handoffOf(refused.id, 2);
+    expect(afterRefusal.accepted).toContain('{"score":3,"verdict":"COMMENT"}');
+    expect(afterRefusal.accepted).not.toContain('"verdict":"REQUEST_CHANGES"');
+    // The request it answered is open again.
+    expect(afterRefusal.unanswered).toContain("REQUEST_CHANGES");
+
+    // A request a rollback undid asks for nothing: the result stays current.
+    const undone = await sessions.create(identity, project.id);
+    await turn(
+      project.id,
+      undone.id,
+      `Review it. ${tool("submit_result", {
+        name: "review",
+        value: { verdict: "COMMENT", score: 4 },
+      })}`,
+    );
+    const state = await turn(project.id, undone.id, "Look again.");
+    const [, later] = orderedTurns(state);
+    await db
+      .updateTable("agent_turns")
+      .set({ status: "rolled_back" })
+      .where("id", "=", later?.id ?? "")
+      .execute();
+    const afterRollback = await handoffOf(undone.id, 2);
+    expect(afterRollback.accepted).toContain('{"score":4,"verdict":"COMMENT"}');
+    expect(afterRollback.accepted).not.toContain(
+      "a newer request has arrived since",
+    );
+    expect(afterRollback.unanswered).not.toContain("Look again.");
+  });
+
   it("shows a child's results in list and wait only to callers who may read that child", async () => {
     const project = await projects.create(identity, { name: "Readers" });
     const parent = await sessions.create(identity, project.id);
