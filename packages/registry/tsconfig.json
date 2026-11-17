@@ -12,6 +12,7 @@
     "src/pull-request-reviews/github.ts",
     "src/pull-request-reviews/reviews.ts",
     "src/slack-threads/slack.ts",
-    "src/slack-threads/slack-threads.ts"
+    "src/slack-threads/slack-threads.ts",
+    "src/machines-ec2/machines-ec2.ts"
   ]
 }
