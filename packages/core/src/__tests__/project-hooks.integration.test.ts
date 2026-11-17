@@ -12,6 +12,7 @@ import type { Project } from "../services/projects-service.js";
 import {
   ProjectNotFoundError,
   ProjectProvisioningError,
+  ProjectsService,
 } from "../services/projects-service.js";
 import { testEnvironmentProvider } from "./test-environment.js";
 
@@ -34,6 +35,7 @@ describeIf("Project lifecycle hooks (ADRs 0046, 0331)", () => {
   let failNextDelete = false;
   let pendingDeletes = 0;
   let mintedSecrets: Record<string, string> | undefined;
+  let failSecondCreate = false;
 
   function coreWithHooks(): CatamorphicCore {
     return new CatamorphicCore({
@@ -43,6 +45,7 @@ describeIf("Project lifecycle hooks (ADRs 0046, 0331)", () => {
       credentialVault: new MemoryCredentialVault(),
       projectHooks: [
         {
+          name: "db",
           onProjectCreated: ({ project }: { project: Project }) => {
             if (failNextCreate) {
               failNextCreate = false;
@@ -62,6 +65,15 @@ describeIf("Project lifecycle hooks (ADRs 0046, 0331)", () => {
             }
             deprovisioned.push(project.id);
             return { done: true };
+          },
+        },
+        {
+          name: "bucket",
+          onProjectCreated: () => {
+            if (failSecondCreate) {
+              failSecondCreate = false;
+              throw new Error("bucket outage");
+            }
           },
         },
       ],
@@ -149,6 +161,8 @@ describeIf("Project lifecycle hooks (ADRs 0046, 0331)", () => {
 
   it("deletes the project and retries a failed cleanup until it is done", async () => {
     const core = coreWithHooks();
+    // Creates rolled back above left cleanups due now; finish those first.
+    await core.projects.retryCleanups();
     const project = await core.projects.create(identity, { name: "sticky" });
 
     failNextDelete = true;
@@ -174,6 +188,14 @@ describeIf("Project lifecycle hooks (ADRs 0046, 0331)", () => {
       attempts: 1,
       last_error: "deprovisioning outage",
     });
+    await expect(core.projects.listCleanups()).resolves.toContainEqual(
+      expect.objectContaining({
+        projectId: project.id,
+        hookName: "db",
+        attempts: 1,
+        lastError: "deprovisioning outage",
+      }),
+    );
     // Not due yet: nothing is called.
     await expect(core.projects.retryCleanups()).resolves.toBe(0);
 
@@ -186,5 +208,66 @@ describeIf("Project lifecycle hooks (ADRs 0046, 0331)", () => {
     await expect(core.projects.retryCleanups()).resolves.toBe(1);
     expect(deprovisioned).toContain(project.id);
     await expect(cleanup()).resolves.toBeUndefined();
+  });
+
+  it("cleans up what earlier hooks made when a later one fails the create", async () => {
+    const core = coreWithHooks();
+    failSecondCreate = true;
+    await expect(
+      core.projects.create(identity, { name: "half" }),
+    ).rejects.toThrow(ProjectProvisioningError);
+    const [made] = provisioned.slice(-1);
+    const cleanup = await db
+      .selectFrom("project_cleanups")
+      .select(["hook_name", "next_attempt_at"])
+      .where("project_id", "=", made ?? "")
+      .executeTakeFirstOrThrow();
+    expect(cleanup.hook_name).toBe("db");
+    await core.projects.retryCleanups();
+    expect(deprovisioned).toContain(made);
+  });
+
+  it("refuses two project hooks with one name", () => {
+    expect(
+      () =>
+        new ProjectsService(db, projectManager, [
+          { name: "db", onProjectDeleted: () => {} },
+          { name: "db", onProjectDeleted: () => {} },
+        ]),
+    ).toThrow("db");
+  });
+
+  it("keeps a slow cleanup claimed while it runs, so it is called once at a time", async () => {
+    let calls = 0;
+    const slow = new ProjectsService(
+      db,
+      projectManager,
+      [
+        {
+          name: "slow",
+          onProjectDeleted: async () => {
+            calls += 1;
+            await new Promise((resolve) => setTimeout(resolve, 1_000));
+            return { done: true };
+          },
+        },
+      ],
+      { cleanupClaimMs: 300 },
+    );
+    const projectId = crypto.randomUUID();
+    await db
+      .insertInto("project_cleanups")
+      .values({
+        tenant_id: identity.tenantId,
+        project_id: projectId,
+        hook_name: "slow",
+        project: JSON.stringify({ id: projectId }),
+        identity: JSON.stringify(identity),
+      })
+      .execute();
+    const first = slow.retryCleanups();
+    await new Promise((resolve) => setTimeout(resolve, 600));
+    await Promise.all([first, slow.retryCleanups()]);
+    expect(calls).toBe(1);
   });
 });

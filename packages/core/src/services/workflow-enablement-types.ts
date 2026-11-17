@@ -75,6 +75,11 @@ export interface WorkflowEnablementPreview {
   /** The project permissions the workflow declares (ADR 0158). */
   permissions: string[];
   consentDigest: string;
+  /**
+   * The consent digest without the code, with triggers and secret names
+   * (ADR 0330): what following compares.
+   */
+  authorityDigest: string;
   triggerCount: number;
   triggers: Array<{ kind: string; config: unknown; projectKind?: string }>;
   connectionLabels: Record<string, string>;

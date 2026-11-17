@@ -163,7 +163,8 @@ turns it on, because it runs with their connections and they should see new
 code before it uses them. On each newly published revision, Work moves a
 following enablement there when the workflow builds and parses at that revision
 and the authority consented to is unchanged: same Environment, connections,
-capabilities and permissions. If the revision asks for more, the enablement
+capabilities and permissions, the same triggers (kind, configuration and
+filters) and the same declared secret names. If the revision asks for more, the enablement
 stays on its commit, shows an update, and its owner is notified to review it. A
 revision whose workflow does not parse, is gone, or whose triggers do not
 register is skipped and reported; the next good one is followed. A failure that

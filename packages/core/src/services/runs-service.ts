@@ -425,7 +425,14 @@ export interface RedriveRunJobInput {
 
 /** A workflow cannot run at a published revision under its consent (ADR 0331). */
 export class WorkflowRevisionUnavailableError extends Error {
-  constructor(readonly reason: string) {
+  constructor(
+    readonly reason: string,
+    /**
+     * `needs_consent`: the revision asks for more authority; `skipped`: the
+     * workflow does not build there; `retry`: a failure that may clear.
+     */
+    readonly kind: "needs_consent" | "skipped" | "retry",
+  ) {
     super(reason);
     this.name = "WorkflowRevisionUnavailableError";
   }
@@ -668,6 +675,8 @@ interface PreparedSource {
   files: Record<string, string>;
   workflowFile: string;
   graph: WorkflowGraph;
+  /** The run secrets the project declares, which every run receives. */
+  secretNames: string[];
   commitSha: string | null;
   workflowPackage?: WorkflowPackagePayload;
 }
@@ -1263,7 +1272,7 @@ export class RunsService {
       commitSha: args.commitSha,
     });
     if (ready.kind !== "ready")
-      throw new WorkflowRevisionUnavailableError(ready.reason);
+      throw new WorkflowRevisionUnavailableError(ready.reason, ready.kind);
     return this.trigger({
       ...args,
       identity: validated.ownerIdentity,
@@ -1909,6 +1918,7 @@ export class RunsService {
     artifact: DeploymentArtifact;
     requirements: WorkflowGraph["connections"];
     permissions: WorkflowGraph["permissions"];
+    secrets: string[];
     remoteBranch?: string;
   }> {
     await this.requireProject(args.identity, args.projectId);
@@ -1947,6 +1957,7 @@ export class RunsService {
       remoteBranch: retained?.remote_branch ?? args.remoteBranch,
       requirements: source.graph.connections,
       permissions: source.graph.permissions,
+      secrets: source.secretNames,
     };
   }
 
@@ -3292,6 +3303,10 @@ async function prepareSource(args: {
     files: prepared.files,
     workflowFile: prepared.graph.filePath,
     graph: prepared.graph,
+    secretNames: prepared.secrets
+      .filter((secret) => secret.use === "run")
+      .map((secret) => secret.name)
+      .sort(),
     commitSha: args.commitSha,
     workflowPackage: await resolveWorkflowPackageFallback({
       packageJson: workflowPackageJson(files),

@@ -54,7 +54,8 @@ export interface HostPluginDefinition {
   /** Package name, used in boot-time collision errors. */
   name: string;
   capabilities?: readonly CapabilityProviderRuntime[];
-  projectHooks?: ProjectLifecycleHooks;
+  /** Named after the plugin unless they name themselves. */
+  projectHooks?: Omit<ProjectLifecycleHooks, "name"> & { name?: string };
   triggerKinds?: readonly TriggerKindRuntime[];
   mcpToolKinds?: readonly McpToolKindSpec[];
   /** Host-side credential providers contributed by this plugin. */
@@ -161,7 +162,11 @@ export function mergeHostPlugins(args: {
       connectionKinds.add(provider.kind);
       connectionProviders.push(provider);
     }
-    if (plugin.projectHooks) projectHooks.push(plugin.projectHooks);
+    if (plugin.projectHooks)
+      projectHooks.push({
+        ...plugin.projectHooks,
+        name: plugin.projectHooks.name ?? plugin.name,
+      });
     mcpToolKinds.push(...(plugin.mcpToolKinds ?? []));
   }
 

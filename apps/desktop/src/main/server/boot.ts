@@ -800,6 +800,7 @@ export async function startEmbeddedServer(
     },
     projectHooks: [
       {
+        name: "work-desktop-workflow-connections",
         onProjectCreated: async () => syncWorkflowConnections(),
       },
     ],

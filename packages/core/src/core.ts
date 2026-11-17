@@ -380,9 +380,10 @@ export interface CatamorphicCoreConfig {
    */
   capabilityProviders?: readonly CapabilityProviderRuntime[];
   /**
-   * Host-side project lifecycle hooks (ADR 0046). `onProjectCreated`
-   * failures roll the create back; `onProjectDeleted` failures abort the
-   * delete. Hooks must be idempotent.
+   * Host-side project lifecycle hooks (ADRs 0046, 0331), each uniquely
+   * named. `onProjectCreated` failures roll the create back and queue the
+   * cleanup of hooks that already ran; `onProjectDeleted` never blocks the
+   * delete and is retried until it reports done. Hooks must be idempotent.
    */
   projectHooks?: readonly ProjectLifecycleHooks[];
   /**
@@ -1301,7 +1302,6 @@ export class CatamorphicCore {
       projectManager: this.projectManager,
       runs: this.runs,
       workflowEnablements: () => this.workflowEnablements,
-      published: (input) => this.published(input),
     });
     this.workflowEnablements = new WorkflowEnablementsService(this.db, {
       executionEnvironments: this.executionEnvironments,
@@ -1357,6 +1357,15 @@ export class CatamorphicCore {
         } finally {
           await repo.dispose();
         }
+      },
+      publishedHead: async ({ tenantId, projectId }) => {
+        const remote = this.projectManager.remoteBackend;
+        if (!remote) return null;
+        return remote
+          .withOrigin(tenantId, projectId, (origin) =>
+            origin.resolveRef("refs/heads/main"),
+          )
+          .catch(() => null);
       },
       notifications: this.notifications,
       automationManagers: (input) => this.automationManagers(input),

@@ -4,7 +4,10 @@
 
 ALTER TABLE workflow_enablements
   ADD COLUMN follow boolean NOT NULL DEFAULT false,
-  ADD COLUMN followed_sequence bigint;
+  ADD COLUMN followed_sequence bigint,
+  -- What the owner agreed to apart from the code: connections, permissions,
+  -- Environment, triggers and secret names (ADR 0330). Null until known.
+  ADD COLUMN authority_digest char(64);
 
 -- Deploying by merging to main just works for the project's automations.
 -- A member's own automation uses their connections, so it follows only once
@@ -27,6 +30,11 @@ CREATE TABLE published_revisions (
   deploy_enablement_id uuid REFERENCES workflow_enablements(id)
     ON DELETE SET NULL,
   deploy_run_id uuid REFERENCES workflow_runs(id) ON DELETE SET NULL,
+  -- Each try of the deploy is its own run, found again by this attempt.
+  deploy_attempt integer NOT NULL DEFAULT 1,
+  deploy_started_at timestamptz,
+  -- The people who manage automations were told it is running long.
+  deploy_noticed boolean NOT NULL DEFAULT false,
   previous_commit_sha char(40),
   error text,
   report jsonb NOT NULL DEFAULT '[]'::jsonb,
@@ -57,15 +65,17 @@ CREATE TABLE project_cleanups (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
   tenant_id uuid NOT NULL,
   project_id uuid NOT NULL,
-  -- The hook's place among the host's project hooks.
-  hook_index integer NOT NULL,
+  -- The hook's name among the host's project hooks.
+  hook_name text NOT NULL,
   project jsonb NOT NULL,
   identity jsonb NOT NULL,
   attempts integer NOT NULL DEFAULT 0,
   last_error text,
   next_attempt_at timestamptz NOT NULL DEFAULT now(),
+  -- The attempt holding it; renewed while the hook runs.
+  claimed_by uuid,
   created_at timestamptz NOT NULL DEFAULT now(),
-  UNIQUE (project_id, hook_index)
+  UNIQUE (project_id, hook_name)
 );
 
 CREATE INDEX idx_project_cleanups_due ON project_cleanups(next_attempt_at);

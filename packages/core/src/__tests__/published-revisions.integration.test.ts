@@ -8,13 +8,18 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import type { Identity } from "../identity.js";
 import { AccessDeniedError } from "../services/artifact-scope.js";
 import type { ExecutionEnvironmentsService } from "../services/execution-environments-service.js";
+import { EnvironmentBindingUnavailableError } from "../services/execution-environments-service.js";
 import {
   PublishedRevisionNotRetryableError,
   PublishedRevisionsService,
   parseProjectDeploy,
 } from "../services/published-revisions-service.js";
 import type { Run } from "../services/runs-service.js";
-import { WorkflowEnablementsService } from "../services/workflow-enablements-service.js";
+import {
+  WorkflowEnablementSuspendedError,
+  WorkflowEnablementsService,
+} from "../services/workflow-enablements-service.js";
+import { projectAdmin } from "./project-admin.js";
 
 const pglite = new PGlite({ extensions: { pgcrypto } });
 const schema = "catamorphic_published_revisions";
@@ -31,7 +36,12 @@ const sha = (letters: string) => letters.repeat(40).slice(0, 40);
 /** What each commit's workflows build to, per workflow name. */
 const targets = new Map<
   string,
-  { permissions: string[]; fails?: string; artifactId: string }
+  {
+    permissions: string[];
+    secrets: string[];
+    fails?: string;
+    artifactId: string;
+  }
 >();
 /** `.work/project.json` per commit. */
 const manifests = new Map<string, string>();
@@ -40,6 +50,22 @@ const notifications: Array<{ kind: string; to: string; title: string }> = [];
 const deploys: Array<{ runId: string; commit: string; previous: unknown }> = [];
 let maxLiveDeploys = 0;
 let head = sha("a");
+/** What the project's published main points to. */
+let mainHead: string | null = null;
+
+/** Main moves to `commitSha`, and the publisher records it. */
+async function publish(commitSha: string) {
+  mainHead = commitSha;
+  await revisions.record({ projectId, commitSha });
+}
+
+/** Starting a deploy run fails with this while set. */
+let deployStartFailure: Error | null = null;
+/** Previewing any revision fails with this while set. */
+let previewError: Error | null = null;
+/** Runs Work canceled. */
+const canceled: string[] = [];
+
 /** A failure that may clear (the database, the network) while set. */
 let transientFailure: string | null = null;
 
@@ -48,7 +74,14 @@ let revisions: PublishedRevisionsService;
 
 async function addCommit(
   commitSha: string,
-  options: { permissions?: string[]; fails?: string } = {},
+  options: {
+    permissions?: string[];
+    fails?: string;
+    /** The secret names the project declares at this commit. */
+    secrets?: string[];
+    /** watchInbox's triggers at this commit. */
+    triggers?: Array<{ kind: string; config: unknown; where?: unknown }>;
+  } = {},
 ) {
   const artifactId = crypto.randomUUID();
   await db
@@ -63,8 +96,29 @@ async function addCommit(
       transform_version: "test",
     })
     .execute();
+  if (options.triggers?.length)
+    await db
+      .insertInto("trigger_definition_scans")
+      .values({ project_id: projectId, commit_sha: commitSha })
+      .execute();
+  for (const [index, trigger] of (options.triggers ?? []).entries())
+    await db
+      .insertInto("trigger_definitions")
+      .values({
+        project_id: projectId,
+        commit_sha: commitSha,
+        workflow_name: "watchInbox",
+        binding_index: index,
+        trigger_kind: trigger.kind,
+        config: JSON.stringify(trigger.config),
+        where_filters: JSON.stringify(trigger.where ?? []),
+        input_parameters: JSON.stringify([]),
+        can_suspend: false,
+      })
+      .execute();
   targets.set(commitSha, {
     permissions: options.permissions ?? [],
+    secrets: options.secrets ?? [],
     ...(options.fails ? { fails: options.fails } : {}),
     artifactId,
   });
@@ -82,9 +136,18 @@ function revisionsService(): PublishedRevisionsService {
           .where("id", "=", args.enablementId)
           .executeTakeFirstOrThrow();
         if (enablement.status !== "active")
-          throw new Error(
-            `Workflow enablement is unavailable: ${enablement.status}`,
+          throw new WorkflowEnablementSuspendedError(
+            args.enablementId,
+            enablement.status,
           );
+        if (deployStartFailure) throw deployStartFailure;
+        const existing = await db
+          .selectFrom("workflow_runs")
+          .select("id")
+          .where("correlation_key", "=", args.correlationKey ?? "")
+          .where("status", "not in", ["completed", "failed", "canceled"])
+          .executeTakeFirst();
+        if (existing) return { id: existing.id } as Run;
         const live = await db
           .selectFrom("workflow_runs")
           .select("id")
@@ -96,6 +159,7 @@ function revisionsService(): PublishedRevisionsService {
           workflowName: args.workflowName,
           commitSha: args.commitSha,
           status: "running",
+          correlationKey: args.correlationKey,
         });
         const input = args.input as { commit: string; previousCommit: unknown };
         deploys.push({
@@ -105,8 +169,14 @@ function revisionsService(): PublishedRevisionsService {
         });
         return { id: run } as Run;
       },
+      cancel: async ({ runId }) => {
+        canceled.push(runId);
+        await settleRun(runId, "canceled");
+        return { id: runId } as Run;
+      },
     }),
     readManifest: async ({ commitSha }) => manifests.get(commitSha) ?? null,
+    publishedHead: async () => mainHead,
     notifications: {
       publish: async (input) => {
         notifications.push({
@@ -124,6 +194,7 @@ async function insertRun(input: {
   workflowName: string;
   commitSha: string;
   status: string;
+  correlationKey?: string;
 }): Promise<string> {
   const row = await db
     .insertInto("workflow_runs")
@@ -133,6 +204,7 @@ async function insertRun(input: {
       provenance: JSON.stringify({ commitSha: input.commitSha }),
       deployment_artifact_id: targets.get(input.commitSha)?.artifactId ?? null,
       status: input.status,
+      correlation_key: input.correlationKey ?? null,
       ...(input.status === "running" ? {} : { completed_at: new Date() }),
     })
     .returning("id")
@@ -140,7 +212,10 @@ async function insertRun(input: {
   return row.id;
 }
 
-async function settleRun(runId: string, status: "completed" | "failed") {
+async function settleRun(
+  runId: string,
+  status: "completed" | "failed" | "canceled",
+) {
   await db
     .updateTable("workflow_runs")
     .set({
@@ -204,6 +279,7 @@ beforeAll(async () => {
       if (!target) throw new Error(`No commit ${commitSha}`);
       if (target.fails) throw new WorkflowSourceInvalidError(target.fails);
       if (transientFailure) throw new Error(transientFailure);
+      if (previewError) throw previewError;
       const artifact = await db
         .selectFrom("deployment_artifacts")
         .selectAll()
@@ -224,6 +300,7 @@ beforeAll(async () => {
           lastUsedAt: artifact.created_at.toISOString(),
         },
         requirements: [],
+        secrets: target.secrets,
         permissions: target.permissions,
       };
     },
@@ -257,7 +334,7 @@ describe("following the published program (ADR 0330)", () => {
     });
 
     await addCommit(sha("b"));
-    await revisions.record({ projectId, commitSha: sha("b") });
+    await publish(sha("b"));
     await revisions.advance();
 
     const moved = await enablements.get({
@@ -292,7 +369,7 @@ describe("following the published program (ADR 0330)", () => {
 
   it("stays, offers the update and tells its owner when the revision needs new consent", async () => {
     await addCommit(sha("c"), { permissions: ["store:write"] });
-    await revisions.record({ projectId, commitSha: sha("c") });
+    await publish(sha("c"));
     await revisions.advance();
 
     expect(
@@ -309,7 +386,7 @@ describe("following the published program (ADR 0330)", () => {
 
   it("skips a revision whose workflow does not build and follows the next good one", async () => {
     await addCommit(sha("d"), { fails: "Workflow watchInbox does not parse" });
-    await revisions.record({ projectId, commitSha: sha("d") });
+    await publish(sha("d"));
     await revisions.advance();
     expect(await commitOf(watcher)).toBe(sha("b"));
     expect(notifications).toEqual([
@@ -320,7 +397,7 @@ describe("following the published program (ADR 0330)", () => {
     ]);
 
     await addCommit(sha("e"));
-    await revisions.record({ projectId, commitSha: sha("e") });
+    await publish(sha("e"));
     await revisions.advance();
     expect(await commitOf(watcher)).toBe(sha("e"));
   });
@@ -339,7 +416,7 @@ describe("following the published program (ADR 0330)", () => {
   it("does not skip a revision on a failure that may clear, and moves once it clears", async () => {
     await addCommit(sha("0"));
     transientFailure = "connection reset by peer";
-    await revisions.record({ projectId, commitSha: sha("0") });
+    await publish(sha("0"));
     await revisions.advance();
     expect(await commitOf(watcher)).toBe(sha("e"));
     expect((await statuses()).slice(-1)).toEqual(["0:applying"]);
@@ -389,13 +466,44 @@ describe("following the published program (ADR 0330)", () => {
   it("records each revision once, and a newer one supersedes one still pending", async () => {
     await addCommit(sha("f"));
     await addCommit(sha("1"));
-    await revisions.record({ projectId, commitSha: sha("f") });
-    await revisions.record({ projectId, commitSha: sha("f") });
-    await revisions.record({ projectId, commitSha: sha("1") });
+    await publish(sha("f"));
+    await publish(sha("f"));
+    await publish(sha("1"));
     expect((await statuses()).slice(-2)).toEqual(["f:superseded", "1:pending"]);
     await revisions.advance();
     expect((await statuses()).slice(-1)).toEqual(["1:applied"]);
     expect(await commitOf(watcher)).toBe(sha("1"));
+  });
+
+  it("ignores a publication that is no longer what main points to", async () => {
+    const before = await statuses();
+    // A scan or a slow publisher that read main before it moved.
+    await revisions.record({ projectId, commitSha: sha("e") });
+    expect(await statuses()).toEqual(before);
+    await revisions.advance();
+    expect(await commitOf(watcher)).toBe(sha("1"));
+  });
+
+  it("does not move back an enablement a person pointed at a newer commit", async () => {
+    await addCommit(sha("bc"));
+    await addCommit(sha("cd"));
+    await publish(sha("bc"));
+    const preview = await enablements.preview({
+      identity: owner,
+      projectId,
+      workflowName: "watchInbox",
+      owner: { type: "project" },
+      commitSha: sha("cd"),
+    });
+    await enablements.updateDeployment({
+      identity: owner,
+      enablementId: watcher,
+      consentDigest: preview.consentDigest,
+      commitSha: sha("cd"),
+    });
+    await revisions.advance();
+    expect((await statuses()).slice(-1)).toEqual(["b:applied"]);
+    expect(await commitOf(watcher)).toBe(sha("cd"));
   });
 
   it("does not move an enablement that stopped following", async () => {
@@ -405,9 +513,9 @@ describe("following the published program (ADR 0330)", () => {
       follow: false,
     });
     await addCommit(sha("2"));
-    await revisions.record({ projectId, commitSha: sha("2") });
+    await publish(sha("2"));
     await revisions.advance();
-    expect(await commitOf(watcher)).toBe(sha("1"));
+    expect(await commitOf(watcher)).toBe(sha("cd"));
     await enablements.setFollow({
       identity: owner,
       enablementId: watcher,
@@ -417,7 +525,7 @@ describe("following the published program (ADR 0330)", () => {
 
   it("moves an enablement once when two replicas advance together", async () => {
     await addCommit(sha("3"));
-    await revisions.record({ projectId, commitSha: sha("3") });
+    await publish(sha("3"));
     const other = revisionsService();
     await Promise.all([revisions.advance(), other.advance()]);
     await Promise.all([revisions.advance(), other.advance()]);
@@ -434,6 +542,27 @@ describe("following the published program (ADR 0330)", () => {
           (event.metadata as { commitSha?: string }).commitSha === sha("3"),
       ),
     ).toHaveLength(1);
+  });
+
+  it("never moves an enablement to a commit older than the one it runs", async () => {
+    await db
+      .updateTable("workflow_enablements")
+      .set({ followed_sequence: null })
+      .where("id", "=", watcher)
+      .execute();
+    const older = await db
+      .selectFrom("published_revisions")
+      .select("sequence")
+      .where("commit_sha", "=", sha("2"))
+      .executeTakeFirstOrThrow();
+    await expect(
+      enablements.followRevision({
+        enablementId: watcher,
+        commitSha: sha("2"),
+        sequence: Number(older.sequence),
+      }),
+    ).resolves.toEqual({ kind: "unchanged", enablementId: watcher });
+    expect(await commitOf(watcher)).toBe(sha("3"));
   });
 });
 
@@ -465,7 +594,7 @@ describe("the project's deploy workflow (ADR 0331)", () => {
 
     await addCommit(sha("4"));
     manifests.set(sha("4"), deployManifest);
-    await revisions.record({ projectId, commitSha: sha("4") });
+    await publish(sha("4"));
     await revisions.advance();
 
     expect(deploys).toEqual([
@@ -487,7 +616,7 @@ describe("the project's deploy workflow (ADR 0331)", () => {
   it("moves nothing when the deploy fails, and tries again at the next revision", async () => {
     await addCommit(sha("5"));
     manifests.set(sha("5"), deployManifest);
-    await revisions.record({ projectId, commitSha: sha("5") });
+    await publish(sha("5"));
     await revisions.advance();
     await settleRun(deploys[1]!.runId, "failed");
     await revisions.advance();
@@ -507,7 +636,7 @@ describe("the project's deploy workflow (ADR 0331)", () => {
 
     await addCommit(sha("6"));
     manifests.set(sha("6"), deployManifest);
-    await revisions.record({ projectId, commitSha: sha("6") });
+    await publish(sha("6"));
     await revisions.advance();
     // The live revision is still the last one that went live.
     expect(deploys[2]).toMatchObject({ commit: sha("6"), previous: sha("4") });
@@ -521,9 +650,9 @@ describe("the project's deploy workflow (ADR 0331)", () => {
     await addCommit(sha("8"));
     manifests.set(sha("7"), deployManifest);
     manifests.set(sha("8"), deployManifest);
-    await revisions.record({ projectId, commitSha: sha("7") });
+    await publish(sha("7"));
     await revisions.advance();
-    await revisions.record({ projectId, commitSha: sha("8") });
+    await publish(sha("8"));
     await revisions.advance();
     await revisions.advance();
     // 8 waits while 7 deploys.
@@ -548,7 +677,7 @@ describe("the project's deploy workflow (ADR 0331)", () => {
       sha("9"),
       JSON.stringify({ deploy: { workflow: "seedData" } }),
     );
-    await revisions.record({ projectId, commitSha: sha("9") });
+    await publish(sha("9"));
     await revisions.advance();
     expect((await statuses()).slice(-1)).toEqual(["9:failed"]);
     expect(await commitOf(watcher)).toBe(sha("8"));
@@ -569,7 +698,7 @@ describe("the project's deploy workflow (ADR 0331)", () => {
     await suspend();
     await addCommit(sha("ab"));
     manifests.set(sha("ab"), deployManifest);
-    await revisions.record({ projectId, commitSha: sha("ab") });
+    await publish(sha("ab"));
     await revisions.advance();
     expect((await statuses()).slice(-1)).toEqual(["a:failed"]);
     const [blocked] = await revisions.list({ identity: owner, projectId });
@@ -620,5 +749,210 @@ describe("the project's deploy workflow (ADR 0331)", () => {
     await expect(
       revisions.retry({ identity: owner, projectId }),
     ).rejects.toBeInstanceOf(PublishedRevisionNotRetryableError);
+  });
+});
+
+describe("what following never does on its own (ADR 0330)", () => {
+  const admin: Identity = {
+    tenantId,
+    externalUserId: "admin",
+    ...projectAdmin(projectId),
+  };
+  let watcher: string;
+
+  it("lets only the member turn following on for their own automation", async () => {
+    const mine = await enable("memberReport", {
+      type: "member",
+      externalUserId: "owner",
+    });
+    await expect(
+      enablements.setFollow({
+        identity: admin,
+        enablementId: mine.id,
+        follow: true,
+      }),
+    ).rejects.toBeInstanceOf(AccessDeniedError);
+    await expect(
+      enablements.setFollow({
+        identity: owner,
+        enablementId: mine.id,
+        follow: true,
+      }),
+    ).resolves.toMatchObject({ follow: true });
+    // Anyone who may manage it may stop it following.
+    await expect(
+      enablements.setFollow({
+        identity: admin,
+        enablementId: mine.id,
+        follow: false,
+      }),
+    ).resolves.toMatchObject({ follow: false });
+    await enablements.disable({ identity: owner, enablementId: mine.id });
+  });
+
+  it("needs consent when a revision changes the workflow's triggers", async () => {
+    watcher = (await enablements.list({ identity: owner, projectId })).find(
+      (item) => item.workflowName === "watchInbox",
+    )!.id;
+    const before = await commitOf(watcher);
+    await addCommit(sha("fa"), {
+      triggers: [{ kind: "webhook", config: { path: "public" } }],
+    });
+    await publish(sha("fa"));
+    await revisions.advance();
+    expect(await commitOf(watcher)).toBe(before);
+    expect(notifications).toEqual([
+      expect.objectContaining({ kind: "automation_update_needs_consent" }),
+    ]);
+  });
+
+  it("needs consent when a revision declares new secrets", async () => {
+    const before = await commitOf(watcher);
+    await addCommit(sha("fb"), { secrets: ["PAYMENTS_KEY"] });
+    await publish(sha("fb"));
+    await revisions.advance();
+    expect(await commitOf(watcher)).toBe(before);
+    // Every run of the project receives its declared secrets.
+    expect(notifications.map((notice) => notice.title).sort()).toEqual([
+      "migrate needs your consent to update",
+      "watchInbox needs your consent to update",
+    ]);
+  });
+});
+
+describe("going live through passing trouble (ADRs 0330, 0331)", () => {
+  let watcher: string;
+  const deployManifest = JSON.stringify({ deploy: { workflow: "migrate" } });
+  const openRevision = () =>
+    db
+      .selectFrom("published_revisions")
+      .selectAll()
+      .where("project_id", "=", projectId)
+      .orderBy("sequence", "desc")
+      .limit(1)
+      .executeTakeFirstOrThrow();
+  const due = () =>
+    db
+      .updateTable("published_revisions")
+      .set({ retry_at: new Date(Date.now() - 1_000) })
+      .where("project_id", "=", projectId)
+      .execute();
+
+  it("waits for a machine to come back instead of asking for consent", async () => {
+    watcher = (await enablements.list({ identity: owner, projectId })).find(
+      (item) => item.workflowName === "watchInbox",
+    )!.id;
+    await addCommit(sha("fc"));
+    previewError = new EnvironmentBindingUnavailableError("default");
+    await publish(sha("fc"));
+    await revisions.advance();
+    expect(await commitOf(watcher)).toBe(sha("ab"));
+    expect(notifications).toEqual([]);
+    expect((await openRevision()).status).toBe("applying");
+
+    previewError = null;
+    await due();
+    await revisions.advance();
+    expect(await commitOf(watcher)).toBe(sha("fc"));
+  });
+
+  it("tries a deploy that could not start for a passing reason again, instead of failing it", async () => {
+    await addCommit(sha("fd"));
+    manifests.set(sha("fd"), deployManifest);
+    const started = deploys.length;
+    deployStartFailure = new Error("No machine has room for this run");
+    await publish(sha("fd"));
+    await revisions.advance();
+    expect((await openRevision()).status).toBe("deploying");
+    expect(notifications).toEqual([]);
+    expect(deploys).toHaveLength(started);
+
+    deployStartFailure = null;
+    await due();
+    await revisions.advance();
+    expect(deploys.slice(started)).toEqual([
+      expect.objectContaining({ commit: sha("fd") }),
+    ]);
+    await settleRun(deploys.at(-1)?.runId ?? "", "completed");
+    await revisions.advance();
+    expect(await commitOf(watcher)).toBe(sha("fd"));
+  });
+
+  it("finds the deploy run it started when it lost the run's id, instead of starting another", async () => {
+    await addCommit(sha("fe"));
+    manifests.set(sha("fe"), deployManifest);
+    await publish(sha("fe"));
+    await revisions.advance();
+    const started = deploys.length;
+    const runId = deploys.at(-1)?.runId;
+    await settleRun(runId ?? "", "completed");
+    // The process died after the run started and before it kept the id.
+    await db
+      .updateTable("published_revisions")
+      .set({ deploy_run_id: null })
+      .where("project_id", "=", projectId)
+      .where("status", "=", "deploying")
+      .execute();
+    await revisions.advance();
+    await revisions.advance();
+    expect(deploys).toHaveLength(started);
+    expect(await commitOf(watcher)).toBe(sha("fe"));
+  });
+
+  it("tells the people who manage automations when a deploy runs long, and gives up after its timeout", async () => {
+    await addCommit(sha("0a"));
+    manifests.set(sha("0a"), deployManifest);
+    await publish(sha("0a"));
+    await revisions.advance();
+    const runId = deploys.at(-1)?.runId ?? "";
+    const startedAgo = (minutes: number) =>
+      db
+        .updateTable("published_revisions")
+        .set({ deploy_started_at: new Date(Date.now() - minutes * 60_000) })
+        .where("project_id", "=", projectId)
+        .where("status", "=", "deploying")
+        .execute();
+
+    await startedAgo(20);
+    await revisions.advance();
+    await revisions.advance();
+    expect(notifications).toEqual([
+      expect.objectContaining({ kind: "deploy_running_long", to: "owner" }),
+    ]);
+
+    await startedAgo(120);
+    await revisions.advance();
+    expect((await openRevision()).status).toBe("failed");
+    expect((await openRevision()).error).toContain("longer than");
+    expect(canceled).toContain(runId);
+    expect(await commitOf(watcher)).toBe(sha("fe"));
+  });
+
+  it("advances a ready project before one that is waiting to try again", async () => {
+    const other = crypto.randomUUID();
+    await db
+      .insertInto("projects")
+      .values({ id: other, tenant_id: tenantId, name: "Other" })
+      .execute();
+    await addCommit(sha("1a"));
+    await publish(sha("1a"));
+    await db
+      .updateTable("published_revisions")
+      .set({ retry_at: new Date(Date.now() + 60_000) })
+      .where("project_id", "=", projectId)
+      .where("status", "=", "pending")
+      .execute();
+    await db
+      .insertInto("published_revisions")
+      .values({ tenant_id: tenantId, project_id: other, commit_sha: sha("2a") })
+      .execute();
+    await expect(revisions.advance({ limit: 1 })).resolves.toBe(1);
+    expect(
+      await db
+        .selectFrom("published_revisions")
+        .select("status")
+        .where("project_id", "=", other)
+        .executeTakeFirstOrThrow(),
+    ).toEqual({ status: "applied" });
   });
 });

@@ -46,9 +46,12 @@ export function workflowEnablementConsentDigest(input: {
 }
 
 /**
- * The consent digest without the code (ADR 0330): only the authority an
- * owner agreed to. A following enablement moves to a new revision only
- * while this stays the same.
+ * Everything an owner agreed to except the code itself (ADR 0330): the
+ * Environment, connections, capabilities and permissions, what starts the
+ * workflow (each trigger's kind, configuration and filters) and the secret
+ * names its runs receive. A following enablement moves to a new revision
+ * only while this stays the same, so a merge cannot add a public webhook, a
+ * broader filter, a frequent schedule or a new secret without consent.
  */
 export function workflowEnablementAuthorityDigest(input: {
   projectId: string;
@@ -58,9 +61,30 @@ export function workflowEnablementAuthorityDigest(input: {
   connections: readonly WorkflowEnablementConnection[];
   capabilities: readonly string[];
   permissions: readonly string[];
+  triggers: ReadonlyArray<{
+    kind: string;
+    config: unknown;
+    projectKind?: string;
+    where?: unknown;
+  }>;
+  secrets: readonly string[];
 }): string {
-  return workflowEnablementConsentDigest({
+  const base = workflowEnablementConsentDigest({
     ...input,
     deploymentArtifactDigest: "",
   });
+  return createHash("sha256")
+    .update(
+      canonical({
+        base,
+        triggers: input.triggers.map((trigger) => ({
+          kind: trigger.kind,
+          config: trigger.config ?? null,
+          projectKind: trigger.projectKind ?? null,
+          where: trigger.where ?? null,
+        })),
+        secrets: [...input.secrets].sort(),
+      }),
+    )
+    .digest("hex");
 }

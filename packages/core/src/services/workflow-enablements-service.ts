@@ -62,6 +62,8 @@ interface WorkflowTarget {
   artifact: DeploymentArtifact;
   requirements: WorkflowGraph["connections"];
   permissions: WorkflowGraph["permissions"];
+  /** The run secrets the project declares at the commit. */
+  secrets?: readonly string[];
 }
 
 interface WorkflowEnablementsDeps {
@@ -247,15 +249,21 @@ export class WorkflowEnablementsService {
     const triggers = (
       await this.db
         .selectFrom("trigger_definitions")
-        .select(["trigger_kind as kind", "config", "project_kind"])
+        .select([
+          "trigger_kind as kind",
+          "config",
+          "project_kind",
+          "where_filters",
+        ])
         .where("project_id", "=", input.projectId)
         .where("commit_sha", "=", preview.commitSha)
         .where("workflow_name", "=", input.workflowName)
         .orderBy("binding_index")
         .execute()
-    ).map(({ project_kind, ...trigger }) => ({
+    ).map(({ project_kind, where_filters, ...trigger }) => ({
       ...trigger,
       ...(project_kind ? { projectKind: project_kind } : {}),
+      where: where_filters,
     }));
     const labels = connections.length
       ? await this.db
@@ -270,11 +278,17 @@ export class WorkflowEnablementsService {
           .execute()
       : [];
     const consentDigest = workflowEnablementConsentDigest(preview);
+    const authorityDigest = workflowEnablementAuthorityDigest({
+      ...preview,
+      triggers,
+      secrets: target.secrets ?? [],
+    });
     return {
       ...preview,
       consentDigest,
+      authorityDigest,
       triggerCount: triggers.length,
-      triggers,
+      triggers: triggers.map(({ where: _where, ...trigger }) => trigger),
       connectionLabels: Object.fromEntries(
         labels.map((connection) => [connection.id, connection.label]),
       ),
@@ -352,8 +366,15 @@ export class WorkflowEnablementsService {
                 capabilities: toJson(preview.capabilities),
                 permissions: toJson(preview.permissions),
                 consent_digest: preview.consentDigest,
+                authority_digest: preview.authorityDigest,
                 temporary: input.temporary ?? false,
                 follow: follows,
+                // What it was enabled at supersedes every revision recorded
+                // so far: none of them moves it.
+                followed_sequence: await latestRevisionSequence(
+                  trx,
+                  input.projectId,
+                ),
                 expires_at: input.expiresAt ?? null,
                 created_by_external_user_id: input.identity.externalUserId,
               })
@@ -563,6 +584,7 @@ export class WorkflowEnablementsService {
         preview,
         actor: input.identity,
         eventType: "deployment_updated",
+        followedSequence: await latestRevisionSequence(trx, current.projectId),
       });
     });
     await this.consented({
@@ -606,6 +628,16 @@ export class WorkflowEnablementsService {
       });
       await this.assertRetainedSourceOwner({ ...input, row, transaction: trx });
       this.assertMayManage(input.identity, row.project_id, ownerFromRow(row));
+      // A member's automation runs with their own connections: only they
+      // may let code others merge reach them (ADR 0330).
+      if (
+        input.follow &&
+        row.owner_kind === "member" &&
+        row.owner_external_user_id !== input.identity.externalUserId
+      )
+        throw new AccessDeniedError(
+          "Only the member whose automation this is can let it follow the published program",
+        );
       if (
         input.follow &&
         (row.temporary || row.remote_branch !== PUBLISHED_BRANCH)
@@ -691,15 +723,14 @@ export class WorkflowEnablementsService {
         reason: "The member who turned it on is no longer in the project",
       };
     const current = await this.hydrate(row);
-    let preview: WorkflowEnablementPreview;
-    try {
-      preview = await this.preview({
+    const previewAt = (commitSha: string) =>
+      this.preview({
         identity: actor,
         projectId: row.project_id,
         workflowName: row.workflow_name,
         environment: row.environment_name,
         owner: current.owner,
-        commitSha: input.commitSha,
+        commitSha,
         remoteBranch: row.remote_branch,
         connectionSelections: Object.fromEntries(
           current.connections.map((connection) => [
@@ -708,6 +739,21 @@ export class WorkflowEnablementsService {
           ]),
         ),
       });
+    let preview: WorkflowEnablementPreview;
+    let consented = row.authority_digest;
+    try {
+      preview = await previewAt(input.commitSha);
+      // Enabled before the digest was kept: what it runs now is what was
+      // agreed to.
+      if (!consented) {
+        consented = (await previewAt(row.commit_sha)).authorityDigest;
+        await this.db
+          .updateTable("workflow_enablements")
+          .set({ authority_digest: consented })
+          .where("id", "=", row.id)
+          .where("authority_digest", "is", null)
+          .execute();
+      }
     } catch (error) {
       const reason = error instanceof Error ? error.message : String(error);
       if (isAuthorityError(error)) return { kind: "needs_consent", reason };
@@ -716,14 +762,11 @@ export class WorkflowEnablementsService {
       if (isRevisionBuildError(error)) return { kind: "skipped", reason };
       return { kind: "retry", reason };
     }
-    if (
-      workflowEnablementAuthorityDigest(preview) !==
-      workflowEnablementAuthorityDigest(current)
-    )
+    if (preview.authorityDigest !== consented)
       return {
         kind: "needs_consent",
         reason:
-          "This revision changes what the workflow may use (connections, permissions or Environment)",
+          "This revision changes what the workflow may use or what starts it (connections, permissions, Environment, triggers or secrets)",
       };
     return { kind: "ready", preview, actor, enablement: current };
   }
@@ -742,7 +785,14 @@ export class WorkflowEnablementsService {
     const { enablementId } = input;
     const before = await this.db
       .selectFrom("workflow_enablements")
-      .select(["revision", "follow", "followed_sequence", "status"])
+      .select([
+        "revision",
+        "follow",
+        "followed_sequence",
+        "status",
+        "project_id",
+        "commit_sha",
+      ])
       .where("id", "=", enablementId)
       .executeTakeFirst();
     if (
@@ -752,6 +802,16 @@ export class WorkflowEnablementsService {
         Number(before.followed_sequence) >= input.sequence)
     )
       return { kind: "unchanged", enablementId };
+    // Its commit is a later revision than this one: never move back.
+    const runsLater = await this.db
+      .selectFrom("published_revisions")
+      .select("sequence")
+      .where("project_id", "=", before.project_id)
+      .where("commit_sha", "=", before.commit_sha)
+      .where("sequence", ">", String(input.sequence))
+      .limit(1)
+      .executeTakeFirst();
+    if (runsLater) return { kind: "unchanged", enablementId };
     const ready = await this.previewAtRevision(input);
     if (ready.kind === "retry")
       return { kind: "retry", enablementId, reason: ready.reason };
@@ -851,7 +911,8 @@ export class WorkflowEnablementsService {
     preview: WorkflowEnablementPreview;
     actor: Identity;
     eventType: string;
-    followedSequence?: number;
+    /** The latest revision it now stands for, so none older moves it. */
+    followedSequence?: number | string | null;
     /** Following keeps a suspension; a person's update reactivates. */
     keepStatus?: boolean;
   }): Promise<void> {
@@ -864,13 +925,15 @@ export class WorkflowEnablementsService {
         commit_sha: preview.commitSha,
         remote_branch: preview.remoteBranch,
         consent_digest: preview.consentDigest,
+        authority_digest: preview.authorityDigest,
         capabilities: toJson(preview.capabilities),
         permissions: toJson(preview.permissions),
         update_available: false,
         ...(input.keepStatus
           ? {}
           : { status: "active", suspension_reason: null }),
-        ...(input.followedSequence !== undefined
+        ...(input.followedSequence !== undefined &&
+        input.followedSequence !== null
           ? { followed_sequence: String(input.followedSequence) }
           : {}),
         revision: eb("revision", "+", 1),
@@ -1417,6 +1480,21 @@ export class WorkflowEnablementsService {
   }
 }
 
+/** The sequence of the latest revision recorded for a project, if any. */
+async function latestRevisionSequence(
+  db: Kysely<DB>,
+  projectId: string,
+): Promise<string | null> {
+  const row = await db
+    .selectFrom("published_revisions")
+    .select("sequence")
+    .where("project_id", "=", projectId)
+    .orderBy("sequence", "desc")
+    .limit(1)
+    .executeTakeFirst();
+  return row?.sequence ?? null;
+}
+
 /** The branch published revisions are of (ADR 0330). */
 const PUBLISHED_BRANCH = "main";
 
@@ -1457,7 +1535,9 @@ function isRevisionBuildError(error: unknown): boolean {
 
 /**
  * Errors that mean the owner's authority no longer covers the revision, so
- * it needs a person; anything else means the workflow did not build there.
+ * it needs a person. A machine or connection that is unavailable for now
+ * (EnvironmentBindingUnavailableError, ConnectionUnavailableError) is not
+ * one of them: that is tried again.
  */
 function isAuthorityError(error: unknown): boolean {
   return [
@@ -1465,9 +1545,7 @@ function isAuthorityError(error: unknown): boolean {
     AuthenticationRequiredError,
     ConnectionNotFoundError,
     ConnectionPermissionDeniedError,
-    ConnectionUnavailableError,
     EnvironmentAccessDeniedError,
-    EnvironmentBindingUnavailableError,
     EnvironmentIncompatibleError,
     EnvironmentNotFoundError,
     EnvironmentPolicyInvalidError,
