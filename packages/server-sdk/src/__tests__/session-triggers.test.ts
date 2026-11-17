@@ -79,4 +79,47 @@ describe("session workflow trigger contracts", () => {
       kind?.matches?.({ config: { workStatus: "completed" }, payload }),
     ).toBe(false);
   });
+  it("selects recorded results by name", () => {
+    const kind = SESSION_TRIGGER_KINDS.find(
+      (entry) => entry.name === "session.result-recorded",
+    );
+    const payload = {
+      id: "event",
+      sequence: 2,
+      projectId: "p",
+      source: "session",
+      kind: "session.result-recorded",
+      externalId: "event",
+      occurredAt: "now",
+      receivedAt: "now",
+      payload: {
+        sessionId: "s",
+        agentId: "a",
+        externalUserId: "u",
+        actor: { kind: "agent" },
+        causation: [],
+        detail: { name: "review", value: { verdict: "COMMENT" } },
+        session: {
+          id: "s",
+          key: "pr-acme/web-1",
+          title: null,
+          status: "active",
+          workStatus: "open",
+          activity: null,
+          parentSessionId: null,
+          stateRevision: 1,
+          authorityHostId: "h",
+          authorityRevision: 1,
+        },
+      },
+    };
+    expect(kind?.validatePayload(payload)).toEqual({ ok: true });
+    expect(kind?.validateConfig({ names: ["review"] }).ok).toBe(true);
+    expect(kind?.matches?.({ config: { names: ["review"] }, payload })).toBe(
+      true,
+    );
+    expect(kind?.matches?.({ config: { names: ["vote"] }, payload })).toBe(
+      false,
+    );
+  });
 });

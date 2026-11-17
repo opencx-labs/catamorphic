@@ -13,9 +13,10 @@ import type { ImportedSession } from "./imported.js";
  * The session protocol (ADR 0197) a server reports in `GET /me` and a
  * client speaks: bumped on any change to snapshots, events, commands or
  * {@link SessionFields} that a client or mirror of the previous version
- * cannot read or would be refused (2: `metadata`, ADR 0226).
+ * cannot read or would be refused (2: `metadata`, ADR 0226; 4: `result`
+ * items, ADR 0323).
  */
-export const SESSION_PROTOCOL_VERSION = 3;
+export const SESSION_PROTOCOL_VERSION = 4;
 
 export type JsonPrimitive = string | number | boolean | null;
 export type JsonValue =
@@ -671,6 +672,25 @@ export interface ContextHandoffItem extends ItemCommon {
   text: string;
 }
 
+/**
+ * A value the agent submitted with `submit_result`, accepted against the
+ * schema its definition declares under that name (ADR 0323). Never
+ * rewritten: hand-offs and compaction leave it as recorded.
+ */
+export interface ResultItem extends ItemCommon {
+  kind: "result";
+  /** The definition's name for this result, e.g. `review`. */
+  name: string;
+  value: JsonValue;
+  /**
+   * The newest input the chat had taken in when this was submitted, or
+   * null: a result answers the chat's newest input only when this is it.
+   */
+  input: { itemId: string; position: number } | null;
+  /** The workspace commit the turn began on, when the chat has a workspace. */
+  commit: string | null;
+}
+
 export type Item =
   | UserMessageItem
   | InboundMessageItem
@@ -684,7 +704,8 @@ export type Item =
   | RequestItem
   | SubagentItem
   | NoticeItem
-  | ContextHandoffItem;
+  | ContextHandoffItem
+  | ResultItem;
 
 export type ItemKind = Item["kind"];
 

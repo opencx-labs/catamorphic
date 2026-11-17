@@ -123,6 +123,13 @@ import {
   parseProjectAgentId,
 } from "./agent-definitions-service.js";
 import {
+  checkResultValue,
+  RESULT_LIMITS,
+  resultValueFits,
+  submitResultDescription,
+  submitResultInputSchema,
+} from "./agent-results.js";
+import {
   assertAgentSessionAccess,
   assertSessionWorkspaceAccess,
 } from "./agent-session-access.js";
@@ -300,6 +307,16 @@ import {
   readTranscript,
   type TranscriptMessage,
 } from "./sessions/session-reads.js";
+import {
+  type LatestResult,
+  latestResults,
+  readResults,
+  recordResult,
+  resultLines,
+  SessionInputNotFoundError,
+  type SessionResult,
+  sessionFamily,
+} from "./sessions/session-results.js";
 import {
   attemptFromRow,
   importedSessionFromRow,
@@ -578,6 +595,8 @@ export interface AgentSubsession {
   allowFurtherDelegation: boolean;
   status: "running" | "completed" | "failed" | "interrupted" | "archived";
   session: AgentSession;
+  /** Its latest accepted result of each name (ADR 0323). */
+  results: LatestResult[];
 }
 
 export interface AgentSessionArchiveImpact {
@@ -1127,6 +1146,9 @@ export interface ArchiveSessionResourcesHandler {
  * Work's question tool (ADR 0195), offered to every agent beside its own:
  * the runner answers it through the request protocol, so it never runs here.
  */
+/** Work's result tool (ADR 0323), for agents that declare results. */
+export const SUBMIT_RESULT_TOOL = "submit_result";
+
 const ASK_USER_HOST_TOOL: ExtraTool = {
   name: ASK_USER_TOOL,
   description: agentQuestionDescription,
@@ -2464,6 +2486,88 @@ export class AgentSessionsService {
   ): Promise<TranscriptMessage[]> {
     await this.requireSession(identity, projectId, sessionId, "read");
     return readTranscript({ db: this.db, sessionId, ...input });
+  }
+
+  /**
+   * The chat's accepted results, newest first (ADR 0323): with `family`,
+   * its subsessions' at every depth too, each naming the chat that recorded
+   * it. `afterInput` names an input of this chat: only results that answer
+   * it or a later input are kept (subsessions': recorded after it arrived).
+   */
+  async results(
+    identity: Identity,
+    projectId: string,
+    sessionId: string,
+    input: {
+      name?: string;
+      family?: boolean;
+      afterInput?: string;
+      limit?: number;
+    } = {},
+  ): Promise<SessionResult[]> {
+    await this.requireSession(identity, projectId, sessionId, "read");
+    const sessionIds = input.family
+      ? await this.readableFamily(identity, projectId, sessionId)
+      : [sessionId];
+    let afterInput:
+      | { sessionId: string; position: number; createdAt: Date }
+      | undefined;
+    if (input.afterInput) {
+      const row = await this.db
+        .selectFrom("agent_items")
+        .select(["position", "created_at"])
+        .where("session_id", "=", sessionId)
+        .where("id", "=", input.afterInput)
+        .where("kind", "in", [...INPUT_ITEM_KINDS])
+        .executeTakeFirst();
+      if (!row) throw new SessionInputNotFoundError(input.afterInput);
+      afterInput = {
+        sessionId,
+        position: Number(row.position),
+        createdAt: row.created_at,
+      };
+    }
+    return readResults(this.db, {
+      sessionIds,
+      ...(input.name ? { name: input.name } : {}),
+      ...(afterInput ? { afterInput } : {}),
+      limit: Math.min(Math.max(input.limit ?? 100, 1), 100),
+    });
+  }
+
+  /** A chat and those of its subsessions the caller may read. */
+  private async readableFamily(
+    identity: Identity,
+    projectId: string,
+    sessionId: string,
+  ): Promise<string[]> {
+    const family = await sessionFamily(this.db, { projectId, sessionId });
+    if (family.length <= 1) return family;
+    const rows = await this.db
+      .selectFrom("agent_sessions")
+      .select(["id", "external_user_id", "agent_id"])
+      .where("project_id", "=", projectId)
+      .where("id", "in", family.slice(1))
+      .execute();
+    const readable = new Set(
+      rows
+        .filter((row) => {
+          try {
+            assertAgentSessionAccess({
+              identity,
+              projectId,
+              externalUserId: row.external_user_id,
+              agentId: row.agent_id,
+              intent: "read",
+            });
+            return true;
+          } catch {
+            return false;
+          }
+        })
+        .map((row) => row.id),
+    );
+    return family.filter((id, index) => index === 0 || readable.has(id));
   }
 
   /**
@@ -4988,6 +5092,10 @@ export class AgentSessionsService {
         : hosted),
       ASK_USER_HOST_TOOL,
       this.closeQuestionsTool(input.session.id),
+      // It writes only the chat's own log, so read-only chats keep it too.
+      ...(input.agent.results && Object.keys(input.agent.results).length > 0
+        ? [this.submitResultTool(input.session.id, input.agent.results)]
+        : []),
     ];
     if (!this.agentCapabilities) return own;
     const gateway = this.agentCapabilities.forSession({
@@ -5003,6 +5111,60 @@ export class AgentSessionsService {
         (tool) => !names.has(tool.name),
       ),
     ];
+  }
+
+  /**
+   * The agent submits a result its definition declares (ADR 0323). Only a
+   * value its schema accepts is recorded; a rejected one comes back with
+   * each failing field, so the agent corrects it within the turn.
+   */
+  private submitResultTool(
+    sessionId: string,
+    schemas: NonNullable<RegisteredCodingAgent["results"]>,
+  ): ExtraTool {
+    const refuse = (text: string) => ({
+      kind: "agent-tool-result",
+      content: [{ type: "text", text: `Not recorded. ${text}` }],
+      isError: true,
+    });
+    return {
+      name: SUBMIT_RESULT_TOOL,
+      description: submitResultDescription(schemas),
+      parameters: submitResultInputSchema.shape,
+      execute: async (args, context) => {
+        const turnId = context.turnId;
+        if (!turnId) return refuse("Results are submitted during a turn.");
+        const name = typeof args.name === "string" ? args.name : "";
+        const schema = Object.hasOwn(schemas, name) ? schemas[name] : undefined;
+        if (schema === undefined)
+          return refuse(
+            `No result is named ${JSON.stringify(name)}. Declared: ${Object.keys(schemas).sort().join(", ")}.`,
+          );
+        const checked = checkResultValue({ schema, value: args.value });
+        if ("errors" in checked)
+          return refuse(
+            [
+              `The value does not match the ${name} schema. Fix these fields and submit again:`,
+              ...checked.errors.map(
+                (error) => `- ${error.path || "(the value)"}: ${error.message}`,
+              ),
+            ].join("\n"),
+          );
+        if (!resultValueFits(checked.value))
+          return refuse(
+            `The value is over ${RESULT_LIMITS.valueBytes / 1024} KiB as JSON.`,
+          );
+        const item = await this.db.transaction().execute((trx) =>
+          recordResult(trx, this.log, {
+            sessionId,
+            turnId,
+            name,
+            value: checked.value,
+          }),
+        );
+        return `Recorded the ${name} result (${item.id}).`;
+      },
+    };
   }
 
   /** The agent withdraws its own open questions (ADR 0195). */
@@ -9378,6 +9540,7 @@ export class AgentSessionsService {
       allowFurtherDelegation: delegation.allow_further_delegation,
       status: "running",
       session: child,
+      results: [],
     };
   }
 
@@ -9413,6 +9576,10 @@ export class AgentSessionsService {
     const running = await this.runningSessionIds(
       sessions.map((session) => session.id),
     );
+    const results = await latestResults(
+      this.db,
+      sessions.map((session) => session.id),
+    );
     return delegations.flatMap((delegation) => {
       const session = sessionsById.get(delegation.target_session_id);
       if (!session) return [];
@@ -9431,6 +9598,7 @@ export class AgentSessionsService {
             this.authorityLeaseMs,
             presentations.get(session.id),
           ),
+          results: results.get(session.id) ?? [],
         },
       ];
     });
@@ -11699,7 +11867,7 @@ export class AgentSessionsService {
       return "Delegation is disabled for this agent. Do not call spawn_subsession.";
     }
     return [
-      `Subsessions are your subagents. spawn_subsession starts one on a bounded, self-contained task that runs in parallel with you, at most ${policy.maxConcurrentChildren} at a time: use it wherever you would use a subagent or a Task tool, such as parallel research or exploration, independent reviews, or work to keep out of this conversation. Its result arrives here as a message from it, during your turn while you still work. A copy of yourself starts on this chat's model and effort, another agent on its own; set model or effort to run a subagent stronger or cheaper, naming the model as that agent's harness does (one it does not offer is refused with the list). read_only and delegate: false need no grant. read_only runs a subagent that changes nothing, where its harness has a read-only mode (Claude Code: plan mode, without a shell; Codex: its read-only sandbox), with only those of Work's tools that read.`,
+      `Subsessions are your subagents. spawn_subsession starts one on a bounded, self-contained task that runs in parallel with you, at most ${policy.maxConcurrentChildren} at a time: use it wherever you would use a subagent or a Task tool, such as parallel research or exploration, independent reviews, or work to keep out of this conversation. Its result arrives here as a message from it, during your turn while you still work; a subagent whose agent declares results submits them typed with submit_result, and its latest result of each name comes with that message and in its list and wait outputs. A copy of yourself starts on this chat's model and effort, another agent on its own; set model or effort to run a subagent stronger or cheaper, naming the model as that agent's harness does (one it does not offer is refused with the list). read_only and delegate: false need no grant. read_only runs a subagent that changes nothing, where its harness has a read-only mode (Claude Code: plan mode, without a shell; Codex: its read-only sandbox), with only those of Work's tools that read.`,
       await this.delegationChoices(identity, projectId, sourceAgent),
     ].join("\n");
   }
@@ -12963,7 +13131,17 @@ export class AgentSessionsService {
         task: { type: "subsession", id: input.sessionId, title, status },
         summary:
           status === "completed" ? `${title} finished` : `${title} failed`,
-        detail: input.content.trim(),
+        // Its typed results travel with its last words (ADR 0323).
+        detail: [
+          input.content.trim(),
+          resultLines(
+            (await latestResults(this.db, [input.sessionId])).get(
+              input.sessionId,
+            ) ?? [],
+          ),
+        ]
+          .filter(Boolean)
+          .join("\n\n"),
         source: { kind: "session", sessionId: input.sessionId },
         idempotencyKey: `delegation:${delegation.id}:result`,
       },
@@ -13314,6 +13492,8 @@ function withDefinitionPolicy(
     ...(Object.keys(layers).length > 0
       ? { toolPolicies: { ...agent.toolPolicies, ...layers } }
       : {}),
+    // The committed definition names its results (ADR 0323).
+    ...(definition.results ? { results: definition.results } : {}),
   };
 }
 

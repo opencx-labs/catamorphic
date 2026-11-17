@@ -66,7 +66,7 @@ export interface paths {
                             };
                             agentProtocol: {
                                 /** @enum {number} */
-                                session: 3;
+                                session: 4;
                                 /** @enum {number} */
                                 runner: 3;
                             };
@@ -7101,6 +7101,84 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/projects/{projectId}/agent/sessions/{sessionId}/results": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: {
+            parameters: {
+                query?: {
+                    name?: string;
+                    family?: "true" | "false";
+                    afterInput?: string;
+                    limit?: number;
+                };
+                header?: never;
+                path: {
+                    projectId: string;
+                    sessionId: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description Default Response */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            results: components["schemas"]["SessionResult"][];
+                        };
+                    };
+                };
+                /** @description Default Response */
+                400: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                503: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                        };
+                    };
+                };
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/projects/{projectId}/agent/sessions/{sessionId}/events": {
         parameters: {
             query?: never;
@@ -8191,6 +8269,15 @@ export interface paths {
                                 /** Format: date-time */
                                 updatedAt: string;
                             };
+                            results: {
+                                id: string;
+                                name: string;
+                                value: components["schemas"]["JsonValue"];
+                                truncated: boolean;
+                                current: boolean;
+                                turnId: string | null;
+                                recordedAt: string;
+                            }[];
                         }[];
                     };
                 };
@@ -8352,6 +8439,15 @@ export interface paths {
                                 /** Format: date-time */
                                 updatedAt: string;
                             };
+                            results: {
+                                id: string;
+                                name: string;
+                                value: components["schemas"]["JsonValue"];
+                                truncated: boolean;
+                                current: boolean;
+                                turnId: string | null;
+                                recordedAt: string;
+                            }[];
                         };
                     };
                 };
@@ -8552,6 +8648,15 @@ export interface paths {
                                 /** Format: date-time */
                                 updatedAt: string;
                             };
+                            results: {
+                                id: string;
+                                name: string;
+                                value: components["schemas"]["JsonValue"];
+                                truncated: boolean;
+                                current: boolean;
+                                turnId: string | null;
+                                recordedAt: string;
+                            }[];
                         }[];
                     };
                 };
@@ -19689,6 +19794,33 @@ export interface components {
                 to: number;
             };
             text: string;
+        } | {
+            id: string;
+            sessionId: string;
+            turnId: string | null;
+            attemptId: string | null;
+            parentItemId: string | null;
+            position: number;
+            /** @enum {string} */
+            status: "in_progress" | "completed" | "failed" | "cancelled";
+            nativeRef: {
+                id: string;
+                /** @enum {string} */
+                strength: "strong" | "weak" | "none";
+            } | null;
+            createdAt: string;
+            updatedAt: string;
+            startedAt: string | null;
+            endedAt: string | null;
+            /** @enum {string} */
+            kind: "result";
+            name: string;
+            value: components["schemas"]["JsonValueInput"];
+            input: {
+                itemId: string;
+                position: number;
+            } | null;
+            commit: string | null;
         };
         RuntimeRequestInput: {
             id: string;
@@ -19933,6 +20065,21 @@ export interface components {
                 code: string;
                 message: string;
             } | null;
+        };
+        SessionResultInput: {
+            id: string;
+            sessionId: string;
+            turnId: string | null;
+            attemptId: string | null;
+            name: string;
+            value: components["schemas"]["JsonValueInput"];
+            input: {
+                itemId: string;
+                position: number;
+            } | null;
+            current: boolean;
+            commit: string | null;
+            recordedAt: string;
         };
         JsonValue: JsonValue;
         ImportedSession: {
@@ -20574,6 +20721,33 @@ export interface components {
                 to: number;
             };
             text: string;
+        } | {
+            id: string;
+            sessionId: string;
+            turnId: string | null;
+            attemptId: string | null;
+            parentItemId: string | null;
+            position: number;
+            /** @enum {string} */
+            status: "in_progress" | "completed" | "failed" | "cancelled";
+            nativeRef: {
+                id: string;
+                /** @enum {string} */
+                strength: "strong" | "weak" | "none";
+            } | null;
+            createdAt: string;
+            updatedAt: string;
+            startedAt: string | null;
+            endedAt: string | null;
+            /** @enum {string} */
+            kind: "result";
+            name: string;
+            value: components["schemas"]["JsonValue"];
+            input: {
+                itemId: string;
+                position: number;
+            } | null;
+            commit: string | null;
         };
         RuntimeRequest: {
             id: string;
@@ -20818,6 +20992,21 @@ export interface components {
                 code: string;
                 message: string;
             } | null;
+        };
+        SessionResult: {
+            id: string;
+            sessionId: string;
+            turnId: string | null;
+            attemptId: string | null;
+            name: string;
+            value: components["schemas"]["JsonValue"];
+            input: {
+                itemId: string;
+                position: number;
+            } | null;
+            current: boolean;
+            commit: string | null;
+            recordedAt: string;
         };
     };
     responses: never;

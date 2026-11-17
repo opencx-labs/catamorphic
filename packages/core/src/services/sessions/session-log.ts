@@ -855,6 +855,8 @@ export function itemText(item: Item): string {
       return item.steps.map((step) => step.text).join("\n");
     case "request":
       return "";
+    case "result":
+      return item.name;
   }
 }
 

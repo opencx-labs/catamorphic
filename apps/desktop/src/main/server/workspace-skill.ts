@@ -151,7 +151,10 @@ keeps it from starting its own. Write the task so it stands alone (or pass
 context_mode inherit), and spawn several for independent pieces: research
 across sources, separate reviews, exploring a large codebase. Each result
 arrives in this chat as a message from the subsession, during your turn while
-you still work and as a new turn after it. wait_for_subsessions waits for the
+you still work and as a new turn after it. A subsession whose agent declares
+results submits typed values with submit_result; its latest result of each
+name comes with that message and in list and wait outputs, and is what to
+count and compare (never re-parse its prose). wait_for_subsessions waits for the
 next one to finish when you have nothing else to do, and ends early when
 anything else reaches you; discover
 interrupt_subsession to stop one. When a skill asks for an Agent or Task tool,

@@ -1,0 +1,93 @@
+# 0323: Agents submit typed results
+
+- **Status:** Accepted (amends 0050, 0090, 0197, 0259)
+- **Date:** 2026-11-17
+
+## Context
+
+What an agent produced was text. A subsession's result reached its parent
+as a message; a workflow that acted on a chat's work parsed its reply. The
+pull request review pack had the reviewer end every turn with a fenced
+`work-review` JSON block that its publisher extracted (ADR 0259). The opencx
+coordinator reviewer had to build typed submissions as harness plugin tools,
+because text results kept breaking: prose before the JSON, arrays sent as
+JSON-encoded strings, a required field missing, a turn ending with reasoning
+only, compaction hiding earlier answers, a mistyped child id. Its rules held:
+only an accepted, validated submission counts; field errors go back to the
+agent in the same turn; a newer input makes earlier submissions stale; the
+parent reads its children's accepted results, and code computes the final
+checks over them.
+
+## Decision
+
+**A committed agent definition declares its results.** `.work/agents/<slug>.json`
+may carry `"results": { "<name>": <JSON Schema> }`. Names are lowercase
+(`^[a-z][a-z0-9_-]{0,63}$`), at most 16; the schemas together stay under
+64 KiB and must compile as JSON Schema 2020-12 (Ajv, already in the
+dependency tree), or the definition is invalid. Results name the agent's
+output, not its authority, so they stay outside the consent hash, like
+`skills`.
+
+**`submit_result { name, value }` is a Work tool.** Core offers it beside
+`ask_user` and `close_questions` to every turn of an agent that declares
+results, on every host and harness (the host tools every runner serves),
+read-only chats included: it writes only the chat's own log. Its
+description lists each name with its schema. The value is validated
+against the named schema; a rejected call stores nothing and answers, as
+the tool's error, each failing field's path and message, so the agent
+corrects it in the same turn. A string value that fails but decodes once
+as JSON to a valid value is accepted decoded. Values are bounded to
+256 KiB of JSON and 1,000 results per chat.
+
+**An accepted result is an item.** `result` joins the item kinds of the
+session log (ADR 0197): `name`, `value`, `input` (the id and position of
+the newest input the chat had taken in when it was submitted, or null),
+and `commit` (the workspace commit the turn began on, or null), beside the
+item's own session, turn, attempt and time. Results are never rewritten:
+a context hand-off, compaction or harness change leaves them where they
+are, and a fork copies them as its own history like every item. A reader
+decides whether a result answers the newest input from `input`: a result
+is `current` when its input is the chat's newest input.
+
+**Readers are code.** The session operation `results({ sessionId | key,
+name?, family?, afterInput?, limit? })` answers newest first, each result
+with its source session; `family: true` includes the chat's subsessions at
+every depth; `afterInput` keeps the named chat's results whose input is
+that input or a later one, and subsessions' results recorded after it
+arrived. The same operation is `session_results` on the project MCP and
+`GET …/agent/sessions/:id/results` over REST. Results of rolled back turns
+are left out. A parent agent reads its children's latest result of each
+name in `list` and `wait` outputs and in the message a finished child
+sends it; a large value is marked truncated there, read whole with
+`session_results`.
+
+**Recording a result is a session event.** `session.result-recorded`
+carries the result in its detail and the session snapshot, with
+`payload.session.key`, so a workflow acts on it the moment it is recorded,
+mid-turn. The database trigger that publishes session events emits it, so
+both hosts do.
+
+**The timeline shows that a result exists.** A result is a step of the
+turn's work: one row naming it, expanding to its value.
+
+**The review pack submits its review.** The reviewer declares a `review`
+result (the former block's contract as JSON Schema) and submits it; the
+publisher reads the turn's latest `review` result instead of parsing the
+reply, and the fenced block is gone. The publisher still checks the value
+itself: the sandbox that wrote it is untrusted (ADR 0259).
+
+Considered: results as session metadata (ADR 0226), which is mutable and
+keyed, so a later write erases what an earlier input produced; a separate
+results table beside the log, a second source of truth a mirror would not
+carry; validating with Zod schemas in code, which a committed definition
+cannot hold.
+
+## Consequences
+
+Agents and workflows exchange typed values without parsing prose, and
+stale answers are distinguishable from current ones. Hosts that build
+agents from definitions pass `results` through (core does for
+server-registered project agents; the desktop's registry does for its
+own). A migration adds the item kind and the event. Mirrors carry result
+items like any item. Hand-offs do not yet tell a new provider thread which
+results it already submitted (ADR 0328 continues this).

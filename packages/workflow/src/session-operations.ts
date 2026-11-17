@@ -60,6 +60,29 @@ export interface SessionHistoryMessage {
   /** ISO timestamp of the message. */
   createdAt: string;
 }
+/**
+ * A value an agent submitted with `submit_result` and its schema accepted
+ * (ADR 0323). Results are never rewritten; `current` says whether it still
+ * answers its chat's newest input.
+ */
+export interface SessionResult {
+  id: string;
+  /** The chat that recorded it: the one named, or one of its subsessions. */
+  sessionId: string;
+  turnId: string | null;
+  attemptId: string | null;
+  /** The name its agent's definition declares, e.g. `review`. */
+  name: string;
+  value: unknown;
+  /** The newest input (a message id) the chat had taken in when it was submitted. */
+  input: { itemId: string; position: number } | null;
+  /** That input is still the chat's newest: the result answers it. */
+  current: boolean;
+  /** The workspace commit the submitting turn began on, when there is one. */
+  commit: string | null;
+  /** ISO timestamp. */
+  recordedAt: string;
+}
 /** The authoritative host has accepted delivery, but has not applied this action yet. */
 export interface QueuedSessionAction {
   delivery: "queued";
@@ -117,6 +140,22 @@ export interface SessionHostOperations {
       key: string | null;
       messages: SessionHistoryMessage[];
     }
+  >;
+  /**
+   * The chat's accepted results, newest first, at most `limit` (default and
+   * max 100). `name` keeps one result name; `family: true` adds its
+   * subsessions' results at every depth, each naming its chat;
+   * `afterInput` (an input's message id, such as a delivery's `messageId`)
+   * keeps results that answer that input or a later one.
+   */
+  results: Call<
+    Target & {
+      name?: string;
+      family?: boolean;
+      afterInput?: string;
+      limit?: number;
+    },
+    { sessionId: string; key: string | null; results: SessionResult[] }
   >;
   /**
    * Send a message to a chat. Name it by `sessionId`, or by `key`: the

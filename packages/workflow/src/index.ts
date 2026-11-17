@@ -277,5 +277,6 @@ export type {
 export type {
   SessionHistoryMessage,
   SessionHostOperations,
+  SessionResult,
   SessionSnapshot,
 } from "./session-operations.js";
