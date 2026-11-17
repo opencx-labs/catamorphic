@@ -35,12 +35,20 @@ const runWait = <T>(
   opts?: { timeoutMs?: number; label?: string },
 ) => app.waitFor<T>(`(() => { ${helpers}\n${body} })()`, opts);
 
-/** A real press of the pointer, as a person clicks (a click with detail). */
+/**
+ * A real press of the pointer, as a person clicks (a click with detail),
+ * once the control has settled where it is drawn: a question sliding in
+ * must not leave the press on the panel beside it.
+ */
 async function click(locate: string, label: string) {
   const point = await runWait<{ x: number; y: number }>(
     `const el = ${locate};
      if (!el || el.closest('[inert]') || el.disabled) return false;
-     return center(el);`,
+     const moving = chat().getAnimations({ subtree: true }).some((a) =>
+       a.playState === 'running' && a.effect?.getTiming().iterations !== Infinity);
+     if (moving) return false;
+     const at = center(el);
+     return el.contains(document.elementFromPoint(at.x, at.y)) ? at : false;`,
     { label },
   );
   await app.cdp("Input.dispatchMouseEvent", { type: "mouseMoved", ...point });

@@ -335,6 +335,11 @@ describe("design lint", () => {
         count: 1,
         reason: "ends a tab drag whose dragend never arrived",
       },
+      "lib/use-composer-focus-return.ts": {
+        count: 1,
+        reason:
+          "a press outside a chat leaves the focus it took from the chat to the person",
+      },
       "lib/focus-modality.ts": {
         count: 2,
         reason: "keyboard or pointer leads, for focus rings",

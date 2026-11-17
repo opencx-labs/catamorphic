@@ -192,6 +192,19 @@ describe("useComposerFocusReturn", () => {
     expect(document.activeElement).toBe(get("composer"));
   });
 
+  it("leaves a dialog an action opened its focus, even on its own panel", () => {
+    const dialog = document.createElement("div");
+    dialog.setAttribute("role", "dialog");
+    dialog.tabIndex = -1;
+    document.body.append(dialog);
+    press(get("retry"));
+    nextFrame();
+    dialog.focus();
+    nextFrame();
+    expect(document.activeElement).toBe(dialog);
+    dialog.remove();
+  });
+
   it("leaves focus lost to a press outside the chat", () => {
     const outside = document.createElement("div");
     document.body.append(outside);

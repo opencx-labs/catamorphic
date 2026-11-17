@@ -12,7 +12,8 @@ export const OWN_FOCUS_ATTR = "data-own-focus";
 const CONTROL = 'button, [role="button"]';
 /** Controls that open something which takes, or needs, focus. */
 const OPENS = '[aria-haspopup]:not([aria-haspopup="false"])';
-const SURFACES = '[role="dialog"], [role="menu"], [role="listbox"]';
+const SURFACES =
+  '[role="dialog"], [role="alertdialog"], [aria-modal="true"], [role="menu"], [role="listbox"]';
 
 /** Focus is on nothing a key can reach. */
 function nowhere(element: Element | null): boolean {
@@ -26,17 +27,20 @@ function nowhere(element: Element | null): boolean {
 }
 
 /**
- * Where a chat parks focus that would otherwise fall to the page, such as
- * a message once its Steer now goes: held, not taken. A field or control
- * the action opened is not.
+ * Where the chat parks focus that would otherwise fall to the page, such
+ * as a message once its Steer now goes: held, not taken. A field or
+ * control the action opened is not, nor anything outside the chat (a
+ * dialog it opened focuses its own panel).
  */
-function resting(element: Element | null): boolean {
+function resting(element: Element | null, chat: Element): boolean {
   return (
     nowhere(element) ||
     (element instanceof HTMLElement &&
+      chat.contains(element) &&
       element.getAttribute("tabindex") === "-1" &&
       !element.isContentEditable &&
-      !element.matches(`${CONTROL}, a[href], input, textarea, select`))
+      !element.matches(`${CONTROL}, a[href], input, textarea, select`) &&
+      element.closest(SURFACES) === null)
   );
 }
 
@@ -147,7 +151,7 @@ export function useComposerFocusReturn({
         return;
       settle(() => {
         const focused = document.activeElement;
-        return focused === control || resting(focused);
+        return focused === control || resting(focused, root);
       });
     };
     const onFocusOut = (event: FocusEvent) => {
