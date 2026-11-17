@@ -1722,7 +1722,15 @@ export const ItemSchema = describes<Item>()(
         name: z.string(),
         value: JsonValueSchema,
         input: z
-          .object({ itemId: z.string(), position: z.number().int() })
+          .object({
+            itemId: z.string(),
+            position: z.number().int(),
+            kind: z.enum([
+              "user_message",
+              "inbound_message",
+              "task_notification",
+            ]),
+          })
           .nullable(),
         commit: z.string().nullable(),
       }),
@@ -1996,9 +2004,16 @@ export const SessionResultSchema = z
     value: JsonValueSchema,
     /** The newest input the chat had taken in when it was submitted. */
     input: z
-      .object({ itemId: z.string(), position: z.number().int() })
+      .object({
+        itemId: z.string(),
+        position: z.number().int(),
+        kind: z.enum(["user_message", "inbound_message", "task_notification"]),
+      })
       .nullable(),
-    /** That input is still the chat's newest. */
+    /**
+     * No new request reached the chat since: nothing a person, a workflow or
+     * a session outside its own subsessions sent.
+     */
     current: z.boolean(),
     commit: z.string().nullable(),
     recordedAt: z.string(),

@@ -171,7 +171,7 @@ export function resultValueFits(value: JsonValue): boolean {
 export function submitResultDescription(schemas: ResultSchemas): string {
   const names = Object.keys(schemas).sort();
   return [
-    "Submit a result your definition declares. Only an accepted result counts: whoever reads your work (a workflow, the session that started you) reads results, not your messages. The value must match the result's JSON Schema; a rejected call records nothing and lists each failing field, so correct those fields and call again. Pass value as JSON, not as text. Submit again whenever a later message changes your answer: the newest result answers the newest input.",
+    "Submit a result your definition declares. Only an accepted result counts: whoever reads your work (a workflow, the session that started you) reads results, not your messages. The value must match the result's JSON Schema; a rejected call records nothing and lists each failing field, so correct those fields and call again. Pass value as JSON, not as text. Submit again after a later message asks for something new (a person's, a workflow's, another chat's): a result made before it no longer counts. Your own subsessions' reports and task notifications do not make it stale.",
     "Results:",
     ...names.map((name) => `- ${name}: ${JSON.stringify(schemas[name])}`),
   ].join("\n");

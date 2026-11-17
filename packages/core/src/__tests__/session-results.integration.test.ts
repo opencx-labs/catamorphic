@@ -333,6 +333,88 @@ describe("typed results", () => {
     ]);
   });
 
+  it("stays current through the agent's own work reporting back, and goes stale on a new request", async () => {
+    const project = await projects.create(identity, { name: "Requests" });
+    const parent = await sessions.create(identity, project.id);
+    await turn(
+      project.id,
+      parent.id,
+      tool("submit_result", {
+        name: "review",
+        value: { verdict: "COMMENT", score: 4 },
+      }),
+    );
+    const current = async () =>
+      (await sessions.results(identity, project.id, parent.id))[0];
+    const recorded = await current();
+    expect(recorded).toMatchObject({
+      current: true,
+      input: { kind: "user_message" },
+    });
+
+    // A task it started reports: still the same request.
+    await sessions.notify(identity, project.id, parent.id, {
+      task: {
+        type: "background_command",
+        id: "build",
+        title: "Build",
+        status: "completed",
+      },
+      summary: "Build finished",
+      mode: "message_only",
+      idempotencyKey: "build-finished",
+    });
+    expect((await current())?.current).toBe(true);
+
+    // Its own subsession finishes and writes to it: still its own work.
+    const child = await sessions.createSubsession(
+      identity,
+      project.id,
+      parent.id,
+      { task: "Look around." },
+    );
+    await vi.waitFor(
+      async () => {
+        const [entry] = await sessions.listSubsessions(
+          identity,
+          project.id,
+          parent.id,
+        );
+        expect(entry?.status).toBe("completed");
+      },
+      { timeout: 15_000 },
+    );
+    await sessions.deliver(identity, project.id, parent.id, {
+      content: "One more finding.",
+      author: { kind: "agent", sessionId: child.session.id, agentId: null },
+      mode: "message_only",
+      idempotencyKey: "child-update",
+    });
+    await vi.waitFor(
+      async () =>
+        expect(
+          orderedTurns(await items(project.id, parent.id)).every(
+            (entry) => entry.status === "completed",
+          ),
+        ).toBe(true),
+      { timeout: 15_000 },
+    );
+    expect((await current())?.current).toBe(true);
+
+    // A workflow asks for more: the result no longer answers the chat.
+    await sessions.deliver(identity, project.id, parent.id, {
+      content: "A new push arrived.",
+      author: { kind: "workflow", runId: randomUUID(), workflowName: "prs" },
+      mode: "message_only",
+      idempotencyKey: "new-push",
+    });
+    expect(await current()).toMatchObject({
+      id: recorded?.id,
+      current: false,
+      input: recorded?.input,
+    });
+  });
+
   it("reads a family's results and hands a child's to its parent", async () => {
     const project = await projects.create(identity, { name: "Family" });
     const parent = await sessions.create(identity, project.id);

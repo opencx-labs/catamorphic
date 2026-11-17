@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import {
   INPUT_ITEM_KINDS,
+  type InputItem,
   type JsonValue,
   type ResultItem,
 } from "@catamorphic/agent-protocol";
@@ -19,10 +20,12 @@ import { itemFromRow } from "./session-rows.js";
 
 type Executor = Kysely<DB> | Transaction<DB>;
 
-/** An input as a result names it: the item and its place in the chat. */
+/** An input as a result names it: the item, its place and its kind. */
 export interface ResultInput {
   itemId: string;
   position: number;
+  /** `user_message`, `inbound_message` or `task_notification`. */
+  kind: InputItem["kind"];
 }
 
 /** One recorded result, as readers see it. */
@@ -36,7 +39,10 @@ export interface SessionResult {
   value: JsonValue;
   /** The newest input the chat had taken in when the agent submitted it. */
   input: ResultInput | null;
-  /** Whether that input is still the chat's newest: the result answers it. */
+  /**
+   * No new request reached the chat after that input: nothing a person, a
+   * workflow or a session outside the chat's own subsessions sent since.
+   */
   current: boolean;
   commit: string | null;
   recordedAt: string;
@@ -75,7 +81,7 @@ async function consumedInput(
   const row = await db
     .selectFrom("agent_items as item")
     .leftJoin("agent_turns as turn", "turn.id", "item.turn_id")
-    .select(["item.id", "item.position"])
+    .select(["item.id", "item.position", "item.kind"])
     .where("item.session_id", "=", input.sessionId)
     .where("item.kind", "in", INPUT_KINDS)
     .where("item.status", "=", "completed")
@@ -89,37 +95,106 @@ async function consumedInput(
     .orderBy("item.position", "desc")
     .limit(1)
     .executeTakeFirst();
-  return row ? { itemId: row.id, position: Number(row.position) } : null;
+  return row
+    ? {
+        itemId: row.id,
+        position: Number(row.position),
+        kind: inputKind(row.kind),
+      }
+    : null;
 }
 
-/** Each chat's newest input, whether or not the agent has reached it. */
-async function newestInputs(
+function inputKind(kind: string): InputItem["kind"] {
+  const known = INPUT_KINDS.find((candidate) => candidate === kind);
+  if (!known) throw new Error(`Not an input kind: ${kind}`);
+  return known;
+}
+
+/** Each chat with its subsessions at every depth: its own work. */
+async function ownFamilies(
+  db: Executor,
+  sessionIds: readonly string[],
+): Promise<Map<string, Set<string>>> {
+  const families = new Map(sessionIds.map((id) => [id, new Set([id])]));
+  let frontier = sessionIds.map((id) => ({ root: id, id }));
+  for (let depth = 0; frontier.length > 0 && depth < 32; depth++) {
+    const rows = await db
+      .selectFrom("agent_sessions")
+      .select(["id", "parent_session_id"])
+      .where(
+        "parent_session_id",
+        "in",
+        frontier.map((entry) => entry.id),
+      )
+      .execute();
+    const next: Array<{ root: string; id: string }> = [];
+    for (const entry of frontier)
+      for (const row of rows) {
+        const family = families.get(entry.root);
+        if (row.parent_session_id !== entry.id || !family || family.has(row.id))
+          continue;
+        family.add(row.id);
+        next.push({ root: entry.root, id: row.id });
+      }
+    frontier = next;
+  }
+  return families;
+}
+
+/**
+ * Each chat's newest new request, whether or not the agent has reached it:
+ * a person's message, or words a workflow, an assistant or a session outside
+ * the chat's own family sent. Task notifications, and messages its own
+ * subsessions send, are the agent's own work reporting back.
+ */
+async function newestRequests(
   db: Executor,
   sessionIds: readonly string[],
 ): Promise<Map<string, ResultInput>> {
-  if (sessionIds.length === 0) return new Map();
-  const rows = await db
-    .selectFrom("agent_items as item")
-    .leftJoin("agent_turns as turn", "turn.id", "item.turn_id")
-    .select(["item.session_id", "item.id", "item.position"])
-    .distinctOn("item.session_id")
-    .where("item.session_id", "in", [...sessionIds])
-    .where("item.kind", "in", INPUT_KINDS)
-    .where((eb) =>
-      eb.or([
-        eb("turn.status", "is", null),
-        eb("turn.status", "<>", "cancelled"),
-      ]),
-    )
-    .orderBy("item.session_id")
-    .orderBy("item.position", "desc")
-    .execute();
-  return new Map(
-    rows.map((row) => [
-      row.session_id,
-      { itemId: row.id, position: Number(row.position) },
-    ]),
-  );
+  const newest = new Map<string, ResultInput>();
+  if (sessionIds.length === 0) return newest;
+  const families = await ownFamilies(db, sessionIds);
+  for (const sessionId of sessionIds) {
+    const own = [...(families.get(sessionId) ?? [sessionId])];
+    const row = await db
+      .selectFrom("agent_items as item")
+      .leftJoin("agent_turns as turn", "turn.id", "item.turn_id")
+      .select(["item.id", "item.position", "item.kind"])
+      .where("item.session_id", "=", sessionId)
+      .where("item.kind", "in", ["user_message", "inbound_message"])
+      .where((eb) =>
+        eb.or([
+          eb("turn.status", "is", null),
+          eb("turn.status", "<>", "cancelled"),
+        ]),
+      )
+      .where((eb) =>
+        eb.or([
+          eb("item.author_kind", "is", null),
+          eb("item.author_kind", "<>", "agent"),
+          eb(sql<string>`item.author_payload->>'sessionId'`, "not in", own),
+        ]),
+      )
+      .orderBy("item.position", "desc")
+      .limit(1)
+      .executeTakeFirst();
+    if (row)
+      newest.set(sessionId, {
+        itemId: row.id,
+        position: Number(row.position),
+        kind: inputKind(row.kind),
+      });
+  }
+  return newest;
+}
+
+/** Whether no new request reached the chat after the result's input. */
+function isCurrent(
+  input: ResultInput | null,
+  request: ResultInput | undefined,
+): boolean {
+  if (request === undefined) return true;
+  return input !== null && input.position >= request.position;
 }
 
 /**
@@ -235,7 +310,7 @@ export async function readResults(
     .orderBy("item.position", "desc")
     .limit(input.limit)
     .execute();
-  const newest = await newestInputs(db, [
+  const newest = await newestRequests(db, [
     ...new Set(rows.map((row) => row.session_id)),
   ]);
   return rows.flatMap((row) => {
@@ -251,10 +326,7 @@ export async function readResults(
         name: item.name,
         value: item.value,
         input: item.input,
-        current:
-          latest === undefined
-            ? item.input === null
-            : item.input?.itemId === latest.itemId,
+        current: isCurrent(item.input, latest),
         commit: item.commit,
         recordedAt: item.createdAt,
       },
@@ -324,7 +396,7 @@ export async function latestResults(
     .orderBy(sql`item.payload->>'name'`)
     .orderBy("item.position", "desc")
     .execute();
-  const newest = await newestInputs(db, [
+  const newest = await newestRequests(db, [
     ...new Set(rows.map((row) => row.session_id)),
   ]);
   for (const row of rows) {
@@ -339,10 +411,7 @@ export async function latestResults(
       name: item.name,
       value: truncated ? null : item.value,
       truncated,
-      current:
-        input === undefined
-          ? item.input === null
-          : item.input?.itemId === input.itemId,
+      current: isCurrent(item.input, input),
       turnId: item.turnId,
       recordedAt: item.createdAt,
     };

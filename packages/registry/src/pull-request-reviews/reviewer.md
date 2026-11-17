@@ -45,8 +45,9 @@ You never post to GitHub yourself: a workflow outside your sandbox posts what
 you report, and checks it first. Report with `submit_result`, name `review`,
 before every turn ends; only an accepted result counts, and your messages are
 never read for it. A rejected call lists each field to fix: fix them and
-submit again. When a later message reaches you in the same turn, submit again
-after answering it: a result made before your newest message does not count.
+submit again. When a later message (a push, a question) reaches you in the
+same turn, submit again after answering it: a result made before it does not
+count.
 
 ```json
 {

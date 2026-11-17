@@ -2551,9 +2551,17 @@
                     "type": "integer",
                     "minimum": -9007199254740991,
                     "maximum": 9007199254740991
+                  },
+                  "kind": {
+                    "type": "string",
+                    "enum": [
+                      "user_message",
+                      "inbound_message",
+                      "task_notification"
+                    ]
                   }
                 },
-                "required": ["itemId", "position"]
+                "required": ["itemId", "position", "kind"]
               },
               "commit": {
                 "nullable": true,
@@ -3507,9 +3515,13 @@
                 "type": "integer",
                 "minimum": -9007199254740991,
                 "maximum": 9007199254740991
+              },
+              "kind": {
+                "type": "string",
+                "enum": ["user_message", "inbound_message", "task_notification"]
               }
             },
-            "required": ["itemId", "position"]
+            "required": ["itemId", "position", "kind"]
           },
           "current": {
             "type": "boolean"
@@ -6159,9 +6171,17 @@
                     "type": "integer",
                     "minimum": -9007199254740991,
                     "maximum": 9007199254740991
+                  },
+                  "kind": {
+                    "type": "string",
+                    "enum": [
+                      "user_message",
+                      "inbound_message",
+                      "task_notification"
+                    ]
                   }
                 },
-                "required": ["itemId", "position"],
+                "required": ["itemId", "position", "kind"],
                 "additionalProperties": false
               },
               "commit": {
@@ -7148,9 +7168,13 @@
                 "type": "integer",
                 "minimum": -9007199254740991,
                 "maximum": 9007199254740991
+              },
+              "kind": {
+                "type": "string",
+                "enum": ["user_message", "inbound_message", "task_notification"]
               }
             },
-            "required": ["itemId", "position"],
+            "required": ["itemId", "position", "kind"],
             "additionalProperties": false
           },
           "current": {

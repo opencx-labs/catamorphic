@@ -74,9 +74,20 @@ export interface SessionResult {
   /** The name its agent's definition declares, e.g. `review`. */
   name: string;
   value: unknown;
-  /** The newest input (a message id) the chat had taken in when it was submitted. */
-  input: { itemId: string; position: number } | null;
-  /** That input is still the chat's newest: the result answers it. */
+  /**
+   * The newest input (a message id) the chat had taken in when it was
+   * submitted, and its kind, for a reader applying a stricter rule.
+   */
+  input: {
+    itemId: string;
+    position: number;
+    kind: "user_message" | "inbound_message" | "task_notification";
+  } | null;
+  /**
+   * No new request reached the chat after that input: nothing a person, a
+   * workflow or a session outside the chat's own subsessions sent. Task
+   * notifications and its subsessions' messages are its own work reporting.
+   */
   current: boolean;
   /** The workspace commit the submitting turn began on, when there is one. */
   commit: string | null;

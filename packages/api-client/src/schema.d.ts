@@ -19819,6 +19819,8 @@ export interface components {
             input: {
                 itemId: string;
                 position: number;
+                /** @enum {string} */
+                kind: "user_message" | "inbound_message" | "task_notification";
             } | null;
             commit: string | null;
         };
@@ -20076,6 +20078,8 @@ export interface components {
             input: {
                 itemId: string;
                 position: number;
+                /** @enum {string} */
+                kind: "user_message" | "inbound_message" | "task_notification";
             } | null;
             current: boolean;
             commit: string | null;
@@ -20746,6 +20750,8 @@ export interface components {
             input: {
                 itemId: string;
                 position: number;
+                /** @enum {string} */
+                kind: "user_message" | "inbound_message" | "task_notification";
             } | null;
             commit: string | null;
         };
@@ -21003,6 +21009,8 @@ export interface components {
             input: {
                 itemId: string;
                 position: number;
+                /** @enum {string} */
+                kind: "user_message" | "inbound_message" | "task_notification";
             } | null;
             current: boolean;
             commit: string | null;
