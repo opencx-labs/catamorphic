@@ -36,6 +36,10 @@ export type HostCallFollower = (args: {
 
 /** Followers by the prefix of the keys they follow (`session-exec:`). */
 export class HostCallFollowers {
+  /**
+   * Replica memory (c): registered by the core constructor at boot, the
+   * same on every replica, so any replica follows any parked call.
+   */
   private readonly followers = new Map<string, HostCallFollower>();
 
   register(input: { prefix: string; follower: HostCallFollower }): void {
