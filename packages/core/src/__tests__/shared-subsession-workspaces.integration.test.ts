@@ -17,12 +17,13 @@ import { PGlite } from "@electric-sql/pglite";
 import { pgcrypto } from "@electric-sql/pglite/contrib/pgcrypto";
 import { Kysely, PGliteDialect, WithSchemaPlugin } from "kysely";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import type { Identity } from "../identity.js";
+import { type Identity, PROJECT_PRINCIPAL_ID } from "../identity.js";
 import {
   AgentDelegationDeniedError,
   AgentDelegationSettingsError,
   AgentSessionsService,
 } from "../services/agent-sessions-service.js";
+import { projectChatIdentity } from "../services/chat-delivery.js";
 import type { RegisteredCodingAgent } from "../services/coding-agent-registry.js";
 import { ConnectionAdmissionService } from "../services/connection-admission.js";
 import { ConnectionCapabilityGrantsService } from "../services/connection-capability-grants.js";
@@ -581,6 +582,44 @@ describe("subagents of a server agent (ADR 0322)", () => {
       await sessions.listSubsessions(identity, projectId, parent.id),
     ).toEqual([]);
   }, 60_000);
+
+  it("shares a chat's workspace only with those who may work in it, and the child is that chat's", async () => {
+    const chat = await sessions.create(
+      projectChatIdentity({ tenantId: identity.tenantId, projectId }),
+      projectId,
+    );
+    // A member who may message the project chat, not work beside its agent.
+    const member: Identity = {
+      tenantId: identity.tenantId,
+      externalUserId: "bob",
+      // Its agents, the host's own included (`agents: ["*"]`).
+      scope: [{ kind: "agent", projectId, name: "*" }],
+    };
+    await expect(
+      sessions.createSubsession(member, projectId, chat.id, {
+        task: "Read the secrets",
+      }),
+    ).rejects.toThrow(/workspace: "own"/);
+    expect(
+      await sessions.listSubsessions(identity, projectId, chat.id),
+    ).toEqual([]);
+    // One who may work there starts a child that is the project chat's too.
+    const maintainer: Identity = {
+      ...member,
+      externalUserId: "carol",
+      projectPermissions: [{ projectId, permission: "sessions:write" }],
+    };
+    const child = await sessions.createSubsession(
+      maintainer,
+      projectId,
+      chat.id,
+      { task: "Check the build" },
+    );
+    expect(child.workspace).toBe("shared");
+    expect(child.session.externalUserId).toBe(PROJECT_PRINCIPAL_ID);
+    expect(child.session.owner).toBe("project");
+    await until("the child rests", () => idle(child.session.id));
+  }, 120_000);
 
   it("refuses a child past the limit, saying so, and makes nothing", async () => {
     const parent = await sessions.create(identity, projectId);

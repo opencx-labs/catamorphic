@@ -6526,6 +6526,8 @@ export class AgentSessionsService {
             selectedAgentId,
             systemPrompt,
             visibility,
+            // One owner per shared workspace: its workspace session's.
+            owner: shared.external_user_id,
             values: {
               allocation_id: shared.allocation_id,
               sandbox_id: shared.sandbox_id,
@@ -6703,6 +6705,8 @@ export class AgentSessionsService {
       selectedAgentId: string | undefined;
       systemPrompt: string;
       visibility: Exclude<SessionVisibility, "archived">;
+      /** Whose chat it is, when not the creator's (a shared subsession's). */
+      owner?: string;
       /** Where it works. */
       values: Pick<
         Insertable<DB["agent_sessions"]>,
@@ -6724,7 +6728,7 @@ export class AgentSessionsService {
         id: sessionId,
         source_action_id: create.sourceActionId ?? null,
         project_id: input.projectId,
-        external_user_id: identity.externalUserId,
+        external_user_id: input.owner ?? identity.externalUserId,
         source: create.source ?? "api",
         agent_id: input.selectedAgentId ?? null,
         model: create.model || null,
@@ -9938,6 +9942,22 @@ export class AgentSessionsService {
       throw new AgentSessionClosedError(
         input.source.workspace_session_id ?? input.source.id,
       );
+    // Working in a chat's workspace is working beside its agent (ADR 0209):
+    // its owner, or someone that may, never one who may only message it.
+    if (identity.externalUserId !== host.external_user_id)
+      try {
+        assertSessionWorkspaceAccess({
+          identity,
+          projectId,
+          externalUserId: host.external_user_id,
+          agentId: host.agent_id,
+        });
+      } catch (error) {
+        if (!(error instanceof AccessDeniedError)) throw error;
+        throw new AgentDelegationDeniedError(
+          'You may message this chat but not work in its workspace, so its subagents cannot either. Start one with workspace: "own" to give it a workspace of its own.',
+        );
+      }
     const refuse = (why: string) =>
       new AgentDelegationSettingsError(
         `${why} Start it with workspace: "own" to give it a workspace of its own.`,
