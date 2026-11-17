@@ -1456,6 +1456,7 @@ export class CatamorphicCore {
         projectManager: this.projectManager,
       });
       // Setup workflows run through their project enablement (ADR 0324).
+      const sessionExec = this.sessionExec;
       this.agentSessions.setSetupWorkflowRunner({
         run: (input) =>
           runSetupWorkflow({
@@ -1464,6 +1465,7 @@ export class CatamorphicCore {
             coordinator,
             ...input,
           }),
+        end: (input) => sessionExec.endSetup(input),
       });
       this.sessionPreviews = new SessionPreviewsService({
         db: this.db,

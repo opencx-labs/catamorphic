@@ -429,6 +429,12 @@ export async function runWorkspaceSetup(input: {
   base?: string;
   timeoutMinutes: number;
   network?: { egress: SandboxEgress; env: Record<string, string> };
+  /**
+   * Run the Environment's part alone, before the chat's grants, secrets
+   * and files are in the sandbox (ADR 0324): no secrets file, only `env`
+   * (the secrets the setup names), on the sandbox's own network.
+   */
+  isolated?: { env: Record<string, string> };
   /** The Environment's setup workflow (ADR 0324). */
   workflow?: {
     name: string;
@@ -444,8 +450,9 @@ export async function runWorkspaceSetup(input: {
   onRun?: () => Promise<void>;
 }): Promise<WorkspaceSetupOutcome> {
   const { provider, sandboxId, projectDir, network } = input;
-  const personal =
-    input.personalAllowed && !network ? input.personal : undefined;
+  const alone = Boolean(network || input.isolated);
+  const env = network?.env ?? input.isolated?.env;
+  const personal = input.personalAllowed && !alone ? input.personal : undefined;
   if (!input.environment?.trim() && !personal?.trim() && !input.workflow)
     return { status: "current" };
   const session = SESSION_FROM_PROJECT;
@@ -487,7 +494,7 @@ export async function runWorkspaceSetup(input: {
     ...(input.environment ? { environment: input.environment } : {}),
     ...(input.workflow ? { workflow: input.workflow.name } : {}),
     ...(personal ? { personal } : {}),
-    personalAllowed: input.personalAllowed && !network,
+    personalAllowed: input.personalAllowed && !alone,
     ...(input.base ? { base: input.base } : {}),
     recorded,
   });
@@ -528,7 +535,7 @@ export async function runWorkspaceSetup(input: {
         "run.sh": workspaceSetupScript({
           plan,
           ...(only ? { parts: only } : {}),
-          ...(network ? { loadSecrets: false } : {}),
+          ...(alone ? { loadSecrets: false } : {}),
         }),
       },
       `${sessionDirectory(provider)}/setup`,
@@ -540,7 +547,7 @@ export async function runWorkspaceSetup(input: {
         projectDir,
         command: `bash ${shellQuote(`${session}/setup/run.sh`)}`,
         timeoutMs,
-        ...(network ? { env: network.env } : {}),
+        ...(env ? { env } : {}),
         ...(input.signal ? { signal: input.signal } : {}),
       });
     return network &&

@@ -12,7 +12,11 @@ import {
   type SandboxEgress,
   type SandboxProcessProvider,
 } from "@catamorphic/sandbox";
-import { type Kysely, type Selectable, sql } from "kysely";
+import {
+  PROJECT_APP_DATA_DIR,
+  PROJECT_WORKSPACE_ROOT,
+} from "@catamorphic/workflow/project-layout";
+import { type Kysely, type Selectable, sql, type Transaction } from "kysely";
 import { z } from "zod";
 import type { Identity } from "../identity.js";
 import { assertSessionWorkspaceAccess } from "./agent-session-access.js";
@@ -129,7 +133,14 @@ interface ExecProgress {
   /** The sandbox and process it runs as. */
   sandboxId?: string;
   processId?: string;
+  /** An adopted start whose process is gone but recorded its exit. */
+  exited?: boolean;
   startedAt?: string;
+  /** When it is stopped: its timeout, or its setup's time (ADR 0324). */
+  deadlineAt?: string;
+  in?: "session" | "setup";
+  /** The setup build whose run started it; that run's end stops it. */
+  build?: string;
   /** The widening of a command `in: "setup"` (ADR 0257). */
   widening?: string;
 }
@@ -395,7 +406,7 @@ export class SessionExecService {
       .updateTable("session_actions")
       .set({
         status: "running",
-        progress: claim as unknown as Json,
+        progress: progressJson(claim),
         updated_at: new Date(),
       })
       .where("id", "=", action.id)
@@ -420,59 +431,153 @@ export class SessionExecService {
       start: true,
       ...(caller ? { caller } : {}),
     });
-    const { handle } = workspace;
+    const { handle, setup } = workspace;
     const processes = processesOf(handle);
     await markWorkspaceUsed({ db: this.deps.db, sessionId: action.session_id });
+    // A setup's commands end with its time (ADR 0324).
+    const deadline = Math.min(
+      Date.now() + input.timeoutMs,
+      setup ? Date.parse(setup.deadline) : Number.POSITIVE_INFINITY,
+    );
+    const base: Omit<ExecProgress, "phase" | "at"> = {
+      sandboxId: handle.sandboxId,
+      in: args.in,
+      deadlineAt: new Date(deadline).toISOString(),
+      ...(setup ? { build: setup.build } : {}),
+    };
+    // A start that stopped after its process began, on this replica or
+    // another, left that process or its exit behind: adopt it.
+    const adopted = await this.adopt({ handle, action });
+    if (adopted) {
+      const progress: ExecProgress = {
+        phase: "running",
+        at: new Date().toISOString(),
+        startedAt: action.updated_at.toISOString(),
+        ...base,
+        ...adopted,
+      };
+      await this.writeProgress({ action, claim, progress });
+      return { progress };
+    }
+    if (deadline <= Date.now())
+      throw new SessionExecRefusedError(
+        "The setup's time is up, so the command did not start",
+      );
     const commit = await this.programCommitOf(action);
-    if (commit)
-      await this.copyProgram({
-        handle,
-        tenantId,
-        projectId: action.project_id,
-        commit,
-      });
-    const network = args.in === "setup" ? workspace.setup?.network : undefined;
-    const dir = execDirectory(action.id);
+    const program = commit
+      ? await this.copyProgram({
+          handle,
+          tenantId,
+          projectId: action.project_id,
+          commit,
+        })
+      : undefined;
+    const network = args.in === "setup" ? setup?.network : undefined;
     await handle.provider.uploadFiles(
       handle.sandboxId,
       {
         "command.sh": `${args.command}\n`,
         "run.sh": execScript({
-          cwd: args.cwd,
-          loadSecrets: !network,
+          ...(args.cwd ? { cwd: args.cwd } : {}),
+          ...(program ? { program } : {}),
+          // A command in setup has no grants or secrets file (ADR 0257).
+          loadSecrets: args.in === "session",
         }),
       },
       `${handle.sessionDirectory}/exec/${action.id}`,
     );
-    let widening: string | undefined;
-    if (network) widening = await this.widen({ handle, network, input });
-    const started = await processes.startProcess({
-      sandboxId: handle.sandboxId,
-      command: `bash ${shellQuote(`${dir}/run.sh`)}`,
-      cwd: handle.projectDirectory,
-      name: `Workflow command ${action.id.slice(0, 8)}`,
-      env: { ...(network?.env ?? {}), ...(args.env ?? {}) },
+    // Network changes and starts are ordered per chat: a command never
+    // starts on a sandbox another's widening holds, nor widens one a
+    // session command runs in, and a narrowing waits for the last widening.
+    return this.withNetworkLock(action.session_id, async (trx) => {
+      const running = await runningExecs(trx, {
+        sessionId: action.session_id,
+        except: action.id,
+        sandboxId: handle.sandboxId,
+      });
+      if (args.in === "session" && running.some((other) => other.widening))
+        throw new SessionExecRefusedError(
+          "The chat's workspace is on its setup's network for a setup command; a command in the session runs once it is narrow again",
+        );
+      if (network && running.some((other) => other.in === "session"))
+        throw new SessionExecRefusedError(
+          "A command in the session is running in this workspace, so it cannot be given the setup's network",
+        );
+      const current = await trx
+        .selectFrom("session_actions")
+        .select("progress")
+        .where("id", "=", action.id)
+        .executeTakeFirstOrThrow();
+      if (parseProgress(current.progress)?.at !== claim.at) return "lost";
+      const widening = network
+        ? await this.widen({ handle, network, until: deadline })
+        : undefined;
+      const started = await processes.startProcess({
+        sandboxId: handle.sandboxId,
+        command: `bash ${shellQuote(`${execDirectory(action.id)}/run.sh`)}`,
+        cwd: handle.projectDirectory,
+        name: processName(action.id),
+        env: {
+          ...(setup && args.in === "setup" ? setup.env : {}),
+          ...(args.env ?? {}),
+        },
+      });
+      const progress: ExecProgress = {
+        phase: "running",
+        at: new Date().toISOString(),
+        processId: started.processId,
+        startedAt: new Date().toISOString(),
+        ...base,
+        ...(widening ? { widening } : {}),
+      };
+      await trx
+        .updateTable("session_actions")
+        .set({ progress: progressJson(progress), updated_at: new Date() })
+        .where("id", "=", action.id)
+        .execute();
+      return { progress };
     });
-    const progress: ExecProgress = {
-      phase: "running",
-      at: new Date().toISOString(),
-      sandboxId: handle.sandboxId,
-      processId: started.processId,
-      startedAt: new Date().toISOString(),
-      ...(widening ? { widening } : {}),
-    };
+  }
+
+  /**
+   * The process an earlier start of this execution left, found by its
+   * name, or the exit it recorded: never started twice.
+   */
+  private async adopt(input: {
+    handle: SessionWorkspaceHandle;
+    action: ActionRow;
+  }): Promise<Pick<ExecProgress, "processId" | "exited"> | undefined> {
+    const { handle, action } = input;
+    const processes = processesOf(handle);
+    const found = (
+      await processes.listProcesses({ sandboxId: handle.sandboxId })
+    ).find((process) => process.name === processName(action.id));
+    if (found) return { processId: found.processId };
+    const exit = await handle.provider.executeCommand(
+      handle.sandboxId,
+      `cat ${shellQuote(`${execDirectory(action.id)}/exit`)} 2>/dev/null || true`,
+      { cwd: handle.projectDirectory, timeout: 60 },
+    );
+    return exit.result.trim() ? { exited: true } : undefined;
+  }
+
+  private async writeProgress(input: {
+    action: ActionRow;
+    claim: ExecProgress;
+    progress: ExecProgress;
+  }): Promise<void> {
     await this.deps.db
       .updateTable("session_actions")
-      .set({ progress: progress as unknown as Json, updated_at: new Date() })
-      .where("id", "=", action.id)
+      .set({ progress: progressJson(input.progress), updated_at: new Date() })
+      .where("id", "=", input.action.id)
+      .where(sql<boolean>`progress->>'at' = ${input.claim.at}`)
       .execute();
-    return { progress };
   }
 
   private async widen(args: {
     handle: SessionWorkspaceHandle;
-    network: { egress: SandboxEgress; env: Record<string, string> };
-    input: { timeoutMs: number };
+    network: { egress: SandboxEgress };
+    until: number;
   }): Promise<string> {
     const { provider, sandboxId } = args.handle;
     if (!provider.widenEgress)
@@ -484,11 +589,27 @@ export class SessionExecService {
       sandboxId,
       egress: args.network.egress,
       id,
-      until: new Date(
-        Date.now() + args.input.timeoutMs + WIDENING_GRACE_MS,
-      ).toISOString(),
+      // The machine narrows by itself soon after the setup's time is up.
+      until: new Date(args.until + WIDENING_GRACE_MS).toISOString(),
     });
     return id;
+  }
+
+  /**
+   * Run `work` holding the chat's network lock (a transaction-scoped
+   * advisory lock), so widenings, narrowings and starts in one sandbox
+   * happen one at a time on every replica.
+   */
+  private withNetworkLock<T>(
+    sessionId: string,
+    work: (trx: Transaction<DB>) => Promise<T>,
+  ): Promise<T> {
+    return this.deps.db.transaction().execute(async (trx) => {
+      await sql`select pg_advisory_xact_lock(hashtext(${`work-exec-network:${sessionId}`}))`.execute(
+        trx,
+      );
+      return work(trx);
+    });
   }
 
   /** Follow a started command for one slice; record its end. */
@@ -501,8 +622,11 @@ export class SessionExecService {
   }): Promise<HostCallFollowOutcome> {
     const { action, progress } = args;
     const startedAt = Date.parse(progress.startedAt ?? progress.at);
+    const deadline = progress.deadlineAt
+      ? Date.parse(progress.deadlineAt)
+      : startedAt + args.timeoutMs;
     const caller = await this.callerOf(action);
-    const handle = await this.deps.sessions
+    const reached = await this.deps.sessions
       .commandWorkspace({
         tenantId: await this.tenantOf(action.project_id),
         projectId: action.project_id,
@@ -516,92 +640,183 @@ export class SessionExecService {
         (workspace) => workspace.handle,
         () => undefined,
       );
-    if (
-      !handle ||
-      !progress.processId ||
-      handle.sandboxId !== progress.sandboxId
-    )
-      return this.finish({
+    const stopped = (stderr: string) =>
+      this.finish({
         action,
         args: args.args,
-        handle,
         progress,
         result: {
           exitCode: null,
           stdout: "",
-          stderr:
-            "The chat's workspace went away while the command ran (given back, replaced, or lost with its machine).",
+          stderr,
           durationMs: Date.now() - startedAt,
           timedOut: false,
         },
       });
+    if (!reached || reached.sandboxId !== progress.sandboxId) {
+      // The caller lost the chat, or the sandbox is another: whatever it
+      // started there stops, and its widening ends (finish narrows).
+      await this.kill({ action, progress });
+      return stopped(
+        reached
+          ? "The chat's workspace went away while the command ran (given back, replaced, or lost with its machine)."
+          : "The run can no longer reach this chat's workspace, so its command was stopped.",
+      );
+    }
+    const handle = reached;
     const processes = processesOf(handle);
     await markWorkspaceUsed({ db: this.deps.db, sessionId: action.session_id });
-    const remaining = startedAt + args.timeoutMs - Date.now();
-    const followed = await followProcess({
-      processes,
-      sandboxId: handle.sandboxId,
-      processId: progress.processId,
-      // Its streams go to files; only its end is read here.
-      cursor: 0,
-      timeoutMs: Math.max(0, Math.min(args.input.sliceMs, remaining)),
-      signal: args.input.signal,
-    });
-    if (followed.aborted) return { status: "pending" };
-    const ended = !followed.timedOut;
-    const overdue = !ended && Date.now() >= startedAt + args.timeoutMs;
-    if (!ended && !overdue) return { status: "pending" };
-    if (overdue)
-      await processes
-        .signalProcess({
+    const followed = progress.processId
+      ? await followProcess({
+          processes,
           sandboxId: handle.sandboxId,
           processId: progress.processId,
-          signal: "SIGKILL",
+          // Its streams go to files; only its end is read here.
+          cursor: 0,
+          timeoutMs: Math.max(
+            0,
+            Math.min(args.input.sliceMs, deadline - Date.now()),
+          ),
+          signal: args.input.signal,
         })
-        .catch(() => {});
-    const tail = async (stream: "stdout" | "stderr") =>
+      : undefined;
+    if (followed?.aborted) return { status: "pending" };
+    const ended = followed ? !followed.timedOut : true;
+    const overdue = !ended && Date.now() >= deadline;
+    if (!ended && !overdue) return { status: "pending" };
+    if (overdue) await this.kill({ action, progress });
+    const read = async (file: "stdout" | "stderr" | "exit") =>
       handle.provider
         .executeCommand(
           handle.sandboxId,
-          `tail -c ${EXEC_OUTPUT_LIMIT} ${shellQuote(`${execDirectory(action.id)}/${stream}`)} 2>/dev/null || true`,
+          `tail -c ${EXEC_OUTPUT_LIMIT} ${shellQuote(`${execDirectory(action.id)}/${file}`)} 2>/dev/null || true`,
           { cwd: handle.projectDirectory, timeout: 60 },
         )
         .then(
           (result) => result.result,
           () => "",
         );
+    const recorded = followed
+      ? undefined
+      : Number.parseInt(await read("exit"), 10);
     return this.finish({
       action,
       args: args.args,
-      handle,
       progress,
       result: {
-        exitCode: overdue ? null : followed.exitCode,
-        stdout: await tail("stdout"),
-        stderr: await tail("stderr"),
+        exitCode: overdue
+          ? null
+          : followed
+            ? followed.exitCode
+            : Number.isNaN(recorded) || recorded === undefined
+              ? null
+              : recorded,
+        stdout: await read("stdout"),
+        stderr: await read("stderr"),
         durationMs: Date.now() - startedAt,
         timedOut: overdue,
       },
     });
   }
 
-  /** Record the execution's end in its action and the chat's log. */
+  /** Stop an execution's process, wherever its sandbox is now. */
+  private async kill(input: {
+    action: ActionRow;
+    progress: ExecProgress;
+  }): Promise<void> {
+    if (!input.progress.processId || !input.progress.sandboxId) return;
+    const sandbox = await this.deps.sessions.chatSandbox({
+      projectId: input.action.project_id,
+      sessionId: input.action.session_id,
+    });
+    if (sandbox?.sandboxId !== input.progress.sandboxId) return;
+    await processesOf(sandbox)
+      .signalProcess({
+        sandboxId: sandbox.sandboxId,
+        processId: input.progress.processId,
+        signal: "SIGKILL",
+      })
+      .catch(() => {});
+  }
+
+  /**
+   * After a chat's setup run ended however it ended (ADR 0324): every
+   * command it started is stopped and recorded, and a sandbox it widened
+   * is narrowed, failing closed: a sandbox that cannot be narrowed is
+   * stopped and this throws, so preparation never goes on with it wide.
+   */
+  async endSetup(input: {
+    tenantId: string;
+    projectId: string;
+    sessionId: string;
+    build: string;
+    network: boolean;
+  }): Promise<void> {
+    const actions = await this.deps.db
+      .selectFrom("session_actions")
+      .selectAll()
+      .where("session_id", "=", input.sessionId)
+      .where("operation", "=", "exec")
+      .where("status", "in", ["pending", "running"])
+      .where(sql<boolean>`progress->>'build' = ${input.build}`)
+      .execute();
+    for (const action of actions) {
+      const progress = parseProgress(action.progress);
+      if (!progress) continue;
+      await this.kill({ action, progress });
+      await this.finish({
+        action,
+        args: SESSION_EXEC_SCHEMA.parse(action.input),
+        progress,
+        result: {
+          exitCode: null,
+          stdout: "",
+          stderr:
+            "The setup ended before the command did, so the command was stopped.",
+          durationMs:
+            Date.now() - Date.parse(progress.startedAt ?? progress.at),
+          timedOut: false,
+        },
+      });
+    }
+    if (!input.network) return;
+    const sandbox = await this.deps.sessions.chatSandbox({
+      projectId: input.projectId,
+      sessionId: input.sessionId,
+    });
+    if (!sandbox) return;
+    await this.withNetworkLock(input.sessionId, () =>
+      narrowSandboxEgress({
+        provider: sandbox.provider,
+        sandboxId: sandbox.sandboxId,
+        id: randomUUID(),
+      }),
+    );
+  }
+
+  /**
+   * Record the execution's end in its action and the chat's log, its
+   * output masked by every secret value the chat received (ADR 0206). Its
+   * widening ends; the sandbox narrows once no other holds one.
+   */
   private async finish(args: {
     action: ActionRow;
     args: SessionExecInput;
-    handle: SessionWorkspaceHandle | undefined;
     progress: ExecProgress;
     result: SessionExecResult;
   }): Promise<HostCallFollowOutcome> {
-    const { action, result } = args;
-    if (args.progress.widening && args.handle)
-      await narrowSandboxEgress({
-        provider: args.handle.provider,
-        sandboxId: args.handle.sandboxId,
-        id: args.progress.widening,
-      }).catch(() => {
-        // Stopped already, or narrowing at its deadline by itself.
-      });
+    const { action } = args;
+    if (args.progress.widening) await this.endWidening(args);
+    const mask = await this.deps.sessions.chatSecretMask({
+      tenantId: await this.tenantOf(action.project_id),
+      projectId: action.project_id,
+      sessionId: action.session_id,
+    });
+    const result: SessionExecResult = {
+      ...args.result,
+      stdout: mask.text(args.result.stdout),
+      stderr: mask.text(args.result.stderr),
+    };
     const output = json(result);
     const actor = actorOf(action);
     await this.deps.db.transaction().execute(async (trx) => {
@@ -616,7 +831,7 @@ export class SessionExecService {
           updated_at: new Date(),
         })
         .where("id", "=", action.id)
-        .where("status", "=", "running")
+        .where("status", "in", ["pending", "running"])
         .returning("id")
         .executeTakeFirst();
       if (!owned) return;
@@ -649,6 +864,43 @@ export class SessionExecService {
     return final.status === "completed"
       ? { status: "done", output: final.result }
       : { status: "failed", error: final.error ?? "The command failed" };
+  }
+
+  /**
+   * End one command's widening: the sandbox narrows when no other running
+   * command holds one, so parallel setup commands never cut each other.
+   * A sandbox that cannot be narrowed is stopped (ADR 0257).
+   */
+  private async endWidening(args: {
+    action: ActionRow;
+    progress: ExecProgress;
+  }): Promise<void> {
+    const { action, progress } = args;
+    await this.withNetworkLock(action.session_id, async (trx) => {
+      await trx
+        .updateTable("session_actions")
+        .set({ progress: sql<Json>`progress - 'widening'` })
+        .where("id", "=", action.id)
+        .execute();
+      const others = await runningExecs(trx, {
+        sessionId: action.session_id,
+        except: action.id,
+        ...(progress.sandboxId ? { sandboxId: progress.sandboxId } : {}),
+      });
+      if (others.some((other) => other.widening)) return;
+      const sandbox = await this.deps.sessions.chatSandbox({
+        projectId: action.project_id,
+        sessionId: action.session_id,
+      });
+      if (!sandbox || sandbox.sandboxId !== progress.sandboxId) return;
+      await narrowSandboxEgress({
+        provider: sandbox.provider,
+        sandboxId: sandbox.sandboxId,
+        id: progress.widening ?? randomUUID(),
+      }).catch(() => {
+        // Stopped by narrowSandboxEgress: closed, as ADR 0257 wants.
+      });
+    });
   }
 
   /** Give a start back that found no workspace yet, for the next slice. */
@@ -702,63 +954,65 @@ export class SessionExecService {
 
   /**
    * Copy the program the run executes (its `.work/` at its deployed
-   * commit) to `$WORK_PROGRAM`, once per commit per sandbox, write bits
-   * removed. Outside the checkout, so no checkpoint or sync carries it.
+   * commit) into its own folder, `.work-program/<commit>`, outside the
+   * checkout, once per commit per sandbox, write bits removed. It appears
+   * whole or not at all: uploaded beside it, then renamed into place.
+   * Returns its path from the project folder, for `$WORK_PROGRAM`.
    */
   private async copyProgram(args: {
     handle: SessionWorkspaceHandle;
     tenantId: string;
     projectId: string;
     commit: string;
-  }): Promise<void> {
+  }): Promise<string> {
     const { handle } = args;
-    const marker = `../${path.posix.basename(handle.sessionDirectory)}/program.commit`;
-    const current = await handle.provider.executeCommand(
+    const folder = `../${PROGRAM_DIRECTORY}/${args.commit}`;
+    const present = await handle.provider.executeCommand(
       handle.sandboxId,
-      `cat ${shellQuote(marker)} 2>/dev/null || true`,
+      `test -d ${shellQuote(folder)} && echo present || true`,
       { cwd: handle.projectDirectory, timeout: 60 },
     );
-    if (current.result.trim() === args.commit) return;
+    if (present.result.trim() === "present") return folder;
+    const prefix = `${PROJECT_WORKSPACE_ROOT}/`;
+    const appData = `${PROJECT_APP_DATA_DIR.slice(prefix.length)}/`;
     const files = await withProgram(
       this.deps.projectManager,
       args.tenantId,
       args.projectId,
-      (repo) => repo.readFilesAtRef(args.commit, { prefix: ".work/" }),
+      (repo) => repo.readFilesAtRef(args.commit, { prefix }),
     );
     const program = Object.fromEntries(
       Object.entries(files)
-        .map(([file, content]) => [file.slice(".work/".length), content])
+        .map(([file, content]) => [file.slice(prefix.length), content])
         .filter(
           ([file]) =>
             file !== undefined &&
             !file.split("/").includes("node_modules") &&
-            !file.startsWith("app-data/"),
+            !file.startsWith(appData),
         ),
     );
     const root = path.posix.dirname(handle.projectDirectory);
-    const next = `${PROGRAM_DIRECTORY}.next-${randomUUID().slice(0, 8)}`;
-    if (Object.keys(program).length > 0)
-      await handle.provider.uploadFiles(
-        handle.sandboxId,
-        program,
-        `${root}/${next}`,
-      );
-    const replaced = await handle.provider.executeCommand(
+    const staging = `${PROGRAM_DIRECTORY}/.staging-${randomUUID()}`;
+    await handle.provider.uploadFiles(
+      handle.sandboxId,
+      { ...program, ".work-program-commit": args.commit },
+      `${root}/${staging}`,
+    );
+    // Renamed whole into place; a copy another start put there first wins.
+    const placed = await handle.provider.executeCommand(
       handle.sandboxId,
       [
-        `mkdir -p ${shellQuote(`../${next}`)}`,
-        `chmod -R a-w ${shellQuote(`../${next}`)}`,
-        `if [ -e ${shellQuote(`../${PROGRAM_DIRECTORY}`)} ]; then chmod -R u+w ${shellQuote(`../${PROGRAM_DIRECTORY}`)} && rm -rf ${shellQuote(`../${PROGRAM_DIRECTORY}`)}; fi`,
-        `mv ${shellQuote(`../${next}`)} ${shellQuote(`../${PROGRAM_DIRECTORY}`)}`,
-        `mkdir -p "$(dirname ${shellQuote(marker)})"`,
-        `printf '%s' ${shellQuote(args.commit)} > ${shellQuote(marker)}`,
+        `chmod -R a-w ${shellQuote(`../${staging}`)}`,
+        `if [ -d ${shellQuote(folder)} ]; then chmod -R u+w ${shellQuote(`../${staging}`)} && rm -rf ${shellQuote(`../${staging}`)}; else mv ${shellQuote(`../${staging}`)} ${shellQuote(folder)} || { test -d ${shellQuote(folder)} && chmod -R u+w ${shellQuote(`../${staging}`)} 2>/dev/null; rm -rf ${shellQuote(`../${staging}`)}; }; fi`,
+        `test -d ${shellQuote(folder)}`,
       ].join(" && "),
       { cwd: handle.projectDirectory, timeout: 120 },
     );
-    if (replaced.exitCode !== 0)
+    if (placed.exitCode !== 0)
       throw new Error(
-        `Could not copy the program into the workspace: ${replaced.result.trim().slice(-500)}`,
+        `Could not copy the program into the workspace: ${placed.result.trim().slice(-500)}`,
       );
+    return folder;
   }
 
   private async programCommitOf(action: ActionRow): Promise<string | null> {
@@ -835,12 +1089,19 @@ function execDirectory(actionId: string): string {
  */
 export function execScript(input: {
   cwd?: string;
+  /** The program's folder from the project folder, for `$WORK_PROGRAM`. */
+  program?: string;
   loadSecrets: boolean;
 }): string {
   return [
     'work_exec=$(cd "$(dirname "$0")" && pwd -P) || exit 1',
     ...(input.loadSecrets ? [sandboxSecretsPrelude()] : []),
-    `if [ -d ${shellQuote(`../${PROGRAM_DIRECTORY}`)} ]; then WORK_PROGRAM=$(cd ${shellQuote(`../${PROGRAM_DIRECTORY}`)} && pwd -P); export WORK_PROGRAM; fi`,
+    ...(input.program
+      ? [
+          `WORK_PROGRAM=$(cd ${shellQuote(input.program)} && pwd -P) || exit 1`,
+          "export WORK_PROGRAM",
+        ]
+      : []),
     ...(input.cwd ? [`cd -- ${shellQuote(input.cwd)} || exit 1`] : []),
     'bash "$work_exec/command.sh" >"$work_exec/stdout" 2>"$work_exec/stderr" </dev/null',
     "work_status=$?",
@@ -859,6 +1120,39 @@ function processesOf(handle: SessionWorkspaceHandle): SandboxProcessProvider {
   return processes;
 }
 
+function progressJson(progress: ExecProgress): Json {
+  return json(progress);
+}
+
+/** The process an execution runs as, found again by its name. */
+function processName(actionId: string): string {
+  return `work-exec-${actionId}`;
+}
+
+/** Other executions running in a chat's sandbox, and what they hold. */
+async function runningExecs(
+  db: Kysely<DB> | Transaction<DB>,
+  input: { sessionId: string; except: string; sandboxId?: string },
+): Promise<ExecProgress[]> {
+  const rows = await db
+    .selectFrom("session_actions")
+    .select("progress")
+    .where("session_id", "=", input.sessionId)
+    .where("operation", "=", "exec")
+    .where("status", "=", "running")
+    .where("id", "!=", input.except)
+    .execute();
+  return rows
+    .map((row) => parseProgress(row.progress))
+    .filter(
+      (progress): progress is ExecProgress =>
+        progress !== null &&
+        (!input.sandboxId ||
+          !progress.sandboxId ||
+          progress.sandboxId === input.sandboxId),
+    );
+}
+
 function parseProgress(value: Json | null): ExecProgress | null {
   if (!value || typeof value !== "object" || Array.isArray(value)) return null;
   const phase = value.phase;
@@ -875,7 +1169,11 @@ function parseProgress(value: Json | null): ExecProgress | null {
     ...(text("sandboxId") ? { sandboxId: text("sandboxId") } : {}),
     ...(text("processId") ? { processId: text("processId") } : {}),
     ...(text("startedAt") ? { startedAt: text("startedAt") } : {}),
+    ...(text("deadlineAt") ? { deadlineAt: text("deadlineAt") } : {}),
+    ...(text("build") ? { build: text("build") } : {}),
     ...(text("widening") ? { widening: text("widening") } : {}),
+    ...(value.in === "session" || value.in === "setup" ? { in: value.in } : {}),
+    ...(value.exited === true ? { exited: true } : {}),
   };
 }
 
