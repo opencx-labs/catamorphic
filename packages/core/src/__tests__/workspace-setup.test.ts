@@ -8,11 +8,13 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { sandboxSecretsPrelude } from "../services/sandbox-secrets.js";
 import {
   environmentSetupDue,
+  environmentSetupKey,
   parseSetupRecord,
   planWorkspaceSetup,
   runWorkspaceSetup,
   SETUP_PROCESS_NAME,
   SetupNetworkError,
+  type SetupWorkflowReason,
   setupFingerprint,
   setupRecordAfter,
   workspaceSetupFailedNote,
@@ -86,6 +88,52 @@ describe("planning a workspace's setup", () => {
         recorded: first?.record ?? null,
       }),
     ).toMatchObject({ environment: `${env} --prefer-offline` });
+  });
+
+  it("fingerprints a setup workflow with the command, and plans it after the command (ADR 0324)", () => {
+    const plan = planWorkspaceSetup({
+      environment: env,
+      workflow: "prepareReview",
+      personalAllowed: false,
+      recorded: null,
+    });
+    expect(plan).toEqual({
+      record: {
+        environment: setupFingerprint(
+          environmentSetupKey({ command: env, workflow: "prepareReview" }),
+        ),
+        personal: "none",
+        base: "none",
+      },
+      environment: env,
+      workflow: "prepareReview",
+    });
+    // A record from before the workflow was named sets up again.
+    expect(
+      planWorkspaceSetup({
+        environment: env,
+        workflow: "prepareReview",
+        personalAllowed: false,
+        recorded: {
+          environment: setupFingerprint(env),
+          personal: "none",
+          base: "none",
+        },
+      }),
+    ).not.toBeNull();
+    // Without a workflow, records stay as they were.
+    expect(environmentSetupKey({ command: env })).toBe(env);
+    if (!plan) throw new Error("unreachable");
+    // The command alone is not done until its workflow is.
+    expect(setupRecordAfter({ plan, part: "environment" })).toEqual({
+      environment: "none",
+      personal: "none",
+      base: "none",
+    });
+    expect(setupRecordAfter({ plan, part: "workflow" })).toEqual({
+      ...plan.record,
+      personal: "none",
+    });
   });
 
   it("runs the Environment's part again when the workspace's base moves", () => {
@@ -379,6 +427,103 @@ describe("running a workspace's setup", () => {
       await runWorkspaceSetup({ ...setup, base: "c".repeat(40), onRun }),
     ).toEqual({ status: "succeeded" });
     expect(await read(id, "../runs")).toBe("ran in project\nran in project\n");
+  }, 30_000);
+
+  it("runs the setup workflow after the command and before the owner's part, recording it only once it succeeded (ADR 0324)", async () => {
+    const { id } = await provider.createSandbox({});
+    const reasons: string[] = [];
+    let fails = true;
+    const workflow = {
+      name: "prepareReview",
+      rebuilt: false,
+      moved: false,
+      run: async ({ reason }: { reason: SetupWorkflowReason }) => {
+        reasons.push(reason);
+        await provider.executeCommand(id, "echo workflow >> ../runs", {
+          cwd: projectDir,
+        });
+        return fails
+          ? {
+              status: "failed" as const,
+              error: "the run failed: no trusted files",
+              timedOut: false,
+            }
+          : { status: "succeeded" as const };
+      },
+    };
+    const setup = {
+      provider,
+      sandboxId: id,
+      projectDir,
+      environment: "echo command >> ../runs",
+      personal: "echo personal >> ../runs",
+      personalAllowed: true,
+      timeoutMinutes: 1,
+      workflow,
+    };
+    const failed = await runWorkspaceSetup(setup);
+    expect(failed).toMatchObject({
+      status: "failed",
+      workflow: "prepareReview",
+      log: "the run failed: no trusted files",
+      parts: ["environment", "workflow", "personal"],
+    });
+    expect(await read(id, "../runs")).toBe("command\nworkflow\n");
+    if (failed.status !== "failed") throw new Error("unreachable");
+    expect(
+      workspaceSetupFailedNote({
+        outcome: failed,
+        timeoutMinutes: 30,
+        logPath: "/workspace/.work-session/setup.log",
+      }),
+    ).toContain(
+      "The setup workflow prepareReview (`setup.workflow` in .work/project.json) failed",
+    );
+    // Not recorded: the next preparation runs all of it again.
+    fails = false;
+    expect(await runWorkspaceSetup(setup)).toEqual({ status: "succeeded" });
+    expect(await read(id, "../runs")).toBe(
+      "command\nworkflow\ncommand\nworkflow\npersonal\n",
+    );
+    expect(await runWorkspaceSetup(setup)).toEqual({ status: "current" });
+    // The base moved: the workflow hears why it runs again.
+    expect(await runWorkspaceSetup({ ...setup, base: "d".repeat(40) })).toEqual(
+      { status: "succeeded" },
+    );
+    expect(reasons).toEqual(["created", "created", "base-moved"]);
+    // Naming another workflow changes the setup, as a new command does.
+    expect(
+      await runWorkspaceSetup({
+        ...setup,
+        base: "d".repeat(40),
+        workflow: { ...workflow, name: "prepareReviewV2" },
+      }),
+    ).toEqual({ status: "succeeded" });
+    expect(reasons.at(-1)).toBe("changed");
+  }, 30_000);
+
+  it("runs a setup that is only a workflow", async () => {
+    const { id } = await provider.createSandbox({});
+    const reasons: string[] = [];
+    const setup = {
+      provider,
+      sandboxId: id,
+      projectDir,
+      personalAllowed: false,
+      timeoutMinutes: 1,
+      workflow: {
+        name: "prepareReview",
+        rebuilt: true,
+        moved: false,
+        run: async ({ reason }: { reason: SetupWorkflowReason }) => {
+          reasons.push(reason);
+          return { status: "succeeded" as const };
+        },
+      },
+    };
+    expect(await runWorkspaceSetup(setup)).toEqual({ status: "succeeded" });
+    expect(await runWorkspaceSetup(setup)).toEqual({ status: "current" });
+    expect(reasons).toEqual(["rebuilt"]);
   }, 30_000);
 
   it("stops a part at its first failing command and does not record it", async () => {

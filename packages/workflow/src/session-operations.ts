@@ -132,6 +132,16 @@ type DeliverTarget =
     };
 type Action = Target & { idempotencyKey: string };
 type Call<Input, Output = unknown> = TransitionCall<Input, Output>;
+/** How a command `exec` ran ended (ADR 0324). */
+export interface SessionExecResult {
+  /** Null when it was stopped: its timeout, or its sandbox went away. */
+  exitCode: number | null;
+  /** The last 16 000 characters of each stream. */
+  stdout: string;
+  stderr: string;
+  durationMs: number;
+  timedOut: boolean;
+}
 /** Host transitions must be returned from a boundary, never awaited as IO. */
 export interface SessionHostOperations {
   inspect: Call<Target, SessionSnapshot>;
@@ -250,6 +260,29 @@ export interface SessionHostOperations {
   complete: Call<Action & { content: string }>;
   reopen: Call<Action>;
   stopWatcher: Call<Action & { watcherId: string }>;
+  /**
+   * Run a shell command in the chat's workspace (ADR 0324), from its
+   * checkout or `cwd` beneath it. `in: "session"` runs as the agent's
+   * commands do, with the chat's network, grants and secrets, starting its
+   * workspace if it has none. `in: "setup"` runs as the Environment's setup
+   * does, on the setup's network without grants or secrets, and only from
+   * the chat's setup workflow while its workspace is built. `$WORK_PROGRAM`
+   * names a read-only copy of this run's `.work/` folder at its deployed
+   * commit: copy trusted files from there. A command longer than the
+   * boundary's attempt parks the run until it ends; a retry with the same
+   * key answers with the same execution.
+   */
+  exec: Call<
+    Action & {
+      command: string;
+      in: "session" | "setup";
+      cwd?: string;
+      env?: Record<string, string>;
+      /** Default 600, at most 14 400 (four hours). */
+      timeoutSeconds?: number;
+    },
+    SessionExecResult
+  >;
   /** Stop this workflow's temporary activation, retaining its source and runs. */
   stop: Call<{ idempotencyKey: string }, { stopped: boolean }>;
 }

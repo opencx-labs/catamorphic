@@ -208,6 +208,7 @@ const SESSION_OPERATION_LABELS: Record<string, string> = {
   complete: "Mark a chat's work done",
   reopen: "Reopen a chat's work",
   stopWatcher: "Stop a watcher",
+  exec: "Run a command in a chat's workspace",
   stop: "Stop this automation",
 };
 

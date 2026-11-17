@@ -181,6 +181,7 @@ export interface AgentSessions {
   sandbox_id: string | null;
   secrets_delivered_ref: string | null;
   secrets_held_at: Timestamp | null;
+  setup_run: Json | null;
   source: Generated<string>;
   source_action_id: string | null;
   state_revision: Generated<Int8>;
@@ -191,7 +192,9 @@ export interface AgentSessions {
   updated_at: Generated<Timestamp>;
   work_status: Generated<string>;
   workspace: Json | null;
+  workspace_generation: Generated<number>;
   workspace_move: Json | null;
+  workspace_released_reason: string | null;
 }
 
 export interface AgentSessionViews {
@@ -899,6 +902,7 @@ export interface SessionActions {
   lease_expires_at: Timestamp | null;
   lease_owner: string | null;
   operation: string;
+  progress: Json | null;
   project_id: string;
   result: Json | null;
   session_id: string;
@@ -1256,6 +1260,7 @@ export interface WorkflowEnablementTriggers {
 
 export interface WorkflowPauses {
   created_at: Generated<Timestamp>;
+  host_call: Json | null;
   id: Generated<string>;
   resolved_at: Timestamp | null;
   resume_idempotency_key: string | null;
@@ -1267,6 +1272,7 @@ export interface WorkflowPauses {
   state_present: Generated<boolean>;
   status: Generated<string>;
   timeout_at: Timestamp | null;
+  wait_key: string | null;
   workflow_step_attempt_id: string;
 }
 
@@ -1306,6 +1312,8 @@ export interface WorkflowRuns {
   provenance: Json;
   result: Json | null;
   session_artifact_id: string | null;
+  setup_build: string | null;
+  setup_session_id: string | null;
   started_at: Timestamp | null;
   state_version: Generated<Int8>;
   status: Generated<string>;

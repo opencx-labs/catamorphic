@@ -230,6 +230,69 @@ bounded by that same budget; cancellation destroys checked-out clients and a
 late pool acquisition is released. Keep the connection provider's own request
 timeout finite too. Timeout or cancellation never proves a remote write failed.
 
+## Optional: a trusted procedure, and pushes during a review
+
+Two patterns the pack leaves out, for a team whose reviewer reads its own
+procedure files (skills, prompts, scripts) from the repository, or whose
+reviews are long enough that pushes land while one runs. Both use `exec`
+and setup workflows (`session-workflows`, ADR 0324).
+
+**The review procedure comes from the program, not the pull request.** Name
+a setup workflow beside the command, `"setup": { "command": "...",
+"workflow": "prepareReview" }`, and enable it for the project with
+`permissions: ["sessions:write"]`. Work runs it in every new review
+workspace, after each move to a new head and when the setup changes, and the
+turn waits for it. It returns one `exec` with `in: "session"`, from the
+checkout:
+
+```sh
+rm -rf .work/skills/review .work/agents/reviewer.md
+cp -R "$WORK_PROGRAM/skills/review" .work/skills/review
+cp "$WORK_PROGRAM/agents/reviewer.md" .work/agents/reviewer.md
+chmod -R u+w .work/skills/review .work/agents/reviewer.md
+```
+
+`$WORK_PROGRAM` is the run's `.work/` folder at its deployed commit, so the
+pull request cannot change how it is reviewed by editing these files in its
+diff. A second `exec` can write prepared facts the agent reads (the
+description, the discussion, CI results fetched by an earlier step) into
+files beside them.
+
+**A push lands while the review runs.** Rather than moving the checkout
+under the agent and its subagents, the push workflow compares the new head's
+lockfiles with the checkout's, with `exec` `in: "session"` (the chat's own
+network fetches through the gateway):
+
+```sh
+git fetch -q origin "$SHA" && git diff --quiet HEAD "$SHA" -- pnpm-lock.yaml '**/package.json'
+```
+
+- **Lockfiles unchanged (exit 0):** a second `exec` adds the head beside the
+  checkout and reuses what setup installed, then the workflow steers the chat
+  (`deliver` with `mode: "steer"`) with the path:
+
+  ```sh
+  git worktree add -q --detach ".versions/$SHA" "$SHA" && cd ".versions/$SHA" && pnpm install --offline --frozen-lockfile
+  ```
+
+  `--offline` resolves from the store setup filled, so nothing is fetched
+  from a registry the chat's network does not reach. Add `.versions/` to the
+  checkout's `.git/info/exclude` in the setup workflow, so it stays out of
+  the chat's saved work.
+- **Lockfiles changed (exit 1):** new dependencies cannot be installed while
+  a turn runs: a sandbox in use never gets the setup's network (ADR 0257).
+  Deliver `workspace: { ref: "refs/pull/<number>/head", update: "reset" }`
+  with `mode: "steer"` and content telling the agent the workspace moves to
+  the new head after its current turn, so it wraps up. The move runs setup
+  again on the new base before the next turn.
+
+What this protects, honestly: a pull request rewriting its own review
+procedure in its diff. It does not protect against a hostile pull request
+at run time. The review image runs as root with Docker for the change's
+services, so code the pull request runs can change any file in the sandbox,
+`$WORK_PROGRAM` and the copied procedure included. The review stays advice,
+and the poster validates every report outside the sandbox (ADR 0259).
+
 ## How reviews reach GitHub
 
 `postReviews` returns one durable host call with only the session and turn

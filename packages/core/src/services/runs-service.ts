@@ -315,6 +315,14 @@ export interface TriggerProductionRunInput {
   onConflict?: EnrollmentConflictPolicy;
 }
 
+/**
+ * Facts about a run only Work states, never taken from a caller's input:
+ * the chat and workspace build a setup run sets up (ADR 0324).
+ */
+interface RunInternalFacts {
+  setupFor?: { sessionId: string; build: string };
+}
+
 export interface TriggerPinnedRunInput extends TriggerProductionRunInput {
   commitSha: string;
   /** Remote branch/ref that makes the pinned commit fetchable. */
@@ -996,6 +1004,35 @@ export class RunsService {
       >;
     },
   ): Promise<Run> {
+    return this.triggerEnabled(args, {});
+  }
+
+  /**
+   * Start a chat's setup workflow through its project enablement (ADR
+   * 0324), stamped with the chat and the workspace build it sets up. Only
+   * Work's setup path calls this; the stamp is what lets the run's
+   * commands run in setup, so it never comes from a caller.
+   */
+  async triggerSetupRun(
+    args: TriggerProductionRunInput & {
+      enablementId: string;
+      setupFor: { sessionId: string; build: string };
+    },
+  ): Promise<Run> {
+    const { setupFor, ...run } = args;
+    return this.triggerEnabled(run, { setupFor });
+  }
+
+  private async triggerEnabled(
+    args: TriggerProductionRunInput & {
+      enablementId: string;
+      expected?: Pick<
+        WorkflowEnablement,
+        "commitSha" | "consentDigest" | "revision"
+      >;
+    },
+    internal: RunInternalFacts,
+  ): Promise<Run> {
     const service = this.deps.workflowEnablements?.();
     if (!service) throw new Error("Workflow enablements are not configured");
     const validated = await service.revalidate({
@@ -1018,21 +1055,24 @@ export class RunsService {
         "Workflow enablement does not match the requested workflow",
       );
     }
-    return this.trigger({
-      ...args,
-      identity: validated.ownerIdentity,
-      environment: enablement.environment,
-      commitSha: enablement.commitSha,
-      remoteBranch: enablement.remoteBranch,
-      connectionAuthorizationSnapshot: enablement.connections,
-      workflowEnablementId: enablement.id,
-      enablementSnapshot: {
+    return this.trigger(
+      {
+        ...args,
+        identity: validated.ownerIdentity,
+        environment: enablement.environment,
         commitSha: enablement.commitSha,
-        consentDigest: enablement.consentDigest,
-        revision: enablement.revision,
+        remoteBranch: enablement.remoteBranch,
+        connectionAuthorizationSnapshot: enablement.connections,
+        workflowEnablementId: enablement.id,
+        enablementSnapshot: {
+          commitSha: enablement.commitSha,
+          consentDigest: enablement.consentDigest,
+          revision: enablement.revision,
+        },
+        unattended: true,
       },
-      unattended: true,
-    });
+      internal,
+    );
   }
 
   /**
@@ -1787,24 +1827,27 @@ export class RunsService {
     return { provider, runtime };
   }
 
-  private async trigger(args: {
-    identity: Identity;
-    projectId: string;
-    workflowName: string;
-    environment?: string;
-    input?: Json;
-    correlationKey?: string;
-    onConflict?: EnrollmentConflictPolicy;
-    unattended?: boolean;
-    connectionAuthorizationSnapshot?: readonly ResolvedConnectionBinding[];
-    workflowEnablementId?: string;
-    enablementSnapshot?: Pick<
-      WorkflowEnablement,
-      "commitSha" | "consentDigest" | "revision"
-    >;
-    commitSha?: string;
-    remoteBranch?: string;
-  }): Promise<Run> {
+  private async trigger(
+    args: {
+      identity: Identity;
+      projectId: string;
+      workflowName: string;
+      environment?: string;
+      input?: Json;
+      correlationKey?: string;
+      onConflict?: EnrollmentConflictPolicy;
+      unattended?: boolean;
+      connectionAuthorizationSnapshot?: readonly ResolvedConnectionBinding[];
+      workflowEnablementId?: string;
+      enablementSnapshot?: Pick<
+        WorkflowEnablement,
+        "commitSha" | "consentDigest" | "revision"
+      >;
+      commitSha?: string;
+      remoteBranch?: string;
+    },
+    internal: RunInternalFacts = {},
+  ): Promise<Run> {
     return withSpan(
       {
         tracer,
@@ -1851,6 +1894,7 @@ export class RunsService {
                 remoteBranch: source.remoteBranch,
               }
             : args,
+          internal,
         );
         setSpanCorrelation({
           span,
@@ -1862,24 +1906,27 @@ export class RunsService {
     );
   }
 
-  private async triggerInner(args: {
-    identity: Identity;
-    projectId: string;
-    workflowName: string;
-    environment?: string;
-    input?: Json;
-    correlationKey?: string;
-    onConflict?: EnrollmentConflictPolicy;
-    unattended?: boolean;
-    connectionAuthorizationSnapshot?: readonly ResolvedConnectionBinding[];
-    workflowEnablementId?: string;
-    enablementSnapshot?: Pick<
-      WorkflowEnablement,
-      "commitSha" | "consentDigest" | "revision"
-    >;
-    commitSha?: string;
-    remoteBranch?: string;
-  }): Promise<Run> {
+  private async triggerInner(
+    args: {
+      identity: Identity;
+      projectId: string;
+      workflowName: string;
+      environment?: string;
+      input?: Json;
+      correlationKey?: string;
+      onConflict?: EnrollmentConflictPolicy;
+      unattended?: boolean;
+      connectionAuthorizationSnapshot?: readonly ResolvedConnectionBinding[];
+      workflowEnablementId?: string;
+      enablementSnapshot?: Pick<
+        WorkflowEnablement,
+        "commitSha" | "consentDigest" | "revision"
+      >;
+      commitSha?: string;
+      remoteBranch?: string;
+    },
+    internal: RunInternalFacts = {},
+  ): Promise<Run> {
     await this.requireProject(args.identity, args.projectId);
     const correlationKey = args.correlationKey
       ? requireCorrelationKey(args.correlationKey)
@@ -2116,6 +2163,8 @@ export class RunsService {
               deployment_artifact_id: artifact.id,
               session_artifact_id: retained?.id ?? null,
               workflow_enablement_id: args.workflowEnablementId ?? null,
+              setup_session_id: internal.setupFor?.sessionId ?? null,
+              setup_build: internal.setupFor?.build ?? null,
               external_user_id: args.identity.externalUserId,
               // Who triggered the run, as verified by the host (ADR 0055):
               // the caller's scope, or null for the root identity.
@@ -2651,7 +2700,8 @@ function mapRun(args: {
     args.row.phase === "source" ||
     args.row.phase === "process" ||
     args.row.phase === "sink";
-  const openPause = args.pause?.status === "open";
+  // A host-call wait (ADR 0324) takes no input: its call's result ends it.
+  const openPause = args.pause?.status === "open" && !args.pause.host_call;
   return {
     id: args.row.id,
     projectId: args.row.project_id,

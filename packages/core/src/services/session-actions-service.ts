@@ -30,7 +30,7 @@ const target = {
   expectedStateRevision: z.number().int().nonnegative().optional(),
 };
 const mutation = { ...target, idempotencyKey: z.string().min(1).max(300) };
-function namesOneChat(value: object, context: z.RefinementCtx): void {
+export function namesOneChat(value: object, context: z.RefinementCtx): void {
   const given = (field: string) =>
     field in value && Reflect.get(value, field) !== undefined;
   if (Number(given("sessionId")) + Number(given("key")) !== 1)
@@ -662,7 +662,7 @@ function actionLabel(operation: SessionActionOperation): string {
  * The key an action is recorded under: who acted and the caller's key. The
  * only way to build it, for the record and for every lookup of it.
  */
-function actionKey(input: {
+export function actionKey(input: {
   author: SessionMessageAuthor;
   idempotencyKey: string;
 }): string {
@@ -687,10 +687,10 @@ function actorIdentity(author: SessionMessageAuthor): SessionMessageAuthor {
  * A value as jsonb stores it, so an action compares equal to its own stored
  * copy: half of a surrogate pair and U+0000 are U+FFFD there.
  */
-function json(value: unknown): Json {
+export function json(value: unknown): Json {
   return JSON.parse(jsonbText(value));
 }
-function canonical(value: Json): string {
+export function canonical(value: Json): string {
   if (Array.isArray(value)) return JSON.stringify(value.map(canonical));
   if (value && typeof value === "object")
     return JSON.stringify(

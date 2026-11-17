@@ -275,6 +275,7 @@ export type {
   SecretStatusEntry,
 } from "./secret-operations.js";
 export type {
+  SessionExecResult,
   SessionHistoryMessage,
   SessionHostOperations,
   SessionResult,

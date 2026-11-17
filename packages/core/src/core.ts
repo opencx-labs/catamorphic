@@ -83,6 +83,7 @@ import { ExecutionEnvironmentsService } from "./services/execution-environments-
 import { ExecutionJobsService } from "./services/execution-jobs-service.js";
 import { ExecutionWorkerService } from "./services/execution-worker-service.js";
 import { GitGatewayService } from "./services/git-gateway.js";
+import { HostCallFollowers } from "./services/host-call-waits.js";
 import { executeHostCall } from "./services/host-calls.js";
 import {
   dbHttpGatewayStore,
@@ -134,11 +135,16 @@ import {
   SessionActionsService,
 } from "./services/session-actions-service.js";
 import { SessionArtifactsService } from "./services/session-artifacts-service.js";
+import {
+  SESSION_EXEC_WAIT_PREFIX,
+  SessionExecService,
+} from "./services/session-exec.js";
 import type { SessionMailboxesService } from "./services/session-mailboxes-service.js";
 import { SessionPreviewsService } from "./services/session-previews-service.js";
 import { SessionSyncService } from "./services/session-sync-service.js";
 import { SessionTerminalsService } from "./services/session-terminals-service.js";
 import { SessionWorkspaces } from "./services/session-workspaces.js";
+import { runSetupWorkflow } from "./services/setup-workflow-runner.js";
 import { SkillsService } from "./services/skills-service.js";
 import { TenantPoliciesService } from "./services/tenant-policies-service.js";
 import type {
@@ -500,6 +506,8 @@ export class CatamorphicCore {
   readonly sessionActions?: SessionActionsService;
   /** Terminals people open in a chat's workspace (ADR 0209). */
   readonly sessionTerminals?: SessionTerminalsService;
+  /** Workflows' commands in chats' workspaces (ADR 0324). */
+  readonly sessionExec?: SessionExecService;
   /** Previews of servers running in a chat's workspace (ADR 0209). */
   readonly sessionPreviews?: SessionPreviewsService;
   readonly apps?: AppsService;
@@ -632,6 +640,24 @@ export class CatamorphicCore {
               sessionId: watcher.sessionId,
               watcherId: watcher.id,
             },
+          });
+        },
+        // A command in a chat's workspace (ADR 0324); one that outlives
+        // the attempt parks the step until it ends.
+        exec: async (context, args) => {
+          if (!this.sessionExec)
+            throw new Error("Coding agents are not configured");
+          const origin = await this.workflowSessionOrigin(context);
+          requireAttemptTime(context);
+          return this.sessionExec.execute({
+            caller: context.caller,
+            projectId: context.projectId,
+            runId: context.runId,
+            author: origin.author,
+            causation: origin.causation,
+            signal: context.signal,
+            deadlineAt: context.deadlineAt,
+            args,
           });
         },
         deliver: async (context, args) => {
@@ -1138,9 +1164,22 @@ export class CatamorphicCore {
       tenantPolicies: this.tenantPolicies,
       workflowEnablements: () => this.workflowEnablements,
     });
+    const hostCallFollowers = new HostCallFollowers();
+    hostCallFollowers.register({
+      prefix: SESSION_EXEC_WAIT_PREFIX,
+      follower: (args) => {
+        if (!this.sessionExec)
+          return Promise.resolve({
+            status: "failed" as const,
+            error: "Coding agents are not configured",
+          });
+        return this.sessionExec.follow(args);
+      },
+    });
     new BoundaryExecutionHandler(this.db, {
       coordinator,
       worker: executionWorker,
+      hostCallFollowers,
       rateReservations,
       tenantPolicies: this.tenantPolicies,
       invokeRuntime: (args) =>
@@ -1410,6 +1449,21 @@ export class CatamorphicCore {
       this.sessionTerminals = new SessionTerminalsService({
         db: this.db,
         sessions: this.agentSessions,
+      });
+      this.sessionExec = new SessionExecService({
+        db: this.db,
+        sessions: this.agentSessions,
+        projectManager: this.projectManager,
+      });
+      // Setup workflows run through their project enablement (ADR 0324).
+      this.agentSessions.setSetupWorkflowRunner({
+        run: (input) =>
+          runSetupWorkflow({
+            db: this.db,
+            runs: this.runs,
+            coordinator,
+            ...input,
+          }),
       });
       this.sessionPreviews = new SessionPreviewsService({
         db: this.db,

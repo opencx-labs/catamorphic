@@ -123,18 +123,31 @@ const NetworkSchema = z.discriminatedUnion("egress", [
   z.strictObject({ egress: z.literal("allowlist"), allow: EgressAllowSchema }),
 ]);
 
-/** An Environment's workspace setup (ADRs 0208, 0257). */
-const SetupSchema = z.strictObject({
-  command: z.string().min(1).max(16_384),
-  timeoutMinutes: z.number().int().positive().max(240).optional(),
-  /** The only hosts the setup reaches, while it runs (ADR 0257). */
-  network: z.strictObject({ allow: EgressAllowSchema }).optional(),
-  /**
-   * The Environment's secrets a setup with its own network runs with (ADR
-   * 0257); it runs with no others.
-   */
-  secrets: z.array(z.string()).max(200).optional(),
-});
+/** An Environment's workspace setup (ADRs 0208, 0257, 0324). */
+const SetupSchema = z
+  .strictObject({
+    command: z.string().min(1).max(16_384).optional(),
+    /**
+     * A project workflow, by its exported name, run after `command` at the
+     * same points (ADR 0324), through its project enablement.
+     */
+    workflow: z
+      .string()
+      .max(200)
+      .regex(/^[A-Za-z_$][\w$]*$/, "workflow is a workflow's exported name")
+      .optional(),
+    timeoutMinutes: z.number().int().positive().max(240).optional(),
+    /** The only hosts the setup reaches, while it runs (ADR 0257). */
+    network: z.strictObject({ allow: EgressAllowSchema }).optional(),
+    /**
+     * The Environment's secrets a setup with its own network runs with (ADR
+     * 0257); it runs with no others.
+     */
+    secrets: z.array(z.string()).max(200).optional(),
+  })
+  .refine((setup) => setup.command !== undefined || setup.workflow, {
+    message: "setup names a command, a workflow, or both",
+  });
 
 /**
  * A secret name an Environment may list or `project.json` may declare (ADR
@@ -358,12 +371,15 @@ export interface ProjectEnvironmentDefinition {
 /**
  * An Environment's workspace setup (ADR 0208): a shell command run in the
  * project folder of every new workspace, again when it changes or the
- * workspace's base moves, within `timeoutMinutes`. With `network` (ADR
+ * workspace's base moves, within `timeoutMinutes`, and after it a project
+ * workflow (ADR 0324). With `network` (ADR
  * 0257) it reaches only those hosts while it runs, in a sandbox holding
  * the base checkout alone, with only the `secrets` it names.
  */
 export interface EnvironmentSetup {
-  command: string;
+  command?: string;
+  /** A project workflow run after `command` (ADR 0324). */
+  workflow?: string;
   timeoutMinutes?: number;
   network?: { allow: readonly string[] };
   /** The Environment's secrets a setup with its own network runs with. */
