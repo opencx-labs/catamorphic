@@ -193,6 +193,17 @@ inline until the workflow's first durable wait, then detaches with an honest
 workspace (`syncTypes`). A trigger firing starts ordinary Runs — no new run
 family. See `docs/decisions/0039-custom-trigger-kinds.md`.
 
+A kind may name each delivery's identity with `deliveryKey: (payload) => id`
+(a webhook's delivery id, an event id): a workflow starts at most one run for
+it, whatever that run's status (ADR 0325). The subject a run is about is the
+workflow's own choice: `concurrency: { key: "<dot path into the input>",
+onConflict }` in `defineWorkflow`, or an explicit `correlationKey` from a host
+caller, which wins. `onConflict` adds `queue` to `ignore`, `restart` and
+`error`: the run is recorded `queued`, holds no Allocation or active-run slot,
+and starts in arrival order when the runs ahead of it settle; every worker's
+maintenance sweep starts heads, so hosts run nothing extra. A key holds at
+most 100 queued runs (`RunQueueFullError`, 409).
+
 Projects compose their own kinds from the host's (ADR 0171): an export of
 `defineTrigger({ name, from: trigger("webhook", { ... }), where })` in
 `.work/triggers/` is a kind workflows bind by name. Every binding may carry
