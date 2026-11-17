@@ -126,6 +126,10 @@ describe("machines-ec2 pack (ADR 0327)", () => {
       "ec2:DescribeInstances",
       "ssm:GetParameters",
     ]);
+    // Spot launches create a request RunInstances must be allowed.
+    expect(policy.Statement[1].Resource).toContain(
+      "arn:aws:ec2:eu-west-1:111122223333:spot-instances-request/*",
+    );
     // Installing the pack adds the client it typechecks against here.
     expect(PACK.manifest.dependencies).toEqual([
       `@aws-sdk/client-ec2@${packageJson.devDependencies["@aws-sdk/client-ec2"]}`,
@@ -312,79 +316,112 @@ describe("machines-ec2 pack (ADR 0327)", () => {
     });
   });
 
-  it("terminates by id and by name tag, and is done only once nothing is alive", async () => {
-    const destroy = (ref: string | null) =>
-      JSON.stringify({
-        name: "review-1a2b3c-1",
-        class: "review",
-        rule: "review",
-        ref,
-        options: OPTIONS,
-      });
+  const ALIVE = ["pending", "running", "stopping", "stopped", "shutting-down"];
+  /** A destroy request; its create was asked for `minutesAgo` minutes ago. */
+  const destroy = (input: {
+    ref: string | null;
+    key?: string | null;
+    minutesAgo?: number;
+    options?: unknown;
+  }) =>
+    JSON.stringify({
+      name: "review-1a2b3c-1",
+      class: "review",
+      rule: "review",
+      ref: input.ref,
+      idempotencyKey: input.key === undefined ? KEY : input.key,
+      requestedAt: new Date(
+        Date.now() - (input.minutesAgo ?? 60) * 60_000,
+      ).toISOString(),
+      options: input.options ?? OPTIONS,
+    });
+
+  it("terminates by id and by launch token, and is done only once nothing is alive", async () => {
     const { result, calls } = await run(`
       // Running: terminated, not done yet.
       answer = ({ command, input }) =>
         command === "DescribeInstances"
           ? { Reservations: [{ Instances: input.InstanceIds ? [${JSON.stringify(instance("i-0aaa", "running"))}] : [${JSON.stringify(instance("i-0aaa", "running"))}, ${JSON.stringify(instance("i-0stray", "pending"))}] }] }
           : {};
-      const running = await destroyMachine.steps[0].run({ input: ${destroy("i-0aaa")} });
+      const running = await destroyMachine.steps[0].run({ input: ${destroy({ ref: "i-0aaa" })} });
       // Shutting down: nothing more to terminate, still not done.
       answer = ({ command }) =>
         command === "DescribeInstances" ? { Reservations: [{ Instances: [${JSON.stringify(instance("i-0aaa", "shutting-down"))}] }] } : {};
-      const stopping = await destroyMachine.steps[0].run({ input: ${destroy("i-0aaa")} });
+      const stopping = await destroyMachine.steps[0].run({ input: ${destroy({ ref: "i-0aaa" })} });
       // Terminated, or gone long enough to be unknown: done.
       answer = ({ command, input }) => {
         if (command !== "DescribeInstances") return {};
         if (input.InstanceIds) throw new Ec2Error("InvalidInstanceID.NotFound");
         return { Reservations: [{ Instances: [${JSON.stringify(instance("i-0aaa", "terminated"))}] }] };
       };
-      const gone = await destroyMachine.steps[0].run({ input: ${destroy("i-0aaa")} });
-      // No ref: a launch whose answer was lost is found by its tags.
-      answer = () => ({ Reservations: [] });
-      const nothing = await destroyMachine.steps[0].run({ input: ${destroy(null)} });
-      return { running, stopping, gone, nothing };
+      const gone = await destroyMachine.steps[0].run({ input: ${destroy({ ref: "i-0aaa" })} });
+      return { running, stopping, gone };
     `);
     expect(result).toEqual({
       running: { done: false },
       stopping: { done: false },
       gone: { done: true },
-      nothing: { done: true },
     });
-    const terminations = calls.filter(
-      (call) => call.command === "TerminateInstances",
-    );
-    expect(terminations).toEqual([
+    expect(
+      calls.filter((call) => call.command === "TerminateInstances"),
+    ).toEqual([
       {
         command: "TerminateInstances",
         region: "eu-west-1",
         input: { InstanceIds: ["i-0aaa", "i-0stray"] },
       },
     ]);
+    // The launch token finds what the create made, whatever its tags say.
     expect(calls[1]).toEqual({
       command: "DescribeInstances",
       region: "eu-west-1",
       input: {
         Filters: [
-          { Name: "tag:work-machine", Values: ["review-1a2b3c-1"] },
-          { Name: "tag:work-class", Values: ["review"] },
-          { Name: "tag:work-server", Values: ["prod"] },
-          {
-            Name: "instance-state-name",
-            Values: [
-              "pending",
-              "running",
-              "stopping",
-              "stopped",
-              "shutting-down",
-            ],
-          },
+          { Name: "client-token", Values: [KEY] },
+          { Name: "instance-state-name", Values: ALIVE },
         ],
       },
     });
-    // Without a ref, only the tags are searched.
-    expect(
-      calls.filter((call) => call.command === "DescribeInstances").at(-1)
-        ?.input,
-    ).toMatchObject({ Filters: expect.any(Array) });
+  });
+
+  it("finds a machine with no launch key by its name and the server's tags only", async () => {
+    const { result, calls } = await run(`
+      answer = () => ({ Reservations: [] });
+      return destroyMachine.steps[0].run({ input: ${destroy({ ref: null, key: null })} });
+    `);
+    expect(result).toEqual({ done: true });
+    expect(calls).toEqual([
+      {
+        command: "DescribeInstances",
+        region: "eu-west-1",
+        input: {
+          Filters: [
+            { Name: "tag:work-machine", Values: ["review-1a2b3c-1"] },
+            { Name: "tag:work-server", Values: ["prod"] },
+            { Name: "instance-state-name", Values: ALIVE },
+          ],
+        },
+      },
+    ]);
+  });
+
+  it("is not done while a just-launched instance may not be listed yet", async () => {
+    const { result } = await run(`
+      // EC2 does not know the new instance by id, and filters miss it.
+      answer = ({ command, input }) => {
+        if (command === "DescribeInstances" && input.InstanceIds) throw new Ec2Error("InvalidInstanceID.NotFound");
+        return { Reservations: [] };
+      };
+      return {
+        justLaunched: await destroyMachine.steps[0].run({ input: ${destroy({ ref: "i-0new", minutesAgo: 1 })} }),
+        noRefYet: await destroyMachine.steps[0].run({ input: ${destroy({ ref: null, minutesAgo: 1 })} }),
+        later: await destroyMachine.steps[0].run({ input: ${destroy({ ref: "i-0new", minutesAgo: 11 })} }),
+      };
+    `);
+    expect(result).toEqual({
+      justLaunched: { done: false },
+      noRefYet: { done: false },
+      later: { done: true },
+    });
   });
 });

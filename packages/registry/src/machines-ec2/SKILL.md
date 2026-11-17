@@ -45,11 +45,13 @@ and enroll, and if it does not within the rule's `enrollMinutes` Work
 destroys it by name.
 
 `destroyMachine` binds `machine.destroy`. It looks the instance up by its
-id and by its `work-machine` and `work-class` tags (and the class's
-`tags`), so a launch whose answer was lost is found too, terminates what
-is still alive, and answers `{ done: true }` only once nothing is left.
-Until then it answers `{ done: false }` and Work runs it again on its next
-pass.
+id and by the ClientToken it was launched with (Work passes the
+enrollment's `idempotencyKey`), so a launch whose answer was lost is found
+too, even after the class's tags or name changed, terminates what is
+still alive, and answers `{ done: true }` only once nothing is left. EC2
+can take a while to list a new instance, so for ten minutes after the
+create was asked for (`requestedAt`) nothing found still answers
+`{ done: false }`. Until done, Work runs it again on later passes.
 
 The class's `options`, as the workflows read them:
 
@@ -62,9 +64,9 @@ The class's `options`, as the workflows read them:
 | `securityGroupIds` | Optional; outbound HTTPS is all a worker needs, nothing inbound |
 | `rootVolumeGb` | Optional; gp3, encrypted, deleted with the instance |
 | `rootDeviceName` | Optional; `/dev/sda1` (Ubuntu) by default |
-| `market` | `on-demand` (default) or `spot`. A Spot interruption ends the machine and every review on it; Work replaces the machine, not the review |
+| `market` | `on-demand` (default) or `spot` (the policy's `spot-instances-request` resource allows it). A Spot interruption ends the machine and every review on it; Work replaces the machine, not the review |
 | `instanceProfile` | Optional instance profile name (needs `iam:PassRole`) |
-| `tags` | Optional extra tags; destroy requires them too, so use one (`work-server: prod`) when several servers share an account |
+| `tags` | Optional extra tags; a machine with no known launch key is found by its name and these, so use one (`work-server: prod`) when several servers share an account |
 
 AWS credentials are the project secrets `AWS_ACCESS_KEY_ID` and
 `AWS_SECRET_ACCESS_KEY`, read in the steps only.
@@ -104,7 +106,8 @@ by tag in IAM (EC2 evaluates it against every resource); it reads only.
         "arn:aws:ec2:eu-west-1::image/*",
         "arn:aws:ec2:eu-west-1:111122223333:subnet/subnet-0123456789abcdef0",
         "arn:aws:ec2:eu-west-1:111122223333:security-group/sg-0123456789abcdef0",
-        "arn:aws:ec2:eu-west-1:111122223333:network-interface/*"
+        "arn:aws:ec2:eu-west-1:111122223333:network-interface/*",
+        "arn:aws:ec2:eu-west-1:111122223333:spot-instances-request/*"
       ]
     },
     {

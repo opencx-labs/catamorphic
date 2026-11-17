@@ -58,6 +58,12 @@ const OWN_TAGS = [MACHINE_TAG, RULE_TAG, CLASS_TAG, "Name"];
 const REFUSALS =
   /^(Invalid|Unauthorized|AuthFailure|Unsupported|MissingParameter|InsufficientInstanceCapacity|InsufficientCapacity|InsufficientFreeAddressesInSubnet|InstanceLimitExceeded|VcpuLimitExceeded|MaxSpotInstanceCountExceeded|SpotMaxPriceTooLow|OptInRequired|PendingVerification|Blocked)/;
 
+/**
+ * How long after a create was asked for a missing instance may still be
+ * one EC2 has not listed yet.
+ */
+const LISTING_GRACE_MS = 10 * 60_000;
+
 /** States an instance leaves only by being terminated. */
 const ALIVE: InstanceStateName[] = [
   "pending",
@@ -306,15 +312,25 @@ async function terminateInstances({
   };
   if (request.ref?.startsWith("i-"))
     await collect({ InstanceIds: [request.ref] });
-  // A create that answered uncertainly may have launched one with no ref.
+  // A create that answered uncertainly may have launched one with no ref:
+  // its ClientToken finds it whatever its tags or class say now. Without
+  // a key, the name tag and the class's own tags (the server's scope) do.
   await collect({
     Filters: [
-      { Name: `tag:${MACHINE_TAG}`, Values: [request.name] },
-      { Name: `tag:${CLASS_TAG}`, Values: [request.class] },
-      ...Object.entries(options.tags ?? {}).map(([key, value]) => ({
-        Name: `tag:${key}`,
-        Values: [value],
-      })),
+      ...(request.idempotencyKey
+        ? [
+            {
+              Name: "client-token",
+              Values: [request.idempotencyKey.slice(0, 64)],
+            },
+          ]
+        : [
+            { Name: `tag:${MACHINE_TAG}`, Values: [request.name] },
+            ...Object.entries(options.tags ?? {}).map(([key, value]) => ({
+              Name: `tag:${key}`,
+              Values: [value],
+            })),
+          ]),
       { Name: "instance-state-name", Values: ALIVE },
     ],
   });
@@ -322,7 +338,14 @@ async function terminateInstances({
     (instance) =>
       instance.State?.Name !== undefined && ALIVE.includes(instance.State.Name),
   );
-  if (alive.length === 0) return { done: true };
+  if (alive.length === 0) {
+    // EC2 lists a new instance late: just after RunInstances it can be
+    // unknown by id and missing from filters. Gone only after a while.
+    const requested = request.requestedAt
+      ? Date.parse(request.requestedAt)
+      : Number.NaN;
+    return { done: !(Date.now() - requested < LISTING_GRACE_MS) };
+  }
   const terminate = alive
     .filter((instance) => instance.State?.Name !== "shutting-down")
     .flatMap((instance) => (instance.InstanceId ? [instance.InstanceId] : []));
