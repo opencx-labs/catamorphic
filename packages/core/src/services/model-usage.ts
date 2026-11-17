@@ -72,6 +72,9 @@ export async function sessionUsageTotals(args: {
             sql<string>`coalesce(sum(reasoning_tokens), 0)`.as("reasoning"),
             sql<string>`count(cost_usd)`.as("priced"),
             sql<string | null>`sum(cost_usd)`.as("cost"),
+            // The whole set's cost, summed exactly in numeric: dollars
+            // become a JavaScript number only at the edge (ADR 0329).
+            sql<string | null>`sum(sum(cost_usd)) OVER ()`.as("totalCost"),
           ])
           .execute();
   const models = rows
@@ -89,7 +92,7 @@ export async function sessionUsageTotals(args: {
     .filter((model) => model.calls > 0);
   const sum = (field: keyof Omit<ModelUsageTotals, "costUsd">) =>
     models.reduce((total, model) => total + model[field], 0);
-  const priced = models.filter((model) => model.costUsd !== null);
+  const totalCost = rows[0]?.totalCost ?? null;
   return {
     sessionId: args.sessionId,
     family: args.family,
@@ -100,9 +103,7 @@ export async function sessionUsageTotals(args: {
     cacheCreationTokens: sum("cacheCreationTokens"),
     outputTokens: sum("outputTokens"),
     reasoningTokens: sum("reasoningTokens"),
-    costUsd: priced.length
-      ? priced.reduce((total, model) => total + (model.costUsd ?? 0), 0)
-      : null,
+    costUsd: totalCost === null ? null : Number(totalCost),
     unpricedCalls: sum("unpricedCalls"),
     openCalls: rows.reduce((total, row) => total + Number(row.open), 0),
     models,

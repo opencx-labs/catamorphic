@@ -616,7 +616,7 @@ describeIf("the model gateway's store (ADR 0180)", () => {
       unpricedCalls: 1,
       openCalls: 1,
     });
-    expect(family.costUsd).toBeCloseTo(0.76);
+    expect(family.costUsd).toBe(0.76);
     expect(family.models).toEqual([
       expect.objectContaining({
         model: "haiku",
@@ -642,6 +642,28 @@ describeIf("the model gateway's store (ADR 0180)", () => {
       family: false,
     });
     expect(alone).toMatchObject({ calls: 2, costUsd: 0.25, unpricedCalls: 1 });
+    // Costs whose floating-point sum is inexact (0.1 + 0.2) total exactly.
+    const exact = crypto.randomUUID();
+    await db
+      .insertInto("agent_sessions")
+      .values({
+        id: exact,
+        project_id: projectId,
+        external_user_id: "member-1",
+      })
+      .execute();
+    await call({ sessionId: exact, model: "a", output: 1, costUsd: 0.1 });
+    await call({ sessionId: exact, model: "b", output: 1, costUsd: 0.2 });
+    const decimal = await sessionUsageTotals({
+      db,
+      projectId,
+      sessionId: exact,
+      sessionIds: [exact],
+      family: false,
+    });
+    expect(0.1 + 0.2).not.toBe(0.3);
+    expect(decimal.costUsd).toBe(0.3);
+    expect(decimal.models.map((model) => model.costUsd)).toEqual([0.1, 0.2]);
     const none = await sessionUsageTotals({
       db,
       projectId,
