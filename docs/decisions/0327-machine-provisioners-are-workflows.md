@@ -54,7 +54,10 @@ awaited (ADR 0205):
 | failed, canceled, other output, or no run after a start that failed uncertainly | an uncertain create: the code stays, the failure shows in the rule's status, and a machine that never enrolls expires and is destroyed by name |
 
 A create is never started twice for one enrollment: the key is checked
-before every start, under the reconciler's claim.
+before every start, under the reconciler's claim, and `machine.create`'s
+delivery key is the same `machine-create:<idempotencyKey>`, so a start
+that repeats anyway answers with the first run, whatever its status
+(ADR 0325).
 
 **Destroy is asked until done.** A pass starts `destroy` under
 `machine-destroy:<name>:<ref>` unless a run with that key is active; a run

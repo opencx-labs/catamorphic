@@ -89,7 +89,9 @@ export const machineCreate = defineTriggerKind({
     "Create one worker machine for a workflow machine class. input.enrollment.cloudInit is user data that installs the worker; input.enrollment.idempotencyKey is the platform's idempotency token (Work never asks twice for one key, but a retried step may). input.options is the class's options. Return { ref } with the platform's id, or { refused: reason } when the platform created nothing.",
   payload: createPayload,
   output: createOutput,
-  correlationKey: (payload) =>
+  // One create per enrollment, for all time: a create started again
+  // answers with its first run, whatever its status (ADR 0325).
+  deliveryKey: (payload) =>
     `machine-create:${payload.enrollment.idempotencyKey}`,
 });
 
@@ -158,7 +160,7 @@ export const MACHINE_EVENT_TRIGGER_KINDS = MACHINE_EVENT_KINDS.map((kind) =>
       payload: machineEvent,
     }),
     config,
-    correlationKey: (event) => event.id,
+    deliveryKey: (event) => event.id,
     matches: ({ config, payload: event }) =>
       !config.classes || config.classes.includes(event.payload.class),
   }),

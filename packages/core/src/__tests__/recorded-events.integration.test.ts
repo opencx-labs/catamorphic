@@ -73,7 +73,7 @@ const webhookKind: TriggerKindRuntime = {
     webhookConfig.safeParse(config).data?.name ===
     z.object({ payload: z.object({ name: z.string() }) }).safeParse(payload)
       .data?.payload.name,
-  correlationKey: (payload) =>
+  deliveryKey: (payload) =>
     z.object({ id: z.string() }).safeParse(payload).data?.id,
 };
 
