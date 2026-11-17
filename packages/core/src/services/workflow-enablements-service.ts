@@ -37,6 +37,7 @@ import {
   TriggerKindNotRegisteredError,
   TriggerModeNotAllowedError,
 } from "./triggers-service.js";
+import { EnvironmentCapacityError } from "./worker-capacity.js";
 import {
   workflowEnablementAuthorityDigest,
   workflowEnablementConsentDigest,
@@ -1009,15 +1010,23 @@ export class WorkflowEnablementsService {
         requirements: { workload: "workflow" },
       });
     } catch (error) {
-      // A broken project policy stops every automation; it is not the
-      // owner losing access.
-      return this.failRevalidation(
-        row,
-        input.identity,
-        error instanceof EnvironmentPolicyInvalidError
-          ? "environment_policy_invalid"
-          : "environment_denied",
-      );
+      // A full or offline machine says nothing about authority: the run's
+      // own admission waits or fails retryably (ADR 0325).
+      if (
+        !(
+          error instanceof EnvironmentCapacityError ||
+          error instanceof EnvironmentBindingUnavailableError
+        )
+      )
+        // A broken project policy stops every automation; it is not the
+        // owner losing access.
+        return this.failRevalidation(
+          row,
+          input.identity,
+          error instanceof EnvironmentPolicyInvalidError
+            ? "environment_policy_invalid"
+            : "environment_denied",
+        );
     }
     if (connections.length > 0 && !this.deps.connectionAdmission) {
       return this.failRevalidation(

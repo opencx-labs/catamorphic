@@ -35,6 +35,5 @@ export const schedule = defineTriggerKind({
     scheduledFor: z.string().datetime(),
     firedAt: z.string().datetime(),
   }),
-  correlationKey: (payload) =>
-    `${payload.activationId}:${payload.scheduledFor}`,
+  deliveryKey: (payload) => `${payload.activationId}:${payload.scheduledFor}`,
 });

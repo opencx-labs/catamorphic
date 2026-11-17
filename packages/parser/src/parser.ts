@@ -211,6 +211,9 @@ const SESSION_OPERATION_LABELS: Record<string, string> = {
   stopWatcher: "Stop a watcher",
   exec: "Run a command in a chat's workspace",
   stop: "Stop this automation",
+  find: "Find a chat",
+  close: "Close a chat",
+  setMetadata: "Set chat metadata",
 };
 
 /**
@@ -2733,6 +2736,7 @@ function buildDefinedWorkflowGraph(
     inputSchema,
     outputSchema,
     triggers: triggerBindings,
+    ...concurrencyOf(definition.config),
     connections: parseWorkflowConnections(definition.config),
     permissions: parseWorkflowPermissions(definition.config),
     canSuspend,
@@ -2808,6 +2812,60 @@ function parseWorkflowConnections(
       ...(typeof optional === "boolean" ? { optional } : {}),
     };
   });
+}
+
+/** A dot path into the run input: identifiers joined by dots. */
+const CONCURRENCY_KEY_PATH = /^[A-Za-z_$][\w$-]*(\.[A-Za-z_$][\w$-]*)*$/;
+const CONFLICT_POLICIES = ["queue", "ignore", "restart", "error"] as const;
+
+/** `concurrency` as constant data (ADR 0325), or nothing when undeclared. */
+function concurrencyOf(config: ObjectLiteralExpression): {
+  concurrency?: import("./types.js").WorkflowConcurrency;
+} {
+  const property = config.getProperty("concurrency");
+  if (!property) return {};
+  if (!Node.isPropertyAssignment(property)) {
+    throw new Error(
+      "Workflow 'concurrency' must be a constant object property",
+    );
+  }
+  const initializer = property.getInitializer();
+  const value = initializer
+    ? workflowConnectionLiteral(initializer)
+    : undefined;
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    throw new Error(
+      "Workflow 'concurrency' must be a constant object: { key, onConflict }",
+    );
+  }
+  const extra = Object.keys(value).filter(
+    (name) => name !== "key" && name !== "onConflict",
+  );
+  if (extra.length > 0) {
+    throw new Error(
+      `Workflow 'concurrency' takes only key and onConflict, not ${extra.join(", ")}`,
+    );
+  }
+  const key = "key" in value ? value.key : undefined;
+  if (
+    typeof key !== "string" ||
+    key.length > 200 ||
+    !CONCURRENCY_KEY_PATH.test(key)
+  ) {
+    throw new Error(
+      "Workflow concurrency 'key' must be a dot path into the run input, such as payload.session.key",
+    );
+  }
+  const onConflict = "onConflict" in value ? value.onConflict : undefined;
+  const policy = CONFLICT_POLICIES.find(
+    (candidate) => candidate === onConflict,
+  );
+  if (!policy) {
+    throw new Error(
+      "Workflow concurrency 'onConflict' must be queue, ignore, restart or error",
+    );
+  }
+  return { concurrency: { key, onConflict: policy } };
 }
 
 /** A concrete `thing:action` permission; wildcards are for roles only. */

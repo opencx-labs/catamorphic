@@ -25,12 +25,13 @@ import {
   PROJECT_WORKFLOWS_PACKAGE_PATH,
   publishedRef,
 } from "@catamorphic/workflow/project-layout";
-import { type Kysely, type Selectable, sql } from "kysely";
+import { type Kysely, type Selectable, sql, type Transaction } from "kysely";
 import {
   hasProjectPermission,
   type Identity,
   identityCovers,
   intersectProjectPermissions,
+  isProjectPrincipal,
 } from "../identity.js";
 import { assertAgentSessionAccess } from "./agent-session-access.js";
 import { allocationSandboxProvider } from "./allocation-sandbox-provider.js";
@@ -43,6 +44,12 @@ import {
 } from "./artifact-scope.js";
 import type { ConnectionAdmissionService } from "./connection-admission.js";
 import type { ResolvedConnectionBinding } from "./connection-types.js";
+import {
+  AuthenticationRequiredError,
+  ConnectionNotFoundError,
+  ConnectionPermissionDeniedError,
+  ConnectionUnavailableError,
+} from "./connections-service.js";
 import type {
   DeploymentArtifact,
   DeploymentArtifactsService,
@@ -51,10 +58,19 @@ import type { DeploymentRuntimeService } from "./deployment-runtime-service.js";
 import { DeploymentRuntimeService as EnvironmentDeploymentRuntimeService } from "./deployment-runtime-service.js";
 import { KyselyDeploymentRuntimeStore } from "./deployment-runtime-store.js";
 import type { DevSandboxService } from "./dev-sandbox-service.js";
-import type { ExecutionAllocationsService } from "./execution-allocations-service.js";
+import {
+  ExecutionAllocationConflictError,
+  type ExecutionAllocationsService,
+} from "./execution-allocations-service.js";
 import {
   admissionPolicy,
+  EnvironmentAccessDeniedError,
+  EnvironmentBindingUnavailableError,
+  EnvironmentIncompatibleError,
+  EnvironmentNotFoundError,
+  EnvironmentPolicyInvalidError,
   type ExecutionEnvironmentsService,
+  NoCompatibleEnvironmentError,
 } from "./execution-environments-service.js";
 import type { ExecutionJobsService } from "./execution-jobs-service.js";
 import type {
@@ -68,15 +84,24 @@ import { jsonColumn, jsonRecord, toJson } from "./run-coordinator.js";
 import type { RunPluginsLoader } from "./run-plugins-loader.js";
 import type { RunSignalReceipt, SignalRunInput } from "./run-signals.js";
 import type { RuntimeEventsService } from "./runtime-events-service.js";
-import type { TenantPoliciesService } from "./tenant-policies-service.js";
+import {
+  TenantActiveRunLimitError,
+  type TenantPoliciesService,
+} from "./tenant-policies-service.js";
+import { EnvironmentCapacityError } from "./worker-capacity.js";
 import type { WorkflowEnablement } from "./workflow-enablement-types.js";
-import type { WorkflowEnablementsService } from "./workflow-enablements-service.js";
+import {
+  WorkflowEnablementSuspendedError,
+  type WorkflowEnablementsService,
+} from "./workflow-enablements-service.js";
 import { WorkflowNotFoundError } from "./workflows-service.js";
 
 type RunRow = Selectable<DB["workflow_runs"]>;
 type StepRow = Selectable<DB["workflow_run_steps"]>;
 
 export type RunStatus =
+  /** Waiting for the active run of its key to settle (ADR 0325). */
+  | "queued"
   | "pending"
   | "running"
   | "waiting"
@@ -295,8 +320,10 @@ export interface ListRunsInput {
  *   webhook a no-op.
  * - `error` surfaces {@link RunEnrollmentConflictError}.
  * - `restart` cancels the live run and enrolls a fresh one.
+ * - `queue` records the run as `queued`; it starts, in arrival order, once
+ *   every earlier run for the key has settled (ADR 0325).
  */
-export type EnrollmentConflictPolicy = "ignore" | "error" | "restart";
+export type EnrollmentConflictPolicy = "ignore" | "error" | "restart" | "queue";
 
 export interface TriggerProductionRunInput {
   identity: Identity;
@@ -311,8 +338,16 @@ export interface TriggerProductionRunInput {
    * `signalByKey` and `cancelByKey`.
    */
   correlationKey?: string;
-  /** Defaults to `ignore`. */
+  /**
+   * Defaults to `ignore`. Without a `correlationKey`, the workflow's declared
+   * `concurrency` supplies both the key and the policy (ADR 0325).
+   */
   onConflict?: EnrollmentConflictPolicy;
+  /**
+   * One delivery's identity (a webhook's id, a schedule occurrence): a
+   * workflow starts at most one run for it, whatever that run's status.
+   */
+  deliveryKey?: string;
 }
 
 /**
@@ -443,6 +478,29 @@ export class RunEnrollmentConflictError extends Error {
   }
 }
 
+/** A key holds at most this many queued runs (ADR 0325). */
+export const MAX_QUEUED_RUNS_PER_KEY = 100;
+
+export class RunQueueFullError extends Error {
+  constructor(
+    readonly workflowName: string,
+    readonly correlationKey: string,
+  ) {
+    super(
+      `Workflow '${workflowName}' already has ${MAX_QUEUED_RUNS_PER_KEY} runs queued for correlation key '${correlationKey}'`,
+    );
+    this.name = "RunQueueFullError";
+  }
+}
+
+/** A queued run is not the next to start, or no longer queued. */
+class QueuedRunNotReadyError extends Error {
+  constructor(readonly runId: string) {
+    super(`Queued run '${runId}' cannot start yet`);
+    this.name = "QueuedRunNotReadyError";
+  }
+}
+
 export class ProductionDeploymentNotFoundError extends Error {
   constructor(readonly projectId: string) {
     super(`Project '${projectId}' has no deployed main revision`);
@@ -469,10 +527,92 @@ function requireCorrelationKey(value: string): string {
   return value;
 }
 
+function requireDeliveryKey(value: string): string {
+  if (value.length === 0 || value.length > 500) {
+    throw new Error("deliveryKey must contain between 1 and 500 characters");
+  }
+  return value;
+}
+
+/**
+ * The subject a run's input names at a declared dot path (ADR 0325): a
+ * string of 1 to 500 characters or a finite number. Anything else, or
+ * nothing there, leaves the run unkeyed.
+ */
+export function correlationKeyAtPath(
+  input: unknown,
+  path: string,
+): string | undefined {
+  let value: unknown = input;
+  for (const segment of path.split(".")) {
+    if (typeof value !== "object" || value === null) return undefined;
+    value = Array.isArray(value)
+      ? /^\d+$/.test(segment)
+        ? value[Number(segment)]
+        : undefined
+      : Object.hasOwn(value, segment)
+        ? Reflect.get(value, segment)
+        : undefined;
+  }
+  if (typeof value === "number" && Number.isFinite(value)) return String(value);
+  if (typeof value === "string" && value.length > 0 && value.length <= 500)
+    return value;
+  return undefined;
+}
+
+/** What starting a queued run needs beyond the run row (ADR 0325). */
+interface QueuedEnrollment {
+  environment?: string;
+  unattended?: boolean;
+  enablementId?: string;
+  commitSha?: string;
+  remoteBranch?: string;
+}
+
+function queuedEnrollment(value: unknown): QueuedEnrollment {
+  const record = jsonRecord(value);
+  const text = (field: string) =>
+    typeof record[field] === "string" ? (record[field] as string) : undefined;
+  const environment = text("environment");
+  const enablementId = text("enablementId");
+  const commitSha = text("commitSha");
+  const remoteBranch = text("remoteBranch");
+  return {
+    ...(environment ? { environment } : {}),
+    ...(record.unattended === true ? { unattended: true } : {}),
+    ...(enablementId ? { enablementId } : {}),
+    ...(commitSha ? { commitSha } : {}),
+    ...(remoteBranch ? { remoteBranch } : {}),
+  };
+}
+
+/** Serializes enrollment and start for one key within a transaction. */
+async function lockCorrelationKey(args: {
+  trx: Transaction<DB>;
+  projectId: string;
+  workflowName: string;
+  correlationKey: string;
+}): Promise<void> {
+  const name = `${args.projectId}\u0000${args.workflowName}\u0000${args.correlationKey}`;
+  await sql`select pg_advisory_xact_lock(hashtextextended(${name}, 325))`.execute(
+    args.trx,
+  );
+}
+
 type EnrollmentDecision =
   | { kind: "proceed" }
   | { kind: "existing"; run: Run }
-  | { kind: "restart"; runId: string };
+  | { kind: "restart"; runId: string }
+  | { kind: "queue" };
+
+/** The delivery uniqueness violation: another enrollment took this delivery. */
+function isDeliveryKeyConflict(error: unknown): boolean {
+  if (typeof error !== "object" || error === null) return false;
+  const record = error as { code?: unknown; constraint?: unknown };
+  return (
+    record.code === "23505" && record.constraint === "uq_workflow_runs_delivery"
+  );
+}
 
 /**
  * Detects the enrollment uniqueness violation specifically, so a genuine
@@ -513,6 +653,15 @@ interface RunsServiceDeps {
   coordinator: RunCoordinator;
   tenantPolicies: TenantPoliciesService;
   workflowEnablements?: () => WorkflowEnablementsService;
+  /**
+   * A member's identity as the host resolves it now, or null when they may
+   * no longer act: starting a member's queued run uses it (ADR 0325).
+   */
+  resolveOwner?: (args: {
+    tenantId: string;
+    projectId: string;
+    externalUserId: string;
+  }) => Promise<Identity | null>;
 }
 
 interface PreparedSource {
@@ -1209,6 +1358,7 @@ export class RunsService {
         if (run.status === "paused" || run.status === "canceling") {
           return suspended("paused");
         }
+        if (run.status === "queued") return suspended("queue");
         if (Date.now() >= args.deadline) return suspended("budget");
 
         const job = await this.deps.executionJobs.nextForRun({
@@ -1278,6 +1428,8 @@ export class RunsService {
             deploymentRuntime?.cancel(invocation).catch(() => {}),
           ),
         );
+        // A canceled run, queued or active, frees its key for the next.
+        await this.startQueuedRuns({ runId: args.runId }).catch(() => {});
         return this.get(args);
       },
     );
@@ -1392,6 +1544,235 @@ export class RunsService {
     });
   }
 
+  /**
+   * Start the next queued run of each key whose runs ahead have all settled
+   * (ADR 0325). With `runId`, only that run's key; with a key, only it;
+   * otherwise up to `limit` keys across the installation, the worker's
+   * maintenance sweep. Any replica may call it: the start transaction
+   * rechecks the head under the key's lock, and the active-key index stays
+   * the authority, so a race starts one run and the others find it started.
+   */
+  async startQueuedRuns(
+    args: {
+      runId?: string;
+      projectId?: string;
+      workflowName?: string;
+      correlationKey?: string;
+      limit?: number;
+    } = {},
+  ): Promise<void> {
+    let key =
+      args.projectId && args.workflowName && args.correlationKey
+        ? {
+            projectId: args.projectId,
+            workflowName: args.workflowName,
+            correlationKey: args.correlationKey,
+          }
+        : undefined;
+    if (args.runId) {
+      const run = await this.db
+        .selectFrom("workflow_runs")
+        .select(["project_id", "workflow_name", "correlation_key"])
+        .where("id", "=", args.runId)
+        .where("parent_run_id", "is", null)
+        .executeTakeFirst();
+      if (!run?.correlation_key) return;
+      key = {
+        projectId: run.project_id,
+        workflowName: run.workflow_name,
+        correlationKey: run.correlation_key,
+      };
+    }
+    // A head that cannot start (its owner lost access) fails and frees the
+    // key, so the next one is tried at once, a bounded number of times.
+    for (let round = 0; round < (key ? 10 : 1); round += 1) {
+      const heads = await this.db
+        .selectFrom("workflow_runs as queued")
+        .innerJoin("projects", "projects.id", "queued.project_id")
+        .select([
+          "queued.id",
+          "queued.project_id",
+          "queued.workflow_name",
+          "queued.correlation_key",
+          "queued.external_user_id",
+          "queued.caller_scope",
+          "queued.input",
+          "queued.enrollment",
+          "projects.tenant_id",
+        ])
+        .where("queued.status", "=", "queued")
+        .$if(key !== undefined, (query) =>
+          query
+            .where("queued.project_id", "=", key?.projectId ?? "")
+            .where("queued.workflow_name", "=", key?.workflowName ?? "")
+            .where("queued.correlation_key", "=", key?.correlationKey ?? ""),
+        )
+        .where(
+          sql<boolean>`NOT EXISTS (
+            SELECT 1 FROM workflow_runs AS ahead
+            WHERE ahead.project_id = queued.project_id
+              AND ahead.workflow_name = queued.workflow_name
+              AND ahead.correlation_key = queued.correlation_key
+              AND ahead.id <> queued.id
+              AND (ahead.status NOT IN ('queued', 'completed', 'failed', 'canceled')
+                OR (ahead.status = 'queued'
+                  AND (ahead.queued_at, ahead.id) < (queued.queued_at, queued.id)))
+          )`,
+        )
+        .orderBy("queued.queued_at")
+        .orderBy("queued.id")
+        .limit(args.limit ?? 20)
+        .execute();
+      if (heads.length === 0) return;
+      let failed = false;
+      for (const head of heads) {
+        if ((await this.startQueuedRun(head)) === "failed") failed = true;
+      }
+      if (!failed) return;
+    }
+  }
+
+  private async startQueuedRun(head: {
+    id: string;
+    project_id: string;
+    workflow_name: string;
+    correlation_key: string | null;
+    external_user_id: string | null;
+    caller_scope: Json | null;
+    input: Json | null;
+    enrollment: Json | null;
+    tenant_id: string;
+  }): Promise<"started" | "waiting" | "failed"> {
+    return withSpan(
+      {
+        tracer,
+        name: "workflow.run.start_queued",
+        attributes: {
+          "catamorphic.run.id": head.id,
+          "catamorphic.project.id": head.project_id,
+          "catamorphic.workflow.name": head.workflow_name,
+          "catamorphic.tenant.id": head.tenant_id,
+        },
+      },
+      async (span) => {
+        const enrollment = queuedEnrollment(head.enrollment);
+        const mechanics: Identity = {
+          tenantId: head.tenant_id,
+          externalUserId: head.external_user_id ?? "",
+        };
+        const common = {
+          projectId: head.project_id,
+          workflowName: head.workflow_name,
+          input: head.input ?? null,
+          correlationKey: head.correlation_key ?? "",
+          onConflict: "queue" as const,
+          start: { runId: head.id },
+        };
+        try {
+          if (enrollment.enablementId) {
+            const service = this.deps.workflowEnablements?.();
+            if (!service)
+              throw new Error("Workflow enablements are not configured");
+            // The automation's current consent starts it, at the commit the
+            // enablement holds now: nothing of a queued run has run yet.
+            const { enablement, ownerIdentity } = await service.revalidate({
+              identity: mechanics,
+              enablementId: enrollment.enablementId,
+            });
+            await this.triggerInner({
+              ...common,
+              identity: ownerIdentity,
+              environment: enablement.environment,
+              commitSha: enablement.commitSha,
+              remoteBranch: enablement.remoteBranch,
+              connectionAuthorizationSnapshot: enablement.connections,
+              workflowEnablementId: enablement.id,
+              enablementSnapshot: {
+                commitSha: enablement.commitSha,
+                consentDigest: enablement.consentDigest,
+                revision: enablement.revision,
+              },
+              unattended: true,
+            });
+          } else {
+            const identity =
+              head.caller_scope === null
+                ? mechanics
+                : await this.deps.resolveOwner?.({
+                    tenantId: head.tenant_id,
+                    projectId: head.project_id,
+                    externalUserId: mechanics.externalUserId,
+                  });
+            if (!identity || isProjectPrincipal(mechanics.externalUserId))
+              throw new AccessDeniedError();
+            await this.triggerInner({
+              ...common,
+              identity,
+              ...(enrollment.environment
+                ? { environment: enrollment.environment }
+                : {}),
+              ...(enrollment.commitSha
+                ? { commitSha: enrollment.commitSha }
+                : {}),
+              ...(enrollment.remoteBranch
+                ? { remoteBranch: enrollment.remoteBranch }
+                : {}),
+              ...(enrollment.unattended ? { unattended: true } : {}),
+            });
+          }
+          span.setAttribute("catamorphic.run.queue.outcome", "started");
+          return "started";
+        } catch (error) {
+          if (
+            error instanceof QueuedRunNotReadyError ||
+            error instanceof EnvironmentCapacityError ||
+            error instanceof EnvironmentBindingUnavailableError ||
+            error instanceof TenantActiveRunLimitError ||
+            error instanceof ExecutionAllocationConflictError ||
+            isCorrelationKeyConflict(error)
+          ) {
+            span.setAttribute("catamorphic.run.queue.outcome", "waiting");
+            return "waiting";
+          }
+          if (
+            error instanceof AccessDeniedError ||
+            error instanceof WorkflowEnablementSuspendedError ||
+            error instanceof RunInputInvalidError ||
+            error instanceof ProductionDeploymentNotFoundError ||
+            error instanceof EnvironmentNotFoundError ||
+            error instanceof EnvironmentAccessDeniedError ||
+            error instanceof EnvironmentIncompatibleError ||
+            error instanceof EnvironmentPolicyInvalidError ||
+            error instanceof NoCompatibleEnvironmentError ||
+            error instanceof AuthenticationRequiredError ||
+            error instanceof ConnectionPermissionDeniedError ||
+            error instanceof ConnectionUnavailableError ||
+            error instanceof ConnectionNotFoundError
+          ) {
+            // A refusal is definitive: the run ends and frees its key.
+            await this.db
+              .updateTable("workflow_runs")
+              .set({
+                status: "failed",
+                error: `The queued run cannot start: ${error.message}`,
+                completed_at: sql<Date>`now()`,
+                updated_at: sql<Date>`now()`,
+              })
+              .where("id", "=", head.id)
+              .where("status", "=", "queued")
+              .execute();
+            span.setAttribute("catamorphic.run.queue.outcome", "failed");
+            return "failed";
+          }
+          // Database or transport trouble: the next sweep tries again.
+          console.warn("[catamorphic] A queued run could not start", error);
+          span.setAttribute("catamorphic.run.queue.outcome", "retry");
+          return "waiting";
+        }
+      },
+    );
+  }
+
   private async findActiveByKey(args: {
     identity: Identity;
     projectId: string;
@@ -1404,7 +1785,8 @@ export class RunsService {
       .where("project_id", "=", args.projectId)
       .where("workflow_name", "=", args.workflowName)
       .where("correlation_key", "=", args.correlationKey)
-      .where("status", "not in", ["completed", "failed", "canceled"])
+      // The live run, never one waiting its turn behind it (ADR 0325).
+      .where("status", "not in", ["queued", "completed", "failed", "canceled"])
       .select([
         "id",
         "project_id",
@@ -1429,6 +1811,21 @@ export class RunsService {
     correlationKey: string;
     onConflict: EnrollmentConflictPolicy;
   }): Promise<EnrollmentDecision> {
+    if (args.onConflict === "queue") {
+      // A run arriving behind queued runs waits too, even in the moment
+      // between the last active run settling and the next one starting.
+      await this.requireProject(args.identity, args.projectId);
+      const ahead = await this.db
+        .selectFrom("workflow_runs")
+        .select("id")
+        .where("project_id", "=", args.projectId)
+        .where("workflow_name", "=", args.workflowName)
+        .where("correlation_key", "=", args.correlationKey)
+        .where("status", "not in", ["completed", "failed", "canceled"])
+        .limit(1)
+        .executeTakeFirst();
+      return ahead ? { kind: "queue" } : { kind: "proceed" };
+    }
     const existing = await this.findActiveByKey(args);
     if (!existing) return { kind: "proceed" };
     if (args.onConflict === "error") {
@@ -1972,6 +2369,7 @@ export class RunsService {
       input?: Json;
       correlationKey?: string;
       onConflict?: EnrollmentConflictPolicy;
+      deliveryKey?: string;
       unattended?: boolean;
       connectionAuthorizationSnapshot?: readonly ResolvedConnectionBinding[];
       workflowEnablementId?: string;
@@ -1981,16 +2379,42 @@ export class RunsService {
       >;
       commitSha?: string;
       remoteBranch?: string;
+      /** Start this queued run instead of enrolling a new one (ADR 0325). */
+      start?: { runId: string };
     },
     internal: RunInternalFacts = {},
   ): Promise<Run> {
     await this.requireProject(args.identity, args.projectId);
+    const deliveryKey =
+      args.deliveryKey && !args.start
+        ? requireDeliveryKey(args.deliveryKey)
+        : undefined;
+    if (deliveryKey) {
+      const delivered = await this.findByDeliveryKey({
+        projectId: args.projectId,
+        workflowName: args.workflowName,
+        deliveryKey,
+      });
+      if (delivered)
+        return this.get({ identity: args.identity, runId: delivered });
+    }
+    const source = await this.prepareProductionSource(args);
+    const input = args.input ?? null;
+    // An explicit key is the host's; otherwise the workflow's declaration
+    // names the subject from the input (ADR 0325).
+    const declared = args.correlationKey ? undefined : source.graph.concurrency;
+    const derivedKey = declared
+      ? correlationKeyAtPath(input, declared.key)
+      : undefined;
     const correlationKey = args.correlationKey
       ? requireCorrelationKey(args.correlationKey)
-      : undefined;
-    const onConflict = args.onConflict ?? "ignore";
+      : derivedKey;
+    const onConflict: EnrollmentConflictPolicy = derivedKey
+      ? (declared?.onConflict ?? "ignore")
+      : (args.onConflict ?? "ignore");
     let supersededRunId: string | null = null;
-    if (correlationKey) {
+    let queue = false;
+    if (correlationKey && !args.start) {
       const decision = await this.resolveEnrollmentConflict({
         identity: args.identity,
         projectId: args.projectId,
@@ -2000,14 +2424,13 @@ export class RunsService {
       });
       if (decision.kind === "existing") return decision.run;
       if (decision.kind === "restart") supersededRunId = decision.runId;
+      if (decision.kind === "queue") queue = true;
     }
-    const source = await this.prepareProductionSource(args);
     const plugins = await this.loadPlugins(
       args.identity,
       args.projectId,
       args.workflowName,
     );
-    const input = args.input ?? null;
     // The graph's input schema is a projection of the workflow's TS input
     // type; rejecting here fails at the door with a path-level error instead
     // of deep inside a sandbox invocation.
@@ -2015,37 +2438,43 @@ export class RunsService {
     if (inputErrors.length > 0) {
       throw new RunInputInvalidError(args.workflowName, inputErrors);
     }
-    const runId = crypto.randomUUID();
-    const admission = await this.deps.executionEnvironments.admit({
-      identity: args.identity,
-      projectId: args.projectId,
-      environment: args.environment,
-      requirements: { workload: "workflow" },
-    });
+    const runId = args.start?.runId ?? crypto.randomUUID();
+    // A run that waits its turn holds nothing: it is admitted when it starts.
+    const admission = queue
+      ? undefined
+      : await this.deps.executionEnvironments.admit({
+          identity: args.identity,
+          projectId: args.projectId,
+          environment: args.environment,
+          requirements: { workload: "workflow" },
+        });
     const connectionRequirements = source.graph.connections ?? [];
     if (
+      admission &&
       (args.connectionAuthorizationSnapshot?.length ||
         connectionRequirements.length > 0) &&
       !this.deps.connectionAdmission
     ) {
       throw new Error("Connection providers are not configured");
     }
-    const connections = args.connectionAuthorizationSnapshot?.length
-      ? await this.deps.connectionAdmission!.admitSnapshot({
-          identity: args.identity,
-          projectId: args.projectId,
-          environment: admission.environmentName,
-          snapshot: args.connectionAuthorizationSnapshot,
-        })
-      : connectionRequirements.length > 0
-        ? await this.deps.connectionAdmission!.admit({
+    const connections = !admission
+      ? []
+      : args.connectionAuthorizationSnapshot?.length
+        ? await this.deps.connectionAdmission!.admitSnapshot({
             identity: args.identity,
             projectId: args.projectId,
             environment: admission.environmentName,
-            requirements: connectionRequirements,
-            unattended: args.unattended,
+            snapshot: args.connectionAuthorizationSnapshot,
           })
-        : [];
+        : connectionRequirements.length > 0
+          ? await this.deps.connectionAdmission!.admit({
+              identity: args.identity,
+              projectId: args.projectId,
+              environment: admission.environmentName,
+              requirements: connectionRequirements,
+              unattended: args.unattended,
+            })
+          : [];
     if (!source.commitSha)
       throw new ProductionDeploymentNotFoundError(args.projectId);
     const provenance: RunProvenance = {
@@ -2053,6 +2482,15 @@ export class RunsService {
       ...(source.graph.displayName
         ? { displayName: source.graph.displayName }
         : {}),
+    };
+    const enrollment: QueuedEnrollment = {
+      ...(args.environment ? { environment: args.environment } : {}),
+      ...(args.unattended ? { unattended: true } : {}),
+      ...(args.workflowEnablementId
+        ? { enablementId: args.workflowEnablementId }
+        : {}),
+      commitSha: source.commitSha,
+      ...(args.remoteBranch ? { remoteBranch: args.remoteBranch } : {}),
     };
     {
       const artifact = await this.deps.deploymentArtifacts.ensure({
@@ -2082,6 +2520,7 @@ export class RunsService {
             allocationId: previous.allocationId,
           }).catch(() => undefined)
         : undefined;
+      let queued = false;
       try {
         const invocations = await this.db.transaction().execute(async (trx) => {
           // Enrollment and retirement serialize on the retained source row.
@@ -2148,6 +2587,137 @@ export class RunsService {
             )
               throw new AccessDeniedError();
           }
+          if (correlationKey && onConflict === "queue") {
+            // Enrollment and start decide under one lock per key, so a run
+            // either starts or is queued behind one that will start it.
+            await lockCorrelationKey({
+              trx,
+              projectId: args.projectId,
+              workflowName: args.workflowName,
+              correlationKey,
+            });
+            const keyed = trx
+              .selectFrom("workflow_runs")
+              .where("project_id", "=", args.projectId)
+              .where("workflow_name", "=", args.workflowName)
+              .where("correlation_key", "=", correlationKey);
+            if (args.start) {
+              const own = await keyed
+                .select(["id", "status", "queued_at"])
+                .where("id", "=", runId)
+                .forUpdate()
+                .executeTakeFirst();
+              const blocking = await keyed
+                .select("id")
+                .where("id", "!=", runId)
+                .where((eb) =>
+                  eb.or([
+                    eb("status", "not in", [
+                      "queued",
+                      "completed",
+                      "failed",
+                      "canceled",
+                    ]),
+                    eb.and([
+                      eb("status", "=", "queued"),
+                      sql<boolean>`(queued_at, id) < (${own?.queued_at ?? null}, ${runId}::uuid)`,
+                    ]),
+                  ]),
+                )
+                .limit(1)
+                .executeTakeFirst();
+              if (own?.status !== "queued" || blocking)
+                throw new QueuedRunNotReadyError(runId);
+            } else {
+              const ahead = await keyed
+                .select((eb) => [
+                  eb.fn.countAll().as("all"),
+                  eb.fn
+                    .count("id")
+                    .filterWhere("status", "=", "queued")
+                    .as("queued"),
+                ])
+                .where("status", "not in", ["completed", "failed", "canceled"])
+                .executeTakeFirstOrThrow();
+              queued = queue || Number(ahead.all) > 0;
+              if (queued && Number(ahead.queued) >= MAX_QUEUED_RUNS_PER_KEY)
+                throw new RunQueueFullError(args.workflowName, correlationKey);
+            }
+          }
+          const row = {
+            project_id: args.projectId,
+            workflow_name: args.workflowName,
+            correlation_key: correlationKey ?? null,
+            provenance: toJson({
+              ...provenance,
+              capabilities: source.graph.capabilities,
+            }),
+            deployment_artifact_id: artifact.id,
+            session_artifact_id: retained?.id ?? null,
+            workflow_enablement_id: args.workflowEnablementId ?? null,
+            phase:
+              source.graph.execution.steps[0]?.type === "batch"
+                ? "source"
+                : "boundary",
+          };
+          const caller = {
+            external_user_id: args.identity.externalUserId,
+            // Who triggered the run, as verified by the host (ADR 0055):
+            // the caller's scope, or null for the root identity.
+            caller_scope:
+              args.identity.scope === undefined
+                ? null
+                : jsonColumn(toJson(args.identity.scope)),
+            caller_execution_scope:
+              args.identity.executionScope === undefined
+                ? null
+                : jsonColumn(toJson(args.identity.executionScope)),
+            caller_connection_scope:
+              args.identity.connectionScope === undefined
+                ? null
+                : jsonColumn(toJson(args.identity.connectionScope)),
+            // A scoped caller's run acts with only what it holds of the
+            // workflow's declared permissions (ADR 0158).
+            caller_project_permissions:
+              args.identity.scope === undefined
+                ? null
+                : jsonColumn(
+                    toJson(
+                      intersectProjectPermissions(
+                        source.graph.permissions.map((permission) => ({
+                          projectId: args.projectId,
+                          permission,
+                        })),
+                        args.identity,
+                      ),
+                    ),
+                  ),
+          };
+          // Only Work's setup path states these, at enrollment; starting a
+          // queued run never rewrites them (ADR 0324).
+          const setup = {
+            setup_session_id: internal.setupFor?.sessionId ?? null,
+            setup_build: internal.setupFor?.build ?? null,
+          };
+          if (queued) {
+            await trx
+              .insertInto("workflow_runs")
+              .values({
+                id: runId,
+                ...row,
+                ...caller,
+                ...setup,
+                environment_name: args.environment ?? null,
+                delivery_key: deliveryKey ?? null,
+                status: "queued",
+                queued_at: sql<Date>`clock_timestamp()`,
+                enrollment: jsonColumn(toJson(enrollment)),
+                input: jsonColumn(input),
+              })
+              .execute();
+            return [];
+          }
+          if (!admission) throw new QueuedRunNotReadyError(runId);
           // Lock the live generation again after preparation. A competing
           // restart must not lend us authority over its replacement.
           const replacing =
@@ -2159,6 +2729,7 @@ export class RunsService {
                   .where("workflow_name", "=", args.workflowName)
                   .where("correlation_key", "=", correlationKey)
                   .where("status", "not in", [
+                    "queued",
                     "completed",
                     "failed",
                     "canceled",
@@ -2204,63 +2775,36 @@ export class RunsService {
             }),
             transaction: trx,
           });
-          await trx
-            .insertInto("workflow_runs")
-            .values({
-              id: runId,
-              allocation_id: allocation.id,
-              environment_name: admission.environmentName,
-              project_id: args.projectId,
-              workflow_name: args.workflowName,
-              correlation_key: correlationKey ?? null,
-              provenance: toJson({
-                ...provenance,
-                capabilities: source.graph.capabilities,
-              }),
-              deployment_artifact_id: artifact.id,
-              session_artifact_id: retained?.id ?? null,
-              workflow_enablement_id: args.workflowEnablementId ?? null,
-              setup_session_id: internal.setupFor?.sessionId ?? null,
-              setup_build: internal.setupFor?.build ?? null,
-              external_user_id: args.identity.externalUserId,
-              // Who triggered the run, as verified by the host (ADR 0055):
-              // the caller's scope, or null for the root identity.
-              caller_scope:
-                args.identity.scope === undefined
-                  ? null
-                  : jsonColumn(toJson(args.identity.scope)),
-              caller_execution_scope:
-                args.identity.executionScope === undefined
-                  ? null
-                  : jsonColumn(toJson(args.identity.executionScope)),
-              caller_connection_scope:
-                args.identity.connectionScope === undefined
-                  ? null
-                  : jsonColumn(toJson(args.identity.connectionScope)),
-              // A scoped caller's run acts with only what it holds of the
-              // workflow's declared permissions (ADR 0158).
-              caller_project_permissions:
-                args.identity.scope === undefined
-                  ? null
-                  : jsonColumn(
-                      toJson(
-                        intersectProjectPermissions(
-                          source.graph.permissions.map((permission) => ({
-                            projectId: args.projectId,
-                            permission,
-                          })),
-                          args.identity,
-                        ),
-                      ),
-                    ),
-              status: "pending",
-              phase:
-                source.graph.execution.steps[0]?.type === "batch"
-                  ? "source"
-                  : "boundary",
-              input: jsonColumn(input),
-            })
-            .execute();
+          if (args.start) {
+            // The run keeps who enrolled it; it now runs where it was admitted.
+            await trx
+              .updateTable("workflow_runs")
+              .set({
+                ...row,
+                allocation_id: allocation.id,
+                environment_name: admission.environmentName,
+                status: "pending",
+                updated_at: sql<Date>`now()`,
+              })
+              .where("id", "=", runId)
+              .where("status", "=", "queued")
+              .execute();
+          } else {
+            await trx
+              .insertInto("workflow_runs")
+              .values({
+                id: runId,
+                ...row,
+                ...caller,
+                ...setup,
+                allocation_id: allocation.id,
+                environment_name: admission.environmentName,
+                delivery_key: deliveryKey ?? null,
+                status: "pending",
+                input: jsonColumn(input),
+              })
+              .execute();
+          }
           await this.deps.coordinator.initialize({
             trx,
             tenantId: args.identity.tenantId,
@@ -2277,7 +2821,16 @@ export class RunsService {
           ),
         );
       } catch (error) {
-        if (correlationKey && isCorrelationKeyConflict(error)) {
+        if (deliveryKey && isDeliveryKeyConflict(error)) {
+          const delivered = await this.findByDeliveryKey({
+            projectId: args.projectId,
+            workflowName: args.workflowName,
+            deliveryKey,
+          });
+          if (delivered)
+            return this.get({ identity: args.identity, runId: delivered });
+        }
+        if (correlationKey && !args.start && isCorrelationKeyConflict(error)) {
           return this.resolveEnrollmentRace({
             identity: args.identity,
             projectId: args.projectId,
@@ -2288,8 +2841,30 @@ export class RunsService {
         }
         throw error;
       }
+      // The run ahead may have settled while this one was enrolling.
+      if (queued && correlationKey)
+        await this.startQueuedRuns({
+          projectId: args.projectId,
+          workflowName: args.workflowName,
+          correlationKey,
+        }).catch(() => {});
       return this.get({ identity: args.identity, runId });
     }
+  }
+
+  private async findByDeliveryKey(args: {
+    projectId: string;
+    workflowName: string;
+    deliveryKey: string;
+  }): Promise<string | undefined> {
+    const row = await this.db
+      .selectFrom("workflow_runs")
+      .select("id")
+      .where("project_id", "=", args.projectId)
+      .where("workflow_name", "=", args.workflowName)
+      .where("delivery_key", "=", args.deliveryKey)
+      .executeTakeFirst();
+    return row?.id;
   }
 
   private async assertRetainedSourceAccess(args: {
@@ -2873,6 +3448,7 @@ function mapStep(row: StepRow): RunStep {
 
 function parseRunStatus(value: string): RunStatus {
   if (
+    value === "queued" ||
     value === "pending" ||
     value === "running" ||
     value === "waiting" ||

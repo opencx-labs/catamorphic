@@ -10,9 +10,8 @@ import http from "node:http";
 import net from "node:net";
 import os from "node:os";
 import path from "node:path";
-import { pathToFileURL } from "node:url";
 import { promisify } from "node:util";
-import type { CapabilityProviderRuntime, Identity } from "@catamorphic/core";
+import type { Identity } from "@catamorphic/core";
 import { WORKFLOW_PACKAGE_VERSION } from "@catamorphic/workflow";
 import pg from "pg";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
@@ -23,7 +22,6 @@ import {
   type WorkServer,
 } from "./server.js";
 import {
-  createTestDatabase,
   filesHolding,
   filesUnder,
   registryPack,
@@ -377,26 +375,20 @@ describe.skipIf(!databaseUrl)("reviewing pull requests (#118)", () => {
   let work: string;
   let mainHead: string;
   let pullHead: string;
-  let publisherDatabase: Awaited<ReturnType<typeof createTestDatabase>>;
-  let publisherLockPool: pg.Pool;
-  let publisherLedgerPool: pg.Pool;
-
-  const publicationEffects = async () =>
-    (
-      await publisherLedgerPool.query<{
-        id: string;
-        commit_sha: string;
-        turn_id: string;
-        run_id: string;
-        action: string;
-        state: string;
-        input_digest: string;
-        receipt: unknown;
-        stamp: string;
-      }>(
-        "SELECT id,commit_sha,turn_id,run_id,action,state,input_digest,receipt,stamp FROM work_review_publication.effects ORDER BY action,id",
-      )
-    ).rows;
+  /** What postReviews keeps on the review chat (ADR 0325). */
+  const reviewState = async () => {
+    const metadata = await server.catamorphic.core.agentSessions?.metadata({
+      identity: setup,
+      projectId,
+      sessionId,
+    });
+    const entries = (key: string) =>
+      (metadata?.[key] as Array<Record<string, unknown>> | undefined) ?? [];
+    return {
+      verdicts: entries("review.verdicts"),
+      posted: entries("review.posted").map((entry) => String(entry.effect)),
+    };
+  };
   const assertAdvisoryPolicy = () => {
     expect(pull.body).toBe("Adds a total to every order.");
     expect(
@@ -591,46 +583,6 @@ describe.skipIf(!databaseUrl)("reviewing pull requests (#118)", () => {
         ],
       }),
     );
-    // Install the exact shipped publisher as deployment-owned source, outside
-    // the reviewed checkout. Its independent database is the application's
-    // ledger, not Catamorphic's schema and not the production replica.
-    publisherDatabase = await createTestDatabase("work_review_publication");
-    publisherLockPool = new pg.Pool({
-      connectionString: publisherDatabase.url,
-      max: 4,
-      connectionTimeoutMillis: 2000,
-    });
-    publisherLedgerPool = new pg.Pool({
-      connectionString: publisherDatabase.url,
-      max: 2,
-      connectionTimeoutMillis: 2000,
-    });
-    await publisherLedgerPool.query(
-      REVIEW_AUTOMATION_FILES[".work/server/review-publisher.sql"] ?? "",
-    );
-    const publisherSource = path.join(root, "deployment-publisher");
-    fs.mkdirSync(publisherSource);
-    for (const name of ["review-publisher.ts", "review-report.ts"]) {
-      const source = REVIEW_AUTOMATION_FILES[`.work/server/${name}`];
-      if (!source) throw new Error(`Publisher pack missing ${name}`);
-      fs.writeFileSync(path.join(publisherSource, name), source);
-    }
-    const publisherBundle = path.join(publisherSource, "review-publisher.mjs");
-    await execute("bun", [
-      "build",
-      "--target=node",
-      path.join(publisherSource, "review-publisher.ts"),
-      `--outfile=${publisherBundle}`,
-    ]);
-    const publisher: {
-      reviewPublicationCapability(input: {
-        core(): WorkServer["catamorphic"]["core"];
-        repository: string;
-        lockPool: pg.Pool;
-        ledgerPool: pg.Pool;
-      }): CapabilityProviderRuntime;
-    } = await import(pathToFileURL(publisherBundle).href);
-
     const port = await freePort();
     base = `http://127.0.0.1:${port}`;
     server = await createWorkServer({
@@ -645,14 +597,6 @@ describe.skipIf(!databaseUrl)("reviewing pull requests (#118)", () => {
         },
       }),
       hooks: {
-        capabilityProviders: [
-          publisher.reviewPublicationCapability({
-            core: () => server.catamorphic.core,
-            repository: "acme/web",
-            lockPool: publisherLockPool,
-            ledgerPool: publisherLedgerPool,
-          }),
-        ],
         github: {
           apiBaseUrl: "https://api.github.test",
           webBaseUrl: gitBase,
@@ -822,8 +766,6 @@ describe.skipIf(!databaseUrl)("reviewing pull requests (#118)", () => {
   afterAll(async () => {
     await Promise.all(workers.map((running) => running.stop()));
     await server?.shutdown();
-    await Promise.all([publisherLockPool?.end(), publisherLedgerPool?.end()]);
-    await publisherDatabase?.drop();
     upstream?.closeAllConnections();
     await new Promise((resolve) => upstream?.close(resolve));
     await new Promise((resolve) => fakeSlack.close(resolve));
@@ -972,7 +914,7 @@ describe.skipIf(!databaseUrl)("reviewing pull requests (#118)", () => {
 
     // The poster ran on the control plane in `github-poster` and posted
     // the report: the review with its inline comment on the chat's commit,
-    // the check run, and durable destination receipts in application Postgres.
+    // the check run, and what it posted recorded on the chat itself.
     await waitFor("the poster to finish", async () => {
       const runs = await posterRuns();
       return runs.some((entry) => entry.status === "completed")
@@ -989,7 +931,7 @@ describe.skipIf(!databaseUrl)("reviewing pull requests (#118)", () => {
       comments: [{ path: "db/002_totals.sql", line: 1, side: "RIGHT" }],
     });
     expect(String((reviewCall?.body as { body?: string })?.body)).toMatch(
-      /^One blocking issue[\s\S]*Score: 2\/5[\s\S]*<!-- work-review effect=[a-f0-9]{64} -->$/,
+      /^One blocking issue[\s\S]*Score: 2\/5[\s\S]*<!-- work-review:[0-9a-f-]{36}:review -->$/,
     );
     const [checkCall] = posted("POST", "/repos/acme/web/check-runs");
     expect(checkCall?.body).toMatchObject({
@@ -997,33 +939,17 @@ describe.skipIf(!databaseUrl)("reviewing pull requests (#118)", () => {
       head_sha: pullHead,
       status: "completed",
       conclusion: "failure",
-      external_id: expect.stringMatching(
-        /^<!-- work-review effect=[a-f0-9]{64} -->$/,
-      ),
+      external_id: expect.stringMatching(/^work-review:[0-9a-f-]{36}:check$/),
       output: { title: "Changes requested (score 2/5)" },
     });
     assertAdvisoryPolicy();
-    const effects = await publicationEffects();
-    expect(effects.map((effect) => effect.action)).toEqual([
-      "create_check_run",
-      "create_review",
+    // The commit's verdict and what was posted live on the review chat.
+    const state = await reviewState();
+    expect(state.verdicts).toEqual([{ commit: pullHead, verdict: "failure" }]);
+    expect(state.posted).toEqual([
+      expect.stringMatching(/^work-review:[0-9a-f-]{36}:check$/),
+      expect.stringMatching(/^work-review:[0-9a-f-]{36}:review$/),
     ]);
-    const poster = await server.catamorphic.core.db
-      .selectFrom("workflow_runs")
-      .select("id")
-      .where("project_id", "=", projectId)
-      .where("workflow_name", "=", "postReviews")
-      .executeTakeFirstOrThrow();
-    for (const effect of effects) {
-      expect(effect).toMatchObject({
-        commit_sha: pullHead,
-        run_id: poster.id,
-        state: "received",
-        input_digest: expect.stringMatching(/^[a-f0-9]{64}$/),
-        receipt: { id: expect.any(Number) },
-      });
-      expect(effect.stamp).toBe(`<!-- work-review effect=${effect.id} -->`);
-    }
     // Nothing the chat forged reached GitHub, and every call carried a
     // minted installation token.
     expect(JSON.stringify(githubCalls)).not.toMatch(/forged/);
@@ -1149,7 +1075,7 @@ describe.skipIf(!databaseUrl)("reviewing pull requests (#118)", () => {
     );
     expect(comment.body).toEqual({
       body: expect.stringMatching(
-        /^Yes: the column is nullable now, so adding it does not rewrite the table\.\n\n<!-- work-review effect=[a-f0-9]{64} -->$/,
+        /^Yes: the column is nullable now, so adding it does not rewrite the table\.\n\n<!-- work-review:[0-9a-f-]{36}:reply -->$/,
       ),
     });
     await waitFor("the poster to finish the answer", async () => {
@@ -1170,10 +1096,8 @@ describe.skipIf(!databaseUrl)("reviewing pull requests (#118)", () => {
       state: "CHANGES_REQUESTED",
     });
     assertAdvisoryPolicy();
-    const effects = await publicationEffects();
-    expect(effects).toHaveLength(6);
-    expect(effects.every((effect) => effect.state === "received")).toBe(true);
-    expect(new Set(effects.map((effect) => effect.id)).size).toBe(6);
+    // Each publication read what the one before it recorded: the first
+    // head's failure stands, the new head went from no review to a pass.
     const detail = await server.catamorphic.core.agentSessions?.get(
       setup,
       projectId,
@@ -1183,9 +1107,21 @@ describe.skipIf(!databaseUrl)("reviewing pull requests (#118)", () => {
       (left, right) => right.ordinal - left.ordinal,
     )[0];
     expect(latestTurn?.status).toBe("completed");
+    const state = await reviewState();
+    expect(state.verdicts.map((entry) => entry.verdict)).toEqual([
+      "failure",
+      "success",
+    ]);
+    expect(state.posted).toHaveLength(6);
     expect(
-      effects.filter((effect) => effect.turn_id === latestTurn?.id),
-    ).toHaveLength(3);
+      state.posted.filter((id) =>
+        id.startsWith(`work-review:${latestTurn?.id}:`),
+      ),
+    ).toEqual([
+      `work-review:${latestTurn?.id}:check`,
+      `work-review:${latestTurn?.id}:review`,
+      `work-review:${latestTurn?.id}:reply`,
+    ]);
     expect((await reviewChat())?.id).toBe(sessionId);
   }, 120_000);
 

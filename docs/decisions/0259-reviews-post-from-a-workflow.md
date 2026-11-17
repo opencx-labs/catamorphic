@@ -1,6 +1,6 @@
 # 0259: Reviews post from a workflow
 
-- **Status:** Accepted (the report is a typed `review` result, not a fenced block, by [0323](0323-agents-submit-typed-results.md))
+- **Status:** Accepted (the report is a typed `review` result, not a fenced block, by [0323](0323-agents-submit-typed-results.md); `postReviews` queues per pull request chat, keeps its state in the chat's metadata and dismisses nothing, by [0325](0325-runs-queue-per-key-and-workflows-keep-session-metadata.md))
 - **Date:** 2026-10-18
 - **Refines:** [0177](0177-github-is-a-connection.md), [0181](0181-project-chats-use-their-environments-bindings.md)
 

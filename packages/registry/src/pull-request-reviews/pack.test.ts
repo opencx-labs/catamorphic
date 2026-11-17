@@ -48,9 +48,18 @@ async function run(input: {
       );
     await fs.writeFile(path.join(directory, "recipe.ts"), source);
     await fs.writeFile(
+      path.join(directory, "review-report.ts"),
+      file(".work/workflows/src/review-report.ts"),
+    );
+    await fs.copyFile(
+      path.join(import.meta.dirname, "post-reviews.harness.ts"),
+      path.join(directory, "harness.ts"),
+    );
+    await fs.writeFile(
       path.join(directory, "verify.ts"),
       `
       import { answerReviewComments, closePullRequestChats, postReviews, reviewPullRequests } from "./recipe.ts";
+      import { fakeWorld, runOverlapping, runWorkflow } from "./harness.ts";
       const host = { "catamorphic.sessions": Object.fromEntries(["deliver", "close"].map(operation => [operation, args => ({ operation, args })])) };
       ${input.script}
     `,
@@ -203,9 +212,7 @@ describe("the pull-request-reviews pack", () => {
       ".work/agents/reviewer.json",
       ".work/agents/reviewer.md",
       ".work/workflows/src/reviews.ts",
-      ".work/server/review-report.ts",
-      ".work/server/review-publisher.ts",
-      ".work/server/review-publisher.sql",
+      ".work/workflows/src/review-report.ts",
       ".work/skills/pull-request-reviews/SKILL.md",
     ]);
     // The same trigger library writing-workflows teaches.
@@ -378,6 +385,9 @@ describe("the pull-request-reviews pack", () => {
     const parsed = parseProject({
       ".work/triggers/github.ts": file(".work/triggers/github.ts"),
       ".work/workflows/src/reviews.ts": file(".work/workflows/src/reviews.ts"),
+      ".work/workflows/src/review-report.ts": file(
+        ".work/workflows/src/review-report.ts",
+      ),
     });
     expect(parsed.errors).toEqual([]);
     expect(parsed.secrets.map((secret) => secret.name)).toEqual([
@@ -404,6 +414,17 @@ describe("the pull-request-reviews pack", () => {
     expect(workflows.postReviews?.graph.triggers[0]?.config).toEqual({
       statuses: ["completed", "failed"],
     });
+    // One publication per pull request chat at a time (ADR 0325).
+    expect(workflows.postReviews?.graph.concurrency).toEqual({
+      key: "payload.session.key",
+      onConflict: "queue",
+    });
+    for (const name of [
+      "reviewPullRequests",
+      "answerReviewComments",
+      "closePullRequestChats",
+    ])
+      expect(workflows[name]?.graph.concurrency, name).toBeUndefined();
 
     // Filters decide which events start runs, before any project code.
     const starts = (name: string, event: unknown) =>
@@ -573,17 +594,142 @@ describe("the pull-request-reviews pack", () => {
 });
 
 describe("postReviews", () => {
-  it("returns one durable publisher transition with ids only", async () => {
-    const result = await run({
+  const OTHER = "d".repeat(40);
+  const posted = (metadata: Record<string, unknown>) =>
+    (metadata["review.posted"] as Array<{ effect: string }> | undefined)?.map(
+      (entry) => entry.effect,
+    );
+  /** Runs overlapping publications in a fake world and reports what GitHub got. */
+  const publish = (script: string) =>
+    run({
       script: `
-      const input = ${JSON.stringify(turnEvent({ key: "pr-acme/web-42" }))};
-      const publisherHost = { "company.review-publication": { publish: args => ({ operation: "publish", args }) } };
-      console.log(JSON.stringify(await postReviews.steps[0].run({ input, host: publisherHost })));
+      const world = fakeWorld({ head: ${JSON.stringify(HEAD)} });
+      const event = (turnId, status = "completed") => ({
+        ...${JSON.stringify(turnEvent({ key: "pr-acme/web-42" }))},
+        payload: { ...${JSON.stringify(turnEvent({ key: "pr-acme/web-42" }).payload)}, detail: { turnId, messageId: "input-" + turnId, status } },
+      });
+      const outcomes = await (async () => { ${script} })();
+      console.log(JSON.stringify({ outcomes, writes: world.github.writes, checks: world.github.checks.map(run => run.conclusion), metadata: world.chat.metadata }));
     `,
-    });
-    expect(result).toEqual({
-      operation: "publish",
-      args: { sessionId: "session-1", turnId: "t1" },
-    });
+    }) as Promise<{
+      outcomes: unknown;
+      writes: string[];
+      checks: string[];
+      metadata: Record<string, unknown>;
+    }>;
+
+  it("serializes overlapping failure and success turns: no later success, no weaker review", async () => {
+    const result = await publish(`
+      world.submit("t1", { verdict: "REQUEST_CHANGES", reviewedCommit: ${JSON.stringify(HEAD)} });
+      world.submit("t2", { verdict: "COMMENT", reviewedCommit: ${JSON.stringify(HEAD)} });
+      return runOverlapping(postReviews, [event("t1"), event("t2")], world.context);
+    `);
+    expect(result.writes).toEqual(["check:failure", "review:REQUEST_CHANGES"]);
+    expect(result.metadata["review.verdicts"]).toEqual([
+      { commit: HEAD, verdict: "failure" },
+    ]);
+    expect(posted(result.metadata)).toEqual([
+      "work-review:t1:check",
+      "work-review:t1:review",
+    ]);
+    expect(result.outcomes).toEqual([
+      { posted: "review", verdict: "failure", problem: null },
+      { posted: "review", verdict: "failure", problem: null },
+    ]);
+  });
+
+  it("tightens a commit's success to a failure, and a missing review never loosens it", async () => {
+    const result = await publish(`
+      world.submit("t1", { verdict: "COMMENT", reviewedCommit: ${JSON.stringify(HEAD)} });
+      world.submit("t2", { verdict: "REQUEST_CHANGES", reviewedCommit: ${JSON.stringify(HEAD)} });
+      return runOverlapping(postReviews, [event("t1"), event("t2"), event("t3", "failed")], world.context);
+    `);
+    expect(result.checks).toEqual(["success", "failure"]);
+    expect(result.writes).toEqual([
+      "check:success",
+      "review:COMMENT",
+      "check:failure",
+      "review:REQUEST_CHANGES",
+    ]);
+    expect(result.metadata["review.verdicts"]).toEqual([
+      { commit: HEAD, verdict: "failure" },
+    ]);
+  });
+
+  it("finds a write GitHub accepted when its answer was lost, and posts it once", async () => {
+    const result = await publish(`
+      world.submit("t1", { verdict: "REQUEST_CHANGES", reviewedCommit: ${JSON.stringify(HEAD)}, reply: { body: "Because @team said so <!-- x -->" } });
+      world.github.loseNextAnswer.add("create_check_run");
+      world.github.loseNextAnswer.add("create_review");
+      world.github.loseNextAnswer.add("issue_comment");
+      const first = await runWorkflow(postReviews, event("t1"), world.context);
+      // A rerun of the same turn finds everything on the chat and in GitHub.
+      const again = await runWorkflow(postReviews, event("t1"), world.context);
+      return [first, again, world.github.comments.map(entry => entry.body)];
+    `);
+    expect(result.writes).toEqual([
+      "check:failure",
+      "review:REQUEST_CHANGES",
+      "comment",
+    ]);
+    const [, , bodies] = result.outcomes as [unknown, unknown, string[]];
+    // Mentions and hidden markers from the report are defused; the stamp is ours.
+    expect(bodies[0]).not.toContain("@team");
+    expect(bodies[0]).not.toContain("<!-- x -->");
+    expect(bodies[0]).toContain("<!-- work-review:t1:reply -->");
+    expect(posted(result.metadata)).toEqual([
+      "work-review:t1:check",
+      "work-review:t1:review",
+      "work-review:t1:reply",
+    ]);
+  });
+
+  it("posts nothing for a stale report or a moved head, and marks a missing review once", async () => {
+    const result = await publish(`
+      world.submit("t1", { verdict: "REQUEST_CHANGES", reviewedCommit: ${JSON.stringify(OTHER)} });
+      const stale = await runWorkflow(postReviews, event("t1"), world.context);
+      world.submit("t2", { verdict: "REQUEST_CHANGES", reviewedCommit: ${JSON.stringify(HEAD)} });
+      world.github.head = ${JSON.stringify(OTHER)};
+      const moved = await runWorkflow(postReviews, event("t2"), world.context);
+      world.github.head = ${JSON.stringify(HEAD)};
+      const missing = await runOverlapping(postReviews, [event("t3"), event("t4", "failed")], world.context);
+      return [stale, moved, ...missing];
+    `);
+    expect(result.outcomes).toEqual([
+      { posted: "nothing", verdict: null, problem: null },
+      { posted: "nothing", verdict: null, problem: null },
+      {
+        posted: "missing",
+        verdict: "action_required",
+        problem: "The turn submitted no current review result.",
+      },
+      {
+        posted: "missing",
+        verdict: "action_required",
+        problem: "The review turn failed.",
+      },
+    ]);
+    expect(result.writes).toEqual(["check:action_required"]);
+  });
+
+  it("answers an inline question in its own thread", async () => {
+    const result = await publish(`
+      world.submit("t1", { verdict: "COMMENT", reviewedCommit: ${JSON.stringify(HEAD)}, reply: { inReplyTo: 7, body: "It rounds half up." } });
+      return runWorkflow(postReviews, event("t1"), world.context);
+    `);
+    expect(result.writes).toEqual([
+      "check:success",
+      "review:COMMENT",
+      "reply:7",
+    ]);
+  });
+
+  it("posts nothing for a chat it does not own", async () => {
+    const result = await publish(`
+      world.submit("t1", { verdict: "REQUEST_CHANGES", reviewedCommit: ${JSON.stringify(HEAD)} });
+      const lookalike = { ...event("t1"), payload: { ...event("t1").payload, session: { ...event("t1").payload.session, key: "pr-acme/web-tools-3" } } };
+      return runWorkflow(postReviews, lookalike, world.context);
+    `);
+    expect(result.writes).toEqual([]);
   });
 });

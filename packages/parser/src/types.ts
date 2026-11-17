@@ -368,6 +368,12 @@ export interface WorkflowGraph {
   outputSchema: unknown;
   /** Host trigger kinds this workflow subscribes to. */
   triggers: WorkflowTriggerBinding[];
+  /**
+   * Runs about one subject take turns (ADR 0325): the dot path into the
+   * run input naming the subject, and what a run does while another is live
+   * for it. Absent when the workflow declares none.
+   */
+  concurrency?: WorkflowConcurrency;
   connections: WorkflowConnectionRequirement[];
   /**
    * Project permissions the workflow declares (ADR 0158): its runs get only
@@ -386,6 +392,11 @@ export interface WorkflowGraph {
   sourceCode: string;
   filePath?: string;
   projectFiles?: string[];
+}
+
+export interface WorkflowConcurrency {
+  key: string;
+  onConflict: "queue" | "ignore" | "restart" | "error";
 }
 
 export interface WorkflowConnectionRequirement {

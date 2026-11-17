@@ -181,12 +181,15 @@ export class ProjectEventDispatcher {
                 intent: "change",
               });
             }
-            const correlationKey = `event:${row.activation_id}:${row.id}`;
+            // One event starts at most one run of each activation's workflow,
+            // whatever key the workflow names its runs by (ADR 0325).
+            const deliveryKey = `event:${row.activation_id}:${row.id}`;
             const existing = await this.db
               .selectFrom("workflow_runs")
               .select("id")
-              .where("workflow_enablement_id", "=", row.enablement_id)
-              .where("correlation_key", "=", correlationKey)
+              .where("project_id", "=", row.project_id)
+              .where("workflow_name", "=", row.workflow_name)
+              .where("delivery_key", "=", deliveryKey)
               .executeTakeFirst();
             const result = cycle
               ? []
@@ -215,8 +218,7 @@ export class ProjectEventDispatcher {
                       activationIds: [row.activation_id],
                       workflows: [row.workflow_name],
                       mode: "async",
-                      correlationKey,
-                      onConflict: "ignore",
+                      deliveryKey,
                     })
                   ).runs.map((run) => run.runId);
             await this.db

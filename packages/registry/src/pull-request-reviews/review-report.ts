@@ -1,3 +1,8 @@
+/*
+ * Pure helpers `postReviews` checks a review with before it posts: no IO,
+ * so every boundary that calls them replays alike.
+ */
+
 /**
  * What the reviewer reports, once checked: its `review` result (ADR 0323),
  * which Work accepted against the schema in `.work/agents/reviewer.json`.

@@ -30,6 +30,7 @@ import { ExecutionAllocationsService } from "../services/execution-allocations-s
 import { ExecutionEnvironmentsService } from "../services/execution-environments-service.js";
 import { ProjectEnvironmentsService } from "../services/project-environments-service.js";
 import { ProjectsService } from "../services/projects-service.js";
+import { SessionActionsService } from "../services/session-actions-service.js";
 import { copySettledHistory } from "../services/sessions/session-copy.js";
 import {
   renameCommandId,
@@ -586,5 +587,142 @@ describe("session metadata", () => {
         values: { note: "after" },
       }),
     ).resolves.toEqual({ note: "after" });
+  });
+  describe("from workflows (ADR 0325)", () => {
+    const author = {
+      kind: "workflow" as const,
+      runId: "33333333-3333-4333-8333-333333333333",
+      workflowName: "postReviews",
+    };
+    const act = (
+      projectId: string,
+      operation: "inspect" | "find" | "setMetadata",
+      args: unknown,
+      caller: Identity = identity,
+    ) =>
+      new SessionActionsService(db, sessions, () => undefined).execute({
+        identity: caller,
+        projectId,
+        operation,
+        args,
+        author,
+      });
+
+    it("sets keys by the chat's key, and inspect and find read them back", async () => {
+      const project = await projects.create(identity, {
+        name: "Workflow notes",
+      });
+      const { sessionId } = await sessions.chatForKey(identity, project.id, {
+        key: "pr-acme/web-42",
+        workflowName: "reviewPullRequests",
+      });
+      expect(
+        await act(project.id, "setMetadata", {
+          key: "pr-acme/web-42",
+          set: { "review.verdicts": { abc: "failure" }, "review.note": "x" },
+        }),
+      ).toEqual({
+        sessionId,
+        metadata: { "review.verdicts": { abc: "failure" }, "review.note": "x" },
+      });
+      // A merge patch: unnamed keys stay, null removes one.
+      await act(project.id, "setMetadata", {
+        sessionId,
+        set: { "review.note": null, "review.comment": 7 },
+      });
+      const expected = {
+        "review.verdicts": { abc: "failure" },
+        "review.comment": 7,
+      };
+      expect(
+        await act(project.id, "inspect", { key: "pr-acme/web-42" }),
+      ).toMatchObject({ id: sessionId, metadata: expected });
+      expect(
+        await act(project.id, "find", { key: "pr-acme/web-42" }),
+      ).toMatchObject({ id: sessionId, metadata: expected });
+      // Repeating a write changes nothing and logs nothing.
+      const { sequence } = (await sessions.get(identity, project.id, sessionId))
+        .snapshot;
+      await act(project.id, "setMetadata", {
+        sessionId,
+        set: { "review.comment": 7 },
+      });
+      expect(
+        (await sessions.get(identity, project.id, sessionId)).snapshot.sequence,
+      ).toBe(sequence);
+    });
+
+    it("keeps ADR 0226's limits and authority, and takes writes on a closed chat", async () => {
+      const project = await projects.create(identity, {
+        name: "Workflow limits",
+      });
+      const session = await sessions.create(identity, project.id);
+      await expect(
+        act(project.id, "setMetadata", {
+          sessionId: session.id,
+          set: { "Review.Bad": 1 },
+        }),
+      ).rejects.toThrow(SessionMetadataError);
+      await expect(
+        act(project.id, "setMetadata", {
+          sessionId: session.id,
+          set: { "review.big": "x".repeat(17_000) },
+        }),
+      ).rejects.toThrow(SessionMetadataError);
+      await expect(
+        act(project.id, "setMetadata", {
+          sessionId: session.id,
+          key: "pr-1",
+          set: {},
+        }),
+      ).rejects.toThrow();
+      // Only those who may change the chat write it.
+      const reader: Identity = {
+        ...identity,
+        scope: [{ kind: "sessions", projectId: project.id }],
+      };
+      await expect(
+        act(
+          project.id,
+          "setMetadata",
+          { sessionId: session.id, set: { "review.x": 1 } },
+          reader,
+        ),
+      ).rejects.toThrow(AccessDeniedError);
+      // A pull request merges after its chat is done.
+      await db
+        .updateTable("agent_sessions")
+        .set({ status: "closed" })
+        .where("id", "=", session.id)
+        .execute();
+      await expect(
+        act(project.id, "setMetadata", {
+          sessionId: session.id,
+          set: { "review.done": true },
+        }),
+      ).resolves.toEqual({
+        sessionId: session.id,
+        metadata: { "review.done": true },
+      });
+      // A copy whose authority is elsewhere refuses, and the run retries.
+      await db
+        .updateTable("agent_sessions")
+        .set({ authority_host_id: "another-host" })
+        .where("id", "=", session.id)
+        .execute();
+      await expect(
+        act(project.id, "setMetadata", {
+          sessionId: session.id,
+          set: { "review.done": null },
+        }),
+      ).rejects.toThrow(AgentSessionAuthorityRequiredError);
+      expect(
+        await sessions.metadata({
+          identity,
+          projectId: project.id,
+          sessionId: session.id,
+        }),
+      ).toEqual({ "review.done": true });
+    });
   });
 });

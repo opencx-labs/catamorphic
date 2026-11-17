@@ -86,7 +86,7 @@ export const directoryMemberJoined = defineTriggerKind({
   payload: envelope("directory.member-joined", membership),
   config,
   requiredPermissions: PERMISSIONS,
-  correlationKey: (event) => event.id,
+  deliveryKey: (event) => event.id,
   matches: ({ config, payload: event }) =>
     inAnyGroup({ wanted: config.groups, groups: event.payload.groups }),
 });
@@ -103,7 +103,7 @@ export const directoryMemberLeft = defineTriggerKind({
   payload: envelope("directory.member-left", membership),
   config,
   requiredPermissions: PERMISSIONS,
-  correlationKey: (event) => event.id,
+  deliveryKey: (event) => event.id,
   matches: ({ config, payload: event }) =>
     inAnyGroup({ wanted: config.groups, groups: event.payload.groups }),
 });
@@ -118,7 +118,7 @@ export const directoryGroupsChanged = defineTriggerKind({
   payload: envelope("directory.groups-changed", groupChange),
   config,
   requiredPermissions: PERMISSIONS,
-  correlationKey: (event) => event.id,
+  deliveryKey: (event) => event.id,
   matches: ({ config, payload: event }) =>
     inAnyGroup({
       wanted: config.groups,

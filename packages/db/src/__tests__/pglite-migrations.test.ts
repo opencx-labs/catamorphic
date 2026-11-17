@@ -159,6 +159,7 @@ describe("PGlite migrations", () => {
       "082_workflow_exec.sql",
       "083_scan_project_kinds.sql",
       "084_enablements_follow_published.sql",
+      "085_queued_runs.sql",
     ]);
 
     const rerun = await migrateToLatest({ db });

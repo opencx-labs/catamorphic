@@ -1,6 +1,6 @@
 # 0292: Review publication is serialized application code
 
-- **Status:** Accepted
+- **Status:** Superseded by [0325](0325-runs-queue-per-key-and-workflows-keep-session-metadata.md): `postReviews` queues per pull request chat and keeps its state in session metadata
 - **Date:** 2026-10-28
 
 ## Context

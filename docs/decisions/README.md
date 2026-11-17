@@ -39,7 +39,7 @@ Settled design decisions live here as short Architecture Decision Records. They 
 | [0024](0024-postgres-durable-pauses.md) | Postgres persisted pauses and timeouts | Accepted (updated by 0026, 0260) |
 | [0025](0025-durable-cancellation-state-machine.md) | Persisted cancellation state machine | Accepted (updated by 0026) |
 | [0026](0026-unified-workflows-runs-and-batch-scopes.md) | Unified workflows, runs, and batch scopes | Accepted |
-| [0027](0027-correlation-keys-and-external-signals.md) | Correlation keys and named external signals | Accepted |
+| [0027](0027-correlation-keys-and-external-signals.md) | Correlation keys and named external signals | Accepted (amended by 0291, 0325) |
 | [0028](0028-shared-rate-budgets-and-tenant-execution-policy.md) | Shared rate budgets and host-owned tenant execution policy | Accepted; claim cost and rate accuracy corrected by 0029 |
 | [0029](0029-queue-and-rate-correctness-at-scale.md) | Queue claim cost, lease fencing, and rate budget accuracy at scale | Accepted; retention gap it identified is closed by 0030 |
 | [0030](0030-run-retention.md) | Run retention | Accepted |
@@ -238,7 +238,7 @@ Settled design decisions live here as short Architecture Decision Records. They 
 | [0223](0223-an-agent-terminal-lives-as-long-as-its-command.md) | An agent terminal lives as long as its command | Accepted (amends 0155; bash marks its commands, amended by 0230) |
 | [0224](0224-a-voice-agent-can-stop-listening.md) | A voice conversation's agent can stop listening | Accepted (amends 0133, 0216) |
 | [0225](0225-harnesses-get-connectors-as-mcp-servers-results-unchanged.md) | Harnesses get connectors as MCP servers, results unchanged | Accepted (amends 0065, 0103, 0133, 0198) |
-| [0226](0226-session-metadata-and-this-session.md) | Session metadata, and a sidebar section for the chat in front | Accepted (refines 0132, 0147, 0215; amended by 0234) |
+| [0226](0226-session-metadata-and-this-session.md) | Session metadata, and a sidebar section for the chat in front | Accepted (refines 0132, 0147, 0215; amended by 0234, 0325) |
 | [0227](0227-pages-ask-through-works-dialogs.md) | Pages ask through Work's dialogs: alerts, Leave site? and sign-ins over their tab | Accepted (amends 0150, 0151, 0194, 0202) |
 | [0228](0228-a-sign-in-that-can-still-refresh-is-retried.md) | A sign-in that can still refresh is retried, and a fixed one runs the turn again | Accepted (amends 0222; amended by 0269; diagnosis corrected by 0275) |
 | [0229](0229-idle-pollers-wait-for-hints.md) | Idle pollers wait for hints from their own process | Accepted (refines 0193, 0197, 0207) |
@@ -265,10 +265,10 @@ Settled design decisions live here as short Architecture Decision Records. They 
 | [0256](0256-the-gateway-rewrites-model-requests.md) | The gateway rewrites model requests: host rewrites, then a connection's override and paths, before policy, failing closed | Accepted (amends 0180; amended by 0261) |
 | [0257](0257-setup-has-its-own-network.md) | Setup has its own network: the base checkout alone, widened for a while, narrow before the session's work arrives | Accepted (amends 0208; amended by 0324: `exec in: "setup"` from a setup workflow) |
 | [0258](0258-machines-on-demand.md) | Machines on demand: work waits for a machine, rules scale with it, and a machine drains under its node lock | Accepted (refines 0173, 0193, 0205) |
-| [0259](0259-reviews-post-from-a-workflow.md) | Reviews post from a workflow: the review chat never writes to GitHub | Accepted (refines 0177, 0181; the report is a typed result by 0323) |
+| [0259](0259-reviews-post-from-a-workflow.md) | Reviews post from a workflow: the review chat never writes to GitHub | Accepted (refines 0177, 0181; the report is a typed result by 0323; publication queues per chat by 0325) |
 | [0260](0260-every-returned-call-carries-state.md) | Every returned call carries state to the next step | Accepted (amends 0020, 0024) |
 | [0261](0261-customize-the-work-server-with-your-own-image.md) | Customize the Work server with your own image: the stock server is one file, and its configuration does not grow | Superseded by 0294 |
-| [0262](0262-recipes-are-registry-packs.md) | Recipes are registry packs: installed into a project and owned there, served by `registry.read` on every host | Accepted (refines 0126, 0179, 0181) |
+| [0262](0262-recipes-are-registry-packs.md) | Recipes are registry packs: installed into a project and owned there, served by `registry.read` on every host | Accepted (refines 0126, 0179, 0181; amended by 0325) |
 | [0263](0263-theme-pictures-behind-sidebars-and-chat.md) | A theme can put a picture behind the sidebars and the chat | Accepted |
 | [0264](0264-a-wait-ends-when-something-reaches-the-agent.md) | A wait ends when something reaches the agent: one signal on every host tool call, one way to wait | Accepted (refines 0155, 0240) |
 | [0265](0265-voice-yields-to-the-person-and-keeps-what-they-saw.md) | Voice yields to the person, and keeps what they saw as they spoke | Accepted (amends 0216, 0236; amended by 0267) |
@@ -297,7 +297,7 @@ Settled design decisions live here as short Architecture Decision Records. They 
 | [0289](0289-workflow-waits-give-back-physical-capacity.md) | Workflow waits give back physical capacity through Allocation retirement and fresh admission | Accepted (extends 0100, 0173, 0190) |
 | [0290](0290-restarts-commit-cancellation-and-replacement-together.md) | Restarts commit cancellation and replacement together | Accepted (amends 0027) |
 | [0291](0291-named-signals-buffer-within-a-run-generation.md) | Named signals buffer within one run generation | Accepted (amends 0027) |
-| [0292](0292-review-publication-is-serialized-application-code.md) | Review publication is serialized application code | Accepted |
+| [0292](0292-review-publication-is-serialized-application-code.md) | Review publication is serialized application code | Superseded by 0325 |
 | [0293](0293-model-grants-end-with-their-turn-attempt.md) | Model grants end with their turn attempt | Accepted (amends 0180, 0255; amended by 0329) |
 | [0294](0294-work-server-deployments-compose-libraries-and-workflows.md) | Work server deployments compose libraries and workflows; no stock image | Accepted (supersedes 0261; amends 0059, 0159, 0160, 0285) |
 | [0295](0295-boundary-attempts-bound-host-and-connection-calls.md) | Boundary attempts bound host and connection calls | Accepted |
@@ -328,6 +328,7 @@ Settled design decisions live here as short Architecture Decision Records. They 
 | [0321](0321-runner-state-stays-out-of-the-checkout.md) | Runner state stays out of the checkout | Accepted (amends 0198) |
 | [0323](0323-agents-submit-typed-results.md) | Agents submit typed results | Accepted (amends 0050, 0090, 0197, 0259) |
 | [0324](0324-workflows-run-commands-in-a-chats-workspace.md) | Workflows run commands in a chat's workspace, setup can be a workflow, and workspaces report their changes | Accepted (amends 0208, 0257) |
+| [0325](0325-runs-queue-per-key-and-workflows-keep-session-metadata.md) | Runs queue per key, and workflows keep state in session metadata | Accepted (amends 0027, 0226, 0259, 0262; supersedes 0292) |
 | [0326](0326-workflows-record-project-events.md) | Workflows record project events | Accepted (amends 0156, 0158, 0171, 0177) |
 | [0327](0327-machine-provisioners-are-workflows.md) | Machine provisioners are workflows | Accepted (refines 0205, 0258) |
 | [0328](0328-hand-offs-keep-results-acp-reports-its-turn.md) | Hand-offs keep results and open requests; ACP agents take effort and report their turn | Accepted (amends 0198, 0241, 0255, 0298) |

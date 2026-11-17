@@ -175,6 +175,7 @@ export interface AppContext {
 export interface RunSnapshot {
   runId: string;
   status:
+    | "queued"
     | "pending"
     | "running"
     | "waiting"

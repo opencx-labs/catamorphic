@@ -11,12 +11,12 @@ server side: GitHub, the service connections, and the review machines.
 For a different review algorithm, cloud allocator or external Postgres ledger,
 compose the same primitives rather than requiring a native integration or
 forcing this recipe onto the application. See [workflow composition](workflow-composition.md).
-The pack includes a deployment-owned publisher hook and an application Postgres
-ledger. Install both before enabling publication. All publishing replicas share
-the ledger and serialize each pull request; stable effect receipts reconcile a
-write whose response was lost. An uncertain effect with no confirmed destination
-receipt blocks later writes for that pull request rather than guessing it is
-safe to repeat a create.
+Nothing installs into the server: publication is the pack's `postReviews`
+workflow. It queues per pull request chat (ADR 0325), so overlapping turns
+publish one at a time, keeps each commit's verdict and what it posted in the
+chat's metadata, and writes through the GitHub connection's typed actions
+with stamps, so a retry after a lost answer finds the write instead of
+posting again.
 
 What runs where:
 
@@ -25,13 +25,12 @@ What runs where:
   runs the workflows, and holds every credential: the App's key, the replica's
   password, Slack's token. It also **posts**: when a review chat's turn ends,
   the `postReviews` workflow (in the workflow-only `github-poster`
-  Environment) returns one host call with the session and turn ids. The hook
-  reads the turn's typed `review` result (the reviewer submits it with
-  `submit_result`, and Work records only a value its schema accepts), validates
-  it again, checks its current generation and head,
+  Environment) reads the turn's typed `review` result (the reviewer submits
+  it with `submit_result`, and Work records only a value its schema accepts),
+  validates it again, checks the pull request's head,
   then posts a commit-bound review, check run and optional reply through the
-  connection broker. The default publisher leaves description edits, dismissal
-  of earlier change requests and thread resolution to people.
+  `github` connection. It leaves description edits, dismissal of earlier
+  change requests and thread resolution to people.
 - A **review machine** (a worker labelled `pool=review`, opened to the
   project) runs each pull request's chat in the `review` Environment: its own
   sandbox from the project's image, with Docker inside it, checked out at the
@@ -66,8 +65,8 @@ needs, and the manifest requests:
 
 The manifest also asks for Issues: write. A pull request conversation can use
 pull-request permissions; automations that edit or delete the App's issue
-comments need Issues: write. The publisher reads App-owned conversation comments
-to reconcile receipts and never edits or deletes them.
+comments need Issues: write. The poster finds its own conversation comments by
+their stamp on a retry and never edits or deletes them.
 
 It subscribes to pull request, pull request review comment, and issue
 comment events.
@@ -189,41 +188,15 @@ adds:
 - `.work/workflows/src/reviews.ts`: `reviewPullRequests`,
   `answerReviewComments`, `closePullRequestChats`, and `postReviews`.
 
-Replace `acme/web` in each trigger's `where`,
-with the project's repository, and use the same repository in the deployment
-publisher. Events from the App's other repositories must start nothing. Map GitHub logins
+Replace `acme/web` in each trigger's `where` and in `REVIEWED_REPOSITORY`
+with the project's repository. Events from the App's other repositories must start nothing. Map GitHub logins
 to members in `GITHUB_MEMBERS` (they approve the chat's escalations) or
 commit a `reviewers` role. Check it with the project MCP `program_check`
 tool (or `bun run --cwd .work check`, with the project's pinned public
 `@catamorphic/*` packages installed), then propose the change; it lands through
 a pull request like any other.
 
-## 5. Install the publisher in the deployment
-
-Copy the pack's `.work/server/review-publisher.ts`, `review-report.ts` and
-`review-publisher.sql` into the company-owned server source. These are templates;
-Work never loads privileged code automatically from a project's mutable files.
-Apply the SQL to the application Postgres database. Its schema is independent
-of Work's tables and is shared by all replicas that publish these reviews.
-
-Use the pack skill's complete deployment manifest: pinned
-`@catamorphic/work-server` and `@catamorphic/server-sdk` releases plus `pg`, with
-`@types/pg` for typechecking. Keep the telemetry peers too when copying the
-reference entry points. Create distinct dedicated `lockPool` and `ledgerPool`
-instances pointing to the same database. This keeps lock waiters from starving intent and receipt commits.
-Each needs at least one connection; transaction poolers are supported because
-coordination uses transaction row locks. Close both pools during deployment
-shutdown.
-
-Register `reviewPublicationCapability` under `hooks.capabilityProviders`. It
-provides `company.review-publication`, the host call used by `postReviews`.
-Configure its actual project and repository, and give it the initialized SDK
-through the getter shown in the installed pack skill. The hook resolves the
-stamped caller, run and connection authority; the workflow passes ids, never
-posting credentials or an unverified report. Follow the pack's tested wiring
-example rather than importing these templates from a live project at boot.
-
-## 6. Turn it on
+## 5. Turn it on
 
 Someone with `automations:write`, in a role whose `environments` list
 `default` and `github-poster` and whose `connections` include
@@ -244,7 +217,7 @@ run unchanged; skip the webhook URL and `GITHUB_WEBHOOK_SECRET`. Events
 arrive up to a minute late, and the first poll records nothing: it remembers
 the open pull requests as they are.
 
-## 7. Verify
+## 6. Verify
 
 1. Open a small pull request. A project chat `pr-acme/web-<number>` appears:
    Environment `review`, a review machine (created for it when none was
@@ -280,10 +253,12 @@ that turn's old grant after interruption, completion or lease loss, or during a
 later turn. Git and HTTP grants keep their normal background lifetime. Calls
 already admitted may finish streaming; clean up cloud resources independently
 and enforce spending policy in connection guards.
-Before unattended use, interleave two publishers and stop one after GitHub has
-accepted a create but before its receipt commits. The next attempt must find the
-exact App-owned receipt. If it cannot, publication stays blocked while the
-operator reconciles the destination; a missing list result is not proof that an
-older request cannot still arrive. Stop the old poster and reconcile its writes
-before upgrading. This is application policy built from ordinary hooks and
-Postgres, not a universal exactly-once external write guarantee.
+While one `postReviews` run publishes, a later turn's run for the same pull
+request shows as `queued` and starts when it settles; the chat's
+`review.verdicts` and `review.posted` metadata say what each commit carries
+and what was posted. A stamp finds a write GitHub accepted when its answer was
+lost; a write GitHub's lists do not show yet can still be posted twice by one
+retry. This is application policy built from ordinary workflow primitives, not
+a universal exactly-once external write guarantee. A deployment that ran the
+earlier server publisher removes its hook registration and its
+`work_review_publication` schema once its last runs have finished.

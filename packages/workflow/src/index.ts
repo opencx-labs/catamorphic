@@ -84,6 +84,8 @@ export type {
   TransitionCall,
   WorkflowBuilderContext,
   WorkflowCaller,
+  WorkflowConcurrency,
+  WorkflowConflictPolicy,
   WorkflowConnectionRequirement,
   WorkflowControls,
   WorkflowDefinition,

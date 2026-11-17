@@ -669,10 +669,11 @@ gateway connection whose named operations are its capabilities
 The `pull-request-reviews` pack is the larger one: a code and
 security review of every pull request, in a chat per pull request on a
 dedicated review pool, verified by running the change and reported to a
-workflow outside the sandbox that calls a deployment-owned publisher hook.
-The hook serializes commit-bound reviews, check runs and replies through an
-application Postgres ledger, reconciles uncertain writes, and leaves mutable
-PR descriptions, dismissals and thread resolution to people
+workflow outside the sandbox. It queues per pull request, so overlapping
+turns publish commit-bound reviews, check runs and replies one at a time,
+keeps each commit's verdict on the review chat, stamps every write so a retry
+finds it, and leaves mutable PR descriptions, dismissals and thread
+resolution to people
 ([Review pull requests](skills/setup-work-server/references/review-pull-requests.md)).
 A server no sender can reach polls instead: a workflow with `events:write`
 records events of the project's own kinds

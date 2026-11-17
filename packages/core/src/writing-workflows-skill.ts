@@ -105,6 +105,19 @@ operators, so a payload field named \`exists\` or \`prefix\` matches by value.
 Header names match in any case.
 Filter in \`where\` rather than in code, so unrelated events never start runs.
 
+Runs about one subject can take turns. Declare
+\`concurrency: { key: "payload.session.key", onConflict: "queue" }\` beside
+\`triggers\` and \`steps\`: \`key\` is a dot path into the run input (constant
+data), and its value, a string or number, names the subject. With \`queue\` a
+run whose subject already has a live run waits, in arrival order and holding
+no machine, until the runs ahead of it settle; its status reads \`queued\`.
+\`ignore\` returns the live run instead, \`restart\` replaces it, \`error\`
+refuses. A run whose input has no value at the path runs unkeyed. Use
+\`queue\` whenever a run reads state and then writes based on it (a verdict,
+a counter, a posted comment), so two overlapping runs never both read the old
+state. A delivery's own id (a webhook's, a schedule occurrence, an event) is
+already deduplicated: the same delivery never starts a second run.
+
 Webhooks use \`trigger("webhook", { name: "github" })\`: a lowercase name that
 becomes the project's URL segment. The server stores each request durably and
 answers 202 before the workflow runs, so a redelivery (same delivery id header) runs

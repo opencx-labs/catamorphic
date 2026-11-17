@@ -12,9 +12,11 @@ import {
 } from "../identity.js";
 import { AccessDeniedError } from "../services/artifact-scope.js";
 import {
+  EnvironmentBindingUnavailableError,
   EnvironmentPolicyInvalidError,
   type ExecutionEnvironmentsService,
 } from "../services/execution-environments-service.js";
+import { EnvironmentCapacityError } from "../services/worker-capacity.js";
 import {
   WorkflowEnablementConflictError,
   WorkflowEnablementConsentRequiredError,
@@ -306,6 +308,22 @@ describe("WorkflowEnablementsService", () => {
     expect(
       await service.reenable({ identity: memberA, enablementId: created!.id }),
     ).toMatchObject({ status: "active", suspensionReason: null });
+  });
+
+  it("a full or offline machine is not lost access: the enablement stays active", async () => {
+    const [created] = await service.list({ identity: memberA, projectId });
+    for (const error of [
+      new EnvironmentCapacityError("worker"),
+      new EnvironmentBindingUnavailableError("default"),
+    ]) {
+      admit.mockRejectedValueOnce(error);
+      await expect(
+        service.revalidate({ identity: memberA, enablementId: created!.id }),
+      ).resolves.toMatchObject({ enablement: { status: "active" } });
+      expect(
+        await service.get({ identity: memberA, enablementId: created!.id }),
+      ).toMatchObject({ status: "active", suspensionReason: null });
+    }
   });
 
   it("project automations: admins enable them, members see them, runs are the project's", async () => {

@@ -81,8 +81,7 @@
             "create_review",
             "create_check_run",
             "reply_to_review_comment",
-            "issue_comment",
-            "issue_comments"
+            "issue_comment"
           ]
         }
       }

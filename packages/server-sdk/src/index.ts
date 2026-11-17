@@ -75,6 +75,7 @@ export {
   RunCapabilityError,
   RunEnrollmentConflictError,
   RunNotFoundError,
+  RunQueueFullError,
   RunSignalInvalidError,
   RunSignalLimitError,
   RunSignalNotFoundError,

@@ -1,3 +1,4 @@
+import type { JsonValue } from "./json.js";
 import type { TransitionCall } from "./workflow.js";
 
 /** Current host snapshot; authority fields identify its owner. Mirrors may lag. */
@@ -39,6 +40,11 @@ export interface SessionSnapshot {
    * then. Null for a chat started from the project itself.
    */
   workspace: { ref: string; commit: string } | null;
+  /**
+   * Named values on the chat (ADR 0226): set by agents, people and
+   * workflows. Keys a workflow owns carry its purpose (`review.verdicts`).
+   */
+  metadata: Record<string, JsonValue>;
 }
 /**
  * Where a chat's workspace starts (ADR 0178): a branch, tag, commit, or
@@ -319,6 +325,18 @@ export interface SessionHostOperations {
       timeoutSeconds?: number;
     },
     SessionExecResult
+  >;
+  /**
+   * Set named values on the chat (ADR 0226, 0325): each key of `set` takes
+   * its value whole, and null removes it. Keys are lowercase words joined
+   * by `_`, `-` or `.`; at most 32 keys, 16 KB a value and 64 KB in all.
+   * Closed and archived chats still take writes. Only the host holding the
+   * chat's authority writes it; elsewhere the call fails and retries. The
+   * same write twice changes nothing, so there is no idempotency key.
+   */
+  setMetadata: Call<
+    Target & { set: Record<string, JsonValue | null> },
+    { sessionId: string; metadata: Record<string, JsonValue> }
   >;
   /** Stop this workflow's temporary activation, retaining its source and runs. */
   stop: Call<{ idempotencyKey: string }, { stopped: boolean }>;

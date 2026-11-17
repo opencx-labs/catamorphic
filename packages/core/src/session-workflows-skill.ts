@@ -81,8 +81,9 @@ and session_reopen for new work. Observe session.work-changed with
 
 context.host["catamorphic.sessions"] provides typed inspect, list, history,
 results, usage, deliver, create, fork, spawn, archive, unarchive, interrupt,
-complete, reopen, exec, stopWatcher, and stop operations. Every host call is a
-boundary transition: RETURN it. Consume its result as the next boundary's input
+complete, reopen, exec, stopWatcher, stop, and setMetadata operations. Every
+host call is a boundary transition: RETURN it. Consume its result as the next
+boundary's input
 (pass { state } as a second argument to keep data across it; the next boundary
 then receives { result, state }, see durable-workflows).
 Do not await it, put it inside a use-step helper, or invoke a second host call
@@ -544,6 +545,17 @@ sandboxes need it.
 - archive stops the session tree's work and future temporary activations while
   preserving readable history. Follow archive preview and confirmStop requirements for stopping live work. Tab closure is
   unrelated. stop stops only the calling temporary activation and retains runs.
+
+inspect and find return the chat's metadata: named JSON values agents, people
+and workflows set (ADR 0226). setMetadata({ sessionId | key, set }) applies a
+merge patch: each key in set takes its value whole, null removes it, and keys
+not named stay. Keys are lowercase words joined by _, - or . (at most 32 keys,
+16 KB a value, 64 KB in all). Prefix the keys a workflow owns with its purpose
+(review.verdicts), and leave other keys alone. Closed and archived chats still
+take writes; only the host holding the chat's authority writes it, so a call
+elsewhere fails and the boundary retries. The same write twice changes
+nothing, so it takes no idempotencyKey. Queue the workflow per chat
+(concurrency, see writing-workflows) when it reads a key and then writes it.
 
 Use stable idempotencyKey values for operations that take them. deliver
 defaults to one delivery per run, chat and content, so a retried boundary never

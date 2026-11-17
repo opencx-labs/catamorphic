@@ -3111,7 +3111,7 @@ export interface paths {
                                     inspectItems: boolean;
                                 };
                                 /** @enum {string} */
-                                status: "pending" | "running" | "waiting" | "paused" | "canceling" | "completed" | "failed" | "canceled";
+                                status: "queued" | "pending" | "running" | "waiting" | "paused" | "canceling" | "completed" | "failed" | "canceled";
                                 /** @enum {string} */
                                 phase: "execute" | "boundary" | "source" | "process" | "sink" | "pause" | "child";
                                 currentStepIndex: number | null;
@@ -3224,7 +3224,7 @@ export interface paths {
                         environment?: string;
                         correlationKey?: string;
                         /** @enum {string} */
-                        onConflict?: "ignore" | "error" | "restart";
+                        onConflict?: "ignore" | "error" | "restart" | "queue";
                     };
                 };
             };
@@ -3253,7 +3253,7 @@ export interface paths {
                                 inspectItems: boolean;
                             };
                             /** @enum {string} */
-                            status: "pending" | "running" | "waiting" | "paused" | "canceling" | "completed" | "failed" | "canceled";
+                            status: "queued" | "pending" | "running" | "waiting" | "paused" | "canceling" | "completed" | "failed" | "canceled";
                             /** @enum {string} */
                             phase: "execute" | "boundary" | "source" | "process" | "sink" | "pause" | "child";
                             currentStepIndex: number | null;
@@ -3452,7 +3452,7 @@ export interface paths {
                         environment?: string;
                         correlationKey?: string;
                         /** @enum {string} */
-                        onConflict?: "ignore" | "error" | "restart";
+                        onConflict?: "ignore" | "error" | "restart" | "queue";
                         budgetMs?: number;
                     };
                 };
@@ -3770,7 +3770,7 @@ export interface paths {
                                 inspectItems: boolean;
                             };
                             /** @enum {string} */
-                            status: "pending" | "running" | "waiting" | "paused" | "canceling" | "completed" | "failed" | "canceled";
+                            status: "queued" | "pending" | "running" | "waiting" | "paused" | "canceling" | "completed" | "failed" | "canceled";
                             /** @enum {string} */
                             phase: "execute" | "boundary" | "source" | "process" | "sink" | "pause" | "child";
                             currentStepIndex: number | null;
@@ -5338,7 +5338,7 @@ export interface paths {
                         workflows?: string[];
                         correlationKey?: string;
                         /** @enum {string} */
-                        onConflict?: "ignore" | "error" | "restart";
+                        onConflict?: "ignore" | "error" | "restart" | "queue";
                         budgetMs?: number;
                     };
                 };
@@ -5535,7 +5535,7 @@ export interface paths {
                                 inspectItems: boolean;
                             };
                             /** @enum {string} */
-                            status: "pending" | "running" | "waiting" | "paused" | "canceling" | "completed" | "failed" | "canceled";
+                            status: "queued" | "pending" | "running" | "waiting" | "paused" | "canceling" | "completed" | "failed" | "canceled";
                             /** @enum {string} */
                             phase: "execute" | "boundary" | "source" | "process" | "sink" | "pause" | "child";
                             currentStepIndex: number | null;
@@ -5725,7 +5725,7 @@ export interface paths {
                                 inspectItems: boolean;
                             };
                             /** @enum {string} */
-                            status: "pending" | "running" | "waiting" | "paused" | "canceling" | "completed" | "failed" | "canceled";
+                            status: "queued" | "pending" | "running" | "waiting" | "paused" | "canceling" | "completed" | "failed" | "canceled";
                             /** @enum {string} */
                             phase: "execute" | "boundary" | "source" | "process" | "sink" | "pause" | "child";
                             currentStepIndex: number | null;
@@ -5879,7 +5879,7 @@ export interface paths {
                                 inspectItems: boolean;
                             };
                             /** @enum {string} */
-                            status: "pending" | "running" | "waiting" | "paused" | "canceling" | "completed" | "failed" | "canceled";
+                            status: "queued" | "pending" | "running" | "waiting" | "paused" | "canceling" | "completed" | "failed" | "canceled";
                             /** @enum {string} */
                             phase: "execute" | "boundary" | "source" | "process" | "sink" | "pause" | "child";
                             currentStepIndex: number | null;
@@ -6033,7 +6033,7 @@ export interface paths {
                                 inspectItems: boolean;
                             };
                             /** @enum {string} */
-                            status: "pending" | "running" | "waiting" | "paused" | "canceling" | "completed" | "failed" | "canceled";
+                            status: "queued" | "pending" | "running" | "waiting" | "paused" | "canceling" | "completed" | "failed" | "canceled";
                             /** @enum {string} */
                             phase: "execute" | "boundary" | "source" | "process" | "sink" | "pause" | "child";
                             currentStepIndex: number | null;
@@ -6195,7 +6195,7 @@ export interface paths {
                                 inspectItems: boolean;
                             };
                             /** @enum {string} */
-                            status: "pending" | "running" | "waiting" | "paused" | "canceling" | "completed" | "failed" | "canceled";
+                            status: "queued" | "pending" | "running" | "waiting" | "paused" | "canceling" | "completed" | "failed" | "canceled";
                             /** @enum {string} */
                             phase: "execute" | "boundary" | "source" | "process" | "sink" | "pause" | "child";
                             currentStepIndex: number | null;
@@ -14699,7 +14699,7 @@ export interface paths {
                         environment?: string;
                         correlationKey?: string;
                         /** @enum {string} */
-                        onConflict?: "ignore" | "error" | "restart";
+                        onConflict?: "ignore" | "error" | "restart" | "queue";
                         budgetMs?: number;
                     };
                 };
@@ -14834,7 +14834,7 @@ export interface paths {
                         environment?: string;
                         correlationKey?: string;
                         /** @enum {string} */
-                        onConflict?: "ignore" | "error" | "restart";
+                        onConflict?: "ignore" | "error" | "restart" | "queue";
                     };
                 };
             };
@@ -14863,7 +14863,7 @@ export interface paths {
                                 inspectItems: boolean;
                             };
                             /** @enum {string} */
-                            status: "pending" | "running" | "waiting" | "paused" | "canceling" | "completed" | "failed" | "canceled";
+                            status: "queued" | "pending" | "running" | "waiting" | "paused" | "canceling" | "completed" | "failed" | "canceled";
                             /** @enum {string} */
                             phase: "execute" | "boundary" | "source" | "process" | "sink" | "pause" | "child";
                             currentStepIndex: number | null;
@@ -15053,7 +15053,7 @@ export interface paths {
                                 inspectItems: boolean;
                             };
                             /** @enum {string} */
-                            status: "pending" | "running" | "waiting" | "paused" | "canceling" | "completed" | "failed" | "canceled";
+                            status: "queued" | "pending" | "running" | "waiting" | "paused" | "canceling" | "completed" | "failed" | "canceled";
                             /** @enum {string} */
                             phase: "execute" | "boundary" | "source" | "process" | "sink" | "pause" | "child";
                             currentStepIndex: number | null;
@@ -16032,7 +16032,7 @@ export interface paths {
                         environment?: string;
                         correlationKey?: string;
                         /** @enum {string} */
-                        onConflict?: "ignore" | "error" | "restart";
+                        onConflict?: "ignore" | "error" | "restart" | "queue";
                     };
                 };
             };
@@ -16061,7 +16061,7 @@ export interface paths {
                                 inspectItems: boolean;
                             };
                             /** @enum {string} */
-                            status: "pending" | "running" | "waiting" | "paused" | "canceling" | "completed" | "failed" | "canceled";
+                            status: "queued" | "pending" | "running" | "waiting" | "paused" | "canceling" | "completed" | "failed" | "canceled";
                             /** @enum {string} */
                             phase: "execute" | "boundary" | "source" | "process" | "sink" | "pause" | "child";
                             currentStepIndex: number | null;
@@ -19405,7 +19405,7 @@ export interface paths {
                                 inspectItems: boolean;
                             };
                             /** @enum {string} */
-                            status: "pending" | "running" | "waiting" | "paused" | "canceling" | "completed" | "failed" | "canceled";
+                            status: "queued" | "pending" | "running" | "waiting" | "paused" | "canceling" | "completed" | "failed" | "canceled";
                             /** @enum {string} */
                             phase: "execute" | "boundary" | "source" | "process" | "sink" | "pause" | "child";
                             currentStepIndex: number | null;

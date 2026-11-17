@@ -12582,7 +12582,7 @@
                   },
                   "onConflict": {
                     "type": "string",
-                    "enum": ["ignore", "error", "restart"]
+                    "enum": ["ignore", "error", "restart", "queue"]
                   }
                 }
               }
@@ -12676,6 +12676,7 @@
                     "status": {
                       "type": "string",
                       "enum": [
+                        "queued",
                         "pending",
                         "running",
                         "waiting",
@@ -13255,6 +13256,7 @@
                           "status": {
                             "type": "string",
                             "enum": [
+                              "queued",
                               "pending",
                               "running",
                               "waiting",
@@ -13614,7 +13616,7 @@
                   },
                   "onConflict": {
                     "type": "string",
-                    "enum": ["ignore", "error", "restart"]
+                    "enum": ["ignore", "error", "restart", "queue"]
                   },
                   "budgetMs": {
                     "type": "integer",
@@ -14244,6 +14246,7 @@
                     "status": {
                       "type": "string",
                       "enum": [
+                        "queued",
                         "pending",
                         "running",
                         "waiting",
@@ -18029,7 +18032,7 @@
                   },
                   "onConflict": {
                     "type": "string",
-                    "enum": ["ignore", "error", "restart"]
+                    "enum": ["ignore", "error", "restart", "queue"]
                   },
                   "budgetMs": {
                     "type": "integer",
@@ -18368,6 +18371,7 @@
                     "status": {
                       "type": "string",
                       "enum": [
+                        "queued",
                         "pending",
                         "running",
                         "waiting",
@@ -18951,6 +18955,7 @@
                     "status": {
                       "type": "string",
                       "enum": [
+                        "queued",
                         "pending",
                         "running",
                         "waiting",
@@ -19367,6 +19372,7 @@
                     "status": {
                       "type": "string",
                       "enum": [
+                        "queued",
                         "pending",
                         "running",
                         "waiting",
@@ -19783,6 +19789,7 @@
                     "status": {
                       "type": "string",
                       "enum": [
+                        "queued",
                         "pending",
                         "running",
                         "waiting",
@@ -20230,6 +20237,7 @@
                     "status": {
                       "type": "string",
                       "enum": [
+                        "queued",
                         "pending",
                         "running",
                         "waiting",
@@ -39035,7 +39043,7 @@
                   },
                   "onConflict": {
                     "type": "string",
-                    "enum": ["ignore", "error", "restart"]
+                    "enum": ["ignore", "error", "restart", "queue"]
                   },
                   "budgetMs": {
                     "type": "integer",
@@ -39297,7 +39305,7 @@
                   },
                   "onConflict": {
                     "type": "string",
-                    "enum": ["ignore", "error", "restart"]
+                    "enum": ["ignore", "error", "restart", "queue"]
                   }
                 }
               }
@@ -39418,6 +39426,7 @@
                     "status": {
                       "type": "string",
                       "enum": [
+                        "queued",
                         "pending",
                         "running",
                         "waiting",
@@ -39923,6 +39932,7 @@
                     "status": {
                       "type": "string",
                       "enum": [
+                        "queued",
                         "pending",
                         "running",
                         "waiting",
@@ -41966,7 +41976,7 @@
                   },
                   "onConflict": {
                     "type": "string",
-                    "enum": ["ignore", "error", "restart"]
+                    "enum": ["ignore", "error", "restart", "queue"]
                   }
                 }
               }
@@ -42061,6 +42071,7 @@
                     "status": {
                       "type": "string",
                       "enum": [
+                        "queued",
                         "pending",
                         "running",
                         "waiting",
@@ -48258,6 +48269,7 @@
                     "status": {
                       "type": "string",
                       "enum": [
+                        "queued",
                         "pending",
                         "running",
                         "waiting",

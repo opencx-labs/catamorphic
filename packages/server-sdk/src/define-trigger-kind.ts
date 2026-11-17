@@ -64,8 +64,11 @@ export function defineTriggerKind<
     config: z.output<ConfigSchema>;
     payload: z.output<PayloadSchema>;
   }) => boolean;
-  /** Derives an enrollment correlation key from a validated payload. */
-  correlationKey?: (payload: z.output<PayloadSchema>) => string | undefined;
+  /**
+   * This delivery's identity in a validated payload (ADR 0325), such as a
+   * webhook's delivery id: a redelivery returns the run it started.
+   */
+  deliveryKey?: (payload: z.output<PayloadSchema>) => string | undefined;
   /**
    * Project permissions a workflow must declare to bind this kind, when its
    * events disclose what only some members may read (ADR 0210), e.g.
@@ -97,8 +100,8 @@ export function defineTriggerKind<
             payload: args.payload.parse(payload),
           }) ?? true
       : undefined,
-    correlationKey: args.correlationKey
-      ? (payload) => args.correlationKey?.(payload as z.output<PayloadSchema>)
+    deliveryKey: args.deliveryKey
+      ? (payload) => args.deliveryKey?.(payload as z.output<PayloadSchema>)
       : undefined,
     ...(args.requiredPermissions?.length
       ? { requiredPermissions: args.requiredPermissions }

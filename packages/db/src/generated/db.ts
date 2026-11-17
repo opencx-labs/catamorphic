@@ -1337,7 +1337,9 @@ export interface WorkflowRuns {
   completed_at: Timestamp | null;
   correlation_key: string | null;
   created_at: Generated<Timestamp>;
+  delivery_key: string | null;
   deployment_artifact_id: string | null;
+  enrollment: Json | null;
   environment_name: string | null;
   error: string | null;
   external_user_id: string | null;
@@ -1348,6 +1350,7 @@ export interface WorkflowRuns {
   phase: Generated<string>;
   project_id: string;
   provenance: Json;
+  queued_at: Timestamp | null;
   result: Json | null;
   session_artifact_id: string | null;
   setup_build: string | null;
