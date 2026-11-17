@@ -26,6 +26,7 @@ import {
   NoCompatibleEnvironmentError,
   ProjectNotFoundError,
   parseChatKey,
+  SessionInputNotFoundError,
   SessionMirrorBehindError,
   SessionMirrorDivergedError,
   UnsupportedAgentTopologyError,
@@ -77,6 +78,8 @@ import {
   SessionItemsPageSchema,
   SessionItemsQuerySchema,
   SessionMirrorQuerySchema,
+  SessionResultsQuerySchema,
+  SessionResultsSchema,
   SessionStreamMessageSchema,
   SkillSchema,
   UpdateAgentSessionActivitySchema,
@@ -379,6 +382,52 @@ export function registerAgentRoutes(app: FastifyInstance, ctx: RouteContext) {
           error instanceof AgentSessionNotFoundError
         )
           return reply.status(404).send({ error: "Session not found" });
+        throw error;
+      }
+    },
+  });
+
+  // The chat's accepted typed results, newest first (ADR 0323): the same
+  // read workflows make with `results`.
+  typed.route({
+    method: "GET",
+    url: "/projects/:projectId/agent/sessions/:sessionId/results",
+    schema: {
+      params: AgentSessionIdParamsSchema,
+      querystring: SessionResultsQuerySchema,
+      response: {
+        200: SessionResultsSchema,
+        400: ErrorSchema,
+        404: ErrorSchema,
+        503: ErrorSchema,
+      },
+    },
+    handler: async (request, reply) => {
+      const agentSessions = ctx.core?.agentSessions;
+      if (!agentSessions)
+        return reply.status(503).send({ error: "Coding agent not configured" });
+      const query = request.query;
+      try {
+        const results = await agentSessions.results(
+          resolveIdentity(request),
+          request.params.projectId,
+          request.params.sessionId,
+          {
+            ...(query.name ? { name: query.name } : {}),
+            ...(query.family ? { family: true } : {}),
+            ...(query.afterInput ? { afterInput: query.afterInput } : {}),
+            ...(query.limit ? { limit: query.limit } : {}),
+          },
+        );
+        return reply.send({ results });
+      } catch (error) {
+        if (
+          error instanceof ProjectNotFoundError ||
+          error instanceof AgentSessionNotFoundError
+        )
+          return reply.status(404).send({ error: "Session not found" });
+        if (error instanceof SessionInputNotFoundError)
+          return reply.status(400).send({ error: error.message });
         throw error;
       }
     },

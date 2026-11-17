@@ -95,6 +95,13 @@ export {
   validateAgentDefinition,
 } from "./services/agent-definitions-service.js";
 export {
+  checkResultValue,
+  RESULT_LIMITS,
+  RESULT_NAME_PATTERN,
+  type ResultFieldError,
+  type ResultSchemas,
+} from "./services/agent-results.js";
+export {
   AgentDelegationDeniedError,
   AgentDelegationSettingsError,
   AgentNotConfiguredError,
@@ -794,6 +801,11 @@ export {
   SNAPSHOT_TURNS,
   type TranscriptMessage,
 } from "./services/sessions/session-reads.js";
+export {
+  SessionInputNotFoundError,
+  type SessionResult,
+  SessionResultLimitError,
+} from "./services/sessions/session-results.js";
 export {
   CONTINUATION_PROMPT,
   steeredTurnId,

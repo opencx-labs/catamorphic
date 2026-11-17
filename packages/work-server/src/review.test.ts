@@ -47,8 +47,8 @@ const REVIEW_AUTOMATION_FILES = registryPack("pull-request-reviews");
  * The automations run in the default Environment on the control plane; the
  * review chat runs in `review` on the worker and uses that Environment's
  * service bindings (ADR 0181): Git through the gateway, the replica, Slack,
- * and GitHub reads. It writes nothing to GitHub: it ends its turn with a
- * work-review report, and `postReviews`, in the workflow-only
+ * and GitHub reads. It writes nothing to GitHub: it submits its `review`
+ * result (ADR 0323), and `postReviews`, in the workflow-only
  * `github-poster` Environment, posts it (ADR 0259). No credential reaches
  * the worker.
  */
@@ -239,9 +239,9 @@ async function fakeGithub(input: unknown, init?: RequestInit) {
   return Response.json({ message: "Not Found" }, { status: 404 });
 }
 
-/** A turn's report, printed by a fake agent step as its last output. */
+/** A turn's report, submitted by a fake agent step as its typed result. */
 const reportStep = (report: object) =>
-  `run printf '%s\\n' '\`\`\`work-review' '${JSON.stringify(report)}' '\`\`\`'`;
+  `tool submit_result ${JSON.stringify({ name: "review", value: report })}`;
 
 /** Git smart HTTP for the repositories, behind installation tokens. */
 function gitHttpServer(projectRoot: string): http.Server {
@@ -968,7 +968,7 @@ describe.skipIf(!databaseUrl)("reviewing pull requests (#118)", () => {
         "refs/heads/work",
       ]),
     ).toBe("");
-    expect(reported).toContain("```work-review\n{");
+    expect(reported).toContain("Recorded the review result");
 
     // The poster ran on the control plane in `github-poster` and posted
     // the report: the review with its inline comment on the chat's commit,
@@ -1104,7 +1104,7 @@ describe.skipIf(!databaseUrl)("reviewing pull requests (#118)", () => {
     expect(checkCall?.body).toMatchObject({
       output: {
         title: "No review",
-        summary: expect.stringMatching(/no work-review block/),
+        summary: expect.stringMatching(/no current review result/),
       },
     });
     expect(posted("POST", "/repos/acme/web/pulls/1/reviews")).toHaveLength(1);

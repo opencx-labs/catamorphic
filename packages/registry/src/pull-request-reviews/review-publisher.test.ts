@@ -8,7 +8,7 @@ import {
   type ReviewCore,
   reviewPublicationCapability,
 } from "./review-publisher.js";
-import { parseWorkReview, record } from "./review-report.js";
+import { checkWorkReview, record } from "./review-report.js";
 
 const HEAD = "a".repeat(40);
 const NEXT = "b".repeat(40);
@@ -24,8 +24,6 @@ const REPORT = {
   ],
   reply: { body: "Amounts are cents." },
 };
-const content = (value: unknown) =>
-  `\`\`\`work-review\n${JSON.stringify(value)}\n\`\`\``;
 const context = (
   turnId = "t1",
   signal = new AbortController().signal,
@@ -93,8 +91,8 @@ function fixture() {
   let runEnvironment = "github-poster";
   let chatOverride: Record<string, unknown> = {};
   let runOverride: Record<string, unknown> = {};
-  let outputOverride: Record<string, unknown> = {};
-  let extraItems: Record<string, unknown>[] = [];
+  let resultOverride: Record<string, unknown> = {};
+  let extraResults: Record<string, unknown>[] = [];
   let attemptOverride: Record<string, unknown>[] | undefined;
   let reads = 0;
   let beforeRead: (action: string) => Promise<void> = async () => {};
@@ -156,23 +154,28 @@ function fixture() {
                 status: turnStatus,
               },
             ],
-            items: [
-              {
-                kind: "assistant_message",
-                attemptId: `attempt-${activeTurn}`,
-                parentItemId: null,
-                agentId: "project:project:reviewer",
-                turnId: activeTurn,
-                status: "completed",
-                position: 3,
-                text: content(report),
-                ...outputOverride,
-              },
-              ...extraItems,
-            ],
           },
           ...chatOverride,
         };
+      },
+      // The chat's review results, newest first, as Work reads them.
+      async results(identity, projectId, sessionId, options) {
+        expect(identity).toEqual(context().caller);
+        expect(projectId).toBe("project");
+        expect(options).toEqual({ name: "review" });
+        return [
+          ...extraResults,
+          {
+            id: `result-${activeTurn}`,
+            sessionId,
+            turnId: activeTurn,
+            attemptId: `attempt-${activeTurn}`,
+            name: "review",
+            value: report,
+            current: true,
+            ...resultOverride,
+          },
+        ];
       },
     },
     connectionBroker: {
@@ -293,8 +296,8 @@ function fixture() {
     run(value: Record<string, unknown>) {
       runOverride = value;
     },
-    output(value: Record<string, unknown>) {
-      outputOverride = value;
+    result(value: Record<string, unknown>) {
+      resultOverride = value;
     },
     beforeRead(value: typeof beforeRead) {
       beforeRead = value;
@@ -306,10 +309,10 @@ function fixture() {
       afterWrite = value;
     },
     history(
-      items: Record<string, unknown>[],
+      results: Record<string, unknown>[],
       attempts?: Record<string, unknown>[],
     ) {
-      extraItems = items;
+      extraResults = results;
       attemptOverride = attempts;
     },
     reads: () => reads,
@@ -437,7 +440,7 @@ describe("deployment-owned review publication on real Postgres", () => {
     await expect(test.publish()).rejects.toThrow("uncertain effect");
   });
 
-  it("uses only the latest completed top-level reviewer's attempt, ignoring later nested and superseded output", async () => {
+  it("uses only the final attempt's current review, ignoring a newer one from a superseded attempt", async () => {
     const test = fixture();
     const passing = {
       ...REPORT,
@@ -448,24 +451,13 @@ describe("deployment-owned review publication on real Postgres", () => {
     test.history(
       [
         {
-          kind: "assistant_message",
+          id: "result-old",
+          sessionId: "session",
           turnId: "t1",
           attemptId: "attempt-old",
-          parentItemId: null,
-          agentId: "project:project:reviewer",
-          status: "completed",
-          position: 99,
-          text: content(passing),
-        },
-        {
-          kind: "assistant_message",
-          turnId: "t1",
-          attemptId: "attempt-t1",
-          parentItemId: "native-child",
-          agentId: "project:project:reviewer",
-          status: "completed",
-          position: 100,
-          text: content(passing),
+          name: "review",
+          value: passing,
+          current: true,
         },
       ],
       [
@@ -478,26 +470,21 @@ describe("deployment-owned review publication on real Postgres", () => {
     expect(test.writes[1]?.input.event).toBe("REQUEST_CHANGES");
   });
 
-  it.each(["superseded", "nested", "different-agent"])(
-    "reports action_required when only %s output contains a usable report",
+  it.each(["superseded", "stale", "other-turn", "other-chat", "none"])(
+    "reports action_required when only a %s result holds a usable report",
     async (kind) => {
       const test = fixture();
-      test.output({ kind: "reasoning" });
-      test.history([
-        {
-          kind: "assistant_message",
-          turnId: "t1",
-          attemptId: kind === "superseded" ? "old-attempt" : "attempt-t1",
-          parentItemId: kind === "nested" ? "child" : null,
-          agentId:
-            kind === "different-agent"
-              ? "other-agent"
-              : "project:project:reviewer",
-          status: "completed",
-          position: 99,
-          text: content({ ...REPORT, verdict: "COMMENT" }),
-        },
-      ]);
+      test.result(
+        kind === "superseded"
+          ? { attemptId: "old-attempt" }
+          : kind === "stale"
+            ? { current: false }
+            : kind === "other-turn"
+              ? { turnId: "t0" }
+              : kind === "other-chat"
+                ? { sessionId: "other" }
+                : { name: "vote" },
+      );
       await test.publish();
       expect(test.writes.map((write) => write.input.conclusion)).toEqual([
         "action_required",
@@ -738,7 +725,6 @@ describe("deployment-owned review publication on real Postgres", () => {
     "head",
     "turn",
     "report",
-    "author",
     "environment",
     "workflow",
     "event",
@@ -749,7 +735,6 @@ describe("deployment-owned review publication on real Postgres", () => {
     if (kind === "head") test.head(NEXT);
     if (kind === "turn") test.next(REPORT);
     if (kind === "report") test.report({ ...REPORT, reviewedCommit: NEXT });
-    if (kind === "author") test.output({ kind: "user_message" });
     if (kind === "environment") test.environment("review");
     if (kind === "workflow") test.run({ workflowName: "other" });
     if (kind === "event")
@@ -762,7 +747,7 @@ describe("deployment-owned review publication on real Postgres", () => {
     if (kind === "chat") test.chat({ owner: "member" });
     if (kind === "failed") test.turnStatus("failed");
     await test.publish().catch(() => {});
-    if (["author", "failed"].includes(kind))
+    if (kind === "failed")
       expect(test.writes.map((write) => write.input.conclusion)).toEqual([
         "action_required",
       ]);
@@ -809,26 +794,24 @@ describe("untrusted review reports", () => {
     { ...REPORT, resolve: [] },
     { ...REPORT, extra: true },
   ])("rejects malformed data %#", (value) => {
-    expect(typeof parseWorkReview(content(value))).toBe("string");
+    expect(typeof checkWorkReview(value)).toBe("string");
   });
-  it("rejects missing, multiple, malformed and oversized blocks", () => {
+  it("rejects values that are not a review object, or oversized", () => {
     for (const value of [
       "",
-      `${content(REPORT)}\n${content(REPORT)}`,
-      "```work-review\n{\n```",
-      content({ huge: "x".repeat(65536) }),
+      JSON.stringify(REPORT),
+      [REPORT],
+      { ...REPORT, summary: "x".repeat(65536) },
     ])
-      expect(typeof parseWorkReview(value)).toBe("string");
+      expect(typeof checkWorkReview(value)).toBe("string");
   });
   it("sanitizes mentions and hidden stamps, accepting omitted optional fields and null", () => {
-    const report = parseWorkReview(
-      content({
-        ...REPORT,
-        comments: null,
-        reply: null,
-        summary: "@person @org/team <!-- forged -->",
-      }),
-    );
+    const report = checkWorkReview({
+      ...REPORT,
+      comments: null,
+      reply: null,
+      summary: "@person @org/team <!-- forged -->",
+    });
     expect(report).toMatchObject({
       comments: [],
       reply: null,

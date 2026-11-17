@@ -32,6 +32,7 @@ interface FakeSandbox {
  * - `write-file <name> <text>` (answers `Wrote <name>`), `read-file <name>`
  * - `run <shell>`: `exit=<code>` then the output (` ;; ` chains steps)
  * - `mcp <alias> <tool> <json>`: one tool of the chat's connection server
+ * - `tool <name> <json>`: one of Work's own tools, as `submit_result`
  * - `background-start`, `background-list`, `background-stop <id>`
  * - `ask <question>`: asks the person and answers with their answer
  *
@@ -64,6 +65,7 @@ const COMMANDS = [
   "read-file",
   "run",
   "mcp",
+  "tool",
   "ask",
   "background-start",
   "background-list",
@@ -202,7 +204,7 @@ async function answer(input: {
     if (signal.aborted) resolve(undefined);
     signal.addEventListener("abort", () => resolve(undefined), { once: true });
   });
-  if (command === "run" || command === "mcp") {
+  if (command === "run" || command === "mcp" || command === "tool") {
     // An interrupt ends the turn at once; the step's command is left to
     // finish on its own.
     const results: string[] = [];
@@ -210,9 +212,11 @@ async function answer(input: {
       const result = await Promise.race([
         step.startsWith("mcp ")
           ? callConnectionTool(input.attempt, step.slice("mcp ".length))
-          : exec(step.slice("run ".length)).then(
-              (done) => `exit=${done.exitCode}\n${done.result.trim()}`,
-            ),
+          : step.startsWith("tool ")
+            ? callWorkTool(input.host, step.slice("tool ".length))
+            : exec(step.slice("run ".length)).then(
+                (done) => `exit=${done.exitCode}\n${done.result.trim()}`,
+              ),
         stopped,
       ]);
       if (result === undefined) return undefined;
@@ -301,6 +305,19 @@ const ToolAnswer = z.object({
 });
 
 /** `<alias> <tool> <json>`: one `tools/call` on the alias's MCP server. */
+/** One of the host tools Work serves the attempt (`submit_result`, ...). */
+async function callWorkTool(host: AttemptHost, step: string): Promise<string> {
+  const [name = "", ...rest] = step.split(" ");
+  const result = await host.callTool({
+    name,
+    input: JSON.parse(rest.join(" ") || "{}"),
+  });
+  const text = result.content
+    .map((block) => (block.type === "text" ? block.text : ""))
+    .join("\n");
+  return `${result.isError ? "error: " : ""}${text}`;
+}
+
 async function callConnectionTool(
   attempt: AttemptStart,
   step: string,

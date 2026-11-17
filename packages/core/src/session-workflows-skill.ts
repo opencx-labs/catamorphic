@@ -42,9 +42,10 @@ arrives late if this computer is off (or name the machine that runs it when it i
 not this one), and that archiving the chat cancels it. Say it in plain words.
 
 Session event kinds: session.created, session.message-received, session.message-sent,
-session.turn-changed, session.state-changed, session.work-changed, and
-session.authority-changed. Config may select sessionId, agentId, statuses, and
-workStatus. Omitting sessionId observes authorized matching sessions in the
+session.turn-changed, session.state-changed, session.work-changed,
+session.authority-changed, and session.result-recorded. Config may select
+sessionId, agentId, statuses, workStatus, and (for results) names. Omitting
+sessionId observes authorized matching sessions in the
 project. Example: trigger("session.turn-changed", { sessionId: "actual-id",
 statuses: ["completed", "failed"] }). Never guess an id. Keyed chats carry their
 key in payload.session.key (null otherwise), so where selects a family of chats
@@ -75,7 +76,7 @@ and session_reopen for new work. Observe session.work-changed with
 
 ## Host calls and authoring shape
 
-context.host["catamorphic.sessions"] provides typed inspect, list, history,
+context.host["catamorphic.sessions"] provides typed inspect, list, history, results,
 deliver, create, fork, spawn, archive, unarchive, interrupt,
 complete, reopen, stopWatcher, and stop operations. Every host call is a
 boundary transition: RETURN it. Consume its result as the next boundary's input
@@ -392,6 +393,22 @@ sandboxes need it.
   returns the chat's key, and through: "<messageId>" ends it at that message,
   so a workflow on session.turn-changed reads exactly the reply the event's
   detail.resultMessageId names, even after later turns.
+- results reads the typed values an agent submitted with submit_result
+  (ADR 0323), newest first: { sessionId | key, name?, family?, afterInput?,
+  limit? }. An agent submits only results its committed definition declares
+  (\`"results": { "<name>": <JSON Schema> }\` in .work/agents/<slug>.json),
+  and only a value its schema accepts is recorded, so read results, never
+  parse a reply. Each result names its chat (family: true adds subsessions at
+  every depth), turn, input (the newest message the chat had taken in when it
+  was submitted, with its kind), commit and recordedAt. current is true while
+  no new request reached the chat since: a person's message, or words from a
+  workflow or a session outside the chat's own subsessions. Task notifications
+  and its subsessions' messages are its own work and keep it current. Pass
+  afterInput: <the messageId your deliver returned> to keep only results that
+  answer it. session.result-recorded fires
+  the moment one is recorded, mid-turn, with the result in input.payload.detail
+  (name, value, turnId, input, commit); select { names: ["review"] }. Compute
+  final checks (votes, coverage) in code over results, not in an agent.
 - deliver message_only records it without a model turn: people see it at
   once and the agent reads it with its next turn. queue starts work when idle
   or queues behind the active turn; steer adds the message to the turn working

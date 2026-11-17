@@ -154,6 +154,7 @@ describe("PGlite migrations", () => {
       "075_provider_retry_state.sql",
       "076_private_artifact_lifetimes.sql",
       "077_retained_source_revisions.sql",
+      "078_typed_results.sql",
       "081_queued_runs.sql",
     ]);
 

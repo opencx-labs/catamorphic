@@ -1,4 +1,7 @@
-/** What the reviewer reports at the end of a turn, once validated. */
+/**
+ * What the reviewer reports, once checked: its `review` result (ADR 0323),
+ * which Work accepted against the schema in `.work/agents/reviewer.json`.
+ */
 export type WorkReview = {
   reviewedCommit: string;
   verdict: "COMMENT" | "REQUEST_CHANGES";
@@ -13,13 +16,6 @@ export type WorkReview = {
   }>;
   reply: { inReplyTo?: number; body: string } | null;
 };
-
-/** The reviewer's report: one fenced work-review block (the fence is three backticks). */
-const FENCE = "`".repeat(3);
-const REPORT_BLOCK = new RegExp(
-  `${FENCE}work-review\\n([\\s\\S]*?)\\n${FENCE}`,
-  "g",
-);
 
 export function record(value: unknown): Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value)
@@ -66,26 +62,15 @@ export function publicationText(text: string): string {
 }
 
 /**
- * The turn's one fenced work-review block, checked field by field: a
- * string says why it cannot be used.
+ * The turn's `review` result, checked field by field again: the sandbox
+ * that submitted it is untrusted, and its schema is project code. A string
+ * says why it cannot be used.
  */
-export function parseWorkReview(content: string): WorkReview | string {
-  const blocks = [...content.matchAll(REPORT_BLOCK)];
-  if (blocks.length !== 1)
-    return blocks.length === 0
-      ? "it has no work-review block"
-      : "it has more than one work-review block";
-  const source = blocks[0]?.[1] ?? "";
-  if (source.length > 65536) return "the block is over 64 KB";
-  const parsed = parseJson(source);
-  if (
-    !parsed ||
-    typeof parsed.value !== "object" ||
-    parsed.value === null ||
-    Array.isArray(parsed.value)
-  )
-    return "the block is not a JSON object";
-  const report = record(parsed.value);
+export function checkWorkReview(value: unknown): WorkReview | string {
+  if (typeof value !== "object" || value === null || Array.isArray(value))
+    return "the review is not a JSON object";
+  if (JSON.stringify(value).length > 65536) return "the review is over 64 KB";
+  const report = record(value);
   const fields = [
     "reviewedCommit",
     "verdict",
@@ -170,14 +155,6 @@ function text(value: unknown, max: number): value is string {
   return (
     typeof value === "string" && value.trim().length > 0 && value.length <= max
   );
-}
-
-function parseJson(source: string): { value: unknown } | null {
-  try {
-    return { value: JSON.parse(source) };
-  } catch {
-    return null;
-  }
 }
 
 /** A filename rendered as literal Markdown text, with no code-span breakout. */

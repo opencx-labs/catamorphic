@@ -37,6 +37,8 @@ const config = z.strictObject({
   agentId: z.string().optional(),
   statuses: z.array(z.string()).min(1).optional(),
   workStatus: z.enum(["open", "completed"]).optional(),
+  /** session.result-recorded: only results of these names (ADR 0323). */
+  names: z.array(z.string()).min(1).optional(),
 });
 /** Domain events are emitted by core on both hosts, transactionally with state. */
 export const SESSION_TRIGGER_KINDS = [
@@ -47,6 +49,7 @@ export const SESSION_TRIGGER_KINDS = [
   "session.state-changed",
   "session.work-changed",
   "session.authority-changed",
+  "session.result-recorded",
 ].map((name) =>
   defineTriggerKind({
     name,
@@ -56,7 +59,9 @@ export const SESSION_TRIGGER_KINDS = [
       icon: "messages-square",
     },
     description:
-      "A durable session transition. Select a session or agent in config, or keyed chats with where on payload.session.key (a { $prefix } matches a key namespace); inspect event-time state in input.payload and read current state with catamorphic.sessions.inspect. Turn completion does not mean work completion.",
+      name === "session.result-recorded"
+        ? "An agent's accepted typed result, the moment it is recorded (mid-turn). The result is in input.payload.detail (name, value, turnId, input, commit); select names in config, a session or agent, or keyed chats with where on payload.session.key. A newer input to the chat makes it stale: check detail.input against catamorphic.sessions.results."
+        : "A durable session transition. Select a session or agent in config, or keyed chats with where on payload.session.key (a { $prefix } matches a key namespace); inspect event-time state in input.payload and read current state with catamorphic.sessions.inspect. Turn completion does not mean work completion.",
     payload: sessionEventPayload,
     config,
     deliveryKey: (event) => event.id,
@@ -67,6 +72,7 @@ export const SESSION_TRIGGER_KINDS = [
         (!config.agentId || config.agentId === value.agentId) &&
         (!config.workStatus ||
           config.workStatus === value.session.workStatus) &&
+        (!config.names || config.names.includes(String(value.detail.name))) &&
         (!config.statuses ||
           config.statuses.includes(
             String(value.detail.status ?? value.session.status),
