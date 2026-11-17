@@ -359,6 +359,33 @@ export interface TriggerProductionRunInput {
  */
 interface RunInternalFacts {
   setupFor?: { sessionId: string; build: string };
+  /** The host kind whose dispatch starts this run (ADR 0327). */
+  dispatchedKind?: string;
+}
+
+/**
+ * The host's own dispatch of a trigger kind, passed by the trigger
+ * dispatcher alone: a workflow bound to a host-only kind starts only so.
+ */
+export interface HostDispatch {
+  kind: string;
+}
+
+/**
+ * A workflow bound to a host-only trigger kind (machine provisioners, ADR
+ * 0327) starts only through the host's dispatch of that kind, never from
+ * a caller's run, an app, a tool or another workflow.
+ */
+export class WorkflowHostOnlyError extends AccessDeniedError {
+  constructor(
+    readonly workflowName: string,
+    readonly kinds: readonly string[],
+  ) {
+    super(
+      `Workflow '${workflowName}' is started only by the host's ${kinds.join(" or ")} dispatch`,
+    );
+    this.name = "WorkflowHostOnlyError";
+  }
 }
 
 export interface TriggerPinnedRunInput extends TriggerProductionRunInput {
@@ -509,6 +536,10 @@ interface QueuedHead {
   enrollment: Json | null;
   queue_attempts: number;
   tenant_id: string;
+}
+
+function dispatchFacts(dispatch: HostDispatch | undefined): RunInternalFacts {
+  return dispatch ? { dispatchedKind: dispatch.kind } : {};
 }
 
 /**
@@ -819,6 +850,8 @@ interface RunsServiceDeps {
     projectId: string;
     externalUserId: string;
   }) => Promise<Identity | null>;
+  /** Whether the host dispatches this trigger kind alone (ADR 0327). */
+  hostOnlyKind?: (kind: string) => boolean;
 }
 
 interface PreparedSource {
@@ -1267,8 +1300,11 @@ export class RunsService {
     };
   }
 
-  async triggerProduction(args: TriggerProductionRunInput): Promise<Run> {
-    return this.trigger(args);
+  async triggerProduction(
+    args: TriggerProductionRunInput,
+    dispatch?: HostDispatch,
+  ): Promise<Run> {
+    return this.trigger(args, dispatchFacts(dispatch));
   }
 
   /** Check the requesting caller before dispatch switches to a consented owner. */
@@ -1288,8 +1324,11 @@ export class RunsService {
   }
 
   /** Run an immutable non-production commit, used by temporary watchers. */
-  async triggerAtCommit(args: TriggerPinnedRunInput): Promise<Run> {
-    return this.trigger(args);
+  async triggerAtCommit(
+    args: TriggerPinnedRunInput,
+    dispatch?: HostDispatch,
+  ): Promise<Run> {
+    return this.trigger(args, dispatchFacts(dispatch));
   }
 
   /** Trigger-only entry point for an immutable non-production commit. */
@@ -1319,8 +1358,9 @@ export class RunsService {
         "commitSha" | "consentDigest" | "revision"
       >;
     },
+    dispatch?: HostDispatch,
   ): Promise<Run> {
-    return this.triggerEnabled(args, {});
+    return this.triggerEnabled(args, dispatchFacts(dispatch));
   }
 
   /**
@@ -2609,6 +2649,18 @@ export class RunsService {
         return this.get({ identity: args.identity, runId: delivered });
     }
     const source = await this.prepareProductionSource(args);
+    // Only the host's dispatch of a host-only kind starts a workflow bound
+    // to one; a queued run was checked when it enrolled (ADR 0327).
+    if (!args.start) {
+      const hostOnly = source.graph.triggers
+        .map((trigger) => trigger.kind)
+        .filter((kind) => this.deps.hostOnlyKind?.(kind) === true);
+      if (
+        hostOnly.length > 0 &&
+        !(internal.dispatchedKind && hostOnly.includes(internal.dispatchedKind))
+      )
+        throw new WorkflowHostOnlyError(args.workflowName, hostOnly);
+    }
     const input = args.input ?? null;
     // An explicit key is the host's; otherwise the workflow's declaration
     // names the subject from the input (ADR 0325).

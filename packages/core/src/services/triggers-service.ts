@@ -294,6 +294,11 @@ export class TriggersService {
     return this.registry.has(name);
   }
 
+  /** Whether the host alone dispatches `name` (ADR 0327). */
+  isHostOnlyKind(name: string): boolean {
+    return this.registry.get(name)?.hostOnly === true;
+  }
+
   /**
    * The project's own trigger kinds at a revision, resolved (ADR 0326),
    * scanning the revision the first time it is seen.
@@ -895,19 +900,30 @@ export class TriggersService {
       onConflict: args.onConflict,
       deliveryKey: args.deliveryKey,
     };
+    // The host's own dispatch says so, which a workflow bound to a
+    // host-only kind requires (ADR 0327); a caller's fire never does.
+    const dispatch = args.callerInitiated
+      ? undefined
+      : { kind: args.triggerKind };
     const run = args.enablementId
-      ? await this.deps.runs.triggerWithEnablement({
-          ...runArgs,
-          enablementId: args.enablementId,
-          expected: args.expectedEnablement,
-        })
-      : args.pinned
-        ? await this.deps.runs.triggerAtCommit({
+      ? await this.deps.runs.triggerWithEnablement(
+          {
             ...runArgs,
-            commitSha: args.pinned.commitSha,
-            remoteBranch: args.pinned.remoteBranch,
-          })
-        : await this.deps.runs.triggerProduction(runArgs);
+            enablementId: args.enablementId,
+            expected: args.expectedEnablement,
+          },
+          dispatch,
+        )
+      : args.pinned
+        ? await this.deps.runs.triggerAtCommit(
+            {
+              ...runArgs,
+              commitSha: args.pinned.commitSha,
+              remoteBranch: args.pinned.remoteBranch,
+            },
+            dispatch,
+          )
+        : await this.deps.runs.triggerProduction(runArgs, dispatch);
     if (args.callerInitiated)
       await this.deps.runs.get({ identity: args.identity, runId: run.id });
     if (args.mode === "async") {

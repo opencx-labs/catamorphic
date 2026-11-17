@@ -1199,6 +1199,8 @@ export class CatamorphicCore {
       coordinator,
       tenantPolicies: this.tenantPolicies,
       workflowEnablements: () => this.workflowEnablements,
+      // Read at call time: triggers are constructed further down.
+      hostOnlyKind: (kind) => this.triggers?.isHostOnlyKind(kind) === true,
     });
     const hostCallFollowers = new HostCallFollowers();
     hostCallFollowers.register({

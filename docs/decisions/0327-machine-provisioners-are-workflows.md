@@ -32,7 +32,10 @@ provisioner never waits for a machine it makes. The machine kinds are
 **host-only**: a trigger kind may say only the host dispatches it, and a
 member firing one over HTTP, MCP or a scoped client is refused, so nobody
 can boot their own image with the project's credentials or forge a
-lifecycle event.
+lifecycle event. A workflow bound to a host-only kind also starts only
+through the host's dispatch of that kind: a run a caller starts directly
+(the runs route, an app, a project tool, another workflow's call) is
+refused (`WorkflowHostOnlyError`).
 
 **Create gets what the hook gets.** The run's input is the hook's `create`
 argument: `name`, `class`, `rule`, `options`, `waiting` (what the waiting

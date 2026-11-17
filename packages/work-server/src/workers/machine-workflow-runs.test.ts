@@ -221,6 +221,43 @@ it("refuses a member firing a machine kind, so only the reconciler makes or remo
   expect(runs).toEqual([]);
 });
 
+it("refuses a caller's own run of a machine provisioner, so only the reconciler's dispatch starts one", async () => {
+  const core = server.catamorphic.core;
+  const before = await core.db
+    .selectFrom("workflow_runs")
+    .select("id")
+    .where("project_id", "=", projectId)
+    .execute();
+  for (const workflowName of ["createMachine", "destroyMachine"])
+    await expect(
+      core.runs.triggerProduction({
+        identity: setup,
+        projectId,
+        workflowName,
+        input: {
+          name: "anything",
+          class: "fleet",
+          rule: "fleet",
+          ref: "i-0live",
+          options: { image: "ami-attacker" },
+          labels: {},
+          enrollment: {
+            controlPlaneUrl: PUBLIC,
+            code: "wke_forged",
+            idempotencyKey: "1".repeat(64),
+            cloudInit: "#cloud-config\n",
+          },
+        },
+      }),
+    ).rejects.toThrow(`Workflow '${workflowName}' is started only by the host`);
+  const after = await core.db
+    .selectFrom("workflow_runs")
+    .select("id")
+    .where("project_id", "=", projectId)
+    .execute();
+  expect(after).toEqual(before);
+});
+
 it("cancels a create run that never finishes", async () => {
   const workflows = new ProjectMachineWorkflows({
     core: server.catamorphic.core,
