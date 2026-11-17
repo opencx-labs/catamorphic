@@ -29,8 +29,12 @@ provider kind), `gen_ai.request.model`, `gen_ai.response.model`,
 says), `gen_ai.usage.output_tokens`, `gen_ai.usage.cache_read.input_tokens`,
 `gen_ai.usage.cache_write.input_tokens`,
 `gen_ai.usage.reasoning.output_tokens`, plus `http.response.status_code`,
-`catamorphic.model.cost_usd` when reported and
-`catamorphic.model.interrupted` when the caller stopped reading.
+`catamorphic.model.cost_usd` when reported,
+`catamorphic.model.interrupted` when the caller stopped reading, and
+`catamorphic.model.metered`. A call whose final usage was never read (a Chat
+Completions stream without `include_usage`, a stream that ended before its
+usage, an answer too large to scan) is unmetered: `model_usage.metered` is
+false and its span carries no token counts, since its zeros measured nothing.
 
 **Cost is what the provider reported.** `model_usage.cost_usd numeric` is
 null unless the answer's usage carried a finite, non-negative `cost`
@@ -44,8 +48,12 @@ operation for workflows (`host["catamorphic.sessions"].usage`) and
 answers the settled calls of a chat, or of the chat and every subsession
 below it, grouped by model: calls, token totals, the summed reported cost,
 how many calls reported none (so a reader knows the cost is a lower bound),
-and calls still streaming. Reading the chat is the access check. Session
-inspect stays as it is: its hot path gains no aggregate.
+how many were unmetered (so the tokens are one too), the summed cost exact
+in numeric until it is returned, and calls still streaming. Reading the chat
+is the access check, and `family` counts only the subsessions the caller may
+read by the same rule, so a caller scoped to one agent never sees another
+agent's models, tokens or cost. Session inspect stays as it is: its hot path
+gains no aggregate.
 
 **Provider refusals are classified, not rewritten.** The provider's own error
 still travels unchanged. The `chat` span records an upstream 401 as

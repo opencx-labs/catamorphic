@@ -143,7 +143,7 @@ ids in the binding.
   `usage.cost`), `model_usage.cost_usd` keeps it; otherwise it is null.
 - Each call's span carries its project, chat, turn, agent, tokens and
   reported cost under OpenTelemetry's GenAI names (see `OBSERVABILITY.md`).
-  Workflows read a chat's totals, with its subsessions, through
+  Workflows read a chat's totals, with the subsessions they may read, through
   `host["catamorphic.sessions"].usage({ key, family: true })`; clients use
   `GET /api/projects/:projectId/agent/sessions/:sessionId/usage?family=true`.
 

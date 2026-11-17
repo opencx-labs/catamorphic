@@ -395,8 +395,9 @@ sandboxes need it.
 - usage is an authorized read of a chat's model calls through the gateway:
   tokens per model, the summed cost providers reported (costUsd, US dollars,
   null when none did), unpricedCalls (so the cost is a lower bound when
-  above zero) and openCalls still streaming. family: true adds every
-  subsession below the chat. Work keeps no prices and no budgets: a project
+  above zero), unmeteredCalls (calls whose usage could not be read, so the
+  tokens are a lower bound too) and openCalls still streaming. family: true
+  adds the subsessions below the chat that the caller may read. Work keeps no prices and no budgets: a project
   that wants a limit or a report computes it from this.
 - deliver message_only records it without a model turn: people see it at
   once and the agent reads it with its next turn. queue starts work when idle
