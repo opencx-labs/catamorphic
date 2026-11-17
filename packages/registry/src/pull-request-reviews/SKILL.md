@@ -16,9 +16,10 @@ every non-draft pull request gets a project chat keyed
 
 - **Opened, reopened, ready for review:** the chat starts in the `review`
   Environment on a machine of the review pool, with its workspace checked out
-  at `refs/pull/<number>/head`. The agent verifies the change and ends its
-  turn with a `work-review` report.
-- **The turn ends:** `postReviews` reads the report, checks it, and posts
+  at `refs/pull/<number>/head`. The agent verifies the change and submits
+  its report as a typed `review` result (`submit_result`, ADR 0323).
+- **The turn ends:** `postReviews` reads the turn's `review` result, checks
+  it, and posts
   the review with inline comments, a "Work review" check run, and replies,
   from the control plane. The review is advice: the pull request's code ran beside it.
 - **A new push:** the same chat moves to the new head (`update: "reset"`) and
@@ -117,6 +118,12 @@ leave its sandbox (no push, proposal, or publish, and connection actions
 only read), whatever its bindings say. Its GitHub tools are reads, an
 allowlist on top of the binding.
 
+Its `results.review` is the report's JSON Schema. The agent submits it with
+`submit_result`; Work records only a value the schema accepts and sends each
+failing field back to the agent in the same turn, so a malformed report is
+fixed before the turn ends instead of being lost. Change the schema together
+with `review-report.ts`, which checks the value again before posting.
+
 ## .work/agents/reviewer.md
 
 The review doctrine. Edit it to match the team: what matters in this
@@ -162,8 +169,8 @@ Environment's binding.
 ## .work/server/review-report.ts
 
 The pure validation and diff helpers used by the publisher. Copy it into the
-same deployment-owned directory as `review-publisher.ts`. The block has one
-full commit, a COMMENT or REQUEST_CHANGES verdict, a score from 1 to 5,
+same deployment-owned directory as `review-publisher.ts`. The `review`
+result has one full commit, a COMMENT or REQUEST_CHANGES verdict, a score from 1 to 5,
 summaries up to 4,000 characters, at most 30 bounded inline comments, and an
 optional reply. Unknown fields, including the old `resolve`, are rejected.
 Mentions and HTML comment delimiters are removed before publication.
@@ -222,9 +229,9 @@ ids. The hook verifies the actual live `postReviews` run, its `github-poster`
 Environment, its trigger input, caller identity, and current Allocation.
 Every GitHub call goes through `core.connectionBroker.invoke`, retaining the
 Environment's binding, authorization and audit. It reads the actual persisted
-session and assistant output, verifies the project review chat and latest
-settled turn, selects the latest top-level reviewer message from that turn's
-latest completed attempt, and compares its commit with GitHub's current open
+session and its results, verifies the project review chat and latest settled
+turn, selects the latest `review` result that turn's latest completed attempt
+recorded and that still answers the chat's newest input, and compares its commit with GitHub's current open
 head before each write. Caller-supplied reports or result-message ids are never trusted.
 
 A transaction row lock serializes the complete publication for a project,

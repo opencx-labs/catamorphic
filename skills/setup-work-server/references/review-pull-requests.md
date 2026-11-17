@@ -25,7 +25,9 @@ What runs where:
   password, Slack's token. It also **posts**: when a review chat's turn ends,
   the `postReviews` workflow (in the workflow-only `github-poster`
   Environment) returns one host call with the session and turn ids. The hook
-  reads and validates the actual report, checks its current generation and head,
+  reads the turn's typed `review` result (the reviewer submits it with
+  `submit_result`, and Work records only a value its schema accepts), validates
+  it again, checks its current generation and head,
   then posts a commit-bound review, check run and optional reply through the
   connection broker. The default publisher leaves description edits, dismissal
   of earlier change requests and thread resolution to people.
@@ -251,8 +253,9 @@ differs; a draft pull request starts no run until it is ready for review; a
 chat that never starts a turn usually has no review machine available to the
 project (check the chat's placement, `GET /_work/operator/machines`, and the
 rule's `problem` and `failure` in `GET /_work/operator/machine-rules`). A
-review that never reaches GitHub shows in `postReviews`' runs: a turn whose
-reply has no valid `work-review` block marks the commit `action_required`
+review that never reaches GitHub shows in `postReviews`' runs: a turn that
+submitted no current `review` result (none, or one made before the chat's
+newest message) marks the commit `action_required`
 with the reason (when no review marked it yet), and a report for a commit
 the chat no longer stands on posts nothing at all.
 

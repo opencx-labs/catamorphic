@@ -6,9 +6,9 @@ import type {
 } from "@catamorphic/server-sdk";
 import type { Pool, QueryResultRow } from "pg";
 import {
+  checkWorkReview,
   diffLines,
   list,
-  parseWorkReview,
   publicationText,
   record,
   renderedPath,
@@ -41,6 +41,11 @@ export interface ReviewCore {
     get(
       ...input: Parameters<
         NonNullable<Catamorphic["core"]["agentSessions"]>["get"]
+      >
+    ): Promise<unknown>;
+    results(
+      ...input: Parameters<
+        NonNullable<Catamorphic["core"]["agentSessions"]>["results"]
       >
     ): Promise<unknown>;
   };
@@ -344,31 +349,41 @@ export function reviewPublicationCapability({
               throw new Error("Pull request head changed before publication");
           };
           await fresh();
-          // Read actual persisted assistant output from that turn, never caller
-          // supplied report/status/resultMessageId. No final output means no pass.
-          const items = list(snapshot.items)
-            .map(record)
-            .filter(
-              (item) =>
-                attempt?.status === "completed" &&
-                (!turn.activeAttemptId ||
-                  turn.activeAttemptId === attempt.id) &&
-                item.attemptId === attempt.id &&
-                item.parentItemId === null &&
-                item.agentId === current.chat.agentId &&
-                item.kind === "assistant_message" &&
-                item.turnId === input.turnId &&
-                item.status === "completed",
-            );
-          const reply = items
-            .sort((a, b) => Number(a.position) - Number(b.position))
-            .at(-1);
+          // Read the review result the turn's final attempt recorded (ADR
+          // 0323), never a caller-supplied report or status. Results come
+          // newest first; one a later input made stale does not count. No
+          // result means no pass.
+          const sessions = sdk.agentSessions;
+          const results =
+            turn.status === "failed" ||
+            attempt?.status !== "completed" ||
+            (turn.activeAttemptId && turn.activeAttemptId !== attempt.id) ||
+            !sessions
+              ? []
+              : list(
+                  await wait(() =>
+                    sessions.results(
+                      context.caller,
+                      context.projectId,
+                      input.sessionId,
+                      { name: "review" },
+                    ),
+                  ),
+                ).map(record);
+          const submitted = results.find(
+            (result) =>
+              result.sessionId === input.sessionId &&
+              result.name === "review" &&
+              result.turnId === input.turnId &&
+              result.attemptId === attempt?.id &&
+              result.current === true,
+          );
           const parsed =
             turn.status === "failed"
               ? "The review turn failed."
-              : parseWorkReview(
-                  typeof reply?.text === "string" ? reply.text : "",
-                );
+              : submitted
+                ? checkWorkReview(submitted.value)
+                : "The turn submitted no current review result.";
           const review = typeof parsed === "string" ? null : parsed;
           if (review && review.reviewedCommit !== commit)
             return { skipped: "stale report" };
