@@ -74,17 +74,20 @@ fails retryably as it always did.
 **The review publisher is workflow code.** `postReviews` declares
 `concurrency: { key: "payload.session.key", onConflict: "queue" }`, so one
 publication per pull request chat runs at a time, in turn order. It reads
-the reviewer's typed `review` result (ADR 0323), keeps the strongest
-verdict per commit, the main comment and posted reply ids in the chat's
-`review.*` metadata, and writes only through the connection's typed actions
-with stamps (ADR 0259), which find an earlier accepted write on retry. The
+the reviewer's typed `review` result (ADR 0323), keeps each commit's
+strongest verdict (`review.verdicts`) and every write's identity and GitHub
+id (`review.posted`, `work-review:<turn>:<check|review|reply>`) as lists in
+the chat's metadata, records the verdict before the writes that depend on
+it, and writes only through the connection's typed actions with stamps
+(ADR 0259), which find an earlier accepted write on retry. The
 server module, its SQL schema, the `company.review-publication` hook and
 their install steps are removed. ADR 0292's policies stay: commit-bound
 reviews and checks, a commit's verdict only holds or tightens, no
 unattended dismissal, description edits or thread resolution. What remains
 uncertain: a write GitHub accepted after the attempt timed out is found by
-its stamp on the retry; a write the stamp lookup cannot see yet may be sent
-twice, which the stamp's lookup on every later retry bounds to that window.
+its stamp on the retry, but one GitHub's lists do not show yet can be sent
+again by that retry; the queue keeps any other publication for the pull
+request from writing meanwhile.
 
 Considered: a promotion inside the settling transaction (it cannot admit,
 which is IO, and every terminal path would need it); a Postgres trigger
