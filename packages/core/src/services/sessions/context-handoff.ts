@@ -1,10 +1,14 @@
-import type {
-  ContextHandoffStrategy,
-  InboundSender,
-  Item,
+import {
+  type ContextHandoffStrategy,
+  INPUT_ITEM_KINDS,
+  type InboundSender,
+  type InputItem,
+  type Item,
+  isInputItem,
 } from "@catamorphic/agent-protocol";
 import type { DB } from "@catamorphic/db";
-import type { Kysely, Transaction } from "kysely";
+import { type Kysely, sql, type Transaction } from "kysely";
+import { LATEST_RESULT_VALUE_BYTES } from "./session-results.js";
 import { itemFromRow } from "./session-rows.js";
 
 /** About 16k tokens: enough to carry a conversation, small enough to stay cheap. */
@@ -12,6 +16,14 @@ export const HANDOFF_BUDGET_CHARS = 64_000;
 const LINE_MAX = 2_000;
 /** The commands a turn's summary still names, its last ones. */
 const COMMANDS_SHOWN = 3;
+/** The share of the budget results and unanswered requests may take. */
+const KEPT_SHARE = 0.5;
+/** Longest request carried verbatim; a longer one is cut and says so. */
+const REQUEST_MAX = 8_000;
+/** A result value longer than its compact view shows this much. */
+const RESULT_EXCERPT = 2_000;
+/** Requests a chat with no result yet carries verbatim, its latest. */
+const LATEST_REQUESTS = 3;
 
 export interface ContextHandoff {
   strategy: ContextHandoffStrategy;
@@ -26,6 +38,11 @@ export interface ContextHandoff {
  * what was asked, answered, run and changed. Its first request and its most
  * recent turns are kept; whatever does not fit in the middle is named, not
  * carried, and the agent can read it with the session history tool.
+ *
+ * What must not be summarized rides beside it, verbatim (ADR 0328): the
+ * chat's accepted results, the latest of each name, and the requests that
+ * arrived after the newest of them. They take at most half the budget, and
+ * the summary takes what they leave.
  */
 export async function buildContextHandoff(input: {
   db: Kysely<DB> | Transaction<DB>;
@@ -77,18 +94,25 @@ export async function buildContextHandoff(input: {
   const sections = turns.map((turn) =>
     renderTurn(turn.ordinal, byTurn.get(turn.id) ?? []),
   );
-  const budget = input.budgetChars ?? HANDOFF_BUDGET_CHARS;
-  const kept: string[] = [];
+  const total = input.budgetChars ?? HANDOFF_BUDGET_CHARS;
+  const kept = await keptSections({
+    db: input.db,
+    sessionId: input.sessionId,
+    ordinals: new Map(turns.map((turn) => [turn.id, turn.ordinal])),
+    budget: Math.floor(total * KEPT_SHARE),
+  });
+  const budget = total - kept.length;
+  const recent: string[] = [];
   let used = 0;
   // Newest first, then the very first request if it still fits.
   const newestFirst = sections.slice(1).reverse();
   for (const section of newestFirst) {
     if (used + section.length > budget) break;
-    kept.unshift(section);
+    recent.unshift(section);
     used += section.length;
   }
   const first = sections[0] ?? "";
-  const omitted = sections.length - 1 - kept.length;
+  const omitted = sections.length - 1 - recent.length;
   const body = [
     used + first.length <= budget
       ? first
@@ -96,7 +120,7 @@ export async function buildContextHandoff(input: {
     omitted > 0
       ? `(${omitted} turn${omitted === 1 ? "" : "s"} in between are not shown; read them with the session history tool.)`
       : "",
-    ...kept,
+    ...recent,
   ]
     .filter(Boolean)
     .join("\n\n");
@@ -122,8 +146,183 @@ export async function buildContextHandoff(input: {
         ? `While you were away from this conversation, it continued (${range}). This is what happened, so you can pick up from here:`
         : `This conversation started before you joined it (${range}). This is what happened so far:`,
       body,
-    ].join("\n\n"),
+      kept,
+    ]
+      .filter(Boolean)
+      .join("\n\n"),
   };
+}
+
+/**
+ * The hand-off's verbatim sections (ADR 0328): the chat's accepted results,
+ * the latest of each name, newest first, each with the request it answers;
+ * then the requests of the covered turns that came after the newest
+ * result's request (a chat with no result: its latest few), oldest first,
+ * the newest kept when they do not all fit. Within `budget` characters, and
+ * each section says what it left out and where to read it.
+ */
+async function keptSections(input: {
+  db: Kysely<DB> | Transaction<DB>;
+  sessionId: string;
+  /** The covered turns' ordinals by id. */
+  ordinals: ReadonlyMap<string, number>;
+  budget: number;
+}): Promise<string> {
+  const { db, sessionId, ordinals } = input;
+  const results = (
+    await db
+      .selectFrom("agent_items as item")
+      .leftJoin("agent_turns as turn", "turn.id", "item.turn_id")
+      .select(["item.payload", "turn.ordinal"])
+      .distinctOn(sql`item.payload->>'name'`)
+      .where("item.session_id", "=", sessionId)
+      .where("item.kind", "=", "result")
+      .where((eb) =>
+        eb.or([
+          eb("turn.status", "is", null),
+          eb("turn.status", "<>", "rolled_back"),
+        ]),
+      )
+      .orderBy(sql`item.payload->>'name'`)
+      .orderBy("item.position", "desc")
+      .execute()
+  )
+    .flatMap((row) => {
+      const item = itemFromRow(row);
+      return item.kind === "result" ? [{ item, ordinal: row.ordinal }] : [];
+    })
+    .sort((a, b) => b.item.position - a.item.position);
+  const newest = results[0]?.item;
+  const answered = [
+    ...new Set(
+      results.flatMap(({ item }) => (item.input ? [item.input.itemId] : [])),
+    ),
+  ];
+  const covered = [...ordinals.keys()];
+  const requestRows =
+    covered.length > 0
+      ? await db
+          .selectFrom("agent_items")
+          .select("payload")
+          .where("session_id", "=", sessionId)
+          .where("kind", "in", [...INPUT_ITEM_KINDS])
+          .where("turn_id", "in", covered)
+          .$if(newest !== undefined, (query) =>
+            query.where("position", ">", String(newest?.input?.position ?? -1)),
+          )
+          .orderBy("position", "desc")
+          .$if(newest === undefined, (query) => query.limit(LATEST_REQUESTS))
+          .execute()
+      : [];
+  const answeredRows =
+    answered.length > 0
+      ? await db
+          .selectFrom("agent_items")
+          .select("payload")
+          .where("session_id", "=", sessionId)
+          .where("id", "in", answered)
+          .execute()
+      : [];
+  const inputs = new Map(
+    answeredRows
+      .map((row) => itemFromRow(row))
+      .filter(isInputItem)
+      .map((item) => [item.id, item]),
+  );
+  const requests = requestRows
+    .map((row) => itemFromRow(row))
+    .filter(isInputItem);
+
+  // What the headings and the notes of what is cut take, first.
+  let left =
+    input.budget -
+    (results.length > 0 ? RESULTS_HEADING.length + NOTE_ALLOWANCE : 0) -
+    (requests.length > 0
+      ? (newest ? UNANSWERED_HEADING : LATEST_HEADING).length + NOTE_ALLOWANCE
+      : 0);
+  const resultLines: string[] = [];
+  for (const { item, ordinal } of results) {
+    const asked = item.input ? inputs.get(item.input.itemId) : undefined;
+    const json = JSON.stringify(item.value);
+    const value =
+      Buffer.byteLength(json, "utf8") > LATEST_RESULT_VALUE_BYTES
+        ? `${truncate(json, RESULT_EXCERPT)} (cut here; read the whole value with session_results, result ${item.id})`
+        : json;
+    const line = [
+      `- ${item.name}${ordinal === null ? "" : `, from turn ${ordinal}`}, ${
+        asked
+          ? `answering ${requestLabel(asked)}${asked.turnId && ordinals.has(asked.turnId) ? ` in turn ${ordinals.get(asked.turnId)}` : ""}: "${truncate(requestText(asked), 200).replace(/\n/g, " ")}"`
+          : "answering no request"
+      }`,
+      `  ${value.replace(/\n/g, "\n  ")}`,
+    ].join("\n");
+    if (line.length > left) break;
+    resultLines.push(line);
+    left -= line.length + 1;
+  }
+  const shownRequests: string[] = [];
+  for (const item of requests) {
+    const ordinal = item.turnId ? ordinals.get(item.turnId) : undefined;
+    const line = `- ${ordinal === undefined ? "" : `Turn ${ordinal}, `}${requestLabel(item)}: ${quoted(requestText(item), REQUEST_MAX)}`;
+    if (line.length > left) break;
+    shownRequests.unshift(line);
+    left -= line.length + 1;
+  }
+  const sections: string[] = [];
+  if (results.length > 0) {
+    const cut = results.length - resultLines.length;
+    sections.push(
+      [
+        RESULTS_HEADING,
+        ...resultLines,
+        ...(cut > 0
+          ? [
+              `(${cut} more result${cut === 1 ? " is" : "s are"} not shown; read them with session_results.)`,
+            ]
+          : []),
+      ].join("\n"),
+    );
+  }
+  if (requests.length > 0) {
+    const cut = requests.length - shownRequests.length;
+    sections.push(
+      [
+        newest ? UNANSWERED_HEADING : LATEST_HEADING,
+        ...(cut > 0
+          ? [
+              `(${cut} earlier request${cut === 1 ? " is" : "s are"} not shown; read ${cut === 1 ? "it" : "them"} with the session history tool.)`,
+            ]
+          : []),
+        ...shownRequests,
+      ].join("\n"),
+    );
+  }
+  return sections.join("\n\n");
+}
+
+const RESULTS_HEADING =
+  "Your accepted results in this chat, as recorded (submitted with submit_result; the latest of each name, newest first). Do not submit them again unless a request below asks for new work:";
+const UNANSWERED_HEADING =
+  "Requests that arrived after your newest result, which no result answers yet (verbatim, oldest first):";
+const LATEST_HEADING =
+  "The latest requests in this chat (verbatim, oldest first):";
+/** Room for a section's line saying how much it left out. */
+const NOTE_ALLOWANCE = 100;
+
+/** Who made a request, as the hand-off names them. */
+function requestLabel(item: InputItem): string {
+  switch (item.kind) {
+    case "user_message":
+      return "Person";
+    case "inbound_message":
+      return senderLabel(item.from);
+    case "task_notification":
+      return `Notification (${item.task.type} ${item.task.id})`;
+  }
+}
+
+function requestText(item: InputItem): string {
+  return item.kind === "task_notification" ? item.summary : item.text;
 }
 
 /**

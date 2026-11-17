@@ -25,6 +25,7 @@ import { ExecutionEnvironmentsService } from "../services/execution-environments
 import { ProjectEnvironmentsService } from "../services/project-environments-service.js";
 import { ProjectsService } from "../services/projects-service.js";
 import { SessionActionsService } from "../services/session-actions-service.js";
+import { buildContextHandoff } from "../services/sessions/context-handoff.js";
 import { testEnvironmentProvider } from "./test-environment.js";
 
 /*
@@ -94,7 +95,22 @@ describe("typed results", () => {
       results: { review: reviewSchema },
     };
     const other: RegisteredCodingAgent = { ...plain, id: "other" };
-    const agents = [plain, reviewer, other];
+    // The same echo on another harness: a chat moved to it starts a new
+    // provider thread, handed the conversation.
+    const echo = new EchoAdapter();
+    const away: RegisteredCodingAgent = {
+      ...plain,
+      id: "away",
+      harness: {
+        placement: "host",
+        adapter: {
+          id: "away",
+          capabilities: () => echo.capabilities(),
+          start: (attempt, host) => echo.start(attempt, host),
+        },
+      },
+    };
+    const agents = [plain, reviewer, other, away];
     sessions = new AgentSessionsService(db, {
       hostId: "results-test-host",
       projectManager,
@@ -331,6 +347,65 @@ describe("typed results", () => {
       [{ verdict: "COMMENT", score: 5 }, true],
       [{ verdict: "REQUEST_CHANGES", score: 2 }, false],
     ]);
+  });
+
+  it("hands a new thread its accepted results and unanswered requests verbatim, within its bound", async () => {
+    const project = await projects.create(identity, { name: "Handoff" });
+    const session = await sessions.create(identity, project.id);
+    await turn(
+      project.id,
+      session.id,
+      `Review pull request 7. ${tool("submit_result", {
+        name: "review",
+        value: { verdict: "COMMENT", score: 4 },
+      })}`,
+    );
+    const push = `A new push arrived: ${"commit abc123 changes the migration. ".repeat(60)}`;
+    await turn(project.id, session.id, push);
+    await turn(project.id, session.id, "Also check the down migration.");
+
+    // The chat moves to another harness: a new thread, handed the chat.
+    await sessions.update(identity, project.id, session.id, {
+      agentId: "away",
+    });
+    const state = await turn(project.id, session.id, "Go on.");
+    const handoff = state.items.find((item) => item.kind === "context_handoff");
+    if (handoff?.kind !== "context_handoff") throw new Error("no hand-off");
+    const [, kept] = handoff.text.split("Your accepted results");
+    expect(kept).toContain(
+      '- review, from turn 1, answering Person in turn 1: "Review pull request 7.',
+    );
+    // The value on its own line, as stored (Postgres orders its keys).
+    expect(kept).toContain('\n  {"score":4,"verdict":"COMMENT"}');
+    const unanswered = kept?.split("which no result answers yet")[1] ?? "";
+    // Verbatim, oldest first; the request the result answers is not one.
+    expect(unanswered).toContain(`- Turn 2, Person: ${push.trim()}`);
+    expect(unanswered.indexOf("Turn 2")).toBeLessThan(
+      unanswered.indexOf("- Turn 3, Person: Also check the down migration."),
+    );
+    expect(unanswered).not.toContain("Review pull request 7");
+    // The turn's own input is its prompt, never repeated.
+    expect(unanswered).not.toContain("Go on.");
+
+    // A small budget: the verbatim sections keep the newest that fits, say
+    // what they cut, and the whole hand-off stays near the bound.
+    const small = await buildContextHandoff({
+      db,
+      sessionId: session.id,
+      fromOrdinal: 1,
+      toOrdinal: 3,
+      strategy: "full",
+      budgetChars: 2_000,
+    });
+    expect(small?.text).toContain('\n  {"score":4,"verdict":"COMMENT"}');
+    expect(small?.text).toContain(
+      "- Turn 3, Person: Also check the down migration.",
+    );
+    expect(small?.text).not.toContain("- Turn 2, Person:");
+    expect(small?.text).toContain(
+      "(1 earlier request is not shown; read it with the session history tool.)",
+    );
+    expect(small?.text.length).toBeLessThan(2_000 + 300);
   });
 
   it("reads a family's results and hands a child's to its parent", async () => {

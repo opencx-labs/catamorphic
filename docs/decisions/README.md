@@ -327,3 +327,4 @@ Settled design decisions live here as short Architecture Decision Records. They 
 | [0320](0320-pages-translate-on-the-device.md) | Pages translate on the device | Accepted |
 | [0321](0321-runner-state-stays-out-of-the-checkout.md) | Runner state stays out of the checkout | Accepted (amends 0198) |
 | [0323](0323-agents-submit-typed-results.md) | Agents submit typed results | Accepted (amends 0050, 0090, 0197, 0259) |
+| [0328](0328-hand-offs-keep-results-acp-reports-its-turn.md) | Hand-offs keep results and open requests; ACP agents take effort and report their turn | Accepted (amends 0198, 0241, 0255, 0298) |
