@@ -195,6 +195,7 @@ export interface AgentSessions {
   workspace_generation: Generated<number>;
   workspace_move: Json | null;
   workspace_released_reason: string | null;
+  workspace_session_id: string | null;
 }
 
 export interface AgentSessionViews {
@@ -578,6 +579,7 @@ export interface ExecutionAllocations {
   root_workload_id: string;
   sandbox_creation_started: Generated<boolean>;
   sandbox_provider_id: string | null;
+  setup_outcome: Json | null;
   status: Generated<string>;
   tenant_id: string;
   worker_node_id: string | null;

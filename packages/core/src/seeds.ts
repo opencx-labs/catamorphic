@@ -604,7 +604,10 @@ its own. For example
 \`{ "maxConcurrentChildren": 4, "agents": [{ "agent": "self", "effort":
 "at-most-parent" }, { "agent": "project:reviewer", "model": ["sonnet"],
 "delegate": false }] }\`. A grant naming an agent decides before \`*\`.
-\`routes\` is no longer read: a definition that has it is refused.
+\`routes\` is no longer read: a definition that has it is refused. A child
+works in its parent's workspace unless the spawn asks for \`"own"\` (ADR
+0322), so give children that write in parallel their own; \`maxConcurrentChildren\`
+(default 10) bounds how many run at once, on the desktop and on a server.
 
 \`results\` names what an agent hands back as typed values (ADR 0323):
 \`{ "review": { "type": "object", "required": ["verdict"], "properties": {

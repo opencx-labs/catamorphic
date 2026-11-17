@@ -21162,6 +21162,12 @@
                       "format": "uuid",
                       "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
                     },
+                    "workspaceSessionId": {
+                      "nullable": true,
+                      "type": "string",
+                      "format": "uuid",
+                      "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+                    },
                     "visibility": {
                       "type": "string",
                       "enum": ["latent", "promoted", "archived"]
@@ -21380,6 +21386,7 @@
                     "forkedFromSessionId",
                     "imported",
                     "parentSessionId",
+                    "workspaceSessionId",
                     "visibility",
                     "archivedAt",
                     "status",
@@ -21797,6 +21804,12 @@
                             "format": "uuid",
                             "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
                           },
+                          "workspaceSessionId": {
+                            "nullable": true,
+                            "type": "string",
+                            "format": "uuid",
+                            "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+                          },
                           "visibility": {
                             "type": "string",
                             "enum": ["latent", "promoted", "archived"]
@@ -22024,6 +22037,7 @@
                           "forkedFromSessionId",
                           "imported",
                           "parentSessionId",
+                          "workspaceSessionId",
                           "visibility",
                           "archivedAt",
                           "status",
@@ -22250,6 +22264,12 @@
                       "format": "uuid",
                       "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
                     },
+                    "workspaceSessionId": {
+                      "nullable": true,
+                      "type": "string",
+                      "format": "uuid",
+                      "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+                    },
                     "visibility": {
                       "type": "string",
                       "enum": ["latent", "promoted", "archived"]
@@ -22468,6 +22488,7 @@
                     "forkedFromSessionId",
                     "imported",
                     "parentSessionId",
+                    "workspaceSessionId",
                     "visibility",
                     "archivedAt",
                     "status",
@@ -22849,6 +22870,12 @@
                       "format": "uuid",
                       "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
                     },
+                    "workspaceSessionId": {
+                      "nullable": true,
+                      "type": "string",
+                      "format": "uuid",
+                      "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+                    },
                     "visibility": {
                       "type": "string",
                       "enum": ["latent", "promoted", "archived"]
@@ -23070,6 +23097,7 @@
                     "forkedFromSessionId",
                     "imported",
                     "parentSessionId",
+                    "workspaceSessionId",
                     "visibility",
                     "archivedAt",
                     "status",
@@ -23269,6 +23297,12 @@
                       ]
                     },
                     "parentSessionId": {
+                      "nullable": true,
+                      "type": "string",
+                      "format": "uuid",
+                      "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+                    },
+                    "workspaceSessionId": {
                       "nullable": true,
                       "type": "string",
                       "format": "uuid",
@@ -23492,6 +23526,7 @@
                     "forkedFromSessionId",
                     "imported",
                     "parentSessionId",
+                    "workspaceSessionId",
                     "visibility",
                     "archivedAt",
                     "status",
@@ -24465,6 +24500,12 @@
                       "format": "uuid",
                       "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
                     },
+                    "workspaceSessionId": {
+                      "nullable": true,
+                      "type": "string",
+                      "format": "uuid",
+                      "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+                    },
                     "visibility": {
                       "type": "string",
                       "enum": ["latent", "promoted", "archived"]
@@ -24683,6 +24724,7 @@
                     "forkedFromSessionId",
                     "imported",
                     "parentSessionId",
+                    "workspaceSessionId",
                     "visibility",
                     "archivedAt",
                     "status",
@@ -25045,6 +25087,12 @@
                           "format": "uuid",
                           "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
                         },
+                        "workspaceSessionId": {
+                          "nullable": true,
+                          "type": "string",
+                          "format": "uuid",
+                          "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+                        },
                         "visibility": {
                           "type": "string",
                           "enum": ["latent", "promoted", "archived"]
@@ -25268,6 +25316,7 @@
                         "forkedFromSessionId",
                         "imported",
                         "parentSessionId",
+                        "workspaceSessionId",
                         "visibility",
                         "archivedAt",
                         "status",
@@ -25846,6 +25895,12 @@
                       "format": "uuid",
                       "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
                     },
+                    "workspaceSessionId": {
+                      "nullable": true,
+                      "type": "string",
+                      "format": "uuid",
+                      "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+                    },
                     "visibility": {
                       "type": "string",
                       "enum": ["latent", "promoted", "archived"]
@@ -26064,6 +26119,7 @@
                     "forkedFromSessionId",
                     "imported",
                     "parentSessionId",
+                    "workspaceSessionId",
                     "visibility",
                     "archivedAt",
                     "status",
@@ -26427,6 +26483,12 @@
                         "format": "uuid",
                         "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
                       },
+                      "workspaceSessionId": {
+                        "nullable": true,
+                        "type": "string",
+                        "format": "uuid",
+                        "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+                      },
                       "forkedFromSessionId": {
                         "nullable": true,
                         "type": "string",
@@ -26466,6 +26528,7 @@
                       "title",
                       "agentId",
                       "parentSessionId",
+                      "workspaceSessionId",
                       "forkedFromSessionId",
                       "visibility",
                       "status",
@@ -26544,6 +26607,10 @@
                   "delegate": {
                     "type": "boolean"
                   },
+                  "workspace": {
+                    "type": "string",
+                    "enum": ["shared", "own"]
+                  },
                   "task": {
                     "type": "string",
                     "minLength": 1,
@@ -26611,6 +26678,10 @@
                     },
                     "allowFurtherDelegation": {
                       "type": "boolean"
+                    },
+                    "workspace": {
+                      "type": "string",
+                      "enum": ["shared", "own"]
                     },
                     "status": {
                       "type": "string",
@@ -26726,6 +26797,12 @@
                           ]
                         },
                         "parentSessionId": {
+                          "nullable": true,
+                          "type": "string",
+                          "format": "uuid",
+                          "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+                        },
+                        "workspaceSessionId": {
                           "nullable": true,
                           "type": "string",
                           "format": "uuid",
@@ -26954,6 +27031,7 @@
                         "forkedFromSessionId",
                         "imported",
                         "parentSessionId",
+                        "workspaceSessionId",
                         "visibility",
                         "archivedAt",
                         "status",
@@ -27028,6 +27106,7 @@
                     "task",
                     "contextMode",
                     "allowFurtherDelegation",
+                    "workspace",
                     "status",
                     "session",
                     "results"
@@ -27175,6 +27254,10 @@
                       "allowFurtherDelegation": {
                         "type": "boolean"
                       },
+                      "workspace": {
+                        "type": "string",
+                        "enum": ["shared", "own"]
+                      },
                       "status": {
                         "type": "string",
                         "enum": [
@@ -27289,6 +27372,12 @@
                             ]
                           },
                           "parentSessionId": {
+                            "nullable": true,
+                            "type": "string",
+                            "format": "uuid",
+                            "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+                          },
+                          "workspaceSessionId": {
                             "nullable": true,
                             "type": "string",
                             "format": "uuid",
@@ -27521,6 +27610,7 @@
                           "forkedFromSessionId",
                           "imported",
                           "parentSessionId",
+                          "workspaceSessionId",
                           "visibility",
                           "archivedAt",
                           "status",
@@ -27595,6 +27685,7 @@
                       "task",
                       "contextMode",
                       "allowFurtherDelegation",
+                      "workspace",
                       "status",
                       "session",
                       "results"
@@ -27720,6 +27811,10 @@
                       "allowFurtherDelegation": {
                         "type": "boolean"
                       },
+                      "workspace": {
+                        "type": "string",
+                        "enum": ["shared", "own"]
+                      },
                       "status": {
                         "type": "string",
                         "enum": [
@@ -27834,6 +27929,12 @@
                             ]
                           },
                           "parentSessionId": {
+                            "nullable": true,
+                            "type": "string",
+                            "format": "uuid",
+                            "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+                          },
+                          "workspaceSessionId": {
                             "nullable": true,
                             "type": "string",
                             "format": "uuid",
@@ -28066,6 +28167,7 @@
                           "forkedFromSessionId",
                           "imported",
                           "parentSessionId",
+                          "workspaceSessionId",
                           "visibility",
                           "archivedAt",
                           "status",
@@ -28140,6 +28242,7 @@
                       "task",
                       "contextMode",
                       "allowFurtherDelegation",
+                      "workspace",
                       "status",
                       "session",
                       "results"
@@ -28432,6 +28535,12 @@
                       "format": "uuid",
                       "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
                     },
+                    "workspaceSessionId": {
+                      "nullable": true,
+                      "type": "string",
+                      "format": "uuid",
+                      "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+                    },
                     "visibility": {
                       "type": "string",
                       "enum": ["latent", "promoted", "archived"]
@@ -28650,6 +28759,7 @@
                     "forkedFromSessionId",
                     "imported",
                     "parentSessionId",
+                    "workspaceSessionId",
                     "visibility",
                     "archivedAt",
                     "status",
@@ -29291,6 +29401,12 @@
                       "format": "uuid",
                       "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
                     },
+                    "workspaceSessionId": {
+                      "nullable": true,
+                      "type": "string",
+                      "format": "uuid",
+                      "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+                    },
                     "visibility": {
                       "type": "string",
                       "enum": ["latent", "promoted", "archived"]
@@ -29509,6 +29625,7 @@
                     "forkedFromSessionId",
                     "imported",
                     "parentSessionId",
+                    "workspaceSessionId",
                     "visibility",
                     "archivedAt",
                     "status",
@@ -29732,6 +29849,12 @@
                       "format": "uuid",
                       "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
                     },
+                    "workspaceSessionId": {
+                      "nullable": true,
+                      "type": "string",
+                      "format": "uuid",
+                      "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+                    },
                     "visibility": {
                       "type": "string",
                       "enum": ["latent", "promoted", "archived"]
@@ -29950,6 +30073,7 @@
                     "forkedFromSessionId",
                     "imported",
                     "parentSessionId",
+                    "workspaceSessionId",
                     "visibility",
                     "archivedAt",
                     "status",
@@ -30505,6 +30629,12 @@
                             "format": "uuid",
                             "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
                           },
+                          "workspaceSessionId": {
+                            "nullable": true,
+                            "type": "string",
+                            "format": "uuid",
+                            "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+                          },
                           "visibility": {
                             "type": "string",
                             "enum": ["latent", "promoted", "archived"]
@@ -30732,6 +30862,7 @@
                           "forkedFromSessionId",
                           "imported",
                           "parentSessionId",
+                          "workspaceSessionId",
                           "visibility",
                           "archivedAt",
                           "status",
@@ -31045,6 +31176,12 @@
                         "format": "uuid",
                         "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
                       },
+                      "workspaceSessionId": {
+                        "nullable": true,
+                        "type": "string",
+                        "format": "uuid",
+                        "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+                      },
                       "visibility": {
                         "type": "string",
                         "enum": ["latent", "promoted", "archived"]
@@ -31263,6 +31400,7 @@
                       "forkedFromSessionId",
                       "imported",
                       "parentSessionId",
+                      "workspaceSessionId",
                       "visibility",
                       "archivedAt",
                       "status",
@@ -34170,6 +34308,12 @@
                         "format": "uuid",
                         "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
                       },
+                      "workspaceSessionId": {
+                        "nullable": true,
+                        "type": "string",
+                        "format": "uuid",
+                        "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+                      },
                       "visibility": {
                         "type": "string",
                         "enum": ["latent", "promoted", "archived"]
@@ -34388,6 +34532,7 @@
                       "forkedFromSessionId",
                       "imported",
                       "parentSessionId",
+                      "workspaceSessionId",
                       "visibility",
                       "archivedAt",
                       "status",

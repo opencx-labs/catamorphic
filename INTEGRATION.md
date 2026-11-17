@@ -558,7 +558,16 @@ its grants allow, and `readOnly` and `delegate` that need no grant (a host
 tool marks itself `readOnly` to stay with a read-only chat); a registry's optional `models()`
 lets core check the model against the agent's harness catalog. A native
 harness subagent is only an execution optimization when it preserves these
-durable identities and policies.
+durable identities and policies. `workspace` (ADR 0322) is `shared` by
+default: the child works in its parent's workspace (its Allocation, sandbox
+or checkout, as it stands; `workspaceSessionId` names that session) with no
+admission or setup of its own; `own` gives it its own workspace at the
+parent's base. Core serves `spawn_subsession`, `wait_for_subsessions` and
+`interrupt_subsession` (`subsessionTools`) to every agent whose host serves
+none of them, so agents placed in a sandbox delegate; a host that builds its
+own uses the same definition. A child's turn that something other than a
+person started (its parent, its own background command, a workflow) reports
+its result to the parent like the first.
 
 Archive is a recursive server operation, not a local hidden flag. It reports
 the session ids, running work, Watchers, and processes that would stop and

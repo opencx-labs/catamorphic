@@ -1246,6 +1246,8 @@ export const AgentSessionSchema = z.object({
   /** Provenance of a chat imported from another tool (ADR 0233). */
   imported: ImportedSessionSchema.nullable(),
   parentSessionId: z.string().uuid().nullable(),
+  /** The session whose workspace it works in (ADR 0322), if not its own. */
+  workspaceSessionId: z.string().uuid().nullable(),
   visibility: z.enum(["latent", "promoted", "archived"]),
   archivedAt: z.string().datetime().nullable(),
   status: z.enum(["active", "closed"]),
@@ -1325,6 +1327,7 @@ export const AgentSessionPeerSchema = z.object({
   title: z.string().nullable(),
   agentId: z.string().nullable(),
   parentSessionId: z.string().uuid().nullable(),
+  workspaceSessionId: z.string().uuid().nullable(),
   forkedFromSessionId: z.string().uuid().nullable(),
   visibility: z.enum(["latent", "promoted", "archived"]),
   status: z.enum(["active", "closed"]),
@@ -1368,6 +1371,11 @@ export const CreateAgentSubsessionSchema = z.object({
   readOnly: z.boolean().optional(),
   /** False keeps the child from starting its own; always allowed. */
   delegate: z.boolean().optional(),
+  /**
+   * Its parent's workspace (default: no admission or setup of its own) or
+   * one of its own started at the parent's base (ADR 0322).
+   */
+  workspace: z.enum(["shared", "own"]).optional(),
   task: z.string().min(1).max(100_000),
   contextMode: z.enum(["fresh", "inherit"]).optional(),
   title: z.string().min(1).max(500).optional(),
@@ -1380,6 +1388,8 @@ export const AgentSubsessionSchema = z.object({
   task: z.string(),
   contextMode: z.enum(["fresh", "inherit"]),
   allowFurtherDelegation: z.boolean(),
+  /** Where it works: its parent's workspace or its own (ADR 0322). */
+  workspace: z.enum(["shared", "own"]),
   status: z.enum(["running", "completed", "failed", "interrupted", "archived"]),
   session: AgentSessionSchema,
   /**

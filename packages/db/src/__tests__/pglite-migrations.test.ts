@@ -160,6 +160,7 @@ describe("PGlite migrations", () => {
       "083_scan_project_kinds.sql",
       "084_enablements_follow_published.sql",
       "085_queued_runs.sql",
+      "086_shared_subsession_workspaces.sql",
     ]);
 
     const rerun = await migrateToLatest({ db });

@@ -217,6 +217,36 @@ describe("SessionCheckouts", () => {
     expect(resolved.path).toBe(await fs.realpath(external));
   });
 
+  it("puts a shared subsession in its parent's checkout as it stands (ADR 0322)", async () => {
+    const childId = "33333333-3333-4333-8333-333333333333";
+    const isolated = async () => true;
+    // A parent in the project folder: the child is there too, whatever
+    // isolation would say, and never owns it.
+    expect(
+      await checkouts.resolveForAgent({
+        projectId,
+        sessionId: childId,
+        sharedWith: sessionId,
+        requiresIsolation: isolated,
+      }),
+    ).toEqual({ path: rootPath, owned: false });
+    // A parent in its own worktree: the child works in that worktree, not
+    // the project folder every child used before.
+    const parent = await checkouts.createManaged({ projectId, sessionId });
+    expect(
+      await checkouts.resolveForAgent({
+        projectId,
+        sessionId: childId,
+        sharedWith: sessionId,
+        requiresIsolation: isolated,
+      }),
+    ).toEqual({ path: parent.path, owned: false });
+    // The child records no checkout of its own.
+    expect(await checkouts.resolve({ projectId, sessionId: childId })).toBe(
+      rootPath,
+    );
+  });
+
   it("keeps a new session on primary until it creates a worktree", async () => {
     expect(await checkouts.resolve({ projectId, sessionId })).toBe(rootPath);
 

@@ -8,8 +8,8 @@ import {
   sessionMetadataToolWrite,
   setSessionMetadataInputSchema,
 } from "@catamorphic/agent-protocol";
+import { type SubsessionRequest, subsessionTools } from "@catamorphic/core";
 import {
-  type AgentEffort,
   agentToolResult,
   type ExtraTool,
   type ExtraToolContext,
@@ -108,7 +108,6 @@ const SESSION_MESSAGE_MODES = [
 ] as const;
 export type SessionMessageMode = (typeof SESSION_MESSAGE_MODES)[number];
 const sessionMessageMode = z.enum(SESSION_MESSAGE_MODES);
-const effortSchema = z.enum(["low", "medium", "high", "xhigh", "max"]);
 
 export interface SessionCoordinationBridge {
   list(projectId: string, sessionId: string): Promise<unknown[]>;
@@ -130,16 +129,7 @@ export interface SessionCoordinationBridge {
   spawn(
     projectId: string,
     sessionId: string,
-    input: {
-      agentId?: string;
-      model?: string;
-      effort?: AgentEffort;
-      readOnly?: boolean;
-      delegate?: boolean;
-      task: string;
-      contextMode?: "fresh" | "inherit";
-      title?: string;
-    },
+    input: SubsessionRequest,
   ): Promise<unknown>;
   listSubsessions(projectId: string, sessionId: string): Promise<unknown[]>;
   waitForSubsessions(
@@ -459,126 +449,32 @@ export function buildWorkspaceToolkit(
         );
       },
     },
-    {
-      name: "spawn_subsession",
-      description:
-        "Start a subagent: a child session that works on one bounded, self-contained task in parallel with you. Whom you may start, and the model and effort you may set, are listed in your instructions. Use it wherever you would use a subagent or Task tool (parallel research, independent reviews, exploration). Returns at once; its result arrives in this chat as a message from it, during your turn if you are still working.",
-      parameters: {
-        task: z
-          .string()
-          .min(1)
-          .describe(
-            "The whole task: the child sees nothing else unless inherit",
-          ),
-        agent: z
-          .string()
-          .min(1)
-          .optional()
-          .describe(
-            "An agent id from your instructions' list; leave out for a copy of yourself",
-          ),
-        model: z
-          .string()
-          .min(1)
-          .optional()
-          .describe(
-            "As its harness names it, like opus; left out, a copy keeps this chat's, another agent its own",
-          ),
-        effort: effortSchema
-          .optional()
-          .describe("How hard it thinks; left out like model"),
-        read_only: z
-          .boolean()
-          .optional()
-          .describe(
-            "Runs it in its harness's read-only mode, with only Work's read-only tools",
-          ),
-        delegate: z
-          .boolean()
-          .optional()
-          .describe("false: it starts no subagents of its own"),
-        context_mode: z.enum(["fresh", "inherit"]).default("fresh"),
-        title: z.string().min(1).max(500).optional(),
-      },
-      execute: async (input, ctx) => {
-        if (!ctx.sessionId) throw new Error("This turn has no chat session.");
-        if (!sessionCoordination) {
+    // One definition of the subsession tools, Work's own (ADR 0322).
+    ...subsessionTools({
+      spawn: ({ projectId, sessionId, request }) => {
+        if (!sessionCoordination)
           throw new Error("Session coordination is not available yet.");
-        }
-        const child = await sessionCoordination.spawn(
-          ctx.projectId,
-          ctx.sessionId,
-          {
-            task: String(input.task),
-            ...(input.agent ? { agentId: String(input.agent) } : {}),
-            ...(input.model ? { model: String(input.model) } : {}),
-            ...(input.effort
-              ? { effort: effortSchema.parse(input.effort) }
-              : {}),
-            ...(input.read_only === true ? { readOnly: true } : {}),
-            ...(input.delegate === false ? { delegate: false } : {}),
-            contextMode: input.context_mode as "fresh" | "inherit",
-            ...(input.title ? { title: String(input.title) } : {}),
-          },
-        );
-        return {
-          ...subsessionSummary(child),
-          note: "Running. Its result arrives in this chat as a message from it.",
-        };
+        return sessionCoordination.spawn(projectId, sessionId, request);
       },
-    },
-    {
-      name: "wait_for_subsessions",
-      description:
-        "Wait until one of your running subsessions (or those given) finishes, or the timeout; call again to keep waiting. Each finished one's result arrives as a message in this chat.",
-      parameters: {
-        session_ids: z.array(z.string().min(1)).max(100).optional(),
-        timeout_ms: z.number().int().min(0).max(60_000).default(60_000),
-      },
-      execute: async (input, ctx) => {
-        if (!ctx.sessionId) throw new Error("This turn has no chat session.");
-        if (!sessionCoordination) {
+      waitFor: ({ projectId, sessionId, ...wait }) => {
+        if (!sessionCoordination)
           throw new Error("Session coordination is not available yet.");
-        }
-        const children = await sessionCoordination.waitForSubsessions(
-          ctx.projectId,
-          ctx.sessionId,
-          {
-            ...(input.session_ids
-              ? { sessionIds: input.session_ids as string[] }
-              : {}),
-            timeoutMs: Number(input.timeout_ms),
-            stopWaiting: ctx.stopWaiting,
-          },
+        return sessionCoordination.waitForSubsessions(
+          projectId,
+          sessionId,
+          wait,
         );
-        return children.length > 0
-          ? children.map(subsessionSummary)
-          : {
-              subsessions: [],
-              note: "None of your subsessions is running; finished ones already sent their results to this chat.",
-            };
       },
-    },
-    {
-      name: "interrupt_subsession",
-      description:
-        "Stop a direct child session that this session spawned. Its delegation is marked interrupted.",
-      parameters: {
-        session_id: z.string().min(1).describe("Child session id"),
-      },
-      execute: async (input, ctx) => {
-        if (!ctx.sessionId) throw new Error("This turn has no chat session.");
-        if (!sessionCoordination) {
+      interrupt: ({ projectId, sessionId, childSessionId }) => {
+        if (!sessionCoordination)
           throw new Error("Session coordination is not available yet.");
-        }
-        await sessionCoordination.interruptSubsession(
-          ctx.projectId,
-          ctx.sessionId,
-          String(input.session_id),
+        return sessionCoordination.interruptSubsession(
+          projectId,
+          sessionId,
+          childSessionId,
         );
-        return { ok: true };
       },
-    },
+    }),
     {
       name: "request_user_attention",
       description:
@@ -1531,52 +1427,6 @@ async function filterWorkspaceOverview(
           }),
         }
       : {}),
-  };
-}
-
-/** A child as its parent reads it: what runs it, and how (ADR 0271). */
-function subsessionSummary(child: unknown): Record<string, unknown> {
-  const parsed = z
-    .object({
-      status: z.string(),
-      session: z.object({
-        id: z.string(),
-        title: z.string().nullable(),
-        agentId: z.string().nullable().optional(),
-        model: z.string().nullable().optional(),
-        modelEffort: z.string().nullable().optional(),
-        readOnly: z.boolean().optional(),
-      }),
-      results: z
-        .array(
-          z.object({
-            name: z.string(),
-            value: z.unknown(),
-            truncated: z.boolean(),
-            current: z.boolean(),
-          }),
-        )
-        .optional(),
-    })
-    .safeParse(child);
-  if (!parsed.success) return { subsession: child };
-  const { session } = parsed.data;
-  // Its typed results, compactly (ADR 0323): a large value is read whole
-  // with session_results.
-  const results = (parsed.data.results ?? []).map((result) => ({
-    name: result.name,
-    ...(result.truncated ? { truncated: true } : { value: result.value }),
-    ...(result.current ? {} : { stale: true }),
-  }));
-  return {
-    sessionId: session.id,
-    title: session.title,
-    status: parsed.data.status,
-    ...(session.agentId ? { agent: session.agentId } : {}),
-    ...(session.model ? { model: session.model } : {}),
-    ...(session.modelEffort ? { effort: session.modelEffort } : {}),
-    ...(session.readOnly ? { readOnly: true } : {}),
-    ...(results.length > 0 ? { results } : {}),
   };
 }
 

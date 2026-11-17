@@ -1,6 +1,6 @@
 # 0202 — Agents see the browser, their subagents and their PATH
 
-- **Status:** Accepted (amended by [0247](0247-a-person-names-a-chat-and-it-keeps-the-name.md): a name the person gives a chat stays)
+- **Status:** Accepted (amended by [0247](0247-a-person-names-a-chat-and-it-keeps-the-name.md): a name the person gives a chat stays; by [0322](0322-server-agents-start-subagents-in-their-workspace.md): server hosts offer subsessions too)
 - **Date:** 2026-10-05
 - **Amends:** 0133 (eager surface), 0090 (delegated results), 0112 (browser control), 0093 (desktop PATH)
 
@@ -59,6 +59,5 @@ Agents find the browser and delegation without searching, and local harnesses
 reach the person's tools. Every turn carries about 13 KB of host schemas. Evaluate
 and network capture bypass the snapshot's password redaction, as screenshots
 already do; pages stay untrusted data. Results arriving mid-turn depend on the
-harness accepting steers (all three do). Server hosts still offer no delegation
-tool to agents, so their agents keep their harness's own subagents and hear
-nothing of subsessions.
+harness accepting steers (all three do). Server hosts offered no delegation
+tool to agents until ADR 0322, which serves the subsession tools from core.

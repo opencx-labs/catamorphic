@@ -276,6 +276,8 @@ export interface SessionHostOperations {
    * Start a subsession of the chat through its agent's grants (ADR 0271): a
    * copy of its agent unless `agentId` names another, with the model and
    * effort a grant allows; `readOnly` and `delegate: false` only narrow.
+   * It works in the chat's workspace unless `workspace` is `"own"`, a
+   * workspace of its own started at the chat's base (ADR 0322).
    */
   spawn: Call<
     Action & {
@@ -285,6 +287,7 @@ export interface SessionHostOperations {
       effort?: "low" | "medium" | "high" | "xhigh" | "max";
       readOnly?: boolean;
       delegate?: boolean;
+      workspace?: "shared" | "own";
       title?: string;
       contextMode?: "fresh" | "inherit";
     },
