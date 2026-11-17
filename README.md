@@ -327,6 +327,15 @@ enables an exact deployed workflow with its trigger, Environment, agent, and
 connection requirements. Connecting an account may complete that chosen flow;
 it never silently enables every compatible automation.
 
+Project automations follow the published program: each revision of `main`
+that builds and asks for no new authority goes live by itself, after the
+project's deploy workflow (named in `.work/project.json`) runs once at that
+revision; a revision that needs new consent waits for its owner. A member's
+own automation follows once the member turns it on. Host project hooks can return
+per-project secrets on create and are retried on delete until done
+([0330](docs/decisions/0330-enablements-follow-the-published-program.md),
+[0331](docs/decisions/0331-project-deploy-workflow-and-host-project-hooks.md)).
+
 ## Apps
 
 Real frontends users (and agents) build on top of workflows: sandboxed

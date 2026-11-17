@@ -17,6 +17,7 @@ export {
   type PreparedWorkflowExecution,
   prepareProjectExecution,
   prepareWorkflowExecution,
+  WorkflowSourceInvalidError,
 } from "./execution-transform.js";
 export {
   HOLE_SCHEMA_KEY,

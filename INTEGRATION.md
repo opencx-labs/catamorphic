@@ -253,7 +253,26 @@ holders of `webhooks:write` rotate one with
 
 Enablements belong to a member or to the project (`owner: { type: "project"
 }`). A project enablement runs as the project principal with shared
-connections. Workflows reach chats with one operation,
+connections. A project automation of `main` follows the published program
+by default; a member's own follows only once the member turns it on, since it
+uses their connections (`follow`, ADR 0330; `POST <api>/projects/:projectId/workflow-enablements/:enablementId/follow`
+with `{ follow }` changes it): every publication (a deploy, a code-host sync
+that receives commits) is recorded in `published_revisions`, and the event
+dispatch pass (`startEventDispatcher`, which every host already runs) moves
+each follower to it when the workflow builds there and its authority digest
+(the consent digest without the artifact) is unchanged. Otherwise it stays
+on its commit with `updateAvailable` and its owner gets a user notification.
+Only a parse, missing-workflow or trigger-registration failure skips a
+revision; other errors are retried with backoff.
+A project's deploy workflow (`.work/project.json` `deploy.workflow`) runs
+once at each revision, through its own project automation, before anything
+moves; a failure moves nothing (ADR 0331). `GET <api>/projects/:projectId/published-revisions`
+lists revisions with their status, deploy run and per-enablement report, and
+`POST <api>/projects/:projectId/published-revisions/retry`
+(`automations:write`) tries the latest failed one again; Work also retries it
+once when the deploy workflow's project automation is consented to again.
+Replicas coordinate through a per-project replica claim and compare-and-set
+status changes, so none moves an enablement twice or out of order. Workflows reach chats with one operation,
 `catamorphic.sessions.deliver`, naming the chat by `sessionId` or by a `key`
 that starts the chat on first use; a project automation's keyed chats are
 project chats every member of the agent's role sees (`AgentSession.owner ===
@@ -739,10 +758,14 @@ Run-time env resolves through one bindings chain:
   credentials here.
 - Attaching a plugin whose non-optional requirement has no registered
   provider fails closed with a 400 at attach time.
-- **Project lifecycle hooks** provision per-project infrastructure:
-  `onProjectCreated` failures roll the create back; `onProjectDeleted` runs
-  before deletion and a failure aborts it (retryable, nothing leaks). Hooks
-  must be idempotent.
+- **Project lifecycle hooks** provision per-project infrastructure (ADRs
+  0046, 0331): `onProjectCreated` failures roll the create back, and it may
+  return `{ secrets: { NAME: value } }`, which Work keeps sealed as the
+  project's shared secrets without reading them (a workflow uses one once it
+  declares the name with `defineSecrets`). `onProjectDeleted` never blocks
+  the delete: one that throws or returns `{ done: false }` is retried with
+  backoff from the event dispatch pass until it reports done. Hooks must be
+  idempotent.
 
 ```ts
 import {
@@ -778,6 +801,37 @@ export const catamorphic = createCatamorphic({
   // capabilityProviders: [...], projectHooks: [...],
 });
 ```
+
+A host that keeps project data on its own Postgres can instead mint a schema
+and role per project and hand the project its URL. This is an example, not a
+Work feature; Work never interprets the secret:
+
+```ts
+const projectDatabases: ProjectLifecycleHooks = {
+  async onProjectCreated({ project }) {
+    const name = `project_${project.id.replaceAll("-", "")}`;
+    const password = randomBytes(24).toString("base64url");
+    await hostPool.query(`CREATE ROLE ${name} LOGIN PASSWORD '${password}'`);
+    await hostPool.query(`CREATE SCHEMA ${name} AUTHORIZATION ${name}`);
+    return {
+      secrets: {
+        DATABASE_URL: `postgres://${name}:${password}@db.internal/app?options=-csearch_path%3D${name}`,
+      },
+    };
+  },
+  async onProjectDeleted({ project }) {
+    const name = `project_${project.id.replaceAll("-", "")}`;
+    await hostPool.query(`DROP SCHEMA IF EXISTS ${name} CASCADE`);
+    await hostPool.query(`DROP ROLE IF EXISTS ${name}`);
+    return { done: true };
+  },
+};
+```
+
+The project migrates that database from its deploy workflow
+(`"deploy": { "workflow": "migrateDatabase" }` in `.work/project.json`), which
+Work runs once at each published revision before following enablements move
+there (ADRs 0330, 0331).
 
 Workflow code stays vendor-blind — it imports the plugin's client and reads
 `process.env.DATABASE_URL`. Providers must not return `CATAMORPHIC_`-prefixed

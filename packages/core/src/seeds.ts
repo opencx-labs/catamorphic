@@ -699,6 +699,14 @@ flow, the host may finish enabling automatically after the final required
 connection succeeds. Merely connecting an account never opts the member into
 every eligible workflow.
 
+A workflow turned on for the project follows the published program: each
+revision that builds and asks for no new authority goes live by itself, so
+merging to \`main\` is deploying. A member's own automation stays on its
+reviewed revision unless the member turns following on. A project with its own data names a deploy workflow in
+\`.work/project.json\` (\`"deploy": { "workflow": "migrateDatabase" }\`) that
+runs once at each revision before anything moves; \`workflow-lifecycle\` has
+the details and the expand then contract rule for migrations.
+
 Two more things members do without commit rights:
 
 - **Propose a change** to the program (\`propose_change\` tool /

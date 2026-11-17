@@ -231,6 +231,11 @@ interface TriggersServiceDeps {
   projectManager: ProjectManager;
   runs: RunsService;
   workflowEnablements?: () => WorkflowEnablementsService;
+  /** Told about the published commit each scan sees (ADR 0330). */
+  published?: (input: {
+    projectId: string;
+    commitSha: string;
+  }) => Promise<void>;
 }
 
 const DEFAULT_SYNC_BUDGET_MS = 30_000;
@@ -921,10 +926,7 @@ export class TriggersService {
         projectId: args.projectId,
       });
       if (!commitSha) return { commitSha: null, bindings: [] };
-      await this.deps.workflowEnablements?.().markUpdateAvailable({
-        projectId: args.projectId,
-        commitSha,
-      });
+      await this.deps.published?.({ projectId: args.projectId, commitSha });
 
       const memoKey = `${args.projectId}:${commitSha}`;
       const memoized = this.scans.get(memoKey);

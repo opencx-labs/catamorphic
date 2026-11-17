@@ -1,6 +1,9 @@
 import type { DB, Json } from "@catamorphic/db";
 import { getTracer, withSpan } from "@catamorphic/otel";
-import type { WorkflowGraph } from "@catamorphic/parser";
+import {
+  type WorkflowGraph,
+  WorkflowSourceInvalidError,
+} from "@catamorphic/parser";
 import type { Kysely, Selectable, Transaction } from "kysely";
 import type { Identity } from "../identity.js";
 import {
@@ -14,26 +17,42 @@ import type { ConnectionAdmissionService } from "./connection-admission.js";
 import type { ResolvedConnectionBinding } from "./connection-types.js";
 import {
   AuthenticationRequiredError,
+  ConnectionNotFoundError,
   ConnectionPermissionDeniedError,
   ConnectionUnavailableError,
 } from "./connections-service.js";
 import type { DeploymentArtifact } from "./deployment-artifacts-service.js";
 import {
+  EnvironmentAccessDeniedError,
+  EnvironmentBindingUnavailableError,
+  EnvironmentIncompatibleError,
+  EnvironmentNotFoundError,
   EnvironmentPolicyInvalidError,
   type ExecutionEnvironmentsService,
+  NoCompatibleEnvironmentError,
 } from "./execution-environments-service.js";
 import { toJson } from "./run-coordinator.js";
-import { workflowEnablementConsentDigest } from "./workflow-enablement-consent.js";
+import {
+  TriggerBindingsInvalidError,
+  TriggerKindNotRegisteredError,
+  TriggerModeNotAllowedError,
+} from "./triggers-service.js";
+import {
+  workflowEnablementAuthorityDigest,
+  workflowEnablementConsentDigest,
+} from "./workflow-enablement-consent.js";
 import type {
   RevalidatedWorkflowEnablement,
   WorkflowEnablement,
   WorkflowEnablementConnection,
+  WorkflowEnablementFollowOutcome,
   WorkflowEnablementOwner,
   WorkflowEnablementPreview,
   WorkflowEnablementStatus,
   WorkflowEnablementSuspensionReason,
   WorkflowEnablementTrigger,
 } from "./workflow-enablement-types.js";
+import { WorkflowNotFoundError } from "./workflows-service.js";
 
 const tracer = getTracer("@catamorphic/core");
 
@@ -72,6 +91,15 @@ interface WorkflowEnablementsDeps {
     projectId: string;
     externalUserId: string;
   }): Promise<Identity | null>;
+  /**
+   * Someone consented to an enablement again: created it, updated its
+   * deployment, or turned it back on (ADR 0331 retries a failed deploy).
+   */
+  onConsented?(args: {
+    projectId: string;
+    workflowName: string;
+    ownerKind: "member" | "project";
+  }): Promise<void>;
 }
 
 export class WorkflowEnablementNotFoundError extends Error {
@@ -92,6 +120,16 @@ export class WorkflowEnablementConflictError extends Error {
   constructor() {
     super("This workflow is already enabled for that owner and Environment");
     this.name = "WorkflowEnablementConflictError";
+  }
+}
+
+/** Only a lasting enablement of `main` can follow it (ADR 0330). */
+export class WorkflowEnablementFollowUnavailableError extends Error {
+  constructor() {
+    super(
+      "Only an enablement of the published main branch that is not temporary can follow it",
+    );
+    this.name = "WorkflowEnablementFollowUnavailableError";
   }
 }
 
@@ -247,6 +285,13 @@ export class WorkflowEnablementsService {
       consentDigest: string;
       temporary?: boolean;
       expiresAt?: Date;
+      /**
+       * Move to each newly published revision (ADR 0330). Defaults to true
+       * for a project automation of `main`, false for a member's own (it
+       * uses their connections; they turn it on). A temporary one never
+       * follows.
+       */
+      follow?: boolean;
       /** Attach ownership in the same transaction before triggers become visible. */
       onCreate?: (input: {
         transaction: Transaction<DB>;
@@ -271,6 +316,12 @@ export class WorkflowEnablementsService {
             preview.consentDigest,
           );
         }
+        const follows = followDefault({
+          follow: input.follow,
+          temporary: input.temporary ?? false,
+          remoteBranch: preview.remoteBranch,
+          owner: preview.owner,
+        });
         let created: Selectable<DB["workflow_enablements"]>;
         try {
           created = await this.db.transaction().execute(async (trx) => {
@@ -301,6 +352,7 @@ export class WorkflowEnablementsService {
                 permissions: toJson(preview.permissions),
                 consent_digest: preview.consentDigest,
                 temporary: input.temporary ?? false,
+                follow: follows,
                 expires_at: input.expiresAt ?? null,
                 created_by_external_user_id: input.identity.externalUserId,
               })
@@ -352,6 +404,7 @@ export class WorkflowEnablementsService {
           }
           throw error;
         }
+        await this.consented(created);
         return this.hydrate(created);
       },
     );
@@ -447,7 +500,13 @@ export class WorkflowEnablementsService {
       enablementId: input.enablementId,
       allowSuspended: true,
     });
-    return this.setStatus(input, "active", null, "reenabled");
+    const reenabled = await this.setStatus(input, "active", null, "reenabled");
+    await this.consented({
+      project_id: reenabled.projectId,
+      workflow_name: reenabled.workflowName,
+      owner_kind: reenabled.owner.type,
+    });
+    return reenabled;
   }
 
   async updateDeployment(input: {
@@ -497,71 +556,373 @@ export class WorkflowEnablementsService {
       });
       await this.assertRetainedSourceOwner({ ...input, row, transaction: trx });
       this.assertMayManage(input.identity, row.project_id, ownerFromRow(row));
+      await this.writeDeployment({
+        transaction: trx,
+        row,
+        preview,
+        actor: input.identity,
+        eventType: "deployment_updated",
+      });
+    });
+    await this.consented({
+      project_id: current.projectId,
+      workflow_name: current.workflowName,
+      owner_kind: current.owner.type,
+    });
+    return this.get(input);
+  }
+
+  private async consented(row: {
+    project_id: string;
+    workflow_name: string;
+    owner_kind: string;
+  }): Promise<void> {
+    await this.deps
+      .onConsented?.({
+        projectId: row.project_id,
+        workflowName: row.workflow_name,
+        ownerKind: row.owner_kind === "project" ? "project" : "member",
+      })
+      .catch((error: unknown) =>
+        console.warn(
+          "[catamorphic] Could not report a consented enablement",
+          error,
+        ),
+      );
+  }
+
+  /** Turn following on or off (ADR 0330). Who may manage it may change it. */
+  async setFollow(input: {
+    identity: Identity;
+    enablementId: string;
+    follow: boolean;
+  }): Promise<WorkflowEnablement> {
+    await this.db.transaction().execute(async (trx) => {
+      const row = await this.requireRow({
+        ...input,
+        transaction: trx,
+        lock: "update",
+      });
+      await this.assertRetainedSourceOwner({ ...input, row, transaction: trx });
+      this.assertMayManage(input.identity, row.project_id, ownerFromRow(row));
+      if (
+        input.follow &&
+        (row.temporary || row.remote_branch !== PUBLISHED_BRANCH)
+      )
+        throw new WorkflowEnablementFollowUnavailableError();
+      if (row.follow === input.follow) return;
       await trx
         .updateTable("workflow_enablements")
         .set((eb) => ({
-          deployment_artifact_id: preview.deploymentArtifactId,
-          environment_name: preview.environment,
-          commit_sha: preview.commitSha,
-          remote_branch: preview.remoteBranch,
-          consent_digest: preview.consentDigest,
-          capabilities: toJson(preview.capabilities),
-          permissions: toJson(preview.permissions),
-          update_available: false,
-          status: "active",
-          suspension_reason: null,
+          follow: input.follow,
           revision: eb("revision", "+", 1),
           updated_at: new Date(),
         }))
-        .where("id", "=", input.enablementId)
-        .execute();
-      await trx
-        .deleteFrom("workflow_enablement_triggers")
-        .where("enablement_id", "=", input.enablementId)
-        .execute();
-      await trx
-        .deleteFrom("workflow_enablement_connections")
-        .where("enablement_id", "=", input.enablementId)
-        .execute();
-      if (preview.connections.length > 0) {
-        await trx
-          .insertInto("workflow_enablement_connections")
-          .values(
-            preview.connections.map((connection) => ({
-              enablement_id: input.enablementId,
-              alias: connection.alias,
-              connection_id: connection.connectionId,
-              provider_kind: connection.providerKind,
-              principal_kind: connection.principalKind,
-              capabilities: toJson(connection.capabilities),
-            })),
-          )
-          .execute();
-      }
-      await trx
-        .insertInto("workflow_enablement_triggers")
-        .columns(["enablement_id", "trigger_definition_id"])
-        .expression((eb) =>
-          eb
-            .selectFrom("trigger_definitions")
-            .select([
-              eb.val(input.enablementId).as("enablement_id"),
-              "trigger_definitions.id as trigger_definition_id",
-            ])
-            .where("project_id", "=", current.projectId)
-            .where("commit_sha", "=", preview.commitSha)
-            .where("workflow_name", "=", current.workflowName),
-        )
+        .where("id", "=", row.id)
         .execute();
       await this.recordEvent(
         trx,
-        input.enablementId,
+        row.id,
         input.identity,
-        "deployment_updated",
+        input.follow ? "follow_on" : "follow_off",
         null,
       );
     });
     return this.get(input);
+  }
+
+  /**
+   * Following enablements of a project that a published revision could
+   * move (ADR 0330): lasting, not turned off, on `main`, behind it.
+   */
+  async followers(input: {
+    projectId: string;
+    sequence: number;
+  }): Promise<Array<{ id: string; workflowName: string }>> {
+    return this.db
+      .selectFrom("workflow_enablements")
+      .select(["id", "workflow_name as workflowName"])
+      .where("project_id", "=", input.projectId)
+      .where("follow", "=", true)
+      .where("temporary", "=", false)
+      .where("status", "!=", "disabled")
+      .where("remote_branch", "=", PUBLISHED_BRANCH)
+      .where((eb) =>
+        eb.or([
+          eb("followed_sequence", "is", null),
+          eb("followed_sequence", "<", String(input.sequence)),
+        ]),
+      )
+      .orderBy("created_at")
+      .execute();
+  }
+
+  /**
+   * The enablement's preview at a published commit, as its owner, and
+   * whether its authority is the one consented to (ADR 0330). Building and
+   * parsing the workflow and registering its triggers happen here, exactly
+   * as enabling does.
+   */
+  async previewAtRevision(input: {
+    enablementId: string;
+    commitSha: string;
+  }): Promise<
+    | {
+        kind: "ready";
+        preview: WorkflowEnablementPreview;
+        actor: Identity;
+        enablement: WorkflowEnablement;
+      }
+    | { kind: "needs_consent"; reason: string }
+    | { kind: "skipped"; reason: string }
+    | { kind: "retry"; reason: string }
+  > {
+    const row = await this.db
+      .selectFrom("workflow_enablements")
+      .selectAll()
+      .where("id", "=", input.enablementId)
+      .executeTakeFirst();
+    if (!row) throw new WorkflowEnablementNotFoundError();
+    const actor = await this.consentingIdentity(row);
+    if (!actor)
+      return {
+        kind: "needs_consent",
+        reason: "The member who turned it on is no longer in the project",
+      };
+    const current = await this.hydrate(row);
+    let preview: WorkflowEnablementPreview;
+    try {
+      preview = await this.preview({
+        identity: actor,
+        projectId: row.project_id,
+        workflowName: row.workflow_name,
+        environment: row.environment_name,
+        owner: current.owner,
+        commitSha: input.commitSha,
+        remoteBranch: row.remote_branch,
+        connectionSelections: Object.fromEntries(
+          current.connections.map((connection) => [
+            connection.alias,
+            connection.connectionId,
+          ]),
+        ),
+      });
+    } catch (error) {
+      const reason = error instanceof Error ? error.message : String(error);
+      if (isAuthorityError(error)) return { kind: "needs_consent", reason };
+      // Only a failure the same files always produce skips the revision;
+      // a database, network or capacity error is tried again.
+      if (isRevisionBuildError(error)) return { kind: "skipped", reason };
+      return { kind: "retry", reason };
+    }
+    if (
+      workflowEnablementAuthorityDigest(preview) !==
+      workflowEnablementAuthorityDigest(current)
+    )
+      return {
+        kind: "needs_consent",
+        reason:
+          "This revision changes what the workflow may use (connections, permissions or Environment)",
+      };
+    return { kind: "ready", preview, actor, enablement: current };
+  }
+
+  /**
+   * Move a following enablement to the published revision `sequence`
+   * (ADR 0330) when its workflow builds there and its authority is
+   * unchanged. Otherwise it stays and is marked `update_available`. Never
+   * moves an enablement to a revision older than one it already followed.
+   */
+  async followRevision(input: {
+    enablementId: string;
+    commitSha: string;
+    sequence: number;
+  }): Promise<WorkflowEnablementFollowOutcome> {
+    const { enablementId } = input;
+    const before = await this.db
+      .selectFrom("workflow_enablements")
+      .select(["revision", "follow", "followed_sequence", "status"])
+      .where("id", "=", enablementId)
+      .executeTakeFirst();
+    if (
+      !before?.follow ||
+      before.status === "disabled" ||
+      (before.followed_sequence !== null &&
+        Number(before.followed_sequence) >= input.sequence)
+    )
+      return { kind: "unchanged", enablementId };
+    const ready = await this.previewAtRevision(input);
+    if (ready.kind === "retry")
+      return { kind: "retry", enablementId, reason: ready.reason };
+    if (ready.kind !== "ready") {
+      await this.db.transaction().execute(async (trx) => {
+        // Considered at this revision: the next one is what it follows.
+        await trx
+          .updateTable("workflow_enablements")
+          .set({
+            update_available: true,
+            followed_sequence: String(input.sequence),
+            updated_at: new Date(),
+          })
+          .where("id", "=", enablementId)
+          .where("commit_sha", "!=", input.commitSha)
+          .where((eb) =>
+            eb.or([
+              eb("followed_sequence", "is", null),
+              eb("followed_sequence", "<", String(input.sequence)),
+            ]),
+          )
+          .execute();
+        await this.recordEvent(
+          trx,
+          enablementId,
+          { tenantId: "", externalUserId: FOLLOW_ACTOR },
+          ready.kind === "skipped" ? "follow_skipped" : "follow_blocked",
+          ready.reason,
+          { commitSha: input.commitSha },
+        );
+      });
+      return { kind: ready.kind, enablementId, reason: ready.reason };
+    }
+    const moved = await this.db.transaction().execute(async (trx) => {
+      const row = await trx
+        .selectFrom("workflow_enablements")
+        .selectAll()
+        .where("id", "=", enablementId)
+        .forUpdate()
+        .executeTakeFirst();
+      // A person changed it meanwhile, it stopped following, or another
+      // pass already took it as far: leave it.
+      if (
+        !row?.follow ||
+        row.status === "disabled" ||
+        row.revision !== before.revision ||
+        (row.followed_sequence !== null &&
+          Number(row.followed_sequence) >= input.sequence)
+      )
+        return false;
+      if (row.commit_sha === ready.preview.commitSha) {
+        await trx
+          .updateTable("workflow_enablements")
+          .set({ followed_sequence: String(input.sequence) })
+          .where("id", "=", enablementId)
+          .execute();
+        return false;
+      }
+      await this.writeDeployment({
+        transaction: trx,
+        row,
+        preview: ready.preview,
+        actor: { tenantId: row.tenant_id, externalUserId: FOLLOW_ACTOR },
+        eventType: "followed",
+        followedSequence: input.sequence,
+        keepStatus: true,
+      });
+      return true;
+    });
+    return moved
+      ? { kind: "moved", enablementId, commitSha: input.commitSha }
+      : { kind: "unchanged", enablementId };
+  }
+
+  /**
+   * Who consented to an enablement, as they are now: the member for their
+   * own automation, the member who turned on a project automation. Null
+   * once they left the project.
+   */
+  private async consentingIdentity(
+    row: Selectable<DB["workflow_enablements"]>,
+  ): Promise<Identity | null> {
+    const stored = row.owner_identity as unknown as Identity;
+    if (stored.scope === undefined || !this.deps.resolveMemberIdentity)
+      return stored;
+    return this.deps.resolveMemberIdentity({
+      tenantId: row.tenant_id,
+      projectId: row.project_id,
+      externalUserId: stored.externalUserId,
+    });
+  }
+
+  /** Point an enablement at a previewed deployment, triggers and all. */
+  private async writeDeployment(input: {
+    transaction: Transaction<DB>;
+    row: Selectable<DB["workflow_enablements"]>;
+    preview: WorkflowEnablementPreview;
+    actor: Identity;
+    eventType: string;
+    followedSequence?: number;
+    /** Following keeps a suspension; a person's update reactivates. */
+    keepStatus?: boolean;
+  }): Promise<void> {
+    const { transaction: trx, row, preview } = input;
+    await trx
+      .updateTable("workflow_enablements")
+      .set((eb) => ({
+        deployment_artifact_id: preview.deploymentArtifactId,
+        environment_name: preview.environment,
+        commit_sha: preview.commitSha,
+        remote_branch: preview.remoteBranch,
+        consent_digest: preview.consentDigest,
+        capabilities: toJson(preview.capabilities),
+        permissions: toJson(preview.permissions),
+        update_available: false,
+        ...(input.keepStatus
+          ? {}
+          : { status: "active", suspension_reason: null }),
+        ...(input.followedSequence !== undefined
+          ? { followed_sequence: String(input.followedSequence) }
+          : {}),
+        revision: eb("revision", "+", 1),
+        updated_at: new Date(),
+      }))
+      .where("id", "=", row.id)
+      .execute();
+    await trx
+      .deleteFrom("workflow_enablement_triggers")
+      .where("enablement_id", "=", row.id)
+      .execute();
+    await trx
+      .deleteFrom("workflow_enablement_connections")
+      .where("enablement_id", "=", row.id)
+      .execute();
+    if (preview.connections.length > 0) {
+      await trx
+        .insertInto("workflow_enablement_connections")
+        .values(
+          preview.connections.map((connection) => ({
+            enablement_id: row.id,
+            alias: connection.alias,
+            connection_id: connection.connectionId,
+            provider_kind: connection.providerKind,
+            principal_kind: connection.principalKind,
+            capabilities: toJson(connection.capabilities),
+          })),
+        )
+        .execute();
+    }
+    await trx
+      .insertInto("workflow_enablement_triggers")
+      .columns(["enablement_id", "trigger_definition_id"])
+      .expression((eb) =>
+        eb
+          .selectFrom("trigger_definitions")
+          .select([
+            eb.val(row.id).as("enablement_id"),
+            "trigger_definitions.id as trigger_definition_id",
+          ])
+          .where("project_id", "=", row.project_id)
+          .where("commit_sha", "=", preview.commitSha)
+          .where("workflow_name", "=", row.workflow_name),
+      )
+      .execute();
+    await this.recordEvent(
+      trx,
+      row.id,
+      input.actor,
+      input.eventType,
+      null,
+      input.eventType === "followed" ? { commitSha: preview.commitSha } : {},
+    );
   }
 
   async markUpdateAvailable(input: {
@@ -1005,6 +1366,7 @@ export class WorkflowEnablementsService {
       status: row.status as WorkflowEnablementStatus,
       suspensionReason: row.suspension_reason,
       updateAvailable: row.update_available,
+      follow: row.follow,
       temporary: row.temporary,
       expiresAt: row.expires_at?.toISOString() ?? null,
       revision: row.revision,
@@ -1031,6 +1393,7 @@ export class WorkflowEnablementsService {
     identity: Identity,
     eventType: string,
     reason: string | null,
+    metadata: Record<string, string> = {},
   ): Promise<unknown> {
     return trx
       .insertInto("workflow_enablement_events")
@@ -1039,10 +1402,68 @@ export class WorkflowEnablementsService {
         actor_external_user_id: identity.externalUserId,
         event_type: eventType,
         reason,
-        metadata: {} as Json,
+        metadata: toJson(metadata),
       })
       .execute();
   }
+}
+
+/** The branch published revisions are of (ADR 0330). */
+const PUBLISHED_BRANCH = "main";
+
+/** Recorded as the actor of what following does on its own. */
+export const FOLLOW_ACTOR = "work:follow";
+
+/**
+ * A project automation follows by default; a member's own does not, since
+ * it uses the member's connections and they should see new code reach
+ * them first (ADR 0330).
+ */
+function followDefault(input: {
+  follow?: boolean;
+  temporary: boolean;
+  remoteBranch: string;
+  owner: WorkflowEnablementOwner;
+}): boolean {
+  const eligible = !input.temporary && input.remoteBranch === PUBLISHED_BRANCH;
+  if (input.follow && !eligible)
+    throw new WorkflowEnablementFollowUnavailableError();
+  return input.follow ?? (eligible && input.owner.type === "project");
+}
+
+/**
+ * The workflow does not build at that revision: its source does not parse,
+ * it is gone, or its triggers do not register. The same files always fail
+ * the same way.
+ */
+function isRevisionBuildError(error: unknown): boolean {
+  return [
+    WorkflowNotFoundError,
+    WorkflowSourceInvalidError,
+    TriggerBindingsInvalidError,
+    TriggerKindNotRegisteredError,
+    TriggerModeNotAllowedError,
+  ].some((type) => error instanceof type);
+}
+
+/**
+ * Errors that mean the owner's authority no longer covers the revision, so
+ * it needs a person; anything else means the workflow did not build there.
+ */
+function isAuthorityError(error: unknown): boolean {
+  return [
+    AccessDeniedError,
+    AuthenticationRequiredError,
+    ConnectionNotFoundError,
+    ConnectionPermissionDeniedError,
+    ConnectionUnavailableError,
+    EnvironmentAccessDeniedError,
+    EnvironmentBindingUnavailableError,
+    EnvironmentIncompatibleError,
+    EnvironmentNotFoundError,
+    EnvironmentPolicyInvalidError,
+    NoCompatibleEnvironmentError,
+  ].some((type) => error instanceof type);
 }
 
 function ownerFromRow(

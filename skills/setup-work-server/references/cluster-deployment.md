@@ -617,7 +617,10 @@ fresh one with an empty disk at any time.
    stopped. One replica at a time publishes a project, creates a deployment
    runtime, or syncs a company project, under a claim in Postgres. A deploy
    applies on every replica at once: roles and program reads follow the
-   published commit.
+   published commit. Following workflow enablements move to each published
+   revision one project at a time, after the project's deploy workflow, under
+   a per-project claim, so no two replicas move one twice or out of order
+   (ADRs 0330, 0331).
 
 A restarted worker process connects under a new epoch. The operations it had
 in flight fail as uncertain and are never replayed; its sandboxes and chats

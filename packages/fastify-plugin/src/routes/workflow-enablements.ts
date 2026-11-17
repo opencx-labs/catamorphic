@@ -9,8 +9,10 @@ import {
   EnvironmentNotFoundError,
   EnvironmentPolicyInvalidError,
   ProductionDeploymentNotFoundError,
+  PublishedRevisionNotRetryableError,
   WorkflowEnablementConflictError,
   WorkflowEnablementConsentRequiredError,
+  WorkflowEnablementFollowUnavailableError,
   WorkflowEnablementNotFoundError,
   WorkflowEnablementSuspendedError,
   WorkflowNotFoundError,
@@ -24,6 +26,7 @@ import {
   AuthenticationRequiredSchema,
   ErrorSchema,
   ProjectIdParamsSchema,
+  PublishedRevisionSchema,
   WorkflowEnablementOwnerSchema,
   WorkflowEnablementPreviewSchema,
   WorkflowEnablementSchema,
@@ -136,7 +139,14 @@ export function registerWorkflowEnablementRoutes(
     url: "/projects/:projectId/workflow-enablements",
     schema: {
       params: ProjectIdParamsSchema,
-      body: PreviewBodySchema.extend({ consentDigest: z.string().length(64) }),
+      body: PreviewBodySchema.extend({
+        consentDigest: z.string().length(64),
+        /**
+         * Move to each newly published revision (ADR 0330). Defaults to
+         * true for an enablement of main.
+         */
+        follow: z.boolean().optional(),
+      }),
       response: {
         201: WorkflowEnablementSchema,
         403: ErrorSchema,
@@ -284,6 +294,126 @@ export function registerWorkflowEnablementRoutes(
       }
     },
   });
+
+  typed.route({
+    method: "POST",
+    url: "/projects/:projectId/workflow-enablements/:enablementId/follow",
+    schema: {
+      params: EnablementParamsSchema,
+      body: z.object({ follow: z.boolean() }),
+      response: {
+        200: WorkflowEnablementSchema,
+        403: ErrorSchema,
+        404: ErrorSchema,
+        409: PreviewConflictSchema,
+      },
+    },
+    handler: async (request, reply) => {
+      const workflowEnablements = service();
+      if (!workflowEnablements) {
+        return reply
+          .status(404)
+          .send({ error: "Workflow enablement not found" });
+      }
+      try {
+        const identity = resolveIdentity(request);
+        const current = await workflowEnablements.get({
+          identity,
+          enablementId: request.params.enablementId,
+        });
+        if (current.projectId !== request.params.projectId) {
+          return reply
+            .status(404)
+            .send({ error: "Workflow enablement not found" });
+        }
+        return reply.send(
+          await workflowEnablements.setFollow({
+            identity,
+            enablementId: request.params.enablementId,
+            follow: request.body.follow,
+          }),
+        );
+      } catch (error) {
+        return handleEnablementError(error, reply);
+      }
+    },
+  });
+
+  typed.route({
+    method: "GET",
+    url: "/projects/:projectId/published-revisions",
+    schema: {
+      params: ProjectIdParamsSchema,
+      querystring: z.object({
+        limit: z.coerce.number().int().min(1).max(100).optional(),
+      }),
+      response: {
+        200: z.object({ items: z.array(PublishedRevisionSchema) }),
+        403: ErrorSchema,
+        503: ErrorSchema,
+      },
+    },
+    handler: async (request, reply) => {
+      const revisions = ctx.core?.publishedRevisions;
+      if (!revisions) {
+        return reply
+          .status(503)
+          .send({ error: "Published revisions unavailable" });
+      }
+      try {
+        return reply.send({
+          items: await revisions.list({
+            identity: resolveIdentity(request),
+            projectId: request.params.projectId,
+            ...(request.query.limit ? { limit: request.query.limit } : {}),
+          }),
+        });
+      } catch (error) {
+        return handleEnablementError(error, reply);
+      }
+    },
+  });
+
+  registerPublishedRevisionRetryRoute(app, ctx);
+}
+
+function registerPublishedRevisionRetryRoute(
+  app: FastifyInstance,
+  ctx: RouteContext,
+): void {
+  app.withTypeProvider<ZodTypeProvider>().route({
+    method: "POST",
+    url: "/projects/:projectId/published-revisions/retry",
+    schema: {
+      params: ProjectIdParamsSchema,
+      response: {
+        200: PublishedRevisionSchema,
+        403: ErrorSchema,
+        409: ErrorSchema,
+        503: ErrorSchema,
+      },
+    },
+    handler: async (request, reply) => {
+      const revisions = ctx.core?.publishedRevisions;
+      if (!revisions) {
+        return reply
+          .status(503)
+          .send({ error: "Published revisions unavailable" });
+      }
+      try {
+        return reply.send(
+          await revisions.retry({
+            identity: resolveIdentity(request),
+            projectId: request.params.projectId,
+          }),
+        );
+      } catch (error) {
+        if (error instanceof PublishedRevisionNotRetryableError)
+          return reply.status(409).send({ error: error.message });
+        return handleEnablementError(error, reply);
+      }
+    },
+  });
 }
 
 export function handleEnablementError(error: unknown, reply: FastifyReply) {
@@ -318,6 +448,7 @@ export function handleEnablementError(error: unknown, reply: FastifyReply) {
   if (
     error instanceof WorkflowEnablementConsentRequiredError ||
     error instanceof WorkflowEnablementConflictError ||
+    error instanceof WorkflowEnablementFollowUnavailableError ||
     error instanceof ConnectionUnavailableError ||
     error instanceof EnvironmentNotFoundError ||
     error instanceof EnvironmentPolicyInvalidError ||

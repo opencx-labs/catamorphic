@@ -103,7 +103,12 @@ disagree with the installed source, the source wins.
 - **Unattended work needs explicit consent.** Each member reviews and enables
   a deployed workflow and authorizes its connections. Project automations
   (`automations:write`) run as the project, not as whoever enabled them
-  (ADR 0156).
+  (ADR 0156). Project automations follow `main`: merging on the code host
+  deploys them once the project syncs, unless the revision asks for new
+  authority, which waits for a person. A member's own automation follows
+  only once the member turns it on. A project's deploy workflow
+  (`.work/project.json` `deploy`) runs first, for migrations (ADRs 0330,
+  0331); do not write a watcher that updates enablements.
 - **Workflows reach chats with `catamorphic.sessions.deliver`**, by session id
   or by a stable `key`. Clients show `attentionRequired` on the ordinary
   session list and acknowledge on open. Web Push is an optional transport,

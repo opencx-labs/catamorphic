@@ -23,6 +23,7 @@ import type {
   Project,
   ProjectFileEntry,
   ProjectPermissionRef,
+  PublishedRevision,
   ResumeRunInput,
   ResumeRunPauseInput,
   Run,
@@ -118,6 +119,8 @@ export interface WorkflowEnablementsResource {
     consentDigest: string;
     temporary?: boolean;
     expiresAt?: Date;
+    /** Move to each newly published revision (ADR 0330); default true. */
+    follow?: boolean;
   }): Promise<WorkflowEnablement>;
   list(args: {
     projectId: string;
@@ -130,6 +133,11 @@ export interface WorkflowEnablementsResource {
   updateDeployment(args: {
     enablementId: string;
     consentDigest: string;
+  }): Promise<WorkflowEnablement>;
+  /** Turn following the published program on or off (ADR 0330). */
+  setFollow(args: {
+    enablementId: string;
+    follow: boolean;
   }): Promise<WorkflowEnablement>;
 }
 
@@ -417,6 +425,35 @@ function buildRuns(core: CatamorphicCore, identity: Identity): RunsResource {
   };
 }
 
+/** A project's published revisions and how they went live (ADRs 0330, 0331). */
+export interface PublishedRevisionsResource {
+  list(args: {
+    projectId: string;
+    limit?: number;
+  }): Promise<PublishedRevision[]>;
+  /**
+   * Try the project's latest revision again when it failed: its deploy
+   * workflow runs again, then followers move. Needs `automations:write`.
+   */
+  retry(args: { projectId: string }): Promise<PublishedRevision>;
+}
+
+function buildPublishedRevisions(
+  core: CatamorphicCore,
+  identity: Identity,
+): PublishedRevisionsResource {
+  return {
+    list: (args) =>
+      withIdentity(identity, () =>
+        core.publishedRevisions.list({ ...args, identity }),
+      ),
+    retry: (args) =>
+      withIdentity(identity, () =>
+        core.publishedRevisions.retry({ ...args, identity }),
+      ),
+  };
+}
+
 function buildWorkflowEnablements(
   core: CatamorphicCore,
   identity: Identity,
@@ -450,6 +487,10 @@ function buildWorkflowEnablements(
       withIdentity(identity, () =>
         core.workflowEnablements.updateDeployment({ ...args, identity }),
       ),
+    setFollow: (args) =>
+      withIdentity(identity, () =>
+        core.workflowEnablements.setFollow({ ...args, identity }),
+      ),
   };
 }
 
@@ -473,6 +514,7 @@ export class ScopedClient {
   readonly projects: ProjectsResource;
   readonly workflows: WorkflowsResource;
   readonly workflowEnablements: WorkflowEnablementsResource;
+  readonly publishedRevisions: PublishedRevisionsResource;
   readonly files: FilesResource;
   readonly runs: RunsResource;
   readonly triggers: TriggersResource;
@@ -492,6 +534,7 @@ export class ScopedClient {
     this.projects = buildProjects(core, identity);
     this.workflows = buildWorkflows(core, identity);
     this.workflowEnablements = buildWorkflowEnablements(core, identity);
+    this.publishedRevisions = buildPublishedRevisions(core, identity);
     this.files = buildFiles(core, identity);
     this.runs = buildRuns(core, identity);
     this.triggers = buildTriggers(core, identity);

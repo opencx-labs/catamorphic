@@ -388,6 +388,14 @@ export interface RedriveRunJobInput {
   availableAt?: Date;
 }
 
+/** A workflow cannot run at a published revision under its consent (ADR 0331). */
+export class WorkflowRevisionUnavailableError extends Error {
+  constructor(readonly reason: string) {
+    super(reason);
+    this.name = "WorkflowRevisionUnavailableError";
+  }
+}
+
 export class RunNotFoundError extends Error {
   constructor(readonly runId: string) {
     super(`Run '${runId}' not found`);
@@ -1073,6 +1081,55 @@ export class RunsService {
       },
       internal,
     );
+  }
+
+  /**
+   * Run an enablement at a later published commit, under the authority it
+   * was consented to, before it moves there (ADR 0331): the project's
+   * deploy workflow. Refused when that commit needs new consent or its
+   * workflow does not build.
+   */
+  async triggerWithEnablementAtRevision(
+    args: TriggerProductionRunInput & {
+      enablementId: string;
+      commitSha: string;
+    },
+  ): Promise<Run> {
+    const service = this.deps.workflowEnablements?.();
+    if (!service) throw new Error("Workflow enablements are not configured");
+    const validated = await service.revalidate({
+      identity: args.identity,
+      enablementId: args.enablementId,
+    });
+    const enablement = validated.enablement;
+    if (
+      enablement.projectId !== args.projectId ||
+      enablement.workflowName !== args.workflowName
+    )
+      throw new Error(
+        "Workflow enablement does not match the requested workflow",
+      );
+    const ready = await service.previewAtRevision({
+      enablementId: enablement.id,
+      commitSha: args.commitSha,
+    });
+    if (ready.kind !== "ready")
+      throw new WorkflowRevisionUnavailableError(ready.reason);
+    return this.trigger({
+      ...args,
+      identity: validated.ownerIdentity,
+      environment: enablement.environment,
+      commitSha: ready.preview.commitSha,
+      remoteBranch: enablement.remoteBranch,
+      connectionAuthorizationSnapshot: enablement.connections,
+      workflowEnablementId: enablement.id,
+      enablementSnapshot: {
+        commitSha: enablement.commitSha,
+        consentDigest: enablement.consentDigest,
+        revision: enablement.revision,
+      },
+      unattended: true,
+    });
   }
 
   /**
