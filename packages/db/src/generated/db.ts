@@ -833,8 +833,11 @@ export interface PublishedRevisions {
   auto_retried: Generated<boolean>;
   commit_sha: string;
   created_at: Generated<Timestamp>;
+  deploy_attempt: Generated<number>;
   deploy_enablement_id: string | null;
+  deploy_noticed: Generated<boolean>;
   deploy_run_id: string | null;
+  deploy_started_at: Timestamp | null;
   deploy_workflow: string | null;
   error: string | null;
   id: Generated<string>;

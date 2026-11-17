@@ -24,7 +24,6 @@ import {
 import type { DeploymentArtifact } from "./deployment-artifacts-service.js";
 import {
   EnvironmentAccessDeniedError,
-  EnvironmentBindingUnavailableError,
   EnvironmentIncompatibleError,
   EnvironmentNotFoundError,
   EnvironmentPolicyInvalidError,
@@ -1526,7 +1525,9 @@ function isRevisionBuildError(error: unknown): boolean {
 
 /**
  * Errors that mean the owner's authority no longer covers the revision, so
- * it needs a person; anything else means the workflow did not build there.
+ * it needs a person. A machine or connection that is unavailable for now
+ * (EnvironmentBindingUnavailableError, ConnectionUnavailableError) is not
+ * one of them: that is tried again.
  */
 function isAuthorityError(error: unknown): boolean {
   return [
@@ -1534,9 +1535,7 @@ function isAuthorityError(error: unknown): boolean {
     AuthenticationRequiredError,
     ConnectionNotFoundError,
     ConnectionPermissionDeniedError,
-    ConnectionUnavailableError,
     EnvironmentAccessDeniedError,
-    EnvironmentBindingUnavailableError,
     EnvironmentIncompatibleError,
     EnvironmentNotFoundError,
     EnvironmentPolicyInvalidError,

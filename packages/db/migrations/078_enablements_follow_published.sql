@@ -30,6 +30,11 @@ CREATE TABLE published_revisions (
   deploy_enablement_id uuid REFERENCES workflow_enablements(id)
     ON DELETE SET NULL,
   deploy_run_id uuid REFERENCES workflow_runs(id) ON DELETE SET NULL,
+  -- Each try of the deploy is its own run, found again by this attempt.
+  deploy_attempt integer NOT NULL DEFAULT 1,
+  deploy_started_at timestamptz,
+  -- The people who manage automations were told it is running long.
+  deploy_noticed boolean NOT NULL DEFAULT false,
   previous_commit_sha char(40),
   error text,
   report jsonb NOT NULL DEFAULT '[]'::jsonb,

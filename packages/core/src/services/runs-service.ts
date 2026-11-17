@@ -382,7 +382,14 @@ export interface RedriveRunJobInput {
 
 /** A workflow cannot run at a published revision under its consent (ADR 0331). */
 export class WorkflowRevisionUnavailableError extends Error {
-  constructor(readonly reason: string) {
+  constructor(
+    readonly reason: string,
+    /**
+     * `needs_consent`: the revision asks for more authority; `skipped`: the
+     * workflow does not build there; `retry`: a failure that may clear.
+     */
+    readonly kind: "needs_consent" | "skipped" | "retry",
+  ) {
     super(reason);
     this.name = "WorkflowRevisionUnavailableError";
   }
@@ -1076,7 +1083,7 @@ export class RunsService {
       commitSha: args.commitSha,
     });
     if (ready.kind !== "ready")
-      throw new WorkflowRevisionUnavailableError(ready.reason);
+      throw new WorkflowRevisionUnavailableError(ready.reason, ready.kind);
     return this.trigger({
       ...args,
       identity: validated.ownerIdentity,

@@ -1,19 +1,26 @@
 import type { DB } from "@catamorphic/db";
 import { getTracer, withSpan } from "@catamorphic/otel";
+import { WorkflowSourceInvalidError } from "@catamorphic/parser";
 import { type Kysely, type Selectable, sql } from "kysely";
 import { z } from "zod";
 import { type Identity, mayUseProject } from "../identity.js";
 import { AccessDeniedError } from "./artifact-scope.js";
 import { ReplicaClaimBusyError, withReplicaClaim } from "./replica-claims.js";
 import { toJson } from "./run-coordinator.js";
-import type { RunsService } from "./runs-service.js";
+import {
+  RunInputInvalidError,
+  type RunsService,
+  WorkflowRevisionUnavailableError,
+} from "./runs-service.js";
 import type { UserNotificationsService } from "./user-notifications-service.js";
 import type { WorkWakeups } from "./work-wakeups.js";
 import type { WorkflowEnablementFollowOutcome } from "./workflow-enablement-types.js";
 import {
   FOLLOW_ACTOR,
+  WorkflowEnablementSuspendedError,
   type WorkflowEnablementsService,
 } from "./workflow-enablements-service.js";
+import { WorkflowNotFoundError } from "./workflows-service.js";
 
 const tracer = getTracer("@catamorphic/core");
 
@@ -95,7 +102,7 @@ const TERMINAL_RUN = ["completed", "failed", "canceled"];
 interface PublishedRevisionsDeps {
   db: Kysely<DB>;
   enablements: WorkflowEnablementsService;
-  runs: () => Pick<RunsService, "triggerWithEnablementAtRevision">;
+  runs: () => Pick<RunsService, "triggerWithEnablementAtRevision" | "cancel">;
   /** The commit the project's published `main` points to now. */
   publishedHead(args: {
     tenantId: string;
@@ -116,6 +123,10 @@ interface PublishedRevisionsDeps {
   wakeups?: WorkWakeups;
   /** Default 60. */
   claimTtlSeconds?: number;
+  /** A deploy run longer than this fails its revision. Default one hour. */
+  deployTimeoutMs?: number;
+  /** A deploy run longer than this is reported once. Default 15 minutes. */
+  deployNoticeMs?: number;
 }
 
 /**
@@ -220,11 +231,14 @@ export class PublishedRevisionsService {
    * Returns how many projects progressed.
    */
   async advance(input: { limit?: number } = {}): Promise<number> {
+    // Ready projects first, oldest first; one waiting to try again last.
     const projects = await this.db
       .selectFrom("published_revisions")
       .select("project_id")
-      .distinct()
       .where("status", "in", ["pending", "deploying", "applying"])
+      .groupBy("project_id")
+      .orderBy(sql`max(coalesce(retry_at, '-infinity'::timestamptz))`)
+      .orderBy(sql`min(sequence)`)
       .limit(input.limit ?? 50)
       .execute();
     let progressed = 0;
@@ -357,6 +371,8 @@ export class PublishedRevisionsService {
         deploy_workflow: deploy.workflow,
         deploy_enablement_id: enablement.id,
         previous_commit_sha: previousCommitSha,
+        deploy_started_at: new Date(),
+        deploy_noticed: false,
         updated_at: new Date(),
       })
       .where("id", "=", row.id)
@@ -373,39 +389,61 @@ export class PublishedRevisionsService {
       deploy_workflow: deploy.workflow,
       deploy_enablement_id: enablement.id,
       previous_commit_sha: previousCommitSha,
+      deploy_started_at: new Date(),
     });
     return true;
   }
 
-  /** Start (or, after a restart, find) the deploy run of a revision. */
+  /**
+   * Start, or after a restart find, the deploy run of a revision's current
+   * attempt: one run per attempt, found again by its correlation key even
+   * once it settled. A failure that may clear waits and tries again; only
+   * refused authority or a deterministic failure fails the revision.
+   */
   private async startDeployRun(row: Row): Promise<void> {
     if (!row.deploy_workflow || !row.deploy_enablement_id) {
       await this.fail(row, "The deploy workflow's enablement was removed");
       return;
     }
+    const correlationKey = `deploy:${row.id}:${row.deploy_attempt}`;
+    const started = await this.db
+      .selectFrom("workflow_runs")
+      .select("id")
+      .where("project_id", "=", row.project_id)
+      .where("workflow_name", "=", row.deploy_workflow)
+      .where("correlation_key", "=", correlationKey)
+      .orderBy("created_at")
+      .limit(1)
+      .executeTakeFirst();
     try {
-      const run = await this.deps.runs().triggerWithEnablementAtRevision({
-        identity: { tenantId: row.tenant_id, externalUserId: FOLLOW_ACTOR },
-        enablementId: row.deploy_enablement_id,
-        projectId: row.project_id,
-        workflowName: row.deploy_workflow,
-        commitSha: row.commit_sha,
-        input: {
-          commit: row.commit_sha,
-          previousCommit: row.previous_commit_sha,
-        },
-        // One live deploy run per revision, even when a restarted pass
-        // starts it again.
-        correlationKey: `deploy:${row.id}`,
-        onConflict: "ignore",
-      });
+      const runId =
+        started?.id ??
+        (
+          await this.deps.runs().triggerWithEnablementAtRevision({
+            identity: { tenantId: row.tenant_id, externalUserId: FOLLOW_ACTOR },
+            enablementId: row.deploy_enablement_id,
+            projectId: row.project_id,
+            workflowName: row.deploy_workflow,
+            commitSha: row.commit_sha,
+            input: {
+              commit: row.commit_sha,
+              previousCommit: row.previous_commit_sha,
+            },
+            correlationKey,
+            onConflict: "ignore",
+          })
+        ).id;
       await this.db
         .updateTable("published_revisions")
-        .set({ deploy_run_id: run.id, updated_at: new Date() })
+        .set({ deploy_run_id: runId, retry_at: null, updated_at: new Date() })
         .where("id", "=", row.id)
         .where("status", "=", "deploying")
         .execute();
     } catch (error) {
+      if (!isDeployRefusal(error)) {
+        await this.deferRow(row);
+        return;
+      }
       await this.fail(row, {
         deployWorkflow: row.deploy_workflow,
         error: `The deploy workflow ${row.deploy_workflow} could not start: ${
@@ -417,6 +455,11 @@ export class PublishedRevisionsService {
 
   private async checkDeploy(row: Row): Promise<boolean> {
     if (!row.deploy_run_id) {
+      // A deploy that keeps failing to start times out like one that runs.
+      const elapsed =
+        Date.now() - (row.deploy_started_at?.getTime() ?? Date.now());
+      if (elapsed > (this.deps.deployTimeoutMs ?? 60 * 60_000))
+        return this.watchDeploy(row);
       await this.startDeployRun(row);
       return true;
     }
@@ -429,7 +472,7 @@ export class PublishedRevisionsService {
       await this.fail(row, "The deploy run is gone");
       return true;
     }
-    if (!TERMINAL_RUN.includes(run.status)) return false;
+    if (!TERMINAL_RUN.includes(run.status)) return this.watchDeploy(row);
     if (run.status !== "completed") {
       await this.fail(row, {
         deployWorkflow: row.deploy_workflow,
@@ -441,6 +484,65 @@ export class PublishedRevisionsService {
     }
     if (!(await this.transition(row, "deploying", "applying"))) return false;
     await this.apply(row);
+    return true;
+  }
+
+  /**
+   * A deploy still running: tell the people who manage automations once it
+   * runs long, and after its timeout cancel it and fail the revision, so a
+   * paused deploy never holds the project's revisions forever.
+   */
+  private async watchDeploy(row: Row): Promise<boolean> {
+    const started = row.deploy_started_at?.getTime() ?? Date.now();
+    const elapsed = Date.now() - started;
+    const timeout = this.deps.deployTimeoutMs ?? 60 * 60_000;
+    if (elapsed > timeout) {
+      if (row.deploy_run_id)
+        await this.deps
+          .runs()
+          .cancel({
+            identity: { tenantId: row.tenant_id, externalUserId: FOLLOW_ACTOR },
+            runId: row.deploy_run_id,
+            reason: "The deploy ran past its timeout",
+          })
+          .catch((error: unknown) =>
+            console.warn("[catamorphic] Could not cancel a long deploy", error),
+          );
+      await this.fail(row, {
+        deployWorkflow: row.deploy_workflow,
+        error: `The deploy workflow ${row.deploy_workflow} ran longer than ${Math.round(
+          timeout / 60_000,
+        )} minutes and was canceled. Nothing moved; the previous revision stays live.`,
+      });
+      return true;
+    }
+    if (
+      row.deploy_noticed ||
+      elapsed <= (this.deps.deployNoticeMs ?? 15 * 60_000)
+    )
+      return false;
+    const noticed = await this.db
+      .updateTable("published_revisions")
+      .set({ deploy_noticed: true, updated_at: new Date() })
+      .where("id", "=", row.id)
+      .where("deploy_noticed", "=", false)
+      .executeTakeFirst();
+    if (noticed.numUpdatedRows !== 1n) return false;
+    await this.publish({
+      row,
+      recipients: await this.deps.automationManagers({
+        tenantId: row.tenant_id,
+        projectId: row.project_id,
+      }),
+      kind: "deploy_running_long",
+      title: `Revision ${row.commit_sha.slice(0, 7)} is still deploying`,
+      body: `The deploy workflow ${row.deploy_workflow} has run for ${Math.round(
+        elapsed / 60_000,
+      )} minutes; followers move once it finishes.`,
+      collapseKey: `deploy_running_long:${row.id}:${row.deploy_attempt}`,
+    }).catch((error: unknown) =>
+      console.warn("[catamorphic] Could not report a long deploy", error),
+    );
     return true;
   }
 
@@ -520,6 +622,20 @@ export class PublishedRevisionsService {
       })
       .where("id", "=", row.id)
       .where("status", "=", "applying")
+      .execute();
+  }
+
+  /** Hold one revision back after a failure that may clear. */
+  private async deferRow(row: Pick<Row, "id" | "attempts">): Promise<void> {
+    const attempts = row.attempts + 1;
+    await this.db
+      .updateTable("published_revisions")
+      .set({
+        attempts,
+        retry_at: new Date(Date.now() + retryBackoffMs(attempts)),
+        updated_at: new Date(),
+      })
+      .where("id", "=", row.id)
       .execute();
   }
 
@@ -627,6 +743,9 @@ export class PublishedRevisionsService {
         settled_at: null,
         attempts: 0,
         retry_at: null,
+        deploy_started_at: null,
+        deploy_noticed: false,
+        deploy_attempt: sql<number>`deploy_attempt + 1`,
         ...(input.automatic ? { auto_retried: true } : {}),
         updated_at: new Date(),
       })
@@ -761,6 +880,23 @@ export class PublishedRevisionNotRetryableError extends Error {
     super(message);
     this.name = "PublishedRevisionNotRetryableError";
   }
+}
+
+/**
+ * A deploy that cannot start because its automation was refused or the
+ * workflow does not build there fails its revision; anything else (machines
+ * full, a run limit, the database or network) may clear.
+ */
+function isDeployRefusal(error: unknown): boolean {
+  if (error instanceof WorkflowRevisionUnavailableError)
+    return error.kind !== "retry";
+  return [
+    AccessDeniedError,
+    WorkflowEnablementSuspendedError,
+    WorkflowNotFoundError,
+    WorkflowSourceInvalidError,
+    RunInputInvalidError,
+  ].some((type) => error instanceof type);
 }
 
 /** 15 seconds after the first failure, doubling, at most 15 minutes. */
