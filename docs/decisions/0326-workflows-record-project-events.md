@@ -28,13 +28,20 @@ several at once. Each event:
   the `webhook` host kind. Host kinds themselves (`session.*`, `schedule`,
   `directory.*`, `webhook`) and project kinds over any other host kind are
   refused: those events are facts only the host may state.
+- if that webhook declares `verify`, belongs to a kind whose chain opts in
+  with `recordable: true` in `defineTrigger`. A verified webhook (payments,
+  deploys) promised that only signed requests fire it; recording would break
+  that promise for every trigger without an `origin` filter, so it fails
+  closed. The GitHub trigger library's `github.delivery` opts in.
 - carries the payload the kind's events carry (for a webhook kind, `{ name,
   headers, query, contentType, body }`). The host builds the stored event,
   checks it with the root kind's payload schema and `matches`, and requires
   every `where` along the kind's chain to match: an event that its own kind
   would not deliver is refused, not silently dropped.
 - is at most the host's webhook body limit (1 MiB by default) as JSON.
-- is stored once per `(kind, id)`. Recording an id the project already has
+- is stored once per `(kind, id)`, as `recorded/<kind>/<id>`: a webhook
+  delivery is stored as `<name>:<delivery id>`, and a webhook name never
+  holds `/`, so the two never meet. Recording an id the project already has
   is a no-op that returns the existing event, so a retried poll is safe.
 
 Recorded events dispatch exactly like ingressed ones: same table, same
@@ -59,9 +66,9 @@ through another workflow that records in turn.
 which the workflow declares (ADR 0158) and its caller must hold, checked
 with the run's live authority like other host calls. The kind is resolved
 against the run's revision: its enablement's commit, else its deployment's.
-Scans record the project's resolved kinds (migration 078,
-`trigger_definition_scans.project_kinds`); a commit scanned before it has
-none and is refused until deployed again.
+Scans record the project's resolved kinds and their opt-in
+(`trigger_definition_scans.project_kinds`, added by this change's migration);
+a commit scanned before it has none and is refused until deployed again.
 
 **Polling is a recipe.** The `github-polling` registry pack (ADR 0262) is a
 schedule workflow that reads the repository's recently updated pull requests

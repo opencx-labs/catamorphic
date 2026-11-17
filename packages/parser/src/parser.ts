@@ -1910,6 +1910,7 @@ function parseProjectTriggerKind(opts: {
   let description: string | undefined;
   let from: WorkflowTriggerBinding | undefined;
   let where: JsonConstant | undefined;
+  let recordable = false;
   for (const property of literal.getProperties()) {
     const key = Node.isPropertyAssignment(property)
       ? readPropertyName(property.getNameNode())
@@ -1952,9 +1953,19 @@ function parseProjectTriggerKind(opts: {
         throw new Error(`Trigger kind '${exportName}': ${errors.join("; ")}`);
       }
       where = result.value;
+    } else if (key === "recordable") {
+      if (
+        value.getKind() !== SyntaxKind.TrueKeyword &&
+        value.getKind() !== SyntaxKind.FalseKeyword
+      ) {
+        throw new Error(
+          `Trigger kind '${exportName}' must write recordable as true or false`,
+        );
+      }
+      recordable = value.getKind() === SyntaxKind.TrueKeyword;
     } else {
       throw new Error(
-        `Trigger kind '${exportName}' has an unknown property '${key}' (use name, description, from and where)`,
+        `Trigger kind '${exportName}' has an unknown property '${key}' (use name, description, from, where and recordable)`,
       );
     }
   }
@@ -1979,6 +1990,7 @@ function parseProjectTriggerKind(opts: {
       ...(from.where !== undefined ? { where: from.where } : {}),
     },
     ...(where !== undefined ? { where } : {}),
+    ...(recordable ? { recordable: true as const } : {}),
     sourceRange: getSourceRange(call),
   };
 }

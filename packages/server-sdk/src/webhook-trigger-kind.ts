@@ -38,7 +38,9 @@ export const webhook = defineTriggerKind({
        * Where the event came from (ADR 0326): a request to the webhook URL,
        * checked as the binding's `verify` declares; an event the host
        * fetched itself from the sender's API (the desktop's GitHub poller,
-       * ADR 0177); or one a workflow of the project recorded.
+       * ADR 0177); or one a workflow of the project recorded, which a kind
+       * over a verifying binding accepts only when it declares
+       * `recordable: true`.
        */
       origin: z.discriminatedUnion("type", [
         z.object({ type: z.literal("request") }),

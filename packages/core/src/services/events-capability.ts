@@ -168,6 +168,12 @@ export function eventsCapability(deps: {
                 throw new RecordedEventRefusedError(
                   `${label}: '${event.kind}' builds on '${kind.kind}'; only kinds over '${RECORDABLE_ROOT}' can be recorded`,
                 );
+              // A webhook that verifies its senders fires only on signed
+              // requests unless the project opted its kind in.
+              if (verifies(kind.config) && !kind.recordable)
+                throw new RecordedEventRefusedError(
+                  `${label}: only signed requests fire '${event.kind}', because its webhook declares verify; add recordable: true to the kind to let workflows record its events`,
+                );
               const payload: JsonObject = {
                 ...event.payload,
                 origin,
@@ -178,7 +184,9 @@ export function eventsCapability(deps: {
                 throw new RecordedEventRefusedError(
                   `${label}: the payload is ${bytes} bytes; the limit is ${limit}`,
                 );
-              const externalId = `recorded:${event.kind}:${event.id}`;
+              // Webhook delivery ids are `<name>:<delivery>`, and a webhook
+              // name never holds '/', so these never meet one.
+              const externalId = `recorded/${event.kind}/${event.id}`;
               const occurredAt = event.occurredAt
                 ? new Date(event.occurredAt).toISOString()
                 : receivedAt;
@@ -237,6 +245,17 @@ export function eventsCapability(deps: {
         ),
     },
   };
+}
+
+/** Whether a webhook binding's config checks its senders. */
+function verifies(config: Json): boolean {
+  return (
+    config !== null &&
+    typeof config === "object" &&
+    !Array.isArray(config) &&
+    config.verify !== undefined &&
+    config.verify !== null
+  );
 }
 
 /** The causation a run's triggering event carried (ADR 0219). */

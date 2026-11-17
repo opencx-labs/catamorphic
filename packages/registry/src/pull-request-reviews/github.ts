@@ -75,7 +75,11 @@ export interface PullRequestReviewCommentEvent {
   repository: { full_name: string };
 }
 
-/** Every signed delivery from the repository's webhook. */
+/**
+ * Every delivery from the repository's webhook, signed, or recorded by a
+ * workflow that polls GitHub where the webhook cannot arrive (`origin` says
+ * which; ADR 0326).
+ */
 export const delivery = defineTrigger({
   name: "github.delivery",
   description: "Any delivery from the GitHub webhook",
@@ -88,6 +92,7 @@ export const delivery = defineTrigger({
       prefix: "sha256=",
     },
   }),
+  recordable: true,
 });
 
 export const pullRequest = defineTrigger<Delivery<PullRequestEvent>>({

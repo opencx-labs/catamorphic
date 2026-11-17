@@ -216,7 +216,10 @@ project's own kinds: \`host["catamorphic.events"].record({ events: [{ kind, id,
 payload, occurredAt? }] })\`, returned from a boundary like any host call, up
 to 100 events per call. The workflow declares \`permissions: ["events:write"]\`.
 \`kind\` must be a project kind built on \`webhook\` (host kinds such as
-\`session.*\`, \`schedule\` or \`webhook\` itself are refused), and \`payload\` is
+\`session.*\`, \`schedule\` or \`webhook\` itself are refused). When that
+webhook declares \`verify\`, only signed requests fire the kind unless a kind
+along its chain says \`recordable: true\` in \`defineTrigger\`, as the GitHub
+library's \`github.delivery\` does; recorded events carry no signature. \`payload\` is
 what the kind's events carry, \`{ name, headers, query, contentType, body }\`:
 the host refuses one its kind's \`where\` filters would not deliver, and one
 over the webhook body limit (1 MiB). Recorded events start every workflow

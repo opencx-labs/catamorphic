@@ -110,6 +110,8 @@ export interface ResolvedProjectKind {
   kind: string;
   config: Json;
   where: Json[];
+  /** A kind along its chain declared `recordable: true`. */
+  recordable: boolean;
 }
 
 export type TriggerSuspensionReason = RunSuspensionReason;
@@ -1281,6 +1283,7 @@ export class TriggersService {
           kind: resolved.binding.kind,
           config: resolved.binding.config as Json,
           where: resolved.binding.where as Json[],
+          recordable: resolved.binding.recordable === true,
         }),
       ];
     });
@@ -1349,12 +1352,13 @@ function bindingFromRow(row: {
 
 function resolvedKindFromJson(value: Json): ResolvedProjectKind | null {
   if (!value || typeof value !== "object" || Array.isArray(value)) return null;
-  const { name, kind, config, where } = value;
+  const { name, kind, config, where, recordable } = value;
   if (typeof name !== "string" || typeof kind !== "string") return null;
   return {
     name,
     kind,
     config: config ?? {},
     where: Array.isArray(where) ? where : [],
+    recordable: recordable === true,
   };
 }
