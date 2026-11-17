@@ -980,6 +980,16 @@ caches (ADR 0208):
   up), or local-process under `WORK_UNENFORCED_EGRESS=accept`. Microsandbox
   fixes a VM's network when it is created and does not offer it. The hosts
   you list could receive the base checkout and the secrets the setup names.
+- `setup.workflow` names a project workflow Work runs after `setup.command`,
+  at the same points, before the turn (ADR 0324): `"setup": { "command":
+  "pnpm install --frozen-lockfile", "workflow": "prepareReview" }`, or a
+  workflow alone. Enable it for the project as a project automation; it
+  runs with the connections and permissions consented there, and one no one
+  enabled fails the setup. It typically calls `exec` to run commands in the
+  workspace being set up: `in: "setup"` on the setup's network as above,
+  `in: "session"` on the chat's own. `$WORK_PROGRAM` names a read-only copy
+  of the run's `.work/` folder for trusted files. A failure or timeout is a
+  failed setup. Chats in folders on people's computers do not run it.
 - `volumes` name directories kept on the machine for each owner (a member,
   or the project for its own chats and runs) and project: the owner's next
   sandbox on that machine mounts the same directory, and nobody else's does.

@@ -170,7 +170,10 @@ for a known chat, or by \`key\` for the chat this workflow keeps for that key,
 started on first use (the enabling member's chat, or for a project enablement a
 project chat; see \`session-workflows\`). \`mode: "message_only"\` with
 \`attention: "required"\` alerts without invoking a model (the agent reads it
-with its next turn); \`queue\` (the default) has the agent do work.
+with its next turn); \`queue\` (the default) has the agent do work. \`exec\`
+runs a command in a chat's workspace and returns its exit code and output; an
+Environment's \`setup\` may name a workflow Work runs before the chat's turns;
+both are in \`session-workflows\`.
 
 A run holds no project permission it does not declare. Name the ones it needs
 in an inline \`permissions\` array, such as \`permissions: ["sessions:write"]\`

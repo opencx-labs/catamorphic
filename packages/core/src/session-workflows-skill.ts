@@ -42,9 +42,9 @@ arrives late if this computer is off (or name the machine that runs it when it i
 not this one), and that archiving the chat cancels it. Say it in plain words.
 
 Session event kinds: session.created, session.message-received, session.message-sent,
-session.turn-changed, session.state-changed, session.work-changed, and
-session.authority-changed. Config may select sessionId, agentId, statuses, and
-workStatus. Omitting sessionId observes authorized matching sessions in the
+session.turn-changed, session.state-changed, session.work-changed,
+session.authority-changed, and session.workspace-changed. Config may select
+sessionId, agentId, statuses, and workStatus. Omitting sessionId observes authorized matching sessions in the
 project. Example: trigger("session.turn-changed", { sessionId: "actual-id",
 statuses: ["completed", "failed"] }). Never guess an id. Keyed chats carry their
 key in payload.session.key (null otherwise), so where selects a family of chats
@@ -77,7 +77,7 @@ and session_reopen for new work. Observe session.work-changed with
 
 context.host["catamorphic.sessions"] provides typed inspect, list, history,
 deliver, create, fork, spawn, archive, unarchive, interrupt,
-complete, reopen, stopWatcher, and stop operations. Every host call is a
+complete, reopen, exec, stopWatcher, and stop operations. Every host call is a
 boundary transition: RETURN it. Consume its result as the next boundary's input
 (pass { state } as a second argument to keep data across it; the next boundary
 then receives { result, state }, see durable-workflows).
@@ -252,6 +252,70 @@ export const closePullRequestChats = defineWorkflow(({ defineBoundary }) => ({
         const key = "pr-" + event.repository.full_name + "-" + event.number;
         return host["catamorphic.sessions"].close({ key, idempotencyKey: "closed:" + key });
       },
+    }),
+  ],
+}));
+\`\`\`
+
+### Commands in a chat's workspace
+
+exec runs a shell command in a chat's workspace and answers { exitCode, stdout,
+stderr, durationMs, timedOut } (the last 16 000 characters of each stream). Name
+the chat by sessionId or key, pass command, in, idempotencyKey, and optionally
+cwd (beneath the checkout), env and timeoutSeconds (default 600, at most 14 400).
+in: "session" runs as the agent's commands do: the chat's network, grants and
+secrets, from its checkout, starting its workspace when it has none. in: "setup"
+runs as the Environment's setup does (on the setup's own network, with only the
+secrets setup.secrets names) and only from the chat's setup workflow while Work
+sets the workspace up; anywhere else it is refused. Installing new dependencies
+while a turn runs is not possible: a sandbox in use never gets the setup's
+network. Reuse what setup installed, or move the workspace so setup runs again.
+
+$WORK_PROGRAM names a copy of this run's .work/ folder at its deployed commit,
+outside the checkout, write bits removed: copy trusted files (review skills,
+prompts, scripts) from there, never from the change under review. cp keeps the
+read-only mode, so make copies writable (chmod -R u+w). A command longer than
+the boundary's attempt parks the run until it ends, holding none of its
+capacity; a retry with the same idempotencyKey answers with the same execution.
+A project chat answers project automations holding sessions:write, a member's
+chat only that member's workflows; each execution is written in the chat's log.
+Commands see the chat's checkout as the agent left it, and code the chat runs
+can change any file in its sandbox: this keeps a change from rewriting its own
+review procedure in its diff, not a hostile change from tampering at run time.
+
+An Environment's setup may name a workflow: { "setup": { "command": "pnpm install",
+"workflow": "prepareReview" } }. Work runs it after the command at the points it
+runs setup (every new workspace, when the base moves, when the setup changes),
+and the turn waits for it. Its input is { sessionId, key, agentId, reason:
+"created" | "rebuilt" | "base-moved" | "changed", workspace: { ref, commit } |
+null }. It runs through its project enablement, so enable it for the project
+with the permissions it declares (sessions:write for exec); one not enabled
+fails the setup and the agent is told, as when a step fails or it times out.
+
+session.workspace-changed reports detail.change: "ready" (its first workspace),
+"rebuilt" (made again), "moved" (a new base), "released" (given back) or "lost"
+(gone with its machine), with detail.reason and detail.workspace. statuses in
+trigger config selects changes: trigger("session.workspace-changed", { statuses:
+["moved"] }). Reacting never holds the turn.
+
+\`\`\`typescript
+import { type BoundaryContext, defineWorkflow } from "@catamorphic/workflow";
+type Setup = { sessionId: string; key: string | null; reason: string };
+
+/** @displayname Prepare a review workspace */
+export const prepareReview = defineWorkflow(({ defineBoundary }) => ({
+  permissions: ["sessions:write"],
+  steps: [
+    /** @displayname Put the trusted procedure in place */
+    defineBoundary({
+      run: ({ input, host }: BoundaryContext<Setup>) =>
+        host["catamorphic.sessions"].exec({
+          sessionId: input.sessionId,
+          in: "session",
+          command:
+            'rm -rf .work/skills/review && cp -R "$WORK_PROGRAM/skills/review" .work/skills/review && chmod -R u+w .work/skills/review',
+          idempotencyKey: "trusted:" + input.reason,
+        }),
     }),
   ],
 }));
