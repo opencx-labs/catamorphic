@@ -320,3 +320,48 @@ describe("provider retry lifecycle", () => {
     await db.destroy();
   });
 });
+
+describe("settings a harness could not apply", () => {
+  it("become one notice of the turn, masked, however often reported", async () => {
+    const db = emptyDatabase();
+    const mask = new SecretMask({ API_KEY: "fixture-secret" });
+    const unapplied: HarnessEvent = {
+      type: "setting.unapplied",
+      setting: "effort",
+      requested: "max",
+      reason:
+        "OpenCode offers no effort max for this model (fixture-secret); it offers low, high.",
+    };
+    const result = await db.transaction().execute((trx) =>
+      ingestHarnessEvents({
+        trx,
+        state: {
+          sessionId: turn.sessionId,
+          agentId: null,
+          turn,
+          attempt,
+          thread,
+        },
+        events: [unapplied, unapplied],
+        now: new Date(at),
+        mask: mask.begin(),
+      }),
+    );
+    const notices = result.events.flatMap((event) =>
+      event.type === "item.added" && event.item.kind === "notice"
+        ? [event.item]
+        : [],
+    );
+    expect(notices).toEqual([
+      expect.objectContaining({
+        code: "setting_not_applied",
+        text: expect.stringContaining("offers no effort max"),
+        data: { setting: "effort", requested: "max" },
+        status: "completed",
+        turnId: turn.id,
+      }),
+    ]);
+    expect(notices[0]?.text).not.toContain("fixture-secret");
+    await db.destroy();
+  });
+});
