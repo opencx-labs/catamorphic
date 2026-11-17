@@ -145,6 +145,14 @@ export class TriggerKindNotRegisteredError extends Error {
   }
 }
 
+/** A caller fired a kind only the host dispatches (ADR 0327). */
+export class TriggerKindHostOnlyError extends Error {
+  constructor(kind: string) {
+    super(`Trigger kind '${kind}' is dispatched only by the host`);
+    this.name = "TriggerKindHostOnlyError";
+  }
+}
+
 export class TriggerModeNotAllowedError extends Error {
   constructor(
     kind: string,
@@ -650,6 +658,8 @@ export class TriggersService {
         ...this.registry.keys(),
       ]);
     }
+    if (callerInitiated && kind.hostOnly)
+      throw new TriggerKindHostOnlyError(kind.name);
     const mode = args.mode ?? "async";
     const allowedModes = kind.modes ?? ["sync", "async"];
     if (!allowedModes.includes(mode)) {

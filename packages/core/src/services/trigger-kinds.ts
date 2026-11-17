@@ -67,6 +67,13 @@ export interface TriggerKindRuntime {
    * deploy scan and each project's check refuse a binding without them.
    */
   requiredPermissions?: readonly string[];
+  /**
+   * Only the host dispatches this kind, through one consented enablement
+   * (`dispatchAtCommit`): a member firing it over HTTP, MCP or a scoped
+   * client is refused. For kinds whose input the host vouches for, such as
+   * a machine's enrollment (ADR 0327).
+   */
+  hostOnly?: boolean;
 }
 
 /** Static kind metadata, safe to serve over HTTP (no functions). */

@@ -890,6 +890,7 @@ export {
   TriggerBindingsInvalidError,
   type TriggerFireOutcome,
   type TriggerFireResult,
+  TriggerKindHostOnlyError,
   TriggerKindNotRegisteredError,
   TriggerModeNotAllowedError,
   TriggerNotEnabledError,

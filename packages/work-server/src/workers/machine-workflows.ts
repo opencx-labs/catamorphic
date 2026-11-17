@@ -7,6 +7,9 @@ import {
   type MachineWorkflows,
 } from "./machine-rules.js";
 
+/** Who cancels a stuck create run, in its run history. */
+const MACHINES_ACTOR = "work-machine-reconciler";
+
 /**
  * `workflow` machine classes over core (ADR 0327): runs start through the
  * project's own enablement of the workflow, at its commit, in its
@@ -95,31 +98,69 @@ export class ProjectMachineWorkflows implements MachineWorkflows {
     workflow: string;
     correlationKey: string;
   }): Promise<MachineWorkflowRun | undefined> {
-    const run = await this.deps.core.db
+    const runs = this.deps.core.db
       .selectFrom("workflow_runs as run")
       .innerJoin(
         "workflow_enablements as enablement",
         "enablement.id",
         "run.workflow_enablement_id",
       )
-      .select(["run.status", "run.result", "run.error", "run.cancel_reason"])
       .where("run.project_id", "=", args.project)
       .where("run.workflow_name", "=", args.workflow)
       .where("run.correlation_key", "=", args.correlationKey)
       // Only the project's automation answers for its machines.
-      .where("enablement.owner_kind", "=", "project")
+      .where("enablement.owner_kind", "=", "project");
+    const run = await runs
+      .select([
+        "run.status",
+        "run.result",
+        "run.error",
+        "run.cancel_reason",
+        sql<number>`(extract(epoch from (now() - run.created_at)) * 1000)::float8`.as(
+          "age_ms",
+        ),
+        sql<number>`(extract(epoch from (now() - coalesce(run.completed_at, run.updated_at))) * 1000)::float8`.as(
+          "ended_for_ms",
+        ),
+      ])
       .orderBy("run.created_at", "desc")
       .limit(1)
       .executeTakeFirst();
     if (!run) return undefined;
     if (run.status === "completed")
       return { status: "completed", output: run.result };
-    if (run.status === "failed" || run.status === "canceled")
+    if (run.status === "failed" || run.status === "canceled") {
+      const failed = await runs
+        .select(sql<number>`count(*)::int`.as("count"))
+        .where("run.status", "in", ["failed", "canceled"])
+        .executeTakeFirst();
       return {
         status: "failed",
         error: run.error ?? run.cancel_reason ?? `the run was ${run.status}`,
+        endedForMs: Number(run.ended_for_ms),
+        failures: Number(failed?.count ?? 1),
       };
-    return { status: "active" };
+    }
+    return { status: "active", ageMs: Number(run.age_ms) };
+  }
+
+  async cancel(args: {
+    project: string;
+    workflow: string;
+    correlationKey: string;
+    reason: string;
+  }): Promise<void> {
+    // The server acting as itself: no member's scope narrows it.
+    await this.deps.core.runs.cancelByKey({
+      identity: {
+        tenantId: this.deps.tenantId,
+        externalUserId: MACHINES_ACTOR,
+      },
+      projectId: args.project,
+      workflowName: args.workflow,
+      correlationKey: args.correlationKey,
+      reason: args.reason,
+    });
   }
 
   async record(args: {

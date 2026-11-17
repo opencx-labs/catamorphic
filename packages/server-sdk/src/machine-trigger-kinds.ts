@@ -54,6 +54,16 @@ const destroyPayload = z.object({
   rule: z.string(),
   /** The ref create returned; null when none is known. */
   ref: z.string().nullable(),
+  /**
+   * The idempotency key its create was given, which finds a machine whose
+   * launch answer was lost even after tags or the class changed.
+   */
+  idempotencyKey: z.string().nullable(),
+  /**
+   * When its create was asked for (ISO 8601): a platform that lists new
+   * machines late should not call one gone this soon after.
+   */
+  requestedAt: z.string().nullable(),
   options: z.record(z.string(), z.unknown()).optional(),
 });
 
@@ -84,6 +94,8 @@ export function machineDestroyResult(
 export const machineCreate = defineTriggerKind({
   name: "machine.create",
   modes: ["async"],
+  // Its input carries an enrollment code and what the machine boots.
+  hostOnly: true,
   display: { label: "create machine", icon: "server" },
   description:
     "Create one worker machine for a workflow machine class. input.enrollment.cloudInit is user data that installs the worker; input.enrollment.idempotencyKey is the platform's idempotency token (Work never asks twice for one key, but a retried step may). input.options is the class's options. Return { ref } with the platform's id, or { refused: reason } when the platform created nothing.",
@@ -98,9 +110,10 @@ export const machineCreate = defineTriggerKind({
 export const machineDestroy = defineTriggerKind({
   name: "machine.destroy",
   modes: ["async"],
+  hostOnly: true,
   display: { label: "destroy machine", icon: "trash-2" },
   description:
-    "Destroy the machine input.ref names and every machine named input.name. Return { done: true } only once none is left; { done: false } while a destruction is under way, and Work asks again.",
+    "Destroy the machine input.ref names, every machine named input.name, and any launched with input.idempotencyKey. Return { done: true } only once none is left; { done: false } while a destruction is under way, or while a machine requested at input.requestedAt may not be listed yet, and Work asks again.",
   payload: destroyPayload,
   output: destroyOutput,
 });
@@ -146,6 +159,8 @@ export const MACHINE_EVENT_TRIGGER_KINDS = MACHINE_EVENT_KINDS.map((kind) =>
   defineTriggerKind({
     name: kind,
     modes: ["async"],
+    // Recorded by the server only; a forged one would mislead bookkeeping.
+    hostOnly: true,
     display: { label: kind.slice(8), icon: "server" },
     description: `${DESCRIPTIONS[kind]} input.payload has the machine's name, class, rule and ref. Config classes narrows to machines of those classes.`,
     payload: z.object({

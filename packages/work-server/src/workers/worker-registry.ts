@@ -181,6 +181,16 @@ export interface ProvisionedMachine {
   releasedForMs: number | null;
   retainDays: number | null;
   placement: WorkerPlacement;
+  /**
+   * The enrollment it was made with (ADR 0327): its code's hash, the
+   * platform's idempotency token, and when it was issued, by the
+   * database's clock. Null when none is kept.
+   */
+  enrollment: {
+    idempotencyKey: string;
+    issuedAt: Date;
+    issuedForMs: number;
+  } | null;
 }
 
 /**
@@ -1232,7 +1242,7 @@ export class WorkWorkerRegistry {
    * ({@link forgetMachine}), whether or not its reference was recorded.
    */
   async machines(): Promise<ProvisionedMachine[]> {
-    const [workers, enrollments] = await Promise.all([
+    const [workers, enrollments, issued] = await Promise.all([
       this.deps.db
         .selectFrom("work_workers")
         .select([
@@ -1266,7 +1276,32 @@ export class WorkWorkerRegistry {
         .where("machine_rule", "is not", null)
         .where("used_at", "is", null)
         .execute(),
+      // Each name's latest code: a name is reused only once its machine is gone.
+      this.deps.db
+        .selectFrom("work_worker_enrollments")
+        .select([
+          "name",
+          "code_hash",
+          "created_at",
+          sql<number>`(extract(epoch from (now() - created_at)) * 1000)::float8`.as(
+            "issued_for_ms",
+          ),
+        ])
+        .where("tenant_id", "=", this.deps.tenantId)
+        .where("machine_rule", "is not", null)
+        .orderBy("created_at")
+        .execute(),
     ]);
+    const enrollmentOf = new Map(
+      issued.map((row) => [
+        row.name,
+        {
+          idempotencyKey: row.code_hash,
+          issuedAt: row.created_at,
+          issuedForMs: Number(row.issued_for_ms),
+        },
+      ]),
+    );
     return [
       ...workers.map((row) => ({
         name: row.name,
@@ -1276,6 +1311,7 @@ export class WorkWorkerRegistry {
         releasedForMs: msOrNull(row.released_for_ms),
         retainDays: row.retain_days,
         placement: storedPlacement(row),
+        enrollment: enrollmentOf.get(row.name) ?? null,
       })),
       ...enrollments.map((row) => ({
         name: row.name,
@@ -1285,6 +1321,7 @@ export class WorkWorkerRegistry {
         releasedForMs: null,
         retainDays: null,
         placement: storedPlacement(row),
+        enrollment: enrollmentOf.get(row.name) ?? null,
       })),
     ];
   }
