@@ -324,3 +324,4 @@ Settled design decisions live here as short Architecture Decision Records. They 
 | [0317](0317-palette-edits-share-one-history.md) | Palette edits share one history | Accepted |
 | [0318](0318-pinned-tabs.md) | Pinned tabs | Accepted |
 | [0319](0319-the-desktop-compacts-rewritten-tables.md) | The desktop compacts the tables it rewrites | Accepted |
+| [0320](0320-pages-translate-on-the-device.md) | Pages translate on the device | Accepted |

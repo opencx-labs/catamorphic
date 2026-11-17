@@ -47,6 +47,11 @@ export default defineConfig({
             import.meta.dirname,
             "src/main/voice/voice-worker.ts",
           ),
+          // Page translation's engine, an Electron utility process (ADR 0320).
+          "translation-worker": path.resolve(
+            import.meta.dirname,
+            "src/main/translation/translation-worker.ts",
+          ),
         },
       },
     },

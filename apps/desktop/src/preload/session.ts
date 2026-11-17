@@ -11,6 +11,7 @@ import {
   installExtensionApis,
 } from "./extension-api.js";
 import { installPageMedia } from "./page-media.js";
+import { installPageTranslation } from "./page-translation.js";
 import { installPasskeys } from "./passkeys.js";
 import { installWebStoreApis, type WebStoreBridge } from "./webstore-api.js";
 
@@ -26,6 +27,8 @@ import { installWebStoreApis, type WebStoreBridge } from "./webstore-api.js";
  *    answers passkey requests from the profile's vault (passkeys.ts).
  *  - Every browsing frame releases its page-owned tracks when that origin's
  *    device permission is revoked (page-media.ts).
+ *  - Every browsing frame in a secure context has Chrome's Translator and
+ *    LanguageDetector, answered on the device (page-translation.ts).
  *  - An extension's service worker or page gets Work's `chrome.*` APIs
  *    (extension-api.ts) before its own code runs; a popup closes on Escape
  *    or when focus leaves it.
@@ -180,7 +183,8 @@ function attempt(job: () => void): void {
   }
 }
 
-// Revoke page-owned capture in every frame, including an embedded call.
+// Revoke page-owned capture in every frame, including an embedded call, and
+// answer translation there (Chrome offers it to embedded frames too).
 if (
   process.type !== "service-worker" &&
   location.protocol !== "chrome-extension:"
@@ -195,6 +199,7 @@ if (
     });
     contextBridge.executeInMainWorld({ func: installPageMedia });
   });
+  attempt(installPageTranslation);
 }
 
 // A tab's embedded frames run the session's preloads too, for the tab

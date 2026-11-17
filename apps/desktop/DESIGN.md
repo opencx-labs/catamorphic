@@ -4250,3 +4250,12 @@ opened folder's beat starts when its rows arrive, so children a source
 loads take the same motion. Pressed again mid-beat, each row turns back
 from where it is drawn over the share of the beat left, as the CSS slide
 of the rows below does. Reduced motion keeps the instant change.
+
+### 2026-11-15: Pages translate on the device
+
+Sites that use Chrome's Translator and LanguageDetector waited forever in
+Work: Electron exposes the classes with nothing behind them. Work now
+answers them itself, shaped as Chrome's, with Firefox's on-device
+translator and Google's CLD3 detector. A pair's model downloads the first
+time a page asks after a click, with the page's own progress, and text
+never leaves the computer (ADR 0320).

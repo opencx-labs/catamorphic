@@ -154,6 +154,7 @@ test without an explicit request. Prefer the isolated Electron harness.
 | Idle CPU and memory | [Performance](docs/performance.md) | `scripts/desktop-soak.ts`, `e2e/runtime-idle.e2e.ts` |
 | Browser control and native computer use | [Computer use](docs/computer-use.md) | `main/browser-driver.ts`, `packages/codex` |
 | Chrome extensions | [Browser extensions](docs/browser-extensions.md) | `main/extensions/`, `preload/session.ts` (also the passkey bridge, `preload/passkeys.ts`), `renderer/components/extensions/` |
+| Pages' Translator and LanguageDetector | [ADR 0320](../../docs/decisions/0320-pages-translate-on-the-device.md) | `main/translation/` (catalog from `scripts/translation-catalog.ts`), `preload/page-translation.ts` |
 | Styling and animation | [Design system](DESIGN.md) | tokens, list motion and native motion tests |
 | Loading buttons and modal stability | [Button contract](DESIGN.md#buttons) | `@catamorphic/ui` PendingButton, reserved status space |
 | Dropdowns and checkboxes | [Control contract](DESIGN.md#dropdowns-and-checkboxes) | `renderer/form-controls.css`, semantic select/checkbox HTML |
