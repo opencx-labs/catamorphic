@@ -228,8 +228,8 @@ async function runStalled(script: string): Promise<unknown> {
         (args, options) => ({ __call: async () => structuredClone(await fn(args)), ...(options && "state" in options ? { state: options.state } : {}) })]));
       const sessions = wrap({
         inspect: () => { log.push(["inspect"]); return { ...structuredClone(chat), turn: structuredClone(turn) }; },
-        exec: (args) => { log.push(["exec", args.in, args.idempotencyKey]); return { exitCode: 0, stdout: "== processes\\n12 1 20:01 S opencode acp", stderr: "", durationMs: 9, timedOut: false }; },
-        attempts: () => { const answer = { attempts: [{ id: turn.attempt.id, status: "running", diagnostics: { runner: "", harness: "[warn] opencode: waiting on a tool" } }] }; meanwhile(); return answer; },
+        // No exec: the evidence is Work's own record, never the workspace's.
+        attempts: (args) => { log.push(["attempts", args.turnId]); const answer = { attempts: [{ id: turn.attempt.id, status: "running", diagnostics: { runner: "", harness: "[warn] opencode: waiting on a tool" } }] }; meanwhile(); return answer; },
         restart: (args) => {
           log.push(["restart", args.attemptId, args.onlyIfStalled, args.idempotencyKey, args.reason]);
           // As Work answers: only the running attempt, while it is stalled.
@@ -655,7 +655,7 @@ describe("the pull-request-reviews pack", () => {
     `);
     const restarted = (attempt: number) => [
       ["inspect"],
-      ["exec", "session", `stall:attempt-${attempt}:diagnose`],
+      ["attempts", "t1"],
       ["write", `store/reviews/stalls/42/attempt-${attempt}.json`],
       ["inspect"],
       [
@@ -679,14 +679,13 @@ describe("the pull-request-reviews pack", () => {
         ["inspect"],
         ...restarted(2),
         ["inspect"],
-        ["exec", "session", "stall:attempt-3:diagnose"],
+        ["attempts", "t1"],
         ["write", "store/reviews/stalls/42/attempt-3.json"],
         ["inspect"],
         ["interrupt", "t1", "stall:t1:stop"],
       ],
       evidence: {
         act: "restart",
-        processes: { stdout: expect.stringContaining("opencode acp") },
         attempts: [
           { diagnostics: { harness: "[warn] opencode: waiting on a tool" } },
         ],
@@ -731,8 +730,8 @@ describe("the pull-request-reviews pack", () => {
       },
     });
     const log = (outcome as { log: unknown[][] }).log;
-    // Nothing ran in a chat that is not ours, and no restart for a look-alike.
-    expect(log.filter((entry) => entry[0] === "exec")).toHaveLength(2);
+    // Nothing was read or kept for a chat that is not ours.
+    expect(log.filter((entry) => entry[0] === "write")).toHaveLength(2);
     expect(log.filter((entry) => entry[0] === "restart")).toEqual([
       [
         "restart",

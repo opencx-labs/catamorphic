@@ -2,7 +2,6 @@ import {
   type BoundaryContext,
   type Carried,
   defineWorkflow,
-  type SessionExecResult,
   type SessionSnapshot,
   type SessionTurnAttempt,
   type TriggerPayload,
@@ -11,8 +10,11 @@ import {
 
 /*
  * Optional (ADR 0333): a review turn that stops making progress for the
- * reviewer's `stall.minutes` is diagnosed and restarted, at most
- * MAX_RESTARTS times a turn. After that the turn is stopped, and
+ * reviewer's `stall.minutes` has its evidence kept and is restarted, at most
+ * MAX_RESTARTS times a turn. The evidence is Work's own record of the
+ * attempt (its runner's and harness's output, masked), never a command run
+ * in the review's workspace: the pull request's code runs there, and
+ * commands may run apart from the agent, where they see neither. After that the turn is stopped, and
  * `postReviews` marks the commit as having no review, as for a failed turn.
  * Work only reports the stall; what to do is this workflow's choice.
  */
@@ -25,21 +27,6 @@ const REVIEWED_REPOSITORY = "acme/web";
 
 /** Where each stall's evidence is kept, per pull request number. */
 const STALLS_PATH = "store/reviews/stalls";
-
-/**
- * What the sandbox shows of a hung agent: its processes and the newest log
- * of a harness that keeps one there. Missing directories are skipped.
- */
-const DIAGNOSE = [
-  "echo '== processes'",
-  "ps -eo pid,ppid,etime,stat,args 2>/dev/null | head -n 200",
-  "echo '== harness logs'",
-  'for dir in "$HOME/.local/share/opencode/log" "$HOME/.codex/log" "$HOME/.claude/debug"; do',
-  '  [ -d "$dir" ] || continue',
-  '  newest=$(ls -t "$dir" 2>/dev/null | head -n 1)',
-  '  [ -n "$newest" ] && { echo "-- $dir/$newest"; tail -n 200 "$dir/$newest"; }',
-  "done",
-].join("\n");
 
 /** One stall, carried from call to call. */
 type Stall = {
@@ -60,7 +47,6 @@ type Stall = {
    * repository's review chat, or the turn moved on).
    */
   act: "restart" | "stop" | "nothing";
-  processes: SessionExecResult | null;
   attempts: SessionTurnAttempt[];
 };
 
@@ -131,7 +117,7 @@ export const restartStalledReviews = defineWorkflow(({ defineBoundary }) => ({
   ],
   // A chat's stalls are handled one at a time, in order.
   concurrency: { key: "payload.session.key", onConflict: "queue" },
-  // `exec` and `restart` act on the project's review chat (ADR 0324).
+  // `restart` and `interrupt` act on the project's review chat.
   permissions: ["sessions:write"],
   steps: [
     /** @displayname Read the review chat */
@@ -161,7 +147,6 @@ export const restartStalledReviews = defineWorkflow(({ defineBoundary }) => ({
               : count(detail.restarts) < MAX_RESTARTS
                 ? "restart"
                 : "stop",
-          processes: null,
           attempts: [],
         };
         return host["catamorphic.sessions"].inspect(
@@ -170,7 +155,7 @@ export const restartStalledReviews = defineWorkflow(({ defineBoundary }) => ({
         );
       },
     }),
-    /** @displayname Collect what the sandbox shows */
+    /** @displayname Read the attempts' own output */
     defineBoundary({
       run: ({
         input,
@@ -184,26 +169,8 @@ export const restartStalledReviews = defineWorkflow(({ defineBoundary }) => ({
             ? input.state
             : { ...input.state, act: "nothing" };
         if (stall.act === "nothing") return { result: null, state: stall };
-        return host["catamorphic.sessions"].exec(
-          {
-            sessionId: stall.sessionId,
-            command: DIAGNOSE,
-            in: "session",
-            timeoutSeconds: 60,
-            idempotencyKey: `stall:${stall.attemptId}:diagnose`,
-          },
-          { state: stall },
-        );
-      },
-    }),
-    /** @displayname Read the attempts' own output */
-    defineBoundary({
-      run: ({
-        input,
-        host,
-      }: BoundaryContext<Carried<SessionExecResult | null, Stall>>) => {
-        const stall: Stall = { ...input.state, processes: input.result };
-        if (stall.act === "nothing") return { result: null, state: stall };
+        // What Work recorded of each attempt, masked: nothing the pull
+        // request's code can write.
         return host["catamorphic.sessions"].attempts(
           { sessionId: stall.sessionId, turnId: stall.turnId },
           { state: stall },
@@ -239,7 +206,6 @@ export const restartStalledReviews = defineWorkflow(({ defineBoundary }) => ({
                 progressAt: stall.progressAt,
                 activity: stall.activity,
                 act: stall.act,
-                processes: stall.processes,
                 attempts: stall.attempts,
               },
               null,
@@ -255,7 +221,7 @@ export const restartStalledReviews = defineWorkflow(({ defineBoundary }) => ({
       run: ({ input, host }: BoundaryContext<Carried<unknown, Stall>>) => {
         const stall = input.state;
         if (stall.act === "nothing") return { result: null, state: stall };
-        // The diagnosis took a while: act only on what the chat is now.
+        // Act only on what the chat is now.
         return host["catamorphic.sessions"].inspect(
           { sessionId: stall.sessionId },
           { state: stall },

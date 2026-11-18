@@ -212,15 +212,14 @@ until someone stops it. For each stall it:
    it is the reviewer's project chat in `review` that `reviewPullRequests`
    started, as `postReviews` checks), and the stalled attempt is still the
    turn's and still silent.
-2. Runs a diagnosis in the chat's workspace with `exec`: the process list and
-   the newest log of a harness that keeps one in the sandbox (OpenCode,
-   Codex, Claude Code). Output is masked by the chat's secrets.
-3. Reads the turn's attempts with `attempts`: each one's outcome and the
-   tails of its runner's and harness's own output Work kept.
-4. Writes both to `store/reviews/stalls/<number>/<attempt>.json`.
-5. Inspects the chat again, since the diagnosis took a while, and acts only
-   if that attempt is still stalled.
-6. Restarts that attempt (`restart` with its `attemptId` and `onlyIfStalled`,
+2. Reads the turn's attempts with `attempts`: each one's outcome and the
+   tails of its runner's and harness's own output Work kept, masked. That is
+   its only evidence: a command run in the review's workspace would print
+   what the pull request's code wants, and may run apart from the agent,
+   seeing neither its processes nor its logs.
+3. Writes it to `store/reviews/stalls/<number>/<attempt>.json`.
+4. Inspects the chat again, and acts only if that attempt is still stalled.
+5. Restarts that attempt (`restart` with its `attemptId` and `onlyIfStalled`,
    keyed by it, so a retried run restarts once): Work ends it without asking
    its harness, revokes its model grant, and runs the same turn again,
    telling the agent it was restarted and to check what it already did. A
@@ -231,7 +230,7 @@ until someone stops it. For each stall it:
    A stopped turn that had already submitted its review for the head
    publishes that review instead.
 
-It declares `sessions:write`, which `exec` and `restart` need on the
+It declares `sessions:write`, which `restart` and `interrupt` need on the
 project's chat; whoever turns it on needs that permission too. It is the
 place to change the policy: skip a stall whose `activity` shows a command
 that is expected to be slow, change the bound, or notify someone instead of

@@ -64,8 +64,12 @@ grants are revoked, its open tool calls and requests close as unanswerable,
 carried steers and interrupts are dropped, and a `turn_restarted` notice
 names the reason. Only then is its runner ended: asked to stop (a sandbox
 runner stops its harness, and an agent in its own process group, before it
-exits), and its process group killed if it has not exited after 10 seconds;
-the next attempt starts once it is gone or that time passed. A holder that
+exits), and its process group killed if it has not exited after 10 seconds.
+A harness that starts a process in a group of its own (the ACP adapter's
+agent) reports it as a `process.group` runner event, recorded on the
+attempt; those groups are killed too, after the runner exits or with its
+group, and once more after a final 5 seconds if it was never seen to exit,
+so nothing of the old attempt runs beside the next, which starts only then. A holder that
 finds the runner already gone (taken over, or exited) carries out a pending
 restart instead of losing the attempt. The same turn then
 runs a new attempt with reason `restart`, bound as every attempt is (ADR
@@ -92,16 +96,18 @@ when the attempt completes. A
 failed, interrupted, lost, superseded or restarted attempt keeps them.
 `host["catamorphic.sessions"].attempts({ sessionId | key, turnId })` (MCP
 `session_attempts`, `GET …/turns/:turnId/attempts`) reads a turn's attempts
-with their diagnostics, for anyone who may read the chat. A workflow that
-needs more (a process list, the harness's log files) runs `exec` (ADR 0324)
-before restarting.
+with their diagnostics, for anyone who may read the chat. They are the
+evidence to keep: Work wrote them from the runner's own output. A command
+run in the chat's workspace (`exec`, ADR 0324) is not: code the chat runs can
+forge what it prints, and commands may run apart from the agent (ADR 0332),
+where they see neither its processes nor its logs.
 
 **Recipe.** The `pull-request-reviews` pack ships an optional
-`restartStalledReviews` workflow: on `session.turn-stalled` for review chats,
-for this repository's review chats exactly (the key and the chat's owner,
-agent, Environment and starting workflow, as the poster checks), it collects
-a process list and the harness's recent log with `exec`, stores them in the
-project store under the pull request's number, inspects the chat again, and
+`restartStalledReviews` workflow: on `session.turn-stalled` for this
+repository's review chats exactly (the key and the chat's owner, agent,
+Environment and starting workflow, as the poster checks), it reads the turn's
+attempts with their diagnostics, stores them in the project store under the
+pull request's number, inspects the chat again, and
 restarts the stalled attempt only while it still is; after two restarts of a
 turn it stops that turn, and the poster marks the commit `action_required`
 unless the turn had already submitted its review for the head, which it
