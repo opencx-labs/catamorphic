@@ -199,6 +199,13 @@ export interface CatamorphicCoreConfig {
    */
   idlePollMs?: number;
   /**
+   * How long a chat's turn waits for its workspace to be given back and
+   * made again in the shape its agents need (ADR 0332), held by a turn, a
+   * question or a person working there, before it fails saying what held
+   * it. Default 10 minutes.
+   */
+  reshapeWaitMinutes?: number;
+  /**
    * Where project-store bytes live when a document is not text (ADR 0055):
    * inline in Postgres by default; a filesystem or S3-compatible store
    * (`FsBundleStore`, `S3ObjectStore`) when configured. Metadata, versions,
@@ -1431,6 +1438,9 @@ export class CatamorphicCore {
         workerNode: config.workerNode,
         wakeups: this.wakeups,
         idlePollMs: config.idlePollMs,
+        ...(config.reshapeWaitMinutes !== undefined
+          ? { reshapeWaitMinutes: config.reshapeWaitMinutes }
+          : {}),
         projectManager: this.projectManager,
         codingAgents,
         nativeAgentCheckout: config.nativeAgentCheckout,

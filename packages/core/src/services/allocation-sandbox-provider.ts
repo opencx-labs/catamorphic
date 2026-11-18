@@ -10,7 +10,7 @@ import {
   type SandboxVolume,
   sameEgress,
 } from "@catamorphic/sandbox";
-import { type Kysely, sql } from "kysely";
+import { type Kysely, type RawBuilder, type SqlBool, sql } from "kysely";
 import { cacheMounts } from "./cache-mounts.js";
 import type { ExecutionAllocation } from "./execution-allocations-service.js";
 import { sandboxProjectDirectory } from "./sandbox-git.js";
@@ -443,11 +443,12 @@ export async function claimAllocationMaintenance(args: {
   status: "active" | "released";
   sessionId?: string;
   /**
-   * Queued turns do not refuse the claim: they wait for the workspace to
-   * be given back and admitted again, reshaped (ADR 0332). Held and
-   * running ones still do.
+   * Turns waiting to start do not refuse the claim: queued ones, and one
+   * whose holder went away before its harness started. They wait for the
+   * workspace to be given back and admitted again, reshaped (ADR 0332).
+   * Held ones and those at work still do.
    */
-  queuedTurns?: boolean;
+  waitingTurns?: boolean;
 }): Promise<AllocationMaintenanceClaim | undefined> {
   const token = randomUUID();
   return args.db.transaction().execute(async (trx) => {
@@ -474,12 +475,14 @@ export async function claimAllocationMaintenance(args: {
         )
         .select("agent_turns.id")
         .where("agent_sessions.allocation_id", "=", args.allocationId)
-        .where(
-          "agent_turns.status",
-          "in",
-          args.queuedTurns
-            ? ["held", ...ACTIVE_TURN_STATUSES]
-            : ["queued", "held", ...ACTIVE_TURN_STATUSES],
+        .where((eb) =>
+          args.waitingTurns
+            ? holdsReshape()
+            : eb("agent_turns.status", "in", [
+                "queued",
+                "held",
+                ...ACTIVE_TURN_STATUSES,
+              ]),
         )
         .executeTakeFirst();
       if (busy) return undefined;
@@ -503,6 +506,26 @@ export async function claimAllocationMaintenance(args: {
       .executeTakeFirst();
     return claimed ? { allocationId: args.allocationId, token } : undefined;
   });
+}
+
+/**
+ * A turn that keeps a workspace from being reshaped (ADR 0332): held for
+ * editing, or at work, except one still preparing whose holder's lease
+ * lapsed (its harness never started; it waits for the new workspace).
+ */
+export function holdsReshape(): RawBuilder<SqlBool> {
+  const status = sql.ref("agent_turns.status");
+  return sql<SqlBool>`(${status} in ('held', 'running', 'waiting', 'finalizing') or (${status} = 'preparing' and ${sql.ref("agent_turns.lease_expires_at")} > now()))`;
+}
+
+/**
+ * A chat's turn that waits for its workspace to be reshaped (ADR 0332):
+ * one queued and due, or one still preparing whose holder's lease lapsed.
+ */
+export function pendingForReshape(): RawBuilder<SqlBool> {
+  const status = sql.ref("agent_turns.status");
+  const lease = sql.ref("agent_turns.lease_expires_at");
+  return sql<SqlBool>`((${status} = 'queued' and ${sql.ref("agent_turns.available_at")} <= now()) or (${status} = 'preparing' and (${lease} is null or ${lease} <= now())))`;
 }
 
 /** Extend a claim this host still holds; false once it lapsed or moved. */

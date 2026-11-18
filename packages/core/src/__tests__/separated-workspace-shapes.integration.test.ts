@@ -1,4 +1,5 @@
 import { execFile } from "node:child_process";
+import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -95,12 +96,21 @@ describe("a separated sandbox's shape follows its chat's harness (ADR 0332)", ()
   let tmpDir: string;
   let projectId: string;
   let sessions: AgentSessionsService;
+  /** Another service on the same database: another host, or other settings. */
+  let service: (
+    extra?: Partial<ConstructorParameters<typeof AgentSessionsService>[1]>,
+  ) => AgentSessionsService;
+  const services: AgentSessionsService[] = [];
   let environments: ExecutionEnvironmentsService;
   let machine: LocalProcessSandboxProvider;
   /** What each sandbox was asked to separate: undefined for one container. */
   const asked: Array<CreateSandboxOpts["separateCommands"]> = [];
   /** The registry, whose agents a project can redefine under the same id. */
   const agents = new Map<string, RegisteredCodingAgent>();
+  /** Runs before each command the machine runs, while set. */
+  let beforeCommand: ((command: string) => Promise<void>) | undefined;
+  /** Holds each sandbox the machine makes until it resolves, while set. */
+  let makeGate: { entered: boolean; open: Promise<void> } | undefined;
 
   /** As the built-in agent: its harness on this host, driving the sandbox. */
   const builtin = (id: string): RegisteredCodingAgent => ({
@@ -232,10 +242,22 @@ describe("a separated sandbox's shape follows its chat's harness (ADR 0332)", ()
     const separating = new Proxy(machine, {
       get(target, property, receiver) {
         if (property === "createSandbox")
-          return (opts: CreateSandboxOpts) => {
+          return async (opts: CreateSandboxOpts) => {
             asked.push(opts.separateCommands);
+            const gate = makeGate;
+            if (gate) {
+              gate.entered = true;
+              await gate.open;
+            }
             const { separateCommands: _separate, ...rest } = opts;
             return target.createSandbox(rest);
+          };
+        if (property === "executeCommand")
+          return async (
+            ...args: Parameters<SandboxProvider["executeCommand"]>
+          ) => {
+            await beforeCommand?.(args[1]);
+            return target.executeCommand(...args);
           };
         const value = Reflect.get(target, property, receiver);
         return typeof value === "function" ? value.bind(target) : value;
@@ -269,7 +291,7 @@ describe("a separated sandbox's shape follows its chat's harness (ADR 0332)", ()
               : undefined,
       },
     );
-    sessions = new AgentSessionsService(db, {
+    const deps: ConstructorParameters<typeof AgentSessionsService>[1] = {
       hostId: "separated-shapes-host",
       projectManager,
       executionEnvironments: environments,
@@ -293,13 +315,20 @@ describe("a separated sandbox's shape follows its chat's harness (ADR 0332)", ()
         modelApi: () => "anthropic",
         servesHttp: () => false,
       },
-    });
+    };
+    sessions = new AgentSessionsService(db, deps);
+    service = (extra = {}) => {
+      const made = new AgentSessionsService(db, { ...deps, ...extra });
+      services.push(made);
+      return made;
+    };
   }, 120_000);
 
   afterAll(async () => {
     await cleanupTestResources(
       [
         () => sessions?.stopLocalTurns(),
+        ...services.map((made) => () => made.stopLocalTurns()),
         () => ownedSandboxes.cleanup(),
         () => db.destroy(),
       ],
@@ -329,21 +358,71 @@ describe("a separated sandbox's shape follows its chat's harness (ADR 0332)", ()
       .orderBy("ordinal", "desc")
       .executeTakeFirst()) ?? { id: "", status: "none" };
   /** Sends without waiting for the turn, which may wait for a workspace. */
-  const send = (sessionId: string, text: string) =>
-    sessions
+  const send = (sessionId: string, text: string, via = sessions) =>
+    via
       .sendMessage(identity, projectId, sessionId, text)
       .catch((error: unknown) => {
         if (!(error instanceof AgentTurnUnsettledError)) throw error;
       });
+  const turnRow = (turnId: string) =>
+    db
+      .selectFrom("agent_turns")
+      .select([
+        "id",
+        "status",
+        "activity",
+        "error",
+        "available_at",
+        "lease_expires_at",
+      ])
+      .where("id", "=", turnId)
+      .executeTakeFirstOrThrow();
+  const settled = (turnId: string) =>
+    until(
+      "the turn settles",
+      async () =>
+        ["completed", "failed", "interrupted"].includes(
+          (await turnRow(turnId)).status,
+        ),
+      60_000,
+    );
+  const workerFor = (via = sessions) =>
+    via.startWorker({
+      resolveIdentity: async () => identity,
+      pollIntervalMs: 50,
+    });
+  /** A person at the chat's terminal now (ADR 0209). */
+  const personUses = (sessionId: string, at = new Date()) =>
+    db
+      .insertInto("session_workspace_use")
+      .values({ session_id: sessionId, used_at: at })
+      .onConflict((conflict) =>
+        conflict.column("session_id").doUpdateSet({ used_at: at }),
+      )
+      .execute();
   /** The chat's agent becomes one whose harness runs in the sandbox. */
   const redefine = () => agents.set("reviewer", sandboxed("reviewer"));
-  /** Its workspace is given back as replaced and admitted again, a pair. */
+  /**
+   * Its workspace is given back as replaced and admitted again, a pair,
+   * and the chat's waiting turns ran there (a subagent's report waiting
+   * beside a message rides along with it, its own turn withdrawn).
+   */
   const reshaped = async (sessionId: string, before: string) => {
     await until(
       "the chat's next turn runs in a reshaped workspace",
       async () =>
-        (await latestTurn(sessionId)).status === "completed" &&
-        (await allocationOf(sessionId)).id !== before,
+        (await allocationOf(sessionId)).id !== before &&
+        (
+          await db
+            .selectFrom("agent_turns")
+            .select(["status", "attempt_count"])
+            .where("session_id", "=", sessionId)
+            .execute()
+        ).every(
+          (turn) =>
+            turn.status === "completed" ||
+            (turn.status === "cancelled" && turn.attempt_count === 0),
+        ),
       60_000,
     );
     expect(
@@ -391,6 +470,35 @@ describe("a separated sandbox's shape follows its chat's harness (ADR 0332)", ()
     expect(read.result.trim()).toBe("edited");
   }, 120_000);
 
+  it("saves what changed in the workspace between turns before giving it back for its new shape", async () => {
+    agents.set("reviewer", builtin("reviewer"));
+    const chat = await sessions.create(identity, projectId, {});
+    const first = await sessions.sendMessage(
+      identity,
+      projectId,
+      chat.id,
+      "hello",
+    );
+    expect(first.turn.status).toBe("completed");
+    const before = (await allocationOf(chat.id)).id;
+    // What a person changed at its terminal after the turn; then the
+    // project redefines the agent.
+    await machine.executeCommand(
+      await sandboxOf(chat.id),
+      "echo between > between.txt",
+      { cwd: "/workspace/project" },
+    );
+    redefine();
+    await send(chat.id, "again");
+    await reshaped(chat.id, before);
+    const read = await machine.executeCommand(
+      await sandboxOf(chat.id),
+      "cat between.txt",
+      { cwd: "/workspace/project" },
+    );
+    expect(read.result.trim()).toBe("between");
+  }, 120_000);
+
   it("keeps a workspace while a shared subsession's turn runs in it, then reshapes it", async () => {
     agents.set("reviewer", builtin("reviewer"));
     const parent = await sessions.create(identity, projectId, {});
@@ -423,34 +531,286 @@ describe("a separated sandbox's shape follows its chat's harness (ADR 0332)", ()
     }
   }, 120_000);
 
-  it("keeps a workspace a person uses now, then reshapes it", async () => {
+  it("keeps a workspace a person uses now, showing the turn why, then reshapes it", async () => {
     agents.set("reviewer", builtin("reviewer"));
     const chat = await sessions.create(identity, projectId, {});
     const before = (await allocationOf(chat.id)).id;
-    // A person at its terminal (ADR 0209).
+    await personUses(chat.id);
+    redefine();
+    const worker = workerFor();
+    try {
+      await send(chat.id, "hello");
+      const first = await latestTurn(chat.id);
+      await until(
+        "the turn shows what holds its workspace",
+        async () =>
+          (await turnRow(first.id)).activity?.includes(
+            "someone using it (an open terminal or preview) keeps it",
+          ) === true,
+      );
+      expect((await allocationOf(chat.id)).id).toBe(before);
+      expect((await turnRow(first.id)).status).toBe("queued");
+      // A later message waiting on its provider's backoff keeps its time
+      // while the first looks again.
+      await send(chat.id, "later");
+      const later = await latestTurn(chat.id);
+      const backoff = new Date(Date.now() + 60 * 60_000);
+      await db
+        .updateTable("agent_turns")
+        .set({ available_at: backoff, attempt_count: 1 })
+        .where("id", "=", later.id)
+        .execute();
+      const looked = (await turnRow(first.id)).available_at.getTime();
+      await until(
+        "the first turn looks again",
+        async () => (await turnRow(first.id)).available_at.getTime() !== looked,
+        20_000,
+      );
+      expect((await turnRow(later.id)).available_at.getTime()).toBe(
+        backoff.getTime(),
+      );
+      await db
+        .updateTable("agent_turns")
+        .set({ available_at: new Date(), attempt_count: 0 })
+        .where("id", "=", later.id)
+        .execute();
+      // They left a while ago.
+      await personUses(chat.id, new Date(Date.now() - 10 * 60_000));
+      await reshaped(chat.id, before);
+      expect((await turnRow(first.id)).status).toBe("completed");
+    } finally {
+      await worker.stop();
+    }
+  }, 120_000);
+
+  it("fails a turn whose workspace stays held past the reshape deadline, saying what kept it and how to free it", async () => {
+    agents.set("reviewer", builtin("reviewer"));
+    // A deadline of 3 seconds rather than 10 minutes.
+    const bounded = service({ reshapeWaitMinutes: 0.05 });
+    const chat = await bounded.create(identity, projectId, {});
+    const before = (await allocationOf(chat.id)).id;
+    await personUses(chat.id);
+    redefine();
+    const worker = workerFor(bounded);
+    try {
+      await send(chat.id, "hello", bounded);
+      const turn = await latestTurn(chat.id);
+      await settled(turn.id);
+      const failed = await turnRow(turn.id);
+      expect(failed.status).toBe("failed");
+      expect(JSON.stringify(failed.error)).toContain(
+        "This chat's workspace could not be made again for reviewer within 3 seconds: someone using it (an open terminal or preview) kept it. Close the workspace's terminals and previews, then send this message again.",
+      );
+      expect((await allocationOf(chat.id)).id).toBe(before);
+    } finally {
+      await worker.stop();
+    }
+  }, 120_000);
+
+  it("fails a turn whose workspace cannot be saved before its reshape with the save's error, after a few tries", async () => {
+    agents.set("reviewer", builtin("reviewer"));
+    const chat = await sessions.create(identity, projectId, {});
+    const first = await sessions.sendMessage(
+      identity,
+      projectId,
+      chat.id,
+      "hello",
+    );
+    expect(first.turn.status).toBe("completed");
+    const before = (await allocationOf(chat.id)).id;
+    redefine();
+    let tries = 0;
+    beforeCommand = async () => {
+      tries += 1;
+      throw new Error("the machine refused the snapshot");
+    };
+    const worker = workerFor();
+    try {
+      await send(chat.id, "again");
+      const turn = await latestTurn(chat.id);
+      await settled(turn.id);
+      const failed = await turnRow(turn.id);
+      expect(failed.status).toBe("failed");
+      expect(JSON.stringify(failed.error)).toContain(
+        "This chat's workspace could not be saved before it was made again for reviewer: the machine refused the snapshot",
+      );
+      expect(tries).toBe(3);
+      expect((await allocationOf(chat.id)).id).toBe(before);
+    } finally {
+      beforeCommand = undefined;
+      await worker.stop();
+    }
+  }, 120_000);
+
+  it("withdraws nothing and keeps the workspace when a person starts using it while it is saved", async () => {
+    agents.set("reviewer", builtin("reviewer"));
+    const chat = await sessions.create(identity, projectId, {});
+    const first = await sessions.sendMessage(
+      identity,
+      projectId,
+      chat.id,
+      "hello",
+    );
+    expect(first.turn.status).toBe("completed");
+    const before = (await allocationOf(chat.id)).id;
+    redefine();
+    // They open its terminal while Work saves it.
+    let arrived = false;
+    beforeCommand = async () => {
+      if (arrived) return;
+      arrived = true;
+      await personUses(chat.id);
+    };
+    const withdraw = vi.spyOn(
+      sessions as unknown as {
+        withdrawFromSessionSandbox: (...args: never[]) => Promise<void>;
+      },
+      "withdrawFromSessionSandbox",
+    );
+    const worker = workerFor();
+    try {
+      await send(chat.id, "again");
+      const turn = await latestTurn(chat.id);
+      await until(
+        "the turn waits for them",
+        async () =>
+          (await turnRow(turn.id)).activity?.includes(
+            "someone using it (an open terminal or preview) keeps it",
+          ) === true,
+      );
+      expect(arrived).toBe(true);
+      expect(withdraw).not.toHaveBeenCalled();
+      expect((await allocationOf(chat.id)).id).toBe(before);
+      // They left.
+      beforeCommand = undefined;
+      await personUses(chat.id, new Date(Date.now() - 10 * 60_000));
+      await reshaped(chat.id, before);
+      expect(withdraw).toHaveBeenCalled();
+    } finally {
+      beforeCommand = undefined;
+      withdraw.mockRestore();
+      await worker.stop();
+    }
+  }, 120_000);
+
+  it("leaves a misshapen workspace to the chat's next turn, never reshaping it from the idle sweep", async () => {
+    agents.set("reviewer", builtin("reviewer"));
+    const chat = await sessions.create(identity, projectId, {});
+    const first = await sessions.sendMessage(
+      identity,
+      projectId,
+      chat.id,
+      "hello",
+    );
+    expect(first.turn.status).toBe("completed");
+    const before = (await allocationOf(chat.id)).id;
+    // On a remote machine the sweep looks after, used a moment ago.
+    const nodeId = `node-${randomUUID()}`;
     await db
-      .insertInto("session_workspace_use")
-      .values({ session_id: chat.id })
+      .insertInto("worker_nodes")
+      .values({
+        id: nodeId,
+        tenant_id: identity.tenantId,
+        authority_id: "test",
+        descriptor: JSON.stringify({}),
+        lease_token: randomUUID(),
+        lease_expires_at: new Date(Date.now() + 3_600_000),
+        remote: JSON.stringify({}),
+      })
+      .execute();
+    await db
+      .updateTable("execution_allocations")
+      .set({ worker_node_id: nodeId })
+      .where("id", "=", before)
       .execute();
     redefine();
-    const worker = sessions.startWorker({
-      resolveIdentity: async () => identity,
-      pollIntervalMs: 50,
+    await sessions.releaseIdleWorkspaces();
+    expect(
+      await db
+        .selectFrom("execution_allocations")
+        .select("status")
+        .where("id", "=", before)
+        .executeTakeFirstOrThrow(),
+    ).toEqual({ status: "active" });
+  }, 120_000);
+
+  it("tells a contained agent its work stayed in the workspace given back for its new shape", async () => {
+    agents.set("reviewer", builtin("reviewer"));
+    const chat = await sessions.create(identity, projectId, {});
+    const before = (await allocationOf(chat.id)).id;
+    agents.set("reviewer", {
+      ...sandboxed("reviewer"),
+      sandboxing: "contained",
     });
     try {
       await send(chat.id, "hello");
-      await new Promise((resolve) => setTimeout(resolve, 1_500));
-      expect((await allocationOf(chat.id)).id).toBe(before);
-      expect((await latestTurn(chat.id)).status).toBe("queued");
-      // They left a while ago.
-      await db
-        .updateTable("session_workspace_use")
-        .set({ used_at: new Date(Date.now() - 10 * 60_000) })
-        .where("session_id", "=", chat.id)
-        .execute();
       await reshaped(chat.id, before);
+      const turn = await latestTurn(chat.id);
+      const said = await db
+        .selectFrom("agent_items")
+        .select("text")
+        .where("turn_id", "=", turn.id)
+        .execute();
+      expect(said.map((item) => item.text).join("\n")).toContain(
+        "This workspace was made again to fit the agents working in it. This agent's sandboxing is contained, so what it changed here before is gone with the old workspace.",
+      );
     } finally {
-      await worker.stop();
+      agents.set("reviewer", builtin("reviewer"));
+    }
+  }, 120_000);
+
+  it("waits for the reshape when it recovers a turn whose holder stopped while preparing it", async () => {
+    agents.set("reviewer", builtin("reviewer"));
+    // Another host takes the chat's first turn and stops while its
+    // workspace is being made.
+    const doomed = service();
+    const chat = await doomed.create(identity, projectId, {});
+    const before = (await allocationOf(chat.id)).id;
+    let open = () => {};
+    makeGate = {
+      entered: false,
+      open: new Promise<void>((resolve) => {
+        open = resolve;
+      }),
+    };
+    const sent = doomed
+      .sendMessage(identity, projectId, chat.id, "hello")
+      .catch(() => undefined);
+    try {
+      await until("its workspace is being made", async () =>
+        Boolean(makeGate?.entered),
+      );
+      const turn = await latestTurn(chat.id);
+      expect(turn.status).toBe("preparing");
+      // Meanwhile the project redefines its agent.
+      redefine();
+      const stopping = doomed.stopLocalTurns({
+        handBack: "all",
+        timeoutMs: 10_000,
+      });
+      await until("its holder hands it back", async () => {
+        const row = await turnRow(turn.id);
+        return (
+          row.lease_expires_at !== null &&
+          row.lease_expires_at.getTime() <= Date.now()
+        );
+      });
+      makeGate = undefined;
+      open();
+      await stopping;
+      expect((await turnRow(turn.id)).status).toBe("preparing");
+      // This host recovers it into a reshaped workspace.
+      const worker = workerFor();
+      try {
+        await reshaped(chat.id, before);
+        expect((await turnRow(turn.id)).status).toBe("completed");
+      } finally {
+        await worker.stop();
+      }
+    } finally {
+      makeGate = undefined;
+      open();
+      await sent;
     }
   }, 120_000);
 
@@ -516,6 +876,28 @@ describe("a separated sandbox's shape follows its chat's harness (ADR 0332)", ()
       await worker.stop();
       agents.set("helper", builtin("helper"));
     }
+  }, 120_000);
+
+  it("shares a live workspace that has an agent container with an agent that runs in the sandbox, whatever the chat's agent", async () => {
+    agents.set("reviewer", sandboxed("reviewer"));
+    const parent = await sessions.create(identity, projectId, {});
+    const workspace = await allocationOf(parent.id);
+    expect(workspace.separate?.agentResources).toBeDefined();
+    // The project redefines its reviewer as the built-in agent; the live
+    // workspace keeps its agent container.
+    agents.set("reviewer", builtin("reviewer"));
+    const child = await sessions.createSubsession(
+      identity,
+      projectId,
+      parent.id,
+      { agentId: "coder", task: "Run the tests" },
+    );
+    expect((await allocationOf(child.session.id)).id).toBe(workspace.id);
+    await until(
+      "the child's turn runs in the shared workspace",
+      async () => (await latestTurn(child.session.id)).status === "completed",
+      60_000,
+    );
   }, 120_000);
 
   it("refuses to share a built-in chat's workspace with an agent that runs in the sandbox, saying to take its own", async () => {

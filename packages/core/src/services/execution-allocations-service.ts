@@ -446,14 +446,6 @@ function releaseReason(value: string | null): AllocationReleaseReason | null {
     : null;
 }
 
-/** An Allocation's recorded policy, or undefined when it cannot be read. */
-export function parseAllocationPolicy(
-  value: unknown,
-): EnvironmentAllocationPolicy | undefined {
-  const parsed = AllocationPolicySchema.safeParse(value);
-  return parsed.success ? parsed.data : undefined;
-}
-
 function mapAllocation(
   row: Selectable<DB["execution_allocations"]>,
 ): ExecutionAllocation {
