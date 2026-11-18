@@ -44,25 +44,31 @@ revision whose status is `applied` (ADR 0330), and by default it is the
 latest such. A pending, deploying, failed or superseded revision is refused,
 and no other ref is accepted, so no pull request, session branch or draft
 fills. Everything the fill takes from the program comes from that one
-revision's manifest: the cache's `fill.command`, `path` and `sizeMb`, and the
-setup's network and secrets. The fill gets its own
+revision: the cache's `fill.command`, `path` and `sizeMb`, the setup's network
+and secrets, and its sandbox's admission (the Environment's image, its
+Dockerfile, `containers` and network), never a newer `main` whose deploy is
+pending or failed. The fill gets its own
 Allocation on the machine, owned by the project and charged like any work:
 a fresh sandbox of the Environment's image, holding the revision's checkout
 alone, on the setup's network (the Environment's own when it has none), with
 no grants and no secrets but the ones `setup.secrets` names, and the cache
-mounted writable as a new empty generation. On exit 0 Work checks the size
-against `sizeMb`, writes `.work-cache.json` (cache, commit, fill, time) into
-the cache's root, removes the sandbox (so nothing the command left running
-writes later), and only then publishes the generation by marking the fill
-succeeded: one row, so a sandbox sees the old generation or the new one,
-never a partial one. A failed, timed out or oversized fill leaves the old
+mounted writable as a new empty generation. On exit 0 Work writes
+`.work-cache.json` (cache, commit, fill, time) into the cache's root and
+removes the sandbox, so nothing the command left running writes later. Then a
+fresh helper sandbox of the machine's own image, which mounts the generation
+read only and runs nothing of the fill's, checks its size against `sizeMb`.
+Only then does Work publish the generation by marking the fill succeeded: one
+row, so a sandbox sees the old generation or the new one, never a partial one. A failed, timed out or oversized fill leaves the old
 generation in place, and what it wrote is removed before its sandbox goes.
 Every step of a fill goes through its Allocation's guard and its claim, so a
 released Allocation, a lost machine lease, or a claim another run took over
-stops it before it publishes. Before publishing, Work searches the generation
-for the values of the setup secrets the fill ran with (those of at least 8
-characters, as written); one found refuses the fill, since every sandbox of
-the Environment would read it (ADR 0257).
+stops it before it publishes. The same helper searches the generation for
+the values of the setup secrets the fill ran with (those of at least 8
+characters, as written, JSON or URL escaped, base64 at every alignment, and
+base64url), handed to it as files; one found refuses the fill, since every
+sandbox of the Environment would read it (ADR 0257). This guards against a
+trusted fill command's accidents, not a hostile one, which could encode a
+value some other way.
 
 **Requesting.** `host["catamorphic.environments"].fillCache({ environment,
 cache, commit?, idempotencyKey })` needs the new permission `caches:write`.
@@ -76,9 +82,12 @@ holding a copy, or one placed machine when none does.
 generation on the machine (`cache-<name>-<digest>-g<generation>`). The
 control plane hands each mount the cache's other generations on that machine
 to retire: all but the published one and one being filled, so failed and
-superseded generations go once no sandbox mounts them. On the machine, one
-lock per cache spans finding a generation, creating the container that mounts
-it, and retiring or pruning, so a generation is never removed between a
+superseded generations go once no sandbox mounts them. A fill taken over after
+its replica stopped keeps the generations its earlier attempts wrote in
+`abandoned_generations`, so they are retired too, and the sandbox an earlier
+attempt left is emptied before it is destroyed. On the machine, one lock per
+cache spans finding a generation, creating the container that mounts it, and
+retiring, pruning or removing every volume, so a generation is never removed between a
 sandbox finding it and mounting it. A read-only generation the machine no
 longer has (pruned, reset, re-enrolled) is never created empty: the sandbox
 reports it skipped, Work forgets that copy and every older one, queues a fill,
@@ -115,8 +124,9 @@ error.
 Review machines install from a cache filled at main. A setup that may mount
 (the review sandbox, which runs its own Docker) lays a writable overlay over
 the cache and fetches only what the pull request adds; the writes land in the
-workspace, never in the cache. A setup that cannot mount installs offline from
-the cache, and a pull request that changes the lockfile then downloads
+workspace, never in the cache; a real-container test under gVisor runs the
+pack's own fill and setup with pnpm and proves it. A setup that cannot mount
+installs offline from the cache, and a pull request that changes the lockfile then downloads
 everything. A deploy workflow runs before its own revision goes live, so the
 next scheduled fill takes a new revision. A cache is as fresh as its last fill, and a project
 decides when that runs. Local-process, microsandbox and Cloudflare machines
