@@ -35,6 +35,7 @@ const capabilitiesSchema = z.array(
     SANDBOX_CAPABILITIES.egressPolicy,
     SANDBOX_CAPABILITIES.setupNetwork,
     SANDBOX_CAPABILITIES.volumes,
+    SANDBOX_CAPABILITIES.caches,
   ]),
 );
 /** Authenticated member clients provide execution, never database access. */
@@ -249,6 +250,7 @@ export class ClientRunnersService {
       label: "This machine",
       workspaceRoot: runner.workspace_root,
       processes: runner.processes,
+      capabilities: capabilitiesSchema.parse(runner.capabilities),
       attributes: {
         "catamorphic.tenant.id": args.tenantId,
         "catamorphic.project.id": args.projectId,

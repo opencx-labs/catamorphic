@@ -256,6 +256,10 @@ export function sandboxCapabilitiesFor(
     ...(Object.keys(definition.volumes ?? {}).length > 0
       ? [SANDBOX_CAPABILITIES.volumes]
       : []),
+    // Read-only mounts the sandbox cannot remount, filled apart (ADR 0334).
+    ...(Object.keys(definition.caches ?? {}).length > 0
+      ? [SANDBOX_CAPABILITIES.caches]
+      : []),
   ];
 }
 
@@ -906,11 +910,17 @@ export class ExecutionEnvironmentsService {
       owner: args.owner,
       volumes: definition.volumes,
     });
+    // The project's caches, whoever owns the work (ADR 0334): which
+    // generation each sandbox mounts is read when it is made.
+    const caches = Object.entries(definition.caches ?? {})
+      .sort(([left], [right]) => (left < right ? -1 : left > right ? 1 : 0))
+      .map(([name, cache]) => ({ name, path: cache.path }));
     const common: EnvironmentSandbox = {
       ...(definition.requirements?.containers ? { containers: true } : {}),
       ...(egress.mode === "open" ? {} : { egress }),
       ...(setupEgress ? { setupEgress } : {}),
       ...(volumes.length > 0 ? { volumes } : {}),
+      ...(caches.length > 0 ? { caches } : {}),
     };
     const image = definition.image;
     if (!image) return common;

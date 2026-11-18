@@ -352,6 +352,32 @@ describe("the pull-request-reviews pack", () => {
       approvals: { waitMinutes: 60 },
     });
     expect(review?.volumes).toBeUndefined();
+    // A pnpm store filled from main, mounted read only (ADR 0334): setup
+    // installs from it offline and falls back to the registries.
+    expect(review?.caches).toEqual({
+      pnpm: {
+        path: "~/.cache/work/pnpm-store",
+        sizeMb: 16384,
+        fill: {
+          command:
+            "if [ -f pnpm-lock.yaml ]; then pnpm fetch --store-dir ~/.cache/work/pnpm-store; fi",
+          timeoutMinutes: 30,
+        },
+      },
+    });
+    // A sandbox that can mount (a review's own Docker) extends the cache in
+    // an overlay, so a changed lockfile fetches only what is new; others
+    // install offline from it and fall back to the registries.
+    const command = review?.setup?.command ?? "";
+    expect(command).toContain(
+      'mount -t overlay overlay -o "lowerdir=$c,upperdir=$o/up,workdir=$o/work" "$s"',
+    );
+    expect(command).toContain(
+      'pnpm install --frozen-lockfile --prefer-offline --store-dir "$s"',
+    );
+    expect(command).toContain(
+      'pnpm install --frozen-lockfile --offline --store-dir "$c" || pnpm install --frozen-lockfile',
+    );
     expect(Object.keys(review?.connections ?? {})).toEqual([
       "github",
       "prod",
@@ -483,7 +509,7 @@ describe("the pull-request-reviews pack", () => {
     );
   });
 
-  it("parses as four workflows on the GitHub library and session events", () => {
+  it("parses as five workflows on the GitHub library, session events and a schedule", () => {
     const parsed = parseProject({
       ".work/triggers/github.ts": file(".work/triggers/github.ts"),
       ".work/workflows/src/reviews.ts": file(".work/workflows/src/reviews.ts"),
@@ -507,6 +533,11 @@ describe("the pull-request-reviews pack", () => {
     ]);
     expect(bindings("closePullRequestChats")).toEqual(["github.pull_request"]);
     expect(bindings("postReviews")).toEqual(["session.turn-changed"]);
+    // The cache fills from main on a schedule, needing only caches:write.
+    expect(bindings("fillReviewCache")).toEqual(["schedule"]);
+    expect(workflows.fillReviewCache?.graph.permissions).toEqual([
+      "caches:write",
+    ]);
     // Only the poster holds a connection; the chat's comes from its
     // Environment.
     for (const workflow of parsed.workflows)

@@ -688,6 +688,47 @@ export const EnvironmentListQuerySchema = z.object({
   agentId: z.string().min(1).optional(),
 });
 
+/** One fill of an Environment cache on a machine (ADR 0334). */
+export const CacheFillSchema = z.object({
+  id: z.string(),
+  environment: z.string(),
+  cache: z.string(),
+  machine: z.string().nullable(),
+  status: z.enum(["queued", "running", "succeeded", "failed", "evicted"]),
+  reason: z.enum(["requested", "first-use"]),
+  commit: z.string().nullable(),
+  generation: z.number().nullable(),
+  attempts: z.number(),
+  sizeBytes: z.number().nullable(),
+  error: z.string().nullable(),
+  createdAt: z.string(),
+  finishedAt: z.string().nullable(),
+  lastUsedAt: z.string().nullable(),
+});
+
+/** The project's Environment caches, their copies and recent fills (ADR 0334). */
+export const EnvironmentCacheListSchema = z.object({
+  items: z.array(
+    z.object({
+      environment: z.string(),
+      cache: z.string(),
+      path: z.string(),
+      sizeMb: z.number(),
+      copies: z.array(
+        z.object({
+          machine: z.string(),
+          generation: z.number(),
+          commit: z.string().nullable(),
+          filledAt: z.string().nullable(),
+          sizeBytes: z.number().nullable(),
+          lastUsedAt: z.string().nullable(),
+        }),
+      ),
+      fills: z.array(CacheFillSchema),
+    }),
+  ),
+});
+
 export const EnvironmentListSchema = z.object({
   items: z.array(
     z.object({

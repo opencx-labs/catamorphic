@@ -277,6 +277,34 @@ type Publication = {
   askedIn: number | null;
 };
 
+/**
+ * @displayname Fill the review package cache
+ *
+ * Every six hours Work fills the `review` Environment's pnpm store from the
+ * revision of main that last went live, with the command that revision's
+ * Environment declares, on every review machine that holds a copy (ADR
+ * 0334). Review setups lay a writable store over it and fetch only what a
+ * pull request adds.
+ */
+export const fillReviewCache = defineWorkflow(({ defineBoundary }) => ({
+  permissions: ["caches:write"],
+  triggers: [trigger("schedule", { cron: "17 */6 * * *", timezone: "UTC" })],
+  steps: [
+    /** @displayname Fill the pnpm store from main */
+    defineBoundary({
+      run: ({
+        input,
+        host,
+      }: BoundaryContext<{ activationId: string; scheduledFor: string }>) =>
+        host["catamorphic.environments"].fillCache({
+          environment: "review",
+          cache: "pnpm",
+          idempotencyKey: `review-cache:${input.activationId}:${input.scheduledFor}`,
+        }),
+    }),
+  ],
+}));
+
 const RETRY = {
   maxAttempts: 4,
   backoff: { initial: "10s", maximum: "2m", multiplier: 3 },

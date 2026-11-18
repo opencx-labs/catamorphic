@@ -30,6 +30,11 @@ export const PROJECT_PERMISSIONS = [
    * workflows bound to them as a webhook delivery would (ADR 0326).
    */
   "events:write",
+  /**
+   * Fill the project's Environment caches from a revision published from
+   * main, with the command each cache declares (ADR 0334).
+   */
+  "caches:write",
   /** Webhook URLs, which are credentials. */
   "webhooks:read",
   /** Replace webhook URLs. */

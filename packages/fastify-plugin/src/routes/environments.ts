@@ -1,9 +1,14 @@
-import { AccessDeniedError, AgentNotConfiguredError } from "@catamorphic/core";
+import {
+  AccessDeniedError,
+  AgentNotConfiguredError,
+  hasProjectPermission,
+} from "@catamorphic/core";
 import type { FastifyInstance } from "fastify";
 import type { ZodTypeProvider } from "fastify-type-provider-zod";
 import type { RouteContext } from "../app.js";
 import { resolveIdentity } from "../http-identity.js";
 import {
+  EnvironmentCacheListSchema,
   EnvironmentListQuerySchema,
   EnvironmentListSchema,
   ErrorSchema,
@@ -65,6 +70,49 @@ export function registerEnvironmentRoutes(
         if (error instanceof AccessDeniedError) {
           return reply.status(403).send({ error: error.message });
         }
+        throw error;
+      }
+    },
+  });
+  // Operators see each cache's copies on machines, sizes, last use and
+  // the last fills' errors (ADR 0334).
+  typed.route({
+    method: "GET",
+    url: "/projects/:projectId/environment-caches",
+    schema: {
+      params: ProjectIdParamsSchema,
+      response: {
+        200: EnvironmentCacheListSchema,
+        403: ErrorSchema,
+        503: ErrorSchema,
+      },
+    },
+    handler: async (request, reply) => {
+      const service = ctx.core?.cacheFills;
+      if (!service)
+        return reply
+          .status(503)
+          .send({ error: "Environment provider not configured" });
+      const identity = resolveIdentity(request);
+      if (
+        !hasProjectPermission(
+          identity,
+          request.params.projectId,
+          "automations:read",
+        )
+      )
+        return reply
+          .status(403)
+          .send({ error: "Seeing caches needs automations:read" });
+      try {
+        const items = await service.list({
+          identity,
+          projectId: request.params.projectId,
+        });
+        return reply.send(EnvironmentCacheListSchema.parse({ items }));
+      } catch (error) {
+        if (error instanceof AccessDeniedError)
+          return reply.status(403).send({ error: error.message });
         throw error;
       }
     },

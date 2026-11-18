@@ -1431,6 +1431,98 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/projects/{projectId}/environment-caches": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    projectId: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description Default Response */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            items: {
+                                environment: string;
+                                cache: string;
+                                path: string;
+                                sizeMb: number;
+                                copies: {
+                                    machine: string;
+                                    generation: number;
+                                    commit: string | null;
+                                    filledAt: string | null;
+                                    sizeBytes: number | null;
+                                    lastUsedAt: string | null;
+                                }[];
+                                fills: {
+                                    id: string;
+                                    environment: string;
+                                    cache: string;
+                                    machine: string | null;
+                                    /** @enum {string} */
+                                    status: "queued" | "running" | "succeeded" | "failed" | "evicted";
+                                    /** @enum {string} */
+                                    reason: "requested" | "first-use";
+                                    commit: string | null;
+                                    generation: number | null;
+                                    attempts: number;
+                                    sizeBytes: number | null;
+                                    error: string | null;
+                                    createdAt: string;
+                                    finishedAt: string | null;
+                                    lastUsedAt: string | null;
+                                }[];
+                            }[];
+                        };
+                    };
+                };
+                /** @description Default Response */
+                403: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                503: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                        };
+                    };
+                };
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/projects/{projectId}/personal-environment": {
         parameters: {
             query?: never;
@@ -11030,7 +11122,7 @@ export interface paths {
                         /** @enum {string} */
                         isolation?: "none" | "process" | "sandbox";
                         processes?: boolean;
-                        capabilities?: ("images" | "images.build" | "containers" | "network.policy" | "network.setup" | "volumes")[];
+                        capabilities?: ("images" | "images.build" | "containers" | "network.policy" | "network.setup" | "volumes" | "caches")[];
                         publicKey?: string;
                     };
                 };
@@ -11306,6 +11398,7 @@ export interface paths {
                             sandboxType: "dev" | "execution";
                             /** @enum {string} */
                             status: "creating" | "started" | "stopped" | "archived" | "error";
+                            skippedVolumes?: string[];
                         } | {
                             exitCode: number;
                             result: string;

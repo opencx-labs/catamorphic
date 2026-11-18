@@ -192,6 +192,43 @@ const VolumeSchema = z.union([
   }),
 ]);
 
+/** The largest cache an Environment may declare, in MiB (1 TiB). */
+const MAX_CACHE_MB = 1024 * 1024;
+
+/** A cache's size limit unless it names one, in MiB (ADR 0334). */
+export const DEFAULT_CACHE_SIZE_MB = 10 * 1024;
+
+/** Minutes a cache's fill may run unless it says otherwise (ADR 0334). */
+export const DEFAULT_CACHE_FILL_TIMEOUT_MINUTES = 30;
+
+/**
+ * A directory every sandbox of the Environment mounts read only, which only
+ * a fill at a published revision writes (ADR 0334).
+ */
+const CacheSchema = z.strictObject({
+  path: VolumePathSchema,
+  sizeMb: z.number().int().positive().max(MAX_CACHE_MB).optional(),
+  fill: z.strictObject({
+    /** Run in the project folder of the published revision's checkout. */
+    command: z.string().min(1).max(16_384),
+    timeoutMinutes: z.number().int().positive().max(240).optional(),
+  }),
+});
+
+/** One spelling of a volume or cache path, to compare them. */
+function pathSegments(path: string): string[] {
+  return path.split("/").filter((part, index) => index === 0 || part !== "");
+}
+
+/** Whether two declared paths are the same directory or one holds the other. */
+function nested(left: string, right: string): boolean {
+  const a = pathSegments(left);
+  const b = pathSegments(right);
+  const shorter = a.length <= b.length ? a : b;
+  const longer = shorter === a ? b : a;
+  return shorter.every((part, index) => longer[index] === part);
+}
+
 /** `project.json`'s own secret declarations (ADR 0206). */
 const ProjectSecretDeclarationsSchema = z.record(
   SecretNameSchema,
@@ -282,6 +319,21 @@ const ProjectEnvironmentDefinitionSchema = z
         VolumeSchema,
       )
       .optional(),
+    /**
+     * Directories mounted read only into every sandbox, filled only from
+     * a published revision (ADR 0334).
+     */
+    caches: z
+      .record(
+        z
+          .string()
+          .regex(
+            VOLUME_NAME_PATTERN,
+            "Cache names are lowercase letters, digits and dashes",
+          ),
+        CacheSchema,
+      )
+      .optional(),
     /** Connection aliases, keyed by alias (ADR 0172). */
     connections: z
       .record(
@@ -310,8 +362,26 @@ const ProjectEnvironmentDefinitionSchema = z
       Object.keys(definition.volumes ?? {}).length === 0,
     {
       message:
-        "A volume would carry what agents wrote into the next setup's wider network: an Environment whose setup has its own network keeps no volumes, so bake caches into its image instead",
+        "A volume would carry what agents wrote into the next setup's wider network: an Environment whose setup has its own network keeps no volumes; declare read-only caches, which only a trusted fill writes, instead",
       path: ["volumes"],
+    },
+  )
+  .refine(
+    (definition) => {
+      const paths = [
+        ...Object.values(definition.volumes ?? {}).map((volume) =>
+          typeof volume === "string" ? volume : volume.path,
+        ),
+        ...Object.values(definition.caches ?? {}).map((cache) => cache.path),
+      ];
+      return paths.every((path, index) =>
+        paths.slice(index + 1).every((other) => !nested(path, other)),
+      );
+    },
+    {
+      message:
+        "Volume and cache paths must not be the same directory or hold one another",
+      path: ["caches"],
     },
   )
   .refine(
@@ -366,6 +436,16 @@ export interface ProjectEnvironmentDefinition {
   setup?: EnvironmentSetup;
   /** Directories kept on the machine for each owner (ADR 0208). */
   volumes?: Readonly<Record<string, EnvironmentVolume>>;
+  /** Read-only directories only a trusted fill writes (ADR 0334). */
+  caches?: Readonly<Record<string, EnvironmentCache>>;
+}
+
+/** One cache an Environment declares (ADR 0334). */
+export interface EnvironmentCache {
+  path: string;
+  /** The largest a fill may leave it; {@link DEFAULT_CACHE_SIZE_MB} by default. */
+  sizeMb?: number;
+  fill: { command: string; timeoutMinutes?: number };
 }
 
 /**

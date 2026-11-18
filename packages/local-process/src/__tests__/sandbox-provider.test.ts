@@ -2,6 +2,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import {
+  cacheVolumeKey,
   machineSignInHome,
   parseSandboxPaths,
   signInHomePath,
@@ -110,6 +111,22 @@ describe("LocalProcessSandboxProvider", () => {
     expect(
       fs.readdirSync(path.join(root, "volume-sandboxes", ".volumes")),
     ).toEqual(["usage.json"]);
+  });
+
+  it("refuses a read-only cache it would mount writable (ADR 0334)", async () => {
+    const key = cacheVolumeKey({
+      projectId: "p",
+      environment: "review",
+      name: "pnpm",
+      generation: 1,
+    });
+    for (const volume of [
+      { key, path: "~/.cache/pnpm", readOnly: true },
+      { key, path: "~/.cache/pnpm" },
+    ])
+      await expect(
+        provider.createSandbox({ volumes: [volume] }),
+      ).rejects.toThrow("cannot keep a cache read only");
   });
 
   it("refuses nested volumes and leaves nothing behind when creation fails", async () => {

@@ -22,6 +22,11 @@ export const SANDBOX_CAPABILITIES = {
   setupNetwork: "network.setup",
   /** Keeps volumes on the machine across sandboxes (ADR 0208). */
   volumes: "volumes",
+  /**
+   * Mounts an Environment's caches read only, enforced so a sandbox's root
+   * cannot remount them, and fills them in a sandbox of their own (ADR 0334).
+   */
+  caches: "caches",
 } as const;
 
 export type SandboxCapability =

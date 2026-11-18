@@ -7,12 +7,14 @@ import {
   openOperation,
   PROCESS_SIGNALS,
   redactUrlCredentials,
+  SANDBOX_CAPABILITIES,
+  SANDBOX_VOLUME_KEY_PATTERN,
+  type SandboxCapability,
   type SandboxProcessProvider,
   type SandboxProvider,
   SealedOperationOpenError,
   SealedOperationSchema,
   sealOperation,
-  VOLUME_KEY_PATTERN,
 } from "@catamorphic/sandbox";
 import type { Span } from "@opentelemetry/api";
 import { type Kysely, sql, type Transaction } from "kysely";
@@ -75,15 +77,23 @@ export const RemoteOperationSchema = z.discriminatedUnion("kind", [
         )
         .readonly()
         .optional(),
-      // Directories the executor keeps across sandboxes (ADR 0208).
+      // Directories the executor keeps across sandboxes (ADR 0208), and
+      // cache generations it mounts read only (ADR 0334). Only executors
+      // that advertise `caches` are handed a read-only one.
       volumes: z
         .array(
           z.object({
-            key: z.string().regex(VOLUME_KEY_PATTERN),
+            key: z.string().regex(SANDBOX_VOLUME_KEY_PATTERN),
             path: z.string().min(1).max(1024),
             exclusive: z.boolean().optional(),
             sizeMb: z.number().int().positive().optional(),
             temporary: z.boolean().optional(),
+            readOnly: z.boolean().optional(),
+            retire: z
+              .array(z.string().regex(SANDBOX_VOLUME_KEY_PATTERN))
+              .max(100)
+              .readonly()
+              .optional(),
           }),
         )
         .readonly()
@@ -226,6 +236,10 @@ const handleSchema = z.object({
   providerId: z.string(),
   sandboxType: z.enum(["dev", "execution"]),
   status: statusSchema,
+  // Read-only cache generations the executor did not have (ADR 0334).
+  skippedVolumes: z
+    .array(z.string().regex(SANDBOX_VOLUME_KEY_PATTERN))
+    .optional(),
 });
 
 const processSchema = z.object({
@@ -518,6 +532,16 @@ function nap(args: {
  */
 const LOCAL_WAKEUPS = new OperationWakeups();
 
+/** The sandbox capabilities among those an executor advertised. */
+function sandboxCapabilitiesIn(
+  advertised: readonly string[],
+): SandboxCapability[] {
+  const known: readonly string[] = Object.values(SANDBOX_CAPABILITIES);
+  return advertised.filter((entry): entry is SandboxCapability =>
+    known.includes(entry),
+  );
+}
+
 /**
  * A sandbox provider whose every operation is executed elsewhere: by a
  * member's desktop runner or by a remote worker (ADR 0164). `call` delivers
@@ -527,6 +551,7 @@ const LOCAL_WAKEUPS = new OperationWakeups();
 function forwardingSandboxProvider(args: {
   workspaceRoot: string;
   processes: boolean;
+  capabilities?: readonly SandboxCapability[];
   call: (operation: RemoteOperation) => Promise<unknown>;
 }): SandboxProvider {
   const { call } = args;
@@ -550,6 +575,9 @@ function forwardingSandboxProvider(args: {
   return {
     workspaceRoot: args.workspaceRoot,
     ...(args.processes ? { processes } : {}),
+    // What the executor advertised (ADR 0334): wrappers refuse read-only
+    // caches on one that cannot keep them.
+    ...(args.capabilities ? { capabilities: args.capabilities } : {}),
     createSandbox: async (options) =>
       handleSchema.parse(await call({ kind: "create", options })),
     startSandbox: async (sandboxId) => {
@@ -743,11 +771,16 @@ export class RemoteOperationQueue {
     workspaceRoot: string;
     /** The executor's provider runs background processes (ADR 0174). */
     processes: boolean;
+    /** What the executor's sandboxes can be given, as it advertised. */
+    capabilities?: readonly string[];
     attributes?: SpanAttributes;
   }): SandboxProvider {
     return forwardingSandboxProvider({
       workspaceRoot: args.workspaceRoot,
       processes: args.processes,
+      ...(args.capabilities
+        ? { capabilities: sandboxCapabilitiesIn(args.capabilities) }
+        : {}),
       call: (operation) =>
         withSpan(
           {

@@ -411,8 +411,11 @@ export class WorkerNodesService {
     offer: RemoteNodeOffer;
     /** Names the executor in errors, such as "The worker". */
     label: string;
+    /** What the node advertised its sandboxes can be given (ADR 0334). */
+    capabilities?: readonly string[];
   }): SandboxProvider {
     return new RemoteOperationQueue(this.db).provider({
+      ...(args.capabilities ? { capabilities: args.capabilities } : {}),
       executor: nodeExecutor(args.nodeId),
       leaseToken: () => this.liveToken({ nodeId: args.nodeId }),
       leaseHeld: async (token) =>

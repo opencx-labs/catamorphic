@@ -271,6 +271,7 @@ it("configures images, containers and unenforced egress per backend (ADR 0176)",
     "network.setup",
     "containers",
     "volumes",
+    "caches",
   ]);
   expect(gvisor.isolation).toBe("sandbox");
   expect(gvisor.backend).toMatchObject({ kind: "container", runtime: "runsc" });
@@ -288,6 +289,7 @@ it("configures images, containers and unenforced egress per backend (ADR 0176)",
     "network.policy",
     "network.setup",
     "volumes",
+    "caches",
   ]);
   expect(runc.isolation).toBe("process");
   const localSettings = await resolveExecutionSettings({

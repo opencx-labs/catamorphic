@@ -110,7 +110,8 @@ Postgres and one authority, with machines exposed as permitted Environments.
 Postgres mode shares origins, artifacts, credentials, auth, and leased execution.
 Each Environment can choose its sandbox image, give agents their own Docker,
 and limit which hosts they reach, with a wider list for its setup alone
-(package registries) while agents reach only the gateway; an agent's
+(package registries) while agents reach only the gateway, and mount
+read-only caches that only a trusted fill from the published main writes; an agent's
 sandboxing decides what leaves its sandbox, apart from its harness's own
 permission mode. Claude Code, Codex and ACP agents such as OpenCode run in
 those sandboxes on the organization's model keys, held by the gateway. New model
@@ -485,7 +486,7 @@ Supporting packages (consumed through the surface above, importable directly for
 | `@catamorphic/agent-runner` | The harness-agnostic runner that drives one attempt of a turn on an adapter, in-process or over stdio. |
 | `@catamorphic/runner-bundle` | The runner and its Claude Code and Codex adapters as one hash-addressed file a sandbox runs with Bun or Node. |
 | `@catamorphic/microsandbox` | Local sandbox provider over the microsandbox SDK: the desktop's default execution. |
-| `@catamorphic/container` | Sandboxes as OCI containers through the Docker Engine API, under gVisor (`runsc`) or runc: images, Dockerfile builds, CPU and memory limits, egress policy through a proxy socket, nested Docker, and volumes (ADR 0204). |
+| `@catamorphic/container` | Sandboxes as OCI containers through the Docker Engine API, under gVisor (`runsc`) or runc: images, Dockerfile builds, CPU and memory limits, egress policy through a proxy socket, nested Docker, volumes, and read-only caches (ADRs 0204, 0334). |
 | `@catamorphic/local-process` | Sandboxless execution as plain subprocesses with an explicit env. Trusted single-tenant hosts only (ADR 0047). |
 | `@catamorphic/cloudflare` | Cloudflare backend plugin: `CloudflareSandboxProvider` (execution via Bridge Worker) + `ArtifactsRemoteBackend` (Cloudflare-native code storage when available). |
 | `@catamorphic/s3` | S3-compatible git origin backend for Cloudflare R2, AWS S3, MinIO, and similar stores. |

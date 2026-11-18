@@ -126,6 +126,8 @@ export interface CatamorphicHostConfig {
   workerNode?: CatamorphicCoreConfig["workerNode"];
   /** How often idle pollers look for work (ADR 0229); see the core option. */
   idlePollMs?: CatamorphicCoreConfig["idlePollMs"];
+  /** Environment caches (ADR 0334); see the core option. */
+  caches?: CatamorphicCoreConfig["caches"];
   database: DatabaseConfig;
   storage: StorageConfig;
   /**
@@ -371,6 +373,7 @@ export class Catamorphic {
       agentCapabilities: config.agentCapabilities,
       workerNode: config.workerNode,
       idlePollMs: config.idlePollMs,
+      ...(config.caches ? { caches: config.caches } : {}),
       db,
       projectManager: resolveStorage(config.storage),
       sandboxProvider: config.sandboxProvider,

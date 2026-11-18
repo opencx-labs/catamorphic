@@ -25,6 +25,8 @@ export async function startFakeDocker(options?: {
   image?: { User?: string; Env?: string[] };
   /** Fail container starts with this message. */
   failStart?: string;
+  /** Awaited before a container is created, to hold a creation midway. */
+  beforeCreateContainer?: (body: Record<string, unknown>) => Promise<void>;
   /** How an exec ends, when not with success and no output. */
   onExec?: (exec: {
     container: FakeContainer;
@@ -124,8 +126,13 @@ export async function startFakeDocker(options?: {
       }
       if (route === "POST /containers/create") {
         const id = url.searchParams.get("name") ?? `c${containers.size}`;
-        containers.set(id, { id, body, running: false });
-        return json(201, { Id: id });
+        void (options?.beforeCreateContainer?.(body) ?? Promise.resolve()).then(
+          () => {
+            containers.set(id, { id, body, running: false });
+            json(201, { Id: id });
+          },
+        );
+        return;
       }
       if (route === "GET /containers/json") {
         const wanted = labelFilter(url.searchParams.get("filters"));

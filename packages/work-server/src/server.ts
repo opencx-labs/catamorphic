@@ -625,6 +625,13 @@ async function createWorkServerInner(
     memberIdForEmail: ({ email }) =>
       verifiedUserIdForEmail({ auth: workAuth, email }),
     workerNode: machine.lease,
+    // A cache copy nobody mounted is evicted when its volume would be
+    // pruned (ADR 0334).
+    caches: {
+      retentionDays: Math.round(
+        execution.volumeRetentionMs / (24 * 60 * 60 * 1000),
+      ),
+    },
     clientExecution: true,
     database: databaseConfig,
     storage: objectStore

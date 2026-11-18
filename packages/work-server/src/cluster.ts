@@ -255,6 +255,7 @@ export async function registerWorkMachine(args: {
                   nodeId: selected.id,
                   offer: selected.remote,
                   label: "The worker",
+                  capabilities: selected.descriptor.capabilities,
                 }),
               }
             : {}),

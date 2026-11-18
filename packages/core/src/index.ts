@@ -174,6 +174,18 @@ export {
   resolveScope,
 } from "./services/artifact-scope.js";
 export {
+  CACHE_FILL_ATTEMPTS,
+  CacheFillRefusedError,
+  type CacheFillState,
+  CacheFillsService,
+  type EnvironmentCacheState,
+} from "./services/cache-fills.js";
+export {
+  CACHE_PROVENANCE_FILE,
+  cacheMounts,
+  cacheNote,
+} from "./services/cache-mounts.js";
+export {
   type CapabilityContext,
   type CapabilityProviderRuntime,
   CapabilityRegistry,
@@ -356,6 +368,7 @@ export {
   EncryptedCredentialVault,
   vaultKeyId,
 } from "./services/encrypted-credential-vault.js";
+export { ENVIRONMENTS_CAPABILITY } from "./services/environments-capability.js";
 export {
   EVENTS_CAPABILITY,
   MAX_RECORDED_EVENTS,
@@ -506,9 +519,12 @@ export {
 } from "./services/private-state-service.js";
 export { PrivateWorkflowsService } from "./services/private-workflows-service.js";
 export {
+  DEFAULT_CACHE_FILL_TIMEOUT_MINUTES,
+  DEFAULT_CACHE_SIZE_MB,
   DEFAULT_ENVIRONMENT,
   DEFAULT_IDLE_RELEASE_MINUTES,
   DEFAULT_SETUP_TIMEOUT_MINUTES,
+  type EnvironmentCache,
   type EnvironmentSetup,
   type ProjectEnvironmentDefinition,
   type ProjectEnvironmentEntry,

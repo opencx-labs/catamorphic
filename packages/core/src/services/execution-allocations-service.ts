@@ -6,7 +6,11 @@ import type {
   SandboxImage,
   WorkloadKind,
 } from "@catamorphic/sandbox";
-import { VOLUME_KEY_PATTERN, VOLUME_NAME_PATTERN } from "@catamorphic/sandbox";
+import {
+  CACHE_VOLUME_KEY_PATTERN,
+  VOLUME_KEY_PATTERN,
+  VOLUME_NAME_PATTERN,
+} from "@catamorphic/sandbox";
 import { type Kysely, type Selectable, sql, type Transaction } from "kysely";
 import { z } from "zod";
 import type { Identity } from "../identity.js";
@@ -113,6 +117,21 @@ const AllocationPolicySchema = z.object({
           }),
         )
         .optional(),
+      caches: z
+        .array(
+          z.object({
+            name: z.string().regex(VOLUME_NAME_PATTERN),
+            path: z.string(),
+          }),
+        )
+        .optional(),
+      fill: z
+        .object({
+          name: z.string().regex(VOLUME_NAME_PATTERN),
+          path: z.string(),
+          key: z.string().regex(CACHE_VOLUME_KEY_PATTERN),
+        })
+        .optional(),
     })
     .optional(),
   approvals: z.object({ waitMinutes: z.number() }).optional(),
@@ -131,6 +150,22 @@ export interface EnvironmentSandbox {
   setupEgress?: SandboxEgress;
   /** The Environment's volumes, keyed for the work's owner (ADR 0208). */
   volumes?: readonly EnvironmentSandboxVolume[];
+  /**
+   * The Environment's caches (ADR 0334), each mounted read only at the
+   * generation its machine holds when the sandbox is made.
+   */
+  caches?: readonly EnvironmentSandboxCache[];
+  /**
+   * A cache fill's own Allocation (ADR 0334): the one cache generation its
+   * sandbox mounts writable, and no other cache.
+   */
+  fill?: EnvironmentSandboxCache & { key: string };
+}
+
+/** One cache an Allocation's sandboxes mount (ADR 0334). */
+export interface EnvironmentSandboxCache {
+  name: string;
+  path: string;
 }
 
 /**

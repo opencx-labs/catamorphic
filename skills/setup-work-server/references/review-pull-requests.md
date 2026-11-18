@@ -124,7 +124,11 @@ they run the container backend under gVisor (`runsc` with `--net-raw` and
 `--host-uds=open`): it offers `containers`, `network.policy` and
 `network.setup`. Microsandbox fixes a sandbox's network when it is created,
 so it cannot host the `review` Environment ([Setup and
-volumes](cluster-deployment.md#setup-and-volumes)).
+volumes](cluster-deployment.md#setup-and-volumes)). The container backend
+also mounts the `review` Environment's pnpm cache read only (`caches`, ADR
+0334), filled from `main` by the pack's `fillReviewCache`: each machine
+keeps its own copy, so keep a few machines warm with `min` and their
+reviews install offline from it.
 
 Reviews come in bursts, so let a machine rule create machines while reviews
 wait and destroy them once idle ([Machines on

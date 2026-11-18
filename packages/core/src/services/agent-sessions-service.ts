@@ -145,6 +145,7 @@ import {
 } from "./allocation-sandbox-provider.js";
 import type { AppPoliciesService } from "./app-policies-service.js";
 import { AccessDeniedError, resolveScope } from "./artifact-scope.js";
+import { cacheNote } from "./cache-mounts.js";
 import { projectChatIdentity } from "./chat-delivery.js";
 import {
   type AgentModelChoice,
@@ -6230,6 +6231,12 @@ export class AgentSessionsService {
             projectChat: isProjectPrincipal(session.external_user_id),
           });
           if (volumes) notes.push(volumes);
+          // What its caches hold, or that this machine has none yet (ADR 0334).
+          const caches = await cacheNote({
+            db: this.db,
+            allocation: runtime.allocation,
+          });
+          if (caches) notes.push(caches);
         }
         // The rest of setup, once the sandbox is narrow and holds the
         // session's work: the owner's own, or all of it without a network of

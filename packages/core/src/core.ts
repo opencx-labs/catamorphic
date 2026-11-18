@@ -40,6 +40,7 @@ import {
 } from "./services/artifact-scope.js";
 import { BatchExecutionHandler } from "./services/batch-execution-handler.js";
 import { BoundaryExecutionHandler } from "./services/boundary-execution-handler.js";
+import { CacheFillsService } from "./services/cache-fills.js";
 import {
   type CapabilityProviderRuntime,
   CapabilityRegistry,
@@ -82,6 +83,7 @@ import {
   type DocumentBlobStore,
   DocumentsService,
 } from "./services/documents-service.js";
+import { environmentsCapability } from "./services/environments-capability.js";
 import { eventsCapability } from "./services/events-capability.js";
 import { ExecutionAllocationsService } from "./services/execution-allocations-service.js";
 import { ExecutionEnvironmentsService } from "./services/execution-environments-service.js";
@@ -180,6 +182,12 @@ export interface CatamorphicCoreConfig {
    * any host of the authority (ADR 0192).
    */
   workerNode?: { id: string; token: string };
+  /**
+   * Environment caches (ADR 0334): a machine's copy no sandbox mounted for
+   * `retentionDays` (30 by default, as `WORK_VOLUME_RETENTION_DAYS`) is
+   * evicted and never mounted again.
+   */
+  caches?: { retentionDays?: number };
   /**
    * How long this process's pollers (workflow and agent workers, event
    * delivery, live session streams) wait after a poll while no work was
@@ -462,6 +470,8 @@ export class CatamorphicCore {
   readonly executionEnvironments: ExecutionEnvironmentsService;
   readonly agentCapabilities: AgentCapabilitiesService;
   readonly executionAllocations: ExecutionAllocationsService;
+  /** Environment caches and their trusted fills (ADR 0334). */
+  readonly cacheFills: CacheFillsService;
   /** Work waiting for a machine (ADR 0258), the demand machine rules read. */
   readonly placementWaits: PlacementWaitsService;
   /** Moves the work of lost disposable machines (ADR 0190). */
@@ -800,6 +810,11 @@ export class CatamorphicCore {
         artifacts: () => this.sessionArtifacts,
         authorizeWorkflow: (context) => this.authorizeWorkflowHostCall(context),
       }),
+      environmentsCapability({
+        // Constructed further down; resolved per call.
+        cacheFills: () => this.cacheFills,
+        authorize: (context) => this.authorizeWorkflowHostCall(context),
+      }),
       eventsCapability({
         db: this.db,
         // Constructed further down; resolved per call.
@@ -880,6 +895,16 @@ export class CatamorphicCore {
         : undefined,
       { gatewayHosts: config.gatewayHosts ?? [] },
     );
+    this.cacheFills = new CacheFillsService({
+      db: this.db,
+      projectManager: this.projectManager,
+      projectEnvironments: this.projectEnvironments,
+      executionEnvironments: this.executionEnvironments,
+      executionAllocations: this.executionAllocations,
+      // Constructed further down; resolved per call.
+      secrets: () => this.secrets,
+      retentionDays: config.caches?.retentionDays ?? 30,
+    });
     this.agentCapabilities = new AgentCapabilitiesService({
       db: this.db,
       hostId: config.workerNode?.id ?? config.hostId,
@@ -1577,9 +1602,15 @@ export class CatamorphicCore {
         console.warn("[catamorphic] Project cleanups did not run", error);
         return 0;
       });
+    // Environment cache fills start in the background (ADR 0334).
+    const filling = await this.cacheFills.dispatch().catch((error: unknown) => {
+      console.warn("[catamorphic] Cache fills did not dispatch", error);
+      return 0;
+    });
     return (
       advanced +
       cleaned +
+      filling +
       (await new ProjectEventDispatcher(
         this.db,
         this.triggers,
