@@ -873,7 +873,8 @@ not hold a machine back.
 The machine removes what Work left that nothing used for
 `WORK_IMAGE_RETENTION_HOURS`, hourly and at once while under its floor:
 images it pulled or built itself that no container uses and no other machine
-sharing the Docker daemon still claims (never its default image, one it
+sharing the Docker daemon still claims (a claim is a tag each machine renews
+daily while it uses the image, ignored after a week; never its default image, one it
 found there, or a build from before builds carried their builder), and the
 dangling images and build cache of each running sandbox with containers. A workspace keeps one `$WORK_PROGRAM` copy per
 program commit it ran; a copy goes once no `exec` there used it for a day,

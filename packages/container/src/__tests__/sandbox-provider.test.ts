@@ -847,6 +847,61 @@ describe("ContainerSandboxProvider without Docker", () => {
     expect(images()).toEqual(["oven/bun"]);
   });
 
+  it("restores an image another machine claimed while this one removed it (ADR 0335)", async () => {
+    const today = new Date().toISOString().slice(0, 10).replaceAll("-", "");
+    let raced = false;
+    const { fake, provider } = await setup(undefined, {
+      images: { "oven/bun": 1 },
+      // Another machine on the daemon claims the image just as this one
+      // removes it.
+      beforeRemoveImage: async (reference) => {
+        if (reference !== "example/review:3" || raced) return;
+        raced = true;
+        const claim = `${"b".repeat(16)}-${"c".repeat(24)}-${today}`;
+        await fake.docker.tagImage({
+          source: reference,
+          repo: "work.local/claims",
+          tag: claim,
+        });
+      },
+    });
+    const machine = provider();
+    const sandbox = await machine.createSandbox({
+      image: { kind: "oci", reference: "example/review:3" },
+    });
+    await machine.destroySandbox(sandbox.id);
+    await machine.disk.clean({ graceMs: 0 });
+    expect(raced).toBe(true);
+    expect(await fake.docker.inspectImage("example/review:3")).toBeDefined();
+  });
+
+  it("ignores and removes a claim no machine renewed for a week (ADR 0335)", async () => {
+    const { fake, provider } = await setup(undefined, {
+      images: { "oven/bun": 1 },
+    });
+    const machine = provider();
+    const sandbox = await machine.createSandbox({
+      image: { kind: "oci", reference: "example/review:4" },
+    });
+    // A machine that left the daemon ten days ago still claims it.
+    const stale = `work.local/claims:${"d".repeat(16)}-${"e".repeat(24)}-${new Date(
+      Date.now() - 10 * 86_400_000,
+    )
+      .toISOString()
+      .slice(0, 10)
+      .replaceAll("-", "")}`;
+    const [repo, tag] = stale.split(":");
+    await fake.docker.tagImage({
+      source: "example/review:4",
+      repo: repo ?? "",
+      tag: tag ?? "",
+    });
+    await machine.destroySandbox(sandbox.id);
+    await machine.disk.clean({ graceMs: 0 });
+    expect(await fake.docker.inspectImage("example/review:4")).toBeUndefined();
+    expect(fake.images?.has(stale)).toBe(false);
+  });
+
   it("prunes dangling images and build cache in running sandboxes with containers only (ADR 0335)", async () => {
     const { fake, provider } = await setup();
     const machine = provider();

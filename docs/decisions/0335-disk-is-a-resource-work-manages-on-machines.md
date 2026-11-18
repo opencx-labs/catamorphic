@@ -72,8 +72,13 @@ label) that none of its sandboxes was made from for
 `WORK_IMAGE_RETENTION_HOURS` (24), that no container uses (Docker refuses
 those) and that no other machine sharing the daemon claims, never the
 machine's own default image, one it found there, or an unlabeled build.
-Each machine claims an image it uses with a reference of its own
-(`work.local/claims:<machine>-<hash>`) and lets go of it once unused. In
+Each machine claims an image it uses with a reference of its own, renewed
+each day it uses it (`work.local/claims:<machine>-<hash>-<day>`), and lets
+go of it once unused; a claim no machine renewed for 7 days is a machine
+that left, ignored and removed by any machine. On one machine, a sandbox
+claiming an image and cleanup releasing it take the image's lock in turn,
+and an image another machine claimed while this one removed it gets its
+name back. In
 each running sandbox with containers, its Docker's dangling images and
 build cache unused for as long go, never a tagged image, a container or a
 volume. The machine's own daemon's build cache is not pruned: Work builds

@@ -42,6 +42,8 @@ export async function startFakeDocker(options?: {
   images?: Record<string, number>;
   /** What `/info` names as Docker's data root. */
   dockerRootDir?: string;
+  /** Awaited as a reference is about to be removed: another machine acts. */
+  beforeRemoveImage?: (reference: string) => Promise<void>;
 }) {
   // Unix socket paths are short; macOS's temporary directory is not.
   const directory = fs.mkdtempSync(
@@ -108,6 +110,21 @@ export async function startFakeDocker(options?: {
         response.writeHead(status, { "content-type": "application/json" });
         response.end(value === undefined ? "" : JSON.stringify(value));
       };
+      const removeImage = (reference: string) => {
+        if (!images?.has(reference))
+          return json(404, { message: `No such image: ${reference}` });
+        // Another reference keeps the image: this one is only untagged.
+        const shared = sameImage(reference).length > 1;
+        const used = [...containers.values()].some((container) =>
+          sameImage(reference).includes(String(container.body.Image)),
+        );
+        if (used && !shared)
+          return json(409, {
+            message: `conflict: unable to remove ${reference}: image is being used by a container`,
+          });
+        images.delete(reference);
+        return json(200, [{ Untagged: reference }]);
+      };
       const containerMatch = url.pathname.match(
         /^\/containers\/([^/]+)(\/[a-z]+)?$/,
       );
@@ -153,9 +170,15 @@ export async function startFakeDocker(options?: {
       }
       const tagMatch = url.pathname.match(/^\/images\/(.+)\/tag$/);
       if (request.method === "POST" && tagMatch) {
-        const source = decodeURIComponent(tagMatch[1] ?? "");
-        if (!images?.has(source))
-          return json(404, { message: `No such image: ${source}` });
+        const named = decodeURIComponent(tagMatch[1] ?? "");
+        // By reference, or by the image's id while any reference keeps it.
+        const source = images?.has(named)
+          ? named
+          : [...(images?.keys() ?? [])].find(
+              (reference) => idOf(reference) === named,
+            );
+        if (!images || !source)
+          return json(404, { message: `No such image: ${named}` });
         const target = `${url.searchParams.get("repo")}:${url.searchParams.get("tag")}`;
         images.set(target, images.get(source) ?? 0);
         imageIds.set(target, idOf(source));
@@ -201,20 +224,16 @@ export async function startFakeDocker(options?: {
       }
       if (request.method === "DELETE" && imageMatch && !imageMatch[2]) {
         const reference = decodeURIComponent(imageMatch[1] ?? "");
-        if (!images?.has(reference))
-          return json(404, { message: `No such image: ${reference}` });
-        // Another reference keeps the image: this one is only untagged.
-        const shared = sameImage(reference).length > 1;
-        const used = [...containers.values()].some((container) =>
-          sameImage(reference).includes(String(container.body.Image)),
-        );
-        if (used && !shared)
-          return json(409, {
-            message: `conflict: unable to remove ${reference}: image is being used by a container`,
+        if (options?.beforeRemoveImage) {
+          void options.beforeRemoveImage(reference).then(() => {
+            removeImage(reference);
           });
-        images.delete(reference);
-        return json(200, [{ Untagged: reference }]);
+          return;
+        }
+        removeImage(reference);
+        return;
       }
+
       if (route === "POST /volumes/create") {
         const name = String(body.Name);
         if (!volumes.has(name)) volumes.set(name, labelsOf(body));
