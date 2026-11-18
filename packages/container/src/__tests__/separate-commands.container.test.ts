@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import fs from "node:fs";
 import http from "node:http";
 import type net from "node:net";
@@ -19,9 +20,16 @@ import { type ContainerRuntime, probeContainerSupport } from "../support.js";
 // Real containers, as sandbox-provider.container.test.ts: WORK_TEST_CONTAINER=1
 // with a Docker daemon (scripts/test-in-docker.sh sets up gVisor).
 const enabled = process.env.WORK_TEST_CONTAINER === "1";
-const IMAGE =
-  process.env.WORK_TEST_CONTAINER_IMAGE ??
+/**
+ * The sandboxes' image: the pinned Bun on Alpine with what Work's default
+ * setup installs (bash, Git), which these restricted sandboxes cannot
+ * install themselves. Alpine keeps busybox's tools and its login profile,
+ * as the review image does. WORK_TEST_CONTAINER_IMAGE names an image that
+ * already has them, used as it is.
+ */
+const BASE =
   "oven/bun:1.4.4-alpine@sha256:4cf82f5686b196504fe119db3fcd9185b191f82ece82c40680e597228ec6070a";
+const TEST_IMAGE_DOCKERFILE = `FROM ${BASE}\nRUN apk add --no-cache bash git\n`;
 const MINUTES = 60_000;
 const PROJECT = "/workspace/project";
 const SECRETS = "/workspace/.work-session/env/secrets.sh";
@@ -42,6 +50,7 @@ describe.skipIf(!enabled)("commands apart from the agent (ADR 0332)", () => {
   let other: http.Server;
   let hostIp: string;
   let provider: ContainerSandboxProvider;
+  let image: string;
   const sandboxes: string[] = [];
 
   beforeAll(async () => {
@@ -70,12 +79,21 @@ describe.skipIf(!enabled)("commands apart from the agent (ADR 0332)", () => {
         .find((entry) => entry?.family === "IPv4" && !entry.internal)
         ?.address ?? "";
     if (!hostIp) throw new Error("This machine has no external IPv4 address");
-    if (!(await docker.inspectImage(IMAGE))) await docker.pullImage(IMAGE);
+    image = process.env.WORK_TEST_CONTAINER_IMAGE ?? "";
+    if (!image) {
+      image = `work-separate-commands-test:${createHash("sha256").update(TEST_IMAGE_DOCKERFILE).digest("hex").slice(0, 12)}`;
+      if (!(await docker.inspectImage(image)))
+        await docker.buildImage({
+          tag: image,
+          dockerfile: TEST_IMAGE_DOCKERFILE,
+        });
+    } else if (!(await docker.inspectImage(image)))
+      await docker.pullImage(image);
     provider = new ContainerSandboxProvider({
       docker,
       runtime,
       stateDirectory: path.join(root, "state"),
-      image: IMAGE,
+      image,
       namePrefix: "work-sep",
       // Restricted sandboxes install nothing: the image has what they need.
       setupCommand: "",
@@ -622,6 +640,8 @@ describe.skipIf(!enabled)("commands apart from the agent (ADR 0332)", () => {
     async () => {
       const id = await separated();
       await plantRuntimeConfig(id);
+      const hasGit =
+        (await provider.executeCommand(id, "command -v git")).exitCode === 0;
       // The provider's shim (Node where the image has it) and one on Bun,
       // each from the checkout, as the harness runs them.
       const bun = (await agent(id, "command -v bun")).result.trim();
@@ -654,8 +674,10 @@ describe.skipIf(!enabled)("commands apart from the agent (ADR 0332)", () => {
           `${shim}/bin/bash -c 'echo "[$LC_PLANTED][$LC_PLANTEDLOCAL] $(pwd)"'`,
         );
         expect(ran.result.trim(), shim).toBe(`[][] ${PROJECT}`);
+        // Git on the command side answers, or says it is not there.
         const git = await harness(id, `${shim}/path/git --version`);
-        expect(git.exitCode, git.result).toBe(0);
+        if (hasGit) expect(git.exitCode, git.result).toBe(0);
+        else expect(git.result).toMatch(/work-command: .*git: not found/);
       }
       expect(await plantedBeside(id)).toBe("none");
     },
@@ -686,13 +708,15 @@ describe.skipIf(!enabled)("commands apart from the agent (ADR 0332)", () => {
         id,
         "chmod 755 /usr/local/bin/work-probe-acp /usr/local/bin/work-probe-claude",
       );
-      const bundle = fs.readFileSync(
-        path.resolve(
-          path.dirname(fileURLToPath(import.meta.url)),
-          "../../../runner-bundle/dist/runner.mjs",
-        ),
-        "utf8",
+      const built = path.resolve(
+        path.dirname(fileURLToPath(import.meta.url)),
+        "../../../runner-bundle/dist/runner.mjs",
       );
+      if (!fs.existsSync(built))
+        throw new Error(
+          `${built} is missing: build @catamorphic/runner-bundle before this test`,
+        );
+      const bundle = fs.readFileSync(built, "utf8");
       await provider.uploadFiles(
         id,
         { "runner/runner.mjs": bundle },
@@ -787,16 +811,23 @@ describe.skipIf(!enabled)("commands apart from the agent (ADR 0332)", () => {
     "runs a setuid program the command side leaves in the checkout as the harness",
     async () => {
       const id = await separated();
+      // The image's own Bun, which keeps a setuid bit's privileges (busybox
+      // would drop them itself), says whom it runs as.
       await provider.executeCommand(
         id,
-        `cp "$(command -v id)" ${PROJECT}/raise && chown 0:0 ${PROJECT}/raise && chmod 4755 ${PROJECT}/raise`,
+        `cp "$(command -v bun)" ${PROJECT}/raise && chown 0:0 ${PROJECT}/raise && chmod 4755 ${PROJECT}/raise`,
       );
       expect(
         (await agent(id, `stat -c '%u %a' ${PROJECT}/raise`)).result.trim(),
       ).toBe("0 4755");
-      expect((await harness(id, `${PROJECT}/raise -u`)).result.trim()).toBe(
-        "10001",
-      );
+      expect(
+        (
+          await harness(
+            id,
+            `${PROJECT}/raise -e 'console.log(process.geteuid())'`,
+          )
+        ).result.trim(),
+      ).toBe("10001");
     },
     10 * MINUTES,
   );
@@ -808,7 +839,7 @@ describe.skipIf(!enabled)("commands apart from the agent (ADR 0332)", () => {
         docker,
         runtime,
         stateDirectory: path.join(root, "state"),
-        image: IMAGE,
+        image,
         namePrefix: "work-sep",
         setupCommand: "",
         separateCommandOutputBytes: 1024 * 1024,

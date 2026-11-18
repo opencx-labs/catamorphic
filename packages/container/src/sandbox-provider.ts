@@ -157,6 +157,15 @@ const AGENT_LAYOUT = [
 ].join("\n");
 
 /**
+ * The end of the command side's /etc/profile when it shares the checkout
+ * (ADR 0332): what login shells make there stays group-writable.
+ */
+const SHARED_PROFILE = [
+  "grep -qxF '# Work: the checkout is shared with the agent side (ADR 0332).' /etc/profile 2>/dev/null && exit 0",
+  "printf '\\n%s\\numask 002\\n' '# Work: the checkout is shared with the agent side (ADR 0332).' >> /etc/profile",
+].join("\n");
+
+/**
  * The longest a sandbox stays widened (ADR 0257): the longest setup, 240
  * minutes, and a margin.
  */
@@ -1427,6 +1436,20 @@ export class ContainerSandboxProvider implements SandboxProvider {
       });
       if (shared.exitCode !== 0)
         throw new Error(`Sharing the checkout failed: ${shared.stderr}`);
+    }
+    // Login shells (setup, exec, Work's Git) read /etc/profile, which on
+    // Alpine sets umask 022 over the one Work gives each command, so the
+    // agent's side could not edit what they make in the checkout. At every
+    // start: gVisor's root filesystem starts over.
+    if (record.separate && sharedTargets.length > 0) {
+      const profiled = await this.exec(id, {
+        cmd: ["sh", "-c", SHARED_PROFILE],
+        user: "0",
+      });
+      if (profiled.exitCode !== 0)
+        throw new Error(
+          `Sharing the checkout failed: ${profiled.stderr || profiled.stdout}`,
+        );
     }
     if (record.agentOf) await this.layOutAgentSide(id);
     if (user && !isRoot(user)) {
