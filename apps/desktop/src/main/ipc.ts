@@ -568,9 +568,17 @@ export function registerIpcHandlers(
 
   // --- per-profile app preferences (notifications) ---
 
-  ipcMain.handle("catamorphic:prefs-get", (event) =>
-    storesFor(event).prefs.load(),
-  );
+  // E2E only: a slow read of the preferences, as on a loaded machine, for
+  // what a workspace draws before it knows them.
+  const prefsReadDelayMs = process.env.CATAMORPHIC_E2E_DATA_DIR
+    ? Number(process.env.CATAMORPHIC_E2E_PREFS_READ_DELAY_MS) || 0
+    : 0;
+  ipcMain.handle("catamorphic:prefs-get", async (event) => {
+    const stores = storesFor(event);
+    if (prefsReadDelayMs > 0)
+      await new Promise((resolve) => setTimeout(resolve, prefsReadDelayMs));
+    return stores.prefs.load();
+  });
 
   // Saving triggers the file watcher, which broadcasts to the profile's
   // windows (same live-reload contract as keybindings).
