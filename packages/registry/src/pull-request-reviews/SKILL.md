@@ -344,13 +344,15 @@ files beside them.
 
 With `commands` apart, copies in the checkout are only as trustworthy as
 the checkout: the change's code runs there after setup and can rewrite
-them. Work places the same program beside the agent too, at the same path
-(`/workspace/.work-program/<commit>`), where no command reaches it. A setup
-`exec` that prints `$WORK_PROGRAM` returns that path; deliver it to the chat
-so a reviewer whose harness runs in the sandbox (the OpenCode reviewer, or
-Claude Code) reads its procedure there with its own file tools. The built-in
-reviewer runs on the control plane and its tools work on the command side,
-so its procedure belongs in its persona or the delivery itself.
+them. Where the reviewer's harness runs in the sandbox in a container of
+its own (a project's own Claude Code reviewer), Work places the same program
+there too, at the same path (`/workspace/.work-program/<commit>`), where no
+command reaches it. A setup `exec` that prints `$WORK_PROGRAM` returns that
+path; deliver it to the chat so that reviewer reads its procedure there with
+its own file tools. The built-in reviewer runs on the control plane and its
+tools work on the command side, so its procedure belongs in its persona or
+the delivery itself. The OpenCode reviewer runs without `commands` apart,
+beside the change's code, so no copy is out of that code's reach.
 
 **A push lands while the review runs.** Rather than moving the checkout
 under the agent and its subagents, the push workflow compares the new head's
