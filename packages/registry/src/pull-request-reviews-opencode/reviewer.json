@@ -3,7 +3,8 @@
   "name": "Reviewer",
   "kind": "acp",
   "acp": {
-    "command": ["opencode", "acp"]
+    "command": ["opencode", "acp"],
+    "shell": true
   },
   "model": "deepseek/deepseek-v4.1-flash",
   "credentials": {

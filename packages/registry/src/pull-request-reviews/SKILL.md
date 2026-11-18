@@ -31,18 +31,24 @@ every non-draft pull request gets a project chat keyed
 - **Closed or merged:** `close({ key })` ends the chat: its workspace,
   containers, session branch, and grants are released; the transcript stays.
 
-The review chat never writes to GitHub (ADR 0259). It runs beside the pull
-request's own code, which can do anything the chat's grants can, so its
-`github` binding only reads (no `git:write`: a push from it would run the
-base repository's `on: push` workflows with their secrets) and its
-sandboxing is `contained`. Whatever that code forges is a report the poster
-validates, never a post. Credentials never reach the review machines either:
-the App's key, the replica's password, and Slack's token stay on the control
-plane, and Git in the sandbox fetches with the session's grant.
+The review chat never writes to GitHub (ADR 0259). The pull request's own
+code (its install scripts, tests and services) runs in a command container
+apart from the reviewer (ADR 0332): it shares the checkout and nothing else,
+so it cannot read the reviewer's grants, call its model or Work's tools as
+the chat, submit a forged `review`, or change the files the reviewer trusts.
+It reaches Git reads through the gateway, which `commands.connections`
+lists, and nothing else of the chat's. The chat's `github` binding only
+reads all the same (no `git:write`: a push would run the base repository's
+`on: push` workflows with their secrets) and its sandboxing is `contained`.
+Whatever the reviewer submits is a report the poster validates, never a
+post. Credentials never reach the review machines either: the App's key, the
+replica's password, and Slack's token stay on the control plane, and Git
+fetches with the session's grant.
 
-The review is advice, not a merge gate. The pull request's code runs where
-the review is written, so it can sway the verdict, the "Work review" check,
-and replies. Protect the base branch with a person's
+The review is advice, not a merge gate. The pull request's code can no
+longer reach the reviewer, but the reviewer reads what the pull request
+wrote, so hostile content can still mislead it about the verdict, the "Work
+review" check, and replies. Protect the base branch with a person's
 approval, and if you require the check, require it from the App so a run
 another workflow names alike does not count.
 
@@ -66,6 +72,16 @@ and Docker; `containers` lets the agent run the change's services with
 Docker Compose inside its own sandbox. The agent's sandbox reaches only the
 control plane's gateway (`egress: gateway`): GitHub and the other
 bindings, and its model.
+
+`commands` runs everything the reviewer runs (its shell, setup, `exec`,
+terminals, the change's tests and Compose services) in a command container
+of its own beside the reviewer's, sharing only the checkout (ADR 0332).
+Docker runs there, not beside the reviewer. Its one connection is
+`github`, a read binding, so its commands (and `exec` from workflows) can
+`git fetch`; add another binding only when the change's tests need it, and
+never a write one. Only container machines (the Work server's
+`WORK_SANDBOX=container`, gVisor or runc without privileged containers)
+take this Environment.
 
 `setup` installs the change's dependencies and pulls its Compose images
 before the first turn and after each push, in a sandbox of its own that
@@ -139,7 +155,9 @@ codebase, which tests are slow, what never to touch.
 
 The `pull-request-reviews-opencode` pack makes the reviewer OpenCode, which
 Work runs as an ACP agent in the same sandbox (ADR 0255), on an open-weight
-model through OpenRouter or another OpenAI-compatible API. Its image points
+model through OpenRouter or another OpenAI-compatible API. Its definition
+says `"acp": { "shell": true }`: OpenCode runs its shell tool with `$SHELL`,
+which Work points at the command container (ADR 0332). Its image points
 OpenCode at `WORK_MODEL_BASE_URL` and `WORK_MODEL_API_KEY`: Work serves the
 model connection on the sandbox's loopback for each turn, so no key reaches
 the machine. `OPENCODE_DISABLE_PROJECT_CONFIG` keeps the pull request's own
@@ -218,6 +236,16 @@ diff. A second `exec` can write prepared facts the agent reads (the
 description, the discussion, CI results fetched by an earlier step) into
 files beside them.
 
+With `commands` apart, copies in the checkout are only as trustworthy as
+the checkout: the change's code runs there after setup and can rewrite
+them. Work places the same program beside the agent too, at the same path
+(`/workspace/.work-program/<commit>`), where no command reaches it. A setup
+`exec` that prints `$WORK_PROGRAM` returns that path; deliver it to the chat
+so a reviewer whose harness runs in the sandbox (the OpenCode reviewer, or
+Claude Code) reads its procedure there with its own file tools. The built-in
+reviewer runs on the control plane and its tools work on the command side,
+so its procedure belongs in its persona or the delivery itself.
+
 **A push lands while the review runs.** Rather than moving the checkout
 under the agent and its subagents, the push workflow compares the new head's
 lockfiles with the checkout's, with `exec` `in: "session"` (the chat's own
@@ -246,12 +274,12 @@ git fetch -q origin "$SHA" && git diff --quiet HEAD "$SHA" -- pnpm-lock.yaml '**
   the new head after its current turn, so it wraps up. The move runs setup
   again on the new base before the next turn.
 
-What this protects, honestly: a pull request rewriting its own review
-procedure in its diff. It does not protect against a hostile pull request
-at run time. The review image runs as root with Docker for the change's
-services, so code the pull request runs can change any file in the sandbox,
-`$WORK_PROGRAM` and the copied procedure included. The review stays advice,
-and the poster validates every report outside the sandbox (ADR 0259).
+What this protects, honestly: with `commands` apart, code the pull request
+runs reaches only the command container, so the reviewer's own program copy,
+grants and tools are out of its reach; the copies in the checkout are not.
+What the pull request wrote still reaches the reviewer as content and can
+mislead it. The review stays advice, and the poster validates every report
+outside the sandbox (ADR 0259).
 
 ## How reviews reach GitHub
 

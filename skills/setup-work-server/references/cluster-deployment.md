@@ -941,7 +941,7 @@ An Environment chooses its sandbox (ADR 0176) in `.work/project.json`:
   directory, as the stock server and workers do.
 
 Machines advertise `images`, `images.build`, `containers`,
-`network.policy`, `network.setup`, and `volumes`, `sign-ins` and one
+`network.policy`, `network.setup`, `commands.separate`, and `volumes`, `sign-ins` and one
 `sign-in:<harness>:<member>` per member signed in on them, and a
 local-process machine `harness.claude-code` and `harness.codex` when those
 CLIs are on its `PATH`; `GET /_work/operator/machines` shows them with the
@@ -1008,6 +1008,20 @@ caches (ADR 0208):
   up), or local-process under `WORK_UNENFORCED_EGRESS=accept`. Microsandbox
   fixes a VM's network when it is created and does not offer it. The hosts
   you list could receive the base checkout and the secrets the setup names.
+- `commands: { "separate": true, "connections": ["github"] }` runs the
+  agent's commands apart from it (ADR 0332): each sandbox is an agent
+  container (the harness, its grants, model and Work tool endpoints, its
+  state) and a command container (setup, `exec`, terminals, background
+  processes, the agent's shell commands, Docker) sharing only the checkout.
+  The worker serves each sandbox's command socket into the agent container
+  alone and runs what arrives there in the command container. Commands hold
+  grants only for the bindings `connections` lists, never a model's. It
+  needs `commands.separate`: the container backend wherever it enforces
+  `network.policy` and runs no privileged containers. A sandbox costs two
+  containers, each with the Environment's limits. Codex cannot run in such
+  an Environment (it picks its own shell); Claude Code loads only its home's
+  settings there; an ACP agent needs `"acp": { "shell": true }` in its
+  definition.
 - `setup.workflow` names a project workflow Work runs after `setup.command`,
   at the same points, before the turn (ADR 0324): `"setup": { "command":
   "pnpm install --frozen-lockfile", "workflow": "prepareReview" }`, or a

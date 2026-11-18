@@ -289,6 +289,13 @@ chat only that member's workflows; each execution is written in the chat's log.
 Commands see the chat's checkout as the agent left it, and code the chat runs
 can change any file in its sandbox: this keeps a change from rewriting its own
 review procedure in its diff, not a hostile change from tampering at run time.
+Where the Environment runs commands apart ("commands": { "separate": true },
+ADR 0332), exec runs in the command container with the agent's commands: it
+holds grants only for the bindings commands.connections lists (list a read Git
+binding for git fetch), never the agent's own. $WORK_PROGRAM is then copied
+beside the agent too, at the same path, where no command reaches it: print it
+from exec and tell the agent to read its procedure there, since copies in the
+checkout are only as trustworthy as the code that runs after them.
 
 An Environment's setup may name a workflow: { "setup": { "command": "pnpm install",
 "workflow": "prepareReview" } }. Work runs it after the command at the points it

@@ -263,6 +263,26 @@ separate `harnessPermissions` field in its native values:
 are in the definition's consent hash. The repository's `CLAUDE.md` and
 `.claude/` apply as in the CLI.
 
+### Commands apart from the agent
+
+An Environment with `"commands": { "separate": true }` runs everything the
+agent's shell runs in a command container beside the agent's, sharing only
+the checkout (ADR 0332), so code from the repository cannot read the
+chat's grants or call its model or Work's tools. Each harness takes it its
+own way:
+
+- **Claude Code** runs Bash, Monitor and background tasks through Work's
+  shim (`CLAUDE_CODE_SHELL`) and loads only its home's settings: the
+  checkout's `CLAUDE.md` and `.claude/` (hooks, MCP servers, skills) would
+  run or steer it from the repository, so they are not read there.
+- **ACP agents** run their commands through `$SHELL`, which Work points at
+  the shim, when the definition says they do: `"acp": { "command":
+  ["opencode", "acp"], "shell": true }`. Without it the turn is refused.
+- **Codex** is refused: it picks its own shell, so its commands cannot be
+  sent apart. Use it in Environments that run commands beside the agent.
+- **The built-in agent** runs on the control plane; its tools already run
+  in the command container.
+
 ## Verify
 
 From a chat with the agent: it edits a file and runs a command; `env` in

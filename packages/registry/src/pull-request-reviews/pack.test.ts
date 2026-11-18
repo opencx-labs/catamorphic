@@ -243,6 +243,9 @@ describe("the pull-request-reviews pack", () => {
       // The agent reaches only the gateway; registries are setup's alone,
       // with no volume to carry what agents wrote into it (ADR 0257).
       network: { egress: "gateway" },
+      // The pull request's code runs apart from the reviewer, reaching only
+      // Git reads through the gateway (ADR 0332).
+      commands: { separate: true, connections: ["github"] },
       setup: {
         network: { allow: expect.arrayContaining(["registry.npmjs.org"]) },
       },
@@ -363,7 +366,8 @@ describe("the pull-request-reviews pack", () => {
     expect(agent.success, JSON.stringify(agent.error)).toBe(true);
     expect(agent.data).toMatchObject({
       kind: "acp",
-      acp: { command: ["opencode", "acp"] },
+      // OpenCode runs its commands with $SHELL, so they run apart (ADR 0332).
+      acp: { command: ["opencode", "acp"], shell: true },
       credentials: { source: "connection", connection: "model" },
       sandboxing: "contained",
       environment: { allowed: ["review"] },
