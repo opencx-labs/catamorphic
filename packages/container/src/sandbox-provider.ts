@@ -129,6 +129,11 @@ const PROXY_MOUNT = "/run/work";
 const PROXY_PORT = 3128;
 /** The most output one of an agent's separated commands sends back (ADR 0332). */
 const SEPARATE_COMMAND_OUTPUT_BYTES = 64 * 1024 * 1024;
+/**
+ * Every tracked command carries its token in its environment, so a root
+ * kill reads its group's leader back from `/proc` before it signals.
+ */
+const TRACKED_TOKEN = "WORK_TRACKED";
 /** Process state of tracked commands, inside the sandbox. */
 const EXEC_STATE = "/tmp/.work-exec";
 
@@ -200,7 +205,11 @@ const SIGNAL_TRACKED = [
   `f="${EXEC_STATE}/$1"`,
   'i=0; while [ ! -s "$f" ] && [ $i -lt 50 ]; do sleep 0.1; i=$((i+1)); done',
   'p=$(cat "$f" 2>/dev/null)',
-  '[ -n "$p" ] && kill -"$2" -"$p" 2>/dev/null',
+  // The pid comes from a folder commands can write: signal only the group
+  // whose leader carries this command's own token (ADR 0332).
+  'case "$p" in ""|*[!0-9]*) exit 0;; esac',
+  `tr '\\0' '\\n' < "/proc/$p/environ" 2>/dev/null | grep -qxF "${TRACKED_TOKEN}=$1" || exit 0`,
+  'kill -"$2" -"$p" 2>/dev/null',
   "exit 0",
 ].join("\n");
 
@@ -219,7 +228,11 @@ const KILL_TRACKED = [
   `f="${EXEC_STATE}/$1"`,
   'i=0; while [ ! -s "$f" ] && [ $i -lt 50 ]; do sleep 0.1; i=$((i+1)); done',
   'p=$(cat "$f" 2>/dev/null)',
-  '[ -n "$p" ] && kill -9 -"$p" 2>/dev/null',
+  // The pid comes from a folder commands can write: signal only the group
+  // whose leader carries this command's own token (ADR 0332).
+  'case "$p" in ""|*[!0-9]*) exit 0;; esac',
+  `tr '\\0' '\\n' < "/proc/$p/environ" 2>/dev/null | grep -qxF "${TRACKED_TOKEN}=$1" || exit 0`,
+  'kill -9 -"$p" 2>/dev/null',
   "exit 0",
 ].join("\n");
 
@@ -1472,7 +1485,7 @@ export class ContainerSandboxProvider implements SandboxProvider {
           back,
           ...request.argv,
         ],
-        env: request.env,
+        env: { ...request.env, [TRACKED_TOKEN]: token },
         stdin: true,
       }),
     );
@@ -1492,7 +1505,7 @@ export class ContainerSandboxProvider implements SandboxProvider {
       void this.docker
         .exec({
           container: sandboxId,
-          // As the command's own user, like a kill.
+          // As root, only to the group that carries its token, like a kill.
           cmd: [
             "sh",
             "-c",
@@ -1501,6 +1514,7 @@ export class ContainerSandboxProvider implements SandboxProvider {
             token,
             signal.slice(3),
           ],
+          user: "0",
         })
         .catch(() => {});
     });
@@ -1774,7 +1788,7 @@ export class ContainerSandboxProvider implements SandboxProvider {
       this.docker.openExec({
         container: sandboxId,
         cmd: ["sh", "-c", script, "work-exec", token, args.cwd, ...args.argv],
-        ...(args.env ? { env: args.env } : {}),
+        env: { ...args.env, [TRACKED_TOKEN]: token },
       }),
     );
     let ended: "exited" | "timeout" | "cancelled" = "exited";
@@ -1811,14 +1825,16 @@ export class ContainerSandboxProvider implements SandboxProvider {
   }
 
   /**
-   * Stop a tracked command's group, as the container's own user: the pid
-   * comes from a folder its commands can write, so the kill can reach no
-   * more than they could.
+   * Stop a tracked command's group, as root, so what it started under
+   * another user (sudo) stops too. The pid comes from a folder commands can
+   * write, so {@link KILL_TRACKED} signals it only when that process
+   * carries the command's own token.
    */
   private async killTracked(sandboxId: string, token: string): Promise<void> {
     await this.docker.exec({
       container: sandboxId,
       cmd: ["sh", "-c", KILL_TRACKED, "work-kill", token],
+      user: "0",
     });
   }
 
@@ -1843,7 +1859,7 @@ export class ContainerSandboxProvider implements SandboxProvider {
           "run",
           "entry.mjs",
         ],
-        env: args.env,
+        env: { ...args.env, [TRACKED_TOKEN]: token },
         stdin: true,
       }),
     );

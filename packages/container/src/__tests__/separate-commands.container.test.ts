@@ -520,6 +520,58 @@ describe.skipIf(!enabled)("commands apart from the agent (ADR 0332)", () => {
   );
 
   it(
+    "kills a timed-out command's group as root, and nothing a forged pid file names",
+    async () => {
+      const { id } = await provider.createSandbox({});
+      sandboxes.push(id);
+      // A process the command does not own.
+      const victim = await provider.processes.startProcess({
+        sandboxId: id,
+        command: "exec sleep 300",
+        name: "Victim",
+      });
+      const victimPid = (
+        await provider.executeCommand(
+          id,
+          `cat /tmp/.catamorphic-processes/${victim.processId}/pid`,
+        )
+      ).result.trim();
+      expect(victimPid).toMatch(/^\d+$/);
+      // The command points its own pid file at the victim, then times out.
+      const forged = await provider.executeCommand(
+        id,
+        `echo ${victimPid} > /tmp/.work-exec/$WORK_TRACKED; sleep 30`,
+        { timeout: 2 },
+      );
+      expect(forged.exitCode).toBe(124);
+      expect(
+        (
+          await provider.executeCommand(
+            id,
+            `kill -0 -${victimPid} 2>/dev/null && echo alive || echo gone`,
+          )
+        ).result.trim(),
+      ).toBe("alive");
+      // An honest one is stopped with everything it started.
+      const honest = await provider.executeCommand(
+        id,
+        "sleep 300 & echo $! > /tmp/honest.pid; wait",
+        { timeout: 2 },
+      );
+      expect(honest.exitCode).toBe(124);
+      await waitFor(async () =>
+        (
+          await provider.executeCommand(
+            id,
+            "kill -0 $(cat /tmp/honest.pid) 2>/dev/null && echo alive || echo gone",
+          )
+        ).result.includes("gone"),
+      );
+    },
+    10 * MINUTES,
+  );
+
+  it(
     "limits the command side as the Environment says and the agent side to its own share",
     async () => {
       const { id } = await provider.createSandbox({
