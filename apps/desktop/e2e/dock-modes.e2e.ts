@@ -195,13 +195,27 @@ describe("dock modes", () => {
            animation.playState === 'running' && animation.effect?.getTiming().iterations !== Infinity);`,
       { label: "floating chat finished opening with its composer focused" },
     ).catch(async (error: unknown) => {
-      const state = await run(`return {
+      // No front dock at all has been the failure so far: say which chats
+      // main and this window hold, and which project each side thinks is
+      // in front.
+      const state =
+        await run(`return window.catamorphicDesktop.dockSnapshot().then(snapshot => ({
         active: document.activeElement?.outerHTML.slice(0, 1000),
         windowFocused: document.hasFocus(),
         animations: frontDock()?.getAnimations({subtree:true}).map(animation => ({
           state: animation.playState, timing: animation.effect?.getTiming(),
+        })) ?? null,
+        visibleProject: document.querySelector('[data-project-runtime][data-workspace-visible="true"]')?.dataset.projectRuntime,
+        mainActiveProject: snapshot.activeProjectId ?? null,
+        mainActiveChat: snapshot.activeChatId ?? null,
+        mainChats: snapshot.chats.map(chat => ({
+          id: chat.entry.localId, project: chat.projectId, mode: chat.entry.mode, local: chat.local,
         })),
-      };`);
+        sections: [...document.querySelectorAll('section[aria-label]')].map(section => ({
+          label: section.getAttribute('aria-label'), project: section.dataset.chatProject ?? null,
+          inert: !!section.closest('[inert]'), composer: !!section.querySelector('[data-composer-input]'),
+        })),
+      }));`);
       throw new Error(`${String(error)}; dock state: ${JSON.stringify(state)}`);
     });
   }, 180_000);
