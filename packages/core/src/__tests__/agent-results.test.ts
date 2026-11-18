@@ -4,7 +4,7 @@ import {
   checkResultValue,
   PATTERN_INPUT_MAX,
   ResultValidators,
-  unsafePattern,
+  unusablePattern,
 } from "../services/agent-results.js";
 
 /* Result schemas (ADR 0323): compiled per schema, patterns checked when a
@@ -62,17 +62,16 @@ describe("result schemas", () => {
   });
 
   it.each([
-    ["(a+)+$", /nests or over-repeats/],
-    ["^(a|a)*b$", /alternatives/],
-    ["^(\\w|\\d)+$", /alternatives/],
-    ["^(a)\\1$", /backreference/],
+    ["^(a)\\1$", /invalid escape sequence/],
+    ["(?=a)b", /unsupported Perl syntax/],
+    ["(?!a)b", /unsupported Perl syntax/],
+    ["(?<=a)b", /invalid named capture/],
+    ["a{1001}", /invalid repeat count/],
     ["a".repeat(1_001), /over 1,000/],
-    ["^a*a*a*a*a*b$", /more than one unbounded quantifier/],
-    ["^\\d+-\\d{2,}$", /more than one unbounded quantifier/],
   ])(
-    "refuses the unsafe pattern %s when the definition loads",
+    "refuses the pattern %s, which RE2 cannot run, when the definition loads",
     (pattern, why) => {
-      expect(unsafePattern(pattern)).toMatch(why);
+      expect(unusablePattern(pattern)).toMatch(why);
       const refused = definition({
         review: {
           type: "object",
@@ -87,15 +86,19 @@ describe("result schemas", () => {
     },
   );
 
-  it("accepts ordinary patterns", () => {
+  it("accepts ordinary patterns, and the ones that backtrack elsewhere", () => {
     for (const pattern of [
       "^[0-9a-f]{40}$",
       "\\S",
       "^(COMMENT|REQUEST)$",
       "[|()]+",
       "^[*+]{2}\\*x+$",
+      "\\p{L}+",
+      "(a+)+$",
+      "^(a|a)*b$",
+      "^a*a*a*a*a*b$",
     ])
-      expect(unsafePattern(pattern), pattern).toBeUndefined();
+      expect(unusablePattern(pattern), pattern).toBeUndefined();
     expect(
       "definition" in
         definition({
@@ -137,6 +140,63 @@ describe("result schemas", () => {
     expect(
       validators.check({ schema, value: { commit: "main" } }),
     ).toHaveProperty("errors");
+  });
+
+  it("matches in linear time, however a pattern repeats, and bounds a check's pattern work", () => {
+    const timed = (
+      schema: Parameters<typeof checkResultValue>[0]["schema"],
+      value: unknown,
+    ) => {
+      const started = performance.now();
+      const checked = checkResultValue({ schema, value });
+      return { checked, ms: performance.now() - started };
+    };
+    // Each would backtrack for ages in JavaScript's engine.
+    for (const pattern of ["(a+)+$", "^(a|a)*b$", "^a*a*a*a*a*b$"]) {
+      const { checked, ms } = timed(
+        { type: "string", pattern },
+        `${"a".repeat(PATTERN_INPUT_MAX - 1)}!`,
+      );
+      expect(ms, pattern).toBeLessThan(500);
+      expect("errors" in checked && checked.errors[0]?.message).toMatch(
+        /pattern/,
+      );
+    }
+    // Bounded repeats: about 10^11 steps of backtracking on 4,001
+    // characters; here a check refuses the work before it starts.
+    const repeated = timed(
+      { type: "string", pattern: "^a{0,999}a{0,999}a{0,999}a{0,999}$" },
+      "a".repeat(4_001),
+    );
+    expect(repeated.ms).toBeLessThan(500);
+    expect(repeated.checked).toEqual({
+      errors: [
+        {
+          path: "",
+          message:
+            "takes too long to check against the schema's patterns; send shorter text",
+        },
+      ],
+    });
+    // Many strings, each cheap alone, share one budget.
+    const many = timed(
+      {
+        type: "array",
+        items: { type: "string", pattern: "^[a-z]{0,999}$" },
+      },
+      Array.from({ length: 64 }, () => "a".repeat(4_000)),
+    );
+    expect(many.ms).toBeLessThan(1_000);
+    expect("errors" in many.checked && many.checked.errors[0]?.message).toMatch(
+      /too long to check/,
+    );
+    // An ordinary value is checked whole.
+    expect(
+      timed(
+        { type: "array", items: { type: "string", pattern: "^[a-z]{0,999}$" } },
+        Array.from({ length: 64 }, () => "a".repeat(100)),
+      ).checked,
+    ).toHaveProperty("value");
   });
 
   it("tries a pattern on no string longer than the cap, so one quantifier stays fast", () => {

@@ -5,7 +5,7 @@ import {
   type ErrorObject,
   type ValidateFunction,
 } from "ajv/dist/2020.js";
-import safeRegex from "safe-regex2";
+import { RE2JS } from "re2js";
 import { z } from "zod";
 
 /*
@@ -94,7 +94,7 @@ function compileSchema(schema: JsonSchemaObject): ValidateFunction {
     validateFormats: false,
     strict: "log",
     logger: false,
-    code: { regExp: cappedRegExp },
+    code: { regExp: linearRegExp },
   }).compile(schema);
 }
 
@@ -103,97 +103,63 @@ const PATTERN_MAX = 1_000;
 
 /**
  * The longest string a schema's pattern is tried on; a longer one does not
- * match it. With at most one unbounded quantifier and none nested, a
- * pattern's time grows at worst with the square of its input, so this
- * bounds the time a 256 KiB value can take.
+ * match it.
  */
 export const PATTERN_INPUT_MAX = 4_096;
 
 /**
- * Ajv's regular expressions for result schemas: JavaScript's own, never
- * tried on a string longer than {@link PATTERN_INPUT_MAX}. Ajv keeps one
- * per `toString()`, so each says its own pattern: without it every pattern
- * of a schema was the first one Ajv compiled, its meta-schema's.
+ * The pattern work one check of a value may do: the characters each
+ * pattern is tried on times the size of its compiled program, which bounds
+ * a linear-time match. About a tenth of a second; a value that needs more
+ * is refused, and says so.
  */
-const cappedRegExp = Object.assign(
-  (pattern: string, flags: string) => {
-    const expression = new RegExp(pattern, flags);
+export const PATTERN_WORK_MAX = 20_000_000;
+
+/** What the patterns of the check in progress may still spend. */
+const patternWork = { left: PATTERN_WORK_MAX, exceeded: false };
+
+/**
+ * Ajv's regular expressions for result schemas (ADR 0336): RE2's, which
+ * match in time linear in the input, through re2js, so an agent's value
+ * cannot make a project's pattern backtrack on the server's event loop.
+ * Each test spends from {@link patternWork}. Ajv keeps one per
+ * `toString()`, so each says its own pattern.
+ */
+const linearRegExp = Object.assign(
+  (pattern: string) => {
+    const expression = RE2JS.compile(pattern);
+    const size = expression.programSize();
     return {
-      test: (value: string) =>
-        value.length <= PATTERN_INPUT_MAX && expression.test(value),
-      toString: () => expression.toString(),
+      test: (value: string) => {
+        if (value.length > PATTERN_INPUT_MAX) return false;
+        patternWork.left -= Math.max(1, value.length) * size;
+        if (patternWork.left < 0) {
+          patternWork.exceeded = true;
+          return false;
+        }
+        return expression.test(value);
+      },
+      toString: () => `/${pattern}/`,
     };
   },
-  { code: "cappedRegExp" },
+  { code: "linearRegExp" },
 );
 
 /**
- * Why a regular expression could take time that grows faster than its
- * input, or undefined. Patterns run on agent-submitted values in the
- * server's process, so a definition holding one is refused when it loads:
- * `safe-regex2` (the check Fastify uses for route patterns) refuses nested
- * and over-repeated quantifiers, and this refuses what it does not see,
- * quantified alternation (`(a|a)*`) and backreferences.
+ * Why a pattern is refused when its definition loads, or undefined:
+ * patterns run with RE2's semantics, which has no backreferences or
+ * lookaround, so a pattern RE2 cannot compile is refused with its reason.
  */
-export function unsafePattern(pattern: string): string | undefined {
+export function unusablePattern(pattern: string): string | undefined {
   if (pattern.length > PATTERN_MAX)
     return `it is over ${PATTERN_MAX.toLocaleString("en-US")} characters`;
-  if (/\\[1-9]|\\k</.test(pattern)) return "it uses a backreference";
-  if (!safeRegex(pattern)) return "it nests or over-repeats quantifiers";
-  if (quantifiedAlternation(pattern))
-    return "it repeats a group that has alternatives";
-  // Two in a row (`^a*a*b$`) backtrack polynomially; one, over a capped
-  // input, stays bounded.
-  if (unboundedQuantifiers(pattern) > 1)
-    return "it has more than one unbounded quantifier (*, + or {n,})";
-  return undefined;
-}
-
-/** How many `*`, `+` and `{n,}` a pattern holds outside character classes. */
-function unboundedQuantifiers(pattern: string): number {
-  let count = 0;
-  let inClass = false;
-  for (let index = 0; index < pattern.length; index++) {
-    const char = pattern[index];
-    if (char === "\\") {
-      index++;
-      continue;
-    }
-    if (inClass) {
-      if (char === "]") inClass = false;
-      continue;
-    }
-    if (char === "[") inClass = true;
-    else if (char === "*" || char === "+") count++;
-    else if (char === "{" && /^\{\d+,\}/.test(pattern.slice(index))) count++;
+  try {
+    RE2JS.compile(pattern);
+    return undefined;
+  } catch (error) {
+    const reason = error instanceof Error ? error.message : String(error);
+    return `Work matches patterns in linear time (RE2), without backreferences or lookaround: ${reason}`;
   }
-  return count;
-}
-
-/** A group with `|` directly inside it, followed by a quantifier. */
-function quantifiedAlternation(pattern: string): boolean {
-  const groups: boolean[] = [];
-  let inClass = false;
-  for (let index = 0; index < pattern.length; index++) {
-    const char = pattern[index];
-    if (char === "\\") {
-      index++;
-      continue;
-    }
-    if (inClass) {
-      if (char === "]") inClass = false;
-      continue;
-    }
-    if (char === "[") inClass = true;
-    else if (char === "(") groups.push(false);
-    else if (char === "|" && groups.length > 0)
-      groups[groups.length - 1] = true;
-    else if (char === ")") {
-      const alternates = groups.pop() ?? false;
-      if (alternates && /[*+?{]/.test(pattern[index + 1] ?? "")) return true;
-    }
-  }
-  return false;
 }
 
 /** Every regular expression a schema holds: `pattern`s and `patternProperties` keys. */
@@ -212,9 +178,9 @@ function schemaPatterns(node: unknown, found: string[] = []): string[] {
 
 function schemaProblem(schema: JsonSchemaObject): string | undefined {
   for (const pattern of schemaPatterns(schema)) {
-    const unsafe = unsafePattern(pattern);
-    if (unsafe)
-      return `pattern ${JSON.stringify(pattern)} is refused: ${unsafe}`;
+    const unusable = unusablePattern(pattern);
+    if (unusable)
+      return `pattern ${JSON.stringify(pattern)} is refused: ${unusable}`;
   }
   try {
     compileSchema(schema);
@@ -307,12 +273,14 @@ function checkWith(
   if (text === undefined)
     return { errors: [{ path: "", message: "must be a JSON value" }] };
   const value = JSON.parse(text) as JsonValue;
-  if (validate(value)) return { value };
+  if (validated(validate, value)) return { value };
+  if (patternWork.exceeded) return { errors: [TOO_MUCH_PATTERN_WORK] };
   const errors = fieldErrors(validate.errors);
   if (typeof value !== "string") return { errors };
   const decoded = decodeOnce(value);
   if (decoded === undefined || typeof decoded === "string") return { errors };
-  if (validate(decoded)) return { value: decoded };
+  if (validated(validate, decoded)) return { value: decoded };
+  if (patternWork.exceeded) return { errors: [TOO_MUCH_PATTERN_WORK] };
   // It was the right kind of value sent as text: say so, and what to fix in it.
   return {
     errors: [
@@ -324,6 +292,19 @@ function checkWith(
       ...fieldErrors(validate.errors),
     ],
   };
+}
+
+const TOO_MUCH_PATTERN_WORK: ResultFieldError = {
+  path: "",
+  message:
+    "takes too long to check against the schema's patterns; send shorter text",
+};
+
+/** One check of a value, with its own budget of pattern work. */
+function validated(validate: ValidateFunction, value: JsonValue): boolean {
+  patternWork.left = PATTERN_WORK_MAX;
+  patternWork.exceeded = false;
+  return validate(value) && !patternWork.exceeded;
 }
 
 function decodeOnce(text: string): JsonValue | undefined {

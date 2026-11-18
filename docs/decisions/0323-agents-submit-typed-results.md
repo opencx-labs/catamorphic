@@ -1,6 +1,6 @@
 # 0323: Agents submit typed results
 
-- **Status:** Accepted (amends 0050, 0090, 0197, 0259; results are bounded per turn, not per chat, by [0336](0336-reviews-show-progress-and-post-findings-as-verified.md))
+- **Status:** Accepted (amends 0050, 0090, 0197, 0259; results are bounded per turn, not per chat, and patterns run in linear time, by [0336](0336-reviews-show-progress-and-post-findings-as-verified.md))
 - **Date:** 2026-11-17
 
 ## Context
@@ -28,17 +28,19 @@ dependency tree), or the definition is invalid. Each schema compiles in an
 Ajv of its own, so a reused `$id` neither collides with nor resolves
 another definition's; a core keeps a bounded cache of compiled schemas keyed
 by digest (replica memory (b), ADR 0193). Patterns run on agent-submitted
-values in the server's process, so a definition whose `pattern` or
-`patternProperties` key could backtrack without bound is refused when it
-loads: `safe-regex2` (the check Fastify uses for route patterns) refuses
-nested and over-repeated quantifiers, and Work also refuses quantified
-alternation, backreferences, more than one unbounded quantifier (`*`, `+`,
-`{n,}`) and patterns over 1,000 characters. A pattern is never tried on a
-string over 4,096 characters, which does not match it, so the one
-unbounded quantifier left grows at worst with the square of that bound.
-A linear-time engine would need a dependency the tree lacks; refusing at
-load also shows the author why. Results name the agent's output, not its
-authority, so they stay outside the consent hash, like `skills`.
+values in the server's process, so they run with RE2's semantics on a
+linear-time engine (re2js, through Ajv's `code.regExp`), never JavaScript's
+backtracking one. (Corrected by ADR 0336: the first version kept
+JavaScript's engine behind load-time heuristics, which missed bounded
+repeats, and Ajv applied one pattern to all of a schema's.) A pattern RE2
+cannot run (backreferences, lookaround, a repeat over 1,000) or over 1,000
+characters is refused when the definition loads, saying why. A pattern is
+never tried on a string over 4,096 characters, which does not match it, and
+one check of a value spends at most 20 million steps of pattern work
+(characters tried times the compiled program's size), about a tenth of a
+second; a value that needs more is refused with a field error saying so.
+Results name the agent's output, not its authority, so they stay outside
+the consent hash, like `skills`.
 
 **`submit_result { name, value }` is a Work tool.** Core offers it beside
 `ask_user` and `close_questions` to every turn of an agent that declares

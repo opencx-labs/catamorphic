@@ -327,7 +327,7 @@ Settled design decisions live here as short Architecture Decision Records. They 
 | [0320](0320-pages-translate-on-the-device.md) | Pages translate on the device | Accepted |
 | [0321](0321-runner-state-stays-out-of-the-checkout.md) | Runner state stays out of the checkout | Accepted (amends 0198) |
 | [0322](0322-server-agents-start-subagents-in-their-workspace.md) | Agents on a server start subagents, which share their workspace by default | Accepted (amends 0090, 0202, 0278) |
-| [0323](0323-agents-submit-typed-results.md) | Agents submit typed results | Accepted (amends 0050, 0090, 0197, 0259; results are bounded per turn by 0336) |
+| [0323](0323-agents-submit-typed-results.md) | Agents submit typed results | Accepted (amends 0050, 0090, 0197, 0259; results are bounded per turn and patterns run in linear time by 0336) |
 | [0324](0324-workflows-run-commands-in-a-chats-workspace.md) | Workflows run commands in a chat's workspace, setup can be a workflow, and workspaces report their changes | Accepted (amends 0208, 0257) |
 | [0325](0325-runs-queue-per-key-and-workflows-keep-session-metadata.md) | Runs queue per key, and workflows keep state in session metadata | Accepted (amends 0027, 0226, 0259, 0262; supersedes 0292; the review publisher hears progress and findings by 0336) |
 | [0326](0326-workflows-record-project-events.md) | Workflows record project events | Accepted (amends 0156, 0158, 0171, 0177) |
