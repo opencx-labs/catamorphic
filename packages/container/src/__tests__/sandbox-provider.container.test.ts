@@ -694,6 +694,84 @@ describe.skipIf(!enabled)("container sandboxes (ADR 0204)", () => {
     15 * MINUTES,
   );
 
+  it.skipIf(process.env.WORK_TEST_CONTAINER_RUNTIME === "runc")(
+    "runs the review pack's fill and setup under gVisor: setup extends the read-only cache in an overlay and fetches only what is new (ADR 0334)",
+    async () => {
+      // The pack's own commands, as it ships them.
+      const pack = JSON.parse(
+        fs.readFileSync(
+          new URL(
+            "../../../registry/src/pull-request-reviews/project.json",
+            import.meta.url,
+          ),
+          "utf8",
+        ),
+      );
+      const review = pack.environments.review;
+      const cachePath: string = review.caches.pnpm.path;
+      const fillCommand: string = review.caches.pnpm.fill.command;
+      const setupCommand: string = review.setup.command;
+      const key = cacheVolumeKey({
+        projectId: `pnpm-${path.basename(root)}`,
+        environment: "review",
+        name: "pnpm",
+        generation: 1,
+      });
+      const pnpm =
+        "command -v pnpm >/dev/null || { apk add --no-cache nodejs npm >/dev/null && npm install -g pnpm@10.34.9 >/dev/null; }";
+      const project = (dependencies: Record<string, string>) =>
+        `mkdir -p /workspace/project && cd /workspace/project && printf '%s' ${JSON.stringify(
+          JSON.stringify({ name: "p", version: "1.0.0", dependencies }),
+        )} > package.json && pnpm install --lockfile-only >/dev/null`;
+      const sandboxProvider = provider({ image: DIND_IMAGE });
+      // The fill, as Work runs it: the cache writable, main's lockfile.
+      const fill = await created(sandboxProvider, {
+        volumes: [{ key, path: cachePath }],
+      });
+      const filled = await sandboxProvider.executeCommand(
+        fill,
+        `${pnpm} && ${project({ "is-number": "7.0.0" })} && ${fillCommand} && echo '{}' > ${cachePath}/.work-cache.json && echo filled`,
+        { timeout: 600 },
+      );
+      expect(filled.result, filled.result).toContain("filled");
+      await sandboxProvider.destroySandbox(fill);
+      // Every file of the cache and its size, to compare after the review.
+      const listing = `cd ${cachePath} && find . -type f -exec stat -c '%n %s' {} + | sort | md5sum`;
+      const before = await created(sandboxProvider, {
+        volumes: [{ key, path: cachePath, readOnly: true }],
+      });
+      const original = (
+        await sandboxProvider.executeCommand(before, listing)
+      ).result.trim();
+      await sandboxProvider.destroySandbox(before);
+
+      // A review sandbox: its own Docker, the cache read only, and a pull
+      // request that adds a dependency main does not have.
+      const reviewer = await created(sandboxProvider, {
+        containers: true,
+        volumes: [{ key, path: cachePath, readOnly: true }],
+      });
+      const setUp = await sandboxProvider.executeCommand(
+        reviewer,
+        `${pnpm} && ${project({ "is-number": "7.0.0", "left-pad": "1.3.0" })} && ${setupCommand} && grep -q " /root/.local/share/pnpm/store overlay" /proc/mounts && ls node_modules`,
+        { timeout: 600 },
+      );
+      expect(setUp.exitCode, setUp.result).toBe(0);
+      // What main had came from the cache; only the new package was fetched.
+      expect(setUp.result).toMatch(/reused 1, downloaded 1/);
+      expect(setUp.result).toContain("left-pad");
+
+      // The cache is as the fill left it.
+      const reader = await created(sandboxProvider, {
+        volumes: [{ key, path: cachePath, readOnly: true }],
+      });
+      const after = await sandboxProvider.executeCommand(reader, listing);
+      expect(original).toMatch(/^[0-9a-f]{32}/);
+      expect(after.result.trim()).toBe(original);
+    },
+    20 * MINUTES,
+  );
+
   it.skipIf(process.env.WORK_TEST_CONTAINER_RUNTIME !== "runc")(
     "refuses a read-only cache in a privileged runc sandbox, whose root could remount it",
     async () => {
