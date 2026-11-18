@@ -1,5 +1,6 @@
 import { type ChildProcess, spawn } from "node:child_process";
 import fs from "node:fs";
+import net from "node:net";
 import os from "node:os";
 import path from "node:path";
 import { writeCommandShell } from "@catamorphic/sandbox";
@@ -187,6 +188,52 @@ describe("separated command channel", () => {
     expect(ran.stdout).toBe("");
     expect(ran.stderr).toMatch(/command container is not reachable/);
   });
+});
+
+describe("separated command channel backpressure", () => {
+  it("holds a command's output while the shim does not read it", async () => {
+    const root = fs.realpathSync(
+      fs.mkdtempSync(path.join(os.tmpdir(), "wcb-")),
+    );
+    let sent = 0;
+    let finished = false;
+    const channel = await startCommandChannel({
+      socketPath: path.join(root, "c.sock"),
+      run: async (session) => {
+        const chunk = Buffer.alloc(1024 * 1024, 97);
+        for (let index = 0; index < 64; index++) {
+          await session.stdout(chunk);
+          sent++;
+        }
+        finished = true;
+        session.exit(0);
+      },
+    });
+    try {
+      const socket = net.createConnection(channel.socketPath);
+      await new Promise<void>((resolve) => socket.once("connect", resolve));
+      socket.pause();
+      socket.write(
+        `${JSON.stringify({ argv: ["bash", "-c", "true"], cwd: "/", env: {}, returns: [] })}\n`,
+      );
+      await new Promise((resolve) => setTimeout(resolve, 500));
+      // Only what the socket's buffers hold went out; the rest waits.
+      expect(sent).toBeLessThan(16);
+      expect(finished).toBe(false);
+      let received = 0;
+      socket.on("data", (data: Buffer) => {
+        received += data.length;
+      });
+      socket.resume();
+      await new Promise<void>((resolve) => socket.once("close", resolve));
+      expect(sent).toBe(64);
+      // Base64 frames: every byte of output arrived.
+      expect(received).toBeGreaterThan(64 * 1024 * 1024);
+    } finally {
+      await channel.close();
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  }, 60_000);
 });
 
 function alive(pid: number): boolean {

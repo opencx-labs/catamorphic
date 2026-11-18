@@ -1518,8 +1518,9 @@ export class ContainerSandboxProvider implements SandboxProvider {
           void this.killTracked(sandboxId, token).catch(() => {});
           break;
         }
-        if (frame.stream === "stdout") session.stdout(frame.data);
-        else if (frame.stream === "stderr") session.stderr(frame.data);
+        // Held until the shim takes it in: a slow reader slows the command.
+        if (frame.stream === "stdout") await session.stdout(frame.data);
+        else if (frame.stream === "stderr") await session.stderr(frame.data);
       }
     } finally {
       session.aborted.removeEventListener("abort", stop);
@@ -1527,7 +1528,7 @@ export class ContainerSandboxProvider implements SandboxProvider {
     }
     if (session.aborted.aborted) return;
     if (overflowed) {
-      session.stderr(
+      await session.stderr(
         Buffer.from(
           `\n[container] the command printed more than ${budget} bytes, so it was stopped with everything it started\n`,
         ),
@@ -1539,7 +1540,7 @@ export class ContainerSandboxProvider implements SandboxProvider {
     if (code !== 0) {
       const died = await this.diedUnder(sandboxId, "");
       if (died) {
-        session.stderr(
+        await session.stderr(
           Buffer.from(
             `\n[container] the command container ${died.outOfMemory ? "ran out of memory" : "stopped"}, which ended every process in it; the next command starts it again\n`,
           ),
