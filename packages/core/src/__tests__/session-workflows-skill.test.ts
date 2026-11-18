@@ -414,13 +414,19 @@ it("the stalled-turn recipe parses, restarts the turn, and stops it past its bou
         args: {
           sessionId: "s1",
           turnId: "t1",
+          attemptId: "a0",
+          onlyIfStalled: true,
           reason: "no progress for 20 minutes",
           idempotencyKey: "stall:a0",
         },
       },
       {
         operation: "interrupt",
-        args: { sessionId: "s1", idempotencyKey: "stall-stop:t1" },
+        args: {
+          sessionId: "s1",
+          turnId: "t1",
+          idempotencyKey: "stall-stop:t1",
+        },
       },
     ]);
   } finally {

@@ -348,20 +348,27 @@ coordinator waits while its subagents work); a subsession stalls on its own
 threshold. Work does
 nothing on its own: deciding a silence is a hang is the workflow's.
 
-restart({ sessionId | key, turnId, reason, idempotencyKey }) ends the turn's
-running attempt without asking its harness (it is killed with what it started,
-its model grant revoked, its open tool calls closed) and runs the same turn
-again on a new attempt, told it was restarted and why and to check what it
-already did. It needs the authority interrupt needs, refuses a turn that is not
-running, and answers { turnId, attemptId, attempt, attempts, restarts } for the
-attempt it ends; key it by the stalled attempt so a retry restarts once, and
-bound it with restarts. attempts({ sessionId | key, turnId }) reads a turn's
-attempts: status, error, progressAt, and diagnostics { runner, harness }, the
-last 16 000 characters of the runner's and the harness's own output, masked,
-kept for attempts that did not complete. Collect more with exec before a
-restart (ps, the harness's log files). The pull-request-reviews pack's
-restartStalledReviews is a complete recipe: inspect, exec, attempts, a store
-document, then restart, or interrupt past its bound.
+restart({ sessionId | key, turnId, attemptId, reason, onlyIfStalled?,
+idempotencyKey }) ends that attempt without asking its harness (its runner is
+asked to stop, its process group killed after ten seconds, its model grant
+revoked, its open tool calls closed) and runs the same turn again on a new
+attempt, told it was restarted and why and to check what it already did. It
+needs the authority interrupt needs. It ends only the attempt named, while it
+is the turn's running attempt (and, with onlyIfStalled, while it is stalled,
+checked again when Work acts): otherwise it answers { restarted: false,
+refused: "not_running" | "not_current" | "not_stalled", message }, which is
+nothing to do, never an error. A restart answers { restarted: true, turnId,
+attemptId, attempt, attempts, restarts }; key it by the stalled attempt so a
+retry restarts once, and bound it with restarts. interrupt takes turnId too:
+it stops that turn only, and answers { interrupted: false } when it no longer
+works. attempts({ sessionId | key, turnId }) reads a turn's attempts: status,
+error, progressAt, and diagnostics { runner, harness }, the last 16 000
+characters of the runner's and the harness's own output, masked, in whole
+lines, kept for attempts that did not complete. Collect more with exec before
+a restart (ps, the harness's log files), and inspect again before acting: a
+diagnosis takes time. The pull-request-reviews pack's restartStalledReviews
+is a complete recipe: inspect, exec, attempts, a store document, inspect,
+then restart, or interrupt past its bound.
 
 \`\`\`typescript
 import {
@@ -384,14 +391,19 @@ export const restartStalled = defineWorkflow(({ defineBoundary }) => ({
     defineBoundary({
       run: ({ input, host }: BoundaryContext<TriggerPayload<"session.turn-stalled">>) => {
         const { sessionId, detail } = input.payload;
+        // This turn only: a newer one may be running by now.
         if (Number(detail.restarts) >= 2)
           return host["catamorphic.sessions"].interrupt({
             sessionId,
+            turnId: String(detail.turnId),
             idempotencyKey: "stall-stop:" + String(detail.turnId),
           });
+        // This attempt only, while it is still stalled.
         return host["catamorphic.sessions"].restart({
           sessionId,
           turnId: String(detail.turnId),
+          attemptId: String(detail.attemptId),
+          onlyIfStalled: true,
           reason: "no progress for " + String(detail.stallMinutes) + " minutes",
           idempotencyKey: "stall:" + String(detail.attemptId),
         });

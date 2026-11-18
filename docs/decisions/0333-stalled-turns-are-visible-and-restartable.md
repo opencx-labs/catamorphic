@@ -19,9 +19,10 @@ logs and harness memory, gone with the attempt.
 
 **Progress is a recorded time.** Each attempt records `progress_at`: when it
 last made progress. Progress is any frame its runner sends (an event, a host
-call, an acknowledgement) except a `diagnostic` event, and every model
-request the gateway admits on the attempt's grant (one write a second at
-most). Diagnostics are log lines, not work. The turn's `activityAt` stays
+call, an acknowledgement) except a `diagnostic` event, each model request the
+gateway passes on the attempt's grant (once per call, after its path, policy
+and guards passed; one write a second at most), and the turn starting or
+ending a wait on a person, which that wait's length never counts against. Diagnostics are log lines, not work. The turn's `activityAt` stays
 what it was: when its live line last changed. A chat as session `inspect` and
 `find` return it to workflows, the session detail over REST, and the
 `session_inspect` MCP tool carry `turn`, the turn working now (or null): its id, status,
@@ -44,17 +45,29 @@ stalledAt, stallMinutes, activity }`. Progress clears `stalled_at`; a later
 silence records it again. Work does not act on a stall.
 
 **Restart is one operation.** `host["catamorphic.sessions"].restart({
-sessionId | key, turnId, reason, idempotencyKey })`, the `session_restart`
-MCP tool and `POST …/agent/sessions/:sessionId/turns/:turnId/restart` are one
-session action, with the authority that interrupts the chat. It refuses a
-turn that is not running or waiting, and answers `{ turnId, attemptId,
-attempt, attempts, restarts }` naming the attempt it ends; the same key
-answers the same. It queues a `restart` turn command for that attempt. The
-lease holder, on any replica, ends the attempt without asking its harness:
-the runner is killed (its process and the harness under it), the attempt is
-`restarted` with the reason, its model grants are revoked, its open tool
-calls and requests close as unanswerable, carried steers and interrupts are
-dropped, and a `turn_restarted` notice names the reason. The same turn then
+sessionId | key, turnId, attemptId, reason, onlyIfStalled?, idempotencyKey
+})`, the `session_restart` MCP tool and `POST
+…/agent/sessions/:sessionId/turns/:turnId/restart` are one session action,
+with the authority that interrupts the chat. It ends only the attempt it
+names, while that is the turn's running attempt (and, with `onlyIfStalled`,
+while it is stalled), so a request about an attempt that moved on, or one
+replaced by another restart, ends nothing. A refusal is an answer, not an
+error (`{ restarted: false, refused: "not_running" | "not_current" |
+"not_stalled" }`; 409 over REST), so a workflow treats it as nothing to do. A
+restart answers `{ restarted: true, turnId, attemptId, attempt, attempts,
+restarts }`; the same key answers the same. It queues a `restart` turn
+command for that attempt. The lease holder, on any replica, first checks it
+still owns the turn and, for `onlyIfStalled`, that the attempt is still
+stalled (else the command is dropped and the attempt runs on); then, without
+asking the harness, the attempt is `restarted` with the reason, its model
+grants are revoked, its open tool calls and requests close as unanswerable,
+carried steers and interrupts are dropped, and a `turn_restarted` notice
+names the reason. Only then is its runner ended: asked to stop (a sandbox
+runner stops its harness, and an agent in its own process group, before it
+exits), and its process group killed if it has not exited after 10 seconds;
+the next attempt starts once it is gone or that time passed. A holder that
+finds the runner already gone (taken over, or exited) carries out a pending
+restart instead of losing the attempt. The same turn then
 runs a new attempt with reason `restart`, bound as every attempt is (ADR
 0198): it resumes the thread when the harness can, told the attempt was
 stopped and to check what was already done first; otherwise a new thread is
@@ -62,7 +75,8 @@ handed the conversation, including what earlier attempts of this turn
 submitted (ADR 0328), and a thread found gone starts over once (ADR 0245).
 A restart is not a lost runner: the turn is not interrupted, no continuation
 turn is queued, and `recovery: stop` does not prevent it, since someone
-asked for it.
+asked for it. `interrupt` takes an optional `turnId` too, stopping that turn
+only.
 
 **Diagnostics survive.** Every attempt keeps, with its record, the last
 16,000 characters of its runner's own output that is not a frame (a crash
@@ -71,7 +85,10 @@ the Claude Code, Codex and ACP adapters now send, at most once a second, as
 the CLI or agent writes to stderr. A runner ended from outside (SIGTERM) now
 stops its harness first, so an agent in a process group of its own (ACP)
 does not outlive it. Both are masked by every secret value the chat received (ADR
-0206) before they are written, and dropped when the attempt completes. A
+0206) before they are written, and nothing is cut inside a line before that:
+a line too long to keep is left out whole, and a burst keeps its newest whole
+lines, so no cut can keep part of a secret no mask matches. They are dropped
+when the attempt completes. A
 failed, interrupted, lost, superseded or restarted attempt keeps them.
 `host["catamorphic.sessions"].attempts({ sessionId | key, turnId })` (MCP
 `session_attempts`, `GET …/turns/:turnId/attempts`) reads a turn's attempts
@@ -81,10 +98,14 @@ before restarting.
 
 **Recipe.** The `pull-request-reviews` pack ships an optional
 `restartStalledReviews` workflow: on `session.turn-stalled` for review chats,
-it collects a process list and the harness's recent log with `exec`, stores
-them in the project store beside the review, restarts the turn, and after
-two restarts of a turn marks the review incomplete the way a failed turn
-does. The reviewer's definition sets a stall threshold.
+for this repository's review chats exactly (the key and the chat's owner,
+agent, Environment and starting workflow, as the poster checks), it collects
+a process list and the harness's recent log with `exec`, stores them in the
+project store under the pull request's number, inspects the chat again, and
+restarts the stalled attempt only while it still is; after two restarts of a
+turn it stops that turn, and the poster marks the commit `action_required`
+unless the turn had already submitted its review for the head, which it
+publishes. The reviewer's definition sets a stall threshold.
 
 Considered: reusing `activityAt` (it moves only when the line changes);
 counting diagnostics as progress (a harness retrying in a loop logs while it
