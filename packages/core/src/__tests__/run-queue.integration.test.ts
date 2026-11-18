@@ -331,13 +331,17 @@ describe.skipIf(!process.env.DATABASE_URL)(
         idlePollIntervalMs: 50,
         leaseSeconds: 30,
       });
+      // Events the host delivers, as a trigger's async dispatch does.
       const digest = (kind: string, n: number) =>
-        core.runs.triggerProduction({
-          identity,
-          projectId,
-          workflowName: "digest",
-          input: { subject: { id: "pr-7", kind }, n },
-        });
+        core.runs.triggerProduction(
+          {
+            identity,
+            projectId,
+            workflowName: "digest",
+            input: { subject: { id: "pr-7", kind }, n },
+          },
+          { kind: "test.event", mode: "async" },
+        );
       const first = await digest("finding", 1);
       expect(first.status).toBe("pending");
       // More than a key's queue holds, all alike: one run waits for them.
@@ -387,21 +391,30 @@ describe.skipIf(!process.env.DATABASE_URL)(
       const run = (
         kind: Kind,
         n: number,
-        extra: { deliveryKey?: string; externalUserId?: string } = {},
+        extra: {
+          deliveryKey?: string;
+          externalUserId?: string;
+          mode?: "async" | "sync" | "none";
+        } = {},
       ) =>
-        core.runs.triggerProduction({
-          identity: {
-            ...identity,
-            externalUserId: extra.externalUserId ?? identity.externalUserId,
+        core.runs.triggerProduction(
+          {
+            identity: {
+              ...identity,
+              externalUserId: extra.externalUserId ?? identity.externalUserId,
+            },
+            projectId,
+            workflowName: "digest",
+            input: {
+              subject: { id: "pr-8", ...(kind === undefined ? {} : { kind }) },
+              n,
+            },
+            ...(extra.deliveryKey ? { deliveryKey: extra.deliveryKey } : {}),
           },
-          projectId,
-          workflowName: "digest",
-          input: {
-            subject: { id: "pr-8", ...(kind === undefined ? {} : { kind }) },
-            n,
-          },
-          ...(extra.deliveryKey ? { deliveryKey: extra.deliveryKey } : {}),
-        });
+          extra.mode === "none"
+            ? undefined
+            : { kind: "test.event", mode: extra.mode ?? "async" },
+        );
       const active = await run("first", 1);
       expect(active.status).toBe("pending");
       // Values that differ never join: not booleans, objects, an empty
@@ -433,7 +446,11 @@ describe.skipIf(!process.env.DATABASE_URL)(
       // Another owner's run never joins.
       const other = await run(true, 33, { externalUserId: "someone-else" });
       expect(waiting).not.toContain(other.id);
-      // A caller waiting for its own run's outcome never joins one.
+      // Only an event no caller waits for joins: not a synchronous fire,
+      // not a run started without the host's dispatch (a caller's, or a
+      // setup run), and not a call.
+      for (const mode of ["sync", "none"] as const)
+        expect(waiting).not.toContain((await run(true, 40, { mode })).id);
       const called = await core.runs.call({
         identity,
         projectId,

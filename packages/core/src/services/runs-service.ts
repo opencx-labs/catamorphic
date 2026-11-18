@@ -360,8 +360,12 @@ export interface TriggerProductionRunInput {
  */
 interface RunInternalFacts {
   setupFor?: { sessionId: string; build: string };
-  /** A caller waits for this run's own outcome: it never joins another. */
-  sync?: true;
+  /**
+   * An event the host delivers and no caller waits for (ADR 0336): the only
+   * enrollment that may join a queued run alike it. Calls, synchronous
+   * fires and setup runs report their own run's outcome, so never join.
+   */
+  delivery?: true;
   /** The host kind whose dispatch starts this run (ADR 0327). */
   dispatchedKind?: string;
 }
@@ -372,6 +376,8 @@ interface RunInternalFacts {
  */
 export interface HostDispatch {
   kind: string;
+  /** `async`: an event delivery no caller waits for, which may join. */
+  mode?: "async" | "sync";
 }
 
 /**
@@ -542,7 +548,11 @@ interface QueuedHead {
 }
 
 function dispatchFacts(dispatch: HostDispatch | undefined): RunInternalFacts {
-  return dispatch ? { dispatchedKind: dispatch.kind } : {};
+  if (!dispatch) return {};
+  return {
+    dispatchedKind: dispatch.kind,
+    ...(dispatch.mode === "async" ? { delivery: true as const } : {}),
+  };
 }
 
 /**
@@ -1531,7 +1541,7 @@ export class RunsService {
       Math.max(1_000, args.budgetMs ?? DEFAULT_CALL_BUDGET_MS),
       MAX_CALL_BUDGET_MS,
     );
-    const run = await this.trigger(args, { sync: true });
+    const run = await this.trigger(args);
     return this.driveInline({
       tenantId: args.identity.tenantId,
       runId: run.id,
@@ -2712,13 +2722,13 @@ export class RunsService {
     const onConflict: EnrollmentConflictPolicy = derivedKey
       ? (declared?.onConflict ?? "ignore")
       : (args.onConflict ?? "ignore");
-    // Queued runs alike by the workflow's own paths join (ADR 0336); a
-    // caller waiting for its own run's outcome never joins another.
+    // Queued runs alike by the workflow's own paths join (ADR 0336), and
+    // only an event delivery no caller waits for joins one.
     const coalesceValues =
       derivedKey &&
       onConflict === "queue" &&
       declared?.coalesce &&
-      !internal.sync
+      internal.delivery
         ? coalesceValuesAtPaths(input, declared.coalesce)
         : null;
     let coalesceKey: string | null = null;
@@ -2910,6 +2920,21 @@ export class RunsService {
               workflowName: args.workflowName,
               correlationKey,
             });
+            // A delivery that joined a run while this one waited for the
+            // lock is that run's (ADR 0336).
+            const rejoined = deliveryKey
+              ? await trx
+                  .selectFrom("workflow_run_joins")
+                  .select("run_id")
+                  .where("project_id", "=", args.projectId)
+                  .where("workflow_name", "=", args.workflowName)
+                  .where("delivery_key", "=", deliveryKey)
+                  .executeTakeFirst()
+              : undefined;
+            if (rejoined) {
+              joined = rejoined.run_id;
+              return [];
+            }
             const keyed = trx
               .selectFrom("workflow_runs")
               .where("project_id", "=", args.projectId)
