@@ -376,7 +376,10 @@ jobs:
     # A GitHub-hosted runner: its own Docker daemon under systemd, which
     # the job reconfigures with a gVisor runtime (ADR 0204).
     runs-on: ubuntu-24.04
-    timeout-minutes: 30
+    # The review recipe's end-to-end run builds its review images when the
+    # cache has none (about 15 minutes), and bounds its own waits to end,
+    # with where things stand, within 45 (WORK_TEST_REVIEW_MINUTES).
+    timeout-minutes: 60
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: ./.github/actions/test-setup
@@ -406,12 +409,57 @@ jobs:
           for i in $(seq 1 60); do docker info >/dev/null 2>&1 && break; sleep 1; done
           docker info --format '{{json .Runtimes.runsc}}'
           docker run --rm --runtime=runsc --network none alpine:3.24.4@sha256:f59abe656b692d901e184be3445e084786602108599d2a51d229c0f5a48c71bf echo gVisor runs
-      # The runner bundle too: a separated sandbox's test starts it (ADR 0332).
-      - run: bun scripts/tool-runtime.ts turbo run build --filter=@catamorphic/container... --filter=@catamorphic/runner-bundle... --output-logs=errors-only
+      # The runner bundle too: a separated sandbox's test starts it (ADR 0332),
+      # and the Work server for the review recipe's end-to-end run.
+      - run: bun scripts/tool-runtime.ts turbo run build --filter=@catamorphic/container... --filter=@catamorphic/runner-bundle... --filter=@catamorphic/work-server... --output-logs=errors-only
       - name: Real container sandboxes under gVisor
         env:
           WORK_TEST_CONTAINER: "1"
         run: bun scripts/tool-runtime.ts vitest --tool-cwd packages/container --config ../../vitest.config.ts src/__tests__/sandbox-provider.container.test.ts src/__tests__/separate-commands.container.test.ts
+      # After Docker's restart above, which would stop a service container.
+      # The image `bun run test` pins (scripts/test-postgres.ts).
+      - name: Disposable Postgres
+        run: |
+          docker run --detach --rm --name work-test-postgres --publish 127.0.0.1:5432:5432 \
+            --env POSTGRES_USER=catamorphic --env POSTGRES_PASSWORD=catamorphic --env POSTGRES_DB=catamorphic \
+            --health-cmd "pg_isready -U catamorphic -d catamorphic" --health-interval 1s --health-retries 120 \
+            postgres:18.6@sha256:e3d24f6906d0760bf4da0dae872415391ededefad23fd471c47dc53b0ddf3c42 -c max_connections=300
+          for i in $(seq 1 120); do
+            [ "$(docker inspect --format '{{.State.Health.Status}}' work-test-postgres)" = healthy ] && exit 0
+            sleep 1
+          done
+          docker logs work-test-postgres
+          exit 1
+      # The review images the end-to-end run builds, and the CA they trust,
+      # kept by what decides them (the pack's Dockerfile, the test's changes
+      # to it, the pinned Claude Code): building them takes most of a run.
+      - name: Restore the review images
+        id: review-images
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ runner.temp }}/review-images
+          key: review-images-v1-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('packages/registry/src/pull-request-reviews/review.Dockerfile', 'packages/work-server/src/review.container.test.ts', 'packages/claude-code/package.json') }}
+      - name: Load the review images
+        if: steps.review-images.outputs.cache-hit == 'true'
+        run: docker load --input "$RUNNER_TEMP/review-images/images.tar"
+      - name: The review recipe end to end under gVisor
+        id: review
+        env:
+          WORK_TEST_CONTAINER: "1"
+          DATABASE_URL: postgresql://catamorphic:catamorphic@127.0.0.1:5432/catamorphic
+          WORK_TEST_REVIEW_CACHE: ${{ runner.temp }}/review-images
+        run: bun scripts/tool-runtime.ts vitest --tool-cwd packages/work-server --config ../../vitest.config.ts --pool=forks src/review.container.test.ts
+      - name: Keep the review images
+        if: steps.review-images.outputs.cache-hit != 'true' && steps.review.outcome == 'success'
+        run: |
+          images=$(docker images --format '{{.Repository}}:{{.Tag}}' | grep '^work.local/images:' || true)
+          test -n "$images"
+          docker save --output "$RUNNER_TEMP/review-images/images.tar" $images
+      - uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        if: steps.review-images.outputs.cache-hit != 'true' && steps.review.outcome == 'success'
+        with:
+          path: ${{ runner.temp }}/review-images
+          key: ${{ steps.review-images.outputs.cache-primary-key }}
       - uses: ./.github/actions/test-cache-save
         if: ${{ !cancelled() && steps.setup.outcome == 'success' }}
         with:

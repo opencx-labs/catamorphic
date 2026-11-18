@@ -27,7 +27,10 @@ export {
   type ScriptedHostBehavior,
   ScriptedNativeState,
 } from "./host.js";
-export { pinnedClaudeExecutable } from "./pinned-cli.js";
+export {
+  pinnedClaudeCodeVersion,
+  pinnedClaudeExecutable,
+} from "./pinned-cli.js";
 export { recordingQuery } from "./record.js";
 export {
   fixturePath,
