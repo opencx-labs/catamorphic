@@ -29,6 +29,9 @@ CREATE TABLE environment_cache_fills (
   error text,
   size_bytes bigint,
   created_at timestamptz NOT NULL DEFAULT now(),
+  -- When it last joined the queue (asked for again, or the fill ahead of
+  -- it ended): the wait limit counts from here, never time behind a fill.
+  queued_at timestamptz NOT NULL DEFAULT now(),
   started_at timestamptz,
   finished_at timestamptz,
   -- When a sandbox last mounted this generation; eviction counts from it.

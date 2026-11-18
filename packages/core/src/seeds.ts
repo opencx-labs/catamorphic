@@ -589,8 +589,8 @@ provide it take the work:
   the new cache is published only when it succeeds. A workflow declaring
   \`caches:write\` asks for one with
   \`host["catamorphic.environments"].fillCache({ environment, cache,
-  idempotencyKey })\`, on a schedule or from the deploy workflow; it never
-  names the command. Each machine keeps its own copy; one without a copy
+  idempotencyKey })\`, on a schedule; it never names the command, and fills
+  only from a revision of main that went live. Each machine keeps its own copy; one without a copy
   mounts none and fills one. Install from it offline and fall back to the
   network: \`pnpm install --frozen-lockfile --offline --store-dir
   ~/.cache/work/pnpm-store || pnpm install --frozen-lockfile\`.

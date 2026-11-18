@@ -4,8 +4,10 @@ import type { DB } from "@catamorphic/db";
 import { getTracer, withSpan } from "@catamorphic/otel";
 import {
   type CreateSandboxOpts,
+  SANDBOX_CAPABILITIES,
   type SandboxProvider,
   type SandboxResources,
+  type SandboxVolume,
   sameEgress,
 } from "@catamorphic/sandbox";
 import { type Kysely, sql } from "kysely";
@@ -58,6 +60,24 @@ function allocationNarrowing(
 }
 
 /**
+ * Mount a cache only where the machine keeps it read only (ADR 0334): a
+ * provider without the `caches` capability would mount it writable, so code
+ * a pull request controls could write what every review reads.
+ */
+function requireCacheCapability(args: {
+  provider: SandboxProvider;
+  volumes: readonly SandboxVolume[];
+}): void {
+  if (
+    args.volumes.length > 0 &&
+    !args.provider.capabilities?.includes(SANDBOX_CAPABILITIES.caches)
+  )
+    throw new Error(
+      "This machine cannot keep a cache read only, so it cannot host an Environment with caches",
+    );
+}
+
+/**
  * The Allocation's image, containers and egress (ADR 0176) and volumes (ADR
  * 0208) on a provider that keeps its own sandbox lifecycle, such as a
  * member's computer: the Environment decides what its sandboxes boot,
@@ -84,17 +104,24 @@ export function withAllocationSandboxPolicy(args: {
   const createSandbox = async (opts: CreateSandboxOpts) => {
     // The Environment's caches, read only at the machine's generation
     // (ADR 0334), or a fill's one writable generation.
+    const caches = await cacheMounts({
+      db: args.db,
+      allocation: args.allocation,
+    });
+    requireCacheCapability({ provider, volumes: caches.volumes });
     const volumes = [
       ...(await holdVolumes({ db: args.db, allocation: args.allocation })),
-      ...(await cacheMounts({ db: args.db, allocation: args.allocation })),
+      ...caches.volumes,
     ];
-    return provider.createSandbox({
+    const handle = await provider.createSandbox({
       ...opts,
       ...(sandbox?.image ? { image: sandbox.image } : {}),
       ...(sandbox?.containers ? { containers: true } : {}),
       ...(sandbox?.egress ? { egress: sandbox.egress } : {}),
       ...(volumes.length > 0 ? { volumes } : {}),
     });
+    await caches.settle(handle);
+    return handle;
   };
   const widenEgress = provider.widenEgress?.bind(provider);
   const widening = widenEgress
@@ -174,9 +201,11 @@ export function allocationSandboxProvider(args: {
     await retireVolumeHolders({ db, allocation, provider });
     // Its caches are read when it is made (ADR 0334): the generation its
     // machine holds now, read only, or a fill's own writable one.
+    const caches = await cacheMounts({ db, allocation });
+    requireCacheCapability({ provider, volumes: caches.volumes });
     const volumes = [
       ...(await holdVolumes({ db, allocation })),
-      ...(await cacheMounts({ db, allocation })),
+      ...caches.volumes,
     ];
     const handle = await provider.createSandbox({
       ...opts,
@@ -196,6 +225,7 @@ export function allocationSandboxProvider(args: {
       .set({ sandbox_provider_id: handle.providerId })
       .where("id", "=", allocation.id)
       .execute();
+    await caches.settle(handle);
     await requireActive(handle.providerId);
     return handle;
   };

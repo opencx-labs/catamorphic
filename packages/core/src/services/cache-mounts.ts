@@ -1,84 +1,197 @@
 import type { DB } from "@catamorphic/db";
-import { cacheVolumeKey, type SandboxVolume } from "@catamorphic/sandbox";
+import {
+  cacheVolumeKey,
+  parseCacheVolumeKey,
+  type SandboxVolume,
+} from "@catamorphic/sandbox";
 import { type Kysely, sql } from "kysely";
 import type { ExecutionAllocation } from "./execution-allocations-service.js";
 
 /** Written into each cache's root by its fill: what it holds (ADR 0334). */
 export const CACHE_PROVENANCE_FILE = ".work-cache.json";
 
+/** The most generations one mount names to retire. */
+const RETIRE_LIMIT = 100;
+
 /**
  * What a sandbox an Allocation makes mounts of its Environment's caches
- * (ADR 0334): a fill's Allocation its one writable generation; any other
- * the generation its machine holds of each cache, read only. A cache the
- * machine holds none of is not mounted, and a fill for that machine is
- * queued. Called as the sandbox is made, so a fill published since the
- * Allocation was admitted is the one mounted.
+ * (ADR 0334), and what to record once it exists. A fill's Allocation mounts
+ * its one writable generation; any other sandbox the generation its
+ * machine holds of each cache, read only. Each names the cache's other
+ * generations on the machine to retire: all but the published one and the
+ * one being filled. Called as the sandbox is made, so a fill published
+ * since the Allocation was admitted is the one mounted.
+ *
+ * `settle` records what the machine did: a generation it mounted was used;
+ * one it no longer had (pruned, reset, re-enrolled) is forgotten with every
+ * older one, and the machine, like one that holds no copy, gets a fill.
  */
 export async function cacheMounts(args: {
   db: Kysely<DB>;
   allocation: ExecutionAllocation;
-}): Promise<SandboxVolume[]> {
-  const sandbox = args.allocation.policy.sandbox;
-  if (sandbox?.fill)
-    return [{ key: sandbox.fill.key, path: sandbox.fill.path }];
+}): Promise<{
+  volumes: SandboxVolume[];
+  settle: (handle: { skippedVolumes?: readonly string[] }) => Promise<void>;
+}> {
+  const { allocation } = args;
+  const sandbox = allocation.policy.sandbox;
+  const node = allocation.workerNodeId;
+  const keyOf = (name: string, generation: number) =>
+    cacheVolumeKey({
+      projectId: allocation.projectId,
+      environment: allocation.environmentName,
+      name,
+      generation,
+    });
+  const nothing = async () => {};
+  if (sandbox?.fill) {
+    const own = parseCacheVolumeKey(sandbox.fill.key)?.generation;
+    const retire = node
+      ? await retirable({
+          db: args.db,
+          allocation,
+          node,
+          cache: sandbox.fill.name,
+          keep: own === undefined ? [] : [own],
+        })
+      : [];
+    return {
+      volumes: [
+        {
+          key: sandbox.fill.key,
+          path: sandbox.fill.path,
+          ...(retire.length > 0
+            ? { retire: retire.map((n) => keyOf(sandbox.fill?.name ?? "", n)) }
+            : {}),
+        },
+      ],
+      settle: nothing,
+    };
+  }
   const caches = sandbox?.caches ?? [];
-  const node = args.allocation.workerNodeId;
-  if (caches.length === 0 || !node) return [];
+  if (caches.length === 0 || !node) return { volumes: [], settle: nothing };
   const copies = await machineCopies({
     db: args.db,
-    projectId: args.allocation.projectId,
-    environment: args.allocation.environmentName,
+    projectId: allocation.projectId,
+    environment: allocation.environmentName,
     node,
   });
-  const mounts: SandboxVolume[] = [];
-  const missing: string[] = [];
+  const volumes: SandboxVolume[] = [];
+  const mounted = new Map<
+    string,
+    { id: string; cache: string; generation: number }
+  >();
   for (const cache of caches) {
     const copy = copies.get(cache.name);
-    if (!copy) {
-      missing.push(cache.name);
-      continue;
-    }
-    mounts.push({
-      key: cacheVolumeKey({
-        projectId: args.allocation.projectId,
-        environment: args.allocation.environmentName,
-        name: cache.name,
-        generation: copy.generation,
-      }),
+    if (!copy) continue;
+    const key = keyOf(cache.name, copy.generation);
+    const retire = await retirable({
+      db: args.db,
+      allocation,
+      node,
+      cache: cache.name,
+      keep: [copy.generation],
+    });
+    volumes.push({
+      key,
       path: cache.path,
       readOnly: true,
+      ...(retire.length > 0
+        ? { retire: retire.map((n) => keyOf(cache.name, n)) }
+        : {}),
+    });
+    mounted.set(key, {
+      id: copy.id,
+      cache: cache.name,
+      generation: copy.generation,
     });
   }
-  const used = caches
-    .map((cache) => copies.get(cache.name)?.id)
-    .filter((id): id is string => id !== undefined);
-  if (used.length > 0)
-    await args.db
-      .updateTable("environment_cache_fills")
-      .set({ last_used_at: sql<Date>`now()` })
-      .where("id", "in", used)
-      .execute();
-  if (missing.length > 0) {
+  const settle = async (handle: { skippedVolumes?: readonly string[] }) => {
+    const skipped = new Set(handle.skippedVolumes ?? []);
+    const used = [...mounted]
+      .filter(([key]) => !skipped.has(key))
+      .map(([, copy]) => copy.id);
+    if (used.length > 0)
+      await args.db
+        .updateTable("environment_cache_fills")
+        .set({ last_used_at: sql<Date>`now()` })
+        .where("id", "in", used)
+        .execute();
+    const missing = caches
+      .map((cache) => cache.name)
+      .filter((name) => !copies.has(name));
+    for (const [key, copy] of mounted) {
+      if (!skipped.has(key)) continue;
+      // The machine lost it: never mounted again, nor anything older.
+      await args.db
+        .updateTable("environment_cache_fills")
+        .set({ status: "evicted" })
+        .where("project_id", "=", allocation.projectId)
+        .where("environment_name", "=", allocation.environmentName)
+        .where("cache_name", "=", copy.cache)
+        .where("worker_node_id", "=", node)
+        .where("status", "=", "succeeded")
+        .where("generation", "<=", String(copy.generation))
+        .execute();
+      missing.push(copy.cache);
+    }
+    if (missing.length === 0) return;
     const tenant = await args.db
       .selectFrom("execution_allocations")
       .select("tenant_id")
-      .where("id", "=", args.allocation.id)
+      .where("id", "=", allocation.id)
       .executeTakeFirst();
     if (tenant)
       for (const name of missing)
         await queueMachineFill({
           db: args.db,
           tenantId: tenant.tenant_id,
-          projectId: args.allocation.projectId,
-          environment: args.allocation.environmentName,
+          projectId: allocation.projectId,
+          environment: allocation.environmentName,
           cache: name,
           node,
           commit: null,
           reason: "first-use",
           onlyWhenIdle: true,
         });
-  }
-  return mounts;
+  };
+  return { volumes, settle };
+}
+
+/**
+ * A cache's generations on a machine that no sandbox should keep: every
+ * one but `keep`, the published one, and the one a fill is writing.
+ */
+async function retirable(args: {
+  db: Kysely<DB>;
+  allocation: ExecutionAllocation;
+  node: string;
+  cache: string;
+  keep: readonly number[];
+}): Promise<number[]> {
+  const rows = await args.db
+    .selectFrom("environment_cache_fills")
+    .select(["generation", "status"])
+    .where("project_id", "=", args.allocation.projectId)
+    .where("environment_name", "=", args.allocation.environmentName)
+    .where("cache_name", "=", args.cache)
+    .where("worker_node_id", "=", args.node)
+    .where("generation", "is not", null)
+    .orderBy("generation", "desc")
+    .limit(RETIRE_LIMIT + 2)
+    .execute();
+  const live = rows.find((row) => row.status === "succeeded");
+  const kept = new Set([
+    ...args.keep,
+    ...(live ? [Number(live.generation)] : []),
+    ...rows
+      .filter((row) => row.status === "running")
+      .map((row) => Number(row.generation)),
+  ]);
+  return rows
+    .map((row) => Number(row.generation))
+    .filter((generation) => !kept.has(generation))
+    .slice(0, RETIRE_LIMIT);
 }
 
 /**
@@ -193,6 +306,7 @@ export async function queueMachineFill(args: {
         .doUpdateSet((excluded) => ({
           commit_sha: excluded.ref("excluded.commit_sha"),
           reason: excluded.ref("excluded.reason"),
+          queued_at: sql<Date>`now()`,
         })),
     )
     .returning("id")
@@ -221,7 +335,7 @@ export async function cacheNote(args: {
     const copy = copies.get(cache.name);
     return copy
       ? `- ${cache.name} at ${cache.path}: filled from main at ${copy.commit?.slice(0, 12) ?? "its head"}${copy.filledAt ? ` on ${copy.filledAt.toISOString()}` : ""}`
-      : `- ${cache.name} at ${cache.path}: this machine has no copy yet, so installs use the network; Work is filling one for later workspaces`;
+      : `- ${cache.name} at ${cache.path}: not in this workspace, since this machine has no copy (none yet, or it lost one), so installs use the network; Work is filling one for later workspaces`;
   });
   return [
     `This workspace mounts its Environment's caches read only; nothing here can write them. Each holds ${CACHE_PROVENANCE_FILE}, saying which commit of main filled it and when.`,

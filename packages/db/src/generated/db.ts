@@ -577,6 +577,7 @@ export interface EnvironmentCacheFills {
   id: Generated<string>;
   last_used_at: Timestamp | null;
   project_id: string;
+  queued_at: Generated<Timestamp>;
   reason: string;
   retry_at: Timestamp | null;
   size_bytes: Int8 | null;

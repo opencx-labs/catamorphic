@@ -4,8 +4,10 @@ import { getTracer, withSpan } from "@catamorphic/otel";
 import {
   cacheVolumeKey,
   followProcess,
+  resolveSetupEgress,
   type SandboxProvider,
 } from "@catamorphic/sandbox";
+import { PROJECT_MANIFEST_PATH } from "@catamorphic/workflow/project-layout";
 import { type Kysely, sql } from "kysely";
 import { type Identity, projectPrincipalIdentity } from "../identity.js";
 import {
@@ -21,12 +23,14 @@ import {
   admissionPolicy,
   type ExecutionEnvironmentsService,
 } from "./execution-environments-service.js";
+import { readProgramFile } from "./program-reader.js";
 import {
   DEFAULT_CACHE_FILL_TIMEOUT_MINUTES,
   DEFAULT_CACHE_SIZE_MB,
   type EnvironmentCache,
   type ProjectEnvironmentDefinition,
   type ProjectEnvironmentsService,
+  parseProjectEnvironmentPolicy,
 } from "./project-environments-service.js";
 import { seedSandboxBase } from "./sandbox-git.js";
 import type { SecretsService } from "./secrets-service.js";
@@ -49,6 +53,17 @@ const LOG_TAIL_CHARS = 4_000;
 
 /** Fills one pass starts. */
 const CLAIM_LIMIT = 8;
+
+/** Secret values shorter than this are not searched for in a cache. */
+const SECRET_SCAN_MIN_LENGTH = 8;
+
+/**
+ * A shell prefix setting `$p` to a cache's path in the sandbox: `~` is the
+ * sandbox user's home, as the mount resolved it.
+ */
+function cacheTarget(path: string): string {
+  return `p=${shellQuote(path)}; case "$p" in "~") p="$HOME";; "~/"*) p="$HOME/\${p#\\~/}";; esac`;
+}
 
 /** The process a fill runs as in its sandbox. */
 const FILL_PROCESS_NAME = "Cache fill";
@@ -158,9 +173,11 @@ export class CacheFillsService {
       executionEnvironments: ExecutionEnvironmentsService;
       executionAllocations: ExecutionAllocationsService;
       /** Read per call: constructed after this service. */
-      secrets?: () => SecretsService | undefined;
+      secrets?: () => Pick<SecretsService, "resolveForSandbox"> | undefined;
       /** Copies no sandbox mounted for this long are evicted. */
       retentionDays: number;
+      /** How often a running fill renews its claim; a quarter of it by default. */
+      claimRenewMs?: number;
     },
   ) {}
 
@@ -198,33 +215,21 @@ export class CacheFillsService {
           .executeTakeFirst();
         if (existing)
           return { fills: await this.fills(idsOf(existing.fill_ids)) };
-        const definition = await this.declared({
-          identity: args.identity,
+        const commit = await this.liveRevision({
+          tenantId: args.identity.tenantId,
+          projectId: args.projectId,
+          ...(args.commit !== undefined ? { commit: args.commit } : {}),
+        });
+        const definition = await this.declaredAt({
+          tenantId: args.identity.tenantId,
           projectId: args.projectId,
           environment: args.environment,
+          commit,
         });
         if (!definition?.caches?.[args.cache])
           throw new CacheFillRefusedError(
-            `Environment '${args.environment}' declares no cache '${args.cache}' in the published program`,
+            `Environment '${args.environment}' declares no cache '${args.cache}' at ${commit.slice(0, 12)}, the revision it would fill from`,
           );
-        const commit = args.commit?.toLowerCase();
-        if (commit !== undefined) {
-          if (!/^[0-9a-f]{40}$/.test(commit))
-            throw new CacheFillRefusedError(
-              `'${args.commit}' is not a commit: a cache fills only from a revision Work published from main, named by its full commit`,
-            );
-          const published = await this.deps.db
-            .selectFrom("published_revisions")
-            .select("id")
-            .where("project_id", "=", args.projectId)
-            .where("tenant_id", "=", args.identity.tenantId)
-            .where("commit_sha", "=", commit)
-            .executeTakeFirst();
-          if (!published)
-            throw new CacheFillRefusedError(
-              `Commit ${commit} is not a revision Work published from main for this project; a cache fills only from those, never from a pull request, a session branch or a draft`,
-            );
-        }
         const holders = await this.deps.db
           .selectFrom("environment_cache_fills as fill")
           .innerJoin("worker_nodes as node", "node.id", "fill.worker_node_id")
@@ -248,7 +253,7 @@ export class CacheFillsService {
             environment: args.environment,
             cache: args.cache,
             node,
-            commit: commit ?? null,
+            commit,
             reason: "requested",
           });
           if (id) ids.push(id);
@@ -261,7 +266,7 @@ export class CacheFillsService {
             idempotency_key: args.idempotencyKey,
             environment_name: args.environment,
             cache_name: args.cache,
-            commit_sha: commit ?? null,
+            commit_sha: commit,
             fill_ids: JSON.stringify(ids),
           })
           .onConflict((conflict) =>
@@ -375,21 +380,71 @@ export class CacheFillsService {
       .map(stateOf);
   }
 
-  /** The Environment as the published program declares it. */
-  private async declared(args: {
-    identity: Identity;
+  /**
+   * The revision a fill runs at (ADR 0334): one that went live through the
+   * project's deploy gate (ADR 0331), `applied`, never one pending,
+   * deploying, failed or superseded. `commit` names one; by default the
+   * latest.
+   */
+  private async liveRevision(args: {
+    tenantId: string;
+    projectId: string;
+    commit?: string;
+  }): Promise<string> {
+    const commit = args.commit?.toLowerCase();
+    if (commit !== undefined && !/^[0-9a-f]{40}$/.test(commit))
+      throw new CacheFillRefusedError(
+        `'${args.commit}' is not a commit: a cache fills only from a revision of main that went live, named by its full commit`,
+      );
+    const row = await this.deps.db
+      .selectFrom("published_revisions")
+      .select("commit_sha")
+      .where("project_id", "=", args.projectId)
+      .where("tenant_id", "=", args.tenantId)
+      .where("status", "=", "applied")
+      .$if(commit !== undefined, (query) =>
+        query.where("commit_sha", "=", commit ?? ""),
+      )
+      .orderBy("sequence", "desc")
+      .limit(1)
+      .executeTakeFirst();
+    if (!row)
+      throw new CacheFillRefusedError(
+        commit !== undefined
+          ? `Commit ${commit} is not a revision of main that went live for this project; a cache fills only from those, never from a pull request, a session branch, a draft, or a revision whose deploy is pending or failed`
+          : "No revision of main has gone live for this project yet, so there is nothing to fill a cache from",
+      );
+    return row.commit_sha;
+  }
+
+  /**
+   * The Environment as the program declares it at `commit`: the cache's
+   * command, size and path, and the setup's network and secrets the fill
+   * runs with, all of the one revision it checks out.
+   */
+  private async declaredAt(args: {
+    tenantId: string;
     projectId: string;
     environment: string;
+    commit: string;
   }): Promise<ProjectEnvironmentDefinition | undefined> {
-    return this.deps.projectEnvironments.get({
-      identity: projectPrincipalIdentity({
-        tenantId: args.identity.tenantId,
-        projectId: args.projectId,
-        environment: args.environment,
-      }),
+    const repo = await this.deps.projectManager.openPublished({
+      tenantId: args.tenantId,
       projectId: args.projectId,
-      name: args.environment,
     });
+    try {
+      const content = await readProgramFile(
+        repo,
+        args.commit,
+        PROJECT_MANIFEST_PATH,
+      );
+      if (!content) return undefined;
+      return parseProjectEnvironmentPolicy(JSON.parse(content)).environments[
+        args.environment
+      ];
+    } finally {
+      await repo.dispose();
+    }
   }
 
   private async evict(): Promise<void> {
@@ -424,7 +479,37 @@ export class CacheFillsService {
       })
       .where("status", "=", "queued")
       .where(
-        sql<boolean>`created_at < now() - make_interval(mins => ${QUEUE_LIMIT_MINUTES})`,
+        sql<boolean>`queued_at < now() - make_interval(mins => ${QUEUE_LIMIT_MINUTES})`,
+      )
+      // Waiting behind a fill of the same cache is not waiting for room.
+      .where(({ not, exists, selectFrom }) =>
+        not(
+          exists(
+            selectFrom("environment_cache_fills as ahead")
+              .select("ahead.id")
+              .whereRef(
+                "ahead.project_id",
+                "=",
+                "environment_cache_fills.project_id",
+              )
+              .whereRef(
+                "ahead.environment_name",
+                "=",
+                "environment_cache_fills.environment_name",
+              )
+              .whereRef(
+                "ahead.cache_name",
+                "=",
+                "environment_cache_fills.cache_name",
+              )
+              .whereRef(
+                "ahead.worker_node_id",
+                "=",
+                "environment_cache_fills.worker_node_id",
+              )
+              .where("ahead.status", "=", "running"),
+          ),
+        ),
       )
       .execute();
   }
@@ -483,6 +568,25 @@ export class CacheFillsService {
       const claimed: FillRow[] = [];
       for (const row of due) {
         if (row.attempts >= CACHE_FILL_ATTEMPTS) {
+          // What its last attempt left on the machine goes too: the
+          // machine's cleanup destroys a released Allocation's sandbox and
+          // gives its reservation back.
+          for (const left of await trx
+            .selectFrom("execution_allocations")
+            .select("id")
+            .where("root_workload_id", "=", row.id)
+            .where("status", "=", "active")
+            .execute())
+            await this.deps.executionAllocations.release({
+              identity: projectPrincipalIdentity({
+                tenantId: row.tenant_id,
+                projectId: row.project_id,
+                environment: row.environment_name,
+              }),
+              allocationId: left.id,
+              reason: "retired",
+              transaction: trx,
+            });
           await trx
             .updateTable("environment_cache_fills")
             .set({
@@ -525,14 +629,24 @@ export class CacheFillsService {
         .where("id", "=", fill.id)
         .where("status", "=", "running")
         .where("generation", "=", String(generation));
-    const renew = setInterval(() => {
-      void mine()
-        .set({
-          claimed_until: sql<Date>`now() + make_interval(secs => ${CLAIM_MS / 1000})`,
-        })
-        .execute()
-        .catch(() => {});
-    }, CLAIM_MS / 4);
+    // A run that can no longer renew its claim stops: another replica
+    // may have taken the fill over.
+    const lost = new AbortController();
+    const renew = setInterval(
+      () => {
+        void mine()
+          .set({
+            claimed_until: sql<Date>`now() + make_interval(secs => ${CLAIM_MS / 1000})`,
+          })
+          .executeTakeFirst()
+          .then((result) => {
+            if (Number(result.numUpdatedRows) === 0)
+              lost.abort(new Error("This fill's claim moved to another run"));
+          })
+          .catch(() => {});
+      },
+      this.deps.claimRenewMs ?? CLAIM_MS / 4,
+    );
     renew.unref?.();
     let mask = new SecretMask({});
     const fail = async (error: unknown) => {
@@ -562,6 +676,7 @@ export class CacheFillsService {
           const outcome = await this.fill({
             fill,
             generation,
+            signal: lost.signal,
             onSecrets: (values) => {
               mask = new SecretMask(
                 Object.fromEntries(
@@ -574,6 +689,7 @@ export class CacheFillsService {
             },
           });
           if (outcome === "requeued") return;
+          lost.signal.throwIfAborted();
           // Published in one statement, once its sandbox is gone: every
           // sandbox made from now on mounts this generation.
           await mine()
@@ -593,36 +709,58 @@ export class CacheFillsService {
       await fail(error);
     } finally {
       clearInterval(renew);
+      // The fill waiting behind this one starts its wait now.
+      await this.deps.db
+        .updateTable("environment_cache_fills")
+        .set({ queued_at: sql<Date>`now()` })
+        .where("project_id", "=", fill.project_id)
+        .where("environment_name", "=", fill.environment_name)
+        .where("cache_name", "=", fill.cache_name)
+        .where("worker_node_id", "=", fill.worker_node_id ?? "")
+        .where("status", "=", "queued")
+        .execute()
+        .catch(() => {});
     }
   }
 
   /**
    * The fill itself: its own Allocation on the machine, a fresh sandbox of
-   * the Environment's image holding the published revision alone, on the
-   * setup's network, with the one cache generation writable. Answers its
-   * size and commit, or `requeued` when the machine had no room.
+   * the Environment's image holding a live revision alone, on that
+   * revision's setup network, with the one cache generation writable.
+   * Every step goes through the Allocation's guard, so a released
+   * Allocation or a lost machine lease stops it, and so does a lost claim.
+   * Answers its size and commit, or `requeued` when the machine had no room.
    */
   private async fill(args: {
     fill: FillRow;
     generation: number;
+    signal: AbortSignal;
     onSecrets: (values: Record<string, string>) => void;
   }): Promise<{ sizeBytes: number; commit: string } | "requeued"> {
-    const { fill } = args;
+    const { fill, signal } = args;
     const identity = projectPrincipalIdentity({
       tenantId: fill.tenant_id,
       projectId: fill.project_id,
       environment: fill.environment_name,
     });
-    const definition = await this.declared({
-      identity,
+    // The revision it fills from, and the cache as that revision declares
+    // it: command, size, path, and the setup's network and secrets.
+    const commit = await this.liveRevision({
+      tenantId: fill.tenant_id,
+      projectId: fill.project_id,
+      ...(fill.commit_sha ? { commit: fill.commit_sha } : {}),
+    });
+    const definition = await this.declaredAt({
+      tenantId: fill.tenant_id,
       projectId: fill.project_id,
       environment: fill.environment_name,
+      commit,
     });
     const cache: EnvironmentCache | undefined =
       definition?.caches?.[fill.cache_name];
     if (!definition || !cache)
       throw new CacheFillRefusedError(
-        `Environment '${fill.environment_name}' no longer declares cache '${fill.cache_name}' in the published program`,
+        `Environment '${fill.environment_name}' declares no cache '${fill.cache_name}' at ${commit.slice(0, 12)}, the live revision it fills from`,
       );
     const workload = definition.workloads.includes("agent")
       ? "agent"
@@ -679,7 +817,10 @@ export class CacheFillsService {
     // A run an earlier replica left: its Allocation and sandbox go first.
     await this.retireEarlier({ identity, fill, machine });
     const sandboxPolicy = admission.sandbox;
-    const egress = sandboxPolicy.setupEgress ?? sandboxPolicy.egress;
+    // The revision's own setup network, else the Environment's network.
+    const egress = definition.setup?.network
+      ? resolveSetupEgress({ allow: definition.setup.network.allow })
+      : sandboxPolicy.egress;
     const policy = admissionPolicy({ admission, connections: [] });
     let allocation: ExecutionAllocation;
     try {
@@ -727,17 +868,35 @@ export class CacheFillsService {
           allocation,
           provider: machine,
         });
+    // Each step proves the Allocation is still active and the claim held.
+    const step = async <T>(work: () => Promise<T>): Promise<T> => {
+      signal.throwIfAborted();
+      if (!managed) await this.requireActiveAllocation(allocation.id);
+      const result = await work();
+      signal.throwIfAborted();
+      return result;
+    };
     let sandboxId: string | undefined;
+    let published = false;
     try {
-      const handle = await guarded.createSandbox({
-        labels: { purpose: "cache-fill", projectId: fill.project_id },
-      });
+      const handle = await step(() =>
+        guarded.createSandbox({
+          labels: { purpose: "cache-fill", projectId: fill.project_id },
+        }),
+      );
       sandboxId = handle.providerId;
-      const commit = await this.seed({
-        fill,
-        provider: machine,
-        sandboxId,
-      });
+      // The machine's cleanup finds it by its Allocation, whatever path
+      // made it.
+      await this.deps.db
+        .updateTable("execution_allocations")
+        .set({ sandbox_provider_id: handle.providerId })
+        .where("id", "=", allocation.id)
+        .where("sandbox_provider_id", "is", null)
+        .execute();
+      const id = sandboxId;
+      await step(() =>
+        this.seed({ fill, provider: guarded, sandboxId: id, commit }),
+      );
       const env = await this.secretValues({
         identity,
         fill,
@@ -745,29 +904,45 @@ export class CacheFillsService {
         isolated: admission.isolated,
       });
       args.onSecrets(env);
-      await this.runCommand({
-        provider: machine,
-        sandboxId,
-        command: cache.fill.command,
-        timeoutMs:
-          (cache.fill.timeoutMinutes ?? DEFAULT_CACHE_FILL_TIMEOUT_MINUTES) *
-          60_000,
-        env,
-      });
-      const sizeBytes = await this.finish({
-        provider: machine,
-        sandboxId,
-        cache,
-        fill,
-        commit,
-        generation: args.generation,
-      });
+      await step(() =>
+        this.runCommand({
+          provider: guarded,
+          sandboxId: id,
+          command: cache.fill.command,
+          timeoutMs:
+            (cache.fill.timeoutMinutes ?? DEFAULT_CACHE_FILL_TIMEOUT_MINUTES) *
+            60_000,
+          env,
+          signal,
+        }),
+      );
+      const sizeBytes = await step(() =>
+        this.finish({
+          provider: guarded,
+          sandboxId: id,
+          cache,
+          fill,
+          commit,
+          generation: args.generation,
+          secrets: env,
+        }),
+      );
       // Nothing the command left running may write after it is published.
-      await machine.destroySandbox(sandboxId);
+      await step(() => guarded.stopSandbox(id));
+      await machine.destroySandbox(id);
       sandboxId = undefined;
+      published = true;
       return { sizeBytes, commit };
     } finally {
-      if (sandboxId)
+      if (sandboxId) {
+        // A generation that will not be published holds nothing: what the
+        // fill wrote is removed before its sandbox goes.
+        if (!published)
+          await this.emptyGeneration({
+            provider: machine,
+            sandboxId,
+            path: cache.path,
+          });
         await machine
           .destroySandbox(sandboxId)
           .catch((error: unknown) =>
@@ -776,10 +951,37 @@ export class CacheFillsService {
               error,
             ),
           );
+      }
       await this.deps.executionAllocations
         .release({ identity, allocationId: allocation.id, reason: "retired" })
         .catch(() => {});
     }
+  }
+
+  /** Fail unless the Allocation is still active. */
+  private async requireActiveAllocation(allocationId: string): Promise<void> {
+    const row = await this.deps.db
+      .selectFrom("execution_allocations")
+      .select("id")
+      .where("id", "=", allocationId)
+      .where("status", "=", "active")
+      .executeTakeFirst();
+    if (!row) throw new Error("The fill's Allocation is no longer active");
+  }
+
+  /** Remove what a fill wrote into a generation that will not be published. */
+  private async emptyGeneration(args: {
+    provider: SandboxProvider;
+    sandboxId: string;
+    path: string;
+  }): Promise<void> {
+    await args.provider
+      .executeCommand(
+        args.sandboxId,
+        `${cacheTarget(args.path)}; find "$p" -mindepth 1 -maxdepth 1 -exec rm -rf {} +`,
+        { cwd: args.provider.workspaceRoot, timeout: 600 },
+      )
+      .catch(() => {});
   }
 
   /** Back to the queue, its attempt not counted: the machine had no room. */
@@ -843,29 +1045,25 @@ export class CacheFillsService {
     }
   }
 
-  /**
-   * The published revision's checkout alone in the project folder, and
-   * the commit it is: the fill's own, or the published main now.
-   */
+  /** The live revision's checkout alone in the project folder. */
   private async seed(args: {
     fill: FillRow;
     provider: SandboxProvider;
     sandboxId: string;
-  }): Promise<string> {
+    commit: string;
+  }): Promise<void> {
     const repo = await this.deps.projectManager.openEphemeral({
       tenantId: args.fill.tenant_id,
       projectId: args.fill.project_id,
     });
     try {
-      const commit = args.fill.commit_sha ?? (await repo.resolveRef("main"));
       await seedSandboxBase({
         provider: args.provider,
         sandboxId: args.sandboxId,
         projectDir: `${args.provider.workspaceRoot}/project`,
         sessionCopyPath: repo.repoPath,
-        base: commit,
+        base: args.commit,
       });
-      return commit;
     } finally {
       await repo.dispose();
     }
@@ -907,6 +1105,7 @@ export class CacheFillsService {
     command: string;
     timeoutMs: number;
     env: Record<string, string>;
+    signal: AbortSignal;
   }): Promise<void> {
     const { provider, sandboxId } = args;
     const cwd = `${provider.workspaceRoot}/project`;
@@ -937,8 +1136,9 @@ export class CacheFillsService {
       cursor: 0,
       timeoutMs: args.timeoutMs,
       outputLimit: LOG_TAIL_CHARS,
+      signal: args.signal,
     });
-    if (followed.timedOut) {
+    if (followed.timedOut || followed.aborted) {
       await processes
         .signalProcess({
           sandboxId,
@@ -946,6 +1146,7 @@ export class CacheFillsService {
           signal: "SIGKILL",
         })
         .catch(() => {});
+      args.signal.throwIfAborted();
       throw new Error(
         `The fill command ran past its ${Math.round(args.timeoutMs / 60_000)} minutes:\n${followed.output.slice(-LOG_TAIL_CHARS)}`,
       );
@@ -967,6 +1168,8 @@ export class CacheFillsService {
     fill: FillRow;
     commit: string;
     generation: number;
+    /** The setup secrets the fill ran with, none of which may stay in it. */
+    secrets: Record<string, string>;
   }): Promise<number> {
     const limitMb = args.cache.sizeMb ?? DEFAULT_CACHE_SIZE_MB;
     const provenance = JSON.stringify({
@@ -978,8 +1181,7 @@ export class CacheFillsService {
       generation: args.generation,
       filledAt: new Date().toISOString(),
     });
-    // `~` is the sandbox user's home, as the mount resolved it.
-    const target = `p=${shellQuote(args.cache.path)}; case "$p" in "~") p="$HOME";; "~/"*) p="$HOME/\${p#\\~/}";; esac`;
+    const target = cacheTarget(args.cache.path);
     const measured = await args.provider.executeCommand(
       args.sandboxId,
       `${target}; du -sk -- "$p" | cut -f1`,
@@ -994,6 +1196,34 @@ export class CacheFillsService {
       throw new Error(
         `The cache holds ${Math.ceil(kib / 1024)} MiB after its fill; its limit is ${limitMb} MiB (sizeMb)`,
       );
+    // Every sandbox mounts what the fill leaves, the agent's included: a
+    // setup secret written into it would reach them all (ADR 0257). The
+    // values travel as the scan's environment, never in its command.
+    const scanned = Object.entries(args.secrets).filter(
+      ([, value]) => value.length >= SECRET_SCAN_MIN_LENGTH,
+    );
+    if (scanned.length > 0) {
+      const names = scanned.map(([name]) => shellQuote(name)).join(" ");
+      const found = await args.provider.executeCommand(
+        args.sandboxId,
+        `${target}; for n in ${names}; do v=$(printenv "$n") || continue; grep -rqF -- "$v" "$p" 2>/dev/null && echo "$n"; done; true`,
+        {
+          cwd: args.provider.workspaceRoot,
+          timeout: 1800,
+          env: Object.fromEntries(scanned),
+        },
+      );
+      const leaked = found.result
+        .split("\n")
+        .map((line) => line.trim())
+        .filter((name) => scanned.some(([secret]) => secret === name));
+      if (found.exitCode !== 0)
+        throw new Error("Could not check the cache for the fill's secrets");
+      if (leaked.length > 0)
+        throw new Error(
+          `The cache holds the value of ${leaked.join(", ")} after its fill, and every sandbox of the Environment would read it; it was not published. Keep secrets out of what the fill command leaves in the cache`,
+        );
+    }
     const written = await args.provider.executeCommand(
       args.sandboxId,
       `${target}; printf '%s\\n' ${shellQuote(provenance)} > "$p/${CACHE_PROVENANCE_FILE}"`,
