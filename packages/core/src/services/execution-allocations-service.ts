@@ -23,7 +23,9 @@ import { requireTenantProject } from "./projects-service.js";
 import { toJson } from "./run-coordinator.js";
 import {
   capacityFits,
+  diskFits,
   EnvironmentCapacityError,
+  machineDiskOf,
   WorkerCapacitySchema,
   WorkerResourceDefaultsSchema,
   workerUsage,
@@ -265,11 +267,13 @@ export class ExecutionAllocationConflictError extends Error {
 /**
  * What an Allocation reserves on its machine (ADR 0100): its sandbox's
  * limits, and where its commands run apart (ADR 0332) the agent
- * container's on top, so admission counts both containers.
+ * container's on top, so admission counts both containers; and its
+ * Environment's `storageMb` (ADR 0335), which both share.
  */
 export function reservedOf(policy: EnvironmentAllocationPolicy): {
   cpuMillis?: number;
   memoryMb?: number;
+  storageMb?: number;
 } {
   const own = policy.requirements.resources;
   const agent = policy.sandbox?.separateCommands?.agentResources;
@@ -279,9 +283,11 @@ export function reservedOf(policy: EnvironmentAllocationPolicy): {
       : (left ?? 0) + (right ?? 0);
   const cpuMillis = sum(own?.cpuMillis, agent?.cpuMillis);
   const memoryMb = sum(own?.memoryMb, agent?.memoryMb);
+  const storageMb = own?.storageMb;
   return {
     ...(cpuMillis !== undefined ? { cpuMillis } : {}),
     ...(memoryMb !== undefined ? { memoryMb } : {}),
+    ...(storageMb !== undefined ? { storageMb } : {}),
   };
 }
 
@@ -349,16 +355,24 @@ export class ExecutionAllocationsService {
           },
         },
       };
-      if (
-        node.capacity &&
-        !capacityFits({
-          capacity: WorkerCapacitySchema.parse(node.capacity),
-          usage: await workerUsage({ db: executor, nodeId: node.id }),
-          resources:
-            args.policy.binding.trust === "managed" ? reservedOf(policy) : {},
-        })
-      )
-        throw new EnvironmentCapacityError(node.id);
+      const disk = machineDiskOf(node.disk);
+      if (node.capacity || disk) {
+        const usage = await workerUsage({ db: executor, nodeId: node.id });
+        const resources =
+          args.policy.binding.trust === "managed" ? reservedOf(policy) : {};
+        // A machine short of disk takes nothing new; the work waits (ADR 0335).
+        if (!diskFits({ usage, resources, ...(disk ? { disk } : {}) }))
+          throw new EnvironmentCapacityError(node.id, disk);
+        if (
+          node.capacity &&
+          !capacityFits({
+            capacity: WorkerCapacitySchema.parse(node.capacity),
+            usage,
+            resources,
+          })
+        )
+          throw new EnvironmentCapacityError(node.id);
+      }
     }
     const reserved =
       args.policy.binding.trust === "managed" ? reservedOf(policy) : {};
@@ -381,6 +395,7 @@ export class ExecutionAllocationsService {
           policy_snapshot: toJson(policy),
           reserved_cpu_millis: reserved.cpuMillis ?? 0,
           reserved_memory_mb: reserved.memoryMb ?? 0,
+          reserved_storage_mb: reserved.storageMb ?? 0,
         })
         .returningAll()
         .executeTakeFirstOrThrow();

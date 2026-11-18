@@ -5,13 +5,17 @@ import {
   renewReplicaClaim,
   takeReplicaClaim,
 } from "@catamorphic/core";
-import type { DB } from "@catamorphic/db";
+import type { DB, JsonObject } from "@catamorphic/db";
 import {
   HetznerCloudError,
   type HetznerCloudMachines,
 } from "@catamorphic/hetzner";
 import { getTracer, withSpan } from "@catamorphic/otel";
-import { environmentSatisfies, poolMatches } from "@catamorphic/sandbox";
+import {
+  environmentSatisfies,
+  type MachineDisk,
+  poolMatches,
+} from "@catamorphic/sandbox";
 import {
   type MachineEventKind,
   machineCreateResult,
@@ -1591,6 +1595,34 @@ export class MachineReconciler {
     });
   }
 
+  /**
+   * A machine of a rule began an episode under its disk floor (ADR 0335):
+   * its class's project hears `machine.disk-low` once per episode.
+   */
+  async machineDiskLow(args: {
+    name: string;
+    rule: string | null;
+    ref: string | null;
+    class: string | null;
+    disk: MachineDisk;
+    since: Date;
+  }): Promise<void> {
+    const machineClass = args.class ? this.classOf(args.class) : undefined;
+    if (machineClass?.platform !== "workflow" || !args.class || !args.rule)
+      return;
+    await this.recordFor({
+      kind: "machine.disk-low",
+      project: machineClass.project,
+      name: args.name,
+      class: args.class,
+      rule: args.rule,
+      ref: args.ref,
+      disk: args.disk,
+      episode: args.since,
+      ...(machineClass.options ? { options: machineClass.options } : {}),
+    });
+  }
+
   private async recordFor(args: {
     kind: MachineEventKind;
     project: string;
@@ -1598,6 +1630,9 @@ export class MachineReconciler {
     class: string;
     rule: string;
     ref: string | null;
+    disk?: MachineDisk;
+    episode?: Date;
+    options?: JsonObject;
   }): Promise<void> {
     try {
       await this.deps.workflows?.record({
@@ -1609,10 +1644,15 @@ export class MachineReconciler {
             class: args.class,
             rule: args.rule,
             ref: platformRef(args.ref),
-            occurredAt: new Date(),
+            occurredAt: args.episode ?? new Date(),
+            ...(args.disk ? { disk: args.disk } : {}),
+            ...(args.options ? { options: args.options } : {}),
           }),
-          // Once per machine: Work's own markers name a machine with no ref.
-          externalId: `${args.kind}:${args.name}:${args.ref ?? "none"}`,
+          // Once per machine (per episode, for one short of disk): Work's
+          // own markers name a machine with no ref.
+          externalId: `${args.kind}:${args.name}:${args.ref ?? "none"}${
+            args.episode ? `:${args.episode.toISOString()}` : ""
+          }`,
         },
       });
     } catch (error) {
@@ -2273,19 +2313,28 @@ function neverConnectedNotice(args: {
 
 /** What one machine has room for, as admission charges it. */
 function roomFor(
-  room: { workspaces: number; cpuMillis?: number; memoryMb?: number },
+  room: {
+    workspaces: number;
+    cpuMillis?: number;
+    memoryMb?: number;
+    storageMb?: number;
+  },
   defaults: { cpuMillis?: number; memoryMb?: number },
   wait: DemandWait,
-): { cpuMillis: number; memoryMb: number } | undefined {
+): { cpuMillis: number; memoryMb: number; storageMb: number } | undefined {
   const cpuMillis =
     wait.requirements.resources.cpuMillis ?? defaults.cpuMillis ?? 0;
   const memoryMb =
     wait.requirements.resources.memoryMb ?? defaults.memoryMb ?? 0;
+  const storageMb = wait.requirements.resources.storageMb ?? 0;
   if (room.workspaces < 1) return undefined;
   if (room.cpuMillis !== undefined && room.cpuMillis < cpuMillis)
     return undefined;
   if (room.memoryMb !== undefined && room.memoryMb < memoryMb) return undefined;
-  return { cpuMillis, memoryMb };
+  // A machine short of disk has none (ADR 0335).
+  if (room.storageMb !== undefined && room.storageMb < storageMb)
+    return undefined;
+  return { cpuMillis, memoryMb, storageMb };
 }
 
 /**
@@ -2393,6 +2442,8 @@ function demandMachines(args: {
         slot.room.cpuMillis -= charged.cpuMillis;
       if (slot.room.memoryMb !== undefined)
         slot.room.memoryMb -= charged.memoryMb;
+      if (slot.room.storageMb !== undefined)
+        slot.room.storageMb -= charged.storageMb;
       return false;
     }
     return true;

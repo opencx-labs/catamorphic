@@ -1,7 +1,13 @@
 import { randomUUID } from "node:crypto";
 import type { DB } from "@catamorphic/db";
 import { getTracer, withSpan } from "@catamorphic/otel";
-import type { EnvironmentBinding, SandboxProvider } from "@catamorphic/sandbox";
+import {
+  diskLow,
+  diskRecovered,
+  type EnvironmentBinding,
+  type MachineDisk,
+  type SandboxProvider,
+} from "@catamorphic/sandbox";
 import { type Kysely, sql } from "kysely";
 import { z } from "zod";
 import {
@@ -13,9 +19,13 @@ import {
 import { toJson } from "./run-coordinator.js";
 import {
   capacityFits,
+  diskFits,
+  MachineDiskSchema,
+  machineDiskOf,
   type WorkerCapacity,
   WorkerCapacitySchema,
   WorkerResourceDefaultsSchema,
+  type WorkerUsage,
   workerUsage,
 } from "./worker-capacity.js";
 
@@ -76,7 +86,11 @@ export interface WorkerNode {
   lastSeenAt: string;
   capacity?: WorkerCapacity;
   defaults: { cpuMillis?: number; memoryMb?: number };
-  usage: { workspaces: number; cpuMillis: number; memoryMb: number };
+  usage: WorkerUsage;
+  /** Its latest disk report (ADR 0335); absent for a machine that sends none. */
+  disk?: MachineDisk;
+  /** When its current episode under its disk floor began. */
+  diskLowSince?: string;
   acceptingWork: boolean;
   /**
    * Set for a node whose lease belongs to a remote executor (ADR 0192): any
@@ -84,6 +98,15 @@ export interface WorkerNode {
    */
   remote?: RemoteNodeOffer;
 }
+
+/**
+ * Where a disk report left a machine's episode under its floor (ADR
+ * 0335): `started` by this report (once per episode, whichever replica
+ * heard it), `ongoing`, `ended` by this report, or `none`.
+ */
+export type DiskEpisode =
+  | { state: "started" | "ongoing"; since: Date }
+  | { state: "ended" | "none" };
 
 /** Every node lease lasts this long unless renewed (the SQL's 45 seconds). */
 export const WORKER_NODE_LEASE_MS = 45_000;
@@ -427,6 +450,46 @@ export class WorkerNodesService {
     });
   }
 
+  /**
+   * Record a machine's disk report (ADR 0335) while `lease` holds it. The
+   * row's lock orders reports from every replica, so the episode under its
+   * floor starts once: when a report first shows free space under the
+   * floor. It ends once free space is back above 1.1 times the floor, so a
+   * machine hovering at its floor is one episode, not many.
+   */
+  async reportDisk(args: {
+    lease: WorkerNodeLease;
+    disk: MachineDisk;
+  }): Promise<DiskEpisode> {
+    const disk = MachineDiskSchema.parse(args.disk);
+    return this.db.transaction().execute(async (trx) => {
+      const row = await trx
+        .selectFrom("worker_nodes")
+        .select("disk_low_at")
+        .where("id", "=", args.lease.id)
+        .where("lease_token", "=", args.lease.token)
+        .forUpdate()
+        .executeTakeFirst();
+      if (!row) return { state: "none" };
+      const before = row.disk_low_at;
+      const since = before
+        ? diskRecovered(disk)
+          ? null
+          : before
+        : diskLow(disk)
+          ? new Date()
+          : null;
+      await trx
+        .updateTable("worker_nodes")
+        .set({ disk: toJson(disk), disk_low_at: since })
+        .where("id", "=", args.lease.id)
+        .execute();
+      if (since && !before) return { state: "started", since };
+      if (since) return { state: "ongoing", since };
+      return { state: before ? "ended" : "none" };
+    });
+  }
+
   async renew(args: { lease: WorkerNodeLease }): Promise<boolean> {
     const row = await this.db
       .updateTable("worker_nodes")
@@ -482,6 +545,7 @@ export class WorkerNodesService {
           row.default_resources,
         );
         const usage = await workerUsage({ db: this.db, nodeId: row.id });
+        const disk = machineDiskOf(row.disk);
         return {
           id: row.id,
           descriptor: descriptorSchema.parse(row.descriptor),
@@ -491,8 +555,13 @@ export class WorkerNodesService {
           capacity,
           defaults,
           usage,
+          ...(disk ? { disk } : {}),
+          ...(row.disk_low_at
+            ? { diskLowSince: row.disk_low_at.toISOString() }
+            : {}),
           acceptingWork:
             row.available &&
+            diskFits({ usage, resources: {}, ...(disk ? { disk } : {}) }) &&
             (!capacity ||
               capacityFits({ capacity, usage, resources: defaults })),
           ...(row.remote
@@ -525,6 +594,7 @@ export class WorkerNodesService {
         "allocation.sandbox_creation_started as creationStarted",
         "allocation.reserved_cpu_millis as cpuMillis",
         "allocation.reserved_memory_mb as memoryMb",
+        "allocation.reserved_storage_mb as storageMb",
       ])
       .execute();
   }

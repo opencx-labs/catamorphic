@@ -891,6 +891,35 @@ describe("machines on demand (ADR 0258)", () => {
     await deleteRule("apart");
   }, 120_000);
 
+  it("gives work a new machine while its machine is short of disk (ADR 0335)", async () => {
+    await putRule("full", {
+      projects: [projectId],
+      machines: { demand: { max: 3 } },
+      class: "review-16",
+      labels: { pool: "full" },
+    });
+    await waiting({ pool: { pool: "full" } });
+    await reconcile();
+    const [first, second] = [1, 2].map((index) =>
+      nameOf("full", "review-16", index),
+    );
+    if (!first || !second) throw new Error("Two names");
+    // Room for workspaces, CPU and memory, but under its disk floor.
+    await connect(first, {
+      capacity: { workspaces: 4 },
+      disk: {
+        path: "/var/lib/work-worker",
+        totalBytes: 100e9,
+        freeBytes: 4e9,
+        floorBytes: 10e9,
+        measuredAt: new Date().toISOString(),
+      },
+    });
+    await reconcile();
+    expect(createdFor(second)).toBeDefined();
+    await deleteRule("full");
+  });
+
   it("counts the machines a rule served before against its maximum", async () => {
     await putRule("scope", {
       projects: [projectId],

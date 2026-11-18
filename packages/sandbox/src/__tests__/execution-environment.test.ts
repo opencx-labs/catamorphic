@@ -28,6 +28,43 @@ const binding: EnvironmentBinding = {
 };
 
 describe("environmentSatisfies", () => {
+  it("takes storageMb where the machine enforces it or reports its disk (ADR 0335)", () => {
+    const container = {
+      ...binding,
+      resourceLimits: ["cpuMillis", "memoryMb"] as const,
+      resources: { cpuMillis: 4000, memoryMb: 8192 },
+    };
+    const requirements = {
+      workload: "agent" as const,
+      resources: { storageMb: 10_000 },
+    };
+    expect(environmentSatisfies(binding, requirements)).toEqual({
+      compatible: true,
+    });
+    expect(environmentSatisfies(container, requirements)).toEqual({
+      compatible: false,
+      reasons: ["Binding can neither enforce nor reserve 'storageMb'"],
+    });
+    const reporting = {
+      ...container,
+      capabilities: [...container.capabilities, "disk"],
+      resources: { ...container.resources, storageMb: 90_000 },
+    };
+    expect(environmentSatisfies(reporting, requirements)).toEqual({
+      compatible: true,
+    });
+    // More than the machine's whole disk less its floor never fits.
+    expect(
+      environmentSatisfies(reporting, {
+        workload: "agent",
+        resources: { storageMb: 100_000 },
+      }),
+    ).toEqual({
+      compatible: false,
+      reasons: ["Storage requirement 100000 MB exceeds the 90000 MB ceiling"],
+    });
+  });
+
   it("accepts requirements inside a binding ceiling", () => {
     expect(
       environmentSatisfies(binding, {

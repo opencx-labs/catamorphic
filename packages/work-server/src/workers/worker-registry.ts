@@ -1,7 +1,9 @@
 import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
 import {
   cleanupWorkerAllocations,
+  diskFits,
   forgetExecutorKey,
+  MachineDiskSchema,
   nodeExecutor,
   PlacementWaitsService,
   REMOTE_EPOCH_PATTERN,
@@ -15,9 +17,14 @@ import {
 } from "@catamorphic/core";
 import type { DB } from "@catamorphic/db";
 import {
+  describeDisk,
+  diskBudgetMb,
+  diskFresh,
   type EnvironmentBinding,
   ExecutorPublicKeySchema,
+  headroom,
   MACHINE_CAPABILITIES,
+  type MachineDisk,
   SANDBOX_CAPABILITIES,
 } from "@catamorphic/sandbox";
 import { type Kysely, sql } from "kysely";
@@ -81,6 +88,11 @@ export const WorkerOfferSchema = z.strictObject({
     })
     .default({}),
   version: z.string().max(100).optional(),
+  /**
+   * Its disk (ADR 0335): the filesystem it writes to with the least room
+   * above its floor. Later measurements come with its lease renewals.
+   */
+  disk: MachineDiskSchema.optional(),
   /** What runs its sandboxes and why it was chosen (ADR 0204). */
   backend: z
     .strictObject({
@@ -204,7 +216,16 @@ export interface MachineLoad {
    */
   live: {
     descriptor: EnvironmentBinding;
-    free: { workspaces: number; cpuMillis?: number; memoryMb?: number };
+    free: {
+      workspaces: number;
+      cpuMillis?: number;
+      memoryMb?: number;
+      /**
+       * Storage it can still reserve above its disk floor (ADR 0335): none
+       * once it is short of disk. Absent without a recent report.
+       */
+      storageMb?: number;
+    };
     defaults: { cpuMillis?: number; memoryMb?: number };
   } | null;
 }
@@ -299,6 +320,20 @@ export class WorkWorkerRegistry {
         ref: string | null;
         class: string | null;
       }) => Promise<void>;
+      /**
+       * A machine's report began an episode under its disk floor (ADR
+       * 0335), once per episode: a rule's machine of a workflow class
+       * records `machine.disk-low` for its class's project.
+       */
+      diskLow?: (machine: {
+        name: string;
+        rule: string | null;
+        ref: string | null;
+        class: string | null;
+        disk: MachineDisk;
+        /** When the episode began: one event per episode. */
+        since: Date;
+      }) => Promise<void>;
       log?: (line: string) => void;
     },
   ) {
@@ -361,8 +396,62 @@ export class WorkWorkerRegistry {
   }
 
   /** A keepalive while operations run and no poll is pending. */
-  async renew(args: { nodeId: string; session: string }): Promise<void> {
+  async renew(args: {
+    nodeId: string;
+    session: string;
+    /** Its latest disk measurement (ADR 0335). */
+    disk?: MachineDisk;
+  }): Promise<void> {
     await this.renewOrThrow(args);
+    if (args.disk)
+      await this.reportDisk({
+        nodeId: args.nodeId,
+        session: args.session,
+        disk: args.disk,
+      });
+  }
+
+  /**
+   * Store a worker's disk report under its epoch (ADR 0335). One that
+   * begins an episode under the floor is logged and handed to `diskLow`
+   * once, whichever replica heard it.
+   */
+  private async reportDisk(args: {
+    nodeId: string;
+    session: string;
+    disk: MachineDisk;
+  }): Promise<void> {
+    const episode = await this.deps.nodes.reportDisk({
+      lease: { id: args.nodeId, token: args.session },
+      disk: args.disk,
+    });
+    if (episode.state !== "started") return;
+    const worker = await this.deps.db
+      .selectFrom("work_workers")
+      .select(["name", "machine_rule", "machine_ref", "labels"])
+      .where("node_id", "=", args.nodeId)
+      .executeTakeFirst();
+    if (!worker) return;
+    this.deps.log?.(
+      `Worker ${worker.name} is short of disk: ${describeDisk(args.disk)}`,
+    );
+    const labels = NodeLabelsSchema.safeParse(worker.labels);
+    await this.deps
+      .diskLow?.({
+        name: worker.name,
+        rule: worker.machine_rule,
+        ref: worker.machine_ref,
+        class: labels.success ? (labels.data.class ?? null) : null,
+        disk: args.disk,
+        since: episode.since,
+      })
+      .catch((error: unknown) =>
+        this.deps.log?.(
+          `Machine ${worker.name} is short of disk, and recording it failed: ${
+            error instanceof Error ? error.message : String(error)
+          }`,
+        ),
+      );
   }
 
   /**
@@ -817,13 +906,23 @@ export class WorkWorkerRegistry {
       // Workflow runs carry project secrets; they stay on the control plane.
       workloads: ["agent"],
       agentTopologies: ["controller"],
-      capabilities: ["network.egress", ...args.offer.capabilities],
+      capabilities: [
+        "network.egress",
+        ...args.offer.capabilities.filter(
+          (capability) => capability !== MACHINE_CAPABILITIES.disk,
+        ),
+        // It reports its disk, so admission reserves storage here (ADR 0335).
+        ...(args.offer.disk ? [MACHINE_CAPABILITIES.disk] : []),
+      ],
       resources: {
         ...(args.offer.capacity.cpuMillis
           ? { cpuMillis: args.offer.capacity.cpuMillis }
           : {}),
         ...(args.offer.capacity.memoryMb
           ? { memoryMb: args.offer.capacity.memoryMb }
+          : {}),
+        ...(args.offer.disk
+          ? { storageMb: diskBudgetMb(args.offer.disk) }
           : {}),
       },
       resourceLimits: args.offer.resourceLimits,
@@ -845,6 +944,12 @@ export class WorkWorkerRegistry {
       });
       await this.firstContact(args.nodeId);
       await this.seen(args.nodeId);
+      if (args.offer.disk)
+        await this.reportDisk({
+          nodeId: args.nodeId,
+          session: args.session,
+          disk: args.offer.disk,
+        });
       if (connected.superseded)
         this.deps.log?.(`Worker ${args.name} restarted and connected`);
       else this.deps.log?.(`Worker ${args.name} connected`);
@@ -1137,16 +1242,23 @@ export class WorkWorkerRegistry {
       rows.map((row) => {
         const node = byId.get(row.node_id);
         const capacity = node?.capacity;
+        // Short of disk, it takes nothing at all (ADR 0335).
+        const roomy =
+          !node ||
+          diskFits({
+            usage: node.usage,
+            resources: {},
+            ...(node.disk ? { disk: node.disk } : {}),
+          });
         const live =
           node?.available && capacity
             ? {
                 descriptor: node.descriptor,
                 defaults: node.defaults,
                 free: {
-                  workspaces: Math.max(
-                    0,
-                    capacity.workspaces - node.usage.workspaces,
-                  ),
+                  workspaces: roomy
+                    ? Math.max(0, capacity.workspaces - node.usage.workspaces)
+                    : 0,
                   ...(capacity.cpuMillis !== undefined
                     ? {
                         cpuMillis: Math.max(
@@ -1160,6 +1272,17 @@ export class WorkWorkerRegistry {
                         memoryMb: Math.max(
                           0,
                           capacity.memoryMb - node.usage.memoryMb,
+                        ),
+                      }
+                    : {}),
+                  ...(node.disk && diskFresh(node.disk)
+                    ? {
+                        storageMb: Math.max(
+                          0,
+                          Math.min(
+                            diskBudgetMb(node.disk) - node.usage.storageMb,
+                            Math.floor(headroom(node.disk) / (1024 * 1024)),
+                          ),
                         ),
                       }
                     : {}),

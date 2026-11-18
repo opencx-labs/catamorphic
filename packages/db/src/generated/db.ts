@@ -617,6 +617,7 @@ export interface ExecutionAllocations {
   released_at: Timestamp | null;
   reserved_cpu_millis: Generated<number>;
   reserved_memory_mb: Generated<number>;
+  reserved_storage_mb: Generated<number>;
   root_workload_id: string;
   sandbox_creation_started: Generated<boolean>;
   sandbox_provider_id: string | null;
@@ -1274,6 +1275,8 @@ export interface WorkerNodes {
   capacity: Json | null;
   default_resources: Generated<Json>;
   descriptor: Json;
+  disk: Json | null;
+  disk_low_at: Timestamp | null;
   disposable: Generated<boolean>;
   enabled: Generated<boolean>;
   id: string;

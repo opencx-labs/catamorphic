@@ -938,13 +938,20 @@ export {
   type WorkTopic,
   WorkWakeups,
 } from "./services/work-wakeups.js";
-export type { WorkerCapacity } from "./services/worker-capacity.js";
+export type {
+  WorkerCapacity,
+  WorkerUsage,
+} from "./services/worker-capacity.js";
 export {
   capacityFits,
+  diskFits,
   EnvironmentCapacityError,
+  MachineDiskSchema,
+  machineDiskOf,
   WorkerCapacitySchema,
 } from "./services/worker-capacity.js";
 export {
+  type DiskEpisode,
   REMOTE_EPOCH_PATTERN,
   RemoteEpochSupersededError,
   type RemoteNodeOffer,

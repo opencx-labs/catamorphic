@@ -151,8 +151,12 @@ function setup(options: { now?: () => number } = {}) {
     controlPlaneUrl: PUBLIC,
     emailOf: async () => undefined,
   });
-  // Machines' first calls reach this reconciler, as the server wires it.
-  const workers = registry((machine) => reconciler.machineConnected(machine));
+  // Machines' first calls and disk episodes reach this reconciler, as the
+  // server wires it.
+  const workers = registry(
+    (machine) => reconciler.machineConnected(machine),
+    (machine) => reconciler.machineDiskLow(machine),
+  );
   /** One pass of this reconciler, once another's is out of the way. */
   const pass = async () => {
     for (;;) {
@@ -168,6 +172,7 @@ function registry(
   firstContact?: ConstructorParameters<
     typeof WorkWorkerRegistry
   >[0]["firstContact"],
+  diskLow?: ConstructorParameters<typeof WorkWorkerRegistry>[0]["diskLow"],
 ) {
   return new WorkWorkerRegistry({
     db: db(),
@@ -175,6 +180,7 @@ function registry(
     tenantId: SERVER_TENANT_ID,
     authorityId,
     ...(firstContact ? { firstContact } : {}),
+    ...(diskLow ? { diskLow } : {}),
   });
 }
 
@@ -203,14 +209,15 @@ async function enroll(args: {
   name: string;
   code: string;
   connect?: boolean;
-}) {
+}): Promise<{ nodeId: string; session: string }> {
   const { publicKey } = generateExecutorKeyPair();
   const { nodeId } = await args.workers.enroll({ code: args.code, publicKey });
+  const session = epoch();
   if (args.connect)
     await args.workers.connect({
       nodeId,
       name: args.name,
-      session: epoch(),
+      session,
       offer: WorkerOfferSchema.parse({
         isolation: "sandbox",
         workspaceRoot: "/workspaces",
@@ -218,6 +225,7 @@ async function enroll(args: {
       }),
       publicKey,
     });
+  return { nodeId, session };
 }
 
 const shared = (rule: string) => ({
@@ -676,5 +684,63 @@ describe("workflow machine classes (ADR 0327)", () => {
       "machine.released",
     ]);
     await reconciler.deleteRule("fleet-g");
+  });
+
+  it("tells it once per episode when a machine falls under its disk floor, with its report and the class's options (ADR 0335)", async () => {
+    const { workflows, reconciler, workers, pass } = setup();
+    await reconciler.setRule(shared("fleet-k"));
+    const name = sharedName("fleet-k", "fleet", ENG, 1);
+    await pass();
+    const [create] = workflows.creates(name);
+    if (!create) throw new Error("No create was started");
+    workflows.answer(create.correlationKey, { ref: "i-0ddd" });
+    await pass();
+    const { nodeId, session } = await enroll({
+      workers,
+      name,
+      code: create.input.enrollment.code,
+      connect: true,
+    });
+    const disk = (free: number) => ({
+      path: "/var/lib/work-worker",
+      totalBytes: 100e9,
+      freeBytes: free,
+      floorBytes: 10e9,
+      measuredAt: new Date().toISOString(),
+    });
+    const lowEvents = () =>
+      workflows.events.filter(
+        (event) => event.event.kind === "machine.disk-low",
+      );
+    await workers.renew({ nodeId, session, disk: disk(50e9) });
+    expect(lowEvents()).toEqual([]);
+    // Every replica hears its renewals; the episode is told once.
+    await Promise.all(
+      [1, 2, 3].map(() => workers.renew({ nodeId, session, disk: disk(4e9) })),
+    );
+    await workers.renew({ nodeId, session, disk: disk(10.5e9) });
+    expect(lowEvents()).toHaveLength(1);
+    expect(lowEvents()[0]).toMatchObject({
+      project: PROVISIONER,
+      event: {
+        source: "machines",
+        kind: "machine.disk-low",
+        payload: {
+          name,
+          class: "fleet",
+          rule: "fleet-k",
+          ref: "i-0ddd",
+          disk: { freeBytes: 4e9, totalBytes: 100e9, floorBytes: 10e9 },
+          options: OPTIONS,
+        },
+      },
+    });
+    // Room again, then short again: a second episode, a second event.
+    await workers.renew({ nodeId, session, disk: disk(30e9) });
+    await workers.renew({ nodeId, session, disk: disk(3e9) });
+    const [first, second] = lowEvents();
+    expect(lowEvents()).toHaveLength(2);
+    expect(second?.event.externalId).not.toBe(first?.event.externalId);
+    await reconciler.deleteRule("fleet-k");
   });
 });

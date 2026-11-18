@@ -84,6 +84,11 @@ export const MACHINE_CAPABILITIES = {
   claudeCode: "harness.claude-code",
   /** The Codex CLI is on the machine's path. */
   codex: "harness.codex",
+  /**
+   * The machine reports its disk (ADR 0335), so admission keeps its floor
+   * and reserves an Environment's `storageMb` there.
+   */
+  disk: "disk",
 } as const;
 
 export type MachineCapability =
@@ -244,9 +249,16 @@ export function environmentSatisfies(
   for (const key of ["cpuMillis", "memoryMb", "storageMb", "gpu"] as const) {
     if (
       requirements.resources?.[key] &&
-      !binding.resourceLimits?.includes(key)
+      !binding.resourceLimits?.includes(key) &&
+      // Storage is reserved where it cannot be enforced, on a machine that
+      // reports its disk (ADR 0335).
+      !(key === "storageMb" && binding.capabilities.includes("disk"))
     ) {
-      reasons.push(`Binding cannot enforce '${key}'`);
+      reasons.push(
+        key === "storageMb"
+          ? "Binding can neither enforce nor reserve 'storageMb'"
+          : `Binding cannot enforce '${key}'`,
+      );
     }
   }
   if (!binding.workloads.includes(requirements.workload)) {
