@@ -107,7 +107,9 @@ const service = await github.authorizeApp({ appId, privateKey, owner: "acme" });
   and revoked by `revoke`. A 401 marks the authorization expired.
 - **Actions**: `get`, `post`, `put`, `patch`, `delete` on the REST API, plus
   `pull_request_files`, `create_review` (with inline comments),
-  `create_check_run`, `update_check_run`, and `issue_comment`. Capabilities
+  `create_check_run`, `update_check_run`, `complete_check_runs` (every run of
+  the App's still in progress on some commits, by name and external id
+  prefix), and `issue_comment`. Capabilities
   narrow them, so a role may grant `get` alone. Every action reaches only
   the repositories the broker passes as `repositories` (the binding's
   `git.repositories`, else the project's linked remote, as for Git); REST

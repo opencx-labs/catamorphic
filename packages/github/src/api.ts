@@ -735,6 +735,17 @@ export class GithubApi {
     return raw.map(commentOf);
   }
 
+  /** A pull request's commits, oldest first (GitHub lists at most 250). */
+  async pullRequestCommits(input: {
+    fullName: string;
+    number: number;
+  }): Promise<string[]> {
+    const raw = await this.requestPages<{ sha: string }>(
+      `/repos/${repositoryPath(input.fullName)}/pulls/${positive(input.number)}/commits`,
+    );
+    return raw.map((commit) => commit.sha);
+  }
+
   /** Check runs on a commit, by name when given, with the App that made each. */
   async checkRuns(input: {
     fullName: string;
