@@ -458,6 +458,80 @@ it.skipIf(!db)(
 );
 
 it.skipIf(!db)(
+  "a heartbeat waits behind a step that ends its run and releases the Allocation, without a deadlock",
+  async () => {
+    if (!core || !db) return;
+    await quietOthers();
+    const node = await register();
+    const work = await placeWork({ nodeId: node.id });
+    const jobs = new ExecutionJobsService(db, node);
+    await jobs.enqueue({
+      tenantId: identity.tenantId,
+      kind: "durable_boundary",
+      payload: {},
+      workflowRunId: work.runId,
+    });
+    const [held] = await jobs.claim({
+      workerId: "renewing-worker",
+      kinds: ["durable_boundary"],
+      leaseSeconds: 60,
+    });
+    if (!held?.leaseToken) throw new Error("The node claimed nothing");
+    const leaseToken = held.leaseToken;
+    let renewal: Promise<boolean> | undefined;
+    // The coordinator's order when a step ends its run: it locks the job
+    // row to prove ownership, then releases the run's Allocation.
+    await db.transaction().execute(async (trx) => {
+      await trx
+        .selectFrom("execution_jobs")
+        .select("id")
+        .where("id", "=", held.id)
+        .forUpdate()
+        .execute();
+      renewal = jobs.heartbeat({
+        jobId: held.id,
+        workerId: "renewing-worker",
+        leaseToken,
+        leaseGeneration: held.leaseGeneration,
+      });
+      await expect
+        .poll(
+          async () =>
+            (
+              await sql<{ waiting: number }>`SELECT count(*)::int AS waiting
+                FROM pg_stat_activity
+                WHERE datname = current_database()
+                  AND wait_event_type = 'Lock'
+                  AND query LIKE '%"execution_jobs" set "lease_expires_at"%'`.execute(
+                db,
+              )
+            ).rows[0]?.waiting,
+          { timeout: 5_000 },
+        )
+        .toBe(1);
+      await trx
+        .updateTable("execution_allocations")
+        .set({ status: "released", released_at: new Date() })
+        .where("id", "=", work.allocationId)
+        .where("status", "=", "active")
+        .execute();
+    });
+    // The waiting renewal completes from its own snapshot; the next one
+    // finds the Allocation released and stops the job.
+    expect(await renewal).toBe(true);
+    expect(
+      await jobs.heartbeat({
+        jobId: held.id,
+        workerId: "renewing-worker",
+        leaseToken,
+        leaseGeneration: held.leaseGeneration,
+      }),
+    ).toBe(false);
+  },
+  30_000,
+);
+
+it.skipIf(!db)(
   "a job still leased on the lost node is fenced from it and claimed once on the new one",
   async () => {
     if (!core || !db) return;

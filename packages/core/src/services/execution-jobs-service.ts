@@ -5,7 +5,13 @@ import {
   setSpanCorrelation,
   withSpan,
 } from "@catamorphic/otel";
-import { type Kysely, type Selectable, sql, type Transaction } from "kysely";
+import {
+  type Expression,
+  type Kysely,
+  type Selectable,
+  sql,
+  type Transaction,
+} from "kysely";
 import type { WorkWakeups } from "./work-wakeups.js";
 
 export type ExecutionJobKind =
@@ -449,11 +455,17 @@ export class ExecutionJobsService {
       })
       .where("id", "=", args.jobId)
       .where(
+        // A renewal checks its placement without the claimers' share lock.
+        // It would hold the Allocation while waiting for this job's row,
+        // which the coordinator locks before it releases the Allocation
+        // when the step ends the run: a deadlock. Parking needs no fence
+        // here, since it never releases an Allocation with a running job.
         workerPlacement(
           this.db,
           this.workerNode,
           "execution_jobs.workflow_run_id",
           "execution_jobs.kind",
+          { lock: false },
         ),
       )
       .where("status", "=", "running")
@@ -1168,6 +1180,7 @@ function workerPlacement(
   node: { id: string; token: string } | undefined,
   runId: string,
   kind: string,
+  options: { lock: boolean } = { lock: true },
 ) {
   const placement = db
     .selectFrom("workflow_runs as placement_run")
@@ -1179,6 +1192,11 @@ function workerPlacement(
     .select("placement_run.id")
     .where("placement_run.id", "=", sql<string>`${sql.ref(runId)}`)
     .where("placement.status", "=", "active");
+  const lock = <
+    Query extends { modifyEnd(modifier: Expression<unknown>): Query },
+  >(
+    query: Query,
+  ) => (options.lock ? query.modifyEnd(sql`FOR SHARE OF placement`) : query);
   // Timeouts advance the journal only. They neither touch a sandbox nor
   // need one admitted, including when the original machine is gone.
   // Claiming and parking exclude each other on the Allocation alone;
@@ -1190,17 +1208,18 @@ function workerPlacement(
       .select("id")
       .where("id", "=", sql<string>`${sql.ref(runId)}`)
       .where("allocation_id", "is", null);
-    return sql<boolean>`(${timeout} OR EXISTS (${unplaced}) OR EXISTS (${placement
-      .where("placement.worker_node_id", "is", null)
-      .modifyEnd(sql`FOR SHARE OF placement`)}))`;
+    return sql<boolean>`(${timeout} OR EXISTS (${unplaced}) OR EXISTS (${lock(
+      placement.where("placement.worker_node_id", "is", null),
+    )}))`;
   }
-  return sql<boolean>`(${timeout} OR EXISTS (${placement
-    .innerJoin("worker_nodes as node", "node.id", "placement.worker_node_id")
-    .where("node.id", "=", node.id)
-    .where("node.lease_token", "=", node.token)
-    .where("node.enabled", "=", true)
-    .where("node.lease_expires_at", ">", sql<Date>`clock_timestamp()`)
-    .modifyEnd(sql`FOR SHARE OF placement`)}))`;
+  return sql<boolean>`(${timeout} OR EXISTS (${lock(
+    placement
+      .innerJoin("worker_nodes as node", "node.id", "placement.worker_node_id")
+      .where("node.id", "=", node.id)
+      .where("node.lease_token", "=", node.token)
+      .where("node.enabled", "=", true)
+      .where("node.lease_expires_at", ">", sql<Date>`clock_timestamp()`),
+  )}))`;
 }
 
 function escapeLike(value: string): string {
