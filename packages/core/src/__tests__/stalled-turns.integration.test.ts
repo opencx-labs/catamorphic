@@ -1,3 +1,4 @@
+import { spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import os from "node:os";
@@ -68,6 +69,8 @@ describe("stalled turns", () => {
   let makeService: () => AgentSessionsService;
   /** The latest attempt of a hung harness, by session: the test speaks for it. */
   const hung = new Map<string, AttemptHost>();
+  /** The process group a hung harness's agent runs in, by session. */
+  const agentGroups = new Map<string, number>();
 
   beforeAll(async () => {
     await migrateToLatest({ db, schema });
@@ -117,6 +120,18 @@ describe("stalled turns", () => {
           level: "warn",
           message: `retrying with ${SECRET}`,
         });
+        // An agent in a process group of its own, as an ACP agent runs.
+        if (attempt.input?.text.includes("[[own-group]]")) {
+          const agent = spawn("sleep", ["300"], {
+            detached: true,
+            stdio: "ignore",
+          });
+          agent.unref();
+          if (agent.pid) {
+            agentGroups.set(attempt.sessionId, agent.pid);
+            host.emit({ type: "process.group", pgid: agent.pid });
+          }
+        }
         return {
           steer: async () => false,
           interrupt: () => {},
@@ -207,6 +222,7 @@ describe("stalled turns", () => {
     agentId = "watched",
     /** Its parent: a subsession of that chat, in its project (ADR 0322). */
     parent?: { projectId: string; sessionId: string },
+    text = "review the pull request [[hang]]",
   ) {
     const project = parent
       ? { id: parent.projectId }
@@ -227,7 +243,7 @@ describe("stalled turns", () => {
     await sessions.command(identity, project.id, session.id, {
       type: "send",
       commandId: randomUUID(),
-      text: "review the pull request [[hang]]",
+      text,
     });
     await vi.waitFor(
       async () => {
@@ -508,6 +524,46 @@ describe("stalled turns", () => {
       attemptId: chat.attemptId,
       reason: "done with this test",
     });
+  }, 40_000);
+
+  it("kills the process group of its own a hung harness reported when it restarts it", async () => {
+    const chat = await hangingChat(
+      "Own group",
+      "watched",
+      undefined,
+      "review the pull request [[hang]] [[own-group]]",
+    );
+    const pgid = await vi.waitFor(
+      async () => {
+        const runner = (await attemptRow(chat.attemptId)).runner as {
+          groups?: number[];
+        } | null;
+        expect(runner?.groups).toEqual([agentGroups.get(chat.sessionId)]);
+        return runner?.groups?.[0] ?? 0;
+      },
+      { timeout: 10_000 },
+    );
+    const alive = () => {
+      try {
+        process.kill(-pgid, 0);
+        return true;
+      } catch {
+        return false;
+      }
+    };
+    expect(alive()).toBe(true);
+    await sessions.restartTurn(identity, chat.projectId, chat.sessionId, {
+      turnId: chat.turnId,
+      attemptId: chat.attemptId,
+      reason: "stalled",
+    });
+    await vi.waitFor(
+      async () => {
+        expect((await attemptRow(chat.attemptId)).status).toBe("restarted");
+        expect(alive()).toBe(false);
+      },
+      { timeout: 20_000 },
+    );
   }, 40_000);
 
   it("restarts, rather than loses, a turn whose runner went away with a restart asked of it", async () => {

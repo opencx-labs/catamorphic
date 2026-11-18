@@ -419,6 +419,9 @@ export async function ingestHarnessEvents(input: {
         break;
       case "diagnostic":
         break;
+      // Recorded on the attempt's runner state by the engine (ADR 0333).
+      case "process.group":
+        break;
       case "turn.completed":
         if (turn.providerRetry) emitTurn({ ...turn, providerRetry: null });
         // Whatever a mask still held is the end of its stream.

@@ -371,11 +371,12 @@ it stops that turn only, and answers { interrupted: false } when it no longer
 works. attempts({ sessionId | key, turnId }) reads a turn's attempts: status,
 error, progressAt, and diagnostics { runner, harness }, the last 16 000
 characters of the runner's and the harness's own output, masked, in whole
-lines, kept for attempts that did not complete. Collect more with exec before
-a restart (ps, the harness's log files), and inspect again before acting: a
-diagnosis takes time. The pull-request-reviews pack's restartStalledReviews
-is a complete recipe: inspect, exec, attempts, a store document, inspect,
-then restart, or interrupt past its bound.
+lines, kept for attempts that did not complete. Keep those as the evidence,
+not exec output: code the chat runs can forge what a command prints, and
+commands may run apart from the agent, seeing neither its processes nor its
+logs. Inspect again before acting. The pull-request-reviews pack's
+restartStalledReviews is a complete recipe: inspect, attempts, a store
+document, inspect, then restart, or interrupt past its bound.
 
 \`\`\`typescript
 import {

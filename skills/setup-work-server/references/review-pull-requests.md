@@ -205,9 +205,9 @@ adds:
 - `.work/workflows/src/stalled-reviews.ts`: the optional
   `restartStalledReviews`. The reviewer's `stall` (20 minutes) makes Work
   emit `session.turn-stalled` when a review turn stops making progress (a
-  hung tool call, a stuck harness, ADR 0333); this workflow keeps the
-  sandbox's process list, the harness's log and Work's diagnostics in the
-  project store, restarts the turn, and after two restarts stops it, so the
+  hung tool call, a stuck harness, ADR 0333); this workflow keeps Work's
+  record of the attempt (its runner's and harness's own output, masked) in
+  the project store, restarts the turn, and after two restarts stops it, so the
   commit's check says the review did not finish.
 
 Replace `acme/web` in each trigger's `where` and in `REVIEWED_REPOSITORY`

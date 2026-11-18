@@ -63,6 +63,26 @@ export interface RunnerChannel {
    * sends SIGKILL to the group instead (ADR 0333).
    */
   kill(input?: { force?: boolean }): Promise<void>;
+  /**
+   * SIGKILL process groups its harness started on their own (ADR 0333),
+   * where the runner runs: none survives the attempt a restart ended.
+   */
+  killGroups(groups: readonly number[]): Promise<void>;
+}
+
+/** Only group ids a harness could have reported: whole numbers above 1. */
+function validGroups(groups: readonly number[]): number[] {
+  return groups.filter((group) => Number.isSafeInteger(group) && group > 1);
+}
+
+/** SIGKILL process groups on this machine (an in-process runner's harness). */
+export function killProcessGroups(groups: readonly number[]): void {
+  for (const group of validGroups(groups))
+    try {
+      process.kill(-group, "SIGKILL");
+    } catch {
+      // Gone already.
+    }
 }
 
 /**
@@ -75,10 +95,22 @@ export async function endRunner(input: {
   channel: RunnerChannel;
   cursor: number;
   graceMs: number;
+  /** Groups of its own its harness reported: killed however it ends. */
+  groups?: readonly number[];
 }): Promise<"exited" | "killed" | "unknown"> {
   const { channel } = input;
+  const groups = input.groups ?? [];
+  // Whatever happens to the runner, nothing it started in a group of its
+  // own outlives it into the next attempt.
+  const killGroups = () => channel.killGroups(groups).catch(() => {});
+  // An in-process harness has no process to kill: its own groups go first,
+  // which may be what it waits on, then it is told to stop and let go.
+  if (channel.location.kind === "in_process") {
+    await killGroups();
+    await channel.kill().catch(() => {});
+    return "unknown";
+  }
   await channel.kill().catch(() => {});
-  if (channel.location.kind === "in_process") return "unknown";
   let cursor = input.cursor;
   const gone = async (deadline: number) => {
     while (Date.now() < deadline) {
@@ -94,9 +126,18 @@ export async function endRunner(input: {
     }
     return false;
   };
-  if (await gone(Date.now() + input.graceMs)) return "exited";
+  if (await gone(Date.now() + input.graceMs)) {
+    await killGroups();
+    return "exited";
+  }
   await channel.kill({ force: true }).catch(() => {});
-  return (await gone(Date.now() + 5_000)) ? "killed" : "unknown";
+  await killGroups();
+  if (await gone(Date.now() + 5_000)) return "killed";
+  // Never seen to exit: its process group and every one it reported get
+  // SIGKILL once more before the next attempt starts.
+  await channel.kill({ force: true }).catch(() => {});
+  await killGroups();
+  return "unknown";
 }
 
 /**
@@ -149,6 +190,7 @@ function inProcessChannel(
       await runner.kill();
       inProcessRunners.delete(runnerId);
     },
+    killGroups: async (groups) => killProcessGroups(groups),
   };
 }
 
@@ -450,6 +492,16 @@ export function sandboxChannel(input: {
           processId: location.processId,
           signal: options?.force ? "SIGKILL" : "SIGTERM",
         })
+        .catch(() => {});
+    },
+    killGroups: async (groups) => {
+      const valid = validGroups(groups);
+      if (valid.length === 0) return;
+      await provider
+        .executeCommand(
+          location.sandboxId,
+          `kill -KILL ${valid.map((group) => `-- -${group}`).join(" ")} 2>/dev/null; true`,
+        )
         .catch(() => {});
     },
   };

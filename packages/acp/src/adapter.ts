@@ -218,6 +218,10 @@ function startAttempt(
       detached: process.platform !== "win32",
     });
     child = spawned;
+    // Its own group outlives a runner killed for a restart unless Work
+    // knows it (ADR 0333).
+    if (process.platform !== "win32" && spawned.pid)
+      host.emit({ type: "process.group", pgid: spawned.pid });
     spawned.stderr.setEncoding("utf8");
     spawned.stderr.on("data", (chunk: string) => {
       stderr.push(...chunk.split("\n").filter((line) => line.trim()));

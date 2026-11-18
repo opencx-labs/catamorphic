@@ -1,8 +1,10 @@
+import { spawn } from "node:child_process";
 import type { SandboxProvider } from "@catamorphic/sandbox";
 import { describe, expect, it } from "vitest";
 import {
   diagnostic,
   endRunner,
+  killProcessGroups,
   type RunnerChannel,
   sandboxChannel,
 } from "../services/sessions/runner-channels.js";
@@ -14,6 +16,7 @@ import {
 
 function fakeRunner(input: { exitsOn: "SIGTERM" | "SIGKILL" | "never" }) {
   const signals: string[] = [];
+  const killed: number[][] = [];
   let exited = false;
   const channel: RunnerChannel = {
     location: {
@@ -32,8 +35,13 @@ function fakeRunner(input: { exitsOn: "SIGTERM" | "SIGKILL" | "never" }) {
       signals.push(signal);
       if (input.exitsOn === signal) exited = true;
     },
+    // Groups are this machine's here: killed for real.
+    killGroups: async (groups) => {
+      killed.push([...groups]);
+      killProcessGroups(groups);
+    },
   };
-  return { channel, signals };
+  return { channel, signals, killed };
 }
 
 describe("endRunner", () => {
@@ -55,21 +63,43 @@ describe("endRunner", () => {
     expect(signals).toEqual(["SIGTERM", "SIGKILL"]);
   });
 
-  it("gives up waiting on one that never exits", async () => {
-    const { channel, signals } = fakeRunner({ exitsOn: "never" });
-    expect(await endRunner({ channel, cursor: 0, graceMs: 100 })).toBe(
-      "unknown",
-    );
-    expect(signals).toEqual(["SIGTERM", "SIGKILL"]);
+  it("kills every group its harness reported before giving up on a runner that ignores every signal", async () => {
+    // An agent in a process group of its own, as an ACP agent runs.
+    const agent = spawn("sleep", ["300"], { detached: true, stdio: "ignore" });
+    const pgid = agent.pid ?? 0;
+    const alive = () => {
+      try {
+        process.kill(-pgid, 0);
+        return true;
+      } catch {
+        return false;
+      }
+    };
+    const gone = new Promise((resolve) => agent.once("exit", resolve));
+    expect(alive()).toBe(true);
+    const { channel, signals, killed } = fakeRunner({ exitsOn: "never" });
+    expect(
+      await endRunner({ channel, cursor: 0, graceMs: 100, groups: [pgid] }),
+    ).toBe("unknown");
+    // Its own group twice, and the agent's group with each.
+    expect(signals).toEqual(["SIGTERM", "SIGKILL", "SIGKILL"]);
+    expect(killed).toEqual([[pgid], [pgid]]);
+    await gone;
+    expect(alive()).toBe(false);
   }, 15_000);
 
   it("signals a sandbox runner's process with SIGTERM, or SIGKILL when forced", async () => {
     const sent: string[] = [];
+    const commands: string[] = [];
     const provider = {
       processes: {
         signalProcess: async ({ signal }: { signal: string }) => {
           sent.push(signal);
         },
+      },
+      executeCommand: async (_sandboxId: string, command: string) => {
+        commands.push(command);
+        return { exitCode: 0, stdout: "", stderr: "" };
       },
     } as unknown as SandboxProvider;
     const channel = sandboxChannel({
@@ -84,6 +114,10 @@ describe("endRunner", () => {
     await channel.kill();
     await channel.kill({ force: true });
     expect(sent).toEqual(["SIGTERM", "SIGKILL"]);
+    // Its harness's own groups, inside the sandbox; nothing a harness could
+    // not have reported.
+    await channel.killGroups([4242, 77, 1, -3, 2.5]);
+    expect(commands).toEqual(["kill -KILL -- -4242 -- -77 2>/dev/null; true"]);
   });
 });
 
