@@ -469,6 +469,57 @@ describe.skipIf(!enabled)("commands apart from the agent (ADR 0332)", () => {
   );
 
   it(
+    "sends every Git beside the agent to the command side, even once the checkout is the harness's",
+    async () => {
+      const id = await separated();
+      const hasGit = await provider.executeCommand(id, "command -v git");
+      if (hasGit.exitCode !== 0) {
+        // The image has no Git to replace: nothing named git runs there.
+        expect((await harness(id, "command -v git")).exitCode).not.toBe(0);
+        return;
+      }
+      // The change's code, as root on its side, configures the checkout
+      // and gives it to the harness's user, undoing the ownership refusal.
+      await provider.executeCommand(
+        id,
+        `cd ${PROJECT} && git init -q && git config core.fsmonitor 'touch /tmp/fsmonitor-ran' && chown -R ${HARNESS} ${PROJECT}`,
+      );
+      // Git by its absolute path, and every git the agent side's PATH
+      // names, trusting the checkout whoever owns it.
+      for (const git of ["/usr/bin/git", "git"]) {
+        const ran = await harness(
+          id,
+          `${git} -c safe.directory='*' -C ${PROJECT} status`,
+        );
+        expect(ran.exitCode, ran.result).toBe(0);
+        expect(
+          (
+            await agent(
+              id,
+              "test -e /tmp/fsmonitor-ran && echo ran || echo not",
+            )
+          ).result.trim(),
+        ).toBe("not");
+        expect(
+          (
+            await provider.executeCommand(
+              id,
+              "test -e /tmp/fsmonitor-ran && echo ran && rm /tmp/fsmonitor-ran || echo not",
+            )
+          ).result.trim(),
+        ).toBe("ran");
+      }
+      // No real Git is left beside the agent, its helpers included.
+      const real = await harness(
+        id,
+        'for d in $(printf %s "$PATH" | tr : " ") /usr/bin /usr/local/bin /bin; do [ -e "$d/git" ] && ! grep -q "runs in the command container" "$d/git" && echo "real $d/git"; done; for h in /usr/lib/git-core/git /usr/libexec/git-core/git; do [ -x "$h" ] && echo "helper $h"; done; echo looked',
+      );
+      expect(real.result.trim()).toBe("looked");
+    },
+    10 * MINUTES,
+  );
+
+  it(
     "keeps the runner's grant, the shim and the harness's configuration from a harness a racing link leads",
     async () => {
       const id = await separated();

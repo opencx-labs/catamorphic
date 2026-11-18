@@ -125,9 +125,11 @@ const AGENT_SESSION = "/workspace/.work-session";
 
 /**
  * Lays out the agent side for its harness (ADR 0332): the session folder
- * root's alone, the harness's own home and temporary folder, and the shim
- * root's (its files written beforehand). Arguments: the harness's user and
- * group, then the Git shim.
+ * root's alone, the harness's own home and temporary folder, the shim
+ * root's (its files written beforehand), and every Git the image has
+ * replaced by the shim's, so even a Git named by its absolute path runs
+ * where commands run; Git's own helper folders are root's alone. Arguments:
+ * the harness's user and group, then the Git shim.
  */
 const AGENT_LAYOUT = [
   'u="$1"; g="$2"; shim_git="$3"',
@@ -140,6 +142,14 @@ const AGENT_LAYOUT = [
   `chown "$u:$g" ${SEPARATE_HARNESS.home} ${SEPARATE_HARNESS.temporary} && chmod 700 ${SEPARATE_HARNESS.home} ${SEPARATE_HARNESS.temporary}`,
   // The shim is root's: the harness reads and runs it, never rewrites it.
   `chown -R 0:0 ${SEPARATE_HARNESS.shim} && chmod -R a+rX,go-w ${SEPARATE_HARNESS.shim} && chmod 755 ${SEPARATE_HARNESS.shim}/bin/bash "$shim_git"`,
+  'for d in $(printf %s "$PATH" | tr : " ") /usr/bin /usr/local/bin /bin /usr/sbin /usr/local/sbin; do',
+  '  [ -e "$d/git" ] || [ -L "$d/git" ] || continue',
+  '  [ "$d/git" = "$shim_git" ] && continue',
+  '  rm -f "$d/git" && cp "$shim_git" "$d/git" && chmod 755 "$d/git" || exit 1',
+  "done",
+  "for d in /usr/lib/git-core /usr/libexec/git-core /usr/local/libexec/git-core; do",
+  '  [ -d "$d" ] && chown 0:0 "$d" && chmod 700 "$d"',
+  "done",
   "exit 0",
 ].join("\n");
 
