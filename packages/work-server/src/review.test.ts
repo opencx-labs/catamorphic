@@ -642,8 +642,9 @@ describe.skipIf(!databaseUrl)("reviewing pull requests (#118)", () => {
     // The company repository attached as a project; the skill's files,
     // committed verbatim. The worker runs local processes, which cannot
     // build the project image or give each sandbox its own Docker daemon,
-    // so the manifest drops just those two lines for this machine, and the
-    // read-only cache, which only the container backend mounts (ADR 0334).
+    // so the manifest drops just those two lines for this machine, the
+    // read-only cache, which only the container backend mounts (ADR 0334),
+    // and running commands apart, which only it does (ADR 0332).
     const project = await core.projects.create(setup, { name: "Acme web" });
     projectId = project.id;
     await core.db
@@ -656,14 +657,15 @@ describe.skipIf(!databaseUrl)("reviewing pull requests (#118)", () => {
       })
       .where("id", "=", projectId)
       .execute();
-    const withoutCache = JSON.parse(
+    const forThisMachine = JSON.parse(
       REVIEW_AUTOMATION_FILES[".work/project.json"] ?? "{}",
     );
-    delete withoutCache.environments.review.caches;
-    const manifest = JSON.stringify(withoutCache, null, 2)
+    delete forThisMachine.environments.review.caches;
+    delete forThisMachine.environments.review.commands;
+    const manifest = JSON.stringify(forThisMachine, null, 2)
       .replace(/\n\s*"image": "[^"]*",/, "")
       .replace(/\n\s*"containers": true,/, "");
-    expect(manifest).not.toMatch(/"image"|"containers"|"caches"/);
+    expect(manifest).not.toMatch(/"image"|"containers"|"caches"|"commands"/);
     const deployed = await core.deployment.deploy(
       SERVER_TENANT_ID,
       projectId,
