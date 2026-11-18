@@ -252,7 +252,7 @@ export class MicrosandboxSandboxProvider implements SandboxProvider {
     if (opts.volumes?.length && !this.usage)
       throw new Error("This machine keeps no volumes for its sandboxes");
     // Its volume mounts are writable (ADR 0334).
-    refuseCacheVolumes(opts.volumes, "Microsandbox");
+    refuseCacheVolumes(opts.volumes, "Microsandbox", opts.internal);
     assertSandboxVolumes(opts.volumes);
     const signIns = this.signInMounts(opts);
     const image = await this.imageFor(opts);

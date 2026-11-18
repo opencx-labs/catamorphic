@@ -66,7 +66,12 @@ export function assertSandboxVolumes(
 export function refuseCacheVolumes(
   volumes: readonly SandboxVolume[] | undefined,
   backend: string,
+  internal?: boolean,
 ): void {
+  if (internal)
+    throw new Error(
+      `${backend} sandboxes cannot run cut off from every network, so they cannot check a cache`,
+    );
   const cache = (volumes ?? []).find(
     (volume) => volume.readOnly || CACHE_VOLUME_KEY_PATTERN.test(volume.key),
   );

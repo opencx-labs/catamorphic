@@ -615,6 +615,44 @@ describe.skipIf(!enabled)("container sandboxes (ADR 0204)", () => {
     10 * MINUTES,
   );
 
+  it(
+    "makes Work's own sandbox cut off from every network, without setup, able to check a cache (ADR 0334)",
+    async () => {
+      // The machine's default setup would install git; Work's own sandbox
+      // runs none of it.
+      const sandboxProvider = provider();
+      const key = cacheVolumeKey({
+        projectId: `internal-${path.basename(root)}`,
+        environment: "review",
+        name: "pnpm",
+        generation: 1,
+      });
+      const fill = await created(sandboxProvider, {
+        volumes: [{ key, path: "/cache" }],
+      });
+      await sandboxProvider.executeCommand(fill, "echo one > /cache/package");
+      await sandboxProvider.destroySandbox(fill);
+      const helper = await created(sandboxProvider, {
+        internal: true,
+        volumes: [{ key, path: "/work-cache-check", readOnly: true }],
+      });
+      const reached = await sandboxProvider.executeCommand(
+        helper,
+        `wget -q -T 5 -O- http://${hostIp}:${port}/internal`,
+      );
+      expect(reached.exitCode).not.toBe(0);
+      expect(reached.result).not.toContain("allowed");
+      const tools = await sandboxProvider.executeCommand(
+        helper,
+        "command -v git >/dev/null && echo has-git; for t in du cut grep basename find rm; do command -v $t >/dev/null || echo missing-$t; done; du -sk /work-cache-check | cut -f1; grep -rqF one /work-cache-check && echo found",
+      );
+      expect(tools.result).not.toContain("has-git");
+      expect(tools.result).not.toContain("missing-");
+      expect(tools.result).toContain("found");
+    },
+    10 * MINUTES,
+  );
+
   it.skipIf(process.env.WORK_TEST_CONTAINER_RUNTIME === "runc")(
     "keeps a cache read only in a review sandbox under gVisor: root with every capability and its own Docker cannot write it, even after remounting it read-write (ADR 0334)",
     async () => {

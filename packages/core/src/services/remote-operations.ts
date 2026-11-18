@@ -77,6 +77,9 @@ export const RemoteOperationSchema = z.discriminatedUnion("kind", [
         )
         .readonly()
         .optional(),
+      // A sandbox for Work's own commands, cut off from every network (ADR
+      // 0334); only executors that advertise `caches` are asked for one.
+      internal: z.boolean().optional(),
       // Directories the executor keeps across sandboxes (ADR 0208), and
       // cache generations it mounts read only (ADR 0334). Only executors
       // that advertise `caches` are handed a read-only one.

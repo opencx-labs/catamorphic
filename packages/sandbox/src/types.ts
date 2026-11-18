@@ -92,6 +92,13 @@ export interface CreateSandboxOpts {
    * at their paths. Needs the `volumes` capability.
    */
   volumes?: readonly SandboxVolume[];
+  /**
+   * A sandbox Work makes for its own commands alone, such as checking a
+   * filled cache generation (ADR 0334): no network at all, no setup command,
+   * no proxy, nothing of an Environment's. Needs the `caches` capability; a
+   * provider that cannot cut a sandbox off entirely refuses it.
+   */
+  internal?: boolean;
 }
 
 /**
