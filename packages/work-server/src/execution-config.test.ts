@@ -269,6 +269,8 @@ it("configures images, containers and unenforced egress per backend (ADR 0176)",
     "images.build",
     "network.policy",
     "network.setup",
+    // An agent's commands apart from it (ADR 0332).
+    "commands.separate",
     "containers",
     "volumes",
   ]);
@@ -287,6 +289,7 @@ it("configures images, containers and unenforced egress per backend (ADR 0176)",
     "images.build",
     "network.policy",
     "network.setup",
+    "commands.separate",
     "volumes",
   ]);
   expect(runc.isolation).toBe("process");

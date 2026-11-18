@@ -22,6 +22,11 @@ export const SANDBOX_CAPABILITIES = {
   setupNetwork: "network.setup",
   /** Keeps volumes on the machine across sandboxes (ADR 0208). */
   volumes: "volumes",
+  /**
+   * Runs an agent's commands in a container of their own beside the
+   * agent's, sharing only the checkout (ADR 0332).
+   */
+  separateCommands: "commands.separate",
 } as const;
 
 export type SandboxCapability =

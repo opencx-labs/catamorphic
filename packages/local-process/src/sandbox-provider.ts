@@ -36,6 +36,7 @@ import {
   newProcessId,
   PROCESS_SIGNALS,
   processReadBounds,
+  refuseSeparateCommands,
   SANDBOX_CAPABILITIES,
   SANDBOX_PATHS_ENV,
   StdioDeploymentRuntimeProvider,
@@ -233,6 +234,10 @@ export class LocalProcessSandboxProvider implements SandboxProvider {
 
   async createSandbox(opts: CreateSandboxOpts): Promise<SandboxHandle> {
     assertSandboxResources(opts.resources, []);
+    refuseSeparateCommands({
+      separateCommands: opts.separateCommands,
+      provider: "Local-process",
+    });
     if (opts.image)
       throw new Error(
         "Local-process sandboxes run on this machine's own system and cannot boot an image",

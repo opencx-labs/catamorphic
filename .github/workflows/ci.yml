@@ -410,7 +410,7 @@ jobs:
       - name: Real container sandboxes under gVisor
         env:
           WORK_TEST_CONTAINER: "1"
-        run: bun scripts/tool-runtime.ts vitest --tool-cwd packages/container --config ../../vitest.config.ts src/__tests__/sandbox-provider.container.test.ts
+        run: bun scripts/tool-runtime.ts vitest --tool-cwd packages/container --config ../../vitest.config.ts src/__tests__/sandbox-provider.container.test.ts src/__tests__/separate-commands.container.test.ts
       - uses: ./.github/actions/test-cache-save
         if: ${{ !cancelled() && steps.setup.outcome == 'success' }}
         with:

@@ -98,6 +98,17 @@ export {
 } from "./coding-agent/warm-sessions.js";
 export { CommandDeploymentRuntimeProvider } from "./command-deployment-runtime.js";
 export {
+  AGENT_ONLY_VARIABLES,
+  COMMAND_RETURN_LIMIT,
+  COMMAND_SHELL_CLIENT_SOURCE,
+  COMMAND_SIGNALS,
+  type CommandRequest,
+  type CommandSignal,
+  commandEnvironment,
+  commandShellFiles,
+  writeCommandShell,
+} from "./command-shell.js";
+export {
   CONNECTION_GRANT_READER,
   MODEL_GRANT_READER,
   readConnectionGrant,
@@ -150,6 +161,7 @@ export {
   decodeUtf8Prefix,
   type FollowProcessResult,
   followProcess,
+  isAgentProcessId,
   newProcessId,
   OutputWindow,
   PROCESS_READ_DEFAULT_BYTES,
@@ -249,10 +261,12 @@ export type {
   RuntimeInvocationRequest,
   RuntimeStepEntry,
   RuntimeTerminalResult,
+  SandboxFileOpts,
   SandboxHandle,
   SandboxManager,
   SandboxProvider,
   SandboxResources,
+  SandboxSide,
   SandboxStatus,
   SandboxType,
   SandboxVolume,
@@ -264,6 +278,8 @@ export {
   positiveTokenCount,
   RuntimeEventReportingError,
   RuntimeInfrastructureError,
+  refuseSeparateCommands,
+  SEPARATE_COMMANDS_SOCKET,
   SIGN_IN_HARNESSES,
   type SignInHarness,
   signInCapability,

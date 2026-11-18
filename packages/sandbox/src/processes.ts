@@ -1,4 +1,4 @@
-import type { ExecOpts, ExecResult } from "./types.js";
+import type { ExecOpts, ExecResult, SandboxSide } from "./types.js";
 
 /**
  * Background processes as a sandbox capability (ADR 0174). A process
@@ -43,6 +43,12 @@ export const PROCESS_WRITE_MAX_BYTES = 1024 * 1024;
 
 export interface StartProcessArgs {
   sandboxId: string;
+  /**
+   * Where in a sandbox that runs commands apart (ADR 0332): a runner
+   * starts on the agent side, everything else where commands run. Its id
+   * says which ({@link isAgentProcessId}).
+   */
+  side?: SandboxSide;
   /** A shell command line, run with bash. */
   command: string;
   /** Absolute sandbox path; the provider's workspace root by default. */
@@ -129,8 +135,21 @@ export const PROCESS_READ_MIN_BYTES = 4;
 
 const PROCESS_ID = /^proc-[a-z0-9]{8,32}$/;
 
-export function newProcessId(): string {
-  return `proc-${crypto.randomUUID().replaceAll("-", "").slice(0, 16)}`;
+/**
+ * A new process id. Ids of processes on the agent side of a sandbox that
+ * runs commands apart (ADR 0332) start `proc-agent`, which no other id
+ * does (theirs are hexadecimal), so every later call finds its side.
+ */
+export function newProcessId(input: { side?: SandboxSide } = {}): string {
+  const random = crypto.randomUUID().replaceAll("-", "");
+  return input.side === "agent"
+    ? `proc-agent${random.slice(0, 16)}`
+    : `proc-${random.slice(0, 16)}`;
+}
+
+/** Whether a process lives on the agent side (ADR 0332). */
+export function isAgentProcessId(processId: string): boolean {
+  return processId.startsWith("proc-agent");
 }
 
 /** Rejects ids that did not come from {@link newProcessId}. */
@@ -379,6 +398,8 @@ export function shellSandboxProcesses(args: {
   workspaceRoot: string;
   /** Absolute sandbox directory for process state. */
   stateDirectory?: string;
+  /** The side its processes live on, which their ids name (ADR 0332). */
+  side?: SandboxSide;
 }): SandboxProcessProvider {
   const stateDirectory = args.stateDirectory ?? "/tmp/.catamorphic-processes";
   const writing = new Map<string, Promise<void>>();
@@ -426,7 +447,7 @@ export function shellSandboxProcesses(args: {
   };
   return {
     async startProcess(start) {
-      const processId = newProcessId();
+      const processId = newProcessId(args.side ? { side: args.side } : {});
       const dir = directory(processId);
       const cwd = start.cwd ?? args.workspaceRoot;
       const meta = JSON.stringify({
