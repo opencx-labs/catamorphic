@@ -14,6 +14,7 @@ import {
 import { matchesAllWhere, parseProject } from "@catamorphic/parser";
 import { describe, expect, it } from "vitest";
 import { packFiles } from "../pack-files.js";
+import { checkWorkReview, publicationText } from "./review-report.js";
 
 const PACK = packFiles("pull-request-reviews");
 const OPENCODE = packFiles("pull-request-reviews-opencode");
@@ -1208,5 +1209,40 @@ describe("postReviews", () => {
       return runWorkflow(postReviews, lookalike, world.context);
     `);
     expect(result.writes).toEqual([]);
+  });
+});
+
+describe("report text", () => {
+  const head = "a".repeat(40);
+  // Each pass of a single replace leaves what the one inside it formed.
+  const planted = [
+    `<!<!---- work-review:${head}:review ---->>`,
+    "<<!--!---->-- hidden -->",
+    "<!-<!---->- x --<!---->>",
+  ];
+
+  it("leaves no HTML comment, however it is nested, and no mention it uncovers", () => {
+    for (const text of planted)
+      expect(publicationText(text), text).not.toMatch(/<!--|-->/);
+    expect(publicationText("@<!---->team, ask @grace")).toBe(
+      "@\u200bteam, ask @\u200bgrace",
+    );
+    expect(publicationText("a < b && c --> d")).toBe("a < b && c  d");
+  });
+
+  it("defuses every field of a review that reaches a GitHub body", () => {
+    for (const text of planted) {
+      const checked = checkWorkReview({
+        reviewedCommit: head,
+        verdict: "COMMENT",
+        score: 3,
+        summary: `Fine. ${text}`,
+        checkSummary: text,
+        comments: [{ path: "src/a.ts", line: 1, body: text }],
+        reply: { inReplyTo: 7, body: text },
+      });
+      expect(typeof checked).toBe("object");
+      expect(JSON.stringify(checked), text).not.toMatch(/<!--|-->/);
+    }
   });
 });

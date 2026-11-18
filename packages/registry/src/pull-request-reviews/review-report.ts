@@ -59,11 +59,17 @@ export function diffLines(result: unknown): Set<string> {
 
 /**
  * Report text is posted as the App: it mentions no one and hides nothing.
- * "@name" and "@org/team" stop notifying, and HTML comments (a fake stamp,
- * a summary marker) are taken apart.
+ * HTML comment delimiters (a fake stamp, a summary marker) are taken out
+ * until none is left, so a nested one such as `<!<!---->--` cannot
+ * reassemble into one, and then "@name" and "@org/team" stop notifying.
  */
 export function publicationText(text: string): string {
-  return text.replace(/@(?=[A-Za-z0-9])/g, "@​").replace(/<!--|-->/g, "");
+  let shown = text;
+  for (let before = ""; before !== shown; ) {
+    before = shown;
+    shown = shown.replace(/<!--|-->/g, "");
+  }
+  return shown.replace(/@(?=[A-Za-z0-9])/g, "@​");
 }
 
 /**
