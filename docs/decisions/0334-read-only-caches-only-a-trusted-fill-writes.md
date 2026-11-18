@@ -63,7 +63,15 @@ Environment's; it runs only `du`, `cut`, `grep`, `basename`, `find` and `rm`,
 which any image has. Providers that cannot cut a sandbox off refuse it. The
 fill row records the helper until it is destroyed, so a helper a stopped
 replica left is removed by the next dispatch pass rather than keeping the
-generation mounted against retirement.
+generation mounted against retirement; a row stays, past retention too,
+until its helper is gone, and a machine that cannot be reached is tried again
+on later passes. A helper is made on a machine that offers `caches` only.
+Sandbox providers cannot list sandboxes by label, so a helper whose replica
+stopped between making it and recording it (one database write) is not
+found by Work: it carries the labels `purpose=cache-check` and `fill=<id>`
+for an operator to find, and a pooled machine's reset removes it. The size
+check takes `du`'s own status, so one that cannot read part of a generation
+fails rather than undercounting.
 Only then does Work publish the generation by marking the fill succeeded: one
 row, so a sandbox sees the old generation or the new one, never a partial one. A failed, timed out or oversized fill leaves the old
 generation in place, and what it wrote is removed: by the fill's sandbox while

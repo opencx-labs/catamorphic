@@ -1215,6 +1215,54 @@ describeIf("Environment caches (ADR 0334)", () => {
     ).toBe(true);
   });
 
+  it("keeps a left-behind helper's fill until its machine is reachable again and the helper is removed", async () => {
+    const { lease, fake } = await addMachine("w");
+    await db!
+      .insertInto("environment_cache_fills")
+      .values({
+        tenant_id: tenantId,
+        project_id: projectId,
+        environment_name: "review",
+        cache_name: "pnpm",
+        worker_node_id: lease.id,
+        reason: "requested",
+        status: "failed",
+        generation: "960",
+        check_sandbox_id: "w-left-helper",
+        finished_at: sql<Date>`now() - interval '40 days'`,
+        created_at: sql<Date>`now() - interval '40 days'`,
+      })
+      .execute();
+    // The machine cannot be reached: admission fails.
+    const entry = machines.get(lease.id);
+    machines.delete(lease.id);
+    await fills.dispatch();
+    expect((await rowsOf(lease.id))[0]?.check_sandbox_id).toBe("w-left-helper");
+    expect(fake.destroyed).not.toContain("w-left-helper");
+    // Back again: the helper goes, and then so may the old row.
+    if (entry) machines.set(lease.id, entry);
+    await fills.dispatch();
+    expect(fake.destroyed).toContain("w-left-helper");
+    await fills.dispatch();
+    expect(await rowsOf(lease.id)).toEqual([]);
+  });
+
+  it("makes no check helper on a machine that cannot cut it off", async () => {
+    const own = [...capabilities];
+    const { lease, fake } = await addMachine("x", { capabilities: own });
+    await workspace(lease.id);
+    // The machine stops offering caches while the fill runs.
+    fake.behavior.duringFill = async () => {
+      own.splice(own.indexOf(SANDBOX_CAPABILITIES.caches), 1);
+    };
+    await fillAll();
+    expect((await rowsOf(lease.id))[0]).toMatchObject({
+      status: "failed",
+      error: expect.stringContaining("cannot make a sandbox cut off"),
+    });
+    expect(fake.created.some((entry) => entry.opts.internal)).toBe(false);
+  });
+
   it("empties a generation the checks refuse and retires it", async () => {
     const { lease, fake } = await addMachine("u");
     await workspace(lease.id);
