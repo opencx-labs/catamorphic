@@ -70,7 +70,10 @@ describe("result schemas", () => {
     ["(?<=a)b", /invalid named capture/],
     ["a{1001}", /invalid repeat count/],
     ["(?:[a-z]{1000}){1000}", /invalid repeat count/],
-    ["[a-z]{999}".repeat(11), /instructions, over 10,000/],
+    ["[a-z]{999}".repeat(3), /instructions, over 2,000/],
+    ["^a{0,999}a{0,999}a{0,999}a{0,999}$", /instructions, over 2,000/],
+    ["\\a", /not an ECMAScript pattern/],
+    ["[\\Sa]", /outside a character class/],
     ["a".repeat(1_001), /over 1,000/],
   ])(
     "refuses the pattern %s, which RE2 cannot run, when the definition loads",
@@ -166,24 +169,24 @@ describe("result schemas", () => {
         /pattern/,
       );
     }
-    // Bounded repeats: about 10^11 steps of backtracking on 4,001
-    // characters; here one linear match.
-    const repeated = timed(
-      { type: "string", pattern: "^a{0,999}a{0,999}a{0,999}a{0,999}$" },
-      "a".repeat(4_001),
+    // The largest program a pattern may be, on the longest text it is
+    // tried on: one match in a few tens of milliseconds.
+    const largest = timed(
+      { type: "string", pattern: "^a{0,499}a{0,499}$" },
+      "a".repeat(PATTERN_INPUT_MAX),
     );
-    expect(repeated.ms).toBeLessThan(1_000);
+    expect(largest.ms).toBeLessThan(500);
     expect(
-      "errors" in repeated.checked && repeated.checked.errors[0]?.message,
+      "errors" in largest.checked && largest.checked.errors[0]?.message,
     ).toMatch(/must match pattern/);
     // A large ordinary value against a modest bounded repeat is checked
     // whole: the budget is the time matching takes, not an estimate.
     const many = timed(
       {
         type: "array",
-        items: { type: "string", pattern: "^[a-z]{0,999}$" },
+        items: { type: "string", pattern: "^[a-z]{0,500}$" },
       },
-      Array.from({ length: 64 }, () => "a".repeat(999)),
+      Array.from({ length: 64 }, () => "a".repeat(500)),
     );
     expect(many.checked).toHaveProperty("value");
     expect(many.ms).toBeLessThan(1_000);
@@ -193,41 +196,63 @@ describe("result schemas", () => {
     const started = performance.now();
     expect(unusablePattern("(?:[a-z]{1000}){1000}")).toMatch(/repeat count/);
     expect(performance.now() - started).toBeLessThan(100);
-    const big = "[a-z]{999}".repeat(9);
+    const big = "[a-z]{999}[0-9]{799}";
     expect(unusablePattern(big)).toBeUndefined();
-    const together = definition({
-      review: {
-        type: "object",
-        properties: Object.fromEntries(
-          [1, 2, 3, 4, 5, 6].map((n) => [
-            `f${n}`,
-            { type: "string", pattern: `${big}${n}` },
-          ]),
-        ),
-      },
+    // Patterns count toward one total across every result name.
+    const schemaOf = (from: number) => ({
+      type: "object",
+      properties: Object.fromEntries(
+        Array.from({ length: 15 }, (_, n) => [
+          `f${n}`,
+          { type: "string", pattern: `${big}${from + n}` },
+        ]),
+      ),
     });
+    expect("definition" in definition({ one: schemaOf(0) })).toBe(true);
+    const together = definition({ one: schemaOf(0), two: schemaOf(100) });
     expect("error" in together && together.error).toMatch(
-      /instructions, over 50,000/,
+      /instructions together, over 50,000/,
     );
-    expect(PATTERN_PROGRAM_MAX).toBe(10_000);
+    expect(PATTERN_PROGRAM_MAX).toBe(2_000);
     // A pattern compiles once, however often its definition loads.
     const again = performance.now();
     for (let load = 0; load < 50; load += 1) unusablePattern(big);
     expect(performance.now() - again).toBeLessThan(20);
   });
 
-  it("reads ECMAScript pattern syntax with RE2's meaning", () => {
+  it("reads ECMAScript patterns with ECMAScript's meaning", () => {
+    const validators = new ResultValidators();
     const ok = (pattern: string, value: string) =>
       "value" in
-      checkResultValue({ schema: { type: "string", pattern }, value });
+      validators.check({ schema: { type: "string", pattern }, value });
     expect(ok("^\\u00e9$", "é")).toBe(true);
     expect(ok("^\\u{1F600}$", "😀")).toBe(true);
     expect(ok("^[^]$", "\n")).toBe(true);
     expect(ok("^\\cJ$", "\n")).toBe(true);
     expect(ok("^\\u00e9$", "e")).toBe(false);
+    expect(ok("^.$", "😀")).toBe(true);
+    // Where RE2 reads alike syntax otherwise, JavaScript's meaning holds:
+    // \s is Unicode whitespace, and . stops at every line terminator.
+    for (let code = 0; code < 0x3100; code += 1) {
+      const char = String.fromCharCode(code);
+      if (code >= 0xd800) break;
+      expect(ok("\\S", char), code.toString(16)).toBe(/\S/u.test(char));
+      expect(ok("^[\\s]$", char), code.toString(16)).toBe(/^[\s]$/u.test(char));
+      expect(ok("^.$", char), code.toString(16)).toBe(/^.$/u.test(char));
+    }
+    // An escaped backslash before a digit is no backreference.
+    expect(ok("^\\\\1$", "\\1")).toBe(true);
   });
 
   it("refuses text too long to match, wherever a pattern applies", () => {
+    // Counted in code points, as maxLength counts: 4,096 astral
+    // characters (8,192 UTF-16 units) are tried.
+    expect(
+      checkResultValue({
+        schema: { type: "string", pattern: "^😀+$" },
+        value: "😀".repeat(PATTERN_INPUT_MAX),
+      }),
+    ).toHaveProperty("value");
     const long = "x".repeat(PATTERN_INPUT_MAX + 1);
     for (const [schema, value] of [
       [{ type: "string", pattern: "x" }, long],

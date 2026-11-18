@@ -26,11 +26,12 @@ export const RESULT_LIMITS = {
   /** One submitted value, as JSON. */
   valueBytes: 256 * 1024,
   /**
-   * Results one turn may record. Per turn, not per chat (ADR 0336): a review
-   * chat lives as long as its pull request, and its results grow with its
-   * turns like the rest of its log.
+   * Submissions one turn may make, accepted or refused (ADR 0336): per
+   * turn, not per chat, since a review chat lives as long as its pull
+   * request; and refused ones count, since checking each costs the server.
+   * A turn's results therefore fit one read of `results`.
    */
-  perTurn: 1_000,
+  perTurn: 100,
   /** Field errors one rejected submission reports. */
   errors: 20,
 } as const;
@@ -68,16 +69,24 @@ export const ResultSchemasSchema = z
         code: "custom",
         message: `Result schemas total at most ${RESULT_LIMITS.schemaBytes / 1024} KiB of JSON`,
       });
+    // Every name's patterns count toward the definition's total.
+    let programs = 0;
     for (const name of names) {
       if (!RESULT_NAME_PATTERN.test(name)) continue;
-      const problem = schemaProblem(results[name] ?? true);
-      if (problem)
+      const checked = schemaProblem(results[name] ?? true);
+      if ("problem" in checked)
         ctx.addIssue({
           code: "custom",
           path: [name],
-          message: `Not a usable JSON Schema (2020-12): ${problem}`,
+          message: `Not a usable JSON Schema (2020-12): ${checked.problem}`,
         });
+      else programs += checked.programs;
     }
+    if (programs > PATTERN_PROGRAMS_MAX)
+      ctx.addIssue({
+        code: "custom",
+        message: `Result schemas' patterns compile to ${programs.toLocaleString("en-US")} instructions together, over ${PATTERN_PROGRAMS_MAX.toLocaleString("en-US")}`,
+      });
   });
 
 /**
@@ -109,19 +118,20 @@ export const PATTERN_INPUT_MAX = 4_096;
 
 /**
  * The largest program one pattern may compile to, in RE2 instructions,
- * and all of a definition's together: a match takes time linear in its
- * input times its program, and compiling takes time in its program.
+ * and all of a definition's patterns together: a match takes time linear in
+ * its input times its program, and compiling takes time in its program.
  */
-export const PATTERN_PROGRAM_MAX = 10_000;
+export const PATTERN_PROGRAM_MAX = 2_000;
 export const PATTERN_PROGRAMS_MAX = 50_000;
 
 /**
  * The time one check of a value may spend matching patterns, in
- * milliseconds; a check that needs more is refused, and says so. One match
- * is at most {@link PATTERN_INPUT_MAX} characters through
- * {@link PATTERN_PROGRAM_MAX} instructions, a fraction of a second.
+ * milliseconds, checked before each match; a check that needs more is
+ * refused, and says so. One match is at most {@link PATTERN_INPUT_MAX}
+ * code points through {@link PATTERN_PROGRAM_MAX} instructions (tens of
+ * milliseconds), so a check ends within about 0.2 s (ADR 0323).
  */
-export const PATTERN_TIME_MAX = 250;
+export const PATTERN_TIME_MAX = 100;
 
 /**
  * The check of a value in progress: when it began, and why it stopped, if
@@ -144,18 +154,63 @@ const TOO_MUCH_PATTERN_WORK: ResultFieldError = {
     "takes too long to check against the schema's patterns; send shorter text",
 };
 
-/** Compiled patterns by source, bounded: definitions load on every turn. */
+/** Compiled patterns by source, bounded by their instructions together. */
 const compiledPatterns = new Map<
   string,
   { expression: RE2JS; size: number } | { problem: string }
 >();
-const COMPILED_PATTERNS_MAX = 1_000;
+let compiledInstructions = 0;
+const COMPILED_INSTRUCTIONS_MAX = 200_000;
+
+/** JavaScript's whitespace, as the inside of a character class. */
+const JS_SPACE =
+  "\\t\\n\\v\\f\\r \\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\ufeff";
 
 /**
- * A pattern compiled with RE2's semantics: ECMAScript syntax is translated
- * first (`\uXXXX`, `\u{...}`, `[^]`, `\cX`), and what RE2 cannot run is
- * refused with its reason. A backreference is refused before translating,
- * which would otherwise read `\k<name>` as plain text.
+ * A pattern rewritten so RE2 reads it as ECMAScript does, where they
+ * differ: `\s` and `\S` as JavaScript's whitespace (RE2's is ASCII), `.`
+ * as anything but a line terminator (RE2's stops at `\n` alone). What it
+ * cannot carry over is refused: a backreference (an escaped backslash
+ * before a digit is not one), and `\S` inside a class.
+ */
+function withEcmaMeaning(pattern: string): string | { problem: string } {
+  let rewritten = "";
+  let inClass = false;
+  for (let index = 0; index < pattern.length; index += 1) {
+    const char = pattern[index] ?? "";
+    if (char === "\\") {
+      const next = pattern[index + 1] ?? "";
+      index += 1;
+      if (/[1-9]/.test(next) || (next === "k" && pattern[index + 1] === "<"))
+        return {
+          problem:
+            "Work matches patterns in linear time (RE2), without backreferences",
+        };
+      if (next === "s") rewritten += inClass ? JS_SPACE : `[${JS_SPACE}]`;
+      else if (next === "S" && inClass)
+        return {
+          problem:
+            "write \\S outside a character class: RE2 cannot carry it in",
+        };
+      else if (next === "S") rewritten += `[^${JS_SPACE}]`;
+      else rewritten += char + next;
+    } else if (inClass) {
+      if (char === "]") inClass = false;
+      rewritten += char;
+    } else if (char === "[") {
+      inClass = true;
+      rewritten += char;
+    } else rewritten += char === "." ? "[^\\n\\r\\u2028\\u2029]" : char;
+  }
+  return rewritten;
+}
+
+/**
+ * A pattern compiled with ECMAScript's meaning on RE2: refused unless
+ * JavaScript itself accepts it (with the `u` flag Ajv uses), rewritten
+ * where the two read alike syntax differently, then translated
+ * (`\uXXXX`, `\u{...}`, `[^]`, `\cX`) and compiled; what RE2 cannot run
+ * (lookaround, a repeat over 1,000) is refused with its reason.
  */
 function compilePattern(
   pattern: string,
@@ -169,13 +224,17 @@ function compilePattern(
       return {
         problem: `it is over ${PATTERN_MAX.toLocaleString("en-US")} characters`,
       };
-    if (/\\[1-9]|\\k</.test(pattern))
-      return {
-        problem:
-          "Work matches patterns in linear time (RE2), without backreferences",
-      };
     try {
-      const expression = RE2JS.compile(RE2JS.translateRegExp(pattern));
+      new RegExp(pattern, "u");
+    } catch (error) {
+      return {
+        problem: `it is not an ECMAScript pattern: ${error instanceof Error ? error.message : String(error)}`,
+      };
+    }
+    const rewritten = withEcmaMeaning(pattern);
+    if (typeof rewritten !== "string") return rewritten;
+    try {
+      const expression = RE2JS.compile(RE2JS.translateRegExp(rewritten));
       const size = expression.programSize();
       return size > PATTERN_PROGRAM_MAX
         ? {
@@ -190,11 +249,21 @@ function compilePattern(
     }
   })();
   compiledPatterns.set(pattern, compiled);
-  for (const oldest of compiledPatterns.keys()) {
-    if (compiledPatterns.size <= COMPILED_PATTERNS_MAX) break;
+  compiledInstructions += "size" in compiled ? compiled.size : 1;
+  for (const [oldest, entry] of compiledPatterns) {
+    if (compiledInstructions <= COMPILED_INSTRUCTIONS_MAX) break;
     compiledPatterns.delete(oldest);
+    compiledInstructions -= "size" in entry ? entry.size : 1;
   }
   return compiled;
+}
+
+/** Whether text is over the code points a pattern is tried on, as `maxLength` counts. */
+function tooLongToMatch(value: string): boolean {
+  if (value.length <= PATTERN_INPUT_MAX) return false;
+  let points = 0;
+  for (const _ of value) if (++points > PATTERN_INPUT_MAX) return true;
+  return false;
 }
 
 /**
@@ -216,9 +285,9 @@ const linearRegExp = Object.assign(
     return {
       test: (value: string) => {
         if (!patternWork.active)
-          return value.length <= PATTERN_INPUT_MAX && expression.test(value);
+          return !tooLongToMatch(value) && expression.test(value);
         if (patternWork.refused) return false;
-        if (value.length > PATTERN_INPUT_MAX) {
+        if (tooLongToMatch(value)) {
           patternWork.refused = TOO_LONG_TO_MATCH;
           return false;
         }
@@ -259,21 +328,24 @@ function schemaPatterns(node: unknown, found: string[] = []): string[] {
   return found;
 }
 
-function schemaProblem(schema: JsonSchemaObject): string | undefined {
+/** Why a schema cannot be used, or the instructions its patterns compile to. */
+function schemaProblem(
+  schema: JsonSchemaObject,
+): { problem: string } | { programs: number } {
   let programs = 0;
   for (const pattern of schemaPatterns(schema)) {
     const compiled = compilePattern(pattern);
     if ("problem" in compiled)
-      return `pattern ${JSON.stringify(pattern)} is refused: ${compiled.problem}`;
+      return {
+        problem: `pattern ${JSON.stringify(pattern)} is refused: ${compiled.problem}`,
+      };
     programs += compiled.size;
   }
-  if (programs > PATTERN_PROGRAMS_MAX)
-    return `its patterns compile to ${programs.toLocaleString("en-US")} instructions, over ${PATTERN_PROGRAMS_MAX.toLocaleString("en-US")}`;
   try {
     compileSchema(schema);
-    return undefined;
+    return { programs };
   } catch (error) {
-    return error instanceof Error ? error.message : String(error);
+    return { problem: error instanceof Error ? error.message : String(error) };
   }
 }
 
@@ -360,6 +432,9 @@ function checkWith(
   if (text === undefined)
     return { errors: [{ path: "", message: "must be a JSON value" }] };
   const value = JSON.parse(text) as JsonValue;
+  // One budget of pattern time for the value, its decoded text included.
+  patternWork.since = performance.now();
+  patternWork.refused = null;
   if (validated(validate, value)) return { value };
   if (patternWork.refused) return { errors: [patternWork.refused] };
   const errors = fieldErrors(validate.errors);
@@ -381,11 +456,9 @@ function checkWith(
   };
 }
 
-/** One check of a value, with its own time for patterns. */
+/** One check of a value, spending from the check's time for patterns. */
 function validated(validate: ValidateFunction, value: JsonValue): boolean {
   patternWork.active = true;
-  patternWork.since = performance.now();
-  patternWork.refused = null;
   try {
     return validate(value) && !patternWork.refused;
   } finally {

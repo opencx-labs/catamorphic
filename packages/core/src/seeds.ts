@@ -641,7 +641,14 @@ works in its parent's workspace unless the spawn asks for \`"own"\` (ADR
 Schema (2020-12) by a lowercase name, at most 16 and 64 KiB in all. The agent
 gets \`submit_result { name, value }\`: only a value its schema accepts is
 recorded, a rejected one comes back with each failing field to fix in the
-same turn, and a turn records at most 1,000. Workflows read them with \`results\` or trigger on
+same turn, and a turn makes at most 100 submissions, rejected ones included.
+A \`pattern\` keeps ECMAScript's meaning but runs on a linear-time engine
+(RE2): it is refused when the agent loads if JavaScript refuses it, if it
+uses a backreference or lookaround, \`\\S\` inside a class, or compiles to more
+than 2,000 instructions (two \`[a-z]{999}\` in a row do). JavaScript's \`\\s\`, \`\\S\` and
+\`.\` hold; Unicode properties are RE2's (scripts and general categories, not
+\`\\p{Emoji}\`). Text over 4,096 code points where a pattern applies is
+refused. Workflows read them with \`results\` or trigger on
 \`session.result-recorded\` (session-workflows), and a parent reads its
 subagents' in their messages and in list and wait outputs. Prefer a result to
 asking an agent to end its reply with a block of JSON.
