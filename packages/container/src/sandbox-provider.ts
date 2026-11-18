@@ -835,6 +835,9 @@ export class ContainerSandboxProvider implements SandboxProvider {
               },
               HostConfig: {
                 ...agentLimits,
+                // No program raises the harness: a setuid copy the command
+                // side's root leaves in the checkout runs as the harness.
+                SecurityOpt: ["no-new-privileges:true"],
                 Mounts: [
                   { Type: "volume", Target: this.workspaceRoot },
                   ...shared,
@@ -1464,7 +1467,9 @@ export class ContainerSandboxProvider implements SandboxProvider {
    */
   private async layOutAgentSide(name: string): Promise<void> {
     const runtime = await this.exec(name, {
-      cmd: ["sh", "-c", "command -v bun || command -v node"],
+      // Node first: it loads nothing from where it starts. Bun runs the
+      // shim with an empty configuration and no .env files.
+      cmd: ["sh", "-c", "command -v node || command -v bun"],
       user: "0",
     });
     const runtimePath = runtime.stdout.trim();

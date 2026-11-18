@@ -672,8 +672,9 @@ export function buildQueryOptions(input: QueryOptionInputs): Options {
   if (harness) {
     env.HOME = harness.home;
     env.XDG_CONFIG_HOME = harness.config;
-    if (access.kind !== "sign_in")
-      env.CLAUDE_CONFIG_DIR = path.join(harness.home, ".claude");
+    // The same for the SDK and the CLI, or the SDK drops the CLI's
+    // transcript as it mirrors it to Work.
+    env.CLAUDE_CONFIG_DIR = harnessConfigHome(attempt) ?? "";
   }
   const command = options.command ?? (host ? undefined : "claude");
   const systemPrompt = attempt.systemPrompt.trim();
@@ -706,7 +707,7 @@ export function buildQueryOptions(input: QueryOptionInputs): Options {
           spawnClaudeCodeProcess: (spawned: SpawnOptions) =>
             spawn(spawned.command, spawned.args, {
               ...(spawned.cwd ? { cwd: spawned.cwd } : {}),
-              env: spawned.env,
+              env: harnessSpawnEnv({ env: spawned.env, harness }),
               uid: harness.uid,
               gid: harness.gid,
               stdio: ["pipe", "pipe", "pipe"],
@@ -777,4 +778,68 @@ export function buildQueryOptions(input: QueryOptionInputs): Options {
     ...(options.debugFile ? { debugFile: options.debugFile } : {}),
     ...threadOptions(attempt),
   };
+}
+
+/**
+ * The CLI's config home as the harness's own user (ADR 0332): its member's
+ * sign-in, or one in its home. Undefined without such a user.
+ */
+export function harnessConfigHome(attempt: AttemptStart): string | undefined {
+  const harness = attempt.commands?.harness;
+  if (!harness) return undefined;
+  return attempt.modelAccess.kind === "sign_in"
+    ? attempt.modelAccess.home
+    : path.join(harness.home, ".claude");
+}
+
+/**
+ * Before the SDK, as root, reads the CLI's config home (resuming a thread
+ * it copies its settings and credentials files into the thread's home),
+ * drop every link at its top: that home is the harness's to write, and a
+ * link there would have root copy what it names into a home the harness
+ * is then given.
+ */
+export async function dropConfigLinks(home: string): Promise<void> {
+  const entries = await fs.promises
+    .readdir(home, { withFileTypes: true })
+    .catch(() => []);
+  for (const entry of entries)
+    if (entry.isSymbolicLink())
+      await fs.promises.unlink(path.join(home, entry.name));
+}
+
+/**
+ * The environment the CLI starts with as the harness's own user (ADR
+ * 0332). Its config home is its own, unless the SDK named a resumed
+ * thread's home: a folder the SDK, as root, made just now in its own
+ * temporary folder, which the harness is given so the CLI reads and
+ * continues the thread there. Links in it stay links, never followed.
+ */
+export function harnessSpawnEnv(input: {
+  env: Record<string, string | undefined>;
+  harness: { uid: number; gid: number; home: string };
+}): Record<string, string | undefined> {
+  const named = input.env.CLAUDE_CONFIG_DIR;
+  if (!named || !path.basename(named).startsWith("claude-resume-"))
+    return input.env;
+  const resumed = path.resolve(named);
+  const temporary = [path.resolve(os.tmpdir()), fs.realpathSync(os.tmpdir())];
+  if (!temporary.includes(path.dirname(resumed)))
+    throw new ClaudeStartError(
+      `Claude Code was to start in ${resumed}, which is not a resumed thread's home.`,
+    );
+  giveTree(resumed, input.harness);
+  return input.env;
+}
+
+/** Hand a folder root just made to a user, never through a link. */
+function giveTree(folder: string, owner: { uid: number; gid: number }): void {
+  const stat = fs.lstatSync(folder);
+  if (!stat.isDirectory()) return;
+  fs.lchownSync(folder, owner.uid, owner.gid);
+  for (const entry of fs.readdirSync(folder, { withFileTypes: true })) {
+    const target = path.join(folder, entry.name);
+    if (entry.isDirectory()) giveTree(target, owner);
+    else fs.lchownSync(target, owner.uid, owner.gid);
+  }
 }

@@ -96,16 +96,17 @@ export function commandEnvironment(
 }
 
 /**
- * The shim's client, run with the runner's own Bun or Node: Node built-ins
- * only, no Work code, so it starts quickly for every command. Arguments:
- * the socket, the return folder (or empty), the program it stands for,
- * then that program's own arguments.
+ * The shim's client, run with Node, or Bun without its configuration and
+ * .env files: Node built-ins only, no Work code, so it starts quickly for
+ * every command. Arguments:
+ * the caller's working directory, the socket, the return folder (or
+ * empty), the program it stands for, then that program's own arguments.
  */
 export const COMMAND_SHELL_CLIENT_SOURCE = `import fs from "node:fs";
 import net from "node:net";
 import path from "node:path";
 
-const [socketPath, returnFolder, program, ...args] = process.argv.slice(2);
+const [callerCwd, socketPath, returnFolder, program, ...args] = process.argv.slice(2);
 const KEPT = new Set(${JSON.stringify(COMMAND_VARIABLES)});
 const env = {};
 for (const [name, value] of Object.entries(process.env))
@@ -123,8 +124,7 @@ if (prefix)
       at = arg.indexOf(prefix, at + 1);
     }
   }
-let cwd = "/";
-try { cwd = process.cwd(); } catch {}
+const cwd = callerCwd || "/";
 const NUMBERS = { SIGINT: 2, SIGTERM: 15, SIGHUP: 1 };
 let ended = false;
 let pending = "";
@@ -202,11 +202,23 @@ export function commandShellFiles(input: {
   const client = path.posix.join(input.directory, "shell.mjs");
   const shell = path.posix.join(input.directory, "bin", "bash");
   const pathFolder = path.posix.join(input.directory, "path");
+  // An empty configuration of its own: Bun reads bunfig.toml (preloads)
+  // and .env files from where it starts, which for a harness is the
+  // checkout the pull request controls.
+  const config = path.posix.join(input.directory, "bunfig.toml");
+  const flags = /(^|\/)bun[^/]*$/.test(input.runtime)
+    ? ` --no-env-file --config=${quote(config)}`
+    : "";
   const wrapper = (program: string) =>
     [
       "#!/bin/sh",
       `# Work: this ${program} runs in the command container (ADR 0332).`,
-      `exec ${quote(input.runtime)} ${quote(client)} ${quote(input.socket)} ${quote(input.returnFolder ?? "")} ${program} "$@"`,
+      // It starts in its own folder and says where it was called from, so
+      // nothing in the caller's folder loads into it.
+      "caller=$(pwd -P 2>/dev/null) || caller=/",
+      `cd ${quote(input.directory)} || exit 126`,
+      "unset NODE_OPTIONS NODE_PATH BUN_OPTIONS",
+      `exec ${quote(input.runtime)}${flags} ${quote(client)} "$caller" ${quote(input.socket)} ${quote(input.returnFolder ?? "")} ${program} "$@"`,
       "",
     ].join("\n");
   return {
@@ -214,6 +226,7 @@ export function commandShellFiles(input: {
     path: pathFolder,
     files: {
       [client]: { content: COMMAND_SHELL_CLIENT_SOURCE, mode: 0o600 },
+      [config]: { content: "", mode: 0o600 },
       [shell]: { content: wrapper("bash"), mode: 0o700 },
       [path.posix.join(pathFolder, "git")]: {
         content: wrapper("git"),

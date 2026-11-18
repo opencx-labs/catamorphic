@@ -3,9 +3,12 @@ import http from "node:http";
 import type net from "node:net";
 import os from "node:os";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 import {
+  commandShellFiles,
   followProcess,
   SANDBOX_CAPABILITIES,
+  SEPARATE_COMMANDS_SOCKET,
   SEPARATE_HARNESS,
 } from "@catamorphic/sandbox";
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
@@ -589,6 +592,210 @@ describe.skipIf(!enabled)("commands apart from the agent (ADR 0332)", () => {
       }
       expect((await harness(id, "cat /proc/1/environ")).result).not.toContain(
         "PATH=",
+      );
+    },
+    10 * MINUTES,
+  );
+
+  /**
+   * What a pull request plants in the checkout for Bun and its own code to
+   * load: a preload in bunfig.toml (which records the user it ran as on
+   * the side it ran) and variables in .env and .env.local.
+   */
+  const plantRuntimeConfig = (id: string) =>
+    provider.executeCommand(
+      id,
+      [
+        `cd ${PROJECT}`,
+        `printf 'preload = ["./planted-preload.js"]\\n' > bunfig.toml`,
+        `printf 'require("node:fs").writeFileSync("/tmp/preload-ran-" + process.getuid(), "ran");\\n' > planted-preload.js`,
+        "printf 'LC_PLANTED=dotenv\\n' > .env",
+        "printf 'LC_PLANTEDLOCAL=dotenv-local\\n' > .env.local",
+      ].join(" && "),
+    );
+  /** Whether anything planted ran or loaded beside the agent. */
+  const plantedBeside = async (id: string) =>
+    (await agent(id, "ls /tmp | grep preload-ran || echo none")).result.trim();
+
+  it(
+    "runs the shim, on Node or Bun, without loading the checkout's bunfig.toml or .env files",
+    async () => {
+      const id = await separated();
+      await plantRuntimeConfig(id);
+      // The provider's shim (Node where the image has it) and one on Bun,
+      // each from the checkout, as the harness runs them.
+      const bun = (await agent(id, "command -v bun")).result.trim();
+      expect(bun).toMatch(/bun$/);
+      const onBun = "/workspace/.work-shim-bun";
+      const { files } = commandShellFiles({
+        directory: onBun,
+        socket: SEPARATE_COMMANDS_SOCKET,
+        runtime: bun,
+        returnFolder: RETURNS,
+      });
+      await provider.uploadFiles(
+        id,
+        Object.fromEntries(
+          Object.entries(files).map(([file, { content }]) => [
+            path.posix.relative(onBun, file),
+            content,
+          ]),
+        ),
+        onBun,
+        { side: "agent" },
+      );
+      await agent(
+        id,
+        `chmod -R a+rX,go-w ${onBun} && chmod 755 ${onBun}/bin/bash ${onBun}/path/git`,
+      );
+      for (const shim of [SHIM, onBun]) {
+        const ran = await harness(
+          id,
+          `${shim}/bin/bash -c 'echo "[$LC_PLANTED][$LC_PLANTEDLOCAL] $(pwd)"'`,
+        );
+        expect(ran.result.trim(), shim).toBe(`[][] ${PROJECT}`);
+        const git = await harness(id, `${shim}/path/git --version`);
+        expect(git.exitCode, git.result).toBe(0);
+      }
+      expect(await plantedBeside(id)).toBe("none");
+    },
+    10 * MINUTES,
+  );
+
+  it(
+    "starts the harness from the runner on the image's Bun as exactly the harness's user and group",
+    async () => {
+      const id = await separated();
+      await plantRuntimeConfig(id);
+      // A harness that records who it is and what it sees, then exits.
+      const probe = [
+        "#!/bin/sh",
+        `out=${RETURNS}/$(basename "$0")`,
+        '{ id -u; id -g; id -G; pwd; env | grep -c "^LC_PLANTED" || true; } > "$out.ids"',
+        `cd ${PROJECT} && ${SHIM}/bin/bash -c 'echo "[$LC_PLANTED]"' > "$out.shim" 2>&1`,
+        "exit 3",
+        "",
+      ].join("\n");
+      await provider.uploadFiles(
+        id,
+        { "work-probe-acp": probe, "work-probe-claude": probe },
+        "/usr/local/bin",
+        { side: "agent" },
+      );
+      await agent(
+        id,
+        "chmod 755 /usr/local/bin/work-probe-acp /usr/local/bin/work-probe-claude",
+      );
+      const bundle = fs.readFileSync(
+        path.resolve(
+          path.dirname(fileURLToPath(import.meta.url)),
+          "../../../runner-bundle/dist/runner.mjs",
+        ),
+        "utf8",
+      );
+      await provider.uploadFiles(
+        id,
+        { "runner/runner.mjs": bundle },
+        "/workspace/.work-session",
+        { side: "agent" },
+      );
+      const attempt = (
+        harnessId: string,
+        options: Record<string, unknown>,
+      ) => ({
+        protocol: 3,
+        sessionId: "session",
+        projectId: "project",
+        turnId: `turn-${harnessId}`,
+        attemptId: `attempt-${harnessId}`,
+        reason: "initial",
+        harness: harnessId,
+        workingDirectory: PROJECT,
+        stateDirectory: "/workspace/.work-session",
+        thread: { mode: "fresh", providerThreadId: `thread-${harnessId}` },
+        input: { itemId: "input", text: "Who are you?", attachments: [] },
+        systemPrompt: "",
+        context: "",
+        permissions: {},
+        modelAccess: {
+          kind: "gateway",
+          api: harnessId === "acp" ? "openai" : "anthropic",
+          baseUrl: "http://127.0.0.1:9",
+          grantDirectory: "/workspace/.work-session/grants/model",
+        },
+        toolPolicies: {},
+        toolAnnotations: {},
+        mcpServers: {},
+        hostTools: [],
+        plugins: [],
+        env: {},
+        options,
+        commands: {
+          socket: SEPARATE_COMMANDS_SOCKET,
+          harness: { ...SEPARATE_HARNESS },
+        },
+      });
+      for (const [harnessId, options] of [
+        [
+          "acp",
+          {
+            command: ["/usr/local/bin/work-probe-acp"],
+            shell: true,
+            projectConfig: false,
+          },
+        ],
+        ["claude-code", { command: "/usr/local/bin/work-probe-claude" }],
+      ] as const) {
+        const frame = `\u001e${JSON.stringify({
+          id: `start-${harnessId}`,
+          command: { kind: "start", attempt: attempt(harnessId, options) },
+        })}\n`;
+        // As Work starts it: root, in its state folder, on Bun first.
+        const ran = await docker.exec({
+          container: `${id}-agent`,
+          cmd: [
+            "sh",
+            "-c",
+            // The frame, then an open input while the attempt runs.
+            `cd /workspace/.work-session && runtime="$(command -v bun || command -v node)" && { head -c ${Buffer.byteLength(frame)}; sleep 15; } | timeout 60 "$runtime" runner/runner.mjs`,
+          ],
+          user: "0:0",
+          input: Buffer.from(frame),
+        });
+        expect(ran.stdout + ran.stderr).toContain("turn.completed");
+        const name =
+          harnessId === "acp" ? "work-probe-acp" : "work-probe-claude";
+        const ids = (await agent(id, `cat ${RETURNS}/${name}.ids`)).result
+          .trim()
+          .split("\n");
+        expect(ids.slice(0, 3), harnessId).toEqual(["10001", "10001", "10001"]);
+        // With nothing the checkout planted; an ACP launcher starts in the
+        // harness's home (the CLI works in the checkout, and reads none of
+        // its files: commands-apart.native.test.ts).
+        expect(ids[4], harnessId).toBe("0");
+        if (harnessId === "acp") expect(ids[3]).toBe(SEPARATE_HARNESS.home);
+        expect(
+          (await agent(id, `cat ${RETURNS}/${name}.shim`)).result.trim(),
+        ).toBe("[]");
+      }
+      expect(await plantedBeside(id)).toBe("none");
+    },
+    10 * MINUTES,
+  );
+
+  it(
+    "runs a setuid program the command side leaves in the checkout as the harness",
+    async () => {
+      const id = await separated();
+      await provider.executeCommand(
+        id,
+        `cp "$(command -v id)" ${PROJECT}/raise && chown 0:0 ${PROJECT}/raise && chmod 4755 ${PROJECT}/raise`,
+      );
+      expect(
+        (await agent(id, `stat -c '%u %a' ${PROJECT}/raise`)).result.trim(),
+      ).toBe("0 4755");
+      expect((await harness(id, `${PROJECT}/raise -u`)).result.trim()).toBe(
+        "10001",
       );
     },
     10 * MINUTES,

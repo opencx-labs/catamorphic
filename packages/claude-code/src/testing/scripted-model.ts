@@ -27,6 +27,8 @@ export interface ScriptedRequest {
   body: JsonObject;
   /** The Authorization header the CLI sent, if any. */
   authorization?: string;
+  /** Every header it sent. */
+  headers?: Record<string, string | string[] | undefined>;
 }
 
 export interface ScriptedModel {
@@ -67,6 +69,7 @@ export async function startScriptedModel(input: {
       index: requests.length,
       body,
       ...(authorization ? { authorization } : {}),
+      headers: { ...req.headers },
     };
     requests.push(request);
     let reply: ScriptedReply;
