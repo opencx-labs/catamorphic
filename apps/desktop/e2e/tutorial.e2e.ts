@@ -360,13 +360,20 @@ describe("the Work tutorial", () => {
         `document.querySelector('.onboarding-page:not([inert])').scrollWidth <= document.querySelector('.onboarding-page:not([inert])').clientWidth`,
       ),
     ).toBe(true);
-    expect(
-      await app.eval(`(() => {
+    // The model scales with its frame (100cqi): the native resize reaches
+    // the frame's layout and the scale's style a moment apart, so the scale
+    // must come to fit the new width, not have done so when the window did.
+    await expect
+      .poll(
+        () =>
+          app.eval<number>(`(() => {
         const frame = document.querySelector('.onboarding-page:not([inert]) .onboarding-workspace-preview');
         const model = frame.querySelector('.onboarding-workspace-model');
         return Math.abs(new DOMMatrix(getComputedStyle(model).transform).a - frame.clientWidth / 880);
       })()`),
-    ).toBeLessThan(0.001);
+        { timeout: 5_000, message: "the preview model scaled to its frame" },
+      )
+      .toBeLessThan(0.001);
     // A hidden track emits no transitionend: cleanup must still release the
     // outgoing preview rather than retaining its subscriptions and DOM.
     await app.eval(
