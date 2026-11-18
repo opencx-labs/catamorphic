@@ -32,9 +32,12 @@ values in the server's process, so a definition whose `pattern` or
 `patternProperties` key could backtrack without bound is refused when it
 loads: `safe-regex2` (the check Fastify uses for route patterns) refuses
 nested and over-repeated quantifiers, and Work also refuses quantified
-alternation, backreferences and patterns over 1,000 characters. A
-linear-time engine would need a dependency the tree lacks; refusing at load
-also shows the author why. Results name the agent's output, not its
+alternation, backreferences, more than one unbounded quantifier (`*`, `+`,
+`{n,}`) and patterns over 1,000 characters. A pattern is never tried on a
+string over 4,096 characters, which does not match it, so the one
+unbounded quantifier left grows at worst with the square of that bound.
+A linear-time engine would need a dependency the tree lacks; refusing at
+load also shows the author why. Results name the agent's output, not its
 authority, so they stay outside the consent hash, like `skills`.
 
 **`submit_result { name, value }` is a Work tool.** Core offers it beside

@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import { validateAgentDefinition } from "../services/agent-definitions-service.js";
 import {
   checkResultValue,
+  PATTERN_INPUT_MAX,
   ResultValidators,
   unsafePattern,
 } from "../services/agent-results.js";
@@ -66,6 +67,8 @@ describe("result schemas", () => {
     ["^(\\w|\\d)+$", /alternatives/],
     ["^(a)\\1$", /backreference/],
     ["a".repeat(1_001), /over 1,000/],
+    ["^a*a*a*a*a*b$", /more than one unbounded quantifier/],
+    ["^\\d+-\\d{2,}$", /more than one unbounded quantifier/],
   ])(
     "refuses the unsafe pattern %s when the definition loads",
     (pattern, why) => {
@@ -90,6 +93,7 @@ describe("result schemas", () => {
       "\\S",
       "^(COMMENT|REQUEST)$",
       "[|()]+",
+      "^[*+]{2}\\*x+$",
     ])
       expect(unsafePattern(pattern), pattern).toBeUndefined();
     expect(
@@ -98,6 +102,24 @@ describe("result schemas", () => {
           review: { type: "string", pattern: "^[0-9a-f]{40}$" },
         }),
     ).toBe(true);
+  });
+
+  it("tries a pattern on no string longer than the cap, so one quantifier stays fast", () => {
+    // Unanchored, one quantifier: slow only on a long run of spaces.
+    const schema = { type: "string", pattern: "\\s*x" } as const;
+    const started = performance.now();
+    const long = checkResultValue({
+      schema,
+      value: `${" ".repeat(256 * 1024 - 2)}`,
+    });
+    expect(performance.now() - started).toBeLessThan(1_000);
+    expect("errors" in long && long.errors[0]?.message).toMatch(/pattern/);
+    expect(
+      checkResultValue({
+        schema,
+        value: `${" ".repeat(PATTERN_INPUT_MAX - 1)}x`,
+      }),
+    ).toHaveProperty("value");
   });
 
   it("reports the decoded value's fields when a value arrives as JSON text", () => {

@@ -90,11 +90,35 @@ function compileSchema(schema: JsonSchemaObject): ValidateFunction {
     validateFormats: false,
     strict: "log",
     logger: false,
+    code: { regExp: cappedRegExp },
   }).compile(schema);
 }
 
 /** The longest `pattern` a schema may hold. */
 const PATTERN_MAX = 1_000;
+
+/**
+ * The longest string a schema's pattern is tried on; a longer one does not
+ * match it. With at most one unbounded quantifier and none nested, a
+ * pattern's time grows at worst with the square of its input, so this
+ * bounds the time a 256 KiB value can take.
+ */
+export const PATTERN_INPUT_MAX = 4_096;
+
+/**
+ * Ajv's regular expressions for result schemas: JavaScript's own, never
+ * tried on a string longer than {@link PATTERN_INPUT_MAX}.
+ */
+const cappedRegExp = Object.assign(
+  (pattern: string, flags: string) => {
+    const expression = new RegExp(pattern, flags);
+    return {
+      test: (value: string) =>
+        value.length <= PATTERN_INPUT_MAX && expression.test(value),
+    };
+  },
+  { code: "cappedRegExp" },
+);
 
 /**
  * Why a regular expression could take time that grows faster than its
@@ -111,7 +135,32 @@ export function unsafePattern(pattern: string): string | undefined {
   if (!safeRegex(pattern)) return "it nests or over-repeats quantifiers";
   if (quantifiedAlternation(pattern))
     return "it repeats a group that has alternatives";
+  // Two in a row (`^a*a*b$`) backtrack polynomially; one, over a capped
+  // input, stays bounded.
+  if (unboundedQuantifiers(pattern) > 1)
+    return "it has more than one unbounded quantifier (*, + or {n,})";
   return undefined;
+}
+
+/** How many `*`, `+` and `{n,}` a pattern holds outside character classes. */
+function unboundedQuantifiers(pattern: string): number {
+  let count = 0;
+  let inClass = false;
+  for (let index = 0; index < pattern.length; index++) {
+    const char = pattern[index];
+    if (char === "\\") {
+      index++;
+      continue;
+    }
+    if (inClass) {
+      if (char === "]") inClass = false;
+      continue;
+    }
+    if (char === "[") inClass = true;
+    else if (char === "*" || char === "+") count++;
+    else if (char === "{" && /^\{\d+,\}/.test(pattern.slice(index))) count++;
+  }
+  return count;
 }
 
 /** A group with `|` directly inside it, followed by a quantifier. */
