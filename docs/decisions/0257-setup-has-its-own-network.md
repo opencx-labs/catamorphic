@@ -1,6 +1,6 @@
 # 0257: Setup has its own network
 
-- **Status:** Accepted (amends 0208; amended by [0324](0324-workflows-run-commands-in-a-chats-workspace.md): a setup workflow's `exec in: "setup"` runs on this network)
+- **Status:** Accepted (amends 0208; amended by [0324](0324-workflows-run-commands-in-a-chats-workspace.md): a setup workflow's `exec in: "setup"` runs on this network; by [0334](0334-read-only-caches-only-a-trusted-fill-writes.md): such an Environment may declare read-only caches)
 - **Date:** 2026-10-18
 - **Refines:** 0175, 0176, 0178, 0204, 0206, 0207, 0212
 
