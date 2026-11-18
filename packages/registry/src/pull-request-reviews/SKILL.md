@@ -207,21 +207,29 @@ agent hangs (a tool call that never returns, a harness stuck on its model)
 otherwise keeps its turn, and the pull request its "Work review" check,
 until someone stops it. For each stall it:
 
-1. Inspects the chat, and does nothing when the turn moved on (progress
-   cleared the stall, or a restart already ran).
+1. Inspects the chat, and does nothing unless it is this repository's review
+   chat exactly (its key names a pull request of `REVIEWED_REPOSITORY`, and
+   it is the reviewer's project chat in `review` that `reviewPullRequests`
+   started, as `postReviews` checks), and the stalled attempt is still the
+   turn's and still silent.
 2. Runs a diagnosis in the chat's workspace with `exec`: the process list and
    the newest log of a harness that keeps one in the sandbox (OpenCode,
    Codex, Claude Code). Output is masked by the chat's secrets.
 3. Reads the turn's attempts with `attempts`: each one's outcome and the
    tails of its runner's and harness's own output Work kept.
-4. Writes both to `store/reviews/stalls/<repository>-<number>/<attempt>.json`.
-5. Restarts the turn (`restart`, keyed by the stalled attempt, so a retried
-   run restarts once): Work ends the attempt without asking its harness,
-   revokes its model grant, and runs the same turn again, telling the agent
-   it was restarted and to check what it already did. After `MAX_RESTARTS`
-   (2) restarts of a turn it stops the turn instead (`interrupt`), and
-   `postReviews` marks the commit `action_required`: "The review turn was
-   stopped before it finished."
+4. Writes both to `store/reviews/stalls/<number>/<attempt>.json`.
+5. Inspects the chat again, since the diagnosis took a while, and acts only
+   if that attempt is still stalled.
+6. Restarts that attempt (`restart` with its `attemptId` and `onlyIfStalled`,
+   keyed by it, so a retried run restarts once): Work ends it without asking
+   its harness, revokes its model grant, and runs the same turn again,
+   telling the agent it was restarted and to check what it already did. A
+   restart Work refuses (the attempt moved on) is nothing to do. After
+   `MAX_RESTARTS` (2) restarts of a turn it stops that turn instead
+   (`interrupt` with its `turnId`), and `postReviews` marks the commit
+   `action_required`: "The review turn was stopped before it finished."
+   A stopped turn that had already submitted its review for the head
+   publishes that review instead.
 
 It declares `sessions:write`, which `exec` and `restart` need on the
 project's chat; whoever turns it on needs that permission too. It is the
@@ -311,7 +319,8 @@ Each boundary returns one call and carries the publication to the next:
 2. Read the turn's `review` result (`results`, ADR 0323): the newest one the
    turn submitted, from any of its attempts (a sandbox lost after the review
    was submitted does not lose it), while it still answered the chat's newest
-   request. No result, or a turn that failed or was stopped, means no pass. Two commits must both
+   request. No result, or a turn that failed, means no pass; a stopped turn
+   publishes the review it submitted, and with none means no pass. Two commits must both
    be the head it posts for: the one the review names (`reviewedCommit`) and
    the one Work recorded the turn began on (the result's `commit`). Either
    one elsewhere refuses the review: the commit is marked `action_required`

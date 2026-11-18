@@ -20,7 +20,10 @@ import {
 /** Restarts of one review turn before it is stopped instead. */
 const MAX_RESTARTS = 2;
 
-/** Where each stall's evidence is kept, per pull request chat. */
+/** The repository this project reviews, as `owner/name` (as in reviews.ts). */
+const REVIEWED_REPOSITORY = "acme/web";
+
+/** Where each stall's evidence is kept, per pull request number. */
 const STALLS_PATH = "store/reviews/stalls";
 
 /**
@@ -42,6 +45,8 @@ const DIAGNOSE = [
 type Stall = {
   sessionId: string;
   key: string;
+  /** The pull request's number, from the chat's key; 0 when not ours. */
+  number: number;
   turnId: string;
   attemptId: string;
   attempt: number;
@@ -50,7 +55,10 @@ type Stall = {
   progressAt: string | null;
   /** What the attempt reported still running when it stalled. */
   activity: string[];
-  /** restart, stop (the bound is reached), or nothing (it moved on). */
+  /**
+   * restart, stop (the bound is reached), or nothing (not this
+   * repository's review chat, or the turn moved on).
+   */
   act: "restart" | "stop" | "nothing";
   processes: SessionExecResult | null;
   attempts: SessionTurnAttempt[];
@@ -62,6 +70,36 @@ function text(value: unknown): string {
 
 function count(value: unknown): number {
   return typeof value === "number" && Number.isFinite(value) ? value : 0;
+}
+
+/** The pull request a review chat's key names, exactly: 0 for any other. */
+function pullRequestOf(key: string): number {
+  // pr-acme/web-tools-3 is not acme/web.
+  const prefix = `pr-${REVIEWED_REPOSITORY}-`;
+  const rest = key.startsWith(prefix) ? key.slice(prefix.length) : "";
+  const number = /^[1-9]\d*$/.test(rest) ? Number(rest) : 0;
+  return Number.isSafeInteger(number) ? number : 0;
+}
+
+/** The reviewer's project chat in `review` that reviewPullRequests started. */
+function ours(chat: SessionSnapshot): boolean {
+  return (
+    chat.owner === "project" &&
+    chat.agentId === `project:${chat.projectId}:reviewer` &&
+    chat.placement?.environment === "review" &&
+    chat.keyWorkflows.includes("reviewPullRequests")
+  );
+}
+
+/** Whether the chat's turn is still the attempt that stalled, still silent. */
+function stillStalled(chat: SessionSnapshot, stall: Stall): boolean {
+  const turn = chat.turn;
+  return (
+    turn?.id === stall.turnId &&
+    turn.attempt?.id === stall.attemptId &&
+    turn.stalledAt !== null &&
+    turn.stalledAt !== undefined
+  );
 }
 
 /** The tool calls and commands a stall event says were still running. */
@@ -104,9 +142,12 @@ export const restartStalledReviews = defineWorkflow(({ defineBoundary }) => ({
       }: BoundaryContext<TriggerPayload<"session.turn-stalled">>) => {
         const event = input.payload;
         const detail = event.detail;
+        const key = event.session.key ?? "";
+        const number = pullRequestOf(key);
         const stall: Stall = {
           sessionId: event.sessionId,
-          key: event.session.key ?? "",
+          key,
+          number,
           turnId: text(detail.turnId),
           attemptId: text(detail.attemptId),
           attempt: count(detail.attempt),
@@ -114,7 +155,12 @@ export const restartStalledReviews = defineWorkflow(({ defineBoundary }) => ({
           stallMinutes: count(detail.stallMinutes),
           progressAt: text(detail.progressAt) || null,
           activity: activityOf(detail.activity),
-          act: count(detail.restarts) < MAX_RESTARTS ? "restart" : "stop",
+          act:
+            number === 0
+              ? "nothing"
+              : count(detail.restarts) < MAX_RESTARTS
+                ? "restart"
+                : "stop",
           processes: null,
           attempts: [],
         };
@@ -130,16 +176,13 @@ export const restartStalledReviews = defineWorkflow(({ defineBoundary }) => ({
         input,
         host,
       }: BoundaryContext<Carried<SessionSnapshot, Stall>>) => {
-        const turn = input.result.turn;
-        // Only the attempt that stalled, while it is still silent: one that
-        // moved on, or was restarted already, is left alone.
-        const still =
-          turn?.id === input.state.turnId &&
-          turn.attempt?.id === input.state.attemptId &&
-          turn.stalledAt !== null;
-        const stall: Stall = still
-          ? input.state
-          : { ...input.state, act: "nothing" };
+        // Only this repository's review chat, and only the attempt that
+        // stalled while it is still silent: one that moved on, or was
+        // restarted already, is left alone.
+        const stall: Stall =
+          ours(input.result) && stillStalled(input.result, input.state)
+            ? input.state
+            : { ...input.state, act: "nothing" };
         if (stall.act === "nothing") return { result: null, state: stall };
         return host["catamorphic.sessions"].exec(
           {
@@ -180,10 +223,10 @@ export const restartStalledReviews = defineWorkflow(({ defineBoundary }) => ({
           attempts: input.result?.attempts ?? [],
         };
         if (stall.act === "nothing") return { result: null, state: stall };
-        const chat = stall.key.replace(/^pr-/, "").replace(/[^\w.-]+/g, "-");
+        // One folder per pull request number: the repository is this one.
         return documents.write(
           {
-            path: `${STALLS_PATH}/${chat}/${stall.attemptId}.json`,
+            path: `${STALLS_PATH}/${stall.number}/${stall.attemptId}.json`,
             contentType: "application/json",
             text: JSON.stringify(
               {
@@ -207,17 +250,36 @@ export const restartStalledReviews = defineWorkflow(({ defineBoundary }) => ({
         );
       },
     }),
-    /** @displayname Restart the turn, or stop it */
+    /** @displayname Read the chat again */
     defineBoundary({
       run: ({ input, host }: BoundaryContext<Carried<unknown, Stall>>) => {
         const stall = input.state;
         if (stall.act === "nothing") return { result: null, state: stall };
-        // Past the bound the turn stops: it settles interrupted, and
-        // postReviews marks the commit as having no review.
+        // The diagnosis took a while: act only on what the chat is now.
+        return host["catamorphic.sessions"].inspect(
+          { sessionId: stall.sessionId },
+          { state: stall },
+        );
+      },
+    }),
+    /** @displayname Restart the turn, or stop it */
+    defineBoundary({
+      run: ({
+        input,
+        host,
+      }: BoundaryContext<Carried<SessionSnapshot | null, Stall>>) => {
+        const stall: Stall =
+          input.result && stillStalled(input.result, input.state)
+            ? input.state
+            : { ...input.state, act: "nothing" };
+        if (stall.act === "nothing") return { result: null, state: stall };
+        // Past the bound this turn stops, and only this turn: it settles
+        // interrupted, and postReviews marks the commit as having no review.
         if (stall.act === "stop")
           return host["catamorphic.sessions"].interrupt(
             {
               sessionId: stall.sessionId,
+              turnId: stall.turnId,
               idempotencyKey: `stall:${stall.turnId}:stop`,
             },
             { state: stall },
@@ -225,10 +287,13 @@ export const restartStalledReviews = defineWorkflow(({ defineBoundary }) => ({
         const waiting = stall.activity.length
           ? ` while running ${stall.activity.slice(0, 3).join(", ")}`
           : "";
+        // Only the attempt that stalled, and only while it still is.
         return host["catamorphic.sessions"].restart(
           {
             sessionId: stall.sessionId,
             turnId: stall.turnId,
+            attemptId: stall.attemptId,
+            onlyIfStalled: true,
             reason: `no progress for ${stall.stallMinutes} minutes${waiting}`,
             idempotencyKey: `stall:${stall.attemptId}`,
           },
@@ -238,12 +303,26 @@ export const restartStalledReviews = defineWorkflow(({ defineBoundary }) => ({
     }),
     /** @displayname Report */
     defineBoundary({
-      run: ({ input }: BoundaryContext<Carried<unknown, Stall>>) => ({
-        key: input.state.key,
-        turnId: input.state.turnId,
-        attempt: input.state.attempt,
-        act: input.state.act,
-      }),
+      run: ({ input }: BoundaryContext<Carried<unknown, Stall>>) => {
+        const result: unknown = input.result;
+        const said = (field: string) =>
+          result !== null &&
+          typeof result === "object" &&
+          Reflect.get(result, field) === true;
+        // A refused restart, or a stop that found the turn gone: nothing.
+        const acted =
+          input.state.act === "restart"
+            ? said("restarted")
+            : input.state.act === "stop"
+              ? said("interrupted")
+              : false;
+        return {
+          key: input.state.key,
+          turnId: input.state.turnId,
+          attempt: input.state.attempt,
+          act: acted ? input.state.act : "nothing",
+        };
+      },
     }),
   ],
 }));

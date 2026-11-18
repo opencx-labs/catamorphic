@@ -417,14 +417,16 @@ export const postReviews = defineWorkflow(({ defineBoundary }) => ({
             result.sessionId === input.state.sessionId,
         );
         const head = input.state.commit ?? "";
+        // A stopped turn that already submitted its review for the head
+        // publishes it; one with none says it did not finish.
         const checked =
           input.state.unfinished === "failed"
             ? "The review turn failed."
-            : input.state.unfinished === "interrupted"
-              ? "The review turn was stopped before it finished."
-              : !submitted
-                ? "The turn submitted no review result."
-                : checkWorkReview(submitted.value);
+            : !submitted
+              ? input.state.unfinished === "interrupted"
+                ? "The review turn was stopped before it finished."
+                : "The turn submitted no review result."
+              : checkWorkReview(submitted.value);
         // Two commits must both be the head being posted for: the one the
         // agent says it reviewed, and the one Work recorded its turn began
         // on. Either one elsewhere refuses the review, and says which.

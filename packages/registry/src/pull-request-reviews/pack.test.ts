@@ -220,20 +220,27 @@ async function runStalled(script: string): Promise<unknown> {
       const log = [];
       // The chat's turn: each restart starts its next attempt, which hangs too.
       const turn = { id: "t1", attempt: { id: "attempt-1", ordinal: 1 }, restarts: 0, stalledAt: "2026-10-18T00:20:00Z" };
+      // The chat as reviewPullRequests started it; a test may change it.
+      const chat = { id: "session-1", projectId: "project-1", owner: "project", agentId: "project:project-1:reviewer", placement: { environment: "review" }, keyWorkflows: ["reviewPullRequests"] };
+      /** Runs between the diagnosis and the action, as time passes. */
+      let meanwhile = () => {};
       const wrap = (fns) => Object.fromEntries(Object.entries(fns).map(([name, fn]) => [name,
         (args, options) => ({ __call: async () => structuredClone(await fn(args)), ...(options && "state" in options ? { state: options.state } : {}) })]));
       const sessions = wrap({
-        inspect: () => ({ turn: structuredClone(turn) }),
+        inspect: () => { log.push(["inspect"]); return { ...structuredClone(chat), turn: structuredClone(turn) }; },
         exec: (args) => { log.push(["exec", args.in, args.idempotencyKey]); return { exitCode: 0, stdout: "== processes\\n12 1 20:01 S opencode acp", stderr: "", durationMs: 9, timedOut: false }; },
-        attempts: () => ({ attempts: [{ id: turn.attempt.id, status: "running", diagnostics: { runner: "", harness: "[warn] opencode: waiting on a tool" } }] }),
+        attempts: () => { const answer = { attempts: [{ id: turn.attempt.id, status: "running", diagnostics: { runner: "", harness: "[warn] opencode: waiting on a tool" } }] }; meanwhile(); return answer; },
         restart: (args) => {
-          log.push(["restart", args.idempotencyKey, args.reason]);
+          log.push(["restart", args.attemptId, args.onlyIfStalled, args.idempotencyKey, args.reason]);
+          // As Work answers: only the running attempt, while it is stalled.
+          if (args.attemptId !== turn.attempt.id) return { restarted: false, turnId: turn.id, attemptId: args.attemptId, refused: "not_current", message: "not current" };
+          if (args.onlyIfStalled && !turn.stalledAt) return { restarted: false, turnId: turn.id, attemptId: args.attemptId, refused: "not_stalled", message: "moved on" };
           const ended = turn.attempt;
           turn.restarts += 1;
           turn.attempt = { id: "attempt-" + (turn.restarts + 1), ordinal: turn.restarts + 1 };
-          return { turnId: turn.id, attemptId: ended.id, attempt: ended.ordinal, attempts: ended.ordinal, restarts: turn.restarts - 1 };
+          return { restarted: true, turnId: turn.id, attemptId: ended.id, attempt: ended.ordinal, attempts: ended.ordinal, restarts: turn.restarts - 1 };
         },
-        interrupt: (args) => { log.push(["interrupt", args.idempotencyKey]); return { interrupted: true }; },
+        interrupt: (args) => { log.push(["interrupt", args.turnId, args.idempotencyKey]); return { interrupted: args.turnId === turn.id }; },
       });
       const written = {};
       const documents = wrap({ write: (args) => { log.push(["write", args.path]); written[args.path] = JSON.parse(args.text); return { version: 1 }; } });
@@ -642,10 +649,23 @@ describe("the pull-request-reviews pack", () => {
       // Run again after its restart ran: that attempt is gone, so nothing.
       results.push(await runWorkflow(restartStalledReviews, stall(1, 0), context));
       results.push(await runWorkflow(restartStalledReviews, stall(2, 1), context));
-      // Past the bound: the turn is stopped instead.
+      // Past the bound: this turn, and only this turn, is stopped instead.
       results.push(await runWorkflow(restartStalledReviews, stall(3, 2), context));
-      console.log(JSON.stringify({ results, log, evidence: written["store/reviews/stalls/acme-web-42/attempt-1.json"] }));
+      console.log(JSON.stringify({ results, log, evidence: written["store/reviews/stalls/42/attempt-1.json"] }));
     `);
+    const restarted = (attempt: number) => [
+      ["inspect"],
+      ["exec", "session", `stall:attempt-${attempt}:diagnose`],
+      ["write", `store/reviews/stalls/42/attempt-${attempt}.json`],
+      ["inspect"],
+      [
+        "restart",
+        `attempt-${attempt}`,
+        true,
+        `stall:attempt-${attempt}`,
+        "no progress for 20 minutes while running mcp__github__get",
+      ],
+    ];
     expect(outcome).toMatchObject({
       results: [
         { act: "restart", attempt: 1 },
@@ -655,23 +675,14 @@ describe("the pull-request-reviews pack", () => {
         { act: "stop", attempt: 3 },
       ],
       log: [
-        ["exec", "session", "stall:attempt-1:diagnose"],
-        ["write", "store/reviews/stalls/acme-web-42/attempt-1.json"],
-        [
-          "restart",
-          "stall:attempt-1",
-          "no progress for 20 minutes while running mcp__github__get",
-        ],
-        ["exec", "session", "stall:attempt-2:diagnose"],
-        ["write", "store/reviews/stalls/acme-web-42/attempt-2.json"],
-        [
-          "restart",
-          "stall:attempt-2",
-          "no progress for 20 minutes while running mcp__github__get",
-        ],
+        ...restarted(1),
+        ["inspect"],
+        ...restarted(2),
+        ["inspect"],
         ["exec", "session", "stall:attempt-3:diagnose"],
-        ["write", "store/reviews/stalls/acme-web-42/attempt-3.json"],
-        ["interrupt", "stall:t1:stop"],
+        ["write", "store/reviews/stalls/42/attempt-3.json"],
+        ["inspect"],
+        ["interrupt", "t1", "stall:t1:stop"],
       ],
       evidence: {
         act: "restart",
@@ -681,6 +692,56 @@ describe("the pull-request-reviews pack", () => {
         ],
       },
     });
+  });
+
+  it("leaves look-alike chats, turns that moved on, and refused restarts alone", async () => {
+    const event = stallEvent({
+      attemptId: "attempt-1",
+      attempt: 1,
+      restarts: 0,
+    });
+    const outcome = await runStalled(`
+      const EVENT = ${JSON.stringify(event)};
+      const keyed = (key) => ({ ...EVENT, payload: { ...EVENT.payload, session: { ...EVENT.payload.session, key } } });
+      const results = {};
+      // Another repository's key that the trigger's prefix also matches.
+      results.lookAlike = await runWorkflow(restartStalledReviews, keyed("pr-acme/web-tools-3"), context);
+      // A chat with this key that reviewPullRequests did not start.
+      chat.keyWorkflows = [];
+      results.notOurs = await runWorkflow(restartStalledReviews, EVENT, context);
+      chat.keyWorkflows = ["reviewPullRequests"];
+      // It made progress while the diagnosis ran: inspected again, nothing.
+      meanwhile = () => { turn.stalledAt = null; };
+      results.movedOn = await runWorkflow(restartStalledReviews, EVENT, context);
+      // Work refuses the restart (it moved on after the second look): nothing.
+      meanwhile = () => {};
+      turn.stalledAt = "2026-10-18T00:20:00Z";
+      const realInspect = context.host["catamorphic.sessions"].inspect;
+      let looks = 0;
+      context.host["catamorphic.sessions"].inspect = (args, options) => { const call = realInspect(args, options); return { ...call, __call: async () => { const seen = await call.__call(); looks += 1; if (looks === 2) turn.stalledAt = null; return seen; } }; };
+      results.refused = await runWorkflow(restartStalledReviews, EVENT, context);
+      console.log(JSON.stringify({ results, log }));
+    `);
+    expect(outcome).toMatchObject({
+      results: {
+        lookAlike: { act: "nothing" },
+        notOurs: { act: "nothing" },
+        movedOn: { act: "nothing" },
+        refused: { act: "nothing" },
+      },
+    });
+    const log = (outcome as { log: unknown[][] }).log;
+    // Nothing ran in a chat that is not ours, and no restart for a look-alike.
+    expect(log.filter((entry) => entry[0] === "exec")).toHaveLength(2);
+    expect(log.filter((entry) => entry[0] === "restart")).toEqual([
+      [
+        "restart",
+        "attempt-1",
+        true,
+        "stall:attempt-1",
+        "no progress for 20 minutes while running mcp__github__get",
+      ],
+    ]);
   });
 
   it("hands each pull request to its keyed chat at its head", async () => {
@@ -984,6 +1045,28 @@ describe("postReviews", () => {
       },
     ]);
     expect(result.writes).toEqual(["check:action_required"]);
+  });
+
+  it("publishes a stopped turn's review for the head, and marks one with none as unfinished", async () => {
+    const result = await publish(`
+      // Stopped (by a person, or by restartStalledReviews past its bound)
+      // after it had submitted its review: the review stands.
+      world.submit("t1", { verdict: "REQUEST_CHANGES", reviewedCommit: ${JSON.stringify(HEAD)} });
+      const reviewed = await runWorkflow(postReviews, event("t1", "interrupted"), world.context);
+      // Stopped before submitting anything.
+      const unfinished = await runWorkflow(postReviews, event("t2", "interrupted"), world.context);
+      return [reviewed, unfinished];
+    `);
+    expect(result.outcomes).toEqual([
+      { posted: "review", verdict: "failure", problem: null },
+      {
+        posted: "missing",
+        verdict: "failure",
+        problem: "The review turn was stopped before it finished.",
+      },
+    ]);
+    expect(result.writes).toContain("check:failure");
+    expect(result.writes).toContain("review:REQUEST_CHANGES");
   });
 
   it("trusts GitHub over the chat's metadata, which the reviewer can write too", async () => {
