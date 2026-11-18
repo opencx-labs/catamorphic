@@ -192,21 +192,28 @@ codebase, which tests are slow, what never to touch.
 
 The `pull-request-reviews-opencode` pack makes the reviewer OpenCode, which
 Work runs as an ACP agent in the same sandbox (ADR 0255), on an open-weight
-model through OpenRouter or another OpenAI-compatible API. Its definition
-states the contract an ACP agent needs to run beside the change's code
-(ADR 0332): `"shell": true` (OpenCode runs its shell tool with `$SHELL`,
-which Work points at the command container) and `"projectConfig": false`,
-with the `env` that makes it so. The image turns off what OpenCode would
-otherwise start or read from the checkout beside the reviewer: language
-servers and formatters (`"lsp": false`, `"formatter": false`, some resolve
-from the change's own dependencies), Git snapshots (`"snapshot": false`),
-language server downloads, and the change's Claude Code files and external
-skills. Its image points
-OpenCode at `WORK_MODEL_BASE_URL` and `WORK_MODEL_API_KEY`: Work serves the
-model connection on the sandbox's loopback for each turn, so no key reaches
-the machine. `OPENCODE_DISABLE_PROJECT_CONFIG` keeps the pull request's own
-OpenCode settings, `.opencode/` agents and plugins, and `AGENTS.md` out of the
-reviewer: the doctrine comes from `reviewer.md` alone. Which providers serve
+model through OpenRouter or another OpenAI-compatible API.
+
+Its reviews are not protected from the code they review. OpenCode loads
+plugins from the checkout (`.opencode/plugin/`, `.opencode/plugins/` and the
+`plugin` list of an `opencode.json`) whatever its settings say, so it cannot
+run apart from the change's code (ADR 0332): Work refuses it in an
+Environment that runs commands apart, and its install removes `commands`
+from the `review` Environment. There the pull request's code runs beside
+the reviewer, plugins it plants included, and can reach the model key and
+the tool the reviewer submits its review with. Where that matters, keep the
+Claude Code reviewer of this pack.
+
+The image still turns off what OpenCode would otherwise start or read from
+the checkout: language servers and formatters (`"lsp": false`,
+`"formatter": false`, some resolve from the change's own dependencies), Git
+snapshots (`"snapshot": false`), language server downloads, and the
+change's Claude Code files and external skills. Its image points OpenCode
+at `WORK_MODEL_BASE_URL` and `WORK_MODEL_API_KEY`: Work serves the model
+connection on the sandbox's loopback for each turn, so no key reaches the
+machine. `OPENCODE_DISABLE_PROJECT_CONFIG` keeps the pull request's own
+OpenCode settings and `AGENTS.md` out of the reviewer's instructions: the
+doctrine comes from `reviewer.md` alone. Which providers serve
 the prompts, with no fallbacks and no data retention, is the server's: a
 rewrite in its own image (the Work server guide's "Harnesses on the server").
 

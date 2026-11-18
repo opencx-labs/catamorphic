@@ -22,8 +22,13 @@ export interface CommandSession {
   /** Input as it arrives; `null` once it ended. */
   onInput(listener: (data: Buffer | null) => void): void;
   onSignal(listener: (signal: CommandSignal) => void): void;
-  stdout(data: Buffer): void;
-  stderr(data: Buffer): void;
+  /**
+   * Send output on; resolves once the shim has taken it in (the socket
+   * drained), so a command whose shim reads slowly is held back rather
+   * than buffered here.
+   */
+  stdout(data: Buffer): Promise<void>;
+  stderr(data: Buffer): Promise<void>;
   returned(files: Record<string, Buffer>): void;
   exit(code: number): void;
   error(message: string): void;
@@ -106,6 +111,20 @@ function serve(args: {
   const send = (frame: Record<string, unknown>) => {
     if (!socket.destroyed) socket.write(`${JSON.stringify(frame)}\n`);
   };
+  /** Send a frame and wait until the socket drains, or closes. */
+  const sendDrained = (frame: Record<string, unknown>): Promise<void> => {
+    if (socket.destroyed) return Promise.resolve();
+    if (socket.write(`${JSON.stringify(frame)}\n`)) return Promise.resolve();
+    return new Promise<void>((resolve) => {
+      const done = () => {
+        socket.off("drain", done);
+        socket.off("close", done);
+        resolve();
+      };
+      socket.once("drain", done);
+      socket.once("close", done);
+    });
+  };
   const finish = (frame: Record<string, unknown>) => {
     if (done) return;
     done = true;
@@ -151,15 +170,15 @@ function serve(args: {
           signals.push(listener);
           for (const signal of waiting.signals.splice(0)) listener(signal);
         },
-        stdout: (data) => {
+        stdout: async (data) => {
           for (let at = 0; at < data.length; at += OUTPUT_CHUNK_BYTES)
-            send({
+            await sendDrained({
               o: data.subarray(at, at + OUTPUT_CHUNK_BYTES).toString("base64"),
             });
         },
-        stderr: (data) => {
+        stderr: async (data) => {
           for (let at = 0; at < data.length; at += OUTPUT_CHUNK_BYTES)
-            send({
+            await sendDrained({
               e: data.subarray(at, at + OUTPUT_CHUNK_BYTES).toString("base64"),
             });
         },

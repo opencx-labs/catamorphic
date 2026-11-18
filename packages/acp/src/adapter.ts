@@ -22,7 +22,15 @@ import {
   type McpServerSpec,
   NO_CAPABILITIES,
 } from "@catamorphic/agent-protocol/runner";
-import { renderUserMessage, writeCommandShell } from "@catamorphic/sandbox";
+import {
+  type LoopbackModel,
+  loopbackModelEnv,
+  loopbackModelHeaders,
+  type ModelRefusal,
+  renderUserMessage,
+  serveLoopbackModel,
+  writeCommandShell,
+} from "@catamorphic/sandbox";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
 import {
@@ -30,13 +38,6 @@ import {
   type CallToolResult,
   ListToolsRequestSchema,
 } from "@modelcontextprotocol/sdk/types.js";
-import {
-  type LoopbackModel,
-  loopbackModelEnv,
-  loopbackModelHeaders,
-  type ModelRefusal,
-  serveLoopbackModel,
-} from "./model-endpoint.js";
 
 /**
  * What an Agent Client Protocol agent offers through the protocol itself.
@@ -55,7 +56,7 @@ export const ACP_CAPABILITIES: HarnessCapabilities = {
 
 /** Why an ACP agent without `acp.shell` does not run where commands run apart (ADR 0332). */
 export const ACP_COMMANDS_APART_REFUSAL =
-  'This Environment runs commands apart from the agent, and an ACP agent runs there only when its definition says both that every way it runs code goes through $SHELL ("shell": true) and that it loads no configuration, plugins, MCP servers, language servers, formatters or instructions from the checkout ("projectConfig": false, with "env" naming the variables that make it so). OpenCode does, with OPENCODE_DISABLE_PROJECT_CONFIG and its language servers and formatters off. Otherwise use another agent there.';
+  'This Environment runs commands apart from the agent, and an ACP agent runs there only when its definition says both that every way it runs code goes through $SHELL ("shell": true) and that it loads no configuration, plugins, MCP servers, language servers, formatters or instructions from the checkout ("projectConfig": false, with "env" naming the variables that make it so). OpenCode does not: it loads plugins from the checkout whatever its settings say. Use Claude Code there, or run this Environment\'s commands beside the agent.';
 
 /** The variables an agent's definition sets for its process. */
 function definitionEnv(value: unknown): Record<string, string> {
@@ -176,12 +177,21 @@ function startAttempt(
         attempt.options.projectConfig !== false
       )
         throw new Error(ACP_COMMANDS_APART_REFUSAL);
-      shell = await writeCommandShell({
-        directory: path.join(attempt.stateDirectory, "commands"),
-        socket: attempt.commands.socket,
-        runtime: process.execPath,
-      });
+      // With a harness user of its own, the provider's shim, which that
+      // user cannot rewrite; otherwise one beside the runner's state.
+      const harness = attempt.commands.harness;
+      shell = harness
+        ? {
+            shell: path.join(harness.shim, "bin", "bash"),
+            path: path.join(harness.shim, "path"),
+          }
+        : await writeCommandShell({
+            directory: path.join(attempt.stateDirectory, "commands"),
+            socket: attempt.commands.socket,
+            runtime: process.execPath,
+          });
     }
+    const harness = attempt.commands?.harness;
     if (access.kind === "gateway")
       model = await serveLoopbackModel({
         access,
@@ -211,7 +221,21 @@ function startAttempt(
                 .join(":"),
             }
           : {}),
+        // Its own user (ADR 0332): a home it writes as a cache, and a
+        // configuration home it cannot write, so nothing it is led to
+        // write loads into it as configuration or a plugin.
+        ...(harness
+          ? {
+              HOME: harness.home,
+              XDG_CONFIG_HOME: harness.config,
+              XDG_DATA_HOME: path.join(harness.home, ".local", "share"),
+              XDG_STATE_HOME: path.join(harness.home, ".local", "state"),
+              XDG_CACHE_HOME: path.join(harness.home, ".cache"),
+              TMPDIR: harness.temporary,
+            }
+          : {}),
       },
+      ...(harness ? { uid: harness.uid, gid: harness.gid } : {}),
       stdio: ["pipe", "pipe", "pipe"],
       // Its own process group, so stopping it stops what it started too
       // (the agent behind an `npx` or `sh -c` command, its MCP servers).

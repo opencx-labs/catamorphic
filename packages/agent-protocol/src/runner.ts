@@ -191,6 +191,25 @@ export type ThreadBinding =
       statePath?: string;
     };
 
+/** The harness's own user and folders beside a runner (ADR 0332). */
+export interface CommandsHarness {
+  uid: number;
+  gid: number;
+  /** Its home: its own, a cache. */
+  home: string;
+  /** Its temporary folder, where commands' working-directory files return. */
+  temporary: string;
+  /** The shim's folder: `bin/bash` its shell, `path/` first on its PATH. */
+  shim: string;
+  /** The runner's folder for pasted media, which the harness's group reads. */
+  media: string;
+  /**
+   * Its configuration home (`XDG_CONFIG_HOME`): the runner's, empty, which
+   * it reads and cannot write, so nothing it is led to write there loads.
+   */
+  config: string;
+}
+
 export interface AttemptStart {
   protocol: typeof RUNNER_PROTOCOL_VERSION;
   sessionId: string;
@@ -254,7 +273,17 @@ export interface AttemptStart {
    * refuses the attempt when it cannot redirect that harness's commands,
    * rather than running them beside the agent.
    */
-  commands?: { socket: string };
+  commands?: {
+    socket: string;
+    /**
+     * Who the harness runs as beside the runner, and where (ADR 0332): its
+     * own user, which can read neither the session's grants nor the
+     * runner's state and write none of the shim, its home and temporary
+     * folder its own, and the shim the provider made. Absent, the harness
+     * runs as the runner and the adapter writes the shim itself.
+     */
+    harness?: CommandsHarness;
+  };
   /** Adapter-specific settings the host configured for this agent. */
   options: JsonObject;
 }

@@ -1,5 +1,5 @@
 import { createHash, randomUUID } from "node:crypto";
-import { mkdir, writeFile } from "node:fs/promises";
+import { chmod, chown, mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";
 import type { AgentAttachment } from "@catamorphic/agent-protocol";
 import { isMediaAttachment, renderUserMessage } from "@catamorphic/sandbox";
@@ -15,6 +15,11 @@ export async function renderPrompt(input: {
   text: string;
   attachments: AgentAttachment[];
   stateDirectory: string;
+  /**
+   * The group of a harness running as its own user (ADR 0332): it reads
+   * the files, the runner alone writes them.
+   */
+  readerGroup?: number;
 }): Promise<string> {
   const withText = renderUserMessage(input.text, input.attachments);
   const media = input.attachments.filter(isMediaAttachment);
@@ -25,7 +30,13 @@ export async function renderPrompt(input: {
     input.itemId.replace(/[^\w.-]+/g, "_"),
   );
   // What the person pasted stays theirs: private, like Work's own copy.
+  const group = input.readerGroup;
   await mkdir(directory, { recursive: true, mode: 0o700 });
+  if (group !== undefined)
+    for (const folder of [path.dirname(directory), directory]) {
+      await chown(folder, -1, group);
+      await chmod(folder, 0o750);
+    }
   const lines: string[] = [];
   for (const attachment of media) {
     // Names come from the person's clipboard and files: keep them readable
@@ -35,6 +46,10 @@ export async function renderPrompt(input: {
     await writeFile(filePath, Buffer.from(attachment.dataBase64, "base64"), {
       mode: 0o600,
     });
+    if (group !== undefined) {
+      await chown(filePath, -1, group);
+      await chmod(filePath, 0o640);
+    }
     lines.push(
       `- [attachment ${input.attachments.indexOf(attachment) + 1}: ${attachment.name}] ${filePath} (${attachment.mediaType})`,
     );

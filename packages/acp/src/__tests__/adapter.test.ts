@@ -13,7 +13,11 @@ import {
   type RunnerFrame,
 } from "@catamorphic/agent-protocol/runner";
 import { InProcessRunner } from "@catamorphic/agent-runner";
-import { agentQuestionJsonSchema } from "@catamorphic/sandbox";
+import {
+  agentQuestionJsonSchema,
+  loopbackModelEnv,
+  serveLoopbackModel,
+} from "@catamorphic/sandbox";
 import { afterEach, describe, expect, it } from "vitest";
 import {
   ACP_COMMANDS_APART_REFUSAL,
@@ -22,7 +26,6 @@ import {
   modelChoice,
   turnUsage,
 } from "../adapter.js";
-import { loopbackModelEnv, serveLoopbackModel } from "../model-endpoint.js";
 
 /*
  * The ACP adapter end to end (ADR 0241): the real runner drives the real
@@ -193,6 +196,63 @@ describe("ACP agents whose commands run apart (ADR 0332)", () => {
       `SHELL=${shim} PATH=${path.join(space.dir, "commands", "path")} MARK=set by its definition`,
     );
     expect(fs.readFileSync(shim, "utf8")).toContain(commands.socket);
+  });
+
+  it("runs an agent as the harness's own user, on the provider's shim, with a configuration home it cannot write", async () => {
+    const space = workspace();
+    const harness = {
+      uid: process.getuid?.() ?? 0,
+      gid: process.getgid?.() ?? 0,
+      home: path.join(space.dir, "harness-home"),
+      temporary: path.join(space.dir, "harness-tmp"),
+      shim: "/workspace/.work-shim",
+      media: path.join(space.dir, "harness-media"),
+      config: path.join(space.dir, "harness-config"),
+    };
+    const turn = run(
+      attempt(space, "[[harness]]", {
+        commands: { ...commands, harness },
+        options: {
+          command: [process.execPath, AGENT],
+          shell: true,
+          projectConfig: false,
+        },
+      }),
+    );
+    await turn.finished();
+    expect(turn.completed()).toMatchObject({ status: "completed" });
+    expect(turn.text("assistant_message")).toBe(
+      `SHELL=/workspace/.work-shim/bin/bash PATH=/workspace/.work-shim/path HOME=${harness.home} CONFIG=${harness.config} UID=${harness.uid}`,
+    );
+    // The provider's shim, which that user cannot rewrite: none is
+    // written beside the runner's state.
+    expect(fs.existsSync(path.join(space.dir, "commands"))).toBe(false);
+  });
+
+  it("refuses the review pack's OpenCode, which loads plugins from the checkout", async () => {
+    const space = workspace();
+    const definition = JSON.parse(
+      fs.readFileSync(
+        path.resolve(
+          path.dirname(fileURLToPath(import.meta.url)),
+          "../../../registry/src/pull-request-reviews-opencode/reviewer.json",
+        ),
+        "utf8",
+      ),
+    );
+    const turn = run(
+      attempt(space, "[[shell]]", {
+        commands,
+        options: { ...definition.acp, command: [process.execPath, AGENT] },
+      }),
+    );
+    await turn.finished();
+    expect(turn.completed()).toMatchObject({
+      status: "failed",
+      error: { message: ACP_COMMANDS_APART_REFUSAL },
+    });
+    expect(ACP_COMMANDS_APART_REFUSAL).toContain("OpenCode does not");
+    expect(fs.existsSync(space.stateFile)).toBe(false);
   });
 
   it.each([

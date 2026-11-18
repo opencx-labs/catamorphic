@@ -142,6 +142,15 @@ export {
 } from "./execution-environment.js";
 export { instrumentSandboxProvider } from "./instrumented-provider.js";
 export {
+  type GatewayModelAccess,
+  type LoopbackModel,
+  loopbackModelEnv,
+  loopbackModelHeaders,
+  type ModelRefusal,
+  passingRefusal,
+  serveLoopbackModel,
+} from "./model-endpoint.js";
+export {
   type ExecutorKeyPair,
   ExecutorPublicKeySchema,
   executorPublicKey,
@@ -291,6 +300,7 @@ export {
   SEPARATE_AGENT_DEFAULT_RESOURCES,
   SEPARATE_COMMANDS_DEFAULT_RESOURCES,
   SEPARATE_COMMANDS_SOCKET,
+  SEPARATE_HARNESS,
   SIGN_IN_HARNESSES,
   type SignInHarness,
   signInCapability,

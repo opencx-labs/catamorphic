@@ -509,20 +509,28 @@ describe("the pull-request-reviews pack", () => {
     expect(agent.success, JSON.stringify(agent.error)).toBe(true);
     expect(agent.data).toMatchObject({
       kind: "acp",
-      // OpenCode runs its commands with $SHELL and loads nothing from the
-      // checkout, so they run apart (ADR 0332).
       acp: {
         command: ["opencode", "acp"],
-        shell: true,
-        projectConfig: false,
         env: { OPENCODE_DISABLE_PROJECT_CONFIG: "1" },
       },
       credentials: { source: "connection", connection: "model" },
       sandboxing: "contained",
       environment: { allowed: ["review"] },
     });
+    // OpenCode loads plugins from the checkout whatever its settings say,
+    // so its definition claims no contract to run apart from the change's
+    // code (ADR 0332), Work refuses it where commands run apart, and the
+    // pack says to run its Environment's commands beside it.
+    expect(agent.data?.acp).not.toHaveProperty("shell");
+    expect(agent.data?.acp).not.toHaveProperty("projectConfig");
+    expect(OPENCODE.manifest.docs).toContain(
+      "Remove `commands` from the `review` Environment",
+    );
+    expect(OPENCODE.manifest.docs).toContain(
+      "not protected from the code they review",
+    );
     // OpenCode's configuration names the model the agent chooses, and the
-    // image keeps the pull request's own configuration out.
+    // image keeps the pull request's own settings out.
     expect(REVIEW_OPENCODE_DOCKERFILE).toMatch(
       /^FROM docker:[\w.-]+-dind@sha256:[a-f0-9]{64}$/m,
     );

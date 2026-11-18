@@ -4,8 +4,6 @@
   "kind": "acp",
   "acp": {
     "command": ["opencode", "acp"],
-    "shell": true,
-    "projectConfig": false,
     "env": {
       "OPENCODE_CONFIG": "/etc/opencode/work.json",
       "OPENCODE_DISABLE_PROJECT_CONFIG": "1",

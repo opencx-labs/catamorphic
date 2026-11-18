@@ -27,6 +27,8 @@ import {
   RequestClosedError,
 } from "@catamorphic/agent-protocol/runner";
 import {
+  type LoopbackModel,
+  serveLoopbackModel,
   type WarmSession,
   WarmSessions,
   type WarmSessionsOptions,
@@ -380,6 +382,8 @@ class ClaudeAttempt {
   private readonly servers: readonly string[];
   readonly transcript: ClaudeTranscript;
   private session?: ClaudeSession;
+  /** The attempt's model endpoint, for a harness of its own user (ADR 0332). */
+  private loopback?: LoopbackModel;
   /** Steered inputs not yet taken into the turn, by SDK uuid. */
   private readonly pendingSteers = new Map<string, string>();
   /** The SDK uuid of this attempt's own input, once sent. */
@@ -472,17 +476,21 @@ class ClaudeAttempt {
     let signature: string;
     let debugging: boolean;
     try {
-      const prompt = await renderPrompt({
-        ...input,
-        stateDirectory: this.attempt.stateDirectory,
-      });
+      // Its own user beside the runner (ADR 0332): its model through the
+      // runner's loopback, so the grant stays the runner's alone.
+      const harness = this.attempt.commands?.harness;
+      if (harness && this.attempt.modelAccess.kind === "gateway")
+        this.loopback = await serveLoopbackModel({
+          access: this.attempt.modelAccess,
+        });
+      const prompt = await renderPrompt({ ...input, ...this.mediaFolder() });
       message = this.userMessage({ itemId: input.itemId, text: prompt });
       const options = readAttemptOptions(this.attempt.options);
       signature = launchSignature({ attempt: this.attempt, options });
       debugging = options.debugFile !== undefined;
       // Its shell, when its commands run apart (ADR 0332).
       const shell = commandShellPaths(this.attempt);
-      if (shell && this.attempt.commands)
+      if (shell && this.attempt.commands && !this.attempt.commands.harness)
         await writeCommandShell({
           directory: shell.directory,
           socket: this.attempt.commands.socket,
@@ -773,6 +781,17 @@ class ClaudeAttempt {
     };
   }
 
+  /**
+   * Where pasted media go: the attempt's state, or, for a harness of its
+   * own user, the runner's folder that user reads and cannot write.
+   */
+  private mediaFolder(): { stateDirectory: string; readerGroup?: number } {
+    const harness = this.attempt.commands?.harness;
+    return harness
+      ? { stateDirectory: harness.media, readerGroup: harness.gid }
+      : { stateDirectory: this.attempt.stateDirectory };
+  }
+
   private settle(input: {
     status: "completed" | "failed" | "interrupted";
     error?: TurnError;
@@ -781,6 +800,9 @@ class ClaudeAttempt {
     this.settled = true;
     this.log.flush();
     this.session?.logTo(undefined);
+    // The attempt's model endpoint ends with it.
+    this.loopback?.close();
+    this.loopback = undefined;
     this.resolveInputSent();
     this.failed = input.status === "failed";
     clearTimeout(this.interruptTimer);
@@ -817,10 +839,7 @@ class ClaudeAttempt {
     // Steered while the CLI starts: it follows the attempt's own input,
     // never stops the attempt for want of a CLI.
     await Promise.race([this.inputSent, this.settledTurn]);
-    const prompt = await renderPrompt({
-      ...input,
-      stateDirectory: this.attempt.stateDirectory,
-    });
+    const prompt = await renderPrompt({ ...input, ...this.mediaFolder() });
     const session = this.session;
     if (this.settled || this.interruptRequested || !session?.alive)
       return false;
@@ -905,6 +924,7 @@ class ClaudeAttempt {
     };
     return buildQueryOptions({
       attempt,
+      ...(this.loopback ? { loopback: this.loopback } : {}),
       options: readAttemptOptions(attempt.options),
       hostServers: hostToolServers({
         tools: attempt.hostTools,
@@ -939,6 +959,10 @@ class ClaudeAttempt {
                     path.dirname(attempt.workingDirectory),
                     ".work-program",
                   ),
+                  // The media the person pasted, which it reads.
+                  attempt.commands?.harness
+                    ? attempt.commands.harness.media
+                    : path.join(attempt.stateDirectory, "attachments"),
                 ],
               }),
             }

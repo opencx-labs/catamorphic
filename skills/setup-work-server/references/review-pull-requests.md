@@ -192,8 +192,10 @@ adds:
 - `.work/triggers/github.ts`: the GitHub trigger library.
 - `.work/agents/reviewer.json` and `reviewer.md`: the reviewer and its
   review doctrine. The `pull-request-reviews-opencode` pack runs OpenCode
-  over ACP on a model connection instead (`acp.shell`, so its commands run
-  apart; its `effort`, if set, chosen
+  over ACP on a model connection instead (beside the pull request's code:
+  OpenCode loads plugins from the checkout, so Work does not run it apart
+  and its reviews are not protected from the code they review; its
+  `effort`, if set, chosen
   among the model's variants; a chat whose sandbox was replaced continues
   from a hand-off that keeps its submitted reviews and the pushes and
   comments they do not answer yet, ADR 0328), such as OpenRouter, with
