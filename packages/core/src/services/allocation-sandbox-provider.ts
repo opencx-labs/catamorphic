@@ -89,15 +89,15 @@ function separateCommandsOf(args: {
   provider: SandboxProvider;
 }): Pick<CreateSandboxOpts, "separateCommands"> {
   const separate = args.allocation.policy.sandbox?.separateCommands;
-  if (!separate) return {};
+  // No agent container for a harness outside the sandbox: the command
+  // container is the whole sandbox.
+  if (!separate?.agentResources) return {};
   const workspaceRoot = args.provider.workspaceRoot;
   return {
     separateCommands: {
       shared: [sandboxProjectDirectory({ workspaceRoot })],
       envFiles: sandboxEnvFiles({ workspaceRoot }),
-      ...(separate.agentResources
-        ? { agentResources: separate.agentResources }
-        : {}),
+      agentResources: separate.agentResources,
     },
   };
 }

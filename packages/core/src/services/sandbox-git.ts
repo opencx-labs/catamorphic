@@ -371,8 +371,10 @@ export async function configureSandboxGateway(input: {
    * aliases, never a model's; the agent side gets only the others (its
    * model's), and no Git configuration or variables, since its harness
    * runs Git and code only where commands run. No grant is on both sides.
+   * Without an agent side (its harness runs outside the sandbox) nothing
+   * but the listed aliases' grants reaches the sandbox.
    */
-  commands?: { aliases: readonly string[] };
+  commands?: { aliases: readonly string[]; agentSide?: boolean };
 }): Promise<void> {
   if (!input.grants.length) return;
   for (const grant of input.grants)
@@ -384,18 +386,19 @@ export async function configureSandboxGateway(input: {
   const listed = new Set(input.commands.aliases);
   // Beside the agent only its attempt's model grant, where its harness
   // reads it (ADR 0293): nothing a link in the checkout could lead to.
-  await publishGateway({
-    ...input,
-    side: "agent",
-    grants: input.grants.flatMap((grant) =>
-      grant.modelAttemptId && !listed.has(grant.alias)
-        ? [{ ...grant, modelOnly: true }]
-        : [],
-    ),
-    gitAliases: [],
-    httpAliases: [],
-    allowEmpty: true,
-  });
+  if (input.commands.agentSide !== false)
+    await publishGateway({
+      ...input,
+      side: "agent",
+      grants: input.grants.flatMap((grant) =>
+        grant.modelAttemptId && !listed.has(grant.alias)
+          ? [{ ...grant, modelOnly: true }]
+          : [],
+      ),
+      gitAliases: [],
+      httpAliases: [],
+      allowEmpty: true,
+    });
   await publishGateway({
     ...input,
     side: "commands",

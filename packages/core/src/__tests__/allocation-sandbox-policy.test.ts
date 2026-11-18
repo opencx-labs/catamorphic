@@ -112,6 +112,27 @@ describe("withAllocationSandboxPolicy", () => {
     ]);
   });
 
+  it("asks for one container when the work's harness runs outside the sandbox (ADR 0332)", async () => {
+    const machine = new MemberMachine();
+    const provider = withAllocationSandboxPolicy({
+      db,
+      allocation: allocation({ separateCommands: { connections: ["git"] } }),
+      provider: machine as unknown as SandboxProvider,
+    });
+    await provider.createSandbox({});
+    // The command container is the sandbox; nothing is reserved beside it.
+    expect(machine.created).toEqual([{}]);
+    expect(
+      reservedOf({
+        ...allocation({ separateCommands: { connections: ["git"] } }).policy,
+        requirements: {
+          workload: "agent",
+          resources: { cpuMillis: 4000, memoryMb: 8192 },
+        },
+      }),
+    ).toEqual({ cpuMillis: 4000, memoryMb: 8192 });
+  });
+
   it("reserves the agent container on top of the command container's limits (ADR 0332)", () => {
     const separated = allocation({
       separateCommands: {

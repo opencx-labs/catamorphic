@@ -1345,6 +1345,28 @@ const ASK_USER_HOST_TOOL: ExtraTool = {
   },
 };
 
+/**
+ * Why a harness that runs in its sandbox cannot start in a separated
+ * sandbox made without an agent container (ADR 0332).
+ */
+export const SEPARATED_WITHOUT_AGENT_SIDE =
+  "This chat's sandbox runs its commands apart with no container beside them for an agent, since it was made for an agent that runs outside it (such as the built-in one). An agent whose harness runs in the sandbox needs a workspace of its own: start it in a new chat rather than in this one's workspace.";
+
+/**
+ * Why a harness cannot start in a sandbox, if it cannot (ADR 0332): one
+ * that runs in the sandbox needs the agent container a separated sandbox
+ * has only when it was admitted for such a harness.
+ */
+export function separatedHarnessRefusal(input: {
+  placement: "sandbox" | "host";
+  separateCommands: { agentResources?: unknown } | undefined;
+}): string | undefined {
+  return input.placement === "sandbox" &&
+    input.separateCommands &&
+    !input.separateCommands.agentResources
+    ? SEPARATED_WITHOUT_AGENT_SIDE
+    : undefined;
+}
 /** How long a change waits for a finalizing turn before it is refused. */
 const FINALIZING_WAIT_MS = 20_000;
 
@@ -5910,6 +5932,15 @@ export class AgentSessionsService {
       session,
       agent,
     );
+    // A sandbox made for a harness outside it has no agent container
+    // (ADR 0332): one that runs in the sandbox would run beside the pull
+    // request's code there, so it is refused before anything reaches it.
+    const separated = runtime.allocation?.policy.sandbox?.separateCommands;
+    const refused = separatedHarnessRefusal({
+      placement: agent.harness.placement,
+      separateCommands: separated,
+    });
+    if (refused) throw new Error(refused);
     const notes: string[] = [];
     const ownerAuthored = await this.ownerAuthoredTurn({
       projectId,
@@ -6550,8 +6581,7 @@ export class AgentSessionsService {
         : {}),
       // Its shell runs where the pull request's code runs, not beside it
       // (ADR 0332); an adapter that cannot redirect it refuses.
-      ...(agent.harness.placement === "sandbox" &&
-      runtime.allocation?.policy.sandbox?.separateCommands
+      ...(agent.harness.placement === "sandbox" && separated
         ? {
             commands: {
               socket: SEPARATE_COMMANDS_SOCKET,
@@ -7193,6 +7223,7 @@ export class AgentSessionsService {
         topology: agent.topology,
       },
       ...(agent.signIn ? { signIn: agent.signIn } : {}),
+      harnessInSandbox: agent.harness.placement === "sandbox",
     });
     const admitted = "admission" in placed ? placed.admission : undefined;
     const environmentName = admitted
@@ -7819,6 +7850,8 @@ export class AgentSessionsService {
                     separate.connections.includes(binding.alias),
                 )
                 .map((binding) => binding.alias),
+              // No agent container for a harness outside the sandbox.
+              agentSide: separate.agentResources !== undefined,
             },
           }
         : {}),
@@ -9459,6 +9492,7 @@ export class AgentSessionsService {
                 topology: mirrorAgent.topology,
               },
               ...(mirrorAgent.signIn ? { signIn: mirrorAgent.signIn } : {}),
+              harnessInSandbox: mirrorAgent.harness.placement === "sandbox",
             })
           : undefined;
         const requirements = mirrorAgent?.connectionRequirements ?? [];
@@ -9763,6 +9797,7 @@ export class AgentSessionsService {
           topology: nextAgent.topology,
         },
         ...(nextAgent.signIn ? { signIn: nextAgent.signIn } : {}),
+        harnessInSandbox: nextAgent.harness.placement === "sandbox",
       });
       const requirements = nextAgent.connectionRequirements ?? [];
       if (requirements.length > 0 && !this.connectionAdmission) {
@@ -11584,6 +11619,7 @@ export class AgentSessionsService {
         topology: agent.topology,
       },
       ...(agent.signIn ? { signIn: agent.signIn } : {}),
+      harnessInSandbox: agent.harness.placement === "sandbox",
     };
     const placed = options.wait
       ? await this.executionEnvironments.admitOrWait({
@@ -13464,6 +13500,7 @@ export class AgentSessionsService {
             topology: agent.topology,
           },
           ...(agent.signIn ? { signIn: agent.signIn } : {}),
+          harnessInSandbox: agent.harness.placement === "sandbox",
           allowed: agent.environment?.allowed,
           preferred: agent.environment?.preferred,
         });
@@ -13948,6 +13985,7 @@ export class AgentSessionsService {
         topology: agent.topology,
       },
       ...(agent.signIn ? { signIn: agent.signIn } : {}),
+      harnessInSandbox: agent.harness.placement === "sandbox",
     });
     for (const key of ["cpuMillis", "memoryMb", "storageMb", "gpu"] as const) {
       const required = admitted.effectiveRequirements.resources?.[key];

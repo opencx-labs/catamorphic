@@ -1021,7 +1021,9 @@ caches (ADR 0208):
   gets the Environment's `requirements.resources`; the agent container its
   own share, `"agentResources": { "cpuMillis": 1000, "memoryMb": 2048 }` by
   default, and the Allocation reserves both, so size `capacity` for the
-  pair. In the agent container the runner runs as root and the harness as
+  pair. A chat whose harness runs outside the sandbox (the built-in agent)
+  and a workflow's sandbox get the command container alone and reserve no
+  agent share. In the agent container the runner runs as root and the harness as
   uid 10001; the checkout's group is gid 10001, and every `git` in the
   image is replaced there by Work's, which runs in the command container.
   Codex cannot run in such an Environment (it picks its own shell);

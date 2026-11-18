@@ -112,6 +112,13 @@ export interface EnvironmentAdmitArgs {
   /** The agent runs on the owner's own sign-in on the machine (ADR 0199). */
   signIn?: SignInHarness;
   /**
+   * The work's harness runs in its sandbox, so a sandbox whose commands run
+   * apart has an agent container for it (ADR 0332). Otherwise (the built-in
+   * agent on the control plane, workflows) its command container is the
+   * whole sandbox and no agent share is reserved.
+   */
+  harnessInSandbox?: boolean;
+  /**
    * Admit as the program declares it at this published commit, Dockerfile
    * included, instead of the newest `main` (ADR 0334): a cache fill builds
    * its sandbox from the revision that went live.
@@ -446,6 +453,8 @@ export class ExecutionEnvironmentsService {
     preferred?: readonly string[];
     /** The agent runs on the owner's own sign-in on the machine (ADR 0199). */
     signIn?: SignInHarness;
+    /** See {@link EnvironmentAdmitArgs.harnessInSandbox}. */
+    harnessInSandbox?: boolean;
   }): Promise<EnvironmentDiscovery> {
     return withSpan(
       {
@@ -782,6 +791,7 @@ export class ExecutionEnvironmentsService {
     allocationBindingId?: string;
     requirements: EnvironmentRequirements;
     signIn?: SignInHarness;
+    harnessInSandbox?: boolean;
     commit?: string;
   }): Promise<
     | { admission: EnvironmentAdmission }
@@ -910,6 +920,8 @@ export class ExecutionEnvironmentsService {
     projectId: string;
     definition: ProjectEnvironmentDefinition;
     owner: string | null;
+    /** See {@link EnvironmentAdmitArgs.harnessInSandbox}. */
+    harnessInSandbox?: boolean;
     /** The published commit the definition was read at, if not `main`. */
     commit?: string;
   }): Promise<EnvironmentSandbox | { reason: string }> {
@@ -942,9 +954,12 @@ export class ExecutionEnvironmentsService {
         ? {
             separateCommands: {
               connections: [...(definition.commands.connections ?? [])],
-              // Fixed at admission, so the reservation and the container
-              // agree (ADR 0332).
-              agentResources: separateAgentResources(definition),
+              // An agent container only for a harness that runs in the
+              // sandbox, its share fixed at admission, so the reservation
+              // and the container agree (ADR 0332).
+              ...(args.harnessInSandbox
+                ? { agentResources: separateAgentResources(definition) }
+                : {}),
             },
           }
         : {}),

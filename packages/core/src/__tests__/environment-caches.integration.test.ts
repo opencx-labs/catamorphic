@@ -357,7 +357,11 @@ describeIf("Environment caches (ADR 0334)", () => {
   });
 
   /** A review chat's workspace on a machine: its Allocation and sandbox. */
-  const workspace = async (node: string) => {
+  /** A review chat's workspace; its harness runs in the sandbox if said. */
+  const workspace = async (
+    node: string,
+    options: { harnessInSandbox?: boolean } = {},
+  ) => {
     const admission = await environments.admit({
       identity: projectPrincipalIdentity({
         tenantId,
@@ -369,6 +373,7 @@ describeIf("Environment caches (ADR 0334)", () => {
       environment: "review",
       workerNodeId: node,
       requirements: { workload: "agent", topology: "controller" },
+      ...(options.harnessInSandbox ? { harnessInSandbox: true } : {}),
     });
     const entry = machines.get(node);
     if (!entry) throw new Error("no machine");
@@ -1500,10 +1505,31 @@ describeIf("Environment caches (ADR 0334)", () => {
         status: "applied",
       })
       .execute();
-    // A review's workspace is a pair, and reserves the agent's share too
-    // (ADR 0332).
-    const first = await workspace(lease.id);
+    // A review's workspace for a harness in its sandbox is a pair, and
+    // reserves the agent's share too (ADR 0332).
+    const first = await workspace(lease.id, { harnessInSandbox: true });
     expect(first.opts?.separateCommands).toBeDefined();
+    // The built-in reviewer runs on the control plane: its workspace is the
+    // command container alone, reserving no agent share, its commands
+    // still reaching only the connections listed for them.
+    const builtin = await workspace(lease.id);
+    expect(builtin.opts?.separateCommands).toBeUndefined();
+    const builtinPolicy = await db!
+      .selectFrom("execution_allocations")
+      .select(["reserved_memory_mb"])
+      .where("id", "=", builtin.allocation.id)
+      .executeTakeFirstOrThrow();
+    const pairPolicy = await db!
+      .selectFrom("execution_allocations")
+      .select(["reserved_memory_mb"])
+      .where("id", "=", first.allocation.id)
+      .executeTakeFirstOrThrow();
+    expect(builtin.allocation.policy.sandbox?.separateCommands).toEqual({
+      connections: expect.any(Array),
+    });
+    expect(builtinPolicy.reserved_memory_mb).toBe(
+      pairPolicy.reserved_memory_mb - SEPARATE_AGENT_DEFAULT_RESOURCES.memoryMb,
+    );
     fake.created.length = 0;
     await fillAll();
     const [row] = await rowsOf(lease.id);

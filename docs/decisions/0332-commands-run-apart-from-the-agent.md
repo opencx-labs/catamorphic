@@ -76,7 +76,10 @@ either kind of harness, through `/bin/sh` in the harness's home with
 - **Codex** is refused: it picks its own shell. Machine sign-ins exist only
   for Codex, so none reaches a harness that runs apart.
 - **The built-in agent** runs on the control plane; its tools already run
-  on the command side.
+  on the command side. A sandbox admitted for a harness outside it (the
+  built-in agent, a workflow) has no agent container and reserves no agent
+  share: its command container is the sandbox, and a harness that runs in
+  the sandbox is refused there.
 
 `exec` copies `$WORK_PROGRAM` to both sides; the agent's copy is beyond the
 commands' reach. Considered: wrapping each harness's shell in project code,

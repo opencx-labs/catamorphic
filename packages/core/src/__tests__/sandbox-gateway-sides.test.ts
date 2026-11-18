@@ -89,6 +89,27 @@ describe("gateway grants on each side of a sandbox (ADR 0332)", () => {
     expect(commandScripts).toContain("rm -f 'env/gateway.sh'");
   });
 
+  it("publishes nothing beside an agent whose harness runs outside the sandbox", async () => {
+    const { provider, uploads, commands } = recordingProvider();
+    await configureSandboxGateway({
+      provider,
+      sandboxId: "sandbox-1",
+      gatewayGitUrl: "https://work.example/gateway/git",
+      grants,
+      gitAliases: [
+        { alias: "github", remoteBaseUrls: ["https://github.com/"] },
+      ],
+      commands: { aliases: ["github"], agentSide: false },
+    });
+    // One container: only the listed binding's grant, never the model's.
+    expect(uploads.every((upload) => upload.side === "commands")).toBe(true);
+    expect(commands.every((command) => command.side === "commands")).toBe(true);
+    const files = uploads.flatMap((upload) => upload.files).join(" ");
+    expect(files).toContain("grants/github/1");
+    expect(files).not.toContain("model");
+    expect(files).not.toContain("logs");
+  });
+
   it("rewrites the command side's Git configuration empty when nothing is listed", async () => {
     const { provider, uploads, commands } = recordingProvider();
     await configureSandboxGateway({

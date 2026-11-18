@@ -168,7 +168,9 @@ export interface EnvironmentSandbox {
     connections: readonly string[];
     /**
      * The agent container's limits, reserved on top of the command
-     * container's (`requirements.resources`).
+     * container's (`requirements.resources`). Absent when the work's harness
+     * runs outside the sandbox: then there is no agent container, and the
+     * command container is the sandbox.
      */
     agentResources?: { cpuMillis: number; memoryMb: number };
   };
