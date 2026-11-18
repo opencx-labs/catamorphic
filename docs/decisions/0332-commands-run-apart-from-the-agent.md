@@ -35,10 +35,11 @@ no-new-privileges. Root alone reads the session folder (grants, runner
 state); the shim, an empty configuration home and pasted media are root's
 and only readable to the harness, which writes the checkout, a temporary
 folder and a cache home. The two share only the checkout volume, whose
-shared group (gid 10001, setgid, umask 002) lets both edit it. The command
-container gets `requirements.resources`; the agent container
-`commands.agentResources` (1 CPU, 2 GiB by default); the Allocation
-reserves the sum (0100). `side: "agent" | "commands"` on operations
+shared group (gid 10001, setgid, umask 002, also at the end of the command
+side's `/etc/profile`, which Alpine's login shells would reset) lets both
+edit it. The command container gets `requirements.resources`; the agent
+container `commands.agentResources` (1 CPU, 2 GiB by default); the
+Allocation reserves the sum (0100). `side: "agent" | "commands"` on operations
 defaults to `commands`.
 
 **Harness shells go to the command container.** The machine serves a Unix
