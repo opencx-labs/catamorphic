@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import type { DB, Json } from "@catamorphic/db";
 import { type ProjectManager, refreshPublished } from "@catamorphic/git";
 import { getTracer, setSpanCorrelation, withSpan } from "@catamorphic/otel";
@@ -359,6 +360,8 @@ export interface TriggerProductionRunInput {
  */
 interface RunInternalFacts {
   setupFor?: { sessionId: string; build: string };
+  /** A caller waits for this run's own outcome: it never joins another. */
+  sync?: true;
   /** The host kind whose dispatch starts this run (ADR 0327). */
   dispatchedKind?: string;
 }
@@ -668,16 +671,38 @@ export function correlationKeyAtPath(
 }
 
 /**
- * What makes a queued run alike another of its key (ADR 0336): the values
- * at the workflow's `coalesce` paths, as JSON, a missing one as null.
+ * The values at a workflow's `coalesce` paths (ADR 0336), exactly: a
+ * missing one apart from null, and booleans, objects and long strings as
+ * themselves, so runs whose values differ never compare equal.
  */
-export function coalesceKeyAtPaths(
+export function coalesceValuesAtPaths(
   input: unknown,
   paths: readonly string[],
-): string {
-  return JSON.stringify(
-    paths.map((path) => correlationKeyAtPath(input, path) ?? null),
-  ).slice(0, 1000);
+): Json {
+  return paths.map((path) => {
+    let value: unknown = input;
+    for (const segment of path.split(".")) {
+      if (typeof value !== "object" || value === null) return ["missing"];
+      value = Array.isArray(value)
+        ? /^\d+$/.test(segment)
+          ? value[Number(segment)]
+          : undefined
+        : Object.hasOwn(value, segment)
+          ? Reflect.get(value, segment)
+          : undefined;
+    }
+    return value === undefined ? ["missing"] : ["value", toJson(value)];
+  });
+}
+
+/**
+ * What makes a queued run alike another (ADR 0336), as a digest: its
+ * coalesce values, and everything a run runs as, so only runs that would
+ * do the same thing join: the program and session artifact, the
+ * Environment, the owner and their scopes, and the enablement.
+ */
+function coalesceKeyOf(facts: Json): string {
+  return createHash("sha256").update(JSON.stringify(facts)).digest("hex");
 }
 
 /** What starting a queued run needs beyond the run row (ADR 0325). */
@@ -1506,7 +1531,7 @@ export class RunsService {
       Math.max(1_000, args.budgetMs ?? DEFAULT_CALL_BUDGET_MS),
       MAX_CALL_BUDGET_MS,
     );
-    const run = await this.trigger(args);
+    const run = await this.trigger(args, { sync: true });
     return this.driveInline({
       tenantId: args.identity.tenantId,
       runId: run.id,
@@ -2687,11 +2712,16 @@ export class RunsService {
     const onConflict: EnrollmentConflictPolicy = derivedKey
       ? (declared?.onConflict ?? "ignore")
       : (args.onConflict ?? "ignore");
-    // Queued runs alike by the workflow's own paths join (ADR 0336).
-    const coalesceKey =
-      derivedKey && onConflict === "queue" && declared?.coalesce
-        ? coalesceKeyAtPaths(input, declared.coalesce)
+    // Queued runs alike by the workflow's own paths join (ADR 0336); a
+    // caller waiting for its own run's outcome never joins another.
+    const coalesceValues =
+      derivedKey &&
+      onConflict === "queue" &&
+      declared?.coalesce &&
+      !internal.sync
+        ? coalesceValuesAtPaths(input, declared.coalesce)
         : null;
+    let coalesceKey: string | null = null;
     let supersededRunId: string | null = null;
     let queue = false;
     if (correlationKey && !args.start) {
@@ -2924,31 +2954,51 @@ export class RunsService {
                 .where("status", "not in", ["completed", "failed", "canceled"])
                 .executeTakeFirstOrThrow();
               queued = queue || Number(ahead.all) > 0;
-              // A run alike one still queued, of the same owner and
-              // enablement, joins it: that run reads the state when it
-              // starts, so it answers this one's event too (ADR 0336).
+              coalesceKey =
+                coalesceValues === null
+                  ? null
+                  : coalesceKeyOf({
+                      values: coalesceValues,
+                      artifact: artifact.id,
+                      sessionArtifact: retained?.id ?? null,
+                      environment: args.environment ?? null,
+                      owner: args.identity.externalUserId,
+                      scope: toJson(args.identity.scope ?? null),
+                      executionScope: toJson(
+                        args.identity.executionScope ?? null,
+                      ),
+                      connectionScope: toJson(
+                        args.identity.connectionScope ?? null,
+                      ),
+                      enablement: args.workflowEnablementId ?? null,
+                    });
+              // A run alike one still queued joins it: that run reads the
+              // state when it starts, so it answers this one's event too
+              // (ADR 0336). Its delivery is recorded against that run, so
+              // a redelivery returns it.
               const alike =
                 queued && coalesceKey !== null
                   ? await keyed
                       .select("id")
                       .where("status", "=", "queued")
                       .where("coalesce_key", "=", coalesceKey)
-                      .where(
-                        "external_user_id",
-                        "=",
-                        args.identity.externalUserId,
-                      )
-                      .where(
-                        "workflow_enablement_id",
-                        args.workflowEnablementId ? "=" : "is",
-                        args.workflowEnablementId ?? null,
-                      )
                       .orderBy("queued_at")
                       .limit(1)
                       .executeTakeFirst()
                   : undefined;
               if (alike) {
                 joined = alike.id;
+                if (deliveryKey)
+                  await trx
+                    .insertInto("workflow_run_joins")
+                    .values({
+                      project_id: args.projectId,
+                      workflow_name: args.workflowName,
+                      delivery_key: deliveryKey,
+                      run_id: alike.id,
+                    })
+                    .onConflict((conflict) => conflict.doNothing())
+                    .execute();
                 return [];
               }
               if (queued && Number(ahead.queued) >= MAX_QUEUED_RUNS_PER_KEY)
@@ -3176,7 +3226,16 @@ export class RunsService {
       .where("workflow_name", "=", args.workflowName)
       .where("delivery_key", "=", args.deliveryKey)
       .executeTakeFirst();
-    return row?.id;
+    if (row) return row.id;
+    // A delivery that joined a queued run alike it (ADR 0336).
+    const joined = await this.db
+      .selectFrom("workflow_run_joins")
+      .select("run_id")
+      .where("project_id", "=", args.projectId)
+      .where("workflow_name", "=", args.workflowName)
+      .where("delivery_key", "=", args.deliveryKey)
+      .executeTakeFirst();
+    return joined?.run_id;
   }
 
   private async assertRetainedSourceAccess(args: {

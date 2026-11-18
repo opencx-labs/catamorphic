@@ -10,3 +10,17 @@ ALTER TABLE workflow_runs ADD COLUMN coalesce_key character varying(1000);
 CREATE INDEX idx_workflow_runs_coalesce ON workflow_runs
   USING btree (project_id, workflow_name, correlation_key, coalesce_key)
   WHERE status = 'queued' AND coalesce_key IS NOT NULL;
+
+-- A delivery that joined a queued run is that run's: a redelivery of it
+-- returns the run instead of starting another (as `delivery_key` does for
+-- the delivery that enrolled it). Cancelling the run ends every delivery
+-- that joined it.
+CREATE TABLE workflow_run_joins (
+    project_id uuid NOT NULL,
+    workflow_name character varying(255) NOT NULL,
+    delivery_key character varying(500) NOT NULL,
+    run_id uuid NOT NULL REFERENCES workflow_runs(id) ON DELETE CASCADE,
+    created_at timestamp with time zone NOT NULL DEFAULT now(),
+    PRIMARY KEY (project_id, workflow_name, delivery_key)
+);
+CREATE INDEX idx_workflow_run_joins_run ON workflow_run_joins (run_id);

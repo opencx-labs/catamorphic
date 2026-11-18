@@ -1374,6 +1374,14 @@ export interface WorkflowRunEvents {
   type: string;
 }
 
+export interface WorkflowRunJoins {
+  created_at: Generated<Timestamp>;
+  delivery_key: string;
+  project_id: string;
+  run_id: string;
+  workflow_name: string;
+}
+
 export interface WorkflowRuns {
   allocation_id: string | null;
   attempt: Generated<number>;
@@ -1722,6 +1730,7 @@ export interface DB {
   workflow_enablements: WorkflowEnablements;
   workflow_pauses: WorkflowPauses;
   workflow_run_events: WorkflowRunEvents;
+  workflow_run_joins: WorkflowRunJoins;
   workflow_run_states: WorkflowRunStates;
   workflow_run_steps: WorkflowRunSteps;
   workflow_runs: WorkflowRuns;

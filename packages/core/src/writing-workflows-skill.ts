@@ -118,10 +118,13 @@ a counter, a posted comment), so two overlapping runs never both read the old
 state. A key holds at most 100 queued runs; when events can flood (an
 agent's results, a busy chat's statuses), add \`coalesce: ["kind",
 "payload.detail.turnId"]\`, one to four more paths: a run that would queue
-while one with the same values still waits joins it instead, so a flood
-holds one waiting run. Coalesce only runs that read what is new when they
-start (results, the chat, GitHub), never ones that act on their own event
-alone. A delivery's own id (a webhook's, a schedule occurrence, an event) is
+while one with exactly the same values (and the same program, Environment,
+owner and enablement) still waits joins it instead, so a flood holds one
+waiting run. A caller waiting for its own run's outcome never joins, a
+joined delivery's redelivery returns the run it joined, and cancelling that
+run ends every delivery that joined it. Coalesce only runs that take
+nothing from their own event but what the values name, and read the rest
+(results, the chat, GitHub) when they start. A delivery's own id (a webhook's, a schedule occurrence, an event) is
 already deduplicated: the same delivery never starts a second run.
 
 Webhooks use \`trigger("webhook", { name: "github" })\`: a lowercase name that

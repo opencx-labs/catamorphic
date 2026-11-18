@@ -86,7 +86,7 @@ export const publish = defineWorkflow(({ defineBoundary }) => ({
 export const digest = defineWorkflow(({ defineBoundary }) => ({
   concurrency: { key: "subject.id", onConflict: "queue", coalesce: ["subject.kind"] },
   steps: [
-    defineBoundary({ run: ({ pause }: BoundaryContext<{ subject: { id: string; kind: string }; n: number }>) => pause({ signal: "go" }) }),
+    defineBoundary({ run: ({ pause }: BoundaryContext<{ subject: { id: string; kind?: unknown }; n: number }>) => pause({ signal: "go" }) }),
     defineBoundary({ run: ({ input }: BoundaryContext<{ reason: string; value: { n: number } }>) => input.value }),
   ],
 }));
@@ -359,10 +359,11 @@ describe.skipIf(!process.env.DATABASE_URL)(
         .where("status", "=", "queued")
         .orderBy("queued_at")
         .execute();
-      expect(queued).toEqual([
-        { id: waiting?.id, coalesce_key: '["finding"]' },
-        { id: settled.id, coalesce_key: '["settled"]' },
-      ]);
+      expect(queued.map((row) => row.id)).toEqual([waiting?.id, settled.id]);
+      // What makes runs alike is kept as a digest: no value is cut short.
+      for (const row of queued)
+        expect(row.coalesce_key).toMatch(/^[0-9a-f]{64}$/);
+      expect(queued[0]?.coalesce_key).not.toBe(queued[1]?.coalesce_key);
       // Once the waiting run starts, an alike event queues a new one.
       await release(first.id, 1);
       await expect
@@ -374,6 +375,74 @@ describe.skipIf(!process.env.DATABASE_URL)(
       await release(waiting?.id ?? "", 2);
       await release(settled.id, 200);
       await release(next.id, 300);
+    }, 120_000);
+
+    it("joins only runs alike in their values and in what they run as; a waiting caller never joins, and a joined delivery stays the run's", async () => {
+      core.runs.startWorker({
+        pollIntervalMs: 10,
+        idlePollIntervalMs: 50,
+        leaseSeconds: 30,
+      });
+      type Kind = string | boolean | null | { a: number } | undefined;
+      const run = (
+        kind: Kind,
+        n: number,
+        extra: { deliveryKey?: string; externalUserId?: string } = {},
+      ) =>
+        core.runs.triggerProduction({
+          identity: {
+            ...identity,
+            externalUserId: extra.externalUserId ?? identity.externalUserId,
+          },
+          projectId,
+          workflowName: "digest",
+          input: {
+            subject: { id: "pr-8", ...(kind === undefined ? {} : { kind }) },
+            n,
+          },
+          ...(extra.deliveryKey ? { deliveryKey: extra.deliveryKey } : {}),
+        });
+      const active = await run("first", 1);
+      expect(active.status).toBe("pending");
+      // Values that differ never join: not booleans, objects, an empty
+      // string and a missing value, null, or long strings alike at first.
+      const kinds: Kind[] = [
+        true,
+        false,
+        { a: 1 },
+        { a: 2 },
+        "",
+        undefined,
+        null,
+        `${"x".repeat(600)}1`,
+        `${"x".repeat(600)}2`,
+      ];
+      const waiting: string[] = [];
+      for (const [index, kind] of kinds.entries())
+        waiting.push((await run(kind, 10 + index)).id);
+      expect(new Set(waiting).size).toBe(kinds.length);
+      // Alike values join, a delivery that joins is recorded for its run,
+      // and its redelivery returns that run.
+      expect((await run({ a: 1 }, 30)).id).toBe(waiting[2]);
+      expect((await run(true, 31, { deliveryKey: "joined-1" })).id).toBe(
+        waiting[0],
+      );
+      expect((await run(true, 32, { deliveryKey: "joined-1" })).id).toBe(
+        waiting[0],
+      );
+      // Another owner's run never joins.
+      const other = await run(true, 33, { externalUserId: "someone-else" });
+      expect(waiting).not.toContain(other.id);
+      // A caller waiting for its own run's outcome never joins one.
+      const called = await core.runs.call({
+        identity,
+        projectId,
+        workflowName: "digest",
+        input: { subject: { id: "pr-8", kind: true }, n: 34 },
+        budgetMs: 1_000,
+      });
+      expect(called.runId).not.toBe(waiting[0]);
+      expect(waiting).not.toContain(called.runId);
     }, 120_000);
 
     it("a failed or canceled run frees the key, and a canceled queued run is skipped", async () => {
