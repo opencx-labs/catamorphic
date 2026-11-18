@@ -4,8 +4,10 @@ import type net from "node:net";
 import os from "node:os";
 import path from "node:path";
 import {
+  commandShellFiles,
   followProcess,
   SANDBOX_CAPABILITIES,
+  SEPARATE_COMMANDS_SOCKET,
   SEPARATE_HARNESS,
 } from "@catamorphic/sandbox";
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
@@ -590,6 +592,71 @@ describe.skipIf(!enabled)("commands apart from the agent (ADR 0332)", () => {
       expect((await harness(id, "cat /proc/1/environ")).result).not.toContain(
         "PATH=",
       );
+    },
+    10 * MINUTES,
+  );
+
+  /**
+   * What a pull request plants in the checkout for Bun and its own code to
+   * load: a preload in bunfig.toml (which records the user it ran as on
+   * the side it ran) and variables in .env and .env.local.
+   */
+  const plantRuntimeConfig = (id: string) =>
+    provider.executeCommand(
+      id,
+      [
+        `cd ${PROJECT}`,
+        `printf 'preload = ["./planted-preload.js"]\\n' > bunfig.toml`,
+        `printf 'require("node:fs").writeFileSync("/tmp/preload-ran-" + process.getuid(), "ran");\\n' > planted-preload.js`,
+        "printf 'LC_PLANTED=dotenv\\n' > .env",
+        "printf 'LC_PLANTEDLOCAL=dotenv-local\\n' > .env.local",
+      ].join(" && "),
+    );
+  /** Whether anything planted ran or loaded beside the agent. */
+  const plantedBeside = async (id: string) =>
+    (await agent(id, "ls /tmp | grep preload-ran || echo none")).result.trim();
+
+  it(
+    "runs the shim, on Node or Bun, without loading the checkout's bunfig.toml or .env files",
+    async () => {
+      const id = await separated();
+      await plantRuntimeConfig(id);
+      // The provider's shim (Node where the image has it) and one on Bun,
+      // each from the checkout, as the harness runs them.
+      const bun = (await agent(id, "command -v bun")).result.trim();
+      expect(bun).toMatch(/bun$/);
+      const onBun = "/workspace/.work-shim-bun";
+      const { files } = commandShellFiles({
+        directory: onBun,
+        socket: SEPARATE_COMMANDS_SOCKET,
+        runtime: bun,
+        returnFolder: RETURNS,
+      });
+      await provider.uploadFiles(
+        id,
+        Object.fromEntries(
+          Object.entries(files).map(([file, { content }]) => [
+            path.posix.relative(onBun, file),
+            content,
+          ]),
+        ),
+        onBun,
+        { side: "agent" },
+      );
+      await agent(
+        id,
+        `chmod -R a+rX,go-w ${onBun} && chmod 755 ${onBun}/bin/bash ${onBun}/path/git`,
+      );
+      for (const shim of [SHIM, onBun]) {
+        const ran = await harness(
+          id,
+          `${shim}/bin/bash -c 'echo "[$LC_PLANTED][$LC_PLANTEDLOCAL] $(pwd)"'`,
+        );
+        expect(ran.result.trim(), shim).toBe(`[][] ${PROJECT}`);
+        const git = await harness(id, `${shim}/path/git --version`);
+        expect(git.exitCode, git.result).toBe(0);
+      }
+      expect(await plantedBeside(id)).toBe("none");
     },
     10 * MINUTES,
   );
