@@ -28,7 +28,11 @@ the `caches` machine capability, which the container backend offers.
 makes (setup sandboxes on the setup network and agent sandboxes alike) mounts
 the machine's copy of each cache read only. A privileged container could
 remount it, so a machine that runs privileged runc containers offers no
-caches, and the backend refuses one in such a sandbox. Code the
+caches, and the backend refuses one in such a sandbox. Under runc without
+privileges the kernel refuses root a remount. Under gVisor a review sandbox
+with its own Docker holds every capability, and gVisor accepts the remount
+in its own mount table, but runsc opened the read-only mount read only on
+the host, so every write still fails (`EROFS`); a test proves both. Code the
 pull request controls reads a cache and never writes it.
 
 **Only a trusted fill writes.** A fill runs the cache's `fill.command`, read

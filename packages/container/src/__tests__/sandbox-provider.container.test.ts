@@ -601,6 +601,77 @@ describe.skipIf(!enabled)("container sandboxes (ADR 0204)", () => {
     10 * MINUTES,
   );
 
+  it.skipIf(process.env.WORK_TEST_CONTAINER_RUNTIME === "runc")(
+    "keeps a cache read only in a review sandbox under gVisor: root with every capability and its own Docker cannot write it, even after remounting it read-write (ADR 0334)",
+    async () => {
+      const filler = provider({ setupCommand: "" });
+      const key = cacheVolumeKey({
+        projectId: `review-${path.basename(root)}`,
+        environment: "review",
+        name: "pnpm",
+        generation: 1,
+      });
+      const fill = await created(filler, {
+        volumes: [{ key, path: "/cache" }],
+      });
+      await filler.executeCommand(fill, "echo one > /cache/package");
+      await filler.destroySandbox(fill);
+
+      // As a review Environment's sandbox is made: its own Docker, so
+      // under gVisor every capability (CapAdd ALL), CAP_SYS_ADMIN included.
+      const sandboxProvider = provider({ image: DIND_IMAGE });
+      expect(sandboxProvider.capabilities).toContain("caches");
+      const id = await created(sandboxProvider, {
+        containers: true,
+        volumes: [{ key, path: "/cache", readOnly: true }],
+      });
+      const capabilities = await sandboxProvider.executeCommand(
+        id,
+        "id -u; grep CapEff /proc/self/status",
+      );
+      expect(capabilities.result).toMatch(/^0\n/);
+      expect(capabilities.result).not.toMatch(/CapEff:\s+0+\n/);
+      for (const attempt of [
+        "echo two > /cache/package",
+        "touch /cache/new",
+        "rm -f /cache/package",
+        "mkdir /cache/dir",
+        // gVisor accepts the remount (its own mount table then says rw),
+        // but runsc opened the read-only mount read only on the host, below
+        // the sandbox's kernel, so every write still fails with EROFS.
+        "mount -o remount,rw /cache && echo two > /cache/package",
+        "mount -o remount,rw,bind /cache && echo two > /cache/package",
+        "mkdir -p /tmp/again && mount --bind /cache /tmp/again && mount -o remount,rw,bind /tmp/again && echo two > /tmp/again/package",
+      ]) {
+        const refused = await sandboxProvider.executeCommand(id, attempt);
+        expect(refused.exitCode, `${attempt}: ${refused.result}`).not.toBe(0);
+      }
+      // The sandbox's own Docker cannot reach past the read-only mount.
+      const nested = await sandboxProvider.executeCommand(
+        id,
+        `${PULL_NESTED} >/dev/null && docker run --rm -v /cache:/c ${NESTED_IMAGE} sh -c 'echo two > /c/package'; echo "exit=$?"`,
+        { timeout: 300 },
+      );
+      expect(nested.result).toMatch(/exit=[1-9]/);
+      // Taking the mount away only uncovers the sandbox's own directory:
+      // what it writes there never reaches the volume (checked below).
+      await sandboxProvider.executeCommand(
+        id,
+        "umount -l /cache; echo two > /cache/package",
+      );
+      // Whatever it tried, the volume is as the fill left it.
+      const reader = await created(filler, {
+        volumes: [{ key, path: "/cache", readOnly: true }],
+      });
+      const after = await filler.executeCommand(
+        reader,
+        "cat /cache/package; ls -A /cache",
+      );
+      expect(after.result.trim().split("\n")).toEqual(["one", "package"]);
+    },
+    15 * MINUTES,
+  );
+
   it.skipIf(process.env.WORK_TEST_CONTAINER_RUNTIME !== "runc")(
     "refuses a read-only cache in a privileged runc sandbox, whose root could remount it",
     async () => {
