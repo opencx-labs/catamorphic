@@ -564,6 +564,7 @@ export interface DeploymentRuntimes {
 }
 
 export interface EnvironmentCacheFills {
+  abandoned_generations: Generated<Json>;
   allocation_id: string | null;
   attempts: Generated<number>;
   cache_name: string;

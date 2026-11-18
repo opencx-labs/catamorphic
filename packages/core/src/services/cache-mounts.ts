@@ -171,7 +171,7 @@ async function retirable(args: {
 }): Promise<number[]> {
   const rows = await args.db
     .selectFrom("environment_cache_fills")
-    .select(["generation", "status"])
+    .select(["generation", "status", "abandoned_generations"])
     .where("project_id", "=", args.allocation.projectId)
     .where("environment_name", "=", args.allocation.environmentName)
     .where("cache_name", "=", args.cache)
@@ -188,9 +188,17 @@ async function retirable(args: {
       .filter((row) => row.status === "running")
       .map((row) => Number(row.generation)),
   ]);
-  return rows
-    .map((row) => Number(row.generation))
-    .filter((generation) => !kept.has(generation))
+  // A lost claim's attempts are named too: `generation` holds the latest.
+  const abandoned = rows.flatMap((row) =>
+    Array.isArray(row.abandoned_generations)
+      ? row.abandoned_generations.map(Number).filter(Number.isSafeInteger)
+      : [],
+  );
+  return [
+    ...new Set([...rows.map((row) => Number(row.generation)), ...abandoned]),
+  ]
+    .filter((generation) => generation > 0 && !kept.has(generation))
+    .sort((left, right) => right - left)
     .slice(0, RETIRE_LIMIT);
 }
 

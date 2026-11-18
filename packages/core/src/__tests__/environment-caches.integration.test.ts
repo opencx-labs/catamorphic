@@ -95,6 +95,13 @@ function machine(
     env?: Record<string, string>;
   }> = [];
   const destroyed: string[] = [];
+  /** Creations and removals, in order. */
+  const events: string[] = [];
+  const uploads: Array<{
+    sandboxId: string;
+    files: Record<string, string>;
+    base: string;
+  }> = [];
   const behavior = {
     fillExit: 0,
     sizeKib: 2048,
@@ -115,6 +122,7 @@ function machine(
       sequence += 1;
       const id = `${name}-sandbox-${sequence}`;
       created.push({ id, opts });
+      events.push(`create ${id}`);
       const skipped = (opts.volumes ?? [])
         .filter((volume) => volume.readOnly && behavior.lost.has(volume.key))
         .map((volume) => volume.key);
@@ -129,6 +137,7 @@ function machine(
     destroySandbox: async (id) => {
       await behavior.onDestroy(id);
       destroyed.push(id);
+      events.push(`destroy ${id}`);
     },
     startSandbox: async () => {},
     stopSandbox: async () => {},
@@ -145,16 +154,18 @@ function machine(
       }
       if (command.includes("du -sk"))
         return { exitCode: 0, result: `${behavior.sizeKib}\n` };
-      if (command.includes("printenv"))
+      if (command.includes("grep -rqF -f"))
         return { exitCode: 0, result: behavior.scanFinds };
       return { exitCode: 0, result: "" };
     },
-    uploadFiles: async () => {},
+    uploadFiles: async (sandboxId, files, base) => {
+      uploads.push({ sandboxId, files, base });
+    },
     downloadFile: async () => "",
     gitClone: async () => {},
     gitCheckout: async () => {},
   };
-  return { provider, created, commands, destroyed, behavior };
+  return { provider, created, commands, destroyed, events, uploads, behavior };
 }
 
 describeIf("Environment caches (ADR 0334)", () => {
@@ -172,20 +183,24 @@ describeIf("Environment caches (ADR 0334)", () => {
     }
   >();
   let fills: CacheFillsService;
+  let fillDeps: ConstructorParameters<typeof CacheFillsService>[0];
   let environments: ExecutionEnvironmentsService;
   const allocations = () => new ExecutionAllocationsService(db!);
 
-  const manifest = (fillCommand: string) =>
+  const manifest = (
+    fillCommand: string,
+    variant: { image?: string; setupAllow?: string[] } = {},
+  ) =>
     JSON.stringify({
       environments: {
         review: {
           workloads: ["agent"],
-          image: "node:22",
+          image: variant.image ?? "node:22",
           network: { egress: "allowlist", allow: ["api.example.com"] },
           secrets: ["NPM_TOKEN"],
           setup: {
             command: SETUP,
-            network: { allow: ["registry.npmjs.org"] },
+            network: { allow: variant.setupAllow ?? ["registry.npmjs.org"] },
             secrets: ["NPM_TOKEN"],
           },
           caches: {
@@ -289,7 +304,7 @@ describeIf("Environment caches (ADR 0334)", () => {
         return binding;
       },
     });
-    fills = new CacheFillsService({
+    fillDeps = {
       db,
       projectManager,
       projectEnvironments,
@@ -305,7 +320,8 @@ describeIf("Environment caches (ADR 0334)", () => {
       }),
       retentionDays: 30,
       claimRenewMs: 50,
-    });
+    };
+    fills = new CacheFillsService(fillDeps);
   }, 120_000);
 
   beforeEach(async () => {
@@ -321,6 +337,8 @@ describeIf("Environment caches (ADR 0334)", () => {
       fake.behavior.onDestroy = async () => {};
       fake.behavior.lost.clear();
       fake.behavior.scanFinds = "";
+      fake.events.length = 0;
+      fake.uploads.length = 0;
     }
   });
 
@@ -414,6 +432,7 @@ describeIf("Environment caches (ADR 0334)", () => {
     expect(await fillRows()).toHaveLength(1);
 
     fake.created.length = 0;
+    fake.events.length = 0;
     await fillAll();
     const [filled] = await fillRows();
     expect(filled).toMatchObject({
@@ -426,8 +445,28 @@ describeIf("Environment caches (ADR 0334)", () => {
     // The fill's own sandbox: the cache writable at its new generation and
     // nothing else, on the setup's network as its own, the published
     // program's command, no secrets, and removed before publishing.
-    expect(fake.created).toHaveLength(1);
-    const fillSandbox = fake.created[0];
+    const fillSandbox = fake.created.find(
+      (entry) => entry.opts.labels?.purpose === "cache-fill",
+    );
+    // Checked after the fill's sandbox is gone, from a fresh helper that
+    // mounts the generation read only.
+    const helper = fake.created.find(
+      (entry) => entry.opts.labels?.purpose === "cache-check",
+    );
+    expect(fake.created).toHaveLength(2);
+    expect(helper?.opts.volumes).toEqual([
+      { key: key(generation), path: "/work-cache-check", readOnly: true },
+    ]);
+    expect(fake.events).toEqual([
+      `create ${fillSandbox?.id}`,
+      `destroy ${fillSandbox?.id}`,
+      `create ${helper?.id}`,
+      `destroy ${helper?.id}`,
+    ]);
+    expect(
+      fake.commands.find((command) => command.command.includes("du -sk"))
+        ?.sandboxId,
+    ).toBe(helper?.id);
     expect(fillSandbox?.opts.volumes).toEqual([
       { key: key(generation), path: "~/.pnpm-store" },
     ]);
@@ -504,7 +543,8 @@ describeIf("Environment caches (ADR 0334)", () => {
     await fillAll();
     const next = (await fillRows()).at(-1);
     expect(next?.status).toBe("succeeded");
-    expect(seen).toEqual([key(old), key(old)]);
+    // While the command runs, as the fill's sandbox goes, as the helper's.
+    expect(seen).toEqual([key(old), key(old), key(old)]);
     fake.behavior.duringFill = async () => {};
     fake.behavior.onDestroy = async () => {};
     expect((await workspace(lease.id)).opts?.volumes?.[0]?.key).toBe(
@@ -1103,9 +1143,31 @@ describeIf("Environment caches (ADR 0334)", () => {
       status: "failed",
       error: expect.stringContaining("holds the value of NPM_TOKEN"),
     });
-    const scan = fake.commands.find((c) => c.command.includes("printenv"));
-    expect(scan?.env).toEqual({ NPM_TOKEN: TOKEN });
+    // Searched from the helper, never the fill's sandbox, with the value's
+    // forms (base64 among them) in a file, never in a command line.
+    const scan = fake.commands.find((c) => c.command.includes("grep -rqF -f"));
+    const helper = fake.created.find(
+      (entry) => entry.opts.labels?.purpose === "cache-check",
+    );
+    expect(scan?.sandboxId).toBe(helper?.id);
     expect(scan?.command).not.toContain(TOKEN);
+    const patterns = fake.uploads.find(
+      (upload) => upload.sandboxId === helper?.id,
+    )?.files.NPM_TOKEN;
+    expect(patterns?.split("\n")).toEqual(
+      expect.arrayContaining([
+        TOKEN,
+        Buffer.from(TOKEN).toString("base64"),
+        Buffer.from(TOKEN).toString("base64url"),
+        // As it reads inside a longer base64 value, at each alignment.
+        ...[1, 2].map((offset) =>
+          Buffer.concat([Buffer.alloc(offset), Buffer.from(TOKEN)])
+            .toString("base64")
+            .slice(4, -4),
+        ),
+      ]),
+    );
+    expect(fake.uploads.some((upload) => "OTHER" in upload.files)).toBe(false);
   });
 
   it("fills only from a revision that went live, with that revision's command and checkout", async () => {
@@ -1117,7 +1179,12 @@ describeIf("Environment caches (ADR 0334)", () => {
     const next = await projectManager.publishFiles({
       tenantId,
       projectId,
-      files: { [PROJECT_MANIFEST_PATH]: manifest(ATTACK) },
+      files: {
+        [PROJECT_MANIFEST_PATH]: manifest(ATTACK, {
+          image: "attacker/image:latest",
+          setupAllow: ["attacker.example"],
+        }),
+      },
       message: "Pending",
       author: { name: "Test", email: "test@example.com" },
     });
@@ -1151,6 +1218,7 @@ describeIf("Environment caches (ADR 0334)", () => {
         }),
       ).rejects.toThrow("went live");
     fake.commands.length = 0;
+    const created = fake.created.length;
     await fills.request({
       identity: ada,
       projectId,
@@ -1170,5 +1238,109 @@ describeIf("Environment caches (ADR 0334)", () => {
         c.command.includes(`git checkout -q -f --detach ${published}`),
       ),
     ).toBe(true);
+    // Its sandbox is built as the live revision declares it, not as main.
+    const fillSandbox = fake.created
+      .filter((entry) => entry.opts.labels?.purpose === "cache-fill")
+      .at(-1);
+    expect(
+      fillSandbox ? fake.created.indexOf(fillSandbox) : -1,
+    ).toBeGreaterThanOrEqual(created);
+    expect(fillSandbox?.opts.image).toEqual({
+      kind: "oci",
+      reference: "node:22",
+    });
+    expect(fillSandbox?.opts.egress).toEqual({
+      mode: "allowlist",
+      allow: ["registry.npmjs.org"],
+    });
+  });
+
+  it("names every generation a lost claim left for retirement, and empties the one its replica left", async () => {
+    const { lease, fake } = await addMachine("s");
+    await workspace(lease.id);
+    await fillAll();
+    const live = Number((await rowsOf(lease.id))[0]?.generation);
+    // A replica's run took a fill and stopped renewing, leaving its
+    // sandbox and generation on the machine.
+    const [row] = await db!
+      .insertInto("environment_cache_fills")
+      .values({
+        tenant_id: tenantId,
+        project_id: projectId,
+        environment_name: "review",
+        cache_name: "pnpm",
+        worker_node_id: lease.id,
+        commit_sha: published,
+        reason: "requested",
+        status: "running",
+        attempts: 1,
+        generation: "901",
+        claimed_until: sql<Date>`now() - interval '1 minute'`,
+      })
+      .returning("id")
+      .execute();
+    const left = await allocations().create({
+      identity: ada,
+      projectId,
+      environmentName: "review",
+      workloadKind: "agent",
+      rootWorkloadId: row?.id ?? "",
+      workerNodeId: lease.id,
+      policy: { binding: descriptor, requirements: { workload: "agent" } },
+    });
+    await db!
+      .updateTable("execution_allocations")
+      .set({ sandbox_provider_id: "s-left-behind" })
+      .where("id", "=", left.id)
+      .execute();
+    fake.commands.length = 0;
+    // Another replica takes it over: a new generation, and the run that
+    // loses its claim after deciding to publish never publishes. The run
+    // taken over renews slowly, so the takeover lands first.
+    const slow = new CacheFillsService({ ...fillDeps, claimRenewMs: 400 });
+    let takenOver = false;
+    fake.behavior.onDestroy = async (id) => {
+      if (takenOver || !id.startsWith("s-sandbox")) return;
+      const current = (await rowsOf(lease.id)).find(
+        (entry) => entry.id === row?.id,
+      );
+      if (current?.status !== "running") return;
+      takenOver = true;
+      await db!
+        .updateTable("environment_cache_fills")
+        .set({ claimed_until: sql<Date>`now() - interval '1 second'` })
+        .where("id", "=", row?.id ?? "")
+        .execute();
+      expect(await fills.dispatch()).toBe(1);
+      await new Promise((resolve) => setTimeout(resolve, 600));
+    };
+    await slow.dispatch();
+    await slow.drain();
+    await fills.drain();
+    const after = (await rowsOf(lease.id)).find(
+      (entry) => entry.id === row?.id,
+    );
+    expect(after?.status).toBe("succeeded");
+    const abandoned = (after?.abandoned_generations ?? []) as number[];
+    expect(abandoned.map(Number)).toEqual(expect.arrayContaining([901]));
+    expect(abandoned.length).toBeGreaterThanOrEqual(2);
+    // What the left-behind sandbox wrote went before it did.
+    expect(
+      fake.commands.some(
+        (command) =>
+          command.sandboxId === "s-left-behind" &&
+          command.command.includes("-exec rm -rf {} +"),
+      ),
+    ).toBe(true);
+    // The next review sandbox retires every generation but the live one.
+    const newest = Number(after?.generation);
+    const review = await workspace(lease.id);
+    expect(review.opts?.volumes?.[0]?.key).toBe(key(newest));
+    expect(review.opts?.volumes?.[0]?.retire).toEqual(
+      expect.arrayContaining([
+        key(live),
+        ...abandoned.map((generation) => key(Number(generation))),
+      ]),
+    );
   });
 });
