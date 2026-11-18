@@ -83,8 +83,9 @@ async function polls(sequence: Poll[]): Promise<PollResult[]> {
           return { status: 200, body: items.slice().sort(compare).slice(from, from + size), totalBytes: 1 };
         };
         const execute = ({ call, args }) => {
+          // As Work lists: a prefix is a folder, and lists what is under it.
           if (call === "documents.list")
-            return [...store.entries()].filter(([path]) => path.startsWith(args.prefix)).map(([path, doc]) => ({ path, source: "store", contentType: "application/json", size: doc.text.length, version: doc.version }));
+            return [...store.entries()].filter(([path]) => path.startsWith(args.prefix.endsWith("/") ? args.prefix : args.prefix + "/")).map(([path, doc]) => ({ path, source: "store", contentType: "application/json", size: doc.text.length, version: doc.version }));
           if (call === "documents.read") {
             const doc = store.get(args.path);
             if (poll.overlapped) store.set(args.path, { ...doc, version: doc.version + 1 });

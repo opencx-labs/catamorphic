@@ -298,6 +298,11 @@ export interface DocumentEntry {
  * as `callWorkflow`: return the call, receive the result in the next step.
  */
 export interface DocumentsCalls {
+  /**
+   * What is under a folder: `prefix` names a folder (`store/customers`),
+   * never the start of a name, so a document's own path lists nothing; to
+   * find one document, list its folder.
+   */
   list: TransitionCall<
     { prefix?: string; source?: "program" | "store" },
     DocumentEntry[]
