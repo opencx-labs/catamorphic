@@ -50,7 +50,7 @@ const grants = [
 ];
 
 describe("gateway grants on each side of a sandbox (ADR 0332)", () => {
-  it("gives the agent every grant and the commands only the bindings listed for them", async () => {
+  it("gives the agent only its model's grant and the commands only the bindings listed for them", async () => {
     const { provider, uploads, commands } = recordingProvider();
     await configureSandboxGateway({
       provider,
@@ -67,13 +67,9 @@ describe("gateway grants on each side of a sandbox (ADR 0332)", () => {
     });
     const agent = uploads.filter((upload) => upload.side === "agent");
     const listed = uploads.filter((upload) => upload.side === "commands");
+    // No grant is on both sides, and the agent has no Git or HTTP of its
+    // own: its harness runs those where commands run.
     expect(agent.flatMap((upload) => upload.files)).toEqual([
-      "env/gateway.sh.in",
-      "git-credential-work",
-      "gitconfig.in",
-      "grants/github/1",
-      "grants/logs/1",
-      "grants/model/1",
       "model-grants/attempt-1/model/1",
       "read-grant",
     ]);

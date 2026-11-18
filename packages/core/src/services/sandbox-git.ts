@@ -366,9 +366,11 @@ export async function configureSandboxGateway(input: {
   httpAliases?: readonly SandboxHttpAlias[];
   renewOnly?: boolean;
   /**
-   * The sandbox runs commands apart from its agent (ADR 0332): everything
-   * goes to the agent side, and the command side gets the grants, Git
-   * configuration and variables of these aliases alone, never a model's.
+   * The sandbox runs commands apart from its agent (ADR 0332): the command
+   * side gets the grants, Git configuration and variables of these
+   * aliases, never a model's; the agent side gets only the others (its
+   * model's), and no Git configuration or variables, since its harness
+   * runs Git and code only where commands run. No grant is on both sides.
    */
   commands?: { aliases: readonly string[] };
 }): Promise<void> {
@@ -379,8 +381,21 @@ export async function configureSandboxGateway(input: {
         "A sandbox grant needs its persisted publication revision",
       );
   if (!input.commands) return publishGateway(input);
-  await publishGateway({ ...input, side: "agent" });
   const listed = new Set(input.commands.aliases);
+  // Beside the agent only its attempt's model grant, where its harness
+  // reads it (ADR 0293): nothing a link in the checkout could lead to.
+  await publishGateway({
+    ...input,
+    side: "agent",
+    grants: input.grants.flatMap((grant) =>
+      grant.modelAttemptId && !listed.has(grant.alias)
+        ? [{ ...grant, modelOnly: true }]
+        : [],
+    ),
+    gitAliases: [],
+    httpAliases: [],
+    allowEmpty: true,
+  });
   await publishGateway({
     ...input,
     side: "commands",

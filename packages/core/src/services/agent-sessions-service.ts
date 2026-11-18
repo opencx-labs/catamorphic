@@ -7514,6 +7514,10 @@ export class AgentSessionsService {
       allocationId: input.allocationId,
     });
     if (allocation?.status !== "active") return [];
+    // Where commands run apart (ADR 0332) a grant exists only where it is
+    // used: the agent's model beside it, the listed bindings with its
+    // commands, and nothing for the rest.
+    const separate = allocation.policy.sandbox?.separateCommands;
     const bindings = (allocation.policy.connections ?? []).flatMap(
       (binding) => {
         const remoteBaseUrls = gateway.remoteBaseUrls(binding.providerKind);
@@ -7530,6 +7534,8 @@ export class AgentSessionsService {
         const http =
           binding.capabilities.some(isHttpMethodCapability) &&
           gateway.servesHttp(binding.providerKind);
+        if (separate && !api && !separate.connections.includes(binding.alias))
+          return [];
         return git || api || http
           ? [{ alias: binding.alias, git, api, http }]
           : [];
@@ -7607,7 +7613,6 @@ export class AgentSessionsService {
     }
     // Commands apart from the agent reach only the bindings their
     // Environment lists for them, and never a model (ADR 0332).
-    const separate = allocation.policy.sandbox?.separateCommands;
     await configureSandboxGateway({
       provider: input.provider,
       sandboxId: input.sandboxProviderId,
