@@ -271,7 +271,30 @@ describe("approved customization processes", () => {
     expect(restored.hasEnabled()).toBe(false);
   });
 
-  it("keeps published worker bytes complete while another view starts", async () => {
+  it("leaves a published worker in place while another view starts", async () => {
+    const { create, owner, launch } = fixture();
+    const manager = create();
+    await manager.start(owner, {
+      key: "reader",
+      command: "sleep 300",
+      lifetime: "view",
+    });
+    const first = launch.mock.calls[0]?.[0];
+    if (!first) throw new Error("Worker was not launched");
+    const published = first.workerPath;
+    const inode = fs.statSync(published).ino;
+    // Bun on Linux reopens a loading entry through /proc, so a worker
+    // replaced under the first child reads as "(deleted)" and it exits.
+    await manager.start(owner, {
+      key: "publisher",
+      command: "sleep 300",
+      lifetime: "view",
+    });
+    expect(launch.mock.calls[1]?.[0].workerPath).toBe(published);
+    expect(fs.statSync(published).ino).toBe(inode);
+  });
+
+  it("republishes a damaged worker as complete private bytes", async () => {
     const { create, owner, launch } = fixture();
     const manager = create();
     await manager.start(owner, {
@@ -283,11 +306,12 @@ describe("approved customization processes", () => {
     if (!first) throw new Error("Worker was not launched");
     const published = first.workerPath;
     const source = fs.readFileSync(published, "utf8");
+    fs.writeFileSync(published, source.slice(0, 10));
     const inode = fs.statSync(published).ino;
     const observed: string[] = [];
     const write = fs.writeFileSync.bind(fs);
     // A child loader can read between a writer's syscalls. Inspect the
-    // published path after only half of each new worker has been written.
+    // published path after only half of the new worker has been written.
     const writing = vi
       .spyOn(fs, "writeFileSync")
       .mockImplementation((file, data, options) => {
@@ -303,7 +327,7 @@ describe("approved customization processes", () => {
         command: "sleep 300",
         lifetime: "view",
       });
-      expect(observed).toEqual([source]);
+      expect(observed).toEqual([source.slice(0, 10)]);
       expect(fs.readFileSync(published, "utf8")).toBe(source);
       expect(fs.statSync(published).ino).not.toBe(inode);
       expect(fs.statSync(published).mode & 0o777).toBe(0o600);
