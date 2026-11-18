@@ -90,6 +90,7 @@ import {
   type SandboxModelGateway,
   type SandboxProvider,
   SEPARATE_COMMANDS_SOCKET,
+  SEPARATE_HARNESS,
   type SignInHarness,
   STOPPED_WAITING_NOTE,
   serverKeyOf,
@@ -6368,7 +6369,13 @@ export class AgentSessionsService {
       // (ADR 0332); an adapter that cannot redirect it refuses.
       ...(agent.harness.placement === "sandbox" &&
       runtime.allocation?.policy.sandbox?.separateCommands
-        ? { commands: { socket: SEPARATE_COMMANDS_SOCKET } }
+        ? {
+            commands: {
+              socket: SEPARATE_COMMANDS_SOCKET,
+              // Its own user beside the runner, which keeps the grants.
+              harness: { ...SEPARATE_HARNESS },
+            },
+          }
         : {}),
       options: protocolJson(agent.options ?? {}),
     };

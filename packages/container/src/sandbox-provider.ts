@@ -23,6 +23,7 @@ import {
   assertSandboxResources,
   assertSandboxVolumes,
   COMMAND_RETURN_LIMIT,
+  commandShellFiles,
   dockerfileImageReference,
   gitCloneFailure,
   gitCloneUrl,
@@ -32,6 +33,7 @@ import {
   SANDBOX_CAPABILITIES,
   SEPARATE_AGENT_DEFAULT_RESOURCES,
   SEPARATE_COMMANDS_SOCKET,
+  SEPARATE_HARNESS,
   StdioDeploymentRuntimeProvider,
   shellSandboxProcesses,
   signInHomePath,
@@ -108,16 +110,38 @@ const SHARED_PREFIX = "work-shared-";
 /** Where the agent side sees its command socket's folder. */
 const COMMANDS_MOUNT = path.posix.dirname(SEPARATE_COMMANDS_SOCKET);
 /**
- * The agent side runs as a user of its own (ADR 0332), which owns none of
- * the checkout: Git that runs there refuses a repository it does not own,
- * whatever the pull request configured. It edits the checkout through the
- * group both sides share, which every checkout folder passes on (setgid)
- * and every command writes for (umask 002).
+ * On the agent side (ADR 0332) Work's runner and operations run as root
+ * and the harness as a user of its own ({@link SEPARATE_HARNESS}), which
+ * owns none of the checkout (Git there refuses a repository it does not
+ * own), reads no grant or runner state, and writes none of the shim. It
+ * edits the checkout through the group both sides share, which every
+ * checkout folder passes on (setgid) and every command writes for (umask
+ * 002).
  */
-export const AGENT_SIDE_UID = 10001;
-export const SHARED_GID = 10001;
-/** The agent side's home, in its own workspace volume. */
-const AGENT_HOME = "/workspace/.work-home";
+const HARNESS_UID = SEPARATE_HARNESS.uid;
+const SHARED_GID = SEPARATE_HARNESS.gid;
+/** Root's alone on the agent side: grants, the runner and its state. */
+const AGENT_SESSION = "/workspace/.work-session";
+
+/**
+ * Lays out the agent side for its harness (ADR 0332): the session folder
+ * root's alone, the harness's own home and temporary folder, and the shim
+ * root's (its files written beforehand). Arguments: the harness's user and
+ * group, then the Git shim.
+ */
+const AGENT_LAYOUT = [
+  'u="$1"; g="$2"; shim_git="$3"',
+  `mkdir -p ${AGENT_SESSION} && chown 0:0 ${AGENT_SESSION} && chmod 700 ${AGENT_SESSION}`,
+  // The harness's folder is root's: it writes its home and temporary
+  // folder, and only reads its media and configuration home.
+  `mkdir -p ${SEPARATE_HARNESS.home} ${SEPARATE_HARNESS.temporary} ${SEPARATE_HARNESS.media} ${SEPARATE_HARNESS.config}`,
+  `chown 0:0 ${path.posix.dirname(SEPARATE_HARNESS.home)} ${SEPARATE_HARNESS.config} && chmod 755 ${path.posix.dirname(SEPARATE_HARNESS.home)} ${SEPARATE_HARNESS.config}`,
+  `chown "0:$g" ${SEPARATE_HARNESS.media} && chmod 750 ${SEPARATE_HARNESS.media}`,
+  `chown "$u:$g" ${SEPARATE_HARNESS.home} ${SEPARATE_HARNESS.temporary} && chmod 700 ${SEPARATE_HARNESS.home} ${SEPARATE_HARNESS.temporary}`,
+  // The shim is root's: the harness reads and runs it, never rewrites it.
+  `chown -R 0:0 ${SEPARATE_HARNESS.shim} && chmod -R a+rX,go-w ${SEPARATE_HARNESS.shim} && chmod 755 ${SEPARATE_HARNESS.shim}/bin/bash "$shim_git"`,
+  "exit 0",
+].join("\n");
 
 /**
  * The longest a sandbox stays widened (ADR 0257): the longest setup, 240
@@ -710,12 +734,12 @@ export class ContainerSandboxProvider implements SandboxProvider {
             Entrypoint: ["sleep"],
             Cmd: ["infinity"],
             WorkingDir: this.workspaceRoot,
-            // Its own user, owning none of the checkout (see AGENT_SIDE_UID).
-            User: `${AGENT_SIDE_UID}:${SHARED_GID}`,
+            // Work's runner as root; the harness as its own user (see
+            // HARNESS_UID), whatever the image's own user is.
+            User: "0:0",
             Env: Object.entries({
               ...opts.envVars,
               ...(restricted ? PROXY_ENV : {}),
-              HOME: AGENT_HOME,
             }).map(([name, value]) => `${name}=${value}`),
             Labels: {
               ...opts.labels,
@@ -1240,23 +1264,12 @@ export class ContainerSandboxProvider implements SandboxProvider {
       if (shared.exitCode !== 0)
         throw new Error(`Sharing the checkout failed: ${shared.stderr}`);
     }
-    if (record.agentOf) {
-      const homed = await this.exec(id, {
-        cmd: [
-          "sh",
-          "-c",
-          `mkdir -p ${AGENT_HOME} && chown ${AGENT_SIDE_UID}:${SHARED_GID} ${AGENT_HOME}`,
-        ],
-        user: "0",
-      });
-      if (homed.exitCode !== 0)
-        throw new Error(`Preparing the agent's home failed: ${homed.stderr}`);
-    }
+    if (record.agentOf) await this.layOutAgentSide(id);
     if (user && !isRoot(user)) {
       // Docker creates volumes (the workspace's included) and the
       // directories leading to them as root; the image's user owns them.
       // Bind mounts (sign-ins, project data) are the machine's own files.
-      // The shared checkout stays the command side's (see AGENT_SIDE_UID).
+      // The shared checkout stays the command side's (see HARNESS_UID).
       const volumes = mounts.flatMap((mount: unknown) => {
         if (typeof mount !== "object" || mount === null) return [];
         const destination = Reflect.get(mount, "Destination");
@@ -1282,6 +1295,65 @@ export class ContainerSandboxProvider implements SandboxProvider {
     }
     if (record.containers) await this.ensureDocker(id, record, home);
     record.ready = true;
+  }
+
+  /**
+   * The agent side's folders and shim for its harness (ADR 0332): written
+   * as root at every start, since gVisor's root filesystem starts over.
+   */
+  private async layOutAgentSide(name: string): Promise<void> {
+    const runtime = await this.exec(name, {
+      cmd: ["sh", "-c", "command -v bun || command -v node"],
+      user: "0",
+    });
+    const runtimePath = runtime.stdout.trim();
+    if (runtime.exitCode !== 0 || !runtimePath)
+      throw new Error(
+        "The agent's side needs Bun or Node to run its harness's shell",
+      );
+    const shim = commandShellFiles({
+      directory: SEPARATE_HARNESS.shim,
+      socket: SEPARATE_COMMANDS_SOCKET,
+      runtime: runtimePath,
+      returnFolder: SEPARATE_HARNESS.temporary,
+    });
+    // Written directly: the side is still being prepared.
+    const archive = tarArchive(
+      Object.entries(shim.files).map(([file, { content }]) => ({
+        path: path.posix.relative(SEPARATE_HARNESS.shim, file),
+        content,
+      })),
+    );
+    const written = await this.exec(name, {
+      cmd: [
+        "sh",
+        "-c",
+        'mkdir -p "$2" && head -c "$1" | tar -xof - -C "$2"',
+        "work-shim",
+        String(archive.length),
+        SEPARATE_HARNESS.shim,
+      ],
+      input: archive,
+      user: "0",
+    });
+    if (written.exitCode !== 0)
+      throw new Error(`Writing the agent's shell failed: ${written.stderr}`);
+    const laid = await this.exec(name, {
+      cmd: [
+        "sh",
+        "-c",
+        AGENT_LAYOUT,
+        "work-agent-layout",
+        String(HARNESS_UID),
+        String(SHARED_GID),
+        path.posix.join(shim.path, "git"),
+      ],
+      user: "0",
+    });
+    if (laid.exitCode !== 0)
+      throw new Error(
+        `Preparing the agent's side failed: ${laid.stderr || laid.stdout}`,
+      );
   }
 
   /**

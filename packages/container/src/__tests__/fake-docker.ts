@@ -2,6 +2,7 @@ import fs from "node:fs";
 import http from "node:http";
 import os from "node:os";
 import path from "node:path";
+import type { Duplex } from "node:stream";
 import { DockerClient } from "../docker-client.js";
 import { dockerFrame } from "../stream-demux.js";
 
@@ -18,7 +19,8 @@ export interface FakeContainer {
  * A Docker Engine API on a Unix socket that keeps containers, volumes,
  * networks and execs in memory: enough of the daemon for the container
  * provider's own logic, with no Docker. Every exec succeeds with no output
- * unless `onExec` answers otherwise.
+ * unless `onExec` answers otherwise, but for the agent side's runtime
+ * probe, which finds Bun (ADR 0332).
  */
 export async function startFakeDocker(options?: {
   /** The image's `Config`. */
@@ -29,7 +31,7 @@ export async function startFakeDocker(options?: {
   onExec?: (exec: {
     container: FakeContainer;
     cmd: string[];
-  }) => { exitCode: number; stderr?: string } | undefined;
+  }) => { exitCode: number; stdout?: string; stderr?: string } | undefined;
 }) {
   // Unix socket paths are short; macOS's temporary directory is not.
   const directory = fs.mkdtempSync(
@@ -44,6 +46,8 @@ export async function startFakeDocker(options?: {
     { container: string; cmd: string[]; exitCode?: number }
   >();
   const requests: string[] = [];
+  /** Exec streams, which the HTTP server no longer tracks once upgraded. */
+  const upgraded = new Set<Duplex>();
   let nextExec = 0;
 
   const labelFilter = (query: string | null): string[] => {
@@ -210,6 +214,8 @@ export async function startFakeDocker(options?: {
   // Exec streams: no output (or what onExec says), then the end.
   server.on("upgrade", (request, socket) => {
     requests.push(`${request.method} ${request.url} upgrade`);
+    upgraded.add(socket);
+    socket.once("close", () => upgraded.delete(socket));
     socket.on("error", () => {});
     socket.write(
       "HTTP/1.1 101 UPGRADED\r\nContent-Type: application/vnd.docker.multiplexed-stream\r\nConnection: Upgrade\r\nUpgrade: tcp\r\n\r\n",
@@ -217,14 +223,17 @@ export async function startFakeDocker(options?: {
     const exec = execs.get(request.url?.match(/^\/exec\/([^/]+)\//)?.[1] ?? "");
     const container = exec ? containers.get(exec.container) : undefined;
     const ended =
-      exec && container
+      (exec && container
         ? options?.onExec?.({ container, cmd: exec.cmd })
-        : undefined;
+        : undefined) ??
+      (exec?.cmd.join(" ").includes("command -v bun")
+        ? { exitCode: 0, stdout: "/usr/local/bin/bun\n" }
+        : undefined);
     if (exec && ended) exec.exitCode = ended.exitCode;
     socket.end(
       ended?.stderr
         ? dockerFrame(2, Buffer.from(ended.stderr))
-        : dockerFrame(1, Buffer.alloc(0)),
+        : dockerFrame(1, Buffer.from(ended?.stdout ?? "")),
     );
   });
   await new Promise<void>((resolve) =>
@@ -241,6 +250,8 @@ export async function startFakeDocker(options?: {
     /** Every exec's argv, in order. */
     commands: () => [...execs.values()].map((exec) => exec.cmd),
     close: async () => {
+      // A stream whose input stayed open (an upload) ends with the daemon.
+      for (const socket of upgraded) socket.destroy();
       server.closeAllConnections();
       await new Promise((resolve) => server.close(resolve));
       fs.rmSync(directory, { recursive: true, force: true });

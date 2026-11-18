@@ -4,10 +4,9 @@ import type net from "node:net";
 import os from "node:os";
 import path from "node:path";
 import {
-  commandShellFiles,
   followProcess,
   SANDBOX_CAPABILITIES,
-  SEPARATE_COMMANDS_SOCKET,
+  SEPARATE_HARNESS,
 } from "@catamorphic/sandbox";
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
 import { DockerClient, dockerEndpoint } from "../docker-client.js";
@@ -23,8 +22,9 @@ const IMAGE =
 const MINUTES = 60_000;
 const PROJECT = "/workspace/project";
 const SECRETS = "/workspace/.work-session/env/secrets.sh";
-const SHIM = "/workspace/.work-session/commands";
-const RETURNS = `${SHIM}/tmp`;
+const SHIM = SEPARATE_HARNESS.shim;
+const RETURNS = SEPARATE_HARNESS.temporary;
+const HARNESS = `${SEPARATE_HARNESS.uid}:${SEPARATE_HARNESS.gid}`;
 
 /**
  * A sandbox that runs an agent's commands apart from the agent (ADR 0332):
@@ -90,7 +90,10 @@ describe.skipIf(!enabled)("commands apart from the agent (ADR 0332)", () => {
     if (root) fs.rmSync(root, { recursive: true, force: true });
   }, 5 * MINUTES);
 
-  /** A separated sandbox reaching only the "gateway", with the shim on its agent side. */
+  /**
+   * A separated sandbox reaching only the "gateway". The provider lays out
+   * its agent side: the shim, the harness's folders, Git replaced.
+   */
   const separated = async (owner: ContainerSandboxProvider = provider) => {
     expect(owner.capabilities).toContain(SANDBOX_CAPABILITIES.separateCommands);
     const { id } = await owner.createSandbox({
@@ -98,32 +101,8 @@ describe.skipIf(!enabled)("commands apart from the agent (ADR 0332)", () => {
       separateCommands: { shared: [PROJECT], envFiles: [SECRETS] },
     });
     sandboxes.push(id);
-    const runtimePath = (
-      await agent(id, "command -v bun || command -v node", undefined, owner)
-    ).result.trim();
-    const { files } = commandShellFiles({
-      directory: SHIM,
-      socket: SEPARATE_COMMANDS_SOCKET,
-      runtime: runtimePath,
-      returnFolder: RETURNS,
-    });
-    await owner.uploadFiles(
-      id,
-      Object.fromEntries(
-        Object.entries(files).map(([file, { content }]) => [
-          path.posix.relative(SHIM, file),
-          content,
-        ]),
-      ),
-      SHIM,
-      { side: "agent" },
-    );
-    await agent(
-      id,
-      `chmod 700 ${SHIM}/bin/bash ${SHIM}/path/git && mkdir -p ${RETURNS}`,
-      undefined,
-      owner,
-    );
+    // Prepared on first use, as a runner's start does.
+    await agent(id, "true", undefined, owner);
     // What the agent side holds and its commands must not reach.
     await owner.uploadFiles(
       id,
@@ -162,12 +141,31 @@ describe.skipIf(!enabled)("commands apart from the agent (ADR 0332)", () => {
       ...(env ? { env } : {}),
     });
 
+  /** A command as the harness's own user beside the runner (ADR 0332). */
+  const harness = async (
+    id: string,
+    command: string,
+    env?: Record<string, string>,
+  ) => {
+    const ran = await docker.exec({
+      container: `${id}-agent`,
+      cmd: ["sh", "-c", command],
+      user: HARNESS,
+      workingDir: PROJECT,
+      ...(env ? { env } : {}),
+    });
+    return {
+      exitCode: ran.exitCode,
+      result: `${ran.stdout}${ran.stdout && ran.stderr ? "\n" : ""}${ran.stderr}`,
+    };
+  };
+
   /** A command as the agent's harness runs it: through its shell. */
   const throughShim = (
     id: string,
     script: string,
     env?: Record<string, string>,
-  ) => agent(id, `cd ${PROJECT} && ${SHIM}/bin/bash -c ${quote(script)}`, env);
+  ) => harness(id, `${SHIM}/bin/bash -c ${quote(script)}`, env);
 
   it(
     "runs the agent's commands on the command side, which reaches nothing of the agent's",
@@ -189,10 +187,16 @@ describe.skipIf(!enabled)("commands apart from the agent (ADR 0332)", () => {
       );
       expect(looked.result).not.toContain("found");
       expect(looked.result).toContain("looked");
-      // The agent side still has them.
+      // The agent side still has them, for its runner alone.
       expect(
         (await agent(id, "cat /workspace/.work-session/grants/model/1")).result,
       ).toBe("model-grant");
+      const denied = await harness(
+        id,
+        "cat /workspace/.work-session/grants/model/1",
+      );
+      expect(denied.exitCode).not.toBe(0);
+      expect(denied.result).not.toContain("model-grant");
       // Work's variables and model keys stay with the agent.
       expect(
         (
@@ -309,9 +313,10 @@ describe.skipIf(!enabled)("commands apart from the agent (ADR 0332)", () => {
     async () => {
       const id = await separated();
       const cwdFile = `${RETURNS}/claude-1a2b-cwd`;
-      const ran = await agent(
+      await provider.executeCommand(id, `mkdir -p ${PROJECT}/sub`);
+      const ran = await harness(
         id,
-        `mkdir -p ${PROJECT}/sub && cd ${PROJECT} && ${SHIM}/bin/bash -c ${quote(`cd sub && pwd -P >| ${cwdFile}`)} && cat ${cwdFile}`,
+        `${SHIM}/bin/bash -c ${quote(`cd sub && pwd -P >| ${cwdFile}`)} && cat ${cwdFile}`,
       );
       expect(ran.exitCode).toBe(0);
       expect(ran.result.trim()).toBe(`${PROJECT}/sub`);
@@ -415,10 +420,12 @@ describe.skipIf(!enabled)("commands apart from the agent (ADR 0332)", () => {
   );
 
   it(
-    "runs the agent side as a user that owns none of the checkout, which both sides still edit",
+    "runs the harness as a user that owns none of the checkout, which both sides still edit",
     async () => {
       const id = await separated();
-      const agentUid = (await agent(id, "id -u")).result.trim();
+      // Work's runner is root beside it; the harness its own user.
+      expect((await agent(id, "id -u")).result.trim()).toBe("0");
+      const agentUid = (await harness(id, "id -u")).result.trim();
       const commandUid = (
         await provider.executeCommand(id, "id -u")
       ).result.trim();
@@ -443,7 +450,7 @@ describe.skipIf(!enabled)("commands apart from the agent (ADR 0332)", () => {
       // The agent edits and adds files; the command side changes them.
       expect(
         (
-          await agent(
+          await harness(
             id,
             `echo two >> ${PROJECT}/src/a.txt && echo three > ${PROJECT}/src/b.txt && echo ok`,
           )
@@ -457,26 +464,81 @@ describe.skipIf(!enabled)("commands apart from the agent (ADR 0332)", () => {
           )
         ).result.trim(),
       ).toBe("one\ntwo\nthree\nfour");
-      // Git beside the agent refuses a repository it does not own, so the
-      // pull request's configuration names nothing it runs there.
-      const hasGit = await provider.executeCommand(id, "command -v git");
-      if (hasGit.exitCode === 0) {
-        await provider.executeCommand(
-          id,
-          `cd ${PROJECT} && git init -q && git config core.fsmonitor 'touch /tmp/fsmonitor-ran'`,
-        );
-        const refused = await agent(id, `git -C ${PROJECT} status`);
-        expect(refused.exitCode).not.toBe(0);
-        expect(refused.result).toMatch(/dubious ownership/);
-        expect(
-          (
-            await agent(
-              id,
-              "test -e /tmp/fsmonitor-ran && echo ran || echo not",
-            )
-          ).result.trim(),
-        ).toBe("not");
+    },
+    10 * MINUTES,
+  );
+
+  it(
+    "keeps the runner's grant, the shim and the harness's configuration from a harness a racing link leads",
+    async () => {
+      const id = await separated();
+      const before = (
+        await agent(id, `cat ${SHIM}/bin/bash ${SHIM}/shell.mjs | sha256sum`)
+      ).result.trim();
+      // The change's code swaps names in the checkout between files and
+      // links to what the harness must not read or write.
+      const targets = [
+        "/workspace/.work-session/grants/model/1",
+        "/workspace/.work-session/runner/state.json",
+        `${SHIM}/bin/bash`,
+        `${SHIM}/shell.mjs`,
+        `${SHIM}/path/git`,
+        `${SEPARATE_HARNESS.config}/opencode/opencode.json`,
+        `${SEPARATE_HARNESS.config}/plugin.js`,
+        `${SEPARATE_HARNESS.media}/planted`,
+      ];
+      const swapper = await provider.processes.startProcess({
+        sandboxId: id,
+        cwd: PROJECT,
+        command: `while :; do ${targets.map((target, index) => `rm -f r${index}; ln -s ${target} r${index}; rm -f r${index}; echo plain > r${index}`).join("; ")}; done`,
+        name: "Link swapper",
+      });
+      // The harness reads and writes those names over and over, as a file
+      // tool checked a moment before would.
+      const raced = await harness(
+        id,
+        `n=0; while [ $n -lt 300 ]; do n=$((n+1)); for i in ${targets.map((_, index) => index).join(" ")}; do cat r$i 2>&1; echo pwned 2>&1 > r$i; done; done; echo raced`,
+      );
+      await provider.processes.signalProcess({
+        sandboxId: id,
+        processId: swapper.processId,
+        signal: "SIGKILL",
+      });
+      expect(raced.result).toContain("raced");
+      // The race reached the links, and the kernel refused them.
+      expect(raced.result).toMatch(/Permission denied/);
+      expect(raced.result).not.toContain("model-grant");
+      expect(raced.result).not.toContain("harness state");
+      expect(
+        (
+          await agent(id, `cat ${SHIM}/bin/bash ${SHIM}/shell.mjs | sha256sum`)
+        ).result.trim(),
+      ).toBe(before);
+      expect(
+        (await agent(id, "cat /workspace/.work-session/grants/model/1")).result,
+      ).toBe("model-grant");
+      expect(
+        (
+          await agent(
+            id,
+            `find ${SEPARATE_HARNESS.config} ${SEPARATE_HARNESS.media} -mindepth 1`,
+          )
+        ).result.trim(),
+      ).toBe("");
+      // Nor can it name them directly, or read the runner's environment.
+      for (const attempt of [
+        "ls /workspace/.work-session",
+        `echo x >> ${SHIM}/bin/bash`,
+        `mkdir ${SEPARATE_HARNESS.config}/opencode`,
+        `touch ${SEPARATE_HARNESS.media}/planted`,
+      ]) {
+        const refused = await harness(id, attempt);
+        expect(refused.exitCode, attempt).not.toBe(0);
+        expect(refused.result, attempt).toMatch(/Permission denied/);
       }
+      expect((await harness(id, "cat /proc/1/environ")).result).not.toContain(
+        "PATH=",
+      );
     },
     10 * MINUTES,
   );
@@ -494,25 +556,16 @@ describe.skipIf(!enabled)("commands apart from the agent (ADR 0332)", () => {
         separateCommandOutputBytes: 1024 * 1024,
       });
       const id = await separated(bounded);
-      const ran = await agent(
+      const ran = await harness(
         id,
-        `cd ${PROJECT} && ${SHIM}/bin/bash -c ${quote("head -c 8000000 /dev/zero | tr '\\0' a; echo never")} | wc -c`,
-        undefined,
-        bounded,
+        `${SHIM}/bin/bash -c ${quote("head -c 8000000 /dev/zero | tr '\\0' a; echo never")} | wc -c`,
       );
       const printed = Number(ran.result.trim().split("\n")[0]);
       expect(printed).toBeLessThan(2 * 1024 * 1024);
       expect(ran.result).not.toContain("never");
       // Within budget it runs as before.
       expect(
-        (
-          await agent(
-            id,
-            `cd ${PROJECT} && ${SHIM}/bin/bash -c 'echo fine'`,
-            undefined,
-            bounded,
-          )
-        ).result.trim(),
+        (await harness(id, `${SHIM}/bin/bash -c 'echo fine'`)).result.trim(),
       ).toBe("fine");
       await bounded.destroySandbox(id);
     },

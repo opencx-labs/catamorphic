@@ -164,6 +164,25 @@ export function refuseSeparateCommands(input: {
 }
 
 /**
+ * Who the harness runs as on the agent side of a sandbox whose commands
+ * run apart, and where (ADR 0332). Work's runner and every operation of
+ * Work's run as root there; the harness as this user, which owns none of
+ * the checkout (it edits it through the shared group) and can read no
+ * grant or runner state: `/workspace/.work-session` is root's alone, and
+ * the shim root's to write.
+ */
+export const SEPARATE_HARNESS = {
+  uid: 10001,
+  /** The group the checkout shares between both sides. */
+  gid: 10001,
+  home: "/workspace/.work-harness/home",
+  temporary: "/workspace/.work-harness/tmp",
+  shim: "/workspace/.work-shim",
+  media: "/workspace/.work-harness/media",
+  config: "/workspace/.work-harness/config",
+} as const;
+
+/**
  * Where a provider offering `commands.separate` serves its command socket
  * inside the agent side of a sandbox (ADR 0332). Nothing on the command
  * side can reach it.

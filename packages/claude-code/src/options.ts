@@ -1,3 +1,4 @@
+import { spawn } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -9,13 +10,14 @@ import type {
   Options,
   PermissionMode,
   SessionStore,
+  SpawnOptions,
 } from "@anthropic-ai/claude-agent-sdk";
 import type { JsonObject, JsonValue } from "@catamorphic/agent-protocol";
 import type {
   AttemptStart,
   McpServerSpec,
 } from "@catamorphic/agent-protocol/runner";
-import { MODEL_GRANT_READER } from "@catamorphic/sandbox";
+import { type LoopbackModel, MODEL_GRANT_READER } from "@catamorphic/sandbox";
 import { hostToolServer } from "./host-tools.js";
 
 /**
@@ -166,6 +168,15 @@ export function commandShellPaths(
   | { directory: string; shell: string; path: string; returnFolder: string }
   | undefined {
   if (!attempt.commands) return undefined;
+  // Its own user (ADR 0332): the provider's shim, its own temporary folder.
+  const harness = attempt.commands.harness;
+  if (harness)
+    return {
+      directory: harness.shim,
+      shell: path.join(harness.shim, "bin", "bash"),
+      path: path.join(harness.shim, "path"),
+      returnFolder: harness.temporary,
+    };
   const directory = path.join(attempt.stateDirectory, "commands");
   return {
     directory,
@@ -513,6 +524,12 @@ export interface QueryOptionInputs {
   sessionStore: SessionStore;
   abortController: AbortController;
   stderr: (data: string) => void;
+  /**
+   * The attempt's model on the runner's loopback (ADR 0332): with a
+   * harness of its own user, the CLI holds this endpoint's key, never the
+   * session's grant, which only the runner reads.
+   */
+  loopback?: LoopbackModel;
 }
 
 /** Which native thread the query runs on (ADR 0198). */
@@ -576,6 +593,12 @@ export function buildQueryOptions(input: QueryOptionInputs): Options {
 
   const host = access.kind === "host";
   const separate = commandShellPaths(attempt);
+  const harness = attempt.commands?.harness;
+  const loopback = harness ? input.loopback : undefined;
+  if (harness && access.kind === "gateway" && !loopback)
+    throw new ClaudeStartError(
+      "Claude Code beside commands run apart reaches its model through Work's loopback endpoint, which did not start.",
+    );
   if (separate && host)
     throw new ClaudeStartError(
       "Claude Code on its host runs its commands where it runs; only a sandboxed one runs them apart.",
@@ -609,13 +632,20 @@ export function buildQueryOptions(input: QueryOptionInputs): Options {
             ? { IS_SANDBOX: "1" }
             : {}),
         }),
-    ...(access.kind === "gateway"
+    ...(access.kind === "gateway" && loopback
       ? {
-          ANTHROPIC_BASE_URL: access.baseUrl,
-          WORK_MODEL_GRANT_DIRECTORY: access.grantDirectory,
-          CLAUDE_CODE_API_KEY_HELPER_TTL_MS: String(API_KEY_HELPER_TTL_MS),
+          // The runner's endpoint and its attempt-scoped key: the grant
+          // stays where the CLI's user cannot read it (ADR 0332).
+          ANTHROPIC_BASE_URL: loopback.baseUrl,
+          ANTHROPIC_API_KEY: loopback.apiKey,
         }
-      : {}),
+      : access.kind === "gateway"
+        ? {
+            ANTHROPIC_BASE_URL: access.baseUrl,
+            WORK_MODEL_GRANT_DIRECTORY: access.grantDirectory,
+            CLAUDE_CODE_API_KEY_HELPER_TTL_MS: String(API_KEY_HELPER_TTL_MS),
+          }
+        : {}),
     // The member's own sign-in, in the harness's own home (ADR 0199), and
     // its store, whatever the attempt names (ADR 0275).
     ...(access.kind === "sign_in"
@@ -637,6 +667,14 @@ export function buildQueryOptions(input: QueryOptionInputs): Options {
   // The CLI's own Git (its repository context) goes where commands run.
   if (separate)
     env.PATH = env.PATH ? `${separate.path}:${env.PATH}` : separate.path;
+  // Its own user's home: a cache, from which nothing loads (no settings
+  // sources, no MCP servers but Work's).
+  if (harness) {
+    env.HOME = harness.home;
+    env.XDG_CONFIG_HOME = harness.config;
+    if (access.kind !== "sign_in")
+      env.CLAUDE_CONFIG_DIR = path.join(harness.home, ".claude");
+  }
   const command = options.command ?? (host ? undefined : "claude");
   const systemPrompt = attempt.systemPrompt.trim();
 
@@ -655,11 +693,27 @@ export function buildQueryOptions(input: QueryOptionInputs): Options {
     ...(options.executableArgs
       ? { executableArgs: options.executableArgs }
       : {}),
-    ...(access.kind === "gateway"
+    ...(access.kind === "gateway" && !loopback
       ? {
           // The session's grant, read from its file at each use, so a
           // renewal applies without a restart (ADR 0180).
           settings: { apiKeyHelper: MODEL_GRANT_READER },
+        }
+      : {}),
+    // As its own user (ADR 0332), so it can read no grant, write no shim.
+    ...(harness
+      ? {
+          spawnClaudeCodeProcess: (spawned: SpawnOptions) =>
+            spawn(spawned.command, spawned.args, {
+              ...(spawned.cwd ? { cwd: spawned.cwd } : {}),
+              env: spawned.env,
+              uid: harness.uid,
+              gid: harness.gid,
+              stdio: ["pipe", "pipe", "pipe"],
+              signal: spawned.signal,
+            }),
+          // Only the MCP servers Work names.
+          strictMcpConfig: true,
         }
       : {}),
     ...(attempt.model ? { model: attempt.model } : {}),
@@ -706,7 +760,13 @@ export function buildQueryOptions(input: QueryOptionInputs): Options {
     // apart (ADR 0332) the checkout is the pull request's: its hooks, MCP
     // servers and status line would run beside the agent, and its
     // instructions would steer it, so only the home's settings load.
-    settingSources: separate ? ["user"] : ["user", "project", "local"],
+    // With a harness user of its own, not even its home's: that home is
+    // its to write, so nothing that runs or steers it loads from there.
+    settingSources: harness
+      ? []
+      : separate
+        ? ["user"]
+        : ["user", "project", "local"],
     includePartialMessages: true,
     sessionStore: input.sessionStore,
     // Every transcript line reaches Work as it is written, so a lost

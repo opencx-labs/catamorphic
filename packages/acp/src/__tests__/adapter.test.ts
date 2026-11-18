@@ -198,6 +198,37 @@ describe("ACP agents whose commands run apart (ADR 0332)", () => {
     expect(fs.readFileSync(shim, "utf8")).toContain(commands.socket);
   });
 
+  it("runs an agent as the harness's own user, on the provider's shim, with a configuration home it cannot write", async () => {
+    const space = workspace();
+    const harness = {
+      uid: process.getuid?.() ?? 0,
+      gid: process.getgid?.() ?? 0,
+      home: path.join(space.dir, "harness-home"),
+      temporary: path.join(space.dir, "harness-tmp"),
+      shim: "/workspace/.work-shim",
+      media: path.join(space.dir, "harness-media"),
+      config: path.join(space.dir, "harness-config"),
+    };
+    const turn = run(
+      attempt(space, "[[harness]]", {
+        commands: { ...commands, harness },
+        options: {
+          command: [process.execPath, AGENT],
+          shell: true,
+          projectConfig: false,
+        },
+      }),
+    );
+    await turn.finished();
+    expect(turn.completed()).toMatchObject({ status: "completed" });
+    expect(turn.text("assistant_message")).toBe(
+      `SHELL=/workspace/.work-shim/bin/bash PATH=/workspace/.work-shim/path HOME=${harness.home} CONFIG=${harness.config} UID=${harness.uid}`,
+    );
+    // The provider's shim, which that user cannot rewrite: none is
+    // written beside the runner's state.
+    expect(fs.existsSync(path.join(space.dir, "commands"))).toBe(false);
+  });
+
   it.each([
     ["does not say it uses $SHELL", { projectConfig: false }],
     ["does not say it loads nothing from the checkout", { shell: true }],

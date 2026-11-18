@@ -171,12 +171,21 @@ function startAttempt(
         attempt.options.projectConfig !== false
       )
         throw new Error(ACP_COMMANDS_APART_REFUSAL);
-      shell = await writeCommandShell({
-        directory: path.join(attempt.stateDirectory, "commands"),
-        socket: attempt.commands.socket,
-        runtime: process.execPath,
-      });
+      // With a harness user of its own, the provider's shim, which that
+      // user cannot rewrite; otherwise one beside the runner's state.
+      const harness = attempt.commands.harness;
+      shell = harness
+        ? {
+            shell: path.join(harness.shim, "bin", "bash"),
+            path: path.join(harness.shim, "path"),
+          }
+        : await writeCommandShell({
+            directory: path.join(attempt.stateDirectory, "commands"),
+            socket: attempt.commands.socket,
+            runtime: process.execPath,
+          });
     }
+    const harness = attempt.commands?.harness;
     if (access.kind === "gateway")
       model = await serveLoopbackModel({
         access,
@@ -206,7 +215,21 @@ function startAttempt(
                 .join(":"),
             }
           : {}),
+        // Its own user (ADR 0332): a home it writes as a cache, and a
+        // configuration home it cannot write, so nothing it is led to
+        // write loads into it as configuration or a plugin.
+        ...(harness
+          ? {
+              HOME: harness.home,
+              XDG_CONFIG_HOME: harness.config,
+              XDG_DATA_HOME: path.join(harness.home, ".local", "share"),
+              XDG_STATE_HOME: path.join(harness.home, ".local", "state"),
+              XDG_CACHE_HOME: path.join(harness.home, ".cache"),
+              TMPDIR: harness.temporary,
+            }
+          : {}),
       },
+      ...(harness ? { uid: harness.uid, gid: harness.gid } : {}),
       stdio: ["pipe", "pipe", "pipe"],
       // Its own process group, so stopping it stops what it started too
       // (the agent behind an `npx` or `sh -c` command, its MCP servers).
