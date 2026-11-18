@@ -1,6 +1,6 @@
 # 0323: Agents submit typed results
 
-- **Status:** Accepted (amends 0050, 0090, 0197, 0259)
+- **Status:** Accepted (amends 0050, 0090, 0197, 0259; results are bounded per turn, not per chat, and patterns run in linear time, by [0336](0336-reviews-show-progress-and-post-findings-as-verified.md))
 - **Date:** 2026-11-17
 
 ## Context
@@ -28,17 +28,23 @@ dependency tree), or the definition is invalid. Each schema compiles in an
 Ajv of its own, so a reused `$id` neither collides with nor resolves
 another definition's; a core keeps a bounded cache of compiled schemas keyed
 by digest (replica memory (b), ADR 0193). Patterns run on agent-submitted
-values in the server's process, so a definition whose `pattern` or
-`patternProperties` key could backtrack without bound is refused when it
-loads: `safe-regex2` (the check Fastify uses for route patterns) refuses
-nested and over-repeated quantifiers, and Work also refuses quantified
-alternation, backreferences, more than one unbounded quantifier (`*`, `+`,
-`{n,}`) and patterns over 1,000 characters. A pattern is never tried on a
-string over 4,096 characters, which does not match it, so the one
-unbounded quantifier left grows at worst with the square of that bound.
-A linear-time engine would need a dependency the tree lacks; refusing at
-load also shows the author why. Results name the agent's output, not its
-authority, so they stay outside the consent hash, like `skills`.
+values in the server's process, so they run on a linear-time engine (RE2
+semantics, re2js, through Ajv's `code.regExp`), never JavaScript's
+backtracking one, with ECMAScript's meaning (corrected by ADR 0336: the
+first version kept JavaScript's engine behind heuristics that missed bounded
+repeats). A pattern is refused when the definition loads unless JavaScript
+accepts it with the `u` flag; where RE2 reads alike syntax otherwise, `\s`,
+`\S` and `.` are rewritten to JavaScript's meaning, and what cannot be carried
+over is refused (a backreference, lookaround, `\S` inside a class, a repeat
+over 1,000). One pattern compiles, once per source, to at most 2,000
+instructions, a definition's patterns to 50,000. A value with text over 4,096
+code points where a pattern applies is refused. One check of a value (its
+JSON-text decoding included) stops matching once 100 ms have passed, so its
+worst case is about that plus one match (4,096 code points through 2,000
+instructions, tens of milliseconds); refused submissions count toward a
+turn's 100 (ADR 0336), so a turn's checks block the event loop for at most
+about 15 seconds in all, spread over its submissions. Results name the agent's output, not its authority, so they stay outside
+the consent hash, like `skills`.
 
 **`submit_result { name, value }` is a Work tool.** Core offers it beside
 `ask_user` and `close_questions` to every turn of an agent that declares

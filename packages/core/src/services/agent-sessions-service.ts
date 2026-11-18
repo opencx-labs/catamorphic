@@ -357,7 +357,7 @@ import {
   nextStallAt,
   recordStalls,
   type TurnProgress,
-  turnProgress,
+  turnState,
 } from "./sessions/turn-stalls.js";
 import {
   documentsClientFor,
@@ -702,6 +702,8 @@ export interface AgentSessionDetail extends AgentSession {
    * turn works.
    */
   turn: TurnProgress | null;
+  /** Its turns waiting to run, oldest first, read with `turn` (ADR 0336). */
+  queued: string[];
 }
 
 export interface AgentSessionPeer {
@@ -2726,6 +2728,7 @@ export class AgentSessionsService {
     const running = (
       await this.sessionsWithRunningTurns({ sessionIds: [sessionId] })
     ).has(sessionId);
+    const { turn, queued } = await turnState(this.db, sessionId);
     return {
       ...mapSession(
         row,
@@ -2736,7 +2739,8 @@ export class AgentSessionsService {
       ),
       attentionMessage: await this.attentionItem(sessionId),
       snapshot,
-      turn: await turnProgress(this.db, sessionId),
+      turn,
+      queued,
     };
   }
 
@@ -2802,6 +2806,8 @@ export class AgentSessionsService {
       turnId?: string;
       afterInput?: string;
       limit?: number;
+      /** `oldest`: the first submitted first, as a turn's first findings. */
+      order?: "newest" | "oldest";
     } = {},
   ): Promise<SessionResult[]> {
     await this.requireSession(identity, projectId, sessionId, "read");
@@ -2831,6 +2837,7 @@ export class AgentSessionsService {
       ...(input.name ? { name: input.name } : {}),
       ...(input.turnId ? { turnId: input.turnId } : {}),
       ...(afterInput ? { afterInput } : {}),
+      ...(input.order === "oldest" ? { oldestFirst: true } : {}),
       limit: Math.min(Math.max(input.limit ?? 100, 1), 100),
     });
   }
@@ -5662,6 +5669,19 @@ export class AgentSessionsService {
         const attemptId = context.attemptId;
         if (!turnId || !attemptId)
           return refuse("Results are submitted during a turn.");
+        // Every submission counts toward the turn's, accepted or refused,
+        // before any is checked (ADR 0336).
+        const counted = await this.db
+          .updateTable("agent_turns")
+          .set({ result_submissions: sql`result_submissions + 1` })
+          .where("id", "=", turnId)
+          .where("session_id", "=", sessionId)
+          .returning("result_submissions")
+          .executeTakeFirst();
+        if (!counted || counted.result_submissions > RESULT_LIMITS.perTurn)
+          return refuse(
+            `This turn has made ${RESULT_LIMITS.perTurn} submissions, the most one turn makes.`,
+          );
         const name = typeof args.name === "string" ? args.name : "";
         const schema = Object.hasOwn(schemas, name) ? schemas[name] : undefined;
         if (schema === undefined)

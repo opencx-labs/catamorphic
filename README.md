@@ -689,8 +689,10 @@ gateway connection whose named operations are its capabilities
 The `pull-request-reviews` pack is the larger one: a code and
 security review of every pull request, in a chat per pull request on a
 dedicated review pool, verified by running the change and reported to a
-workflow outside the sandbox. It queues per pull request, so overlapping
-turns publish commit-bound reviews, check runs and replies one at a time,
+workflow outside the sandbox. Its check shows the review in progress from
+the moment it is queued, and each finding posts as soon as it is verified.
+It queues per pull request, so overlapping turns, progress and findings
+publish commit-bound reviews, check runs and replies one at a time,
 records each commit's verdict on the review chat, stamps every write so a retry
 finds it, and leaves mutable PR descriptions, dismissals and thread
 resolution to people

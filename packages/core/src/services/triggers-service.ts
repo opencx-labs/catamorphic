@@ -904,7 +904,7 @@ export class TriggersService {
     // host-only kind requires (ADR 0327); a caller's fire never does.
     const dispatch = args.callerInitiated
       ? undefined
-      : { kind: args.triggerKind };
+      : { kind: args.triggerKind, mode: args.mode };
     const run = args.enablementId
       ? await this.deps.runs.triggerWithEnablement(
           {

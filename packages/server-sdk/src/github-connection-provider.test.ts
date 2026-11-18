@@ -1491,6 +1491,137 @@ describe("GitHub connections: the actions a review poster needs", () => {
     expect(github.calls.at(-1)?.url).toContain("check_name=Work%20review");
   });
 
+  it("completes every run of the App's still in progress on the commits, with the name and external id prefix", async () => {
+    const OTHER = "b".repeat(40);
+    const runsOn = (sha: string) =>
+      [
+        // Two of ours in progress (a list that lagged made a second), one
+        // done, one with another prefix, and another app's alike.
+        {
+          id: 1,
+          external_id: "pr:42:progress:e1",
+          app: { slug: "work" },
+          status: "in_progress",
+          conclusion: null,
+          html_url: "u",
+        },
+        {
+          id: 2,
+          external_id: "pr:42:progress:e2",
+          app: { slug: "work" },
+          status: "queued",
+          conclusion: null,
+          html_url: "u",
+        },
+        {
+          id: 3,
+          external_id: "pr:42:progress:e0",
+          app: { slug: "work" },
+          status: "completed",
+          conclusion: "success",
+          html_url: "u",
+        },
+        {
+          id: 4,
+          external_id: "pr:43:progress:e9",
+          app: { slug: "work" },
+          status: "in_progress",
+          conclusion: null,
+          html_url: "u",
+        },
+        {
+          id: 5,
+          external_id: "pr:42:progress:e3",
+          app: { slug: "github-actions" },
+          status: "in_progress",
+          conclusion: null,
+          html_url: "u",
+        },
+      ].map((run) => ({ ...run, id: sha === OTHER ? run.id + 10 : run.id }));
+    const updated: number[] = [];
+    const { call } = await setupWith({
+      [`GET /repos/octo/hello/commits/${SHA}/check-runs`]: () =>
+        Response.json({ total_count: 5, check_runs: runsOn(SHA) }),
+      [`GET /repos/octo/hello/commits/${OTHER}/check-runs`]: () =>
+        Response.json({ total_count: 5, check_runs: runsOn(OTHER) }),
+      ...Object.fromEntries(
+        [1, 2, 11, 12].map((id) => [
+          `PATCH /repos/octo/hello/check-runs/${id}`,
+          (body: unknown) => {
+            updated.push(id);
+            expect(body).toMatchObject({
+              status: "completed",
+              conclusion: "cancelled",
+              output: { title: "Superseded" },
+            });
+            return Response.json({
+              id,
+              status: "completed",
+              conclusion: "cancelled",
+              html_url: "u",
+            });
+          },
+        ]),
+      ),
+    });
+    await expect(
+      call("complete_check_runs", {
+        repository: "octo/hello",
+        commits: [SHA, OTHER],
+        name: "Work review",
+        externalIdPrefix: "pr:42:progress:",
+        conclusion: "cancelled",
+        output: { title: "Superseded", summary: "A newer push is reviewed." },
+      }),
+    ).resolves.toEqual({
+      completed: [
+        { id: 1, commit: SHA },
+        { id: 2, commit: SHA },
+        { id: 11, commit: OTHER },
+        { id: 12, commit: OTHER },
+      ],
+    });
+    expect(updated).toEqual([1, 2, 11, 12]);
+    // A pull request's earlier commits, its head left alone.
+    updated.length = 0;
+    const { call: callPull } = await setupWith({
+      "GET /repos/octo/hello/pulls/42/commits": () =>
+        Response.json([{ sha: OTHER }, { sha: SHA }]),
+      [`GET /repos/octo/hello/commits/${OTHER}/check-runs`]: () =>
+        Response.json({ total_count: 5, check_runs: runsOn(OTHER) }),
+      ...Object.fromEntries(
+        [11, 12].map((id) => [
+          `PATCH /repos/octo/hello/check-runs/${id}`,
+          () => {
+            updated.push(id);
+            return Response.json({
+              id,
+              status: "completed",
+              conclusion: "cancelled",
+              html_url: "u",
+            });
+          },
+        ]),
+      ),
+    });
+    await expect(
+      callPull("complete_check_runs", {
+        repository: "octo/hello",
+        pullRequest: { number: 42, except: SHA },
+        name: "Work review",
+        externalIdPrefix: "pr:42:progress:",
+        conclusion: "cancelled",
+        output: { title: "Superseded", summary: "A newer push is reviewed." },
+      }),
+    ).resolves.toEqual({
+      completed: [
+        { id: 11, commit: OTHER },
+        { id: 12, commit: OTHER },
+      ],
+    });
+    expect(updated).toEqual([11, 12]);
+  });
+
   it("comments on an issue with issues alone", async () => {
     const { github, provider } = appProvider({
       ...REVIEW_ROUTES,

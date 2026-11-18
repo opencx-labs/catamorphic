@@ -9,7 +9,7 @@ Once installed, the code belongs to the project and can be adapted.
 | Pack | What it installs |
 | --- | --- |
 | `code-review` | Review shell, navigation, findings and diffs for apps |
-| `pull-request-reviews` | A review chat per pull request on a review pool, and the workflow that posts its review, check run and summary to GitHub (`.work/` files and a project skill) |
+| `pull-request-reviews` | A review chat per pull request on a review pool, and the workflow that shows each review in progress, posts its findings as they are verified, then its review, check run and replies to GitHub (`.work/` files and a project skill) |
 | `pull-request-reviews-opencode` | The same reviewer as OpenCode on an open-weight model, replacing two of `pull-request-reviews`'s files |
 | `github-polling` | GitHub events for a server without inbound webhooks: a schedule workflow that records pull request and comment events of the GitHub trigger kinds (`.work/` files and a project skill) |
 | `slack-threads` | A project chat per Slack thread that answers mentions, with reading and citing guidance (`.work/` files and a project skill) |

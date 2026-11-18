@@ -584,7 +584,31 @@ export const plain = defineWorkflow(({ defineBoundary }) => ({
       parseWorkflow(
         withConcurrency('{ key: "id", onConflict: "queue", limit: "2" }'),
       ),
-    ).toThrow("takes only key and onConflict");
+    ).toThrow("takes only key, onConflict and coalesce");
+  });
+
+  it("records what makes queued runs alike, which join (ADR 0336)", () => {
+    expect(
+      parseWorkflow(
+        withConcurrency(
+          '{ key: "payload.session.key", onConflict: "queue", coalesce: ["kind", "payload.detail.turnId"] }',
+        ),
+      ).concurrency,
+    ).toEqual({
+      key: "payload.session.key",
+      onConflict: "queue",
+      coalesce: ["kind", "payload.detail.turnId"],
+    });
+    for (const value of [
+      '{ key: "id", onConflict: "ignore", coalesce: ["kind"] }',
+      '{ key: "id", onConflict: "queue", coalesce: [] }',
+      '{ key: "id", onConflict: "queue", coalesce: "kind" }',
+      '{ key: "id", onConflict: "queue", coalesce: ["a..b"] }',
+      '{ key: "id", onConflict: "queue", coalesce: ["a", "b", "c", "d", "e"] }',
+    ])
+      expect(() => parseWorkflow(withConcurrency(value)), value).toThrow(
+        "'coalesce' takes one to four dot paths",
+      );
   });
 });
 

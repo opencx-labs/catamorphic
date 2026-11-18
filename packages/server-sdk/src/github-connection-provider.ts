@@ -249,6 +249,44 @@ const TypedSchemas = {
     name: z.string().min(1).optional(),
     ...CheckRunFields,
   }),
+  complete_check_runs: z.strictObject({
+    repository: Repository,
+    commits: z
+      .array(z.string().regex(/^[0-9a-f]{40}$/))
+      .min(1)
+      .max(MAX_ITEMS)
+      .optional(),
+    pullRequest: z
+      .strictObject({
+        number: Number_,
+        except: z
+          .string()
+          .regex(/^[0-9a-f]{40}$/)
+          .optional()
+          .describe("A commit to leave alone, such as the head"),
+      })
+      .optional()
+      .describe("Instead of commits: the pull request's last 20"),
+    name: z.string().min(1),
+    externalIdPrefix: z
+      .string()
+      .min(4)
+      .max(200)
+      .describe("Only runs whose external id starts with it"),
+    conclusion: z.enum([
+      "action_required",
+      "cancelled",
+      "failure",
+      "neutral",
+      "success",
+      "skipped",
+      "timed_out",
+    ]),
+    output: z.strictObject({
+      title: z.string().min(1),
+      summary: z.string().min(1),
+    }),
+  }),
   issue_comment: z.strictObject({
     repository: Repository,
     number: Number_,
@@ -330,6 +368,7 @@ const TYPED_ACTIONS: readonly TypedAction[] = [
   "create_review",
   "create_check_run",
   "update_check_run",
+  "complete_check_runs",
   "issue_comment",
   "review_threads",
   "check_runs",
@@ -362,6 +401,7 @@ const TYPED_PERMISSIONS: Record<TypedAction, GithubPermissions | undefined> = {
   create_review: { pull_requests: "write" },
   create_check_run: { checks: "write" },
   update_check_run: { checks: "write" },
+  complete_check_runs: { checks: "write" },
   // Comments on pull requests need pull_requests, on issues need issues:
   // issueCommentPermissions reads which the number is.
   issue_comment: undefined,
@@ -386,6 +426,8 @@ const DESCRIPTIONS: Record<TypedAction, string> = {
   create_check_run:
     "Report a check run on a commit, with an optional summary and line annotations",
   update_check_run: "Update a check run's status, conclusion, or output",
+  complete_check_runs:
+    "Complete every check run of this App still in progress on the given commits (up to 20), or a pull request's last 20 commits, that has the name and an external id starting with the prefix, with one conclusion and output",
   issue_comment: "Comment on an issue or pull request conversation",
   review_threads:
     "List a pull request's review threads: node id, resolved or not, path and line, and every comment with its database id, author, and whether this connection wrote it (own)",
@@ -874,6 +916,54 @@ export function defineGithubConnectionProvider(
             ...input,
             ...(stamp !== undefined ? { externalId: stamp } : {}),
           });
+        }
+        case "complete_check_runs": {
+          const input = TypedSchemas.complete_check_runs.parse(args.input);
+          // Check runs are an App's alone; a member connection ends none.
+          const slug =
+            args.credential.kind === "app"
+              ? (await installationOf(args.credential)).appSlug
+              : null;
+          const completed: Array<{ id: number; commit: string }> = [];
+          if (slug === null) return { completed };
+          const pull = input.pullRequest;
+          const commits = pull
+            ? (
+                await api.pullRequestCommits({
+                  fullName: input.repository,
+                  number: pull.number,
+                })
+              )
+                .filter((commit) => commit !== pull.except)
+                .slice(-MAX_ITEMS)
+            : (input.commits ?? []);
+          if (commits.length === 0 && !pull)
+            throw new ConnectionActionRefusedError(
+              "Name the commits, or a pull request",
+            );
+          for (const commit of new Set(commits)) {
+            const runs = await api.checkRuns({
+              fullName: input.repository,
+              sha: commit,
+              name: input.name,
+            });
+            for (const run of runs)
+              if (
+                run.app === slug &&
+                run.status !== "completed" &&
+                run.externalId?.startsWith(input.externalIdPrefix)
+              ) {
+                await api.updateCheckRun({
+                  fullName: input.repository,
+                  checkRunId: run.id,
+                  status: "completed",
+                  conclusion: input.conclusion,
+                  output: input.output,
+                });
+                completed.push({ id: run.id, commit });
+              }
+          }
+          return { completed };
         }
         case "update_check_run": {
           const { repository, ...input } = TypedSchemas.update_check_run.parse(

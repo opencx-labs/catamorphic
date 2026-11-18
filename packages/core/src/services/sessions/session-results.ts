@@ -7,7 +7,6 @@ import {
 } from "@catamorphic/agent-protocol";
 import type { DB, Json } from "@catamorphic/db";
 import { type Kysely, sql, type Transaction } from "kysely";
-import { RESULT_LIMITS } from "../agent-results.js";
 import type { SessionLog } from "./session-log.js";
 import { itemFromRow } from "./session-rows.js";
 
@@ -63,15 +62,6 @@ export class SessionResultAttemptError extends Error {
       "This attempt no longer runs its turn, so its result does not count.",
     );
     this.name = "SessionResultAttemptError";
-  }
-}
-
-export class SessionResultLimitError extends Error {
-  constructor() {
-    super(
-      `This chat has recorded ${RESULT_LIMITS.perSession} results, the most one chat keeps`,
-    );
-    this.name = "SessionResultLimitError";
   }
 }
 
@@ -267,14 +257,6 @@ export async function recordResult(
   },
 ): Promise<ResultItem> {
   await log.lock(trx, input.sessionId);
-  const count = await trx
-    .selectFrom("agent_items")
-    .select((eb) => eb.fn.countAll<string>().as("count"))
-    .where("session_id", "=", input.sessionId)
-    .where("kind", "=", "result")
-    .executeTakeFirstOrThrow();
-  if (Number(count.count) >= RESULT_LIMITS.perSession)
-    throw new SessionResultLimitError();
   const turn = await trx
     .selectFrom("agent_turns")
     .select(["active_attempt_id", "checkpoint_before", "status"])
@@ -332,6 +314,8 @@ export async function readResults(
     /** Only what this turn's attempts submitted. */
     turnId?: string;
     afterInput?: { sessionId: string; position: number; createdAt: Date };
+    /** The first submitted first, instead of the newest. */
+    oldestFirst?: boolean;
     limit: number;
   },
 ): Promise<SessionResult[]> {
@@ -375,8 +359,8 @@ export async function readResults(
         ]),
       ),
     )
-    .orderBy("item.created_at", "desc")
-    .orderBy("item.position", "desc")
+    .orderBy("item.created_at", input.oldestFirst ? "asc" : "desc")
+    .orderBy("item.position", input.oldestFirst ? "asc" : "desc")
     .limit(input.limit)
     .execute();
   const newest = await newestRequests(db, [
@@ -426,6 +410,26 @@ export async function sessionFamily(
   return family;
 }
 
+/**
+ * The newest results of a chat a read of each name's latest looks at
+ * (ADR 0336): a chat records at most 1,000 results a turn, but over its
+ * life it keeps every one, so the latest of each name is found among these,
+ * through the results index, and a name only older results carry is left
+ * out.
+ */
+export const RESULT_READ_WINDOW = 1_000;
+
+/** The ids of a chat's newest results, at most {@link RESULT_READ_WINDOW}. */
+export function newestResultIds(db: Executor, sessionId: string) {
+  return db
+    .selectFrom("agent_items")
+    .select("id")
+    .where("session_id", "=", sessionId)
+    .where("kind", "=", "result")
+    .orderBy("created_at", "desc")
+    .limit(RESULT_READ_WINDOW);
+}
+
 /** A child's latest result of one name, as its parent agent reads it. */
 export interface LatestResult {
   id: string;
@@ -454,6 +458,13 @@ export async function latestResults(
     .select(["item.payload", "item.session_id"])
     .distinctOn(["item.session_id", sql`item.payload->>'name'`])
     .where("item.session_id", "in", [...sessionIds])
+    .where((eb) =>
+      eb.or(
+        sessionIds.map((sessionId) =>
+          eb("item.id", "in", newestResultIds(db, sessionId)),
+        ),
+      ),
+    )
     .where("item.kind", "=", "result")
     // A result this side did not accept (a mirror's, ADR 0323) is no result.
     .where("item.status", "=", "completed")

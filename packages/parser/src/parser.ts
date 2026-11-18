@@ -2853,11 +2853,11 @@ function concurrencyOf(config: ObjectLiteralExpression): {
     );
   }
   const extra = Object.keys(value).filter(
-    (name) => name !== "key" && name !== "onConflict",
+    (name) => name !== "key" && name !== "onConflict" && name !== "coalesce",
   );
   if (extra.length > 0) {
     throw new Error(
-      `Workflow 'concurrency' takes only key and onConflict, not ${extra.join(", ")}`,
+      `Workflow 'concurrency' takes only key, onConflict and coalesce, not ${extra.join(", ")}`,
     );
   }
   const key = "key" in value ? value.key : undefined;
@@ -2879,7 +2879,33 @@ function concurrencyOf(config: ObjectLiteralExpression): {
       "Workflow concurrency 'onConflict' must be queue, ignore, restart or error",
     );
   }
-  return { concurrency: { key, onConflict: policy } };
+  if (!("coalesce" in value))
+    return { concurrency: { key, onConflict: policy } };
+  // Queued runs that wait for the same thing join (ADR 0336).
+  const coalesce = value.coalesce;
+  if (
+    policy !== "queue" ||
+    !Array.isArray(coalesce) ||
+    coalesce.length < 1 ||
+    coalesce.length > 4 ||
+    coalesce.some(
+      (path) =>
+        typeof path !== "string" ||
+        path.length > 200 ||
+        !CONCURRENCY_KEY_PATH.test(path),
+    )
+  ) {
+    throw new Error(
+      "Workflow concurrency 'coalesce' takes one to four dot paths into the run input, with onConflict queue",
+    );
+  }
+  return {
+    concurrency: {
+      key,
+      onConflict: policy,
+      coalesce: coalesce.filter((path) => typeof path === "string"),
+    },
+  };
 }
 
 /** A concrete `thing:action` permission; wildcards are for roles only. */

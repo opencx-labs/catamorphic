@@ -404,6 +404,8 @@ export interface WorkflowGraph {
 export interface WorkflowConcurrency {
   key: string;
   onConflict: "queue" | "ignore" | "restart" | "error";
+  /** Paths whose values make queued runs alike, which join (ADR 0336). */
+  coalesce?: string[];
 }
 
 export interface WorkflowConnectionRequirement {

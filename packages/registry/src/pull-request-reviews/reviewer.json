@@ -74,34 +74,6 @@
           "pattern": "\\S",
           "maxLength": 4000
         },
-        "comments": {
-          "type": ["array", "null"],
-          "maxItems": 30,
-          "items": {
-            "type": "object",
-            "additionalProperties": false,
-            "required": ["path", "line", "body"],
-            "properties": {
-              "path": {
-                "type": "string",
-                "pattern": "\\S",
-                "maxLength": 300
-              },
-              "line": {
-                "type": "integer",
-                "minimum": 1
-              },
-              "side": {
-                "enum": ["LEFT", "RIGHT", null]
-              },
-              "body": {
-                "type": "string",
-                "pattern": "\\S",
-                "maxLength": 1500
-              }
-            }
-          }
-        },
         "reply": {
           "type": ["object", "null"],
           "additionalProperties": false,
@@ -117,6 +89,49 @@
               "maxLength": 4000
             }
           }
+        }
+      }
+    },
+    "finding": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "path", "line", "severity", "title", "body"],
+      "properties": {
+        "id": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$",
+          "description": "Names this problem: the same id on the same head never posts twice"
+        },
+        "path": {
+          "type": "string",
+          "pattern": "\\S",
+          "maxLength": 300
+        },
+        "line": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "The line in the new file, or the old one when side is LEFT; the last line of a range"
+        },
+        "startLine": {
+          "type": ["integer", "null"],
+          "minimum": 1,
+          "description": "The first line of a range ending at line"
+        },
+        "side": {
+          "enum": ["LEFT", "RIGHT", null]
+        },
+        "severity": {
+          "enum": ["blocking", "important", "minor"]
+        },
+        "title": {
+          "type": "string",
+          "pattern": "\\S",
+          "maxLength": 200
+        },
+        "body": {
+          "type": "string",
+          "pattern": "\\S",
+          "maxLength": 1500
         }
       }
     }
