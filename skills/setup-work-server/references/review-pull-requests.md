@@ -15,7 +15,9 @@ compose the same primitives rather than requiring a native integration or
 forcing this recipe onto the application. See [workflow composition](workflow-composition.md).
 Nothing installs into the server: publication is the pack's `postReviews`
 workflow. It queues per pull request chat (ADR 0325), so overlapping turns,
-progress and findings publish one at a time, in order, decides from what
+progress and findings publish one at a time, and a burst of alike events
+(an agent's findings) joins the one publication still waiting, so the queue
+never fills and the verdict always gets in (ADR 0336). It decides from what
 GitHub shows (the chat's metadata
 holds a record of each commit's verdict and what it posted, never trusted
 for what to post), and writes through the GitHub connection's typed actions
@@ -290,8 +292,8 @@ named commit, or the commit its turn began on, is not the head. Nothing posts
 while GitHub's head is past the chat's commit. A check that stays at *Waiting
 to start* has no review machine yet; one at *Preparing the workspace* is in
 setup. A finding's run says why it did not post (a later request made it
-stale, it is outside the diff, it was already posted); the review posts it
-when it names it.
+stale, it is outside the diff, it was already posted, it is past the turn's
+first 30); the turn's review posts what is left of its first 30.
 
 Model access through the gateway lasts only for the exact review turn attempt
 and its live lease (ADR 0293). Background code cannot start model requests with
@@ -301,7 +303,7 @@ already admitted may finish streaming; clean up cloud resources independently
 and enforce spending policy in connection guards.
 While one `postReviews` run publishes, later runs for the same pull request
 (a turn's status, a finding, a settled turn) show as `queued` and start in
-turn; the chat's `review.verdicts`, `review.posted` and `review.progress`
+turn, alike events joining the one waiting; the chat's `review.verdicts`, `review.posted` and `review.progress`
 metadata say what each commit carries, what was posted, and which run shows
 the review in progress. A stamp finds a write GitHub accepted when its answer
 was lost, and a finding's marker finds it wherever it was posted; a write

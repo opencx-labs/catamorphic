@@ -11,78 +11,87 @@ comments and the "Work review" check run. A review on a new machine can spend
 over 10 minutes preparing before the agent starts, and a production pull
 request reviewer took 30 minutes on a small change, which was merged before
 any finding appeared. That reviewer posts an in progress check and each
-verified finding at once. The primitives were there: results are recorded
-mid-turn and each fires `session.result-recorded` (ADR 0323), one workflow
-owns every GitHub write (ADR 0259), and runs queue per key (ADR 0325). One
-limit was not: a chat kept at most 1,000 results, and a review chat lives as
-long as its pull request.
+verified finding at once. Results are recorded mid-turn and fire
+`session.result-recorded` (ADR 0323), one workflow owns every GitHub write
+(ADR 0259), and runs queue per key (ADR 0325). But a key queued at most 100
+runs, one per event, and a chat kept at most 1,000 results while a review chat
+lives as long as its pull request.
 
 ## Decision
 
+**Queued runs coalesce.** A workflow may declare `concurrency.coalesce` (with
+`queue`): one to four paths whose values say what a run is for. A run that
+would queue while a queued run of its key, owner and enablement has the same
+values joins it, under the key's lock and before the queue's bound, keeping
+its place (migration 091). Coalesce only runs that read what is new when they
+start. Without it a burst of findings filled the poster's queue and the turn's
+settled event, refused, never published its verdict.
+
 **One writer hears more.** `postReviews` also runs on the review chat's
 `session.turn-changed` statuses `queued`, `preparing`, `running` and
-`cancelled`, and on `session.result-recorded` for `finding`. Every event
-carries `payload.session.key`, so they share its queue: each run starts after
-the one before it, in event order, and a progress write can never overtake
-or race the final one.
+`cancelled`, and on `session.result-recorded` for `finding`, coalescing on the
+event's kind, turn and status. The queue keeps two publications from writing
+at once, not the order events happened in (replicas, retries and joining
+reorder them), so ordering is not what protects the verdict. These guards do:
+progress never writes on a commit with a verdict, rewrites a run only after
+reading it by id and never once completed, a status arriving after its turn
+stopped working changes nothing, every write checks GitHub's head, and
+findings are found by their markers.
 
-**A review shows it started.** On a queued, preparing or running turn the
-poster reads GitHub's head of the open pull request. If the App has no "Work
-review" run on that commit, it creates one `in_progress`, external id
-`work-review:<number>:progress`. Its title follows the chat's working turn,
-which existing turn state tells cheaply: *Waiting to start* (no working turn
-on that head yet), *Preparing the workspace* (the turn is `preparing`: a
-machine, setup), *Reviewing* (the turn runs on that commit). A later status
-rewrites only the text, after reading the run by id, and never a completed
-run. The final publication completes that run with the verdict (an update,
-not a new run). The chat records `review.progress` (`{ commit, id }`); a
-progress event for a newer head reads that commit's runs and cancels the
-App's in progress run that carries this pull request's progress id. The
-record is the reviewer's to write too, so it only says where to look: GitHub
-and the id decide, and the head is never cancelled. A turn that settles or is
-cancelled on a closed pull request cancels the head's in progress run.
+**A review shows it started.** For a working turn the poster creates, on
+GitHub's head of the open pull request, an `in_progress` run with external id
+`work-review:<number>:progress:<turn>`, unless the commit has a verdict; a run
+an earlier turn left cancelled does not stop a new one. Its title is *Waiting
+to start*, *Preparing the workspace* (the turn is `preparing`) or *Reviewing*,
+from the chat's turn state. The verdict completes that run; this pull
+request's own run always ends, with the commit's verdict when another pull
+request on the same head holds a stronger one. The chat's `review.progress`
+(`{ commit, id }`) only says where to look: a newer head cancels the App's own
+run there that carries this pull request's progress prefix. A closed pull
+request, or a queued turn cancelled with no other at work, cancels the head's.
 
 **Findings post as they are verified.** The reviewer submits each verified
-finding as its own `finding` result (`id`, `path`, `line`, optional
-`startLine` and `side`, `severity`, `title`, `body`), then the final `review`,
-whose `findings` lists the ids it stands behind; its `comments` are gone. On
-each `finding` the poster posts it as a one comment review whose body is the
-finding's marker, `<!-- work-review:<commit>:finding:<id> -->`, when the
-result is `current`, the commit its turn began on is GitHub's head of the
-open pull request, its lines are in the diff, and none of the App's reviews
-on the pull request carries the marker yet. A commit takes at most 30 such
-reviews. The final publication posts the referenced findings of its turn
-that no review carries yet (inline where they fit, in its body otherwise)
-and lists their markers in its body. So a finding posts once per head and id
-across retried runs, resubmissions after a restart or hand-off, and the
-final review; GitHub's lists can lag a write by a moment, as ADR 0325 says.
-Reviews made of findings never count as one that already stands for the
-commit. A finding a comment made stale waits for the final review, which
-still posts it if it refers to it: a question does not withdraw a finding.
+finding as a `finding` result (`id`, `path`, `line`, optional `startLine` and
+`side`, `severity`, `title`, `body`), then a `review` that does not repeat
+them. A finding's publication decides from Work's record alone, so one with
+nothing to post calls GitHub not at all: of the turn's first 30 distinct
+findings, those first submitted since its event, while `current`. It posts
+them in one review whose body is their markers
+(`<!-- work-review:<commit>:finding:<id> -->`), each comment ending with its
+own, on lines the diff has, while the commit holds fewer than 30 so posted.
+The turn's review posts what is left of its first 30, as last submitted
+(stale, outside the diff, corrected), so nothing depends on the agent
+remembering ids across a hand-off. A turn of 100 findings or more cannot tell
+its first ones from the newest it reads and posts none. Finding-only reviews
+never count as a review that stands for the commit.
 
 **A newer turn speaks for the head.** A publication with no usable review
-marks a commit only while no newer turn of the chat works; otherwise that
-turn's publication does. So a turn of an earlier head, settling after the
-workspace moved, cannot complete the new head's check.
+marks a commit only while no newer turn of the chat works.
 
-**Results are bounded per turn.** A turn records at most 1,000 results, each
-at most 256 KiB, instead of a chat recording 1,000. A chat's results grow with
-its turns like the rest of its log, which its life bounds: closing or
-archiving it. The poster reads a turn's newest 100 findings.
+**Results are bounded per turn, and their reads per chat.** A turn records at
+most 1,000 results of at most 256 KiB. A chat keeps every result over its
+life, so nothing bounds its result storage but its turns; reads are bounded:
+`results` returns at most 100, and the latest of each name (hand-offs, a
+parent's list and wait) is looked for among a chat's newest 1,000 results,
+leaving out a name only older ones carry.
 
-**The workflow snapshot names the chat's Environment.** `SessionSnapshot`
-gains `environment` (recorded before a machine is placed), which inspect
-already returned, so the poster knows a review chat still waiting for its
-machine.
+**Result patterns match in linear time.** Applying every pattern (Ajv keyed
+them by `toString()`, so one applied to all) put project regexes on
+agent-submitted values in the server's process. They now run with RE2's
+semantics on re2js, refusing at load what RE2 cannot run, and one check of a
+value spends at most 20 million steps of pattern work (ADR 0323 corrected).
 
-Considered: one workflow per kind of write, which ADR 0325's per workflow
-queue does not order against each other; a new typed action for a single
-review comment, which GitHub stores as a review anyway; trusting the chat's
-record for which runs to cancel or which findings were posted.
+**Smaller.** `SessionSnapshot` names the chat's `environment`, which a chat
+waiting for its machine has before a placement. Report text loses HTML comment
+delimiters until none is left.
+
+Considered: one workflow per kind of write (separate queues race on the same
+finding); a typed action for single review comments (GitHub stores them as
+reviews anyway); trusting the chat's record for what was posted.
 
 ## Consequences
 
-An author sees the review start within a minute and each finding as it is
-verified. A review chat runs the poster for every status and finding, a few
-GitHub calls each. Findings are a second result to keep in step with
-`review-report.ts`. The `review` result's `comments` field is removed.
+An author sees the review start within a minute and findings as they are
+verified, a few GitHub calls per publication, and no flood of findings can
+lose the verdict. The `review` result has no `comments` or `findings`.
+Coalescing is available to any queued workflow that reads current state.

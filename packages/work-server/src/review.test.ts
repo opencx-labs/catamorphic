@@ -855,7 +855,6 @@ describe.skipIf(!databaseUrl)("reviewing pull requests (#118)", () => {
       summary: "One blocking issue: the new NOT NULL column rewrites orders.",
       checkSummary:
         "Fetched main, read the migration, counted 1200 orders on the replica.",
-      findings: ["orders-rewrite"],
     };
     const finding = {
       id: "orders-rewrite",
@@ -977,7 +976,9 @@ describe.skipIf(!databaseUrl)("reviewing pull requests (#118)", () => {
       name: "Work review",
       head_sha: pullHead,
       status: "in_progress",
-      external_id: "work-review:1:progress",
+      external_id: expect.stringMatching(
+        /^work-review:1:progress:[0-9a-f-]{36}$/,
+      ),
     });
     const updates = githubCalls.filter(
       (call) =>
@@ -1017,7 +1018,14 @@ describe.skipIf(!databaseUrl)("reviewing pull requests (#118)", () => {
       (findingCall?.body as { comments?: Array<{ body: string }> } | undefined)
         ?.comments?.[0]?.body,
     ).toMatch(/^\*\*Blocking:\*\* The new NOT NULL column rewrites orders/);
-    // The review refers to the finding already posted, and does not repeat it.
+    // Its comment ends with its marker: a resumed reviewer reads its id.
+    expect(
+      (findingCall?.body as { comments?: Array<{ body: string }> } | undefined)
+        ?.comments?.[0]?.body,
+    ).toMatch(
+      new RegExp(`<!-- work-review:${pullHead}:finding:orders-rewrite -->$`),
+    );
+    // The review does not repeat the finding already posted.
     expect(reviewCall?.body).toMatchObject({
       event: "REQUEST_CHANGES",
       commit_id: pullHead,
@@ -1116,7 +1124,9 @@ describe.skipIf(!databaseUrl)("reviewing pull requests (#118)", () => {
       ),
     );
     expect(missing).toMatchObject({
-      external_id: "work-review:1:progress",
+      external_id: expect.stringMatching(
+        /^work-review:1:progress:[0-9a-f-]{36}$/,
+      ),
       conclusion: "action_required",
       output: {
         title: "No review",
