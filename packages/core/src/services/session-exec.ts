@@ -1121,7 +1121,8 @@ export class SessionExecService {
    * The program commits a workspace's chats may still read (ADR 0335): those
    * of its executions still running or starting, of any that ran within the
    * retention, and of any that ran since the oldest turn still queued or
-   * working there began, since a workflow hands the path to a turn.
+   * working there began (at most a week back), since a workflow hands the
+   * path to a turn.
    */
   private async programsInUse(args: { action: ActionRow }): Promise<string[]> {
     const shared = await this.workspaceOf(args.action);
@@ -1134,8 +1135,14 @@ export class SessionExecService {
     const retention = new Date(
       Date.now() - PROGRAM_COPY_RETENTION_MINUTES * 60_000,
     );
+    // A turn waiting for days keeps no more than a week back.
+    const cap = new Date(Date.now() - PROGRAM_COPY_TURN_CAP_DAYS * 86_400_000);
     const since =
-      turn?.since && turn.since < retention ? turn.since : retention;
+      turn?.since && turn.since < retention
+        ? turn.since < cap
+          ? cap
+          : turn.since
+        : retention;
     const rows = await this.deps.db
       .selectFrom("session_actions")
       .select("progress")
@@ -1310,6 +1317,8 @@ export class SessionExecService {
 
 /** Minutes a copy of another commit's program stays in a workspace. */
 const PROGRAM_COPY_RETENTION_MINUTES = 24 * 60;
+/** The furthest back a working turn keeps program copies, in days. */
+const PROGRAM_COPY_TURN_CAP_DAYS = 7;
 
 /**
  * The script that removes old program copies from a workspace root (ADR

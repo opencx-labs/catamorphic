@@ -83,7 +83,7 @@ with other software keeps its own. Volumes keep their retention (ADR
 folder goes once its result is recorded, and placing a program copy
 removes copies of commits no exec of the workspace used within 24 hours,
 nor since its oldest turn still queued or working began (a workflow hands
-the path to a turn), nor is starting or running now; an exec names its
+the path to a turn; at most a week back), nor is starting or running now; an exec names its
 commit as it starts, and a copy used again is touched, its time being
 what counts for a copy Work has no record of (ADR 0324). Nothing of the project's own
 (the checkout, its volumes, its caches, its tagged images) is removed.

@@ -877,7 +877,8 @@ sharing the Docker daemon still claims (never its default image, one it
 found there, or a build from before builds carried their builder), and the
 dangling images and build cache of each running sandbox with containers. A workspace keeps one `$WORK_PROGRAM` copy per
 program commit it ran; a copy goes once no `exec` there used it for a day,
-none used it since the workspace's oldest active turn began, and none
+none used it since the workspace's oldest active turn began (at most a week
+back), and none
 starting or running uses it, and each `exec`'s output files go once its
 result is recorded. Volumes and caches keep their own retention. A failed turn,
 run, `exec` or cache fill on a machine under its floor says so with the

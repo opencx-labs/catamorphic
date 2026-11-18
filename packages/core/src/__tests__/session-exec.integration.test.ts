@@ -1183,6 +1183,26 @@ describeIf("workflows run commands in a chat's workspace (ADR 0324)", () => {
     });
     const w = await programOf("keep-w");
     expect(await copies()).toEqual([y, z, w].sort());
+    // A turn waiting for days keeps nothing older than a week.
+    await age(y, 8 * 24);
+    await db
+      .updateTable("agent_turns")
+      .set({
+        status: "waiting",
+        created_at: new Date(Date.now() - 9 * 24 * 3_600_000),
+      })
+      .where("session_id", "=", sessionId)
+      .execute();
+    await writeAndDeploy({
+      ".work/skills/review/SKILL.md": "# Review\n\nThe V procedure.\n",
+    });
+    const v = await programOf("keep-v");
+    expect(await copies()).toEqual([z, w, v].sort());
+    await db
+      .updateTable("agent_turns")
+      .set({ status: "completed" })
+      .where("session_id", "=", sessionId)
+      .execute();
     // The project's program as the other cases expect it.
     await writeAndDeploy({
       ".work/skills/review/SKILL.md": "# Review\n\nThe trusted procedure.\n",
