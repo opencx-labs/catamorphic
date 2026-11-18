@@ -642,7 +642,9 @@ describe.skipIf(!databaseUrl)("reviewing pull requests (#118)", () => {
     // The company repository attached as a project; the skill's files,
     // committed verbatim. The worker runs local processes, which cannot
     // build the project image or give each sandbox its own Docker daemon,
-    // so the manifest drops just those two lines for this machine.
+    // so the manifest drops just those two lines for this machine, and
+    // running commands apart, which only the container backend does (ADR
+    // 0332).
     const project = await core.projects.create(setup, { name: "Acme web" });
     projectId = project.id;
     await core.db
@@ -655,10 +657,14 @@ describe.skipIf(!databaseUrl)("reviewing pull requests (#118)", () => {
       })
       .where("id", "=", projectId)
       .execute();
-    const manifest = (REVIEW_AUTOMATION_FILES[".work/project.json"] ?? "")
+    const forThisMachine = JSON.parse(
+      REVIEW_AUTOMATION_FILES[".work/project.json"] ?? "{}",
+    );
+    delete forThisMachine.environments.review.commands;
+    const manifest = JSON.stringify(forThisMachine, null, 2)
       .replace(/\n\s*"image": "[^"]*",/, "")
       .replace(/\n\s*"containers": true,/, "");
-    expect(manifest).not.toMatch(/"image"|"containers"/);
+    expect(manifest).not.toMatch(/"image"|"containers"|"commands"/);
     const deployed = await core.deployment.deploy(
       SERVER_TENANT_ID,
       projectId,
