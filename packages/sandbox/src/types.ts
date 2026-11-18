@@ -124,6 +124,13 @@ export interface CreateSandboxOpts {
      */
     agentResources?: SeparateAgentResources;
   };
+  /**
+   * A sandbox Work makes for its own commands alone, such as checking a
+   * filled cache generation (ADR 0334): no network at all, no setup command,
+   * no proxy, nothing of an Environment's. Needs the `caches` capability; a
+   * provider that cannot cut a sandbox off entirely refuses it.
+   */
+  internal?: boolean;
 }
 
 /** The limits of the agent side of a sandbox that runs commands apart (ADR 0332). */

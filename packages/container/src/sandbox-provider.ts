@@ -93,6 +93,8 @@ const FALLBACK_NAMESERVERS = ["8.8.8.8", "8.8.4.4"];
 const EGRESS_LABEL = "work.sandbox.egress";
 /** Present when the sandbox runs its own Docker daemon. */
 const CONTAINERS_LABEL = "work.sandbox.containers";
+/** Marks Work's own sandbox: no network, no setup (ADR 0334). */
+const INTERNAL_LABEL = "work.sandbox.internal";
 /** The persistent volumes it mounts, comma-separated keys. */
 const VOLUMES_LABEL = "work.sandbox.volumes";
 /** Names a Docker volume as one of this machine's sandbox volumes. */
@@ -345,6 +347,8 @@ export interface ContainerProviderConfig {
 interface SandboxRecord {
   proxy?: EgressPolicy;
   containers: boolean;
+  /** Work's own sandbox: no network and no setup (ADR 0334). */
+  internal?: boolean;
   volumes: string[];
   /** Whether this process saw it running and started what it needs. */
   ready: boolean;
@@ -537,6 +541,19 @@ export class ContainerSandboxProvider implements SandboxProvider {
           ? "This machine's gVisor runtime has no --net-raw, so its sandboxes cannot run containers"
           : "This machine runs containers in sandboxes only when its operator accepts privileged containers (WORK_CONTAINER_PRIVILEGED=1)",
       );
+    // Work's own sandbox, for its own commands alone (ADR 0334): no network
+    // of any kind, no setup, nothing an Environment asks for.
+    const internal = opts.internal === true;
+    if (
+      internal &&
+      (opts.egress ||
+        opts.containers ||
+        opts.signIns?.length ||
+        opts.separateCommands)
+    )
+      throw new Error(
+        "A sandbox Work makes for its own commands takes no egress, containers, sign-ins or separated commands",
+      );
     const restricted = opts.egress?.mode === "allowlist";
     if (restricted && !this.hostSockets)
       throw new Error(
@@ -598,7 +615,7 @@ export class ContainerSandboxProvider implements SandboxProvider {
       );
       const separate = this.separateOf(opts);
       const hostPathOf = await this.hostPathOf();
-      if (!restricted) await this.ensureNetwork();
+      if (!restricted && !internal) await this.ensureNetwork();
       const id = `${this.config.namePrefix ?? "work"}-${randomUUID().replaceAll("-", "").slice(0, 12)}`;
       // Nested containers under gVisor have no route but the proxy, so an
       // open sandbox that runs containers gets one that admits anything.
@@ -646,19 +663,20 @@ export class ContainerSandboxProvider implements SandboxProvider {
         Source: hostPathOf(signIn.host),
         Target: signIn.guest,
       }));
-      const resolverMounts = restricted
-        ? []
-        : [
-            // The sandbox network's own resolver may not answer inside
-            // gVisor; sandboxes ask the machine's name servers, as on
-            // Docker's bridge.
-            {
-              Type: "bind",
-              Source: hostPathOf(this.resolvConf()),
-              Target: "/etc/resolv.conf",
-              ReadOnly: true,
-            },
-          ];
+      const resolverMounts =
+        restricted || internal
+          ? []
+          : [
+              // The sandbox network's own resolver may not answer inside
+              // gVisor; sandboxes ask the machine's name servers, as on
+              // Docker's bridge.
+              {
+                Type: "bind",
+                Source: hostPathOf(this.resolvConf()),
+                Target: "/etc/resolv.conf",
+                ReadOnly: true,
+              },
+            ];
       const proxyMount = (name: string) => ({
         Type: "bind",
         Source: hostPathOf(this.egressDirectory(name)),
@@ -706,7 +724,7 @@ export class ContainerSandboxProvider implements SandboxProvider {
         Memory: memory * 1024 * 1024,
         MemorySwap: memory * 1024 * 1024,
         PidsLimit: this.config.pidsLimit ?? DEFAULT_PIDS_LIMIT,
-        NetworkMode: restricted ? "none" : SANDBOX_NETWORK,
+        NetworkMode: restricted || internal ? "none" : SANDBOX_NETWORK,
       });
       // The command side runs the change's tests and services: the
       // Environment's limits. The agent side runs the harness: its own
@@ -724,6 +742,7 @@ export class ContainerSandboxProvider implements SandboxProvider {
         [OWNER_LABEL]: this.owner,
         ...(proxy ? { [EGRESS_LABEL]: JSON.stringify(proxy) } : {}),
         ...(opts.containers ? { [CONTAINERS_LABEL]: "1" } : {}),
+        ...(internal ? { [INTERNAL_LABEL]: "1" } : {}),
         ...(persistent.length > 0
           ? {
               [VOLUMES_LABEL]: persistent.map((volume) => volume.key).join(","),
@@ -740,6 +759,7 @@ export class ContainerSandboxProvider implements SandboxProvider {
       const record: SandboxRecord = {
         ...(proxy ? { proxy } : {}),
         containers: Boolean(opts.containers),
+        ...(internal ? { internal: true } : {}),
         volumes: persistent.map((volume) => volume.key),
         ready: false,
         ...(separate
@@ -1356,7 +1376,11 @@ export class ContainerSandboxProvider implements SandboxProvider {
     // A restricted sandbox's setup may reach only what the proxy admits;
     // an open one installs Bun or Node for its forwarder first.
     if (restricted) await this.startForwarder(id);
-    const setup = this.config.setupCommand ?? DEFAULT_SETUP_COMMAND;
+    // Work's own sandbox runs no setup: its commands need only the image's
+    // shell utilities, and it has no network to install anything with.
+    const setup = record.internal
+      ? ""
+      : (this.config.setupCommand ?? DEFAULT_SETUP_COMMAND);
     if (setup && (args.fresh || this.config.runtime.kind === "runsc")) {
       const prepared = await this.exec(id, {
         cmd: ["sh", "-c", setup],
@@ -1872,6 +1896,7 @@ export class ContainerSandboxProvider implements SandboxProvider {
     const record: SandboxRecord = {
       ...(egress ? { proxy: egress } : {}),
       containers: labels[CONTAINERS_LABEL] === "1",
+      ...(labels[INTERNAL_LABEL] === "1" ? { internal: true } : {}),
       volumes:
         typeof labels[VOLUMES_LABEL] === "string"
           ? labels[VOLUMES_LABEL].split(",").filter(Boolean)

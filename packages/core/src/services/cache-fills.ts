@@ -58,6 +58,25 @@ const CLAIM_LIMIT = 8;
 const CHECK_PATH = "/work-cache-check";
 
 /**
+ * The shell script that searches a generation for secret values (ADR
+ * 0334): one pattern file per secret in `directory`, each line a form. It
+ * prints the name of each secret found, and exits 3 when grep could not read
+ * something (status above 1), so an unreadable file never reads as clean.
+ */
+export function secretScanScript(args: {
+  directory: string;
+  path: string;
+}): string {
+  return [
+    `d=${shellQuote(args.directory)}`,
+    "s=0",
+    `for f in "$d"/*; do [ -s "$f" ] || continue; grep -rqF -f "$f" -- ${shellQuote(args.path)} 2>/dev/null; r=$?; if [ "$r" -eq 0 ]; then basename "$f"; elif [ "$r" -gt 1 ]; then s=3; fi; done`,
+    'rm -rf "$d"',
+    'exit "$s"',
+  ].join("; ");
+}
+
+/**
  * The forms of a secret value searched for in a filled generation: those
  * output masking knows (ADR 0206), and its base64 at the two other byte
  * alignments, as it appears inside a longer encoded value.
@@ -375,6 +394,7 @@ export class CacheFillsService {
    */
   async dispatch(): Promise<number> {
     await this.evict();
+    await this.reclaimHelpers();
     const claimed = await this.claim();
     for (const fill of claimed) {
       const run = this.run(fill)
@@ -961,21 +981,39 @@ export class CacheFillsService {
       await step(() => guarded.stopSandbox(id));
       await machine.destroySandbox(id);
       sandboxId = undefined;
-      const sizeBytes = await step(() =>
-        this.check({
-          machine,
-          allocationId: allocation.id,
-          key,
-          cache,
-          secrets: env,
-        }),
-      );
+      const helped = {
+        fillId: fill.id,
+        generation: args.generation,
+        machine,
+        key,
+      };
+      let sizeBytes: number;
+      try {
+        sizeBytes = await step(() =>
+          this.check({
+            ...helped,
+            allocationId: allocation.id,
+            cache,
+            secrets: env,
+          }),
+        );
+      } catch (error) {
+        // A generation the checks refuse holds nothing either: an offline
+        // helper empties it, and the next mount retires it.
+        await this.emptyRefused(helped).catch((cleanup: unknown) =>
+          console.warn(
+            `[catamorphic] Could not empty refused cache generation ${key}`,
+            cleanup,
+          ),
+        );
+        throw error;
+      }
       published = true;
       return { sizeBytes, commit };
     } finally {
       if (sandboxId) {
-        // A generation that will not be published holds nothing: what the
-        // fill wrote is removed before its sandbox goes.
+        // A fill that failed while its sandbox still runs: what it wrote is
+        // removed before its sandbox goes.
         if (!published)
           await this.emptyGeneration({
             provider: machine,
@@ -1235,16 +1273,68 @@ export class CacheFillsService {
   }
 
   /**
-   * Check a filled generation once its fill's sandbox is gone, from a fresh
-   * helper sandbox of the machine's own image that mounts it read only, so
-   * nothing the fill ran can answer for it (ADR 0334): its size against
-   * the limit, and none of the setup secrets' values (as written, JSON or
-   * URL escaped, base64 at every alignment, base64url) in any file. This
-   * guards against a trusted fill command's accidents, not a hostile one:
-   * a command could encode a value some other way. Answers the size in
-   * bytes.
+   * Run Work's own commands on a generation in a helper sandbox: cut off
+   * from every network, with no setup and nothing of the Environment's
+   * (ADR 0334). It is recorded on the fill until it is destroyed, so a
+   * replica that stops meanwhile leaves it for the next pass to remove.
+   */
+  private async withHelper<T>(
+    args: {
+      fillId: string;
+      generation: number;
+      machine: SandboxProvider;
+      key: string;
+      writable?: boolean;
+    },
+    work: (helper: { sandboxId: string; skipped: boolean }) => Promise<T>,
+  ): Promise<T> {
+    const helper = await args.machine.createSandbox({
+      internal: true,
+      volumes: [
+        {
+          key: args.key,
+          path: CHECK_PATH,
+          ...(args.writable ? {} : { readOnly: true }),
+        },
+      ],
+      labels: { purpose: "cache-check", fill: args.fillId },
+    });
+    const id = helper.providerId;
+    await this.deps.db
+      .updateTable("environment_cache_fills")
+      .set({ check_sandbox_id: id })
+      .where("id", "=", args.fillId)
+      .where("generation", "=", String(args.generation))
+      .execute();
+    try {
+      return await work({
+        sandboxId: id,
+        skipped: helper.skippedVolumes?.includes(args.key) ?? false,
+      });
+    } finally {
+      await args.machine.destroySandbox(id).catch(() => {});
+      await this.deps.db
+        .updateTable("environment_cache_fills")
+        .set({ check_sandbox_id: null })
+        .where("id", "=", args.fillId)
+        .where("check_sandbox_id", "=", id)
+        .execute();
+    }
+  }
+
+  /**
+   * Check a filled generation once its fill's sandbox is gone, from an
+   * offline helper of the machine's own image that mounts it read only, so
+   * nothing the fill ran can answer for it and the secrets it searches for
+   * can reach nothing (ADR 0334): its size against the limit, and none of
+   * the setup secrets' values (as written, JSON or URL escaped, base64 at
+   * every alignment, base64url) in any file. This guards against a trusted
+   * fill command's accidents, not a hostile one: a command could encode a
+   * value some other way. Answers the size in bytes.
    */
   private async check(args: {
+    fillId: string;
+    generation: number;
     machine: SandboxProvider;
     allocationId: string;
     key: string;
@@ -1253,15 +1343,11 @@ export class CacheFillsService {
   }): Promise<number> {
     await this.requireActiveAllocation(args.allocationId);
     const limitMb = args.cache.sizeMb ?? DEFAULT_CACHE_SIZE_MB;
-    const helper = await args.machine.createSandbox({
-      volumes: [{ key: args.key, path: CHECK_PATH, readOnly: true }],
-      labels: { purpose: "cache-check", allocationId: args.allocationId },
-    });
-    try {
-      if (helper.skippedVolumes?.includes(args.key))
+    return this.withHelper(args, async (helper) => {
+      if (helper.skipped)
         throw new Error("The machine lost the generation the fill wrote");
       const measured = await args.machine.executeCommand(
-        helper.providerId,
+        helper.sandboxId,
         `du -sk -- ${CHECK_PATH} | cut -f1`,
         { cwd: args.machine.workspaceRoot, timeout: 600 },
       );
@@ -1285,14 +1371,16 @@ export class CacheFillsService {
       );
       if (Object.keys(patterns).length > 0) {
         const directory = `${args.machine.workspaceRoot}/.work-cache-check`;
-        await args.machine.uploadFiles(helper.providerId, patterns, directory);
+        await args.machine.uploadFiles(helper.sandboxId, patterns, directory);
         const found = await args.machine.executeCommand(
-          helper.providerId,
-          `d=${shellQuote(directory)}; for f in "$d"/*; do [ -s "$f" ] || continue; grep -rqF -f "$f" -- ${CHECK_PATH} 2>/dev/null && basename "$f"; done; rm -rf "$d"; true`,
+          helper.sandboxId,
+          secretScanScript({ directory, path: CHECK_PATH }),
           { cwd: args.machine.workspaceRoot, timeout: 1800 },
         );
         if (found.exitCode !== 0)
-          throw new Error("Could not check the cache for the fill's secrets");
+          throw new Error(
+            "Could not check the cache for the fill's secrets: a file could not be read",
+          );
         const leaked = found.result
           .split("\n")
           .map((line) => line.trim())
@@ -1303,8 +1391,94 @@ export class CacheFillsService {
           );
       }
       return kib * 1024;
-    } finally {
-      await args.machine.destroySandbox(helper.providerId).catch(() => {});
+    });
+  }
+
+  /** Empty a generation the checks refused, from an offline helper. */
+  private async emptyRefused(args: {
+    fillId: string;
+    generation: number;
+    machine: SandboxProvider;
+    key: string;
+  }): Promise<void> {
+    await this.withHelper({ ...args, writable: true }, async (helper) => {
+      if (helper.skipped) return;
+      await args.machine.executeCommand(
+        helper.sandboxId,
+        `find ${CHECK_PATH} -mindepth 1 -maxdepth 1 -exec rm -rf {} +`,
+        { cwd: args.machine.workspaceRoot, timeout: 600 },
+      );
+    });
+  }
+
+  /**
+   * Remove the helpers runs left behind (ADR 0334): those recorded on a
+   * fill that is no longer running here, so they keep no generation
+   * mounted against retirement and pruning.
+   */
+  private async reclaimHelpers(): Promise<void> {
+    const left = await this.deps.db
+      .selectFrom("environment_cache_fills")
+      .select([
+        "id",
+        "tenant_id",
+        "project_id",
+        "environment_name",
+        "worker_node_id",
+        "check_sandbox_id",
+      ])
+      .where("check_sandbox_id", "is not", null)
+      .where("worker_node_id", "is not", null)
+      .where((eb) =>
+        eb.or([
+          eb("status", "!=", "running"),
+          eb("claimed_until", "<", sql<Date>`now()`),
+        ]),
+      )
+      .limit(CLAIM_LIMIT)
+      .execute();
+    for (const row of left) {
+      const helper = row.check_sandbox_id;
+      const node = row.worker_node_id;
+      if (!helper || !node) continue;
+      try {
+        const identity = projectPrincipalIdentity({
+          tenantId: row.tenant_id,
+          projectId: row.project_id,
+          environment: row.environment_name,
+        });
+        const definition = await this.deps.projectEnvironments.get({
+          identity,
+          projectId: row.project_id,
+          name: row.environment_name,
+        });
+        const admission = await this.deps.executionEnvironments.admit({
+          identity,
+          projectId: row.project_id,
+          owner: null,
+          environment: row.environment_name,
+          workerNodeId: node,
+          requirements: {
+            workload: definition?.workloads.includes("agent")
+              ? "agent"
+              : "workflow",
+          },
+        });
+        const machine = admission.runtime.sandboxProvider;
+        if (!machine || admission.runtime.workerNodeId !== node) continue;
+        await machine.destroySandbox(helper);
+        await this.deps.db
+          .updateTable("environment_cache_fills")
+          .set({ check_sandbox_id: null })
+          .where("id", "=", row.id)
+          .where("check_sandbox_id", "=", helper)
+          .execute();
+      } catch (error) {
+        console.warn(
+          `[catamorphic] Cache check helper ${helper} not removed yet`,
+          error,
+        );
+      }
     }
   }
 }

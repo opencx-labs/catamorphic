@@ -554,6 +554,59 @@ describe("ContainerSandboxProvider without Docker", () => {
     expect(fake.volumes.has(`work-volume-${generation(4)}`)).toBe(true);
   });
 
+  it("makes Work's own sandbox with no network at all and no setup (ADR 0334)", async () => {
+    const ran: string[][] = [];
+    const { fake, provider } = await setup(
+      { setupCommand: "apk add --no-cache git" },
+      {
+        onExec: ({ cmd }) => {
+          ran.push(cmd);
+          return undefined;
+        },
+      },
+    );
+    const machine = provider();
+    const internal = await machine.createSandbox({
+      internal: true,
+      volumes: [{ key: generation(8), path: "/cache", readOnly: true }],
+    });
+    const body = fake.containers.get(internal.id)?.body ?? {};
+    expect(hostConfigOf(body).NetworkMode).toBe("none");
+    // No resolver, no proxy socket: nothing to reach anything with.
+    const mounts = Reflect.get(hostConfigOf(body), "Mounts");
+    expect(
+      (Array.isArray(mounts) ? mounts : []).filter(
+        (mount: unknown) =>
+          typeof mount === "object" &&
+          mount !== null &&
+          Reflect.get(mount, "Type") === "bind",
+      ),
+    ).toEqual([]);
+    expect(ran.some((cmd) => cmd.join(" ").includes("apk add"))).toBe(false);
+    // An ordinary sandbox still gets its network and its setup.
+    const ordinary = await machine.createSandbox({});
+    expect(
+      hostConfigOf(fake.containers.get(ordinary.id)?.body ?? {}).NetworkMode,
+    ).toBe(SANDBOX_NETWORK);
+    expect(ran.some((cmd) => cmd.join(" ").includes("apk add"))).toBe(true);
+    // It takes nothing an Environment asks for.
+    await expect(
+      machine.createSandbox({
+        internal: true,
+        egress: { mode: "allowlist", allow: ["example.com"] },
+      }),
+    ).rejects.toThrow("takes no egress, containers, sign-ins");
+    // Nor is it ever a pair whose commands run apart (ADR 0332).
+    const before = fake.containers.size;
+    await expect(
+      machine.createSandbox({
+        internal: true,
+        separateCommands: { shared: ["/workspace/project"] },
+      }),
+    ).rejects.toThrow("separated commands");
+    expect(fake.containers.size).toBe(before);
+  });
+
   it("removes its own sandboxes before volumes only when asked", async () => {
     const { fake, provider } = await setup();
     const key = volumeKey({ projectId: "p", owner: "m", name: "cache" });

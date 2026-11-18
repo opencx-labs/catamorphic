@@ -127,6 +127,9 @@ describe("LocalProcessSandboxProvider", () => {
       await expect(
         provider.createSandbox({ volumes: [volume] }),
       ).rejects.toThrow("cannot keep a cache read only");
+    await expect(provider.createSandbox({ internal: true })).rejects.toThrow(
+      "cannot run cut off from every network",
+    );
   });
 
   it("refuses nested volumes and leaves nothing behind when creation fails", async () => {

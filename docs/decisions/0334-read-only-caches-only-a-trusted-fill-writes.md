@@ -57,15 +57,25 @@ mounted writable as a new empty generation. On exit 0 Work writes
 removes the sandbox, so nothing the command left running writes later. Then a
 fresh helper sandbox of the machine's own image, which mounts the generation
 read only and runs nothing of the fill's, checks its size against `sizeMb`.
+The helper is Work's own sandbox (`internal`): no network of any kind (Docker
+`NetworkMode: none`, no proxy, no resolver), no setup command, nothing of the
+Environment's; it runs only `du`, `cut`, `grep`, `basename`, `find` and `rm`,
+which any image has. Providers that cannot cut a sandbox off refuse it. The
+fill row records the helper until it is destroyed, so a helper a stopped
+replica left is removed by the next dispatch pass rather than keeping the
+generation mounted against retirement.
 Only then does Work publish the generation by marking the fill succeeded: one
 row, so a sandbox sees the old generation or the new one, never a partial one. A failed, timed out or oversized fill leaves the old
-generation in place, and what it wrote is removed before its sandbox goes.
+generation in place, and what it wrote is removed: by the fill's sandbox while
+it still runs, or, for a generation the checks refuse, by a second offline
+helper that mounts it writable; either way the next mount retires it.
 Every step of a fill goes through its Allocation's guard and its claim, so a
 released Allocation, a lost machine lease, or a claim another run took over
 stops it before it publishes. The same helper searches the generation for
 the values of the setup secrets the fill ran with (those of at least 8
 characters, as written, JSON or URL escaped, base64 at every alignment, and
-base64url), handed to it as files; one found refuses the fill, since every
+base64url), handed to it as files; one found refuses the fill, and so does a
+file grep cannot read (a status above 1 is a failed check, never clean), since every
 sandbox of the Environment would read it (ADR 0257). This guards against a
 trusted fill command's accidents, not a hostile one, which could encode a
 value some other way.

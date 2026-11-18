@@ -393,7 +393,11 @@ async function executeClientOperation({
       // A cache stays read only only where this machine can keep it so
       // (ADR 0334), whatever the control plane asked.
       if (!provider.capabilities?.includes(SANDBOX_CAPABILITIES.caches))
-        refuseCacheVolumes(operation.options.volumes, "This machine's");
+        refuseCacheVolumes(
+          operation.options.volumes,
+          "This machine's",
+          operation.options.internal,
+        );
       return provider.createSandbox(operation.options);
     case "start":
       return provider.startSandbox(operation.sandboxId);
