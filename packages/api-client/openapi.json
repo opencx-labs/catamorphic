@@ -32955,7 +32955,8 @@
                         "network.policy",
                         "network.setup",
                         "volumes",
-                        "caches"
+                        "caches",
+                        "commands.separate"
                       ]
                     }
                   },

@@ -44,7 +44,7 @@ export function registerClientRunnerRoutes(
           isolation: z.enum(["none", "process", "sandbox"]).optional(),
           /** The runner's provider runs background processes (ADR 0174). */
           processes: z.boolean().optional(),
-          /** What its sandboxes can be given (ADRs 0176, 0208, 0334). */
+          /** What its sandboxes can be given (ADRs 0176, 0208, 0332, 0334). */
           capabilities: z
             .array(
               z.enum([
@@ -55,6 +55,7 @@ export function registerClientRunnerRoutes(
                 "network.setup",
                 "volumes",
                 "caches",
+                "commands.separate",
               ]),
             )
             .optional(),

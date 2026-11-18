@@ -11127,7 +11127,7 @@ export interface paths {
                         /** @enum {string} */
                         isolation?: "none" | "process" | "sandbox";
                         processes?: boolean;
-                        capabilities?: ("images" | "images.build" | "containers" | "network.policy" | "network.setup" | "volumes" | "caches")[];
+                        capabilities?: ("images" | "images.build" | "containers" | "network.policy" | "network.setup" | "volumes" | "caches" | "commands.separate")[];
                         publicKey?: string;
                     };
                 };
