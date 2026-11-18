@@ -128,7 +128,10 @@ offline from the cache and falls back to the registries, so there a pull
 request that changes the lockfile downloads everything. Copies live on each machine: the first review on a new
 machine installs from the network while Work fills that machine's copy, and
 machines kept idle (`machines.demand.min`) stay warm. `sizeMb` bounds a
-fill; a copy no review mounted for 30 days is evicted. Each copy holds
+fill, and a fill reserves it on its machine (ADR 0335): it starts only
+while the machine's free disk less `sizeMb` stays above its floor, so size
+it to the machines (the pack's 16 GiB suits machines of about 100 GB). A
+copy no review mounted for 30 days is evicted. Each copy holds
 `.work-cache.json` saying which commit of main filled it and when, and the
 agent is told the same. The pack caches pnpm's store, which pnpm installs
 from read only; check that another package manager does before declaring

@@ -1128,7 +1128,8 @@ caches (ADR 0208):
   after the deploy gate), with that revision's cache command, path, size and
   setup network and secrets, in a fresh sandbox of the Environment's image
   holding that revision alone, with no grant, in an Allocation of its own on
-  that machine. Work publishes the new
+  that machine, which reserves `sizeMb` of its disk (ADR 0335). Work
+  publishes the new
   generation only when the fill exited 0, stayed within `sizeMb` (10 GiB by
   default) and holds none of its setup secrets' values, both checked once
   the fill's sandbox is gone from a fresh helper that mounts the generation
