@@ -733,7 +733,7 @@ it.skipIf(!db)(
       (await nodes.list({ tenantId: identity.tenantId, authorityId })).find(
         (node) => node.id === lease.id,
       )?.usage,
-    ).toEqual({ workspaces: 2, cpuMillis: 2000, memoryMb: 2048 });
+    ).toEqual({ workspaces: 2, cpuMillis: 2000, memoryMb: 2048, storageMb: 0 });
     await cleanupWorkerAllocations({ db, workerNode: lease, provider });
     const recovery = core.nodeRecovery;
     await Promise.all(

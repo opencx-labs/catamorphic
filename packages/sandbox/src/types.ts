@@ -459,6 +459,30 @@ export interface SandboxProvider {
 
   /** Persistent volumes (ADR 0208); present when the provider mounts them. */
   readonly volumes?: SandboxVolumeProvider;
+
+  /**
+   * The disk the provider writes to and what it leaves there (ADR 0335);
+   * present when it has either.
+   */
+  readonly disk?: SandboxDiskProvider;
+}
+
+/** What a provider tells its machine about disk (ADR 0335). */
+export interface SandboxDiskProvider {
+  /**
+   * Paths on this process's filesystem, one on each filesystem the
+   * provider writes to (its state, Docker's data root), that this process
+   * can measure. The machine adds its own data folder.
+   */
+  paths(): Promise<readonly string[]>;
+  /**
+   * Remove what the provider left that nothing has used for `graceMs`:
+   * images it built or pulled, build cache, dangling images and build
+   * cache inside sandboxes with containers. Never anything a sandbox
+   * still uses, a volume, or a tagged image inside a sandbox. Answers what
+   * went, in words, for the machine's log.
+   */
+  clean?(args: { graceMs: number }): Promise<string[]>;
 }
 
 export type DeploymentRuntimeStatus =
@@ -668,7 +692,9 @@ export type AgentErrorKind =
   | "rate_limit"
   | "unavailable"
   | "model_incompat"
-  | "agent_missing";
+  | "agent_missing"
+  /** The machine ran out of disk, or the output says so (ADR 0335). */
+  | "out_of_disk";
 
 /**
  * Per-turn token/cost accounting reported by a harness (ADR 0057). All

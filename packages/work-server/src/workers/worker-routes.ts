@@ -1,4 +1,5 @@
 import {
+  MachineDiskSchema,
   REMOTE_EPOCH_PATTERN,
   RemoteExecutorLeaseLostError,
   RemoteReceiptRefusedError,
@@ -22,6 +23,8 @@ import {
 } from "./worker-registry.js";
 
 const Session = z.strictObject({ session: z.string().uuid() });
+/** A renewal may carry the worker's latest disk measurement (ADR 0335). */
+const Renewal = Session.extend({ disk: MachineDiskSchema.optional() });
 /** A retried poll repeats its id and receives what that poll took. */
 const Poll = Session.extend({
   pollId: z.string().uuid(),
@@ -174,7 +177,7 @@ export function registerWorkerRoutes(
   app.post("/api/workers/renew", async (request, reply) => {
     const worker = await authenticated(request, reply);
     if (!worker) return reply;
-    const body = Session.safeParse(request.body);
+    const body = Renewal.safeParse(request.body);
     if (!body.success) return reply.status(400).send({ error: "No session" });
     try {
       await registry.renew({ nodeId: worker.nodeId, ...body.data });

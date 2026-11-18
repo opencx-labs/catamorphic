@@ -1,7 +1,7 @@
 ---
 name: machines-ec2
 title: Machines on EC2
-description: How this project creates and destroys its Work server's machines on Amazon EC2 through a workflow machine class, with the IAM policy it needs, the class and rule setup for a review pool, and what to check when a machine does not come up. Use when changing the EC2 workflows, their options, or the machines they make.
+description: How this project creates and destroys its Work server's machines on Amazon EC2 through a workflow machine class, with the IAM policy it needs, the class and rule setup for a review pool, disk sizing and replacing a machine short of disk, and what to check when a machine does not come up. Use when changing the EC2 workflows, their options, or the machines they make.
 ---
 
 # Machines on EC2
@@ -64,7 +64,7 @@ The class's `options`, as the workflows read them:
 | `image` | An AMI id, or `resolve:ssm:/aws/service/canonical/ubuntu/server/24.04/stable/current/amd64/hvm/ebs-gp3/ami-id` for the current Ubuntu 24.04 |
 | `subnetId` | The subnet machines start in; it needs a route to the Work server and the container registry |
 | `securityGroupIds` | Optional; outbound HTTPS is all a worker needs, nothing inbound |
-| `rootVolumeGb` | Optional; gp3, encrypted, deleted with the instance |
+| `rootVolumeGb` | Optional; gp3, encrypted, deleted with the instance. Size it for the machine's workspaces (see Disk) |
 | `rootDeviceName` | Optional; `/dev/sda1` (Ubuntu) by default |
 | `market` | `on-demand` (default) or `spot` (the policy's `spot-instances-request` resource allows it). A Spot interruption ends the machine and every review on it; Work replaces the machine, not the review |
 | `instanceProfile` | Optional instance profile name (needs `iam:PassRole`) |
@@ -200,6 +200,36 @@ yourself): Work uses only the project's automation, with the secrets it
 declares. Workflow runs stay on the Work server, never on the machines
 they make.
 
+## Disk
+
+Everything a machine's workspaces hold lives on its root volume: each
+review's checkout and installed dependencies, the overlay over the cache,
+the copies of caches, Environment images, and with `containers` each
+sandbox's own Docker data. Set `rootVolumeGb` so one machine's workspaces
+fit with room to spare: for one review per machine, about 100 GB holds a
+large repository, its dependencies, a cache and a few images. EC2's
+default root volume for Ubuntu is 8 GB, which one review can fill.
+
+The machine keeps a floor of free space (`WORK_DISK_FLOOR_MB` on the
+worker, by default 10% of the disk and at most 10 GiB) and takes no new
+workspace below it; the work waits, and on demand Work makes another
+machine for it. It removes what Work left there that nothing used for a
+day (`WORK_IMAGE_RETENTION_HOURS`): unused images and the Docker data
+inside sandboxes. A failure while the machine is short of disk says so,
+and the project hears `machine.disk-low` once each time a machine falls
+under its floor, with its disk report and the class's options.
+
+Work replaces a machine short of disk itself: it gives it no new work
+and destroys it through `destroyMachine` once it holds no work, so no
+review is cut off; it still counts toward the rule's `max` until then.
+When machines of the class come up short soon after connecting, the
+class's disk is too small for its work: the rule makes no new machines
+for an hour (or until it is written again), its status says so, and the
+project hears `machine.disk-too-small`. Raise `rootVolumeGb`, then write
+the rule again. A workflow on `machine.disk-low`
+is for the team's own policy: an alert, or raising the class's
+`rootVolumeGb` for the machines to come.
+
 ## When a machine does not come up
 
 - The rule's status (`GET /_work/operator/machine-rules`) shows the latest
@@ -212,6 +242,7 @@ they make.
   written again (ADR 0258).
 
 The project hears `machine.created`, `machine.connected`, `machine.lost`,
-`machine.released` and `machine.destroyed` as events with the machine's
-name, class, rule and instance id; workflows may trigger on them for
-bookkeeping or alerts.
+`machine.released`, `machine.destroyed`, `machine.disk-low` and
+`machine.disk-too-small` as events with the machine's name (the rule's,
+for the last), class, rule and instance id; workflows may trigger on them
+for bookkeeping or alerts.

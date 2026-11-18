@@ -228,6 +228,18 @@ async function connect(name: string, offer: Partial<WorkerOffer> = {}) {
   });
 }
 
+/** A disk report under its floor, as a machine sends it. */
+function lowDisk() {
+  return {
+    path: "/var/lib/work-worker",
+    totalBytes: 100e9,
+    freeBytes: 4e9,
+    floorBytes: 10e9,
+    criticalBytes: 1e9,
+    measuredAt: new Date().toISOString(),
+  };
+}
+
 /** Work on a machine: an Allocation holding its capacity. */
 async function holdWork(
   name: string,
@@ -890,6 +902,127 @@ describe("machines on demand (ADR 0258)", () => {
     await sessions.close(project, projectId, chat.sessionId);
     await deleteRule("apart");
   }, 120_000);
+
+  it("gives work a new machine while its machine is short of disk (ADR 0335)", async () => {
+    await putRule("full", {
+      projects: [projectId],
+      machines: { demand: { max: 3 } },
+      class: "review-16",
+      labels: { pool: "full" },
+    });
+    await waiting({ pool: { pool: "full" } });
+    await reconcile();
+    const [first, second] = [1, 2].map((index) =>
+      nameOf("full", "review-16", index),
+    );
+    if (!first || !second) throw new Error("Two names");
+    // Room for workspaces, CPU and memory, but under its disk floor: it
+    // came up with room an hour ago and filled since.
+    await connect(first, { capacity: { workspaces: 4 }, disk: lowDisk() });
+    await sql`
+      UPDATE work_workers SET enrolled_at = now() - interval '1 hour'
+      WHERE name = ${first}
+    `.execute(db());
+    await reconcile();
+    expect(createdFor(second)).toBeDefined();
+    await deleteRule("full");
+  });
+
+  it("replaces a machine short of disk although the rule keeps one warm and allows one (ADR 0335)", async () => {
+    await putRule("diskwarm", {
+      projects: [projectId],
+      machines: { demand: { min: 1, max: 1, idleMinutes: 1 } },
+      class: "review-16",
+      labels: { pool: "diskwarm" },
+    });
+    await reconcile();
+    const [first, second] = [1, 2].map((index) =>
+      nameOf("diskwarm", "review-16", index),
+    );
+    if (!first || !second) throw new Error("Two names");
+    expect(createdFor(first)).toBeDefined();
+    // Connected, idle past its minutes, and under its disk floor.
+    await connect(first, {
+      capacity: { workspaces: 4 },
+      disk: {
+        path: "/var/lib/work-worker",
+        totalBytes: 100e9,
+        freeBytes: 4e9,
+        floorBytes: 10e9,
+        criticalBytes: 1e9,
+        measuredAt: new Date().toISOString(),
+      },
+    });
+    await idleFor(first, 30);
+    await waiting({ pool: { pool: "diskwarm" } });
+    await reconcile();
+    // Kept warm it would hold the rule's one place and the review would wait
+    // until its disk freed: it goes, and a machine with room comes.
+    expect(createdFor(second)).toBeDefined();
+    await deleteRule("diskwarm");
+  });
+
+  it("keeps max a ceiling: a machine short of disk still holding work counts until it drains (ADR 0335)", async () => {
+    await putRule("ceiling", {
+      projects: [projectId],
+      machines: { demand: { max: 1 } },
+      class: "review-16",
+      labels: { pool: "ceiling" },
+    });
+    await waiting({ pool: { pool: "ceiling" } });
+    await reconcile();
+    const [first, second] = [1, 2].map((index) =>
+      nameOf("ceiling", "review-16", index),
+    );
+    if (!first || !second) throw new Error("Two names");
+    await connect(first, { capacity: { workspaces: 4 }, disk: lowDisk() });
+    // It came up with room, and filled while it worked.
+    await sql`
+      UPDATE work_workers SET enrolled_at = now() - interval '2 hours'
+      WHERE name = ${first}
+    `.execute(db());
+    await holdWork(first);
+    await waiting({ pool: { pool: "ceiling" } });
+    await reconcile();
+    // Its review goes on; the next waits rather than going past max.
+    expect(createdFor(second)).toBeUndefined();
+    await deleteRule("ceiling");
+  });
+
+  it("stops replacing a class's machines that come up short of disk, and says its disk is too small (ADR 0335)", async () => {
+    await putRule("tiny", {
+      projects: [projectId],
+      machines: { demand: { max: 3 } },
+      class: "review-16",
+      labels: { pool: "tiny" },
+    });
+    await waiting({ pool: { pool: "tiny" } });
+    await reconcile();
+    const first = nameOf("tiny", "review-16", 1);
+    const made = () =>
+      platform.created.filter((machine) =>
+        machine.name.startsWith(first.slice(0, -1)),
+      ).length;
+    expect(made()).toBe(1);
+    // Short of disk as soon as it connects: its disk is too small for it.
+    await connect(first, { capacity: { workspaces: 4 }, disk: lowDisk() });
+    await reconcile();
+    await reconcile();
+    expect(made()).toBe(1);
+    expect((await status()).tiny.problem).toMatch(
+      /came up short of disk .*too small/,
+    );
+    // Written again (a larger disk, say), it tries once more.
+    await putRule("tiny", {
+      projects: [projectId],
+      machines: { demand: { max: 3 } },
+      class: "review-16",
+      labels: { pool: "tiny" },
+    });
+    await reconcile();
+    expect(made()).toBe(2);
+    await deleteRule("tiny");
+  });
 
   it("counts the machines a rule served before against its maximum", async () => {
     await putRule("scope", {

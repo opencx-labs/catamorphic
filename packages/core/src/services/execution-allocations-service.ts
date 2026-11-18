@@ -23,7 +23,10 @@ import { requireTenantProject } from "./projects-service.js";
 import { toJson } from "./run-coordinator.js";
 import {
   capacityFits,
+  diskFits,
+  diskFreshSql,
   EnvironmentCapacityError,
+  machineDiskOf,
   WorkerCapacitySchema,
   WorkerResourceDefaultsSchema,
   workerUsage,
@@ -142,6 +145,7 @@ const AllocationPolicySchema = z.object({
           name: z.string().regex(VOLUME_NAME_PATTERN),
           path: z.string(),
           key: z.string().regex(CACHE_VOLUME_KEY_PATTERN),
+          sizeMb: z.number().int().positive().optional(),
         })
         .optional(),
     })
@@ -183,9 +187,10 @@ export interface EnvironmentSandbox {
   caches?: readonly EnvironmentSandboxCache[];
   /**
    * A cache fill's own Allocation (ADR 0334): the one cache generation its
-   * sandbox mounts writable, and no other cache.
+   * sandbox mounts writable, and no other cache, and the most it writes,
+   * reserved as storage (ADR 0335).
    */
-  fill?: EnvironmentSandboxCache & { key: string };
+  fill?: EnvironmentSandboxCache & { key: string; sizeMb?: number };
 }
 
 /** One cache an Allocation's sandboxes mount (ADR 0334). */
@@ -265,11 +270,13 @@ export class ExecutionAllocationConflictError extends Error {
 /**
  * What an Allocation reserves on its machine (ADR 0100): its sandbox's
  * limits, and where its commands run apart (ADR 0332) the agent
- * container's on top, so admission counts both containers.
+ * container's on top, so admission counts both containers; and its
+ * Environment's `storageMb` (ADR 0335), which both share.
  */
 export function reservedOf(policy: EnvironmentAllocationPolicy): {
   cpuMillis?: number;
   memoryMb?: number;
+  storageMb?: number;
 } {
   const own = policy.requirements.resources;
   const agent = policy.sandbox?.separateCommands?.agentResources;
@@ -279,9 +286,12 @@ export function reservedOf(policy: EnvironmentAllocationPolicy): {
       : (left ?? 0) + (right ?? 0);
   const cpuMillis = sum(own?.cpuMillis, agent?.cpuMillis);
   const memoryMb = sum(own?.memoryMb, agent?.memoryMb);
+  // A cache fill writes up to its size (ADR 0335).
+  const storageMb = sum(own?.storageMb, policy.sandbox?.fill?.sizeMb);
   return {
     ...(cpuMillis !== undefined ? { cpuMillis } : {}),
     ...(memoryMb !== undefined ? { memoryMb } : {}),
+    ...(storageMb !== undefined ? { storageMb } : {}),
   };
 }
 
@@ -310,6 +320,7 @@ export class ExecutionAllocationsService {
       const node = await executor
         .selectFrom("worker_nodes")
         .selectAll()
+        .select(diskFreshSql.as("disk_fresh"))
         .where("id", "=", args.workerNodeId)
         .where("tenant_id", "=", args.identity.tenantId)
         .where("enabled", "=", true)
@@ -349,16 +360,34 @@ export class ExecutionAllocationsService {
           },
         },
       };
-      if (
-        node.capacity &&
-        !capacityFits({
-          capacity: WorkerCapacitySchema.parse(node.capacity),
-          usage: await workerUsage({ db: executor, nodeId: node.id }),
-          resources:
-            args.policy.binding.trust === "managed" ? reservedOf(policy) : {},
-        })
-      )
-        throw new EnvironmentCapacityError(node.id);
+      const disk = node.disk_fresh ? machineDiskOf(node.disk) : undefined;
+      if (node.capacity || disk) {
+        const usage = await workerUsage({ db: executor, nodeId: node.id });
+        const resources =
+          args.policy.binding.trust === "managed" ? reservedOf(policy) : {};
+        // A machine short of disk takes no new workspace; the work waits
+        // (ADR 0335). A workflow run starts down to the lower critical
+        // floor, so the workflows that free or replace a machine still run,
+        // and every reservation (a cache fill's size too) needs its room.
+        if (
+          !diskFits({
+            usage,
+            resources,
+            workload: args.workloadKind,
+            ...(disk ? { disk } : {}),
+          })
+        )
+          throw new EnvironmentCapacityError(node.id, disk);
+        if (
+          node.capacity &&
+          !capacityFits({
+            capacity: WorkerCapacitySchema.parse(node.capacity),
+            usage,
+            resources,
+          })
+        )
+          throw new EnvironmentCapacityError(node.id);
+      }
     }
     const reserved =
       args.policy.binding.trust === "managed" ? reservedOf(policy) : {};
@@ -381,6 +410,7 @@ export class ExecutionAllocationsService {
           policy_snapshot: toJson(policy),
           reserved_cpu_millis: reserved.cpuMillis ?? 0,
           reserved_memory_mb: reserved.memoryMb ?? 0,
+          reserved_storage_mb: reserved.storageMb ?? 0,
         })
         .returningAll()
         .executeTakeFirstOrThrow();

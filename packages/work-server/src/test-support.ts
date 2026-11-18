@@ -66,6 +66,9 @@ export function testServerOptions(args: {
         WORK_DATA_DIR: args.dataDir,
         // Tests run trusted subprocesses unless they choose a backend.
         WORK_SANDBOX: "local-process",
+        // The test machine's own free disk is not what a test checks; the
+        // disk tests set a floor of their own (ADR 0335).
+        WORK_DISK_FLOOR_MB: "0",
         ...args.env,
       }),
       dataDir: args.dataDir,
@@ -82,7 +85,11 @@ export function testServerOptions(args: {
 export function testExecutionSettings(
   env: Record<string, string | undefined>,
 ): WorkExecutionSettings {
-  return executionSettingsFromEnv({ WORK_SANDBOX: "local-process", ...env });
+  return executionSettingsFromEnv({
+    WORK_SANDBOX: "local-process",
+    WORK_DISK_FLOOR_MB: "0",
+    ...env,
+  });
 }
 
 /**

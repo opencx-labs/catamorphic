@@ -7,8 +7,10 @@ import { RUNTIME_PROTOCOL_VERSION } from "@catamorphic/runtime";
 import {
   cacheVolumeKey,
   dockerfileDigest,
+  dockerfileImageReference,
   followProcess,
   machineSignInHome,
+  measureDisk,
   volumeKey,
 } from "@catamorphic/sandbox";
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
@@ -951,6 +953,38 @@ describe.skipIf(!enabled)("container sandboxes (ADR 0204)", () => {
       });
       const built = await sandboxProvider.executeCommand(id, "cat /built");
       expect(built.result).toContain("built-");
+    },
+    10 * MINUTES,
+  );
+
+  it(
+    "measures its disk, keeps an image a sandbox uses, and removes it once unused (ADR 0335)",
+    async () => {
+      const dockerfile = `FROM ${IMAGE}\nRUN echo disk-${Date.now()} > /built\n`;
+      const sandboxProvider = provider({ setupCommand: "" });
+      const reference = dockerfileImageReference(dockerfileDigest(dockerfile));
+      const id = await created(sandboxProvider, {
+        image: {
+          kind: "dockerfile",
+          path: ".work/images/disk.Dockerfile",
+          content: dockerfile,
+          digest: dockerfileDigest(dockerfile),
+        },
+      });
+      const paths = await sandboxProvider.disk.paths();
+      expect(paths[0]).toBe(path.join(root, "state"));
+      const measured = measureDisk({ paths });
+      expect(measured?.totalBytes).toBeGreaterThan(0);
+      expect(measured?.freeBytes).toBeGreaterThan(0);
+      // A sandbox uses it: Docker refuses, and it stays.
+      await sandboxProvider.disk.clean({ graceMs: 0 });
+      expect(await docker.inspectImage(reference)).toBeDefined();
+      await sandboxProvider.destroySandbox(id);
+      const lines = await sandboxProvider.disk.clean({ graceMs: 0 });
+      expect(lines.join("\n")).toContain(reference);
+      expect(await docker.inspectImage(reference)).toBeUndefined();
+      // The machine's own image is never removed.
+      expect(await docker.inspectImage(IMAGE)).toBeDefined();
     },
     10 * MINUTES,
   );

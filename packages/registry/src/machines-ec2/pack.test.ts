@@ -433,4 +433,12 @@ describe("machines-ec2 pack (ADR 0327)", () => {
       unknownLaunch: { done: false },
     });
   });
+  it("leaves a machine short of disk to Work, which replaces it once drained (ADR 0335)", () => {
+    // Work gives a machine under its floor no new work and replaces it on
+    // demand once it holds none; nothing here terminates one mid-review.
+    expect(recipe).not.toMatch(/machine\.disk-low/);
+    expect(
+      [...recipe.matchAll(/trigger\("([^"]+)"\)/g)].map((match) => match[1]),
+    ).toEqual(["machine.create", "machine.destroy"]);
+  });
 });

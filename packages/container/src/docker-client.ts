@@ -205,13 +205,21 @@ export class DockerClient {
    * Build a Dockerfile into `tag` with the Dockerfile alone as its context
    * (ADR 0176), with the classic builder.
    */
-  async buildImage(args: { tag: string; dockerfile: string }): Promise<void> {
+  async buildImage(args: {
+    tag: string;
+    dockerfile: string;
+    /** Labels the image carries, such as the machine that built it. */
+    labels?: Record<string, string>;
+  }): Promise<void> {
     const context = tarArchive([
       { path: "Dockerfile", content: args.dockerfile },
     ]);
+    const labels = args.labels
+      ? `&labels=${encodeURIComponent(JSON.stringify(args.labels))}`
+      : "";
     const response = await this.send({
       method: "POST",
-      path: `/build?t=${encodeURIComponent(args.tag)}&rm=1&forcerm=1`,
+      path: `/build?t=${encodeURIComponent(args.tag)}&rm=1&forcerm=1${labels}`,
       headers: {
         "content-type": "application/x-tar",
         "content-length": String(context.length),
@@ -346,6 +354,46 @@ export class DockerClient {
       },
       accept: [409],
     });
+  }
+
+  /** Give an image another reference (`repo:tag`). */
+  async tagImage(args: {
+    source: string;
+    repo: string;
+    tag: string;
+  }): Promise<void> {
+    await this.json({
+      method: "POST",
+      path: `/images/${encodeURIComponent(args.source)}/tag?repo=${encodeURIComponent(args.repo)}&tag=${encodeURIComponent(args.tag)}`,
+    });
+  }
+
+  /** Images whose reference matches `reference` (Docker's filter). */
+  async listImages(args: {
+    reference: string;
+  }): Promise<Array<Record<string, unknown>>> {
+    const answer = await this.json({
+      method: "GET",
+      path: `/images/json?filters=${encodeURIComponent(JSON.stringify({ reference: [args.reference] }))}`,
+    });
+    return Array.isArray(answer.body)
+      ? answer.body.map((item) => record(item, "Image"))
+      : [];
+  }
+
+  /**
+   * Remove a reference, never forced: an image another reference shares
+   * only loses this one; the last one goes with the image unless a
+   * container (running or stopped) uses it (`kept`). `gone` once removed
+   * or when there was none.
+   */
+  async removeImage(reference: string): Promise<"gone" | "kept"> {
+    const answer = await this.json({
+      method: "DELETE",
+      path: `/images/${encodeURIComponent(reference)}`,
+      accept: [404, 409],
+    });
+    return answer.status === 409 ? "kept" : "gone";
   }
 
   /** Remove a named volume; false while a container still uses it. */

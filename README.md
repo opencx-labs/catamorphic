@@ -122,7 +122,11 @@ background access keep their normal grant lifetime. The gateway
 can pin the providers an aggregator routes to; work that needs a machine can
 wait for one, and machine rules can create machines on demand and remove
 them when idle, on Hetzner Cloud or on any cloud through two workflows of a
-project (an EC2 recipe ships as a pack). See
+project (an EC2 recipe ships as a pack). Machines manage their disk too:
+each keeps a floor of free space below which it takes no new workspace,
+reserves what an Environment's `storageMb` asks, removes the images and
+leftovers Work no longer uses, names a full disk in the failures it causes,
+and tells its project once when it runs short. See
 [the machine setup and recovery model](skills/setup-work-server/references/cluster-deployment.md).
 The Work server is single-tenant because its local-process execution can access
 the host machine. Run one trusted organization or household per deployment.

@@ -2,6 +2,7 @@ import { createECDH, createHash } from "node:crypto";
 import {
   capacityFits,
   cleanupWorkerAllocations,
+  diskFits,
   EnvironmentCapacityError,
   WORKER_NODE_LEASE_MS,
   type WorkerCapacity,
@@ -12,11 +13,15 @@ import type { DB } from "@catamorphic/db";
 import type {
   EnvironmentBinding,
   EnvironmentProvider,
+  MachineDisk,
   SandboxProvider,
 } from "@catamorphic/sandbox";
 import {
   accessTier,
+  describeDisk,
+  diskBudgetMb,
   environmentSatisfies,
+  MACHINE_CAPABILITIES,
   placementOrder,
   poolMatches,
 } from "@catamorphic/sandbox";
@@ -68,6 +73,11 @@ export async function registerWorkMachine(args: {
    */
   ownSignIns?: boolean;
   /**
+   * This machine's latest disk measurement (ADR 0335), sent with each
+   * heartbeat; admission keeps its floor and reserves `storageMb` here.
+   */
+  disk?: () => MachineDisk | undefined;
+  /**
    * Whose work each worker takes, and who owns a piece of work: an email
    * and directory groups matched against worker access (ADR 0167).
    */
@@ -80,6 +90,7 @@ export async function registerWorkMachine(args: {
 }) {
   const nodes = new WorkerNodesService(args.db);
   let signIns = args.signIns?.() ?? [];
+  const firstDisk = args.disk?.();
   const describe = (): EnvironmentBinding => ({
     id: args.nodeId,
     label: args.label,
@@ -93,11 +104,14 @@ export async function registerWorkMachine(args: {
       "network.egress",
       ...(args.sandboxProvider.capabilities ?? []),
       ...(args.capabilities ?? []),
+      ...(firstDisk ? [MACHINE_CAPABILITIES.disk] : []),
       ...signIns,
     ],
     resources: {
       cpuMillis: args.capacity?.cpuMillis,
       memoryMb: args.capacity?.memoryMb,
+      // The most a workspace may reserve here (ADR 0335).
+      ...(firstDisk ? { storageMb: diskBudgetMb(firstDisk) } : {}),
     },
     resourceLimits: args.sandboxProvider.resourceLimits,
     labels: { ...args.labels, node: args.nodeId, plane: "control" },
@@ -201,19 +215,39 @@ export async function registerWorkMachine(args: {
           }),
         { strict },
       );
+      // The rule admission applies (ADR 0335): a workflow run down to the
+      // critical floor, everything with the storage it reserves.
+      const roomy = ({ node }: (typeof ordered)[number]) =>
+        diskFits({
+          usage: node.usage,
+          resources: { ...requirements?.resources },
+          ...(requirements?.workload
+            ? { workload: requirements.workload }
+            : {}),
+          ...(node.disk && node.diskFresh ? { disk: node.disk } : {}),
+        });
       const chosen = ordered.find(
-        ({ node }) =>
+        (entry) =>
           allocationBindingId ||
-          !node.capacity ||
-          capacityFits({
-            capacity: node.capacity,
-            usage: node.usage,
-            resources: { ...node.defaults, ...requirements?.resources },
-          }),
+          (roomy(entry) &&
+            (!entry.node.capacity ||
+              capacityFits({
+                capacity: entry.node.capacity,
+                usage: entry.node.usage,
+                resources: {
+                  ...entry.node.defaults,
+                  ...requirements?.resources,
+                },
+              }))),
       );
       if (!chosen) {
         const full = ordered[0];
-        if (full) throw new EnvironmentCapacityError(full.node.id);
+        // Short of disk is a wait like any other (ADR 0335), said as such.
+        if (full)
+          throw new EnvironmentCapacityError(
+            full.node.id,
+            roomy(full) ? undefined : full.node.disk,
+          );
         return undefined;
       }
       const selected = {
@@ -297,11 +331,28 @@ export async function registerWorkMachine(args: {
     isLost = true;
     markLost();
   };
+  // The disk is reported under the lease it holds (ADR 0335); an episode
+  // under the floor is logged once, where any replica could hear it.
+  const reportDisk = async () => {
+    const disk = args.disk?.();
+    if (!disk) return;
+    const episode = await nodes.reportDisk({ lease, disk });
+    if (episode.state === "started")
+      console.warn(
+        `[catamorphic] ${args.label} is short of disk: ${describeDisk(disk)}`,
+      );
+  };
   const beat = async (): Promise<void> => {
     const sentAt = performance.now();
     if (await renew()) {
       renewedFrom = sentAt;
       ready = true;
+      await reportDisk().catch((error: unknown) =>
+        console.warn(
+          "[catamorphic] Could not report this machine's disk",
+          error,
+        ),
+      );
       return;
     }
     ready = false;
@@ -323,6 +374,11 @@ export async function registerWorkMachine(args: {
       if (!(error instanceof WorkerNodeLeaseHeldError)) throw error;
     }
   };
+  // Admission knows this machine's disk from its first moment.
+  if (ready)
+    await reportDisk().catch((error: unknown) =>
+      console.warn("[catamorphic] Could not report this machine's disk", error),
+    );
   const timer = setInterval(() => {
     if (isLost) return;
     // Whatever the database says, a disposable node whose lease could have

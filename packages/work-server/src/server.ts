@@ -120,6 +120,7 @@ import { registerShareRoutes } from "./shares/share-routes.js";
 import { shareTools } from "./shares/share-tools.js";
 import { WorkSharesService } from "./shares/shares-service.js";
 import { CodexSignIns } from "./workers/codex-sign-ins.js";
+import { startDiskCare } from "./workers/disk-care.js";
 import {
   installTarget,
   registerInstallScriptRoute,
@@ -431,6 +432,20 @@ async function createWorkServerInner(
     log,
   });
   disposers.push(async () => stopVolumePruning());
+  // This machine measures its disk and removes what Work left (ADR 0335).
+  const diskCare = startDiskCare({
+    provider: sandboxProvider,
+    ...(execution.diskFloorMb !== undefined
+      ? { floorMb: execution.diskFloorMb }
+      : {}),
+    ...(execution.diskCriticalMb !== undefined
+      ? { criticalMb: execution.diskCriticalMb }
+      : {}),
+    graceMs: execution.imageRetentionMs,
+    log,
+  });
+  disposers.push(async () => diskCare.stop());
+  await diskCare.measure();
   if (!ownDb) throw new Error("Database was not initialized");
   await migrateToLatest({ db: ownDb });
   const objectStore = config.databaseUrl
@@ -519,6 +534,10 @@ async function createWorkServerInner(
     ref: string | null;
     class: string | null;
   }) => Promise<void> = async () => {};
+  /** A machine short of disk, for workflow classes (ADR 0335). */
+  let machineDiskLow: NonNullable<
+    ConstructorParameters<typeof WorkWorkerRegistry>[0]["diskLow"]
+  > = async () => {};
   // Enrolled remote workers (ADR 0164). Each worker owns its node lease
   // (ADR 0192), so any replica serves its calls and runs its agents.
   const workers = new WorkWorkerRegistry({
@@ -528,6 +547,7 @@ async function createWorkServerInner(
     authorityId: hostId,
     connected: () => workerConnected(),
     firstContact: (machine) => machineFirstContact(machine),
+    diskLow: (machine) => machineDiskLow(machine),
     log,
   });
   // A single person's server whose operator accepted personal credentials
@@ -553,6 +573,7 @@ async function createWorkServerInner(
     backend: execution.backend,
     signIns: () => signInCapabilities(execution.signInRoot),
     ownSignIns: singleServerSignIns,
+    disk: () => diskCare.latest(),
     sandboxProvider,
     placement: {
       workers: () => workers.placements(),
@@ -937,6 +958,7 @@ async function createWorkServerInner(
   if (machineReconciler) {
     machineFirstContact = (machine) =>
       machineReconciler.machineConnected(machine);
+    machineDiskLow = (machine) => machineReconciler.machineDiskLow(machine);
     const machineTimer = setInterval(reconcileMachines, 60_000);
     machineTimer.unref();
     // Machines on demand (ADR 0258): demand is looked at every few seconds
