@@ -376,8 +376,9 @@ jobs:
     # A GitHub-hosted runner: its own Docker daemon under systemd, which
     # the job reconfigures with a gVisor runtime (ADR 0204).
     runs-on: ubuntu-24.04
-    # The review recipe's end-to-end run builds the review image and
-    # installs from npm on a fresh runner: about 15 minutes on its own.
+    # The review recipe's end-to-end run builds its review images when the
+    # cache has none (about 15 minutes), and bounds its own waits to end,
+    # with where things stand, within 45 (WORK_TEST_REVIEW_MINUTES).
     timeout-minutes: 60
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -429,11 +430,36 @@ jobs:
           done
           docker logs work-test-postgres
           exit 1
+      # The review images the end-to-end run builds, and the CA they trust,
+      # kept by what decides them (the pack's Dockerfile, the test's changes
+      # to it, the pinned Claude Code): building them takes most of a run.
+      - name: Restore the review images
+        id: review-images
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ runner.temp }}/review-images
+          key: review-images-v1-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('packages/registry/src/pull-request-reviews/review.Dockerfile', 'packages/work-server/src/review.container.test.ts', 'packages/claude-code/package.json') }}
+      - name: Load the review images
+        if: steps.review-images.outputs.cache-hit == 'true'
+        run: docker load --input "$RUNNER_TEMP/review-images/images.tar"
       - name: The review recipe end to end under gVisor
+        id: review
         env:
           WORK_TEST_CONTAINER: "1"
           DATABASE_URL: postgresql://catamorphic:catamorphic@127.0.0.1:5432/catamorphic
+          WORK_TEST_REVIEW_CACHE: ${{ runner.temp }}/review-images
         run: bun scripts/tool-runtime.ts vitest --tool-cwd packages/work-server --config ../../vitest.config.ts --pool=forks src/review.container.test.ts
+      - name: Keep the review images
+        if: steps.review-images.outputs.cache-hit != 'true' && steps.review.outcome == 'success'
+        run: |
+          images=$(docker images --format '{{.Repository}}:{{.Tag}}' | grep '^work.local/images:' || true)
+          test -n "$images"
+          docker save --output "$RUNNER_TEMP/review-images/images.tar" $images
+      - uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        if: steps.review-images.outputs.cache-hit != 'true' && steps.review.outcome == 'success'
+        with:
+          path: ${{ runner.temp }}/review-images
+          key: ${{ steps.review-images.outputs.cache-primary-key }}
       - uses: ./.github/actions/test-cache-save
         if: ${{ !cancelled() && steps.setup.outcome == 'success' }}
         with:
