@@ -247,6 +247,14 @@ export interface AttemptStart {
    * nothing.
    */
   envFiles?: string[];
+  /**
+   * The harness's shell commands run apart from it (ADR 0332): on the
+   * command side of its sandbox, reached through this socket. An adapter
+   * points its harness's shell at the shim `writeCommandShell` makes, and
+   * refuses the attempt when it cannot redirect that harness's commands,
+   * rather than running them beside the agent.
+   */
+  commands?: { socket: string };
   /** Adapter-specific settings the host configured for this agent. */
   options: JsonObject;
 }

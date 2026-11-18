@@ -253,6 +253,10 @@ export function sandboxCapabilitiesFor(
     // A setup with its own network needs a machine that switches a running
     // sandbox's egress (ADR 0257).
     ...(definition.setup?.network ? [SANDBOX_CAPABILITIES.setupNetwork] : []),
+    // An agent's commands apart from it (ADR 0332).
+    ...(definition.commands?.separate
+      ? [SANDBOX_CAPABILITIES.separateCommands]
+      : []),
     ...(Object.keys(definition.volumes ?? {}).length > 0
       ? [SANDBOX_CAPABILITIES.volumes]
       : []),
@@ -911,6 +915,13 @@ export class ExecutionEnvironmentsService {
       ...(egress.mode === "open" ? {} : { egress }),
       ...(setupEgress ? { setupEgress } : {}),
       ...(volumes.length > 0 ? { volumes } : {}),
+      ...(definition.commands?.separate
+        ? {
+            separateCommands: {
+              connections: [...(definition.commands.connections ?? [])],
+            },
+          }
+        : {}),
     };
     const image = definition.image;
     if (!image) return common;

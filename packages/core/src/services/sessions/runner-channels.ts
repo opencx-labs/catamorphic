@@ -225,11 +225,12 @@ export async function startSandboxRunner(input: {
   // Its contents are checked, not its name: anything in the sandbox could
   // have replaced the file since it was uploaded.
   const relative = `runner/${hash}.mjs`;
+  // Beside the agent, never where its commands run (ADR 0332).
   const present = await input.provider
     .executeCommand(
       input.sandboxId,
       `(sha256sum ${shellQuote(relative)} 2>/dev/null || shasum -a 256 ${shellQuote(relative)}) | cut -d ' ' -f 1`,
-      { cwd: input.stateDirectory },
+      { cwd: input.stateDirectory, side: "agent" },
     )
     .then(
       (result) => result.exitCode === 0 && result.result.trim() === digest,
@@ -240,9 +241,11 @@ export async function startSandboxRunner(input: {
       input.sandboxId,
       { [`${hash}.mjs`]: source },
       directory,
+      { side: "agent" },
     );
   const started = await processes.startProcess({
     sandboxId: input.sandboxId,
+    side: "agent",
     // Relative to its working directory: a provider maps only the cwd onto
     // its own filesystem, never paths inside a command.
     command: `runtime="$(command -v bun || command -v node)"; if [ -z "$runtime" ]; then echo "This sandbox has neither Bun nor Node to run the agent runner." >&2; exit 127; fi; exec "$runtime" ${shellQuote(`runner/${hash}.mjs`)}`,

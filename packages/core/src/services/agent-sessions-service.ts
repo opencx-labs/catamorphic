@@ -88,6 +88,7 @@ import {
   type Sandboxing,
   type SandboxModelGateway,
   type SandboxProvider,
+  SEPARATE_COMMANDS_SOCKET,
   type SignInHarness,
   STOPPED_WAITING_NOTE,
   serverKeyOf,
@@ -229,6 +230,7 @@ import {
   removeSessionCredentials,
   SESSION_DIRECTORY,
   sandboxGrantDirectory,
+  sandboxProjectDirectory,
   seedSandboxBase,
   seedSandboxRepository,
 } from "./sandbox-git.js";
@@ -6361,6 +6363,12 @@ export class AgentSessionsService {
             }),
           }
         : {}),
+      // Its shell runs where the pull request's code runs, not beside it
+      // (ADR 0332); an adapter that cannot redirect it refuses.
+      ...(agent.harness.placement === "sandbox" &&
+      runtime.allocation?.policy.sandbox?.separateCommands
+        ? { commands: { socket: SEPARATE_COMMANDS_SOCKET } }
+        : {}),
       options: protocolJson(agent.options ?? {}),
     };
     const harness = agent.harness;
@@ -7597,10 +7605,26 @@ export class AgentSessionsService {
         });
       }
     }
+    // Commands apart from the agent reach only the bindings their
+    // Environment lists for them, and never a model (ADR 0332).
+    const separate = allocation.policy.sandbox?.separateCommands;
     await configureSandboxGateway({
       provider: input.provider,
       sandboxId: input.sandboxProviderId,
       gatewayGitUrl: `${url}/git`,
+      ...(separate
+        ? {
+            commands: {
+              aliases: bindings
+                .filter(
+                  (binding) =>
+                    !binding.api &&
+                    separate.connections.includes(binding.alias),
+                )
+                .map((binding) => binding.alias),
+            },
+          }
+        : {}),
       grants: issued,
       gitAliases: bindings.flatMap((binding) =>
         binding.git
@@ -14186,7 +14210,7 @@ export class AgentSessionsService {
   // --- Dev sandbox lifecycle ---
 
   private projectDir(provider: SandboxProvider): string {
-    return `${provider.workspaceRoot}/project`;
+    return sandboxProjectDirectory({ workspaceRoot: provider.workspaceRoot });
   }
 
   /**

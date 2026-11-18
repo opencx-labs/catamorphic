@@ -102,6 +102,9 @@ const AllocationPolicySchema = z.object({
       containers: z.boolean().optional(),
       egress: EgressSchema.optional(),
       setupEgress: EgressSchema.optional(),
+      separateCommands: z
+        .object({ connections: z.array(z.string()).readonly() })
+        .optional(),
       volumes: z
         .array(
           z.object({
@@ -129,6 +132,11 @@ export interface EnvironmentSandbox {
    * Environment whose setup names a network.
    */
   setupEgress?: SandboxEgress;
+  /**
+   * The agent's commands run apart from the agent (ADR 0332), reaching
+   * through the gateway only these bindings.
+   */
+  separateCommands?: { connections: readonly string[] };
   /** The Environment's volumes, keyed for the work's owner (ADR 0208). */
   volumes?: readonly EnvironmentSandboxVolume[];
 }

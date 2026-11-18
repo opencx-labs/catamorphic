@@ -82,6 +82,27 @@ describe("withAllocationSandboxPolicy", () => {
     await expect(provider.stopSandbox("vm-1")).resolves.toBe("/workspacevm-1");
   });
 
+  it("asks for an agent side and a command side sharing only the checkout (ADR 0332)", async () => {
+    const machine = new MemberMachine();
+    const provider = withAllocationSandboxPolicy({
+      db,
+      allocation: allocation({ separateCommands: { connections: [] } }),
+      provider: machine as unknown as SandboxProvider,
+    });
+    await provider.createSandbox({});
+    expect(machine.created).toEqual([
+      {
+        separateCommands: {
+          shared: ["/workspace/project"],
+          envFiles: [
+            "/workspace/.work-session/env/gateway.sh",
+            "/workspace/.work-session/env/secrets.sh",
+          ],
+        },
+      },
+    ]);
+  });
+
   it("returns the provider itself when the Environment sets nothing", () => {
     const machine = new MemberMachine() as unknown as SandboxProvider;
     expect(

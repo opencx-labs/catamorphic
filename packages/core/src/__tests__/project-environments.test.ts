@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { sandboxCapabilitiesFor } from "../services/execution-environments-service.js";
 import { parseProjectEnvironmentPolicy } from "../services/project-environments-service.js";
 
 describe("project Environment policy", () => {
@@ -364,6 +365,79 @@ describe("project Environment policy", () => {
   ])("reports %s as an invalid Environment", (_name, extra, message) => {
     const parsed = parseProjectEnvironmentPolicy({
       environments: { dev: { workloads: ["agent"], ...extra } },
+    });
+    expect(parsed.entries[0]?.invalid?.error).toContain(message);
+  });
+
+  it("parses commands that run apart from the agent and what they reach (ADR 0332)", () => {
+    const parsed = parseProjectEnvironmentPolicy({
+      environments: {
+        review: {
+          workloads: ["agent"],
+          connections: {
+            github: {
+              provider: "github",
+              principal: "service",
+              service: "github",
+              capabilities: ["get", "git:read"],
+            },
+          },
+          commands: { separate: true, connections: ["github"] },
+        },
+      },
+    });
+    expect(parsed.environments.review?.commands).toEqual({
+      separate: true,
+      connections: ["github"],
+    });
+    expect(
+      sandboxCapabilitiesFor(
+        parsed.environments.review ?? { workloads: ["agent"] },
+      ),
+    ).toContain("commands.separate");
+    expect(sandboxCapabilitiesFor({ workloads: ["agent"] })).not.toContain(
+      "commands.separate",
+    );
+  });
+
+  it.each([
+    [
+      "a connection the Environment does not bind",
+      { commands: { separate: true, connections: ["github"] } },
+      "is not one of this Environment's connections",
+    ],
+    [
+      "a model connection",
+      {
+        connections: {
+          model: {
+            provider: "openrouter",
+            principal: "service",
+            service: "openrouter",
+            model: { allow: ["deepseek/deepseek-v4.1-flash"] },
+          },
+        },
+        commands: { separate: true, connections: ["model"] },
+      },
+      "is a model connection",
+    ],
+    [
+      "connections for commands that do not run apart",
+      {
+        connections: {
+          github: {
+            provider: "github",
+            principal: "service",
+            service: "github",
+          },
+        },
+        commands: { separate: false, connections: ["github"] },
+      },
+      "set commands.separate",
+    ],
+  ])("refuses commands that reach %s (ADR 0332)", (_name, extra, message) => {
+    const parsed = parseProjectEnvironmentPolicy({
+      environments: { review: { workloads: ["agent"], ...extra } },
     });
     expect(parsed.entries[0]?.invalid?.error).toContain(message);
   });

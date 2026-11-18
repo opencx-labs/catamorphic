@@ -10,6 +10,8 @@ import {
 } from "@catamorphic/sandbox";
 import { type Kysely, sql } from "kysely";
 import type { ExecutionAllocation } from "./execution-allocations-service.js";
+import { sandboxProjectDirectory } from "./sandbox-git.js";
+import { sandboxEnvFiles } from "./sandbox-secrets.js";
 import {
   holdVolumes,
   sweepVolumeHolds,
@@ -57,6 +59,25 @@ function allocationNarrowing(
 }
 
 /**
+ * What a provider is asked for when the Allocation's commands run apart
+ * from its agent (ADR 0332): the checkout is all both sides share, and the
+ * agent's commands load the command side's own session files.
+ */
+function separateCommandsOf(args: {
+  allocation: ExecutionAllocation;
+  provider: SandboxProvider;
+}): Pick<CreateSandboxOpts, "separateCommands"> {
+  if (!args.allocation.policy.sandbox?.separateCommands) return {};
+  const workspaceRoot = args.provider.workspaceRoot;
+  return {
+    separateCommands: {
+      shared: [sandboxProjectDirectory({ workspaceRoot })],
+      envFiles: sandboxEnvFiles({ workspaceRoot }),
+    },
+  };
+}
+
+/**
  * The Allocation's image, containers and egress (ADR 0176) and volumes (ADR
  * 0208) on a provider that keeps its own sandbox lifecycle, such as a
  * member's computer: the Environment decides what its sandboxes boot,
@@ -75,6 +96,7 @@ export function withAllocationSandboxPolicy(args: {
     !sandbox?.containers &&
     !sandbox?.egress &&
     !sandbox?.volumes?.length &&
+    !sandbox?.separateCommands &&
     !provider.widenEgress
   )
     return provider;
@@ -89,6 +111,7 @@ export function withAllocationSandboxPolicy(args: {
       ...(sandbox?.containers ? { containers: true } : {}),
       ...(sandbox?.egress ? { egress: sandbox.egress } : {}),
       ...(volumes.length > 0 ? { volumes } : {}),
+      ...separateCommandsOf({ allocation: args.allocation, provider }),
     });
   };
   const widenEgress = provider.widenEgress?.bind(provider);
@@ -174,6 +197,7 @@ export function allocationSandboxProvider(args: {
       ...(sandbox?.containers ? { containers: true } : {}),
       ...(sandbox?.egress ? { egress: sandbox.egress } : {}),
       ...(volumes.length > 0 ? { volumes } : {}),
+      ...separateCommandsOf({ allocation, provider }),
       resources,
       labels: {
         ...opts.labels,
@@ -225,10 +249,10 @@ export function allocationSandboxProvider(args: {
             : {}),
         }),
       ),
-    uploadFiles: (id, files, base) =>
-      guard(id, () => provider.uploadFiles(id, files, base)),
-    downloadFile: (id, file) =>
-      guard(id, () => provider.downloadFile(id, file)),
+    uploadFiles: (id, files, base, opts) =>
+      guard(id, () => provider.uploadFiles(id, files, base, opts)),
+    downloadFile: (id, file, opts) =>
+      guard(id, () => provider.downloadFile(id, file, opts)),
     gitClone: (id, url, path, opts) =>
       guard(id, () => provider.gitClone(id, url, path, opts)),
     gitCheckout: (id, path, ref) =>

@@ -289,6 +289,19 @@ const ProjectEnvironmentDefinitionSchema = z
         EnvironmentConnectionBindingSchema,
       )
       .optional(),
+    /**
+     * Run the agent's commands apart from the agent (ADR 0332), reaching
+     * through the gateway only the bindings `connections` lists.
+     */
+    commands: z
+      .strictObject({
+        separate: z.boolean(),
+        connections: z
+          .array(z.string().regex(CONNECTION_ALIAS_PATTERN))
+          .max(64)
+          .optional(),
+      })
+      .optional(),
   })
   .refine((definition) => !(definition.device && definition.pool), {
     message: "An Environment runs on a member's device or on a pool, not both",
@@ -314,6 +327,32 @@ const ProjectEnvironmentDefinitionSchema = z
       path: ["volumes"],
     },
   )
+  .superRefine((definition, ctx) => {
+    const commands = definition.commands;
+    if (!commands) return;
+    if (!commands.separate && commands.connections?.length)
+      ctx.addIssue({
+        code: "custom",
+        path: ["commands", "connections"],
+        message:
+          "commands.connections names what commands reach when they run apart: set commands.separate",
+      });
+    for (const [index, alias] of (commands.connections ?? []).entries()) {
+      const binding = definition.connections?.[alias];
+      if (!binding)
+        ctx.addIssue({
+          code: "custom",
+          path: ["commands", "connections", index],
+          message: `'${alias}' is not one of this Environment's connections`,
+        });
+      else if (binding.model || binding.capabilities?.includes("model"))
+        ctx.addIssue({
+          code: "custom",
+          path: ["commands", "connections", index],
+          message: `'${alias}' is a model connection: the agent's model stays beside the agent, never with its commands`,
+        });
+    }
+  })
   .refine(
     (definition) =>
       !definition.setup?.secrets ||
@@ -366,6 +405,18 @@ export interface ProjectEnvironmentDefinition {
   setup?: EnvironmentSetup;
   /** Directories kept on the machine for each owner (ADR 0208). */
   volumes?: Readonly<Record<string, EnvironmentVolume>>;
+  /**
+   * The agent's commands run apart from the agent (ADR 0332), reaching
+   * through the gateway only the bindings `connections` lists.
+   */
+  commands?: EnvironmentCommands;
+}
+
+/** How an Environment runs an agent's commands (ADR 0332). */
+export interface EnvironmentCommands {
+  separate: boolean;
+  /** Bindings of the Environment commands may reach; none by default. */
+  connections?: readonly string[];
 }
 
 /**
