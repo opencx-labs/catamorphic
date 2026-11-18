@@ -13,7 +13,11 @@ import {
   type RunnerFrame,
 } from "@catamorphic/agent-protocol/runner";
 import { InProcessRunner } from "@catamorphic/agent-runner";
-import { agentQuestionJsonSchema } from "@catamorphic/sandbox";
+import {
+  agentQuestionJsonSchema,
+  loopbackModelEnv,
+  serveLoopbackModel,
+} from "@catamorphic/sandbox";
 import { afterEach, describe, expect, it } from "vitest";
 import {
   ACP_COMMANDS_APART_REFUSAL,
@@ -22,7 +26,6 @@ import {
   modelChoice,
   turnUsage,
 } from "../adapter.js";
-import { loopbackModelEnv, serveLoopbackModel } from "../model-endpoint.js";
 
 /*
  * The ACP adapter end to end (ADR 0241): the real runner drives the real

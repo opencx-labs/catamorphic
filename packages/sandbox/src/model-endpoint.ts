@@ -6,8 +6,16 @@ import {
   type ServerResponse,
 } from "node:http";
 import { Readable } from "node:stream";
-import type { ModelAccess } from "@catamorphic/agent-protocol/runner";
-import { readConnectionGrant } from "@catamorphic/sandbox";
+import { readConnectionGrant } from "./connection-grants.js";
+
+/** A model connection reached through the gateway with a grant file (ADR 0180). */
+export interface GatewayModelAccess {
+  /** As a runner attempt's `modelAccess` names it. */
+  kind?: "gateway";
+  api: "anthropic" | "openai";
+  baseUrl: string;
+  grantDirectory: string;
+}
 
 /** Largest request body the endpoint takes, as the gateway does. */
 const MAX_REQUEST_BYTES = 32 * 1024 * 1024;
@@ -94,7 +102,7 @@ export interface LoopbackModel {
  * as it passes back to the agent, which may retry it.
  */
 export async function serveLoopbackModel(input: {
-  access: Extract<ModelAccess, { kind: "gateway" }>;
+  access: GatewayModelAccess;
   fetch?: typeof fetch;
   onRefused?: (refusal: ModelRefusal) => void;
   /** A call the model answered (below 400): its provider answers again. */

@@ -21,7 +21,15 @@ import {
   type McpServerSpec,
   NO_CAPABILITIES,
 } from "@catamorphic/agent-protocol/runner";
-import { renderUserMessage, writeCommandShell } from "@catamorphic/sandbox";
+import {
+  type LoopbackModel,
+  loopbackModelEnv,
+  loopbackModelHeaders,
+  type ModelRefusal,
+  renderUserMessage,
+  serveLoopbackModel,
+  writeCommandShell,
+} from "@catamorphic/sandbox";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
 import {
@@ -29,13 +37,6 @@ import {
   type CallToolResult,
   ListToolsRequestSchema,
 } from "@modelcontextprotocol/sdk/types.js";
-import {
-  type LoopbackModel,
-  loopbackModelEnv,
-  loopbackModelHeaders,
-  type ModelRefusal,
-  serveLoopbackModel,
-} from "./model-endpoint.js";
 
 /**
  * What an Agent Client Protocol agent offers through the protocol itself.
