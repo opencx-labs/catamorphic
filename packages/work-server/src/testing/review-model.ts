@@ -98,9 +98,14 @@ export async function startReviewModel(
     const prompt = textOf(record(messages[0]));
     const chat = chats.get(prompt) ?? [];
     chats.set(prompt, chat);
+    // Only a user message starts a turn or answers a tool: Claude Code
+    // also sends context as `system` messages, among them a reminder after
+    // a while that the user has not heard from it.
+    let last = messages.length - 1;
+    while (last > 0 && record(messages[last]).role !== "user") last -= 1;
     // Each finished turn submitted once before the message answered now.
     const earlier = messages
-      .slice(0, -1)
+      .slice(0, last)
       .flatMap((message) =>
         record(message).role === "user" ? toolResults(record(message)) : [],
       );
@@ -108,7 +113,7 @@ export async function startReviewModel(
       earlier.filter((result) => result.id.startsWith(SUBMIT)).length + 1;
     const current: ReviewTurn = chat[turn - 1] ?? {};
     chat[turn - 1] = current;
-    const answered = toolResults(record(messages.at(-1))).at(-1);
+    const answered = toolResults(record(messages[last])).at(-1);
     const step = { prompt, turn };
     if (!answered) {
       const key = `${prompt}\n${turn}`;

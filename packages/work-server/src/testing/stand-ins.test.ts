@@ -437,6 +437,15 @@ describe("the review model", () => {
       input: { name: "review", value: { verdict: "COMMENT" } },
     });
     expect(noticed).toEqual(["0 a Recorded a", "1 b Recorded b"]);
+    // A system message after a tool's answer (Claude Code's reminder that
+    // the user has not heard from it) neither answers nor starts a turn.
+    const reminded = [
+      ...history,
+      { role: "assistant", content: [] },
+      result("toolu_submit_1", "Recorded the review"),
+      { role: "system", content: "The user hasn't heard from you in a while." },
+    ];
+    expect(textOf(await call(reminded))).toBe("Submitted the review.");
     expect(model.turnsOf("pull request 1")).toMatchObject([
       {
         findings: [
@@ -444,6 +453,7 @@ describe("the review model", () => {
           { value: { id: "b" }, answer: "Recorded b" },
         ],
         submitted: { verdict: "COMMENT" },
+        submitAnswer: "Recorded the review",
       },
     ]);
     // Findings are no review: the next message is still the first turn's.
