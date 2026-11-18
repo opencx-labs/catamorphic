@@ -8,6 +8,7 @@ import type { DB, Json, JsonObject } from "@catamorphic/db";
 import { shellQuote } from "@catamorphic/git";
 import { getTracer, withSpan } from "@catamorphic/otel";
 import {
+  commandSideProcesses,
   followProcess,
   type SandboxEgress,
   type SandboxProcessProvider,
@@ -1216,7 +1217,8 @@ function processesOf(handle: SessionWorkspaceHandle): SandboxProcessProvider {
     throw new SessionExecRefusedError(
       "This machine cannot run a workflow's commands in a chat's workspace",
     );
-  return processes;
+  // A workflow's commands live on the command side alone (ADR 0332).
+  return commandSideProcesses(processes);
 }
 
 function progressJson(progress: ExecProgress): Json {

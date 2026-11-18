@@ -72,6 +72,7 @@ import {
   buildPluginsPreamble,
   closeQuestionsDescription,
   closeQuestionsInputSchema,
+  commandSideProcesses,
   type ExtraTool,
   extraToolResult,
   type HarnessPermissions,
@@ -6392,7 +6393,8 @@ export class AgentSessionsService {
               ...(provider && sandboxProviderId
                 ? {
                     sandbox: {
-                      provider,
+                      // Its tools reach the command side alone (ADR 0332).
+                      provider: withCommandSideProcesses(provider),
                       sandboxId: sandboxProviderId,
                       workingDirectory,
                       // Its commands load the gateway's variables and the
@@ -15671,4 +15673,21 @@ function answerMedia(
       .join("\n"),
     attachments: groups.flatMap(({ media }) => media),
   };
+}
+
+/**
+ * A provider whose processes are the command side's alone (ADR 0332), for
+ * a harness on the host whose tools start and follow background commands.
+ */
+function withCommandSideProcesses(provider: SandboxProvider): SandboxProvider {
+  const processes = provider.processes;
+  if (!processes) return provider;
+  const filtered = commandSideProcesses(processes);
+  return new Proxy(provider, {
+    get(target, property) {
+      if (property === "processes") return filtered;
+      const value: unknown = Reflect.get(target, property, target);
+      return typeof value === "function" ? value.bind(target) : value;
+    },
+  });
 }

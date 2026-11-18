@@ -152,6 +152,40 @@ export function isAgentProcessId(processId: string): boolean {
   return processId.startsWith("proc-agent");
 }
 
+/**
+ * A sandbox's processes as a model or a person may reach them (ADR 0332):
+ * the command side's alone. Agent-side processes (the runner, the
+ * harness) are left out of every list, and naming one is an unknown
+ * process; what starts here starts where commands run.
+ */
+export function commandSideProcesses(
+  processes: SandboxProcessProvider,
+): SandboxProcessProvider {
+  const refuse = (processId: string) => {
+    if (isAgentProcessId(processId))
+      throw new Error(`Unknown process '${processId}'`);
+  };
+  return {
+    startProcess: ({ side: _side, ...args }) => processes.startProcess(args),
+    readProcessOutput: async (args) => {
+      refuse(args.processId);
+      return processes.readProcessOutput(args);
+    },
+    signalProcess: async (args) => {
+      refuse(args.processId);
+      return processes.signalProcess(args);
+    },
+    writeProcessInput: async (args) => {
+      refuse(args.processId);
+      return processes.writeProcessInput(args);
+    },
+    listProcesses: async (args) =>
+      (await processes.listProcesses(args)).filter(
+        (process) => !isAgentProcessId(process.processId),
+      ),
+  };
+}
+
 /** Rejects ids that did not come from {@link newProcessId}. */
 export function assertProcessId(processId: string): void {
   if (!PROCESS_ID.test(processId))

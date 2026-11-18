@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import type { DB } from "@catamorphic/db";
 import { getTracer, withSpan } from "@catamorphic/otel";
 import {
+  commandSideProcesses,
   PROCESS_READ_MAX_WAIT_MS,
   PROCESS_WRITE_MAX_BYTES,
   type ProcessOutput,
@@ -419,7 +420,8 @@ function processesOf(
       "unsupported",
       "This chat's machine does not run terminals.",
     );
-  return processes;
+  // A person reaches the command side alone (ADR 0332).
+  return commandSideProcesses(processes);
 }
 
 /** A column or row count a terminal accepts. */

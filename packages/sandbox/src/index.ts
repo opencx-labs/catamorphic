@@ -159,6 +159,7 @@ export {
 export {
   assertProcessId,
   assertWriteSize,
+  commandSideProcesses,
   decodeProcessChunk,
   decodeUtf8Prefix,
   type FollowProcessResult,
