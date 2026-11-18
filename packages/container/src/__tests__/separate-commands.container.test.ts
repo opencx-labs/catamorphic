@@ -190,15 +190,16 @@ describe.skipIf(!enabled)("commands apart from the agent (ADR 0332)", () => {
         (
           await throughShim(
             id,
-            'echo "[$WORK_MODEL_API_KEY][$OPENAI_API_KEY][$KEPT]"',
+            'echo "[$WORK_MODEL_API_KEY][$OPENAI_API_KEY][$OTHER][$TZ]"',
             {
               WORK_MODEL_API_KEY: "loopback",
               OPENAI_API_KEY: "loopback",
-              KEPT: "kept",
+              OTHER: "from the agent",
+              TZ: "Asia/Amman",
             },
           )
         ).result.trim(),
-      ).toBe("[][][kept]");
+      ).toBe("[][][][Asia/Amman]");
     },
     10 * MINUTES,
   );
@@ -401,6 +402,73 @@ describe.skipIf(!enabled)("commands apart from the agent (ADR 0332)", () => {
         processId: first.processId,
         signal: "SIGKILL",
       });
+    },
+    10 * MINUTES,
+  );
+
+  it(
+    "runs the agent side as a user that owns none of the checkout, which both sides still edit",
+    async () => {
+      const id = await separated();
+      const agentUid = (await agent(id, "id -u")).result.trim();
+      const commandUid = (
+        await provider.executeCommand(id, "id -u")
+      ).result.trim();
+      expect(agentUid).toBe("10001");
+      expect(agentUid).not.toBe(commandUid);
+      // Work's own Git and the change's code make the checkout's files.
+      await provider.executeCommand(
+        id,
+        `mkdir -p ${PROJECT}/src && echo one > ${PROJECT}/src/a.txt`,
+      );
+      const owners = await agent(
+        id,
+        `stat -c '%u %g %a' ${PROJECT} ${PROJECT}/src ${PROJECT}/src/a.txt`,
+      );
+      for (const line of owners.result.trim().split("\n")) {
+        const [owner, group, mode] = line.split(" ");
+        expect(owner).not.toBe(agentUid);
+        expect(group).toBe("10001");
+        // Group-writable: the agent edits through the shared group.
+        expect(Number.parseInt(mode ?? "0", 8) & 0o020).toBe(0o020);
+      }
+      // The agent edits and adds files; the command side changes them.
+      expect(
+        (
+          await agent(
+            id,
+            `echo two >> ${PROJECT}/src/a.txt && echo three > ${PROJECT}/src/b.txt && echo ok`,
+          )
+        ).result.trim(),
+      ).toBe("ok");
+      expect(
+        (
+          await provider.executeCommand(
+            id,
+            `echo four >> ${PROJECT}/src/b.txt && cat ${PROJECT}/src/a.txt ${PROJECT}/src/b.txt`,
+          )
+        ).result.trim(),
+      ).toBe("one\ntwo\nthree\nfour");
+      // Git beside the agent refuses a repository it does not own, so the
+      // pull request's configuration names nothing it runs there.
+      const hasGit = await provider.executeCommand(id, "command -v git");
+      if (hasGit.exitCode === 0) {
+        await provider.executeCommand(
+          id,
+          `cd ${PROJECT} && git init -q && git config core.fsmonitor 'touch /tmp/fsmonitor-ran'`,
+        );
+        const refused = await agent(id, `git -C ${PROJECT} status`);
+        expect(refused.exitCode).not.toBe(0);
+        expect(refused.result).toMatch(/dubious ownership/);
+        expect(
+          (
+            await agent(
+              id,
+              "test -e /tmp/fsmonitor-ran && echo ran || echo not",
+            )
+          ).result.trim(),
+        ).toBe("not");
+      }
     },
     10 * MINUTES,
   );

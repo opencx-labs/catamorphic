@@ -107,6 +107,17 @@ const SHARED_LABEL = "work.shared";
 const SHARED_PREFIX = "work-shared-";
 /** Where the agent side sees its command socket's folder. */
 const COMMANDS_MOUNT = path.posix.dirname(SEPARATE_COMMANDS_SOCKET);
+/**
+ * The agent side runs as a user of its own (ADR 0332), which owns none of
+ * the checkout: Git that runs there refuses a repository it does not own,
+ * whatever the pull request configured. It edits the checkout through the
+ * group both sides share, which every checkout folder passes on (setgid)
+ * and every command writes for (umask 002).
+ */
+export const AGENT_SIDE_UID = 10001;
+export const SHARED_GID = 10001;
+/** The agent side's home, in its own workspace volume. */
+const AGENT_HOME = "/workspace/.work-home";
 
 /**
  * The longest a sandbox stays widened (ADR 0257): the longest setup, 240
@@ -656,6 +667,8 @@ export class ContainerSandboxProvider implements SandboxProvider {
           HostConfig: {
             ...limits,
             Mounts: mounts,
+            // Writes what the agent side made, through the shared group.
+            ...(separate ? { GroupAdd: [String(SHARED_GID)] } : {}),
             ...(opts.containers
               ? runtime.kind === "runsc"
                 ? { CapAdd: ["ALL"] }
@@ -677,9 +690,12 @@ export class ContainerSandboxProvider implements SandboxProvider {
             Entrypoint: ["sleep"],
             Cmd: ["infinity"],
             WorkingDir: this.workspaceRoot,
+            // Its own user, owning none of the checkout (see AGENT_SIDE_UID).
+            User: `${AGENT_SIDE_UID}:${SHARED_GID}`,
             Env: Object.entries({
               ...opts.envVars,
               ...(restricted ? PROXY_ENV : {}),
+              HOME: AGENT_HOME,
             }).map(([name, value]) => `${name}=${value}`),
             Labels: {
               ...opts.labels,
@@ -1070,7 +1086,7 @@ export class ContainerSandboxProvider implements SandboxProvider {
       cmd: [
         "sh",
         "-c",
-        'mkdir -p "$2" && head -c "$1" | tar -xof - -C "$2"',
+        `${(await this.sharesCheckout(target)) ? "umask 002; " : ""}mkdir -p "$2" && head -c "$1" | tar -xof - -C "$2"`,
         "work-upload",
         String(archive.length),
         basePath || "/",
@@ -1174,17 +1190,57 @@ export class ContainerSandboxProvider implements SandboxProvider {
         );
     }
     if (record.proxy && !restricted) await this.startForwarder(id);
+    const mounts = Array.isArray(inspected.Mounts) ? inspected.Mounts : [];
+    const sharedTargets = mounts.flatMap((mount: unknown) => {
+      if (typeof mount !== "object" || mount === null) return [];
+      const name = Reflect.get(mount, "Name");
+      const destination = Reflect.get(mount, "Destination");
+      return typeof name === "string" &&
+        name.startsWith(SHARED_PREFIX) &&
+        typeof destination === "string"
+        ? [destination]
+        : [];
+    });
+    // The checkout both sides share (ADR 0332): its group the shared one,
+    // passed on to everything made in it, and writable through it.
+    if (args.fresh && record.separate && sharedTargets.length > 0) {
+      const shared = await this.exec(id, {
+        cmd: [
+          "sh",
+          "-c",
+          'g="$1"; shift; for d in "$@"; do chgrp "$g" "$d" && chmod 2775 "$d" || exit 1; done',
+          "work-share",
+          String(SHARED_GID),
+          ...sharedTargets,
+        ],
+        user: "0",
+      });
+      if (shared.exitCode !== 0)
+        throw new Error(`Sharing the checkout failed: ${shared.stderr}`);
+    }
+    if (record.agentOf) {
+      const homed = await this.exec(id, {
+        cmd: [
+          "sh",
+          "-c",
+          `mkdir -p ${AGENT_HOME} && chown ${AGENT_SIDE_UID}:${SHARED_GID} ${AGENT_HOME}`,
+        ],
+        user: "0",
+      });
+      if (homed.exitCode !== 0)
+        throw new Error(`Preparing the agent's home failed: ${homed.stderr}`);
+    }
     if (user && !isRoot(user)) {
       // Docker creates volumes (the workspace's included) and the
       // directories leading to them as root; the image's user owns them.
       // Bind mounts (sign-ins, project data) are the machine's own files.
-      const volumes = (
-        Array.isArray(inspected.Mounts) ? inspected.Mounts : []
-      ).flatMap((mount: unknown) => {
+      // The shared checkout stays the command side's (see AGENT_SIDE_UID).
+      const volumes = mounts.flatMap((mount: unknown) => {
         if (typeof mount !== "object" || mount === null) return [];
         const destination = Reflect.get(mount, "Destination");
         return Reflect.get(mount, "Type") === "volume" &&
-          typeof destination === "string"
+          typeof destination === "string" &&
+          !(record.agentOf && sharedTargets.includes(destination))
           ? [destination]
           : [];
       });
@@ -1388,13 +1444,14 @@ export class ContainerSandboxProvider implements SandboxProvider {
       ? path.posix.dirname(request.returns[0])
       : "";
     const token = randomUUID();
+    const script = await this.trackedScript(sandboxId);
     const exec = await this.whileRunning(sandboxId, () =>
       this.docker.openExec({
         container: sandboxId,
         cmd: [
           "sh",
           "-c",
-          TRACKED,
+          script,
           "work-command",
           token,
           request.cwd,
@@ -1426,6 +1483,7 @@ export class ContainerSandboxProvider implements SandboxProvider {
       void this.docker
         .exec({
           container: sandboxId,
+          // As the command's own user, like a kill.
           cmd: [
             "sh",
             "-c",
@@ -1434,7 +1492,6 @@ export class ContainerSandboxProvider implements SandboxProvider {
             token,
             signal.slice(3),
           ],
-          user: "0",
         })
         .catch(() => {});
     });
@@ -1463,6 +1520,23 @@ export class ContainerSandboxProvider implements SandboxProvider {
     if (request.returns.length > 0)
       session.returned(await this.collectReturns(sandboxId, request.returns));
     session.exit(code);
+  }
+
+  /** Whether a container is one side of a sandbox that runs commands apart. */
+  private async sharesCheckout(name: string): Promise<boolean> {
+    const record = await this.record(name);
+    return Boolean(record.separate || record.agentOf);
+  }
+
+  /**
+   * {@link TRACKED}, writing for the shared group on either side of a
+   * sandbox that runs commands apart (ADR 0332), so what one side makes in
+   * the checkout the other can change.
+   */
+  private async trackedScript(name: string): Promise<string> {
+    return (await this.sharesCheckout(name))
+      ? `umask 002\n${TRACKED}`
+      : TRACKED;
   }
 
   /** The files a command was asked to return, removed where it wrote them. */
@@ -1664,10 +1738,11 @@ export class ContainerSandboxProvider implements SandboxProvider {
     ended: "exited" | "timeout" | "cancelled";
   }> {
     const token = randomUUID();
+    const script = await this.trackedScript(sandboxId);
     const session = await this.whileRunning(sandboxId, () =>
       this.docker.openExec({
         container: sandboxId,
-        cmd: ["sh", "-c", TRACKED, "work-exec", token, args.cwd, ...args.argv],
+        cmd: ["sh", "-c", script, "work-exec", token, args.cwd, ...args.argv],
         ...(args.env ? { env: args.env } : {}),
       }),
     );
@@ -1704,11 +1779,15 @@ export class ContainerSandboxProvider implements SandboxProvider {
     };
   }
 
+  /**
+   * Stop a tracked command's group, as the container's own user: the pid
+   * comes from a folder its commands can write, so the kill can reach no
+   * more than they could.
+   */
   private async killTracked(sandboxId: string, token: string): Promise<void> {
     await this.docker.exec({
       container: sandboxId,
       cmd: ["sh", "-c", KILL_TRACKED, "work-kill", token],
-      user: "0",
     });
   }
 
