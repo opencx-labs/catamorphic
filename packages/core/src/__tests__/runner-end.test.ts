@@ -1,4 +1,5 @@
-import { spawn } from "node:child_process";
+import { execFileSync, spawn } from "node:child_process";
+import { existsSync } from "node:fs";
 import type { SandboxProvider } from "@catamorphic/sandbox";
 import { describe, expect, it } from "vitest";
 import {
@@ -117,9 +118,50 @@ describe("endRunner", () => {
     // Its harness's own groups, inside the sandbox; nothing a harness could
     // not have reported.
     await channel.killGroups([4242, 77, 1, -3, 2.5]);
-    expect(commands).toEqual(["kill -KILL -- -4242 -- -77 2>/dev/null; true"]);
+    expect(commands).toEqual([
+      "kill -s KILL -- -4242 -77 2>/dev/null; true",
+    ]);
   });
 });
+
+it("kills every reported group with one command, under dash as under bash (ADR 0333)", async () => {
+  const shells = ["/bin/sh", "/bin/dash", "/bin/bash"].filter((shell) =>
+    existsSync(shell),
+  );
+  expect(shells.length).toBeGreaterThan(0);
+  for (const shell of shells) {
+    // Two agents, each in a group of its own.
+    const agents = [0, 1].map(() =>
+      spawn("sleep", ["300"], { detached: true, stdio: "ignore" }),
+    );
+    const groups = agents.map((agent) => agent.pid ?? 0);
+    const gone = agents.map(
+      (agent) => new Promise((resolve) => agent.once("exit", resolve)),
+    );
+    let command = "";
+    const channel = sandboxChannel({
+      provider: {
+        processes: { signalProcess: async () => {} },
+        executeCommand: async (_sandboxId: string, line: string) => {
+          command = line;
+          return { exitCode: 0, stdout: "", stderr: "" };
+        },
+      } as unknown as SandboxProvider,
+      location: {
+        kind: "sandbox_process",
+        allocationId: "allocation",
+        sandboxId: "sandbox",
+        processId: "runner",
+      },
+    });
+    await channel.killGroups(groups);
+    // The sandbox runs it with its shell: here, each one in turn.
+    execFileSync(shell, ["-c", command]);
+    await Promise.all(gone);
+    for (const group of groups)
+      expect(() => process.kill(-group, 0), `${shell} ${group}`).toThrow();
+  }
+}, 15_000);
 
 it("keeps a runner's line whole or leaves it out, never part of one", () => {
   expect(diagnostic("short")).toBe("short");

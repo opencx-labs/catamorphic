@@ -497,7 +497,9 @@ export function sandboxChannel(input: {
       await provider
         .executeCommand(
           location.sandboxId,
-          `kill -KILL ${valid.map((group) => `-- -${group}`).join(" ")} 2>/dev/null; true`,
+          // POSIX's form, one `--`, then every group: dash refuses
+          // `-KILL --`, and stops at a second `--`.
+          `kill -s KILL -- ${valid.map((group) => `-${group}`).join(" ")} 2>/dev/null; true`,
         )
         .catch(() => {});
     },
