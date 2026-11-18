@@ -10,7 +10,7 @@ This project reviews its pull requests with its own code, installed from the
 `pull-request-reviews` pack and the team's to change: the GitHub trigger
 library, a `review` Environment with its own image and read-only bindings, a
 `github-poster` Environment for workflows only, a `reviewer` agent whose
-persona is the review doctrine, and four workflows. With the workflows on,
+persona is the review doctrine, and five workflows. With the workflows on,
 every non-draft pull request gets a project chat keyed
 `pr-<repository>-<number>`:
 
@@ -78,7 +78,26 @@ private registry and the secret it needs in `setup.secrets`, a binary
 host such as `binaries.prisma.sh`, another image registry). A setup that
 fails runs again before every turn, each time in a new sandbox, so a host
 missing from the list costs every turn. With a setup network the
-Environment keeps no volumes, so caches belong in the image. `waitMinutes` lets a new review wait for a
+Environment keeps no volumes: what the pull request's install scripts write
+must never reach the next review.
+
+`caches.pnpm` is a pnpm store every review sandbox mounts read only, setup's
+included, at `~/.cache/work/pnpm-store` (ADR 0334). Only a fill writes it:
+Work runs the cache's own `fill.command` (`pnpm fetch`) in a fresh sandbox
+holding the published main alone, on the setup's network with nothing else,
+and publishes the new store only when the fill succeeded and its sandbox is
+gone. Setup installs from it offline and falls back to the registries when
+the pull request needs a package main does not have (`pnpm install
+--frozen-lockfile --offline --store-dir ... || pnpm install
+--frozen-lockfile`). Copies live on each machine: the first review on a new
+machine installs from the network while Work fills that machine's copy, and
+machines kept idle (`machines.demand.min`) stay warm. `sizeMb` bounds a
+fill; a copy no review mounted for 30 days is evicted. Each copy holds
+`.work-cache.json` saying which commit of main filled it and when, and the
+agent is told the same. The pack caches pnpm's store, which pnpm installs
+from read only; check that another package manager does before declaring
+its cache.
+`waitMinutes` lets a new review wait for a
 machine (one made on demand takes a few minutes) instead of failing.
 `idleReleaseMinutes` gives a quiet review's machine back and rehydrates it
 on the next push. `approvals.waitMinutes` is how long an escalation waits
@@ -179,6 +198,15 @@ Deliveries are keyed by GitHub's delivery id and comment id, so a redelivered
 webhook adds nothing. `postReviews` is the one workflow holding a
 connection; enable it in `github-poster` so its runs use that
 Environment's binding.
+
+`fillReviewCache` asks Work every six hours to fill the `review`
+Environment's pnpm store from the published main
+(`host["catamorphic.environments"].fillCache`, `permissions:
+["caches:write"]`). It names only the Environment and the cache: the command
+is the one the published `.work/project.json` declares, so no workflow and no
+pull request chooses what runs with the store writable. A project with a
+deploy workflow (ADR 0331) can call `fillCache` there too, passing its
+`commit`, so the store follows each published revision.
 
 ## .work/workflows/src/review-report.ts
 
@@ -331,10 +359,10 @@ merge gate.
    the `@catamorphic/*` packages.
 2. Store `GITHUB_WEBHOOK_SECRET` as a project secret (the server does this
    when it registered the App for this project) and turn on
-   `reviewPullRequests`, `answerReviewComments`, and `closePullRequestChats`
-   for the project, and `postReviews` for the project in the `github-poster`
+   `reviewPullRequests`, `answerReviewComments`, `closePullRequestChats` and
+   `fillReviewCache` for the project, and `postReviews` for the project in the `github-poster`
    Environment with its `github` connection. Whoever turns them on needs
-   `automations:write` in a role whose `environments` list both
+   `automations:write` (and `caches:write` for `fillReviewCache`) in a role whose `environments` list both
    Environments the workflows run in (`default` and `github-poster`) and
    whose `connections` include
    `{ "environment": "github-poster", "alias": "github" }`. The `github`
@@ -345,6 +373,10 @@ merge gate.
    posts the review and the "Work review" check run.
 4. Push again (same chat, new head), comment `@work why?` (an answer on the
    pull request), then close it (the chat closes; its workspace is gone).
+5. Run `fillReviewCache` once by hand, then open the project's caches
+   (`GET /projects/:id/environment-caches`): each review machine shows a copy
+   with the commit it was filled from. The next review's setup log shows an
+   offline install.
 
 When nothing happens, look at the webhook's deliveries (a signature failure
 means the secret differs), the workflow's runs (a filtered-out event starts

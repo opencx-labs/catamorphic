@@ -1002,7 +1002,7 @@ caches (ADR 0208):
   at a ref of the project's remote (a delivery's `workspace: { ref }`) run
   it; elsewhere the agent is told it did not run. Such an Environment
   declares no volumes, which would carry what agents wrote into the next
-  setup: put caches in its image. It needs a machine that advertises
+  setup; it declares read-only `caches` instead (below). It needs a machine that advertises
   `network.setup`: the container backend wherever it enforces
   `network.policy` (the worker narrows by itself when the setup's time is
   up), or local-process under `WORK_UNENFORCED_EGRESS=accept`. Microsandbox
@@ -1036,6 +1036,34 @@ caches (ADR 0208):
   keeps only paths under `~`. A machine forgets volumes nobody used for 30
   days (`WORK_VOLUME_RETENTION_DAYS`) and a member's volumes when a pooled
   machine is reset.
+- `caches` name directories every sandbox of the Environment mounts read
+  only, setup's on its own network included, and that only a trusted fill
+  writes (ADR 0334): `"caches": { "pnpm": { "path":
+  "~/.cache/work/pnpm-store", "sizeMb": 16384, "fill": { "command": "pnpm
+  fetch --store-dir ~/.cache/work/pnpm-store", "timeoutMinutes": 30 } } }`.
+  A fill runs the cache's own command, read from the published program,
+  in a fresh sandbox of the Environment's image holding a revision Work
+  published from `main` alone, on the setup's network (the Environment's own
+  without one), with no grant and only the secrets `setup.secrets` names,
+  in an Allocation of its own on that machine. Work publishes the new
+  generation only when the fill exited 0, stayed within `sizeMb` (10 GiB by
+  default) and its sandbox is gone, so a sandbox sees the old cache or the
+  new one. A workflow with `caches:write` asks for one with
+  `host["catamorphic.environments"].fillCache({ environment, cache,
+  commit?, idempotencyKey })` on a schedule or from the project's deploy
+  workflow; it cannot name a command or any ref but a published revision.
+  Copies live on each machine as Docker volumes, one per generation. A
+  machine with no copy mounts none (setup installs from the network as
+  before) and Work queues a fill for it; one fill per cache and machine
+  runs at a time. Each copy holds `.work-cache.json` (the commit of `main`
+  that filled it and when), and a new workspace's agent is told the same.
+  A copy no sandbox mounted for `WORK_VOLUME_RETENTION_DAYS` is evicted,
+  and a pooled machine's reset forgets them all. `GET
+  /projects/:id/environment-caches` (`automations:read`) lists each cache's
+  copies, sizes, last use and recent fills with their errors. Only the
+  container backend offers `caches`, and it refuses them in a privileged
+  runc sandbox, whose root could remount one writable; under gVisor they
+  are enforced.
 
 ## Members' own sign-ins and files
 

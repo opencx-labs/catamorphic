@@ -276,6 +276,34 @@ type Publication = {
   askedIn: number | null;
 };
 
+/**
+ * @displayname Fill the review package cache
+ *
+ * Every six hours Work fills the `review` Environment's pnpm store from the
+ * published main, with the command the Environment declares, on every
+ * review machine that holds a copy (ADR 0334). Review setups install from
+ * it read only and fetch only what a pull request changed. A project with
+ * a deploy workflow (ADR 0331) can fill from there too, with its `commit`.
+ */
+export const fillReviewCache = defineWorkflow(({ defineBoundary }) => ({
+  permissions: ["caches:write"],
+  triggers: [trigger("schedule", { cron: "17 */6 * * *", timezone: "UTC" })],
+  steps: [
+    /** @displayname Fill the pnpm store from main */
+    defineBoundary({
+      run: ({
+        input,
+        host,
+      }: BoundaryContext<{ activationId: string; scheduledFor: string }>) =>
+        host["catamorphic.environments"].fillCache({
+          environment: "review",
+          cache: "pnpm",
+          idempotencyKey: `review-cache:${input.activationId}:${input.scheduledFor}`,
+        }),
+    }),
+  ],
+}));
+
 const RETRY = {
   maxAttempts: 4,
   backoff: { initial: "10s", maximum: "2m", multiplier: 3 },

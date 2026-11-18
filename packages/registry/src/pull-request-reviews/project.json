@@ -20,7 +20,7 @@
         "egress": "gateway"
       },
       "setup": {
-        "command": "if [ -f pnpm-lock.yaml ]; then pnpm install --frozen-lockfile; elif [ -f bun.lock ] || [ -f bun.lockb ]; then bun install --frozen-lockfile; elif [ -f package-lock.json ]; then npm ci --no-audit --no-fund; fi; for f in compose.yaml compose.yml docker-compose.yaml docker-compose.yml; do if [ -f \"$f\" ]; then docker compose -f \"$f\" pull --ignore-buildable --ignore-pull-failures --quiet; break; fi; done",
+        "command": "if [ -f pnpm-lock.yaml ]; then pnpm install --frozen-lockfile --offline --store-dir ~/.cache/work/pnpm-store || pnpm install --frozen-lockfile; elif [ -f bun.lock ] || [ -f bun.lockb ]; then bun install --frozen-lockfile; elif [ -f package-lock.json ]; then npm ci --no-audit --no-fund; fi; for f in compose.yaml compose.yml docker-compose.yaml docker-compose.yml; do if [ -f \"$f\" ]; then docker compose -f \"$f\" pull --ignore-buildable --ignore-pull-failures --quiet; break; fi; done",
         "timeoutMinutes": 20,
         "network": {
           "allow": [
@@ -31,6 +31,16 @@
             "ghcr.io",
             "pkg-containers.githubusercontent.com"
           ]
+        }
+      },
+      "caches": {
+        "pnpm": {
+          "path": "~/.cache/work/pnpm-store",
+          "sizeMb": 16384,
+          "fill": {
+            "command": "if [ -f pnpm-lock.yaml ]; then pnpm fetch --store-dir ~/.cache/work/pnpm-store; fi",
+            "timeoutMinutes": 30
+          }
         }
       },
       "waitMinutes": 30,
