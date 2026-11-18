@@ -446,7 +446,7 @@ const handlers = (() => {
         await say(
           sessionId,
           "agent_message_chunk",
-          `SHELL=${process.env.SHELL ?? "unset"}`,
+          `SHELL=${process.env.SHELL ?? "unset"} PATH=${(process.env.PATH ?? "").split(":")[0]} MARK=${process.env.TEST_AGENT_MARK ?? "unset"}`,
         );
         return { stopReason: "end_turn" };
       }

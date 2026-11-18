@@ -395,6 +395,20 @@ export function agentDefinitionSchema(opts?: { allowE2eFake?: boolean }) {
            * apart from it (ADR 0332).
            */
           shell: z.boolean().optional(),
+          /**
+           * `false`: the agent loads no configuration, plugins, MCP
+           * servers, language servers, formatters or instructions from the
+           * checkout (with `env` set). Required, with `shell`, for its
+           * commands to run apart (ADR 0332).
+           */
+          projectConfig: z.boolean().optional(),
+          /** Variables Work sets on the agent's process. */
+          env: z
+            .record(
+              z.string().regex(/^[A-Za-z_][A-Za-z0-9_]*$/),
+              z.string().max(4096),
+            )
+            .optional(),
         })
         .optional(),
     })
@@ -442,7 +456,13 @@ export interface AgentDefinition {
    * `shell`: the agent runs its commands with `$SHELL`, so Work can run
    * them apart from it (ADR 0332).
    */
-  acp?: { endpoint?: string; command?: string[]; shell?: boolean };
+  acp?: {
+    endpoint?: string;
+    command?: string[];
+    shell?: boolean;
+    projectConfig?: boolean;
+    env?: Record<string, string>;
+  };
 }
 
 export interface ProjectAgentEntry {
@@ -530,6 +550,10 @@ export function definitionHash(
           command: definition.acp.command ?? null,
           // Only when named, so existing consent hashes stay valid.
           ...(definition.acp.shell ? { shell: true } : {}),
+          ...(definition.acp.projectConfig !== undefined
+            ? { projectConfig: definition.acp.projectConfig }
+            : {}),
+          ...(definition.acp.env ? { env: definition.acp.env } : {}),
         }
       : null,
     prompt:

@@ -54,7 +54,20 @@ export const ACP_CAPABILITIES: HarnessCapabilities = {
 
 /** Why an ACP agent without `acp.shell` does not run where commands run apart (ADR 0332). */
 export const ACP_COMMANDS_APART_REFUSAL =
-  'This Environment runs commands apart from the agent, and Work can send an ACP agent\'s commands there only when the agent runs them with $SHELL. Set "acp": { "shell": true } in the agent\'s definition if it does (OpenCode does), or use another agent there.';
+  'This Environment runs commands apart from the agent, and an ACP agent runs there only when its definition says both that every way it runs code goes through $SHELL ("shell": true) and that it loads no configuration, plugins, MCP servers, language servers, formatters or instructions from the checkout ("projectConfig": false, with "env" naming the variables that make it so). OpenCode does, with OPENCODE_DISABLE_PROJECT_CONFIG and its language servers and formatters off. Otherwise use another agent there.';
+
+/** The variables an agent's definition sets for its process. */
+function definitionEnv(value: unknown): Record<string, string> {
+  if (typeof value !== "object" || value === null || Array.isArray(value))
+    return {};
+  return Object.fromEntries(
+    Object.entries(value).filter(
+      (entry): entry is [string, string] =>
+        /^[A-Za-z_][A-Za-z0-9_]*$/.test(entry[0]) &&
+        typeof entry[1] === "string",
+    ),
+  );
+}
 
 /** How long an agent gets to exit after its turn before it is killed. */
 const EXIT_GRACE_MS = 3_000;
@@ -149,7 +162,13 @@ function startAttempt(
     // command container; any other is refused, never run beside the agent.
     let shell: { shell: string; path: string } | undefined;
     if (attempt.commands) {
-      if (attempt.options.shell !== true)
+      // The contract (ADR 0332): every way it runs code goes through
+      // $SHELL, and it loads nothing from the checkout, which the pull
+      // request controls. Work cannot check either; the definition says so.
+      if (
+        attempt.options.shell !== true ||
+        attempt.options.projectConfig !== false
+      )
         throw new Error(ACP_COMMANDS_APART_REFUSAL);
       shell = await writeCommandShell({
         directory: path.join(attempt.stateDirectory, "commands"),
@@ -168,6 +187,9 @@ function startAttempt(
       env: {
         ...process.env,
         ...attempt.env,
+        // What the definition sets for the agent (keeping project
+        // configuration off, ADR 0332).
+        ...definitionEnv(attempt.options.env),
         ...(model
           ? loopbackModelEnv({
               model,

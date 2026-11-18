@@ -366,8 +366,14 @@ describe("the pull-request-reviews pack", () => {
     expect(agent.success, JSON.stringify(agent.error)).toBe(true);
     expect(agent.data).toMatchObject({
       kind: "acp",
-      // OpenCode runs its commands with $SHELL, so they run apart (ADR 0332).
-      acp: { command: ["opencode", "acp"], shell: true },
+      // OpenCode runs its commands with $SHELL and loads nothing from the
+      // checkout, so they run apart (ADR 0332).
+      acp: {
+        command: ["opencode", "acp"],
+        shell: true,
+        projectConfig: false,
+        env: { OPENCODE_DISABLE_PROJECT_CONFIG: "1" },
+      },
       credentials: { source: "connection", connection: "model" },
       sandboxing: "contained",
       environment: { allowed: ["review"] },
@@ -383,6 +389,29 @@ describe("the pull-request-reviews pack", () => {
     expect(REVIEW_OPENCODE_DOCKERFILE).toContain(
       "OPENCODE_DISABLE_PROJECT_CONFIG=1",
     );
+    // Beside the reviewer, OpenCode starts no language server or formatter
+    // (some resolve from the change's dependencies), downloads none, keeps
+    // no Git snapshots, and reads none of the change's Claude Code files.
+    const config = JSON.parse(
+      [...REVIEW_OPENCODE_DOCKERFILE.matchAll(/^\s*'(.*)' (?:\\$|>)/gm)]
+        .map((line) => line[1])
+        .join("\n"),
+    );
+    expect(config).toMatchObject({
+      lsp: false,
+      formatter: false,
+      snapshot: false,
+    });
+    for (const variable of [
+      "OPENCODE_DISABLE_LSP_DOWNLOAD=1",
+      "OPENCODE_DISABLE_CLAUDE_CODE=1",
+      "OPENCODE_DISABLE_EXTERNAL_SKILLS=1",
+    ])
+      expect(REVIEW_OPENCODE_DOCKERFILE).toContain(variable);
+    expect(agent.data?.acp?.env).toMatchObject({
+      OPENCODE_DISABLE_LSP_DOWNLOAD: "1",
+      OPENCODE_DISABLE_CLAUDE_CODE: "1",
+    });
   });
 
   it("parses as four workflows on the GitHub library and session events", () => {

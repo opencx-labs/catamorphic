@@ -178,19 +178,34 @@ describe("ACP agents whose commands run apart (ADR 0332)", () => {
     const turn = run(
       attempt(space, "[[shell]]", {
         commands,
-        options: { command: [process.execPath, AGENT], shell: true },
+        options: {
+          command: [process.execPath, AGENT],
+          shell: true,
+          projectConfig: false,
+          env: { TEST_AGENT_MARK: "set by its definition" },
+        },
       }),
     );
     await turn.finished();
     const shim = path.join(space.dir, "commands", "bin", "bash");
     expect(turn.completed()).toMatchObject({ status: "completed" });
-    expect(turn.text("assistant_message")).toBe(`SHELL=${shim}`);
+    expect(turn.text("assistant_message")).toBe(
+      `SHELL=${shim} PATH=${path.join(space.dir, "commands", "path")} MARK=set by its definition`,
+    );
     expect(fs.readFileSync(shim, "utf8")).toContain(commands.socket);
   });
 
-  it("refuses an agent whose definition does not say it uses $SHELL", async () => {
+  it.each([
+    ["does not say it uses $SHELL", { projectConfig: false }],
+    ["does not say it loads nothing from the checkout", { shell: true }],
+  ])("refuses an agent whose definition %s", async (_name, options) => {
     const space = workspace();
-    const turn = run(attempt(space, "[[shell]]", { commands }));
+    const turn = run(
+      attempt(space, "[[shell]]", {
+        commands,
+        options: { command: [process.execPath, AGENT], ...options },
+      }),
+    );
     await turn.finished();
     expect(turn.completed()).toMatchObject({
       status: "failed",

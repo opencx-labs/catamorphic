@@ -158,8 +158,15 @@ codebase, which tests are slow, what never to touch.
 The `pull-request-reviews-opencode` pack makes the reviewer OpenCode, which
 Work runs as an ACP agent in the same sandbox (ADR 0255), on an open-weight
 model through OpenRouter or another OpenAI-compatible API. Its definition
-says `"acp": { "shell": true }`: OpenCode runs its shell tool with `$SHELL`,
-which Work points at the command container (ADR 0332). Its image points
+states the contract an ACP agent needs to run beside the change's code
+(ADR 0332): `"shell": true` (OpenCode runs its shell tool with `$SHELL`,
+which Work points at the command container) and `"projectConfig": false`,
+with the `env` that makes it so. The image turns off what OpenCode would
+otherwise start or read from the checkout beside the reviewer: language
+servers and formatters (`"lsp": false`, `"formatter": false`, some resolve
+from the change's own dependencies), Git snapshots (`"snapshot": false`),
+language server downloads, and the change's Claude Code files and external
+skills. Its image points
 OpenCode at `WORK_MODEL_BASE_URL` and `WORK_MODEL_API_KEY`: Work serves the
 model connection on the sandbox's loopback for each turn, so no key reaches
 the machine. `OPENCODE_DISABLE_PROJECT_CONFIG` keeps the pull request's own

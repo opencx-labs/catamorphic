@@ -32134,6 +32134,15 @@
                               },
                               "shell": {
                                 "type": "boolean"
+                              },
+                              "projectConfig": {
+                                "type": "boolean"
+                              },
+                              "env": {
+                                "type": "object",
+                                "additionalProperties": {
+                                  "type": "string"
+                                }
                               }
                             },
                             "additionalProperties": false

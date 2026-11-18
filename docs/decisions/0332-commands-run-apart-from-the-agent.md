@@ -73,8 +73,14 @@ the agent container, so it has no channel back.
   and only its home's settings: the checkout's `.claude` settings, hooks,
   MCP servers, skills and `CLAUDE.md` would run or steer the agent from the
   pull request, so they are not loaded.
-- **ACP agents:** `SHELL`, for a definition with `"acp": { "shell": true }`
-  (OpenCode runs its shell tool with `$SHELL`). Others are refused.
+- **ACP agents** run apart only under a contract their definition states,
+  which Work cannot check: `"shell": true` (every way the agent runs code
+  goes through `$SHELL`) and `"projectConfig": false` (it loads no
+  configuration, plugins, MCP servers, language servers, formatters or
+  instructions from the checkout), with `"env"` naming what makes it so;
+  Work sets `env` and points `SHELL` at the shim. Others are refused.
+  OpenCode meets it with its project config, language servers,
+  formatters, snapshots and Claude Code files off.
 - **Codex:** refused. It takes the login shell from the password database
   and lets the model name any shell binary.
 - **The built-in agent** runs on the control plane; its tools already run

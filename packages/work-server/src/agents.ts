@@ -262,6 +262,8 @@ function sandboxProjectAgent(input: {
             id: input.id,
             command,
             shell: definition.acp?.shell === true,
+            projectConfig: definition.acp?.projectConfig,
+            env: definition.acp?.env,
           })
         : undefined
       : sandboxHarness(definition.kind === "codex" ? "codex" : "claude-code");
@@ -312,6 +314,9 @@ function acpHarness(input: {
   command: readonly string[];
   /** It runs its commands with `$SHELL` (ADR 0332). */
   shell: boolean;
+  /** `false`: it loads nothing from the checkout (ADR 0332). */
+  projectConfig: boolean | undefined;
+  env: Record<string, string> | undefined;
 }): {
   harness: AgentHarness;
   options: RegisteredCodingAgent["options"];
@@ -321,6 +326,10 @@ function acpHarness(input: {
     options: {
       command: [...input.command],
       ...(input.shell ? { shell: true } : {}),
+      ...(input.projectConfig !== undefined
+        ? { projectConfig: input.projectConfig }
+        : {}),
+      ...(input.env ? { env: { ...input.env } } : {}),
     },
   };
 }

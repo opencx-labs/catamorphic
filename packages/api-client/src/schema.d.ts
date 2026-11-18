@@ -10748,6 +10748,10 @@ export interface paths {
                                     endpoint?: string;
                                     command?: string[];
                                     shell?: boolean;
+                                    projectConfig?: boolean;
+                                    env?: {
+                                        [key: string]: string;
+                                    };
                                 };
                             };
                             promptFile?: string;

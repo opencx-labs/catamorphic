@@ -275,9 +275,18 @@ own way:
   shim (`CLAUDE_CODE_SHELL`) and loads only its home's settings: the
   checkout's `CLAUDE.md` and `.claude/` (hooks, MCP servers, skills) would
   run or steer it from the repository, so they are not read there.
-- **ACP agents** run their commands through `$SHELL`, which Work points at
-  the shim, when the definition says they do: `"acp": { "command":
-  ["opencode", "acp"], "shell": true }`. Without it the turn is refused.
+- **ACP agents** run there only under a contract their definition states,
+  since Work cannot see inside them: every way the agent runs code goes
+  through `$SHELL` (`"shell": true`), and it loads no configuration,
+  plugins, MCP servers, language servers, formatters or instructions from
+  the checkout (`"projectConfig": false`), with `"env"` naming the
+  variables that make it so, which Work sets on its process. Work points
+  `SHELL` at the shim and puts its `git` first on `PATH`. Without both the
+  turn is refused. For OpenCode: `"acp": { "command": ["opencode", "acp"],
+  "shell": true, "projectConfig": false, "env": {
+  "OPENCODE_DISABLE_PROJECT_CONFIG": "1", "OPENCODE_DISABLE_LSP_DOWNLOAD":
+  "1", "OPENCODE_DISABLE_CLAUDE_CODE": "1" } }`, and `"lsp": false`,
+  `"formatter": false` and `"snapshot": false` in its baked configuration.
 - **Codex** is refused: it picks its own shell, so its commands cannot be
   sent apart. Use it in Environments that run commands beside the agent.
 - **The built-in agent** runs on the control plane; its tools already run
