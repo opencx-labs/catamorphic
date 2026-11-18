@@ -2397,6 +2397,11 @@ function demandMachines(args: {
   ).length;
   const lostAfter = demand.enrollMinutes * 60_000;
   const kept: ProvisionedMachine[] = [];
+  /**
+   * Kept machines short of disk (ADR 0335): they finish the work they hold
+   * but take none, so they count toward neither `min` nor `max`.
+   */
+  let full = 0;
   /** Kept machines that will take a piece of work once they connect. */
   let coming = 0;
   const idle: Array<{ machine: ProvisionedMachine; idleForMs: number }> = [];
@@ -2414,6 +2419,15 @@ function demandMachines(args: {
       lost.push(machine.name);
       continue;
     }
+    if (load.shortOfDisk) {
+      // One holding work keeps it; an idle one goes, and a machine with
+      // room takes its place.
+      if (load.holding > 0) {
+        kept.push(machine);
+        full += 1;
+      }
+      continue;
+    }
     if (load.holding > 0) kept.push(machine);
     else if (load.neverConnected) {
       // Enrolled, and still starting its worker.
@@ -2424,7 +2438,7 @@ function demandMachines(args: {
   }
   idle.sort((left, right) => left.idleForMs - right.idleForMs);
   for (const { machine } of idle) {
-    if (kept.length >= demand.min) break;
+    if (kept.length - full >= demand.min) break;
     kept.push(machine);
   }
   // Work a connected kept machine has room for is admitted there on its
@@ -2449,10 +2463,13 @@ function demandMachines(args: {
     return true;
   });
   const unmet = uncovered.slice(coming);
-  const room = Math.max(0, demand.max - kept.length - before);
+  const room = Math.max(0, demand.max - (kept.length - full) - before);
   const add = args.stalled
     ? 0
-    : Math.min(room, Math.max(unmet.length, demand.min - kept.length, 0));
+    : Math.min(
+        room,
+        Math.max(unmet.length, demand.min - (kept.length - full), 0),
+      );
   const machines = kept.map((machine) => desired(machine.name));
   const taken = new Set(own.map((machine) => machine.name));
   for (let index = 1, made = 0; made < add; index += 1) {

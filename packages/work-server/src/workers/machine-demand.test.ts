@@ -920,6 +920,39 @@ describe("machines on demand (ADR 0258)", () => {
     await deleteRule("full");
   });
 
+  it("replaces a machine short of disk although the rule keeps one warm and allows one (ADR 0335)", async () => {
+    await putRule("diskwarm", {
+      projects: [projectId],
+      machines: { demand: { min: 1, max: 1, idleMinutes: 1 } },
+      class: "review-16",
+      labels: { pool: "diskwarm" },
+    });
+    await reconcile();
+    const [first, second] = [1, 2].map((index) =>
+      nameOf("diskwarm", "review-16", index),
+    );
+    if (!first || !second) throw new Error("Two names");
+    expect(createdFor(first)).toBeDefined();
+    // Connected, idle past its minutes, and under its disk floor.
+    await connect(first, {
+      capacity: { workspaces: 4 },
+      disk: {
+        path: "/var/lib/work-worker",
+        totalBytes: 100e9,
+        freeBytes: 4e9,
+        floorBytes: 10e9,
+        measuredAt: new Date().toISOString(),
+      },
+    });
+    await idleFor(first, 30);
+    await waiting({ pool: { pool: "diskwarm" } });
+    await reconcile();
+    // Kept warm it would hold the rule's one place and the review would wait
+    // until its disk freed: it goes, and a machine with room comes.
+    expect(createdFor(second)).toBeDefined();
+    await deleteRule("diskwarm");
+  });
+
   it("counts the machines a rule served before against its maximum", async () => {
     await putRule("scope", {
       projects: [projectId],

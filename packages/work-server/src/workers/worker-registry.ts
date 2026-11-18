@@ -211,6 +211,11 @@ export interface MachineLoad {
   /** It enrolled and has not connected yet. */
   neverConnected: boolean;
   /**
+   * Its recent disk report is under its floor (ADR 0335): it takes no new
+   * work, so it is no machine to keep warm or to count against a maximum.
+   */
+  shortOfDisk: boolean;
+  /**
    * While its lease is live: what it offers, what it has free, and what a
    * workspace naming no resources is charged there.
    */
@@ -1296,6 +1301,7 @@ export class WorkWorkerRegistry {
             idleForMs: Number(row.idle_for_ms),
             unseenForMs: Number(row.unseen_for_ms),
             neverConnected: row.never_connected,
+            shortOfDisk: Boolean(node?.available) && !roomy,
             live,
           },
         ];
