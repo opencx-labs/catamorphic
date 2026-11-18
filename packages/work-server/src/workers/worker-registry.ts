@@ -17,6 +17,8 @@ import type { DB } from "@catamorphic/db";
 import {
   type EnvironmentBinding,
   ExecutorPublicKeySchema,
+  MACHINE_CAPABILITIES,
+  SANDBOX_CAPABILITIES,
 } from "@catamorphic/sandbox";
 import { type Kysely, sql } from "kysely";
 import { z } from "zod";
@@ -54,21 +56,12 @@ export const WorkerOfferSchema = z.strictObject({
   capabilities: z
     .array(
       z.union([
+        // What its sandboxes can be given (ADR 0176) and what the machine
+        // offers beside its provider (ADR 0184), named by the same
+        // constants the providers list, so a new one is never refused.
         z.enum([
-          "images",
-          "images.build",
-          "containers",
-          "network.policy",
-          // It widens a running sandbox for its setup, for a while (ADR 0257).
-          "network.setup",
-          // It keeps volumes across sandboxes (ADR 0208).
-          "volumes",
-          // What the machine offers beside its provider (ADR 0184).
-          "credentials.personal",
-          "harness.claude-code",
-          "harness.codex",
-          // Its sandboxes mount members' own sign-ins (ADR 0199).
-          "sign-ins",
+          ...Object.values(SANDBOX_CAPABILITIES),
+          ...Object.values(MACHINE_CAPABILITIES),
         ]),
         // A member signed in to a harness on it: the fact, never the value.
         z.string().regex(/^sign-in:(claude-code|codex):\S{1,255}$/),
