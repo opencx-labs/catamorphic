@@ -103,7 +103,7 @@ docker exec "$name" bash -c '
 if [ "$suite" = review ]; then
   echo "Starting a disposable Postgres in the machine..."
   docker exec -e IMAGE="$postgres_image" "$name" sh -c '
-    docker rm -f work-test-postgres >/dev/null 2>&1 || true
+    docker rm -f -v work-test-postgres >/dev/null 2>&1 || true
     docker run -d --rm --name work-test-postgres -p 127.0.0.1:5432:5432 \
       -e POSTGRES_USER=catamorphic -e POSTGRES_PASSWORD=catamorphic -e POSTGRES_DB=catamorphic \
       --health-cmd "pg_isready -U catamorphic -d catamorphic" --health-interval 1s --health-retries 120 \
