@@ -2134,9 +2134,16 @@ export class ContainerSandboxProvider implements SandboxProvider {
     })) {
       const key = volumeKeyOf(volume);
       if (!key) continue;
-      if (await this.docker.removeVolume(String(volume.Name)))
-        removed.push(key);
-      else kept.push(key);
+      // Under its cache's lock, like retiring and pruning (ADR 0334).
+      const family = parseCacheVolumeKey(key)?.family;
+      const release = await this.lockCaches(family ? [family] : []);
+      try {
+        if (await this.docker.removeVolume(String(volume.Name)))
+          removed.push(key);
+        else kept.push(key);
+      } finally {
+        release();
+      }
     }
     this.usage.forget(removed);
     if (kept.length > 0)

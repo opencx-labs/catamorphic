@@ -34,7 +34,7 @@ import {
 } from "./project-environments-service.js";
 import { seedSandboxBase } from "./sandbox-git.js";
 import type { SecretsService } from "./secrets-service.js";
-import { SecretMask } from "./sessions/secret-mask.js";
+import { SecretMask, secretForms } from "./sessions/secret-mask.js";
 import { EnvironmentCapacityError } from "./worker-capacity.js";
 
 const tracer = getTracer("@catamorphic/core");
@@ -54,8 +54,28 @@ const LOG_TAIL_CHARS = 4_000;
 /** Fills one pass starts. */
 const CLAIM_LIMIT = 8;
 
-/** Secret values shorter than this are not searched for in a cache. */
-const SECRET_SCAN_MIN_LENGTH = 8;
+/** Where the helper that checks a filled generation mounts it. */
+const CHECK_PATH = "/work-cache-check";
+
+/**
+ * The forms of a secret value searched for in a filled generation: those
+ * output masking knows (ADR 0206), and its base64 at the two other byte
+ * alignments, as it appears inside a longer encoded value.
+ */
+export function scanForms(value: string): string[] {
+  const forms = new Set(secretForms(value));
+  if (forms.size === 0) return [];
+  for (const offset of [0, 1, 2]) {
+    const encoded = Buffer.concat([
+      Buffer.alloc(offset),
+      Buffer.from(value),
+    ]).toString("base64");
+    // Characters that depend on the value's bytes alone.
+    const core = encoded.slice(offset === 0 ? 0 : 4, -4);
+    if (core.length >= 8) forms.add(core);
+  }
+  return [...forms].filter((form) => form.length > 0 && !form.includes("\n"));
+}
 
 /**
  * A shell prefix setting `$p` to a cache's path in the sandbox: `~` is the
@@ -611,6 +631,8 @@ export class CacheFillsService {
           .set({
             status: "running",
             attempts: row.attempts + 1,
+            // An earlier attempt's generation stays named, for retirement.
+            abandoned_generations: sql`CASE WHEN generation IS NULL THEN abandoned_generations ELSE abandoned_generations || jsonb_build_array(generation) END`,
             generation: sql<string>`nextval('environment_cache_generations')`,
             claimed_until: sql<Date>`now() + make_interval(secs => ${CLAIM_MS / 1000})`,
             started_at: sql<Date>`now()`,
@@ -779,6 +801,9 @@ export class CacheFillsService {
         environment: fill.environment_name,
         ...(fill.worker_node_id ? { workerNodeId: fill.worker_node_id } : {}),
         requirements: { workload },
+        // Image, Dockerfile, containers and network of that same revision,
+        // never a newer main whose deploy is pending or failed.
+        commit,
       });
     } catch (error) {
       if (error instanceof EnvironmentCapacityError)
@@ -820,7 +845,7 @@ export class CacheFillsService {
       generation: args.generation,
     });
     // A run an earlier replica left: its Allocation and sandbox go first.
-    await this.retireEarlier({ identity, fill, machine });
+    await this.retireEarlier({ identity, fill, machine, path: cache.path });
     const sandboxPolicy = admission.sandbox;
     // The revision's own setup network, else the Environment's network.
     const egress = definition.setup?.network
@@ -921,21 +946,30 @@ export class CacheFillsService {
           signal,
         }),
       );
-      const sizeBytes = await step(() =>
-        this.finish({
+      await step(() =>
+        this.recordProvenance({
           provider: guarded,
           sandboxId: id,
           cache,
           fill,
           commit,
           generation: args.generation,
-          secrets: env,
         }),
       );
-      // Nothing the command left running may write after it is published.
+      // The fill's sandbox goes before anything is checked: nothing the
+      // command left running can write after the checks.
       await step(() => guarded.stopSandbox(id));
       await machine.destroySandbox(id);
       sandboxId = undefined;
+      const sizeBytes = await step(() =>
+        this.check({
+          machine,
+          allocationId: allocation.id,
+          key,
+          cache,
+          secrets: env,
+        }),
+      );
       published = true;
       return { sizeBytes, commit };
     } finally {
@@ -1030,6 +1064,7 @@ export class CacheFillsService {
     identity: Identity;
     fill: FillRow;
     machine: SandboxProvider;
+    path: string;
   }): Promise<void> {
     const left = await this.deps.db
       .selectFrom("execution_allocations")
@@ -1038,10 +1073,18 @@ export class CacheFillsService {
       .where("status", "=", "active")
       .execute();
     for (const row of left) {
-      if (row.sandbox_provider_id)
+      if (row.sandbox_provider_id) {
+        // What the earlier attempt wrote goes with it; its generation is
+        // named in the row's abandoned ones and retired at the next mount.
+        await this.emptyGeneration({
+          provider: args.machine,
+          sandboxId: row.sandbox_provider_id,
+          path: args.path,
+        });
         await args.machine
           .destroySandbox(row.sandbox_provider_id)
           .catch(() => {});
+      }
       await this.deps.executionAllocations.release({
         identity: args.identity,
         allocationId: row.id,
@@ -1162,21 +1205,15 @@ export class CacheFillsService {
       );
   }
 
-  /**
-   * Check the cache's size against its limit and write its provenance into
-   * its root. Answers its size in bytes.
-   */
-  private async finish(args: {
+  /** Write what the generation holds into its root, from the fill's sandbox. */
+  private async recordProvenance(args: {
     provider: SandboxProvider;
     sandboxId: string;
     cache: EnvironmentCache;
     fill: FillRow;
     commit: string;
     generation: number;
-    /** The setup secrets the fill ran with, none of which may stay in it. */
-    secrets: Record<string, string>;
-  }): Promise<number> {
-    const limitMb = args.cache.sizeMb ?? DEFAULT_CACHE_SIZE_MB;
+  }): Promise<void> {
     const provenance = JSON.stringify({
       cache: args.fill.cache_name,
       environment: args.fill.environment_name,
@@ -1186,58 +1223,88 @@ export class CacheFillsService {
       generation: args.generation,
       filledAt: new Date().toISOString(),
     });
-    const target = cacheTarget(args.cache.path);
-    const measured = await args.provider.executeCommand(
-      args.sandboxId,
-      `${target}; du -sk -- "$p" | cut -f1`,
-      { cwd: args.provider.workspaceRoot, timeout: 600 },
-    );
-    const kib = Number.parseInt(measured.result.trim(), 10);
-    if (measured.exitCode !== 0 || !Number.isFinite(kib))
-      throw new Error(
-        `Could not measure the cache: ${measured.result.slice(-500)}`,
-      );
-    if (kib > limitMb * 1024)
-      throw new Error(
-        `The cache holds ${Math.ceil(kib / 1024)} MiB after its fill; its limit is ${limitMb} MiB (sizeMb)`,
-      );
-    // Every sandbox mounts what the fill leaves, the agent's included: a
-    // setup secret written into it would reach them all (ADR 0257). The
-    // values travel as the scan's environment, never in its command.
-    const scanned = Object.entries(args.secrets).filter(
-      ([, value]) => value.length >= SECRET_SCAN_MIN_LENGTH,
-    );
-    if (scanned.length > 0) {
-      const names = scanned.map(([name]) => shellQuote(name)).join(" ");
-      const found = await args.provider.executeCommand(
-        args.sandboxId,
-        `${target}; for n in ${names}; do v=$(printenv "$n") || continue; grep -rqF -- "$v" "$p" 2>/dev/null && echo "$n"; done; true`,
-        {
-          cwd: args.provider.workspaceRoot,
-          timeout: 1800,
-          env: Object.fromEntries(scanned),
-        },
-      );
-      const leaked = found.result
-        .split("\n")
-        .map((line) => line.trim())
-        .filter((name) => scanned.some(([secret]) => secret === name));
-      if (found.exitCode !== 0)
-        throw new Error("Could not check the cache for the fill's secrets");
-      if (leaked.length > 0)
-        throw new Error(
-          `The cache holds the value of ${leaked.join(", ")} after its fill, and every sandbox of the Environment would read it; it was not published. Keep secrets out of what the fill command leaves in the cache`,
-        );
-    }
     const written = await args.provider.executeCommand(
       args.sandboxId,
-      `${target}; printf '%s\\n' ${shellQuote(provenance)} > "$p/${CACHE_PROVENANCE_FILE}"`,
+      `${cacheTarget(args.cache.path)}; printf '%s\\n' ${shellQuote(provenance)} > "$p/${CACHE_PROVENANCE_FILE}"`,
       { cwd: args.provider.workspaceRoot, timeout: 60 },
     );
     if (written.exitCode !== 0)
       throw new Error(
         `Could not record what the cache holds: ${written.result.slice(-500)}`,
       );
-    return kib * 1024;
+  }
+
+  /**
+   * Check a filled generation once its fill's sandbox is gone, from a fresh
+   * helper sandbox of the machine's own image that mounts it read only, so
+   * nothing the fill ran can answer for it (ADR 0334): its size against
+   * the limit, and none of the setup secrets' values (as written, JSON or
+   * URL escaped, base64 at every alignment, base64url) in any file. This
+   * guards against a trusted fill command's accidents, not a hostile one:
+   * a command could encode a value some other way. Answers the size in
+   * bytes.
+   */
+  private async check(args: {
+    machine: SandboxProvider;
+    allocationId: string;
+    key: string;
+    cache: EnvironmentCache;
+    secrets: Record<string, string>;
+  }): Promise<number> {
+    await this.requireActiveAllocation(args.allocationId);
+    const limitMb = args.cache.sizeMb ?? DEFAULT_CACHE_SIZE_MB;
+    const helper = await args.machine.createSandbox({
+      volumes: [{ key: args.key, path: CHECK_PATH, readOnly: true }],
+      labels: { purpose: "cache-check", allocationId: args.allocationId },
+    });
+    try {
+      if (helper.skippedVolumes?.includes(args.key))
+        throw new Error("The machine lost the generation the fill wrote");
+      const measured = await args.machine.executeCommand(
+        helper.providerId,
+        `du -sk -- ${CHECK_PATH} | cut -f1`,
+        { cwd: args.machine.workspaceRoot, timeout: 600 },
+      );
+      const kib = Number.parseInt(measured.result.trim(), 10);
+      if (measured.exitCode !== 0 || !Number.isFinite(kib))
+        throw new Error(
+          `Could not measure the cache: ${measured.result.slice(-500)}`,
+        );
+      if (kib > limitMb * 1024)
+        throw new Error(
+          `The cache holds ${Math.ceil(kib / 1024)} MiB after its fill; its limit is ${limitMb} MiB (sizeMb)`,
+        );
+      // Every sandbox mounts what the fill leaves, the agent's included: a
+      // setup secret written into it would reach them all (ADR 0257). The
+      // forms reach the helper as files, never in a command line.
+      const patterns = Object.fromEntries(
+        Object.entries(args.secrets)
+          .map(([name, value]) => [name, scanForms(value)] as const)
+          .filter(([, forms]) => forms.length > 0)
+          .map(([name, forms]) => [name, `${forms.join("\n")}\n`]),
+      );
+      if (Object.keys(patterns).length > 0) {
+        const directory = `${args.machine.workspaceRoot}/.work-cache-check`;
+        await args.machine.uploadFiles(helper.providerId, patterns, directory);
+        const found = await args.machine.executeCommand(
+          helper.providerId,
+          `d=${shellQuote(directory)}; for f in "$d"/*; do [ -s "$f" ] || continue; grep -rqF -f "$f" -- ${CHECK_PATH} 2>/dev/null && basename "$f"; done; rm -rf "$d"; true`,
+          { cwd: args.machine.workspaceRoot, timeout: 1800 },
+        );
+        if (found.exitCode !== 0)
+          throw new Error("Could not check the cache for the fill's secrets");
+        const leaked = found.result
+          .split("\n")
+          .map((line) => line.trim())
+          .filter((name) => name in patterns);
+        if (leaked.length > 0)
+          throw new Error(
+            `The cache holds the value of ${leaked.join(", ")} after its fill, and every sandbox of the Environment would read it; it was not published. Keep secrets out of what the fill command leaves in the cache`,
+          );
+      }
+      return kib * 1024;
+    } finally {
+      await args.machine.destroySandbox(helper.providerId).catch(() => {});
+    }
   }
 }

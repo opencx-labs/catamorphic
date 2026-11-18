@@ -21,6 +21,9 @@ CREATE TABLE environment_cache_fills (
   -- Names this attempt's volume on the machine; a new one per attempt, so
   -- an attempt never writes into what an earlier one left.
   generation bigint,
+  -- Generations earlier attempts wrote before a lost claim was taken over:
+  -- named for retirement, since `generation` names only the latest.
+  abandoned_generations jsonb NOT NULL DEFAULT '[]'::jsonb,
   attempts integer NOT NULL DEFAULT 0,
   retry_at timestamptz,
   -- The replica running it holds it until then, renewing as it runs.

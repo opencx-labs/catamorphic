@@ -111,6 +111,12 @@ export interface EnvironmentAdmitArgs {
   requirements: EnvironmentRequirements;
   /** The agent runs on the owner's own sign-in on the machine (ADR 0199). */
   signIn?: SignInHarness;
+  /**
+   * Admit as the program declares it at this published commit, Dockerfile
+   * included, instead of the newest `main` (ADR 0334): a cache fill builds
+   * its sandbox from the revision that went live.
+   */
+  commit?: string;
 }
 
 /** An Environment's setup as admission reads it (ADRs 0208, 0257). */
@@ -776,6 +782,7 @@ export class ExecutionEnvironmentsService {
     allocationBindingId?: string;
     requirements: EnvironmentRequirements;
     signIn?: SignInHarness;
+    commit?: string;
   }): Promise<
     | { admission: EnvironmentAdmission }
     | { bindingUnavailable: true; reasons: [] }
@@ -903,6 +910,8 @@ export class ExecutionEnvironmentsService {
     projectId: string;
     definition: ProjectEnvironmentDefinition;
     owner: string | null;
+    /** The published commit the definition was read at, if not `main`. */
+    commit?: string;
   }): Promise<EnvironmentSandbox | { reason: string }> {
     const { definition } = args;
     const egress = resolveEgress({
@@ -948,6 +957,7 @@ export class ExecutionEnvironmentsService {
       identity: args.identity,
       projectId: args.projectId,
       path: image.path,
+      ...(args.commit !== undefined ? { commit: args.commit } : {}),
     });
     if (content === null)
       return { reason: `Image Dockerfile ${image.path} does not exist` };

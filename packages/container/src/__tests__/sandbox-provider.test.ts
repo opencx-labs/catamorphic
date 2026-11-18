@@ -503,6 +503,57 @@ describe("ContainerSandboxProvider without Docker", () => {
     expect(fake.volumes.has(`work-volume-${generation(5)}`)).toBe(false);
   });
 
+  it("never removes a cache generation between a sandbox finding it and mounting it when every volume is removed (ADR 0334)", async () => {
+    let hold: (() => void) | undefined;
+    const held = new Promise<void>((resolve) => {
+      hold = resolve;
+    });
+    let reached: () => void = () => {};
+    const midway = new Promise<void>((resolve) => {
+      reached = resolve;
+    });
+    const { fake, provider } = await setup(undefined, {
+      beforeCreateContainer: async (body) => {
+        const mounts = Reflect.get(hostConfigOf(body), "Mounts");
+        const cache = (Array.isArray(mounts) ? mounts : []).find(
+          (mount: unknown) =>
+            typeof mount === "object" &&
+            mount !== null &&
+            Reflect.get(mount, "Source") === `work-volume-${generation(4)}` &&
+            Reflect.get(mount, "ReadOnly") === true,
+        );
+        if (cache) {
+          reached();
+          await held;
+        }
+      },
+    });
+    const machine = provider();
+    const fill = await machine.createSandbox({
+      volumes: [{ key: generation(4), path: "/cache" }],
+    });
+    await machine.destroySandbox(fill.id);
+    const reader = machine.createSandbox({
+      volumes: [{ key: generation(4), path: "/cache", readOnly: true }],
+    });
+    await midway;
+    // Settled into a value at once, so its refusal is never unhandled.
+    const removal = machine.volumes.removeAll().then(
+      () => undefined,
+      (error: unknown) => error,
+    );
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    expect(fake.volumes.has(`work-volume-${generation(4)}`)).toBe(true);
+    hold?.();
+    const handle = await reader;
+    // The reader holds it now, so the removal keeps it and says so.
+    const refused = await removal;
+    expect(refused).toBeInstanceOf(Error);
+    expect(String(refused)).toContain("still mounted by sandboxes");
+    expect(handle.skippedVolumes).toBeUndefined();
+    expect(fake.volumes.has(`work-volume-${generation(4)}`)).toBe(true);
+  });
+
   it("removes its own sandboxes before volumes only when asked", async () => {
     const { fake, provider } = await setup();
     const key = volumeKey({ projectId: "p", owner: "m", name: "cache" });

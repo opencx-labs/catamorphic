@@ -699,6 +699,27 @@ export function parseProjectEnvironmentPolicy(
   };
 }
 
+/** The Environment policy a manifest declares, or why it is invalid. */
+function parsePolicyContent(content: string | null): ProjectEnvironmentPolicy {
+  if (!content) {
+    return defaultEnvironmentPolicy();
+  }
+  try {
+    return parseProjectEnvironmentPolicy(JSON.parse(content));
+  } catch (cause) {
+    return {
+      environments: {},
+      entries: [],
+      secrets: {},
+      invalid: {
+        error: `Project manifest is not valid JSON: ${
+          cause instanceof Error ? cause.message : String(cause)
+        }`,
+      },
+    };
+  }
+}
+
 export class ProjectEnvironmentsService {
   constructor(
     private readonly db: Kysely<DB>,
@@ -708,8 +729,22 @@ export class ProjectEnvironmentsService {
   async list(args: {
     identity: Identity;
     projectId: string;
+    /**
+     * Read the program at this published commit instead of the newest
+     * `main`: a cache fill builds its sandbox from the revision that went
+     * live (ADR 0334).
+     */
+    commit?: string;
   }): Promise<ProjectEnvironmentPolicy> {
     await requireTenantProject(this.db, args.identity.tenantId, args.projectId);
+    if (args.commit !== undefined)
+      return parsePolicyContent(
+        await this.readAtCommit({
+          ...args,
+          commit: args.commit,
+          path: PROJECT_MANIFEST_PATH,
+        }),
+      );
     const publishedOnly =
       args.identity.scope !== undefined &&
       Boolean(
@@ -731,22 +766,24 @@ export class ProjectEnvironmentsService {
         publishedOnly,
       },
     );
-    if (!content) {
-      return defaultEnvironmentPolicy();
-    }
+    return parsePolicyContent(content);
+  }
+
+  /** A program file at one commit of the published program. */
+  private async readAtCommit(args: {
+    identity: Identity;
+    projectId: string;
+    commit: string;
+    path: string;
+  }): Promise<string | null> {
+    const repo = await this.projectManager.openPublished({
+      tenantId: args.identity.tenantId,
+      projectId: args.projectId,
+    });
     try {
-      return parseProjectEnvironmentPolicy(JSON.parse(content));
-    } catch (cause) {
-      return {
-        environments: {},
-        entries: [],
-        secrets: {},
-        invalid: {
-          error: `Project manifest is not valid JSON: ${
-            cause instanceof Error ? cause.message : String(cause)
-          }`,
-        },
-      };
+      return await readProgramFile(repo, args.commit, args.path);
+    } finally {
+      await repo.dispose();
     }
   }
 
@@ -754,6 +791,8 @@ export class ProjectEnvironmentsService {
     identity: Identity;
     projectId: string;
     name: string;
+    /** As for {@link list}. */
+    commit?: string;
   }): Promise<ProjectEnvironmentDefinition | undefined> {
     return (await this.list(args)).environments[args.name];
   }
@@ -766,8 +805,12 @@ export class ProjectEnvironmentsService {
     identity: Identity;
     projectId: string;
     path: string;
+    /** As for {@link list}: the Dockerfile of that same commit. */
+    commit?: string;
   }): Promise<string | null> {
     await requireTenantProject(this.db, args.identity.tenantId, args.projectId);
+    if (args.commit !== undefined)
+      return this.readAtCommit({ ...args, commit: args.commit });
     const publishedOnly =
       args.identity.scope !== undefined &&
       Boolean(
