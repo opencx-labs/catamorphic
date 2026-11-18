@@ -44,7 +44,11 @@ import { startTlsFront, type TlsFront } from "./testing/tls-front.js";
  * records GitHub's events as project events (ADR 0326); one container
  * machine under gVisor, enrolled as a review pool machine is; GitHub and
  * the model as stand-ins on loopback. The real workflows review and
- * publish:
+ * publish: the check shows each review in progress from before its turn
+ * starts, every finding posts inline while its turn still works, and the
+ * verdict completes the same check (ADR 0336); the machine reports its
+ * disk, and admission places the fill and the reviews within its floor
+ * (ADR 0335).
  *
  * - `acme/web` runs the pack as it ships: the built-in reviewer on the
  *   control plane on the server's own model, its tools in the review
@@ -107,6 +111,22 @@ const FIXTURE = fileURLToPath(
 );
 /** What the probe the pull request plants prints. */
 const PROBE = /^WORK-PROBE (\{.*\})$/m;
+const MIB = 1024 * 1024;
+/**
+ * The review machine's disk floor and the review cache's size, set as a
+ * team sizes them to its machines (ADR 0335): admission keeps the floor
+ * free and a fill reserves its cache's whole size, so the pack's 16 GiB
+ * cache and the default floor (10% of the disk) would make this test
+ * depend on how much free disk the machine running it has.
+ */
+const DISK_FLOOR_MB = 256;
+const REVIEW_CACHE_MB = 512;
+const MACHINE_ID = "worker.review-1";
+/** What the check says while a review is under way (ADR 0336). */
+const PHASES = ["Waiting to start", "Preparing the workspace", "Reviewing"];
+/** A finding's marker, which its inline comment ends with. */
+const findingMarker = (commit: string, id: string) =>
+  `<!-- work-review:${commit}:finding:${id} -->`;
 
 const execute = promisify(execFile);
 const git = async (cwd: string, args: readonly string[]) =>
@@ -134,9 +154,10 @@ function filesOf(folder: string): Record<string, string> {
 /**
  * The review and polling packs' files for `repository`, installed as their
  * docs say: the packs' Environments merged, the repository named in every
- * trigger and constant, and the `prod` and `slack` bindings this
- * organization has not set up left out. The image also trusts the test's
- * own CA, as a production image trusts the public chain.
+ * trigger and constant, the `prod` and `slack` bindings this organization
+ * has not set up left out, and the review cache sized to the machine. The
+ * image also trusts the test's own CA, as a production image trusts the
+ * public chain.
  */
 function reviewPack(input: {
   repository: string;
@@ -157,6 +178,8 @@ function reviewPack(input: {
   const review = manifest.environments.review;
   expect(review.commands).toEqual({ separate: true, connections: ["git"] });
   expect(review.caches.pnpm.path).toBe("~/.cache/work/pnpm-store");
+  expect(review.caches.pnpm.sizeMb).toBe(16384);
+  review.caches.pnpm.sizeMb = REVIEW_CACHE_MB;
   delete review.connections.prod;
   delete review.connections.slack;
   manifest.environments["github-poller"] = JSON.parse(
@@ -272,6 +295,19 @@ describe.skipIf(!enabled)(
     const projects = new Map<string, Reviewed>();
     const inspections = new Map<string, Inspection>();
     const lookFailures: string[] = [];
+    /** The head's check runs as each turn's first model call found them. */
+    const progressAtStart = new Map<
+      string,
+      Array<{ status: string; title: unknown }>
+    >();
+    /**
+     * Each turn's first finding on GitHub while the turn still worked: the
+     * turn's status then, and whether the verdict was posted yet.
+     */
+    const midTurn = new Map<
+      string,
+      { turnStatuses: string[]; verdictPosted: boolean }
+    >();
     let clock = Date.now();
 
     const db = () => server.catamorphic.core.db;
@@ -339,6 +375,8 @@ describe.skipIf(!enabled)(
         .select(["environment_name", "status", "release_reason"])
         .execute(),
       looks: lookFailures,
+      progressAtStart: Object.fromEntries(progressAtStart),
+      midTurn: Object.fromEntries(midTurn),
       github: github.calls
         .slice(-15)
         .map((call) => `${call.method} ${call.path} ${call.status}`),
@@ -480,6 +518,54 @@ describe.skipIf(!enabled)(
       await fire(project.projectId, ["pollGithub"]);
       return head;
     }
+
+    /** The App's "Work review" runs on a commit, with what each says. */
+    const runsOn = (project: Reviewed, commit: string) =>
+      project.github.checkRuns
+        .filter((run) => run.head_sha === commit && run.name === "Work review")
+        .map((run) => ({
+          ...run,
+          title: JSON.parse(JSON.stringify(run.output ?? {})).title as unknown,
+        }));
+    /** The review that carries a turn's verdict: stamped by its turn. */
+    const verdictReview = (project: Reviewed, commit: string) =>
+      project.github.reviews.find(
+        (entry) =>
+          entry.commit_id === commit &&
+          /<!-- work-review:[0-9a-f-]{36}:review -->$/.test(entry.body),
+      );
+    /** What a project wrote to GitHub, a check run's id left out. */
+    const writeKinds = (project: Reviewed) =>
+      project.github
+        .writes()
+        .map(
+          (write) =>
+            `${write.method} ${write.path.replace(/\/check-runs\/\d+$/, "/check-runs/:id")}`,
+        );
+    const operatorMachines = async () =>
+      (
+        await server.operatorApp.inject({
+          method: "GET",
+          url: "/_work/operator/machines",
+          headers: { authorization: `Bearer ${OPERATOR_SECRET}` },
+        })
+      ).json() as {
+        machines: Array<{
+          id: string;
+          descriptor: {
+            capabilities: string[];
+            resources: { storageMb?: number };
+          };
+          disk?: {
+            totalBytes: number;
+            freeBytes: number;
+            floorBytes: number;
+            criticalBytes: number;
+          };
+          diskFresh: boolean;
+          acceptingWork: boolean;
+        }>;
+      };
 
     /** The poster's runs of a project, once none is still queued or running. */
     const settledPosts = async (project: Reviewed, count: number) =>
@@ -869,6 +955,12 @@ describe.skipIf(!enabled)(
       expect(output).toContain(look.command.hostname);
       expect(output).toContain("tests passed");
       expect(reviewTurn?.readOutput).toContain("isNumber(line.amount)");
+      // Each finding was recorded as it was submitted, a resubmission
+      // too, and then the review, which lists none (ADR 0336).
+      expect(reviewTurn?.findings?.length).toBeGreaterThan(0);
+      for (const finding of reviewTurn?.findings ?? [])
+        expect(finding.answer).toMatch(/Recorded the finding result/);
+      expect(reviewTurn?.submitted).not.toHaveProperty("comments");
       expect(reviewTurn?.submitAnswer).toMatch(/Recorded the review result/);
 
       // The probe found the gateway and tried everything it read as a key
@@ -906,6 +998,13 @@ describe.skipIf(!enabled)(
       await waitFor(
         `${project.repository}'s runs and turns to settle`,
         async () => {
+          const failed = (await runsOf(project.projectId, "postReviews")).find(
+            (run) => run.status === "failed",
+          );
+          if (failed)
+            throw new Error(
+              `postReviews failed: ${JSON.stringify(failed.error)}`,
+            );
           const runs = await db()
             .selectFrom("workflow_runs")
             .select("status")
@@ -933,22 +1032,58 @@ describe.skipIf(!enabled)(
             call.query.service === "git-receive-pack"),
       );
 
-    /** One check run and one review on the commit, by the App. */
-    function expectPublishedOnce(
+    /**
+     * What a head's review published, by the App: one check run, shown in
+     * progress and completed by the verdict, saying only what the review
+     * was doing until then; each finding once, inline, in a review of its
+     * own; and one review with the verdict that repeats none of them
+     * (ADR 0336).
+     */
+    function expectPublished(
       project: Reviewed,
       commit: string,
-      verdict: { conclusion: string; state: string },
+      verdict: { conclusion: string; state: string; findings: string[] },
     ) {
+      const [run, ...others] = runsOn(project, commit);
+      expect(others).toEqual([]);
+      expect(run).toMatchObject({
+        status: "completed",
+        conclusion: verdict.conclusion,
+        app: { slug: "work-acme" },
+        external_id: expect.stringMatching(/^work-review:1:progress:/),
+      });
+      const writes = project.github.writes();
       expect(
-        project.github.checkRuns.filter((run) => run.head_sha === commit),
+        writes.filter(
+          (write) =>
+            write.method === "POST" &&
+            write.path.endsWith("/check-runs") &&
+            JSON.stringify(write.body).includes(commit),
+        ),
       ).toMatchObject([
         {
-          name: "Work review",
-          status: "completed",
-          conclusion: verdict.conclusion,
-          app: { slug: "work-acme" },
+          body: {
+            name: "Work review",
+            head_sha: commit,
+            status: "in_progress",
+          },
         },
       ]);
+      const updates = writes.filter(
+        (write) =>
+          write.method === "PATCH" &&
+          write.path.endsWith(`/check-runs/${run?.id}`),
+      );
+      expect(updates.at(-1)?.body).toMatchObject({
+        status: "completed",
+        conclusion: verdict.conclusion,
+      });
+      for (const update of updates.slice(0, -1)) {
+        expect(update.body).not.toHaveProperty("conclusion");
+        expect(PHASES).toContain(
+          JSON.parse(JSON.stringify(update.body)).output?.title,
+        );
+      }
       // Every review names the commit it is for.
       expect(
         project.github.reviews.filter(
@@ -958,19 +1093,66 @@ describe.skipIf(!enabled)(
       const reviews = project.github.reviews.filter(
         (entry) => entry.commit_id === commit,
       );
-      expect(reviews).toMatchObject([
-        {
-          state: verdict.state,
+      const verdictOne = verdictReview(project, commit);
+      expect(
+        reviews.filter((entry) => entry !== verdictOne),
+        "the findings' own reviews",
+      ).toMatchObject(
+        verdict.findings.map((id) => ({
+          state: "COMMENTED",
           user: github.bot,
+          body: findingMarker(commit, id),
           comments: [
             {
               path: "src/total.js",
               side: "RIGHT",
               line: expect.any(Number),
+              body: expect.stringMatching(
+                new RegExp(`${findingMarker(commit, id)}$`),
+              ),
             },
           ],
+        })),
+      );
+      for (const id of verdict.findings)
+        expect(
+          project.github.reviewComments.filter((comment) =>
+            comment.body.endsWith(findingMarker(commit, id)),
+          ),
+          `${id} posted once`,
+        ).toHaveLength(1);
+      expect(verdictOne).toMatchObject({
+        state: verdict.state,
+        user: github.bot,
+        comments: [],
+      });
+      expect(verdictOne?.body).not.toContain(":finding:");
+    }
+
+    /**
+     * A head's progress as its turn started: its check run was already
+     * in progress, saying the review waited or was being prepared.
+     */
+    function expectProgressBeforeStart(repository: string, turn: number) {
+      expect(
+        progressAtStart.get(`${repository}#${turn}`),
+        lookFailures.join("; "),
+      ).toEqual([
+        {
+          status: "in_progress",
+          title: expect.stringMatching(
+            /^(?:Waiting to start|Preparing the workspace)$/,
+          ),
         },
       ]);
+    }
+
+    /** A turn's first finding was on GitHub while the turn still worked. */
+    function expectFindingMidTurn(repository: string, turn: number) {
+      expect(
+        midTurn.get(`${repository}#${turn}`),
+        lookFailures.join("; "),
+      ).toEqual({ turnStatuses: ["running"], verdictPosted: false });
     }
 
     beforeAll(async () => {
@@ -996,15 +1178,41 @@ describe.skipIf(!enabled)(
           privateKey: APP_KEY,
         },
       });
+      /** The line the change's fix is on, in the author's working copy. */
+      const fixLine = (project: Reviewed) =>
+        fs
+          .readFileSync(path.join(project.work, "src", "total.js"), "utf8")
+          .split("\n")
+          .findIndex((text) => text.includes("isNumber(")) + 1;
+      const reviewedCommitOf = (commandOutput: string) =>
+        /\b[0-9a-f]{40}\b/.exec(commandOutput)?.[0] ?? "";
       model = await startReviewModel({
         command: "git rev-parse HEAD && hostname && pnpm test",
         read: "src/total.js",
         onTurnStart: async (step) => {
           const repository = repositoryOf(step);
+          const key = `${repository}#${step.turn}`;
           try {
-            inspections.set(
-              `${repository}#${step.turn}`,
-              await inspectSandbox(reviewed(repository)),
+            const project = reviewed(repository);
+            const head = project.heads.at(-1) ?? "";
+            // What the head's check said before this first model call.
+            progressAtStart.set(
+              key,
+              runsOn(project, head).map(({ status, title }) => ({
+                status,
+                title,
+              })),
+            );
+            inspections.set(key, await inspectSandbox(project));
+            // While the turn works, its check says so.
+            await waitFor(
+              `${key}'s check to say it is reviewing`,
+              () =>
+                runsOn(project, head).find(
+                  (run) =>
+                    run.status === "in_progress" && run.title === "Reviewing",
+                ),
+              3 * MINUTES,
             );
           } catch (error) {
             // Kept for the assertion that reads the look, which then says
@@ -1014,15 +1222,72 @@ describe.skipIf(!enabled)(
             );
           }
         },
-        review: (step) => {
+        // One verified problem a turn, submitted again after it posted: a
+        // resubmission posts nothing (ADR 0336).
+        findings: (step) => {
           const project = reviewed(repositoryOf(step));
-          const reviewedCommit =
-            /\b[0-9a-f]{40}\b/.exec(step.commandOutput)?.[0] ?? "";
-          const line =
-            fs
-              .readFileSync(path.join(project.work, "src", "total.js"), "utf8")
-              .split("\n")
-              .findIndex((text) => text.includes("isNumber(")) + 1;
+          const finding =
+            step.turn === 1
+              ? {
+                  id: "string-amount",
+                  path: "src/total.js",
+                  line: fixLine(project),
+                  severity: "blocking",
+                  title: "A numeric string is counted",
+                  body: 'is-number accepts numeric strings, so an amount of "3" is added as 3.',
+                }
+              : {
+                  id: "rounding",
+                  path: "src/total.js",
+                  line: fixLine(project),
+                  severity: "minor",
+                  title: "Rounding each line",
+                  body: "Rounding each line before summing keeps cents exact.",
+                };
+          return step.turn === 1 ? [finding, finding] : [finding];
+        },
+        onFinding: async (step) => {
+          if (step.index > 0) return;
+          const repository = repositoryOf(step);
+          const key = `${repository}#${step.turn}`;
+          try {
+            const project = reviewed(repository);
+            const commit =
+              reviewedCommitOf(
+                model.turnsOf(`${repository}#1`)[step.turn - 1]
+                  ?.commandOutput ?? "",
+              ) ||
+              (project.heads.at(-1) ?? "");
+            const marker = findingMarker(commit, String(step.finding.id));
+            // The poster posts it while this turn waits on its next step.
+            await waitFor(
+              `${key}'s finding inline on GitHub`,
+              () =>
+                project.github.reviewComments.find((comment) =>
+                  comment.body.endsWith(marker),
+                ),
+              3 * MINUTES,
+            );
+            const chat = await reviewChat(project);
+            const turns = await db()
+              .selectFrom("agent_turns")
+              .select("status")
+              .where("session_id", "=", chat?.id ?? "")
+              .where("status", "in", ["queued", "preparing", "running"])
+              .execute();
+            midTurn.set(key, {
+              turnStatuses: turns.map((turn) => turn.status),
+              verdictPosted: verdictReview(project, commit) !== undefined,
+            });
+          } catch (error) {
+            lookFailures.push(
+              `${key} finding: ${error instanceof Error ? error.message : String(error)}`,
+            );
+          }
+        },
+        // The review carries the verdict alone: its findings are posted.
+        review: (step) => {
+          const reviewedCommit = reviewedCommitOf(step.commandOutput);
           return step.turn === 1
             ? {
                 reviewedCommit,
@@ -1032,13 +1297,6 @@ describe.skipIf(!enabled)(
                   "One blocking issue: a string amount is counted, so a total can mix units.",
                 checkSummary:
                   "Ran the tests (they pass) and read src/total.js at the head.",
-                comments: [
-                  {
-                    path: "src/total.js",
-                    line,
-                    body: 'is-number accepts numeric strings, so an amount of "3" is added as 3.',
-                  },
-                ],
               }
             : {
                 reviewedCommit,
@@ -1047,13 +1305,6 @@ describe.skipIf(!enabled)(
                 summary: "The total is in cents now; nothing blocks.",
                 checkSummary:
                   "Ran the tests at the new head (they pass) and read src/total.js.",
-                comments: [
-                  {
-                    path: "src/total.js",
-                    line,
-                    body: "Rounding each line before summing keeps cents exact.",
-                  },
-                ],
               };
         },
       });
@@ -1170,6 +1421,7 @@ describe.skipIf(!enabled)(
           WORK_CONTAINER_RUNTIME: "runsc",
           WORK_SANDBOX_IMAGE: SANDBOX_IMAGE,
           WORK_MAX_WORKSPACES: "4",
+          WORK_DISK_FLOOR_MB: String(DISK_FLOOR_MB),
           PATH: process.env.PATH,
           ...(process.env.DOCKER_HOST
             ? { DOCKER_HOST: process.env.DOCKER_HOST }
@@ -1235,9 +1487,8 @@ describe.skipIf(!enabled)(
           const asked = model.requests.length;
           const head = await openPullRequest(project);
           await waitFor(
-            "the first head's review on GitHub",
-            () =>
-              project.github.reviews.find((entry) => entry.commit_id === head),
+            "the first head's verdict on GitHub",
+            () => verdictReview(project, head),
             20 * MINUTES,
           );
           const posts = await settledPosts(project, 1);
@@ -1251,22 +1502,90 @@ describe.skipIf(!enabled)(
           for (const request of calls)
             expect(request.headers?.["x-api-key"]).toBe(SERVER_MODEL_KEY);
           await settle(project);
-          expectPublishedOnce(project, head, {
+          // The check was in progress before the turn's first model call
+          // (its new sandbox, checkout and setup take far longer than a
+          // publication), the finding was inline while the turn worked,
+          // and the verdict completed the same check.
+          expectProgressBeforeStart(SHIPPED, 1);
+          expectFindingMidTurn(SHIPPED, 1);
+          expectPublished(project, head, {
             conclusion: "failure",
             state: "CHANGES_REQUESTED",
+            findings: ["string-amount"],
           });
           expect(pushesTo(SHIPPED)).toEqual([]);
           for (const write of project.github.writes())
             expect(write.credential).toBe("installation");
-          expect(
-            project.github
-              .writes()
-              .map((write) => `${write.method} ${write.path}`)
-              .sort(),
-          ).toEqual([
+          const kinds = writeKinds(project);
+          expect([...new Set(kinds)].sort()).toEqual([
+            `PATCH /repos/${SHIPPED}/check-runs/:id`,
             `POST /repos/${SHIPPED}/check-runs`,
             `POST /repos/${SHIPPED}/pulls/1/reviews`,
           ]);
+          expect(
+            kinds.filter((kind) => kind.startsWith("POST")).sort(),
+          ).toEqual([
+            `POST /repos/${SHIPPED}/check-runs`,
+            `POST /repos/${SHIPPED}/pulls/1/reviews`,
+            `POST /repos/${SHIPPED}/pulls/1/reviews`,
+          ]);
+
+          // The machine reports its disk, and admission placed the fill and
+          // the review within it (ADR 0335): the fill reserved its cache's
+          // size; the review's Environment asks for no storage.
+          const listed = (await operatorMachines()).machines.find(
+            (entry) => entry.id === MACHINE_ID,
+          );
+          expect(listed).toMatchObject({
+            diskFresh: true,
+            acceptingWork: true,
+            disk: { floorBytes: DISK_FLOOR_MB * MIB },
+          });
+          const disk = listed?.disk;
+          if (!disk) throw new Error("The review machine reports no disk");
+          expect(disk.freeBytes).toBeGreaterThan(disk.floorBytes);
+          expect(disk.criticalBytes).toBeLessThanOrEqual(disk.floorBytes);
+          expect(listed?.descriptor.capabilities).toContain("disk");
+          expect(listed?.descriptor.resources.storageMb).toBe(
+            Math.floor((disk.totalBytes - disk.floorBytes) / MIB),
+          );
+          const fillAllocation = await db()
+            .selectFrom("environment_cache_fills as fill")
+            .innerJoin(
+              "execution_allocations as allocation",
+              "allocation.id",
+              "fill.allocation_id",
+            )
+            .select([
+              "allocation.worker_node_id",
+              "allocation.reserved_storage_mb",
+            ])
+            .where("fill.project_id", "=", project.projectId)
+            .where("fill.status", "=", "succeeded")
+            .executeTakeFirstOrThrow();
+          expect(fillAllocation).toEqual({
+            worker_node_id: MACHINE_ID,
+            reserved_storage_mb: REVIEW_CACHE_MB,
+          });
+          const chatAllocation = await db()
+            .selectFrom("agent_sessions")
+            .innerJoin(
+              "execution_allocations as allocation",
+              "allocation.id",
+              "agent_sessions.allocation_id",
+            )
+            .select([
+              "allocation.worker_node_id",
+              "allocation.reserved_storage_mb",
+              "allocation.status",
+            ])
+            .where("agent_sessions.project_id", "=", project.projectId)
+            .where("agent_sessions.chat_key", "=", project.chatKey)
+            .executeTakeFirstOrThrow();
+          expect(chatAllocation).toMatchObject({
+            worker_node_id: MACHINE_ID,
+            reserved_storage_mb: 0,
+          });
         },
         30 * MINUTES,
       );
@@ -1283,9 +1602,8 @@ describe.skipIf(!enabled)(
           // The poller records `synchronize`; the chat moves to the new head.
           await fire(project.projectId, ["pollGithub"]);
           await waitFor(
-            "the pushed head's review on GitHub",
-            () =>
-              project.github.reviews.find((entry) => entry.commit_id === head),
+            "the pushed head's verdict on GitHub",
+            () => verdictReview(project, head),
             20 * MINUTES,
           );
           await settledPosts(project, 2);
@@ -1304,14 +1622,18 @@ describe.skipIf(!enabled)(
           for (const request of model.requests.slice(asked))
             expect(request.headers?.["x-api-key"]).toBe(SERVER_MODEL_KEY);
           await settle(project);
-          // Each head carries its own check run and review, once.
-          expectPublishedOnce(project, previous, {
+          // Each head carries its own check run, findings and review, once;
+          // the new head's check was in progress while its turn worked.
+          expectFindingMidTurn(SHIPPED, 2);
+          expectPublished(project, previous, {
             conclusion: "failure",
             state: "CHANGES_REQUESTED",
+            findings: ["string-amount"],
           });
-          expectPublishedOnce(project, head, {
+          expectPublished(project, head, {
             conclusion: "success",
             state: "COMMENTED",
+            findings: ["rounding"],
           });
           expect(pushesTo(SHIPPED)).toEqual([]);
         },
@@ -1325,6 +1647,7 @@ describe.skipIf(!enabled)(
           const chat = await reviewChat(project);
           const container = await commandContainerOf(project);
           expect(container).not.toBe("");
+          const written = project.github.writes().length;
           project.github.close({ number: 1 });
           // The poller records `closed`; closePullRequestChats closes the chat.
           await fire(project.projectId, ["pollGithub"]);
@@ -1357,18 +1680,12 @@ describe.skipIf(!enabled)(
             .where("agent_sessions.id", "=", chat?.id ?? "")
             .executeTakeFirstOrThrow();
           expect(allocation.status).toBe("released");
-          // Closing posts nothing.
+          // Closing posts nothing: no check of the head is in progress.
+          await settle(project);
+          expect(project.github.writes().slice(written)).toEqual([]);
           expect(
-            project.github
-              .writes()
-              .map((write) => `${write.method} ${write.path}`)
-              .sort(),
-          ).toEqual([
-            `POST /repos/${SHIPPED}/check-runs`,
-            `POST /repos/${SHIPPED}/check-runs`,
-            `POST /repos/${SHIPPED}/pulls/1/reviews`,
-            `POST /repos/${SHIPPED}/pulls/1/reviews`,
-          ]);
+            writeKinds(project).filter((kind) => kind.startsWith("POST")),
+          ).toHaveLength(6);
           expect(pushesTo(SHIPPED)).toEqual([]);
         },
         15 * MINUTES,
@@ -1392,9 +1709,8 @@ describe.skipIf(!enabled)(
           const asked = model.requests.length;
           const head = await openPullRequest(project);
           await waitFor(
-            "the Claude Code review on GitHub",
-            () =>
-              project.github.reviews.find((entry) => entry.commit_id === head),
+            "the Claude Code review's verdict on GitHub",
+            () => verdictReview(project, head),
             20 * MINUTES,
           );
           await settledPosts(project, 1);
@@ -1442,22 +1758,23 @@ describe.skipIf(!enabled)(
             expect(request.headers?.["x-api-key"]).toBe(CONNECTION_MODEL_KEY);
 
           // Published once, and still once when everything has settled.
-          expectPublishedOnce(project, head, {
+          const published = {
             conclusion: "failure",
             state: "CHANGES_REQUESTED",
-          });
+            findings: ["string-amount"],
+          };
+          expectPublished(project, head, published);
           await settle(project);
-          expectPublishedOnce(project, head, {
-            conclusion: "failure",
-            state: "CHANGES_REQUESTED",
-          });
+          expectProgressBeforeStart(CLAUDE_CODE, 1);
+          expectFindingMidTurn(CLAUDE_CODE, 1);
+          expectPublished(project, head, published);
           expect(
-            project.github
-              .writes()
-              .map((write) => `${write.method} ${write.path}`)
+            writeKinds(project)
+              .filter((kind) => kind.startsWith("POST"))
               .sort(),
           ).toEqual([
             `POST /repos/${CLAUDE_CODE}/check-runs`,
+            `POST /repos/${CLAUDE_CODE}/pulls/1/reviews`,
             `POST /repos/${CLAUDE_CODE}/pulls/1/reviews`,
           ]);
           expect(pushesTo(CLAUDE_CODE)).toEqual([]);

@@ -8,8 +8,9 @@ import {
 /**
  * A model on loopback that drives a harness through a pull request review,
  * for end-to-end tests: each turn runs the change's tests with the
- * harness's shell tool, reads one file with its read tool, and submits a
- * typed `review` result with Work's `submit_result`, then ends. It speaks
+ * harness's shell tool, reads one file with its read tool, submits each
+ * verified problem as a typed `finding` result and then its `review` with
+ * Work's `submit_result` (ADR 0336), then ends. It speaks
  * the Anthropic Messages API, so it stands in for a provider wherever one
  * is reached (a server's own model, a model connection behind the
  * gateway), and it drives either harness Work runs a reviewer on: the
@@ -33,6 +34,8 @@ export interface ReviewTurn {
   commandOutput?: string;
   /** The file the read tool returned. */
   readOutput?: string;
+  /** The findings it submitted, in order, with what each answer said. */
+  findings?: Array<{ value: JsonObject; answer?: string }>;
   /** The review it submitted. */
   submitted?: JsonObject;
   /** What `submit_result` answered. */
@@ -52,6 +55,18 @@ export interface ReviewScript {
   command: string;
   /** A file each turn reads with the harness's read tool, in the checkout. */
   read: string;
+  /**
+   * The findings a turn submits after its read and before its review, in
+   * order (a resubmission is an id again); none when absent.
+   */
+  findings?(input: ReviewStep & { commandOutput: string }): JsonObject[];
+  /**
+   * Called once `submit_result` answered a finding, before the turn's next
+   * step: the turn is still at work, its harness waiting on this model.
+   */
+  onFinding?(
+    input: ReviewStep & { index: number; finding: JsonObject; answer: string },
+  ): Promise<void>;
   /** The review a turn submits, from what its command printed. */
   review(input: ReviewStep & { commandOutput: string }): JsonObject;
   /**
@@ -64,12 +79,15 @@ export interface ReviewScript {
 const RUN = "toolu_run_";
 const READ = "toolu_read_";
 const SUBMIT = "toolu_submit_";
+const FINDING = "toolu_finding_";
 
 export async function startReviewModel(
   script: ReviewScript,
 ): Promise<ReviewModel> {
   const chats = new Map<string, ReviewTurn[]>();
   const started = new Set<string>();
+  /** A finding's hook, once per finding: a retried request waits on it too. */
+  const noticed = new Map<string, Promise<void>>();
   const reply = async (request: ScriptedRequest): Promise<ScriptedReply> => {
     const tools = toolNames(request.body);
     const claudeCode = tools.includes("Bash");
@@ -131,19 +149,54 @@ export async function startReviewModel(
         ],
       };
     }
-    if (answered.id.startsWith(READ)) {
-      current.readOutput = answered.text;
-      const submit = tools.find(
-        (name) => name === "submit_result" || name.endsWith("__submit_result"),
-      );
+    const submit = tools.find(
+      (name) => name === "submit_result" || name.endsWith("__submit_result"),
+    );
+    if (answered.id.startsWith(READ) || answered.id.startsWith(FINDING)) {
       if (!submit)
         return {
           blocks: [{ type: "text", text: "Work's submit_result is missing." }],
         };
-      const value = script.review({
-        ...step,
-        commandOutput: current.commandOutput ?? "",
-      });
+      const input = { ...step, commandOutput: current.commandOutput ?? "" };
+      const findings = script.findings?.(input) ?? [];
+      let next = 0;
+      if (answered.id.startsWith(READ)) current.readOutput = answered.text;
+      else {
+        const index = Number(answered.id.split("_").at(-1));
+        const finding = findings[index] ?? {};
+        current.findings ??= [];
+        current.findings[index] = { value: finding, answer: answered.text };
+        const key = `${prompt}\n${turn}\n${index}`;
+        const hook =
+          noticed.get(key) ??
+          Promise.resolve(
+            script.onFinding?.({
+              ...step,
+              index,
+              finding,
+              answer: answered.text,
+            }),
+          );
+        noticed.set(key, hook);
+        await hook;
+        next = index + 1;
+      }
+      const finding = findings[next];
+      if (finding) {
+        current.findings ??= [];
+        current.findings[next] ??= { value: finding };
+        return {
+          blocks: [
+            {
+              type: "tool_use",
+              id: `${FINDING}${turn}_${next}`,
+              name: submit,
+              input: { name: "finding", value: finding },
+            },
+          ],
+        };
+      }
+      const value = script.review(input);
       current.submitted = value;
       return {
         blocks: [

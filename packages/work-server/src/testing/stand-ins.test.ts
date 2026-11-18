@@ -220,6 +220,55 @@ describe("the stand-in GitHub", () => {
       body: "{",
     });
     expect(unparsed.status).toBe(400);
+    // A run in progress is read and rewritten by id, as the review's
+    // progress is (ADR 0336); a conclusion completes it.
+    const started = (await (
+      await api("/repos/acme/web/check-runs", token, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          name: "Work review",
+          head_sha: pull.head.sha,
+          external_id: "work-review:1:progress:e",
+          status: "in_progress",
+          output: { title: "Waiting to start", summary: "Queued" },
+        }),
+      })
+    ).json()) as { id: number };
+    const patch = (body: object) =>
+      api(`/repos/acme/web/check-runs/${started.id}`, token, {
+        method: "PATCH",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify(body),
+      });
+    expect(
+      (await patch({ output: { title: "Reviewing", summary: "At work" } }))
+        .status,
+    ).toBe(200);
+    expect(
+      await (
+        await api(`/repos/acme/web/check-runs/${started.id}`, token)
+      ).json(),
+    ).toMatchObject({
+      status: "in_progress",
+      conclusion: null,
+      external_id: "work-review:1:progress:e",
+      output: { title: "Reviewing" },
+    });
+    await patch({
+      conclusion: "failure",
+      output: { title: "Changes requested", summary: "One finding" },
+    });
+    expect(web.checkRuns.at(-1)).toMatchObject({
+      status: "completed",
+      conclusion: "failure",
+      output: { title: "Changes requested" },
+    });
+    expect((await api("/repos/acme/web/check-runs/1", token)).status).toBe(404);
+    // A pull request's commits, oldest first: those its head adds to main.
+    expect(
+      await (await api("/repos/acme/web/pulls/1/commits", token)).json(),
+    ).toEqual([{ sha: pull.head.sha }]);
     // Its fetch reaches it and nothing else.
     await expect(github.fetch("https://api.github.com/zen")).rejects.toThrow(
       "refused",
@@ -338,6 +387,75 @@ describe("the review model", () => {
       },
       {},
     ]);
+  });
+
+  it("submits a turn's findings one by one before its review, waiting on each one's hook once", async () => {
+    const noticed: string[] = [];
+    model = await startReviewModel({
+      command: "pnpm test",
+      read: "src/total.js",
+      findings: () => [{ id: "a" }, { id: "b" }],
+      onFinding: async ({ index, finding, answer }) => {
+        noticed.push(`${index} ${String(finding.id)} ${answer}`);
+      },
+      review: () => ({ verdict: "COMMENT" }),
+    });
+    const prompt = { role: "user", content: "Review pull request 1" };
+    const result = (id: string, text: string) => ({
+      role: "user",
+      content: [{ type: "tool_result", tool_use_id: id, content: text }],
+    });
+    const history: unknown[] = [
+      prompt,
+      { role: "assistant", content: [] },
+      result("toolu_run_1", "tests passed"),
+      { role: "assistant", content: [] },
+      result("toolu_read_1", "the file"),
+    ];
+    expect(toolUse(await call(history))).toMatchObject({
+      block: { id: "toolu_finding_1_0" },
+      input: { name: "finding", value: { id: "a" } },
+    });
+    history.push(
+      { role: "assistant", content: [] },
+      result("toolu_finding_1_0", "Recorded a"),
+    );
+    expect(toolUse(await call(history))).toMatchObject({
+      block: { id: "toolu_finding_1_1" },
+      input: { name: "finding", value: { id: "b" } },
+    });
+    // A retried request asks for the same step and runs no hook again.
+    expect(toolUse(await call(history)).block).toMatchObject({
+      id: "toolu_finding_1_1",
+    });
+    history.push(
+      { role: "assistant", content: [] },
+      result("toolu_finding_1_1", "Recorded b"),
+    );
+    expect(toolUse(await call(history))).toMatchObject({
+      block: { id: "toolu_submit_1" },
+      input: { name: "review", value: { verdict: "COMMENT" } },
+    });
+    expect(noticed).toEqual(["0 a Recorded a", "1 b Recorded b"]);
+    expect(model.turnsOf("pull request 1")).toMatchObject([
+      {
+        findings: [
+          { value: { id: "a" }, answer: "Recorded a" },
+          { value: { id: "b" }, answer: "Recorded b" },
+        ],
+        submitted: { verdict: "COMMENT" },
+      },
+    ]);
+    // Findings are no review: the next message is still the first turn's.
+    history.push(
+      { role: "assistant", content: [] },
+      result("toolu_submit_1", "Recorded the review"),
+      { role: "assistant", content: [] },
+      { role: "user", content: "New commits" },
+    );
+    expect(toolUse(await call(history)).block).toMatchObject({
+      id: "toolu_run_2",
+    });
   });
 
   it("speaks the built-in agent's tools, and keeps each chat's turns apart", async () => {

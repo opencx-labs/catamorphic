@@ -16,7 +16,9 @@ const execute = promisify(execFile);
  * App's token flow minted (itself signed with the App's key) is accepted.
  *
  * Routes are a table keyed by method and path pattern: an endpoint a
- * recipe starts calling is one entry.
+ * recipe starts calling is one entry. The review recipe's progress (ADR
+ * 0336) reads and rewrites a check run by id and lists a pull request's
+ * commits; its findings are reviews of their own.
  */
 export interface GithubStandIn {
   /** The REST API base and the web base (Git remotes): one origin. */
@@ -756,6 +758,32 @@ async function standInRepository(args: {
     },
     {
       method: "GET",
+      pattern: new RegExp(`^${repo}/check-runs/(\\d+)$`),
+      credential: "installation",
+      handle: ({ match }) => ({ body: checkRunOf(match[1]) }),
+    },
+    {
+      method: "PATCH",
+      pattern: new RegExp(`^${repo}/check-runs/(\\d+)$`),
+      credential: "installation",
+      // As GitHub does: a conclusion completes the run, and what is not
+      // named stays as it was.
+      handle: ({ match, body }) => {
+        const run = checkRunOf(match[1]);
+        if (typeof body.name === "string") run.name = body.name;
+        if (typeof body.external_id === "string")
+          run.external_id = body.external_id;
+        if (typeof body.status === "string") run.status = body.status;
+        if (typeof body.conclusion === "string") {
+          run.conclusion = body.conclusion;
+          run.status = "completed";
+        }
+        if (body.output !== undefined) run.output = body.output;
+        return { body: run };
+      },
+    },
+    {
+      method: "GET",
       pattern: new RegExp(`^${repo}/commits/([0-9a-f]{40})/check-runs$`),
       credential: "installation",
       handle: ({ match, query }) => {
@@ -769,7 +797,32 @@ async function standInRepository(args: {
         };
       },
     },
+    {
+      method: "GET",
+      pattern: new RegExp(`^${repo}/pulls/(\\d+)/commits$`),
+      credential: "installation",
+      // The pull request's commits, oldest first, as GitHub lists them.
+      handle: async ({ match, query }) => {
+        const pull = pullOf(match[1]);
+        const commits = (
+          await git([
+            "rev-list",
+            "--reverse",
+            `${pull.base.sha}..${pull.head.sha}`,
+          ])
+        )
+          .split("\n")
+          .filter(Boolean);
+        return { body: page(commits, query).map((sha) => ({ sha })) };
+      },
+    },
   ];
+
+  function checkRunOf(id: string | undefined): StandInCheckRun {
+    const run = checkRuns.find((entry) => entry.id === Number(id));
+    if (!run) throw new NotFound();
+    return run;
+  }
 
   /** Comments changed at or after `since`, in GitHub's order for the list. */
   function sinceSorted(
