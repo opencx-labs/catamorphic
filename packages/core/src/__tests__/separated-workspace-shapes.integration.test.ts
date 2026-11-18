@@ -402,16 +402,18 @@ describe("a separated sandbox's shape follows its chat's harness (ADR 0332)", ()
         .catch((error: unknown) => {
           if (!(error instanceof AgentTurnUnsettledError)) throw error;
         });
-      let row: { requirements: unknown } | undefined;
-      await until("its wait is recorded", async () => {
-        row = await db
+      const recorded = () =>
+        db
           .selectFrom("placement_waits")
           .select("requirements")
           .where("root_workload_id", "=", chat.id)
           .executeTakeFirst();
-        return Boolean(row);
-      });
-      return (row?.requirements as { resources?: unknown }).resources;
+      await until("its wait is recorded", async () =>
+        Boolean(await recorded()),
+      );
+      const row = await recorded();
+      return (row?.requirements as { resources?: unknown } | undefined)
+        ?.resources;
     };
     agents.set("reviewer", builtin("reviewer"));
     // The built-in agent's workspace is the command container alone.
