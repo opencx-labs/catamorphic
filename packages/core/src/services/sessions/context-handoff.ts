@@ -9,6 +9,7 @@ import type { DB } from "@catamorphic/db";
 import { type Kysely, sql, type Transaction } from "kysely";
 import {
   LATEST_RESULT_VALUE_BYTES,
+  newestResultIds,
   ownFamilies,
   readRequests,
 } from "./session-results.js";
@@ -247,6 +248,8 @@ async function keptSections(input: {
         .select(["item.payload", "turn.ordinal"])
         .distinctOn(sql`item.payload->>'name'`)
         .where("item.session_id", "=", sessionId)
+        // Among the chat's newest results, through their index (ADR 0336).
+        .where("item.id", "in", newestResultIds(db, sessionId))
         .where("item.kind", "=", "result")
         // A result this side did not accept (a mirror's) is no result.
         .where("item.status", "=", "completed")

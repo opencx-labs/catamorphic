@@ -31,6 +31,8 @@ import { buildContextHandoff } from "../services/sessions/context-handoff.js";
 import { copySettledHistory } from "../services/sessions/session-copy.js";
 import { readFullSnapshot } from "../services/sessions/session-reads.js";
 import {
+  latestResults,
+  RESULT_READ_WINDOW,
   recordResult,
   SessionResultAttemptError,
   SessionResultLimitError,
@@ -786,6 +788,65 @@ describe("typed results", () => {
       .where("kind", "=", "result")
       .executeTakeFirstOrThrow();
     expect(Number(count.count)).toBe(RESULT_LIMITS.perTurn + 1);
+  });
+
+  it("finds each name's latest among a chat's newest results, so its reads stay bounded", async () => {
+    const project = await projects.create(identity, { name: "Window" });
+    const session = await sessions.create(identity, project.id);
+    await turn(
+      project.id,
+      session.id,
+      tool("submit_result", {
+        name: "review",
+        value: { verdict: "COMMENT", score: 4 },
+      }),
+    );
+    const state = await turn(
+      project.id,
+      session.id,
+      tool("submit_result", { name: "notes", value: "first note" }),
+    );
+    const notes = state.items.find(
+      (item) => item.kind === "result" && item.name === "notes",
+    );
+    const names = async () =>
+      (await latestResults(db, [session.id]))
+        .get(session.id)
+        ?.map((result) => result.name);
+    // The hand-off's section of results, without the requests after it.
+    const handoff = async () =>
+      (
+        (
+          await buildContextHandoff({
+            db,
+            sessionId: session.id,
+            fromOrdinal: 1,
+            toOrdinal: 2,
+            strategy: "full",
+          })
+        )?.text ?? ""
+      )
+        .split("Your accepted results")[1]
+        ?.split("Requests that arrived after")[0] ?? "";
+    expect((await names())?.sort()).toEqual(["notes", "review"]);
+    expect(await handoff()).toContain("- review, from turn 1");
+    // A later turn fills the window with notes, written as history is.
+    await db.transaction().execute(async (trx) => {
+      await sql`select set_config('catamorphic.suppress_session_events', 'true', true)`.execute(
+        trx,
+      );
+      await sql`
+        insert into ${sql.id(schema, "agent_items")} (id, session_id, turn_id, attempt_id, position, kind, status, payload, created_at)
+        select gen_random_uuid(), item.session_id, item.turn_id, item.attempt_id,
+               item.position + n, item.kind, item.status, item.payload, item.created_at + make_interval(secs => n)
+          from ${sql.id(schema, "agent_items")} item, generate_series(1, ${RESULT_READ_WINDOW}) n
+         where item.id = ${notes?.id ?? ""}`.execute(trx);
+    });
+    // The review is older than the chat's newest results: no read of each
+    // name's latest scans past them to find it.
+    expect(await names()).toEqual(["notes"]);
+    expect(await handoff()).toContain("- notes, from turn 2");
+    expect(await handoff()).not.toContain("- review, from turn 1");
   });
 
   it("reads what one turn submitted, whatever came after it", async () => {
