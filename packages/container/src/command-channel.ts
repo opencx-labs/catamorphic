@@ -2,7 +2,9 @@ import fs from "node:fs";
 import net from "node:net";
 import path from "node:path";
 import {
+  COMMAND_PROGRAMS,
   COMMAND_RETURN_LIMIT,
+  COMMAND_RETURN_NAME,
   COMMAND_SIGNALS,
   type CommandRequest,
   type CommandSignal,
@@ -222,7 +224,9 @@ export function parseRequest(frame: object): CommandRequest | undefined {
     !Array.isArray(argv) ||
     argv.length === 0 ||
     argv.length > 4096 ||
-    !argv.every((part) => typeof part === "string" && !part.includes("\0"))
+    !argv.every((part) => typeof part === "string" && !part.includes("\0")) ||
+    // Only what a shim stands for: the harness's shell and Git.
+    !COMMAND_PROGRAMS.some((program) => program === argv[0])
   )
     return undefined;
   if (
@@ -243,7 +247,7 @@ export function parseRequest(frame: object): CommandRequest | undefined {
       (file): file is string =>
         typeof file === "string" &&
         path.posix.isAbsolute(file) &&
-        /^[A-Za-z0-9._-]+$/.test(path.posix.basename(file)) &&
+        COMMAND_RETURN_NAME.test(path.posix.basename(file)) &&
         !file.split("/").includes("..") &&
         !file.includes("\0"),
     )

@@ -27,7 +27,12 @@ describe("separated command channel", () => {
     const [file, ...args] = session.request.argv;
     const child: ChildProcess = spawn(file ?? "bash", args, {
       cwd: session.request.cwd,
-      env: session.request.env,
+      // The command side's own PATH and HOME, as a container has.
+      env: {
+        PATH: process.env.PATH ?? "/usr/bin:/bin",
+        HOME: process.env.HOME ?? "/",
+        ...session.request.env,
+      },
       detached: true,
       stdio: ["pipe", "pipe", "pipe"],
     });
@@ -117,11 +122,13 @@ describe("separated command channel", () => {
     const ran = await shim(
       [
         "-c",
-        'echo "keep=$KEEP model=$WORK_MODEL_API_KEY grant=$WORK_GATEWAY_READ_GRANT openai=$OPENAI_API_KEY anthropic=$ANTHROPIC_BASE_URL"',
+        'echo "locale=$LANG tz=$TZ other=$OTHER model=$WORK_MODEL_API_KEY grant=$WORK_GATEWAY_READ_GRANT openai=$OPENAI_API_KEY anthropic=$ANTHROPIC_BASE_URL"',
       ],
       {
         env: {
-          KEEP: "yes",
+          LANG: "C.UTF-8",
+          TZ: "Asia/Amman",
+          OTHER: "from the agent",
           WORK_MODEL_API_KEY: "loopback-key",
           WORK_GATEWAY_READ_GRANT: "/workspace/.work-session/read-grant",
           OPENAI_API_KEY: "loopback-key",
@@ -129,7 +136,10 @@ describe("separated command channel", () => {
         },
       },
     );
-    expect(ran.stdout).toBe("keep=yes model= grant= openai= anthropic=\n");
+    // Only how output looks travels; nothing else of the agent's (ADR 0332).
+    expect(ran.stdout).toBe(
+      "locale=C.UTF-8 tz=Asia/Amman other= model= grant= openai= anthropic=\n",
+    );
   });
 
   it("sends a signal the shim receives to the command's whole group", async () => {

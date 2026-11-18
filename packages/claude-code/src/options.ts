@@ -162,12 +162,17 @@ const SHELL_TOOLS = ["Bash", "PowerShell"];
  */
 export function commandShellPaths(
   attempt: AttemptStart,
-): { directory: string; shell: string; returnFolder: string } | undefined {
+):
+  | { directory: string; shell: string; path: string; returnFolder: string }
+  | undefined {
   if (!attempt.commands) return undefined;
   const directory = path.join(attempt.stateDirectory, "commands");
   return {
     directory,
     shell: path.join(directory, "bin", "bash"),
+    // Its `git`, first on the CLI's PATH: the CLI runs Git on the
+    // repository itself, whose configuration names programs Git runs.
+    path: path.join(directory, "path"),
     returnFolder: path.join(directory, "tmp"),
   };
 }
@@ -629,6 +634,9 @@ export function buildQueryOptions(input: QueryOptionInputs): Options {
         }
       : {}),
   };
+  // The CLI's own Git (its repository context) goes where commands run.
+  if (separate)
+    env.PATH = env.PATH ? `${separate.path}:${env.PATH}` : separate.path;
   const command = options.command ?? (host ? undefined : "claude");
   const systemPrompt = attempt.systemPrompt.trim();
 

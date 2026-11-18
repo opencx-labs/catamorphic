@@ -3,10 +3,10 @@ import path from "node:path";
 
 /**
  * Commands run apart from the agent (ADR 0332): a harness on the agent side
- * of a sandbox uses a `bash` shim as its shell. The shim forwards the
- * command to the provider's command socket, which runs it on the command
- * side in its own process group and streams it back. Newline-delimited JSON
- * both ways:
+ * of a sandbox uses a `bash` shim as its shell, and finds a `git` shim
+ * first on its `PATH`. A shim forwards the command to the provider's
+ * command socket, which runs it on the command side in its own process
+ * group and streams it back. Newline-delimited JSON both ways:
  *
  * - shim to provider: one {@link CommandRequest}, then `{ i: <base64> }`
  *   for standard input, `{ eof: true }` when it ends, and `{ signal }` for
@@ -18,16 +18,21 @@ import path from "node:path";
  * A connection that drops before the command ends stops its whole group.
  */
 export interface CommandRequest {
+  /** `bash` or `git` and their arguments: the programs a shim stands for. */
   argv: string[];
   cwd: string;
+  /** What of the agent side's environment the command keeps; see {@link commandEnvironment}. */
   env: Record<string, string>;
   /**
-   * Files the command writes that the agent side reads afterwards (Claude
-   * Code's working-directory file), each directly in the shim's return
-   * folder: brought back when the command ends, small and regular only.
+   * Claude Code's working-directory files the command writes in the shim's
+   * return folder (`claude-<id>-cwd`): brought back when it ends, small and
+   * regular only.
    */
   returns: string[];
 }
+
+/** The programs a shim runs on the command side. */
+export const COMMAND_PROGRAMS = ["bash", "git"] as const;
 
 /** Signals a shim forwards; the provider sends them to the whole group. */
 export const COMMAND_SIGNALS = ["SIGINT", "SIGTERM", "SIGHUP"] as const;
@@ -36,58 +41,77 @@ export type CommandSignal = (typeof COMMAND_SIGNALS)[number];
 /** The most files one command returns, and the most bytes each. */
 export const COMMAND_RETURN_LIMIT = { files: 16, bytes: 64 * 1024 };
 
+/** The only files a command returns: Claude Code's working-directory files. */
+export const COMMAND_RETURN_NAME = /^claude-[A-Za-z0-9]{1,32}-cwd$/;
+
 /**
- * Variables that stay on the agent side: Work's own (`WORK_*`: the
- * gateway's variables, the model endpoint and its key, grant folders) and
- * the model credentials a harness may hold. Authority lives in files and
- * loopback endpoints the command side cannot reach, so a value that leaked
- * would name nothing usable there; they stay out anyway.
+ * What a command keeps of the agent side's environment (ADR 0332): how
+ * output looks and nothing else. The command side keeps its own `PATH`,
+ * `HOME` and user, and loads its own session files (the Environment's
+ * secrets, its gateway variables), so no value from beside the agent
+ * reaches it unless it is named here.
  */
-export const AGENT_ONLY_VARIABLES = [
-  "ANTHROPIC_API_KEY",
-  "ANTHROPIC_AUTH_TOKEN",
-  "ANTHROPIC_BASE_URL",
-  "CLAUDE_CODE_OAUTH_TOKEN",
-  "OPENAI_API_KEY",
-  "OPENAI_BASE_URL",
-  "CODEX_API_KEY",
+export const COMMAND_VARIABLES = [
+  "LANG",
+  "LANGUAGE",
+  "TERM",
+  "COLORTERM",
+  "TZ",
+  "CI",
+  "COLUMNS",
+  "LINES",
+  "NO_COLOR",
+  "FORCE_COLOR",
+  "CLICOLOR",
+  "CLICOLOR_FORCE",
+  "PAGER",
+  "GIT_PAGER",
+  "GIT_EDITOR",
+  "EDITOR",
+  "VISUAL",
+  // Claude Code marks the commands it runs.
+  "CLAUDECODE",
+  "CLAUDE_CODE_ENTRYPOINT",
 ] as const;
 
 const NAME = /^[A-Za-z_][A-Za-z0-9_]*$/;
+
+/** Whether a command keeps a variable of the agent side's environment. */
+function kept(name: string): boolean {
+  return (
+    NAME.test(name) &&
+    (COMMAND_VARIABLES.some((allowed) => allowed === name) ||
+      name.startsWith("LC_"))
+  );
+}
 
 /** What of an agent-side environment a command takes along (ADR 0332). */
 export function commandEnvironment(
   env: Readonly<Record<string, string | undefined>>,
 ): Record<string, string> {
-  const dropped = new Set<string>(AGENT_ONLY_VARIABLES);
-  const kept: Record<string, string> = {};
+  const result: Record<string, string> = {};
   for (const [name, value] of Object.entries(env))
-    if (
-      typeof value === "string" &&
-      NAME.test(name) &&
-      !name.startsWith("WORK_") &&
-      !dropped.has(name)
-    )
-      kept[name] = value;
-  return kept;
+    if (typeof value === "string" && kept(name)) result[name] = value;
+  return result;
 }
 
 /**
  * The shim's client, run with the runner's own Bun or Node: Node built-ins
  * only, no Work code, so it starts quickly for every command. Arguments:
- * the socket, the return folder (or empty), then the shell's own
- * arguments, which run as `bash <args>` on the command side.
+ * the socket, the return folder (or empty), the program it stands for,
+ * then that program's own arguments.
  */
 export const COMMAND_SHELL_CLIENT_SOURCE = `import fs from "node:fs";
 import net from "node:net";
 import path from "node:path";
 
-const [socketPath, returnFolder, ...args] = process.argv.slice(2);
-const DROPPED = new Set(${JSON.stringify(AGENT_ONLY_VARIABLES)});
+const [socketPath, returnFolder, program, ...args] = process.argv.slice(2);
+const KEPT = new Set(${JSON.stringify(COMMAND_VARIABLES)});
 const env = {};
 for (const [name, value] of Object.entries(process.env))
-  if (typeof value === "string" && /^[A-Za-z_][A-Za-z0-9_]*$/.test(name) && !name.startsWith("WORK_") && !DROPPED.has(name))
+  if (typeof value === "string" && /^[A-Za-z_][A-Za-z0-9_]*$/.test(name) && (KEPT.has(name) || name.startsWith("LC_")))
     env[name] = value;
+const RETURNED = ${COMMAND_RETURN_NAME.toString()};
 const prefix = returnFolder ? returnFolder.replace(/\\/+$/, "") + "/" : "";
 const returns = new Set();
 if (prefix)
@@ -95,7 +119,7 @@ if (prefix)
     let at = arg.indexOf(prefix);
     while (at >= 0) {
       const name = /^[A-Za-z0-9._-]+/.exec(arg.slice(at + prefix.length));
-      if (name && name[0] !== "." && name[0] !== "..") returns.add(prefix + name[0]);
+      if (name && RETURNED.test(name[0])) returns.add(prefix + name[0]);
       at = arg.indexOf(prefix, at + 1);
     }
   }
@@ -120,7 +144,7 @@ const fail = (message) => {
   finish(126);
 };
 socket.on("connect", () => {
-  send({ argv: ["bash", ...args], cwd, env, returns: [...returns].slice(0, ${COMMAND_RETURN_LIMIT.files}) });
+  send({ argv: [program, ...args], cwd, env, returns: [...returns].slice(0, ${COMMAND_RETURN_LIMIT.files}) });
   process.stdin.on("data", (chunk) => send({ i: Buffer.from(chunk).toString("base64") }));
   process.stdin.on("end", () => send({ eof: true }));
   process.stdin.on("error", () => send({ eof: true }));
@@ -159,8 +183,11 @@ socket.on("close", () => fail("the connection to the command container closed be
 `;
 
 /**
- * The shim's files (ADR 0332): its client and the `bash` that runs it with
- * `runtime`, each with its mode, keyed by absolute path.
+ * The shim's files (ADR 0332): its client, the `bash` a harness uses as
+ * its shell, and the `git` first on its `PATH`, each with its mode, keyed
+ * by absolute path. `path` is the folder to put first on the harness's
+ * `PATH`: it holds `git` alone, so nothing else the harness runs by name
+ * is redirected.
  */
 export function commandShellFiles(input: {
   directory: string;
@@ -169,21 +196,27 @@ export function commandShellFiles(input: {
   returnFolder?: string;
 }): {
   shell: string;
+  path: string;
   files: Record<string, { content: string; mode: number }>;
 } {
   const client = path.posix.join(input.directory, "shell.mjs");
   const shell = path.posix.join(input.directory, "bin", "bash");
+  const pathFolder = path.posix.join(input.directory, "path");
+  const wrapper = (program: string) =>
+    [
+      "#!/bin/sh",
+      `# Work: this ${program} runs in the command container (ADR 0332).`,
+      `exec ${quote(input.runtime)} ${quote(client)} ${quote(input.socket)} ${quote(input.returnFolder ?? "")} ${program} "$@"`,
+      "",
+    ].join("\n");
   return {
     shell,
+    path: pathFolder,
     files: {
       [client]: { content: COMMAND_SHELL_CLIENT_SOURCE, mode: 0o600 },
-      [shell]: {
-        content: [
-          "#!/bin/sh",
-          "# Work: this shell's commands run in the command container (ADR 0332).",
-          `exec ${quote(input.runtime)} ${quote(client)} ${quote(input.socket)} ${quote(input.returnFolder ?? "")} "$@"`,
-          "",
-        ].join("\n"),
+      [shell]: { content: wrapper("bash"), mode: 0o700 },
+      [path.posix.join(pathFolder, "git")]: {
+        content: wrapper("git"),
         mode: 0o700,
       },
     },
@@ -191,9 +224,10 @@ export function commandShellFiles(input: {
 }
 
 /**
- * Write the shim into `directory` (beside the runner's state, ADR 0321)
- * and return the path of its `bash`, for a harness's shell setting.
- * `runtime` is the Bun or Node that runs it (the runner's own).
+ * Write the shim into `directory` (beside the runner's state, ADR 0321):
+ * the path of its `bash`, for a harness's shell setting, and the folder to
+ * put first on the harness's `PATH`. `runtime` is the Bun or Node that
+ * runs it (the runner's own).
  */
 export async function writeCommandShell(input: {
   directory: string;
@@ -201,8 +235,8 @@ export async function writeCommandShell(input: {
   runtime: string;
   /** Where the harness reads files its commands write (see {@link CommandRequest.returns}). */
   returnFolder?: string;
-}): Promise<{ shell: string }> {
-  const { shell, files } = commandShellFiles(input);
+}): Promise<{ shell: string; path: string }> {
+  const { shell, path: pathFolder, files } = commandShellFiles(input);
   for (const [file, { content, mode }] of Object.entries(files)) {
     await mkdir(path.dirname(file), { recursive: true, mode: 0o700 });
     await writeFile(file, content, { mode });
@@ -210,7 +244,7 @@ export async function writeCommandShell(input: {
   }
   if (input.returnFolder)
     await mkdir(input.returnFolder, { recursive: true, mode: 0o700 });
-  return { shell };
+  return { shell, path: pathFolder };
 }
 
 function quote(value: string): string {

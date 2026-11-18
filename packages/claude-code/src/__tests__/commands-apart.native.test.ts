@@ -143,7 +143,9 @@ it("runs the pinned CLI's commands through the command socket", async () => {
     expect(
       side.requests.some((argv) => argv.join(" ").includes("echo moved")),
     ).toBe(true);
-    expect(side.requests.every((argv) => argv[0] === "bash")).toBe(true);
+    expect(
+      side.requests.every((argv) => argv[0] === "bash" || argv[0] === "git"),
+    ).toBe(true);
     // Its output reached the agent, and so did the folder it moved to.
     expect(results).toContain("moved");
     expect(results).toContain(`${directories.here.cwd}/sub`);
@@ -152,6 +154,124 @@ it("runs the pinned CLI's commands through the command socket", async () => {
     // The checkout's hooks never ran.
     expect(fs.existsSync(hookMarker)).toBe(false);
   } finally {
+    await model.close();
+    await side.close();
+    await rm(root, { recursive: true, force: true });
+  }
+}, 90_000);
+
+/**
+ * Git the CLI runs on its own (the repository's status for its context)
+ * reads the repository's configuration and attributes, which the pull
+ * request controls; the CLI defends its own calls, but none of them may
+ * run beside the agent at all. A tripwire `git` on the CLI's PATH says
+ * where each ran.
+ */
+it("runs the CLI's own Git on the command side, where the repository's config is the pull request's", async () => {
+  const root = await realpath(
+    await mkdtemp(path.join(tmpdir(), "claude-apart-git-")),
+  );
+  const directories = {
+    here: {
+      cwd: path.join(root, "work"),
+      state: path.join(root, "state"),
+      home: path.join(root, "home"),
+    },
+    elsewhere: {
+      cwd: path.join(root, "work-elsewhere"),
+      state: path.join(root, "state-elsewhere"),
+      home: path.join(root, "home-elsewhere"),
+    },
+  };
+  const marker = path.join(root, "git-ran");
+  await mkdir(directories.here.cwd, { recursive: true });
+  const git = (args: string[]) =>
+    new Promise<void>((resolve, reject) => {
+      const child = spawn("git", ["-C", directories.here.cwd, ...args], {
+        stdio: "ignore",
+      });
+      child.once("close", (code) =>
+        code === 0 ? resolve() : reject(new Error(`git ${args.join(" ")}`)),
+      );
+    });
+  await git(["init", "-q"]);
+  await writeFile(path.join(directories.here.cwd, "README.md"), "hello\n");
+  await git(["add", "."]);
+  await git([
+    "-c",
+    "user.name=Test",
+    "-c",
+    "user.email=test@example.com",
+    "commit",
+    "-qm",
+    "start",
+  ]);
+  const realGit = await new Promise<string>((resolve) => {
+    const which = spawn("sh", ["-c", "command -v git"]);
+    let out = "";
+    which.stdout.on("data", (data: Buffer) => {
+      out += data.toString();
+    });
+    which.once("close", () => resolve(out.trim()));
+  });
+  const tripwire = path.join(root, "tripwire");
+  await mkdir(tripwire);
+  await writeFile(
+    path.join(tripwire, "git"),
+    `#!/bin/sh\necho "\${WORK_TEST_SIDE:-agent}" >> '${marker}'\nexec '${realGit}' "$@"\n`,
+    { mode: 0o755 },
+  );
+  const path0 = process.env.PATH;
+  process.env.PATH = `${tripwire}:${path0 ?? ""}`;
+  const side = await commandSide({
+    socket: path.join(root, "c.sock"),
+    returnFolder: path.join(directories.here.state, "commands", "tmp"),
+    elsewhere: path.join(root, "command-tmp"),
+  });
+  const scenario: ClaudeScenario = {
+    name: "commands-apart-git",
+    description: "The CLI's own Git through the command socket.",
+    model: () => ({ blocks: [{ type: "text", text: "Done." }] }),
+    attempts: [
+      {
+        start: (context) => ({
+          ...scenarioAttempt({
+            context,
+            scenario: "commands-apart-git",
+            turn: 1,
+            text: "Say done",
+          }),
+          commands: { socket: side.socket },
+        }),
+      },
+    ],
+    check: () => {},
+  };
+  const model = await startScriptedModel({
+    reply: (request) => scenario.model(request, { cwd: directories.here.cwd }),
+  });
+  try {
+    await runScenario({
+      scenario,
+      directories,
+      modelUrl: model.url,
+      fixtureServer: { transport: "stdio", command: "unused" },
+      runner: () =>
+        new InProcessRunner({
+          adapters: { "claude-code": createClaudeCodeAdapter() },
+          version: "live",
+        }),
+      timeoutMs: 60_000,
+    });
+    // The CLI did look at the repository, and only through the command side.
+    expect(side.requests.some((argv) => argv[0] === "git")).toBe(true);
+    const ran = fs.existsSync(marker)
+      ? fs.readFileSync(marker, "utf8").split("\n").filter(Boolean)
+      : [];
+    expect(ran).toContain("commands");
+    expect(ran).not.toContain("agent");
+  } finally {
+    process.env.PATH = path0;
     await model.close();
     await side.close();
     await rm(root, { recursive: true, force: true });
@@ -193,7 +313,14 @@ async function commandSide(input: {
           );
           const started = spawn(file ?? "bash", args, {
             cwd: frame.cwd,
-            env: frame.env,
+            // Whatever runs here can tell it is on the command side.
+            // The command side's own PATH and HOME, as a container has.
+            env: {
+              PATH: process.env.PATH ?? "/usr/bin:/bin",
+              HOME: process.env.HOME ?? "/",
+              ...frame.env,
+              WORK_TEST_SIDE: "commands",
+            },
             detached: true,
           });
           child = started;

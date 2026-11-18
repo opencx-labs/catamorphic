@@ -98,10 +98,12 @@ export {
 } from "./coding-agent/warm-sessions.js";
 export { CommandDeploymentRuntimeProvider } from "./command-deployment-runtime.js";
 export {
-  AGENT_ONLY_VARIABLES,
+  COMMAND_PROGRAMS,
   COMMAND_RETURN_LIMIT,
+  COMMAND_RETURN_NAME,
   COMMAND_SHELL_CLIENT_SOURCE,
   COMMAND_SIGNALS,
+  COMMAND_VARIABLES,
   type CommandRequest,
   type CommandSignal,
   commandEnvironment,

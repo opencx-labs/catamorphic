@@ -147,17 +147,15 @@ function startAttempt(
     // Its commands apart from it (ADR 0332): only an agent whose
     // definition says it runs them with `$SHELL` can be pointed at the
     // command container; any other is refused, never run beside the agent.
-    let shell: string | undefined;
+    let shell: { shell: string; path: string } | undefined;
     if (attempt.commands) {
       if (attempt.options.shell !== true)
         throw new Error(ACP_COMMANDS_APART_REFUSAL);
-      shell = (
-        await writeCommandShell({
-          directory: path.join(attempt.stateDirectory, "commands"),
-          socket: attempt.commands.socket,
-          runtime: process.execPath,
-        })
-      ).shell;
+      shell = await writeCommandShell({
+        directory: path.join(attempt.stateDirectory, "commands"),
+        socket: attempt.commands.socket,
+        runtime: process.execPath,
+      });
     }
     if (access.kind === "gateway")
       model = await serveLoopbackModel({
@@ -176,7 +174,15 @@ function startAttempt(
               ...(attempt.model ? { modelId: attempt.model } : {}),
             })
           : {}),
-        ...(shell ? { SHELL: shell } : {}),
+        // Its shell, and Git first on its PATH, run where commands run.
+        ...(shell
+          ? {
+              SHELL: shell.shell,
+              PATH: [shell.path, attempt.env.PATH ?? process.env.PATH]
+                .filter(Boolean)
+                .join(":"),
+            }
+          : {}),
       },
       stdio: ["pipe", "pipe", "pipe"],
       // Its own process group, so stopping it stops what it started too
