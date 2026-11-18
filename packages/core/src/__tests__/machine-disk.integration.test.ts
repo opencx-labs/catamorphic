@@ -4,13 +4,16 @@ import type { EnvironmentBinding, MachineDisk } from "@catamorphic/sandbox";
 import pg from "pg";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { ExecutionAllocationsService } from "../services/execution-allocations-service.js";
+import { ExecutionJobsService } from "../services/execution-jobs-service.js";
+import { outOfDiskFor } from "../services/out-of-disk.js";
+import { RunCoordinator } from "../services/run-coordinator.js";
 import { EnvironmentCapacityError } from "../services/worker-capacity.js";
 import { WorkerNodesService } from "../services/worker-nodes-service.js";
 
 /**
  * Disk is a resource Work manages on machines (ADR 0335): admission keeps
  * a machine's floor and reserves `storageMb`, an episode under the floor
- * is recorded once.
+ * is recorded once, and failures there name the disk.
  */
 const schema = `disk_${randomUUID().replaceAll("-", "")}`;
 const pool = process.env.DATABASE_URL
@@ -187,5 +190,95 @@ describe.skipIf(!db)("machine disk (ADR 0335)", () => {
         disk: low,
       }),
     ).toEqual({ state: "none" });
+  });
+
+  it("names the disk in a failure from the machine's report, and output only as a hint", async () => {
+    if (!db) return;
+    const { nodes, lease, admit } = await machine();
+    await nodes.reportDisk({ lease, disk: report({ free: 40 * GIB }) });
+    const allocation = await admit();
+    expect(
+      await outOfDiskFor({
+        db,
+        allocationId: allocation.id,
+        texts: ["exit 1"],
+      }),
+    ).toBeUndefined();
+    expect(
+      await outOfDiskFor({
+        db,
+        allocationId: allocation.id,
+        texts: ["npm ERR! code ENOSPC"],
+      }),
+    ).toMatch(
+      /^The workspace ran out of disk space \(no space left on device\); the machine reports 42\.9 GB free/,
+    );
+    await nodes.reportDisk({ lease, disk: report({ free: 2 * GIB }) });
+    expect(
+      await outOfDiskFor({ db, allocationId: allocation.id, texts: [] }),
+    ).toBe(
+      "The machine ran out of disk: 2.1 GB free of 107 GB, where Work keeps 10.7 GB free.",
+    );
+    expect(await outOfDiskFor({ db, nodeId: lease.id, texts: [] })).toMatch(
+      /^The machine ran out of disk/,
+    );
+  });
+
+  it("names the disk in a failed run's error (ADR 0335)", async () => {
+    if (!db) return;
+    const { projectId, nodes, lease, admit } = await machine();
+    const coordinator = new RunCoordinator(db, new ExecutionJobsService(db));
+    const failed = async (error: string) => {
+      const allocation = await admit();
+      const runId = randomUUID();
+      await db
+        .insertInto("workflow_runs")
+        .values({
+          id: runId,
+          project_id: projectId,
+          workflow_name: "review",
+          provenance: {},
+          status: "running",
+          allocation_id: allocation.id,
+        })
+        .execute();
+      await coordinator.failRunTree({ runId, error });
+      const run = await db
+        .selectFrom("workflow_runs")
+        .select(["status", "error"])
+        .where("id", "=", runId)
+        .executeTakeFirstOrThrow();
+      expect(run.status).toBe("failed");
+      return run.error;
+    };
+    await nodes.reportDisk({ lease, disk: report({ free: 40 * GIB }) });
+    expect(await failed("The step failed")).toBe("The step failed");
+    expect(await failed("ENOSPC: no space left on device")).toMatch(
+      /^The workspace ran out of disk space \(no space left on device\); the machine reports 42\.9 GB free.* ENOSPC: no space left on device$/,
+    );
+    // Admitted, then the machine filled up under the run.
+    const allocation = await admit();
+    await nodes.reportDisk({ lease, disk: report({ free: 2 * GIB }) });
+    const runId = randomUUID();
+    await db
+      .insertInto("workflow_runs")
+      .values({
+        id: runId,
+        project_id: projectId,
+        workflow_name: "review",
+        provenance: {},
+        status: "running",
+        allocation_id: allocation.id,
+      })
+      .execute();
+    await coordinator.failRunTree({ runId, error: "exit 1" });
+    const run = await db
+      .selectFrom("workflow_runs")
+      .select("error")
+      .where("id", "=", runId)
+      .executeTakeFirstOrThrow();
+    expect(run.error).toBe(
+      "The machine ran out of disk: 2.1 GB free of 107 GB, where Work keeps 10.7 GB free. exit 1",
+    );
   });
 });

@@ -267,7 +267,8 @@ export const closePullRequestChats = defineWorkflow(({ defineBoundary }) => ({
 
 exec runs a shell command in a chat's workspace and answers { exitCode, stdout,
 stderr, durationMs, timedOut } (the last 16 000 characters of each stream, the
-chat's secret values masked). Name
+chat's secret values masked), and outOfDisk when it failed while its machine
+is short of disk or its output says no space was left. Name
 the chat by sessionId or key, pass command, in, idempotencyKey, and optionally
 cwd (beneath the checkout), env and timeoutSeconds (default 600, at most 14 400).
 in: "session" runs as the agent's commands do: the chat's network, grants and

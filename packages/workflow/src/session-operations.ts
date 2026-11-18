@@ -241,6 +241,11 @@ export interface SessionExecResult {
   stderr: string;
   durationMs: number;
   timedOut: boolean;
+  /**
+   * Set when it failed and the disk is to blame (ADR 0335): its machine is
+   * short of disk, or its output says a write found no room.
+   */
+  outOfDisk?: string;
 }
 /** Host transitions must be returned from a boundary, never awaited as IO. */
 export interface SessionHostOperations {

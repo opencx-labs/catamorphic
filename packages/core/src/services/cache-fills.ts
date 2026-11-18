@@ -24,6 +24,7 @@ import {
   admissionPolicy,
   type ExecutionEnvironmentsService,
 } from "./execution-environments-service.js";
+import { outOfDiskFor, withOutOfDisk } from "./out-of-disk.js";
 import { readProgramFile } from "./program-reader.js";
 import {
   DEFAULT_CACHE_FILL_TIMEOUT_MINUTES,
@@ -710,7 +711,16 @@ export class CacheFillsService {
     renew.unref?.();
     let mask = new SecretMask({});
     const fail = async (error: unknown) => {
-      const message = error instanceof Error ? error.message : String(error);
+      const said = error instanceof Error ? error.message : String(error);
+      // A fill that found no room says so (ADR 0335).
+      const message = withOutOfDisk(
+        said,
+        await outOfDiskFor({
+          db: this.deps.db,
+          nodeId: fill.worker_node_id,
+          texts: [said],
+        }),
+      );
       await mine()
         .set({
           status: "failed",

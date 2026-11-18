@@ -1008,6 +1008,47 @@ describeIf("workflows run commands in a chat's workspace (ADR 0324)", () => {
     }
   }, 120_000);
 
+  it("says a command ran out of disk, and leaves no output files in the workspace (ADR 0335)", async () => {
+    const sessionId = (await sessions().create(root, projectId)).id;
+    const { run } = await runExec({
+      sessionId,
+      in: "session",
+      idempotencyKey: "full",
+      command: "echo 'npm ERR! code ENOSPC' >&2; exit 1",
+    });
+    const { result } = run.result as {
+      result: { exitCode: number; outOfDisk?: string };
+    };
+    expect(result.exitCode).toBe(1);
+    expect(result.outOfDisk).toBe(
+      "The workspace ran out of disk space (no space left on device).",
+    );
+    // Its streams' files are gone once its result is kept.
+    const action = await actionOf(sessionId, "full");
+    const workspace = await sessions().personWorkspace({
+      identity: root,
+      projectId,
+      sessionId,
+      start: false,
+    });
+    const left = await workspace.provider.executeCommand(
+      workspace.sandboxId,
+      `test -e ../.work-session/exec/${action.id} && echo left || echo gone`,
+      { cwd: workspace.projectDirectory },
+    );
+    expect(left.result.trim()).toBe("gone");
+    // A command that failed for another reason says nothing of the disk.
+    const { run: plain } = await runExec({
+      sessionId,
+      in: "session",
+      idempotencyKey: "plain",
+      command: "exit 2",
+    });
+    expect(
+      (plain.result as { result: { outOfDisk?: string } }).result.outOfDisk,
+    ).toBeUndefined();
+  }, 120_000);
+
   it("masks the chat's secret values in what a command prints", async () => {
     const sessionId = (await sessions().create(root, projectId)).id;
     if (!core.secrets) throw new Error("secrets not configured");

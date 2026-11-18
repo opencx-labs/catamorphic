@@ -35,6 +35,7 @@ import {
 } from "./chat-delivery.js";
 import type { HostCallFollowOutcome } from "./host-call-waits.js";
 import { HostCallParkedError } from "./host-call-waits.js";
+import { outOfDiskFor, withOutOfDisk } from "./out-of-disk.js";
 import { withProgram } from "./program-reader.js";
 import { sandboxSecretsPrelude } from "./sandbox-secrets.js";
 import {
@@ -126,6 +127,11 @@ export interface SessionExecResult {
   stderr: string;
   durationMs: number;
   timedOut: boolean;
+  /**
+   * Why it failed when the disk is to blame (ADR 0335): its machine is
+   * short of disk, or its output says a write found no room.
+   */
+  outOfDisk?: string;
 }
 
 /** Where a started execution is, as `session_actions.progress` holds it. */
@@ -885,10 +891,19 @@ export class SessionExecService {
       projectId: action.project_id,
       sessionId: action.session_id,
     });
+    const failed = args.result.exitCode !== 0 || args.result.timedOut;
+    const outOfDisk = failed
+      ? await outOfDiskFor({
+          db: this.deps.db,
+          sessionId: action.session_id,
+          texts: [args.result.stderr, args.result.stdout],
+        })
+      : undefined;
     const result: SessionExecResult = {
       ...args.result,
       stdout: mask.text(args.result.stdout),
       stderr: mask.text(args.result.stderr),
+      ...(outOfDisk ? { outOfDisk } : {}),
     };
     const output = json(result);
     const actor = actorOf(action);
@@ -1017,11 +1032,23 @@ export class SessionExecService {
       .execute();
   }
 
-  private async fail(args: {
+  private async fail(given: {
     action: ActionRow;
     error: string;
   }): Promise<HostCallFollowOutcome> {
-    const { action } = args;
+    const { action } = given;
+    // A start that found no room says so (ADR 0335).
+    const args = {
+      ...given,
+      error: withOutOfDisk(
+        given.error,
+        await outOfDiskFor({
+          db: this.deps.db,
+          sessionId: action.session_id,
+          texts: [given.error],
+        }),
+      ),
+    };
     const actor = actorOf(action);
     await this.deps.db.transaction().execute(async (trx) => {
       const failed = await trx
