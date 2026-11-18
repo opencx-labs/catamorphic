@@ -217,7 +217,7 @@ export function commandShellFiles(input: {
       // nothing in the caller's folder loads into it.
       // Its folder's name may end in newlines, which $(...) strips: a
       // mark after pwd's own newline keeps them.
-      "caller=$(pwd -P 2>/dev/null && printf x) && caller=${caller%?x} || caller=/",
+      `caller=$(pwd -P 2>/dev/null && printf x) && caller=\${caller%?x} || caller=/`,
       `cd ${quote(input.directory)} || exit 126`,
       "unset NODE_OPTIONS NODE_PATH BUN_OPTIONS",
       `exec ${quote(input.runtime)}${flags} ${quote(client)} "$caller" ${quote(input.socket)} ${quote(input.returnFolder ?? "")} ${program} "$@"`,
