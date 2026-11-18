@@ -20,6 +20,7 @@ import {
 import {
   type AttemptStart,
   type HarnessCapabilities,
+  type HarnessEvent,
   type HostCall,
   type HostToolResult,
   RUNNER_PROTOCOL_VERSION,
@@ -52,6 +53,7 @@ import {
 } from "./request-policy.js";
 import {
   endRunner,
+  killProcessGroups,
   type RunnerChannel,
   type RunnerLocation,
   reattachInProcessRunner,
@@ -106,6 +108,11 @@ export interface RunnerState {
    * attempt that never did starts that input over (ADR 0240).
    */
   started?: boolean;
+  /**
+   * Process groups of its own the harness started (ADR 0333): killed with
+   * the runner when a restart ends it.
+   */
+  groups?: number[];
   interruptSentAt: string | null;
 }
 
@@ -1709,6 +1716,8 @@ export class TurnEngine {
             attempt,
             channel: undefined,
             cursor: runner.cursor,
+            groups: runner.groups ?? [],
+            inProcess: runner.location.kind === "in_process",
             ...asked,
           });
           if (restarted.kind !== "declined") return restarted;
@@ -1840,6 +1849,8 @@ export class TurnEngine {
           attempt,
           channel,
           cursor: runner.cursor,
+          groups: runner.groups ?? [],
+          inProcess: runner.location.kind === "in_process",
           ...restart,
         });
         restart = undefined;
@@ -2012,8 +2023,10 @@ export class TurnEngine {
             ...ctx,
             turn,
             attempt,
-            channel: undefined,
+            channel,
             cursor: runner.cursor,
+            groups: runner.groups ?? [],
+            inProcess: runner.location.kind === "in_process",
             ...asked,
           });
           if (restarted.kind !== "declined") return restarted;
@@ -2187,6 +2200,10 @@ export class TurnEngine {
       /** Its runner, or none when it is already gone. */
       channel: RunnerChannel | undefined;
       cursor: number;
+      /** The process groups its harness started, killed with its runner. */
+      groups: readonly number[];
+      /** Its runner ran in this process: its groups are this machine's. */
+      inProcess: boolean;
       commandId: string;
       reason: string;
       onlyIfStalled: boolean;
@@ -2306,6 +2323,10 @@ export class TurnEngine {
       });
     });
     if (declined) return { kind: "declined" };
+    // Gone already: what its harness started in groups of its own may not
+    // be, and it never starts beside the next attempt. A sandbox's are
+    // reached through a channel only.
+    if (!ctx.channel && ctx.inProcess) killProcessGroups(ctx.groups);
     // It is not asked to finish: a stuck harness would never answer. Its
     // process group goes before the next attempt starts on the same
     // workspace and thread.
@@ -2318,6 +2339,7 @@ export class TurnEngine {
         channel,
         cursor: ctx.cursor,
         graceMs: RESTART_EXIT_GRACE_MS,
+        groups: ctx.groups,
       }).catch(() => "unknown" as const);
       if (ended === "unknown" && channel.location.kind !== "in_process")
         console.warn(
@@ -2613,6 +2635,8 @@ export class TurnEngine {
           consumed: [...(runner.consumed ?? []), ...ingested.consumed],
         };
       if (ingested.started) runner = { ...runner, started: true };
+      const groups = processGroups(runner.groups, events);
+      if (groups !== runner.groups) runner = { ...runner, groups };
       let turn = ingested.turn;
       const extra: SessionEvent[] = [];
       // A chat a person named keeps its name (ADR 0247).
@@ -4173,6 +4197,28 @@ async function closeOpenWork(
 }
 
 export type { JsonObject };
+
+/**
+ * The harness's own process groups so far, with those these events report
+ * (ADR 0333): whole numbers above 1, at most 16; the same array when none
+ * is new.
+ */
+function processGroups(
+  known: number[] | undefined,
+  events: readonly HarnessEvent[],
+): number[] | undefined {
+  let groups = known;
+  for (const event of events)
+    if (
+      event.type === "process.group" &&
+      Number.isSafeInteger(event.pgid) &&
+      event.pgid > 1 &&
+      !(groups ?? []).includes(event.pgid) &&
+      (groups ?? []).length < 16
+    )
+      groups = [...(groups ?? []), event.pgid];
+  return groups;
+}
 
 /** What a `restart` turn command asks (ADR 0333). */
 function restartOf(command: { id: string; payload: JsonObject }): {

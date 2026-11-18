@@ -186,6 +186,12 @@ describe("ACP adapter", () => {
     });
     expect(turn.text("reasoning")).toBe("Thinking it over.");
     expect(turn.text("assistant_message")).toBe("Echo: hello");
+    // Its own process group, reported so a restart can end it (ADR 0333).
+    if (process.platform !== "win32")
+      expect(turn.events()).toContainEqual({
+        type: "process.group",
+        pgid: expect.any(Number),
+      });
     const session = space.state().sessions["session-1"];
     expect(session?.cwd).toBe(space.dir);
     expect(session?.prompts[0]).toEqual([
