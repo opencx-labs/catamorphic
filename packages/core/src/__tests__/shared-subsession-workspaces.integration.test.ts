@@ -816,6 +816,74 @@ describe("subagents of a server agent (ADR 0322)", () => {
     }
   }, 120_000);
 
+  it("keeps a shared workspace someone uses through a subagent from being given back as idle", async () => {
+    const parent = await sessions.create(identity, projectId, {
+      workspace: { ref: "pr" },
+    });
+    await sessions.sendMessage(identity, projectId, parent.id, "Look around");
+    const child = await sessions.createSubsession(
+      identity,
+      projectId,
+      parent.id,
+      { task: "First look" },
+    );
+    await until(
+      "both rest",
+      async () => (await idle(parent.id)) && (await idle(child.session.id)),
+    );
+    const allocationId = (await session(parent.id)).allocation_id ?? "";
+    // The workspace sits on a remote machine and has idled for two hours,
+    // no turn since.
+    const nodeId = `node-${randomUUID()}`;
+    await db
+      .insertInto("worker_nodes")
+      .values({
+        id: nodeId,
+        tenant_id: identity.tenantId,
+        authority_id: "test",
+        descriptor: JSON.stringify({}),
+        lease_token: randomUUID(),
+        lease_expires_at: new Date(Date.now() + 3_600_000),
+        remote: JSON.stringify({}),
+      })
+      .execute();
+    const longAgo = new Date(Date.now() - 2 * 3_600_000);
+    await db
+      .updateTable("execution_allocations")
+      .set({ worker_node_id: nodeId, created_at: longAgo })
+      .where("id", "=", allocationId)
+      .execute();
+    await db
+      .updateTable("agent_turns")
+      .set({ updated_at: longAgo })
+      .where("session_id", "in", [parent.id, child.session.id])
+      .execute();
+    // A person's terminal, or a workflow's command, in the subagent's chat
+    // a moment ago.
+    await db
+      .insertInto("session_workspace_use")
+      .values({ session_id: child.session.id })
+      .execute();
+    const status = async () =>
+      (
+        await db
+          .selectFrom("execution_allocations")
+          .select("status")
+          .where("id", "=", allocationId)
+          .executeTakeFirstOrThrow()
+      ).status;
+    expect(await sessions.releaseIdleWorkspaces()).toBe(0);
+    expect(await status()).toBe("active");
+    // Unused for two hours too: now it goes.
+    await db
+      .updateTable("session_workspace_use")
+      .set({ used_at: longAgo })
+      .where("session_id", "=", child.session.id)
+      .execute();
+    expect(await sessions.releaseIdleWorkspaces()).toBe(1);
+    expect(await status()).toBe("released");
+  }, 120_000);
+
   it("starts a child that asks for its own workspace at the parent's base", async () => {
     const parent = await sessions.create(identity, projectId, {
       workspace: { ref: "pr" },

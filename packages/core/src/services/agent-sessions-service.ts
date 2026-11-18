@@ -11880,12 +11880,23 @@ export class AgentSessionsService {
           .whereRef("sharer.allocation_id", "=", "allocation.id")
           .as("last_turn_at"),
       )
-      // A person at a terminal or a preview there keeps it too (ADR 0209).
+      // A person at a terminal or a preview there keeps it too (ADR 0209),
+      // or a workflow's command, in any session sharing it (ADR 0322).
       .select((eb) =>
         eb
           .selectFrom("session_workspace_use")
-          .select("session_workspace_use.used_at")
-          .whereRef("session_workspace_use.session_id", "=", "session.id")
+          .innerJoin(
+            "agent_sessions as user",
+            "user.id",
+            "session_workspace_use.session_id",
+          )
+          .select((use) => use.fn.max("session_workspace_use.used_at").as("at"))
+          .where((use) =>
+            use.or([
+              use("user.id", "=", use.ref("session.id")),
+              use("user.workspace_session_id", "=", use.ref("session.id")),
+            ]),
+          )
           .as("last_used_at"),
       )
       .where("session.status", "=", "active")
@@ -12022,9 +12033,19 @@ export class AgentSessionsService {
     // keeps it (ADR 0209); they mark their use before they start anything.
     const used = await this.db
       .selectFrom("session_workspace_use")
-      .select("used_at")
-      .where("session_id", "=", sessionId)
-      .where("used_at", ">", input.idleSince)
+      .innerJoin(
+        "agent_sessions as user",
+        "user.id",
+        "session_workspace_use.session_id",
+      )
+      .select("session_workspace_use.used_at")
+      .where((eb) =>
+        eb.or([
+          eb("user.id", "=", sessionId),
+          eb("user.workspace_session_id", "=", sessionId),
+        ]),
+      )
+      .where("session_workspace_use.used_at", ">", input.idleSince)
       .executeTakeFirst();
     if (used) return false;
     const agent = await this.resolveAgent(input.agentId, projectId).catch(
