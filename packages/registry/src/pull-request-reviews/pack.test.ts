@@ -157,6 +157,100 @@ const turnEvent = (input: {
   },
 });
 
+/** A stall of the review chat's turn (ADR 0333). */
+const stallEvent = (input: {
+  key?: string | null;
+  attemptId: string;
+  attempt: number;
+  restarts: number;
+}) => ({
+  ...turnEvent({ key: input.key === undefined ? "pr-acme/web-42" : input.key }),
+  kind: "session.turn-stalled",
+  payload: {
+    ...turnEvent({
+      key: input.key === undefined ? "pr-acme/web-42" : input.key,
+    }).payload,
+    detail: {
+      turnId: "t1",
+      attemptId: input.attemptId,
+      attempt: input.attempt,
+      attempts: input.attempt,
+      restarts: input.restarts,
+      progressAt: "2026-10-18T00:00:00Z",
+      stalledAt: "2026-10-18T00:20:00Z",
+      stallMinutes: 20,
+      activity: {
+        tools: [
+          {
+            name: "mcp__github__get",
+            description: "Read the pull request",
+            since: "2026-10-18T00:00:00Z",
+          },
+        ],
+        commands: [],
+      },
+    },
+  },
+});
+
+/** Runs `restartStalledReviews` under bun against a fake chat whose turn hangs. */
+async function runStalled(script: string): Promise<unknown> {
+  const directory = await fs.mkdtemp(path.join(os.tmpdir(), "stalled-recipe-"));
+  try {
+    const workflowModule = path.resolve(
+      import.meta.dirname,
+      "../../../workflow/src/index.ts",
+    );
+    await fs.writeFile(
+      path.join(directory, "stalled.ts"),
+      file(".work/workflows/src/stalled-reviews.ts").replace(
+        '"@catamorphic/workflow"',
+        JSON.stringify(workflowModule),
+      ),
+    );
+    await fs.copyFile(
+      path.join(import.meta.dirname, "post-reviews.harness.ts"),
+      path.join(directory, "harness.ts"),
+    );
+    await fs.writeFile(
+      path.join(directory, "verify.ts"),
+      `
+      import { restartStalledReviews } from "./stalled.ts";
+      import { runWorkflow } from "./harness.ts";
+      const log = [];
+      // The chat's turn: each restart starts its next attempt, which hangs too.
+      const turn = { id: "t1", attempt: { id: "attempt-1", ordinal: 1 }, restarts: 0, stalledAt: "2026-10-18T00:20:00Z" };
+      const wrap = (fns) => Object.fromEntries(Object.entries(fns).map(([name, fn]) => [name,
+        (args, options) => ({ __call: async () => structuredClone(await fn(args)), ...(options && "state" in options ? { state: options.state } : {}) })]));
+      const sessions = wrap({
+        inspect: () => ({ turn: structuredClone(turn) }),
+        exec: (args) => { log.push(["exec", args.in, args.idempotencyKey]); return { exitCode: 0, stdout: "== processes\\n12 1 20:01 S opencode acp", stderr: "", durationMs: 9, timedOut: false }; },
+        attempts: () => ({ attempts: [{ id: turn.attempt.id, status: "running", diagnostics: { runner: "", harness: "[warn] opencode: waiting on a tool" } }] }),
+        restart: (args) => {
+          log.push(["restart", args.idempotencyKey, args.reason]);
+          const ended = turn.attempt;
+          turn.restarts += 1;
+          turn.attempt = { id: "attempt-" + (turn.restarts + 1), ordinal: turn.restarts + 1 };
+          return { turnId: turn.id, attemptId: ended.id, attempt: ended.ordinal, attempts: ended.ordinal, restarts: turn.restarts - 1 };
+        },
+        interrupt: (args) => { log.push(["interrupt", args.idempotencyKey]); return { interrupted: true }; },
+      });
+      const written = {};
+      const documents = wrap({ write: (args) => { log.push(["write", args.path]); written[args.path] = JSON.parse(args.text); return { version: 1 }; } });
+      const context = { host: { "catamorphic.sessions": sessions }, documents };
+      ${script}
+    `,
+    );
+    const result = await promisify(execFile)("bun", ["run", "verify.ts"], {
+      cwd: directory,
+      timeout: 10000,
+    });
+    return JSON.parse(result.stdout);
+  } finally {
+    await fs.rm(directory, { recursive: true, force: true });
+  }
+}
+
 const comment = (input: {
   body: string;
   type?: string;
@@ -213,6 +307,7 @@ describe("the pull-request-reviews pack", () => {
       ".work/agents/reviewer.md",
       ".work/workflows/src/reviews.ts",
       ".work/workflows/src/review-report.ts",
+      ".work/workflows/src/stalled-reviews.ts",
       ".work/skills/pull-request-reviews/SKILL.md",
     ]);
     // The same trigger library writing-workflows teaches.
@@ -412,7 +507,7 @@ describe("the pull-request-reviews pack", () => {
         workflow.functionName === "postReviews" ? ["github"] : [],
       );
     expect(workflows.postReviews?.graph.triggers[0]?.config).toEqual({
-      statuses: ["completed", "failed"],
+      statuses: ["completed", "failed", "interrupted"],
     });
     // One publication per pull request chat at a time (ADR 0325).
     expect(workflows.postReviews?.graph.concurrency).toEqual({
@@ -495,6 +590,97 @@ describe("the pull-request-reviews pack", () => {
       expect(starts("postReviews", turnEvent({ key })), String(key)).toBe(
         false,
       );
+  });
+
+  it("parses the optional stall workflow on session.turn-stalled for this repository's chats", () => {
+    const parsed = parseProject({
+      ".work/workflows/src/stalled-reviews.ts": file(
+        ".work/workflows/src/stalled-reviews.ts",
+      ),
+    });
+    expect(parsed.errors).toEqual([]);
+    const [workflow, ...others] = parsed.workflows;
+    expect(others).toEqual([]);
+    expect(workflow?.functionName).toBe("restartStalledReviews");
+    expect(workflow?.graph.triggers.map((binding) => binding.kind)).toEqual([
+      "session.turn-stalled",
+    ]);
+    expect(workflow?.graph.concurrency).toEqual({
+      key: "payload.session.key",
+      onConflict: "queue",
+    });
+    const starts = (event: unknown) =>
+      (workflow?.graph.triggers ?? []).some((binding) =>
+        matchesAllWhere(
+          binding.where === undefined ? [] : [binding.where],
+          event,
+        ),
+      );
+    const stall = { attemptId: "a", attempt: 1, restarts: 0 };
+    expect(starts(stallEvent(stall))).toBe(true);
+    for (const key of ["pr-acme/payments-42", null])
+      expect(starts(stallEvent({ ...stall, key })), String(key)).toBe(false);
+    // The reviewers set a threshold, or no stall is ever recorded.
+    for (const reviewer of [
+      JSON.parse(file(".work/agents/reviewer.json")),
+      JSON.parse(OPENCODE.files[".work/agents/reviewer.json"] ?? "{}"),
+    ])
+      expect(reviewer.stall).toEqual({ minutes: 20 });
+  });
+
+  it("restarts a stalled review with its evidence kept, and stops it at the bound", async () => {
+    const event = stallEvent({
+      attemptId: "attempt-1",
+      attempt: 1,
+      restarts: 0,
+    });
+    const outcome = await runStalled(`
+      const EVENT = ${JSON.stringify(event)};
+      const stall = (attempt, restarts) => ({ ...EVENT, payload: { ...EVENT.payload, detail: { ...EVENT.payload.detail, attemptId: "attempt-" + attempt, attempt, attempts: attempt, restarts } } });
+      const results = [];
+      results.push(await runWorkflow(restartStalledReviews, stall(1, 0), context));
+      // Run again after its restart ran: that attempt is gone, so nothing.
+      results.push(await runWorkflow(restartStalledReviews, stall(1, 0), context));
+      results.push(await runWorkflow(restartStalledReviews, stall(2, 1), context));
+      // Past the bound: the turn is stopped instead.
+      results.push(await runWorkflow(restartStalledReviews, stall(3, 2), context));
+      console.log(JSON.stringify({ results, log, evidence: written["store/reviews/stalls/acme-web-42/attempt-1.json"] }));
+    `);
+    expect(outcome).toMatchObject({
+      results: [
+        { act: "restart", attempt: 1 },
+        // Retried after the restart ran: that attempt is gone, so nothing.
+        { act: "nothing", attempt: 1 },
+        { act: "restart", attempt: 2 },
+        { act: "stop", attempt: 3 },
+      ],
+      log: [
+        ["exec", "session", "stall:attempt-1:diagnose"],
+        ["write", "store/reviews/stalls/acme-web-42/attempt-1.json"],
+        [
+          "restart",
+          "stall:attempt-1",
+          "no progress for 20 minutes while running mcp__github__get",
+        ],
+        ["exec", "session", "stall:attempt-2:diagnose"],
+        ["write", "store/reviews/stalls/acme-web-42/attempt-2.json"],
+        [
+          "restart",
+          "stall:attempt-2",
+          "no progress for 20 minutes while running mcp__github__get",
+        ],
+        ["exec", "session", "stall:attempt-3:diagnose"],
+        ["write", "store/reviews/stalls/acme-web-42/attempt-3.json"],
+        ["interrupt", "stall:t1:stop"],
+      ],
+      evidence: {
+        act: "restart",
+        processes: { stdout: expect.stringContaining("opencode acp") },
+        attempts: [
+          { diagnostics: { harness: "[warn] opencode: waiting on a tool" } },
+        ],
+      },
+    });
   });
 
   it("hands each pull request to its keyed chat at its head", async () => {

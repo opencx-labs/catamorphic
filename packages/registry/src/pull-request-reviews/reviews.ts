@@ -251,7 +251,8 @@ const KEPT = 30;
 type Publication = {
   sessionId: string;
   turnId: string;
-  failed: boolean;
+  /** The turn did not finish: it failed, or was stopped. */
+  unfinished: "failed" | "interrupted" | null;
   /** From the chat's key, never from the report. */
   number: number;
   /** The commit the chat's workspace stands on. */
@@ -285,7 +286,9 @@ const RETRY = {
 export const postReviews = defineWorkflow(({ defineBoundary }) => ({
   triggers: [
     trigger("session.turn-changed", {
-      statuses: ["completed", "failed"],
+      // A turn stopped before it finished (by a person, or by
+      // restartStalledReviews past its bound) leaves no review either.
+      statuses: ["completed", "failed", "interrupted"],
       where: { payload: { session: { key: { $prefix: "pr-acme/web-" } } } },
     }),
   ],
@@ -328,7 +331,11 @@ export const postReviews = defineWorkflow(({ defineBoundary }) => ({
         const publication: Publication = {
           sessionId: event.sessionId,
           turnId: String(event.detail.turnId),
-          failed: event.detail.status === "failed",
+          unfinished:
+            event.detail.status === "failed" ||
+            event.detail.status === "interrupted"
+              ? event.detail.status
+              : null,
           number,
           commit: null,
           post:
@@ -410,11 +417,14 @@ export const postReviews = defineWorkflow(({ defineBoundary }) => ({
             result.sessionId === input.state.sessionId,
         );
         const head = input.state.commit ?? "";
-        const checked = input.state.failed
-          ? "The review turn failed."
-          : !submitted
-            ? "The turn submitted no review result."
-            : checkWorkReview(submitted.value);
+        const checked =
+          input.state.unfinished === "failed"
+            ? "The review turn failed."
+            : input.state.unfinished === "interrupted"
+              ? "The review turn was stopped before it finished."
+              : !submitted
+                ? "The turn submitted no review result."
+                : checkWorkReview(submitted.value);
         // Two commits must both be the head being posted for: the one the
         // agent says it reviewed, and the one Work recorded its turn began
         // on. Either one elsewhere refuses the review, and says which.
