@@ -451,7 +451,8 @@ export class WorkerNodesService {
   }
 
   /**
-   * Record a machine's disk report (ADR 0335) while `lease` holds it. The
+   * Record a machine's disk report (ADR 0335) while `lease` holds it,
+   * dated when it arrived. The
    * row's lock orders reports from every replica, so the episode under its
    * floor starts once: when a report first shows free space under the
    * floor. It ends once free space is back above 1.1 times the floor, so a
@@ -479,9 +480,14 @@ export class WorkerNodesService {
         : diskLow(disk)
           ? new Date()
           : null;
+      // Dated when the server heard it, by the database's clock: a
+      // machine's own clock never makes an old report look recent.
       await trx
         .updateTable("worker_nodes")
-        .set({ disk: toJson(disk), disk_low_at: since })
+        .set({
+          disk: sql`jsonb_set(${toJson(disk)}::jsonb, '{measuredAt}', to_jsonb(to_char(now() AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"')))`,
+          disk_low_at: since,
+        })
         .where("id", "=", args.lease.id)
         .execute();
       if (since && !before) return { state: "started", since };

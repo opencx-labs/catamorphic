@@ -36,8 +36,9 @@ reports offers the machine capability `disk`. Operators see the report
 and since when it is short with every machine, the server's own included
 (`GET /_work/operator/machines`).
 
-**Admission respects disk.** On a machine with a report younger than 5
-minutes, a workspace is admitted only while free space less its
+**Admission respects disk.** On a machine whose report the server heard
+within 5 minutes (a report is dated by the database's clock when it
+arrives, never by the machine's), a workspace is admitted only while free space less its
 `storageMb` stays at or above the floor, and `storageMb` is reserved like
 memory (ADR 0100): the Allocation records `reserved_storage_mb`, and the
 reservations on a machine never exceed its total less its floor, which is

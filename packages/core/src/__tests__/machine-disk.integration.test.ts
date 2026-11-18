@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { createDatabase, migrateToLatest } from "@catamorphic/db";
 import type { EnvironmentBinding, MachineDisk } from "@catamorphic/sandbox";
+import { sql } from "kysely";
 import pg from "pg";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { ExecutionAllocationsService } from "../services/execution-allocations-service.js";
@@ -193,8 +194,10 @@ describe.skipIf(!db)("machine disk (ADR 0335)", () => {
     ).rejects.toBeInstanceOf(EnvironmentCapacityError);
   });
 
-  it("does not hold a machine to a report too old to speak for it", async () => {
+  it("dates a report by when the server heard it, not the machine's clock", async () => {
+    if (!db) return;
     const { nodes, lease, admit } = await machine();
+    // A machine whose clock is ten minutes behind still holds work back.
     await nodes.reportDisk({
       lease,
       disk: report({
@@ -202,6 +205,15 @@ describe.skipIf(!db)("machine disk (ADR 0335)", () => {
         at: new Date(Date.now() - 10 * 60_000),
       }),
     });
+    await expect(admit()).rejects.toBeInstanceOf(EnvironmentCapacityError);
+    // One the server last heard ten minutes ago speaks for nothing now.
+    await db
+      .updateTable("worker_nodes")
+      .set({
+        disk: sql`jsonb_set(disk, '{measuredAt}', to_jsonb((now() - interval '10 minutes')::timestamptz))`,
+      })
+      .where("id", "=", lease.id)
+      .execute();
     await expect(admit()).resolves.toMatchObject({ status: "active" });
   });
 

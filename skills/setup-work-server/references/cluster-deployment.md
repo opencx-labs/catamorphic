@@ -857,8 +857,9 @@ cache fill: the work waits as it does for CPU or memory, and on demand Work
 makes another machine for it. Workflow runs are not held back, so a full
 server still runs the workflows that free or replace machines. An Environment's `storageMb` is reserved like memory, within
 the disk less its floor, and admitted only while free space less it stays
-above the floor; it is enforced only by microsandbox. A report older than 5
-minutes does not hold a machine back.
+above the floor; it is enforced only by microsandbox. A report the server
+heard over 5 minutes ago (dated on arrival, not by the machine's clock) does
+not hold a machine back.
 
 The machine removes what Work left that nothing used for
 `WORK_IMAGE_RETENTION_HOURS`, hourly and at once while under its floor:

@@ -15,7 +15,7 @@ export const MachineDiskSchema = z.strictObject({
   totalBytes: z.number().nonnegative(),
   freeBytes: z.number().nonnegative(),
   floorBytes: z.number().nonnegative(),
-  measuredAt: z.string().datetime(),
+  measuredAt: z.string().datetime({ offset: true }),
 });
 
 /** A stored report, or undefined for none or one that does not parse. */
