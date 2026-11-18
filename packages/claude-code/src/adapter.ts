@@ -41,6 +41,8 @@ import {
   buildQueryOptions,
   ClaudeStartError,
   commandShellPaths,
+  dropConfigLinks,
+  harnessConfigHome,
   launchSignature,
   readAttemptOptions,
 } from "./options.js";
@@ -453,6 +455,8 @@ class ClaudeAttempt {
         this.loopback = await serveLoopbackModel({
           access: this.attempt.modelAccess,
         });
+      const configHome = harnessConfigHome(this.attempt);
+      if (configHome) await dropConfigLinks(configHome);
       const prompt = await renderPrompt({ ...input, ...this.mediaFolder() });
       message = this.userMessage({ itemId: input.itemId, text: prompt });
       const options = readAttemptOptions(this.attempt.options);
