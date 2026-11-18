@@ -20,6 +20,7 @@ import {
   type AttemptControl,
   type AttemptHost,
   type AttemptStart,
+  diagnosticStream,
   type HarnessAdapter,
   type HarnessCapabilities,
   RequestClosedError,
@@ -244,6 +245,8 @@ class ClaudeSession implements WarmSession {
   /** The native turn its last attempt ended on (an assistant uuid). */
   lastTurn?: string;
   stderr = "";
+  /** The serving attempt's log: the CLI's stderr reaches Work as written (ADR 0333). */
+  log?: (data: string) => void;
   private handle?: ClaudeQueryHandle;
   private serving?: ClaudeAttempt;
   private ended = false;
@@ -340,6 +343,8 @@ class ClaudeSession implements WarmSession {
 class ClaudeAttempt {
   private readonly attempt: AttemptStart;
   private readonly host: AttemptHost;
+  /** The CLI's own log while this attempt is its own (ADR 0333). */
+  private readonly log: ReturnType<typeof diagnosticStream>;
   private readonly query: ClaudeQuery;
   private readonly interruptGraceMs: number;
   private readonly exitGraceMs: number;
@@ -390,6 +395,10 @@ class ClaudeAttempt {
   }) {
     this.attempt = input.attempt;
     this.host = input.host;
+    this.log = diagnosticStream({
+      emit: (event) => input.host.emit(event),
+      prefix: "claude: ",
+    });
     this.query = input.query;
     this.interruptGraceMs = input.interruptGraceMs;
     this.exitGraceMs = input.exitGraceMs;
@@ -476,6 +485,7 @@ class ClaudeAttempt {
     if (!session) return;
     this.session = session;
     this.stderrFrom = session.stderr.length;
+    session.log = (data) => this.log.write(data);
     this.ownInputUuid = message.uuid;
     session.inputs.push(message);
     this.resolveInputSent();
@@ -742,6 +752,8 @@ class ClaudeAttempt {
   }): void {
     if (this.settled) return;
     this.settled = true;
+    this.log.flush();
+    if (this.session?.log) this.session.log = undefined;
     this.resolveInputSent();
     this.failed = input.status === "failed";
     clearTimeout(this.interruptTimer);
@@ -900,6 +912,7 @@ class ClaudeAttempt {
       abortController: session.abort,
       stderr: (data) => {
         session.stderr = (session.stderr + data).slice(-8_000);
+        session.log?.(data);
       },
     });
   }

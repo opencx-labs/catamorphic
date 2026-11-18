@@ -13,6 +13,7 @@ import {
   type AttemptControl,
   type AttemptHost,
   type AttemptStart,
+  diagnosticStream,
   type HarnessAdapter,
   type HarnessCapabilities,
   type HarnessEvent,
@@ -97,6 +98,11 @@ function startAttempt(
   /** Permission requests still waiting on their person. */
   const asks = new Set<AbortController>();
   const stderr: string[] = [];
+  // The agent's own log reaches Work while it is written (ADR 0333).
+  const log = diagnosticStream({
+    emit: (event) => host.emit(event),
+    prefix: `${path.basename(command[0] ?? "agent")}: `,
+  });
   const items = new ItemStream(host);
   /** A model call the endpoint saw refused, until new output (ADR 0298). */
   let retrying = false;
@@ -168,6 +174,7 @@ function startAttempt(
     spawned.stderr.on("data", (chunk: string) => {
       stderr.push(...chunk.split("\n").filter((line) => line.trim()));
       stderr.splice(0, Math.max(0, stderr.length - 20));
+      log.write(chunk);
     });
     // Ends the attempt when the agent goes away mid-request.
     const exited = new Promise<never>((_, reject) => {
@@ -533,6 +540,7 @@ function startAttempt(
       await stop(child);
       // After the agent, so a call it made on the way out still lands.
       model?.close();
+      log.flush();
       host.emit({
         type: "turn.completed",
         status:

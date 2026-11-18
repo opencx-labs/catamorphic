@@ -612,3 +612,55 @@ export interface HarnessAdapter {
    */
   dispose?(): Promise<void>;
 }
+
+/**
+ * A harness's own log (a CLI's stderr) as `diagnostic` events, while it is
+ * written (ADR 0333): Work keeps their tail with the attempt, so a hung or
+ * crashed harness leaves its last words. Lines are sent at most once a
+ * second, newest kept when one second's lines pass `maxBytes`; nothing in
+ * them reaches the transcript.
+ */
+export function diagnosticStream(input: {
+  emit: (event: Extract<HarnessEvent, { type: "diagnostic" }>) => void;
+  /** Prefixed to each line, e.g. `opencode: `. */
+  prefix?: string;
+  level?: "info" | "warn" | "error";
+  intervalMs?: number;
+  maxBytes?: number;
+}): { write(chunk: string): void; flush(): void } {
+  const intervalMs = input.intervalMs ?? 1_000;
+  const maxBytes = input.maxBytes ?? 8_000;
+  let partial = "";
+  let lines: string[] = [];
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const flush = () => {
+    if (timer) clearTimeout(timer);
+    timer = undefined;
+    if (lines.length === 0) return;
+    let message = lines.join("\n");
+    lines = [];
+    if (message.length > maxBytes)
+      message = `…${message.slice(message.length - maxBytes)}`;
+    input.emit({ type: "diagnostic", level: input.level ?? "info", message });
+  };
+  return {
+    write(chunk) {
+      const split = splitLines(partial + chunk);
+      partial = split.rest.slice(-maxBytes);
+      for (const line of split.lines)
+        if (line.trim())
+          lines.push(`${input.prefix ?? ""}${line.slice(0, 2_000)}`);
+      if (lines.length > 200) lines = lines.slice(-200);
+      if (lines.length > 0 && !timer) {
+        timer = setTimeout(flush, intervalMs);
+        timer.unref?.();
+      }
+    },
+    flush() {
+      if (partial.trim())
+        lines.push(`${input.prefix ?? ""}${partial.slice(0, 2_000)}`);
+      partial = "";
+      flush();
+    },
+  };
+}

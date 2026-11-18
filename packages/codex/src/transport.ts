@@ -37,6 +37,8 @@ export type CodexTransportFactory = (
   input: CodexSpawn & {
     onMessage: (message: JsonObject) => void;
     onExit: (exit: CodexExit) => void;
+    /** Standard error as Codex writes it (ADR 0333). */
+    onStderr?: (chunk: string) => void;
   },
 ) => CodexTransport;
 
@@ -62,6 +64,7 @@ export const processTransport: CodexTransportFactory = (input) => {
   child.stderr.setEncoding("utf8");
   child.stderr.on("data", (chunk: string) => {
     stderr = (stderr + chunk).slice(-STDERR_TAIL);
+    input.onStderr?.(chunk);
   });
   child.on("error", (error) => {
     stderr = `${stderr}\n${error.message}`.slice(-STDERR_TAIL);
