@@ -27,6 +27,7 @@
     "@catamorphic/api-client": "workspace:*",
     "@catamorphic/core": "workspace:*",
     "@catamorphic/parser": "workspace:*",
+    "@catamorphic/server-sdk": "workspace:*",
     "@monaco-editor/react": "^4.7.0",
     "@types/node": "^26.6.6",
     "@types/react": "^19.3.0",
