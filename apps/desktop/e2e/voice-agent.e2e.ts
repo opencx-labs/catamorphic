@@ -79,6 +79,14 @@ const helpers = `
   const mic = () => $('[data-testid="voice-button"]');
   const chatOf = (localId) => $('[data-chat-local-id="' + localId + '"]');
   const chatMic = (localId) => chatOf(localId)?.querySelector('[data-testid="chat-voice-button"]');
+  // The chat a shortcut just opened takes the keyboard. A chat from earlier
+  // tests can mount meanwhile, hidden, and is not the one opened.
+  const openedChat = (known) => {
+    const chat = document.activeElement?.closest('[data-chat-local-id]');
+    return !!chat && !known.includes(chat.dataset.chatLocalId) && !chat.closest('[inert]') &&
+      chat.checkVisibility() && chat.querySelector('[data-composer-input]') === document.activeElement &&
+      chat.dataset.chatLocalId;
+  };
   const dockVoice = () => mic()?.closest('[data-dock-voice]')?.dataset.dockVoice;
   const api = window.catamorphicDesktop;
   const session = async (ref, path = '') => {
@@ -386,10 +394,11 @@ async function talk(
   `);
     held = true;
     await input(true);
-    const ref = await runWait<Ref>(
+    // Hearing starts with the first captured frame, while the assistant's
+    // chat may still be created: the stored chat is read after release.
+    await runWait(
       `const status = await api.voiceStatus();
-     const prefs = await api.getPrefs();
-     return status.phase === 'hearing' && prefs.assistantSession;`,
+     return status.phase === 'hearing';`,
       {
         timeoutMs: 30_000,
         label: "the assistant hearing while the microphone is held",
@@ -450,10 +459,13 @@ async function talk(
     expect(appStartup, JSON.stringify(timing)).toBeLessThan(500);
     await input(false);
     held = false;
-    await runWait(
-      `const detail = await session(${JSON.stringify(ref)});
+    const ref = await runWait<Ref>(
+      `const ref = (await api.getPrefs()).assistantSession;
+     if (!ref) return false;
+     const detail = await session(ref);
      return detail.messages?.some((m) => m.role === 'user' && m.content === ${JSON.stringify(utterance)}) &&
-       detail.messages.some((m) => m.role === 'assistant' && m.content.startsWith(${JSON.stringify(reply)}));`,
+       detail.messages.some((m) => m.role === 'assistant' && m.content.startsWith(${JSON.stringify(reply)})) &&
+       { projectId: ref.projectId, sessionId: ref.sessionId };`,
       {
         timeoutMs: 30_000,
         label: "the released utterance and its answer in the assistant's chat",
@@ -917,9 +929,7 @@ describe("voice", () => {
       ...(/Mac/.test(navigator.platform) ? { metaKey: true } : { ctrlKey: true }),
     })); return true;`);
     const localId = await runWait<string>(
-      `const known = ${JSON.stringify(before)};
-       const chat = $$('[data-chat-local-id]').find((el) => !known.includes(el.dataset.chatLocalId));
-       return chat?.querySelector('[data-composer-input]') && chat.dataset.chatLocalId;`,
+      `return openedChat(${JSON.stringify(before)});`,
       { label: "a new chat" },
     );
     const type = (text: string) =>
@@ -946,7 +956,17 @@ describe("voice", () => {
          status.target?.kind === 'chat' && chatMic(${JSON.stringify(localId)})?.dataset.lit === 'true' &&
          { projectId: status.target.projectId, sessionId: status.target.sessionId };`,
       { timeoutMs: 30_000, label: "voice on in the chat" },
-    );
+    ).catch(async (cause: unknown) => {
+      const detail =
+        await run(`const button = chatMic(${JSON.stringify(localId)});
+        return {
+          status:await api.voiceStatus(),inputs:window.__voiceInputLog,focused:document.hasFocus(),
+          button:button && {...button.dataset,box:button.getBoundingClientRect().toJSON()},
+        };`);
+      throw new Error(
+        `${String(cause)}; chat voice: ${JSON.stringify(detail)}`,
+      );
+    });
     expect(await run(`return mic().dataset.phase;`)).toBe("off");
     await capturedSpeech();
     await runWait(
@@ -1309,9 +1329,7 @@ describe("voice", () => {
       ...(/Mac/.test(navigator.platform) ? { metaKey: true } : { ctrlKey: true }),
     })); return true;`);
     const localId = await runWait<string>(
-      `const known = ${JSON.stringify(before)};
-       const chat = $$('[data-chat-local-id]').find((el) => !known.includes(el.dataset.chatLocalId));
-       return chat?.querySelector('[data-composer-input]') && chat.dataset.chatLocalId;`,
+      `return openedChat(${JSON.stringify(before)});`,
       { label: "a new chat" },
     );
     // A long answer: about two seconds of speech.
