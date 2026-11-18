@@ -3,6 +3,7 @@ import http from "node:http";
 import type net from "node:net";
 import os from "node:os";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 import {
   commandShellFiles,
   followProcess,
@@ -655,6 +656,127 @@ describe.skipIf(!enabled)("commands apart from the agent (ADR 0332)", () => {
         expect(ran.result.trim(), shim).toBe(`[][] ${PROJECT}`);
         const git = await harness(id, `${shim}/path/git --version`);
         expect(git.exitCode, git.result).toBe(0);
+      }
+      expect(await plantedBeside(id)).toBe("none");
+    },
+    10 * MINUTES,
+  );
+
+  it(
+    "starts the harness from the runner on the image's Bun as exactly the harness's user and group",
+    async () => {
+      const id = await separated();
+      await plantRuntimeConfig(id);
+      // A harness that records who it is and what it sees, then exits.
+      const probe = [
+        "#!/bin/sh",
+        `out=${RETURNS}/$(basename "$0")`,
+        '{ id -u; id -g; id -G; pwd; env | grep -c "^LC_PLANTED" || true; } > "$out.ids"',
+        `cd ${PROJECT} && ${SHIM}/bin/bash -c 'echo "[$LC_PLANTED]"' > "$out.shim" 2>&1`,
+        "exit 3",
+        "",
+      ].join("\n");
+      await provider.uploadFiles(
+        id,
+        { "work-probe-acp": probe, "work-probe-claude": probe },
+        "/usr/local/bin",
+        { side: "agent" },
+      );
+      await agent(
+        id,
+        "chmod 755 /usr/local/bin/work-probe-acp /usr/local/bin/work-probe-claude",
+      );
+      const bundle = fs.readFileSync(
+        path.resolve(
+          path.dirname(fileURLToPath(import.meta.url)),
+          "../../../runner-bundle/dist/runner.mjs",
+        ),
+        "utf8",
+      );
+      await provider.uploadFiles(
+        id,
+        { "runner/runner.mjs": bundle },
+        "/workspace/.work-session",
+        { side: "agent" },
+      );
+      const attempt = (
+        harnessId: string,
+        options: Record<string, unknown>,
+      ) => ({
+        protocol: 3,
+        sessionId: "session",
+        projectId: "project",
+        turnId: `turn-${harnessId}`,
+        attemptId: `attempt-${harnessId}`,
+        reason: "initial",
+        harness: harnessId,
+        workingDirectory: PROJECT,
+        stateDirectory: "/workspace/.work-session",
+        thread: { mode: "fresh", providerThreadId: `thread-${harnessId}` },
+        input: { itemId: "input", text: "Who are you?", attachments: [] },
+        systemPrompt: "",
+        context: "",
+        permissions: {},
+        modelAccess: {
+          kind: "gateway",
+          api: harnessId === "acp" ? "openai" : "anthropic",
+          baseUrl: "http://127.0.0.1:9",
+          grantDirectory: "/workspace/.work-session/grants/model",
+        },
+        toolPolicies: {},
+        toolAnnotations: {},
+        mcpServers: {},
+        hostTools: [],
+        plugins: [],
+        env: {},
+        options,
+        commands: {
+          socket: SEPARATE_COMMANDS_SOCKET,
+          harness: { ...SEPARATE_HARNESS },
+        },
+      });
+      for (const [harnessId, options] of [
+        [
+          "acp",
+          {
+            command: ["/usr/local/bin/work-probe-acp"],
+            shell: true,
+            projectConfig: false,
+          },
+        ],
+        ["claude-code", { command: "/usr/local/bin/work-probe-claude" }],
+      ] as const) {
+        const frame = `\u001e${JSON.stringify({
+          id: `start-${harnessId}`,
+          command: { kind: "start", attempt: attempt(harnessId, options) },
+        })}\n`;
+        // As Work starts it: root, in its state folder, on Bun first.
+        const ran = await docker.exec({
+          container: `${id}-agent`,
+          cmd: [
+            "sh",
+            "-c",
+            // The frame, then an open input while the attempt runs.
+            `cd /workspace/.work-session && runtime="$(command -v bun || command -v node)" && { head -c ${Buffer.byteLength(frame)}; sleep 15; } | timeout 60 "$runtime" runner/runner.mjs`,
+          ],
+          user: "0:0",
+          input: Buffer.from(frame),
+        });
+        expect(ran.stdout + ran.stderr).toContain("turn.completed");
+        const name =
+          harnessId === "acp" ? "work-probe-acp" : "work-probe-claude";
+        const ids = (await agent(id, `cat ${RETURNS}/${name}.ids`)).result
+          .trim()
+          .split("\n");
+        expect(ids.slice(0, 3), harnessId).toEqual(["10001", "10001", "10001"]);
+        // With nothing the checkout planted; an ACP launcher starts in the
+        // harness's home (the CLI works in the checkout, and reads none of
+        // its files: commands-apart.native.test.ts).
+        expect(ids[4], harnessId).toBe("0");
+        if (harnessId === "acp") expect(ids[3]).toBe(SEPARATE_HARNESS.home);
+        expect(
+          (await agent(id, `cat ${RETURNS}/${name}.shim`)).result.trim(),
+        ).toBe("[]");
       }
       expect(await plantedBeside(id)).toBe("none");
     },
