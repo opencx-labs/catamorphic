@@ -9,17 +9,19 @@ import {
   trigger,
 } from "@catamorphic/workflow";
 import {
-  checkFinding,
   checkWorkReview,
   diffLines,
+  FINDINGS_READ,
   findingComment,
   findingFits,
   findingLine,
   findingMarker,
+  findingMarkersIn,
   isFindingReview,
   list,
   MAX_FINDINGS,
   record,
+  turnFindings,
   type WorkFinding,
   type WorkReview,
 } from "./review-report";
@@ -289,9 +291,9 @@ type Publication = {
   problem: string | null;
   /** The result a `session.result-recorded` event names. */
   resultId: string | null;
-  /** What the turn submitted, as Work recorded it. */
+  /** The turn's review, as Work recorded it. */
   submitted: { value: unknown; commit: string | null; current: boolean } | null;
-  /** The findings it posts: a finding's own, or those its review names. */
+  /** The findings it posts: on their own, or the turn's left for its review. */
   findings: WorkFinding[];
   /** Findings on lines outside the diff, listed in the review's body. */
   outside: WorkFinding[];
@@ -322,8 +324,11 @@ type Publication = {
   superseded: string | null;
   /** The in progress check on the commit, read by id before it is rewritten. */
   running: number | null;
-  /** The pull request is closed: its head's in progress check is cancelled. */
-  closed: boolean;
+  /**
+   * Why the head's in progress check ends without a verdict: the pull
+   * request closed, or the turn that would review it was cancelled.
+   */
+  ended: "closed" | "cancelled" | null;
 };
 
 /**
@@ -387,10 +392,16 @@ export const postReviews = defineWorkflow(({ defineBoundary }) => ({
       where: { payload: { session: { key: { $prefix: "pr-acme/web-" } } } },
     }),
   ],
-  // One publication per pull request chat at a time, in the order its
-  // events came: each reads what the one before it posted (ADR 0325), and
-  // nothing in progress overtakes a verdict (ADR 0336).
-  concurrency: { key: "payload.session.key", onConflict: "queue" },
+  // One publication per pull request chat at a time: each reads what the
+  // one before it posted (ADR 0325). Events of one turn alike in kind and
+  // status join a publication still waiting (ADR 0336): every run reads
+  // the chat, its results and GitHub afresh, so a burst of findings holds
+  // one waiting run and never fills the queue the turn's verdict needs.
+  concurrency: {
+    key: "payload.session.key",
+    onConflict: "queue",
+    coalesce: ["kind", "payload.detail.turnId", "payload.detail.status"],
+  },
   connections: [
     {
       alias: "github",
@@ -468,7 +479,7 @@ export const postReviews = defineWorkflow(({ defineBoundary }) => ({
           progress: null,
           superseded: null,
           running: null,
-          closed: false,
+          ended: null,
         };
         // A settled turn's publication starts out as a missing review.
         if (publication.post === "review") publication.post = "missing";
@@ -528,6 +539,7 @@ export const postReviews = defineWorkflow(({ defineBoundary }) => ({
             sessionId: publication.sessionId,
             name: publication.kind === "finding" ? "finding" : "review",
             turnId: publication.turnId,
+            limit: FINDINGS_READ,
           },
           { state: publication },
         );
@@ -543,17 +555,17 @@ export const postReviews = defineWorkflow(({ defineBoundary }) => ({
         Carried<{ results: SessionResult[] } | null, Publication>
       >) => {
         const state = input.state;
-        // The turn's own results, newest first (ADR 0323): its newest
-        // review, or the finding the event recorded.
+        // The turn's own results, newest first (ADR 0323).
         const own = (input.result?.results ?? []).filter(
           (result) =>
             result.turnId === state.turnId &&
             result.sessionId === state.sessionId,
         );
-        const picked =
-          state.kind === "finding"
-            ? own.find((result) => result.id === state.resultId)
-            : own[0];
+        // Findings are decided from Work's record alone: one with nothing
+        // to post reads nothing of GitHub.
+        if (state.kind === "finding")
+          return { result: null, state: findingsToPost(state, own) };
+        const [picked] = own;
         const publication: Publication = {
           ...state,
           submitted: picked
@@ -564,8 +576,7 @@ export const postReviews = defineWorkflow(({ defineBoundary }) => ({
               }
             : null,
         };
-        // A review names the findings it stands behind by id: the turn's
-        // newest 100 findings are where it finds them.
+        // The turn's findings, which its review posts if they are not yet.
         if (
           publication.kind !== "review" ||
           publication.post === "nothing" ||
@@ -577,7 +588,7 @@ export const postReviews = defineWorkflow(({ defineBoundary }) => ({
             sessionId: publication.sessionId,
             name: "finding",
             turnId: publication.turnId,
-            limit: 100,
+            limit: FINDINGS_READ,
           },
           { state: publication },
         );
@@ -593,13 +604,11 @@ export const postReviews = defineWorkflow(({ defineBoundary }) => ({
         Carried<{ results: SessionResult[] } | null, Publication>
       >) => {
         const state = input.state;
-        if (!state.ours) return { result: null, state };
+        if (!readsGithub(state)) return { result: null, state };
         const publication: Publication =
           state.kind === "review"
             ? checkedReview(state, input.result?.results ?? [])
-            : state.kind === "finding"
-              ? checkedFinding(state)
-              : state;
+            : state;
         // A closed pull request is read even when nothing posts: its head's
         // in progress check is cancelled.
         return connections.github.get(
@@ -616,7 +625,7 @@ export const postReviews = defineWorkflow(({ defineBoundary }) => ({
         connections,
       }: BoundaryContext<Carried<unknown, Publication>>) => {
         const state = input.state;
-        if (!state.ours) return { result: null, state };
+        if (!readsGithub(state)) return { result: null, state };
         // GitHub's head, not the chat's: a push the chat has not seen yet
         // makes this publication stale too.
         const pull = record(restBody(input.result, "the pull request"));
@@ -630,7 +639,18 @@ export const postReviews = defineWorkflow(({ defineBoundary }) => ({
           );
         if (pull.state !== "open")
           return checks(
-            { ...nothing(state), commit: head, closed: true },
+            { ...nothing(state), commit: head, ended: "closed" },
+            head,
+          );
+        // A turn cancelled before it ran, with no other at work, leaves
+        // nothing to review the head: its check stops waiting.
+        if (
+          state.kind === "review" &&
+          state.unfinished === "cancelled" &&
+          !state.newer
+        )
+          return checks(
+            { ...nothing(state), commit: head, ended: "cancelled" },
             head,
           );
         if (state.kind === "progress") {
@@ -673,7 +693,7 @@ export const postReviews = defineWorkflow(({ defineBoundary }) => ({
         connections,
       }: BoundaryContext<Carried<unknown, Publication>>) => {
         const state = input.state;
-        if (!state.commit || (state.post === "nothing" && !state.closed))
+        if (!state.commit || (state.post === "nothing" && !state.ended))
           return { result: null, state };
         // The commit's verdict so far is the App's own check runs on it:
         // GitHub decides, not the chat's record, which its reviewer can
@@ -681,14 +701,15 @@ export const postReviews = defineWorkflow(({ defineBoundary }) => ({
         const runs = list(record(input.result).runs)
           .map(record)
           .filter((run) => run.own === true);
-        const progressRuns = runs.filter(
-          (run) => run.externalId === progressStamp(state),
-        );
-        const running = progressRuns.find(
-          (run) => run.status !== "completed" && typeof run.id === "number",
+        // This pull request's own run in progress, of any of its turns.
+        const running = runs.find(
+          (run) =>
+            isProgressRun(state, run.externalId) &&
+            run.status !== "completed" &&
+            typeof run.id === "number",
         );
         const runningId = typeof running?.id === "number" ? running.id : null;
-        if (state.closed)
+        if (state.ended)
           return runningId === null
             ? { result: null, state }
             : connections.github.update_check_run(
@@ -700,21 +721,23 @@ export const postReviews = defineWorkflow(({ defineBoundary }) => ({
                   output: {
                     title: "Not reviewed",
                     summary:
-                      "The pull request was closed before the review finished.",
+                      state.ended === "closed"
+                        ? "The pull request was closed before the review finished."
+                        : "The review was cancelled before it started.",
                   },
                 },
                 { state },
               );
         if (state.kind === "progress") {
-          // A commit with a verdict shows it; one whose in progress run was
-          // cancelled waits for its verdict; otherwise the review shows it
-          // started, once per commit.
+          // A commit with a verdict shows it. Otherwise the review shows it
+          // started, with a run of this turn's: one an earlier turn left
+          // cancelled (a head pushed again, a pull request reopened) does
+          // not stop a new one.
           if (
             runs.some(
               (run) =>
                 run.status === "completed" && strength(run.conclusion) >= 0,
-            ) ||
-            (progressRuns.length > 0 && runningId === null)
+            )
           )
             return { result: null, state: nothing(state) };
           // A turn that stopped working changes nothing: its settled
@@ -772,8 +795,30 @@ export const postReviews = defineWorkflow(({ defineBoundary }) => ({
         };
         // A failure stands until the next push, a success gives way only to
         // a failure, and no review marks a commit only while nothing has.
-        if (proposed <= held) return { result: null, state: publication };
+        // This pull request's own run in progress always ends, with the
+        // verdict the commit holds (another pull request on the same head
+        // may hold a stronger one).
+        if (proposed <= held && runningId === null)
+          return { result: null, state: publication };
         const review = state.review;
+        if (proposed <= held && runningId !== null)
+          return connections.github.update_check_run(
+            {
+              repository: REVIEWED_REPOSITORY,
+              checkRunId: runningId,
+              status: "completed",
+              conclusion: VERDICTS[strongest] ?? "action_required",
+              output: {
+                title: VERDICT_TITLES[VERDICTS[strongest] ?? "action_required"],
+                summary:
+                  "An earlier review of this commit holds this verdict. " +
+                  (review
+                    ? review.checkSummary
+                    : (state.problem ?? "No review was reported.")),
+              },
+            },
+            { state: publication },
+          );
         const verdict = {
           status: "completed" as const,
           conclusion: VERDICTS[proposed] ?? "action_required",
@@ -844,7 +889,7 @@ export const postReviews = defineWorkflow(({ defineBoundary }) => ({
                 };
           return { result: null, state: publication };
         }
-        if (state.kind !== "progress" || state.closed || !state.commit)
+        if (state.kind !== "progress" || state.ended || !state.commit)
           return { result: null, state };
         if (state.running === null)
           return {
@@ -885,7 +930,7 @@ export const postReviews = defineWorkflow(({ defineBoundary }) => ({
         connections,
       }: BoundaryContext<Carried<unknown, Publication>>) => {
         const state = input.state;
-        if (state.kind !== "progress" || state.closed || !state.superseded)
+        if (state.kind !== "progress" || state.ended || !state.superseded)
           return { result: null, state };
         return connections.github.check_runs(
           {
@@ -914,7 +959,7 @@ export const postReviews = defineWorkflow(({ defineBoundary }) => ({
           .find(
             (entry) =>
               entry.own === true &&
-              entry.externalId === progressStamp(state) &&
+              isProgressRun(state, entry.externalId) &&
               entry.status !== "completed" &&
               typeof entry.id === "number",
           );
@@ -961,7 +1006,7 @@ export const postReviews = defineWorkflow(({ defineBoundary }) => ({
         if (state.post !== "review" && state.post !== "finding")
           return { result: null, state };
         // One comment on a line outside the diff fails the whole review: a
-        // review lists those in its body, and a finding waits for its review.
+        // review lists those in its body, and findings wait for theirs.
         const lines = diffLines(input.result);
         const publication: Publication = {
           ...state,
@@ -972,12 +1017,12 @@ export const postReviews = defineWorkflow(({ defineBoundary }) => ({
             (finding) => !findingFits(lines, finding),
           ),
         };
-        if (publication.post === "finding" && publication.outside.length > 0)
+        if (publication.post === "finding" && publication.findings.length === 0)
           return {
             result: null,
             state: nothing(
               publication,
-              "The finding is on lines outside the diff; the review lists it.",
+              "Its findings are on lines outside the diff; the turn's review lists them.",
             ),
           };
         return connections.github.list_reviews(
@@ -1011,32 +1056,40 @@ export const postReviews = defineWorkflow(({ defineBoundary }) => ({
         const findings = state.findings.filter((entry) => !posted(entry));
         const outside = state.outside.filter((entry) => !posted(entry));
         if (state.post === "finding") {
-          const [finding] = findings;
-          const onCommit = own.filter(
-            (entry) => entry.commitId === commit && isFindingReview(entry.body),
-          ).length;
-          if (!finding || onCommit >= MAX_FINDINGS)
+          // Every finding still to post goes in one review whose body is
+          // their markers, while the commit holds fewer than 30 posted so.
+          const onCommit = own
+            .filter(
+              (entry) =>
+                entry.commitId === commit && isFindingReview(entry.body),
+            )
+            .flatMap((entry) => findingMarkersIn(entry.body)).length;
+          const batch = findings.slice(0, Math.max(0, MAX_FINDINGS - onCommit));
+          const [first] = batch;
+          if (!first)
             return {
               result: null,
               state: nothing(
                 state,
-                finding
-                  ? `This commit has ${MAX_FINDINGS} findings posted; the review posts the rest.`
-                  : "The finding was already posted.",
+                findings.length > 0
+                  ? `This commit has ${MAX_FINDINGS} findings posted on their own; the turn's review posts the rest.`
+                  : "Its findings were already posted.",
               ),
             };
-          const stamp = findingMarker(commit, finding.id);
+          // The first marker is the stamp a retry finds the review by.
           return connections.github.create_review(
             {
               repository: REVIEWED_REPOSITORY,
               number: state.number,
               event: "COMMENT",
               commitId: commit,
-              body: stamp,
-              comments: [findingComment(finding)],
-              stamp,
+              body: batch
+                .map((finding) => findingMarker(commit, finding.id))
+                .join("\n"),
+              comments: batch.map((finding) => findingComment(finding, commit)),
+              stamp: findingMarker(commit, first.id),
             },
-            { state: { ...state, findings: [finding], outside: none } },
+            { state: { ...state, findings: batch, outside: none } },
           );
         }
         const review = state.review;
@@ -1074,7 +1127,9 @@ export const postReviews = defineWorkflow(({ defineBoundary }) => ({
             ]
               .filter((part) => part.length > 0)
               .join("\n\n"),
-            comments: findings.map(findingComment),
+            comments: findings.map((finding) =>
+              findingComment(finding, commit),
+            ),
             stamp,
           },
           { state: { ...state, findings, outside } },
@@ -1090,18 +1145,24 @@ export const postReviews = defineWorkflow(({ defineBoundary }) => ({
       }: BoundaryContext<Carried<unknown, Publication>>) => {
         const state = input.state;
         const id = receiptId(input.result);
-        const [finding] = state.findings;
+        const commit = state.commit;
+        // Each finding a review carried, and the review itself.
         const publication: Publication =
-          id === null || !state.commit
+          id === null || !commit
             ? input.state
             : {
                 ...state,
-                posted: withEntry(
+                posted: [
+                  ...state.findings.map((finding) =>
+                    findingEffect(commit, finding.id),
+                  ),
+                  ...state.outside.map((finding) =>
+                    findingEffect(commit, finding.id),
+                  ),
+                  ...(state.post === "review" ? [effect(state, "review")] : []),
+                ].reduce(
+                  (record, key) => withEntry(record, key, id),
                   state.posted,
-                  state.post === "finding" && finding
-                    ? findingEffect(state.commit, finding.id)
-                    : effect(state, "review"),
-                  id,
                 ),
               };
         if (publication.post !== "review" || !publication.review?.reply)
@@ -1264,48 +1325,91 @@ function checkedReview(
     review,
     problem,
     post: review ? "review" : "missing",
-    // The turn's own findings the review names, newest of each id, found
-    // on the head the review is for.
-    findings: review
-      ? review.findings.flatMap((id) => {
-          const result = findings.find(
-            (entry) =>
-              entry.turnId === state.turnId &&
-              entry.sessionId === state.sessionId &&
-              entry.commit === head &&
-              record(entry.value).id === id,
-          );
-          const finding = result ? checkFinding(result.value) : null;
-          return finding && typeof finding !== "string" ? [finding] : [];
-        })
-      : [],
+    findings: review ? reviewFindings(state, findings, head) : [],
   };
 }
 
 /**
- * A finding the event recorded, checked: it posts while it still answers
- * the chat's newest request (ADR 0323 `current`) for the commit its turn
- * began on. A finding a later request made stale is left for the turn's
- * review, which posts it if it names it.
+ * The turn's findings its review posts unless a review of the App's
+ * carries them already: its first 30, so one a question made stale, or on
+ * lines outside the diff, is not lost, whether or not the agent still
+ * remembers it after a hand-off. Each as last submitted, on the head the
+ * review is for. A turn that submitted 100 findings or more cannot tell
+ * its first ones from the newest it reads, and posts none.
  */
-function checkedFinding(state: Publication): Publication {
+function reviewFindings(
+  state: Publication,
+  results: readonly SessionResult[],
+  head: string,
+): WorkFinding[] {
+  const { findings, cut } = turnFindings(
+    results.filter(
+      (entry) =>
+        entry.turnId === state.turnId && entry.sessionId === state.sessionId,
+    ),
+  );
+  return cut
+    ? []
+    : findings
+        .filter((entry) => entry.newest.commit === head)
+        .map((entry) => entry.latest);
+}
+
+/**
+ * The findings a finding's publication posts, from Work's record alone, so
+ * one with nothing to post makes no GitHub call: of the turn's first 30
+ * distinct findings, those first submitted at or after the event that
+ * started this run (an earlier one had a run of its own, which started
+ * after it was recorded), as first submitted, while each still answers the
+ * chat's newest request (ADR 0323 `current`). A turn that submitted 100 or
+ * more posts none on its own. What a question made stale, a correction, and
+ * anything left waits for the turn's review.
+ */
+function findingsToPost(
+  state: Publication,
+  newestFirst: readonly SessionResult[],
+): Publication {
   if (state.post === "nothing") return state;
-  const submitted = state.submitted;
-  const checked = submitted
-    ? checkFinding(submitted.value)
-    : "The finding is not among the turn's newest 100.";
-  const commit = submitted?.commit ?? null;
-  const problem =
-    typeof checked === "string"
-      ? checked
-      : !submitted?.current
-        ? "A newer request reached the chat; the review posts the finding if it names it."
-        : !commit || !/^[0-9a-f]{40}$/.test(commit)
-          ? "Work recorded no commit for the finding's turn."
-          : null;
-  return typeof checked === "string" || problem
-    ? nothing(state, problem)
-    : { ...state, commit, findings: [checked] };
+  const { findings, cut } = turnFindings(newestFirst);
+  if (cut)
+    return nothing(
+      state,
+      `The turn submitted ${FINDINGS_READ} findings or more; its review posts its first ${MAX_FINDINGS}.`,
+    );
+  const order = [...newestFirst].reverse().map((result) => result.id);
+  const from = order.indexOf(state.resultId ?? "");
+  if (from < 0)
+    return nothing(state, "The finding is not among the turn's results.");
+  const mine = findings.filter(
+    (entry) => order.indexOf(entry.first.id) >= from,
+  );
+  const commit = mine.find((entry) => entry.first.current)?.first.commit;
+  const ready =
+    commit && /^[0-9a-f]{40}$/.test(commit)
+      ? mine.filter(
+          (entry) => entry.first.current && entry.first.commit === commit,
+        )
+      : [];
+  if (ready.length === 0)
+    return nothing(
+      state,
+      mine.length === 0
+        ? `Its findings are past the turn's first ${MAX_FINDINGS}, or had a publication already.`
+        : "A newer request reached the chat; the turn's review posts its findings.",
+    );
+  return {
+    ...state,
+    commit: commit ?? null,
+    findings: ready.map((entry) => entry.finding),
+  };
+}
+
+/**
+ * Whether a publication reads GitHub at all: not for a chat it does not
+ * own, nor for findings it has decided, from Work's record, not to post.
+ */
+function readsGithub(state: Publication): boolean {
+  return state.ours && !(state.kind === "finding" && state.post === "nothing");
 }
 
 /** The publication with nothing to post, and why. */
@@ -1338,10 +1442,29 @@ function marker(state: Publication, action: "review" | "reply") {
   return `<!-- ${effect(state, action)} -->`;
 }
 
-/** The external id of this pull request's in progress run, on any commit. */
+/**
+ * The external id of the run a turn shows in progress: this pull request's
+ * and that turn's, so a turn of a head pushed again, or of a reopened pull
+ * request, starts a new one where an earlier was cancelled.
+ */
 function progressStamp(state: Publication) {
-  return `work-review:${state.number}:progress`;
+  return `work-review:${state.number}:progress:${state.turnId}`;
 }
+
+/** A run this pull request showed in progress, by any of its turns. */
+function isProgressRun(state: Publication, externalId: unknown) {
+  return (
+    typeof externalId === "string" &&
+    externalId.startsWith(`work-review:${state.number}:progress:`)
+  );
+}
+
+/** A commit's verdict, as a check's title says it. */
+const VERDICT_TITLES: Record<Verdict, string> = {
+  action_required: "No review",
+  success: "Nothing blocks",
+  failure: "Changes requested",
+};
 
 /** What the in progress check says, by phase (ADR 0336). */
 function progressOutput(state: Publication) {

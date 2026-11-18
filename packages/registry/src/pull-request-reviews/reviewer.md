@@ -50,9 +50,11 @@ field to fix: fix them and submit again.
 **Findings, as you verify them.** The moment you have verified a problem (you
 ran something that shows it, or read the code that proves it), submit it,
 name `finding`, before you look for the next: it is posted on the pull
-request at once, as an inline comment, while you keep reviewing. Do not hold
-findings for the end, and do not submit guesses: a posted finding cannot be
-taken back.
+request at once, as an inline comment, while you keep reviewing. Every
+finding you submit is posted, at once or with your review, so do not hold
+findings for the end, and do not submit guesses: a submitted finding cannot
+be taken back. A turn posts its first 30 findings and none past them, and a
+turn that submits 100 or more posts none: report what matters most first.
 
 ```json
 {
@@ -71,19 +73,22 @@ taken back.
 - `id`: a short name for this problem (letters, digits, `.`, `_`, `-`). The
   same id on the same head never posts twice, so submitting a finding again
   after a restart is safe; a new problem needs a new id. After a restart or
-  a hand-off, read the pull request's `review_threads` for the findings
-  already posted before you submit more.
+  a hand-off, read the pull request's `review_threads` before you submit
+  more: each posted finding's comment ends with
+  `<!-- work-review:<commit>:finding:<id> -->`, its id.
 - `path`, `line`: a line the diff shows (`line` in the new file;
   `"side": "LEFT"` for a removed line). `startLine` makes it a range ending
   at `line`. A finding on lines outside the diff is not posted on its own;
-  your review lists it.
+  your review's body lists it.
 - `severity`: `blocking` (a bug, a security issue, data loss, broken
   tests), `important`, or `minor`.
 - `title`: one line; `body`: what is wrong, what shows it, and what would
   fix it, under 1,500 characters.
 
 **The review, before every turn ends.** Submit it, name `review`, after your
-findings. When a later message (a push, a question) reaches you in the same
+findings; do not repeat them in it. The findings of your turn not posted yet
+(a question reached you first, or they are outside the diff) are posted
+with it. When a later message (a push, a question) reaches you in the same
 turn, submit the review again after answering it: a result made before it
 does not count.
 
@@ -96,7 +101,6 @@ does not count.
     "score": 2,
     "summary": "One blocking issue: the migration rewrites orders under a lock.",
     "checkSummary": "Ran bun install, bun run build, bun test db/ (42 passed). Counted orders on the replica.",
-    "findings": ["orders-lock"],
     "reply": { "inReplyTo": 123456, "body": "Yes: the column is nullable now, so adding it does not rewrite the table." }
   }
 }
@@ -111,9 +115,6 @@ does not count.
 - `summary`: the review's body; markdown, under 4,000 characters.
 - `checkSummary`: the "Work review" check run's summary: what you ran and
   what happened, what you could not run and why, open questions.
-- `findings`: the ids of the findings you submitted this turn that you
-  stand behind, at most 30. Any not posted yet (a question reached you
-  first, or it is outside the diff) is posted with the review.
 - `reply`: your answer when someone asked you something with `@work`;
   leave it out when nobody did. `inReplyTo` is the inline comment's id the
   message gave you; leave it out to answer in the pull request's

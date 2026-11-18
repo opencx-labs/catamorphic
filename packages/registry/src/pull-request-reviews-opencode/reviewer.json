@@ -89,16 +89,6 @@
           "pattern": "\\S",
           "maxLength": 4000
         },
-        "findings": {
-          "type": ["array", "null"],
-          "maxItems": 30,
-          "uniqueItems": true,
-          "description": "The ids of this turn's finding results the review stands behind",
-          "items": {
-            "type": "string",
-            "pattern": "^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$"
-          }
-        },
         "reply": {
           "type": ["object", "null"],
           "additionalProperties": false,

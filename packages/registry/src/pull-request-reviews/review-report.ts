@@ -6,7 +6,7 @@
 /**
  * What the reviewer reports, once checked: its `review` result (ADR 0323),
  * which Work accepted against the schema in `.work/agents/reviewer.json`.
- * `findings` names the `finding` results of its turn it stands behind.
+ * Its turn's findings are posted with it; it does not repeat them.
  */
 export type WorkReview = {
   reviewedCommit: string;
@@ -14,7 +14,6 @@ export type WorkReview = {
   score: number;
   summary: string;
   checkSummary: string;
-  findings: string[];
   reply: { inReplyTo?: number; body: string } | null;
 };
 
@@ -38,8 +37,69 @@ export type WorkFinding = {
 /** A finding's id: letters, digits, `.`, `_` and `-`, so its marker stays whole. */
 export const FINDING_ID = /^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$/;
 
-/** A review names at most this many findings, as it once had 30 comments. */
+/**
+ * Findings a turn posts, and a commit holds from findings posted on their
+ * own: a turn's first 30 distinct ids, as a review once had 30 comments.
+ */
 export const MAX_FINDINGS = 30;
+
+/** Findings of a turn read at once; a turn that submitted more posts none on its own. */
+export const FINDINGS_READ = 100;
+
+/** A recorded finding as the poster reads it: Work's record of a `finding` result. */
+export type RecordedFinding = {
+  id: string;
+  value: unknown;
+  commit: string | null;
+  current: boolean;
+};
+
+/**
+ * A turn's findings, from its results newest first (at most
+ * {@link FINDINGS_READ}): its first {@link MAX_FINDINGS} distinct valid
+ * ids in the order they were first submitted, each with its first result
+ * (what posts on its own) and its newest (what the review posts, a
+ * correction included). `cut` says the read was full, so first submissions
+ * may be missing from it.
+ */
+export function turnFindings(newestFirst: readonly RecordedFinding[]): {
+  findings: Array<{
+    first: RecordedFinding;
+    newest: RecordedFinding;
+    finding: WorkFinding;
+    latest: WorkFinding;
+  }>;
+  cut: boolean;
+} {
+  const byId = new Map<
+    string,
+    {
+      first: RecordedFinding;
+      newest: RecordedFinding;
+      finding: WorkFinding;
+      latest: WorkFinding;
+    }
+  >();
+  for (const result of [...newestFirst].reverse()) {
+    const checked = checkFinding(result.value);
+    if (typeof checked === "string") continue;
+    const known = byId.get(checked.id);
+    if (known) {
+      known.newest = result;
+      known.latest = checked;
+    } else if (byId.size < MAX_FINDINGS)
+      byId.set(checked.id, {
+        first: result,
+        newest: result,
+        finding: checked,
+        latest: checked,
+      });
+  }
+  return {
+    findings: [...byId.values()],
+    cut: newestFirst.length >= FINDINGS_READ,
+  };
+}
 
 export function record(value: unknown): Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value)
@@ -107,7 +167,6 @@ export function checkWorkReview(value: unknown): WorkReview | string {
     "score",
     "summary",
     "checkSummary",
-    "findings",
     "reply",
   ];
   const extra = Object.keys(report).find((key) => !fields.includes(key));
@@ -131,22 +190,12 @@ export function checkWorkReview(value: unknown): WorkReview | string {
     return "summary is missing or over 4,000 characters";
   if (!text(checkSummary, 4000))
     return "checkSummary is missing or over 4,000 characters";
-  // A field it may leave out may also be null, as models often write it.
-  const findings = list(report.findings ?? []);
-  if (
-    !Array.isArray(report.findings ?? []) ||
-    findings.length > MAX_FINDINGS ||
-    findings.some((id) => typeof id !== "string" || !FINDING_ID.test(id)) ||
-    new Set(findings).size !== findings.length
-  )
-    return `findings is not a list of at most ${MAX_FINDINGS} distinct finding ids`;
   const checked: WorkReview = {
     reviewedCommit,
     verdict,
     score,
     summary: publicationText(summary),
     checkSummary: publicationText(checkSummary),
-    findings: findings.filter((id) => typeof id === "string"),
     reply: null,
   };
   if (report.reply != null) {
@@ -263,8 +312,11 @@ const SEVERITY_LABELS: Record<WorkFinding["severity"], string> = {
   minor: "Minor",
 };
 
-/** A finding as an inline comment of a review. */
-export function findingComment(finding: WorkFinding) {
+/**
+ * A finding as an inline comment of a review. Its marker rides along, so
+ * the review's threads show a resumed reviewer which ids are posted.
+ */
+export function findingComment(finding: WorkFinding, commit: string) {
   return {
     path: finding.path,
     line: finding.line,
@@ -272,8 +324,17 @@ export function findingComment(finding: WorkFinding) {
     ...(finding.startLine === null
       ? {}
       : { startLine: finding.startLine, startSide: finding.side }),
-    body: `**${SEVERITY_LABELS[finding.severity]}:** ${finding.title}\n\n${finding.body}`,
+    body: `**${SEVERITY_LABELS[finding.severity]}:** ${finding.title}\n\n${finding.body}\n\n${findingMarker(commit, finding.id)}`,
   };
+}
+
+/** The finding markers a review's body carries. */
+export function findingMarkersIn(body: unknown): string[] {
+  return typeof body === "string"
+    ? (body.match(
+        /<!-- work-review:[0-9a-f]{40}:finding:[A-Za-z0-9_.-]+ -->/g,
+      ) ?? [])
+    : [];
 }
 
 /** A finding listed in a review's body, for one the diff cannot hold. */

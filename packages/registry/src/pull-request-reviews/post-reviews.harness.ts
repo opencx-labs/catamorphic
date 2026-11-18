@@ -14,8 +14,6 @@ export interface FakeReview {
   verdict: "COMMENT" | "REQUEST_CHANGES";
   reviewedCommit: string;
   reply?: { inReplyTo?: number; body: string } | null;
-  /** The ids of the turn's findings it stands behind. */
-  findings?: string[];
   /** The attempt that submitted it; the turn may have later attempts. */
   attemptId?: string;
   /** The commit Work recorded the turn began on; the chat's commit when absent. */
@@ -62,6 +60,8 @@ export function fakeWorld(input: { head: string }) {
     /** Writes GitHub accepts whose answer never reaches the caller. */
     loseNextAnswer: new Set<string>(),
     writes: [] as string[],
+    /** Every call made to GitHub, reads included. */
+    calls: 0,
   };
   const chat = {
     metadata: {} as Record<string, Json>,
@@ -232,8 +232,16 @@ export function fakeWorld(input: { head: string }) {
       metadata: structuredClone(chat.metadata),
       turn: structuredClone(chat.turn),
     }),
-    // As core reads them: newest first, at most 100, by name and turn.
-    results: ({ name, turnId }: { name?: string; turnId?: string }) => ({
+    // As core reads them: newest first, at most `limit` (100), by name and turn.
+    results: ({
+      name,
+      turnId,
+      limit,
+    }: {
+      name?: string;
+      turnId?: string;
+      limit?: number;
+    }) => ({
       results: structuredClone(
         chat.results
           .filter(
@@ -241,7 +249,7 @@ export function fakeWorld(input: { head: string }) {
               (name === undefined || result.name === name) &&
               (turnId === undefined || result.turnId === turnId),
           )
-          .slice(0, 100),
+          .slice(0, Math.min(limit ?? 100, 100)),
       ),
     }),
     setMetadata: ({ set }: { set: Record<string, Json> }) => {
@@ -272,7 +280,19 @@ export function fakeWorld(input: { head: string }) {
     chat,
     context: {
       host: { "catamorphic.sessions": calls(sessions) },
-      connections: { github: calls(connections.github) },
+      connections: {
+        github: calls(
+          Object.fromEntries(
+            Object.entries(connections.github).map(([name, fn]) => [
+              name,
+              (args: never) => {
+                github.calls += 1;
+                return (fn as (input: never) => Json)(args);
+              },
+            ]),
+          ),
+        ),
+      },
     },
     /** A request reached the chat after every result: none is current. */
     requestArrived() {
@@ -296,7 +316,6 @@ export function fakeWorld(input: { head: string }) {
           score: review.verdict === "REQUEST_CHANGES" ? 2 : 4,
           summary: `Review of ${turnId}`,
           checkSummary: `Check of ${turnId}`,
-          findings: review.findings ?? [],
           reply: review.reply ?? null,
         },
       });
@@ -362,7 +381,11 @@ function resultEvent(result: Record<string, Json>) {
 }
 
 type Workflow = {
-  concurrency?: { key: string; onConflict: string };
+  concurrency?: {
+    key: string;
+    onConflict: string;
+    coalesce?: readonly string[];
+  };
   steps: ReadonlyArray<{
     run: (context: Record<string, unknown>) => unknown;
     retry?: { maxAttempts: number };
@@ -420,6 +443,68 @@ export async function runWorkflow(
     }
   }
   return current;
+}
+
+function valueAt(input: Json, path: string): unknown {
+  return path
+    .split(".")
+    .reduce<unknown>(
+      (value, segment) =>
+        value && typeof value === "object"
+          ? (value as Record<string, unknown>)[segment]
+          : undefined,
+      input,
+    );
+}
+
+/**
+ * One key's queue as Work keeps it (ADRs 0325, 0336): runs take turns; a
+ * run delivered while one with the same `coalesce` values still waits joins
+ * it; a key holds at most 100 waiting runs, and refuses a delivery beyond.
+ */
+export function workflowQueue(
+  workflow: Workflow,
+  context: Record<string, unknown>,
+) {
+  const waiting: Array<{ input: Json; alike: string | null }> = [];
+  const outcomes: Json[] = [];
+  const refused: Json[] = [];
+  let active: Promise<void> | null = null;
+  const alikeOf = (input: Json) =>
+    workflow.concurrency?.coalesce
+      ? JSON.stringify(
+          workflow.concurrency.coalesce.map(
+            (path) => valueAt(input, path) ?? null,
+          ),
+        )
+      : null;
+  const pump = async () => {
+    for (let next = waiting.shift(); next; next = waiting.shift())
+      outcomes.push(await runWorkflow(workflow, next.input, context));
+    active = null;
+  };
+  return {
+    deliver(input: Json): "started" | "queued" | "joined" | "refused" {
+      const alike = alikeOf(input);
+      if (!active) {
+        waiting.push({ input, alike });
+        active = pump();
+        return "started";
+      }
+      if (alike !== null && waiting.some((entry) => entry.alike === alike))
+        return "joined";
+      if (waiting.length >= 100) {
+        refused.push(input);
+        return "refused";
+      }
+      waiting.push({ input, alike });
+      return "queued";
+    },
+    async drain() {
+      while (active) await active;
+      return { outcomes, refused };
+    },
+  };
 }
 
 /**
