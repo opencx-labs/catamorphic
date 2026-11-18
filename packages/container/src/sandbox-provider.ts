@@ -104,6 +104,11 @@ const INTERNAL_LABEL = "work.sandbox.internal";
 const VOLUMES_LABEL = "work.sandbox.volumes";
 /** Names a Docker volume as one of this machine's sandbox volumes. */
 export const VOLUME_LABEL = "work.volume";
+/**
+ * Where each machine sharing a daemon keeps a reference of its own to an
+ * image it uses (ADR 0335): an image another machine claims is kept.
+ */
+const CLAIM_REPOSITORY = "work.local/claims";
 const VOLUME_PREFIX = "work-volume-";
 /**
  * The agent container of a sandbox whose commands run apart (ADR 0332)
@@ -415,8 +420,10 @@ export class ContainerSandboxProvider implements SandboxProvider {
   private readonly docker: DockerClient;
   private readonly config: ContainerProviderConfig;
   private readonly usage: VolumeUsageLog;
-  /** When a sandbox was last made from each image Work built or pulled. */
+  /** When a sandbox was last made from each image this machine used. */
   private readonly imageUsage: VolumeUsageLog;
+  /** The images this machine pulled itself, which are its to remove. */
+  private readonly pulledImages: VolumeUsageLog;
   private readonly creations: CreationRegistry;
   private readonly owner: string;
   private readonly records = new Map<string, SandboxRecord>();
@@ -449,6 +456,9 @@ export class ContainerSandboxProvider implements SandboxProvider {
     );
     this.imageUsage = new VolumeUsageLog(
       path.join(config.stateDirectory, "images.json"),
+    );
+    this.pulledImages = new VolumeUsageLog(
+      path.join(config.stateDirectory, "pulled-images.json"),
     );
     this.creations = new CreationRegistry(
       path.join(config.stateDirectory, "creating.json"),
@@ -2166,13 +2176,11 @@ export class ContainerSandboxProvider implements SandboxProvider {
       await this.once(reference, async () => {
         if (!(await this.docker.inspectImage(reference))) {
           await this.docker.pullImage(reference);
-          // Pulled by Work: removed once unused (ADR 0335).
-          this.imageUsage.touch([reference]);
+          // Pulled by this machine: its to remove once unused (ADR 0335).
+          this.pulledImages.touch([reference]);
         }
       });
-      // One the machine had before Work pulled it is never Work's.
-      if (this.imageUsage.lastUsed(reference) !== undefined)
-        this.imageUsage.touch([reference]);
+      await this.claimImage(reference);
       return reference;
     }
     if (!(this.config.imageBuild ?? true))
@@ -2190,8 +2198,39 @@ export class ContainerSandboxProvider implements SandboxProvider {
           labels: { [OWNER_LABEL]: this.owner },
         });
     });
-    this.imageUsage.touch([reference]);
+    await this.claimImage(reference);
     return reference;
+  }
+
+  /**
+   * Record that this machine uses an image (ADR 0335): when, in its own
+   * log, and on the daemon a reference of its own to the image, so
+   * another machine sharing the daemon keeps an image while this one uses
+   * it. The machine's default image is its own, never claimed or removed.
+   */
+  private async claimImage(reference: string): Promise<void> {
+    if (this.defaultImages().has(reference)) return;
+    this.imageUsage.touch([reference]);
+    await this.docker
+      .tagImage({ source: reference, ...this.claimOf(reference) })
+      .catch(() => {});
+  }
+
+  /** This machine's claim on an image: a reference only it makes. */
+  private claimOf(reference: string): { repo: string; tag: string } {
+    return {
+      repo: CLAIM_REPOSITORY,
+      tag: `${this.owner}-${createHash("sha256").update(reference).digest("hex").slice(0, 24)}`,
+    };
+  }
+
+  private defaultImages(): Set<string> {
+    return new Set(
+      [this.config.image ?? DEFAULT_IMAGE].flatMap((reference) => [
+        reference,
+        withTag(reference),
+      ]),
+    );
   }
 
   /**
@@ -2227,9 +2266,11 @@ export class ContainerSandboxProvider implements SandboxProvider {
 
   /**
    * Remove what Work left on this machine that nothing used for
-   * `graceMs` (ADR 0335): images it built or pulled that no sandbox was
-   * made from since and no container uses (Docker refuses those), never
-   * the machine's own default image; and in each running sandbox with
+   * `graceMs` (ADR 0335): images this machine pulled or built itself that
+   * no sandbox of its was made from since, no other machine sharing the
+   * daemon claims and no container uses (Docker refuses those), never the
+   * machine's own default image nor one it found; its claim on any other
+   * image it stopped using goes. And in each running sandbox with
    * containers, its Docker's dangling images and build cache that old,
    * never a tagged image, a container or a volume. Work builds with the
    * classic builder, so the machine's daemon holds no build cache of
@@ -2238,27 +2279,21 @@ export class ContainerSandboxProvider implements SandboxProvider {
   private async cleanDisk(args: { graceMs: number }): Promise<string[]> {
     await this.reclaimed;
     const done: string[] = [];
-    const own = new Set(
-      [this.config.image ?? DEFAULT_IMAGE].flatMap((reference) => [
-        reference,
-        withTag(reference),
-      ]),
-    );
-    // Images this machine built are its own whether or not its log
-    // recorded them, and so are those built before builds were labeled.
-    // Another machine's on a shared daemon are not.
+    const own = this.defaultImages();
+    // Builds carry their builder's label: this machine's are its own even
+    // where its log lost them. Another's, and unlabeled ones, never are.
     const repository = dockerfileImageReference("").slice(0, -1);
     const built = new Map<string, number>();
     for (const image of await this.docker.listImages({
       reference: repository,
     })) {
-      const builder = objectField(image, "Labels")[OWNER_LABEL];
-      if (builder !== undefined && builder !== this.owner) continue;
+      if (objectField(image, "Labels")[OWNER_LABEL] !== this.owner) continue;
       for (const tag of stringList(image.RepoTags))
         if (tag.startsWith(`${repository}:`))
           built.set(tag, Number(image.Created) * 1000);
     }
     const removed: string[] = [];
+    const forgotten: string[] = [];
     for (const reference of new Set([
       ...Object.keys(this.imageUsage.entries()),
       ...built.keys(),
@@ -2273,10 +2308,39 @@ export class ContainerSandboxProvider implements SandboxProvider {
         })
       )
         continue;
+      // This machine no longer uses it: its claim goes either way.
+      const claim = this.claimOf(reference);
+      await this.docker.removeImage(`${claim.repo}:${claim.tag}`);
+      const inspected = await this.docker.inspectImage(reference);
+      if (!inspected) {
+        forgotten.push(reference);
+        continue;
+      }
+      // Only an image this machine pulled or built is its to remove; one
+      // it found on the daemon never is.
+      const builder = objectField(objectField(inspected, "Config"), "Labels")[
+        OWNER_LABEL
+      ];
+      const mine =
+        this.pulledImages.lastUsed(reference) !== undefined ||
+        builder === this.owner;
+      if (!mine) {
+        forgotten.push(reference);
+        continue;
+      }
+      // Another machine sharing the daemon still uses it: kept, and asked
+      // again on a later pass.
+      if (
+        stringList(inspected.RepoTags).some((tag) =>
+          tag.startsWith(`${CLAIM_REPOSITORY}:`),
+        )
+      )
+        continue;
       if ((await this.docker.removeImage(reference)) === "gone")
         removed.push(reference);
     }
-    this.imageUsage.forget(removed);
+    this.imageUsage.forget([...removed, ...forgotten]);
+    this.pulledImages.forget([...removed, ...forgotten]);
     if (removed.length > 0)
       done.push(
         `Removed ${removed.length} unused image${removed.length === 1 ? "" : "s"}: ${removed.join(", ")}`,

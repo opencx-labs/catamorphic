@@ -52,12 +52,18 @@ reservation, then protects the others.
 
 **Work removes what Work leaves.** On the machine, hourly and at once when
 a report falls under the floor (at most every 10 minutes): Environment
-images Work built or pulled that no sandbox was made from for
-`WORK_IMAGE_RETENTION_HOURS` (24) and that no container uses (Docker
-refuses those), except the machine's own default image; Docker build
-cache unused for as long; and in each running sandbox with containers,
-its Docker's dangling images and build cache unused for as long, never a
-tagged image, a container or a volume. Volumes keep their retention (ADR
+images this machine pulled or built itself (a build carries its builder's
+label) that none of its sandboxes was made from for
+`WORK_IMAGE_RETENTION_HOURS` (24), that no container uses (Docker refuses
+those) and that no other machine sharing the daemon claims, never the
+machine's own default image, one it found there, or an unlabeled build.
+Each machine claims an image it uses with a reference of its own
+(`work.local/claims:<machine>-<hash>`) and lets go of it once unused. In
+each running sandbox with containers, its Docker's dangling images and
+build cache unused for as long go, never a tagged image, a container or a
+volume. The machine's own daemon's build cache is not pruned: Work builds
+with the classic builder, which leaves none of Work's, and a daemon shared
+with other software keeps its own. Volumes keep their retention (ADR
 0208); caches keep theirs (ADR 0334). In a workspace: each exec's output
 folder goes once its result is recorded, and placing a program copy
 removes copies of commits no exec of the workspace used within 24 hours,

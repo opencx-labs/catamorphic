@@ -742,7 +742,7 @@ describe("ContainerSandboxProvider without Docker", () => {
       images: {
         "oven/bun": 1,
         "example/found:1": 1,
-        // Built before this machine kept a log: counted from when it was made.
+        // Built before builds carried their builder: nobody's to remove.
         "work.local/images:0123456789abcdef0123456789abcdef01234567": 1,
         // Another machine's build on the same daemon: never this one's.
         "work.local/images:fedcba9876543210fedcba9876543210fedcba98": 1,
@@ -760,11 +760,13 @@ describe("ContainerSandboxProvider without Docker", () => {
       image: { kind: "oci", reference: "example/found:1" },
     });
     await machine.createSandbox({});
-    const kept = () => [...(fake.images?.keys() ?? [])].sort();
-    // Used just now: only the old build is past an hour's grace.
-    expect(await machine.disk.clean({ graceMs: 3_600_000 })).toEqual([
-      "Removed 1 unused image: work.local/images:0123456789abcdef0123456789abcdef01234567",
-    ]);
+    const kept = () =>
+      [...(fake.images?.keys() ?? [])]
+        .filter((reference) => !reference.startsWith("work.local/claims:"))
+        .sort();
+    // Used just now: nothing is past an hour's grace, and a build with no
+    // builder's label is never this machine's.
+    expect(await machine.disk.clean({ graceMs: 3_600_000 })).toEqual([]);
     // In use by a sandbox (Docker refuses), or never Work's: kept.
     expect(await machine.disk.clean({ graceMs: 0 })).toEqual([]);
     await machine.destroySandbox(pulled.id);
@@ -772,10 +774,12 @@ describe("ContainerSandboxProvider without Docker", () => {
     expect(await machine.disk.clean({ graceMs: 0 })).toEqual([
       "Removed 1 unused image: example/review:1",
     ]);
-    // The machine's own image, one it had before Work, another's: never.
+    // The machine's own image, one it had before Work, another's, an
+    // unlabeled build: never.
     expect(kept()).toEqual([
       "example/found:1",
       "oven/bun",
+      "work.local/images:0123456789abcdef0123456789abcdef01234567",
       "work.local/images:fedcba9876543210fedcba9876543210fedcba98",
     ]);
     // Its own builds carry its label, and go once unused.
@@ -800,6 +804,47 @@ describe("ContainerSandboxProvider without Docker", () => {
       image: { kind: "oci", reference: "example/review:1" },
     });
     expect(kept()).toContain("example/review:1");
+  });
+
+  it("never removes an image another machine sharing the daemon uses, nor one it found (ADR 0335)", async () => {
+    const { fake, provider } = await setup(undefined, {
+      images: { "oven/bun": 1 },
+    });
+    const a = provider();
+    const b = provider({ stateDirectory: path.join(fake.directory, "b") });
+    const dockerfile = "FROM oven/bun\nRUN echo shared\n";
+    const built = {
+      kind: "dockerfile" as const,
+      path: ".work/images/review.Dockerfile",
+      content: dockerfile,
+      digest: dockerfileDigest(dockerfile),
+    };
+    const pulled = { kind: "oci" as const, reference: "example/review:2" };
+    const y = dockerfileImageReference(dockerfileDigest(dockerfile));
+    // A pulls one and builds the other; B finds both and uses them too.
+    const sandboxes = [
+      await a.createSandbox({ image: pulled }),
+      await a.createSandbox({ image: built }),
+    ];
+    const others = [
+      await b.createSandbox({ image: pulled }),
+      await b.createSandbox({ image: built }),
+    ];
+    for (const sandbox of sandboxes) await a.destroySandbox(sandbox.id);
+    for (const sandbox of others) await b.destroySandbox(sandbox.id);
+    const images = () =>
+      [...(fake.images?.keys() ?? [])]
+        .filter((reference) => !reference.startsWith("work.local/claims:"))
+        .sort();
+    // B used them: A keeps what it pulled and built.
+    await a.disk.clean({ graceMs: 0 });
+    expect(images()).toEqual(["example/review:2", "oven/bun", y].sort());
+    // Neither is B's: B only lets go of them.
+    await b.disk.clean({ graceMs: 0 });
+    expect(images()).toEqual(["example/review:2", "oven/bun", y].sort());
+    // Nobody else uses them now: A's own go.
+    await a.disk.clean({ graceMs: 0 });
+    expect(images()).toEqual(["oven/bun"]);
   });
 
   it("prunes dangling images and build cache in running sandboxes with containers only (ADR 0335)", async () => {

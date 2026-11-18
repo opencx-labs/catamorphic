@@ -860,9 +860,10 @@ minutes does not hold a machine back.
 
 The machine removes what Work left that nothing used for
 `WORK_IMAGE_RETENTION_HOURS`, hourly and at once while under its floor:
-images it built or pulled that no container uses (never its default image or
-one it found there), and the dangling images and build cache of each running
-sandbox with containers. A workspace keeps one `$WORK_PROGRAM` copy per
+images it pulled or built itself that no container uses and no other machine
+sharing the Docker daemon still claims (never its default image, one it
+found there, or a build from before builds carried their builder), and the
+dangling images and build cache of each running sandbox with containers. A workspace keeps one `$WORK_PROGRAM` copy per
 program commit it ran; a copy goes once no `exec` there used it for a day,
 none used it since the workspace's oldest active turn began, and none
 starting or running uses it, and each `exec`'s output files go once its

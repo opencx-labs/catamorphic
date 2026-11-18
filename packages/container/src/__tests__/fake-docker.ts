@@ -59,8 +59,15 @@ export async function startFakeDocker(options?: {
   const images = options?.images
     ? new Map<string, number>(Object.entries(options.images))
     : undefined;
-  /** Labels a build or a test gave each image. */
+  /** Labels a build or a test gave each image, by reference. */
   const imageLabels = new Map<string, Record<string, string>>();
+  /** Which image each reference names: its own unless a tag shares one. */
+  const imageIds = new Map<string, string>();
+  const idOf = (reference: string) => imageIds.get(reference) ?? reference;
+  const sameImage = (reference: string) =>
+    [...(images?.keys() ?? [])].filter(
+      (other) => idOf(other) === idOf(reference),
+    );
   /** Exec streams, which the HTTP server no longer tracks once upgraded. */
   const upgraded = new Set<Duplex>();
   let nextExec = 0;
@@ -118,28 +125,55 @@ export async function startFakeDocker(options?: {
             ? Reflect.get(filters, "reference")
             : undefined;
         const prefix = Array.isArray(wanted) ? String(wanted[0] ?? "") : "";
-        return json(
-          200,
-          [...(images ?? new Map<string, number>())]
+        const ids = new Set(
+          [...(images?.keys() ?? [])]
             .filter(
-              ([reference]) =>
+              (reference) =>
                 !prefix ||
                 reference === prefix ||
                 reference.startsWith(`${prefix}:`),
             )
-            .map(([reference, created]) => ({
-              RepoTags: [reference],
-              Created: created,
-              Labels: imageLabels.get(reference) ?? null,
-            })),
+            .map(idOf),
         );
+        return json(
+          200,
+          [...ids].map((id) => {
+            const tags = [...(images?.keys() ?? [])].filter(
+              (reference) => idOf(reference) === id,
+            );
+            const first = tags[0] ?? id;
+            return {
+              Id: id,
+              RepoTags: tags,
+              Created: images?.get(first) ?? 0,
+              Labels: imageLabels.get(first) ?? null,
+            };
+          }),
+        );
+      }
+      const tagMatch = url.pathname.match(/^\/images\/(.+)\/tag$/);
+      if (request.method === "POST" && tagMatch) {
+        const source = decodeURIComponent(tagMatch[1] ?? "");
+        if (!images?.has(source))
+          return json(404, { message: `No such image: ${source}` });
+        const target = `${url.searchParams.get("repo")}:${url.searchParams.get("tag")}`;
+        images.set(target, images.get(source) ?? 0);
+        imageIds.set(target, idOf(source));
+        return json(201);
       }
       const imageMatch = url.pathname.match(/^\/images\/(.+?)(\/json)?$/);
       if (request.method === "GET" && imageMatch?.[2]) {
         const reference = decodeURIComponent(imageMatch[1] ?? "");
         if (images && !images.has(reference))
           return json(404, { message: `No such image: ${reference}` });
-        return json(200, { Config: options?.image ?? {} });
+        return json(200, {
+          Id: idOf(reference),
+          RepoTags: images ? sameImage(reference) : [reference],
+          Config: {
+            ...(options?.image ?? {}),
+            Labels: imageLabels.get(reference) ?? null,
+          },
+        });
       }
       if (route === "POST /images/create") {
         const reference = url.searchParams.get("fromImage") ?? "";
@@ -169,10 +203,12 @@ export async function startFakeDocker(options?: {
         const reference = decodeURIComponent(imageMatch[1] ?? "");
         if (!images?.has(reference))
           return json(404, { message: `No such image: ${reference}` });
-        const used = [...containers.values()].some(
-          (container) => container.body.Image === reference,
+        // Another reference keeps the image: this one is only untagged.
+        const shared = sameImage(reference).length > 1;
+        const used = [...containers.values()].some((container) =>
+          sameImage(reference).includes(String(container.body.Image)),
         );
-        if (used)
+        if (used && !shared)
           return json(409, {
             message: `conflict: unable to remove ${reference}: image is being used by a container`,
           });

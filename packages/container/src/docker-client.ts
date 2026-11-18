@@ -356,6 +356,18 @@ export class DockerClient {
     });
   }
 
+  /** Give an image another reference (`repo:tag`). */
+  async tagImage(args: {
+    source: string;
+    repo: string;
+    tag: string;
+  }): Promise<void> {
+    await this.json({
+      method: "POST",
+      path: `/images/${encodeURIComponent(args.source)}/tag?repo=${encodeURIComponent(args.repo)}&tag=${encodeURIComponent(args.tag)}`,
+    });
+  }
+
   /** Images whose reference matches `reference` (Docker's filter). */
   async listImages(args: {
     reference: string;
@@ -370,9 +382,10 @@ export class DockerClient {
   }
 
   /**
-   * Remove an image by reference, never forced: `kept` while a container
-   * (running or stopped) uses it or another reference shares it, `gone`
-   * once removed or when there was none.
+   * Remove a reference, never forced: an image another reference shares
+   * only loses this one; the last one goes with the image unless a
+   * container (running or stopped) uses it (`kept`). `gone` once removed
+   * or when there was none.
    */
   async removeImage(reference: string): Promise<"gone" | "kept"> {
     const answer = await this.json({
