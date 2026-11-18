@@ -153,6 +153,22 @@ describe.skipIf(!db)("machine disk (ADR 0335)", () => {
     });
   });
 
+  it("lists a machine's storage ceiling from its latest report, whichever filesystem is tightest now", async () => {
+    const { nodes, lease, list } = await machine();
+    await nodes.reportDisk({ lease, disk: report({ free: 50 * GIB }) });
+    expect((await list())?.descriptor.resources.storageMb).toBe(90 * 1024);
+    // Another of its filesystems is the tightest now (a smaller state
+    // folder's): what may be reserved there is what the machine offers.
+    await nodes.reportDisk({
+      lease,
+      disk: report({ free: 15 * GIB, total: 20 * GIB, floor: 2 * GIB }),
+    });
+    expect((await list())?.descriptor.resources).toMatchObject({
+      cpuMillis: 8000,
+      storageMb: 18 * 1024,
+    });
+  });
+
   it("holds a workflow run only to the critical floor, and every workload to the storage it reserves (ADR 0335)", async () => {
     if (!db) return;
     const { identity, projectId, nodes, lease, admit, allocations } =

@@ -2,9 +2,11 @@ import { randomUUID } from "node:crypto";
 import type { DB } from "@catamorphic/db";
 import { getTracer, withSpan } from "@catamorphic/otel";
 import {
+  diskBudgetMb,
   diskLow,
   diskRecovered,
   type EnvironmentBinding,
+  MACHINE_CAPABILITIES,
   type MachineDisk,
   type SandboxProvider,
 } from "@catamorphic/sandbox";
@@ -578,9 +580,22 @@ export class WorkerNodesService {
         const usage = await workerUsage({ db: this.db, nodeId: row.id });
         const disk = machineDiskOf(row.disk);
         const fresh = disk !== undefined && row.disk_fresh;
+        const stored = descriptorSchema.parse(row.descriptor);
+        // What may be reserved is the latest report's (ADR 0335): the
+        // tightest of a machine's filesystems can change after it connects.
+        const descriptor =
+          disk && stored.capabilities.includes(MACHINE_CAPABILITIES.disk)
+            ? {
+                ...stored,
+                resources: {
+                  ...stored.resources,
+                  storageMb: diskBudgetMb(disk),
+                },
+              }
+            : stored;
         return {
           id: row.id,
-          descriptor: descriptorSchema.parse(row.descriptor),
+          descriptor,
           enabled: row.enabled,
           available: row.available,
           lastSeenAt: row.updated_at.toISOString(),
