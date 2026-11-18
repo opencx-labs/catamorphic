@@ -83,7 +83,9 @@ what counts for a copy Work has no record of (ADR 0324). Nothing of the project'
 exec ends with a failure, or a cache fill fails while the machine reports
 free space under its floor, the error says so with the machine's numbers:
 the turn's error kind is `out_of_disk`, and the attempt's diagnostics
-(ADR 0333) carry the same line. Output that says `ENOSPC` or `No space
+(ADR 0333) carry the same line. A turn failure that already has a kind
+(a provider's limit or outage, a lost sign-in, a missing agent, a history
+to repair) keeps it, with the actions that come with it. Output that says `ENOSPC` or `No space
 left on device` gets the same reason with "the workspace ran out of disk
 space" and the machine's numbers: that text can come from code the chat
 runs, so it explains a failure but never acts on the machine.

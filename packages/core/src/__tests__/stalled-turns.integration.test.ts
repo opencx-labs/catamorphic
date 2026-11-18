@@ -179,6 +179,20 @@ describe("stalled turns", () => {
             level: "error",
             message: "npm ERR! code ENOSPC: no space left on device, write",
           });
+        // A provider's own failure, with a kind of its own, beside output
+        // that says the disk is full.
+        if (attempt.input?.text.includes("[[auth]]")) {
+          host.emit({
+            type: "turn.completed",
+            status: "failed",
+            error: { message: "The key was revoked", kind: "auth" },
+          });
+          return {
+            steer: async () => false,
+            interrupt: () => {},
+            finished: Promise.resolve(),
+          };
+        }
         const before = beforeFailing.get(attempt.sessionId);
         return {
           steer: async () => false,
@@ -1025,6 +1039,13 @@ describe("stalled turns", () => {
       kind: "out_of_disk",
       message:
         "The machine ran out of disk: 2.0 GB free of 100 GB, where Work keeps 10.0 GB free. The install failed",
+    });
+    // A more specific kind keeps its actions (reconnect, choose an agent):
+    // the disk does not take its place.
+    const auth = await failedTurn({ text: "install [[enospc]] [[auth]]" });
+    expect(auth.error).toEqual({
+      message: "The key was revoked",
+      kind: "auth",
     });
     // Nothing about the disk: the failure stands as it was.
     const plain = await failedTurn({ text: "install" });

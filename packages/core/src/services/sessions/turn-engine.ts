@@ -3225,8 +3225,9 @@ export class TurnEngine {
    * A failed turn whose machine is short of disk, or whose error or
    * diagnostics say a write found no room, says so (ADR 0335): its error
    * leads with the reason and is `out_of_disk`, and its attempt's
-   * diagnostics keep the same line. A provider's transient failure keeps
-   * its kind, so it is still retried.
+   * diagnostics keep the same line. A failure that already has a kind
+   * (a provider's limit or outage, a lost sign-in, a missing agent, a
+   * history to repair) keeps it.
    */
   private async withDiskReason(input: {
     session: SessionRow;
@@ -3235,13 +3236,9 @@ export class TurnEngine {
     error?: TurnError | null;
   }): Promise<TurnError | null | undefined> {
     const { error } = input;
-    if (
-      input.status !== "failed" ||
-      error?.kind === "out_of_disk" ||
-      error?.kind === "rate_limit" ||
-      error?.kind === "unavailable"
-    )
-      return error;
+    // A failure the harness or Work already named keeps its kind and the
+    // actions that come with it (retry, reconnect, choose an agent).
+    if (input.status !== "failed" || error?.kind !== undefined) return error;
     const row = await this.deps.db
       .selectFrom("agent_turn_attempts")
       .select("diagnostics")
