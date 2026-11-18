@@ -13,6 +13,7 @@ import {
   SANDBOX_CAPABILITIES,
   type SandboxCapability,
   type SandboxProvider,
+  SEPARATE_AGENT_DEFAULT_RESOURCES,
 } from "@catamorphic/sandbox";
 import { PROJECT_MANIFEST_PATH } from "@catamorphic/workflow/project-layout";
 import { sql } from "kysely";
@@ -79,7 +80,7 @@ const descriptor: EnvironmentBinding = {
   isolation: "sandbox",
   workloads: ["agent"],
   agentTopologies: ["controller"],
-  capabilities,
+  capabilities: [...capabilities, SANDBOX_CAPABILITIES.separateCommands],
   resources: {},
 };
 
@@ -189,7 +190,7 @@ describeIf("Environment caches (ADR 0334)", () => {
 
   const manifest = (
     fillCommand: string,
-    variant: { image?: string; setupAllow?: string[] } = {},
+    variant: { image?: string; setupAllow?: string[]; separate?: boolean } = {},
   ) =>
     JSON.stringify({
       environments: {
@@ -210,6 +211,7 @@ describeIf("Environment caches (ADR 0334)", () => {
               fill: { command: fillCommand },
             },
           },
+          ...(variant.separate ? { commands: { separate: true } } : {}),
         },
       },
       defaultEnvironment: "review",
@@ -1341,6 +1343,66 @@ describeIf("Environment caches (ADR 0334)", () => {
         key(live),
         ...abandoned.map((generation) => key(Number(generation))),
       ]),
+    );
+  });
+  // Last: it moves main to a revision whose commands run apart.
+  it("fills and checks a cache in single containers where the Environment runs commands apart", async () => {
+    const { lease, fake } = await addMachine("apart", {
+      capabilities: [...capabilities, SANDBOX_CAPABILITIES.separateCommands],
+    });
+    const next = await projectManager.publishFiles({
+      tenantId,
+      projectId,
+      files: { [PROJECT_MANIFEST_PATH]: manifest(FILL, { separate: true }) },
+      message: "Commands apart",
+      author: { name: "Test", email: "test@example.com" },
+    });
+    if (next.status !== "deployed") throw new Error("not published");
+    await db!
+      .insertInto("published_revisions")
+      .values({
+        tenant_id: tenantId,
+        project_id: projectId,
+        commit_sha: next.commitSha,
+        status: "applied",
+      })
+      .execute();
+    // A review's workspace is a pair, and reserves the agent's share too
+    // (ADR 0332).
+    const first = await workspace(lease.id);
+    expect(first.opts?.separateCommands).toBeDefined();
+    fake.created.length = 0;
+    await fillAll();
+    const [row] = await rowsOf(lease.id);
+    expect(row).toMatchObject({
+      status: "succeeded",
+      commit_sha: next.commitSha,
+    });
+    // The fill and the helper that checks it run nothing of an agent's:
+    // one container each, reserving no agent share (ADR 0334).
+    const fillSandbox = fake.created.find(
+      (entry) => entry.opts.labels?.purpose === "cache-fill",
+    );
+    const helper = fake.created.find(
+      (entry) => entry.opts.labels?.purpose === "cache-check",
+    );
+    expect(fillSandbox).toBeDefined();
+    expect(helper).toBeDefined();
+    expect(fillSandbox?.opts.separateCommands).toBeUndefined();
+    expect(helper?.opts.separateCommands).toBeUndefined();
+    const reserved = (id: string | null | undefined) =>
+      db!
+        .selectFrom("execution_allocations")
+        .select(["policy_snapshot", "reserved_memory_mb"])
+        .where("id", "=", id ?? "")
+        .executeTakeFirstOrThrow();
+    const agent = await reserved(first.allocation.id);
+    const fill = await reserved(row?.allocation_id);
+    expect(JSON.stringify(fill.policy_snapshot)).not.toContain(
+      "separateCommands",
+    );
+    expect(fill.reserved_memory_mb).toBeLessThanOrEqual(
+      agent.reserved_memory_mb - SEPARATE_AGENT_DEFAULT_RESOURCES.memoryMb,
     );
   });
 });
