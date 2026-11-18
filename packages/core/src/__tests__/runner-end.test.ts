@@ -118,9 +118,7 @@ describe("endRunner", () => {
     // Its harness's own groups, inside the sandbox; nothing a harness could
     // not have reported.
     await channel.killGroups([4242, 77, 1, -3, 2.5]);
-    expect(commands).toEqual([
-      "kill -s KILL -- -4242 -77 2>/dev/null; true",
-    ]);
+    expect(commands).toEqual(["kill -s KILL -- -4242 -77 2>/dev/null; true"]);
   });
 });
 
