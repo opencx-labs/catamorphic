@@ -163,6 +163,41 @@ it("kills every reported group with one command, under dash as under bash (ADR 0
   }
 }, 15_000);
 
+it("leaves out the unfinished last line of a runner that exited mid-line, as a restart kills it", async () => {
+  const secret = "sk-live-0123456789abcdef";
+  const output = `a warning\nretrying with ${secret.slice(0, 10)}`;
+  const channel = sandboxChannel({
+    provider: {
+      processes: {
+        readProcessOutput: async ({ cursor }: { cursor?: number }) => ({
+          processId: "runner",
+          chunk: (cursor ?? 0) === 0 ? output : "",
+          cursor: cursor ?? 0,
+          nextCursor: Buffer.byteLength(output),
+          more: false,
+          outputBytes: Buffer.byteLength(output),
+          status: "exited",
+          exitCode: null,
+          signal: "SIGKILL",
+        }),
+      },
+    } as unknown as SandboxProvider,
+    location: {
+      kind: "sandbox_process",
+      allocationId: "allocation",
+      sandboxId: "sandbox",
+      processId: "runner",
+    },
+  });
+  const read = await channel.read({ cursor: 0, waitMs: 0 });
+  expect(read.exited).toBe(true);
+  expect(read.diagnostics).toEqual([
+    "a warning",
+    "[An unfinished 24-byte line of output was left out]",
+  ]);
+  expect(read.diagnostics.join("\n")).not.toContain("sk-live");
+});
+
 it("keeps a runner's line whole or leaves it out, never part of one", () => {
   expect(diagnostic("short")).toBe("short");
   const secret = "sk-live-0123456789abcdef";
