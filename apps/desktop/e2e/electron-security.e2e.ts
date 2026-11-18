@@ -15,6 +15,7 @@ import { assertIsolatedDesktopTestHost } from "../../../scripts/desktop-test-env
 import {
   type AppHandle,
   type FrameHandle,
+  focusWindow,
   launchApp,
   removeE2eDirectory,
 } from "./harness.js";
@@ -404,6 +405,15 @@ it("renders an interactive project app without exposing the shell bridge or broa
   });
   // The app remains useful inside that boundary, driven by the OS pointer.
   // One press counts: aim once the button and its frame are where they rest.
+  // On macOS a press on a window that is not key only makes it key, and
+  // the app never hears it (twice in CI, the probe left at "Ready"): the
+  // window is made key first.
+  await focusWindow(handle);
+  await guest.eval(`(() => { window.__probeUnderPointer = false;
+    const button = document.querySelector('#probe-button');
+    for (const type of ['pointerover', 'pointermove'])
+      button.addEventListener(type, () => { window.__probeUnderPointer = true; });
+    return true; })()`);
   const point = await guest.waitFor<{ x: number; y: number }>(
     `(() => { const button=document.querySelector('#probe-button'); const r=button.getBoundingClientRect();
       const point={x:r.x+r.width/2,y:r.y+r.height/2};
@@ -418,10 +428,19 @@ it("renders an interactive project app without exposing the shell bridge or broa
       return !moving && document.elementFromPoint(r.x+${point.x},r.y+${point.y})===frame && {x:r.x,y:r.y}; })()`,
     { label: "the app frame at rest under the button" },
   );
-  await handle.clickPointer({
-    x: point.x + offset.x,
-    y: point.y + offset.y,
-  });
+  // Pressed only once the app has seen the OS pointer arrive over the
+  // button, so the press goes where the move went.
+  await handle.clickPointer(
+    { x: point.x + offset.x, y: point.y + offset.y },
+    {
+      beforePress: async () => {
+        await guest.waitFor(
+          "window.__probeUnderPointer === true || document.querySelector('#probe-button').matches(':hover')",
+          { label: "the app sees the OS pointer over the probe button" },
+        );
+      },
+    },
+  );
   await guest.waitFor(
     "document.querySelector('#probe-result')?.textContent === 'The isolated app is interactive'",
   );
