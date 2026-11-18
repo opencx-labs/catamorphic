@@ -96,13 +96,16 @@ when a report first shows free space under the floor (`disk_low_at`, one
 conditional update), and ends it when free space is back above 1.1 times
 the floor. A machine of a `workflow` class (ADR 0327) then records the
 project event `machine.disk-low` (source `machines`) with its name, class,
-rule, ref and the report, once per episode, so a workflow can replace or
-grow it. A recording that fails is tried again on each later report of
+rule, ref and the report, once per episode, so a workflow can alert or
+size later machines. A recording that fails is tried again on each later report of
 the episode until it lands; the event's id names the episode, so it is
-recorded once. Only Work's own measurement starts an episode. Policy stays in
-the project: the `machines-ec2` recipe documents root volume sizes and
-ships an optional workflow that terminates a machine on `machine.disk-low`,
-which Work then replaces on demand.
+recorded once. Only Work's own measurement starts an episode. Replacing a machine is
+Work's: on demand, a machine short of disk takes no new work, counts
+toward neither the rule's `min` nor its `max`, and is destroyed once it
+holds no work, so no review is cut off. Policy stays in the project: the
+`machines-ec2` recipe documents root volume sizes. A workflow that
+terminated the machine on the event was considered and left out: it could
+not see whether the machine was still short or still working.
 
 Considered: per-sandbox quotas (Docker cannot cap a volume; out of scope);
 failing a workspace that does not fit (a full machine is a wait, like

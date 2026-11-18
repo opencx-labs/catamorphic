@@ -169,9 +169,9 @@ demand](cluster-deployment.md#machines-on-demand)):
    review per machine (`rootVolumeGb` on EC2; a Hetzner server type's own
    disk). A machine under its disk floor takes no new review, which waits
    for another machine, and its failures say the machine ran out of disk
-   ([Disk](cluster-deployment.md#disk)); a `workflow` class's project hears
-   `machine.disk-low` and can replace it (the `machines-ec2` pack's
-   optional `replaceFullMachine`).
+   ([Disk](cluster-deployment.md#disk)). On demand, Work replaces such a
+   machine once its reviews are done; a `workflow` class's project hears
+   `machine.disk-low` for its own alerts.
 
 For a fixed fleet instead, enroll each machine yourself:
 `POST /_work/operator/workers` with

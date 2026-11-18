@@ -219,13 +219,12 @@ inside sandboxes. A failure while the machine is short of disk says so,
 and the project hears `machine.disk-low` once each time a machine falls
 under its floor, with its disk report and the class's options.
 
-A machine short of disk is destroyed once idle, like any machine on
-demand. To replace it at once, turn on `replaceFullMachine`: on
-`machine.disk-low` it terminates the instance the event names, if it
-carries this class's `work-class` tag. The reviews on it end, and Work
-continues them on another machine as it does for any lost machine. It
-needs nothing beyond the policy below. Keep it off to let running
-reviews finish.
+Work replaces a machine short of disk itself: it gives it no new work,
+makes another machine for the work waiting (it counts toward neither the
+rule's `min` nor its `max`), and destroys it through `destroyMachine` once
+it holds no work, so no review is cut off. A workflow on `machine.disk-low`
+is for the team's own policy: an alert, or raising the class's
+`rootVolumeGb` for the machines to come.
 
 ## When a machine does not come up
 

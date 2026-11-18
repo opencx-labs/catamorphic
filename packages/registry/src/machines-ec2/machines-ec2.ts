@@ -31,9 +31,6 @@ import {
  *   market            "on-demand" (default) or "spot"
  *   instanceProfile   optional; an instance profile name for the machine
  *   tags              optional; extra tags, also required by destroy
- *
- * `replaceFullMachine`, optional, terminates a machine on machine.disk-low
- * (ADR 0335); the event carries the class's options too.
  */
 
 export const awsSecrets = defineSecrets({
@@ -366,53 +363,6 @@ async function terminateInstances({
   return { done: false };
 }
 
-/**
- * @displayname Terminate a machine short of disk
- * @icon hard-drive
- * @param event - @displayname Event | @description The machine.disk-low event, with the machine's instance id and the class's options
- */
-async function terminateFullMachine({
-  event,
-}: {
-  event: TriggerPayload<"machine.disk-low">;
-}): Promise<{ terminated: string[] }> {
-  "use step";
-  const machine = event.payload;
-  const options = ec2Options(machine.options);
-  if ("invalid" in options) throw new Error(options.invalid);
-  if (!machine.ref?.startsWith("i-")) return { terminated: [] };
-  const client = ec2Client(options.region);
-  let page: DescribeInstancesCommandOutput;
-  try {
-    page = await client.send(
-      new DescribeInstancesCommand({ InstanceIds: [machine.ref] }),
-    );
-  } catch (error) {
-    if (errorName(error).startsWith("InvalidInstanceID."))
-      return { terminated: [] };
-    throw error;
-  }
-  // Only the machine the event names, of this class, while it runs.
-  const terminate = (page.Reservations ?? [])
-    .flatMap((reservation) => reservation.Instances ?? [])
-    .filter(
-      (instance) =>
-        instance.InstanceId === machine.ref &&
-        instance.State?.Name !== undefined &&
-        ALIVE.includes(instance.State.Name) &&
-        instance.State.Name !== "shutting-down" &&
-        instance.Tags?.some(
-          (tag) => tag.Key === CLASS_TAG && tag.Value === machine.class,
-        ),
-    )
-    .flatMap((instance) => (instance.InstanceId ? [instance.InstanceId] : []));
-  if (terminate.length > 0)
-    await client.send(
-      new TerminateInstancesCommand({ InstanceIds: terminate }),
-    );
-  return { terminated: terminate };
-}
-
 /** @displayname Create EC2 machine */
 export const createMachine = defineWorkflow(({ defineBoundary }) => ({
   triggers: [trigger("machine.create")],
@@ -433,26 +383,6 @@ export const destroyMachine = defineWorkflow(({ defineBoundary }) => ({
     defineBoundary({
       run: ({ input }: BoundaryContext<TriggerPayload<"machine.destroy">>) =>
         terminateInstances({ request: input }),
-    }),
-  ],
-}));
-
-/**
- * @displayname Replace a machine short of disk
- *
- * Optional: on machine.disk-low (ADR 0335), terminate the machine at once.
- * Work already gives a machine short of disk no new workspaces, makes new
- * machines for the work waiting, and destroys it once idle; this ends the
- * reviews on it sooner, and Work continues them elsewhere as it does for
- * any lost machine.
- */
-export const replaceFullMachine = defineWorkflow(({ defineBoundary }) => ({
-  triggers: [trigger("machine.disk-low")],
-  steps: [
-    /** @displayname Terminate its instance */
-    defineBoundary({
-      run: ({ input }: BoundaryContext<TriggerPayload<"machine.disk-low">>) =>
-        terminateFullMachine({ event: input }),
     }),
   ],
 }));
