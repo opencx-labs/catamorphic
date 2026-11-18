@@ -155,14 +155,19 @@ const recordDismissals = () =>
     new MutationObserver((records) => {
       for (const record of records) note(record.attributeName + ' ' + name(record.target));
     }).observe(document.body, { subtree: true, attributes: true, attributeFilter: ['inert', 'hidden'] });
-    // A menu can open and go between two polls: its arrival is kept.
-    let shown = false;
-    new MutationObserver(() => {
-      const now = !!document.querySelector('[data-sidebar-menu]');
-      if (now === shown) return;
-      shown = now;
-      if (now) window.__menuOpened = true;
-      note(now ? 'menu opened' : 'menu removed');
+    // A menu can open and go between two polls: its arrival is kept. Each
+    // menu that opens brings its own shield, even while an earlier one's
+    // panel is still leaving.
+    new MutationObserver((records) => {
+      for (const record of records) {
+        for (const node of record.addedNodes)
+          if (node instanceof Element && node.matches('[data-menu-shield]')) {
+            window.__menuOpened = true;
+            note('menu opened');
+          }
+        for (const node of record.removedNodes)
+          if (node instanceof Element && node.matches('[data-sidebar-menu]')) note('menu removed');
+      }
     }).observe(document.body, { childList: true });
     return true;
   })()`);
@@ -302,17 +307,12 @@ const rowMenu = async (label: string) => {
       await settled();
       return point;
     } catch (cause) {
-      // The OS took key status from the window as the menu opened, or
-      // handed focus back to the page as it made the window key (macOS
-      // CI, right after the window was made key or a dialog closed): the
-      // window is made key again and the row right-clicked again. Anything
-      // else closing it fails.
-      const reason = String(cause);
-      if (
-        attempt >= 1 ||
-        !(reason.includes("blur window") || reason.includes("focusin webview"))
-      )
-        throw cause;
+      // The OS took key status from the window as the menu opened (once on
+      // macOS CI, right after a dialog closed): the window is made key again
+      // and the row right-clicked again. Anything else closing it fails.
+      if (attempt >= 1 || !String(cause).includes("blur window")) throw cause;
+      // Its panel finishes leaving first: the next menu is the only one.
+      await closed();
     }
   }
 };
