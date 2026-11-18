@@ -5,10 +5,10 @@
 
 ## Context
 
-Machine classes (ADR 0205) create machines on Hetzner Cloud, draw on pools,
-or call the `machineProvisioner` hook, which is host server code. A team on
-AWS had to fork the server or build the lifecycle outside Work: the opencx
-reviewer did, with about 1,500 lines of EC2 code plus IAM for launch
+Machine classes (ADR 0205) create machines on Hetzner Cloud, draw on pools, or
+call the `machineProvisioner` hook, which is host server code. A team on AWS
+had to fork the server or build the lifecycle outside Work: a production pull
+request reviewer did, with about 1,500 lines of EC2 code plus IAM for launch
 intent, idempotency tokens, heartbeat replacement, idle stop and orphan
 sweeps. Work already owns the hard part (demand, replacement after
 `enrollMinutes`, draining under the node lock, destroying until done). What

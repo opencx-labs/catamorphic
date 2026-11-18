@@ -7,19 +7,19 @@
 
 A correlation key (ADR 0027) makes a run's subject unique among live runs,
 with `ignore`, `error` or `restart` on conflict. Nothing lets one subject's
-runs take turns. The review recipe's publisher reads a verdict and then
-writes one, so two overlapping `postReviews` runs both read "no verdict" and
-posted a failure then a success. ADR 0292 answered with deployment-owned
-server code, its own Postgres schema, row locks and two connection pools;
-the opencx watcher built its own effects tables and per pull request locks
-for the same races. Both are the scheduler's job. Their durable state (the
-strongest verdict per commit, posted ids) is a few facts about one chat,
-which session metadata (ADR 0226) holds, but workflows could not read or
-write it. Trigger kinds also derived their delivery ids (a webhook's id, a
-schedule occurrence, a project event) as correlation keys, so a key was
-both "this delivery" and "this subject" and a workflow could not choose a
-subject of its own. Separately, enablement revalidation reported a full
-machine as `environment_denied` and suspended the automation.
+runs take turns. The review recipe's publisher reads a verdict and then writes
+one, so two overlapping `postReviews` runs both read "no verdict" and posted a
+failure then a success. ADR 0292 answered with deployment-owned server code,
+its own Postgres schema, row locks and two connection pools; a production pull
+request reviewer's watcher built its own effects tables and per pull request
+locks for the same races. Both are the scheduler's job. Their durable state
+(the strongest verdict per commit, posted ids) is a few facts about one chat,
+which session metadata (ADR 0226) holds, but workflows could not read or write
+it. Trigger kinds also derived their delivery ids (a webhook's id, a schedule
+occurrence, a project event) as correlation keys, so a key was both "this
+delivery" and "this subject" and a workflow could not choose a subject of its
+own. Separately, enablement revalidation reported a full machine as
+`environment_denied` and suspended the automation.
 
 ## Decision
 

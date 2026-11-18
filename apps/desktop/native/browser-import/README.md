@@ -78,7 +78,7 @@ release; synthetic tests do not claim to verify the user's installed browsers.
 
 ### Developer-profile check: 2026-09-18
 
-The user authenticated personal and OpenCX Chrome import attempts. The helper's
+The user authenticated personal and work Chrome import attempts. The helper's
 device-owner authentication succeeded, but macOS rejected the shared Chrome Safe
 Storage read with OSStatus -25293 and an integrity-check denial. The user verified
 the same refusal in Apple's Keychain Access. No source keys, ACLs or browser data

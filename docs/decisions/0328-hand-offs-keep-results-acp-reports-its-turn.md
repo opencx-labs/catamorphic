@@ -5,18 +5,18 @@
 
 ## Context
 
-A pull request review chat lives across many pushes and comments. Its
-OpenCode coordinator runs as an ACP agent in the chat's sandbox on a server
-(ADR 0255), and Work does not hold an ACP agent's thread: when the sandbox
-is replaced (idle release, a lost machine), the next turn starts a new
-thread handed a budgeted summary of the conversation (ADR 0198, 0245). The
-summary trims from the middle, so a long chat can lose exactly what the
-agent most needs: the results it already submitted (ADR 0323) and the
-requests it has not answered. The opencx watcher kept OpenCode's SQLite on
-an encrypted volume per pull request for this, and its big runs still
-failed once compaction dropped the original observations. The ACP adapter
-also ignored effort, reported no usage, and never said when the agent's
-model calls were being refused, so a retrying agent looked busy.
+A pull request review chat lives across many pushes and comments. Its OpenCode
+coordinator runs as an ACP agent in the chat's sandbox on a server (ADR 0255),
+and Work does not hold an ACP agent's thread: when the sandbox is replaced
+(idle release, a lost machine), the next turn starts a new thread handed a
+budgeted summary of the conversation (ADR 0198, 0245). The summary trims from
+the middle, so a long chat can lose exactly what the agent most needs: the
+results it already submitted (ADR 0323) and the requests it has not answered.
+A production pull request reviewer's watcher kept OpenCode's SQLite on an
+encrypted volume per pull request for this, and its big runs still failed once
+compaction dropped the original observations. The ACP adapter also ignored
+effort, reported no usage, and never said when the agent's model calls were
+being refused, so a retrying agent looked busy.
 
 ## Decision
 

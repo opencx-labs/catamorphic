@@ -5,18 +5,18 @@
 
 ## Context
 
-What an agent produced was text. A subsession's result reached its parent
-as a message; a workflow that acted on a chat's work parsed its reply. The
-pull request review pack had the reviewer end every turn with a fenced
-`work-review` JSON block that its publisher extracted (ADR 0259). The opencx
-coordinator reviewer had to build typed submissions as harness plugin tools,
-because text results kept breaking: prose before the JSON, arrays sent as
-JSON-encoded strings, a required field missing, a turn ending with reasoning
-only, compaction hiding earlier answers, a mistyped child id. Its rules held:
-only an accepted, validated submission counts; field errors go back to the
-agent in the same turn; a newer input makes earlier submissions stale; the
-parent reads its children's accepted results, and code computes the final
-checks over them.
+What an agent produced was text. A subsession's result reached its parent as a
+message; a workflow that acted on a chat's work parsed its reply. The pull
+request review pack had the reviewer end every turn with a fenced
+`work-review` JSON block that its publisher extracted (ADR 0259). A production
+pull request reviewer, a coordinator with subagents, had to build typed
+submissions as harness plugin tools, because text results kept breaking: prose
+before the JSON, arrays sent as JSON-encoded strings, a required field
+missing, a turn ending with reasoning only, compaction hiding earlier answers,
+a mistyped child id. Its rules held: only an accepted, validated submission
+counts; field errors go back to the agent in the same turn; a newer input
+makes earlier submissions stale; the parent reads its children's accepted
+results, and code computes the final checks over them.
 
 ## Decision
 
