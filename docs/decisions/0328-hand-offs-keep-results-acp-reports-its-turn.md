@@ -28,6 +28,8 @@ sections verbatim, outside the summary's trimming:
   name that an earlier attempt of the turn being handed off submitted (a
   lost sandbox, a restart on a new session). That turn is still open, so
   they are told to submit again if still right, never that the work is done.
+  A first turn started again on a new thread gets a hand-off of this alone,
+  when its earlier attempt submitted something.
 - *Your accepted results*: the latest result of each name from earlier
   turns (newest first), with its turn, the request it answers (quoted
   briefly), and whether a newer request arrived since. A value above 8 KiB,

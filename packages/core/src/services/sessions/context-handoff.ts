@@ -60,7 +60,18 @@ export async function buildContextHandoff(input: {
    */
   currentTurn?: { id: string; ordinal: number };
 }): Promise<ContextHandoff | null> {
-  if (input.toOrdinal < input.fromOrdinal) return null;
+  if (input.toOrdinal < input.fromOrdinal)
+    return input.currentTurn
+      ? earlierAttemptHandoff({
+          db: input.db,
+          sessionId: input.sessionId,
+          current: input.currentTurn,
+          strategy: input.strategy,
+          budget: Math.floor(
+            (input.budgetChars ?? HANDOFF_BUDGET_CHARS) * KEPT_SHARE,
+          ),
+        })
+      : null;
   const turns = await input.db
     .selectFrom("agent_turns")
     .select(["id", "ordinal", "provider_thread_id", "status"])
@@ -159,6 +170,50 @@ export async function buildContextHandoff(input: {
     ]
       .filter(Boolean)
       .join("\n\n"),
+  };
+}
+
+/**
+ * A turn with no turn before it, started again on a new thread (its first
+ * turn's earlier attempt lost its sandbox): what that attempt submitted,
+ * so the new thread does not start it over blind. None when it submitted
+ * nothing.
+ */
+async function earlierAttemptHandoff(input: {
+  db: Kysely<DB> | Transaction<DB>;
+  sessionId: string;
+  current: { id: string; ordinal: number };
+  strategy: ContextHandoffStrategy;
+  budget: number;
+}): Promise<ContextHandoff | null> {
+  const submitted = await input.db
+    .selectFrom("agent_items")
+    .select("id")
+    .where("session_id", "=", input.sessionId)
+    .where("turn_id", "=", input.current.id)
+    .where("kind", "=", "result")
+    .where("status", "=", "completed")
+    .limit(1)
+    .executeTakeFirst();
+  if (!submitted) return null;
+  const kept = await keptSections({
+    db: input.db,
+    sessionId: input.sessionId,
+    ordinals: new Map(),
+    current: input.current,
+    budget: input.budget,
+  });
+  return {
+    strategy: input.strategy,
+    coveredTurnOrdinals: {
+      from: input.current.ordinal,
+      to: input.current.ordinal,
+    },
+    fromProviderThreadIds: [],
+    text: [
+      `This turn (turn ${input.current.ordinal}) was started before, and that attempt did not finish. What it submitted is kept:`,
+      kept,
+    ].join("\n\n"),
   };
 }
 

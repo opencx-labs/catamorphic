@@ -1501,7 +1501,9 @@ export class TurnEngine {
             updatedAt: now,
           };
       binding = { mode: "fresh", providerThreadId: thread.id };
-      if (input.turn.ordinal > 1) handoffFrom = 1;
+      // From turn 1: for a first turn, only what an earlier attempt of it
+      // submitted (ADR 0328), when it did.
+      handoffFrom = 1;
     }
     // A native thread can exist before any turn started on it. Resuming
     // that empty thread still needs all conversation context.

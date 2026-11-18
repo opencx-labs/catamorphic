@@ -418,6 +418,50 @@ describe("typed results", () => {
     expect(small?.text.length).toBeLessThan(2_000 + 300);
   });
 
+  it("hands a first turn started again on a new thread what its earlier attempt submitted", async () => {
+    const project = await projects.create(identity, { name: "First again" });
+    const session = await sessions.create(identity, project.id);
+    const state = await turn(
+      project.id,
+      session.id,
+      `Review pull request 11. ${tool("submit_result", {
+        name: "review",
+        value: { verdict: "COMMENT", score: 5 },
+      })}`,
+    );
+    const [first] = orderedTurns(state);
+    if (!first) throw new Error("no first turn");
+    // Its attempt lost its sandbox after submitting: no turn came before it.
+    const handoff = await buildContextHandoff({
+      db,
+      sessionId: session.id,
+      fromOrdinal: 1,
+      toOrdinal: 0,
+      strategy: "full",
+      currentTurn: { id: first.id, ordinal: 1 },
+    });
+    const text = handoff?.text ?? "";
+    expect(text).toContain("This turn (turn 1) was started before");
+    const [, earlier = ""] = text.split(
+      "Submitted by an earlier attempt of this turn, which did not finish",
+    );
+    expect(earlier).toContain('{"score":5,"verdict":"COMMENT"}');
+    // A first turn that submitted nothing starts plainly.
+    const plain = await sessions.create(identity, project.id);
+    const plainState = await turn(project.id, plain.id, "Hello.");
+    const [plainFirst] = orderedTurns(plainState);
+    expect(
+      await buildContextHandoff({
+        db,
+        sessionId: plain.id,
+        fromOrdinal: 1,
+        toOrdinal: 0,
+        strategy: "full",
+        currentTurn: { id: plainFirst?.id ?? "", ordinal: 1 },
+      }),
+    ).toBeNull();
+  });
+
   it("tells a turn's next attempt what an earlier attempt of it submitted, and keeps that turn's request open", async () => {
     const project = await projects.create(identity, { name: "Earlier" });
     const session = await sessions.create(identity, project.id);
