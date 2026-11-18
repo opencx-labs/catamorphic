@@ -497,10 +497,14 @@ export function sandboxChannel(input: {
     killGroups: async (groups) => {
       const valid = validGroups(groups);
       if (valid.length === 0) return;
+      // Where the runner and its harness run: in a sandbox whose commands
+      // run apart, the command container is another process namespace,
+      // where the same number names an unrelated group (ADR 0332).
       await provider
         .executeCommand(
           location.sandboxId,
           `kill -KILL ${valid.map((group) => `-- -${group}`).join(" ")} 2>/dev/null; true`,
+          { side: "agent" },
         )
         .catch(() => {});
     },

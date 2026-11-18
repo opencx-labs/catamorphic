@@ -119,6 +119,41 @@ describe("endRunner", () => {
     await channel.killGroups([4242, 77, 1, -3, 2.5]);
     expect(commands).toEqual(["kill -KILL -- -4242 -- -77 2>/dev/null; true"]);
   });
+
+  it("kills a harness's groups beside the runner, never in the command container of a sandbox that runs commands apart", async () => {
+    // Two containers, two process namespaces (ADR 0332): the same group id
+    // names the harness's agent beside the runner and an unrelated command
+    // of the pull request's.
+    const groups = {
+      agent: new Set([42]),
+      commands: new Set([42]),
+    };
+    const provider = {
+      processes: { signalProcess: async () => {} },
+      executeCommand: async (
+        _sandboxId: string,
+        command: string,
+        opts?: { side?: "agent" | "commands" },
+      ) => {
+        const side = groups[opts?.side ?? "commands"];
+        for (const [, group] of command.matchAll(/-- -(\d+)/g))
+          side.delete(Number(group));
+        return { exitCode: 0, result: "" };
+      },
+    } as unknown as SandboxProvider;
+    const channel = sandboxChannel({
+      provider,
+      location: {
+        kind: "sandbox_process",
+        allocationId: "allocation",
+        sandboxId: "sandbox",
+        processId: "proc-agent-runner",
+      } as Parameters<typeof sandboxChannel>[0]["location"],
+    });
+    await channel.killGroups([42]);
+    expect(groups.agent.has(42)).toBe(false);
+    expect(groups.commands.has(42)).toBe(true);
+  });
 });
 
 it("keeps a runner's line whole or leaves it out, never part of one", () => {
