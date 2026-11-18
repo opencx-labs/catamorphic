@@ -229,6 +229,32 @@ describe("ACP agents whose commands run apart (ADR 0332)", () => {
     expect(fs.existsSync(path.join(space.dir, "commands"))).toBe(false);
   });
 
+  it("refuses the review pack's OpenCode, which loads plugins from the checkout", async () => {
+    const space = workspace();
+    const definition = JSON.parse(
+      fs.readFileSync(
+        path.resolve(
+          path.dirname(fileURLToPath(import.meta.url)),
+          "../../../registry/src/pull-request-reviews-opencode/reviewer.json",
+        ),
+        "utf8",
+      ),
+    );
+    const turn = run(
+      attempt(space, "[[shell]]", {
+        commands,
+        options: { ...definition.acp, command: [process.execPath, AGENT] },
+      }),
+    );
+    await turn.finished();
+    expect(turn.completed()).toMatchObject({
+      status: "failed",
+      error: { message: ACP_COMMANDS_APART_REFUSAL },
+    });
+    expect(ACP_COMMANDS_APART_REFUSAL).toContain("OpenCode does not");
+    expect(fs.existsSync(space.stateFile)).toBe(false);
+  });
+
   it.each([
     ["does not say it uses $SHELL", { projectConfig: false }],
     ["does not say it loads nothing from the checkout", { shell: true }],

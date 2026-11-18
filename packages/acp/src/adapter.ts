@@ -55,7 +55,7 @@ export const ACP_CAPABILITIES: HarnessCapabilities = {
 
 /** Why an ACP agent without `acp.shell` does not run where commands run apart (ADR 0332). */
 export const ACP_COMMANDS_APART_REFUSAL =
-  'This Environment runs commands apart from the agent, and an ACP agent runs there only when its definition says both that every way it runs code goes through $SHELL ("shell": true) and that it loads no configuration, plugins, MCP servers, language servers, formatters or instructions from the checkout ("projectConfig": false, with "env" naming the variables that make it so). OpenCode does, with OPENCODE_DISABLE_PROJECT_CONFIG and its language servers and formatters off. Otherwise use another agent there.';
+  'This Environment runs commands apart from the agent, and an ACP agent runs there only when its definition says both that every way it runs code goes through $SHELL ("shell": true) and that it loads no configuration, plugins, MCP servers, language servers, formatters or instructions from the checkout ("projectConfig": false, with "env" naming the variables that make it so). OpenCode does not: it loads plugins from the checkout whatever its settings say. Use Claude Code there, or run this Environment\'s commands beside the agent.';
 
 /** The variables an agent's definition sets for its process. */
 function definitionEnv(value: unknown): Record<string, string> {

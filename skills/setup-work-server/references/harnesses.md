@@ -238,7 +238,9 @@ OpenCode, a configuration the command names points a provider at them:
 with the file in the image and
 `"command": ["env", "OPENCODE_CONFIG=/etc/opencode/work.json", "OPENCODE_DISABLE_PROJECT_CONFIG=1", "opencode", "acp"]`.
 In a review sandbox the repository is the pull request's, so the agent's
-settings come from the image, not the checkout.
+settings come from the image, not the checkout. Its plugins do not:
+OpenCode loads them from the checkout whatever its settings say (see
+[Commands apart from the agent](#commands-apart-from-the-agent)).
 
 The definition's `effort` (or the chat's, or a delegation's) is set
 through the agent's thought level option after the model, since an agent's
@@ -284,11 +286,11 @@ own way:
   the checkout (`"projectConfig": false`), with `"env"` naming the
   variables that make it so, which Work sets on its process. Work points
   `SHELL` at the shim and puts its `git` first on `PATH`. Without both the
-  turn is refused. For OpenCode: `"acp": { "command": ["opencode", "acp"],
-  "shell": true, "projectConfig": false, "env": {
-  "OPENCODE_DISABLE_PROJECT_CONFIG": "1", "OPENCODE_DISABLE_LSP_DOWNLOAD":
-  "1", "OPENCODE_DISABLE_CLAUDE_CODE": "1" } }`, and `"lsp": false`,
-  `"formatter": false` and `"snapshot": false` in its baked configuration.
+  turn is refused. OpenCode does not qualify: version 1.19.5 loads plugins
+  from the checkout's `.opencode/` folder and `opencode.json` whatever
+  `OPENCODE_DISABLE_PROJECT_CONFIG` says, so run it only in Environments
+  that run commands beside the agent, where the repository's code can
+  reach what the agent holds.
 - **Codex** is refused: it picks its own shell, so its commands cannot be
   sent apart. Use it in Environments that run commands beside the agent.
 - **The built-in agent** runs on the control plane; its tools already run

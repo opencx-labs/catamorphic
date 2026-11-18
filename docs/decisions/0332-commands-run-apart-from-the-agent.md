@@ -93,8 +93,13 @@ file of the agent container, so it has no channel back.
   configuration, plugins, MCP servers, language servers, formatters or
   instructions from the checkout), with `"env"` naming what makes it so;
   Work sets `env` and points `SHELL` at the shim. Others are refused.
-  OpenCode meets it with its project config, language servers,
-  formatters, snapshots and Claude Code files off.
+  OpenCode does not meet it: 1.19.5 (and 1.19.6) has a second
+  configuration loader that runs plugins from the checkout's `.opencode/`
+  and `opencode.json` whatever `OPENCODE_DISABLE_PROJECT_CONFIG` or
+  `OPENCODE_PURE` says (a native test shows it). Its definition in the
+  review pack claims nothing, so Work refuses it where commands run apart,
+  and that pack's Environment runs commands beside it, unprotected from
+  the code it reviews.
 - **Codex:** refused. It takes the login shell from the password database
   and lets the model name any shell binary.
 - **The built-in agent** runs on the control plane; its tools already run
