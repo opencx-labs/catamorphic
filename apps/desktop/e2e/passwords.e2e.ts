@@ -87,23 +87,32 @@ const server = http.createServer((request, response) => {
             ready();
           }
         });
+        // The site answers a submitted password when the test says its
+        // server has: after the key that submitted it has been delivered.
+        let answer;
+        addEventListener('message', ({data}) => {
+          if (data.answer && answer) { const next = answer; answer = undefined; next(); }
+        });
         form.addEventListener('submit', (event) => {
           event.preventDefault();
           if (!document.querySelector('#pw')) { passwordStep(); return; }
-          if (document.querySelector('#pw').value !== 'correct horse') {
-            location.href = '/auth-frame?rejected=1';
-            return;
-          }
-          if (${JSON.stringify(mode)} === 'pending') {
+          if (${JSON.stringify(mode)} === 'pending' && document.querySelector('#pw').value === 'correct horse') {
             parent.postMessage({phase:'pending'}, '*');
             return;
           }
-          if (${JSON.stringify(mode)} === 'top') {
-            top.location.href = ${JSON.stringify(`${origin}/welcome`)};
-            return;
-          }
-          if (${JSON.stringify(mode)} !== 'remove') form.remove();
-          parent.postMessage({done:true}, '*');
+          answer = () => {
+            if (document.querySelector('#pw').value !== 'correct horse') {
+              location.href = '/auth-frame?rejected=1';
+              return;
+            }
+            if (${JSON.stringify(mode)} === 'top') {
+              top.location.href = ${JSON.stringify(`${origin}/welcome`)};
+              return;
+            }
+            if (${JSON.stringify(mode)} !== 'remove') form.remove();
+            parent.postMessage({done:true}, '*');
+          };
+          parent.postMessage({phase:'submitted'}, '*');
         });
         if (${rejected}) {
           passwordStep();
@@ -254,6 +263,10 @@ async function typeInFrame(field: string, text: string) {
       document.body.dataset.focused = '';
       document.body.dataset.typed = '';
       const frame = document.querySelector('#auth');
+      // A retry hands focus back to this page first. Focusing a frame that
+      // already holds focus changes nothing, so the retry would otherwise
+      // repeat whatever focus state lost the first input.
+      if (${attempt > 0} && document.activeElement === frame) frame.blur();
       frame.focus();
       frame.contentWindow.postMessage({focus:${JSON.stringify(field)},text:${JSON.stringify(text)}}, '*');
     })()`);
@@ -271,7 +284,16 @@ async function typeInFrame(field: string, text: string) {
     } catch (error) {
       // Native macOS can drop the first input after switching frames.
       // The fixture clears the field before retrying, so text never doubles.
-      if (attempt === 2) throw error;
+      if (attempt < 2) continue;
+      const focus = await app.eval(`(async () => ({
+        hostFocused: document.hasFocus(),
+        hostActive: document.activeElement?.tagName,
+        page: await ${guest}.executeJavaScript("({focused: document.hasFocus(), active: document.activeElement?.id})"),
+      }))()`);
+      throw new Error(
+        `${field} in the authentication frame never received ${JSON.stringify(text)}: ${JSON.stringify(focus)}`,
+        { cause: error },
+      );
     }
   }
 }
@@ -292,7 +314,17 @@ async function framedLogin(mode: string, username: string, password: string) {
     "password step in authentication frame",
   );
   await typeInFrame("pw", password);
+  // Enter submits; the site answers only once the key is fully delivered.
+  // A frame removed or navigated while CDP still waits for its key's
+  // acknowledgement never acknowledges it: Chromium's DevTools input
+  // injector keeps the callback of an event its target widget dropped, so
+  // Input.dispatchKeyEvent hung for 60 seconds whenever the answer won.
   await app.press("Enter");
+  if (mode === "pending" && password === "correct horse") return;
+  await framePhase("submitted");
+  await inGuest(
+    `document.querySelector('#auth').contentWindow.postMessage({answer:true}, '*')`,
+  );
 }
 
 describe("browser passwords", () => {

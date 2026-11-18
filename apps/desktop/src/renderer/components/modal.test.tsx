@@ -135,6 +135,67 @@ describe("Modal focus containment", () => {
     render(false);
     expect(document.activeElement).toBe(opener);
   });
+
+  it("takes focus back from a page beneath that focuses after it opened", async () => {
+    // A browser tab focused just before a request opened the dialog can
+    // finish that focus later; Escape must still reach the dialog.
+    const page = document.createElement("iframe");
+    document.body.append(page);
+    containers.push(page);
+    let closed = 0;
+    mountModal(() => {
+      closed += 1;
+    });
+    const panel = document.body.querySelector<HTMLElement>('[role="dialog"]');
+    expect(document.activeElement).toBe(panel);
+
+    // Chromium blurs the window as focus enters a frame; jsdom only moves
+    // activeElement, so the test sends the blur the browser would.
+    act(() => {
+      page.focus();
+      window.dispatchEvent(new FocusEvent("blur"));
+    });
+    // The dialog waits for the frame's focus to finish moving.
+    await act(() => new Promise((resolve) => setTimeout(resolve)));
+
+    expect(document.activeElement).toBe(panel);
+    act(() => {
+      panel?.dispatchEvent(
+        new KeyboardEvent("keydown", {
+          key: "Escape",
+          bubbles: true,
+          cancelable: true,
+        }),
+      );
+    });
+    expect(closed).toBe(1);
+  });
+
+  it("leaves a frame inside the dialog focused", async () => {
+    const container = document.createElement("div");
+    document.body.append(container);
+    containers.push(container);
+    const root = createRoot(container);
+    roots.push(root);
+    act(() => {
+      root.render(
+        <Modal open onClose={() => {}}>
+          <iframe title="Inside" />
+        </Modal>,
+      );
+    });
+    const inside = document.body.querySelector<HTMLElement>(
+      'iframe[title="Inside"]',
+    );
+
+    act(() => {
+      inside?.focus();
+      window.dispatchEvent(new FocusEvent("blur"));
+    });
+    await act(() => new Promise((resolve) => setTimeout(resolve)));
+
+    expect(document.activeElement).toBe(inside);
+  });
 });
 
 it("does not mount closed contents and removes them after the exit animation", () => {
