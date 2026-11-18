@@ -1009,3 +1009,89 @@ describe("going live through passing trouble (ADRs 0330, 0331)", () => {
     ).toEqual({ status: "applied" });
   });
 });
+
+describe("moving keeps what a trigger received (ADR 0330)", () => {
+  it("keeps an unchanged trigger's activation, created time and receipts, and starts a new one fresh", async () => {
+    const watcher =
+      (await enablements.list({ identity: owner, projectId })).find(
+        (item) => item.workflowName === "watchInbox",
+      )?.id ?? (await enable("watchInbox")).id;
+    const moveTo = async (commitSha: string) => {
+      const preview = await enablements.preview({
+        identity: owner,
+        projectId,
+        workflowName: "watchInbox",
+        owner: { type: "project" },
+        commitSha,
+      });
+      await enablements.updateDeployment({
+        identity: owner,
+        enablementId: watcher,
+        consentDigest: preview.consentDigest,
+        commitSha,
+      });
+    };
+    const activations = () =>
+      db
+        .selectFrom("workflow_enablement_triggers as activation")
+        .innerJoin(
+          "trigger_definitions as definition",
+          "definition.id",
+          "activation.trigger_definition_id",
+        )
+        .select([
+          "activation.id",
+          "activation.created_at",
+          "definition.commit_sha",
+          "definition.config",
+        ])
+        .where("activation.enablement_id", "=", watcher)
+        .orderBy("definition.binding_index")
+        .execute();
+    const inbox = { kind: "webhook", config: { name: "inbox" } };
+    await addCommit(sha("e1"), { triggers: [inbox] });
+    await moveTo(sha("e1"));
+    const [before] = await activations();
+    // An event received before the move, its delivery waiting to retry.
+    const event = await db
+      .insertInto("project_events")
+      .values({
+        project_id: projectId,
+        source: "webhook",
+        kind: "webhook",
+        external_id: "delivery-1",
+        occurred_at: new Date(),
+        payload: JSON.stringify({ name: "inbox" }),
+      })
+      .returning("id")
+      .executeTakeFirstOrThrow();
+    await db
+      .insertInto("project_event_deliveries")
+      .values({ activation_id: before!.id, event_id: event.id })
+      .execute();
+
+    await addCommit(sha("e2"), {
+      triggers: [inbox, { kind: "webhook", config: { name: "alerts" } }],
+    });
+    await moveTo(sha("e2"));
+    const after = await activations();
+    expect(after).toHaveLength(2);
+    expect(after[0]).toMatchObject({
+      id: before!.id,
+      created_at: before!.created_at,
+      commit_sha: sha("e2"),
+    });
+    expect(after[1]?.id).not.toBe(before!.id);
+    expect(after[1]?.created_at.getTime()).toBeGreaterThan(
+      before!.created_at.getTime(),
+    );
+    expect(
+      await db
+        .selectFrom("project_event_deliveries")
+        .select("status")
+        .where("activation_id", "=", before!.id)
+        .where("event_id", "=", event.id)
+        .executeTakeFirst(),
+    ).toEqual({ status: "pending" });
+  });
+});

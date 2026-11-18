@@ -969,10 +969,7 @@ export class WorkflowEnablementsService {
       }))
       .where("id", "=", row.id)
       .execute();
-    await trx
-      .deleteFrom("workflow_enablement_triggers")
-      .where("enablement_id", "=", row.id)
-      .execute();
+    await this.repointActivations({ trx, row, commitSha: preview.commitSha });
     await trx
       .deleteFrom("workflow_enablement_connections")
       .where("enablement_id", "=", row.id)
@@ -992,21 +989,6 @@ export class WorkflowEnablementsService {
         )
         .execute();
     }
-    await trx
-      .insertInto("workflow_enablement_triggers")
-      .columns(["enablement_id", "trigger_definition_id"])
-      .expression((eb) =>
-        eb
-          .selectFrom("trigger_definitions")
-          .select([
-            eb.val(row.id).as("enablement_id"),
-            "trigger_definitions.id as trigger_definition_id",
-          ])
-          .where("project_id", "=", row.project_id)
-          .where("commit_sha", "=", preview.commitSha)
-          .where("workflow_name", "=", row.workflow_name),
-      )
-      .execute();
     await this.recordEvent(
       trx,
       row.id,
@@ -1015,6 +997,92 @@ export class WorkflowEnablementsService {
       null,
       input.eventType === "followed" ? { commitSha: preview.commitSha } : {},
     );
+  }
+
+  /**
+   * Point an enablement's activations at a commit's trigger definitions.
+   * An activation whose trigger is unchanged there (its kind, project kind,
+   * configuration and filters) is repointed in place: it keeps its id, its
+   * creation time and its receipts, so an event it received before the move
+   * and has not delivered yet is delivered after it, and a schedule keeps
+   * its clock. A trigger new at the commit starts from now; one gone is
+   * removed with what it held.
+   */
+  private async repointActivations(input: {
+    trx: Transaction<DB>;
+    row: Selectable<DB["workflow_enablements"]>;
+    commitSha: string;
+  }): Promise<void> {
+    const { trx, row } = input;
+    const identity = (definition: {
+      trigger_kind: string;
+      project_kind: string | null;
+      config: unknown;
+      where_filters: unknown;
+    }) =>
+      canonicalJson([
+        definition.trigger_kind,
+        definition.project_kind,
+        definition.config,
+        definition.where_filters,
+      ]);
+    const current = await trx
+      .selectFrom("workflow_enablement_triggers as activation")
+      .innerJoin(
+        "trigger_definitions as definition",
+        "definition.id",
+        "activation.trigger_definition_id",
+      )
+      .select([
+        "activation.id",
+        "definition.trigger_kind",
+        "definition.project_kind",
+        "definition.config",
+        "definition.where_filters",
+      ])
+      .where("activation.enablement_id", "=", row.id)
+      .orderBy("definition.binding_index")
+      .execute();
+    const next = await trx
+      .selectFrom("trigger_definitions")
+      .select(["id", "trigger_kind", "project_kind", "config", "where_filters"])
+      .where("project_id", "=", row.project_id)
+      .where("commit_sha", "=", input.commitSha)
+      .where("workflow_name", "=", row.workflow_name)
+      .orderBy("binding_index")
+      .execute();
+    const unclaimed = [...current];
+    for (const definition of next) {
+      const key = identity(definition);
+      const index = unclaimed.findIndex(
+        (activation) => identity(activation) === key,
+      );
+      const [same] = index >= 0 ? unclaimed.splice(index, 1) : [];
+      if (same) {
+        await trx
+          .updateTable("workflow_enablement_triggers")
+          .set({ trigger_definition_id: definition.id, updated_at: new Date() })
+          .where("id", "=", same.id)
+          .execute();
+      } else {
+        await trx
+          .insertInto("workflow_enablement_triggers")
+          .values({
+            enablement_id: row.id,
+            trigger_definition_id: definition.id,
+          })
+          .execute();
+      }
+    }
+    if (unclaimed.length > 0)
+      await trx
+        .deleteFrom("workflow_enablement_triggers")
+        .where(
+          "id",
+          "in",
+          unclaimed.map((activation) => activation.id),
+        )
+        .execute();
   }
 
   async markUpdateAvailable(input: {
@@ -1607,4 +1675,14 @@ function isUniqueViolation(error: unknown): boolean {
     error !== null &&
     (error as { code?: unknown }).code === "23505"
   );
+}
+
+/** JSON with object keys sorted, so equal values compare equal. */
+function canonicalJson(value: unknown): string {
+  if (value === null || typeof value !== "object") return JSON.stringify(value);
+  if (Array.isArray(value)) return `[${value.map(canonicalJson).join(",")}]`;
+  return `{${Object.entries(value)
+    .sort(([left], [right]) => (left < right ? -1 : left > right ? 1 : 0))
+    .map(([key, item]) => `${JSON.stringify(key)}:${canonicalJson(item)}`)
+    .join(",")}}`;
 }

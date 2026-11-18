@@ -48,11 +48,16 @@ there and the authority the owner consented to is unchanged.**
   which builds the artifact and registers trigger definitions exactly as
   enabling does. If the preview's authority digest equals the one stored
   when the owner consented, the enablement takes the new commit, artifact
-  and triggers in one transaction (`followed` event). The authority digest
-  is the consent digest without the artifact digest plus what starts the
-  workflow (each trigger's kind, configuration and filters, and whether workflows may record its project kind, ADR 0326) and the run
-  secret names the project declares, so a merge cannot add a public webhook,
-  a broader filter, a frequent schedule or a new secret without consent.
+  and triggers in one transaction (`followed` event). A trigger unchanged
+  at the new commit keeps its activation (its id, creation time and
+  receipts), so an event it received before the move and has not delivered
+  yet is delivered after it, and a schedule keeps its clock; a new trigger
+  starts from the move. The authority digest is the consent digest without
+  the artifact digest plus what starts the workflow (each trigger's kind,
+  configuration and filters, and whether workflows may record its project
+  kind, ADR 0326) and the run secret names the project declares, so a
+  merge cannot add a public webhook, a broader filter, a frequent schedule
+  or a new secret without consent.
   Otherwise it stays, is marked `update_available`, and its owner (for a
   project automation, everyone who manages project automations) is notified
   through user notifications. Only a deterministic failure of that workflow at
