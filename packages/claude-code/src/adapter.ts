@@ -1,3 +1,4 @@
+import path from "node:path";
 import {
   type CanUseTool,
   type ElicitationResult,
@@ -30,6 +31,7 @@ import {
   type WarmSessionsOptions,
   writeCommandShell,
 } from "@catamorphic/sandbox";
+import { checkoutPathHooks } from "./checkout-paths.js";
 import { classifyClaudeError } from "./errors.js";
 import { hostToolServer, hostToolServers } from "./host-tools.js";
 import { inputUuid, renderPrompt } from "./input.js";
@@ -835,6 +837,7 @@ class ClaudeAttempt {
    */
   private options(session: ClaudeSession): Options {
     const attempt = this.attempt;
+    const separate = commandShellPaths(attempt);
     const own =
       attempt.thread.mode === "fresh"
         ? attempt.thread.providerThreadId
@@ -898,6 +901,22 @@ class ClaudeAttempt {
       hooks: {
         PostToolUse: [{ matcher: "^mcp__", hooks: [onMcpResult] }],
         ...turnContextHooks(session.live),
+        // Its commands apart (ADR 0332): file tools stay in the checkout,
+        // whatever links the pull request put there.
+        ...(separate
+          ? {
+              PreToolUse: checkoutPathHooks({
+                workingDirectory: attempt.workingDirectory,
+                temporaryFolder: separate.returnFolder,
+                readOnly: [
+                  path.join(
+                    path.dirname(attempt.workingDirectory),
+                    ".work-program",
+                  ),
+                ],
+              }),
+            }
+          : {}),
       },
       sessionStore: hostSessionStore({
         nativeState,

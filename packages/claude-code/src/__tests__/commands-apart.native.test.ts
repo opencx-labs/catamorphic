@@ -279,6 +279,124 @@ it("runs the CLI's own Git on the command side, where the repository's config is
 }, 90_000);
 
 /**
+ * The checkout is the pull request's, so a link in it can name the agent's
+ * own files: its model grant, its settings. The CLI's file tools resolve
+ * the real path first and stay in the checkout.
+ */
+it("keeps the CLI's file tools in the checkout, whatever links the pull request made", async () => {
+  const root = await realpath(
+    await mkdtemp(path.join(tmpdir(), "claude-apart-links-")),
+  );
+  const directories = {
+    here: {
+      cwd: path.join(root, "work"),
+      state: path.join(root, "state"),
+      home: path.join(root, "home"),
+    },
+    elsewhere: {
+      cwd: path.join(root, "work-elsewhere"),
+      state: path.join(root, "state-elsewhere"),
+      home: path.join(root, "home-elsewhere"),
+    },
+  };
+  await mkdir(directories.here.cwd, { recursive: true });
+  const grant = path.join(root, "agent-only", "grant");
+  const settings = path.join(root, "agent-only", "settings.json");
+  await mkdir(path.dirname(grant), { recursive: true });
+  await writeFile(grant, "grant-value-1234\n");
+  await writeFile(settings, "{}\n");
+  await writeFile(path.join(directories.here.cwd, "own.txt"), "mine\n");
+  fs.symlinkSync(grant, path.join(directories.here.cwd, "notes.txt"));
+  fs.symlinkSync(settings, path.join(directories.here.cwd, "config.json"));
+  const side = await commandSide({
+    socket: path.join(root, "c.sock"),
+    returnFolder: path.join(directories.here.state, "commands", "tmp"),
+    elsewhere: path.join(root, "command-tmp"),
+  });
+  const cwd = directories.here.cwd;
+  const scenario: ClaudeScenario = {
+    name: "commands-apart-links",
+    description: "File tools through links in the checkout.",
+    model: (request) => {
+      if (request.index === 0)
+        return {
+          blocks: [
+            {
+              type: "tool_use",
+              id: "toolu_read_link",
+              name: "Read",
+              input: { file_path: path.join(cwd, "notes.txt") },
+            },
+            {
+              type: "tool_use",
+              id: "toolu_read_own",
+              name: "Read",
+              input: { file_path: path.join(cwd, "own.txt") },
+            },
+          ],
+        };
+      if (request.index === 1)
+        return {
+          blocks: [
+            {
+              type: "tool_use",
+              id: "toolu_write_link",
+              name: "Write",
+              input: {
+                file_path: path.join(cwd, "config.json"),
+                content: '{ "hooks": "rewritten" }',
+              },
+            },
+          ],
+        };
+      return { blocks: [{ type: "text", text: "Done." }] };
+    },
+    attempts: [
+      {
+        start: (context) => ({
+          ...scenarioAttempt({
+            context,
+            scenario: "commands-apart-links",
+            turn: 1,
+            text: "Read the notes",
+          }),
+          commands: { socket: side.socket },
+        }),
+      },
+    ],
+    check: () => {},
+  };
+  const model = await startScriptedModel({
+    reply: (request) => scenario.model(request, { cwd }),
+  });
+  try {
+    await runScenario({
+      scenario,
+      directories,
+      modelUrl: model.url,
+      fixtureServer: { transport: "stdio", command: "unused" },
+      runner: () =>
+        new InProcessRunner({
+          adapters: { "claude-code": createClaudeCodeAdapter() },
+          version: "live",
+        }),
+      timeoutMs: 60_000,
+    });
+    const seen = JSON.stringify(model.requests.map((request) => request.body));
+    // The checkout's own file reads; the linked grant never reaches the
+    // model, and the linked settings are unchanged.
+    expect(seen).toContain("mine");
+    expect(seen).not.toContain("grant-value-1234");
+    expect(seen).toContain("outside the checkout");
+    expect(fs.readFileSync(settings, "utf8")).toBe("{}\n");
+  } finally {
+    await model.close();
+    await side.close();
+    await rm(root, { recursive: true, force: true });
+  }
+}, 90_000);
+
+/**
  * A stand-in for the command side: runs each command here, but writes
  * what lands in the CLI's temporary folder to another folder, and returns
  * the files the shim asks for from there, as a separate container would.
