@@ -604,7 +604,8 @@ provide it take the work:
   \`agentResources\` (1 CPU and 2 GiB by default) on top of the Environment's
   limits, which the commands' container gets. Use it wherever the agent runs code it
   does not trust, such as a pull request's. Claude Code then loads no
-  settings from the checkout, an ACP agent needs \`"acp": { "shell": true }\`,
+  settings files, an ACP agent needs \`"acp": { "shell": true,
+  "projectConfig": false }\` with the \`env\` that makes it so, and OpenCode
   and Codex cannot run there. Only container machines take such work.
 
 An agent definition's \`sandboxing\` says what may leave its sandbox, and the

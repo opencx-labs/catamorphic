@@ -202,7 +202,9 @@ Environment that runs commands apart, and its install removes `commands`
 from the `review` Environment. There the pull request's code runs beside
 the reviewer, plugins it plants included, and can reach the model key and
 the tool the reviewer submits its review with. Where that matters, keep the
-Claude Code reviewer of this pack.
+Claude Code reviewer of this pack. The rest of the pack applies unchanged:
+the `review` Environment's read-only pnpm cache and `fillReviewCache`, and
+`restartStalledReviews` (the OpenCode reviewer sets `stall` too).
 
 The image still turns off what OpenCode would otherwise start or read from
 the checkout: language servers and formatters (`"lsp": false`,

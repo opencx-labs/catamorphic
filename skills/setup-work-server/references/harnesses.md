@@ -307,6 +307,25 @@ harness's file tools nowhere its user may not go. Every `git` in the
 image is replaced there by Work's, so Git named by any path runs in the
 command container, whoever owns the checkout.
 
+What it does not cover:
+
+- The agent still reads what the repository's code wrote, links included,
+  so hostile content can talk it into misusing its own authority (its
+  model, its Work tools, the connections it holds).
+- A link can still lead a harness's file tools to what its own user holds:
+  its cache home and transcripts, its loopback key (which serves only that
+  turn, only on its loopback), and a member's sign-in when it runs on one.
+  A harness that runs programs from its cache home could be led to plant
+  one there.
+- Docker's volume driver does not apply `nosymfollow` to the shared
+  checkout under runc or gVisor (tested), so the Claude Code hook and the
+  harness's own user carry that instead.
+- An ACP agent is trusted on its definition's word (`shell`,
+  `projectConfig`).
+- `$WORK_PROGRAM`'s copy on the command side is only as trustworthy as the
+  command container once the repository's code ran; give the agent the
+  path of its own copy.
+
 ## Verify
 
 From a chat with the agent: it edits a file and runs a command; `env` in
