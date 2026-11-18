@@ -387,32 +387,47 @@ export class ExecutionJobsService {
   }): Promise<ExecutionJob | null> {
     const leaseSeconds = args.leaseSeconds ?? 60;
     const leaseToken = crypto.randomUUID();
-    const row = await this.db
-      .updateTable("execution_jobs")
-      .set((eb) => ({
-        status: "running",
-        leased_by: args.workerId,
-        lease_token: leaseToken,
-        lease_generation: sql<string>`lease_generation + 1`,
-        heartbeat_at: sql<Date>`clock_timestamp()`,
-        lease_expires_at: sql<Date>`clock_timestamp() + (${leaseSeconds} * interval '1 second')`,
-        attempt: eb("attempt", "+", 1),
-        updated_at: new Date(),
-      }))
-      .where("id", "=", args.jobId)
-      .where(
-        workerPlacement(
-          this.db,
-          this.workerNode,
-          "execution_jobs.workflow_run_id",
-          "execution_jobs.kind",
-        ),
-      )
-      .where("status", "=", "pending")
-      .where("available_at", "<=", sql<Date>`clock_timestamp()`)
-      .returningAll()
-      .executeTakeFirst();
-    return row ? mapExecutionJob(row) : null;
+    return this.db.transaction().execute(async (trx) => {
+      // The job row first, as the batch claim and the coordinator lock it:
+      // a run being cancelled or failed locks its jobs before it releases
+      // the Allocation, so taking the Allocation's share lock first could
+      // deadlock with it. A job someone holds is a lost race.
+      const locked = await trx
+        .selectFrom("execution_jobs")
+        .select("id")
+        .where("id", "=", args.jobId)
+        .where("status", "=", "pending")
+        .where("available_at", "<=", sql<Date>`clock_timestamp()`)
+        .forUpdate()
+        .skipLocked()
+        .executeTakeFirst();
+      if (!locked) return null;
+      const row = await trx
+        .updateTable("execution_jobs")
+        .set((eb) => ({
+          status: "running",
+          leased_by: args.workerId,
+          lease_token: leaseToken,
+          lease_generation: sql<string>`lease_generation + 1`,
+          heartbeat_at: sql<Date>`clock_timestamp()`,
+          lease_expires_at: sql<Date>`clock_timestamp() + (${leaseSeconds} * interval '1 second')`,
+          attempt: eb("attempt", "+", 1),
+          updated_at: new Date(),
+        }))
+        .where("id", "=", locked.id)
+        .where(
+          workerPlacement(
+            trx,
+            this.workerNode,
+            "execution_jobs.workflow_run_id",
+            "execution_jobs.kind",
+          ),
+        )
+        .where("status", "=", "pending")
+        .returningAll()
+        .executeTakeFirst();
+      return row ? mapExecutionJob(row) : null;
+    });
   }
 
   /**
@@ -458,8 +473,12 @@ export class ExecutionJobsService {
         // A renewal checks its placement without the claimers' share lock.
         // It would hold the Allocation while waiting for this job's row,
         // which the coordinator locks before it releases the Allocation
-        // when the step ends the run: a deadlock. Parking needs no fence
-        // here, since it never releases an Allocation with a running job.
+        // when the step ends the run: a deadlock. Without the lock, a
+        // renewal racing a release or a park (which does not count
+        // host_call_wait jobs as running) can extend this lease once, by
+        // at most leaseSeconds. It can never take back a job that was
+        // fenced, reclaimed or cancelled: the job row's status, token,
+        // generation and expiry are rechecked under its row lock.
         workerPlacement(
           this.db,
           this.workerNode,

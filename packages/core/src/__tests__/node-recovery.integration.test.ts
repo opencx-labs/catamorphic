@@ -31,6 +31,27 @@ const pool = process.env.DATABASE_URL
   ? new pg.Pool({ connectionString: process.env.DATABASE_URL })
   : undefined;
 const db = pool ? createDatabase({ pool, schema }) : undefined;
+/** Connections of their own, named so a lock wait counts only theirs. */
+const tagged: Array<ReturnType<typeof createDatabase>> = [];
+function taggedDatabase(name: string) {
+  const connection = createDatabase({
+    pool: new pg.Pool({
+      connectionString: process.env.DATABASE_URL,
+      application_name: name,
+      max: 2,
+    }),
+    schema,
+  });
+  tagged.push(connection);
+  return connection;
+}
+async function waitingOnLock(name: string): Promise<number> {
+  if (!db) return 0;
+  const result = await sql<{ waiting: number }>`SELECT count(*)::int AS waiting
+    FROM pg_stat_activity
+    WHERE application_name = ${name} AND wait_event_type = 'Lock'`.execute(db);
+  return result.rows[0]?.waiting ?? 0;
+}
 const authorityId = "recovery-test";
 const identity: Identity = {
   tenantId: randomUUID(),
@@ -139,6 +160,7 @@ beforeAll(async () => {
 });
 
 afterAll(async () => {
+  await Promise.all(tagged.splice(0).map((connection) => connection.destroy()));
   await db?.schema.dropSchema(schema).cascade().execute();
   await db?.destroy();
   if (root) await fs.rm(root, { recursive: true, force: true });
@@ -464,7 +486,8 @@ it.skipIf(!db)(
     await quietOthers();
     const node = await register();
     const work = await placeWork({ nodeId: node.id });
-    const jobs = new ExecutionJobsService(db, node);
+    const renewing = `renewal-${randomUUID()}`;
+    const jobs = new ExecutionJobsService(taggedDatabase(renewing), node);
     await jobs.enqueue({
       tenantId: identity.tenantId,
       kind: "durable_boundary",
@@ -495,19 +518,7 @@ it.skipIf(!db)(
         leaseGeneration: held.leaseGeneration,
       });
       await expect
-        .poll(
-          async () =>
-            (
-              await sql<{ waiting: number }>`SELECT count(*)::int AS waiting
-                FROM pg_stat_activity
-                WHERE datname = current_database()
-                  AND wait_event_type = 'Lock'
-                  AND query LIKE '%"execution_jobs" set "lease_expires_at"%'`.execute(
-                db,
-              )
-            ).rows[0]?.waiting,
-          { timeout: 5_000 },
-        )
+        .poll(() => waitingOnLock(renewing), { timeout: 5_000 })
         .toBe(1);
       await trx
         .updateTable("execution_allocations")
@@ -527,6 +538,74 @@ it.skipIf(!db)(
         leaseGeneration: held.leaseGeneration,
       }),
     ).toBe(false);
+  },
+  30_000,
+);
+
+it.skipIf(!db)(
+  "a claim by id loses to a run being cancelled or failed instead of deadlocking with it",
+  async () => {
+    if (!core || !db) return;
+    await quietOthers();
+    const node = await register();
+    const work = await placeWork({ nodeId: node.id });
+    await new ExecutionJobsService(db, node).enqueue({
+      tenantId: identity.tenantId,
+      kind: "durable_boundary",
+      payload: {},
+      workflowRunId: work.runId,
+    });
+    const job = await db
+      .selectFrom("execution_jobs")
+      .select("id")
+      .where("workflow_run_id", "=", work.runId)
+      .executeTakeFirstOrThrow();
+    const claiming = `claim-${randomUUID()}`;
+    const driver = new ExecutionJobsService(taggedDatabase(claiming), node);
+    let claim: Promise<unknown> | undefined;
+    // The coordinator's order when it cancels or fails a run: it cancels
+    // the run's open jobs, then releases the run's Allocation.
+    await db.transaction().execute(async (trx) => {
+      await trx
+        .updateTable("execution_jobs")
+        .set({
+          status: "canceled",
+          leased_by: null,
+          lease_token: null,
+          heartbeat_at: null,
+          lease_expires_at: null,
+          completed_at: new Date(),
+          updated_at: new Date(),
+        })
+        .where("workflow_run_id", "=", work.runId)
+        .where("status", "in", ["pending", "running"])
+        .execute();
+      let settled = false;
+      claim = driver.claimById({ jobId: job.id, workerId: "sync-driver" });
+      claim.then(
+        () => {
+          settled = true;
+        },
+        () => {
+          settled = true;
+        },
+      );
+      // A sync driver arrives mid-cancel: it either gives up on the locked
+      // job at once or waits for it.
+      await expect
+        .poll(async () => settled || (await waitingOnLock(claiming)) > 0, {
+          timeout: 5_000,
+        })
+        .toBe(true);
+      await trx
+        .updateTable("execution_allocations")
+        .set({ status: "released", released_at: new Date() })
+        .where("id", "=", work.allocationId)
+        .where("status", "=", "active")
+        .execute();
+    });
+    // Losing the race is a null, never an error.
+    expect(await claim).toBeNull();
   },
   30_000,
 );
