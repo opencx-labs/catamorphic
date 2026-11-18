@@ -1078,12 +1078,20 @@ describe.skipIf(!enabled)(
         status: "completed",
         conclusion: verdict.conclusion,
       });
-      for (const update of updates.slice(0, -1)) {
+      // Until then it said what the review was doing, only moving forward.
+      const [created] = writes.filter(
+        (write) =>
+          write.method === "POST" &&
+          write.path.endsWith("/check-runs") &&
+          JSON.stringify(write.body).includes(commit),
+      );
+      for (const update of updates.slice(0, -1))
         expect(update.body).not.toHaveProperty("conclusion");
-        expect(PHASES).toContain(
-          JSON.parse(JSON.stringify(update.body)).output?.title,
-        );
-      }
+      const said = [created, ...updates.slice(0, -1)].map((write) =>
+        PHASES.indexOf(JSON.parse(JSON.stringify(write?.body)).output?.title),
+      );
+      expect(said.every((phase) => phase >= 0)).toBe(true);
+      expect(said).toEqual([...said].sort((left, right) => left - right));
       // Every review names the commit it is for.
       expect(
         project.github.reviews.filter(
@@ -1130,21 +1138,31 @@ describe.skipIf(!enabled)(
     }
 
     /**
-     * A head's progress as its turn started: its check run was already
-     * in progress, saying the review waited or was being prepared.
+     * A head's progress before its turn ran: by the turn's first model call
+     * its check run was in progress, and it was made saying the review
+     * waited or was being prepared (its new sandbox, checkout and setup
+     * take far longer than a publication).
      */
-    function expectProgressBeforeStart(repository: string, turn: number) {
+    function expectProgressBeforeStart(
+      project: Reviewed,
+      commit: string,
+      turn: number,
+    ) {
       expect(
-        progressAtStart.get(`${repository}#${turn}`),
+        progressAtStart.get(`${project.repository}#${turn}`),
         lookFailures.join("; "),
-      ).toEqual([
-        {
-          status: "in_progress",
-          title: expect.stringMatching(
-            /^(?:Waiting to start|Preparing the workspace)$/,
-          ),
-        },
-      ]);
+      ).toEqual([{ status: "in_progress", title: expect.any(String) }]);
+      const [created] = project.github
+        .writes()
+        .filter(
+          (write) =>
+            write.method === "POST" &&
+            write.path.endsWith("/check-runs") &&
+            JSON.stringify(write.body).includes(commit),
+        );
+      expect(JSON.parse(JSON.stringify(created?.body)).output?.title).toMatch(
+        /^(?:Waiting to start|Preparing the workspace)$/,
+      );
     }
 
     /** A turn's first finding was on GitHub while the turn still worked. */
@@ -1506,7 +1524,7 @@ describe.skipIf(!enabled)(
           // (its new sandbox, checkout and setup take far longer than a
           // publication), the finding was inline while the turn worked,
           // and the verdict completed the same check.
-          expectProgressBeforeStart(SHIPPED, 1);
+          expectProgressBeforeStart(project, head, 1);
           expectFindingMidTurn(SHIPPED, 1);
           expectPublished(project, head, {
             conclusion: "failure",
@@ -1765,7 +1783,7 @@ describe.skipIf(!enabled)(
           };
           expectPublished(project, head, published);
           await settle(project);
-          expectProgressBeforeStart(CLAUDE_CODE, 1);
+          expectProgressBeforeStart(project, head, 1);
           expectFindingMidTurn(CLAUDE_CODE, 1);
           expectPublished(project, head, published);
           expect(
