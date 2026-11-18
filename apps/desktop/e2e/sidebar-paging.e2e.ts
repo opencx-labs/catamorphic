@@ -407,6 +407,12 @@ it("fades a list's edges where it continues; thumbs in their own lanes, hidden a
           `${String(error)}; target: ${JSON.stringify(await app.eval(targetState(point)))}`,
         );
       });
+  // Where the OS pointer last reached the renderer (see the drag below).
+  await app.eval(`(() => {
+    window.__dragPointer = null;
+    addEventListener('pointermove', (event) => { window.__dragPointer = { x: event.clientX, y: event.clientY }; }, { capture: true });
+    return true;
+  })()`);
   // Scrolling places the thumb asynchronously, and native movement crosses
   // a process boundary. Confirm the wheel's actual target on both sides.
   const point = await targetReady();
@@ -436,7 +442,14 @@ it("fades a list's edges where it continues; thumbs in their own lanes, hidden a
     const thumb = document.querySelector('${panelThumb} .overlay-scrollbar-thumb').getBoundingClientRect();
     return { x: thumb.left + thumb.width / 2, y: thumb.top + thumb.height / 2, top: document.querySelector('${panelSelector}').scrollTop };
   })()`);
+  // The OS pointer's move reaches the renderer a while after it is made. One
+  // landing after the press below is a buttonless move at the press point,
+  // which drags the thumb back to where it started: press only once it is in.
   await app.movePointer(drag);
+  await app.waitFor(
+    `!!window.__dragPointer && Math.abs(window.__dragPointer.x - ${drag.x}) <= 1 && Math.abs(window.__dragPointer.y - ${drag.y}) <= 1`,
+    { label: "the OS pointer on the sidebar's thumb" },
+  );
   await app.cdp("Input.dispatchMouseEvent", {
     type: "mousePressed",
     x: drag.x,
