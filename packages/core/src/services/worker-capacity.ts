@@ -5,6 +5,7 @@ import {
   diskFresh,
   type EnvironmentResourcePolicy,
   type MachineDisk,
+  type WorkloadKind,
 } from "@catamorphic/sandbox";
 import { type Kysely, sql, type Transaction } from "kysely";
 import { z } from "zod";
@@ -15,6 +16,7 @@ export const MachineDiskSchema = z.strictObject({
   totalBytes: z.number().nonnegative(),
   freeBytes: z.number().nonnegative(),
   floorBytes: z.number().nonnegative(),
+  criticalBytes: z.number().nonnegative(),
   measuredAt: z.string().datetime({ offset: true }),
 });
 
@@ -104,22 +106,27 @@ export function capacityFits(args: {
 const MIB = 1024 * 1024;
 
 /**
- * Whether a workspace fits a machine's disk (ADR 0335): with a recent
- * report, free space less its `storageMb` stays at or above the floor,
- * and the machine's reservations stay within its total less its floor.
- * A machine with no recent report is not held to either.
+ * Whether work fits a machine's disk (ADR 0335): with a recent report,
+ * free space less its `storageMb` stays at or above the floor (a workflow
+ * run's, the lower critical floor), and the machine's reservations stay
+ * within its total less its floor. A machine with no recent report is not
+ * held to either.
  */
 export function diskFits(args: {
   usage: Pick<WorkerUsage, "storageMb">;
   resources: Pick<EnvironmentResourcePolicy, "storageMb">;
   disk?: MachineDisk;
+  /** The work's kind: a workflow run is held to the critical floor. */
+  workload?: WorkloadKind;
   now?: number;
 }): boolean {
   const { disk } = args;
   if (!disk || !diskFresh(disk, args.now)) return true;
   const storageMb = args.resources.storageMb ?? 0;
+  const floor =
+    args.workload === "workflow" ? disk.criticalBytes : disk.floorBytes;
   return (
-    disk.freeBytes - storageMb * MIB >= disk.floorBytes &&
+    disk.freeBytes - storageMb * MIB >= floor &&
     args.usage.storageMb + storageMb <= diskBudgetMb(disk)
   );
 }

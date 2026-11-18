@@ -849,6 +849,7 @@ Work's own leftovers stay:
 
 ```dotenv
 WORK_DISK_FLOOR_MB=10240         # kept free on each filesystem; 0 keeps none
+WORK_DISK_CRITICAL_MB=1024       # workflow runs start down to this; 0 keeps none
 WORK_IMAGE_RETENTION_HOURS=24    # unused images and sandboxes' Docker data
 ```
 
@@ -859,8 +860,11 @@ counts toward the rule's `max` and is destroyed once it holds no work, and
 Work makes another machine within `max`. A rule whose machines come up short
 within 30 minutes of enrolling makes no new machines for an hour (or until
 it is written again) and says the class's disk is too small; a workflow
-class's project hears `machine.disk-too-small`. Workflow runs are not held back, so a full
-server still runs the workflows that free or replace machines. An Environment's `storageMb` is reserved like memory, within
+class's project hears `machine.disk-too-small`. Workflow runs start down to the lower critical
+floor (by default 1%, at most 1 GiB), so a server whose chats stopped still
+runs the workflows that free or replace machines, and nothing starts into a
+truly full disk. A cache fill reserves its cache's size. A stock server's
+database usually shares the measured filesystem: its growth counts too. An Environment's `storageMb` is reserved like memory, within
 the disk less its floor, and admitted only while free space less it stays
 above the floor; it is enforced only by microsandbox. A report the server
 heard over 5 minutes ago (dated on arrival, not by the machine's clock) does

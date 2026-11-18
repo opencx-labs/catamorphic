@@ -12,6 +12,9 @@ const GIB = 1024 * MIB;
 /** The default floor: 10% of a filesystem, at most this. */
 export const DEFAULT_DISK_FLOOR_MAX_BYTES = 10 * GIB;
 
+/** The default critical floor: 1% of a filesystem, at most this. */
+export const DEFAULT_DISK_CRITICAL_MAX_BYTES = 1 * GIB;
+
 /** A report older than this is not used for admission. */
 export const DISK_REPORT_FRESH_MS = 5 * 60_000;
 
@@ -24,8 +27,14 @@ export interface MachineDisk {
   path: string;
   totalBytes: number;
   freeBytes: number;
-  /** What the machine keeps free there: admission never goes below it. */
+  /** What the machine keeps free there: no chat's workspace starts below it. */
   floorBytes: number;
+  /**
+   * Its critical floor, lower: workflow runs start down to it, so the
+   * workflows that free or replace machines still run, and nothing starts
+   * below it.
+   */
+  criticalBytes: number;
   /** ISO time of the measurement. */
   measuredAt: string;
 }
@@ -47,6 +56,26 @@ export function diskFloorBytes(args: {
 }
 
 /**
+ * The critical floor of a filesystem: `criticalMb` when the operator set
+ * one (`WORK_DISK_CRITICAL_MB`, 0 keeps none), else 1% of it, at most
+ * 1 GiB, and never above its floor.
+ */
+export function diskCriticalBytes(args: {
+  totalBytes: number;
+  criticalMb?: number;
+  floorBytes: number;
+}): number {
+  const critical =
+    args.criticalMb !== undefined
+      ? Math.max(0, args.criticalMb) * MIB
+      : Math.min(
+          Math.floor(args.totalBytes * 0.01),
+          DEFAULT_DISK_CRITICAL_MAX_BYTES,
+        );
+  return Math.min(critical, args.floorBytes);
+}
+
+/**
  * Measure each path's filesystem once (paths on one device are one
  * filesystem) and answer the one with the least room above its floor.
  * Paths that do not exist or cannot be measured are skipped; undefined
@@ -55,6 +84,7 @@ export function diskFloorBytes(args: {
 export function measureDisk(args: {
   paths: readonly string[];
   floorMb?: number;
+  criticalMb?: number;
   now?: Date;
   /** For tests: statfs and stat as Node's. */
   statfs?: (path: string) => { bsize: number; blocks: number; bavail: number };
@@ -73,14 +103,22 @@ export function measureDisk(args: {
       seen.add(dev);
       const stats = statfs(path);
       const totalBytes = stats.blocks * stats.bsize;
+      const floorBytes = diskFloorBytes({
+        totalBytes,
+        ...(args.floorMb !== undefined ? { floorMb: args.floorMb } : {}),
+      });
       measured = {
         path,
         totalBytes,
         // What an unprivileged writer may still use.
         freeBytes: stats.bavail * stats.bsize,
-        floorBytes: diskFloorBytes({
+        floorBytes,
+        criticalBytes: diskCriticalBytes({
           totalBytes,
-          ...(args.floorMb !== undefined ? { floorMb: args.floorMb } : {}),
+          floorBytes,
+          ...(args.criticalMb !== undefined
+            ? { criticalMb: args.criticalMb }
+            : {}),
         }),
         measuredAt,
       };

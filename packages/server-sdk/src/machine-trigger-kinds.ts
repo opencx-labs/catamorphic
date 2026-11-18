@@ -156,6 +156,7 @@ const machineDisk = z.object({
   totalBytes: z.number(),
   freeBytes: z.number(),
   floorBytes: z.number(),
+  criticalBytes: z.number().optional(),
   measuredAt: z.string(),
 });
 

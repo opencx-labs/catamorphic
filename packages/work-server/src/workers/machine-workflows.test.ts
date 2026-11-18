@@ -720,6 +720,7 @@ describe("workflow machine classes (ADR 0327)", () => {
       totalBytes: 100e9,
       freeBytes: free,
       floorBytes: 10e9,
+      criticalBytes: 1e9,
       measuredAt: new Date().toISOString(),
     });
     const lowEvents = () =>
@@ -836,6 +837,7 @@ describe("workflow machine classes (ADR 0327)", () => {
           totalBytes: 20e9,
           freeBytes: 1e9,
           floorBytes: 2e9,
+          criticalBytes: 0.2e9,
           measuredAt: new Date().toISOString(),
         },
       }),

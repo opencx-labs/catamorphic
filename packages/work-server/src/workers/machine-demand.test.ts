@@ -235,6 +235,7 @@ function lowDisk() {
     totalBytes: 100e9,
     freeBytes: 4e9,
     floorBytes: 10e9,
+    criticalBytes: 1e9,
     measuredAt: new Date().toISOString(),
   };
 }
@@ -948,6 +949,7 @@ describe("machines on demand (ADR 0258)", () => {
         totalBytes: 100e9,
         freeBytes: 4e9,
         floorBytes: 10e9,
+        criticalBytes: 1e9,
         measuredAt: new Date().toISOString(),
       },
     });

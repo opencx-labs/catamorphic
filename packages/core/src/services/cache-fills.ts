@@ -912,7 +912,14 @@ export class CacheFillsService {
             ...(sandboxPolicy.image ? { image: sandboxPolicy.image } : {}),
             ...(sandboxPolicy.containers ? { containers: true } : {}),
             ...(egress ? { egress } : {}),
-            fill: { name: fill.cache_name, path: cache.path, key },
+            // It writes up to its size, reserved like storage: it starts
+            // only where that fits above its floor (ADR 0335).
+            fill: {
+              name: fill.cache_name,
+              path: cache.path,
+              key,
+              sizeMb: cache.sizeMb ?? DEFAULT_CACHE_SIZE_MB,
+            },
           },
         },
       });

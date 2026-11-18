@@ -144,6 +144,7 @@ const AllocationPolicySchema = z.object({
           name: z.string().regex(VOLUME_NAME_PATTERN),
           path: z.string(),
           key: z.string().regex(CACHE_VOLUME_KEY_PATTERN),
+          sizeMb: z.number().int().positive().optional(),
         })
         .optional(),
     })
@@ -185,9 +186,10 @@ export interface EnvironmentSandbox {
   caches?: readonly EnvironmentSandboxCache[];
   /**
    * A cache fill's own Allocation (ADR 0334): the one cache generation its
-   * sandbox mounts writable, and no other cache.
+   * sandbox mounts writable, and no other cache, and the most it writes,
+   * reserved as storage (ADR 0335).
    */
-  fill?: EnvironmentSandboxCache & { key: string };
+  fill?: EnvironmentSandboxCache & { key: string; sizeMb?: number };
 }
 
 /** One cache an Allocation's sandboxes mount (ADR 0334). */
@@ -283,20 +285,13 @@ export function reservedOf(policy: EnvironmentAllocationPolicy): {
       : (left ?? 0) + (right ?? 0);
   const cpuMillis = sum(own?.cpuMillis, agent?.cpuMillis);
   const memoryMb = sum(own?.memoryMb, agent?.memoryMb);
-  const storageMb = own?.storageMb;
+  // A cache fill writes up to its size (ADR 0335).
+  const storageMb = sum(own?.storageMb, policy.sandbox?.fill?.sizeMb);
   return {
     ...(cpuMillis !== undefined ? { cpuMillis } : {}),
     ...(memoryMb !== undefined ? { memoryMb } : {}),
     ...(storageMb !== undefined ? { storageMb } : {}),
   };
-}
-
-/** Work the disk floor never holds back (ADR 0335): workflow runs, not fills. */
-export function diskExempt(args: {
-  workloadKind: WorkloadKind;
-  policy: EnvironmentAllocationPolicy;
-}): boolean {
-  return args.workloadKind === "workflow" && !args.policy.sandbox?.fill;
 }
 
 export class ExecutionAllocationsService {
@@ -368,13 +363,17 @@ export class ExecutionAllocationsService {
         const usage = await workerUsage({ db: executor, nodeId: node.id });
         const resources =
           args.policy.binding.trust === "managed" ? reservedOf(policy) : {};
-        // A machine short of disk takes no new workspace and no cache fill;
-        // the work waits (ADR 0335). A workflow run is not held back: it
-        // runs the program, not a checkout, and the workflows that free or
-        // replace a machine must still run.
+        // A machine short of disk takes no new workspace; the work waits
+        // (ADR 0335). A workflow run starts down to the lower critical
+        // floor, so the workflows that free or replace a machine still run,
+        // and every reservation (a cache fill's size too) needs its room.
         if (
-          !diskExempt(args) &&
-          !diskFits({ usage, resources, ...(disk ? { disk } : {}) })
+          !diskFits({
+            usage,
+            resources,
+            workload: args.workloadKind,
+            ...(disk ? { disk } : {}),
+          })
         )
           throw new EnvironmentCapacityError(node.id, disk);
         if (

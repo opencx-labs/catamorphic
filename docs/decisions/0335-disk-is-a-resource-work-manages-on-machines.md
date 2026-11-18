@@ -25,13 +25,17 @@ container backend's, the local-process sandboxes, microsandbox's VMs)
 and, for the container backend, Docker's data root where this process
 sees it at the same path (not inside the worker's own container; there
 its state, on the machine's disk, stands for it). The rest of the
-machine's data folder (a server's database) is not measured for itself:
-Work's cleanup cannot free it. It reports the filesystem with the least
-room above its floor as `{ path, totalBytes, freeBytes, floorBytes,
-measuredAt }`: a remote worker in its connect offer and on its lease
-renewals, the server's own machine on its heartbeat. The floor is
-`WORK_DISK_FLOOR_MB` (MiB, the same for every filesystem; 0 keeps none),
-by default 10% of the filesystem and at most 10 GiB. A machine that
+machine's data folder is not measured for itself, but a stock server's
+database usually shares a filesystem with its sandboxes, so that
+filesystem's free space includes what the database uses; the critical
+floor below is what keeps work from filling it. It reports the filesystem
+with the least room above its floor as `{ path, totalBytes, freeBytes,
+floorBytes, criticalBytes, measuredAt }`: a remote worker in its connect
+offer and on its lease renewals, the server's own machine on its
+heartbeat. The floor is `WORK_DISK_FLOOR_MB` (MiB, the same for every
+filesystem; 0 keeps none), by default 10% of the filesystem and at most
+10 GiB; the critical floor is `WORK_DISK_CRITICAL_MB`, by default 1% and
+at most 1 GiB, never above the floor. A machine that
 reports offers the machine capability `disk`. Operators see the report
 and since when it is short with every machine, the server's own included
 (`GET /_work/operator/machines`).
@@ -44,9 +48,13 @@ memory (ADR 0100): the Allocation records `reserved_storage_mb`, and the
 reservations on a machine never exceed its total less its floor, which is
 also the machine's `storageMb` ceiling. A workspace that does not fit
 waits for room as one that does not fit by memory does; it never fails.
-A cache fill waits too. A workflow run is not held back by the floor: it
-runs the program, not a checkout, and the workflows that free or replace
-a machine (provisioners, publishers) must still run on a full server.
+A workflow run is held to the critical floor instead, so the workflows
+that free or replace a machine (provisioners, publishers) still run when
+chats stop, and nothing starts into a truly full disk. Reservations and
+the budget apply to every workload, and a cache fill reserves its cache's
+size, so it starts only where that fits above its floor (on its one
+machine; one that does not fit backs off, as ADR 0334 says). Placement
+and admission apply the same rule.
 Machines on demand count a machine under its floor as having no room, so
 waiting work gets a new machine (ADR 0258). An Environment's `storageMb`
 needs a machine that enforces it (microsandbox, which sizes its VM's root

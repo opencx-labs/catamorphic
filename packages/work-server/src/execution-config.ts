@@ -108,6 +108,13 @@ export interface WorkExecutionSettings {
    */
   diskFloorMb?: number;
   /**
+   * The lower floor workflow runs start down to, in MiB (ADR 0335,
+   * `WORK_DISK_CRITICAL_MB`): so the workflows that free or replace
+   * machines still run when chats stop. 0 keeps none; absent, 1% of the
+   * filesystem and at most 1 GiB.
+   */
+  diskCriticalMb?: number;
+  /**
    * Hours an image Work built or pulled, and the Docker data inside
    * sandboxes, may go unused before the machine removes it (ADR 0335,
    * `WORK_IMAGE_RETENTION_HOURS`, default 24).
@@ -199,6 +206,9 @@ export function executionSettingsFromEnv(
     imageRetentionHours: positive("WORK_IMAGE_RETENTION_HOURS", 24),
     ...(env.WORK_DISK_FLOOR_MB !== undefined
       ? { diskFloorMb: nonNegative("WORK_DISK_FLOOR_MB") }
+      : {}),
+    ...(env.WORK_DISK_CRITICAL_MB !== undefined
+      ? { diskCriticalMb: nonNegative("WORK_DISK_CRITICAL_MB") }
       : {}),
     ...(env.WORK_SANDBOX_PIDS_LIMIT !== undefined
       ? { pidsLimit: positive("WORK_SANDBOX_PIDS_LIMIT", 4096) }
@@ -654,6 +664,9 @@ export function workExecution(args: {
     /** What the machine keeps free on its disk (ADR 0335). */
     ...(settings.diskFloorMb !== undefined
       ? { diskFloorMb: settings.diskFloorMb }
+      : {}),
+    ...(settings.diskCriticalMb !== undefined
+      ? { diskCriticalMb: settings.diskCriticalMb }
       : {}),
     imageRetentionMs: settings.imageRetentionHours * 60 * 60 * 1000,
   };

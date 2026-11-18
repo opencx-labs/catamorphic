@@ -34,6 +34,8 @@ export function startDiskCare(args: {
   provider: Pick<SandboxProvider, "disk">;
   /** `WORK_DISK_FLOOR_MB`; the default floor when absent. */
   floorMb?: number;
+  /** `WORK_DISK_CRITICAL_MB`; the default critical floor when absent. */
+  criticalMb?: number;
   /** `WORK_IMAGE_RETENTION_HOURS`, in milliseconds. */
   graceMs: number;
   measureEveryMs?: number;
@@ -71,6 +73,7 @@ export function startDiskCare(args: {
     const measured = measure({
       paths,
       ...(args.floorMb !== undefined ? { floorMb: args.floorMb } : {}),
+      ...(args.criticalMb !== undefined ? { criticalMb: args.criticalMb } : {}),
     });
     if (stopped) return latest;
     latest = measured;

@@ -2,6 +2,7 @@ import os from "node:os";
 import { describe, expect, it } from "vitest";
 import {
   diskBudgetMb,
+  diskCriticalBytes,
   diskFloorBytes,
   diskFresh,
   diskLow,
@@ -21,6 +22,7 @@ const disk = (free: number, total = 100 * GIB, floor = 10 * GIB) =>
     totalBytes: total,
     freeBytes: free,
     floorBytes: floor,
+    criticalBytes: Math.min(floor, GIB),
     measuredAt: at,
   }) satisfies MachineDisk;
 
@@ -32,6 +34,26 @@ describe("machine disk (ADR 0335)", () => {
       2 * GIB,
     );
     expect(diskFloorBytes({ totalBytes: 50 * GIB, floorMb: 0 })).toBe(0);
+  });
+
+  it("keeps a lower critical floor for workflow runs: 1%, at most 1 GiB, never above the floor", () => {
+    expect(
+      diskCriticalBytes({ totalBytes: 50 * GIB, floorBytes: 5 * GIB }),
+    ).toBe(Math.floor(50 * GIB * 0.01));
+    expect(
+      diskCriticalBytes({ totalBytes: 1000 * GIB, floorBytes: 10 * GIB }),
+    ).toBe(GIB);
+    expect(
+      diskCriticalBytes({
+        totalBytes: 50 * GIB,
+        floorBytes: 5 * GIB,
+        criticalMb: 2048,
+      }),
+    ).toBe(2 * GIB);
+    // Never above the floor, and 0 with none.
+    expect(diskCriticalBytes({ totalBytes: 1000 * GIB, floorBytes: 0 })).toBe(
+      0,
+    );
   });
 
   it("reports the filesystem with the least room above its floor, each device once", () => {
@@ -69,6 +91,7 @@ describe("machine disk (ADR 0335)", () => {
       totalBytes: 40 * GIB,
       freeBytes: 8 * GIB,
       floorBytes: 4 * GIB,
+      criticalBytes: Math.floor(40 * GIB * 0.01),
       measuredAt: at,
     });
     expect(

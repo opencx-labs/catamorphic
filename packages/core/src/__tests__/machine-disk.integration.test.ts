@@ -34,12 +34,14 @@ const report = (args: {
   free: number;
   total?: number;
   floor?: number;
+  critical?: number;
   at?: Date;
 }): MachineDisk => ({
   path: "/var/lib/docker",
   totalBytes: args.total ?? 100 * GIB,
   freeBytes: args.free,
   floorBytes: args.floor ?? 10 * GIB,
+  criticalBytes: args.critical ?? 1 * GIB,
   measuredAt: (args.at ?? new Date()).toISOString(),
 });
 
@@ -147,12 +149,10 @@ describe.skipIf(!db)("machine disk (ADR 0335)", () => {
     });
   });
 
-  it("holds back chats and cache fills on a machine short of disk, never a workflow run (ADR 0335)", async () => {
+  it("holds a workflow run only to the critical floor, and every workload to the storage it reserves (ADR 0335)", async () => {
     if (!db) return;
     const { identity, projectId, nodes, lease, admit, allocations } =
       await machine();
-    await nodes.reportDisk({ lease, disk: report({ free: 1 * GIB }) });
-    await expect(admit()).rejects.toBeInstanceOf(EnvironmentCapacityError);
     const binding = {
       id: lease.id,
       label: "Server",
@@ -164,9 +164,7 @@ describe.skipIf(!db)("machine disk (ADR 0335)", () => {
       resourceLimits: [],
       resources: {},
     };
-    const workflow = (sandbox?: {
-      fill: { name: string; path: string; key: string };
-    }) =>
+    const workflow = (storageMb?: number) =>
       allocations.create({
         identity,
         projectId,
@@ -176,22 +174,26 @@ describe.skipIf(!db)("machine disk (ADR 0335)", () => {
         workerNodeId: lease.id,
         policy: {
           binding,
-          requirements: { workload: "workflow" },
-          ...(sandbox ? { sandbox } : {}),
+          requirements: {
+            workload: "workflow",
+            ...(storageMb ? { resources: { storageMb } } : {}),
+          },
         },
       });
-    // A provisioner or a poster still runs: it is what frees the machine.
+    // Under the floor, above the critical floor: chats wait, and the
+    // workflows that free or replace machines still run.
+    await nodes.reportDisk({ lease, disk: report({ free: 3 * GIB }) });
+    await expect(admit()).rejects.toBeInstanceOf(EnvironmentCapacityError);
     await expect(workflow()).resolves.toMatchObject({ status: "active" });
-    // A cache fill writes gigabytes: it waits like a chat.
-    await expect(
-      workflow({
-        fill: {
-          name: "pnpm",
-          path: "~/.pnpm-store",
-          key: `cache-pnpm-${"0".repeat(24)}-g1`,
-        },
-      }),
-    ).rejects.toBeInstanceOf(EnvironmentCapacityError);
+    // A cache fill reserves its size: it needs that room above the
+    // critical floor, as a workflow's storage does.
+    await expect(workflow(4 * 1024)).rejects.toBeInstanceOf(
+      EnvironmentCapacityError,
+    );
+    await expect(workflow(1024)).resolves.toMatchObject({ status: "active" });
+    // Under the critical floor nothing more starts.
+    await nodes.reportDisk({ lease, disk: report({ free: 0.5 * GIB }) });
+    await expect(workflow()).rejects.toBeInstanceOf(EnvironmentCapacityError);
   });
 
   it("dates a report by when the server heard it, not the machine's clock", async () => {

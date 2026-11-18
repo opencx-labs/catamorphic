@@ -981,6 +981,7 @@ describe("stalled turns", () => {
                 totalBytes: 100e9,
                 freeBytes: 2e9,
                 floorBytes: 10e9,
+                criticalBytes: 1e9,
                 measuredAt: new Date().toISOString(),
               }),
             })

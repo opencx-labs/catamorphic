@@ -215,13 +215,15 @@ export async function registerWorkMachine(args: {
           }),
         { strict },
       );
-      // Workflow runs are not held back by the floor; admission still
-      // holds a cache fill back (ADR 0335).
+      // The rule admission applies (ADR 0335): a workflow run down to the
+      // critical floor, everything with the storage it reserves.
       const roomy = ({ node }: (typeof ordered)[number]) =>
-        requirements?.workload === "workflow" ||
         diskFits({
           usage: node.usage,
           resources: { ...requirements?.resources },
+          ...(requirements?.workload
+            ? { workload: requirements.workload }
+            : {}),
           ...(node.disk ? { disk: node.disk } : {}),
         });
       const chosen = ordered.find(

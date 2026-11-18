@@ -122,11 +122,13 @@ export {
   redactUrlCredentials,
 } from "./credential-redaction.js";
 export {
+  DEFAULT_DISK_CRITICAL_MAX_BYTES,
   DEFAULT_DISK_FLOOR_MAX_BYTES,
   DISK_RECOVERY_FACTOR,
   DISK_REPORT_FRESH_MS,
   describeDisk,
   diskBudgetMb,
+  diskCriticalBytes,
   diskFloorBytes,
   diskFresh,
   diskLow,

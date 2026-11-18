@@ -438,6 +438,9 @@ async function createWorkServerInner(
     ...(execution.diskFloorMb !== undefined
       ? { floorMb: execution.diskFloorMb }
       : {}),
+    ...(execution.diskCriticalMb !== undefined
+      ? { criticalMb: execution.diskCriticalMb }
+      : {}),
     graceMs: execution.imageRetentionMs,
     log,
   });

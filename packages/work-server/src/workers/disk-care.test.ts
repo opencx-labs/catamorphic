@@ -13,6 +13,7 @@ describe("disk care", () => {
     totalBytes: 100,
     freeBytes: free,
     floorBytes: 10,
+    criticalBytes: 1,
     measuredAt: new Date().toISOString(),
   });
 

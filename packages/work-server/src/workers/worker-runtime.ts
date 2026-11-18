@@ -226,6 +226,9 @@ export async function startWorkWorker(options: WorkWorkerOptions): Promise<{
     ...(execution.diskFloorMb !== undefined
       ? { floorMb: execution.diskFloorMb }
       : {}),
+    ...(execution.diskCriticalMb !== undefined
+      ? { criticalMb: execution.diskCriticalMb }
+      : {}),
     graceMs: execution.imageRetentionMs,
     log,
   });
