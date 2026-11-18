@@ -1,6 +1,6 @@
 # 0180: Harnesses run in the sandbox; models through the gateway
 
-- **Status:** Accepted (control loop placement superseded by [0198](0198-agent-runners-run-harnesses-beside-their-workspace.md); amended by [0184](0184-personal-credentials-reach-a-members-own-sessions.md), [0199](0199-subscription-sign-ins-stay-on-the-machine.md) and [0256](0256-the-gateway-rewrites-model-requests.md): a provider may rewrite request bodies; model grant lifetime amended by [0293](0293-model-grants-end-with-their-turn-attempt.md); usage on spans, reported cost and usage totals in [0329](0329-model-usage-is-telemetry-and-a-session-read.md))
+- **Status:** Accepted (control loop placement superseded by [0198](0198-agent-runners-run-harnesses-beside-their-workspace.md); amended by [0184](0184-personal-credentials-reach-a-members-own-sessions.md), [0199](0199-subscription-sign-ins-stay-on-the-machine.md) and [0256](0256-the-gateway-rewrites-model-requests.md): a provider may rewrite request bodies; model grant lifetime amended by [0293](0293-model-grants-end-with-their-turn-attempt.md); usage on spans, reported cost and usage totals in [0329](0329-model-usage-is-telemetry-and-a-session-read.md); by [0332](0332-commands-run-apart-from-the-agent.md): where an Environment runs commands apart, the harness and its model access stay in the agent container and its shell commands run in a command container that reaches neither)
 - **Date:** 2026-09-27
 - **Refines:** 0050, 0057, 0162, 0164, 0174, 0175, 0176
 

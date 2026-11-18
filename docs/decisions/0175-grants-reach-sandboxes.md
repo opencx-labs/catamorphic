@@ -1,6 +1,6 @@
 # 0175: Grants reach sandboxes; credentials never do
 
-- **Status:** Accepted (amended by [0184](0184-personal-credentials-reach-a-members-own-sessions.md): a member's own logins and files may reach sandboxes that run only their work; by [0206](0206-project-secrets-reach-environments-per-member.md): secrets a project lists for an Environment reach its sandboxes; refined by [0212](0212-http-apis-reach-code-in-sandboxes-through-the-gateway.md): HTTP APIs are a third gateway surface, for code in sandboxes)
+- **Status:** Accepted (amended by [0184](0184-personal-credentials-reach-a-members-own-sessions.md): a member's own logins and files may reach sandboxes that run only their work; by [0206](0206-project-secrets-reach-environments-per-member.md): secrets a project lists for an Environment reach its sandboxes; refined by [0212](0212-http-apis-reach-code-in-sandboxes-through-the-gateway.md): HTTP APIs are a third gateway surface, for code in sandboxes; by [0332](0332-commands-run-apart-from-the-agent.md): where an Environment runs commands apart, grant files sit beside the agent, and its commands hold only those of the bindings `commands.connections` lists, never a model's)
 - **Date:** 2026-09-27
 - **Refines:** 0065, 0162, 0164
 - **Models implemented by:** [0180](0180-harnesses-run-in-the-sandbox-models-through-the-gateway.md)
