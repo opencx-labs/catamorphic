@@ -834,9 +834,16 @@ export function App({
   const {
     prefs: profileValues,
     loaded: preferencesLoaded,
+    error: preferencesError,
     update: updateProfilePrefs,
     reload: reloadProfilePrefs,
   } = useAppPreferences();
+  // Until the preferences are read, whether a sidebar is open is unknown,
+  // not "closed". A sidebar first drawn in that unknown pose would slide
+  // open once they arrive, taking the content (and the dock centred on it)
+  // with it after the workspace reported ready. It mounts again in the pose
+  // they give, still, behind the boot veil (bootReady waits for them).
+  const sidebarPoseKey = preferencesLoaded ? "known" : "pending";
   const profilePrefs = preferencesLoaded ? profileValues : null;
   const sidebarOpen = preferencesLoaded && profileValues.sidebarOpen;
   const savedRightSidebarOpen =
@@ -5430,6 +5437,8 @@ export function App({
     profilesData !== null &&
     agentsData !== null &&
     workspaceConfig !== null &&
+    // The sidebars' poses come from the preferences.
+    (preferencesLoaded || preferencesError !== null) &&
     !projectsLoading &&
     (projectsLoadError ||
       initialProjectError !== null ||
@@ -8153,7 +8162,7 @@ export function App({
               }}
             />
             <TabbedSidebar
-              key={`left:${activeProfile?.id}:${projectId}`}
+              key={`left:${activeProfile?.id}:${projectId}:${sidebarPoseKey}`}
               side="left"
               scope={`${activeProfile?.id}:${projectId}`}
               tabs={sidebarTabs("left")}
@@ -9385,7 +9394,7 @@ export function App({
               )}
             </main>
             <TabbedSidebar
-              key={`right:${activeProfile?.id}:${projectId}`}
+              key={`right:${activeProfile?.id}:${projectId}:${sidebarPoseKey}`}
               side="right"
               headerActions={
                 rightSidebarMotion.phase !== "closed" && sidebarToggle("right")
