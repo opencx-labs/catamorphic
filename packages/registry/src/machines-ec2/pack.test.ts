@@ -78,7 +78,7 @@ async function run(script: string): Promise<{
       import { Ec2Error, setEc2Handler } from ${JSON.stringify(fakeEc2)};
       process.env.AWS_ACCESS_KEY_ID = "AKIATEST";
       process.env.AWS_SECRET_ACCESS_KEY = "not-a-secret";
-      const { createMachine, destroyMachine } = await import("./recipe.ts");
+      const { createMachine, destroyMachine, replaceFullMachine } = await import("./recipe.ts");
       const calls = [];
       let answer = () => ({});
       setEc2Handler((call) => {
@@ -432,5 +432,62 @@ describe("machines-ec2 pack (ADR 0327)", () => {
       // With no launch time known, never gone: Work asks again.
       unknownLaunch: { done: false },
     });
+  });
+
+  it("replaces a machine short of disk: terminates only the instance the event names, of its class (ADR 0335)", async () => {
+    const diskLow = (ref: string | null) =>
+      JSON.stringify({
+        id: "e1",
+        sequence: 1,
+        projectId: "p",
+        source: "machines",
+        kind: "machine.disk-low",
+        externalId: `machine.disk-low:review-1:${ref}:2026-11-18T10:00:00.000Z`,
+        occurredAt: "2026-11-18T10:00:00.000Z",
+        receivedAt: "2026-11-18T10:00:00.000Z",
+        payload: {
+          name: "review-1",
+          class: "review",
+          rule: "review",
+          ref,
+          options: OPTIONS,
+          disk: {
+            path: "/var/lib/work-worker",
+            totalBytes: 100e9,
+            freeBytes: 4e9,
+            floorBytes: 10e9,
+            measuredAt: "2026-11-18T10:00:00.000Z",
+          },
+        },
+      });
+    const tagged = (id: string, state: string, workClass: string) => ({
+      ...instance(id, state),
+      Tags: [{ Key: "work-class", Value: workClass }],
+    });
+    const { result, calls } = await run(`
+      answer = ({ command, input }) =>
+        command === "DescribeInstances"
+          ? { Reservations: [{ Instances: input.InstanceIds[0] === "i-0full" ? [${JSON.stringify(tagged("i-0full", "running", "review"))}] : [${JSON.stringify(tagged("i-0other", "running", "desk"))}] }] }
+          : {};
+      return {
+        full: await replaceFullMachine.steps[0].run({ input: ${diskLow("i-0full")} }),
+        otherClass: await replaceFullMachine.steps[0].run({ input: ${diskLow("i-0other")} }),
+        noRef: await replaceFullMachine.steps[0].run({ input: ${diskLow(null)} }),
+      };
+    `);
+    expect(result).toEqual({
+      full: { terminated: ["i-0full"] },
+      otherClass: { terminated: [] },
+      noRef: { terminated: [] },
+    });
+    expect(
+      calls.filter((call) => call.command === "TerminateInstances"),
+    ).toEqual([
+      {
+        command: "TerminateInstances",
+        region: "eu-west-1",
+        input: { InstanceIds: ["i-0full"] },
+      },
+    ]);
   });
 });

@@ -345,8 +345,9 @@ the JSON file `WORK_MACHINES_CONFIG` names:
   code, and repeated refusals wait longer each time. Destroy runs again on
   later passes until it answers `{ done: true }` (failing runs back off),
   and a create run stuck for 30 minutes is canceled first. The project also hears `machine.created`,
-  `machine.connected`, `machine.lost`, `machine.released` and
-  `machine.destroyed` as project events. Its create runs carry enrollment
+  `machine.connected`, `machine.lost`, `machine.released`,
+  `machine.destroyed` and, once per episode under its disk floor,
+  `machine.disk-low` ([Disk](#disk)) as project events. Its create runs carry enrollment
   codes, so keep it to administrators. The `machines-ec2` pack
   (`registry.read`) is the EC2 recipe, with a tag-scoped IAM policy.
 
@@ -791,9 +792,11 @@ agent resource configuration file. For example, merge this into an ordinary
 Microsandbox enforces whole-core CPU limits (multiples of 1000 millicores),
 memory in MiB, and `storageMb` as the size of the VM's root disk, which holds
 the workspace. The container backend enforces CPU in any millicores and
-memory in MiB (Docker's `NanoCpus` and `Memory`, without swap), and rejects
-`storageMb`: Docker's default storage cannot cap one container's disk. GPU
-limits are rejected by the stock providers.
+memory in MiB (Docker's `NanoCpus` and `Memory`, without swap). It cannot
+cap a workspace's disk (the workspace is a Docker volume), so there
+`storageMb` is reserved at admission and the machine's disk measured, not
+enforced (ADR 0335; see [Disk](#disk)). GPU limits are rejected by the stock
+providers.
 Native host CLI execution does not enforce these sandbox limits; use controller
 agents for this setup. The stock controller and connection broker remain outside
 the sandbox. `resources.commandTimeoutSeconds` bounds one foreground command, an
@@ -831,6 +834,47 @@ Do not switch a machine's sandbox backend while it still owns workspaces.
 Member runners report their actual isolation and supported limits at registration;
 This machine remains local trust even when it uses a VM. Unsupported requirements
 are rejected before use, and requested limits travel with sandbox creation.
+
+### Disk
+
+Disk is a resource Work manages on each machine (ADR 0335). Every 30
+seconds a machine measures the filesystems Work writes to (its data
+directory and, for the container backend, Docker's data root where the
+worker sees it at the same path; a worker in its own container measures its
+data directory, which is on the machine's disk) and reports the one with the
+least room above its floor, with its renewals. Set the floor and how long
+Work's own leftovers stay:
+
+```dotenv
+WORK_DISK_FLOOR_MB=10240         # kept free on each filesystem; 0 keeps none
+WORK_IMAGE_RETENTION_HOURS=24    # unused images and sandboxes' Docker data
+```
+
+Without `WORK_DISK_FLOOR_MB` the floor is 10% of the filesystem, at most 10
+GiB. A machine whose free space is under its floor takes no new workspace:
+the work waits as it does for CPU or memory, and on demand Work makes another
+machine for it. An Environment's `storageMb` is reserved like memory, within
+the disk less its floor, and admitted only while free space less it stays
+above the floor; it is enforced only by microsandbox. A report older than 5
+minutes does not hold a machine back.
+
+The machine removes what Work left that nothing used for
+`WORK_IMAGE_RETENTION_HOURS`, hourly and at once while under its floor:
+images it built or pulled that no container uses (never its default image or
+one it found there), and the dangling images and build cache of each running
+sandbox with containers. A workspace keeps one `$WORK_PROGRAM` copy per
+program commit it ran; copies of other commits go after a day unless a
+running command uses them, and each `exec`'s output files go once its result
+is recorded. Volumes and caches keep their own retention. A failed turn,
+run, `exec` or cache fill on a machine under its floor says so with the
+machine's numbers (the turn's error kind is `out_of_disk`, and its attempt's
+diagnostics keep the line); output that says `ENOSPC` gets the same
+explanation, but only the machine's own measurement starts an episode. The
+first report under the floor logs it and, for a machine of a `workflow`
+class, records `machine.disk-low` once per episode for its class's project,
+with the report and the class's options; the episode ends once free space is
+back above 1.1 times the floor. `GET /_work/operator/machines` shows each
+machine's `disk`, `diskLowSince` and `usage.storageMb`.
 
 ## Assign a development machine to one user
 
@@ -941,7 +985,8 @@ An Environment chooses its sandbox (ADR 0176) in `.work/project.json`:
   directory, as the stock server and workers do.
 
 Machines advertise `images`, `images.build`, `containers`,
-`network.policy`, `network.setup`, `commands.separate`, and `volumes`, `sign-ins` and one
+`network.policy`, `network.setup`, `commands.separate`, `caches`, `disk`
+(it reports its disk, ADR 0335), and `volumes`, `sign-ins` and one
 `sign-in:<harness>:<member>` per member signed in on them, and a
 local-process machine `harness.claude-code` and `harness.codex` when those
 CLIs are on its `PATH`; `GET /_work/operator/machines` shows them with the

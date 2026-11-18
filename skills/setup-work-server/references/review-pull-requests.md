@@ -163,6 +163,15 @@ demand](cluster-deployment.md#machines-on-demand)):
 3. A review that finds no machine waits up to the Environment's
    `waitMinutes`; the rule's status (`GET /_work/operator/machine-rules`)
    counts it as `queued` and shows the machine starting.
+4. Give each machine disk for its reviews: every review keeps its checkout,
+   its installed dependencies and its sandbox's Docker data there for as
+   long as its pull request is open. About 100 GB per machine for one
+   review per machine (`rootVolumeGb` on EC2; a Hetzner server type's own
+   disk). A machine under its disk floor takes no new review, which waits
+   for another machine, and its failures say the machine ran out of disk
+   ([Disk](cluster-deployment.md#disk)); a `workflow` class's project hears
+   `machine.disk-low` and can replace it (the `machines-ec2` pack's
+   optional `replaceFullMachine`).
 
 For a fixed fleet instead, enroll each machine yourself:
 `POST /_work/operator/workers` with
