@@ -22,6 +22,12 @@ import {
   startScriptedModel,
 } from "../testing/index.js";
 
+/*
+ * Each test's folders are named short: the CLI makes a Unix socket in its
+ * temporary folder, a socket path holds at most 104 bytes on macOS, and the
+ * test runner's own TMPDIR is already long.
+ */
+
 /**
  * The pinned Claude Code CLI with its commands apart from it (ADR 0332):
  * its Bash runs through Work's shim, over the command socket, on a stand-in
@@ -30,9 +36,7 @@ import {
  * settings never run beside the agent.
  */
 it("runs the pinned CLI's commands through the command socket", async () => {
-  const root = await realpath(
-    await mkdtemp(path.join(tmpdir(), "claude-apart-")),
-  );
+  const root = await realpath(await mkdtemp(path.join(tmpdir(), "ca-")));
   const directories = {
     here: {
       cwd: path.join(root, "work"),
@@ -169,9 +173,7 @@ it("runs the pinned CLI's commands through the command socket", async () => {
  * where each ran.
  */
 it("runs the CLI's own Git on the command side, where the repository's config is the pull request's", async () => {
-  const root = await realpath(
-    await mkdtemp(path.join(tmpdir(), "claude-apart-git-")),
-  );
+  const root = await realpath(await mkdtemp(path.join(tmpdir(), "cag-")));
   const directories = {
     here: {
       cwd: path.join(root, "work"),
@@ -285,9 +287,7 @@ it("runs the CLI's own Git on the command side, where the repository's config is
  * the real path first and stay in the checkout.
  */
 it("keeps the CLI's file tools in the checkout, whatever links the pull request made", async () => {
-  const root = await realpath(
-    await mkdtemp(path.join(tmpdir(), "claude-apart-links-")),
-  );
+  const root = await realpath(await mkdtemp(path.join(tmpdir(), "cal-")));
   const directories = {
     here: {
       cwd: path.join(root, "work"),
@@ -406,9 +406,7 @@ it("keeps the CLI's file tools in the checkout, whatever links the pull request 
  * replaces with a user of its own.
  */
 it("starts a harness of its own user on the loopback model, loading nothing from its home", async () => {
-  const root = await realpath(
-    await mkdtemp(path.join(tmpdir(), "claude-apart-harness-")),
-  );
+  const root = await realpath(await mkdtemp(path.join(tmpdir(), "cah-")));
   const directories = {
     here: {
       cwd: path.join(root, "work"),
@@ -726,9 +724,7 @@ it.each([
 ] as const)(
   "loads what a checkout plants only with its commands beside it: $name",
   async ({ side }) => {
-    const root = await realpath(
-      await mkdtemp(path.join(tmpdir(), "claude-apart-planted-")),
-    );
+    const root = await realpath(await mkdtemp(path.join(tmpdir(), "cap-")));
     const directories = {
       here: {
         cwd: path.join(root, "work"),
