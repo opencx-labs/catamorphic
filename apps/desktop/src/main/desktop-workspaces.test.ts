@@ -183,6 +183,7 @@ describe("activating a profile", () => {
     });
     workspaces.track(workspace);
     const focus = vi.fn();
+    const appFocus = Object.getOwnPropertyDescriptor(app, "focus");
     Object.assign(app, { focus });
     const platform = Object.getOwnPropertyDescriptor(process, "platform");
     Object.defineProperty(process, "platform", { value: "darwin" });
@@ -190,6 +191,9 @@ describe("activating a profile", () => {
       expect(workspaces.activateProfile("profile")).toBe(true);
     } finally {
       if (platform) Object.defineProperty(process, "platform", platform);
+      // The mocked app is shared by the file's later tests.
+      if (appFocus) Object.defineProperty(app, "focus", appFocus);
+      else Reflect.deleteProperty(app, "focus");
     }
     expect(workspace.show).toHaveBeenCalledOnce();
     expect(focus).toHaveBeenCalledWith({ steal: true });
