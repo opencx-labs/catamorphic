@@ -1,0 +1,12 @@
+{
+  "name": "web",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test": "node test/run.js"
+  },
+  "dependencies": {
+    "is-number": "7.0.0"
+  }
+}
