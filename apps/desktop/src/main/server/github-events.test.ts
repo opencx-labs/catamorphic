@@ -78,7 +78,7 @@ describe("the desktop's GitHub poller (ADR 0177)", () => {
     ).toBe(true);
     expect(merged.payload).toMatchObject({
       name: "github",
-      hostVerified: true,
+      origin: { type: "host" },
       headers: {
         "x-github-event": "pull_request",
         "x-github-delivery": "pull_request:9:2026-09-27T00:00:00Z",
@@ -260,7 +260,10 @@ describe("the desktop's GitHub poller (ADR 0177)", () => {
     expect(appended[0]).toMatchObject({
       source: "webhook",
       kind: "webhook",
-      payload: { headers: { "x-github-event": "push" }, hostVerified: true },
+      payload: {
+        headers: { "x-github-event": "push" },
+        origin: { type: "host" },
+      },
     });
     // The member's own token read the repository.
     const eventsCall = fetchImpl.mock.calls.find(([input]) =>

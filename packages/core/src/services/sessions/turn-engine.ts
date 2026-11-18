@@ -199,6 +199,8 @@ export interface TurnEngineHost {
     identity: Identity;
     session: SessionRow;
     turn: Turn;
+    /** The attempt whose runner called the tool. */
+    attempt: Attempt;
     name: string;
     input: JsonValue;
     /** Fires when the agent should stop waiting (ADR 0264). */
@@ -1499,7 +1501,9 @@ export class TurnEngine {
             updatedAt: now,
           };
       binding = { mode: "fresh", providerThreadId: thread.id };
-      if (input.turn.ordinal > 1) handoffFrom = 1;
+      // From turn 1: for a first turn, only what an earlier attempt of it
+      // submitted (ADR 0328), when it did.
+      handoffFrom = 1;
     }
     // A native thread can exist before any turn started on it. Resuming
     // that empty thread still needs all conversation context.
@@ -1515,6 +1519,7 @@ export class TurnEngine {
             fromOrdinal: handoffFrom,
             toOrdinal: input.turn.ordinal - 1,
             strategy,
+            currentTurn: { id: input.turn.id, ordinal: input.turn.ordinal },
           })
         : null;
     const turn: Turn = {
@@ -2614,6 +2619,7 @@ export class TurnEngine {
             identity: ctx.identity,
             session: ctx.session,
             turn: ctx.turn,
+            attempt: ctx.attempt,
             name: call.name,
             input: call.input,
             stopWaiting: AbortSignal.any([

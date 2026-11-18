@@ -21,7 +21,7 @@ import { PROJECT_MANIFEST_PATH } from "@catamorphic/workflow/project-layout";
 import { PGlite } from "@electric-sql/pglite";
 import { pgcrypto } from "@electric-sql/pglite/contrib/pgcrypto";
 import { Kysely, PGliteDialect, WithSchemaPlugin } from "kysely";
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import type { Identity } from "../identity.js";
 import { AgentSessionsService } from "../services/agent-sessions-service.js";
 import type { RegisteredCodingAgent } from "../services/coding-agent-registry.js";
@@ -476,5 +476,39 @@ describe("a setup on its own network, end to end (ADR 0257)", () => {
       "narrow",
     ]);
     expect(found.at(-1)).toBe("prod-rows logs");
+  }, 60_000);
+
+  it("tells a shared subagent how its workspace's setup on its own network went (ADR 0322)", async () => {
+    await fs.rm(runs, { force: true });
+    const flag = path.join(tmpDir, "fail-shared");
+    await fs.writeFile(flag, "");
+    await writeManifest(probe("v4", flag));
+    try {
+      const chat = await sessions.create(identity, projectId, {
+        workspace: { ref: "main" },
+      });
+      expect(await send(chat.id, "set up")).toContain(
+        "failed with exit code 3",
+      );
+      // It may not rebuild the workspace to set it up again: the chat's next
+      // turn does. It is told how the last setup went.
+      const child = await sessions.createSubsession(
+        identity,
+        projectId,
+        chat.id,
+        { task: "Look at the logs" },
+      );
+      await vi.waitFor(
+        () =>
+          expect(
+            adapter.attempts.find(
+              (attempt) => attempt.sessionId === child.session.id,
+            )?.input?.text,
+          ).toContain("failed with exit code 3"),
+        { timeout: 30_000 },
+      );
+    } finally {
+      await fs.rm(flag, { force: true });
+    }
   }, 60_000);
 });

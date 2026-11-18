@@ -154,6 +154,13 @@ describe("PGlite migrations", () => {
       "075_provider_retry_state.sql",
       "076_private_artifact_lifetimes.sql",
       "077_retained_source_revisions.sql",
+      "080_model_usage_cost.sql",
+      "081_typed_results.sql",
+      "082_workflow_exec.sql",
+      "083_scan_project_kinds.sql",
+      "084_enablements_follow_published.sql",
+      "085_queued_runs.sql",
+      "086_shared_subsession_workspaces.sql",
     ]);
 
     const rerun = await migrateToLatest({ db });
@@ -179,7 +186,7 @@ describe("PGlite migrations", () => {
       WHERE table_schema = ${DEFAULT_SCHEMA}
         AND table_type = 'BASE TABLE'
     `.execute(db);
-    expect(tables.rows[0]?.count).toBe(102);
+    expect(tables.rows[0]?.count).toBe(104);
   });
 
   it("supports the runtime primitives core relies on", {

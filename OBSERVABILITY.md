@@ -148,6 +148,7 @@ work under Bun and Electron bundling. Do not add both on the same server.
 | Workflows | Triggering, execution jobs, worker dispatch, runtime deployment/invocation, boundary/batch dispatch, runtime events, pause/resume/cancel |
 | Agent orchestration | Session create, send/enqueue, run, fork, retry, interrupt, close, handoff, checkpoints, runtime events/requests |
 | Built-in AI SDK harnesses | Agent invocation, each model call, each executed tool including MCP and host tools, nested tool work, usage and latency metrics, settlement logs |
+| Model gateway | Each sandbox harness model call (`gateway.model`, and a `chat` child span until the answer ends) with its session, turn, agent, token usage, provider-reported cost, and provider refusals |
 | Sandbox providers | Create/start/stop/destroy/status, exec and exit status, upload/download, git clone/checkout, runtime ensure/invoke/cancel/health, workspace hydration |
 | Background services | Existing watcher, schedule, retention, connection, session-sync, event and mailbox spans |
 | Host process | Resident memory and cumulative user/system CPU time |
@@ -168,6 +169,33 @@ Usage comes from provider reports; missing counts are omitted. User cancellation
 is a separate outcome. Failed or abandoned streams close outstanding spans.
 Prompts, messages, reasoning, tool inputs/results, and provider error bodies are
 not captured. Error types remain available without potentially sensitive text.
+
+Model calls a sandbox harness makes through the gateway (ADR 0329) get a
+`gateway.model` span, ended when the answer's headers are sent, and a `chat`
+client span from forwarding until the answer ends, so a streamed answer's usage
+lands on it. Both carry `catamorphic.tenant.id`, `catamorphic.project.id`,
+`catamorphic.agent.session.id`, `gen_ai.conversation.id`,
+`catamorphic.agent.turn.id`, `catamorphic.agent.id` when the chat has an
+agent, and `gen_ai.request.model` when the gateway read it. The `chat` span
+adds `gen_ai.operation.name`, `gen_ai.provider.name` (the connection's
+provider kind), `gen_ai.response.model`, `gen_ai.usage.input_tokens` (all
+input, cached included), `gen_ai.usage.output_tokens`,
+`gen_ai.usage.cache_read.input_tokens`, `gen_ai.usage.cache_write.input_tokens`,
+`gen_ai.usage.reasoning.output_tokens`, `http.response.status_code`,
+`catamorphic.connection.alias`, `catamorphic.model.path`, and
+`catamorphic.model.cost_usd` when the provider reported what it charged
+(OpenRouter's `usage.cost`, in US dollars; Work keeps no price table). A
+caller that stopped reading is `catamorphic.model.interrupted`.
+`catamorphic.model.metered` is false when the answer's final usage was never
+read (a Chat Completions stream without `stream_options.include_usage`, a
+stream that ended first, an answer too large to scan); such a span carries no
+token counts. A provider
+refusal keeps its own error for the harness and marks the span:
+`error.type` `provider.authentication` (401), `provider.billing` (402),
+`provider.permission` (403), `provider.rate_limit` (429), or the status.
+The same rows are in `model_usage`, totalled per chat or chat family by
+`GET /projects/:projectId/agent/sessions/:sessionId/usage?family=true` and the
+workflow session operation `usage`.
 
 External harnesses (Claude Code/Codex) expose the lifecycle Catamorphic owns.
 We do not infer their internal model or tool spans. Project exporter
@@ -262,6 +290,8 @@ arbitrary MCP servers do not receive Catamorphic correlation baggage.
 For analytics, count `agent.turn` spans for core turn executions, or
 `invoke_agent` operations for standalone harness invocations; do not add both.
 Count distinct turn IDs for logical turns and model `chat` spans for model attempts.
-Sum token usage on model spans only. Retry attempts are separate spans. Sampling
+Sum token usage on model spans only: the AI SDK harness's `chat` spans for its
+own calls, the gateway's `chat` spans (scope `@catamorphic/core`) for sandbox
+harnesses. Retry attempts are separate spans. Sampling
 and export loss affect trace-derived totals; use metrics for aggregate monitoring and persisted
 application records when exact accounting is required.

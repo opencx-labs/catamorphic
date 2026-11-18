@@ -59,7 +59,7 @@ const ticketCreated: TriggerKindRuntime = {
     typeof value === "object" && value !== null && !Array.isArray(value)
       ? { ok: true }
       : { ok: false, errors: ["config must be an object"] },
-  correlationKey: (payload) =>
+  deliveryKey: (payload) =>
     (payload as { ticketId?: string }).ticketId ?? undefined,
 };
 
@@ -361,7 +361,7 @@ describeIf("TriggersService end to end", () => {
     ).rejects.toBeInstanceOf(TriggerPayloadInvalidError);
   });
 
-  it("fires async: enrolls runs with the payload as input and a derived correlation key", async () => {
+  it("fires async: enrolls runs with the payload as input, once per delivery", async () => {
     const result = await core.triggers.fire({
       identity,
       projectId,
@@ -378,10 +378,11 @@ describeIf("TriggersService end to end", () => {
     const runId = result.runs[0]?.runId ?? "";
     const run = await core.runs.get({ identity, runId });
     expect(run.input).toEqual({ ticketId: "T-100" });
-    expect(run.correlationKey).toBe("T-100");
+    // A delivery id names the delivery, not a subject (ADR 0325).
+    expect(run.correlationKey).toBeNull();
     expect(run.workflowEnablementId).toMatch(/^[0-9a-f-]{36}$/);
 
-    // Redelivery with the same correlation key is a no-op (default ignore).
+    // Redelivery with the same delivery key returns the run it started.
     const again = await core.triggers.fire({
       identity,
       projectId,
@@ -880,6 +881,60 @@ export const inert = defineWorkflow(({ defineBoundary }) => ({
     expect(run.provenance.commitSha).not.toBe(deployed.commitSha);
   });
 
+  it("starts one run per enablement for one delivery, and none is kept for interactive fires", async () => {
+    const preview = await core.workflowEnablements.preview({
+      identity,
+      projectId,
+      workflowName: "escalateTicket",
+    });
+    const second = await core.workflowEnablements.create({
+      identity,
+      projectId,
+      workflowName: "escalateTicket",
+      consentDigest: preview.consentDigest,
+      temporary: true,
+      expiresAt: new Date(Date.now() + 60_000),
+    });
+    try {
+      const fire = () =>
+        core.triggers.fire({
+          identity,
+          projectId,
+          kind: "ticket.created",
+          payload: { ticketId: "T-both" },
+          workflows: ["escalateTicket"],
+        });
+      const first = await fire();
+      // Each enablement's run, though the delivery is one.
+      const ids = first.runs.map((run) => run.runId);
+      expect(ids).toHaveLength(2);
+      expect(new Set(ids).size).toBe(2);
+      // Delivered again, each enablement returns its own run.
+      expect((await fire()).runs.map((run) => run.runId).sort()).toEqual(
+        [...ids].sort(),
+      );
+    } finally {
+      await core.workflowEnablements.disable({
+        identity,
+        enablementId: second.id,
+      });
+    }
+    // A person's test fire of a fixed payload runs every time.
+    const interactive = () =>
+      core.triggers.fire({
+        identity,
+        projectId,
+        kind: "ticket.created",
+        payload: { ticketId: "T-sample" },
+        workflows: ["escalateTicket"],
+        interactive: true,
+      });
+    const once = (await interactive()).runs[0]?.runId;
+    const twice = (await interactive()).runs[0]?.runId;
+    expect(once).toBeDefined();
+    expect(twice).not.toBe(once);
+  });
+
   it("isolates an invalid owner enablement during trigger fan-out", async () => {
     const preview = await core.workflowEnablements.preview({
       identity,
@@ -932,7 +987,7 @@ const webhookKind: TriggerKindRuntime = {
     webhookConfig.safeParse(config).data?.name ===
     z.object({ payload: z.object({ name: z.string() }) }).safeParse(payload)
       .data?.payload.name,
-  correlationKey: (payload) =>
+  deliveryKey: (payload) =>
     z.object({ id: z.string() }).safeParse(payload).data?.id,
 };
 

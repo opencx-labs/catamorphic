@@ -44,6 +44,7 @@ import {
   FsBundleStore,
   type GithubConnectionOptions,
   githubCodeHost,
+  MACHINE_TRIGGER_KINDS,
   ObjectRemoteBackend,
   PostgresObjectStore,
   ProjectManager,
@@ -131,6 +132,7 @@ import {
   type MachineProvisioner,
   MachineReconciler,
 } from "./workers/machine-rules.js";
+import { ProjectMachineWorkflows } from "./workers/machine-workflows.js";
 import { registerMemberMachineRoutes } from "./workers/member-machine-routes.js";
 import { MemberMachines } from "./workers/member-machines.js";
 import { signInCapabilities } from "./workers/sign-ins.js";
@@ -169,6 +171,13 @@ export interface WorkServerHooks {
    * connects.
    */
   github?: GithubConnectionOptions;
+  /**
+   * Host code run when a project is created and deleted (ADRs 0046, 0331):
+   * provision what the project needs (a schema, a bucket) and return its
+   * credentials as project secrets, then clean it up on delete. Work
+   * retries a cleanup until it reports done.
+   */
+  projectHooks?: CreateCatamorphicConfig["projectHooks"];
   /** Replace or extend the files seeded into new projects (ADR 0049). */
   projectSeeds?: (
     defaults: Readonly<Record<string, string>>,
@@ -503,6 +512,13 @@ async function createWorkServerInner(
   // A worker that connects may take chats waiting for a machine (ADR
   // 0258): this process's agent sweep hears it once the core is up.
   let workerConnected = () => {};
+  /** A provisioned machine's first call, for workflow classes (ADR 0327). */
+  let machineFirstContact: (machine: {
+    name: string;
+    rule: string;
+    ref: string | null;
+    class: string | null;
+  }) => Promise<void> = async () => {};
   // Enrolled remote workers (ADR 0164). Each worker owns its node lease
   // (ADR 0192), so any replica serves its calls and runs its agents.
   const workers = new WorkWorkerRegistry({
@@ -511,6 +527,7 @@ async function createWorkServerInner(
     tenantId: SERVER_TENANT_ID,
     authorityId: hostId,
     connected: () => workerConnected(),
+    firstContact: (machine) => machineFirstContact(machine),
     log,
   });
   // A single person's server whose operator accepted personal credentials
@@ -581,6 +598,7 @@ async function createWorkServerInner(
     ...(hooks.capabilityProviders
       ? { capabilityProviders: hooks.capabilityProviders }
       : {}),
+    ...(hooks.projectHooks ? { projectHooks: hooks.projectHooks } : {}),
     agentCapabilities: workAgentCapabilities({
       core: () => catamorphic.core,
       auth: () => workAuth,
@@ -666,6 +684,8 @@ async function createWorkServerInner(
       webhook,
       ...SESSION_TRIGGER_KINDS,
       ...DIRECTORY_TRIGGER_KINDS,
+      // Workflow machine classes (ADR 0327) and their machines' lifecycle.
+      ...MACHINE_TRIGGER_KINDS,
     ],
     // Workflows bound to `ai.tool-call` are tools on the project MCP, for
     // project agents and members' own MCP clients alike.
@@ -895,6 +915,10 @@ async function createWorkServerInner(
                 }),
               }
             : {}),
+          workflows: new ProjectMachineWorkflows({
+            core,
+            tenantId: SERVER_TENANT_ID,
+          }),
           install,
           controlPlaneUrl: publicBase,
           emailOf: async (userId) =>
@@ -904,6 +928,8 @@ async function createWorkServerInner(
       : undefined;
   const reconcileMachines = () => machineReconciler?.reconcileSoon();
   if (machineReconciler) {
+    machineFirstContact = (machine) =>
+      machineReconciler.machineConnected(machine);
     const machineTimer = setInterval(reconcileMachines, 60_000);
     machineTimer.unref();
     // Machines on demand (ADR 0258): demand is looked at every few seconds

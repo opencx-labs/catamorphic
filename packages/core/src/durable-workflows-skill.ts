@@ -83,10 +83,26 @@ authenticated callback in an application inbox when acceptance must outlive
 that generation. Correlation keys deduplicate live runs, not permanent business
 jobs; keep desired business state and command identities in the application.
 
-Serialize publications by business identity and generation, and store destination
-object ids. Read-before-create stamps alone race. Model allowed verdict
-transitions explicitly; an old success must not overwrite a newer failure.
-Work's database never makes an arbitrary external side effect exactly once.
+Serialize publications by their subject with
+\`concurrency: { key, onConflict: "queue" }\` (see writing-workflows): each run
+then reads what the one before it recorded. Keep that state where the subject
+is. For a chat, that is its session metadata: \`inspect\` returns
+\`metadata\`, and \`host["catamorphic.sessions"].setMetadata({ sessionId, set:
+{ "review.verdicts": verdicts } })\` records it (null removes a key; at most 32
+keys, 16 KB a value, 64 KB in all). Prefix the keys a workflow owns with its
+purpose (\`review.\`): agents and people write metadata too. So when an agent
+can write the record (its own chat's metadata), decide from the destination
+(the check runs GitHub shows) and keep the record as a cache, written last;
+a planted entry must never suppress a write. Model allowed transitions
+explicitly; an old success must not overwrite a newer failure.
+
+Give every external write a stable identity (the turn or event and what it
+writes) and pass it as the destination's stamp or idempotency key, so a
+boundary retried after a lost answer finds the write the destination already
+accepted. Store the destination's id once you have it. A stamp is retry
+lookup, not exclusion: the queue keeps two runs from writing at once, and a
+list that lags a write can still let one retry post it again. Work's
+database never makes an arbitrary external side effect exactly once.
 
 ## Return one transition
 
@@ -237,7 +253,14 @@ export const briefOrder = defineWorkflow(({ defineBoundary }) => ({
 }));
 \`\`\`
 
-## Keyed restarts
+## Keyed queues and restarts
+
+A queued run holds no Allocation, job or active-run slot. It starts when
+every earlier run for its key has settled (completed, failed or canceled),
+admitted then like any run; a full machine leaves it queued. Canceling a
+queued run ends it where it stands, and a run that fails frees the key for
+the next. \`signalByKey\` and \`cancelByKey\` address the live run, never one
+waiting behind it.
 
 Keyed enrollment with \`onConflict: "restart"\` cancels the observed live run
 and commits its replacement and first job together. Failed admission or job

@@ -2,6 +2,7 @@ import { Project, type SourceFile, SyntaxKind } from "ts-morph";
 import { parseProject } from "./parser.js";
 import { transitionCallName } from "./transition-calls.js";
 import type {
+  DeclaredSecret,
   DiscoveredWorkflow,
   SourceRange,
   WorkflowGraph,
@@ -13,11 +14,15 @@ export const EXECUTION_TRANSFORM_VERSION = "execution-transform-v4";
 export interface PreparedProjectExecution {
   files: Record<string, string>;
   workflows: DiscoveredWorkflow[];
+  /** The secrets the project declares with `defineSecrets`. */
+  secrets: DeclaredSecret[];
 }
 
 export interface PreparedWorkflowExecution {
   files: Record<string, string>;
   graph: WorkflowGraph;
+  /** The secrets the project declares with `defineSecrets`. */
+  secrets: DeclaredSecret[];
 }
 
 interface SourceEdit {
@@ -36,7 +41,22 @@ export function prepareWorkflowExecution(opts: {
   );
   if (!selected) return null;
 
-  return { files: prepared.files, graph: selected.graph };
+  return {
+    files: prepared.files,
+    graph: selected.graph,
+    secrets: prepared.secrets,
+  };
+}
+
+/**
+ * The project's workflow source does not parse. Deterministic for a given
+ * set of files: the same commit fails the same way every time.
+ */
+export class WorkflowSourceInvalidError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "WorkflowSourceInvalidError";
+  }
 }
 
 export function prepareProjectExecution(opts: {
@@ -44,7 +64,7 @@ export function prepareProjectExecution(opts: {
 }): PreparedProjectExecution {
   const parsed = parseProject(opts.files);
   if (parsed.errors.length > 0) {
-    throw new Error(
+    throw new WorkflowSourceInvalidError(
       parsed.errors
         .map((error) =>
           error.file ? `${error.file}: ${error.message}` : error.message,
@@ -86,7 +106,11 @@ export function prepareProjectExecution(opts: {
     transformed[filePath] = applyEdits(original, edits);
   }
 
-  return { files: transformed, workflows: parsed.workflows };
+  return {
+    files: transformed,
+    workflows: parsed.workflows,
+    secrets: parsed.secrets,
+  };
 }
 
 function collectWorkflowEdits(opts: {

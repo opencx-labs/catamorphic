@@ -66,7 +66,7 @@ export interface paths {
                             };
                             agentProtocol: {
                                 /** @enum {number} */
-                                session: 3;
+                                session: 4;
                                 /** @enum {number} */
                                 runner: 3;
                             };
@@ -3111,7 +3111,7 @@ export interface paths {
                                     inspectItems: boolean;
                                 };
                                 /** @enum {string} */
-                                status: "pending" | "running" | "waiting" | "paused" | "canceling" | "completed" | "failed" | "canceled";
+                                status: "queued" | "pending" | "running" | "waiting" | "paused" | "canceling" | "completed" | "failed" | "canceled";
                                 /** @enum {string} */
                                 phase: "execute" | "boundary" | "source" | "process" | "sink" | "pause" | "child";
                                 currentStepIndex: number | null;
@@ -3224,7 +3224,7 @@ export interface paths {
                         environment?: string;
                         correlationKey?: string;
                         /** @enum {string} */
-                        onConflict?: "ignore" | "error" | "restart";
+                        onConflict?: "ignore" | "error" | "restart" | "queue";
                     };
                 };
             };
@@ -3253,7 +3253,7 @@ export interface paths {
                                 inspectItems: boolean;
                             };
                             /** @enum {string} */
-                            status: "pending" | "running" | "waiting" | "paused" | "canceling" | "completed" | "failed" | "canceled";
+                            status: "queued" | "pending" | "running" | "waiting" | "paused" | "canceling" | "completed" | "failed" | "canceled";
                             /** @enum {string} */
                             phase: "execute" | "boundary" | "source" | "process" | "sink" | "pause" | "child";
                             currentStepIndex: number | null;
@@ -3452,7 +3452,7 @@ export interface paths {
                         environment?: string;
                         correlationKey?: string;
                         /** @enum {string} */
-                        onConflict?: "ignore" | "error" | "restart";
+                        onConflict?: "ignore" | "error" | "restart" | "queue";
                         budgetMs?: number;
                     };
                 };
@@ -3770,7 +3770,7 @@ export interface paths {
                                 inspectItems: boolean;
                             };
                             /** @enum {string} */
-                            status: "pending" | "running" | "waiting" | "paused" | "canceling" | "completed" | "failed" | "canceled";
+                            status: "queued" | "pending" | "running" | "waiting" | "paused" | "canceling" | "completed" | "failed" | "canceled";
                             /** @enum {string} */
                             phase: "execute" | "boundary" | "source" | "process" | "sink" | "pause" | "child";
                             currentStepIndex: number | null;
@@ -3940,6 +3940,7 @@ export interface paths {
                                 status: "active" | "suspended" | "disabled";
                                 suspensionReason: string | null;
                                 updateAvailable: boolean;
+                                follow: boolean;
                                 temporary: boolean;
                                 /** Format: date-time */
                                 expiresAt: string | null;
@@ -4004,6 +4005,7 @@ export interface paths {
                             [key: string]: string;
                         };
                         consentDigest: string;
+                        follow?: boolean;
                     };
                 };
             };
@@ -4049,6 +4051,7 @@ export interface paths {
                             status: "active" | "suspended" | "disabled";
                             suspensionReason: string | null;
                             updateAvailable: boolean;
+                            follow: boolean;
                             temporary: boolean;
                             /** Format: date-time */
                             expiresAt: string | null;
@@ -4345,6 +4348,7 @@ export interface paths {
                             status: "active" | "suspended" | "disabled";
                             suspensionReason: string | null;
                             updateAvailable: boolean;
+                            follow: boolean;
                             temporary: boolean;
                             /** Format: date-time */
                             expiresAt: string | null;
@@ -4461,6 +4465,7 @@ export interface paths {
                             status: "active" | "suspended" | "disabled";
                             suspensionReason: string | null;
                             updateAvailable: boolean;
+                            follow: boolean;
                             temporary: boolean;
                             /** Format: date-time */
                             expiresAt: string | null;
@@ -4590,6 +4595,7 @@ export interface paths {
                             status: "active" | "suspended" | "disabled";
                             suspensionReason: string | null;
                             updateAvailable: boolean;
+                            follow: boolean;
                             temporary: boolean;
                             /** Format: date-time */
                             expiresAt: string | null;
@@ -4725,6 +4731,7 @@ export interface paths {
                             status: "active" | "suspended" | "disabled";
                             suspensionReason: string | null;
                             updateAvailable: boolean;
+                            follow: boolean;
                             temporary: boolean;
                             /** Format: date-time */
                             expiresAt: string | null;
@@ -4800,6 +4807,329 @@ export interface paths {
                                 providerKind: string;
                                 principalKinds: ("member" | "project_service" | "tenant_service")[];
                             }[];
+                        };
+                    };
+                };
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/projects/{projectId}/workflow-enablements/{enablementId}/follow": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    projectId: string;
+                    enablementId: string;
+                };
+                cookie?: never;
+            };
+            requestBody: {
+                content: {
+                    "application/json": {
+                        follow: boolean;
+                    };
+                };
+            };
+            responses: {
+                /** @description Default Response */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            /** Format: uuid */
+                            projectId: string;
+                            workflowName: string;
+                            /** Format: uuid */
+                            deploymentArtifactId: string;
+                            commitSha: string;
+                            remoteBranch: string;
+                            environment: string;
+                            owner: {
+                                /** @enum {string} */
+                                type: "member";
+                                externalUserId: string;
+                            } | {
+                                /** @enum {string} */
+                                type: "project";
+                            };
+                            connections: {
+                                alias: string;
+                                /** Format: uuid */
+                                connectionId: string;
+                                providerKind: string;
+                                /** @enum {string} */
+                                principalKind: "member" | "project_service" | "tenant_service";
+                                capabilities: string[];
+                            }[];
+                            capabilities: string[];
+                            permissions: string[];
+                            consentDigest: string;
+                            /** Format: uuid */
+                            id: string;
+                            /** @enum {string} */
+                            status: "active" | "suspended" | "disabled";
+                            suspensionReason: string | null;
+                            updateAvailable: boolean;
+                            follow: boolean;
+                            temporary: boolean;
+                            /** Format: date-time */
+                            expiresAt: string | null;
+                            revision: number;
+                            triggers: {
+                                /** Format: uuid */
+                                id: string;
+                                /** Format: uuid */
+                                definitionId: string;
+                                kind: string;
+                                config: unknown;
+                                projectKind?: string;
+                                /** @enum {string} */
+                                status: "active" | "paused";
+                            }[];
+                            /** Format: date-time */
+                            createdAt: string;
+                            /** Format: date-time */
+                            updatedAt: string;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                403: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                409: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                            /** @enum {string} */
+                            reason: "not_published";
+                        } | {
+                            error: string;
+                        };
+                    };
+                };
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/projects/{projectId}/published-revisions": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: {
+            parameters: {
+                query?: {
+                    limit?: number;
+                };
+                header?: never;
+                path: {
+                    projectId: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description Default Response */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            items: {
+                                /** Format: uuid */
+                                id: string;
+                                sequence: number;
+                                /** Format: uuid */
+                                projectId: string;
+                                commitSha: string;
+                                /** @enum {string} */
+                                status: "pending" | "deploying" | "applying" | "applied" | "superseded" | "failed";
+                                deployWorkflow: string | null;
+                                /** Format: uuid */
+                                deployRunId: string | null;
+                                previousCommitSha: string | null;
+                                error: string | null;
+                                report: {
+                                    /** @enum {string} */
+                                    kind: "moved" | "needs_consent" | "skipped" | "retry" | "unchanged";
+                                    /** Format: uuid */
+                                    enablementId: string;
+                                    workflowName: string;
+                                    commitSha?: string;
+                                    reason?: string;
+                                }[];
+                                /** Format: date-time */
+                                createdAt: string;
+                                /** Format: date-time */
+                                settledAt: string | null;
+                            }[];
+                        };
+                    };
+                };
+                /** @description Default Response */
+                403: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                503: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                        };
+                    };
+                };
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/projects/{projectId}/published-revisions/retry": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    projectId: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description Default Response */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            /** Format: uuid */
+                            id: string;
+                            sequence: number;
+                            /** Format: uuid */
+                            projectId: string;
+                            commitSha: string;
+                            /** @enum {string} */
+                            status: "pending" | "deploying" | "applying" | "applied" | "superseded" | "failed";
+                            deployWorkflow: string | null;
+                            /** Format: uuid */
+                            deployRunId: string | null;
+                            previousCommitSha: string | null;
+                            error: string | null;
+                            report: {
+                                /** @enum {string} */
+                                kind: "moved" | "needs_consent" | "skipped" | "retry" | "unchanged";
+                                /** Format: uuid */
+                                enablementId: string;
+                                workflowName: string;
+                                commitSha?: string;
+                                reason?: string;
+                            }[];
+                            /** Format: date-time */
+                            createdAt: string;
+                            /** Format: date-time */
+                            settledAt: string | null;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                403: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                409: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                503: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
                         };
                     };
                 };
@@ -5008,7 +5338,7 @@ export interface paths {
                         workflows?: string[];
                         correlationKey?: string;
                         /** @enum {string} */
-                        onConflict?: "ignore" | "error" | "restart";
+                        onConflict?: "ignore" | "error" | "restart" | "queue";
                         budgetMs?: number;
                     };
                 };
@@ -5035,6 +5365,17 @@ export interface paths {
                                 /** @enum {string} */
                                 suspendedOn?: "pause" | "child" | "paused" | "backoff" | "batch" | "budget" | "queue";
                             }[];
+                        };
+                    };
+                };
+                /** @description Default Response */
+                403: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
                         };
                     };
                 };
@@ -5205,7 +5546,7 @@ export interface paths {
                                 inspectItems: boolean;
                             };
                             /** @enum {string} */
-                            status: "pending" | "running" | "waiting" | "paused" | "canceling" | "completed" | "failed" | "canceled";
+                            status: "queued" | "pending" | "running" | "waiting" | "paused" | "canceling" | "completed" | "failed" | "canceled";
                             /** @enum {string} */
                             phase: "execute" | "boundary" | "source" | "process" | "sink" | "pause" | "child";
                             currentStepIndex: number | null;
@@ -5395,7 +5736,7 @@ export interface paths {
                                 inspectItems: boolean;
                             };
                             /** @enum {string} */
-                            status: "pending" | "running" | "waiting" | "paused" | "canceling" | "completed" | "failed" | "canceled";
+                            status: "queued" | "pending" | "running" | "waiting" | "paused" | "canceling" | "completed" | "failed" | "canceled";
                             /** @enum {string} */
                             phase: "execute" | "boundary" | "source" | "process" | "sink" | "pause" | "child";
                             currentStepIndex: number | null;
@@ -5549,7 +5890,7 @@ export interface paths {
                                 inspectItems: boolean;
                             };
                             /** @enum {string} */
-                            status: "pending" | "running" | "waiting" | "paused" | "canceling" | "completed" | "failed" | "canceled";
+                            status: "queued" | "pending" | "running" | "waiting" | "paused" | "canceling" | "completed" | "failed" | "canceled";
                             /** @enum {string} */
                             phase: "execute" | "boundary" | "source" | "process" | "sink" | "pause" | "child";
                             currentStepIndex: number | null;
@@ -5703,7 +6044,7 @@ export interface paths {
                                 inspectItems: boolean;
                             };
                             /** @enum {string} */
-                            status: "pending" | "running" | "waiting" | "paused" | "canceling" | "completed" | "failed" | "canceled";
+                            status: "queued" | "pending" | "running" | "waiting" | "paused" | "canceling" | "completed" | "failed" | "canceled";
                             /** @enum {string} */
                             phase: "execute" | "boundary" | "source" | "process" | "sink" | "pause" | "child";
                             currentStepIndex: number | null;
@@ -5865,7 +6206,7 @@ export interface paths {
                                 inspectItems: boolean;
                             };
                             /** @enum {string} */
-                            status: "pending" | "running" | "waiting" | "paused" | "canceling" | "completed" | "failed" | "canceled";
+                            status: "queued" | "pending" | "running" | "waiting" | "paused" | "canceling" | "completed" | "failed" | "canceled";
                             /** @enum {string} */
                             phase: "execute" | "boundary" | "source" | "process" | "sink" | "pause" | "child";
                             currentStepIndex: number | null;
@@ -6228,6 +6569,8 @@ export interface paths {
                                 imported: components["schemas"]["ImportedSession"] | null;
                                 /** Format: uuid */
                                 parentSessionId: string | null;
+                                /** Format: uuid */
+                                workspaceSessionId: string | null;
                                 /** @enum {string} */
                                 visibility: "latent" | "promoted" | "archived";
                                 /** Format: date-time */
@@ -6374,6 +6717,8 @@ export interface paths {
                             imported: components["schemas"]["ImportedSession"] | null;
                             /** Format: uuid */
                             parentSessionId: string | null;
+                            /** Format: uuid */
+                            workspaceSessionId: string | null;
                             /** @enum {string} */
                             visibility: "latent" | "promoted" | "archived";
                             /** Format: date-time */
@@ -6592,6 +6937,8 @@ export interface paths {
                             imported: components["schemas"]["ImportedSession"] | null;
                             /** Format: uuid */
                             parentSessionId: string | null;
+                            /** Format: uuid */
+                            workspaceSessionId: string | null;
                             /** @enum {string} */
                             visibility: "latent" | "promoted" | "archived";
                             /** Format: date-time */
@@ -6729,6 +7076,8 @@ export interface paths {
                             imported: components["schemas"]["ImportedSession"] | null;
                             /** Format: uuid */
                             parentSessionId: string | null;
+                            /** Format: uuid */
+                            workspaceSessionId: string | null;
                             /** @enum {string} */
                             visibility: "latent" | "promoted" | "archived";
                             /** Format: date-time */
@@ -6875,6 +7224,8 @@ export interface paths {
                             imported: components["schemas"]["ImportedSession"] | null;
                             /** Format: uuid */
                             parentSessionId: string | null;
+                            /** Format: uuid */
+                            workspaceSessionId: string | null;
                             /** @enum {string} */
                             visibility: "latent" | "promoted" | "archived";
                             /** Format: date-time */
@@ -7066,6 +7417,85 @@ export interface paths {
                         "application/json": {
                             items: components["schemas"]["Item"][];
                             olderBefore: number | null;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                503: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                        };
+                    };
+                };
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/projects/{projectId}/agent/sessions/{sessionId}/results": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: {
+            parameters: {
+                query?: {
+                    name?: string;
+                    family?: "true" | "false";
+                    turnId?: string;
+                    afterInput?: string;
+                    limit?: number;
+                };
+                header?: never;
+                path: {
+                    projectId: string;
+                    sessionId: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description Default Response */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            results: components["schemas"]["SessionResult"][];
+                        };
+                    };
+                };
+                /** @description Default Response */
+                400: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
                         };
                     };
                 };
@@ -7397,6 +7827,8 @@ export interface paths {
                             imported: components["schemas"]["ImportedSession"] | null;
                             /** Format: uuid */
                             parentSessionId: string | null;
+                            /** Format: uuid */
+                            workspaceSessionId: string | null;
                             /** @enum {string} */
                             visibility: "latent" | "promoted" | "archived";
                             /** Format: date-time */
@@ -7653,6 +8085,8 @@ export interface paths {
                                 imported: components["schemas"]["ImportedSession"] | null;
                                 /** Format: uuid */
                                 parentSessionId: string | null;
+                                /** Format: uuid */
+                                workspaceSessionId: string | null;
                                 /** @enum {string} */
                                 visibility: "latent" | "promoted" | "archived";
                                 /** Format: date-time */
@@ -7896,6 +8330,8 @@ export interface paths {
                             imported: components["schemas"]["ImportedSession"] | null;
                             /** Format: uuid */
                             parentSessionId: string | null;
+                            /** Format: uuid */
+                            workspaceSessionId: string | null;
                             /** @enum {string} */
                             visibility: "latent" | "promoted" | "archived";
                             /** Format: date-time */
@@ -7986,6 +8422,106 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/projects/{projectId}/agent/sessions/{sessionId}/usage": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: {
+            parameters: {
+                query?: {
+                    family?: "true" | "false";
+                };
+                header?: never;
+                path: {
+                    projectId: string;
+                    sessionId: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description Default Response */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            /** Format: uuid */
+                            sessionId: string;
+                            family: boolean;
+                            sessions: number;
+                            openCalls: number;
+                            calls: number;
+                            inputTokens: number;
+                            cachedInputTokens: number;
+                            cacheCreationTokens: number;
+                            outputTokens: number;
+                            reasoningTokens: number;
+                            costUsd: number | null;
+                            unpricedCalls: number;
+                            unmeteredCalls: number;
+                            models: {
+                                model: string | null;
+                                calls: number;
+                                inputTokens: number;
+                                cachedInputTokens: number;
+                                cacheCreationTokens: number;
+                                outputTokens: number;
+                                reasoningTokens: number;
+                                costUsd: number | null;
+                                unpricedCalls: number;
+                                unmeteredCalls: number;
+                            }[];
+                        };
+                    };
+                };
+                /** @description Default Response */
+                403: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                503: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                        };
+                    };
+                };
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/projects/{projectId}/agent/sessions/{sessionId}/peers": {
         parameters: {
             query?: never;
@@ -8020,6 +8556,8 @@ export interface paths {
                             agentId: string | null;
                             /** Format: uuid */
                             parentSessionId: string | null;
+                            /** Format: uuid */
+                            workspaceSessionId: string | null;
                             /** Format: uuid */
                             forkedFromSessionId: string | null;
                             /** @enum {string} */
@@ -8100,6 +8638,8 @@ export interface paths {
                             contextMode: "fresh" | "inherit";
                             allowFurtherDelegation: boolean;
                             /** @enum {string} */
+                            workspace: "shared" | "own";
+                            /** @enum {string} */
                             status: "running" | "completed" | "failed" | "interrupted" | "archived";
                             session: {
                                 /** @enum {string} */
@@ -8133,6 +8673,8 @@ export interface paths {
                                 imported: components["schemas"]["ImportedSession"] | null;
                                 /** Format: uuid */
                                 parentSessionId: string | null;
+                                /** Format: uuid */
+                                workspaceSessionId: string | null;
                                 /** @enum {string} */
                                 visibility: "latent" | "promoted" | "archived";
                                 /** Format: date-time */
@@ -8191,6 +8733,15 @@ export interface paths {
                                 /** Format: date-time */
                                 updatedAt: string;
                             };
+                            results: {
+                                id: string;
+                                name: string;
+                                value: components["schemas"]["JsonValue"];
+                                truncated: boolean;
+                                current: boolean;
+                                turnId: string | null;
+                                recordedAt: string;
+                            }[];
                         }[];
                     };
                 };
@@ -8238,6 +8789,8 @@ export interface paths {
                         effort?: "low" | "medium" | "high" | "xhigh" | "max";
                         readOnly?: boolean;
                         delegate?: boolean;
+                        /** @enum {string} */
+                        workspace?: "shared" | "own";
                         task: string;
                         /** @enum {string} */
                         contextMode?: "fresh" | "inherit";
@@ -8260,6 +8813,8 @@ export interface paths {
                             /** @enum {string} */
                             contextMode: "fresh" | "inherit";
                             allowFurtherDelegation: boolean;
+                            /** @enum {string} */
+                            workspace: "shared" | "own";
                             /** @enum {string} */
                             status: "running" | "completed" | "failed" | "interrupted" | "archived";
                             session: {
@@ -8294,6 +8849,8 @@ export interface paths {
                                 imported: components["schemas"]["ImportedSession"] | null;
                                 /** Format: uuid */
                                 parentSessionId: string | null;
+                                /** Format: uuid */
+                                workspaceSessionId: string | null;
                                 /** @enum {string} */
                                 visibility: "latent" | "promoted" | "archived";
                                 /** Format: date-time */
@@ -8352,6 +8909,15 @@ export interface paths {
                                 /** Format: date-time */
                                 updatedAt: string;
                             };
+                            results: {
+                                id: string;
+                                name: string;
+                                value: components["schemas"]["JsonValue"];
+                                truncated: boolean;
+                                current: boolean;
+                                turnId: string | null;
+                                recordedAt: string;
+                            }[];
                         };
                     };
                 };
@@ -8461,6 +9027,8 @@ export interface paths {
                             contextMode: "fresh" | "inherit";
                             allowFurtherDelegation: boolean;
                             /** @enum {string} */
+                            workspace: "shared" | "own";
+                            /** @enum {string} */
                             status: "running" | "completed" | "failed" | "interrupted" | "archived";
                             session: {
                                 /** @enum {string} */
@@ -8494,6 +9062,8 @@ export interface paths {
                                 imported: components["schemas"]["ImportedSession"] | null;
                                 /** Format: uuid */
                                 parentSessionId: string | null;
+                                /** Format: uuid */
+                                workspaceSessionId: string | null;
                                 /** @enum {string} */
                                 visibility: "latent" | "promoted" | "archived";
                                 /** Format: date-time */
@@ -8552,6 +9122,15 @@ export interface paths {
                                 /** Format: date-time */
                                 updatedAt: string;
                             };
+                            results: {
+                                id: string;
+                                name: string;
+                                value: components["schemas"]["JsonValue"];
+                                truncated: boolean;
+                                current: boolean;
+                                turnId: string | null;
+                                recordedAt: string;
+                            }[];
                         }[];
                     };
                 };
@@ -8719,6 +9298,8 @@ export interface paths {
                             imported: components["schemas"]["ImportedSession"] | null;
                             /** Format: uuid */
                             parentSessionId: string | null;
+                            /** Format: uuid */
+                            workspaceSessionId: string | null;
                             /** @enum {string} */
                             visibility: "latent" | "promoted" | "archived";
                             /** Format: date-time */
@@ -9147,6 +9728,8 @@ export interface paths {
                             imported: components["schemas"]["ImportedSession"] | null;
                             /** Format: uuid */
                             parentSessionId: string | null;
+                            /** Format: uuid */
+                            workspaceSessionId: string | null;
                             /** @enum {string} */
                             visibility: "latent" | "promoted" | "archived";
                             /** Format: date-time */
@@ -9297,6 +9880,8 @@ export interface paths {
                             imported: components["schemas"]["ImportedSession"] | null;
                             /** Format: uuid */
                             parentSessionId: string | null;
+                            /** Format: uuid */
+                            workspaceSessionId: string | null;
                             /** @enum {string} */
                             visibility: "latent" | "promoted" | "archived";
                             /** Format: date-time */
@@ -9597,6 +10182,8 @@ export interface paths {
                                 imported: components["schemas"]["ImportedSession"] | null;
                                 /** Format: uuid */
                                 parentSessionId: string | null;
+                                /** Format: uuid */
+                                workspaceSessionId: string | null;
                                 /** @enum {string} */
                                 visibility: "latent" | "promoted" | "archived";
                                 /** Format: date-time */
@@ -9776,6 +10363,8 @@ export interface paths {
                             imported: components["schemas"]["ImportedSession"] | null;
                             /** Format: uuid */
                             parentSessionId: string | null;
+                            /** Format: uuid */
+                            workspaceSessionId: string | null;
                             /** @enum {string} */
                             visibility: "latent" | "promoted" | "archived";
                             /** Format: date-time */
@@ -11401,6 +11990,8 @@ export interface paths {
                             imported: components["schemas"]["ImportedSession"] | null;
                             /** Format: uuid */
                             parentSessionId: string | null;
+                            /** Format: uuid */
+                            workspaceSessionId: string | null;
                             /** @enum {string} */
                             visibility: "latent" | "promoted" | "archived";
                             /** Format: date-time */
@@ -14166,7 +14757,7 @@ export interface paths {
                         environment?: string;
                         correlationKey?: string;
                         /** @enum {string} */
-                        onConflict?: "ignore" | "error" | "restart";
+                        onConflict?: "ignore" | "error" | "restart" | "queue";
                         budgetMs?: number;
                     };
                 };
@@ -14301,7 +14892,7 @@ export interface paths {
                         environment?: string;
                         correlationKey?: string;
                         /** @enum {string} */
-                        onConflict?: "ignore" | "error" | "restart";
+                        onConflict?: "ignore" | "error" | "restart" | "queue";
                     };
                 };
             };
@@ -14330,7 +14921,7 @@ export interface paths {
                                 inspectItems: boolean;
                             };
                             /** @enum {string} */
-                            status: "pending" | "running" | "waiting" | "paused" | "canceling" | "completed" | "failed" | "canceled";
+                            status: "queued" | "pending" | "running" | "waiting" | "paused" | "canceling" | "completed" | "failed" | "canceled";
                             /** @enum {string} */
                             phase: "execute" | "boundary" | "source" | "process" | "sink" | "pause" | "child";
                             currentStepIndex: number | null;
@@ -14520,7 +15111,7 @@ export interface paths {
                                 inspectItems: boolean;
                             };
                             /** @enum {string} */
-                            status: "pending" | "running" | "waiting" | "paused" | "canceling" | "completed" | "failed" | "canceled";
+                            status: "queued" | "pending" | "running" | "waiting" | "paused" | "canceling" | "completed" | "failed" | "canceled";
                             /** @enum {string} */
                             phase: "execute" | "boundary" | "source" | "process" | "sink" | "pause" | "child";
                             currentStepIndex: number | null;
@@ -15499,7 +16090,7 @@ export interface paths {
                         environment?: string;
                         correlationKey?: string;
                         /** @enum {string} */
-                        onConflict?: "ignore" | "error" | "restart";
+                        onConflict?: "ignore" | "error" | "restart" | "queue";
                     };
                 };
             };
@@ -15528,7 +16119,7 @@ export interface paths {
                                 inspectItems: boolean;
                             };
                             /** @enum {string} */
-                            status: "pending" | "running" | "waiting" | "paused" | "canceling" | "completed" | "failed" | "canceled";
+                            status: "queued" | "pending" | "running" | "waiting" | "paused" | "canceling" | "completed" | "failed" | "canceled";
                             /** @enum {string} */
                             phase: "execute" | "boundary" | "source" | "process" | "sink" | "pause" | "child";
                             currentStepIndex: number | null;
@@ -18554,6 +19145,7 @@ export interface paths {
                             status: "active" | "suspended" | "disabled";
                             suspensionReason: string | null;
                             updateAvailable: boolean;
+                            follow: boolean;
                             temporary: boolean;
                             /** Format: date-time */
                             expiresAt: string | null;
@@ -18871,7 +19463,7 @@ export interface paths {
                                 inspectItems: boolean;
                             };
                             /** @enum {string} */
-                            status: "pending" | "running" | "waiting" | "paused" | "canceling" | "completed" | "failed" | "canceled";
+                            status: "queued" | "pending" | "running" | "waiting" | "paused" | "canceling" | "completed" | "failed" | "canceled";
                             /** @enum {string} */
                             phase: "execute" | "boundary" | "source" | "process" | "sink" | "pause" | "child";
                             currentStepIndex: number | null;
@@ -19689,6 +20281,35 @@ export interface components {
                 to: number;
             };
             text: string;
+        } | {
+            id: string;
+            sessionId: string;
+            turnId: string | null;
+            attemptId: string | null;
+            parentItemId: string | null;
+            position: number;
+            /** @enum {string} */
+            status: "in_progress" | "completed" | "failed" | "cancelled";
+            nativeRef: {
+                id: string;
+                /** @enum {string} */
+                strength: "strong" | "weak" | "none";
+            } | null;
+            createdAt: string;
+            updatedAt: string;
+            startedAt: string | null;
+            endedAt: string | null;
+            /** @enum {string} */
+            kind: "result";
+            name: string;
+            value: components["schemas"]["JsonValueInput"];
+            input: {
+                itemId: string;
+                position: number;
+                /** @enum {string} */
+                kind: "user_message" | "inbound_message" | "task_notification";
+            } | null;
+            commit: string | null;
         };
         RuntimeRequestInput: {
             id: string;
@@ -19933,6 +20554,23 @@ export interface components {
                 code: string;
                 message: string;
             } | null;
+        };
+        SessionResultInput: {
+            id: string;
+            sessionId: string;
+            turnId: string | null;
+            attemptId: string | null;
+            name: string;
+            value: components["schemas"]["JsonValueInput"];
+            input: {
+                itemId: string;
+                position: number;
+                /** @enum {string} */
+                kind: "user_message" | "inbound_message" | "task_notification";
+            } | null;
+            current: boolean;
+            commit: string | null;
+            recordedAt: string;
         };
         JsonValue: JsonValue;
         ImportedSession: {
@@ -20574,6 +21212,35 @@ export interface components {
                 to: number;
             };
             text: string;
+        } | {
+            id: string;
+            sessionId: string;
+            turnId: string | null;
+            attemptId: string | null;
+            parentItemId: string | null;
+            position: number;
+            /** @enum {string} */
+            status: "in_progress" | "completed" | "failed" | "cancelled";
+            nativeRef: {
+                id: string;
+                /** @enum {string} */
+                strength: "strong" | "weak" | "none";
+            } | null;
+            createdAt: string;
+            updatedAt: string;
+            startedAt: string | null;
+            endedAt: string | null;
+            /** @enum {string} */
+            kind: "result";
+            name: string;
+            value: components["schemas"]["JsonValue"];
+            input: {
+                itemId: string;
+                position: number;
+                /** @enum {string} */
+                kind: "user_message" | "inbound_message" | "task_notification";
+            } | null;
+            commit: string | null;
         };
         RuntimeRequest: {
             id: string;
@@ -20818,6 +21485,23 @@ export interface components {
                 code: string;
                 message: string;
             } | null;
+        };
+        SessionResult: {
+            id: string;
+            sessionId: string;
+            turnId: string | null;
+            attemptId: string | null;
+            name: string;
+            value: components["schemas"]["JsonValue"];
+            input: {
+                itemId: string;
+                position: number;
+                /** @enum {string} */
+                kind: "user_message" | "inbound_message" | "task_notification";
+            } | null;
+            current: boolean;
+            commit: string | null;
+            recordedAt: string;
         };
     };
     responses: never;

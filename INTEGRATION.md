@@ -193,6 +193,17 @@ inline until the workflow's first durable wait, then detaches with an honest
 workspace (`syncTypes`). A trigger firing starts ordinary Runs — no new run
 family. See `docs/decisions/0039-custom-trigger-kinds.md`.
 
+A kind may name each delivery's identity with `deliveryKey: (payload) => id`
+(a webhook's delivery id, an event id): a workflow starts at most one run for
+it, whatever that run's status (ADR 0325). The subject a run is about is the
+workflow's own choice: `concurrency: { key: "<dot path into the input>",
+onConflict }` in `defineWorkflow`, or an explicit `correlationKey` from a host
+caller, which wins. `onConflict` adds `queue` to `ignore`, `restart` and
+`error`: the run is recorded `queued`, holds no Allocation or active-run slot,
+and starts in arrival order when the runs ahead of it settle; every worker's
+maintenance sweep starts heads, so hosts run nothing extra. A key holds at
+most 100 queued runs (`RunQueueFullError`, 409).
+
 Projects compose their own kinds from the host's (ADR 0171): an export of
 `defineTrigger({ name, from: trigger("webhook", { ... }), where })` in
 `.work/triggers/` is a kind workflows bind by name. Every binding may carry
@@ -253,7 +264,29 @@ holders of `webhooks:write` rotate one with
 
 Enablements belong to a member or to the project (`owner: { type: "project"
 }`). A project enablement runs as the project principal with shared
-connections. Workflows reach chats with one operation,
+connections. A project automation of `main` follows the published program
+by default; a member's own follows only once that member turns it on, since
+it uses their connections (`follow`, ADR 0330; `POST <api>/projects/:projectId/workflow-enablements/:enablementId/follow`
+with `{ follow }` changes it): every publication (a deploy, a code-host sync
+that receives commits) is recorded in `published_revisions`, and the event
+dispatch pass (`startEventDispatcher`, which every host already runs) moves
+each follower to it when the workflow builds there and its authority digest
+(the consent digest without the artifact) is unchanged. Otherwise it stays
+on its commit with `updateAvailable` and its owner gets a user notification.
+The digest also covers each trigger's kind, configuration and filters and the
+project's declared run secret names. Only a parse, missing-workflow or
+trigger-registration failure skips a revision; other errors are retried with
+backoff. Revisions are recorded only by deploys and the code-host sync, and
+only when the commit is what `main` points to then.
+A project's deploy workflow (`.work/project.json` `deploy.workflow`) runs
+once at each revision, through its own project automation, before anything
+moves; a failure moves nothing (ADR 0331). `GET <api>/projects/:projectId/published-revisions`
+lists revisions with their status, deploy run and per-enablement report, and
+`POST <api>/projects/:projectId/published-revisions/retry`
+(`automations:write`) tries the latest failed one again; Work also retries it
+once when the deploy workflow's project automation is consented to again.
+Replicas coordinate through a per-project replica claim and compare-and-set
+status changes, so none moves an enablement twice or out of order. Workflows reach chats with one operation,
 `catamorphic.sessions.deliver`, naming the chat by `sessionId` or by a `key`
 that starts the chat on first use; a project automation's keyed chats are
 project chats every member of the agent's role sees (`AgentSession.owner ===
@@ -528,7 +561,16 @@ its grants allow, and `readOnly` and `delegate` that need no grant (a host
 tool marks itself `readOnly` to stay with a read-only chat); a registry's optional `models()`
 lets core check the model against the agent's harness catalog. A native
 harness subagent is only an execution optimization when it preserves these
-durable identities and policies.
+durable identities and policies. `workspace` (ADR 0322) is `shared` by
+default: the child works in its parent's workspace (its Allocation, sandbox
+or checkout, as it stands; `workspaceSessionId` names that session) with no
+admission or setup of its own; `own` gives it its own workspace at the
+parent's base. Core serves `spawn_subsession`, `wait_for_subsessions` and
+`interrupt_subsession` (`subsessionTools`) to every agent whose host serves
+none of them, so agents placed in a sandbox delegate; a host that builds its
+own uses the same definition. A child's turn that something other than a
+person started (its parent, its own background command, a workflow) reports
+its result to the parent like the first.
 
 Archive is a recursive server operation, not a local hidden flag. It reports
 the session ids, running work, Watchers, and processes that would stop and
@@ -739,10 +781,17 @@ Run-time env resolves through one bindings chain:
   credentials here.
 - Attaching a plugin whose non-optional requirement has no registered
   provider fails closed with a 400 at attach time.
-- **Project lifecycle hooks** provision per-project infrastructure:
-  `onProjectCreated` failures roll the create back; `onProjectDeleted` runs
-  before deletion and a failure aborts it (retryable, nothing leaks). Hooks
-  must be idempotent.
+- **Project lifecycle hooks** provision per-project infrastructure (ADRs
+  0046, 0331): `onProjectCreated` failures roll the create back, and it may
+  return `{ secrets: { NAME: value } }`, which Work keeps sealed as the
+  project's shared secrets without reading them (a workflow uses one once it
+  declares the name with `defineSecrets`). `onProjectDeleted` never blocks
+  the delete: one that throws or returns `{ done: false }` is retried with
+  backoff from the event dispatch pass until it reports done. Each hook has a
+  unique `name` (a plugin's defaults to the plugin's) that owed cleanups find
+  it by after restarts; a create rolled back after some hooks ran queues
+  their cleanups, and `core.projects.listCleanups()` shows the ones that keep
+  failing. Hooks must be idempotent.
 
 ```ts
 import {
@@ -778,6 +827,38 @@ export const catamorphic = createCatamorphic({
   // capabilityProviders: [...], projectHooks: [...],
 });
 ```
+
+A host that keeps project data on its own Postgres can instead mint a schema
+and role per project and hand the project its URL. This is an example, not a
+Work feature; Work never interprets the secret:
+
+```ts
+const projectDatabases: ProjectLifecycleHooks = {
+  name: "project-databases",
+  async onProjectCreated({ project }) {
+    const name = `project_${project.id.replaceAll("-", "")}`;
+    const password = randomBytes(24).toString("base64url");
+    await hostPool.query(`CREATE ROLE ${name} LOGIN PASSWORD '${password}'`);
+    await hostPool.query(`CREATE SCHEMA ${name} AUTHORIZATION ${name}`);
+    return {
+      secrets: {
+        DATABASE_URL: `postgres://${name}:${password}@db.internal/app?options=-csearch_path%3D${name}`,
+      },
+    };
+  },
+  async onProjectDeleted({ project }) {
+    const name = `project_${project.id.replaceAll("-", "")}`;
+    await hostPool.query(`DROP SCHEMA IF EXISTS ${name} CASCADE`);
+    await hostPool.query(`DROP ROLE IF EXISTS ${name}`);
+    return { done: true };
+  },
+};
+```
+
+The project migrates that database from its deploy workflow
+(`"deploy": { "workflow": "migrateDatabase" }` in `.work/project.json`), which
+Work runs once at each published revision before following enablements move
+there (ADRs 0330, 0331).
 
 Workflow code stays vendor-blind — it imports the plugin's client and reads
 `process.env.DATABASE_URL`. Providers must not return `CATAMORPHIC_`-prefixed
@@ -1170,7 +1251,12 @@ host code (the Work server takes them in its own image, ADR 0261). Guards see ki
 spending rules belong in guards. Usage lands in `model_usage` per session and
 turn, read passively from Anthropic and OpenAI answers (zero when a format is
 not recognized, such as a Chat Completions stream without
-`stream_options.include_usage`). At each sandbox attempt core writes the grant of every model alias into
+`stream_options.include_usage`), with `cost_usd` when the provider reported
+what it charged (ADR 0329). Each call's `chat` span carries the same usage
+under GenAI names with its project, session, turn and agent
+([OBSERVABILITY.md](OBSERVABILITY.md)); `agentSessions.usage({ identity,
+projectId, sessionId, family })` and `GET …/agent/sessions/:sessionId/usage`
+total a chat and the subsessions the caller may read, with unmetered and unpriced call counts. At each sandbox attempt core writes the grant of every model alias into
 the sandbox (the same `sandbox`-channel grants as Git), and an agent
 registered with `harness: { placement: "sandbox", id }` and `modelConnection:
 <alias>` gets `AttemptStart.modelAccess = { kind: "gateway", ... }`. Core

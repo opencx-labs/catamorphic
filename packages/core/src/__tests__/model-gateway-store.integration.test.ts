@@ -5,6 +5,7 @@ import { ConnectionCapabilityGrantsService } from "../services/connection-capabi
 import { hashBearer } from "../services/connections-service.js";
 import { ExecutionAllocationsService } from "../services/execution-allocations-service.js";
 import { dbModelGatewayStore } from "../services/model-gateway.js";
+import { sessionUsageTotals } from "../services/model-usage.js";
 
 const connectionString = process.env.DATABASE_URL ?? "";
 const describeIf = connectionString ? describe : describe.skip;
@@ -426,6 +427,7 @@ describeIf("the model gateway's store (ADR 0180)", () => {
       cacheCreationTokens: 1,
       outputTokens: 12,
       reasoningTokens: 0,
+      metered: true,
     };
     await store.recordUsage({ record: { ...record, turnId }, usage });
     await store.recordUsage({ record: { ...record, turnId }, usage });
@@ -462,5 +464,226 @@ describeIf("the model gateway's store (ADR 0180)", () => {
       .execute();
     expect(await store.openCalls({ sessionId })).toBe(0);
     expect(await store.openCalls({ sessionId, turnId })).toBe(0);
+  });
+
+  it("records the cost a provider reported, and nothing when it reported none (ADR 0329)", async () => {
+    const store = dbModelGatewayStore(db);
+    const { sessionId, allocationId, token } = await grant();
+    await db
+      .updateTable("agent_sessions")
+      .set({ agent_id: "reviewer" })
+      .where("id", "=", sessionId)
+      .execute();
+    expect((await store.liveGrant({ token }))?.session).toMatchObject({
+      agentId: "reviewer",
+    });
+    const turnId = crypto.randomUUID();
+    const record = {
+      tenantId,
+      projectId,
+      sessionId,
+      turnId,
+      allocationId,
+      connectionId,
+      alias: "openrouter",
+      endpoint: "chat/completions",
+    };
+    const usage = {
+      inputTokens: 10,
+      cachedInputTokens: 0,
+      cacheCreationTokens: 0,
+      outputTokens: 5,
+      reasoningTokens: 0,
+      metered: true,
+    };
+    await store.recordUsage({ record, usage: { ...usage, costUsd: 0.0125 } });
+    const openId = await store.openUsage({ record });
+    await store.recordUsage({
+      record,
+      usage: { ...usage, costUsd: 0.0005 },
+      openId,
+    });
+    const rows = await db
+      .selectFrom("model_usage")
+      .select("cost_usd")
+      .where("agent_session_id", "=", sessionId)
+      .orderBy("id")
+      .execute();
+    expect(rows.map((row) => Number(row.cost_usd))).toEqual([0.0125, 0.0005]);
+    expect((await store.usage({ sessionId, turnId }))?.costUsd).toBeCloseTo(
+      0.013,
+    );
+    // One call without a reported cost: the turn's cost is unknown, never
+    // the priced calls' sum.
+    await store.recordUsage({ record, usage });
+    const unpriced = await db
+      .selectFrom("model_usage")
+      .select("cost_usd")
+      .where("agent_session_id", "=", sessionId)
+      .orderBy("id", "desc")
+      .executeTakeFirstOrThrow();
+    expect(unpriced.cost_usd).toBeNull();
+    const turn = await store.usage({ sessionId, turnId });
+    expect(turn?.outputTokens).toBe(15);
+    expect(turn).not.toHaveProperty("costUsd");
+  });
+
+  it("totals a chat and its subsessions per model, priced and unpriced (ADR 0329)", async () => {
+    const store = dbModelGatewayStore(db);
+    const { sessionId: root, allocationId } = await grant();
+    const child = crypto.randomUUID();
+    const grandchild = crypto.randomUUID();
+    const stranger = crypto.randomUUID();
+    for (const [id, parent] of [
+      [child, root],
+      [grandchild, child],
+      [stranger, null],
+    ] as const)
+      await db
+        .insertInto("agent_sessions")
+        .values({
+          id,
+          project_id: projectId,
+          external_user_id: "member-1",
+          parent_session_id: parent,
+        })
+        .execute();
+    const call = async (args: {
+      sessionId: string;
+      model: string;
+      output: number;
+      costUsd?: number;
+      metered?: boolean;
+    }) =>
+      store.recordUsage({
+        record: {
+          tenantId,
+          projectId,
+          sessionId: args.sessionId,
+          turnId: crypto.randomUUID(),
+          allocationId,
+          connectionId,
+          alias: "openrouter",
+          endpoint: "chat/completions",
+        },
+        usage: {
+          model: args.model,
+          inputTokens: 100,
+          cachedInputTokens: 10,
+          cacheCreationTokens: 0,
+          outputTokens: args.output,
+          reasoningTokens: 1,
+          metered: args.metered ?? true,
+          ...(args.costUsd !== undefined ? { costUsd: args.costUsd } : {}),
+        },
+      });
+    await call({ sessionId: root, model: "opus", output: 10, costUsd: 0.5 });
+    await call({ sessionId: child, model: "opus", output: 20, costUsd: 0.25 });
+    // Neither priced nor metered: a stream whose usage the gateway never saw.
+    await call({ sessionId: child, model: "haiku", output: 5, metered: false });
+    await call({
+      sessionId: grandchild,
+      model: "haiku",
+      output: 7,
+      costUsd: 0.01,
+    });
+    await call({ sessionId: stranger, model: "opus", output: 999, costUsd: 9 });
+    // Still streaming: not counted, but said.
+    await store.openUsage({
+      record: {
+        tenantId,
+        projectId,
+        sessionId: grandchild,
+        turnId: null,
+        allocationId,
+        connectionId,
+        alias: "openrouter",
+        endpoint: "chat/completions",
+      },
+    });
+
+    const family = await sessionUsageTotals({
+      db,
+      projectId,
+      sessionId: root,
+      sessionIds: [root, child, grandchild],
+      family: true,
+    });
+    expect(family).toMatchObject({
+      sessionId: root,
+      family: true,
+      sessions: 3,
+      calls: 4,
+      inputTokens: 400,
+      cachedInputTokens: 40,
+      outputTokens: 42,
+      reasoningTokens: 4,
+      unpricedCalls: 1,
+      unmeteredCalls: 1,
+      openCalls: 1,
+    });
+    expect(family.costUsd).toBe(0.76);
+    expect(family.models).toEqual([
+      expect.objectContaining({
+        model: "haiku",
+        calls: 2,
+        outputTokens: 12,
+        costUsd: 0.01,
+        unpricedCalls: 1,
+        unmeteredCalls: 1,
+      }),
+      expect.objectContaining({
+        model: "opus",
+        calls: 2,
+        outputTokens: 30,
+        costUsd: 0.75,
+        unpricedCalls: 0,
+        unmeteredCalls: 0,
+      }),
+    ]);
+
+    const alone = await sessionUsageTotals({
+      db,
+      projectId,
+      sessionId: child,
+      sessionIds: [child],
+      family: false,
+    });
+    expect(alone).toMatchObject({
+      calls: 2,
+      costUsd: 0.25,
+      unpricedCalls: 1,
+      unmeteredCalls: 1,
+    });
+    // Costs whose floating-point sum is inexact (0.1 + 0.2) total exactly.
+    const exact = crypto.randomUUID();
+    await db
+      .insertInto("agent_sessions")
+      .values({
+        id: exact,
+        project_id: projectId,
+        external_user_id: "member-1",
+      })
+      .execute();
+    await call({ sessionId: exact, model: "a", output: 1, costUsd: 0.1 });
+    await call({ sessionId: exact, model: "b", output: 1, costUsd: 0.2 });
+    const decimal = await sessionUsageTotals({
+      db,
+      projectId,
+      sessionId: exact,
+      sessionIds: [exact],
+      family: false,
+    });
+    expect(0.1 + 0.2).not.toBe(0.3);
+    expect(decimal.costUsd).toBe(0.3);
+    expect(decimal.models.map((model) => model.costUsd)).toEqual([0.1, 0.2]);
+    const none = await sessionUsageTotals({
+      db,
+      projectId,
+      sessionId: stranger,
+      sessionIds: [crypto.randomUUID()],
+      family: false,
+    });
+    expect(none).toMatchObject({ calls: 0, costUsd: null, models: [] });
   });
 });

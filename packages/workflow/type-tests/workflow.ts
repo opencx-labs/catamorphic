@@ -5,6 +5,7 @@ import {
   type Carried,
   defineBatchStep,
   defineWorkflow,
+  type SessionUsage,
   type WorkflowDefinition,
 } from "../src/index.js";
 
@@ -455,6 +456,33 @@ defineWorkflow(({ defineBoundary }) => ({
     }),
     defineBoundary({
       run: ({ input }: BoundaryContext<{ key: string | null }>) => input.key,
+    }),
+  ],
+}));
+
+// A chat family's usage reaches the next step typed; cost may be unknown.
+defineWorkflow(({ defineBoundary }) => ({
+  steps: [
+    defineBoundary({
+      run: ({ host }: BoundaryContext<OrderInput>) =>
+        host["catamorphic.sessions"].usage({ key: "pr-42", family: true }),
+    }),
+    defineBoundary({
+      run: ({ input }: BoundaryContext<SessionUsage>) => ({
+        spent: input.costUsd ?? 0,
+        lowerBound: input.unpricedCalls > 0,
+        models: input.models.map((model) => model.model ?? "unknown"),
+      }),
+    }),
+  ],
+}));
+
+defineWorkflow(({ defineBoundary }) => ({
+  steps: [
+    defineBoundary({
+      run: ({ host }: BoundaryContext<OrderInput>) =>
+        // @ts-expect-error family is a boolean.
+        host["catamorphic.sessions"].usage({ sessionId: "s", family: "yes" }),
     }),
   ],
 }));

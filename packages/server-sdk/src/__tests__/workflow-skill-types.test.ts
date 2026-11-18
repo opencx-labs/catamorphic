@@ -135,13 +135,14 @@ it("shipped workflow recipes typecheck against the public API and real host trig
   const packs = {
     ...(await packSources("slack-threads")),
     ...(await packSources("pull-request-reviews")),
+    ...(await packSources("github-polling")),
   };
   // The review pack ships the GitHub library writing-workflows teaches.
   expect(packs[".work/triggers/github.ts"]).toBe(
     skills.files[".work/triggers/github.ts"],
   );
   const files = { ...skills.files, ...packs };
-  expect(skills.count).toBe(11);
+  expect(skills.count).toBe(12);
   expect(parseProject(files).triggerKinds.map((kind) => kind.name)).toEqual([
     "github.delivery",
     "github.issue_comment",

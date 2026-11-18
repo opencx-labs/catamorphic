@@ -94,7 +94,9 @@ export async function seedSandboxRepository(input: {
   /**
    * The checkout holds the base alone and what a setup made on it (ADR
    * 0257): seed whatever its refs say, and keep the files Git does not
-   * track, which that setup made. Otherwise they go, as after a base move.
+   * track, which that setup made, and its changes to tracked files where
+   * the saved work leaves them alone. Otherwise they go, as after a base
+   * move.
    */
   afterSetup?: boolean;
 }): Promise<{ seeded: boolean }> {
@@ -128,7 +130,12 @@ export async function seedSandboxRepository(input: {
         packFile: `../${SESSION_DIRECTORY}/seed.pack.b64`,
         shallow,
       }),
-      `git checkout -q -f -B ${shellQuote(input.branch)} ${input.head}`,
+      // After a setup, what it changed in tracked files stays (a trusted
+      // procedure copied over the change's own, ADR 0324) unless the
+      // session's saved work changed the same files: then the work wins.
+      input.afterSetup
+        ? `(git checkout -q -B ${shellQuote(input.branch)} ${input.head} 2>/dev/null || git checkout -q -f -B ${shellQuote(input.branch)} ${input.head})`
+        : `git checkout -q -f -B ${shellQuote(input.branch)} ${input.head}`,
       ...(input.afterSetup ? [] : ["git clean -fdq"]),
       // The branch stands on the base; the session's saved work (its
       // checkpoints since the base) is in the working tree, uncommitted, so
@@ -335,6 +342,11 @@ export async function configureSandboxGateway(input: {
     grant: string;
     publicationRevision: string;
     modelAttemptId?: string;
+    /**
+     * Published only under its attempt: a shared subsession's model grant
+     * (ADR 0322), never where the workspace's Git and HTTP read theirs.
+     */
+    modelOnly?: boolean;
   }[];
   gitAliases: readonly SandboxGitAlias[];
   httpAliases?: readonly SandboxHttpAlias[];
@@ -379,9 +391,9 @@ export async function configureSandboxGateway(input: {
     "",
   ].join("\n");
   const files = input.grants.flatMap((grant) => {
-    const revisions: [string, string][] = [
-      [`grants/${grant.alias}/${grant.publicationRevision}`, grant.grant],
-    ];
+    const revisions: [string, string][] = grant.modelOnly
+      ? []
+      : [[`grants/${grant.alias}/${grant.publicationRevision}`, grant.grant]];
     if (grant.modelAttemptId)
       revisions.push([
         `model-grants/${grant.modelAttemptId}/${grant.alias}/${grant.publicationRevision}`,
@@ -420,6 +432,7 @@ export async function configureSandboxGateway(input: {
         // A conflict or any other publication failure must still fail preparation.
         `ln ${shellQuote(`${stage}/${file}`)} ${shellQuote(file)} 2>/dev/null || { [ -f ${shellQuote(file)} ] && cmp -s ${shellQuote(`${stage}/${file}`)} ${shellQuote(file)} || { echo ${shellQuote(`Could not publish immutable grant ${file}`)} >&2; exit 1; }; }`,
       ]),
+      "mkdir -p grants",
       "chmod 700 grants",
       ...(input.grants.some((grant) => grant.modelAttemptId)
         ? ["chmod 700 model-grants"]

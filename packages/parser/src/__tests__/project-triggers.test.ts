@@ -154,6 +154,47 @@ describe("project trigger kinds", () => {
     });
   });
 
+  it("carries a kind's recordable opt-in through every kind built on it", () => {
+    const parsed = parseProject({
+      ".work/triggers/github.ts": `
+import { defineTrigger, trigger } from "@catamorphic/workflow";
+export const delivery = defineTrigger({
+  name: "gh.delivery",
+  from: trigger("webhook", { name: "github", verify: { scheme: "hmac", secret: "S", header: "x-sig" } }),
+  recordable: true,
+});
+export const pull = defineTrigger({ name: "gh.pull", from: trigger("gh.delivery") });
+export const signed = defineTrigger({
+  name: "pay.signed",
+  from: trigger("webhook", { name: "pay", verify: { scheme: "token", secret: "T", header: "x-token" } }),
+  recordable: false,
+});
+`,
+    });
+    expect(parsed.errors).toEqual([]);
+    const resolve = (kind: string) =>
+      resolveTriggerBinding({
+        binding: { kind, config: {} },
+        projectKinds: parsed.triggerKinds,
+      });
+    expect(resolve("gh.pull")).toMatchObject({
+      ok: true,
+      binding: { kind: "webhook", recordable: true },
+    });
+    const signed = resolve("pay.signed");
+    expect(signed.ok && "recordable" in signed.binding).toBe(false);
+    const computed = parseProject({
+      ".work/triggers/x.ts": `
+import { defineTrigger, trigger } from "@catamorphic/workflow";
+const yes = true;
+export const x = defineTrigger({ name: "x.y", from: trigger("webhook", { name: "x" }), recordable: yes });
+`,
+    });
+    expect(computed.errors.map((error) => error.message)).toEqual([
+      expect.stringContaining("must write recordable as true or false"),
+    ]);
+  });
+
   it("reports cycles, duplicates, computed values and misplaced kinds", () => {
     const result = parseProject({
       ".work/triggers/loop.ts": `

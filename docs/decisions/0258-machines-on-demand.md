@@ -1,6 +1,6 @@
 # 0258 — Machines on demand
 
-- **Status:** Accepted
+- **Status:** Accepted; refined by [0327](0327-machine-provisioners-are-workflows.md): machine provisioners as project workflows
 - **Date:** 2026-10-18
 - **Refines:** 0173, 0193, 0205
 

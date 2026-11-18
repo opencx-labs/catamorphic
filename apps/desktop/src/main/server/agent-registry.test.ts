@@ -266,6 +266,21 @@ it("runs an approved project ACP agent as its own command, on a harness of its o
   expect(agent.defaults).toEqual({});
 });
 
+it("gives an approved project agent the results its definition declares (ADR 0323)", () => {
+  const results = {
+    review: { type: "object", required: ["verdict"] },
+  };
+  const { agent } = hostOf(
+    approvedRegistry({ ...runnerDefinition, results }),
+    "project:project:runner",
+  );
+  expect(agent.results).toEqual(results);
+  expect(
+    hostOf(approvedRegistry(runnerDefinition), "project:project:runner").agent
+      .results,
+  ).toBeUndefined();
+});
+
 it("says how to fix an approved project ACP agent that names no command (ADR 0241)", () => {
   const agent = approvedRegistry({
     version: 1,

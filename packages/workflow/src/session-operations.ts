@@ -1,3 +1,4 @@
+import type { JsonValue } from "./json.js";
 import type { TransitionCall } from "./workflow.js";
 
 /** Current host snapshot; authority fields identify its owner. Mirrors may lag. */
@@ -39,6 +40,11 @@ export interface SessionSnapshot {
    * then. Null for a chat started from the project itself.
    */
   workspace: { ref: string; commit: string } | null;
+  /**
+   * Named values on the chat (ADR 0226): set by agents, people and
+   * workflows. Keys a workflow owns carry its purpose (`review.verdicts`).
+   */
+  metadata: Record<string, JsonValue>;
 }
 /**
  * Where a chat's workspace starts (ADR 0178): a branch, tag, commit, or
@@ -59,6 +65,77 @@ export interface SessionHistoryMessage {
   content: string;
   /** ISO timestamp of the message. */
   createdAt: string;
+}
+/**
+ * A value an agent submitted with `submit_result` and its schema accepted
+ * (ADR 0323). Results are never rewritten; `current` says whether it still
+ * answers its chat's newest input.
+ */
+export interface SessionResult {
+  id: string;
+  /** The chat that recorded it: the one named, or one of its subsessions. */
+  sessionId: string;
+  turnId: string | null;
+  attemptId: string | null;
+  /** The name its agent's definition declares, e.g. `review`. */
+  name: string;
+  value: unknown;
+  /**
+   * The newest input (a message id) the chat had taken in when it was
+   * submitted, and its kind, for a reader applying a stricter rule.
+   */
+  input: {
+    itemId: string;
+    position: number;
+    kind: "user_message" | "inbound_message" | "task_notification";
+  } | null;
+  /**
+   * No new request reached the chat after that input: nothing a person, a
+   * workflow or a session outside the chat's own subsessions sent. Task
+   * notifications and its subsessions' messages are its own work reporting.
+   */
+  current: boolean;
+  /** The workspace commit the submitting turn began on, when there is one. */
+  commit: string | null;
+  /** ISO timestamp. */
+  recordedAt: string;
+}
+/** Token totals and the cost providers reported for some model calls. */
+export interface ModelUsageTotals {
+  /** Settled calls counted here. */
+  calls: number;
+  /** Uncached input tokens (never includes the cached portion). */
+  inputTokens: number;
+  cachedInputTokens: number;
+  cacheCreationTokens: number;
+  outputTokens: number;
+  /** Subset of `outputTokens`. */
+  reasoningTokens: number;
+  /**
+   * What providers said these calls cost, in US dollars, summed; null when
+   * none said. Never an estimate.
+   */
+  costUsd: number | null;
+  /** Calls whose provider reported no cost: `costUsd` is a lower bound. */
+  unpricedCalls: number;
+  /**
+   * Calls whose usage could not be read (for example a Chat Completions
+   * stream without `stream_options.include_usage`): they count zero tokens,
+   * so token totals are a lower bound when this is above zero.
+   */
+  unmeteredCalls: number;
+}
+/** A chat's model calls through the gateway, as `usage` totals them. */
+export interface SessionUsage extends ModelUsageTotals {
+  sessionId: string;
+  /** Whether the totals include every subsession below the chat. */
+  family: boolean;
+  /** The chats counted. */
+  sessions: number;
+  /** Calls still streaming, not yet in the totals. */
+  openCalls: number;
+  /** The same totals per model; `model` is null when unknown. */
+  models: Array<ModelUsageTotals & { model: string | null }>;
 }
 /** The authoritative host has accepted delivery, but has not applied this action yet. */
 export interface QueuedSessionAction {
@@ -98,6 +175,16 @@ type DeliverTarget =
     };
 type Action = Target & { idempotencyKey: string };
 type Call<Input, Output = unknown> = TransitionCall<Input, Output>;
+/** How a command `exec` ran ended (ADR 0324). */
+export interface SessionExecResult {
+  /** Null when it was stopped: its timeout, or its sandbox went away. */
+  exitCode: number | null;
+  /** The last 16 000 characters of each stream. */
+  stdout: string;
+  stderr: string;
+  durationMs: number;
+  timedOut: boolean;
+}
 /** Host transitions must be returned from a boundary, never awaited as IO. */
 export interface SessionHostOperations {
   inspect: Call<Target, SessionSnapshot>;
@@ -118,6 +205,30 @@ export interface SessionHostOperations {
       messages: SessionHistoryMessage[];
     }
   >;
+  /**
+   * The chat's accepted results, newest first, at most `limit` (default and
+   * max 100). `name` keeps one result name; `family: true` adds its
+   * subsessions' results at every depth, each naming its chat;
+   * `afterInput` (an input's message id, such as a delivery's `messageId`)
+   * keeps results that answer that input or a later one.
+   */
+  results: Call<
+    Target & {
+      name?: string;
+      family?: boolean;
+      /** Only what one turn's attempts submitted, e.g. the turn being published. */
+      turnId?: string;
+      afterInput?: string;
+      limit?: number;
+    },
+    { sessionId: string; key: string | null; results: SessionResult[] }
+  >;
+  /**
+   * The chat's model usage through the gateway: tokens per model and the
+   * cost providers reported. `family` adds every subsession below it. A
+   * project builds its own limits and reports on this; Work has none.
+   */
+  usage: Call<Target & { family?: boolean }, SessionUsage>;
   /**
    * Send a message to a chat. Name it by `sessionId`, or by `key`: the
    * project's chat for that key, started on first use and reused by every
@@ -173,6 +284,8 @@ export interface SessionHostOperations {
    * Start a subsession of the chat through its agent's grants (ADR 0271): a
    * copy of its agent unless `agentId` names another, with the model and
    * effort a grant allows; `readOnly` and `delegate: false` only narrow.
+   * It works in the chat's workspace unless `workspace` is `"own"`, a
+   * workspace of its own started at the chat's base (ADR 0322).
    */
   spawn: Call<
     Action & {
@@ -182,6 +295,7 @@ export interface SessionHostOperations {
       effort?: "low" | "medium" | "high" | "xhigh" | "max";
       readOnly?: boolean;
       delegate?: boolean;
+      workspace?: "shared" | "own";
       title?: string;
       contextMode?: "fresh" | "inherit";
     },
@@ -200,6 +314,41 @@ export interface SessionHostOperations {
   complete: Call<Action & { content: string }>;
   reopen: Call<Action>;
   stopWatcher: Call<Action & { watcherId: string }>;
+  /**
+   * Run a shell command in the chat's workspace (ADR 0324), from its
+   * checkout or `cwd` beneath it. `in: "session"` runs as the agent's
+   * commands do, with the chat's network, grants and secrets, starting its
+   * workspace if it has none. `in: "setup"` runs as the Environment's setup
+   * does, on the setup's network without grants or secrets, and only from
+   * the chat's setup workflow while its workspace is built. `$WORK_PROGRAM`
+   * names a read-only copy of this run's `.work/` folder at its deployed
+   * commit: copy trusted files from there. A command longer than the
+   * boundary's attempt parks the run until it ends; a retry with the same
+   * key answers with the same execution.
+   */
+  exec: Call<
+    Action & {
+      command: string;
+      in: "session" | "setup";
+      cwd?: string;
+      env?: Record<string, string>;
+      /** Default 600, at most 14 400 (four hours). */
+      timeoutSeconds?: number;
+    },
+    SessionExecResult
+  >;
+  /**
+   * Set named values on the chat (ADR 0226, 0325): each key of `set` takes
+   * its value whole, and null removes it. Keys are lowercase words joined
+   * by `_`, `-` or `.`; at most 32 keys, 16 KB a value and 64 KB in all.
+   * Closed and archived chats still take writes. Only the host holding the
+   * chat's authority writes it; elsewhere the call fails and retries. The
+   * same write twice changes nothing, so there is no idempotency key.
+   */
+  setMetadata: Call<
+    Target & { set: Record<string, JsonValue | null> },
+    { sessionId: string; metadata: Record<string, JsonValue> }
+  >;
   /** Stop this workflow's temporary activation, retaining its source and runs. */
   stop: Call<{ idempotencyKey: string }, { stopped: boolean }>;
 }

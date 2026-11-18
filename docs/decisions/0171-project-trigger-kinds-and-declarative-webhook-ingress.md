@@ -2,6 +2,7 @@
 
 - **Status:** Accepted
 - **Date:** 2026-09-27
+- **Amended by:** 0326 (workflows record events of project kinds; scans keep resolved kinds)
 - **Refines:** 0039, 0042, 0156
 
 ## Context

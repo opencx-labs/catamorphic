@@ -31,8 +31,7 @@ interface ScheduleTriggerDispatcher {
     workflows?: readonly string[];
     enablementIds?: readonly string[];
     activationIds?: readonly string[];
-    correlationKey?: string;
-    onConflict?: "ignore" | "error" | "restart";
+    deliveryKey?: string;
   }): Promise<TriggerFireResult>;
 }
 
@@ -217,7 +216,7 @@ export class SchedulesService {
     const occurrences = await this.claimPending(projectId, now);
     let enrolled = 0;
     for (const occurrence of occurrences) {
-      const correlationKey = `${occurrence.activationId}:${occurrence.scheduledFor.toISOString()}`;
+      const deliveryKey = `${occurrence.activationId}:${occurrence.scheduledFor.toISOString()}`;
       try {
         // A process can die after TriggersService durably inserts the run but
         // before this occurrence records the receipt. Look for that exact
@@ -227,7 +226,7 @@ export class SchedulesService {
           .select("id")
           .where("project_id", "=", projectId)
           .where("workflow_name", "=", occurrence.workflowName)
-          .where("correlation_key", "=", correlationKey)
+          .where("delivery_key", "=", deliveryKey)
           .orderBy("created_at", "asc")
           .executeTakeFirst();
         if (existingRun) {
@@ -246,8 +245,7 @@ export class SchedulesService {
           enablementIds: [occurrence.enablementId],
           activationIds: [occurrence.activationId],
           environment: occurrence.environment,
-          correlationKey,
-          onConflict: "ignore",
+          deliveryKey,
           payload: {
             activationId: occurrence.activationId,
             scheduledFor: occurrence.scheduledFor.toISOString(),

@@ -15,7 +15,12 @@ import {
 import { InProcessRunner } from "@catamorphic/agent-runner";
 import { agentQuestionJsonSchema } from "@catamorphic/sandbox";
 import { afterEach, describe, expect, it } from "vitest";
-import { createAcpAdapter, modelChoice } from "../adapter.js";
+import {
+  createAcpAdapter,
+  effortChoice,
+  modelChoice,
+  turnUsage,
+} from "../adapter.js";
 import { loopbackModelEnv, serveLoopbackModel } from "../model-endpoint.js";
 
 /*
@@ -962,6 +967,50 @@ describe("ACP adapter", () => {
     },
   );
 
+  it("reports the turn's usage: its tokens, context, and what this turn cost", async () => {
+    const space = workspace();
+    const usage = (turn: ReturnType<typeof run>) =>
+      turn
+        .events()
+        .filter((event) => event.type === "usage")
+        .map((event) => (event.type === "usage" ? event.usage : null));
+    const first = run(
+      attempt(space, "hello", {
+        env: { TEST_AGENT_STATE: space.stateFile, TEST_AGENT_USAGE: "1" },
+      }),
+    );
+    await first.finished();
+    expect(usage(first)).toEqual([
+      {
+        inputTokens: 120,
+        outputTokens: 30,
+        cachedInputTokens: 900,
+        cacheCreationTokens: 100,
+        reasoningTokens: 10,
+        costUsd: 0.01,
+        contextTokens: 1_000,
+        contextWindow: 200_000,
+      },
+    ]);
+    // A reopened session: its cost so far, as reported on load, is not
+    // this turn's.
+    const second = run(
+      attempt(space, "again", {
+        thread: {
+          mode: "resume",
+          providerThreadId: "thread",
+          nativeRef: { id: "session-1", strength: "strong" },
+        },
+        env: { TEST_AGENT_STATE: space.stateFile, TEST_AGENT_USAGE: "1" },
+      }),
+    );
+    await second.finished();
+    expect(usage(second)).toEqual([
+      expect.objectContaining({ costUsd: 0.01, contextTokens: 2_000 }),
+    ]);
+    expect(usage(second)[0]?.costUsd).toBeCloseTo(0.01, 10);
+  });
+
   it("fails the turn clearly when the agent's command cannot start", async () => {
     const space = workspace();
     const turn = run(
@@ -988,6 +1037,7 @@ async function fakeGateway(grantDirectory: string) {
   const seen: Array<{ authorization: string; body: string }> = [];
   let grant = "grant-1";
   let renewal: string | undefined;
+  let refusals = 0;
   let revision = 0;
   const publish = (value: string) => {
     fs.mkdirSync(grantDirectory, { recursive: true });
@@ -1005,6 +1055,17 @@ async function fakeGateway(grantDirectory: string) {
     request.on("end", () => {
       const authorization = String(request.headers.authorization ?? "");
       seen.push({ authorization, body });
+      if (refusals > 0) {
+        refusals -= 1;
+        response.writeHead(429, {
+          "content-type": "application/json",
+          "retry-after": "2",
+        });
+        response.end(
+          JSON.stringify({ error: { message: "Rate limited by provider" } }),
+        );
+        return;
+      }
       if (renewal) {
         grant = renewal;
         renewal = undefined;
@@ -1041,6 +1102,10 @@ async function fakeGateway(grantDirectory: string) {
     },
     renewDuringNextCall: (next: string) => {
       renewal = next;
+    },
+    /** Answer the next `count` calls 429, as a provider out of capacity. */
+    refuse: (count: number) => {
+      refusals = count;
     },
     close: () =>
       new Promise<void>((resolve) => {
@@ -1149,6 +1214,187 @@ describe("ACP agents on a model connection (ADR 0255)", () => {
     }
   });
 
+  it("reports a refused model call as a provider retry, and new output as resumed (ADR 0298)", async () => {
+    const space = workspace();
+    const gateway = await fakeGateway(path.join(space.dir, "grant"));
+    gateway.refuse(1);
+    try {
+      const before = Date.now();
+      const turn = run({
+        ...gatewayAttempt(space, gateway),
+        input: { itemId: "input", text: "[[model retry]]", attachments: [] },
+      });
+      await turn.finished();
+      expect(turn.text("assistant_message")).toBe(
+        "Model said (200): hi from deepseek/v4-flash",
+      );
+      const provider = turn
+        .events()
+        .filter(
+          (event) =>
+            event.type === "provider.retrying" ||
+            event.type === "provider.resumed",
+        );
+      expect(provider).toEqual([
+        {
+          type: "provider.retrying",
+          error: { message: "Rate limited by provider", kind: "rate_limit" },
+          attempt: null,
+          maxAttempts: null,
+          retryAt: expect.any(String),
+        },
+        { type: "provider.resumed" },
+      ]);
+      const [retry] = provider;
+      const at =
+        retry?.type === "provider.retrying" && retry.retryAt
+          ? Date.parse(retry.retryAt)
+          : 0;
+      expect(at).toBeGreaterThanOrEqual(before + 2_000);
+      expect(at).toBeLessThan(Date.now() + 2_000);
+      // Retrying, then its answer: the thought before it proves nothing.
+      const kinds = turn.events().map((event) => event.type);
+      expect(kinds.indexOf("provider.retrying")).toBeLessThan(
+        kinds.indexOf("provider.resumed"),
+      );
+    } finally {
+      await gateway.close();
+    }
+  });
+
+  it("reports the provider resumed when the retried call is answered, though its output is a tool call", async () => {
+    const space = workspace();
+    const gateway = await fakeGateway(path.join(space.dir, "grant"));
+    gateway.refuse(1);
+    try {
+      const turn = run({
+        ...gatewayAttempt(space, gateway),
+        input: {
+          itemId: "input",
+          text: "[[model retry quiet]]",
+          attachments: [],
+        },
+      });
+      await turn.finished();
+      expect(turn.completed()).toMatchObject({ status: "completed" });
+      expect(
+        turn
+          .events()
+          .filter(
+            (event) =>
+              event.type === "provider.retrying" ||
+              event.type === "provider.resumed",
+          )
+          .map((event) => event.type),
+      ).toEqual(["provider.retrying", "provider.resumed"]);
+    } finally {
+      await gateway.close();
+    }
+  });
+
+  it("applies the effort after the model, through the agent's thought level option", async () => {
+    const space = workspace();
+    const gateway = await fakeGateway(path.join(space.dir, "grant"));
+    try {
+      const turn = run({
+        ...gatewayAttempt(space, gateway, {
+          TEST_AGENT_MODELS: "1",
+          TEST_AGENT_EFFORT: "low,high",
+        }),
+        effort: "high",
+      });
+      await turn.finished();
+      expect(turn.completed()).toMatchObject({ status: "completed" });
+      const state = space.state() as ReturnType<typeof space.state> & {
+        sessions: Record<string, { model?: string; effort?: string }>;
+      };
+      expect(state.sessions["session-1"]).toMatchObject({
+        model: "deepseek/v4-flash",
+        effort: "high",
+      });
+      expect(
+        turn.events().filter((event) => event.type === "setting.unapplied"),
+      ).toEqual([]);
+    } finally {
+      await gateway.close();
+    }
+  });
+
+  it("says so when the agent offers no such effort, refuses it, or offers none", async () => {
+    const space = workspace();
+    const gateway = await fakeGateway(path.join(space.dir, "grant"));
+    const unapplied = async (
+      effort: "medium" | "max",
+      env: Record<string, string>,
+    ) => {
+      const turn = run({ ...gatewayAttempt(space, gateway, env), effort });
+      await turn.finished();
+      expect(turn.completed()).toMatchObject({ status: "completed" });
+      return turn
+        .events()
+        .filter((event) => event.type === "setting.unapplied");
+    };
+    try {
+      const levels = {
+        TEST_AGENT_MODELS: "1",
+        TEST_AGENT_EFFORT: "low,high,max",
+      };
+      expect(await unapplied("medium", levels)).toEqual([
+        {
+          type: "setting.unapplied",
+          setting: "effort",
+          requested: "medium",
+          reason:
+            "test-agent offers no effort medium for deepseek/v4-flash; it offers low, high, max, default. The turn runs at its own setting.",
+        },
+      ]);
+      expect(await unapplied("max", levels)).toEqual([
+        expect.objectContaining({
+          setting: "effort",
+          requested: "max",
+          reason: expect.stringMatching(
+            /^test-agent refused effort max: .*max is not offered/,
+          ),
+        }),
+      ]);
+      expect(await unapplied("medium", { TEST_AGENT_MODELS: "1" })).toEqual([
+        expect.objectContaining({
+          setting: "effort",
+          reason:
+            "test-agent offers no effort setting for deepseek/v4-flash, so effort medium is not applied.",
+        }),
+      ]);
+    } finally {
+      await gateway.close();
+    }
+  });
+
+  it("says so when the agent offers no such model", async () => {
+    const space = workspace();
+    const gateway = await fakeGateway(path.join(space.dir, "grant"));
+    try {
+      const turn = run({
+        ...gatewayAttempt(space, gateway, { TEST_AGENT_MODELS: "1" }),
+        model: "kimi-k3",
+        input: { itemId: "input", text: "hello", attachments: [] },
+      });
+      await turn.finished();
+      expect(
+        turn.events().filter((event) => event.type === "setting.unapplied"),
+      ).toEqual([
+        {
+          type: "setting.unapplied",
+          setting: "model",
+          requested: "kimi-k3",
+          reason:
+            "test-agent offers no model kimi-k3; it offers default-model, deepseek/v4-flash.",
+        },
+      ]);
+    } finally {
+      await gateway.close();
+    }
+  });
+
   it("closes its model endpoint with the turn", async () => {
     const space = workspace();
     const gateway = await fakeGateway(path.join(space.dir, "grant"));
@@ -1237,6 +1483,61 @@ describe("choosing the definition's model", () => {
     });
     expect(modelChoice({ options: [], model: "c" })).toBeUndefined();
     expect(modelChoice({ options: undefined, model: "c" })).toBeUndefined();
+  });
+});
+
+describe("choosing the effort and counting usage", () => {
+  const thought = (currentValue: string, values: string[]) =>
+    ({
+      id: "effort",
+      name: "Effort",
+      category: "thought_level",
+      type: "select",
+      currentValue,
+      options: values.map((value) => ({ value, name: value.toUpperCase() })),
+    }) as Parameters<typeof effortChoice>[0]["options"] extends
+      | readonly (infer O)[]
+      | null
+      | undefined
+      ? O
+      : never;
+
+  it("finds the level by value or name, and says what it offers otherwise", () => {
+    expect(
+      effortChoice({
+        options: [thought("default", ["low", "high"])],
+        effort: "high",
+      }),
+    ).toEqual({ kind: "set", configId: "effort", value: "high" });
+    expect(
+      effortChoice({
+        options: [thought("high", ["low", "high"])],
+        effort: "high",
+      }),
+    ).toEqual({ kind: "chosen" });
+    expect(
+      effortChoice({ options: [thought("low", ["l", "h"])], effort: "low" }),
+    ).toEqual({ kind: "unknown", offered: ["l", "h"] });
+    expect(effortChoice({ options: [], effort: "low" })).toEqual({
+      kind: "absent",
+    });
+  });
+
+  it("leaves out what the agent did not say, and a reopened session's cost without a figure from before", () => {
+    expect(
+      turnUsage({ usage: null, spend: {}, newSession: true }),
+    ).toBeUndefined();
+    expect(
+      turnUsage({ usage: null, spend: { costNow: 0.5 }, newSession: false }),
+    ).toBeUndefined();
+    expect(
+      turnUsage({
+        usage: { inputTokens: 1, outputTokens: 2, totalTokens: 3 },
+        spend: {},
+        newSession: false,
+        model: "deepseek/v4-flash",
+      }),
+    ).toEqual({ model: "deepseek/v4-flash", inputTokens: 1, outputTokens: 2 });
   });
 });
 
@@ -1334,6 +1635,84 @@ describe("the loopback model endpoint", () => {
     } finally {
       model.close();
       await upstream.close();
+    }
+  });
+
+  /** An endpoint before an upstream answering `answer()` to every call. */
+  const refusing = async (answer: () => { status: number; body: string }) => {
+    const upstream = await upstreamServer((request, response) => {
+      request.resume();
+      request.on("end", () => {
+        const { status, body } = answer();
+        response.writeHead(status, { "content-type": "application/json" });
+        response.end(body);
+      });
+    });
+    const refusals: Array<{ status: number; message: string }> = [];
+    let answered = 0;
+    const model = await serveLoopbackModel({
+      access: {
+        kind: "gateway",
+        api: "openai",
+        baseUrl: upstream.baseUrl,
+        grantDirectory: grantDirectory(),
+      },
+      onRefused: ({ status, message }) => refusals.push({ status, message }),
+      onAnswered: () => {
+        answered += 1;
+      },
+    });
+    return {
+      refusals,
+      answered: () => answered,
+      call: () =>
+        fetch(`${model.baseUrl}/chat/completions`, {
+          method: "POST",
+          headers: { authorization: `Bearer ${model.apiKey}` },
+          body: "{}",
+        }),
+      close: async () => {
+        model.close();
+        await upstream.close();
+      },
+    };
+  };
+
+  it("reports only refusals that pass: not 501 or 505, but 500, 502, 503, 504 and 529", async () => {
+    let status = 501;
+    const endpoint = await refusing(() => ({
+      status,
+      body: '{"error":{"message":"refused"}}',
+    }));
+    try {
+      for (const code of [501, 505, 500, 502, 503, 504, 529, 200]) {
+        status = code;
+        expect((await endpoint.call()).status).toBe(code);
+      }
+      expect(endpoint.refusals.map((refusal) => refusal.status)).toEqual([
+        500, 502, 503, 504, 529,
+      ]);
+      expect(endpoint.refusals[0]?.message).toBe("refused");
+      expect(endpoint.answered()).toBe(1);
+    } finally {
+      await endpoint.close();
+    }
+  });
+
+  it("hands a refusal's body on whole, however large, reading only its start for the words", async () => {
+    const big = JSON.stringify({
+      error: { message: "Overloaded", detail: "x".repeat(100 * 1024) },
+    });
+    const endpoint = await refusing(() => ({ status: 503, body: big }));
+    try {
+      const overloaded = await endpoint.call();
+      expect(overloaded.status).toBe(503);
+      expect(await overloaded.text()).toBe(big);
+      expect(endpoint.refusals).toEqual([
+        { status: 503, message: expect.any(String) },
+      ]);
+    } finally {
+      await endpoint.close();
     }
   });
 

@@ -34,6 +34,7 @@ export const processOutputSchema = z.object({
 export const runSnapshotSchema = z.object({
   runId: z.string(),
   status: z.enum([
+    "queued",
     "pending",
     "running",
     "waiting",

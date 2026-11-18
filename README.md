@@ -118,7 +118,8 @@ calls require the turn's exact attempt and live lease; Git and HTTP
 background access keep their normal grant lifetime. The gateway
 can pin the providers an aggregator routes to; work that needs a machine can
 wait for one, and machine rules can create machines on demand and remove
-them when idle. See
+them when idle, on Hetzner Cloud or on any cloud through two workflows of a
+project (an EC2 recipe ships as a pack). See
 [the machine setup and recovery model](skills/setup-work-server/references/cluster-deployment.md).
 The Work server is single-tenant because its local-process execution can access
 the host machine. Run one trusted organization or household per deployment.
@@ -291,13 +292,24 @@ A result starts a new turn if the parent has finished. An agent starts a copy of
 another agent it is granted, on the model and effort the work needs, or
 read-only for a review (on harnesses with a read-only mode); grants in its
 definition limit whom it may start and what it may choose, and by default it
-may start copies of itself on any model and effort.
+may start copies of itself on any model and effort. Agents on a Work server
+delegate the same way, from their sandbox. A subagent works in its parent's
+workspace by default, on the same files with nothing to set up again, or in
+one of its own started where the parent's started; a result it reaches in a
+later turn reaches the parent too.
+An agent's definition can also declare typed results, each a JSON Schema: the
+agent submits them with `submit_result`, Work records only a value its schema
+accepts and returns field errors to the agent in the same turn, and parents,
+workflows (`results`, `session.result-recorded`), the project MCP and REST read
+them with the chat, turn and input that produced them.
 Archive recursively stops active work only after reporting its impact, while
 keeping the session tree restorable and searchable. Session source records
 whether a conversation began on desktop, mobile, Slack, Claude, MCP, or API.
 (ADRs [0089](docs/decisions/0089-project-shaped-member-shell.md),
 [0090](docs/decisions/0090-first-class-subsessions-and-delegation.md),
-[0271](docs/decisions/0271-agents-delegate-by-naming-an-agent-and-its-settings.md))
+[0271](docs/decisions/0271-agents-delegate-by-naming-an-agent-and-its-settings.md),
+[0322](docs/decisions/0322-server-agents-start-subagents-in-their-workspace.md),
+[0323](docs/decisions/0323-agents-submit-typed-results.md))
 
 ## Durable workflows
 
@@ -319,6 +331,15 @@ Role access is separate from unattended consent. Each member previews and
 enables an exact deployed workflow with its trigger, Environment, agent, and
 connection requirements. Connecting an account may complete that chosen flow;
 it never silently enables every compatible automation.
+
+Project automations follow the published program: each revision of `main`
+that builds and asks for no new authority goes live by itself, after the
+project's deploy workflow (named in `.work/project.json`) runs once at that
+revision; a revision that needs new consent waits for its owner. A member's
+own automation follows once the member turns it on. Host project hooks can return
+per-project secrets on create and are retried on delete until done
+([0330](docs/decisions/0330-enablements-follow-the-published-program.md),
+[0331](docs/decisions/0331-project-deploy-workflow-and-host-project-hooks.md)).
 
 ## Apps
 
@@ -653,18 +674,25 @@ gateway connection whose named operations are its capabilities
 The `pull-request-reviews` pack is the larger one: a code and
 security review of every pull request, in a chat per pull request on a
 dedicated review pool, verified by running the change and reported to a
-workflow outside the sandbox that calls a deployment-owned publisher hook.
-The hook serializes commit-bound reviews, check runs and replies through an
-application Postgres ledger, reconciles uncertain writes, and leaves mutable
-PR descriptions, dismissals and thread resolution to people
+workflow outside the sandbox. It queues per pull request, so overlapping
+turns publish commit-bound reviews, check runs and replies one at a time,
+records each commit's verdict on the review chat, stamps every write so a retry
+finds it, and leaves mutable PR descriptions, dismissals and thread
+resolution to people
 ([Review pull requests](skills/setup-work-server/references/review-pull-requests.md)).
+A server no sender can reach polls instead: a workflow with `events:write`
+records events of the project's own kinds
+(`host["catamorphic.events"].record`), checked against each kind's filters,
+deduplicated by id and dispatched like deliveries; the `github-polling` pack
+feeds the GitHub kinds this way, so the review pack runs on a private server.
 See [`INTEGRATION.md`](INTEGRATION.md) and ADRs
 [0039](docs/decisions/0039-custom-trigger-kinds.md) /
 [0042](docs/decisions/0042-parameterized-trigger-kinds-and-workflow-tools-mcp.md) /
 [0171](docs/decisions/0171-project-trigger-kinds-and-declarative-webhook-ingress.md) /
 [0179](docs/decisions/0179-integrations-from-project-code-slack.md) /
 [0181](docs/decisions/0181-project-chats-use-their-environments-bindings.md) /
-[0259](docs/decisions/0259-reviews-post-from-a-workflow.md).
+[0259](docs/decisions/0259-reviews-post-from-a-workflow.md) /
+[0326](docs/decisions/0326-workflows-record-project-events.md).
 
 ### Long-lived journeys: correlation keys, signals, shared rate budgets
 
@@ -935,9 +963,9 @@ Direction, not shipped. Tracked in [`TODO.md`](TODO.md):
 
 - **More desktop platforms**: Intel Mac validation, then signed Windows and
   Linux packages.
-- **ACP beyond the desktop**: the desktop runs a project's local ACP agents
-  (`kind: "acp"` with `acp.command`, such as Hermes); the remote endpoint
-  transport and ACP agents on the Work server are next.
+- **ACP, the rest**: ACP agents run on the desktop and in a Work server's
+  sandbox; the remote endpoint transport, a warm process between turns,
+  and carrying an agent's own session store across sandboxes are next.
 - **TS `defineAgent`**: a typed authoring layer that compiles to the
   committed `.work/agents/<slug>.json` substrate.
 - **Review-mode collaboration**: PR-first sync for shared projects, invites,

@@ -324,6 +324,8 @@ describe("agent session coordination", () => {
     notification?: { title?: string; body?: string };
   }> = [];
   const checkoutBySession = new Map<string, string>();
+  /** Chats the host was asked to give a checkout of their own. */
+  const plannedCheckouts: string[] = [];
 
   const snapshot = async (sessionId: string, projectId: string) =>
     (await sessions.get(identity, projectId, sessionId)).snapshot;
@@ -374,10 +376,27 @@ describe("agent session coordination", () => {
     const agents = new Map(
       [
         registeredAgent("worker"),
-        // A host that offers no delegation tool (a server's agent).
+        // A host that serves no subsession tool: core serves them (ADR 0322).
         {
           id: "plain",
           harness: { placement: "host", adapter: provider },
+          topology: "native",
+        } satisfies RegisteredCodingAgent,
+        // A host that serves waiting on subsessions but not starting one.
+        {
+          id: "waiter",
+          harness: {
+            placement: "host",
+            adapter: provider,
+            hostTools: [
+              {
+                name: "wait_for_subsessions",
+                description: "Wait for subagents",
+                parameters: {},
+                execute: async () => null,
+              },
+            ],
+          },
           topology: "native",
         } satisfies RegisteredCodingAgent,
         registeredAgent("small", { sandboxing: "contained" }),
@@ -469,14 +488,34 @@ describe("agent session coordination", () => {
       resolve: async ({
         projectId,
         sessionId,
+        sharedWith,
+      }: {
+        projectId: string;
+        sessionId: string;
+        sharedWith?: string;
+      }) => {
+        // A shared subsession works in its parent's checkout (ADR 0322).
+        const checkout =
+          checkoutBySession.get(sharedWith ?? sessionId) ??
+          path.join(tmpDir, projectId);
+        await fs.mkdir(checkout, { recursive: true });
+        return {
+          path: checkout,
+          owned: !sharedWith && checkoutBySession.has(sessionId),
+        };
+      },
+      plan: async ({
+        projectId,
+        sessionId,
       }: {
         projectId: string;
         sessionId: string;
       }) => {
-        const checkout =
-          checkoutBySession.get(sessionId) ?? path.join(tmpDir, projectId);
-        await fs.mkdir(checkout, { recursive: true });
-        return { path: checkout, owned: checkoutBySession.has(sessionId) };
+        plannedCheckouts.push(sessionId);
+        checkoutBySession.set(
+          sessionId,
+          path.join(tmpDir, projectId, "worktrees", sessionId),
+        );
       },
       checkpoint: ({
         sessionId,
@@ -1486,6 +1525,56 @@ describe("agent session coordination", () => {
     );
   });
 
+  it("puts a child in its parent's checkout, or plans one of its own (ADR 0322)", async () => {
+    const project = await projects.create(identity, {
+      name: "Shared checkouts",
+    });
+    const parent = await sessions.create(identity, project.id);
+    // The parent works in its own worktree, not the project folder.
+    const parentCheckout = path.join(tmpDir, project.id, "parent-worktree");
+    checkoutBySession.set(parent.id, parentCheckout);
+    const shared = await sessions.createSubsession(
+      identity,
+      project.id,
+      parent.id,
+      { task: "Read the notes" },
+    );
+    expect(shared.workspace).toBe("shared");
+    expect(shared.session.workspaceSessionId).toBe(parent.id);
+    expect(plannedCheckouts).not.toContain(shared.session.id);
+    await vi.waitFor(
+      () =>
+        expect(
+          settledTurns.find((turn) => turn.sessionId === shared.session.id)
+            ?.workingDirectory,
+        ).toBe(parentCheckout),
+      { timeout: 10_000 },
+    );
+    // Its checkpoint is the parent checkout's.
+    expect(checkpointedTurns).toContainEqual({
+      sessionId: parent.id,
+      workingDirectory: parentCheckout,
+    });
+
+    const own = await sessions.createSubsession(
+      identity,
+      project.id,
+      parent.id,
+      { task: "Write the notes", workspace: "own" },
+    );
+    expect(own.workspace).toBe("own");
+    expect(own.session.workspaceSessionId).toBeNull();
+    expect(plannedCheckouts).toContain(own.session.id);
+    await vi.waitFor(
+      () =>
+        expect(
+          settledTurns.find((turn) => turn.sessionId === own.session.id)
+            ?.workingDirectory,
+        ).toBe(path.join(tmpDir, project.id, "worktrees", own.session.id)),
+      { timeout: 10_000 },
+    );
+  });
+
   it("waits on the subsessions still running, not one that settled before", async () => {
     const project = await projects.create(identity, {
       name: "Waiting on subagents",
@@ -1544,7 +1633,7 @@ describe("agent session coordination", () => {
     );
   });
 
-  it("tells only an agent given spawn_subsession about its subagents", async () => {
+  it("tells only an agent served spawn_subsession about its subagents", async () => {
     const project = await projects.create(identity, {
       name: "Subagent prompt",
     });
@@ -1565,7 +1654,9 @@ describe("agent session coordination", () => {
     expect(await promptOf("worker")).toContain(
       "Subsessions are your subagents",
     );
-    expect(await promptOf("plain")).not.toContain("subsession");
+    // Its host serves none: Work's own reach it (ADR 0322).
+    expect(await promptOf("plain")).toContain("Subsessions are your subagents");
+    expect(await promptOf("waiter")).not.toContain("subsession");
   });
 
   it("inherits the parent agent for a manually created subsession", async () => {
@@ -3418,6 +3509,77 @@ describe("agent session coordination", () => {
     await expect(history({ through: randomUUID() })).rejects.toThrow(
       "No message in this chat has that id",
     );
+  });
+
+  it("totals a chat's model usage for workflows, with its subsessions when asked (ADR 0329)", async () => {
+    const project = await projects.create(identity, { name: "Usage" });
+    const session = await sessions.create(identity, project.id);
+    await db
+      .updateTable("agent_sessions")
+      .set({ chat_key: "pr-42" })
+      .where("id", "=", session.id)
+      .execute();
+    const child = randomUUID();
+    await db
+      .insertInto("agent_sessions")
+      .values({
+        id: child,
+        project_id: project.id,
+        external_user_id: identity.externalUserId,
+        parent_session_id: session.id,
+      })
+      .execute();
+    for (const [sessionId, output, cost] of [
+      [session.id, 10, "0.5"],
+      [child, 20, null],
+    ] as const)
+      await db
+        .insertInto("model_usage")
+        .values({
+          tenant_id: identity.tenantId,
+          project_id: project.id,
+          agent_session_id: sessionId,
+          allocation_id: randomUUID(),
+          connection_id: randomUUID(),
+          alias: "openrouter",
+          endpoint: "chat/completions",
+          model: "opus",
+          output_tokens: output,
+          cost_usd: cost,
+          metered: true,
+          settled_at: new Date(),
+        })
+        .execute();
+    const actions = new SessionActionsService(db, sessions, () => undefined);
+    const usage = (args: Record<string, unknown>) =>
+      actions.execute({
+        identity,
+        projectId: project.id,
+        operation: "usage",
+        args,
+        author: { kind: "user", externalUserId: identity.externalUserId },
+      });
+    expect(await usage({ sessionId: session.id })).toMatchObject({
+      sessionId: session.id,
+      family: false,
+      sessions: 1,
+      calls: 1,
+      outputTokens: 10,
+      costUsd: 0.5,
+      unpricedCalls: 0,
+    });
+    expect(await usage({ sessionId: session.id, family: true })).toMatchObject({
+      family: true,
+      sessions: 2,
+      calls: 2,
+      outputTokens: 30,
+      costUsd: 0.5,
+      unpricedCalls: 1,
+      models: [{ model: "opus", calls: 2, unpricedCalls: 1 }],
+    });
+    await expect(
+      usage({ sessionId: session.id, family: "yes" }),
+    ).rejects.toThrow();
   });
 
   it("retries workflow child creation without duplicating a delegated session", async () => {

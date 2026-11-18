@@ -202,13 +202,18 @@ const SESSION_OPERATION_LABELS: Record<string, string> = {
   inspect: "Look at a chat",
   list: "List chats",
   history: "Read a chat",
+  usage: "Read a chat's model usage",
   archive: "Archive a chat",
   unarchive: "Restore a chat",
   interrupt: "Interrupt a chat",
   complete: "Mark a chat's work done",
   reopen: "Reopen a chat's work",
   stopWatcher: "Stop a watcher",
+  exec: "Run a command in a chat's workspace",
   stop: "Stop this automation",
+  find: "Find a chat",
+  close: "Close a chat",
+  setMetadata: "Set chat metadata",
 };
 
 /**
@@ -1910,6 +1915,7 @@ function parseProjectTriggerKind(opts: {
   let description: string | undefined;
   let from: WorkflowTriggerBinding | undefined;
   let where: JsonConstant | undefined;
+  let recordable = false;
   for (const property of literal.getProperties()) {
     const key = Node.isPropertyAssignment(property)
       ? readPropertyName(property.getNameNode())
@@ -1952,9 +1958,19 @@ function parseProjectTriggerKind(opts: {
         throw new Error(`Trigger kind '${exportName}': ${errors.join("; ")}`);
       }
       where = result.value;
+    } else if (key === "recordable") {
+      if (
+        value.getKind() !== SyntaxKind.TrueKeyword &&
+        value.getKind() !== SyntaxKind.FalseKeyword
+      ) {
+        throw new Error(
+          `Trigger kind '${exportName}' must write recordable as true or false`,
+        );
+      }
+      recordable = value.getKind() === SyntaxKind.TrueKeyword;
     } else {
       throw new Error(
-        `Trigger kind '${exportName}' has an unknown property '${key}' (use name, description, from and where)`,
+        `Trigger kind '${exportName}' has an unknown property '${key}' (use name, description, from, where and recordable)`,
       );
     }
   }
@@ -1979,6 +1995,7 @@ function parseProjectTriggerKind(opts: {
       ...(from.where !== undefined ? { where: from.where } : {}),
     },
     ...(where !== undefined ? { where } : {}),
+    ...(recordable ? { recordable: true as const } : {}),
     sourceRange: getSourceRange(call),
   };
 }
@@ -2731,6 +2748,7 @@ function buildDefinedWorkflowGraph(
     inputSchema,
     outputSchema,
     triggers: triggerBindings,
+    ...concurrencyOf(definition.config),
     connections: parseWorkflowConnections(definition.config),
     permissions: parseWorkflowPermissions(definition.config),
     canSuspend,
@@ -2806,6 +2824,60 @@ function parseWorkflowConnections(
       ...(typeof optional === "boolean" ? { optional } : {}),
     };
   });
+}
+
+/** A dot path into the run input: identifiers joined by dots. */
+const CONCURRENCY_KEY_PATH = /^[A-Za-z_$][\w$-]*(\.[A-Za-z_$][\w$-]*)*$/;
+const CONFLICT_POLICIES = ["queue", "ignore", "restart", "error"] as const;
+
+/** `concurrency` as constant data (ADR 0325), or nothing when undeclared. */
+function concurrencyOf(config: ObjectLiteralExpression): {
+  concurrency?: import("./types.js").WorkflowConcurrency;
+} {
+  const property = config.getProperty("concurrency");
+  if (!property) return {};
+  if (!Node.isPropertyAssignment(property)) {
+    throw new Error(
+      "Workflow 'concurrency' must be a constant object property",
+    );
+  }
+  const initializer = property.getInitializer();
+  const value = initializer
+    ? workflowConnectionLiteral(initializer)
+    : undefined;
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    throw new Error(
+      "Workflow 'concurrency' must be a constant object: { key, onConflict }",
+    );
+  }
+  const extra = Object.keys(value).filter(
+    (name) => name !== "key" && name !== "onConflict",
+  );
+  if (extra.length > 0) {
+    throw new Error(
+      `Workflow 'concurrency' takes only key and onConflict, not ${extra.join(", ")}`,
+    );
+  }
+  const key = "key" in value ? value.key : undefined;
+  if (
+    typeof key !== "string" ||
+    key.length > 200 ||
+    !CONCURRENCY_KEY_PATH.test(key)
+  ) {
+    throw new Error(
+      "Workflow concurrency 'key' must be a dot path into the run input, such as payload.session.key",
+    );
+  }
+  const onConflict = "onConflict" in value ? value.onConflict : undefined;
+  const policy = CONFLICT_POLICIES.find(
+    (candidate) => candidate === onConflict,
+  );
+  if (!policy) {
+    throw new Error(
+      "Workflow concurrency 'onConflict' must be queue, ignore, restart or error",
+    );
+  }
+  return { concurrency: { key, onConflict: policy } };
 }
 
 /** A concrete `thing:action` permission; wildcards are for roles only. */

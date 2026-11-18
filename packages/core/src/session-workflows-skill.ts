@@ -42,10 +42,11 @@ arrives late if this computer is off (or name the machine that runs it when it i
 not this one), and that archiving the chat cancels it. Say it in plain words.
 
 Session event kinds: session.created, session.message-received, session.message-sent,
-session.turn-changed, session.state-changed, session.work-changed, and
-session.authority-changed. Config may select sessionId, agentId, statuses, and
-workStatus. Omitting sessionId observes authorized matching sessions in the
-project. Example: trigger("session.turn-changed", { sessionId: "actual-id",
+session.turn-changed, session.state-changed, session.work-changed,
+session.authority-changed, session.result-recorded, and
+session.workspace-changed. Config may select sessionId, agentId, statuses,
+workStatus, and (for results) names. Omitting sessionId observes authorized
+matching sessions in the project. Example: trigger("session.turn-changed", { sessionId: "actual-id",
 statuses: ["completed", "failed"] }). Never guess an id. Keyed chats carry their
 key in payload.session.key (null otherwise), so where selects a family of chats
 without starting runs for the rest: where: { payload: { session: { key: {
@@ -56,8 +57,11 @@ library in writing-workflows. A host without a public webhook URL (the desktop)
 can observe for it instead: pass the host's event source to create_watcher
 (eventSource: "github"). The host polls the repository with your GitHub
 connection from the watcher's start and records events shaped like the webhook's
-deliveries, with payload.hostVerified true in place of a signature, so the same
-trigger kinds and where filters match on every host.
+deliveries, with payload.origin { type: "host" } in place of a signature, so the
+same trigger kinds and where filters match on every host. A server without a
+public URL feeds those kinds for the whole project instead with a workflow that
+polls and records them (writing-workflows, "Recording events"; the
+github-polling pack).
 
 Events are normalized Project Events. input.payload.session is the snapshot at
 the transition; input.payload.detail contains the message/turn/visibility change.
@@ -76,9 +80,10 @@ and session_reopen for new work. Observe session.work-changed with
 ## Host calls and authoring shape
 
 context.host["catamorphic.sessions"] provides typed inspect, list, history,
-deliver, create, fork, spawn, archive, unarchive, interrupt,
-complete, reopen, stopWatcher, and stop operations. Every host call is a
-boundary transition: RETURN it. Consume its result as the next boundary's input
+results, usage, deliver, create, fork, spawn, archive, unarchive, interrupt,
+complete, reopen, exec, stopWatcher, stop, and setMetadata operations. Every
+host call is a boundary transition: RETURN it. Consume its result as the next
+boundary's input
 (pass { state } as a second argument to keep data across it; the next boundary
 then receives { result, state }, see durable-workflows).
 Do not await it, put it inside a use-step helper, or invoke a second host call
@@ -257,6 +262,74 @@ export const closePullRequestChats = defineWorkflow(({ defineBoundary }) => ({
 }));
 \`\`\`
 
+### Commands in a chat's workspace
+
+exec runs a shell command in a chat's workspace and answers { exitCode, stdout,
+stderr, durationMs, timedOut } (the last 16 000 characters of each stream, the
+chat's secret values masked). Name
+the chat by sessionId or key, pass command, in, idempotencyKey, and optionally
+cwd (beneath the checkout), env and timeoutSeconds (default 600, at most 14 400).
+in: "session" runs as the agent's commands do: the chat's network, grants and
+secrets, from its checkout, starting its workspace when it has none. in: "setup"
+runs as the Environment's setup does (on the setup's own network, with only the
+secrets setup.secrets names, no grants) and only from the chat's setup workflow
+while Work sets the workspace up, ending by the setup's own time; anywhere else
+it is refused. When the setup run ends, whatever it started there is stopped. Installing new dependencies
+while a turn runs is not possible: a sandbox in use never gets the setup's
+network. Reuse what setup installed, or move the workspace so setup runs again.
+
+$WORK_PROGRAM names a copy of this run's .work/ folder at its deployed commit,
+outside the checkout, write bits removed: copy trusted files (review skills,
+prompts, scripts) from there, never from the change under review. cp keeps the
+read-only mode, so make copies writable (chmod -R u+w). A command longer than
+the boundary's attempt parks the run until it ends, holding none of its
+capacity; a retry with the same idempotencyKey answers with the same execution.
+A project chat answers project automations holding sessions:write, a member's
+chat only that member's workflows; each execution is written in the chat's log.
+Commands see the chat's checkout as the agent left it, and code the chat runs
+can change any file in its sandbox: this keeps a change from rewriting its own
+review procedure in its diff, not a hostile change from tampering at run time.
+
+An Environment's setup may name a workflow: { "setup": { "command": "pnpm install",
+"workflow": "prepareReview" } }. Work runs it after the command at the points it
+runs setup (every new workspace, when the base moves, when the setup changes),
+and the turn waits for it. Its input is { sessionId, key, agentId, reason:
+"created" | "rebuilt" | "base-moved" | "changed", workspace: { ref, commit } |
+null }. It runs through its project enablement, so enable it for the project
+with the permissions it declares (sessions:write for exec); one not enabled
+fails the setup and the agent is told, as when a step fails or it times out.
+A workspace subsessions share is their parent's: its setup workflow and its
+events name the parent, whichever chat's turn made it.
+
+session.workspace-changed reports detail.change: "ready" (its first workspace),
+"rebuilt" (made again), "moved" (a new base), "released" (given back) or "lost"
+(gone with its machine), with detail.reason and detail.workspace. statuses in
+trigger config selects changes: trigger("session.workspace-changed", { statuses:
+["moved"] }). Reacting never holds the turn.
+
+\`\`\`typescript
+import { type BoundaryContext, defineWorkflow } from "@catamorphic/workflow";
+type Setup = { sessionId: string; key: string | null; reason: string };
+
+/** @displayname Prepare a review workspace */
+export const prepareReview = defineWorkflow(({ defineBoundary }) => ({
+  permissions: ["sessions:write"],
+  steps: [
+    /** @displayname Put the trusted procedure in place */
+    defineBoundary({
+      run: ({ input, host }: BoundaryContext<Setup>) =>
+        host["catamorphic.sessions"].exec({
+          sessionId: input.sessionId,
+          in: "session",
+          command:
+            'rm -rf .work/skills/review && cp -R "$WORK_PROGRAM/skills/review" .work/skills/review && chmod -R u+w .work/skills/review',
+          idempotencyKey: "trusted:" + input.reason,
+        }),
+    }),
+  ],
+}));
+\`\`\`
+
 ### A chat per Slack thread
 
 Mentions of the Slack app become one project chat per thread, keyed
@@ -392,6 +465,30 @@ sandboxes need it.
   returns the chat's key, and through: "<messageId>" ends it at that message,
   so a workflow on session.turn-changed reads exactly the reply the event's
   detail.resultMessageId names, even after later turns.
+- results reads the typed values an agent submitted with submit_result
+  (ADR 0323), newest first: { sessionId | key, name?, family?, turnId?,
+  afterInput?, limit? }. An agent submits only results its committed definition declares
+  (\`"results": { "<name>": <JSON Schema> }\` in .work/agents/<slug>.json),
+  and only a value its schema accepts is recorded, so read results, never
+  parse a reply. Each result names its chat (family: true adds subsessions at
+  every depth), turn, input (the newest message the chat had taken in when it
+  was submitted, with its kind), commit and recordedAt. current is true while
+  no new request reached the chat since: a person's message, or words from a
+  workflow or a session outside the chat's own subsessions. Task notifications
+  and its subsessions' messages are its own work and keep it current. Pass
+  afterInput: <the messageId your deliver returned> to keep only results that
+  answer it, or turnId: <the settled turn's id> to read what that turn
+  submitted, whatever came after it. session.result-recorded fires
+  the moment one is recorded, mid-turn, with the result in input.payload.detail
+  (name, value, turnId, input, commit); select { names: ["review"] }. Compute
+  final checks (votes, coverage) in code over results, not in an agent.
+- usage is an authorized read of a chat's model calls through the gateway:
+  tokens per model, the summed cost providers reported (costUsd, US dollars,
+  null when none did), unpricedCalls (so the cost is a lower bound when
+  above zero), unmeteredCalls (calls whose usage could not be read, so the
+  tokens are a lower bound too) and openCalls still streaming. family: true
+  adds the subsessions below the chat that the caller may read. Work keeps no prices and no budgets: a project
+  that wants a limit or a report computes it from this.
 - deliver message_only records it without a model turn: people see it at
   once and the agent reads it with its next turn. queue starts work when idle
   or queues behind the active turn; steer adds the message to the turn working
@@ -442,7 +539,11 @@ sandboxes need it.
 - spawn starts a copy of the chat's agent unless agentId names another, and
   takes model and effort as the agent's delegation grants allow (a copy keeps
   the chat's model and effort otherwise); readOnly and delegate: false need no
-  grant. Fresh context
+  grant. The child works in the chat's workspace (workspace: "shared", the
+  default: its files as they are, nothing set up again); workspace: "own"
+  gives it one of its own started at the chat's base, for children that
+  write in parallel. Each result the child reaches later, woken by its own
+  background command or a message, reaches the chat too. Fresh context
   is the default. fork explicitly copies transcript history; create makes an
   independent conversation. Do not simulate children as untracked shell agents.
 - attention: "required" on deliver alerts the user to that exact message. It is
@@ -454,6 +555,17 @@ sandboxes need it.
 - archive stops the session tree's work and future temporary activations while
   preserving readable history. Follow archive preview and confirmStop requirements for stopping live work. Tab closure is
   unrelated. stop stops only the calling temporary activation and retains runs.
+
+inspect and find return the chat's metadata: named JSON values agents, people
+and workflows set (ADR 0226). setMetadata({ sessionId | key, set }) applies a
+merge patch: each key in set takes its value whole, null removes it, and keys
+not named stay. Keys are lowercase words joined by _, - or . (at most 32 keys,
+16 KB a value, 64 KB in all). Prefix the keys a workflow owns with its purpose
+(review.verdicts), and leave other keys alone. Closed and archived chats still
+take writes; only the host holding the chat's authority writes it, so a call
+elsewhere fails and the boundary retries. The same write twice changes
+nothing, so it takes no idempotencyKey. Queue the workflow per chat
+(concurrency, see writing-workflows) when it reads a key and then writes it.
 
 Use stable idempotencyKey values for operations that take them. deliver
 defaults to one delivery per run, chat and content, so a retried boundary never

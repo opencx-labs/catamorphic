@@ -732,6 +732,8 @@ export async function startEmbeddedServer(
               checkoutPath,
             ),
         }),
+      // A subsession that asked for its own workspace (ADR 0322).
+      plan: (input) => sessionCheckouts.plan(input),
       checkpoint: async (input) => {
         const checkout = await sessionCheckouts.describe(input);
         if (
@@ -798,6 +800,7 @@ export async function startEmbeddedServer(
     },
     projectHooks: [
       {
+        name: "work-desktop-workflow-connections",
         onProjectCreated: async () => syncWorkflowConnections(),
       },
     ],
@@ -989,12 +992,18 @@ export async function startEmbeddedServer(
       projectId,
       sessionId,
     );
+    // Sessions sharing one workspace work there by choice (ADR 0322).
+    const workspace = detail.workspaceSessionId ?? sessionId;
     return isolationConflictPeerSessionIds({
       projectId,
       agentId: detail.agentId,
       peers: (peers ?? [])
         .filter(
-          (peer) => peer.running && !(incognitoSessions?.has(peer.id) ?? false),
+          (peer) =>
+            peer.running &&
+            !(incognitoSessions?.has(peer.id) ?? false) &&
+            peer.id !== workspace &&
+            peer.workspaceSessionId !== workspace,
         )
         .map((peer) => ({ id: peer.id, agentId: peer.agentId })),
       defaultAgentId: (id) => agentRegistry.defaultAgentId(id),

@@ -28,6 +28,7 @@ export interface RunsPanelProps {
 }
 
 const STATUS_LABELS: Record<RunStatus, string> = {
+  queued: "Queued",
   pending: "Pending",
   running: "Running",
   waiting: "Waiting",
@@ -39,6 +40,7 @@ const STATUS_LABELS: Record<RunStatus, string> = {
 };
 
 const STATUS_COLORS: Record<RunStatus, string> = {
+  queued: "#a3a3a3",
   pending: "#a3a3a3",
   running: "#60a5fa",
   waiting: "#fbbf24",

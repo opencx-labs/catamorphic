@@ -335,6 +335,11 @@ export interface ProjectTriggerKind {
   /** The kind it builds on, as written in `from: trigger(...)`. */
   from: { kind: string; config: unknown; where?: unknown };
   where?: unknown;
+  /**
+   * Workflows may record this kind's events although a kind it builds on
+   * verifies senders (ADR 0326).
+   */
+  recordable?: true;
   sourceRange: SourceRange;
 }
 
@@ -349,6 +354,8 @@ export interface ResolvedTriggerBinding {
   where: unknown[];
   /** The project kind the workflow bound, kept for display. */
   projectKind?: string;
+  /** A kind along the chain lets workflows record its events (ADR 0326). */
+  recordable?: true;
 }
 
 export interface WorkflowGraph {
@@ -368,6 +375,12 @@ export interface WorkflowGraph {
   outputSchema: unknown;
   /** Host trigger kinds this workflow subscribes to. */
   triggers: WorkflowTriggerBinding[];
+  /**
+   * Runs about one subject take turns (ADR 0325): the dot path into the
+   * run input naming the subject, and what a run does while another is live
+   * for it. Absent when the workflow declares none.
+   */
+  concurrency?: WorkflowConcurrency;
   connections: WorkflowConnectionRequirement[];
   /**
    * Project permissions the workflow declares (ADR 0158): its runs get only
@@ -386,6 +399,11 @@ export interface WorkflowGraph {
   sourceCode: string;
   filePath?: string;
   projectFiles?: string[];
+}
+
+export interface WorkflowConcurrency {
+  key: string;
+  onConflict: "queue" | "ignore" | "restart" | "error";
 }
 
 export interface WorkflowConnectionRequirement {

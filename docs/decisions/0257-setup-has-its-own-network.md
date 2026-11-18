@@ -1,6 +1,6 @@
 # 0257: Setup has its own network
 
-- **Status:** Accepted (amends 0208)
+- **Status:** Accepted (amends 0208; amended by [0324](0324-workflows-run-commands-in-a-chats-workspace.md): a setup workflow's `exec in: "setup"` runs on this network)
 - **Date:** 2026-10-18
 - **Refines:** 0175, 0176, 0178, 0204, 0206, 0207, 0212
 

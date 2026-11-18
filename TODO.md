@@ -62,7 +62,9 @@
   dynamic tools instead of the loopback listener. Renew connection MCP
   (`mcp` channel) grants during long sessions. Serve project harness agents
   when the server has no control-plane model (today `/me` reports chat off).
-  A usage view for gateway usage (`model_usage`) per project and member.
+  Gateway usage is on spans and totalled per chat family (ADR 0329); a
+  project-wide usage page per member, and a `billing` failure kind with
+  provider retries surfaced by the ACP adapter, remain.
 - **Dev-shell follow-ups (ADR 0045).** PR review depth on the CodeHost
   seam: inline comments, approvals, merge-from-app; a human-facing worktree
   cleanup surface (agents can create and adopt worktrees, but Catamorphic
@@ -98,12 +100,24 @@
 - **ACP harness, the rest.** The desktop runs local ACP command agents
   (`acp.command`, ADR 0241), and a Work server runs them in the chat's
   sandbox on a model connection (ADR 0255), choosing the definition's model
-  through the agent's model option. Still to build: the remote endpoint
-  transport (`acp.endpoint`), effort through ACP, plans and usage over
-  ACP. A stdio MCP
-  bridge for agents that take no HTTP MCP (Work's tools ride
-  HTTP today, which Hermes accepts without advertising). A warm process
-  per thread instead of one per turn.
+  through the agent's model option, effort through its thought level
+  option, usage from its reports, and provider retries from the loopback
+  endpoint (ADR 0328). Still to build: the remote endpoint transport
+  (`acp.endpoint`), plans over ACP. A stdio MCP bridge for agents that take
+  no HTTP MCP (Work's tools ride HTTP today, which Hermes accepts without
+  advertising). A warm process per thread instead of one per turn: it
+  helps only the desktop (a sandbox runner owns one attempt) and needs a
+  host tool server that outlives attempts and routes to the current one,
+  since the agent binds its MCP servers at `session/new`. Carrying the
+  agent's own session across a replaced sandbox (ADR 0328 evaluated it):
+  ACP's `session/load` takes no history from the client, and OpenCode keeps
+  every session in one unbounded SQLite file beside its sign-ins, so the
+  hand-off carries results and open requests instead; a definition field
+  naming an agent's own export and import commands (OpenCode has both) is
+  the next step if a second agent offers the same. Retries for an ACP
+  agent on its own sign-in (ACP has no retry notice), and a reopened
+  session's turn cost when the agent reports only its total after the
+  turn. Effort for profile ACP agents in the desktop's settings.
   The remote-Catamorphic-server agent story rides the endpoint transport:
   a stock server exposes its agents over ACP and a project definition
   points at it, with `credentials.source: "secret"` carrying the token so

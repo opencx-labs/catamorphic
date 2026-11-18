@@ -1070,6 +1070,7 @@ export class DesktopAgentRegistry implements CodingAgentRegistry {
             },
       ...(persona ? { systemPrompt: persona } : {}),
       delegation: resolveProjectDelegation(def.delegation, projectId),
+      ...(def.results ? { results: def.results } : {}),
     };
   }
 

@@ -100,8 +100,9 @@ current schema. See [ADR 0296](../../docs/decisions/0296-one-oauth-token-endpoin
 | `connectionGuards` | Guards that review each gateway action (ADR 0162). Work ships none; a guard is host code (ADR 0183) |
 | `vaultKeys` | Credential vault keys from a key service instead of `WORK_VAULT_KEY` |
 | `directories` | Upstream directories (beyond Google Workspace) that keep accounts active or disable them (ADR 0161) |
-| `machineProvisioner` | Creates and destroys worker machines on a platform Work does not ship, for `custom` machine classes, so machine rules give people and teams their own machines, or machines on demand for waiting work. `create` gets the class's `options`, the rule, and what the waiting work needs, and is idempotent per enrollment code (`enrollment.idempotencyKey`); `destroy` removes every machine with the name and answers `{ done }` (ADRs 0167, 0205, 0258) |
+| `machineProvisioner` | Creates and destroys worker machines on a platform Work does not ship, for `custom` machine classes, so machine rules give people and teams their own machines, or machines on demand for waiting work. `create` gets the class's `options`, the rule, and what the waiting work needs, and is idempotent per enrollment code (`enrollment.idempotencyKey`); `destroy` removes every machine with the name and answers `{ done }` (ADRs 0167, 0205, 0258). A `workflow` class does the same with a project's own `machine.create` and `machine.destroy` workflows instead of server code (ADR 0327; the `machines-ec2` pack is the EC2 recipe) |
 | `hetzner` | Hetzner Cloud API options for `hetzner-cloud` machine classes: another endpoint, or a `fetch` for tests (the token is `WORK_HETZNER_TOKEN`) |
+| `projectHooks` | Named code run when a project is created and deleted (ADRs 0046, 0331); each needs a unique `name`. `onProjectCreated` may return `{ secrets }`, kept sealed as the project's shared secrets (for example a `DATABASE_URL` for a schema and role it made on the host's Postgres; see `INTEGRATION.md`). `onProjectDeleted` cleans up; one that throws or answers `{ done: false }` is retried with backoff until done, and never blocks the delete |
 | `projectSeeds` | Changes to the files seeded into new projects |
 | `routes` | Extra routes on the public application |
 
@@ -201,7 +202,9 @@ host function; registering a function is not an authorization policy.
 
 Do not expose allocator, database or GitHub write credentials to untrusted
 review code. Launching an external runner through an AWS SDK does not
-require a Work machine provisioner. Use `machineProvisioner` when Work's own
-machine rules should provision enrolled execution capacity. See
+require a Work machine provisioner. When Work's own machine rules should
+provision enrolled execution capacity, write the provisioner as two project
+workflows behind a `workflow` machine class (ADR 0327), or as the
+`machineProvisioner` hook. See
 [workflow composition](../../skills/setup-work-server/references/workflow-composition.md)
 for the guarantees, recovery design and acceptance tests.

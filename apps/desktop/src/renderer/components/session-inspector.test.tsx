@@ -27,6 +27,7 @@ const session: AgentSession = {
   forkedFromSessionId: null,
   imported: null,
   parentSessionId: null,
+  workspaceSessionId: null,
   visibility: "promoted",
   archivedAt: null,
   status: "active",

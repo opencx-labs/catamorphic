@@ -6,6 +6,7 @@ import { type Kysely, sql } from "kysely";
 import { z } from "zod";
 import type { Identity } from "../identity.js";
 import {
+  type AgentSessionDetail,
   type AgentSessionsService,
   protocolJson,
 } from "./agent-sessions-service.js";
@@ -16,6 +17,7 @@ import {
   keyedChatOwnerId,
 } from "./chat-delivery.js";
 import { SessionWorkspaceRequestSchema } from "./session-workspaces.js";
+import { SUBSESSION_WORKSPACES } from "./sessions/subsession-tools.js";
 import type { WatchersService } from "./watchers-service.js";
 
 /**
@@ -30,7 +32,7 @@ const target = {
   expectedStateRevision: z.number().int().nonnegative().optional(),
 };
 const mutation = { ...target, idempotencyKey: z.string().min(1).max(300) };
-function namesOneChat(value: object, context: z.RefinementCtx): void {
+export function namesOneChat(value: object, context: z.RefinementCtx): void {
   const given = (field: string) =>
     field in value && Reflect.get(value, field) !== undefined;
   if (Number(given("sessionId")) + Number(given("key")) !== 1)
@@ -64,6 +66,24 @@ export const SESSION_ACTION_SCHEMAS = {
      */
     through: z.string().uuid().optional(),
   }),
+  /**
+   * The chat's accepted results, newest first (ADR 0323). `family` adds
+   * its subsessions' results; `afterInput` (an input's message id) keeps
+   * results that answer that input or a later one.
+   */
+  results: chat({
+    ...target,
+    name: z.string().min(1).max(64).optional(),
+    family: z.boolean().optional(),
+    turnId: z.string().uuid().optional(),
+    afterInput: z.string().uuid().optional(),
+    limit: z.number().int().min(1).max(100).optional(),
+  }),
+  /**
+   * The chat's model usage through the gateway (ADR 0329); `family` adds
+   * every subsession below it.
+   */
+  usage: chat({ ...target, family: z.boolean().optional() }),
   create: chat({
     ...mutation,
     agentId: z.string().optional(),
@@ -84,6 +104,8 @@ export const SESSION_ACTION_SCHEMAS = {
     effort: z.enum(["low", "medium", "high", "xhigh", "max"]).optional(),
     readOnly: z.boolean().optional(),
     delegate: z.boolean().optional(),
+    /** Its parent's workspace (default) or its own (ADR 0322). */
+    workspace: z.enum(SUBSESSION_WORKSPACES).optional(),
     title: z.string().max(500).optional(),
     contextMode: z.enum(["fresh", "inherit"]).optional(),
   }),
@@ -95,6 +117,16 @@ export const SESSION_ACTION_SCHEMAS = {
   complete: chat({ ...mutation, content: z.string().min(1) }),
   reopen: chat(mutation),
   stopWatcher: chat({ ...mutation, watcherId: z.string().uuid() }),
+  /**
+   * Set named values on the chat (ADR 0226, 0325): each key of `set` takes
+   * its value and null removes it, with the limits and authority rules of
+   * every other writer. Repeating a write changes nothing, so it needs no
+   * idempotency key.
+   */
+  setMetadata: chat({
+    ...target,
+    set: z.record(z.string(), z.json()),
+  }),
 };
 export type SessionActionOperation = keyof typeof SESSION_ACTION_SCHEMAS;
 
@@ -171,7 +203,7 @@ export class SessionActionsService {
             });
         if (input.operation === "find") {
           const detail = open ? await read(open) : null;
-          return detail ? json(detail) : null;
+          return detail ? snapshotOf(detail) : null;
         }
         const key =
           "idempotencyKey" in parsed &&
@@ -232,7 +264,26 @@ export class SessionActionsService {
           throw new SessionKeyNotFoundError(keyed?.key ?? "");
         }
         const session = detail;
-        if (input.operation === "inspect") return json(session);
+        if (input.operation === "inspect") return snapshotOf(session);
+        if (input.operation === "usage")
+          return json(
+            await this.sessions.usage({
+              identity: input.identity,
+              projectId: input.projectId,
+              sessionId: session.id,
+              family: "family" in args && args.family === true,
+            }),
+          );
+        if (input.operation === "setMetadata") {
+          input.signal?.throwIfAborted();
+          const metadata = await this.sessions.setMetadata({
+            identity: input.identity,
+            projectId: input.projectId,
+            sessionId: session.id,
+            values: SESSION_ACTION_SCHEMAS.setMetadata.parse(args).set,
+          });
+          return json({ sessionId: session.id, metadata });
+        }
         if (input.operation === "history") {
           const through =
             "through" in args && args.through !== undefined
@@ -248,6 +299,31 @@ export class SessionActionsService {
           if (through && !messages.some((message) => message.id === through))
             throw new Error("No message in this chat has that id");
           return json({ sessionId: session.id, key: session.key, messages });
+        }
+        if (input.operation === "results") {
+          const results = await this.sessions.results(
+            input.identity,
+            input.projectId,
+            session.id,
+            {
+              ...("name" in args && typeof args.name === "string"
+                ? { name: args.name }
+                : {}),
+              ...("family" in args && args.family === true
+                ? { family: true }
+                : {}),
+              ...("turnId" in args && typeof args.turnId === "string"
+                ? { turnId: args.turnId }
+                : {}),
+              ...("afterInput" in args && typeof args.afterInput === "string"
+                ? { afterInput: args.afterInput }
+                : {}),
+              ...("limit" in args && typeof args.limit === "number"
+                ? { limit: args.limit }
+                : {}),
+            },
+          );
+          return json({ sessionId: session.id, key: session.key, results });
         }
         if (key === undefined) throw new Error("idempotencyKey is required");
         // Everything past this point changes the session: settle access
@@ -611,6 +687,8 @@ function actionLabel(operation: SessionActionOperation): string {
     list: "Listed sessions",
     find: "Found a session by key",
     history: "Read session history",
+    results: "Read session results",
+    usage: "Read session usage",
     create: "Created a session",
     fork: "Forked this session",
     spawn: "Created a child session",
@@ -621,13 +699,14 @@ function actionLabel(operation: SessionActionOperation): string {
     complete: "Marked work finished",
     reopen: "Reopened the work",
     stopWatcher: "Stopped a watcher",
+    setMetadata: "Set this session's metadata",
   }[operation];
 }
 /**
  * The key an action is recorded under: who acted and the caller's key. The
  * only way to build it, for the record and for every lookup of it.
  */
-function actionKey(input: {
+export function actionKey(input: {
   author: SessionMessageAuthor;
   idempotencyKey: string;
 }): string {
@@ -652,10 +731,15 @@ function actorIdentity(author: SessionMessageAuthor): SessionMessageAuthor {
  * A value as jsonb stores it, so an action compares equal to its own stored
  * copy: half of a surrogate pair and U+0000 are U+FFFD there.
  */
-function json(value: unknown): Json {
+/** A chat as workflows read it: its fields and its metadata (ADR 0325). */
+function snapshotOf(session: AgentSessionDetail): Json {
+  return json({ ...session, metadata: session.snapshot.session.metadata });
+}
+
+export function json(value: unknown): Json {
   return JSON.parse(jsonbText(value));
 }
-function canonical(value: Json): string {
+export function canonical(value: Json): string {
   if (Array.isArray(value)) return JSON.stringify(value.map(canonical));
   if (value && typeof value === "object")
     return JSON.stringify(

@@ -3,6 +3,7 @@ import {
   createBatch,
   type DefineBatch,
 } from "./batch.js";
+import type { EventHostOperations } from "./event-operations.js";
 import type { OutputTemplateMatches, PayloadTemplateMatches } from "./holes.js";
 import type { TriggerBinding } from "./index.js";
 import type {
@@ -134,6 +135,7 @@ class WorkflowDefinitionImpl<Input, Output, Steps extends readonly unknown[]> {
   readonly steps: Steps;
   readonly controls?: WorkflowControls;
   readonly triggers?: readonly TriggerBinding<unknown>[];
+  readonly concurrency?: WorkflowConcurrency;
   readonly connections?: readonly (string | WorkflowConnectionRequirement)[];
   readonly permissions?: readonly WorkflowPermission[];
 
@@ -141,12 +143,14 @@ class WorkflowDefinitionImpl<Input, Output, Steps extends readonly unknown[]> {
     steps: Steps;
     controls?: WorkflowControls;
     triggers?: readonly TriggerBinding<unknown>[];
+    concurrency?: WorkflowConcurrency;
     connections?: readonly (string | WorkflowConnectionRequirement)[];
     permissions?: readonly WorkflowPermission[];
   }) {
     this.steps = args.steps;
     this.controls = args.controls;
     this.triggers = args.triggers;
+    this.concurrency = args.concurrency;
     this.connections = args.connections;
     this.permissions = args.permissions;
     Object.defineProperty(this, "kind", { value: "durable-workflow" });
@@ -345,6 +349,7 @@ export interface BoundaryContext<Input> {
   readonly host: HostNamespace & {
     readonly "catamorphic.sessions": SessionHostOperations;
     readonly "catamorphic.secrets": SecretHostOperations;
+    readonly "catamorphic.events": EventHostOperations;
     readonly "catamorphic.privateState": {
       read: TransitionCall<
         { key: string },
@@ -419,6 +424,25 @@ export interface WorkflowControls {
    * control. The host still owns authorization and actual availability.
    */
   readonly cancel?: true;
+}
+
+/**
+ * What a run does when another run of this workflow is live for the same
+ * key (ADR 0325): `queue` waits its turn, in arrival order, holding no
+ * capacity; `ignore` returns the live run; `restart` cancels it and starts
+ * this one; `error` refuses.
+ */
+export type WorkflowConflictPolicy = "queue" | "ignore" | "restart" | "error";
+
+/**
+ * Runs about one subject take turns (ADR 0325). `key` is a dot path into
+ * the run's input (`"payload.session.key"`); its value, a string or a
+ * number, names the subject. A run whose input has no value there runs
+ * without a key. Constant data: the host reads it statically.
+ */
+export interface WorkflowConcurrency {
+  readonly key: string;
+  readonly onConflict: WorkflowConflictPolicy;
 }
 
 type ExecutionUnitInput<Unit> =
@@ -585,6 +609,8 @@ export function defineWorkflow<
     readonly steps: Steps;
     readonly controls?: WorkflowControls;
     readonly triggers?: Triggers;
+    /** Runs about one subject take turns (ADR 0325). */
+    readonly concurrency?: WorkflowConcurrency;
     readonly connections?: readonly (string | WorkflowConnectionRequirement)[];
     /**
      * Project permissions this workflow's runs need (ADR 0158), shown when
@@ -608,6 +634,7 @@ export function defineWorkflow<
     steps: definition.steps,
     controls: definition.controls,
     triggers: definition.triggers,
+    concurrency: definition.concurrency,
     connections: definition.connections,
     permissions: definition.permissions,
   });

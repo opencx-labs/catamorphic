@@ -201,6 +201,8 @@ export interface ExtraToolContext {
   sessionId?: string;
   /** The turn the tool runs in, when the host knows it. */
   turnId?: string;
+  /** The attempt of that turn that called it, when the host knows it. */
+  attemptId?: string;
   /** Checkout or sandbox directory selected by the host for this turn. */
   workingDirectory?: string;
   /** Who the session serves. */

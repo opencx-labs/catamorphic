@@ -48,6 +48,7 @@ export interface ExecutionWorkerHandle {
 const ALL_JOB_KINDS: readonly ExecutionJobKind[] = [
   "durable_boundary",
   "durable_pause_timeout",
+  "host_call_wait",
   "batch_source",
   "batch_item",
   "batch_step",

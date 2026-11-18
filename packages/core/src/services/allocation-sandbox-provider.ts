@@ -389,11 +389,22 @@ export async function claimAllocationMaintenance(args: {
         session.allocation_id !== args.allocationId
       )
         return undefined;
+      // Any session working in the workspace keeps it (ADR 0322): its
+      // shared subsessions carry its Allocation.
       const busy = await trx
         .selectFrom("agent_turns")
-        .select("id")
-        .where("session_id", "=", args.sessionId)
-        .where("status", "in", ["queued", "held", ...ACTIVE_TURN_STATUSES])
+        .innerJoin(
+          "agent_sessions",
+          "agent_sessions.id",
+          "agent_turns.session_id",
+        )
+        .select("agent_turns.id")
+        .where("agent_sessions.allocation_id", "=", args.allocationId)
+        .where("agent_turns.status", "in", [
+          "queued",
+          "held",
+          ...ACTIVE_TURN_STATUSES,
+        ])
         .executeTakeFirst();
       if (busy) return undefined;
     }

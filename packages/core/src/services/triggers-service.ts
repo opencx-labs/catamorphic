@@ -101,6 +101,19 @@ export interface StoredTriggerActivation extends StoredTriggerBinding {
   environment: string;
 }
 
+/**
+ * A project trigger kind as a scan resolved it (ADR 0326): the host kind
+ * that fires it, that kind's config, and every filter along its chain.
+ */
+export interface ResolvedProjectKind {
+  name: string;
+  kind: string;
+  config: Json;
+  where: Json[];
+  /** A kind along its chain declared `recordable: true`. */
+  recordable: boolean;
+}
+
 export type TriggerSuspensionReason = RunSuspensionReason;
 
 export type TriggerFireOutcome =
@@ -129,6 +142,14 @@ export class TriggerKindNotRegisteredError extends Error {
       }`,
     );
     this.name = "TriggerKindNotRegisteredError";
+  }
+}
+
+/** A caller fired a kind only the host dispatches (ADR 0327). */
+export class TriggerKindHostOnlyError extends Error {
+  constructor(kind: string) {
+    super(`Trigger kind '${kind}' is dispatched only by the host`);
+    this.name = "TriggerKindHostOnlyError";
   }
 }
 
@@ -201,8 +222,14 @@ interface FireArgs {
   enablementIds?: readonly string[];
   /** Narrows to exact activations: a durable delivery names the one it serves. */
   activationIds?: readonly string[];
+  /** The subject's key, overriding the workflow's declared one (ADR 0325). */
   correlationKey?: string;
   onConflict?: EnrollmentConflictPolicy;
+  /**
+   * This delivery's identity; the kind's own `deliveryKey` when absent. One
+   * delivery starts at most one run of each workflow.
+   */
+  deliveryKey?: string;
   budgetMs?: number;
   /** User-initiated tool calls use the caller's live authority. */
   interactive?: boolean;
@@ -260,6 +287,66 @@ export class TriggersService {
   kindInfo(name: string): TriggerKindInfo | null {
     const kind = this.registry.get(name);
     return kind ? triggerKindInfo(kind) : null;
+  }
+
+  /** Whether the host registers `name` itself. */
+  isHostKind(name: string): boolean {
+    return this.registry.has(name);
+  }
+
+  /** Whether the host alone dispatches `name` (ADR 0327). */
+  isHostOnlyKind(name: string): boolean {
+    return this.registry.get(name)?.hostOnly === true;
+  }
+
+  /**
+   * The project's own trigger kinds at a revision, resolved (ADR 0326),
+   * scanning the revision the first time it is seen.
+   */
+  async projectKindsAtCommit(args: {
+    identity: Identity;
+    projectId: string;
+    commitSha: string;
+    remoteBranch: string;
+  }): Promise<ResolvedProjectKind[]> {
+    await this.ensureScanAtCommit(args);
+    const scan = await this.db
+      .selectFrom("trigger_definition_scans")
+      .select("project_kinds")
+      .where("project_id", "=", args.projectId)
+      .where("commit_sha", "=", args.commitSha)
+      .executeTakeFirst();
+    const kinds = scan?.project_kinds;
+    return Array.isArray(kinds)
+      ? kinds.flatMap((value) => {
+          const kind = resolvedKindFromJson(value);
+          return kind ? [kind] : [];
+        })
+      : [];
+  }
+
+  /**
+   * Why the host would not deliver `event` as the project kind `kind`
+   * (ADR 0326): the root kind's payload schema and `matches`, then every
+   * filter along the chain. Empty when it would.
+   */
+  recordedEventErrors(args: {
+    kind: ResolvedProjectKind;
+    event: Json;
+  }): string[] {
+    const root = this.registry.get(args.kind.kind);
+    if (!root) return [`it builds on unknown trigger kind '${args.kind.kind}'`];
+    const check = root.validatePayload(args.event);
+    if (!check.ok) return check.errors;
+    // Matched as the dispatcher will read it back from its row.
+    const payload = storedJson(args.event);
+    if (root.matches && !root.matches({ config: args.kind.config, payload }))
+      return [
+        `it does not match the '${root.name}' config of '${args.kind.name}'`,
+      ];
+    if (!matchesAllWhere(args.kind.where, payload))
+      return [`it does not match the filters of '${args.kind.name}'`];
+    return [];
   }
 
   /**
@@ -571,6 +658,8 @@ export class TriggersService {
         ...this.registry.keys(),
       ]);
     }
+    if (callerInitiated && kind.hostOnly)
+      throw new TriggerKindHostOnlyError(kind.name);
     const mode = args.mode ?? "async";
     const allowedModes = kind.modes ?? ["sync", "async"];
     if (!allowedModes.includes(mode)) {
@@ -580,8 +669,11 @@ export class TriggersService {
     if (!payloadCheck.ok) {
       throw new TriggerPayloadInvalidError(kind.name, payloadCheck.errors);
     }
-    const correlationKey =
-      args.correlationKey ?? kind.correlationKey?.(args.payload);
+    // A person's own fire (a tool call, a test of a fixed payload) runs
+    // every time; a delivery's id dedupes only what systems deliver.
+    const kindDeliveryKey = args.interactive
+      ? undefined
+      : kind.deliveryKey?.(args.payload);
 
     return withSpan(
       {
@@ -740,8 +832,16 @@ export class TriggersService {
               payload: args.payload,
               environment: args.environment,
               mode,
-              correlationKey,
+              correlationKey: args.correlationKey,
               onConflict: args.onConflict,
+              // One delivery starts one run for each enablement it reaches:
+              // a member's and the project's enablement of a workflow each
+              // get theirs (ADR 0325). A caller's own key is already scoped.
+              deliveryKey:
+                args.deliveryKey ??
+                (kindDeliveryKey && enablementId
+                  ? `${enablementId}:${kindDeliveryKey}`
+                  : undefined),
               deadline,
               commitSha: scanned.commitSha,
               triggerKind: binding.kind,
@@ -777,6 +877,7 @@ export class TriggersService {
     mode: TriggerMode;
     correlationKey?: string;
     onConflict?: EnrollmentConflictPolicy;
+    deliveryKey?: string;
     deadline: number;
     commitSha: string | null;
     triggerKind: string;
@@ -797,20 +898,32 @@ export class TriggersService {
       environment: args.environment,
       correlationKey: args.correlationKey,
       onConflict: args.onConflict,
+      deliveryKey: args.deliveryKey,
     };
+    // The host's own dispatch says so, which a workflow bound to a
+    // host-only kind requires (ADR 0327); a caller's fire never does.
+    const dispatch = args.callerInitiated
+      ? undefined
+      : { kind: args.triggerKind };
     const run = args.enablementId
-      ? await this.deps.runs.triggerWithEnablement({
-          ...runArgs,
-          enablementId: args.enablementId,
-          expected: args.expectedEnablement,
-        })
-      : args.pinned
-        ? await this.deps.runs.triggerAtCommit({
+      ? await this.deps.runs.triggerWithEnablement(
+          {
             ...runArgs,
-            commitSha: args.pinned.commitSha,
-            remoteBranch: args.pinned.remoteBranch,
-          })
-        : await this.deps.runs.triggerProduction(runArgs);
+            enablementId: args.enablementId,
+            expected: args.expectedEnablement,
+          },
+          dispatch,
+        )
+      : args.pinned
+        ? await this.deps.runs.triggerAtCommit(
+            {
+              ...runArgs,
+              commitSha: args.pinned.commitSha,
+              remoteBranch: args.pinned.remoteBranch,
+            },
+            dispatch,
+          )
+        : await this.deps.runs.triggerProduction(runArgs, dispatch);
     if (args.callerInitiated)
       await this.deps.runs.get({ identity: args.identity, runId: run.id });
     if (args.mode === "async") {
@@ -855,6 +968,7 @@ export class TriggersService {
         projectId: args.projectId,
       });
       if (!commitSha) return { commitSha: null, bindings: [] };
+      // Offer the update; only publishers record revisions (ADR 0330).
       await this.deps.workflowEnablements?.().markUpdateAvailable({
         projectId: args.projectId,
         commitSha,
@@ -1014,6 +1128,7 @@ export class TriggersService {
       );
     }
     errors.push(...this.projectKindErrors(parsed.triggerKinds));
+    const projectKinds = this.resolvedProjectKinds(parsed.triggerKinds);
     const bindings: Array<
       TriggerBindingInfo & {
         connectionRequirements: Json;
@@ -1148,7 +1263,11 @@ export class TriggersService {
     await this.db.transaction().execute(async (trx) => {
       await trx
         .insertInto("trigger_definition_scans")
-        .values({ project_id: args.projectId, commit_sha: args.commitSha })
+        .values({
+          project_id: args.projectId,
+          commit_sha: args.commitSha,
+          project_kinds: jsonColumn(toJson(projectKinds)),
+        })
         .onConflict((oc) =>
           oc.columns(["project_id", "commit_sha"]).doNothing(),
         )
@@ -1191,6 +1310,29 @@ export class TriggersService {
     return bindings.map(
       ({ connectionRequirements: _, bindingIndex: __, ...binding }) => binding,
     );
+  }
+
+  /** Every project kind that resolves to a registered host kind. */
+  private resolvedProjectKinds(
+    kinds: readonly ProjectTriggerKind[],
+  ): ResolvedProjectKind[] {
+    return kinds.flatMap((kind) => {
+      if (this.registry.has(kind.name)) return [];
+      const resolved = resolveTriggerBinding({
+        binding: { kind: kind.name, config: {} },
+        projectKinds: kinds,
+      });
+      if (!resolved.ok || !this.registry.has(resolved.binding.kind)) return [];
+      return [
+        storedJson({
+          name: kind.name,
+          kind: resolved.binding.kind,
+          config: resolved.binding.config as Json,
+          where: resolved.binding.where as Json[],
+          recordable: resolved.binding.recordable === true,
+        }),
+      ];
+    });
   }
 
   /**
@@ -1251,5 +1393,18 @@ function bindingFromRow(row: {
     inputParameters: (row.input_parameters ?? []) as unknown as ParameterInfo[],
     inputSchema: row.input_schema ?? {},
     outputSchema: row.output_schema ?? {},
+  };
+}
+
+function resolvedKindFromJson(value: Json): ResolvedProjectKind | null {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+  const { name, kind, config, where, recordable } = value;
+  if (typeof name !== "string" || typeof kind !== "string") return null;
+  return {
+    name,
+    kind,
+    config: config ?? {},
+    where: Array.isArray(where) ? where : [],
+    recordable: recordable === true,
   };
 }

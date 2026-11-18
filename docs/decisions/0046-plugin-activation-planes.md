@@ -7,6 +7,10 @@ Accepted.
 Secret-bearing provider operations are refined by ADR 0065 and use the
 connection broker instead of environment-variable injection.
 
+Project lifecycle hooks are amended by ADR 0331: `onProjectCreated` may
+return project secrets, and `onProjectDeleted` no longer aborts the delete;
+Work retries it until it reports done.
+
 ## Context
 
 Embedders want per-project infrastructure — the motivating case is a database

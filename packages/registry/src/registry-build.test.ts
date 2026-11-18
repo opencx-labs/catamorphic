@@ -33,6 +33,19 @@ async function fixture() {
 describe("registry release versions", () => {
   it("rebuilds the real recipe for a preview and stable release without editing its source", async () => {
     const { root, directory } = await fixture();
+    // The review recipe installs only project files; give it the framework
+    // and third-party pins a recipe with server code would carry.
+    const filename = path.join(directory, "registry-item.json");
+    const manifest: RegistryItem = JSON.parse(
+      await fs.readFile(filename, "utf8"),
+    );
+    manifest.dependencies = ["@catamorphic/server-sdk", "pg@8.23.1"];
+    manifest.devDependencies = ["@types/pg@8.23.1"];
+    await fs.writeFile(filename, JSON.stringify(manifest));
+    await fs.appendFile(
+      path.join(directory, "SKILL.md"),
+      '\n```json\n{ "@catamorphic/server-sdk": "{{CATAMORPHIC_VERSION}}", "@catamorphic/work-server": "{{CATAMORPHIC_VERSION}}" }\n```\n',
+    );
     const original = await fs.readFile(
       path.join(directory, "SKILL.md"),
       "utf8",

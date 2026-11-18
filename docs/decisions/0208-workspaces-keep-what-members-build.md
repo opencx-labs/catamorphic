@@ -1,6 +1,6 @@
 # 0208 — Workspaces keep what members build: setup and volumes
 
-- **Status:** Accepted (amended by [0257](0257-setup-has-its-own-network.md): `setup` is an object with its own network, and runs again when the workspace's base moves)
+- **Status:** Accepted (amended by [0257](0257-setup-has-its-own-network.md): `setup` is an object with its own network, and runs again when the workspace's base moves; by [0324](0324-workflows-run-commands-in-a-chats-workspace.md): setup can be a workflow)
 - **Date:** 2026-10-06
 - **Refines:** 0173, 0176, 0184
 

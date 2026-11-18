@@ -53,7 +53,26 @@ const NOTHING_RECORDED: SetupRecord = {
 };
 
 /** One part of a workspace's setup. */
-export type SetupPart = "environment" | "personal";
+export type SetupPart = "environment" | "workflow" | "personal";
+
+/** Why a setup workflow runs (ADR 0324). */
+export type SetupWorkflowReason =
+  | "created"
+  | "rebuilt"
+  | "base-moved"
+  | "changed";
+
+/**
+ * What the Environment's part is fingerprinted by: its command, and the
+ * workflow it names after it (ADR 0324), so either changing runs both.
+ */
+export function environmentSetupKey(input: {
+  command?: string;
+  workflow?: string;
+}): string | undefined {
+  if (!input.workflow) return input.command;
+  return `${input.command ?? ""}\n# setup workflow: ${input.workflow}`;
+}
 
 /** A command's fingerprint, or `none` without one. */
 export function setupFingerprint(command: string | undefined): string {
@@ -91,6 +110,8 @@ export function parseSetupRecord(text: string): SetupRecord | null {
 export interface WorkspaceSetupPlan {
   record: SetupRecord;
   environment?: string;
+  /** The setup workflow, run after `environment` (ADR 0324). */
+  workflow?: string;
   personal?: string;
 }
 
@@ -101,13 +122,20 @@ export interface WorkspaceSetupPlan {
  */
 export function environmentSetupDue(input: {
   environment?: string;
+  workflow?: string;
   base?: string;
   recorded: SetupRecord | null;
 }): boolean {
   const recorded = input.recorded ?? NOTHING_RECORDED;
   return (
-    setupFingerprint(input.environment) !== recorded.environment ||
-    (input.base ?? NONE) !== recorded.base
+    setupFingerprint(
+      environmentSetupKey({
+        ...(input.environment !== undefined
+          ? { command: input.environment }
+          : {}),
+        ...(input.workflow ? { workflow: input.workflow } : {}),
+      }),
+    ) !== recorded.environment || (input.base ?? NONE) !== recorded.base
   );
 }
 
@@ -123,6 +151,8 @@ export function environmentSetupDue(input: {
  */
 export function planWorkspaceSetup(input: {
   environment?: string;
+  /** The Environment's setup workflow (ADR 0324). */
+  workflow?: string;
   personal?: string;
   /** The owner's personal setup may run in this turn. */
   personalAllowed: boolean;
@@ -131,6 +161,11 @@ export function planWorkspaceSetup(input: {
   recorded: SetupRecord | null;
 }): WorkspaceSetupPlan | null {
   const environment = input.environment?.trim() ? input.environment : undefined;
+  const workflow = input.workflow || undefined;
+  const environmentKey = environmentSetupKey({
+    ...(environment ? { command: environment } : {}),
+    ...(workflow ? { workflow } : {}),
+  });
   const personal =
     input.personalAllowed && input.personal?.trim()
       ? input.personal
@@ -138,11 +173,12 @@ export function planWorkspaceSetup(input: {
   const recorded = input.recorded ?? NOTHING_RECORDED;
   const environmentDue = environmentSetupDue({
     ...(environment ? { environment } : {}),
+    ...(workflow ? { workflow } : {}),
     ...(input.base ? { base: input.base } : {}),
     recorded,
   });
   const record: SetupRecord = {
-    environment: setupFingerprint(environment),
+    environment: setupFingerprint(environmentKey),
     personal: input.personalAllowed
       ? setupFingerprint(personal)
       : environmentDue
@@ -157,14 +193,39 @@ export function planWorkspaceSetup(input: {
   return {
     record,
     ...(environmentDue && environment ? { environment } : {}),
+    ...(environmentDue && workflow ? { workflow } : {}),
     ...(personalDue && personal ? { personal } : {}),
   };
+}
+
+/**
+ * How long a session's turn waits for another session's setup of the same
+ * workspace build (ADR 0322) before it gives up. Each part a setup may run
+ * is bounded by the setup's timeout: following a setup an earlier holder
+ * left running, the Environment's command, its setup workflow (ADR 0324)
+ * and the owner's personal setup; five minutes more cover the preparation
+ * around them. A command on its own network (ADR 0257) is the same command,
+ * not another part.
+ */
+export function setupClaimWaitMs(input: {
+  timeoutMinutes: number;
+  command?: string;
+  workflow?: string;
+  personalAllowed: boolean;
+}): number {
+  const parts =
+    1 +
+    (input.command?.trim() ? 1 : 0) +
+    (input.workflow ? 1 : 0) +
+    (input.personalAllowed ? 1 : 0);
+  return (input.timeoutMinutes * parts + 5) * 60_000;
 }
 
 /** The parts a plan runs, in order. */
 export function planParts(plan: WorkspaceSetupPlan): SetupPart[] {
   return [
     ...(plan.environment ? ["environment" as const] : []),
+    ...(plan.workflow ? ["workflow" as const] : []),
     ...(plan.personal ? ["personal" as const] : []),
   ];
 }
@@ -178,13 +239,17 @@ export function setupRecordAfter(input: {
   plan: WorkspaceSetupPlan;
   part: SetupPart;
 }): SetupRecord {
-  return input.part === "environment"
-    ? { ...input.plan.record, personal: NONE }
-    : input.plan.record;
+  // A command its workflow follows is not done until the workflow is.
+  if (input.part === "environment" && input.plan.workflow)
+    return { ...input.plan.record, environment: NONE, personal: NONE };
+  return input.part === "personal"
+    ? input.plan.record
+    : { ...input.plan.record, personal: NONE };
 }
 
 const PART_LABELS: Record<SetupPart, string> = {
   environment: "Environment setup",
+  workflow: "Setup workflow",
   personal: "Personal setup",
 };
 
@@ -202,7 +267,8 @@ export function workspaceSetupScript(input: {
 }): string {
   const { plan } = input;
   const parts = planParts(plan).filter(
-    (part) => !input.parts || input.parts.includes(part),
+    (part) =>
+      part !== "workflow" && (!input.parts || input.parts.includes(part)),
   );
   const stale = [
     ...(plan.environment ? [] : ["environment.sh"]),
@@ -253,6 +319,8 @@ export type WorkspaceSetupOutcome =
       log: string;
       /** Which parts ran. */
       parts: SetupPart[];
+      /** The setup workflow that failed (ADR 0324); `log` is its error. */
+      workflow?: string;
     }
   /** The turn stopped while setup ran; it was stopped too. */
   | { status: "aborted" };
@@ -352,15 +420,26 @@ async function onSetupNetwork<T>(input: {
   }
 }
 
+/** How a setup workflow ended (ADR 0324). */
+export type SetupWorkflowOutcome =
+  | { status: "succeeded" }
+  | { status: "failed"; error: string; timedOut: boolean }
+  | { status: "aborted" };
+
 /**
  * Set up one workspace if it needs it (ADR 0208). A setup an earlier,
  * interrupted preparation started is waited for rather than started again.
  * `onRun` is called just before commands run, so the chat can show it.
+ * The Environment's setup workflow (ADR 0324) runs after its command,
+ * through `workflow.run`, before the owner's part; the record says it ran
+ * only once it succeeded.
  *
  * With `network` (ADR 0257), only the Environment's part runs, on the
  * setup's network, in a sandbox this preparation made that holds the base
  * checkout alone: it loads no secrets file, and has only `network.env`
- * (the secrets the setup names). The owner's part is a later call's.
+ * (the secrets the setup names). Its workflow runs narrow; its commands
+ * `in: "setup"` widen the sandbox for themselves. The owner's part is a
+ * later call's.
  */
 export async function runWorkspaceSetup(input: {
   provider: SandboxProvider;
@@ -373,13 +452,31 @@ export async function runWorkspaceSetup(input: {
   base?: string;
   timeoutMinutes: number;
   network?: { egress: SandboxEgress; env: Record<string, string> };
+  /**
+   * Run the Environment's part alone, before the chat's grants, secrets
+   * and files are in the sandbox (ADR 0324): no secrets file, only `env`
+   * (the secrets the setup names), on the sandbox's own network.
+   */
+  isolated?: { env: Record<string, string> };
+  /** The Environment's setup workflow (ADR 0324). */
+  workflow?: {
+    name: string;
+    /** The sandbox replaced an earlier workspace of the chat. */
+    rebuilt: boolean;
+    /** This preparation moved the workspace's base. */
+    moved: boolean;
+    run: (args: {
+      reason: SetupWorkflowReason;
+    }) => Promise<SetupWorkflowOutcome>;
+  };
   signal?: AbortSignal;
   onRun?: () => Promise<void>;
 }): Promise<WorkspaceSetupOutcome> {
   const { provider, sandboxId, projectDir, network } = input;
-  const personal =
-    input.personalAllowed && !network ? input.personal : undefined;
-  if (!input.environment?.trim() && !personal?.trim())
+  const alone = Boolean(network || input.isolated);
+  const env = network?.env ?? input.isolated?.env;
+  const personal = input.personalAllowed && !alone ? input.personal : undefined;
+  if (!input.environment?.trim() && !personal?.trim() && !input.workflow)
     return { status: "current" };
   const session = SESSION_FROM_PROJECT;
   const timeoutMs = input.timeoutMinutes * 60_000;
@@ -415,12 +512,14 @@ export async function runWorkspaceSetup(input: {
         })
         .catch(() => {});
   }
+  const recorded = await readSetupRecord({ provider, sandboxId, projectDir });
   const plan = planWorkspaceSetup({
     ...(input.environment ? { environment: input.environment } : {}),
+    ...(input.workflow ? { workflow: input.workflow.name } : {}),
     ...(personal ? { personal } : {}),
-    personalAllowed: input.personalAllowed && !network,
+    personalAllowed: input.personalAllowed && !alone,
     ...(input.base ? { base: input.base } : {}),
-    recorded: await readSetupRecord({ provider, sandboxId, projectDir }),
+    recorded,
   });
   if (!plan) return { status: "current" };
   const parts = planParts(plan);
@@ -428,10 +527,6 @@ export async function runWorkspaceSetup(input: {
   await provider.uploadFiles(
     sandboxId,
     {
-      "run.sh": workspaceSetupScript({
-        plan,
-        ...(network ? { loadSecrets: false } : {}),
-      }),
       ...(plan.environment
         ? { "environment.sh": `${plan.environment}\n` }
         : {}),
@@ -439,40 +534,111 @@ export async function runWorkspaceSetup(input: {
     },
     `${sessionDirectory(provider)}/setup`,
   );
-  const run = () =>
-    runSetupCommand({
-      provider,
+  const failed = async (ran: {
+    exitCode: number | null;
+    timedOut: boolean;
+  }): Promise<WorkspaceSetupOutcome> => {
+    const tail = await provider
+      .executeCommand(
+        sandboxId,
+        `tail -n ${SETUP_LOG_TAIL_LINES} ${shellQuote(`${session}/setup.log`)} 2>/dev/null || true`,
+        { cwd: projectDir, timeout: 60 },
+      )
+      .then(
+        (result) => result.result,
+        () => "",
+      );
+    return { status: "failed", ...ran, log: tail, parts };
+  };
+  /** One script running `only` of the plan's shell parts, or all of them. */
+  const script = async (only?: SetupPart[]) => {
+    await provider.uploadFiles(
       sandboxId,
-      projectDir,
-      command: `bash ${shellQuote(`${session}/setup/run.sh`)}`,
-      timeoutMs,
-      ...(network ? { env: network.env } : {}),
-      ...(input.signal ? { signal: input.signal } : {}),
-    });
-  const ran =
-    network && plan.environment
-      ? await onSetupNetwork({
+      {
+        "run.sh": workspaceSetupScript({
+          plan,
+          ...(only ? { parts: only } : {}),
+          ...(alone ? { loadSecrets: false } : {}),
+        }),
+      },
+      `${sessionDirectory(provider)}/setup`,
+    );
+    const run = () =>
+      runSetupCommand({
+        provider,
+        sandboxId,
+        projectDir,
+        command: `bash ${shellQuote(`${session}/setup/run.sh`)}`,
+        timeoutMs,
+        ...(env ? { env } : {}),
+        ...(input.signal ? { signal: input.signal } : {}),
+      });
+    return network &&
+      plan.environment &&
+      (!only || only.includes("environment"))
+      ? onSetupNetwork({
           provider,
           sandboxId,
           egress: network.egress,
           until: new Date(Date.now() + timeoutMs + WIDENING_GRACE_MS),
           run,
         })
-      : await run();
+      : run();
+  };
+  if (!plan.workflow || !input.workflow) {
+    const ran = await script();
+    if (ran === "aborted") return { status: "aborted" };
+    return ran.exitCode === 0 && !ran.timedOut
+      ? { status: "succeeded" }
+      : failed(ran);
+  }
+  // The command, then the workflow, then the owner's part (ADR 0324).
+  if (plan.environment) {
+    const ran = await script(["environment"]);
+    if (ran === "aborted") return { status: "aborted" };
+    if (ran.exitCode !== 0 || ran.timedOut) return failed(ran);
+  }
+  // Nothing set up yet, or an earlier try that did not finish: why the
+  // workspace is new. Otherwise what changed since it was set up.
+  const reason: SetupWorkflowReason =
+    !recorded || recorded.environment === NONE
+      ? input.workflow.moved
+        ? "base-moved"
+        : input.workflow.rebuilt
+          ? "rebuilt"
+          : "created"
+      : recorded.base !== plan.record.base
+        ? "base-moved"
+        : "changed";
+  const workflow = await input.workflow.run({ reason });
+  if (workflow.status === "aborted") return { status: "aborted" };
+  if (workflow.status === "failed")
+    return {
+      status: "failed",
+      exitCode: null,
+      timedOut: workflow.timedOut,
+      log: workflow.error,
+      parts,
+      workflow: input.workflow.name,
+    };
+  const done = plan.personal
+    ? setupRecordAfter({ plan, part: "workflow" })
+    : plan.record;
+  await provider.executeCommand(
+    sandboxId,
+    [
+      `mkdir -p ${SESSION_FROM_PROJECT}`,
+      `printf '%s\\n' ${shellQuote(JSON.stringify(done))} > ${shellQuote(`${SESSION_FROM_PROJECT}/setup.done.next`)}`,
+      `mv -f ${shellQuote(`${SESSION_FROM_PROJECT}/setup.done.next`)} ${shellQuote(`${SESSION_FROM_PROJECT}/setup.done`)}`,
+    ].join(" && "),
+    { cwd: projectDir, timeout: 60 },
+  );
+  if (!plan.personal) return { status: "succeeded" };
+  const ran = await script(["personal"]);
   if (ran === "aborted") return { status: "aborted" };
-  const { exitCode, timedOut } = ran;
-  if (exitCode === 0 && !timedOut) return { status: "succeeded" };
-  const tail = await provider
-    .executeCommand(
-      sandboxId,
-      `tail -n ${SETUP_LOG_TAIL_LINES} ${shellQuote(`${session}/setup.log`)} 2>/dev/null || true`,
-      { cwd: projectDir, timeout: 60 },
-    )
-    .then(
-      (result) => result.result,
-      () => "",
-    );
-  return { status: "failed", exitCode, timedOut, log: tail, parts };
+  return ran.exitCode === 0 && !ran.timedOut
+    ? { status: "succeeded" }
+    : failed(ran);
 }
 
 /**
@@ -545,7 +711,8 @@ export function workspaceSetupFailedNote(input: {
       ? "was stopped"
       : `failed with exit code ${outcome.exitCode}`;
   const where = [
-    ...(outcome.parts.includes("environment")
+    ...(outcome.parts.includes("environment") ||
+    outcome.parts.includes("workflow")
       ? [
           "the Environment's `setup` in .work/project.json (a reviewed project change)",
         ]
@@ -557,6 +724,12 @@ export function workspaceSetupFailedNote(input: {
       : []),
   ];
   const log = outcome.log.trimEnd().slice(-8_000);
+  // A setup workflow's failure is its error, not the log's end (ADR 0324).
+  if (outcome.workflow)
+    return [
+      `[Workspace] The setup workflow ${outcome.workflow} (\`setup.workflow\` in .work/project.json) ${outcome.timedOut ? `did not finish within ${input.timeoutMinutes} ${input.timeoutMinutes === 1 ? "minute" : "minutes"} and was stopped` : "failed"}, so what it prepares may be missing. It runs again before the next turn.`,
+      ...(log ? [`Its error:\n\n\`\`\`\n${log}\n\`\`\``] : []),
+    ].join("\n\n");
   const commands =
     where.length === 0
       ? ""

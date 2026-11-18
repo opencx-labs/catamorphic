@@ -271,7 +271,10 @@ describe.each(databases)("retried session actions, on %s", (name, open) => {
         args: {
           sessionId,
           idempotencyKey: `canceled-${operation}`,
-          ...(operation === "spawn" ? { task: "must never start" } : {}),
+          // A shared child admits nothing (ADR 0322): one of its own does.
+          ...(operation === "spawn"
+            ? { task: "must never start", workspace: "own" }
+            : {}),
         },
         author: runs[0]![1](),
         signal: abort.signal,

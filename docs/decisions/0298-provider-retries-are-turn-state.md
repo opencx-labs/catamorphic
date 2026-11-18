@@ -1,6 +1,6 @@
 # 0298 - Provider retries are turn state
 
-- **Status:** Accepted
+- **Status:** Accepted (amended by [0328](0328-hand-offs-keep-results-acp-reports-its-turn.md): ACP agents on a model connection report retries through the loopback endpoint)
 - **Date:** 2026-10-31
 
 ## Context

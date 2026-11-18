@@ -23,6 +23,7 @@ import { z } from "zod";
 import type { CodexSignInRequest } from "./codex-sign-ins.js";
 import {
   accessGroupsOf,
+  NodeLabelsSchema,
   type ScheduledPlacement,
   servesNobody,
   servesOneOwner,
@@ -180,6 +181,16 @@ export interface ProvisionedMachine {
   releasedForMs: number | null;
   retainDays: number | null;
   placement: WorkerPlacement;
+  /**
+   * The enrollment it was made with (ADR 0327): its code's hash, the
+   * platform's idempotency token, and when it was issued, by the
+   * database's clock. Null when none is kept.
+   */
+  enrollment: {
+    idempotencyKey: string;
+    issuedAt: Date;
+    issuedForMs: number;
+  } | null;
 }
 
 /**
@@ -285,6 +296,16 @@ export class WorkWorkerRegistry {
        * chats waiting for a machine (ADR 0258) again at once.
        */
       connected?: () => void;
+      /**
+       * A machine a rule provisioned called for the first time: its
+       * class's project hears `machine.connected` (ADR 0327).
+       */
+      firstContact?: (machine: {
+        name: string;
+        rule: string;
+        ref: string | null;
+        class: string | null;
+      }) => Promise<void>;
       log?: (line: string) => void;
     },
   ) {
@@ -383,6 +404,37 @@ export class WorkWorkerRegistry {
         ]),
       )
       .execute();
+  }
+
+  /**
+   * The first call a machine ever made: marks it seen, and tells the
+   * reconciler's listener when a rule provisioned it.
+   */
+  private async firstContact(nodeId: string): Promise<void> {
+    if (!this.deps.firstContact) return;
+    const first = await this.deps.db
+      .updateTable("work_workers")
+      .set({ last_seen_at: sql`now()` })
+      .where("node_id", "=", nodeId)
+      .where("last_seen_at", "is", null)
+      .returning(["name", "machine_rule", "machine_ref", "labels", "pool"])
+      .executeTakeFirst();
+    if (!first?.machine_rule || first.pool) return;
+    const labels = NodeLabelsSchema.safeParse(first.labels);
+    await this.deps
+      .firstContact({
+        name: first.name,
+        rule: first.machine_rule,
+        ref: first.machine_ref,
+        class: labels.success ? (labels.data.class ?? null) : null,
+      })
+      .catch((error: unknown) =>
+        this.deps.log?.(
+          `Machine ${first.name} connected, and recording it failed: ${
+            error instanceof Error ? error.message : String(error)
+          }`,
+        ),
+      );
   }
 
   /** Why this epoch's session ended: superseded, or disabled and lapsed. */
@@ -798,6 +850,7 @@ export class WorkWorkerRegistry {
           processes: args.offer.processes,
         },
       });
+      await this.firstContact(args.nodeId);
       await this.seen(args.nodeId);
       if (connected.superseded)
         this.deps.log?.(`Worker ${args.name} restarted and connected`);
@@ -1156,13 +1209,40 @@ export class WorkWorkerRegistry {
   }
 
   /**
+   * Replace a machine's ref while it is still `from` (ADR 0327): a create
+   * workflow answered, on the enrollment and on the worker if it enrolled
+   * first.
+   */
+  async replaceMachineRef(args: {
+    name: string;
+    from: string;
+    to: string;
+  }): Promise<void> {
+    await this.deps.db
+      .updateTable("work_worker_enrollments")
+      .set({ machine_ref: args.to })
+      .where("tenant_id", "=", this.deps.tenantId)
+      .where("name", "=", args.name)
+      .where("machine_ref", "=", args.from)
+      .execute();
+    await this.deps.db
+      .updateTable("work_workers")
+      .set({ machine_ref: args.to })
+      .where("tenant_id", "=", this.deps.tenantId)
+      .where("name", "=", args.name)
+      .where("machine_ref", "=", args.from)
+      .where("machine_destroyed_at", "is", null)
+      .execute();
+  }
+
+  /**
    * Machines a reconciler provisioned, by state: enrolled, still pending
    * enrollment, expired before enrolling, or revoked but not yet destroyed.
    * A machine stays listed until its platform confirmed it gone
    * ({@link forgetMachine}), whether or not its reference was recorded.
    */
   async machines(): Promise<ProvisionedMachine[]> {
-    const [workers, enrollments] = await Promise.all([
+    const [workers, enrollments, issued] = await Promise.all([
       this.deps.db
         .selectFrom("work_workers")
         .select([
@@ -1196,7 +1276,32 @@ export class WorkWorkerRegistry {
         .where("machine_rule", "is not", null)
         .where("used_at", "is", null)
         .execute(),
+      // Each name's latest code: a name is reused only once its machine is gone.
+      this.deps.db
+        .selectFrom("work_worker_enrollments")
+        .select([
+          "name",
+          "code_hash",
+          "created_at",
+          sql<number>`(extract(epoch from (now() - created_at)) * 1000)::float8`.as(
+            "issued_for_ms",
+          ),
+        ])
+        .where("tenant_id", "=", this.deps.tenantId)
+        .where("machine_rule", "is not", null)
+        .orderBy("created_at")
+        .execute(),
     ]);
+    const enrollmentOf = new Map(
+      issued.map((row) => [
+        row.name,
+        {
+          idempotencyKey: row.code_hash,
+          issuedAt: row.created_at,
+          issuedForMs: Number(row.issued_for_ms),
+        },
+      ]),
+    );
     return [
       ...workers.map((row) => ({
         name: row.name,
@@ -1206,6 +1311,7 @@ export class WorkWorkerRegistry {
         releasedForMs: msOrNull(row.released_for_ms),
         retainDays: row.retain_days,
         placement: storedPlacement(row),
+        enrollment: enrollmentOf.get(row.name) ?? null,
       })),
       ...enrollments.map((row) => ({
         name: row.name,
@@ -1215,6 +1321,7 @@ export class WorkWorkerRegistry {
         releasedForMs: null,
         retainDays: null,
         placement: storedPlacement(row),
+        enrollment: enrollmentOf.get(row.name) ?? null,
       })),
     ];
   }

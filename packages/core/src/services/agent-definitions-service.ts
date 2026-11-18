@@ -16,6 +16,7 @@ import { PROJECT_AGENTS_DIR } from "@catamorphic/workflow/project-layout";
 import type { Kysely } from "kysely";
 import { z } from "zod";
 import { hasProjectPermission, type Identity } from "../identity.js";
+import { type ResultSchemas, ResultSchemasSchema } from "./agent-results.js";
 import { AccessDeniedError } from "./artifact-scope.js";
 import {
   CONNECTION_ALIAS_PATTERN,
@@ -378,6 +379,12 @@ export function agentDefinitionSchema(opts?: { allowE2eFake?: boolean }) {
         .optional(),
       /** Which agents this agent may create as first-class subsessions. */
       delegation: AgentDelegationPolicySchema.optional(),
+      /**
+       * The results this agent submits with `submit_result`, each a JSON
+       * Schema by a lowercase name (ADR 0323). Its output, not its
+       * authority: outside the consent hash.
+       */
+      results: ResultSchemasSchema.optional(),
       /** For kind "acp": the command that starts the agent, or its endpoint. */
       acp: z
         .object({
@@ -425,6 +432,7 @@ export interface AgentDefinition {
     }
   >;
   delegation?: AgentDelegationPolicy;
+  results?: ResultSchemas;
   acp?: { endpoint?: string; command?: string[] };
 }
 
@@ -474,7 +482,7 @@ export function validateAgentDefinition(
  *
  * Deliberately NOT covered: name and description, which are display concerns,
  * plus skills and toolPolicies, which can only narrow what the member's own
- * profile allows. Environment and connection requirements are covered because
+ * profile allows, and results, which name the agent's output (ADR 0323). Environment and connection requirements are covered because
  * they select execution and brokered authority. `sandboxing` and
  * `harnessPermissions` are covered because widening what the agent may do,
  * inside its harness or past its sandbox, must re-earn consent.

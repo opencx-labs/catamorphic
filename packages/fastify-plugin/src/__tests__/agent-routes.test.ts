@@ -2,6 +2,7 @@ import {
   AccessDeniedError,
   AgentNotConfiguredError,
   AgentSessionAuthorityRequiredError,
+  AgentSessionNotFoundError,
   EnvironmentPolicyInvalidError,
 } from "@catamorphic/core";
 import { describe, expect, it, vi } from "vitest";
@@ -109,6 +110,78 @@ describe("agent routes", () => {
       });
       expect(response.statusCode).toBe(400);
     }
+    await app.close();
+  });
+
+  it("answers a chat's model usage, with its subsessions when asked (ADR 0329)", async () => {
+    const totals = {
+      sessionId: SESSION_ID,
+      family: true,
+      sessions: 2,
+      openCalls: 0,
+      calls: 3,
+      inputTokens: 300,
+      cachedInputTokens: 0,
+      cacheCreationTokens: 0,
+      outputTokens: 30,
+      reasoningTokens: 0,
+      costUsd: 0.75,
+      unpricedCalls: 1,
+      unmeteredCalls: 0,
+      models: [
+        {
+          model: "opus",
+          calls: 3,
+          inputTokens: 300,
+          cachedInputTokens: 0,
+          cacheCreationTokens: 0,
+          outputTokens: 30,
+          reasoningTokens: 0,
+          costUsd: 0.75,
+          unpricedCalls: 1,
+          unmeteredCalls: 0,
+        },
+      ],
+    };
+    const usage = vi.fn(async (args: { sessionId: string }) => {
+      if (args.sessionId !== SESSION_ID)
+        throw new AgentSessionNotFoundError(args.sessionId);
+      return totals;
+    });
+    const app = createTestApp({
+      core: { agentSessions: { usage } } as never,
+    });
+    await app.ready();
+    const family = await app.inject({
+      method: "GET",
+      url: `/api/projects/${PROJECT_ID}/agent/sessions/${SESSION_ID}/usage?family=true`,
+    });
+    expect(family.statusCode).toBe(200);
+    expect(family.json()).toEqual(totals);
+    expect(usage).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        projectId: PROJECT_ID,
+        sessionId: SESSION_ID,
+        family: true,
+      }),
+    );
+    await app.inject({
+      method: "GET",
+      url: `/api/projects/${PROJECT_ID}/agent/sessions/${SESSION_ID}/usage`,
+    });
+    expect(usage).toHaveBeenLastCalledWith(
+      expect.objectContaining({ family: false }),
+    );
+    const bad = await app.inject({
+      method: "GET",
+      url: `/api/projects/${PROJECT_ID}/agent/sessions/${SESSION_ID}/usage?family=yes`,
+    });
+    expect(bad.statusCode).toBe(400);
+    const missing = await app.inject({
+      method: "GET",
+      url: `/api/projects/${PROJECT_ID}/agent/sessions/${PROJECT_ID}/usage`,
+    });
+    expect(missing.statusCode).toBe(404);
     await app.close();
   });
 

@@ -539,6 +539,55 @@ export const plain = defineWorkflow(({ defineBoundary }) => ({
   });
 });
 
+describe("declared concurrency (ADR 0325)", () => {
+  const withConcurrency = (value: string) => `
+export const publish = defineWorkflow(({ defineBoundary }) => ({
+  concurrency: ${value},
+  steps: [defineBoundary({ run: () => ({}) })],
+}));
+`;
+
+  it("records the key path and policy", () => {
+    expect(
+      parseWorkflow(
+        withConcurrency('{ key: "payload.session.key", onConflict: "queue" }'),
+      ).concurrency,
+    ).toEqual({ key: "payload.session.key", onConflict: "queue" });
+    expect(
+      parseWorkflow(withConcurrency('{ key: "id", onConflict: "restart" }'))
+        .concurrency,
+    ).toEqual({ key: "id", onConflict: "restart" });
+  });
+
+  it("declares nothing when the property is absent", () => {
+    expect(
+      parseWorkflow(`
+export const plain = defineWorkflow(({ defineBoundary }) => ({
+  steps: [defineBoundary({ run: () => ({}) })],
+}));
+`).concurrency,
+    ).toBeUndefined();
+  });
+
+  it("rejects computed values, unknown policies and paths", () => {
+    expect(() => parseWorkflow(withConcurrency("CONCURRENCY"))).toThrow();
+    expect(() =>
+      parseWorkflow(withConcurrency('{ key: "id", onConflict: "wait" }')),
+    ).toThrow("must be queue, ignore, restart or error");
+    expect(() =>
+      parseWorkflow(withConcurrency('{ key: "a..b", onConflict: "queue" }')),
+    ).toThrow("must be a dot path");
+    expect(() =>
+      parseWorkflow(withConcurrency('{ key: KEY, onConflict: "queue" }')),
+    ).toThrow();
+    expect(() =>
+      parseWorkflow(
+        withConcurrency('{ key: "id", onConflict: "queue", limit: "2" }'),
+      ),
+    ).toThrow("takes only key and onConflict");
+  });
+});
+
 describe("conditional boundary bodies", () => {
   const nodesOf = (source: string) => {
     const graph = parseWorkflow(source);

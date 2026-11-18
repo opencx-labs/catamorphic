@@ -12,6 +12,7 @@ import {
   RunCapabilityError,
   RunEnrollmentConflictError,
   RunInputInvalidError,
+  RunQueueFullError,
   SandboxProviderNotConfiguredError,
   TenantActiveRunLimitError,
   WorkflowNotFoundError,
@@ -36,7 +37,10 @@ export function replyForTriggerError(
   if (err instanceof ProductionDeploymentNotFoundError) {
     return reply.status(409).send({ error: err.message });
   }
-  if (err instanceof RunEnrollmentConflictError) {
+  if (
+    err instanceof RunEnrollmentConflictError ||
+    err instanceof RunQueueFullError
+  ) {
     return reply.status(409).send({ error: err.message });
   }
   if (err instanceof AuthenticationRequiredError) {

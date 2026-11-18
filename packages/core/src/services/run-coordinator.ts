@@ -392,6 +392,169 @@ export class RunCoordinator {
     });
   }
 
+  /**
+   * A returned call that outlives its attempt (ADR 0324): the step waits
+   * like a pause, holding the call it made, and a `host_call_wait` job
+   * follows the work `waitKey` names until it ends and resolves the step
+   * with the call's result.
+   */
+  async suspendForHostCall(args: {
+    workflowStepAttemptId: string;
+    job: ExecutionJob;
+    transition: Record<string, unknown>;
+    waitKey: string;
+  }): Promise<void> {
+    await this.db.transaction().execute(async (trx) => {
+      const context = await this.lockActiveAttempt({
+        trx,
+        workflowStepAttemptId: args.workflowStepAttemptId,
+      });
+      if (
+        context?.attempt.status !== "running" ||
+        !(await ownsJob({ trx, job: args.job }))
+      ) {
+        return;
+      }
+      const now = await databaseNow(trx);
+      const pauseId = crypto.randomUUID();
+      // One open wait per key: a redelivered boundary that parks again
+      // joins the wait it left, rather than starting a second follower.
+      const earlier = await trx
+        .selectFrom("workflow_pauses")
+        .select("id")
+        .where("wait_key", "=", args.waitKey)
+        .where("status", "=", "open")
+        .executeTakeFirst();
+      if (earlier)
+        await trx
+          .updateTable("workflow_pauses")
+          .set({ status: "canceled", resolved_at: now })
+          .where("id", "=", earlier.id)
+          .execute();
+      await trx
+        .insertInto("workflow_pauses")
+        .values({
+          id: pauseId,
+          run_id: context.attempt.run_id,
+          workflow_step_attempt_id: context.attempt.id,
+          state_present: false,
+          state: null,
+          timeout_at: null,
+          signal_name: null,
+          host_call: jsonColumn(toJson(args.transition)),
+          wait_key: args.waitKey,
+        })
+        .execute();
+      await trx
+        .updateTable("workflow_step_attempts")
+        .set({ status: "waiting", updated_at: now })
+        .where("id", "=", context.attempt.id)
+        .execute();
+      await trx
+        .updateTable("workflow_runs")
+        .set({ status: "waiting", phase: "pause", updated_at: now })
+        .where("id", "=", context.attempt.run_id)
+        .where("status", "in", [...ACTIVE_RUN_STATUSES])
+        .execute();
+      await this.jobs.enqueue({
+        trx,
+        tenantId: context.tenantId,
+        workflowRunId: context.attempt.run_id,
+        workflowStepAttemptId: context.attempt.id,
+        kind: "host_call_wait",
+        payload: { pauseId, waitKey: args.waitKey },
+        availableAt: now,
+        maxAttempts: 10,
+        dedupeKey: `run:${context.attempt.run_id}:host-call:${pauseId}`,
+      });
+    });
+  }
+
+  /**
+   * End a host-call wait with the call's result, as the call would have
+   * returned it: beside the state it carried (ADR 0260). Only the job that
+   * follows it may, and only while it is open.
+   */
+  async resolveHostCallWait(args: {
+    job: ExecutionJob;
+    pauseId: string;
+    output: Json;
+  }): Promise<void> {
+    await this.db.transaction().execute(async (trx) => {
+      const pause = await this.lockHostCallWait({ trx, ...args });
+      if (!pause) return;
+      const now = await databaseNow(trx);
+      await trx
+        .updateTable("workflow_pauses")
+        .set({
+          status: "resumed",
+          resume_value: jsonColumn(args.output),
+          resolved_at: now,
+        })
+        .where("id", "=", pause.id)
+        .execute();
+      await this.resolvePause({
+        trx,
+        pause: { ...pause, resume_value: args.output },
+        reason: "resumed",
+      });
+    });
+  }
+
+  /** End a host-call wait as a failed call: the step's retry policy applies. */
+  async failHostCallWait(args: {
+    job: ExecutionJob;
+    pauseId: string;
+    error: string;
+  }): Promise<void> {
+    const pause = await this.db.transaction().execute(async (trx) => {
+      const pause = await this.lockHostCallWait({ trx, ...args });
+      if (!pause) return undefined;
+      return pause;
+    });
+    if (!pause) return;
+    await this.failStep({
+      workflowStepAttemptId: pause.workflow_step_attempt_id,
+      job: args.job,
+      error: args.error,
+    });
+  }
+
+  /** The open host-call wait a job follows, with its run locked. */
+  private async lockHostCallWait(args: {
+    trx: Transaction<DB>;
+    job: ExecutionJob;
+    pauseId: string;
+  }): Promise<Selectable<DB["workflow_pauses"]> | undefined> {
+    const run = await lockRun({ trx: args.trx, runId: args.job.workflowRunId });
+    if (
+      !run ||
+      !isActiveRunStatus(run.status) ||
+      !(await ownsJob({ trx: args.trx, job: args.job }))
+    )
+      return undefined;
+    const pause = await args.trx
+      .selectFrom("workflow_pauses")
+      .where("id", "=", args.pauseId)
+      .where("run_id", "=", args.job.workflowRunId)
+      .selectAll()
+      .forUpdate()
+      .executeTakeFirst();
+    return pause?.status === "open" && pause.host_call !== null
+      ? pause
+      : undefined;
+  }
+
+  /** Whether a host-call wait still waits: its follower stops otherwise. */
+  async hostCallWaitOpen(args: { pauseId: string }): Promise<boolean> {
+    const pause = await this.db
+      .selectFrom("workflow_pauses")
+      .select("status")
+      .where("id", "=", args.pauseId)
+      .executeTakeFirst();
+    return pause?.status === "open";
+  }
+
   /** The run row orders sends against pause creation, timeout and termination. */
   async signalByKey(args: SignalRunInput): Promise<RunSignalReceipt> {
     const payload = signalPayload(args);
@@ -565,7 +728,10 @@ export class RunCoordinator {
         .selectAll()
         .forUpdate()
         .executeTakeFirst();
-      if (!pause) throw new RunPauseNotFoundError(args.pauseId);
+      // A host-call wait ends with its call's own result, never a value
+      // someone resumes it with (ADR 0324).
+      if (!pause || pause.host_call !== null)
+        throw new RunPauseNotFoundError(args.pauseId);
       if (pause.status !== "open") {
         if (
           pause.resume_idempotency_key === args.idempotencyKey &&
@@ -923,7 +1089,31 @@ export class RunCoordinator {
         .select(["workflow_run_id", "invocation_id"])
         .orderBy("created_at")
         .execute();
-      const active = runs.filter((run) => !isTerminalRunStatus(run.status));
+      const now = await databaseNow(trx);
+      // A queued run holds no work and is outside the active-key index, so
+      // it ends at once; passing through `canceling` would claim its key
+      // from the run ahead of it (ADR 0325).
+      const queued = runs.filter((run) => run.status === "queued");
+      if (queued.length > 0)
+        await trx
+          .updateTable("workflow_runs")
+          .set({
+            status: "canceled",
+            cancel_requested_at: now,
+            cancel_reason: args.reason ?? null,
+            completed_at: now,
+            updated_at: now,
+          })
+          .where(
+            "id",
+            "in",
+            queued.map((run) => run.id),
+          )
+          .where("status", "=", "queued")
+          .execute();
+      const active = runs.filter(
+        (run) => run.status !== "queued" && !isTerminalRunStatus(run.status),
+      );
       if (active.length === 0) {
         return {
           invocations: [],
@@ -931,7 +1121,6 @@ export class RunCoordinator {
         };
       }
       const activeIds = active.map((run) => run.id);
-      const now = await databaseNow(trx);
       await trx
         .updateTable("workflow_runs")
         .set({
@@ -1074,6 +1263,25 @@ export class RunCoordinator {
         });
       }
     }
+  }
+
+  /**
+   * End a queued run that cannot start (ADR 0325) through the ordinary
+   * failure path. It holds no work, so only its row changes; its key is
+   * free for the next run.
+   */
+  async failQueued(args: { runId: string; error: string }): Promise<void> {
+    await this.db.transaction().execute(async (trx) => {
+      const run = await lockRun({ trx, runId: args.runId });
+      if (run?.status !== "queued") return;
+      await this.failRun({
+        trx,
+        runId: args.runId,
+        error: args.error,
+        now: await databaseNow(trx),
+        statuses: ["queued"],
+      });
+    });
   }
 
   async handleExhaustedJob(args: {
@@ -1574,6 +1782,7 @@ export class RunCoordinator {
       state_present: boolean;
       state: Json | null;
       resume_value: Json | null;
+      host_call?: Json | null;
     };
     reason: "resumed" | "timed_out";
   }): Promise<void> {
@@ -1582,11 +1791,20 @@ export class RunCoordinator {
       workflowStepAttemptId: args.pause.workflow_step_attempt_id,
     });
     if (context?.attempt.status !== "waiting") return;
-    const output = toJson({
-      reason: args.reason,
-      ...(args.reason === "resumed" ? { value: args.pause.resume_value } : {}),
-      ...(args.pause.state_present ? { state: args.pause.state } : {}),
-    });
+    // A host-call wait resolves as its call: the result, beside the state
+    // the call carried (ADR 0260).
+    const call = args.pause.host_call ? jsonRecord(args.pause.host_call) : null;
+    const output = call
+      ? call.statePresent === true
+        ? toJson({ result: args.pause.resume_value, state: call.state ?? null })
+        : toJson(args.pause.resume_value)
+      : toJson({
+          reason: args.reason,
+          ...(args.reason === "resumed"
+            ? { value: args.pause.resume_value }
+            : {}),
+          ...(args.pause.state_present ? { state: args.pause.state } : {}),
+        });
     const now = await databaseNow(args.trx);
     await args.trx
       .updateTable("workflow_step_attempts")

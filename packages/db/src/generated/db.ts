@@ -181,6 +181,8 @@ export interface AgentSessions {
   sandbox_id: string | null;
   secrets_delivered_ref: string | null;
   secrets_held_at: Timestamp | null;
+  setup_run: Json | null;
+  setup_widened_until: Timestamp | null;
   source: Generated<string>;
   source_action_id: string | null;
   state_revision: Generated<Int8>;
@@ -191,7 +193,10 @@ export interface AgentSessions {
   updated_at: Generated<Timestamp>;
   work_status: Generated<string>;
   workspace: Json | null;
+  workspace_generation: Generated<number>;
   workspace_move: Json | null;
+  workspace_released_reason: string | null;
+  workspace_session_id: string | null;
 }
 
 export interface AgentSessionViews {
@@ -575,6 +580,7 @@ export interface ExecutionAllocations {
   root_workload_id: string;
   sandbox_creation_started: Generated<boolean>;
   sandbox_provider_id: string | null;
+  setup_outcome: Json | null;
   status: Generated<string>;
   tenant_id: string;
   worker_node_id: string | null;
@@ -641,10 +647,12 @@ export interface ModelUsage {
   cache_creation_tokens: Generated<Int8>;
   cached_input_tokens: Generated<Int8>;
   connection_id: string;
+  cost_usd: Numeric | null;
   created_at: Generated<Timestamp>;
   endpoint: string;
   id: Generated<Int8>;
   input_tokens: Generated<Int8>;
+  metered: Generated<boolean>;
   model: string | null;
   output_tokens: Generated<Int8>;
   project_id: string;
@@ -714,6 +722,20 @@ export interface PlacementWaits {
   tenant_id: string;
   waiting_since: Generated<Timestamp>;
   workload_kind: string;
+}
+
+export interface ProjectCleanups {
+  attempts: Generated<number>;
+  claimed_by: string | null;
+  created_at: Generated<Timestamp>;
+  hook_name: string;
+  id: Generated<string>;
+  identity: Json;
+  last_error: string | null;
+  next_attempt_at: Generated<Timestamp>;
+  project: Json;
+  project_id: string;
+  tenant_id: string;
 }
 
 export interface ProjectEventDeliveries {
@@ -815,6 +837,30 @@ export interface Publications {
   slug: string;
 }
 
+export interface PublishedRevisions {
+  attempts: Generated<number>;
+  auto_retried: Generated<boolean>;
+  commit_sha: string;
+  created_at: Generated<Timestamp>;
+  deploy_attempt: Generated<number>;
+  deploy_enablement_id: string | null;
+  deploy_noticed: Generated<boolean>;
+  deploy_run_id: string | null;
+  deploy_started_at: Timestamp | null;
+  deploy_workflow: string | null;
+  error: string | null;
+  id: Generated<string>;
+  previous_commit_sha: string | null;
+  project_id: string;
+  report: Generated<Json>;
+  retry_at: Timestamp | null;
+  sequence: Generated<Int8>;
+  settled_at: Timestamp | null;
+  status: Generated<string>;
+  tenant_id: string;
+  updated_at: Generated<Timestamp>;
+}
+
 export interface PushSubscriptions {
   auth_secret: string;
   created_at: Generated<Timestamp>;
@@ -899,6 +945,7 @@ export interface SessionActions {
   lease_expires_at: Timestamp | null;
   lease_owner: string | null;
   operation: string;
+  progress: Json | null;
   project_id: string;
   result: Json | null;
   session_id: string;
@@ -1085,6 +1132,7 @@ export interface TriggerDefinitions {
 export interface TriggerDefinitionScans {
   commit_sha: string;
   project_id: string;
+  project_kinds: Generated<Json>;
   scanned_at: Generated<Timestamp>;
 }
 
@@ -1218,6 +1266,7 @@ export interface WorkflowEnablementEvents {
 }
 
 export interface WorkflowEnablements {
+  authority_digest: string | null;
   capabilities: Generated<Json>;
   commit_sha: string;
   consent_digest: string;
@@ -1226,6 +1275,8 @@ export interface WorkflowEnablements {
   deployment_artifact_id: string;
   environment_name: string;
   expires_at: Timestamp | null;
+  follow: Generated<boolean>;
+  followed_sequence: Int8 | null;
   id: Generated<string>;
   owner_external_user_id: string | null;
   owner_identity: Json;
@@ -1256,6 +1307,7 @@ export interface WorkflowEnablementTriggers {
 
 export interface WorkflowPauses {
   created_at: Generated<Timestamp>;
+  host_call: Json | null;
   id: Generated<string>;
   resolved_at: Timestamp | null;
   resume_idempotency_key: string | null;
@@ -1267,6 +1319,7 @@ export interface WorkflowPauses {
   state_present: Generated<boolean>;
   status: Generated<string>;
   timeout_at: Timestamp | null;
+  wait_key: string | null;
   workflow_step_attempt_id: string;
 }
 
@@ -1293,7 +1346,9 @@ export interface WorkflowRuns {
   completed_at: Timestamp | null;
   correlation_key: string | null;
   created_at: Generated<Timestamp>;
+  delivery_key: string | null;
   deployment_artifact_id: string | null;
+  enrollment: Json | null;
   environment_name: string | null;
   error: string | null;
   external_user_id: string | null;
@@ -1304,8 +1359,15 @@ export interface WorkflowRuns {
   phase: Generated<string>;
   project_id: string;
   provenance: Json;
+  queue_attempted_at: Timestamp | null;
+  queue_attempts: Generated<number>;
+  queue_blocked: string | null;
+  queue_room_waits: Generated<number>;
+  queued_at: Timestamp | null;
   result: Json | null;
   session_artifact_id: string | null;
+  setup_build: string | null;
+  setup_session_id: string | null;
   started_at: Timestamp | null;
   state_version: Generated<Int8>;
   status: Generated<string>;
@@ -1560,6 +1622,7 @@ export interface DB {
   personal_environment_entries: PersonalEnvironmentEntries;
   personal_environment_setups: PersonalEnvironmentSetups;
   placement_waits: PlacementWaits;
+  project_cleanups: ProjectCleanups;
   project_event_deliveries: ProjectEventDeliveries;
   project_event_monitors: ProjectEventMonitors;
   project_events: ProjectEvents;
@@ -1568,6 +1631,7 @@ export interface DB {
   project_secrets: ProjectSecrets;
   projects: Projects;
   publications: Publications;
+  published_revisions: PublishedRevisions;
   push_subscriptions: PushSubscriptions;
   rate_reservation_buckets: RateReservationBuckets;
   remote_operations: RemoteOperations;

@@ -48,6 +48,11 @@ export interface WorkflowEnablement {
   status: WorkflowEnablementStatus;
   suspensionReason: string | null;
   updateAvailable: boolean;
+  /**
+   * Whether it moves to each newly published revision of its branch whose
+   * workflow builds and whose authority is unchanged (ADR 0330).
+   */
+  follow: boolean;
   temporary: boolean;
   expiresAt: string | null;
   revision: number;
@@ -70,6 +75,11 @@ export interface WorkflowEnablementPreview {
   /** The project permissions the workflow declares (ADR 0158). */
   permissions: string[];
   consentDigest: string;
+  /**
+   * The consent digest without the code, with triggers and secret names
+   * (ADR 0330): what following compares.
+   */
+  authorityDigest: string;
   triggerCount: number;
   triggers: Array<{ kind: string; config: unknown; projectKind?: string }>;
   connectionLabels: Record<string, string>;
@@ -90,3 +100,18 @@ export interface RevalidatedWorkflowEnablement {
   enablement: WorkflowEnablement;
   ownerIdentity: import("../identity.js").Identity;
 }
+
+/**
+ * What following one published revision did to one enablement (ADR 0330):
+ * it moved; it stayed because the revision needs new consent or its owner
+ * is unavailable; it skipped a revision whose workflow does not build; it
+ * will try again after a failure that may clear; or there was nothing to
+ * do (not following, already there or past it).
+ */
+export type WorkflowEnablementFollowOutcome =
+  | { kind: "moved"; enablementId: string; commitSha: string }
+  | { kind: "needs_consent"; enablementId: string; reason: string }
+  | { kind: "skipped"; enablementId: string; reason: string }
+  /** A failure that may clear (database, network, capacity): try again. */
+  | { kind: "retry"; enablementId: string; reason: string }
+  | { kind: "unchanged"; enablementId: string };

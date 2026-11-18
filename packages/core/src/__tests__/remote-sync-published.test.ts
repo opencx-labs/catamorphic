@@ -36,6 +36,8 @@ describe("published sync of an attached project (ADR 0170)", () => {
   let server: Awaited<ReturnType<typeof gitHttpServer>>;
   let sync: RemoteSyncService;
   let projects: ProjectsService;
+  /** What the sync told following enablements about (ADR 0330). */
+  const published: Array<{ projectId: string; commitSha: string }> = [];
 
   /** Commit a file on top of `branch` of a bare repository. */
   async function commitTo(repo: string, file: string, from = repo) {
@@ -90,7 +92,14 @@ describe("published sync of an attached project (ADR 0170)", () => {
       projectManager: manager,
       remoteBase: server.url,
     });
-    sync = new RemoteSyncService(db, manager, forge.codeHosts);
+    sync = new RemoteSyncService(
+      db,
+      manager,
+      forge.codeHosts,
+      async (input) => {
+        published.push(input);
+      },
+    );
   }, 60_000);
 
   afterAll(async () => {
@@ -98,6 +107,23 @@ describe("published sync of an attached project (ADR 0170)", () => {
     await db.destroy();
     if (temp) await fs.rm(temp, { recursive: true, force: true });
   });
+
+  it("publishes what it receives, so following enablements move", async () => {
+    await commitTo(codeHost, "agents.md");
+    const pulled = await sync.syncPublished({ identity, projectId });
+    expect(pulled.status).toBe("pulled");
+    expect(published).toEqual([
+      {
+        projectId,
+        commitSha: pulled.status === "pulled" ? pulled.remoteSha : "",
+      },
+    ]);
+    expect((await sync.syncPublished({ identity, projectId })).status).toBe(
+      "up-to-date",
+    );
+    expect(published).toHaveLength(1);
+    published.length = 0;
+  }, 60_000);
 
   it("records since when main diverged, and clears it once they converge", async () => {
     await commitTo(codeHost, "roles.json");

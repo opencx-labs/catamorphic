@@ -305,12 +305,49 @@ export const WorkflowEnablementSchema = WorkflowEnablementTargetSchema.extend({
   status: z.enum(["active", "suspended", "disabled"]),
   suspensionReason: z.string().nullable(),
   updateAvailable: z.boolean(),
+  /**
+   * Moves to each newly published revision whose workflow builds and whose
+   * authority is unchanged (ADR 0330).
+   */
+  follow: z.boolean(),
   temporary: z.boolean(),
   expiresAt: z.string().datetime().nullable(),
   revision: z.number().int().positive(),
   triggers: z.array(WorkflowEnablementTriggerSchema),
   createdAt: z.string().datetime(),
   updatedAt: z.string().datetime(),
+});
+
+/** One published revision and how it went live (ADRs 0330, 0331). */
+export const PublishedRevisionSchema = z.object({
+  id: z.string().uuid(),
+  sequence: z.number().int(),
+  projectId: z.string().uuid(),
+  commitSha: z.string(),
+  status: z.enum([
+    "pending",
+    "deploying",
+    "applying",
+    "applied",
+    "superseded",
+    "failed",
+  ]),
+  deployWorkflow: z.string().nullable(),
+  deployRunId: z.string().uuid().nullable(),
+  previousCommitSha: z.string().nullable(),
+  error: z.string().nullable(),
+  /** What following the revision did to each following enablement. */
+  report: z.array(
+    z.object({
+      kind: z.enum(["moved", "needs_consent", "skipped", "retry", "unchanged"]),
+      enablementId: z.string().uuid(),
+      workflowName: z.string(),
+      commitSha: z.string().optional(),
+      reason: z.string().optional(),
+    }),
+  ),
+  createdAt: z.string().datetime(),
+  settledAt: z.string().datetime().nullable(),
 });
 
 export const WorkflowSummarySchema = z.object({
@@ -488,6 +525,7 @@ export const WorkflowDetailSchema = WorkflowGraphSchema.extend({
 
 // --- Runs ---
 export const RunStatusSchema = z.enum([
+  "queued",
   "pending",
   "running",
   "waiting",
@@ -635,6 +673,7 @@ export const EnrollmentConflictPolicySchema = z.enum([
   "ignore",
   "error",
   "restart",
+  "queue",
 ]);
 
 export const TriggerRunSchema = z.object({
@@ -1207,6 +1246,8 @@ export const AgentSessionSchema = z.object({
   /** Provenance of a chat imported from another tool (ADR 0233). */
   imported: ImportedSessionSchema.nullable(),
   parentSessionId: z.string().uuid().nullable(),
+  /** The session whose workspace it works in (ADR 0322), if not its own. */
+  workspaceSessionId: z.string().uuid().nullable(),
   visibility: z.enum(["latent", "promoted", "archived"]),
   archivedAt: z.string().datetime().nullable(),
   status: z.enum(["active", "closed"]),
@@ -1247,12 +1288,48 @@ export const AgentSessionIdParamsSchema = ProjectIdParamsSchema.extend({
   sessionId: z.string().uuid(),
 });
 
+export const AgentSessionUsageQuerySchema = z.object({
+  /** Include every subsession below the chat. */
+  family: z
+    .enum(["true", "false"])
+    .transform((value) => value === "true")
+    .optional(),
+});
+
+const ModelUsageTotalsShape = {
+  calls: z.number().int().nonnegative(),
+  inputTokens: z.number().int().nonnegative(),
+  cachedInputTokens: z.number().int().nonnegative(),
+  cacheCreationTokens: z.number().int().nonnegative(),
+  outputTokens: z.number().int().nonnegative(),
+  reasoningTokens: z.number().int().nonnegative(),
+  /** Provider-reported cost in US dollars, summed; null when none reported. */
+  costUsd: z.number().nonnegative().nullable(),
+  /** Calls whose provider reported no cost: costUsd is a lower bound. */
+  unpricedCalls: z.number().int().nonnegative(),
+  /** Calls whose usage could not be read: token totals are a lower bound. */
+  unmeteredCalls: z.number().int().nonnegative(),
+};
+
+/** A chat's model usage through the gateway (ADR 0329). */
+export const AgentSessionUsageSchema = z.object({
+  sessionId: z.string().uuid(),
+  family: z.boolean(),
+  sessions: z.number().int().nonnegative(),
+  openCalls: z.number().int().nonnegative(),
+  ...ModelUsageTotalsShape,
+  models: z.array(
+    z.object({ model: z.string().nullable(), ...ModelUsageTotalsShape }),
+  ),
+});
+
 export const AgentSessionPeerSchema = z.object({
   id: z.string().uuid(),
   projectId: z.string().uuid(),
   title: z.string().nullable(),
   agentId: z.string().nullable(),
   parentSessionId: z.string().uuid().nullable(),
+  workspaceSessionId: z.string().uuid().nullable(),
   forkedFromSessionId: z.string().uuid().nullable(),
   visibility: z.enum(["latent", "promoted", "archived"]),
   status: z.enum(["active", "closed"]),
@@ -1296,6 +1373,11 @@ export const CreateAgentSubsessionSchema = z.object({
   readOnly: z.boolean().optional(),
   /** False keeps the child from starting its own; always allowed. */
   delegate: z.boolean().optional(),
+  /**
+   * Its parent's workspace (default: no admission or setup of its own) or
+   * one of its own started at the parent's base (ADR 0322).
+   */
+  workspace: z.enum(["shared", "own"]).optional(),
   task: z.string().min(1).max(100_000),
   contextMode: z.enum(["fresh", "inherit"]).optional(),
   title: z.string().min(1).max(500).optional(),
@@ -1308,8 +1390,25 @@ export const AgentSubsessionSchema = z.object({
   task: z.string(),
   contextMode: z.enum(["fresh", "inherit"]),
   allowFurtherDelegation: z.boolean(),
+  /** Where it works: its parent's workspace or its own (ADR 0322). */
+  workspace: z.enum(["shared", "own"]),
   status: z.enum(["running", "completed", "failed", "interrupted", "archived"]),
   session: AgentSessionSchema,
+  /**
+   * The child's latest accepted result of each name (ADR 0323). A large
+   * value is left out (`value` null, `truncated`): read it with results.
+   */
+  results: z.array(
+    z.object({
+      id: z.string(),
+      name: z.string(),
+      value: JsonValueSchema,
+      truncated: z.boolean(),
+      current: z.boolean(),
+      turnId: z.string().nullable(),
+      recordedAt: z.string(),
+    }),
+  ),
 });
 
 export const WaitForAgentSubsessionsSchema = z.object({
@@ -1701,6 +1800,24 @@ export const ItemSchema = describes<Item>()(
         }),
         text: z.string(),
       }),
+      z.object({
+        ...itemCommon,
+        kind: z.literal("result"),
+        name: z.string(),
+        value: JsonValueSchema,
+        input: z
+          .object({
+            itemId: z.string(),
+            position: z.number().int(),
+            kind: z.enum([
+              "user_message",
+              "inbound_message",
+              "task_notification",
+            ]),
+          })
+          .nullable(),
+        commit: z.string().nullable(),
+      }),
     ])
     .meta({ id: "Item" }),
 );
@@ -1957,6 +2074,52 @@ export const SessionItemsQuerySchema = z.object({
 export const SessionItemsPageSchema = z.object({
   items: z.array(ItemSchema),
   olderBefore: z.number().int().nullable(),
+});
+
+/** A typed result an agent submitted and its schema accepted (ADR 0323). */
+export const SessionResultSchema = z
+  .object({
+    id: z.string(),
+    /** The chat that recorded it: the one asked about, or a subsession. */
+    sessionId: z.string(),
+    turnId: z.string().nullable(),
+    attemptId: z.string().nullable(),
+    name: z.string(),
+    value: JsonValueSchema,
+    /** The newest input the chat had taken in when it was submitted. */
+    input: z
+      .object({
+        itemId: z.string(),
+        position: z.number().int(),
+        kind: z.enum(["user_message", "inbound_message", "task_notification"]),
+      })
+      .nullable(),
+    /**
+     * No new request reached the chat since: nothing a person, a workflow or
+     * a session outside its own subsessions sent.
+     */
+    current: z.boolean(),
+    commit: z.string().nullable(),
+    recordedAt: z.string(),
+  })
+  .meta({ id: "SessionResult" });
+
+export const SessionResultsQuerySchema = z.object({
+  name: z.string().min(1).max(64).optional(),
+  /** `true`: the chat's subsessions' results too, at every depth. */
+  family: z
+    .enum(["true", "false"])
+    .transform((value) => value === "true")
+    .optional(),
+  /** Only what one turn's attempts submitted. */
+  turnId: z.string().uuid().optional(),
+  /** An input's message id: results that answer it or a later one. */
+  afterInput: z.string().uuid().optional(),
+  limit: z.coerce.number().int().min(1).max(100).optional(),
+});
+
+export const SessionResultsSchema = z.object({
+  results: z.array(SessionResultSchema),
 });
 
 export const SessionEventsQuerySchema = z.object({

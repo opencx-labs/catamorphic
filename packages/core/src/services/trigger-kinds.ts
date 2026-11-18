@@ -54,8 +54,12 @@ export interface TriggerKindRuntime {
    * matches alike; the run still gets the payload as sent.
    */
   matches?(input: { config: Json; payload: Json }): boolean;
-  /** Derives an enrollment correlation key from the payload (ADR 0027). */
-  correlationKey?(payload: Json): string | undefined;
+  /**
+   * This delivery's identity in the payload, such as a webhook's delivery
+   * id (ADR 0325): a redelivery returns the run it started, in any status.
+   * A workflow names the subject its runs are about with `concurrency`.
+   */
+  deliveryKey?(payload: Json): string | undefined;
   /**
    * Project permissions (ADR 0158) a workflow must declare to bind this
    * kind, because its events disclose what only they may read: directory
@@ -63,6 +67,13 @@ export interface TriggerKindRuntime {
    * deploy scan and each project's check refuse a binding without them.
    */
   requiredPermissions?: readonly string[];
+  /**
+   * Only the host dispatches this kind, through one consented enablement
+   * (`dispatchAtCommit`): a member firing it over HTTP, MCP or a scoped
+   * client is refused. For kinds whose input the host vouches for, such as
+   * a machine's enrollment (ADR 0327).
+   */
+  hostOnly?: boolean;
 }
 
 /** Static kind metadata, safe to serve over HTTP (no functions). */

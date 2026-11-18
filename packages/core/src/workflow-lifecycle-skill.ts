@@ -141,7 +141,9 @@ their roles; a project chat may use any project Environment) and the agent's
 3. Share through the authorized sync or PR flow. Preserve existing authorization;
    ask only for a missing destination or approval that the host actually requires.
 4. Deploy through the host's offered flow and verify the revision. A saved file,
-   git commit, or push alone does not update a deployment or an existing enablement.
+   git commit, or push alone does not publish. Publishing does update following
+   enablements (see below); merging to the code host's \`main\` publishes a
+   project attached to it.
    In the desktop, the workflow's **Automatic** view offers **Publish** first
    when the workflow is not published yet; say so rather than claiming it is
    deployed.
@@ -151,6 +153,51 @@ their roles; a project chat may use any project Environment) and the agent's
    **Enable for me**; someone with \`automations:write\` can choose **The project**
    instead. The consent lists the declared permissions. Connecting an account may finish that initiated flow; connecting an
    account by itself never initiates it.
+
+## Following main, and the deploy workflow
+
+A project automation of \`main\` follows the published program by default
+(\`follow: true\`; set it when enabling, change it later with the enablement's
+\`follow\` action). A member's own automation does not follow unless the member
+turns it on, because it runs with their connections and they should see new
+code before it uses them. On each newly published revision, Work moves a
+following enablement there when the workflow builds and parses at that revision
+and the authority consented to is unchanged: same Environment, connections,
+capabilities and permissions, the same triggers (kind, configuration and
+filters) and the same declared secret names. If the revision asks for more, the enablement
+stays on its commit, shows an update, and its owner is notified to review it. A
+revision whose workflow does not parse, is gone, or whose triggers do not
+register is skipped and reported; the next good one is followed. A failure that
+may clear (the database, the network, capacity) is tried again later, never
+skipped. Runs already going keep the commit they started on. Temporary
+enablements never follow. Turn \`follow\` off to pin a workflow to a reviewed
+commit.
+
+A project that keeps its own data (a database reached through a secret) names a
+deploy workflow in \`.work/project.json\`:
+
+\`\`\`json
+{ "deploy": { "workflow": "migrateDatabase" } }
+\`\`\`
+
+Before following enablements move to a revision, Work runs that exported workflow
+once at the new revision with \`{ commit, previousCommit }\` and waits for it.
+It runs through its own project automation, so turn it on for **The project**
+with the connections and secrets it needs. If it fails, nothing moves, the
+previous revision stays live, the people who manage project automations are told,
+and the next published revision runs its own deploy. Someone with
+\`automations:write\` can also try the failed revision again (the project's
+\`published-revisions/retry\`), and Work tries it once more by itself when the
+deploy workflow's project automation is consented to again. One deploy runs per project at
+a time, in publication order. What it does is up to the project: run migrations
+with any tool, or nothing.
+
+Write migrations expand then contract: runs on the previous commit keep running
+against the new schema while they finish, including long pauses. A revision adds
+columns, tables and defaults the new code needs without breaking the old code; a
+later revision, once nothing reads them, removes what is no longer used. Make
+each migration idempotent, since a failed deploy is tried again at the next
+revision.
 
 To keep a successful session check, copy its selected source into project code
 when requested. Resolve name collisions, parameterize session-specific targets,

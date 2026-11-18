@@ -301,7 +301,7 @@ the JSON file `WORK_MACHINES_CONFIG` names:
   `firewalls` and `networks` (ids) and extra server `labels` are optional;
   `snapshot: true` keeps an image of a machine's disk when it is destroyed.
   The API token is `WORK_HETZNER_TOKEN` (read and write), never the file.
-- `sandbox` (Hetzner and custom classes): the backend the machines run,
+- `sandbox` (Hetzner, custom and workflow classes): the backend the machines run,
   passed to the [install script](#the-install-script) as `--sandbox`:
   `auto` (default), `microsandbox`, or `container`, which runs gVisor even
   where KVM is usable. Give `container` to classes for Environments whose
@@ -325,9 +325,34 @@ the JSON file `WORK_MACHINES_CONFIG` names:
   (a hash of the code) as the platform's idempotency token,
   never the name, which a later machine of the rule reuses. A server with
   the hook and no classes file treats every class as custom.
+- `workflow`: a project's own workflows create and destroy them (ADR 0327),
+  so a cloud Work does not ship needs no server code:
+  `"review": { "platform": "workflow", "project": "<project id>", "create": "createMachine", "destroy": "destroyMachine", "options": { ... } }`.
+  `create` binds the `machine.create` trigger kind and gets what the hook's
+  `create` gets; it returns `{ ref }`, or `{ refused }` when the platform
+  made nothing. `destroy` binds `machine.destroy`, gets
+  `{ name, class, rule, ref, idempotencyKey, requestedAt, options }` (`ref`
+  null when none is known; find a lost launch by the key, and wait a while
+  after `requestedAt` before calling a missing machine gone), and returns
+  `{ done }`. Only the server dispatches these kinds: members cannot fire
+  them. Both must be turned on **for the project**: Work
+  runs only the project's automation, in its Environment with its consented
+  connections and secrets. Work never waits on a run: it records the
+  machine's intent, starts `create` once per enrollment, and reads the
+  answer on later passes; a failed run is an uncertain create, so the code
+  waits for the machine to enroll and a machine that never does is
+  destroyed by name. A start that stored no run tries again with a new
+  code, and repeated refusals wait longer each time. Destroy runs again on
+  later passes until it answers `{ done: true }` (failing runs back off),
+  and a create run stuck for 30 minutes is canceled first. The project also hears `machine.created`,
+  `machine.connected`, `machine.lost`, `machine.released` and
+  `machine.destroyed` as project events. Its create runs carry enrollment
+  codes, so keep it to administrators. The `machines-ec2` pack
+  (`registry.read`) is the EC2 recipe, with a tag-scoped IAM policy.
 
 The server refuses to start when a class needs what it lacks (a Hetzner
-class without the token, a custom class without the hook), and refuses a
+class without the token, a custom class without the hook; a workflow class
+needs neither), and refuses a
 rule that names a class it does not know.
 
 ### Hetzner Cloud
@@ -430,7 +455,7 @@ work such as [pull request reviews](review-pull-requests.md):
   several projects, must isolate its agents (microsandbox or gVisor) unless
   the rule says `"trusted": true`; such a rule is refused when it is written
   if machines of its class are known to run plain processes.
-- Only `hetzner-cloud` and `custom` classes scale; a pool class is refused.
+- Only `hetzner-cloud`, `custom` and `workflow` classes scale; a pool class is refused.
 - A machine is revoked only while nothing holds it: the drain and a new
   Allocation take the same lock, so work never lands on a machine being
   destroyed. One holding workspaces goes anyway only once it has been
@@ -597,7 +622,10 @@ fresh one with an empty disk at any time.
    stopped. One replica at a time publishes a project, creates a deployment
    runtime, or syncs a company project, under a claim in Postgres. A deploy
    applies on every replica at once: roles and program reads follow the
-   published commit.
+   published commit. Following workflow enablements move to each published
+   revision one project at a time, after the project's deploy workflow, under
+   a per-project claim, so no two replicas move one twice or out of order
+   (ADRs 0330, 0331).
 
 A restarted worker process connects under a new epoch. The operations it had
 in flight fail as uncertain and are never replayed; its sandboxes and chats
@@ -980,6 +1008,16 @@ caches (ADR 0208):
   up), or local-process under `WORK_UNENFORCED_EGRESS=accept`. Microsandbox
   fixes a VM's network when it is created and does not offer it. The hosts
   you list could receive the base checkout and the secrets the setup names.
+- `setup.workflow` names a project workflow Work runs after `setup.command`,
+  at the same points, before the turn (ADR 0324): `"setup": { "command":
+  "pnpm install --frozen-lockfile", "workflow": "prepareReview" }`, or a
+  workflow alone. Enable it for the project as a project automation; it
+  runs with the connections and permissions consented there, and one no one
+  enabled fails the setup. It typically calls `exec` to run commands in the
+  workspace being set up: `in: "setup"` on the setup's network as above,
+  `in: "session"` on the chat's own. `$WORK_PROGRAM` names a read-only copy
+  of the run's `.work/` folder for trusted files. A failure or timeout is a
+  failed setup. Chats in folders on people's computers do not run it.
 - `volumes` name directories kept on the machine for each owner (a member,
   or the project for its own chats and runs) and project: the owner's next
   sandbox on that machine mounts the same directory, and nobody else's does.

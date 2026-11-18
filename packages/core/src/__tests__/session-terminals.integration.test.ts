@@ -451,6 +451,28 @@ describe("terminals and previews in a chat's workspace (ADR 0209)", () => {
       .execute();
     expect(await sessions.releaseIdleWorkspaces()).toBe(1);
     expect(await status()).toBe("released");
+    // Workflows hear it was given back (ADR 0324).
+    const changes = await db
+      .selectFrom("project_events")
+      .select("payload")
+      .where("kind", "=", "session.workspace-changed")
+      .orderBy("sequence")
+      .execute();
+    expect(
+      changes
+        .map(
+          (row) =>
+            row.payload as {
+              sessionId?: string;
+              detail?: { change?: string; reason?: string };
+            },
+        )
+        .filter((payload) => payload.sessionId === sessionId)
+        .map((payload) => [payload.detail?.change, payload.detail?.reason]),
+    ).toEqual([
+      ["ready", "created"],
+      ["released", "idle"],
+    ]);
     await expect(
       terminals().read({
         identity: alice,

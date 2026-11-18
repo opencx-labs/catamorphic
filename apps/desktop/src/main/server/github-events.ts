@@ -19,7 +19,8 @@ export const GITHUB_WEBHOOK_NAME = "github";
  * the webhook payload's shape. The same trigger library (`.work/triggers/
  * github.ts` on `trigger("webhook", { name: "github" })`) and `where`
  * filters then match on the desktop and on a server. The host fetched the
- * event itself, so it carries `hostVerified: true` instead of a signature.
+ * event itself, so it carries `origin: { type: "host" }` instead of a
+ * signature (ADR 0326).
  */
 export function githubPollingEventSource(args: {
   core: () => CatamorphicCore;
@@ -318,7 +319,7 @@ export function githubWebhookEvent(args: {
     query: {},
     contentType: "application/json",
     body: toJson(body),
-    hostVerified: true,
+    origin: { type: "host" },
   };
 }
 

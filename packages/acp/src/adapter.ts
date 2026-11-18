@@ -4,13 +4,18 @@ import { createServer, type Server } from "node:http";
 import path from "node:path";
 import { Readable, Writable } from "node:stream";
 import * as acp from "@agentclientprotocol/sdk/unstable";
-import type { JsonValue } from "@catamorphic/agent-protocol";
+import type {
+  AgentEffort,
+  AgentTurnUsage,
+  JsonValue,
+} from "@catamorphic/agent-protocol";
 import {
   type AttemptControl,
   type AttemptHost,
   type AttemptStart,
   type HarnessAdapter,
   type HarnessCapabilities,
+  type HarnessEvent,
   type HostToolDescriptor,
   type HostToolResult,
   type McpServerSpec,
@@ -28,6 +33,7 @@ import {
   type LoopbackModel,
   loopbackModelEnv,
   loopbackModelHeaders,
+  type ModelRefusal,
   serveLoopbackModel,
 } from "./model-endpoint.js";
 
@@ -52,9 +58,9 @@ const EXIT_GRACE_MS = 3_000;
 const CANCEL_GRACE_MS = 10_000;
 
 // ponytail: one agent process per attempt, its session reopened (and its
-// history replayed) each turn; keep a thread's process warm between
-// attempts (ADR 0222's pattern) when start-up or long histories cost too
-// much.
+// history replayed) each turn. A warm process (ADR 0222's pattern) helps
+// only the desktop and needs a host tool server that outlives attempts
+// (ADR 0328).
 /**
  * The ACP harness adapter (ADR 0050, 0241): runs one agent process per
  * attempt from `options.command` (`["hermes", "acp"]`) in the workspace,
@@ -92,6 +98,34 @@ function startAttempt(
   const asks = new Set<AbortController>();
   const stderr: string[] = [];
   const items = new ItemStream(host);
+  /** A model call the endpoint saw refused, until new output (ADR 0298). */
+  let retrying = false;
+  const providerRefused = (refusal: ModelRefusal) => {
+    if (!items.live) return;
+    retrying = true;
+    host.emit({
+      type: "provider.retrying",
+      error: {
+        message: refusal.message,
+        kind: refusal.status === 429 ? "rate_limit" : "unavailable",
+      },
+      attempt: null,
+      maxAttempts: null,
+      retryAt: refusal.retryAt,
+    });
+  };
+  /** A refused model call answered again: the provider is back. */
+  const providerAnswered = () => {
+    if (!retrying || !items.live) return;
+    retrying = false;
+    host.emit({ type: "provider.resumed" });
+  };
+  /** What the agent's `usage_update`s said: before the turn, and since. */
+  const spend: {
+    context?: { used: number; size: number };
+    costBefore?: number;
+    costNow?: number;
+  } = {};
 
   const run = async (): Promise<"completed" | "cancelled"> => {
     const [executable, ...args] = command;
@@ -106,7 +140,12 @@ function startAttempt(
       throw new Error(
         "ACP agents run on their own sign-in or a model connection, not a Work sign-in.",
       );
-    if (access.kind === "gateway") model = await serveLoopbackModel({ access });
+    if (access.kind === "gateway")
+      model = await serveLoopbackModel({
+        access,
+        onRefused: providerRefused,
+        onAnswered: providerAnswered,
+      });
     const spawned = spawn(executable, args, {
       cwd: attempt.workingDirectory,
       env: {
@@ -172,6 +211,18 @@ function startAttempt(
         ({ params: { update } }) => {
           // A reopened session's history, replayed before the turn starts.
           if (!items.live && REPLAYED.has(update.sessionUpdate)) replayed += 1;
+          if (update.sessionUpdate === "usage_update") {
+            spend.context = { used: update.used, size: update.size };
+            const cost =
+              update.cost?.currency === "USD" ? update.cost.amount : undefined;
+            if (cost !== undefined) {
+              if (items.live) spend.costNow = cost;
+              else spend.costBefore = cost;
+            }
+          }
+          // New output from the model (words, thoughts, a tool call or a
+          // plan): its provider answers again.
+          if (LIVE_OUTPUT.has(update.sessionUpdate)) providerAnswered();
           items.update(update);
         },
       )
@@ -362,30 +413,71 @@ function startAttempt(
       options = created.configOptions;
     }
     sessionId = opened;
-    // The definition's model, where the agent offers a choice of models.
-    const choice = attempt.model
-      ? modelChoice({ options, model: attempt.model })
-      : undefined;
-    if (choice?.kind === "set")
-      await until(
-        connection.request(acp.methods.agent.session.setConfigOption, {
+    // The definition's model and effort, where the agent offers them
+    // (ADR 0255, 0328); what it cannot take is told once the turn starts.
+    const unapplied: Extract<HarnessEvent, { type: "setting.unapplied" }>[] =
+      [];
+    const agent = connection;
+    const setOption = async (option: { configId: string; value: string }) => {
+      const answer = await until(
+        agent.request(acp.methods.agent.session.setConfigOption, {
           sessionId: opened,
-          configId: choice.configId,
-          value: choice.value,
-        }),
-      ).catch((error: unknown) =>
-        host.emit({
-          type: "diagnostic",
-          level: "warn",
-          message: `${agentName} refused the model ${attempt.model}: ${error instanceof Error ? error.message : String(error)}`,
+          ...option,
         }),
       );
-    else if (choice?.kind === "unknown")
-      host.emit({
-        type: "diagnostic",
-        level: "warn",
-        message: `${agentName} offers no model ${attempt.model}; it offers ${choice.offered.join(", ")}.`,
-      });
+      // An agent's effort levels follow its model: read them again.
+      options = answer?.configOptions ?? options;
+    };
+    let modelChosen = false;
+    if (attempt.model) {
+      const choice = modelChoice({ options, model: attempt.model });
+      if (choice?.kind === "set")
+        await setOption(choice).then(
+          () => {
+            modelChosen = true;
+          },
+          (error: unknown) =>
+            unapplied.push({
+              type: "setting.unapplied",
+              setting: "model",
+              requested: attempt.model ?? "",
+              reason: `${agentName} refused the model ${attempt.model}: ${error instanceof Error ? error.message : String(error)}`,
+            }),
+        );
+      else if (choice?.kind === "chosen") modelChosen = true;
+      else if (choice?.kind === "unknown")
+        unapplied.push({
+          type: "setting.unapplied",
+          setting: "model",
+          requested: attempt.model,
+          reason: `${agentName} offers no model ${attempt.model}; it offers ${listed(choice.offered)}.`,
+        });
+    }
+    if (attempt.effort) {
+      const effort = attempt.effort;
+      const choice = effortChoice({ options, effort });
+      const unapply = (reason: string) =>
+        unapplied.push({
+          type: "setting.unapplied",
+          setting: "effort",
+          requested: effort,
+          reason,
+        });
+      if (choice.kind === "set")
+        await setOption(choice).catch((error: unknown) =>
+          unapply(
+            `${agentName} refused effort ${effort}: ${error instanceof Error ? error.message : String(error)}`,
+          ),
+        );
+      else if (choice.kind === "unknown")
+        unapply(
+          `${agentName} offers no effort ${effort}${modelChosen ? ` for ${attempt.model}` : ""}; it offers ${listed(choice.offered)}. The turn runs at its own setting.`,
+        );
+      else if (choice.kind === "absent")
+        unapply(
+          `${agentName} offers no effort setting${modelChosen ? ` for ${attempt.model}` : ""}, so effort ${effort} is not applied.`,
+        );
+    }
     // Work hears of a session once it holds the conversation and can be
     // reopened: a reopened one at once, a new one after its first turn ends
     // (an interrupted one starts afresh, told Work's instructions again),
@@ -396,8 +488,9 @@ function startAttempt(
     if (reopened) report();
     if (interrupted) return "cancelled";
     host.emit({ type: "turn.started" });
+    for (const event of unapplied) host.emit(event);
     items.live = true;
-    await until(
+    const answer = await until(
       connection.request(acp.methods.agent.session.prompt, {
         sessionId: opened,
         prompt: promptBlocks({
@@ -407,6 +500,13 @@ function startAttempt(
         }),
       }),
     );
+    const usage = turnUsage({
+      usage: answer?.usage,
+      spend,
+      newSession: !reopened,
+      ...(modelChosen && attempt.model ? { model: attempt.model } : {}),
+    });
+    if (usage) host.emit({ type: "usage", usage });
     // Only Work's interrupt makes the turn interrupted: an agent that ends
     // its own turn as cancelled (a request it was told no to) finished it.
     const outcome = interrupted ? "cancelled" : "completed";
@@ -538,6 +638,95 @@ export function modelChoice(input: {
       : { kind: "set", configId: option.id, value: match.value };
   }
   return offered ? { kind: "unknown", offered } : undefined;
+}
+
+/**
+ * The attempt's effort as the agent's thought level option (ADR 0328): a
+ * value or name equal to the level, to set or already chosen; unknown to
+ * the agent with what it offers instead; or `absent` when it offers no
+ * thought level to choose.
+ */
+export function effortChoice(input: {
+  options: readonly acp.SessionConfigOption[] | null | undefined;
+  effort: AgentEffort;
+}):
+  | { kind: "set"; configId: string; value: string }
+  | { kind: "chosen" }
+  | { kind: "unknown"; offered: string[] }
+  | { kind: "absent" } {
+  const option = (input.options ?? []).find(
+    (candidate) =>
+      candidate.category === "thought_level" && candidate.type === "select",
+  );
+  if (option?.type !== "select") return { kind: "absent" };
+  const values = option.options.flatMap((entry) =>
+    "group" in entry ? entry.options : [entry],
+  );
+  const match =
+    values.find((value) => value.value === input.effort) ??
+    values.find((value) => value.name.toLowerCase() === input.effort);
+  if (!match)
+    return { kind: "unknown", offered: values.map((value) => value.value) };
+  return match.value === option.currentValue
+    ? { kind: "chosen" }
+    : { kind: "set", configId: option.id, value: match.value };
+}
+
+/**
+ * The turn's usage from what the agent said (ADR 0328): its prompt answer's
+ * tokens (unstable in ACP), the context its last `usage_update` reported,
+ * and the session cost it reported in USD less what it reported before the
+ * turn (nothing before a new session's first). Undefined when it said none.
+ */
+export function turnUsage(input: {
+  usage: acp.Usage | null | undefined;
+  spend: {
+    context?: { used: number; size: number };
+    costBefore?: number;
+    costNow?: number;
+  };
+  newSession: boolean;
+  model?: string;
+}): AgentTurnUsage | undefined {
+  const { usage, spend } = input;
+  const before = spend.costBefore ?? (input.newSession ? 0 : undefined);
+  const cost =
+    spend.costNow !== undefined && before !== undefined
+      ? Math.max(0, spend.costNow - before)
+      : undefined;
+  const counted: AgentTurnUsage = {
+    ...(usage
+      ? {
+          inputTokens: usage.inputTokens,
+          outputTokens: usage.outputTokens,
+          ...(usage.cachedReadTokens
+            ? { cachedInputTokens: usage.cachedReadTokens }
+            : {}),
+          ...(usage.cachedWriteTokens
+            ? { cacheCreationTokens: usage.cachedWriteTokens }
+            : {}),
+          ...(usage.thoughtTokens
+            ? { reasoningTokens: usage.thoughtTokens }
+            : {}),
+        }
+      : {}),
+    ...(cost !== undefined ? { costUsd: cost } : {}),
+    ...(spend.context
+      ? {
+          contextTokens: spend.context.used,
+          contextWindow: spend.context.size,
+        }
+      : {}),
+  };
+  if (Object.keys(counted).length === 0) return undefined;
+  return input.model ? { model: input.model, ...counted } : counted;
+}
+
+/** Values an agent offers, named in a notice: the first ten, then a count. */
+function listed(values: readonly string[]): string {
+  if (values.length === 0) return "nothing";
+  const shown = values.slice(0, 10).join(", ");
+  return values.length > 10 ? `${shown} and ${values.length - 10} more` : shown;
 }
 
 /** Signals the agent and everything it started, its process group. */
@@ -799,6 +988,15 @@ async function serveHostTools(input: {
     })),
   };
 }
+
+/** Updates that are the model's own output in a turn. */
+const LIVE_OUTPUT: ReadonlySet<string> = new Set([
+  "agent_message_chunk",
+  "agent_thought_chunk",
+  "tool_call",
+  "tool_call_update",
+  "plan",
+]);
 
 /** The conversation updates an agent replays from a session it reopens. */
 const REPLAYED: ReadonlySet<string> = new Set([

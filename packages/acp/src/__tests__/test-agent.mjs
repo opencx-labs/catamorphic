@@ -36,7 +36,16 @@
 // `deepseek/v4-flash`, and notes the one chosen as the session's `model`.
 // Without a provider set, its model is at WORK_MODEL_BASE_URL with
 // WORK_MODEL_API_KEY. TEST_AGENT_PROVIDERS=fail advertises providers and
-// then fails to list them.
+// then fails to list them. TEST_AGENT_EFFORT=<levels> (comma separated)
+// offers, while `deepseek/v4-flash` is chosen, an "Effort" thought level
+// option of those levels, as OpenCode offers its model variants, noted as
+// the session's `effort`. TEST_AGENT_USAGE=1 reports usage: a
+// `usage_update` (context and the session's cost so far, a cent a turn,
+// also on load) and the turn's tokens in its prompt answer.
+//
+//   [[model retry]]                  the same as [[model]], asking again
+//                                    once after a refused answer
+//   [[model retry quiet]]            the same, answering with a tool call only
 import { spawn } from "node:child_process";
 import fs from "node:fs";
 import { Readable, Writable } from "node:stream";
@@ -55,8 +64,25 @@ const write = (state) =>
 
 let cancel = () => {};
 
-/** The model option a session offers with TEST_AGENT_MODELS=1. */
-const modelOptions = (currentValue) => [
+/** The options a session offers with TEST_AGENT_MODELS=1. */
+const modelOptions = (currentValue, effort = "default") => [
+  ...(process.env.TEST_AGENT_EFFORT && currentValue === "deepseek/v4-flash"
+    ? [
+        {
+          id: "effort",
+          name: "Effort",
+          category: "thought_level",
+          type: "select",
+          currentValue: effort,
+          options: [...process.env.TEST_AGENT_EFFORT.split(","), "default"].map(
+            (value) => ({
+              value,
+              name: value[0].toUpperCase() + value.slice(1),
+            }),
+          ),
+        },
+      ]
+    : []),
   {
     id: "model",
     name: "Model",
@@ -81,6 +107,33 @@ if (exitSave > 0)
   );
 
 let connection;
+/** With TEST_AGENT_USAGE=1: context and the session's cost after `turns`. */
+const usage = (sessionId, turns) =>
+  process.env.TEST_AGENT_USAGE === "1"
+    ? connection.notify(acp.methods.client.session.update, {
+        sessionId,
+        update: {
+          sessionUpdate: "usage_update",
+          used: 1_000 * turns,
+          size: 200_000,
+          cost: { amount: 0.01 * turns, currency: "USD" },
+        },
+      })
+    : Promise.resolve();
+/** With TEST_AGENT_USAGE=1: the turn's tokens, for its prompt answer. */
+const turnTokens = () =>
+  process.env.TEST_AGENT_USAGE === "1"
+    ? {
+        usage: {
+          inputTokens: 120,
+          outputTokens: 30,
+          totalTokens: 1_150,
+          thoughtTokens: 10,
+          cachedReadTokens: 900,
+          cachedWriteTokens: 100,
+        },
+      }
+    : {};
 const handlers = (() => {
   const say = (sessionId, sessionUpdate, text) =>
     connection.notify(acp.methods.client.session.update, {
@@ -126,11 +179,21 @@ const handlers = (() => {
       write(state);
       return {};
     },
-    setSessionConfigOption: async ({ sessionId, value }) => {
+    setSessionConfigOption: async ({ sessionId, configId, value }) => {
       const state = read();
-      state.sessions[sessionId].model = value;
+      const session = state.sessions[sessionId];
+      if (configId === "effort") {
+        if (value === "max")
+          throw acp.RequestError.invalidParams(undefined, "max is not offered");
+        session.effort = value;
+      } else session.model = value;
       write(state);
-      return { configOptions: modelOptions(value) };
+      return {
+        configOptions: modelOptions(
+          session.model ?? "default-model",
+          session.effort,
+        ),
+      };
     },
     authenticate: async () => {},
     newSession: async ({ cwd, mcpServers }) => {
@@ -178,6 +241,7 @@ const handlers = (() => {
         await say(sessionId, "user_message_chunk", prompt.at(-1)?.text ?? "");
         await say(sessionId, "agent_message_chunk", "(replayed)");
       }
+      await usage(sessionId, session.prompts.length);
       return {};
     },
     listSessions: async () => {
@@ -328,21 +392,41 @@ const handlers = (() => {
         }
         return { stopReason: "cancelled" };
       }
-      if (words.includes("[[model]]")) {
+      if (words.includes("[[model")) {
         const provider = read().providers?.main;
         const base = provider?.baseUrl ?? process.env.WORK_MODEL_BASE_URL;
         const headers = provider?.headers ?? {
           authorization: `Bearer ${process.env.WORK_MODEL_API_KEY}`,
         };
-        const answer = await fetch(`${base}/chat/completions`, {
-          method: "POST",
-          headers: { "content-type": "application/json", ...headers },
-          body: JSON.stringify({
-            model: session.model ?? process.env.WORK_MODEL ?? "unset",
-            messages: [{ role: "user", content: words }],
-          }),
-        });
+        const ask = () =>
+          fetch(`${base}/chat/completions`, {
+            method: "POST",
+            headers: { "content-type": "application/json", ...headers },
+            body: JSON.stringify({
+              model: session.model ?? process.env.WORK_MODEL ?? "unset",
+              messages: [{ role: "user", content: words }],
+            }),
+          });
+        let answer = await ask();
+        if (words.includes("[[model retry]]") && answer.status === 429) {
+          await answer.text();
+          answer = await ask();
+        }
         const json = await answer.json();
+        if (words.includes("quiet")) {
+          // Answered again, and its output is a tool call, not words.
+          await connection.notify(acp.methods.client.session.update, {
+            sessionId,
+            update: {
+              sessionUpdate: "tool_call",
+              toolCallId: "call-quiet",
+              title: "Read a file",
+              kind: "read",
+              status: "completed",
+            },
+          });
+          return { stopReason: "end_turn" };
+        }
         await say(
           sessionId,
           "agent_message_chunk",
@@ -368,7 +452,8 @@ const handlers = (() => {
       }
       await say(sessionId, "agent_message_chunk", "Echo: ");
       await say(sessionId, "agent_message_chunk", words);
-      return { stopReason: "end_turn" };
+      await usage(sessionId, session.prompts.length);
+      return { stopReason: "end_turn", ...turnTokens() };
     },
   };
 })();

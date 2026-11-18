@@ -48,6 +48,8 @@ describe("mergeHostPlugins", () => {
     ]);
     expect(merged.triggerKinds.map((k) => k.name)).toEqual(["acme.ticket"]);
     expect(merged.projectHooks).toHaveLength(1);
+    // A cleanup owed across restarts finds its hook by this name.
+    expect(merged.projectHooks[0]?.name).toBe("@acme/catamorphic-neon");
   });
 
   it("merges connection providers and rejects duplicate kinds", () => {

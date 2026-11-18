@@ -18,7 +18,10 @@ import {
   type PluginsService,
   UndeclaredSecretError,
 } from "./plugins-service.js";
-import type { ProjectEnvironmentsService } from "./project-environments-service.js";
+import {
+  ENVIRONMENT_SECRET_NAME,
+  type ProjectEnvironmentsService,
+} from "./project-environments-service.js";
 import { requireTenantProject } from "./projects-service.js";
 import { toJson } from "./run-coordinator.js";
 import { SECRET_MASK_MIN_LENGTH } from "./sessions/secret-mask.js";
@@ -250,6 +253,9 @@ function checkValue(value: string): void {
       "A secret's value may not contain a NUL character",
     );
 }
+
+/** Who set a value a host's project hook returned (ADR 0331). */
+export const HOST_SECRET_SETTER = "host";
 
 type ValueRow = {
   name: string;
@@ -665,6 +671,47 @@ export class SecretsService {
     );
     if (!status) throw new UndeclaredSecretError(name);
     return status;
+  }
+
+  /**
+   * Keep values a host's project hook minted as the project's shared
+   * secrets (ADR 0331), set by `host`. They need no declaration yet: a
+   * workflow or Environment reads one once it declares the name. Names
+   * follow the Environment secret rule; values are never interpreted.
+   */
+  async storeHostValues(opts: {
+    tenantId: string;
+    projectId: string;
+    values: Readonly<Record<string, string>>;
+  }): Promise<void> {
+    await requireTenantProject(this.db, opts.tenantId, opts.projectId);
+    for (const [name, value] of Object.entries(opts.values)) {
+      if (!ENVIRONMENT_SECRET_NAME.test(name))
+        throw new SecretValueInvalidError(
+          `'${name}' is not a secret name: use capitals, digits and underscores, not starting with CATAMORPHIC_ or WORK_`,
+        );
+      checkValue(value);
+    }
+    for (const [name, value] of Object.entries(opts.values)) {
+      await this.store({
+        tenantId: opts.tenantId,
+        projectId: opts.projectId,
+        name,
+        member: null,
+        value,
+        setBy: HOST_SECRET_SETTER,
+        updatedAt: new Date(),
+      });
+      await this.audit({
+        identity: {
+          tenantId: opts.tenantId,
+          externalUserId: HOST_SECRET_SETTER,
+        },
+        projectId: opts.projectId,
+        eventType: "project_secrets.set",
+        metadata: { name, member: null },
+      });
+    }
   }
 
   /** Remove the shared value. Needs `secrets:write`. */

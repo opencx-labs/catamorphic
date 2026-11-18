@@ -604,7 +604,21 @@ its own. For example
 \`{ "maxConcurrentChildren": 4, "agents": [{ "agent": "self", "effort":
 "at-most-parent" }, { "agent": "project:reviewer", "model": ["sonnet"],
 "delegate": false }] }\`. A grant naming an agent decides before \`*\`.
-\`routes\` is no longer read: a definition that has it is refused.
+\`routes\` is no longer read: a definition that has it is refused. A child
+works in its parent's workspace unless the spawn asks for \`"own"\` (ADR
+0322), so give children that write in parallel their own; \`maxConcurrentChildren\`
+(default 10) bounds how many run at once, on the desktop and on a server.
+
+\`results\` names what an agent hands back as typed values (ADR 0323):
+\`{ "review": { "type": "object", "required": ["verdict"], "properties": {
+"verdict": { "enum": ["COMMENT", "REQUEST_CHANGES"] } } } }\`, each a JSON
+Schema (2020-12) by a lowercase name, at most 16 and 64 KiB in all. The agent
+gets \`submit_result { name, value }\`: only a value its schema accepts is
+recorded, a rejected one comes back with each failing field to fix in the
+same turn. Workflows read them with \`results\` or trigger on
+\`session.result-recorded\` (session-workflows), and a parent reads its
+subagents' in their messages and in list and wait outputs. Prefer a result to
+asking an agent to end its reply with a block of JSON.
 
 A remote project keeps one authority for membership, connections, and history.
 \`device: "member"\` offers an authenticated member's own computer when the
@@ -687,6 +701,14 @@ missing. When the member initiated that
 flow, the host may finish enabling automatically after the final required
 connection succeeds. Merely connecting an account never opts the member into
 every eligible workflow.
+
+A workflow turned on for the project follows the published program: each
+revision that builds and asks for no new authority goes live by itself, so
+merging to \`main\` is deploying. A member's own automation stays on its
+reviewed revision unless the member turns following on. A project with its own data names a deploy workflow in
+\`.work/project.json\` (\`"deploy": { "workflow": "migrateDatabase" }\`) that
+runs once at each revision before anything moves; \`workflow-lifecycle\` has
+the details and the expand then contract rule for migrations.
 
 Two more things members do without commit rights:
 

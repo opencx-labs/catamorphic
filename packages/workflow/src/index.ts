@@ -84,6 +84,8 @@ export type {
   TransitionCall,
   WorkflowBuilderContext,
   WorkflowCaller,
+  WorkflowConcurrency,
+  WorkflowConflictPolicy,
   WorkflowConnectionRequirement,
   WorkflowControls,
   WorkflowDefinition,
@@ -239,6 +241,13 @@ interface ProjectTriggerDefinition<From, Filtered> {
   readonly from: From;
   /** What the underlying event must hold for this kind to fire. */
   readonly where?: Where<Filtered>;
+  /**
+   * Lets workflows record this kind's events (ADR 0326) although the webhook
+   * it builds on verifies senders: recorded events carry no signature, only
+   * `origin: { type: "workflow" }`. Without it, only signed requests fire a
+   * verified kind. A literal `true` or `false`.
+   */
+  readonly recordable?: boolean;
 }
 
 /**
@@ -271,11 +280,21 @@ export function defineTrigger(
 export const WORKFLOW_PACKAGE_VERSION = packageJson.version;
 
 export type {
+  EventHostOperations,
+  RecordableTriggerKind,
+  RecordedEvent,
+  RecordedEventInput,
+} from "./event-operations.js";
+export type {
   SecretHostOperations,
   SecretStatusEntry,
 } from "./secret-operations.js";
 export type {
+  ModelUsageTotals,
+  SessionExecResult,
   SessionHistoryMessage,
   SessionHostOperations,
+  SessionResult,
   SessionSnapshot,
+  SessionUsage,
 } from "./session-operations.js";

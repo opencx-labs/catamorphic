@@ -95,6 +95,13 @@ export {
   validateAgentDefinition,
 } from "./services/agent-definitions-service.js";
 export {
+  checkResultValue,
+  RESULT_LIMITS,
+  RESULT_NAME_PATTERN,
+  type ResultFieldError,
+  type ResultSchemas,
+} from "./services/agent-results.js";
+export {
   AgentDelegationDeniedError,
   AgentDelegationSettingsError,
   AgentNotConfiguredError,
@@ -349,6 +356,11 @@ export {
   vaultKeyId,
 } from "./services/encrypted-credential-vault.js";
 export {
+  EVENTS_CAPABILITY,
+  MAX_RECORDED_EVENTS,
+  RecordedEventRefusedError,
+} from "./services/events-capability.js";
+export {
   type AllocationReleaseReason,
   type EnvironmentAllocationPolicy,
   type EnvironmentSandbox,
@@ -442,6 +454,10 @@ export {
   SseUsageReader,
   usageFromJson,
 } from "./services/model-gateway.js";
+export type {
+  ModelUsageTotals,
+  SessionUsage,
+} from "./services/model-usage.js";
 export {
   LOST_NODE_GRACE_MS,
   type NodeRecoveryResult,
@@ -521,7 +537,8 @@ export {
   type ListProjectsInput,
   type ListProjectsResult,
   type Project,
-  ProjectDeprovisioningError,
+  type ProjectCleanupResult,
+  type ProjectCreatedResult,
   ProjectFileConflictError,
   type ProjectFileEntry,
   ProjectFileNotFoundError,
@@ -552,6 +569,15 @@ export {
   PublicationSlugTakenError,
   PublicationsService,
 } from "./services/publications-service.js";
+export {
+  type ProjectDeploy,
+  type PublishedRevision,
+  PublishedRevisionNotRetryableError,
+  type PublishedRevisionReportEntry,
+  type PublishedRevisionStatus,
+  PublishedRevisionsService,
+  parseProjectDeploy,
+} from "./services/published-revisions-service.js";
 export {
   type BlockedRateReservation,
   type GrantedRateReservation,
@@ -648,6 +674,7 @@ export {
   type BatchProgress,
   type CallRunInput,
   type CancelRunInput,
+  correlationKeyAtPath,
   type EnrollmentConflictPolicy,
   type GetRunInput,
   type ListBatchItemStepsInput,
@@ -655,6 +682,7 @@ export {
   type ListBatchItemsResult,
   type ListRunsInput,
   type ListRunsResult,
+  MAX_QUEUED_RUNS_PER_KEY,
   type PauseRunInput,
   PluginSecretsMissingError,
   ProductionDeploymentNotFoundError,
@@ -673,6 +701,7 @@ export {
   type RunPause,
   type RunPhase,
   type RunProvenance,
+  RunQueueFullError,
   type RunStatus,
   type RunStep,
   type RunSuspensionReason,
@@ -681,6 +710,7 @@ export {
   type StepStatus,
   type TriggerPinnedRunInput,
   type TriggerProductionRunInput,
+  WorkflowRevisionUnavailableError,
   type WorkflowStepAttempt,
   type WorkflowStepAttemptStatus,
 } from "./services/runs-service.js";
@@ -792,6 +822,20 @@ export {
   type TranscriptMessage,
 } from "./services/sessions/session-reads.js";
 export {
+  SessionInputNotFoundError,
+  type SessionResult,
+  SessionResultLimitError,
+} from "./services/sessions/session-results.js";
+export {
+  SUBSESSION_TOOL_NAMES,
+  SUBSESSION_WORKSPACES,
+  type SubsessionOperations,
+  type SubsessionRequest,
+  type SubsessionWorkspace,
+  subsessionSummary,
+  subsessionTools,
+} from "./services/sessions/subsession-tools.js";
+export {
   CONTINUATION_PROMPT,
   steeredTurnId,
 } from "./services/sessions/turn-engine.js";
@@ -840,11 +884,13 @@ export {
   triggerKindInfo,
 } from "./services/trigger-kinds.js";
 export {
+  type ResolvedProjectKind,
   type StoredTriggerBinding,
   type TriggerBindingInfo,
   TriggerBindingsInvalidError,
   type TriggerFireOutcome,
   type TriggerFireResult,
+  TriggerKindHostOnlyError,
   TriggerKindNotRegisteredError,
   TriggerModeNotAllowedError,
   TriggerNotEnabledError,
@@ -892,11 +938,15 @@ export {
   WorkerNodeLeaseHeldError,
   WorkerNodesService,
 } from "./services/worker-nodes-service.js";
-export { workflowEnablementConsentDigest } from "./services/workflow-enablement-consent.js";
+export {
+  workflowEnablementAuthorityDigest,
+  workflowEnablementConsentDigest,
+} from "./services/workflow-enablement-consent.js";
 export type {
   RevalidatedWorkflowEnablement,
   WorkflowEnablement,
   WorkflowEnablementConnection,
+  WorkflowEnablementFollowOutcome,
   WorkflowEnablementOwner,
   WorkflowEnablementPreview,
   WorkflowEnablementStatus,
@@ -906,6 +956,7 @@ export type {
 export {
   WorkflowEnablementConflictError,
   WorkflowEnablementConsentRequiredError,
+  WorkflowEnablementFollowUnavailableError,
   WorkflowEnablementNotFoundError,
   WorkflowEnablementSuspendedError,
   WorkflowEnablementsService,

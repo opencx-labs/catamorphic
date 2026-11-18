@@ -4,11 +4,25 @@
   "kind": "builtin",
   "description": "Reviews pull requests for correctness, security, data safety, performance, and tests, verifying by running them.",
   "sandboxing": "contained",
-  "environment": { "preferred": ["review"], "allowed": ["review"] },
+  "environment": {
+    "preferred": ["review"],
+    "allowed": ["review"]
+  },
   "connections": [
-    { "alias": "github", "principal": "service" },
-    { "alias": "prod", "principal": "service", "optional": true },
-    { "alias": "slack", "principal": "service", "optional": true }
+    {
+      "alias": "github",
+      "principal": "service"
+    },
+    {
+      "alias": "prod",
+      "principal": "service",
+      "optional": true
+    },
+    {
+      "alias": "slack",
+      "principal": "service",
+      "optional": true
+    }
   ],
   "toolPolicies": {
     "github": {
@@ -17,6 +31,88 @@
         "get": "allow",
         "pull_request_files": "allow",
         "review_threads": "allow"
+      }
+    }
+  },
+  "results": {
+    "review": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "reviewedCommit",
+        "verdict",
+        "score",
+        "summary",
+        "checkSummary"
+      ],
+      "properties": {
+        "reviewedCommit": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{40}$",
+          "description": "The commit your workspace stood on when you reviewed"
+        },
+        "verdict": {
+          "enum": ["COMMENT", "REQUEST_CHANGES"]
+        },
+        "score": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 5
+        },
+        "summary": {
+          "type": "string",
+          "pattern": "\\S",
+          "maxLength": 4000
+        },
+        "checkSummary": {
+          "type": "string",
+          "pattern": "\\S",
+          "maxLength": 4000
+        },
+        "comments": {
+          "type": ["array", "null"],
+          "maxItems": 30,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["path", "line", "body"],
+            "properties": {
+              "path": {
+                "type": "string",
+                "pattern": "\\S",
+                "maxLength": 300
+              },
+              "line": {
+                "type": "integer",
+                "minimum": 1
+              },
+              "side": {
+                "enum": ["LEFT", "RIGHT", null]
+              },
+              "body": {
+                "type": "string",
+                "pattern": "\\S",
+                "maxLength": 1500
+              }
+            }
+          }
+        },
+        "reply": {
+          "type": ["object", "null"],
+          "additionalProperties": false,
+          "required": ["body"],
+          "properties": {
+            "inReplyTo": {
+              "type": ["integer", "null"],
+              "minimum": 1
+            },
+            "body": {
+              "type": "string",
+              "pattern": "\\S",
+              "maxLength": 4000
+            }
+          }
+        }
       }
     }
   }

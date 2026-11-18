@@ -1,6 +1,6 @@
 ---
 name: setup-work-server
-description: Use when installing or operating a Work server (a deployment built on the server library), provisioning its first project and user, company sign-in and deprovisioning, credentials and the connection gateway, connecting Slack, reviewing pull requests on a review pool, enrolling workers or replicas, giving every engineer a machine on Hetzner Cloud or from a pool of servers, sharing with customers, embedding Catamorphic in an existing application, mapping host authentication to Catamorphic identity, or configuring Postgres or PGlite.
+description: Use when installing or operating a Work server (a deployment built on the server library), provisioning its first project and user, company sign-in and deprovisioning, credentials and the connection gateway, connecting Slack, reviewing pull requests on a review pool, enrolling workers or replicas, giving every engineer a machine on Hetzner Cloud, on AWS EC2 or another cloud through a project's workflows, or from a pool of servers, sharing with customers, embedding Catamorphic in an existing application, mapping host authentication to Catamorphic identity, or configuring Postgres or PGlite.
 ---
 
 # Setting up a Work server or a Catamorphic host
@@ -61,7 +61,7 @@ Start small and add only what the situation needs:
 | GitHub: a GitHub App, company repositories, pull requests, webhooks | [Connect GitHub](references/connect-github.md) |
 | Slack: a project answering mentions in threads, reading and searching Slack | [Connect Slack](references/connect-slack.md) |
 | Code and security review of every pull request on a dedicated review pool | [Review pull requests with Work](references/review-pull-requests.md) |
-| More execution capacity, workers, replicas for availability; a machine for every engineer on Hetzner Cloud or from a pool of the company's own servers | [Machines: control plane, replicas, and workers](references/cluster-deployment.md) |
+| More execution capacity, workers, replicas for availability; a machine for every engineer on Hetzner Cloud, on any cloud through a project's workflows (EC2 recipe pack), or from a pool of the company's own servers | [Machines: control plane, replicas, and workers](references/cluster-deployment.md) |
 | Sharing documents, folders, or apps with customers behind a sign-in | [Sharing outside the company](references/sharing.md) |
 | Members working from Claude Code, Codex, or another MCP client | [Working from your own agent](references/members-over-mcp.md) |
 | Project agents that are Claude Code, Codex or an ACP agent (OpenCode, Hermes), running on the server with a model key the gateway holds (and providers it pins), or Codex on a member's own subscription signed in on the machine | [Harnesses on the server](references/harnesses.md) |
@@ -103,7 +103,12 @@ disagree with the installed source, the source wins.
 - **Unattended work needs explicit consent.** Each member reviews and enables
   a deployed workflow and authorizes its connections. Project automations
   (`automations:write`) run as the project, not as whoever enabled them
-  (ADR 0156).
+  (ADR 0156). Project automations follow `main`: merging on the code host
+  deploys them once the project syncs, unless the revision asks for new
+  authority, which waits for a person. A member's own automation follows
+  only once the member turns it on. A project's deploy workflow
+  (`.work/project.json` `deploy`) runs first, for migrations (ADRs 0330,
+  0331); do not write a watcher that updates enablements.
 - **Workflows reach chats with `catamorphic.sessions.deliver`**, by session id
   or by a stable `key`. Clients show `attentionRequired` on the ordinary
   session list and acknowledge on open. Web Push is an optional transport,
