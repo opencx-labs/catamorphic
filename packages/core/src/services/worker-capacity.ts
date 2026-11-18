@@ -4,6 +4,7 @@ import {
   describeDisk,
   diskBudgetMb,
   type EnvironmentResourcePolicy,
+  formatBytes,
   type MachineDisk,
   type WorkloadKind,
 } from "@catamorphic/sandbox";
@@ -49,10 +50,17 @@ export class EnvironmentCapacityError extends Error {
     readonly nodeId: string,
     /** The machine is short of disk (ADR 0335): its report, to say so. */
     readonly disk?: MachineDisk,
+    /**
+     * What the refused work reserves of that disk (its `storageMb`, a
+     * cache fill's size): with free space above the floor, the reason.
+     */
+    readonly storageMb?: number,
   ) {
     super(
       disk
-        ? `This machine is short of disk (${describeDisk(disk)}), so the workspace waits for room. Archive an unused session or choose another Environment, then retry.`
+        ? storageMb
+          ? `This machine is short of disk for the ${formatBytes(storageMb * MIB)} this work reserves (${describeDisk(disk)}), so it waits for room. Archive an unused session or choose another Environment, then retry.`
+          : `This machine is short of disk (${describeDisk(disk)}), so the workspace waits for room. Archive an unused session or choose another Environment, then retry.`
         : "This server has no workspace capacity available. Archive an unused session or choose another Environment, then retry.",
     );
     this.name = "EnvironmentCapacityError";

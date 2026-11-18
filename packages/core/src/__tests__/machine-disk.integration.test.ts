@@ -144,6 +144,10 @@ describe.skipIf(!db)("machine disk (ADR 0335)", () => {
     await expect(fresh.admit(3 * 1024)).rejects.toBeInstanceOf(
       EnvironmentCapacityError,
     );
+    // Free space is above the floor: the words name what the work reserves.
+    await expect(fresh.admit(3 * 1024)).rejects.toThrow(
+      /^This machine is short of disk for the 3\.2 GB this work reserves \(12\.9 GB free of 107 GB, where Work keeps 10\.7 GB free\), so it waits for room\./,
+    );
     await expect(fresh.admit(1024)).resolves.toMatchObject({
       status: "active",
     });

@@ -377,7 +377,11 @@ export class ExecutionAllocationsService {
             ...(disk ? { disk } : {}),
           })
         )
-          throw new EnvironmentCapacityError(node.id, disk);
+          throw new EnvironmentCapacityError(
+            node.id,
+            disk,
+            resources.storageMb,
+          );
         if (
           node.capacity &&
           !capacityFits({

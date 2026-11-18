@@ -247,6 +247,7 @@ export async function registerWorkMachine(args: {
           throw new EnvironmentCapacityError(
             full.node.id,
             roomy(full) ? undefined : full.node.disk,
+            requirements?.resources?.storageMb,
           );
         return undefined;
       }
