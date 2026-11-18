@@ -125,7 +125,7 @@ describe.skipIf(!enabled)("commands apart from the agent (ADR 0332)", () => {
       owner,
     );
     // What the agent side holds and its commands must not reach.
-    await provider.uploadFiles(
+    await owner.uploadFiles(
       id,
       {
         "grants/model/1": "model-grant",
@@ -135,14 +135,14 @@ describe.skipIf(!enabled)("commands apart from the agent (ADR 0332)", () => {
       "/workspace/.work-session",
       { side: "agent" },
     );
-    await provider.uploadFiles(
+    await owner.uploadFiles(
       id,
       { "abc/skills/review.md": "trusted procedure" },
       "/workspace/.work-program",
       { side: "agent" },
     );
     // What the command side's own session folder holds for its commands.
-    await provider.uploadFiles(
+    await owner.uploadFiles(
       id,
       { "env/secrets.sh": "export TEST_SECRET='for-tests'\n" },
       "/workspace/.work-session",
