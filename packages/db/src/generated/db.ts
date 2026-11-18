@@ -568,6 +568,7 @@ export interface EnvironmentCacheFills {
   allocation_id: string | null;
   attempts: Generated<number>;
   cache_name: string;
+  check_sandbox_id: string | null;
   claimed_until: Timestamp | null;
   commit_sha: string | null;
   created_at: Generated<Timestamp>;

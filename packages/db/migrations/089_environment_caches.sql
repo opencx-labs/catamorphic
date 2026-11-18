@@ -29,6 +29,9 @@ CREATE TABLE environment_cache_fills (
   -- The replica running it holds it until then, renewing as it runs.
   claimed_until timestamptz,
   allocation_id uuid,
+  -- The helper sandbox checking or emptying its generation, until it is
+  -- destroyed: a replica that stops meanwhile leaves it for the next pass.
+  check_sandbox_id text,
   error text,
   size_bytes bigint,
   created_at timestamptz NOT NULL DEFAULT now(),

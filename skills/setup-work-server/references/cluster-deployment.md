@@ -1049,8 +1049,10 @@ caches (ADR 0208):
   generation only when the fill exited 0, stayed within `sizeMb` (10 GiB by
   default) and holds none of its setup secrets' values, both checked once
   the fill's sandbox is gone from a fresh helper that mounts the generation
-  read only, so a sandbox sees the old cache or the new one; a failed fill's
-  generation is emptied. The secret check catches a trusted fill command's
+  read only and has no network and no setup (Work's own sandbox), so a
+  sandbox sees the old cache or the new one; a failed or refused fill's
+  generation is emptied, and a helper a stopped replica left is removed on
+  the next pass. The secret check catches a trusted fill command's
   accidents, not a hostile command. A workflow with `caches:write` asks for one with
   `host["catamorphic.environments"].fillCache({ environment, cache,
   commit?, idempotencyKey })`, on a schedule; it cannot name a command, nor

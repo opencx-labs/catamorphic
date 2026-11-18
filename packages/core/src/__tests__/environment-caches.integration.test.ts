@@ -113,6 +113,8 @@ function machine(
     lost: new Set<string>(),
     /** What the secret scan finds in the cache. */
     scanFinds: "",
+    /** Runs before each command answers. */
+    onCommand: async (_sandboxId: string, _command: string) => {},
   };
   let sequence = 0;
   const provider: SandboxProvider = {
@@ -148,6 +150,7 @@ function machine(
         command,
         ...(opts?.env ? { env: opts.env } : {}),
       });
+      await behavior.onCommand(sandboxId, command);
       if (command === FILL) {
         await behavior.duringFill();
         return { exitCode: behavior.fillExit, result: "fetched\n" };
@@ -336,6 +339,7 @@ describeIf("Environment caches (ADR 0334)", () => {
       fake.behavior.duringFill = async () => {};
       fake.behavior.onDestroy = async () => {};
       fake.behavior.lost.clear();
+      fake.behavior.onCommand = async () => {};
       fake.behavior.scanFinds = "";
       fake.events.length = 0;
       fake.uploads.length = 0;
@@ -457,6 +461,11 @@ describeIf("Environment caches (ADR 0334)", () => {
     expect(helper?.opts.volumes).toEqual([
       { key: key(generation), path: "/work-cache-check", readOnly: true },
     ]);
+    // Cut off from every network, with nothing of the Environment's: the
+    // secrets it searches for can reach nothing.
+    expect(helper?.opts.internal).toBe(true);
+    expect(helper?.opts.egress).toBeUndefined();
+    expect(helper?.opts.image).toBeUndefined();
     expect(fake.events).toEqual([
       `create ${fillSandbox?.id}`,
       `destroy ${fillSandbox?.id}`,
@@ -1168,6 +1177,82 @@ describeIf("Environment caches (ADR 0334)", () => {
       ]),
     );
     expect(fake.uploads.some((upload) => "OTHER" in upload.files)).toBe(false);
+  });
+
+  it("records its check helper on the fill while it runs, and a later pass removes one a stopped replica left", async () => {
+    const { lease, fake } = await addMachine("t");
+    await workspace(lease.id);
+    const seen: Array<string | null> = [];
+    fake.behavior.onCommand = async (sandboxId, command) => {
+      if (!command.includes("du -sk")) return;
+      const [row] = await rowsOf(lease.id);
+      seen.push(row?.check_sandbox_id === sandboxId ? "recorded" : null);
+    };
+    await fillAll();
+    expect(seen).toEqual(["recorded"]);
+    expect((await rowsOf(lease.id))[0]?.check_sandbox_id).toBeNull();
+    // A replica stopped during a check: its helper is still on the machine.
+    await db!
+      .insertInto("environment_cache_fills")
+      .values({
+        tenant_id: tenantId,
+        project_id: projectId,
+        environment_name: "review",
+        cache_name: "pnpm",
+        worker_node_id: lease.id,
+        reason: "requested",
+        status: "failed",
+        generation: "950",
+        check_sandbox_id: "t-left-helper",
+      })
+      .execute();
+    await fills.dispatch();
+    expect(fake.destroyed).toContain("t-left-helper");
+    expect(
+      (await rowsOf(lease.id)).every((row) => row.check_sandbox_id === null),
+    ).toBe(true);
+  });
+
+  it("empties a generation the checks refuse and retires it", async () => {
+    const { lease, fake } = await addMachine("u");
+    await workspace(lease.id);
+    await fillAll();
+    const live = Number((await rowsOf(lease.id))[0]?.generation);
+    fake.behavior.sizeKib = 5 * 1024;
+    await fills.request({
+      identity: ada,
+      projectId,
+      environment: "review",
+      cache: "pnpm",
+      idempotencyKey: "too-big",
+    });
+    fake.created.length = 0;
+    fake.commands.length = 0;
+    await fillAll();
+    const refused = (await rowsOf(lease.id))[0];
+    expect(refused?.error).toContain("its limit is 4 MiB");
+    const emptier = fake.created.find(
+      (entry) =>
+        entry.opts.internal === true &&
+        entry.opts.volumes?.[0]?.readOnly === undefined,
+    );
+    expect(emptier?.opts.volumes).toEqual([
+      { key: key(Number(refused?.generation)), path: "/work-cache-check" },
+    ]);
+    expect(
+      fake.commands.some(
+        (command) =>
+          command.sandboxId === emptier?.id &&
+          command.command.includes("-exec rm -rf {} +"),
+      ),
+    ).toBe(true);
+    expect(fake.destroyed).toContain(emptier?.id);
+    fake.behavior.sizeKib = 2048;
+    const review = await workspace(lease.id);
+    expect(review.opts?.volumes?.[0]).toMatchObject({
+      key: key(live),
+      retire: expect.arrayContaining([key(Number(refused?.generation))]),
+    });
   });
 
   it("fills only from a revision that went live, with that revision's command and checkout", async () => {
