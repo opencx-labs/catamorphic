@@ -24,6 +24,7 @@ import { toJson } from "./run-coordinator.js";
 import {
   capacityFits,
   diskFits,
+  diskFreshSql,
   EnvironmentCapacityError,
   machineDiskOf,
   WorkerCapacitySchema,
@@ -319,6 +320,7 @@ export class ExecutionAllocationsService {
       const node = await executor
         .selectFrom("worker_nodes")
         .selectAll()
+        .select(diskFreshSql.as("disk_fresh"))
         .where("id", "=", args.workerNodeId)
         .where("tenant_id", "=", args.identity.tenantId)
         .where("enabled", "=", true)
@@ -358,7 +360,7 @@ export class ExecutionAllocationsService {
           },
         },
       };
-      const disk = machineDiskOf(node.disk);
+      const disk = node.disk_fresh ? machineDiskOf(node.disk) : undefined;
       if (node.capacity || disk) {
         const usage = await workerUsage({ db: executor, nodeId: node.id });
         const resources =

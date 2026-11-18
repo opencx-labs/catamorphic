@@ -4,7 +4,6 @@ import {
   diskBudgetMb,
   diskCriticalBytes,
   diskFloorBytes,
-  diskFresh,
   diskLow,
   diskRecovered,
   type MachineDisk,
@@ -118,8 +117,6 @@ describe("machine disk (ADR 0335)", () => {
     expect(diskRecovered(disk(10.5 * GIB))).toBe(false);
     expect(diskRecovered(disk(11 * GIB))).toBe(true);
     expect(diskBudgetMb(disk(50 * GIB))).toBe(90 * 1024);
-    expect(diskFresh(disk(1), Date.parse(at) + 4 * 60_000)).toBe(true);
-    expect(diskFresh(disk(1), Date.parse(at) + 6 * 60_000)).toBe(false);
   });
 
   it("names a full disk from the machine's own report, and treats output as a hint", () => {

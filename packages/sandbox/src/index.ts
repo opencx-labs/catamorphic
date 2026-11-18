@@ -130,7 +130,6 @@ export {
   diskBudgetMb,
   diskCriticalBytes,
   diskFloorBytes,
-  diskFresh,
   diskLow,
   diskRecovered,
   formatBytes,

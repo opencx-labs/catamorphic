@@ -15,7 +15,10 @@ export const DEFAULT_DISK_FLOOR_MAX_BYTES = 10 * GIB;
 /** The default critical floor: 1% of a filesystem, at most this. */
 export const DEFAULT_DISK_CRITICAL_MAX_BYTES = 1 * GIB;
 
-/** A report older than this is not used for admission. */
+/**
+ * A report the server heard longer ago than this is not used for
+ * admission; the database judges it, by its own clock.
+ */
 export const DISK_REPORT_FRESH_MS = 5 * 60_000;
 
 /** An episode ends once free space is back above this times the floor. */
@@ -149,12 +152,6 @@ export function diskRecovered(disk: MachineDisk): boolean {
 /** The storage a machine can reserve (MiB): its total less its floor. */
 export function diskBudgetMb(disk: MachineDisk): number {
   return Math.max(0, Math.floor((disk.totalBytes - disk.floorBytes) / MIB));
-}
-
-/** Whether a report is recent enough to admit by (ADR 0335). */
-export function diskFresh(disk: MachineDisk, now = Date.now()): boolean {
-  const at = Date.parse(disk.measuredAt);
-  return Number.isFinite(at) && now - at <= DISK_REPORT_FRESH_MS;
 }
 
 /** What a full disk prints: errno names and messages of Linux and Docker. */

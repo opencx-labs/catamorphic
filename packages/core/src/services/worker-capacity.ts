@@ -1,8 +1,8 @@
 import type { DB } from "@catamorphic/db";
 import {
+  DISK_REPORT_FRESH_MS,
   describeDisk,
   diskBudgetMb,
-  diskFresh,
   type EnvironmentResourcePolicy,
   type MachineDisk,
   type WorkloadKind,
@@ -25,6 +25,13 @@ export function machineDiskOf(value: unknown): MachineDisk | undefined {
   const parsed = MachineDiskSchema.safeParse(value);
   return parsed.success ? parsed.data : undefined;
 }
+
+/**
+ * Whether a node's report is recent enough to admit by (ADR 0335), judged
+ * by the database's clock against the time it stamped on arrival, so no
+ * replica's clock decides.
+ */
+export const diskFreshSql = sql<boolean>`coalesce((worker_nodes.disk->>'measuredAt')::timestamptz > now() - make_interval(secs => ${DISK_REPORT_FRESH_MS / 1000}), false)`;
 
 export const WorkerCapacitySchema = z.strictObject({
   workspaces: z.number().int().positive(),
@@ -106,11 +113,11 @@ export function capacityFits(args: {
 const MIB = 1024 * 1024;
 
 /**
- * Whether work fits a machine's disk (ADR 0335): with a recent report,
- * free space less its `storageMb` stays at or above the floor (a workflow
- * run's, the lower critical floor), and the machine's reservations stay
- * within its total less its floor. A machine with no recent report is not
- * held to either.
+ * Whether work fits a machine's disk (ADR 0335): free space less its
+ * `storageMb` stays at or above the floor (a workflow run's, the lower
+ * critical floor), and the machine's reservations stay within its total
+ * less its floor. `disk` is the machine's recent report (see
+ * {@link diskFreshSql}); a machine with none is not held to either.
  */
 export function diskFits(args: {
   usage: Pick<WorkerUsage, "storageMb">;
@@ -118,10 +125,9 @@ export function diskFits(args: {
   disk?: MachineDisk;
   /** The work's kind: a workflow run is held to the critical floor. */
   workload?: WorkloadKind;
-  now?: number;
 }): boolean {
   const { disk } = args;
-  if (!disk || !diskFresh(disk, args.now)) return true;
+  if (!disk) return true;
   const storageMb = args.resources.storageMb ?? 0;
   const floor =
     args.workload === "workflow" ? disk.criticalBytes : disk.floorBytes;

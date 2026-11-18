@@ -3,7 +3,7 @@ import { createDatabase, migrateToLatest } from "@catamorphic/db";
 import type { EnvironmentBinding, MachineDisk } from "@catamorphic/sandbox";
 import { sql } from "kysely";
 import pg from "pg";
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { ExecutionAllocationsService } from "../services/execution-allocations-service.js";
 import { ExecutionJobsService } from "../services/execution-jobs-service.js";
 import { outOfDiskFor } from "../services/out-of-disk.js";
@@ -194,6 +194,19 @@ describe.skipIf(!db)("machine disk (ADR 0335)", () => {
     // Under the critical floor nothing more starts.
     await nodes.reportDisk({ lease, disk: report({ free: 0.5 * GIB }) });
     await expect(workflow()).rejects.toBeInstanceOf(EnvironmentCapacityError);
+  });
+
+  it("judges a report's age by the database's clock, not this replica's (ADR 0335)", async () => {
+    const { nodes, lease, admit } = await machine();
+    await nodes.reportDisk({ lease, disk: report({ free: 1 * GIB }) });
+    // This replica's clock runs ten minutes ahead of the database's.
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(Date.now() + 10 * 60_000);
+    try {
+      await expect(admit()).rejects.toBeInstanceOf(EnvironmentCapacityError);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("dates a report by when the server heard it, not the machine's clock", async () => {

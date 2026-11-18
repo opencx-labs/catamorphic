@@ -1,11 +1,7 @@
 import type { DB } from "@catamorphic/db";
-import {
-  diskFresh,
-  type MachineDisk,
-  outOfDiskReason,
-} from "@catamorphic/sandbox";
+import { type MachineDisk, outOfDiskReason } from "@catamorphic/sandbox";
 import type { Kysely, Transaction } from "kysely";
-import { machineDiskOf } from "./worker-capacity.js";
+import { diskFreshSql, machineDiskOf } from "./worker-capacity.js";
 
 /**
  * The recent disk report of the machine an Allocation is on (ADR 0335),
@@ -23,17 +19,15 @@ export async function allocationDisk(args: {
   /** Or the machine itself. */
   nodeId?: string | null;
 }): Promise<MachineDisk | undefined> {
-  const fresh = (value: unknown) => {
-    const disk = machineDiskOf(value);
-    return disk && diskFresh(disk) ? disk : undefined;
-  };
+  const fresh = (row: { disk: unknown; fresh: boolean } | undefined) =>
+    row?.fresh ? machineDiskOf(row.disk) : undefined;
   if (args.nodeId) {
     const node = await args.db
       .selectFrom("worker_nodes")
-      .select("disk")
+      .select(["disk", diskFreshSql.as("fresh")])
       .where("id", "=", args.nodeId)
       .executeTakeFirst();
-    return fresh(node?.disk);
+    return fresh(node);
   }
   const allocationId =
     args.allocationId ??
@@ -43,11 +37,11 @@ export async function allocationDisk(args: {
   if (!allocationId) return undefined;
   const row = await args.db
     .selectFrom("execution_allocations as allocation")
-    .innerJoin("worker_nodes as node", "node.id", "allocation.worker_node_id")
-    .select("node.disk")
+    .innerJoin("worker_nodes", "worker_nodes.id", "allocation.worker_node_id")
+    .select(["worker_nodes.disk", diskFreshSql.as("fresh")])
     .where("allocation.id", "=", allocationId)
     .executeTakeFirst();
-  return fresh(row?.disk);
+  return fresh(row);
 }
 
 /** The Allocation holding a chat's workspace: its own, or its sharer's. */

@@ -224,7 +224,7 @@ export async function registerWorkMachine(args: {
           ...(requirements?.workload
             ? { workload: requirements.workload }
             : {}),
-          ...(node.disk ? { disk: node.disk } : {}),
+          ...(node.disk && node.diskFresh ? { disk: node.disk } : {}),
         });
       const chosen = ordered.find(
         (entry) =>

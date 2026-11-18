@@ -20,6 +20,7 @@ import { toJson } from "./run-coordinator.js";
 import {
   capacityFits,
   diskFits,
+  diskFreshSql,
   MachineDiskSchema,
   machineDiskOf,
   type WorkerCapacity,
@@ -89,6 +90,8 @@ export interface WorkerNode {
   usage: WorkerUsage;
   /** Its latest disk report (ADR 0335); absent for a machine that sends none. */
   disk?: MachineDisk;
+  /** The report is recent enough to admit by, by the database's clock. */
+  diskFresh: boolean;
   /** When its current episode under its disk floor began. */
   diskLowSince?: string;
   acceptingWork: boolean;
@@ -559,6 +562,7 @@ export class WorkerNodesService {
       .select(
         sql<boolean>`enabled AND lease_expires_at > now()`.as("available"),
       )
+      .select(diskFreshSql.as("disk_fresh"))
       .where("tenant_id", "=", args.tenantId)
       .where("authority_id", "=", args.authorityId)
       .orderBy("id")
@@ -573,6 +577,7 @@ export class WorkerNodesService {
         );
         const usage = await workerUsage({ db: this.db, nodeId: row.id });
         const disk = machineDiskOf(row.disk);
+        const fresh = disk !== undefined && row.disk_fresh;
         return {
           id: row.id,
           descriptor: descriptorSchema.parse(row.descriptor),
@@ -583,12 +588,17 @@ export class WorkerNodesService {
           defaults,
           usage,
           ...(disk ? { disk } : {}),
+          diskFresh: fresh,
           ...(row.disk_low_at
             ? { diskLowSince: row.disk_low_at.toISOString() }
             : {}),
           acceptingWork:
             row.available &&
-            diskFits({ usage, resources: {}, ...(disk ? { disk } : {}) }) &&
+            diskFits({
+              usage,
+              resources: {},
+              ...(disk && fresh ? { disk } : {}),
+            }) &&
             (!capacity ||
               capacityFits({ capacity, usage, resources: defaults })),
           ...(row.remote

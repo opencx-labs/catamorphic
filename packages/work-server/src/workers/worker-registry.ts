@@ -19,7 +19,6 @@ import type { DB } from "@catamorphic/db";
 import {
   describeDisk,
   diskBudgetMb,
-  diskFresh,
   type EnvironmentBinding,
   ExecutorPublicKeySchema,
   headroom,
@@ -1270,7 +1269,7 @@ export class WorkWorkerRegistry {
           diskFits({
             usage: node.usage,
             resources: {},
-            ...(node.disk ? { disk: node.disk } : {}),
+            ...(node.disk && node.diskFresh ? { disk: node.disk } : {}),
           });
         const live =
           node?.available && capacity
@@ -1297,7 +1296,7 @@ export class WorkWorkerRegistry {
                         ),
                       }
                     : {}),
-                  ...(node.disk && diskFresh(node.disk)
+                  ...(node.disk && node.diskFresh
                     ? {
                         storageMb: Math.max(
                           0,
