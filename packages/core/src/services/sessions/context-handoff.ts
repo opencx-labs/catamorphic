@@ -5,7 +5,7 @@ import {
   type Item,
   isInputItem,
 } from "@catamorphic/agent-protocol";
-import type { DB } from "@catamorphic/db";
+import type { DB, Json } from "@catamorphic/db";
 import { type Kysely, sql, type Transaction } from "kysely";
 import {
   LATEST_RESULT_VALUE_BYTES,
@@ -281,26 +281,36 @@ async function keptSections(input: {
   // first, not only each name's latest (ADR 0336): a restarted attempt
   // sees each finding it already submitted, by id, and does not submit it
   // again under another.
+  // Each in short: its name and short fields (an id, a title), never its
+  // whole value, so every one fits and none loads a large value.
   const earlier = current
-    ? (
-        await db
-          .selectFrom("agent_items as item")
-          .leftJoin("agent_turns as turn", "turn.id", "item.turn_id")
-          .select(["item.payload", "turn.ordinal"])
-          .where("item.session_id", "=", sessionId)
-          .where("item.turn_id", "=", current.id)
-          .where("item.kind", "=", "result")
-          .where("item.status", "=", "completed")
-          .orderBy("item.position", "desc")
-          .limit(EARLIER_RESULTS)
-          .execute()
-      ).flatMap((row) => {
-        const item = itemFromRow(row);
-        return item.kind === "result" ? [{ item, ordinal: row.ordinal }] : [];
-      })
+    ? await db
+        .selectFrom("agent_items as item")
+        .select([
+          "item.id",
+          sql<string>`item.payload->>'name'`.as("name"),
+          sql<Json>`CASE jsonb_typeof(item.payload->'value')
+            WHEN 'object' THEN COALESCE((
+              SELECT jsonb_object_agg(field.key, field.value)
+                FROM jsonb_each(item.payload->'value') AS field
+               WHERE jsonb_typeof(field.value) IN ('number', 'boolean')
+                  OR (jsonb_typeof(field.value) = 'string'
+                      AND length(field.value #>> '{}') <= ${SHORT_FIELD})), '{}'::jsonb)
+            WHEN 'string' THEN CASE WHEN length(item.payload->>'value') <= ${SHORT_FIELD}
+              THEN item.payload->'value' END
+            WHEN 'array' THEN NULL
+            ELSE item.payload->'value' END`.as("short"),
+        ])
+        .where("item.session_id", "=", sessionId)
+        .where("item.turn_id", "=", current.id)
+        .where("item.kind", "=", "result")
+        .where("item.status", "=", "completed")
+        .orderBy("item.position", "desc")
+        .limit(EARLIER_RESULTS)
+        .execute()
     : [];
   const settled = await latestSettled();
-  const results = [...earlier, ...settled];
+  const results = settled;
   const newest = settled[0]?.item;
   const answered = [
     ...new Set(
@@ -397,10 +407,21 @@ async function keptSections(input: {
   };
 
   // What the headings and the notes of what is cut take, first.
+  const earlierLines = earlier.map(
+    (row) =>
+      `- ${row.name}: ${
+        row.short === null
+          ? `(read it with session_results, result ${row.id})`
+          : truncate(JSON.stringify(row.short), SHORT_LINE)
+      }`,
+  );
   let left =
     input.budget -
     (settled.length > 0 ? RESULTS_HEADING.length + NOTE_ALLOWANCE : 0) -
-    (earlier.length > 0 ? EARLIER_HEADING.length + NOTE_ALLOWANCE : 0) -
+    (earlier.length > 0
+      ? EARLIER_HEADING.length +
+        earlierLines.reduce((sum, line) => sum + line.length + 1, 0)
+      : 0) -
     (requests.length > 0
       ? (newest ? UNANSWERED_HEADING : LATEST_HEADING).length + NOTE_ALLOWANCE
       : 0);
@@ -425,7 +446,6 @@ async function keptSections(input: {
     }
     return lines;
   };
-  const earlierLines = fill(earlier);
   const settledLines = fill(settled);
   for (const item of older) {
     const line = requestLine(item, REQUEST_MAX);
@@ -441,13 +461,7 @@ async function keptSections(input: {
       : [];
   const sections: string[] = [];
   if (earlier.length > 0)
-    sections.push(
-      [
-        EARLIER_HEADING,
-        ...earlierLines,
-        ...resultsCut(earlier.length - earlierLines.length),
-      ].join("\n"),
-    );
+    sections.push([EARLIER_HEADING, ...earlierLines].join("\n"));
   if (settled.length > 0)
     sections.push(
       [
@@ -473,10 +487,13 @@ async function keptSections(input: {
   return sections.join("\n\n");
 }
 
-/** Results of the turn being handed off it lists, newest first. */
+/** Results of the turn being handed off it lists, newest first: all of them. */
 const EARLIER_RESULTS = 100;
+/** The longest field an earlier result shows in short, and its line. */
+const SHORT_FIELD = 200;
+const SHORT_LINE = 300;
 const EARLIER_HEADING =
-  "Submitted by an earlier attempt of this turn, which did not finish (this turn's request is still open; submit again if they are still right):";
+  "Submitted by an earlier attempt of this turn, which did not finish (this turn's request is still open; submit again if they are still right). Each in short, newest first, with its short fields; read whole values with session_results:";
 const RESULTS_HEADING =
   "Your accepted results in this chat, as recorded (submitted with submit_result; the latest of each name, newest first). Each says whether a newer request arrived since; a request below may need a new one:";
 const UNANSWERED_HEADING =

@@ -575,7 +575,8 @@ sandboxes need it.
   the moment one is recorded, mid-turn, with the result in input.payload.detail
   (name, value, turnId, input, commit); select { names: ["review"] }. The
   pull-request-reviews pack posts each verified finding that way, in the same
-  per-key queue as the turn's review. A turn records at most 1,000 results.
+  per-key queue as the turn's review. A turn makes at most 100 submissions,
+  rejected ones included, so one read of a turn's results holds them all.
   Compute final checks (votes, coverage) in code over results, not in an
   agent.
 - usage is an authorized read of a chat's model calls through the gateway:

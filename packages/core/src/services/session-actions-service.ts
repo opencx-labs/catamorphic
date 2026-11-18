@@ -225,9 +225,7 @@ export class SessionActionsService {
             });
         if (input.operation === "find") {
           const detail = open ? await read(open) : null;
-          return detail
-            ? snapshotOf(detail, await this.queued(detail.id))
-            : null;
+          return detail ? snapshotOf(detail) : null;
         }
         const key =
           "idempotencyKey" in parsed &&
@@ -288,8 +286,7 @@ export class SessionActionsService {
           throw new SessionKeyNotFoundError(keyed?.key ?? "");
         }
         const session = detail;
-        if (input.operation === "inspect")
-          return snapshotOf(session, await this.queued(session.id));
+        if (input.operation === "inspect") return snapshotOf(session);
         if (input.operation === "usage")
           return json(
             await this.sessions.usage({
@@ -747,22 +744,6 @@ export class SessionActionsService {
       },
     );
   }
-  /**
-   * The chat's turns waiting to run, oldest first (queued or held): with
-   * `turn`, the one at work, what a workflow needs to tell a turn still to
-   * come from one that settled or was withdrawn (ADR 0336).
-   */
-  private async queued(sessionId: string): Promise<string[]> {
-    const rows = await this.db
-      .selectFrom("agent_turns")
-      .select("id")
-      .where("session_id", "=", sessionId)
-      .where("status", "in", ["queued", "held"])
-      .orderBy("ordinal")
-      .limit(100)
-      .execute();
-    return rows.map((row) => row.id);
-  }
 }
 function actionLabel(operation: SessionActionOperation): string {
   return {
@@ -817,12 +798,8 @@ function actorIdentity(author: SessionMessageAuthor): SessionMessageAuthor {
  * copy: half of a surrogate pair and U+0000 are U+FFFD there.
  */
 /** A chat as workflows read it: its fields and its metadata (ADR 0325). */
-function snapshotOf(session: AgentSessionDetail, queued: string[]): Json {
-  return json({
-    ...session,
-    metadata: session.snapshot.session.metadata,
-    queued,
-  });
+function snapshotOf(session: AgentSessionDetail): Json {
+  return json({ ...session, metadata: session.snapshot.session.metadata });
 }
 
 export function json(value: unknown): Json {

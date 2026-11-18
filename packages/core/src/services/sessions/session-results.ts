@@ -7,7 +7,6 @@ import {
 } from "@catamorphic/agent-protocol";
 import type { DB, Json } from "@catamorphic/db";
 import { type Kysely, sql, type Transaction } from "kysely";
-import { RESULT_LIMITS } from "../agent-results.js";
 import type { SessionLog } from "./session-log.js";
 import { itemFromRow } from "./session-rows.js";
 
@@ -63,15 +62,6 @@ export class SessionResultAttemptError extends Error {
       "This attempt no longer runs its turn, so its result does not count.",
     );
     this.name = "SessionResultAttemptError";
-  }
-}
-
-export class SessionResultLimitError extends Error {
-  constructor() {
-    super(
-      `This turn has recorded ${RESULT_LIMITS.perTurn} results, the most one turn keeps`,
-    );
-    this.name = "SessionResultLimitError";
   }
 }
 
@@ -267,15 +257,6 @@ export async function recordResult(
   },
 ): Promise<ResultItem> {
   await log.lock(trx, input.sessionId);
-  const count = await trx
-    .selectFrom("agent_items")
-    .select((eb) => eb.fn.countAll<string>().as("count"))
-    .where("turn_id", "=", input.turnId)
-    .where("session_id", "=", input.sessionId)
-    .where("kind", "=", "result")
-    .executeTakeFirstOrThrow();
-  if (Number(count.count) >= RESULT_LIMITS.perTurn)
-    throw new SessionResultLimitError();
   const turn = await trx
     .selectFrom("agent_turns")
     .select(["active_attempt_id", "checkpoint_before", "status"])

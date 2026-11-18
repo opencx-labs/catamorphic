@@ -841,7 +841,6 @@ export {
 export {
   SessionInputNotFoundError,
   type SessionResult,
-  SessionResultLimitError,
 } from "./services/sessions/session-results.js";
 export {
   SUBSESSION_TOOL_NAMES,

@@ -35,7 +35,6 @@ import {
   RESULT_READ_WINDOW,
   recordResult,
   SessionResultAttemptError,
-  SessionResultLimitError,
 } from "../services/sessions/session-results.js";
 import { testEnvironmentProvider } from "./test-environment.js";
 
@@ -473,7 +472,7 @@ describe("typed results", () => {
     const state = await turn(
       project.id,
       session.id,
-      ["first finding", "second finding", "third finding"]
+      ["first finding", "second finding", "third finding", "x".repeat(300)]
         .map((note) => tool("submit_result", { name: "notes", value: note }))
         .join(" "),
     );
@@ -496,9 +495,14 @@ describe("typed results", () => {
           "Submitted by an earlier attempt of this turn, which did not finish",
         )[1]
         ?.split("\n\n")[0] ?? "";
-    // Each result's value is on its own line, under the request it answers.
+    // Each in short, by name and its short fields, newest first.
     for (const note of ["first finding", "second finding", "third finding"])
-      expect(earlier).toContain(`\n  "${note}"`);
+      expect(earlier).toContain(`\n- notes: "${note}"`);
+    // A long value is named, never loaded whole.
+    expect(earlier).toMatch(
+      /\n- notes: \(read it with session_results, result [0-9a-f-]{36}\)/,
+    );
+    expect(earlier).not.toContain("x".repeat(300));
   });
 
   it("tells a turn's next attempt what an earlier attempt of it submitted, and keeps that turn's request open", async () => {
@@ -537,10 +541,10 @@ describe("typed results", () => {
     const [, earlier = ""] = text.split(
       "Submitted by an earlier attempt of this turn, which did not finish",
     );
+    // In short: the result's name and short fields.
     expect(earlier).toContain(
-      'answering Person in turn 3 (this turn): "Review the new push.',
+      '\n- review: {"score":2,"verdict":"REQUEST_CHANGES"}',
     );
-    expect(earlier).toContain('\n  {"score":2,"verdict":"REQUEST_CHANGES"}');
     expect(earlier).toContain("submit again if they are still right");
     const [, accepted = ""] = text.split("Your accepted results");
     expect(accepted).toContain('{"score":4,"verdict":"COMMENT"}');
@@ -772,57 +776,35 @@ describe("typed results", () => {
       .execute();
   });
 
-  it("bounds the results of a turn, not of the chat", async () => {
+  it("bounds the submissions of a turn, refused ones too, not of the chat", async () => {
     const project = await projects.create(identity, { name: "Bounded" });
     const session = await sessions.create(identity, project.id);
-    await turn(project.id, session.id, "Hello.");
-    const state = await turn(project.id, session.id, "Again.");
-    const [first, second] = orderedTurns(state);
-    const running = (turnId: string, status: string) =>
-      db
-        .updateTable("agent_turns")
-        .set({ status })
-        .where("id", "=", turnId)
-        .execute();
-    const submit = (settled: typeof first) =>
-      db.transaction().execute((trx) =>
-        recordResult(trx, sessions.log, {
-          sessionId: session.id,
-          turnId: settled?.id ?? "",
-          attemptId: settled?.activeAttemptId ?? "",
-          name: "review",
-          value: { verdict: "COMMENT", score: 3 },
-        }),
-      );
-    await running(first?.id ?? "", "running");
-    const recorded = await submit(first);
-    // The first turn fills its share: copies of its result, written as
-    // history is, without an event each.
-    await db.transaction().execute(async (trx) => {
-      await sql`select set_config('catamorphic.suppress_session_events', 'true', true)`.execute(
-        trx,
-      );
-      await sql`
-        insert into ${sql.id(schema, "agent_items")} (id, session_id, turn_id, attempt_id, position, kind, status, payload)
-        select gen_random_uuid(), item.session_id, item.turn_id, item.attempt_id,
-               item.position + n, item.kind, item.status, item.payload
-          from ${sql.id(schema, "agent_items")} item, generate_series(1, ${RESULT_LIMITS.perTurn - 1}) n
-         where item.id = ${recorded.id}`.execute(trx);
+    // A turn of refused submissions, then one the schema accepts.
+    const refused = tool("submit_result", {
+      name: "review",
+      value: { verdict: "APPROVE", score: 9 },
     });
-    await expect(submit(first)).rejects.toThrow(SessionResultLimitError);
-    await running(first?.id ?? "", "completed");
-    // The chat holds more than one turn's share; its next turn still records.
-    await running(second?.id ?? "", "running");
-    const next = await submit(second);
-    expect(next.turnId).toBe(second?.id);
-    await running(second?.id ?? "", "completed");
-    const count = await db
-      .selectFrom("agent_items")
-      .select((eb) => eb.fn.countAll<string>().as("count"))
-      .where("session_id", "=", session.id)
-      .where("kind", "=", "result")
-      .executeTakeFirstOrThrow();
-    expect(Number(count.count)).toBe(RESULT_LIMITS.perTurn + 1);
+    const accepted = tool("submit_result", {
+      name: "review",
+      value: { verdict: "COMMENT", score: 4 },
+    });
+    const full = await turn(
+      project.id,
+      session.id,
+      [
+        ...Array.from({ length: RESULT_LIMITS.perTurn }, () => refused),
+        accepted,
+      ].join(" "),
+    );
+    const answers = toolResults(full);
+    expect(answers.at(-2)).toContain("does not match the review schema");
+    expect(answers.at(-1)).toContain(
+      `This turn has made ${RESULT_LIMITS.perTurn} submissions`,
+    );
+    expect(full.items.filter((item) => item.kind === "result")).toEqual([]);
+    // The chat's next turn records.
+    const next = await turn(project.id, session.id, accepted);
+    expect(toolResults(next).at(-1)).toContain("Recorded the review result");
   });
 
   it("finds each name's latest among a chat's newest results, so its reads stay bounded", async () => {

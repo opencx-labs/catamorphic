@@ -24,3 +24,7 @@ CREATE TABLE workflow_run_joins (
     PRIMARY KEY (project_id, workflow_name, delivery_key)
 );
 CREATE INDEX idx_workflow_run_joins_run ON workflow_run_joins (run_id);
+
+-- ADR 0336: every result a turn's agent submits counts toward the turn's
+-- limit, accepted or refused, before it is checked.
+ALTER TABLE agent_turns ADD COLUMN result_submissions integer NOT NULL DEFAULT 0;

@@ -266,6 +266,7 @@ export interface AgentTurns {
   priority: Generated<number>;
   provider_retry: Json | null;
   provider_thread_id: string | null;
+  result_submissions: Generated<number>;
   session_id: string;
   started_at: Timestamp | null;
   status: Generated<string>;
