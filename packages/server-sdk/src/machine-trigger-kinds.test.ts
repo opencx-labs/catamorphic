@@ -8,7 +8,7 @@ import {
 } from "./machine-trigger-kinds.js";
 
 describe("machine trigger kinds (ADR 0327)", () => {
-  it("registers create, destroy and the six lifecycle events", () => {
+  it("registers create, destroy and the seven lifecycle events", () => {
     expect(MACHINE_TRIGGER_KINDS.map((kind) => kind.name)).toEqual([
       "machine.create",
       "machine.destroy",
@@ -18,6 +18,7 @@ describe("machine trigger kinds (ADR 0327)", () => {
       "machine.released",
       "machine.destroyed",
       "machine.disk-low",
+      "machine.disk-too-small",
     ]);
     expect(machineCreate.outputJsonSchema).toBeDefined();
   });

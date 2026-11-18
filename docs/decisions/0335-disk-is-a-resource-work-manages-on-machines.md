@@ -100,9 +100,16 @@ rule, ref and the report, once per episode, so a workflow can alert or
 size later machines. A recording that fails is tried again on each later report of
 the episode until it lands; the event's id names the episode, so it is
 recorded once. Only Work's own measurement starts an episode. Replacing a machine is
-Work's: on demand, a machine short of disk takes no new work, counts
-toward neither the rule's `min` nor its `max`, and is destroyed once it
-holds no work, so no review is cut off. Policy stays in the project: the
+Work's: on demand, a machine short of disk takes no new work, still
+counts toward the rule's `max` (a hard ceiling, so code that fills disks
+cannot drive the machine count) and `min`, and is destroyed once it holds
+no work, so no review is cut off; only then does its place open. A rule
+whose machine came up under its floor within 30 minutes of enrolling has
+a class whose disk is too small for its work: it makes no new machines for
+an hour after the latest such machine, or until it is written again, and
+says so in its status, and a workflow class's project hears
+`machine.disk-too-small` once per brake, so machines are never made and
+destroyed in a loop. Policy stays in the project: the
 `machines-ec2` recipe documents root volume sizes. A workflow that
 terminated the machine on the event was considered and left out: it could
 not see whether the machine was still short or still working.

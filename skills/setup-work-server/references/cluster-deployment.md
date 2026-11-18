@@ -346,8 +346,9 @@ the JSON file `WORK_MACHINES_CONFIG` names:
   later passes until it answers `{ done: true }` (failing runs back off),
   and a create run stuck for 30 minutes is canceled first. The project also hears `machine.created`,
   `machine.connected`, `machine.lost`, `machine.released`,
-  `machine.destroyed` and, once per episode under its disk floor,
-  `machine.disk-low` ([Disk](#disk)) as project events. Its create runs carry enrollment
+  `machine.destroyed`, once per episode under its disk floor
+  `machine.disk-low`, and once per brake `machine.disk-too-small`
+  ([Disk](#disk)) as project events. Its create runs carry enrollment
   codes, so keep it to administrators. The `machines-ec2` pack
   (`registry.read`) is the EC2 recipe, with a tag-scoped IAM policy.
 
@@ -853,8 +854,12 @@ WORK_IMAGE_RETENTION_HOURS=24    # unused images and sandboxes' Docker data
 
 Without `WORK_DISK_FLOOR_MB` the floor is 10% of the filesystem, at most 10
 GiB. A machine whose free space is under its floor takes no new workspace or
-cache fill: the work waits as it does for CPU or memory, and on demand Work
-makes another machine for it. Workflow runs are not held back, so a full
+cache fill: the work waits as it does for CPU or memory. On demand it still
+counts toward the rule's `max` and is destroyed once it holds no work, and
+Work makes another machine within `max`. A rule whose machines come up short
+within 30 minutes of enrolling makes no new machines for an hour (or until
+it is written again) and says the class's disk is too small; a workflow
+class's project hears `machine.disk-too-small`. Workflow runs are not held back, so a full
 server still runs the workflows that free or replace machines. An Environment's `storageMb` is reserved like memory, within
 the disk less its floor, and admitted only while free space less it stays
 above the floor; it is enforced only by microsandbox. A report the server

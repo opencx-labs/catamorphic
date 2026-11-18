@@ -219,10 +219,14 @@ inside sandboxes. A failure while the machine is short of disk says so,
 and the project hears `machine.disk-low` once each time a machine falls
 under its floor, with its disk report and the class's options.
 
-Work replaces a machine short of disk itself: it gives it no new work,
-makes another machine for the work waiting (it counts toward neither the
-rule's `min` nor its `max`), and destroys it through `destroyMachine` once
-it holds no work, so no review is cut off. A workflow on `machine.disk-low`
+Work replaces a machine short of disk itself: it gives it no new work
+and destroys it through `destroyMachine` once it holds no work, so no
+review is cut off; it still counts toward the rule's `max` until then.
+When machines of the class come up short soon after connecting, the
+class's disk is too small for its work: the rule makes no new machines
+for an hour (or until it is written again), its status says so, and the
+project hears `machine.disk-too-small`. Raise `rootVolumeGb`, then write
+the rule again. A workflow on `machine.disk-low`
 is for the team's own policy: an alert, or raising the class's
 `rootVolumeGb` for the machines to come.
 
@@ -238,6 +242,7 @@ is for the team's own policy: an alert, or raising the class's
   written again (ADR 0258).
 
 The project hears `machine.created`, `machine.connected`, `machine.lost`,
-`machine.released`, `machine.destroyed` and `machine.disk-low` as events
-with the machine's name, class, rule and instance id; workflows may
-trigger on them for bookkeeping or alerts.
+`machine.released`, `machine.destroyed`, `machine.disk-low` and
+`machine.disk-too-small` as events with the machine's name (the rule's,
+for the last), class, rule and instance id; workflows may trigger on them
+for bookkeeping or alerts.

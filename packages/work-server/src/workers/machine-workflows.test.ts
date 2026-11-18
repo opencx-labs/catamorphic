@@ -800,4 +800,59 @@ describe("workflow machine classes (ADR 0327)", () => {
     expect(lowEvents()).toHaveLength(3);
     await reconciler.deleteRule("fleet-k");
   });
+
+  it("tells it once when a rule's machines come up short of disk, and makes no more for a while (ADR 0335)", async () => {
+    const { workflows, reconciler, workers, pass } = setup();
+    await reconciler.setRule({
+      name: "fleet-s",
+      rule: {
+        group: ENG,
+        machines: { demand: { max: 2, min: 1 } },
+        class: "fleet",
+        trusted: true,
+      },
+    });
+    await pass();
+    const [create] = workflows.creates();
+    if (!create) throw new Error("No create was started");
+    const { name } = create.input;
+    workflows.answer(create.correlationKey, { ref: "i-0sss" });
+    await pass();
+    const { publicKey } = generateExecutorKeyPair();
+    const { nodeId } = await workers.enroll({
+      code: create.input.enrollment.code,
+      publicKey,
+    });
+    await workers.connect({
+      nodeId,
+      name,
+      session: epoch(),
+      offer: WorkerOfferSchema.parse({
+        isolation: "sandbox",
+        workspaceRoot: "/workspaces",
+        capacity: { workspaces: 1 },
+        disk: {
+          path: "/var/lib/work-worker",
+          totalBytes: 20e9,
+          freeBytes: 1e9,
+          floorBytes: 2e9,
+          measuredAt: new Date().toISOString(),
+        },
+      }),
+      publicKey,
+    });
+    await pass();
+    await pass();
+    const small = workflows.events.filter(
+      (event) => event.event.kind === "machine.disk-too-small",
+    );
+    expect(small).toHaveLength(1);
+    expect(small[0]).toMatchObject({
+      project: PROVISIONER,
+      event: { payload: { rule: "fleet-s", class: "fleet", options: OPTIONS } },
+    });
+    // The short machine goes; none replaces it while the rule is braked.
+    expect(workflows.creates()).toHaveLength(1);
+    await reconciler.deleteRule("fleet-s");
+  });
 });

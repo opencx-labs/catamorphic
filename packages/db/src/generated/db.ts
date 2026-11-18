@@ -1496,6 +1496,7 @@ export interface WorkGithubAppRegistrations {
 export interface WorkMachineRules {
   created_at: Generated<Timestamp>;
   definition: Json;
+  disk_short_at: Timestamp | null;
   last_failure: string | null;
   last_failure_at: Timestamp | null;
   name: string;

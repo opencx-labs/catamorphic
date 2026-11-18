@@ -1596,6 +1596,30 @@ export class MachineReconciler {
   }
 
   /**
+   * A rule's class came up short of disk (ADR 0335): a workflow class's
+   * project hears `machine.disk-too-small`, once per brake (every pass of
+   * the brake asks; the event's id names it).
+   */
+  private async diskTooSmall(args: {
+    rule: string;
+    definition: MachineRule;
+    at: Date;
+  }): Promise<void> {
+    const machineClass = this.classOf(args.definition.class);
+    if (machineClass?.platform !== "workflow") return;
+    await this.recordFor({
+      kind: "machine.disk-too-small",
+      project: machineClass.project,
+      name: args.rule,
+      class: args.definition.class,
+      rule: args.rule,
+      ref: null,
+      episode: args.at,
+      ...(machineClass.options ? { options: machineClass.options } : {}),
+    });
+  }
+
+  /**
    * A machine of a rule began an episode under its disk floor (ADR 0335):
    * its class's project hears `machine.disk-low` once per episode.
    */
@@ -1887,6 +1911,14 @@ export class MachineReconciler {
               definition,
             }),
           ]);
+        const brake = demand.shortClasses.get(rule);
+        if (brake) {
+          notices.set(rule, [
+            ...(notices.get(rule) ?? []),
+            `Machines of class '${definition.class}' came up short of disk soon after connecting (${brake.at.toISOString()}): its disk is too small for this rule's work. This rule makes no new machines until ${brake.until.toISOString()}, or until it is written again; give the class a larger disk.`,
+          ]);
+          await this.diskTooSmall({ rule, definition, at: brake.at });
+        }
         const planned = demandMachines({
           rule,
           definition,
@@ -1894,7 +1926,7 @@ export class MachineReconciler {
           machines: demand.machines.filter((machine) => machine.rule === rule),
           loads: demand.loads,
           waits,
-          stalled: Boolean(stalled),
+          stalled: Boolean(stalled) || Boolean(brake),
         });
         for (const machine of planned.machines)
           desired.provisioned.set(machine.name, machine);
@@ -1979,7 +2011,9 @@ export class MachineReconciler {
     machines: ProvisionedMachine[];
     loads: Map<string, MachineLoad>;
     stalled: Array<{ rule: string; name: string; enrolledForMs: number }>;
+    shortClasses: Map<string, DiskBrake>;
   }> {
+    const shortClasses = await this.diskBrakes();
     const [rows, machines, loads, stalled] = await Promise.all([
       this.deps.db
         .selectFrom("placement_waits")
@@ -2055,12 +2089,81 @@ export class MachineReconciler {
       waits,
       machines,
       loads,
+      shortClasses,
       stalled: stalled.map((row) => ({
         rule: row.machine_rule ?? "",
         name: row.name,
         enrolledForMs: Number(row.enrolled_for_ms),
       })),
     };
+  }
+
+  /**
+   * Rules whose class's disk is too small for their work (ADR 0335): a
+   * machine they made came up under its disk floor within
+   * {@link DISK_SHORT_AFTER_ENROLL_MINUTES} of enrolling. Each such rule
+   * makes no new machines for {@link DISK_BRAKE_MINUTES} after the latest,
+   * or until it is written again, so machines are not made and destroyed
+   * in a loop; a workflow class's project hears `machine.disk-too-small`
+   * once per brake.
+   */
+  private async diskBrakes(): Promise<Map<string, DiskBrake>> {
+    const tenantId = this.deps.tenantId;
+    const shortSoon = this.deps.db
+      .selectFrom("work_workers")
+      .innerJoin("worker_nodes", "worker_nodes.id", "work_workers.node_id")
+      .select([
+        "work_workers.machine_rule",
+        sql<Date>`max(worker_nodes.disk_low_at)`.as("at"),
+      ])
+      .where("work_workers.tenant_id", "=", tenantId)
+      .where("work_workers.machine_rule", "is not", null)
+      .where("work_workers.pool", "=", false)
+      .where("work_workers.revoked_at", "is", null)
+      .where("worker_nodes.disk_low_at", "is not", null)
+      .where(
+        sql<boolean>`worker_nodes.disk_low_at < work_workers.enrolled_at + make_interval(mins => ${DISK_SHORT_AFTER_ENROLL_MINUTES})`,
+      )
+      .groupBy("work_workers.machine_rule")
+      .as("short");
+    await this.deps.db
+      .updateTable("work_machine_rules")
+      .from(shortSoon)
+      .set({ disk_short_at: sql`short.at` })
+      .whereRef("work_machine_rules.name", "=", "short.machine_rule")
+      .where("work_machine_rules.tenant_id", "=", tenantId)
+      .where((eb) =>
+        eb.or([
+          eb("work_machine_rules.disk_short_at", "is", null),
+          eb("work_machine_rules.disk_short_at", "<", sql<Date>`short.at`),
+        ]),
+      )
+      .execute();
+    const rows = await this.deps.db
+      .selectFrom("work_machine_rules")
+      .select([
+        "name",
+        "disk_short_at",
+        sql<Date>`disk_short_at + make_interval(mins => ${DISK_BRAKE_MINUTES})`.as(
+          "until",
+        ),
+      ])
+      .where("tenant_id", "=", tenantId)
+      .where("disk_short_at", "is not", null)
+      .whereRef("disk_short_at", ">", "updated_at")
+      .where(
+        "disk_short_at",
+        ">",
+        sql<Date>`now() - make_interval(mins => ${DISK_BRAKE_MINUTES})`,
+      )
+      .execute();
+    return new Map(
+      rows.flatMap((row) =>
+        row.disk_short_at
+          ? [[row.name, { at: row.disk_short_at, until: row.until }]]
+          : [],
+      ),
+    );
   }
 
   /**
@@ -2262,6 +2365,22 @@ function demandWaitMatches(rule: MachineRule, wait: DemandWait): boolean {
   );
 }
 
+/**
+ * A machine under its disk floor this soon after enrolling came up short:
+ * its class's disk is too small for the rule's work (ADR 0335).
+ */
+const DISK_SHORT_AFTER_ENROLL_MINUTES = 30;
+/** How long a rule whose class came up short makes no new machines. */
+const DISK_BRAKE_MINUTES = 60;
+
+/** A rule braked because its class's disk is too small (ADR 0335). */
+interface DiskBrake {
+  /** When its latest machine came up short. */
+  at: Date;
+  /** When it makes machines again, unless written again before. */
+  until: Date;
+}
+
 /** Since when a wait for a machine still counts as demand (ADR 0258). */
 function waitFresh() {
   return sql<Date>`now() - make_interval(secs => ${PLACEMENT_WAIT_FRESH_SECONDS})`;
@@ -2401,11 +2520,6 @@ function demandMachines(args: {
   ).length;
   const lostAfter = demand.enrollMinutes * 60_000;
   const kept: ProvisionedMachine[] = [];
-  /**
-   * Kept machines short of disk (ADR 0335): they finish the work they hold
-   * but take none, so they count toward neither `min` nor `max`.
-   */
-  let full = 0;
   /** Kept machines that will take a piece of work once they connect. */
   let coming = 0;
   const idle: Array<{ machine: ProvisionedMachine; idleForMs: number }> = [];
@@ -2424,12 +2538,10 @@ function demandMachines(args: {
       continue;
     }
     if (load.shortOfDisk) {
-      // One holding work keeps it; an idle one goes, and a machine with
-      // room takes its place.
-      if (load.holding > 0) {
-        kept.push(machine);
-        full += 1;
-      }
+      // One holding work finishes it, taking no new work and still
+      // counting toward `max`; an idle one goes, and a machine with room
+      // may take its place (ADR 0335).
+      if (load.holding > 0) kept.push(machine);
       continue;
     }
     if (load.holding > 0) kept.push(machine);
@@ -2442,7 +2554,7 @@ function demandMachines(args: {
   }
   idle.sort((left, right) => left.idleForMs - right.idleForMs);
   for (const { machine } of idle) {
-    if (kept.length - full >= demand.min) break;
+    if (kept.length >= demand.min) break;
     kept.push(machine);
   }
   // Work a connected kept machine has room for is admitted there on its
@@ -2467,13 +2579,10 @@ function demandMachines(args: {
     return true;
   });
   const unmet = uncovered.slice(coming);
-  const room = Math.max(0, demand.max - (kept.length - full) - before);
+  const room = Math.max(0, demand.max - kept.length - before);
   const add = args.stalled
     ? 0
-    : Math.min(
-        room,
-        Math.max(unmet.length, demand.min - (kept.length - full), 0),
-      );
+    : Math.min(room, Math.max(unmet.length, demand.min - kept.length, 0));
   const machines = kept.map((machine) => desired(machine.name));
   const taken = new Set(own.map((machine) => machine.name));
   for (let index = 1, made = 0; made < add; index += 1) {

@@ -18,3 +18,9 @@ ALTER TABLE worker_nodes
 ALTER TABLE execution_allocations
   ADD COLUMN reserved_storage_mb integer NOT NULL DEFAULT 0
     CHECK (reserved_storage_mb >= 0);
+
+-- When a machine a rule made came up under its disk floor soon after it
+-- enrolled: the class's disk is too small for the rule's work, and the rule
+-- makes no new machines for a while, or until it is written again.
+ALTER TABLE work_machine_rules
+  ADD COLUMN disk_short_at timestamp with time zone;

@@ -130,6 +130,7 @@ export const MACHINE_EVENT_KINDS = [
   "machine.released",
   "machine.destroyed",
   "machine.disk-low",
+  "machine.disk-too-small",
 ] as const;
 export type MachineEventKind = (typeof MACHINE_EVENT_KINDS)[number];
 
@@ -145,6 +146,8 @@ const DESCRIPTIONS: Record<MachineEventKind, string> = {
   "machine.destroyed": "A machine's destroy workflow answered that it is gone.",
   "machine.disk-low":
     "A machine has less free disk than its floor, once per episode (ADR 0335): it takes no new workspaces until there is room. input.payload.disk has its path, totalBytes, freeBytes, floorBytes and measuredAt; input.payload.options is the class's options.",
+  "machine.disk-too-small":
+    "A rule's machines came up short of disk soon after connecting (ADR 0335): the class's disk is too small for the rule's work, and the rule makes no new machines for an hour or until it is written again. input.payload.name and rule name the rule; input.payload.options is the class's options.",
 };
 
 /** A machine's disk report, on `machine.disk-low` (ADR 0335). */
