@@ -22,6 +22,7 @@ import {
   gitCloneUrl,
   imageUserHome,
   machineSignInHome,
+  refuseCacheVolumes,
   SANDBOX_CAPABILITIES,
   shellSandboxProcesses,
   signInHomePath,
@@ -250,6 +251,8 @@ export class MicrosandboxSandboxProvider implements SandboxProvider {
       throw new Error("This machine does not run containers in sandboxes");
     if (opts.volumes?.length && !this.usage)
       throw new Error("This machine keeps no volumes for its sandboxes");
+    // Its volume mounts are writable (ADR 0334).
+    refuseCacheVolumes(opts.volumes, "Microsandbox");
     assertSandboxVolumes(opts.volumes);
     const signIns = this.signInMounts(opts);
     const image = await this.imageFor(opts);

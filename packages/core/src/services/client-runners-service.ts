@@ -250,6 +250,7 @@ export class ClientRunnersService {
       label: "This machine",
       workspaceRoot: runner.workspace_root,
       processes: runner.processes,
+      capabilities: capabilitiesSchema.parse(runner.capabilities),
       attributes: {
         "catamorphic.tenant.id": args.tenantId,
         "catamorphic.project.id": args.projectId,

@@ -263,6 +263,8 @@ export class ContainerSandboxProvider implements SandboxProvider {
   /** Widenings each sandbox has seen end, refused should they arrive late. */
   private readonly endedWidenings = new Map<string, string[]>();
   private readonly images = new Map<string, Promise<void>>();
+  /** Each cache's lock on this machine, by family (ADR 0334). */
+  private readonly cacheLocks = new Map<string, Promise<void>>();
   private hostPaths: Promise<HostPathOf> | undefined;
   private network: Promise<void> | undefined;
   /** Sandboxes an earlier process left half made, removed once (see {@link reclaim}). */
@@ -381,212 +383,265 @@ export class ContainerSandboxProvider implements SandboxProvider {
     const imageConfig = objectField(inspected, "Config");
     const user = typeof imageConfig.User === "string" ? imageConfig.User : "";
     const home = imageUserHome({ user, env: stringList(imageConfig.Env) });
+    // Each cache's generations are checked, mounted and retired one
+    // sandbox at a time on this machine (ADR 0334): a generation found here
+    // cannot be removed before the container holding it exists.
+    const releaseCaches = await this.lockCaches(
+      (opts.volumes ?? []).flatMap(
+        (volume) => parseCacheVolumeKey(volume.key)?.family ?? [],
+      ),
+    );
     // A cache generation this machine no longer has (pruned, or the
-    // machine was reset) is not mounted: an empty one would read as a
-    // cache. Only a fill, which mounts it writable, makes one.
+    // machine was reset) is not mounted, never created: an empty one would
+    // read as a cache. Only a fill, which mounts it writable, makes one.
+    // The handle reports it, so the control plane fills the machine again.
     const absent = new Set<string>();
-    for (const volume of opts.volumes ?? [])
-      if (
-        volume.readOnly &&
-        (
-          await this.docker.listVolumes({
-            label: [
-              `${VOLUME_LABEL}=${volume.key}`,
-              `${OWNER_LABEL}=${this.owner}`,
-            ],
-          })
-        ).length === 0
-      )
-        absent.add(volume.key);
-    const volumes = (opts.volumes ?? [])
-      .filter((volume) => !absent.has(volume.key))
-      .map((volume) => ({
-        ...volume,
-        target: volumeMountPath({ path: volume.path, home }),
-      }));
-    // `~/x` and `/root/x` are one place once the home is known.
-    assertSandboxVolumes(
-      volumes.map((volume) => ({ ...volume, path: volume.target })),
-    );
-    const hostPathOf = await this.hostPathOf();
-    if (!restricted) await this.ensureNetwork();
-    const id = `${this.config.namePrefix ?? "work"}-${randomUUID().replaceAll("-", "").slice(0, 12)}`;
-    // Nested containers under gVisor have no route but the proxy, so an
-    // open sandbox that runs containers gets one that admits anything.
-    const proxy: EgressPolicy | undefined =
-      opts.egress?.mode === "allowlist"
-        ? { allow: opts.egress.allow }
-        : opts.containers &&
-            this.config.runtime.kind === "runsc" &&
-            this.hostSockets
-          ? { any: true }
-          : undefined;
-    const persistent = volumes.filter((volume) => !volume.temporary);
-    for (const volume of persistent)
-      await this.docker.createVolume({
-        name: `${VOLUME_PREFIX}${volume.key}`,
-        labels: { [VOLUME_LABEL]: volume.key, [OWNER_LABEL]: this.owner },
-      });
-    this.usage.touch(persistent.map((volume) => volume.key));
-    const dataDirectory =
-      opts.labels?.purpose === "deployment-runtime" && opts.labels.projectId
-        ? await this.config.projectDataDirectory?.({
-            projectId: opts.labels.projectId,
-          })
-        : undefined;
-    const env: Record<string, string> = {
-      ...opts.envVars,
-      ...(dataDirectory ? { [APP_DATA_ENV]: APP_DATA_MOUNT } : {}),
-      ...(restricted ? PROXY_ENV : {}),
-    };
-    const mounts: unknown[] = [
-      // The workspace is a volume of the container's own, removed with it:
-      // gVisor's root filesystem does not survive a restart.
-      { Type: "volume", Target: this.workspaceRoot },
-      ...volumes.map((volume) => ({
-        Type: "volume",
-        Target: volume.target,
-        ...(volume.temporary
-          ? {}
-          : { Source: `${VOLUME_PREFIX}${volume.key}` }),
-        ...(volume.readOnly ? { ReadOnly: true } : {}),
-      })),
-      ...signIns.map((signIn) => ({
-        Type: "bind",
-        Source: hostPathOf(signIn.host),
-        Target: signIn.guest,
-      })),
-      ...(dataDirectory
-        ? [
-            {
-              Type: "bind",
-              Source: hostPathOf(dataDirectory),
-              Target: APP_DATA_MOUNT,
-            },
-          ]
-        : []),
-      ...(proxy
-        ? [
-            {
-              Type: "bind",
-              Source: hostPathOf(this.egressDirectory(id)),
-              Target: PROXY_MOUNT,
-              ReadOnly: true,
-            },
-          ]
-        : []),
-      // The sandbox network's own resolver may not answer inside gVisor;
-      // sandboxes ask the machine's name servers, as on Docker's bridge.
-      ...(restricted
-        ? []
-        : [
-            {
-              Type: "bind",
-              Source: hostPathOf(this.resolvConf()),
-              Target: "/etc/resolv.conf",
-              ReadOnly: true,
-            },
-          ]),
-    ];
-    const cpuMillis =
-      opts.resources?.cpuMillis ?? this.config.cpuMillis ?? DEFAULT_CPU_MILLIS;
-    const memoryMb =
-      opts.resources?.memoryMb ?? this.config.memoryMb ?? DEFAULT_MEMORY_MB;
-    const runtime = this.config.runtime;
-    const labels: Record<string, string> = {
-      ...opts.labels,
-      [SANDBOX_LABEL]: "1",
-      [OWNER_LABEL]: this.owner,
-      ...(proxy ? { [EGRESS_LABEL]: JSON.stringify(proxy) } : {}),
-      ...(opts.containers ? { [CONTAINERS_LABEL]: "1" } : {}),
-      ...(persistent.length > 0
-        ? { [VOLUMES_LABEL]: persistent.map((volume) => volume.key).join(",") }
-        : {}),
-    };
-    const record: SandboxRecord = {
-      ...(proxy ? { proxy } : {}),
-      containers: Boolean(opts.containers),
-      volumes: persistent.map((volume) => volume.key),
-      ready: false,
-    };
-    // Recorded before the container exists: a process that dies before it
-    // hands the sandbox over leaves a record the next one reclaims.
-    this.creations.begin(id);
     try {
-      if (proxy) await this.ensureProxy(id, proxy);
-      await this.docker.createContainer({
-        name: id,
-        body: {
-          Image: image,
-          // The sandbox stays up until stopped; tini reaps what commands
-          // leave behind and forwards the stop signal.
-          Entrypoint: ["sleep"],
-          Cmd: ["infinity"],
-          WorkingDir: this.workspaceRoot,
-          Env: Object.entries(env).map(([name, value]) => `${name}=${value}`),
-          Labels: labels,
-          HostConfig: {
-            ...(runtime.name ? { Runtime: runtime.name } : {}),
-            Init: true,
-            NanoCpus: cpuMillis * 1_000_000,
-            Memory: memoryMb * 1024 * 1024,
-            MemorySwap: memoryMb * 1024 * 1024,
-            PidsLimit: this.config.pidsLimit ?? DEFAULT_PIDS_LIMIT,
-            NetworkMode: restricted ? "none" : SANDBOX_NETWORK,
-            Mounts: mounts,
-            ...(opts.containers
-              ? runtime.kind === "runsc"
-                ? { CapAdd: ["ALL"] }
-                : privileged
-                  ? { Privileged: true }
-                  : {}
-              : {}),
+      for (const volume of opts.volumes ?? [])
+        if (
+          volume.readOnly &&
+          (
+            await this.docker.listVolumes({
+              label: [
+                `${VOLUME_LABEL}=${volume.key}`,
+                `${OWNER_LABEL}=${this.owner}`,
+              ],
+            })
+          ).length === 0
+        )
+          absent.add(volume.key);
+      const volumes = (opts.volumes ?? [])
+        .filter((volume) => !absent.has(volume.key))
+        .map((volume) => ({
+          ...volume,
+          target: volumeMountPath({ path: volume.path, home }),
+        }));
+      // `~/x` and `/root/x` are one place once the home is known.
+      assertSandboxVolumes(
+        volumes.map((volume) => ({ ...volume, path: volume.target })),
+      );
+      const hostPathOf = await this.hostPathOf();
+      if (!restricted) await this.ensureNetwork();
+      const id = `${this.config.namePrefix ?? "work"}-${randomUUID().replaceAll("-", "").slice(0, 12)}`;
+      // Nested containers under gVisor have no route but the proxy, so an
+      // open sandbox that runs containers gets one that admits anything.
+      const proxy: EgressPolicy | undefined =
+        opts.egress?.mode === "allowlist"
+          ? { allow: opts.egress.allow }
+          : opts.containers &&
+              this.config.runtime.kind === "runsc" &&
+              this.hostSockets
+            ? { any: true }
+            : undefined;
+      const persistent = volumes.filter((volume) => !volume.temporary);
+      for (const volume of persistent)
+        await this.docker.createVolume({
+          name: `${VOLUME_PREFIX}${volume.key}`,
+          labels: { [VOLUME_LABEL]: volume.key, [OWNER_LABEL]: this.owner },
+        });
+      this.usage.touch(persistent.map((volume) => volume.key));
+      const dataDirectory =
+        opts.labels?.purpose === "deployment-runtime" && opts.labels.projectId
+          ? await this.config.projectDataDirectory?.({
+              projectId: opts.labels.projectId,
+            })
+          : undefined;
+      const env: Record<string, string> = {
+        ...opts.envVars,
+        ...(dataDirectory ? { [APP_DATA_ENV]: APP_DATA_MOUNT } : {}),
+        ...(restricted ? PROXY_ENV : {}),
+      };
+      const mounts: unknown[] = [
+        // The workspace is a volume of the container's own, removed with it:
+        // gVisor's root filesystem does not survive a restart.
+        { Type: "volume", Target: this.workspaceRoot },
+        ...volumes.map((volume) => ({
+          Type: "volume",
+          Target: volume.target,
+          ...(volume.temporary
+            ? {}
+            : { Source: `${VOLUME_PREFIX}${volume.key}` }),
+          ...(volume.readOnly ? { ReadOnly: true } : {}),
+        })),
+        ...signIns.map((signIn) => ({
+          Type: "bind",
+          Source: hostPathOf(signIn.host),
+          Target: signIn.guest,
+        })),
+        ...(dataDirectory
+          ? [
+              {
+                Type: "bind",
+                Source: hostPathOf(dataDirectory),
+                Target: APP_DATA_MOUNT,
+              },
+            ]
+          : []),
+        ...(proxy
+          ? [
+              {
+                Type: "bind",
+                Source: hostPathOf(this.egressDirectory(id)),
+                Target: PROXY_MOUNT,
+                ReadOnly: true,
+              },
+            ]
+          : []),
+        // The sandbox network's own resolver may not answer inside gVisor;
+        // sandboxes ask the machine's name servers, as on Docker's bridge.
+        ...(restricted
+          ? []
+          : [
+              {
+                Type: "bind",
+                Source: hostPathOf(this.resolvConf()),
+                Target: "/etc/resolv.conf",
+                ReadOnly: true,
+              },
+            ]),
+      ];
+      const cpuMillis =
+        opts.resources?.cpuMillis ??
+        this.config.cpuMillis ??
+        DEFAULT_CPU_MILLIS;
+      const memoryMb =
+        opts.resources?.memoryMb ?? this.config.memoryMb ?? DEFAULT_MEMORY_MB;
+      const runtime = this.config.runtime;
+      const labels: Record<string, string> = {
+        ...opts.labels,
+        [SANDBOX_LABEL]: "1",
+        [OWNER_LABEL]: this.owner,
+        ...(proxy ? { [EGRESS_LABEL]: JSON.stringify(proxy) } : {}),
+        ...(opts.containers ? { [CONTAINERS_LABEL]: "1" } : {}),
+        ...(persistent.length > 0
+          ? {
+              [VOLUMES_LABEL]: persistent.map((volume) => volume.key).join(","),
+            }
+          : {}),
+      };
+      const record: SandboxRecord = {
+        ...(proxy ? { proxy } : {}),
+        containers: Boolean(opts.containers),
+        volumes: persistent.map((volume) => volume.key),
+        ready: false,
+      };
+      // Recorded before the container exists: a process that dies before it
+      // hands the sandbox over leaves a record the next one reclaims.
+      this.creations.begin(id);
+      try {
+        if (proxy) await this.ensureProxy(id, proxy);
+        await this.docker.createContainer({
+          name: id,
+          body: {
+            Image: image,
+            // The sandbox stays up until stopped; tini reaps what commands
+            // leave behind and forwards the stop signal.
+            Entrypoint: ["sleep"],
+            Cmd: ["infinity"],
+            WorkingDir: this.workspaceRoot,
+            Env: Object.entries(env).map(([name, value]) => `${name}=${value}`),
+            Labels: labels,
+            HostConfig: {
+              ...(runtime.name ? { Runtime: runtime.name } : {}),
+              Init: true,
+              NanoCpus: cpuMillis * 1_000_000,
+              Memory: memoryMb * 1024 * 1024,
+              MemorySwap: memoryMb * 1024 * 1024,
+              PidsLimit: this.config.pidsLimit ?? DEFAULT_PIDS_LIMIT,
+              NetworkMode: restricted ? "none" : SANDBOX_NETWORK,
+              Mounts: mounts,
+              ...(opts.containers
+                ? runtime.kind === "runsc"
+                  ? { CapAdd: ["ALL"] }
+                  : privileged
+                    ? { Privileged: true }
+                    : {}
+                : {}),
+            },
           },
-        },
-      });
-      this.records.set(id, record);
-      await this.docker.startContainer(id);
-      await this.prepare({ id, record, fresh: true });
-    } catch (error) {
-      // One that cannot be removed now stays recorded, for reclaiming.
-      await this.destroySandbox(id).catch(() => {});
-      throw error;
+        });
+        // Created: Docker now keeps its volumes, so others may retire.
+        releaseCaches();
+        this.records.set(id, record);
+        await this.docker.startContainer(id);
+        await this.prepare({ id, record, fresh: true });
+      } catch (error) {
+        releaseCaches();
+        // One that cannot be removed now stays recorded, for reclaiming.
+        await this.destroySandbox(id).catch(() => {});
+        throw error;
+      }
+      this.creations.end(id);
+      await this.retireCacheGenerations(volumes);
+      return {
+        id,
+        providerId: id,
+        sandboxType: "execution",
+        status: "started",
+        ...(absent.size > 0 ? { skippedVolumes: [...absent] } : {}),
+      };
+    } finally {
+      releaseCaches();
     }
-    this.creations.end(id);
-    await this.retireCacheGenerations(
-      volumes.filter((volume) => volume.readOnly).map((volume) => volume.key),
-    );
-    return { id, providerId: id, sandboxType: "execution", status: "started" };
   }
 
   /**
-   * A cache generation mounted read only is published (ADR 0334): remove
-   * the older generations of the same cache that no sandbox mounts. Never
-   * a newer one, which a fill may be writing or Work may have published
-   * since this sandbox's generation was chosen.
+   * Hold each named cache's lock (ADR 0334), in one order so two sandboxes
+   * never wait on each other. Answers the release, safe to call twice.
    */
-  private async retireCacheGenerations(keys: readonly string[]): Promise<void> {
+  private async lockCaches(families: readonly string[]): Promise<() => void> {
+    const releases: Array<() => void> = [];
+    for (const family of [...new Set(families)].sort()) {
+      const previous = this.cacheLocks.get(family) ?? Promise.resolve();
+      let release: () => void = () => {};
+      const held = new Promise<void>((resolve) => {
+        release = resolve;
+      });
+      const chained = previous.then(() => held);
+      this.cacheLocks.set(family, chained);
+      await previous;
+      releases.push(() => {
+        release();
+        if (this.cacheLocks.get(family) === chained)
+          this.cacheLocks.delete(family);
+      });
+    }
+    let released = false;
+    return () => {
+      if (released) return;
+      released = true;
+      for (const release of releases.reverse()) release();
+    };
+  }
+
+  /**
+   * Remove the generations of a cache the control plane named as neither
+   * published nor being filled (ADR 0334), under that cache's lock, once
+   * no sandbox mounts them: Docker keeps one a sandbox still mounts, even a
+   * stopped one. Never a key of another cache, nor one this sandbox mounts.
+   */
+  private async retireCacheGenerations(
+    volumes: ReadonlyArray<{ key: string; retire?: readonly string[] }>,
+  ): Promise<void> {
+    const mounted = new Set(volumes.map((volume) => volume.key));
     const removed: string[] = [];
-    for (const key of keys) {
-      const mounted = parseCacheVolumeKey(key);
-      if (!mounted) continue;
-      for (const volume of await this.docker.listVolumes({
-        label: [VOLUME_LABEL, `${OWNER_LABEL}=${this.owner}`],
-      })) {
-        const other = volumeKeyOf(volume);
-        const parsed = other ? parseCacheVolumeKey(other) : undefined;
-        if (
-          !other ||
-          !parsed ||
-          parsed.family !== mounted.family ||
-          parsed.generation >= mounted.generation
-        )
-          continue;
-        // Docker keeps one a sandbox still mounts, even a stopped one.
-        if (
-          await this.docker.removeVolume(String(volume.Name)).catch(() => false)
-        )
-          removed.push(other);
+    for (const volume of volumes) {
+      const family = parseCacheVolumeKey(volume.key)?.family;
+      if (!family || !volume.retire?.length) continue;
+      const release = await this.lockCaches([family]);
+      try {
+        for (const key of volume.retire) {
+          if (mounted.has(key) || parseCacheVolumeKey(key)?.family !== family)
+            continue;
+          if (
+            await this.docker
+              .removeVolume(`${VOLUME_PREFIX}${key}`)
+              .catch(() => false)
+          )
+            removed.push(key);
+        }
+      } finally {
+        release();
       }
     }
     this.usage.forget(removed);
@@ -1428,9 +1483,17 @@ export class ContainerSandboxProvider implements SandboxProvider {
         })
       )
         continue;
-      // A sandbox that still exists, even stopped, keeps its volumes.
-      if (await this.docker.removeVolume(String(volume.Name)))
-        removed.push(key);
+      // A sandbox that still exists, even stopped, keeps its volumes. A
+      // cache generation goes under its cache's lock, never between a
+      // sandbox finding it and mounting it (ADR 0334).
+      const family = parseCacheVolumeKey(key)?.family;
+      const release = await this.lockCaches(family ? [family] : []);
+      try {
+        if (await this.docker.removeVolume(String(volume.Name)))
+          removed.push(key);
+      } finally {
+        release();
+      }
     }
     this.usage.forget(removed);
     return removed;

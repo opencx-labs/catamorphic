@@ -59,6 +59,24 @@ export function assertSandboxVolumes(
 }
 
 /**
+ * Refuse the read-only cache generations (and a fill's writable one) of
+ * ADR 0334 on a backend that cannot keep them read only: it would mount
+ * them writable, so code a pull request controls could write a cache.
+ */
+export function refuseCacheVolumes(
+  volumes: readonly SandboxVolume[] | undefined,
+  backend: string,
+): void {
+  const cache = (volumes ?? []).find(
+    (volume) => volume.readOnly || CACHE_VOLUME_KEY_PATTERN.test(volume.key),
+  );
+  if (cache)
+    throw new Error(
+      `${backend} sandboxes cannot keep a cache read only (${cache.key}); place an Environment with caches on a machine that offers them`,
+    );
+}
+
+/**
  * The home of an image's user, where `~` volume paths go: the image's
  * `HOME`, root's for root (or no user), `/home/<name>` for a named user.
  * Empty for a numeric user without `HOME`, whose home nothing names.

@@ -555,9 +555,9 @@ describe.skipIf(!enabled)("container sandboxes (ADR 0204)", () => {
       );
       expect(after.result.trim().split("\n")).toEqual(["one", "package"]);
 
-      // A newer generation mounted read only retires the older ones no
-      // sandbox mounts; the reader still holds generation 1, so it stays
-      // until the reader is gone.
+      // A newer generation mounted read only retires the ones the control
+      // plane names once no sandbox mounts them; the reader still holds
+      // generation 1, so it stays until the reader is gone.
       const next = await created(sandboxProvider, {
         volumes: [{ key: generation(2), path: "/cache" }],
       });
@@ -568,7 +568,14 @@ describe.skipIf(!enabled)("container sandboxes (ADR 0204)", () => {
           .map((volume) => String(volume.Name))
           .filter((name) => name.includes(generation(1).slice(0, -3)));
       const second = await created(sandboxProvider, {
-        volumes: [{ key: generation(2), path: "/cache", readOnly: true }],
+        volumes: [
+          {
+            key: generation(2),
+            path: "/cache",
+            readOnly: true,
+            retire: [generation(1)],
+          },
+        ],
       });
       expect(
         (await sandboxProvider.executeCommand(second, "cat /cache/package"))
@@ -578,7 +585,14 @@ describe.skipIf(!enabled)("container sandboxes (ADR 0204)", () => {
       await sandboxProvider.destroySandbox(reader);
       await sandboxProvider.destroySandbox(second);
       const third = await created(sandboxProvider, {
-        volumes: [{ key: generation(2), path: "/cache", readOnly: true }],
+        volumes: [
+          {
+            key: generation(2),
+            path: "/cache",
+            readOnly: true,
+            retire: [generation(1)],
+          },
+        ],
       });
       expect(await volumeNames()).toEqual([`work-volume-${generation(2)}`]);
 
@@ -653,6 +667,14 @@ describe.skipIf(!enabled)("container sandboxes (ADR 0204)", () => {
         { timeout: 300 },
       );
       expect(nested.result).toMatch(/exit=[1-9]/);
+      // Setup's writable store: an overlay whose lower layer is the cache.
+      // Writes land in the upper layer, never in the cache.
+      const overlay = await sandboxProvider.executeCommand(
+        id,
+        "mkdir -p /workspace/.work-pnpm/up /workspace/.work-pnpm/work /root/store && mount -t overlay overlay -o lowerdir=/cache,upperdir=/workspace/.work-pnpm/up,workdir=/workspace/.work-pnpm/work /root/store && echo three > /root/store/package && echo added > /root/store/added && cat /root/store/package /root/store/added",
+      );
+      expect(overlay.exitCode, overlay.result).toBe(0);
+      expect(overlay.result).toBe("three\nadded\n");
       // Taking the mount away only uncovers the sandbox's own directory:
       // what it writes there never reaches the volume (checked below).
       await sandboxProvider.executeCommand(

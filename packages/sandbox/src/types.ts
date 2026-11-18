@@ -30,6 +30,12 @@ export interface SandboxHandle {
   providerId: string;
   sandboxType: SandboxType;
   status: SandboxStatus;
+  /**
+   * Read-only cache generations it was handed and did not mount, because
+   * the machine no longer has them (ADR 0334). The control plane forgets
+   * those copies and fills the machine again.
+   */
+  skippedVolumes?: string[];
 }
 
 /** Hard sandbox limits. A provider must reject limits it cannot enforce. */
@@ -116,6 +122,13 @@ export interface SandboxVolume {
    * remove that cache's older generations no sandbox mounts.
    */
   readOnly?: boolean;
+  /**
+   * Other generations of the same cache to remove once no sandbox mounts
+   * them (ADR 0334): those that are neither published nor being filled.
+   * The control plane names them; a provider removes only keys of the same
+   * cache, never one it mounts here.
+   */
+  retire?: readonly string[];
 }
 
 /** Volume names an Environment may declare (ADR 0208). */

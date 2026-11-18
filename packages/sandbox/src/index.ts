@@ -201,6 +201,7 @@ export {
 export {
   assertSandboxVolumes,
   imageUserHome,
+  refuseCacheVolumes,
   VolumeUsageLog,
   volumeMountPath,
 } from "./sandbox-volumes.js";
