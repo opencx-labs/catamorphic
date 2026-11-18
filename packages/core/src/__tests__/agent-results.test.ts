@@ -104,6 +104,41 @@ describe("result schemas", () => {
     ).toBe(true);
   });
 
+  it("holds every pattern of a schema to its own expression", () => {
+    const schema = {
+      type: "object",
+      properties: {
+        commit: { type: "string", pattern: "^[0-9a-f]{40}$" },
+        summary: { type: "string", pattern: "\\S" },
+        ids: {
+          type: "array",
+          items: {
+            type: "string",
+            pattern: "^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$",
+          },
+        },
+      },
+    } as const;
+    const refused = checkResultValue({
+      schema,
+      value: { commit: "main", summary: "   ", ids: ["ok", "a b"] },
+    });
+    expect(
+      "errors" in refused && refused.errors.map((error) => error.path),
+    ).toEqual(["/commit", "/summary", "/ids/1"]);
+    expect(
+      checkResultValue({
+        schema,
+        value: { commit: "a".repeat(40), summary: "Fine.", ids: ["f.1"] },
+      }),
+    ).toHaveProperty("value");
+    // Compiled by a core, alike.
+    const validators = new ResultValidators();
+    expect(
+      validators.check({ schema, value: { commit: "main" } }),
+    ).toHaveProperty("errors");
+  });
+
   it("tries a pattern on no string longer than the cap, so one quantifier stays fast", () => {
     // Unanchored, one quantifier: slow only on a long run of spaces.
     const schema = { type: "string", pattern: "\\s*x" } as const;

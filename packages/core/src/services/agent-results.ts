@@ -107,7 +107,9 @@ export const PATTERN_INPUT_MAX = 4_096;
 
 /**
  * Ajv's regular expressions for result schemas: JavaScript's own, never
- * tried on a string longer than {@link PATTERN_INPUT_MAX}.
+ * tried on a string longer than {@link PATTERN_INPUT_MAX}. Ajv keeps one
+ * per `toString()`, so each says its own pattern: without it every pattern
+ * of a schema was the first one Ajv compiled, its meta-schema's.
  */
 const cappedRegExp = Object.assign(
   (pattern: string, flags: string) => {
@@ -115,6 +117,7 @@ const cappedRegExp = Object.assign(
     return {
       test: (value: string) =>
         value.length <= PATTERN_INPUT_MAX && expression.test(value),
+      toString: () => expression.toString(),
     };
   },
   { code: "cappedRegExp" },
