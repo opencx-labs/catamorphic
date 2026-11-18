@@ -305,7 +305,12 @@ and the shim and the harness's configuration home are root's and only
 readable, so a link the repository's code swaps in the checkout leads a
 harness's file tools nowhere its user may not go. Every `git` in the
 image is replaced there by Work's, so Git named by any path runs in the
-command container, whoever owns the checkout.
+command container, whoever owns the checkout. The container runs with
+no-new-privileges, so a setuid program left in the checkout runs as the
+harness. Work's shim starts in its own folder, on Node where the image has
+it (else Bun with no configuration or `.env` files), and an ACP launcher
+starts in the harness's home, so a `bunfig.toml`, `.npmrc` or `.env` in
+the checkout loads into neither.
 
 ## Verify
 
