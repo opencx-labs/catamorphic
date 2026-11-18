@@ -332,6 +332,24 @@ describe("a separated sandbox's shape follows its chat's harness (ADR 0332)", ()
     ).toBeDefined();
   });
 
+  it("issues no model grant for a built-in chat's turns, which nothing in its sandbox would read", async () => {
+    agents.set("reviewer", builtin("reviewer"));
+    const chat = await sessions.create(identity, projectId, {});
+    const sent = await sessions.sendMessage(
+      identity,
+      projectId,
+      chat.id,
+      "hello",
+    );
+    expect(sent.turn.status).toBe("completed");
+    const grants = await db
+      .selectFrom("connection_capability_grants")
+      .select(["alias", "model_attempt_id"])
+      .where("agent_session_id", "=", chat.id)
+      .execute();
+    expect(grants.filter((grant) => grant.alias === "model")).toEqual([]);
+  }, 120_000);
+
   it("waits for a machine sized for the agent container only when the chat's harness runs in the sandbox", async () => {
     const waitOf = async (agentId: string) => {
       const chat = await sessions.create(identity, projectId, {

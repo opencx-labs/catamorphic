@@ -7762,6 +7762,9 @@ export class AgentSessionsService {
           gateway.servesHttp(binding.providerKind);
         if (separate && !api && !separate.connections.includes(binding.alias))
           return [];
+        // No agent container, no model grant: nothing in the sandbox
+        // would read it (ADR 0332).
+        if (separate && api && !separate.agentResources) return [];
         return git || api || http
           ? [{ alias: binding.alias, git, api, http }]
           : [];
