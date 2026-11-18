@@ -291,6 +291,14 @@ export function reservedOf(policy: EnvironmentAllocationPolicy): {
   };
 }
 
+/** Work the disk floor never holds back (ADR 0335): workflow runs, not fills. */
+export function diskExempt(args: {
+  workloadKind: WorkloadKind;
+  policy: EnvironmentAllocationPolicy;
+}): boolean {
+  return args.workloadKind === "workflow" && !args.policy.sandbox?.fill;
+}
+
 export class ExecutionAllocationsService {
   constructor(private readonly db: Kysely<DB>) {}
 
@@ -360,8 +368,14 @@ export class ExecutionAllocationsService {
         const usage = await workerUsage({ db: executor, nodeId: node.id });
         const resources =
           args.policy.binding.trust === "managed" ? reservedOf(policy) : {};
-        // A machine short of disk takes nothing new; the work waits (ADR 0335).
-        if (!diskFits({ usage, resources, ...(disk ? { disk } : {}) }))
+        // A machine short of disk takes no new workspace and no cache fill;
+        // the work waits (ADR 0335). A workflow run is not held back: it
+        // runs the program, not a checkout, and the workflows that free or
+        // replace a machine must still run.
+        if (
+          !diskExempt(args) &&
+          !diskFits({ usage, resources, ...(disk ? { disk } : {}) })
+        )
           throw new EnvironmentCapacityError(node.id, disk);
         if (
           node.capacity &&

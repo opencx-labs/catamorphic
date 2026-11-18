@@ -215,7 +215,10 @@ export async function registerWorkMachine(args: {
           }),
         { strict },
       );
+      // Workflow runs are not held back by the floor; admission still
+      // holds a cache fill back (ADR 0335).
       const roomy = ({ node }: (typeof ordered)[number]) =>
+        requirements?.workload === "workflow" ||
         diskFits({
           usage: node.usage,
           resources: { ...requirements?.resources },

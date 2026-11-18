@@ -146,6 +146,53 @@ describe.skipIf(!db)("machine disk (ADR 0335)", () => {
     });
   });
 
+  it("holds back chats and cache fills on a machine short of disk, never a workflow run (ADR 0335)", async () => {
+    if (!db) return;
+    const { identity, projectId, nodes, lease, admit, allocations } =
+      await machine();
+    await nodes.reportDisk({ lease, disk: report({ free: 1 * GIB }) });
+    await expect(admit()).rejects.toBeInstanceOf(EnvironmentCapacityError);
+    const binding = {
+      id: lease.id,
+      label: "Server",
+      trust: "managed" as const,
+      isolation: "process" as const,
+      workloads: ["workflow" as const],
+      agentTopologies: ["controller" as const],
+      capabilities: ["disk"],
+      resourceLimits: [],
+      resources: {},
+    };
+    const workflow = (sandbox?: {
+      fill: { name: string; path: string; key: string };
+    }) =>
+      allocations.create({
+        identity,
+        projectId,
+        environmentName: "automations",
+        workloadKind: "workflow",
+        rootWorkloadId: randomUUID(),
+        workerNodeId: lease.id,
+        policy: {
+          binding,
+          requirements: { workload: "workflow" },
+          ...(sandbox ? { sandbox } : {}),
+        },
+      });
+    // A provisioner or a poster still runs: it is what frees the machine.
+    await expect(workflow()).resolves.toMatchObject({ status: "active" });
+    // A cache fill writes gigabytes: it waits like a chat.
+    await expect(
+      workflow({
+        fill: {
+          name: "pnpm",
+          path: "~/.pnpm-store",
+          key: `cache-pnpm-${"0".repeat(24)}-g1`,
+        },
+      }),
+    ).rejects.toBeInstanceOf(EnvironmentCapacityError);
+  });
+
   it("does not hold a machine to a report too old to speak for it", async () => {
     const { nodes, lease, admit } = await machine();
     await nodes.reportDisk({

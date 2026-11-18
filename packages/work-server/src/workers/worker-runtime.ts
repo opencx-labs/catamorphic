@@ -223,7 +223,6 @@ export async function startWorkWorker(options: WorkWorkerOptions): Promise<{
   // what Work left there removed (ADR 0335).
   const diskCare = startDiskCare({
     provider,
-    dataDir: options.dataDir,
     ...(execution.diskFloorMb !== undefined
       ? { floorMb: execution.diskFloorMb }
       : {}),

@@ -20,18 +20,21 @@ output files, Environment images and build cache) grew without end.
 ## Decision
 
 **Machines report disk.** A machine measures, every 30 seconds, each
-filesystem Work writes to: its data folder (the provider's state, the
-local-process sandboxes, microsandbox's VMs) and, for the container
-backend, Docker's data root where this process sees it at the same path
-(not inside the worker's own container; there its data folder, on the
-machine's disk, stands for it). It reports the filesystem with the least
+filesystem its sandbox provider writes to: the provider's state (the
+container backend's, the local-process sandboxes, microsandbox's VMs)
+and, for the container backend, Docker's data root where this process
+sees it at the same path (not inside the worker's own container; there
+its state, on the machine's disk, stands for it). The rest of the
+machine's data folder (a server's database) is not measured for itself:
+Work's cleanup cannot free it. It reports the filesystem with the least
 room above its floor as `{ path, totalBytes, freeBytes, floorBytes,
 measuredAt }`: a remote worker in its connect offer and on its lease
 renewals, the server's own machine on its heartbeat. The floor is
 `WORK_DISK_FLOOR_MB` (MiB, the same for every filesystem; 0 keeps none),
 by default 10% of the filesystem and at most 10 GiB. A machine that
 reports offers the machine capability `disk`. Operators see the report
-with the machine.
+and since when it is short with every machine, the server's own included
+(`GET /_work/operator/machines`).
 
 **Admission respects disk.** On a machine with a report younger than 5
 minutes, a workspace is admitted only while free space less its
@@ -40,6 +43,9 @@ memory (ADR 0100): the Allocation records `reserved_storage_mb`, and the
 reservations on a machine never exceed its total less its floor, which is
 also the machine's `storageMb` ceiling. A workspace that does not fit
 waits for room as one that does not fit by memory does; it never fails.
+A cache fill waits too. A workflow run is not held back by the floor: it
+runs the program, not a checkout, and the workflows that free or replace
+a machine (provisioners, publishers) must still run on a full server.
 Machines on demand count a machine under its floor as having no room, so
 waiting work gets a new machine (ADR 0258). An Environment's `storageMb`
 needs a machine that enforces it (microsandbox, which sizes its VM's root

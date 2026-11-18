@@ -838,11 +838,12 @@ are rejected before use, and requested limits travel with sandbox creation.
 ### Disk
 
 Disk is a resource Work manages on each machine (ADR 0335). Every 30
-seconds a machine measures the filesystems Work writes to (its data
-directory and, for the container backend, Docker's data root where the
+seconds a machine measures the filesystems its sandboxes write to (the
+backend's state and, for the container backend, Docker's data root where the
 worker sees it at the same path; a worker in its own container measures its
-data directory, which is on the machine's disk) and reports the one with the
-least room above its floor, with its renewals. Set the floor and how long
+state, which is on the machine's disk; a server's database is not measured
+for itself) and reports the one with the least room above its floor, with its
+renewals. Set the floor and how long
 Work's own leftovers stay:
 
 ```dotenv
@@ -851,9 +852,10 @@ WORK_IMAGE_RETENTION_HOURS=24    # unused images and sandboxes' Docker data
 ```
 
 Without `WORK_DISK_FLOOR_MB` the floor is 10% of the filesystem, at most 10
-GiB. A machine whose free space is under its floor takes no new workspace:
-the work waits as it does for CPU or memory, and on demand Work makes another
-machine for it. An Environment's `storageMb` is reserved like memory, within
+GiB. A machine whose free space is under its floor takes no new workspace or
+cache fill: the work waits as it does for CPU or memory, and on demand Work
+makes another machine for it. Workflow runs are not held back, so a full
+server still runs the workflows that free or replace machines. An Environment's `storageMb` is reserved like memory, within
 the disk less its floor, and admitted only while free space less it stays
 above the floor; it is enforced only by microsandbox. A report older than 5
 minutes does not hold a machine back.

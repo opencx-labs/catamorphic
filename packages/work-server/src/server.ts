@@ -435,7 +435,6 @@ async function createWorkServerInner(
   // This machine measures its disk and removes what Work left (ADR 0335).
   const diskCare = startDiskCare({
     provider: sandboxProvider,
-    dataDir: data,
     ...(execution.diskFloorMb !== undefined
       ? { floorMb: execution.diskFloorMb }
       : {}),

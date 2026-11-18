@@ -22,8 +22,9 @@ export interface DiskCare {
 }
 
 /**
- * A machine's care of its disk (ADR 0335): it measures its data folder and
- * the filesystems its provider writes to every 30 seconds, keeping the one
+ * A machine's care of its disk (ADR 0335): it measures the filesystems its
+ * provider writes to every 30 seconds (not the rest of its data folder,
+ * such as a database, which Work's cleanup cannot free), keeping the one
  * with the least room above its floor for the machine to report, and
  * removes what its provider left that nothing used for `graceMs`: once at
  * start, then hourly, and at once (at most every 10 minutes) while under
@@ -31,8 +32,6 @@ export interface DiskCare {
  */
 export function startDiskCare(args: {
   provider: Pick<SandboxProvider, "disk">;
-  /** The machine's own data folder, always measured. */
-  dataDir: string;
   /** `WORK_DISK_FLOOR_MB`; the default floor when absent. */
   floorMb?: number;
   /** `WORK_IMAGE_RETENTION_HOURS`, in milliseconds. */
@@ -68,10 +67,7 @@ export function startDiskCare(args: {
       });
   };
   const once = async (): Promise<MachineDisk | undefined> => {
-    const paths = [
-      args.dataDir,
-      ...((await args.provider.disk?.paths().catch(() => [])) ?? []),
-    ];
+    const paths = (await args.provider.disk?.paths().catch(() => [])) ?? [];
     const measured = measure({
       paths,
       ...(args.floorMb !== undefined ? { floorMb: args.floorMb } : {}),

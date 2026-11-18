@@ -3,9 +3,9 @@ import { describe, expect, it } from "vitest";
 import { startDiskCare } from "./disk-care.js";
 
 /**
- * A machine's care of its disk (ADR 0335): it measures its data folder and
- * its provider's filesystems, and cleans once at start, hourly, and sooner
- * while under its floor.
+ * A machine's care of its disk (ADR 0335): it measures its provider's
+ * filesystems, and cleans once at start, hourly, and sooner while under its
+ * floor.
  */
 describe("disk care", () => {
   const report = (free: number): MachineDisk => ({
@@ -16,7 +16,7 @@ describe("disk care", () => {
     measuredAt: new Date().toISOString(),
   });
 
-  it("measures the data folder and the provider's paths, and cleans sooner while short of disk", async () => {
+  it("measures only the provider's paths, and cleans sooner while short of disk", async () => {
     let free = 50;
     const measured: string[][] = [];
     const cleaned: number[] = [];
@@ -31,7 +31,6 @@ describe("disk care", () => {
           },
         },
       },
-      dataDir: "/data",
       floorMb: 0,
       graceMs: 1234,
       measureEveryMs: 60_000,
@@ -45,7 +44,9 @@ describe("disk care", () => {
     });
     try {
       await care.measure();
-      expect(measured[0]).toEqual(["/data", "/var/lib/docker"]);
+      // Not the machine's whole data folder (a database there is not
+      // Work's to free).
+      expect(measured[0]).toEqual(["/var/lib/docker"]);
       expect(care.latest()?.freeBytes).toBe(50);
       // Once at start, with the grace it was given.
       await new Promise((resolve) => setTimeout(resolve, 10));
@@ -73,7 +74,6 @@ describe("disk care", () => {
   it("reports nothing for a machine whose filesystems cannot be measured", async () => {
     const care = startDiskCare({
       provider: {},
-      dataDir: "/data",
       graceMs: 0,
       measureDisk: () => undefined,
     });
