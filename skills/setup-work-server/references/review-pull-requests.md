@@ -36,11 +36,16 @@ What runs where:
   project) runs each pull request's chat in the `review` Environment: its own
   sandbox from the project's image, checked out at the pull request's head.
   It holds no credential; Git and the agent's tools go through the gateway
-  with the session's grant. The sandbox is two containers (ADR 0332): the
-  reviewer's, holding its grants, model and Work tool endpoints and state,
-  and a command container sharing only the checkout, where the pull
-  request's install scripts, tests and Docker services run. That code reaches
-  Git reads through the gateway and nothing else of the chat's. The chat's
+  with the session's grant. The pack's reviewer, the built-in agent, runs on
+  the control plane, so its model key and Work's tools never reach the
+  machine; its tools run in the sandbox's command container (ADR 0332) with
+  the pull request's install scripts, tests and Docker services, which reach
+  Git reads through the gateway and nothing else of the chat's. That
+  container is the whole sandbox and reserves nothing beside it. A reviewer
+  whose harness runs in the sandbox (a project's Claude Code agent) gets a
+  second container of its own, holding its grants, model and Work tool
+  endpoints, sharing only the checkout; the OpenCode variant runs beside the
+  pull request's code, unprotected. The chat's
   `github` binding only reads (no `git:write`) and the reviewer's sandboxing
   is `contained`: nothing on a review machine can write to GitHub, and the
   reviewer's report is only something the poster validates.

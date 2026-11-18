@@ -32,13 +32,14 @@ every non-draft pull request gets a project chat keyed
 - **Closed or merged:** `close({ key })` ends the chat: its workspace,
   containers, session branch, and grants are released; the transcript stays.
 
-The review chat never writes to GitHub (ADR 0259). The pull request's own
-code (its install scripts, tests and services) runs in a command container
-apart from the reviewer (ADR 0332): it shares the checkout and nothing else,
-so it cannot read the reviewer's grants, call its model or Work's tools as
-the chat, submit a forged `review`, or change the files the reviewer trusts.
-It reaches Git reads through the gateway, which `commands.connections`
-lists, and nothing else of the chat's. The chat's `github` binding only
+The review chat never writes to GitHub (ADR 0259). The reviewer, the
+built-in agent, runs on the control plane; its tools and the pull request's
+own code (its install scripts, tests and services) run in a command
+container (ADR 0332), which holds none of the reviewer's grants, model or
+Work tools, so that code cannot call them as the chat, submit a forged
+`review`, or change the files the reviewer trusts. That code reaches Git
+reads through the gateway, which `commands.connections` lists, and nothing
+else of the chat's. The chat's `github` binding only
 reads all the same (no `git:write`: a push would run the base repository's
 `on: push` workflows with their secrets) and its sandboxing is `contained`.
 Whatever the reviewer submits is a report the poster validates, never a
@@ -74,17 +75,20 @@ Docker Compose inside its own sandbox. The agent's sandbox reaches only the
 control plane's gateway (`egress: gateway`): GitHub and the other
 bindings, and its model.
 
-`commands` runs everything the reviewer runs (its shell, setup, `exec`,
+`commands` runs everything the reviewer runs (its tools, setup, `exec`,
 terminals, the change's tests and Compose services) in a command container
-of its own beside the reviewer's, sharing only the checkout (ADR 0332).
-Docker runs there, not beside the reviewer. Its one connection is `git`, a
+that reaches only the connections it lists (ADR 0332). For the built-in
+reviewer that container is the whole sandbox; a reviewer whose harness
+runs in the sandbox (Claude Code) gets a container of its own beside it,
+sharing only the checkout. Docker runs in the command container. Its one connection is `git`, a
 binding of its own with `git:read` alone, which reaches only the project's
 linked repository (a binding's default), so its commands (and `exec` from
 workflows) can `git fetch`; the reviewer's `github` binding keeps the
 GitHub reads and gives the commands nothing. Add another binding only when
 the change's tests need it, and never a write one. `requirements.resources` limits the command container;
-the reviewer's own container takes `commands.agentResources` (1 CPU and
-2 GiB by default) on top, and a machine reserves both. Only container machines (the Work server's
+a reviewer whose harness runs in the sandbox takes `commands.agentResources`
+(1 CPU and 2 GiB by default) on top for its own, and a machine reserves
+both. The built-in reviewer reserves nothing more. Only container machines (the Work server's
 `WORK_SANDBOX=container`, gVisor or runc without privileged containers)
 take this Environment.
 
@@ -201,8 +205,10 @@ run apart from the change's code (ADR 0332): Work refuses it in an
 Environment that runs commands apart, and its install removes `commands`
 from the `review` Environment. There the pull request's code runs beside
 the reviewer, plugins it plants included, and can reach the model key and
-the tool the reviewer submits its review with. Where that matters, keep the
-Claude Code reviewer of this pack. The rest of the pack applies unchanged:
+the tool the reviewer submits its review with. Where that matters, keep this
+pack's own reviewer, the built-in agent: it runs on the control plane, so
+the model key and Work's tools never enter the machine, and its tools run
+in the command container. The rest of the pack applies unchanged:
 the `review` Environment's read-only pnpm cache and `fillReviewCache`, and
 `restartStalledReviews` (the OpenCode reviewer sets `stall` too).
 
