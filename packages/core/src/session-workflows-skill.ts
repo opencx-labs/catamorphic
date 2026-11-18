@@ -571,8 +571,11 @@ sandboxes need it.
   answer it, or turnId: <the settled turn's id> to read what that turn
   submitted, whatever came after it. session.result-recorded fires
   the moment one is recorded, mid-turn, with the result in input.payload.detail
-  (name, value, turnId, input, commit); select { names: ["review"] }. Compute
-  final checks (votes, coverage) in code over results, not in an agent.
+  (name, value, turnId, input, commit); select { names: ["review"] }. The
+  pull-request-reviews pack posts each verified finding that way, in the same
+  per-key queue as the turn's review. A turn records at most 1,000 results.
+  Compute final checks (votes, coverage) in code over results, not in an
+  agent.
 - usage is an authorized read of a chat's model calls through the gateway:
   tokens per model, the summed cost providers reported (costUsd, US dollars,
   null when none did), unpricedCalls (so the cost is a lower bound when

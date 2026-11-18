@@ -19,6 +19,7 @@ import { Kysely, PGliteDialect, sql, WithSchemaPlugin } from "kysely";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import type { Identity } from "../identity.js";
 import { validateAgentDefinition } from "../services/agent-definitions-service.js";
+import { RESULT_LIMITS } from "../services/agent-results.js";
 import { AgentSessionsService } from "../services/agent-sessions-service.js";
 import type { RegisteredCodingAgent } from "../services/coding-agent-registry.js";
 import { ExecutionAllocationsService } from "../services/execution-allocations-service.js";
@@ -32,6 +33,7 @@ import { readFullSnapshot } from "../services/sessions/session-reads.js";
 import {
   recordResult,
   SessionResultAttemptError,
+  SessionResultLimitError,
 } from "../services/sessions/session-results.js";
 import { testEnvironmentProvider } from "./test-environment.js";
 
@@ -731,6 +733,59 @@ describe("typed results", () => {
       .set({ status: "completed" })
       .where("id", "=", settled?.id ?? "")
       .execute();
+  });
+
+  it("bounds the results of a turn, not of the chat", async () => {
+    const project = await projects.create(identity, { name: "Bounded" });
+    const session = await sessions.create(identity, project.id);
+    await turn(project.id, session.id, "Hello.");
+    const state = await turn(project.id, session.id, "Again.");
+    const [first, second] = orderedTurns(state);
+    const running = (turnId: string, status: string) =>
+      db
+        .updateTable("agent_turns")
+        .set({ status })
+        .where("id", "=", turnId)
+        .execute();
+    const submit = (settled: typeof first) =>
+      db.transaction().execute((trx) =>
+        recordResult(trx, sessions.log, {
+          sessionId: session.id,
+          turnId: settled?.id ?? "",
+          attemptId: settled?.activeAttemptId ?? "",
+          name: "review",
+          value: { verdict: "COMMENT", score: 3 },
+        }),
+      );
+    await running(first?.id ?? "", "running");
+    const recorded = await submit(first);
+    // The first turn fills its share: copies of its result, written as
+    // history is, without an event each.
+    await db.transaction().execute(async (trx) => {
+      await sql`select set_config('catamorphic.suppress_session_events', 'true', true)`.execute(
+        trx,
+      );
+      await sql`
+        insert into ${sql.id(schema, "agent_items")} (id, session_id, turn_id, attempt_id, position, kind, status, payload)
+        select gen_random_uuid(), item.session_id, item.turn_id, item.attempt_id,
+               item.position + n, item.kind, item.status, item.payload
+          from ${sql.id(schema, "agent_items")} item, generate_series(1, ${RESULT_LIMITS.perTurn - 1}) n
+         where item.id = ${recorded.id}`.execute(trx);
+    });
+    await expect(submit(first)).rejects.toThrow(SessionResultLimitError);
+    await running(first?.id ?? "", "completed");
+    // The chat holds more than one turn's share; its next turn still records.
+    await running(second?.id ?? "", "running");
+    const next = await submit(second);
+    expect(next.turnId).toBe(second?.id);
+    await running(second?.id ?? "", "completed");
+    const count = await db
+      .selectFrom("agent_items")
+      .select((eb) => eb.fn.countAll<string>().as("count"))
+      .where("session_id", "=", session.id)
+      .where("kind", "=", "result")
+      .executeTakeFirstOrThrow();
+    expect(Number(count.count)).toBe(RESULT_LIMITS.perTurn + 1);
   });
 
   it("reads what one turn submitted, whatever came after it", async () => {

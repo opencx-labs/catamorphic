@@ -641,7 +641,7 @@ works in its parent's workspace unless the spawn asks for \`"own"\` (ADR
 Schema (2020-12) by a lowercase name, at most 16 and 64 KiB in all. The agent
 gets \`submit_result { name, value }\`: only a value its schema accepts is
 recorded, a rejected one comes back with each failing field to fix in the
-same turn. Workflows read them with \`results\` or trigger on
+same turn, and a turn records at most 1,000. Workflows read them with \`results\` or trigger on
 \`session.result-recorded\` (session-workflows), and a parent reads its
 subagents' in their messages and in list and wait outputs. Prefer a result to
 asking an agent to end its reply with a block of JSON.

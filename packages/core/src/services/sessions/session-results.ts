@@ -69,7 +69,7 @@ export class SessionResultAttemptError extends Error {
 export class SessionResultLimitError extends Error {
   constructor() {
     super(
-      `This chat has recorded ${RESULT_LIMITS.perSession} results, the most one chat keeps`,
+      `This turn has recorded ${RESULT_LIMITS.perTurn} results, the most one turn keeps`,
     );
     this.name = "SessionResultLimitError";
   }
@@ -270,10 +270,11 @@ export async function recordResult(
   const count = await trx
     .selectFrom("agent_items")
     .select((eb) => eb.fn.countAll<string>().as("count"))
+    .where("turn_id", "=", input.turnId)
     .where("session_id", "=", input.sessionId)
     .where("kind", "=", "result")
     .executeTakeFirstOrThrow();
-  if (Number(count.count) >= RESULT_LIMITS.perSession)
+  if (Number(count.count) >= RESULT_LIMITS.perTurn)
     throw new SessionResultLimitError();
   const turn = await trx
     .selectFrom("agent_turns")

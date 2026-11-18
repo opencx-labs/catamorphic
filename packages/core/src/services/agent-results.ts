@@ -25,8 +25,12 @@ export const RESULT_LIMITS = {
   schemaBytes: 64 * 1024,
   /** One submitted value, as JSON. */
   valueBytes: 256 * 1024,
-  /** Results one chat may record. */
-  perSession: 1_000,
+  /**
+   * Results one turn may record. Per turn, not per chat (ADR 0336): a review
+   * chat lives as long as its pull request, and its results grow with its
+   * turns like the rest of its log.
+   */
+  perTurn: 1_000,
   /** Field errors one rejected submission reports. */
   errors: 20,
 } as const;
