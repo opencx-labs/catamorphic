@@ -183,9 +183,10 @@ import {
 import { DevSandboxService } from "./dev-sandbox-service.js";
 import type { DocumentsService } from "./documents-service.js";
 import { checkpointDraft, draftStoreFolder } from "./draft-workspace.js";
-import type {
-  ExecutionAllocation,
-  ExecutionAllocationsService,
+import {
+  type ExecutionAllocation,
+  type ExecutionAllocationsService,
+  parseAllocationPolicy,
 } from "./execution-allocations-service.js";
 import {
   type AdmittedSetup,
@@ -264,6 +265,7 @@ import {
   type SessionWorkspaceHandle,
   SessionWorkspaceUnavailableError,
   WORKSPACE_NOT_RUNNING_MESSAGE,
+  WORKSPACE_USE_INTERVAL_SECONDS,
 } from "./session-workspace.js";
 import {
   basePin,
@@ -1349,6 +1351,11 @@ const ASK_USER_HOST_TOOL: ExtraTool = {
  * Why a harness that runs in its sandbox cannot start in a separated
  * sandbox made without an agent container (ADR 0332).
  */
+/** A person used a workspace this recently: they are using it now. */
+const IN_USE_SECONDS = 2 * WORKSPACE_USE_INTERVAL_SECONDS;
+/** How long a turn waits before it looks again for a reshaped workspace. */
+const RESHAPE_RETRY_SECONDS = 5;
+
 export const SEPARATED_WITHOUT_AGENT_SIDE =
   'This workspace was made for an agent that runs outside its sandbox (such as the built-in one), so its commands run apart with no container beside them for an agent that runs in the sandbox. Such an agent works in a workspace of its own: a subagent starts with workspace: "own", and a chat whose agent changed gets a new workspace at its next turn.';
 
@@ -5324,18 +5331,17 @@ export class AgentSessionsService {
       }
       if (
         allocation?.status === "active" &&
-        ((await this.releaseEndedConnection({
-          identity,
-          session,
-          allocation,
-        })) ||
-          (await this.releaseMisshapenWorkspace({
-            identity,
-            session,
-            allocation,
-          })))
+        (await this.releaseEndedConnection({ identity, session, allocation }))
       )
         continue;
+      // A workspace whose shape no longer fits the agents working in it
+      // (ADR 0332) is given back the way an idle one is, as soon as nothing
+      // uses it; the chat's turn waits for that, then is admitted again.
+      if (allocation?.status === "active" && due) {
+        const shape = await this.giveBackForShape({ session, allocation });
+        if (shape === "released") continue;
+        if (shape === "waiting") return;
+      }
       const ran = await this.engine.runNext({
         sessionId,
         ...(this.workerNode ? { localNode: this.workerNode } : {}),
@@ -5941,9 +5947,17 @@ export class AgentSessionsService {
       session,
       agent,
     );
-    // A harness in the sandbox on a workspace with no agent container was
-    // refused above, before anything reached it (ADR 0332).
+    // A harness in the sandbox never starts on a workspace with no agent
+    // container (ADR 0332). Checked here, at attempt start, and nowhere
+    // else, so finishing a turn, opening the workspace or delivering its
+    // secrets never stops on it; the chat's turn waits for the workspace to
+    // be given back and admitted again before it gets here.
     const separated = runtime.allocation?.policy.sandbox?.separateCommands;
+    const refused = separatedHarnessRefusal({
+      placement: agent.harness.placement,
+      separateCommands: separated,
+    });
+    if (refused) throw new Error(refused);
     const notes: string[] = [];
     const ownerAuthored = await this.ownerAuthoredTurn({
       projectId,
@@ -11452,87 +11466,6 @@ export class AgentSessionsService {
    * the runner is connected again under a new lease (ADR 0192). True when
    * this host released it.
    */
-  /**
-   * A chat whose agent now runs its harness in the sandbox, on a workspace
-   * made for one that runs outside it (ADR 0332): its commands run apart
-   * with no agent container. Between turns its workspace is given back, so
-   * the next turn is admitted again with one. A shared subsession's
-   * workspace is its workspace session's, which this never gives back.
-   */
-  private async releaseMisshapenWorkspace(input: {
-    identity: Identity;
-    session: SessionRow;
-    allocation: ExecutionAllocation;
-  }): Promise<boolean> {
-    const { allocation, session } = input;
-    if (session.workspace_session_id) return false;
-    const separate = allocation.policy.sandbox?.separateCommands;
-    if (!separate || separate.agentResources) return false;
-    const agent = await this.resolveAgent(
-      session.agent_id,
-      session.project_id,
-    ).catch(() => undefined);
-    if (
-      !agent ||
-      !separatedHarnessRefusal({
-        placement: agent.harness.placement,
-        separateCommands: separate,
-      })
-    )
-      return false;
-    // Personal logins and files leave with the workspace (ADR 0184).
-    if (session.sandbox_id)
-      await this.withdrawFromSessionSandbox({
-        identity: input.identity,
-        projectId: session.project_id,
-        sessionId: session.id,
-      });
-    const released = await this.db.transaction().execute(async (trx) => {
-      const current = await trx
-        .selectFrom("agent_sessions")
-        .select(["status", "allocation_id"])
-        .where("id", "=", session.id)
-        .forUpdate()
-        .executeTakeFirst();
-      if (
-        current?.status !== "active" ||
-        current.allocation_id !== allocation.id
-      )
-        return false;
-      const running = await trx
-        .selectFrom("agent_turns")
-        .select("id")
-        .where("session_id", "=", session.id)
-        .where("status", "in", [...ACTIVE_TURN_STATUSES])
-        .executeTakeFirst();
-      if (running) return false;
-      const done = await this.executionAllocations.release({
-        identity: input.identity,
-        allocationId: allocation.id,
-        reason: "replaced",
-        transaction: trx,
-      });
-      if (!done) return false;
-      await trx
-        .updateTable("agent_sessions")
-        .set({ sandbox_id: null })
-        .where("id", "=", session.id)
-        .execute();
-      await recordWorkspaceGone({
-        db: trx,
-        sessionId: session.id,
-        change: "released",
-        reason: "replaced",
-      });
-      return true;
-    });
-    if (released)
-      await this.connectionGrants
-        ?.revokeAllocation({ allocationId: allocation.id })
-        .catch(() => {});
-    return released;
-  }
-
   private async releaseEndedConnection(input: {
     identity: Identity;
     session: SessionRow;
@@ -12269,6 +12202,7 @@ export class AgentSessionsService {
         "allocation.id as allocation_id",
         "allocation.created_at as allocated_at",
         "allocation.sandbox_provider_id",
+        "allocation.policy_snapshot",
       ])
       // Every session working in the workspace keeps it (ADR 0322).
       .select((eb) =>
@@ -12324,12 +12258,29 @@ export class AgentSessionsService {
               .select("agent_turns.id")
               .whereRef("sharer.allocation_id", "=", "allocation.id")
               .where("agent_turns.status", "in", [
-                "queued",
                 "held",
                 ...ACTIVE_TURN_STATUSES,
               ]),
           ),
         ),
+      )
+      // A queued turn keeps an idle workspace; one that waits for its
+      // workspace to be reshaped does not (ADR 0332).
+      .select((eb) =>
+        eb
+          .exists(
+            eb
+              .selectFrom("agent_turns")
+              .innerJoin(
+                "agent_sessions as sharer",
+                "sharer.id",
+                "agent_turns.session_id",
+              )
+              .select("agent_turns.id")
+              .whereRef("sharer.allocation_id", "=", "allocation.id")
+              .where("agent_turns.status", "=", "queued"),
+          )
+          .as("queued"),
       )
       .orderBy("allocation.created_at")
       .limit(input.limit ?? 100)
@@ -12345,6 +12296,28 @@ export class AgentSessionsService {
       };
       const environment = row.environment_name;
       if (!environment) continue;
+      const allocation = parseAllocationPolicy(row.policy_snapshot);
+      if (
+        await this.workspaceMisshapen({
+          projectId: row.project_id,
+          sessionId: row.id,
+          agentId: row.agent_id,
+          separateCommands: allocation?.sandbox?.separateCommands,
+        })
+      ) {
+        // No idle timer: it is given back as soon as nothing uses it.
+        if (
+          await this.giveBackWorkspace({
+            identity,
+            row,
+            idleSince: now,
+            reshape: true,
+          })
+        )
+          released.push(row.id);
+        continue;
+      }
+      if (row.queued) continue;
       const policyKey = `${row.project_id}:${environment}`;
       const minutes =
         limits.get(policyKey) ??
@@ -12369,45 +12342,191 @@ export class AgentSessionsService {
         lastUsedAt,
       );
       if (now.getTime() - idleSince < minutes * 60_000) continue;
-      // Locks the chat and is refused while it has work; turns then wait
-      // until the workspace is saved and released (ADR 0192).
-      const claim = await claimAllocationMaintenance({
-        db: this.db,
-        allocationId: row.allocation_id,
-        status: "active",
-        sessionId: row.id,
-      });
-      if (!claim) continue;
-      try {
-        if (
-          await withAllocationMaintenance({
-            db: this.db,
-            claim,
-            work: (held) =>
-              this.releaseIdleWorkspace({
-                claim,
-                held,
-                identity,
-                projectId: row.project_id,
-                sessionId: row.id,
-                agentId: row.agent_id,
-                allocationId: row.allocation_id,
-                sandboxProviderId: row.sandbox_provider_id,
-                owner: placementOwner(row.external_user_id),
-                idleSince: new Date(now.getTime() - minutes * 60_000),
-              }),
-          })
-        )
-          released.push(row.id);
-      } catch (error) {
-        // Nothing is released when the workspace could not be saved first.
-        console.warn(
-          `[catamorphic] Idle workspace of session ${row.id} kept`,
-          error,
-        );
-      }
+      if (
+        await this.giveBackWorkspace({
+          identity,
+          row,
+          idleSince: new Date(now.getTime() - minutes * 60_000),
+        })
+      )
+        released.push(row.id);
     }
     return released.length;
+  }
+
+  /**
+   * Give one chat's workspace back under this host's maintenance claim
+   * (ADR 0192), saving it first: idle, or with `reshape` because its shape
+   * no longer fits the agents working in it (ADR 0332). Refused while
+   * anything uses it.
+   */
+  private async giveBackWorkspace(input: {
+    identity: Identity;
+    row: {
+      id: string;
+      project_id: string;
+      agent_id: string | null;
+      allocation_id: string;
+      sandbox_provider_id: string | null;
+      external_user_id: string;
+    };
+    idleSince: Date;
+    reshape?: boolean;
+  }): Promise<boolean> {
+    const { row } = input;
+    // Locks the chat and is refused while it has work; turns then wait
+    // until the workspace is saved and released (ADR 0192).
+    const claim = await claimAllocationMaintenance({
+      db: this.db,
+      allocationId: row.allocation_id,
+      status: "active",
+      sessionId: row.id,
+      ...(input.reshape ? { queuedTurns: true } : {}),
+    });
+    if (!claim) return false;
+    try {
+      return await withAllocationMaintenance({
+        db: this.db,
+        claim,
+        work: (held) =>
+          this.releaseIdleWorkspace({
+            claim,
+            held,
+            identity: input.identity,
+            projectId: row.project_id,
+            sessionId: row.id,
+            agentId: row.agent_id,
+            allocationId: row.allocation_id,
+            sandboxProviderId: row.sandbox_provider_id,
+            owner: placementOwner(row.external_user_id),
+            idleSince: input.idleSince,
+            ...(input.reshape ? { reshape: true } : {}),
+          }),
+      });
+    } catch (error) {
+      // Nothing is released when the workspace could not be saved first.
+      console.warn(`[catamorphic] Workspace of session ${row.id} kept`, error);
+      return false;
+    }
+  }
+
+  /**
+   * Whether a chat's workspace has no agent container though an agent
+   * working in it (the chat's own, or a shared subsession's) runs its
+   * harness in the sandbox (ADR 0332).
+   */
+  private async workspaceMisshapen(input: {
+    projectId: string;
+    sessionId: string;
+    agentId: string | null;
+    separateCommands: { agentResources?: unknown } | undefined;
+  }): Promise<boolean> {
+    if (!input.separateCommands || input.separateCommands.agentResources)
+      return false;
+    return this.harnessInSandboxFor(input);
+  }
+
+  /**
+   * Whether any agent working in a chat's workspace, its own or a shared
+   * subsession's, runs its harness in the sandbox (ADR 0332).
+   */
+  private async harnessInSandboxFor(input: {
+    projectId: string;
+    sessionId: string;
+    agentId: string | null;
+  }): Promise<boolean> {
+    const own = await this.resolveAgent(input.agentId, input.projectId).catch(
+      () => undefined,
+    );
+    return (
+      own?.harness.placement === "sandbox" ||
+      (await this.sharerHarnessInSandbox(input))
+    );
+  }
+
+  /** Whether a shared subsession of the chat runs its harness in the sandbox. */
+  private async sharerHarnessInSandbox(input: {
+    projectId: string;
+    sessionId: string;
+  }): Promise<boolean> {
+    const sharers = await this.db
+      .selectFrom("agent_sessions")
+      .select("agent_id")
+      .where("workspace_session_id", "=", input.sessionId)
+      .where("status", "=", "active")
+      .execute();
+    for (const sharer of sharers) {
+      const agent = await this.resolveAgent(
+        sharer.agent_id,
+        input.projectId,
+      ).catch(() => undefined);
+      if (agent?.harness.placement === "sandbox") return true;
+    }
+    return false;
+  }
+
+  /**
+   * A chat with a turn due whose workspace no longer fits the agents
+   * working in it (ADR 0332): given back now through the same release an
+   * idle workspace takes, or, while something still uses it, the turn
+   * waits a moment and looks again.
+   */
+  private async giveBackForShape(input: {
+    session: SessionRow;
+    allocation: ExecutionAllocation;
+  }): Promise<"fits" | "released" | "waiting"> {
+    const { allocation } = input;
+    // A shared subsession's workspace is its workspace session's.
+    if (input.session.workspace_session_id) return "fits";
+    const owner = input.session;
+    if (
+      !(await this.workspaceMisshapen({
+        projectId: owner.project_id,
+        sessionId: owner.id,
+        agentId: owner.agent_id,
+        separateCommands: allocation.policy.sandbox?.separateCommands,
+      }))
+    )
+      return "fits";
+    const placed = await this.db
+      .selectFrom("execution_allocations")
+      .innerJoin("projects", "projects.id", "execution_allocations.project_id")
+      .select([
+        "projects.tenant_id",
+        "execution_allocations.sandbox_provider_id",
+      ])
+      .where("execution_allocations.id", "=", allocation.id)
+      .executeTakeFirstOrThrow();
+    if (
+      await this.giveBackWorkspace({
+        identity: {
+          tenantId: placed.tenant_id,
+          externalUserId: PROJECT_PRINCIPAL_ID,
+          scope: [],
+        },
+        row: {
+          id: owner.id,
+          project_id: owner.project_id,
+          agent_id: owner.agent_id,
+          allocation_id: allocation.id,
+          sandbox_provider_id: placed.sandbox_provider_id,
+          external_user_id: owner.external_user_id,
+        },
+        idleSince: new Date(),
+        reshape: true,
+      })
+    )
+      return "released";
+    // Something still uses it: this chat's turn looks again in a moment.
+    await this.db
+      .updateTable("agent_turns")
+      .set({
+        available_at: sql<Date>`now() + make_interval(secs => ${RESHAPE_RETRY_SECONDS})`,
+      })
+      .where("session_id", "=", input.session.id)
+      .where("status", "=", "queued")
+      .execute();
+    return "waiting";
   }
 
   private async releaseIdleWorkspace(input: {
@@ -12425,6 +12544,12 @@ export class AgentSessionsService {
     owner?: string | null;
     /** Use since this keeps the workspace. */
     idleSince: Date;
+    /**
+     * Its shape no longer fits the agents working in it (ADR 0332): given
+     * back with the chat's queued turns waiting for it, not after the idle
+     * timer, but never while a turn runs or a person uses it now.
+     */
+    reshape?: boolean;
   }): Promise<boolean> {
     const { identity, projectId, sessionId } = input;
     const allocation = await this.executionAllocations.get({
@@ -12448,7 +12573,13 @@ export class AgentSessionsService {
           eb("user.workspace_session_id", "=", sessionId),
         ]),
       )
-      .where("session_workspace_use.used_at", ">", input.idleSince)
+      .where(
+        "session_workspace_use.used_at",
+        ">",
+        input.reshape
+          ? new Date(Date.now() - IN_USE_SECONDS * 1000)
+          : input.idleSince,
+      )
       .executeTakeFirst();
     if (used) return false;
     const agent = await this.resolveAgent(input.agentId, projectId).catch(
@@ -12494,7 +12625,9 @@ export class AgentSessionsService {
         tenantId: identity.tenantId,
         projectId,
         sessionId,
-        message: "Save the workspace before releasing it while idle",
+        message: input.reshape
+          ? "Save the workspace before giving it back for its new shape"
+          : "Save the workspace before releasing it while idle",
         author: CHECKPOINT_AUTHOR,
       });
     }
@@ -12532,17 +12665,34 @@ export class AgentSessionsService {
         .forUpdate()
         .executeTakeFirst();
       if (!claimed) throw new AllocationMaintenanceLostError();
+      // A queued turn of the chat waits for a reshaped workspace; a turn
+      // running in any session sharing it keeps it (ADR 0322).
       const busy = await trx
         .selectFrom("agent_turns")
-        .select("id")
-        .where("session_id", "=", sessionId)
-        .where("status", "in", ["queued", "held", ...ACTIVE_TURN_STATUSES])
+        .innerJoin(
+          "agent_sessions as sharer",
+          "sharer.id",
+          "agent_turns.session_id",
+        )
+        .select("agent_turns.id")
+        .where((eb) =>
+          input.reshape
+            ? eb("sharer.allocation_id", "=", allocation.id)
+            : eb("agent_turns.session_id", "=", sessionId),
+        )
+        .where(
+          "agent_turns.status",
+          "in",
+          input.reshape
+            ? ["held", ...ACTIVE_TURN_STATUSES]
+            : ["queued", "held", ...ACTIVE_TURN_STATUSES],
+        )
         .executeTakeFirst();
       if (busy) return false;
       await this.executionAllocations.release({
         identity,
         allocationId: allocation.id,
-        reason: "idle",
+        reason: input.reshape ? "replaced" : "idle",
         transaction: trx,
       });
       await trx
@@ -12554,7 +12704,7 @@ export class AgentSessionsService {
         db: trx,
         sessionId,
         change: "released",
-        reason: "idle",
+        reason: input.reshape ? "replaced" : "idle",
       });
       return true;
     });
@@ -13978,7 +14128,6 @@ export class AgentSessionsService {
       throw new Error(
         "This Environment's binding changed. Move the session explicitly before continuing.",
       );
-    if (mismatch === "sandbox") throw new Error(SEPARATED_WITHOUT_AGENT_SIDE);
     if (agent.topology === "native") {
       return {
         bindingId: allocation.bindingId,

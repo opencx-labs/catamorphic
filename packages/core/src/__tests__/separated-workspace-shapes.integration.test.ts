@@ -96,6 +96,7 @@ describe("a separated sandbox's shape follows its chat's harness (ADR 0332)", ()
   let projectId: string;
   let sessions: AgentSessionsService;
   let environments: ExecutionEnvironmentsService;
+  let machine: LocalProcessSandboxProvider;
   /** What each sandbox was asked to separate: undefined for one container. */
   const asked: Array<CreateSandboxOpts["separateCommands"]> = [];
   /** The registry, whose agents a project can redefine under the same id. */
@@ -113,6 +114,7 @@ describe("a separated sandbox's shape follows its chat's harness (ADR 0332)", ()
       maxConcurrentChildren: 2,
       agents: [
         { agent: "coder", model: "any", effort: "any", delegate: false },
+        { agent: "helper", model: "any", effort: "any", delegate: false },
       ],
     },
   });
@@ -224,7 +226,7 @@ describe("a separated sandbox's shape follows its chat's harness (ADR 0332)", ()
 
     // A machine that runs commands apart: here one process sandbox, which
     // records what it was asked to separate.
-    const machine = ownedSandboxes.track(
+    machine = ownedSandboxes.track(
       new LocalProcessSandboxProvider({ root: path.join(tmpDir, "machine") }),
     );
     const separating = new Proxy(machine, {
@@ -254,6 +256,7 @@ describe("a separated sandbox's shape follows its chat's harness (ADR 0332)", ()
     };
     agents.set("reviewer", builtin("reviewer"));
     agents.set("coder", sandboxed("coder"));
+    agents.set("helper", builtin("helper"));
     const allocations = new ExecutionAllocationsService(db);
     environments = new ExecutionEnvironmentsService(
       new ProjectEnvironmentsService(db, projectManager),
@@ -303,6 +306,153 @@ describe("a separated sandbox's shape follows its chat's harness (ADR 0332)", ()
       () => fs.rm(tmpDir, { recursive: true, force: true, maxRetries: 5 }),
     );
   });
+
+  /** The machine's id of a chat's sandbox. */
+  const sandboxOf = async (sessionId: string) =>
+    (
+      await db
+        .selectFrom("agent_sessions")
+        .innerJoin(
+          "project_sandboxes",
+          "project_sandboxes.id",
+          "agent_sessions.sandbox_id",
+        )
+        .select("project_sandboxes.provider_id")
+        .where("agent_sessions.id", "=", sessionId)
+        .executeTakeFirstOrThrow()
+    ).provider_id;
+  const latestTurn = async (sessionId: string) =>
+    (await db
+      .selectFrom("agent_turns")
+      .select(["id", "status"])
+      .where("session_id", "=", sessionId)
+      .orderBy("ordinal", "desc")
+      .executeTakeFirst()) ?? { id: "", status: "none" };
+  /** Sends without waiting for the turn, which may wait for a workspace. */
+  const send = (sessionId: string, text: string) =>
+    sessions
+      .sendMessage(identity, projectId, sessionId, text)
+      .catch((error: unknown) => {
+        if (!(error instanceof AgentTurnUnsettledError)) throw error;
+      });
+  /** The chat's agent becomes one whose harness runs in the sandbox. */
+  const redefine = () => agents.set("reviewer", sandboxed("reviewer"));
+  /** Its workspace is given back as replaced and admitted again, a pair. */
+  const reshaped = async (sessionId: string, before: string) => {
+    await until(
+      "the chat's next turn runs in a reshaped workspace",
+      async () =>
+        (await latestTurn(sessionId)).status === "completed" &&
+        (await allocationOf(sessionId)).id !== before,
+      60_000,
+    );
+    expect(
+      (await allocationOf(sessionId)).separate?.agentResources,
+    ).toBeDefined();
+    expect(
+      await db
+        .selectFrom("execution_allocations")
+        .select(["status", "release_reason"])
+        .where("id", "=", before)
+        .executeTakeFirstOrThrow(),
+    ).toEqual({ status: "released", release_reason: "replaced" });
+  };
+
+  it("keeps a turn's edits when its agent is redefined while it runs, and runs the next turn in a pair", async () => {
+    agents.set("reviewer", builtin("reviewer"));
+    const chat = await sessions.create(identity, projectId, {});
+    const before = (await allocationOf(chat.id)).id;
+    const working = sessions.sendMessage(
+      identity,
+      projectId,
+      chat.id,
+      "[[wait 6000]] working",
+    );
+    await until(
+      "the turn runs",
+      async () => (await latestTurn(chat.id)).status === "running",
+    );
+    // What the turn changed in its workspace; then its agent is
+    // redefined. The turn ends as it began, its edits saved.
+    await machine.executeCommand(
+      await sandboxOf(chat.id),
+      "echo edited > edited.txt",
+      { cwd: "/workspace/project" },
+    );
+    redefine();
+    expect((await working).turn.status).toBe("completed");
+    await send(chat.id, "hello");
+    await reshaped(chat.id, before);
+    const read = await machine.executeCommand(
+      await sandboxOf(chat.id),
+      "cat edited.txt",
+      { cwd: "/workspace/project" },
+    );
+    expect(read.result.trim()).toBe("edited");
+  }, 120_000);
+
+  it("keeps a workspace while a shared subsession's turn runs in it, then reshapes it", async () => {
+    agents.set("reviewer", builtin("reviewer"));
+    const parent = await sessions.create(identity, projectId, {});
+    const before = (await allocationOf(parent.id)).id;
+    const child = await sessions.createSubsession(
+      identity,
+      projectId,
+      parent.id,
+      { agentId: "helper", task: "[[wait 12000]] helping" },
+    );
+    await until(
+      "the child works",
+      async () => (await latestTurn(child.session.id)).status === "running",
+    );
+    redefine();
+    const worker = sessions.startWorker({
+      resolveIdentity: async () => identity,
+      pollIntervalMs: 50,
+    });
+    try {
+      await send(parent.id, "hello");
+      // The child is still working: the workspace stays.
+      await new Promise((resolve) => setTimeout(resolve, 1_000));
+      expect((await latestTurn(child.session.id)).status).toBe("running");
+      expect((await allocationOf(parent.id)).id).toBe(before);
+      await reshaped(parent.id, before);
+      expect((await latestTurn(child.session.id)).status).toBe("completed");
+    } finally {
+      await worker.stop();
+    }
+  }, 120_000);
+
+  it("keeps a workspace a person uses now, then reshapes it", async () => {
+    agents.set("reviewer", builtin("reviewer"));
+    const chat = await sessions.create(identity, projectId, {});
+    const before = (await allocationOf(chat.id)).id;
+    // A person at its terminal (ADR 0209).
+    await db
+      .insertInto("session_workspace_use")
+      .values({ session_id: chat.id })
+      .execute();
+    redefine();
+    const worker = sessions.startWorker({
+      resolveIdentity: async () => identity,
+      pollIntervalMs: 50,
+    });
+    try {
+      await send(chat.id, "hello");
+      await new Promise((resolve) => setTimeout(resolve, 1_500));
+      expect((await allocationOf(chat.id)).id).toBe(before);
+      expect((await latestTurn(chat.id)).status).toBe("queued");
+      // They left a while ago.
+      await db
+        .updateTable("session_workspace_use")
+        .set({ used_at: new Date(Date.now() - 10 * 60_000) })
+        .where("session_id", "=", chat.id)
+        .execute();
+      await reshaped(chat.id, before);
+    } finally {
+      await worker.stop();
+    }
+  }, 120_000);
 
   it("refuses to share a built-in chat's workspace with an agent that runs in the sandbox, saying to take its own", async () => {
     agents.set("reviewer", builtin("reviewer"));
@@ -364,8 +514,8 @@ describe("a separated sandbox's shape follows its chat's harness (ADR 0332)", ()
     try {
       await sessions.catalog({ identity, projectId });
       expect(
-        discover.mock.calls.map(([args]) => args.harnessInSandbox).sort(),
-      ).toEqual([false, true]);
+        new Set(discover.mock.calls.map(([args]) => args.harnessInSandbox)),
+      ).toEqual(new Set([false, true]));
     } finally {
       discover.mockRestore();
     }

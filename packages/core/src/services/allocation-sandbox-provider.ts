@@ -442,6 +442,12 @@ export async function claimAllocationMaintenance(args: {
   allocationId: string;
   status: "active" | "released";
   sessionId?: string;
+  /**
+   * Queued turns do not refuse the claim: they wait for the workspace to
+   * be given back and admitted again, reshaped (ADR 0332). Held and
+   * running ones still do.
+   */
+  queuedTurns?: boolean;
 }): Promise<AllocationMaintenanceClaim | undefined> {
   const token = randomUUID();
   return args.db.transaction().execute(async (trx) => {
@@ -468,11 +474,13 @@ export async function claimAllocationMaintenance(args: {
         )
         .select("agent_turns.id")
         .where("agent_sessions.allocation_id", "=", args.allocationId)
-        .where("agent_turns.status", "in", [
-          "queued",
-          "held",
-          ...ACTIVE_TURN_STATUSES,
-        ])
+        .where(
+          "agent_turns.status",
+          "in",
+          args.queuedTurns
+            ? ["held", ...ACTIVE_TURN_STATUSES]
+            : ["queued", "held", ...ACTIVE_TURN_STATUSES],
+        )
         .executeTakeFirst();
       if (busy) return undefined;
     }
