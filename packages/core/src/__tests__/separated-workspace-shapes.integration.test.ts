@@ -454,6 +454,70 @@ describe("a separated sandbox's shape follows its chat's harness (ADR 0332)", ()
     }
   }, 120_000);
 
+  it("refuses a shared spawn from the agents themselves while the host's workspace is down", async () => {
+    agents.set("reviewer", builtin("reviewer"));
+    const parent = await sessions.create(identity, projectId, {});
+    // Its workspace was given back (idle release, a lost machine).
+    await new ExecutionAllocationsService(db).release({
+      identity,
+      allocationId: (await allocationOf(parent.id)).id,
+      reason: "idle",
+    });
+    await db
+      .updateTable("agent_sessions")
+      .set({ sandbox_id: null })
+      .where("id", "=", parent.id)
+      .execute();
+    const spawn = sessions.createSubsession(identity, projectId, parent.id, {
+      agentId: "coder",
+      task: "Run the tests",
+    });
+    await expect(spawn).rejects.toBeInstanceOf(AgentDelegationSettingsError);
+    await expect(spawn).rejects.toThrow(/runs in its sandbox/);
+    await expect(spawn).rejects.toThrow(/workspace: "own"/);
+  });
+
+  it("reshapes a workspace for a shared subsession whose agent now runs in the sandbox", async () => {
+    agents.set("reviewer", builtin("reviewer"));
+    agents.set("helper", builtin("helper"));
+    const parent = await sessions.create(identity, projectId, {});
+    const before = (await allocationOf(parent.id)).id;
+    const child = await sessions.createSubsession(
+      identity,
+      projectId,
+      parent.id,
+      { agentId: "helper", task: "Look around" },
+    );
+    await until(
+      "the child rests",
+      async () => (await latestTurn(child.session.id)).status === "completed",
+    );
+    // The project redefines the child's agent: its harness now runs in the
+    // sandbox the two share.
+    agents.set("helper", sandboxed("helper"));
+    // Its turn waits while the parent still works, and looks again.
+    const worker = sessions.startWorker({
+      resolveIdentity: async () => identity,
+      pollIntervalMs: 50,
+    });
+    try {
+      await send(child.session.id, "hello");
+      await until(
+        "the child's turn runs in a reshaped workspace",
+        async () =>
+          (await latestTurn(child.session.id)).status === "completed" &&
+          (await allocationOf(parent.id)).id !== before,
+        60_000,
+      );
+      expect(
+        (await allocationOf(parent.id)).separate?.agentResources,
+      ).toBeDefined();
+    } finally {
+      await worker.stop();
+      agents.set("helper", builtin("helper"));
+    }
+  }, 120_000);
+
   it("refuses to share a built-in chat's workspace with an agent that runs in the sandbox, saying to take its own", async () => {
     agents.set("reviewer", builtin("reviewer"));
     const parent = await sessions.create(identity, projectId, {});

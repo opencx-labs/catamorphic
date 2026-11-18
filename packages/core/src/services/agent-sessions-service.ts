@@ -9817,7 +9817,10 @@ export class AgentSessionsService {
           topology: nextAgent.topology,
         },
         ...(nextAgent.signIn ? { signIn: nextAgent.signIn } : {}),
-        harnessInSandbox: nextAgent.harness.placement === "sandbox",
+        // Shaped for its shared subsessions' agents too (ADR 0322).
+        harnessInSandbox:
+          nextAgent.harness.placement === "sandbox" ||
+          (await this.sharerHarnessInSandbox({ projectId, sessionId })),
       });
       const requirements = nextAgent.connectionRequirements ?? [];
       if (requirements.length > 0 && !this.connectionAdmission) {
@@ -10990,6 +10993,24 @@ export class AgentSessionsService {
       throw refuse(
         `${targetAgentId} copies what it changes out of its sandbox, and this chat's workspace is contained, so it cannot work there.`,
       );
+    // Where commands run apart, a workspace made for an agent outside its
+    // sandbox has no container for one that runs in it (ADR 0332): decided
+    // from the agents, whether or not the workspace is up now.
+    if (
+      hostAgent.harness.placement !== "sandbox" &&
+      targetAgent.harness.placement === "sandbox" &&
+      host.environment_name &&
+      (await this.executionEnvironments
+        .separatesCommands({
+          identity,
+          projectId,
+          environment: host.environment_name,
+        })
+        .catch(() => false))
+    )
+      throw refuse(
+        `${targetAgentId} runs in its sandbox, and this chat's workspace is made for an agent that runs outside it, with no container beside its commands for one that runs in it (ADR 0332).`,
+      );
     if (hostAgentId === targetAgentId || !host.allocation_id) return host;
     // Another agent runs on the machine as the workspace was admitted there.
     const allocation = await this.executionAllocations.get({
@@ -11643,7 +11664,13 @@ export class AgentSessionsService {
         topology: agent.topology,
       },
       ...(agent.signIn ? { signIn: agent.signIn } : {}),
-      harnessInSandbox: agent.harness.placement === "sandbox",
+      // Shaped for every agent working in it: the chat's own and those of
+      // its shared subsessions (ADRs 0322, 0332).
+      harnessInSandbox: await this.harnessInSandboxFor({
+        projectId,
+        sessionId: session.id,
+        agentId: session.agent_id,
+      }),
     };
     const placed = options.wait
       ? await this.executionEnvironments.admitOrWait({
@@ -12476,9 +12503,16 @@ export class AgentSessionsService {
     allocation: ExecutionAllocation;
   }): Promise<"fits" | "released" | "waiting"> {
     const { allocation } = input;
-    // A shared subsession's workspace is its workspace session's.
-    if (input.session.workspace_session_id) return "fits";
-    const owner = input.session;
+    // A shared subsession's workspace is its workspace session's, shaped
+    // for every agent working in it (ADR 0322).
+    const owner = input.session.workspace_session_id
+      ? await this.db
+          .selectFrom("agent_sessions")
+          .selectAll()
+          .where("id", "=", input.session.workspace_session_id)
+          .executeTakeFirst()
+      : input.session;
+    if (!owner || owner.allocation_id !== allocation.id) return "fits";
     if (
       !(await this.workspaceMisshapen({
         projectId: owner.project_id,

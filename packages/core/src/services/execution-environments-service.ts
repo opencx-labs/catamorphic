@@ -781,6 +781,20 @@ export class ExecutionEnvironmentsService {
     return definition?.idleReleaseMinutes ?? DEFAULT_IDLE_RELEASE_MINUTES;
   }
 
+  /** Whether an Environment runs its agents' commands apart (ADR 0332). */
+  async separatesCommands(args: {
+    identity: Identity;
+    projectId: string;
+    environment: string;
+  }): Promise<boolean> {
+    const definition = await this.projects.get({
+      identity: args.identity,
+      projectId: args.projectId,
+      name: args.environment,
+    });
+    return Boolean(definition?.commands?.separate);
+  }
+
   private async evaluate(args: {
     identity: Identity;
     projectId: string;
