@@ -275,9 +275,11 @@ own way:
 
 - **Claude Code** runs Bash, Monitor and background tasks through Work's
   shim (`CLAUDE_CODE_SHELL`), finds Work's `git` first on its `PATH`, and
-  loads only its home's settings: the checkout's `CLAUDE.md` and `.claude/`
-  (hooks, MCP servers, skills) would run or steer it from the repository,
-  so they are not read there. Its file tools resolve links and stay in the
+  loads no settings files and only Work's MCP servers: the checkout's
+  `CLAUDE.md` and `.claude/` (hooks, MCP servers, skills, permissions)
+  would run or steer it from the repository, so they are not read there.
+  It reaches its model through the runner's loopback endpoint on a key
+  for that turn alone. Its file tools resolve links and stay in the
   checkout and its temporary folder.
 - **ACP agents** run there only under a contract their definition states,
   since Work cannot see inside them: every way the agent runs code goes
@@ -296,12 +298,14 @@ own way:
 - **The built-in agent** runs on the control plane; its tools already run
   in the command container.
 
-The agent's container runs as uid 10001, owning none of the checkout, so
-Git there refuses the repository; keep `safe.directory` out of the image's
-system Git configuration. It holds only the turn's model grant. An ACP
-agent's own file tools still follow links in the checkout, to that grant or
-its configuration; an agent that matters here should refuse paths outside
-the checkout itself.
+In the agent's container Work's runner runs as root and the harness as
+uid 10001, which owns none of the checkout (it edits it through gid
+10001). The runner's folder, with the turn's model grant, is root's alone,
+and the shim and the harness's configuration home are root's and only
+readable, so a link the repository's code swaps in the checkout leads a
+harness's file tools nowhere its user may not go. Every `git` in the
+image is replaced there by Work's, so Git named by any path runs in the
+command container, whoever owns the checkout.
 
 ## Verify
 

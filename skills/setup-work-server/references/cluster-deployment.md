@@ -1021,13 +1021,13 @@ caches (ADR 0208):
   gets the Environment's `requirements.resources`; the agent container its
   own share, `"agentResources": { "cpuMillis": 1000, "memoryMb": 2048 }` by
   default, and the Allocation reserves both, so size `capacity` for the
-  pair. The agent container runs as uid 10001 and the checkout's group is
-  gid 10001; an image whose system Git configuration sets
-  `safe.directory=*` undoes Git's refusal of a checkout it does not own.
-  Codex cannot run in such
-  an Environment (it picks its own shell); Claude Code loads only its home's
-  settings there; an ACP agent needs `"acp": { "shell": true }` in its
-  definition.
+  pair. In the agent container the runner runs as root and the harness as
+  uid 10001; the checkout's group is gid 10001, and every `git` in the
+  image is replaced there by Work's, which runs in the command container.
+  Codex cannot run in such an Environment (it picks its own shell);
+  Claude Code loads no settings files there; an ACP agent needs
+  `"acp": { "shell": true, "projectConfig": false }` in its definition,
+  which OpenCode cannot honestly state.
 - `setup.workflow` names a project workflow Work runs after `setup.command`,
   at the same points, before the turn (ADR 0324): `"setup": { "command":
   "pnpm install --frozen-lockfile", "workflow": "prepareReview" }`, or a
