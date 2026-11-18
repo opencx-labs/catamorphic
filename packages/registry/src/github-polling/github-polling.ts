@@ -17,6 +17,9 @@ const REPOSITORY = "acme/web";
 /** The project store document that keeps the cursor between polls. */
 const CURSOR_PATH = "store/github-polling/acme-web.json";
 
+/** Its folder: a list's prefix is a folder, never part of a name. */
+const CURSOR_FOLDER = CURSOR_PATH.slice(0, CURSOR_PATH.lastIndexOf("/"));
+
 /**
  * Pull requests read per poll, most recently updated first. GitHub's list
  * items are large (each carries both repositories), so keep a page well
@@ -386,7 +389,7 @@ export const pollGithub = defineWorkflow(({ defineBoundary }) => ({
     /** @displayname Find the cursor */
     defineBoundary({
       run: ({ documents }: BoundaryContext<TriggerPayload<"schedule">>) =>
-        documents.list({ prefix: CURSOR_PATH, source: "store" }),
+        documents.list({ prefix: CURSOR_FOLDER, source: "store" }),
     }),
     /** @displayname Read the cursor */
     defineBoundary({
