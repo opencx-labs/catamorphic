@@ -28,6 +28,11 @@ export interface SessionSnapshot {
   owner: "project" | "member";
   /** Workflows that delivered to this chat by its key. */
   keyWorkflows: string[];
+  /**
+   * The Environment the chat runs in, recorded when it starts: before a
+   * machine is placed (a chat waiting for one has no `placement` yet).
+   */
+  environment: string | null;
   /** Where the chat runs and why; null for chats from before placement was recorded. */
   placement: {
     environment: string;
