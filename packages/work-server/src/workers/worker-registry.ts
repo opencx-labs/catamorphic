@@ -674,10 +674,11 @@ export class WorkWorkerRegistry {
         .where("node_id", "=", nodeId)
         .where("revoked_at", "is not", null)
         .execute();
-      // A re-enrolled name gets its (revoked, disabled) node back.
+      // A re-enrolled name gets its (revoked, disabled) node back, as a
+      // new machine: nothing of the old one's disk (ADR 0335).
       await trx
         .updateTable("worker_nodes")
-        .set({ enabled: true })
+        .set({ enabled: true, disk: null, disk_low_at: null })
         .where("id", "=", nodeId)
         .where("tenant_id", "=", this.deps.tenantId)
         .execute();

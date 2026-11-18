@@ -741,6 +741,45 @@ describe("workflow machine classes (ADR 0327)", () => {
     const [first, second] = lowEvents();
     expect(lowEvents()).toHaveLength(2);
     expect(second?.event.externalId).not.toBe(first?.event.externalId);
+    // A new machine under the same name inherits nothing of the old one's
+    // disk: under its floor at once, it is an episode of its own.
+    await workers.revoke({ name });
+    const again = await workers.createMachineEnrollment({
+      name,
+      rule: "fleet-k",
+      ttlMinutes: 15,
+      placement: { labels: { class: "fleet" }, access: { groups: [ENG] } },
+    });
+    if (!again) throw new Error("No enrollment for the new machine");
+    const { publicKey } = generateExecutorKeyPair();
+    const { nodeId: reused } = await workers.enroll({
+      code: again.code,
+      publicKey,
+    });
+    expect(reused).toBe(nodeId);
+    expect(
+      (await registry().machines()).find((machine) => machine.name === name),
+    ).toBeDefined();
+    const nodes = await new WorkerNodesService(db()).list({
+      tenantId: SERVER_TENANT_ID,
+      authorityId,
+    });
+    expect(nodes.find((node) => node.id === nodeId)).not.toHaveProperty(
+      "diskLowSince",
+    );
+    await workers.connect({
+      nodeId,
+      name,
+      session: epoch(),
+      offer: WorkerOfferSchema.parse({
+        isolation: "sandbox",
+        workspaceRoot: "/workspaces",
+        capacity: { workspaces: 1 },
+        disk: disk(2e9),
+      }),
+      publicKey,
+    });
+    expect(lowEvents()).toHaveLength(3);
     await reconciler.deleteRule("fleet-k");
   });
 });
