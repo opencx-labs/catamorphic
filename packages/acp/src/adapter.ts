@@ -193,7 +193,10 @@ function startAttempt(
         onAnswered: providerAnswered,
       });
     const spawned = spawn(executable, args, {
-      cwd: attempt.workingDirectory,
+      // A harness of its own user starts in its home: its launcher (bunx,
+      // npx, a Bun binary) would read bunfig.toml, .npmrc or .env files
+      // from the checkout. Its session still works in the checkout.
+      cwd: attempt.commands?.harness?.home ?? attempt.workingDirectory,
       env: {
         ...process.env,
         ...attempt.env,

@@ -200,6 +200,8 @@ describe("ACP agents whose commands run apart (ADR 0332)", () => {
 
   it("runs an agent as the harness's own user, on the provider's shim, with a configuration home it cannot write", async () => {
     const space = workspace();
+    // Its launcher starts in its home, which exists before it starts.
+    fs.mkdirSync(path.join(space.dir, "harness-home"));
     const harness = {
       uid: process.getuid?.() ?? 0,
       gid: process.getgid?.() ?? 0,
@@ -222,7 +224,7 @@ describe("ACP agents whose commands run apart (ADR 0332)", () => {
     await turn.finished();
     expect(turn.completed()).toMatchObject({ status: "completed" });
     expect(turn.text("assistant_message")).toBe(
-      `SHELL=/workspace/.work-shim/bin/bash PATH=/workspace/.work-shim/path HOME=${harness.home} CONFIG=${harness.config} UID=${harness.uid}`,
+      `SHELL=/workspace/.work-shim/bin/bash PATH=/workspace/.work-shim/path HOME=${harness.home} CONFIG=${harness.config} UID=${harness.uid} STARTED=${fs.realpathSync(harness.home)} SESSION=${space.dir}`,
     );
     // The provider's shim, which that user cannot rewrite: none is
     // written beside the runner's state.
