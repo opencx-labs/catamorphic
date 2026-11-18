@@ -23,6 +23,7 @@ import {
   imageUserHome,
   machineSignInHome,
   refuseCacheVolumes,
+  refuseSeparateCommands,
   SANDBOX_CAPABILITIES,
   shellSandboxProcesses,
   signInHomePath,
@@ -242,6 +243,10 @@ export class MicrosandboxSandboxProvider implements SandboxProvider {
 
   async createSandbox(opts: CreateSandboxOpts): Promise<SandboxHandle> {
     assertSandboxResources(opts.resources, this.resourceLimits);
+    refuseSeparateCommands({
+      separateCommands: opts.separateCommands,
+      provider: "Microsandbox",
+    });
     const cpuMillis = opts.resources?.cpuMillis ?? this.config.cpus * 1000;
     if (cpuMillis % 1000 !== 0)
       throw new Error(

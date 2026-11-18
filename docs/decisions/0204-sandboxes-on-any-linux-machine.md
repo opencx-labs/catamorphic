@@ -1,6 +1,6 @@
 # 0204 — Sandboxes on any Linux machine: the container backend
 
-- **Status:** Accepted
+- **Status:** Accepted (amended by [0332](0332-commands-run-apart-from-the-agent.md): a sandbox can be an agent container and a command container that share only the checkout, offered as `commands.separate` where host sockets are served and no container runs privileged)
 - **Date:** 2026-10-06
 - **Refines:** 0047, 0164, 0167, 0176, 0184
 

@@ -9,6 +9,7 @@ import {
 import {
   CONNECTION_GRANT_READER,
   type SandboxProvider,
+  type SandboxSide,
 } from "@catamorphic/sandbox";
 
 /**
@@ -23,6 +24,16 @@ import {
 /** Work's own files in a sandbox, beside (never inside) the project. */
 export const SESSION_DIRECTORY = ".work-session";
 
+/**
+ * The project checkout in a session's sandbox: the one directory both sides
+ * of a sandbox that runs commands apart share (ADR 0332).
+ */
+export function sandboxProjectDirectory(input: {
+  workspaceRoot: string;
+}): string {
+  return `${input.workspaceRoot}/project`;
+}
+
 const AGENT = `-c 'user.name=Work Agent' -c user.email=agent@work.software`;
 
 async function run(input: {
@@ -31,11 +42,17 @@ async function run(input: {
   cwd: string;
   command: string;
   what: string;
+  /** Where in a sandbox that runs commands apart (ADR 0332). */
+  side?: SandboxSide;
 }): Promise<string> {
   const result = await input.provider.executeCommand(
     input.sandboxId,
     input.command,
-    { cwd: input.cwd, timeout: 600 },
+    {
+      cwd: input.cwd,
+      timeout: 600,
+      ...(input.side ? { side: input.side } : {}),
+    },
   );
   if (result.exitCode !== 0)
     throw new Error(`Failed to ${input.what}: ${result.result.slice(-2000)}`);
@@ -205,13 +222,20 @@ export async function removeSessionCredentials(input: {
   provider: SandboxProvider;
   sandboxId: string;
 }): Promise<void> {
-  await run({
-    ...input,
-    cwd: input.provider.workspaceRoot,
-    what: "clear the sandbox's grants and variables",
-    command: `rm -rf ${SESSION_DIRECTORY}/grants ${SESSION_DIRECTORY}/model-grants ${SESSION_DIRECTORY}/grant-staging ${SESSION_DIRECTORY}/env ${SESSION_DIRECTORY}/gitconfig`,
-  });
+  // Both sides of a sandbox that runs commands apart (ADR 0332); one
+  // container twice otherwise.
+  for (const side of SIDES)
+    await run({
+      ...input,
+      side,
+      cwd: input.provider.workspaceRoot,
+      what: "clear the sandbox's grants and variables",
+      command: `rm -rf ${SESSION_DIRECTORY}/grants ${SESSION_DIRECTORY}/model-grants ${SESSION_DIRECTORY}/grant-staging ${SESSION_DIRECTORY}/env ${SESSION_DIRECTORY}/gitconfig`,
+    });
 }
+
+/** Every side of a sandbox, commands first (ADR 0332). */
+const SIDES: readonly SandboxSide[] = ["commands", "agent"];
 
 /** One Git-capable alias as the sandbox configures it. */
 export interface SandboxGitAlias {
@@ -337,20 +361,18 @@ export async function configureSandboxGateway(input: {
   sandboxId: string;
   /** `<gateway>/git`, as the sandbox reaches it. */
   gatewayGitUrl: string;
-  grants: readonly {
-    alias: string;
-    grant: string;
-    publicationRevision: string;
-    modelAttemptId?: string;
-    /**
-     * Published only under its attempt: a shared subsession's model grant
-     * (ADR 0322), never where the workspace's Git and HTTP read theirs.
-     */
-    modelOnly?: boolean;
-  }[];
+  grants: readonly SandboxGrant[];
   gitAliases: readonly SandboxGitAlias[];
   httpAliases?: readonly SandboxHttpAlias[];
   renewOnly?: boolean;
+  /**
+   * The sandbox runs commands apart from its agent (ADR 0332): the command
+   * side gets the grants, Git configuration and variables of these
+   * aliases, never a model's; the agent side gets only the others (its
+   * model's), and no Git configuration or variables, since its harness
+   * runs Git and code only where commands run. No grant is on both sides.
+   */
+  commands?: { aliases: readonly string[] };
 }): Promise<void> {
   if (!input.grants.length) return;
   for (const grant of input.grants)
@@ -358,6 +380,73 @@ export async function configureSandboxGateway(input: {
       throw new Error(
         "A sandbox grant needs its persisted publication revision",
       );
+  if (!input.commands) return publishGateway(input);
+  const listed = new Set(input.commands.aliases);
+  // Beside the agent only its attempt's model grant, where its harness
+  // reads it (ADR 0293): nothing a link in the checkout could lead to.
+  await publishGateway({
+    ...input,
+    side: "agent",
+    grants: input.grants.flatMap((grant) =>
+      grant.modelAttemptId && !listed.has(grant.alias)
+        ? [{ ...grant, modelOnly: true }]
+        : [],
+    ),
+    gitAliases: [],
+    httpAliases: [],
+    allowEmpty: true,
+  });
+  await publishGateway({
+    ...input,
+    side: "commands",
+    grants: input.grants.flatMap((grant) =>
+      listed.has(grant.alias) && !grant.modelOnly
+        ? [
+            {
+              alias: grant.alias,
+              grant: grant.grant,
+              publicationRevision: grant.publicationRevision,
+            },
+          ]
+        : [],
+    ),
+    gitAliases: input.gitAliases.filter((alias) => listed.has(alias.alias)),
+    httpAliases: (input.httpAliases ?? []).filter((alias) =>
+      listed.has(alias.alias),
+    ),
+    // A side with nothing listed still gets its Git configuration and
+    // variables rewritten empty, so none outlives its listing.
+    allowEmpty: true,
+  });
+}
+
+/** One grant as a sandbox's session folder publishes it (ADRs 0175, 0293). */
+export interface SandboxGrant {
+  alias: string;
+  grant: string;
+  publicationRevision: string;
+  modelAttemptId?: string;
+  /**
+   * Published only under its attempt: a shared subsession's model grant
+   * (ADR 0322), never where the workspace's Git and HTTP read theirs.
+   */
+  modelOnly?: boolean;
+}
+
+/** Publish grants, Git configuration and variables on one side. */
+async function publishGateway(input: {
+  provider: SandboxProvider;
+  sandboxId: string;
+  gatewayGitUrl: string;
+  grants: readonly SandboxGrant[];
+  gitAliases: readonly SandboxGitAlias[];
+  httpAliases?: readonly SandboxHttpAlias[];
+  renewOnly?: boolean;
+  side?: SandboxSide;
+  allowEmpty?: boolean;
+}): Promise<void> {
+  if (!input.grants.length && !input.allowEmpty) return;
+  if (!input.grants.length && input.renewOnly) return;
   const stage = `grant-staging/${randomUUID()}`;
   const directory = `${input.provider.workspaceRoot}/${SESSION_DIRECTORY}`;
   const gateway = input.gatewayGitUrl.replace(/\/+$/, "");
@@ -414,6 +503,7 @@ export async function configureSandboxGateway(input: {
       ...(git ? { "git-credential-work": helper, "gitconfig.in": config } : {}),
     },
     `${directory}/${stage}`,
+    input.side ? { side: input.side } : undefined,
   );
   await run({
     ...input,
@@ -474,12 +564,15 @@ export async function removeSandboxGateway(input: {
 }): Promise<void> {
   const session = `../${SESSION_DIRECTORY}`;
   const file = `${session}/${GATEWAY_ENV_IN_SESSION_DIRECTORY}`;
-  await run({
-    ...input,
-    cwd: input.projectDir,
-    what: "remove the session's gateway grants",
-    command: `rm -rf ${session}/grants ${session}/model-grants ${session}/grant-staging ${file} ${file}.in ${file}.new`,
-  });
+  // Both sides of a sandbox that runs commands apart (ADR 0332).
+  for (const side of SIDES)
+    await run({
+      ...input,
+      side,
+      cwd: input.projectDir,
+      what: "remove the session's gateway grants",
+      command: `rm -rf ${session}/grants ${session}/model-grants ${session}/grant-staging ${file} ${file}.in ${file}.new`,
+    });
 }
 
 function originOf(url: string): string {

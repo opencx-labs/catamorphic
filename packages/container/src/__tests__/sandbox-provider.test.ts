@@ -575,4 +575,56 @@ describe("ContainerSandboxProvider without Docker", () => {
       ),
     ).toHaveLength(2);
   });
+  it("gives the command side the Environment's limits and the agent side its own share (ADR 0332)", async () => {
+    const { fake, provider } = await setup();
+    const sandbox = await provider().createSandbox({
+      resources: { cpuMillis: 4000, memoryMb: 8192 },
+      separateCommands: {
+        shared: ["/workspace/project"],
+        agentResources: { cpuMillis: 500, memoryMb: 1536 },
+      },
+    });
+    const commands = hostConfigOf(fake.containers.get(sandbox.id)?.body ?? {});
+    const agent = hostConfigOf(
+      fake.containers.get(`${sandbox.id}-agent`)?.body ?? {},
+    );
+    expect([commands.NanoCpus, commands.Memory]).toEqual([
+      4000 * 1_000_000,
+      8192 * 1024 * 1024,
+    ]);
+    expect([agent.NanoCpus, agent.Memory, agent.MemorySwap]).toEqual([
+      500 * 1_000_000,
+      1536 * 1024 * 1024,
+      1536 * 1024 * 1024,
+    ]);
+    // Without its own share, the agent side gets 1 CPU and 2 GiB.
+    const plain = await provider().createSandbox({
+      resources: { cpuMillis: 4000, memoryMb: 8192 },
+      separateCommands: { shared: ["/workspace/project"] },
+    });
+    const defaults = hostConfigOf(
+      fake.containers.get(`${plain.id}-agent`)?.body ?? {},
+    );
+    expect([defaults.NanoCpus, defaults.Memory]).toEqual([
+      1000 * 1_000_000,
+      2048 * 1024 * 1024,
+    ]);
+    for (const id of [sandbox.id, plain.id])
+      await provider().destroySandbox(id);
+  });
+  it("stops and destroys a pair named by either side after this process restarted (ADR 0332)", async () => {
+    const { fake, provider } = await setup();
+    const sandbox = await provider().createSandbox({
+      separateCommands: { shared: ["/workspace/project"] },
+    });
+    const agent = `${sandbox.id}-agent`;
+    // Another process, which never saw the pair made.
+    const restarted = provider();
+    await restarted.stopSandbox(agent);
+    const running = (name: string) => fake.containers.get(name)?.running;
+    expect([running(sandbox.id), running(agent)]).toEqual([false, false]);
+    await provider().destroySandbox(agent);
+    expect(fake.containers.has(sandbox.id)).toBe(false);
+    expect(fake.containers.has(agent)).toBe(false);
+  });
 });

@@ -341,6 +341,35 @@ const ProjectEnvironmentDefinitionSchema = z
         EnvironmentConnectionBindingSchema,
       )
       .optional(),
+    /**
+     * Run the agent's commands apart from the agent (ADR 0332), reaching
+     * through the gateway only the bindings `connections` lists.
+     */
+    commands: z
+      .strictObject({
+        separate: z.boolean(),
+        connections: z
+          .array(z.string().regex(CONNECTION_ALIAS_PATTERN))
+          .max(64)
+          .optional(),
+        /**
+         * The agent container's own limits (ADR 0332); the Environment's
+         * `requirements.resources` are the command container's. 1 CPU and
+         * 2 GiB by default; the Allocation reserves both.
+         */
+        agentResources: z
+          .strictObject({
+            cpuMillis: z.number().int().positive().max(1_024_000).optional(),
+            memoryMb: z
+              .number()
+              .int()
+              .positive()
+              .max(4 * 1024 * 1024)
+              .optional(),
+          })
+          .optional(),
+      })
+      .optional(),
   })
   .refine((definition) => !(definition.device && definition.pool), {
     message: "An Environment runs on a member's device or on a pool, not both",
@@ -366,6 +395,39 @@ const ProjectEnvironmentDefinitionSchema = z
       path: ["volumes"],
     },
   )
+  .superRefine((definition, ctx) => {
+    const commands = definition.commands;
+    if (!commands) return;
+    if (!commands.separate && commands.agentResources)
+      ctx.addIssue({
+        code: "custom",
+        path: ["commands", "agentResources"],
+        message:
+          "commands.agentResources limits the agent's own container, which exists only when commands run apart: set commands.separate",
+      });
+    if (!commands.separate && commands.connections?.length)
+      ctx.addIssue({
+        code: "custom",
+        path: ["commands", "connections"],
+        message:
+          "commands.connections names what commands reach when they run apart: set commands.separate",
+      });
+    for (const [index, alias] of (commands.connections ?? []).entries()) {
+      const binding = definition.connections?.[alias];
+      if (!binding)
+        ctx.addIssue({
+          code: "custom",
+          path: ["commands", "connections", index],
+          message: `'${alias}' is not one of this Environment's connections`,
+        });
+      else if (binding.model || binding.capabilities?.includes("model"))
+        ctx.addIssue({
+          code: "custom",
+          path: ["commands", "connections", index],
+          message: `'${alias}' is a model connection: the agent's model stays beside the agent, never with its commands`,
+        });
+    }
+  })
   .refine(
     (definition) => {
       const paths = [
@@ -438,6 +500,11 @@ export interface ProjectEnvironmentDefinition {
   volumes?: Readonly<Record<string, EnvironmentVolume>>;
   /** Read-only directories only a trusted fill writes (ADR 0334). */
   caches?: Readonly<Record<string, EnvironmentCache>>;
+  /**
+   * The agent's commands run apart from the agent (ADR 0332), reaching
+   * through the gateway only the bindings `connections` lists.
+   */
+  commands?: EnvironmentCommands;
 }
 
 /** One cache an Environment declares (ADR 0334). */
@@ -446,6 +513,15 @@ export interface EnvironmentCache {
   /** The largest a fill may leave it; {@link DEFAULT_CACHE_SIZE_MB} by default. */
   sizeMb?: number;
   fill: { command: string; timeoutMinutes?: number };
+}
+
+/** How an Environment runs an agent's commands (ADR 0332). */
+export interface EnvironmentCommands {
+  separate: boolean;
+  /** Bindings of the Environment commands may reach; none by default. */
+  connections?: readonly string[];
+  /** The agent container's own limits; 1 CPU and 2 GiB by default. */
+  agentResources?: { cpuMillis?: number; memoryMb?: number };
 }
 
 /**

@@ -594,6 +594,18 @@ provide it take the work:
   mounts none and fills one. Install from it offline and fall back to the
   network: \`pnpm install --frozen-lockfile --offline --store-dir
   ~/.cache/work/pnpm-store || pnpm install --frozen-lockfile\`.
+- \`commands\`: \`{ "separate": true, "connections": ["github"] }\` runs the
+  agent's commands (its shell, setup, \`exec\`, terminals, background
+  processes, the change's tests and services) in a container of their own
+  beside the agent's, sharing only the checkout. The agent's grants, model,
+  Work tools and state stay out of their reach; \`connections\` names the
+  bindings commands may use through the gateway (none by default, never a
+  model): list only a read binding. The agent's own container takes
+  \`agentResources\` (1 CPU and 2 GiB by default) on top of the Environment's
+  limits, which the commands' container gets. Use it wherever the agent runs code it
+  does not trust, such as a pull request's. Claude Code then loads no
+  settings from the checkout, an ACP agent needs \`"acp": { "shell": true }\`,
+  and Codex cannot run there. Only container machines take such work.
 
 An agent definition's \`sandboxing\` says what may leave its sandbox, and the
 host enforces it: \`contained\` agents may do anything inside their sandbox,

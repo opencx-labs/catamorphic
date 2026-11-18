@@ -72,6 +72,7 @@ import {
   buildPluginsPreamble,
   closeQuestionsDescription,
   closeQuestionsInputSchema,
+  commandSideProcesses,
   type ExtraTool,
   extraToolResult,
   type HarnessPermissions,
@@ -88,6 +89,7 @@ import {
   type Sandboxing,
   type SandboxModelGateway,
   type SandboxProvider,
+  SEPARATE_COMMANDS_SOCKET,
   type SignInHarness,
   STOPPED_WAITING_NOTE,
   serverKeyOf,
@@ -230,6 +232,7 @@ import {
   removeSessionCredentials,
   SESSION_DIRECTORY,
   sandboxGrantDirectory,
+  sandboxProjectDirectory,
   seedSandboxBase,
   seedSandboxRepository,
 } from "./sandbox-git.js";
@@ -6544,6 +6547,12 @@ export class AgentSessionsService {
             }),
           }
         : {}),
+      // Its shell runs where the pull request's code runs, not beside it
+      // (ADR 0332); an adapter that cannot redirect it refuses.
+      ...(agent.harness.placement === "sandbox" &&
+      runtime.allocation?.policy.sandbox?.separateCommands
+        ? { commands: { socket: SEPARATE_COMMANDS_SOCKET } }
+        : {}),
       options: protocolJson(agent.options ?? {}),
     };
     const harness = agent.harness;
@@ -6567,7 +6576,8 @@ export class AgentSessionsService {
               ...(provider && sandboxProviderId
                 ? {
                     sandbox: {
-                      provider,
+                      // Its tools reach the command side alone (ADR 0332).
+                      provider: withCommandSideProcesses(provider),
                       sandboxId: sandboxProviderId,
                       workingDirectory,
                       // Its commands load the gateway's variables and the
@@ -7689,6 +7699,10 @@ export class AgentSessionsService {
       allocationId: input.allocationId,
     });
     if (allocation?.status !== "active") return [];
+    // Where commands run apart (ADR 0332) a grant exists only where it is
+    // used: the agent's model beside it, the listed bindings with its
+    // commands, and nothing for the rest.
+    const separate = allocation.policy.sandbox?.separateCommands;
     const bindings = (allocation.policy.connections ?? []).flatMap(
       (binding) => {
         const remoteBaseUrls = gateway.remoteBaseUrls(binding.providerKind);
@@ -7705,6 +7719,8 @@ export class AgentSessionsService {
         const http =
           binding.capabilities.some(isHttpMethodCapability) &&
           gateway.servesHttp(binding.providerKind);
+        if (separate && !api && !separate.connections.includes(binding.alias))
+          return [];
         return git || api || http
           ? [{ alias: binding.alias, git, api, http }]
           : [];
@@ -7780,10 +7796,25 @@ export class AgentSessionsService {
         });
       }
     }
+    // Commands apart from the agent reach only the bindings their
+    // Environment lists for them, and never a model (ADR 0332).
     await configureSandboxGateway({
       provider: input.provider,
       sandboxId: input.sandboxProviderId,
       gatewayGitUrl: `${url}/git`,
+      ...(separate
+        ? {
+            commands: {
+              aliases: bindings
+                .filter(
+                  (binding) =>
+                    !binding.api &&
+                    separate.connections.includes(binding.alias),
+                )
+                .map((binding) => binding.alias),
+            },
+          }
+        : {}),
       grants: issued,
       gitAliases: bindings.flatMap((binding) =>
         binding.git
@@ -14369,7 +14400,7 @@ export class AgentSessionsService {
   // --- Dev sandbox lifecycle ---
 
   private projectDir(provider: SandboxProvider): string {
-    return `${provider.workspaceRoot}/project`;
+    return sandboxProjectDirectory({ workspaceRoot: provider.workspaceRoot });
   }
 
   /**
@@ -15827,4 +15858,21 @@ function answerMedia(
       .join("\n"),
     attachments: groups.flatMap(({ media }) => media),
   };
+}
+
+/**
+ * A provider whose processes are the command side's alone (ADR 0332), for
+ * a harness on the host whose tools start and follow background commands.
+ */
+function withCommandSideProcesses(provider: SandboxProvider): SandboxProvider {
+  const processes = provider.processes;
+  if (!processes) return provider;
+  const filtered = commandSideProcesses(processes);
+  return new Proxy(provider, {
+    get(target, property) {
+      if (property === "processes") return filtered;
+      const value: unknown = Reflect.get(target, property, target);
+      return typeof value === "function" ? value.bind(target) : value;
+    },
+  });
 }

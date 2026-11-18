@@ -154,6 +154,29 @@ export const ALLOWED_TOOLS = [
 
 const SHELL_TOOLS = ["Bash", "PowerShell"];
 
+/**
+ * Where an attempt whose commands run apart (ADR 0332) keeps its shell
+ * shim, beside its state: the `bash` Claude Code uses as its shell, and its
+ * temporary folder, from which the working-directory file each command
+ * writes comes back.
+ */
+export function commandShellPaths(
+  attempt: AttemptStart,
+):
+  | { directory: string; shell: string; path: string; returnFolder: string }
+  | undefined {
+  if (!attempt.commands) return undefined;
+  const directory = path.join(attempt.stateDirectory, "commands");
+  return {
+    directory,
+    shell: path.join(directory, "bin", "bash"),
+    // Its `git`, first on the CLI's PATH: the CLI runs Git on the
+    // repository itself, whose configuration names programs Git runs.
+    path: path.join(directory, "path"),
+    returnFolder: path.join(directory, "tmp"),
+  };
+}
+
 /** Tools that change files: surfaced as `file_change` items. */
 export const FILE_EDIT_TOOLS = new Set([
   "Edit",
@@ -552,6 +575,11 @@ export function buildQueryOptions(input: QueryOptionInputs): Options {
     external[name] = mapMcpServer(spec);
 
   const host = access.kind === "host";
+  const separate = commandShellPaths(attempt);
+  if (separate && host)
+    throw new ClaudeStartError(
+      "Claude Code on its host runs its commands where it runs; only a sandboxed one runs them apart.",
+    );
   const env: Record<string, string> = {
     // On the host the CLI inherits the host's environment (its own
     // sign-in and settings) but not a stray API key; beside a sandbox's
@@ -596,7 +624,19 @@ export function buildQueryOptions(input: QueryOptionInputs): Options {
           CLAUDE_SECURESTORAGE_CONFIG_DIR: access.home,
         }
       : {}),
+    // Its Bash, Monitor and background commands run apart from it (ADR
+    // 0332): the shim is its shell, and each command's working-directory
+    // file comes back to its temporary folder.
+    ...(separate
+      ? {
+          CLAUDE_CODE_SHELL: separate.shell,
+          CLAUDE_CODE_TMPDIR: separate.returnFolder,
+        }
+      : {}),
   };
+  // The CLI's own Git (its repository context) goes where commands run.
+  if (separate)
+    env.PATH = env.PATH ? `${separate.path}:${env.PATH}` : separate.path;
   const command = options.command ?? (host ? undefined : "claude");
   const systemPrompt = attempt.systemPrompt.trim();
 
@@ -662,8 +702,11 @@ export function buildQueryOptions(input: QueryOptionInputs): Options {
     onElicitation: input.onElicitation,
     hooks: input.hooks,
     // Everything real Claude Code recognizes: the repository's CLAUDE.md
-    // and .claude, and the harness home's own settings.
-    settingSources: ["user", "project", "local"],
+    // and .claude, and the harness home's own settings. With its commands
+    // apart (ADR 0332) the checkout is the pull request's: its hooks, MCP
+    // servers and status line would run beside the agent, and its
+    // instructions would steer it, so only the home's settings load.
+    settingSources: separate ? ["user"] : ["user", "project", "local"],
     includePartialMessages: true,
     sessionStore: input.sessionStore,
     // Every transcript line reaches Work as it is written, so a lost

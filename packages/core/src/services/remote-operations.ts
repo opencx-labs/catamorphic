@@ -30,6 +30,8 @@ import { type Wakeup, WorkWakeups } from "./work-wakeups.js";
 const tracer = getTracer("@catamorphic/core");
 
 const stringMap = z.record(z.string(), z.string());
+/** Where in a sandbox that runs commands apart an operation happens (ADR 0332). */
+const sideSchema = z.enum(["agent", "commands"]);
 const egressSchema = z.discriminatedUnion("mode", [
   z.object({ mode: z.literal("open") }),
   z.object({
@@ -98,6 +100,24 @@ export const RemoteOperationSchema = z.discriminatedUnion("kind", [
         )
         .readonly()
         .optional(),
+      // An agent's commands apart from it (ADR 0332): only to executors
+      // offering `commands.separate`.
+      separateCommands: z
+        .object({
+          shared: z.array(z.string().min(1).max(1024)).min(1).max(4).readonly(),
+          envFiles: z
+            .array(z.string().min(1).max(1024))
+            .max(8)
+            .readonly()
+            .optional(),
+          agentResources: z
+            .object({
+              cpuMillis: z.number().int().positive().optional(),
+              memoryMb: z.number().int().positive().optional(),
+            })
+            .optional(),
+        })
+        .optional(),
     }),
   }),
   z.object({
@@ -110,6 +130,7 @@ export const RemoteOperationSchema = z.discriminatedUnion("kind", [
     command: z.string(),
     options: z
       .object({
+        side: sideSchema.optional(),
         cwd: z.string().optional(),
         timeout: z.number().optional(),
         env: stringMap.optional(),
@@ -121,11 +142,13 @@ export const RemoteOperationSchema = z.discriminatedUnion("kind", [
     sandboxId: z.string(),
     files: stringMap,
     basePath: z.string(),
+    side: sideSchema.optional(),
   }),
   z.object({
     kind: z.literal("download"),
     sandboxId: z.string(),
     path: z.string(),
+    side: sideSchema.optional(),
   }),
   z.object({
     kind: z.literal("clone"),
@@ -167,6 +190,7 @@ export const RemoteOperationSchema = z.discriminatedUnion("kind", [
   z.object({
     kind: z.literal("process.start"),
     sandboxId: z.string(),
+    side: sideSchema.optional(),
     command: z.string(),
     cwd: z.string().optional(),
     env: stringMap.optional(),
@@ -595,11 +619,24 @@ function forwardingSandboxProvider(args: {
       z
         .object({ exitCode: z.number(), result: z.string() })
         .parse(await call({ kind: "execute", sandboxId, command, options })),
-    uploadFiles: async (sandboxId, files, basePath) => {
-      await call({ kind: "upload", sandboxId, files, basePath });
+    uploadFiles: async (sandboxId, files, basePath, options) => {
+      await call({
+        kind: "upload",
+        sandboxId,
+        files,
+        basePath,
+        ...(options?.side ? { side: options.side } : {}),
+      });
     },
-    downloadFile: async (sandboxId, path) =>
-      z.string().parse(await call({ kind: "download", sandboxId, path })),
+    downloadFile: async (sandboxId, path, options) =>
+      z.string().parse(
+        await call({
+          kind: "download",
+          sandboxId,
+          path,
+          ...(options?.side ? { side: options.side } : {}),
+        }),
+      ),
     gitClone: async (sandboxId, url, path, options) => {
       await call({ kind: "clone", sandboxId, url, path, options });
     },

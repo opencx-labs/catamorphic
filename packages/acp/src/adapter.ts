@@ -22,7 +22,7 @@ import {
   type McpServerSpec,
   NO_CAPABILITIES,
 } from "@catamorphic/agent-protocol/runner";
-import { renderUserMessage } from "@catamorphic/sandbox";
+import { renderUserMessage, writeCommandShell } from "@catamorphic/sandbox";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
 import {
@@ -52,6 +52,23 @@ export const ACP_CAPABILITIES: HarnessCapabilities = {
   streamsReasoning: true,
   ids: { thread: "strong", turn: "none", item: "weak" },
 };
+
+/** Why an ACP agent without `acp.shell` does not run where commands run apart (ADR 0332). */
+export const ACP_COMMANDS_APART_REFUSAL =
+  'This Environment runs commands apart from the agent, and an ACP agent runs there only when its definition says both that every way it runs code goes through $SHELL ("shell": true) and that it loads no configuration, plugins, MCP servers, language servers, formatters or instructions from the checkout ("projectConfig": false, with "env" naming the variables that make it so). OpenCode does, with OPENCODE_DISABLE_PROJECT_CONFIG and its language servers and formatters off. Otherwise use another agent there.';
+
+/** The variables an agent's definition sets for its process. */
+function definitionEnv(value: unknown): Record<string, string> {
+  if (typeof value !== "object" || value === null || Array.isArray(value))
+    return {};
+  return Object.fromEntries(
+    Object.entries(value).filter(
+      (entry): entry is [string, string] =>
+        /^[A-Za-z_][A-Za-z0-9_]*$/.test(entry[0]) &&
+        typeof entry[1] === "string",
+    ),
+  );
+}
 
 /** How long an agent gets to exit after its turn before it is killed. */
 const EXIT_GRACE_MS = 3_000;
@@ -146,6 +163,25 @@ function startAttempt(
       throw new Error(
         "ACP agents run on their own sign-in or a model connection, not a Work sign-in.",
       );
+    // Its commands apart from it (ADR 0332): only an agent whose
+    // definition says it runs them with `$SHELL` can be pointed at the
+    // command container; any other is refused, never run beside the agent.
+    let shell: { shell: string; path: string } | undefined;
+    if (attempt.commands) {
+      // The contract (ADR 0332): every way it runs code goes through
+      // $SHELL, and it loads nothing from the checkout, which the pull
+      // request controls. Work cannot check either; the definition says so.
+      if (
+        attempt.options.shell !== true ||
+        attempt.options.projectConfig !== false
+      )
+        throw new Error(ACP_COMMANDS_APART_REFUSAL);
+      shell = await writeCommandShell({
+        directory: path.join(attempt.stateDirectory, "commands"),
+        socket: attempt.commands.socket,
+        runtime: process.execPath,
+      });
+    }
     if (access.kind === "gateway")
       model = await serveLoopbackModel({
         access,
@@ -157,11 +193,23 @@ function startAttempt(
       env: {
         ...process.env,
         ...attempt.env,
+        // What the definition sets for the agent (keeping project
+        // configuration off, ADR 0332).
+        ...definitionEnv(attempt.options.env),
         ...(model
           ? loopbackModelEnv({
               model,
               ...(attempt.model ? { modelId: attempt.model } : {}),
             })
+          : {}),
+        // Its shell, and Git first on its PATH, run where commands run.
+        ...(shell
+          ? {
+              SHELL: shell.shell,
+              PATH: [shell.path, attempt.env.PATH ?? process.env.PATH]
+                .filter(Boolean)
+                .join(":"),
+            }
           : {}),
       },
       stdio: ["pipe", "pipe", "pipe"],

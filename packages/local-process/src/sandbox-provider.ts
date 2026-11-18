@@ -37,6 +37,7 @@ import {
   PROCESS_SIGNALS,
   processReadBounds,
   refuseCacheVolumes,
+  refuseSeparateCommands,
   SANDBOX_CAPABILITIES,
   SANDBOX_PATHS_ENV,
   StdioDeploymentRuntimeProvider,
@@ -236,6 +237,10 @@ export class LocalProcessSandboxProvider implements SandboxProvider {
     assertSandboxResources(opts.resources, []);
     // A plain process can write any directory its user owns (ADR 0334).
     refuseCacheVolumes(opts.volumes, "Local-process");
+    refuseSeparateCommands({
+      separateCommands: opts.separateCommands,
+      provider: "Local-process",
+    });
     if (opts.image)
       throw new Error(
         "Local-process sandboxes run on this machine's own system and cannot boot an image",

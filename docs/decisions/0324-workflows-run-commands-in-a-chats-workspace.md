@@ -1,6 +1,6 @@
 # 0324: Workflows run commands in a chat's workspace, setup can be a workflow, and workspaces report their changes
 
-- **Status:** Accepted (amends 0208, 0257)
+- **Status:** Accepted (amends 0208, 0257; amended by [0332](0332-commands-run-apart-from-the-agent.md): where commands run apart, `exec` in either mode runs in the command container, with the grants only of `commands.connections`; `$WORK_PROGRAM` is copied beside the agent too, out of commands' reach)
 - **Date:** 2026-11-17
 - **Refines:** 0156, 0158, 0173, 0178, 0209, 0260, 0289, 0295
 

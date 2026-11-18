@@ -2550,6 +2550,12 @@ export const ProjectAgentDefinitionSchema = z.object({
     .object({
       endpoint: z.string().optional(),
       command: z.array(z.string()).optional(),
+      /** The agent runs its commands with `$SHELL` (ADR 0332). */
+      shell: z.boolean().optional(),
+      /** `false`: the agent loads nothing from the checkout (ADR 0332). */
+      projectConfig: z.boolean().optional(),
+      /** Variables Work sets on the agent's process. */
+      env: z.record(z.string(), z.string()).optional(),
     })
     .optional(),
 });

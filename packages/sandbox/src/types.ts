@@ -18,6 +18,20 @@ import type {
 
 export type SandboxType = "execution" | "dev";
 
+/**
+ * Where in a sandbox that runs commands apart (ADR 0332) an operation
+ * happens: beside the agent (its runner, grants and state) or where its
+ * commands run. `commands` is the default everywhere, so an operation that
+ * names no side runs where the pull request's code already is. A provider
+ * without `commands.separate` has one side and ignores it.
+ */
+export type SandboxSide = "agent" | "commands";
+
+/** Options naming the side of a file operation (ADR 0332). */
+export interface SandboxFileOpts {
+  side?: SandboxSide;
+}
+
 export type SandboxStatus =
   | "creating"
   | "started"
@@ -92,7 +106,75 @@ export interface CreateSandboxOpts {
    * at their paths. Needs the `volumes` capability.
    */
   volumes?: readonly SandboxVolume[];
+  /**
+   * Run commands apart from the agent (ADR 0332): needs
+   * `commands.separate`. The sandbox becomes an agent side and a command
+   * side sharing only the `shared` directories (the checkout). The
+   * provider serves {@link SEPARATE_COMMANDS_SOCKET} on the agent side;
+   * every command it runs there for the agent first loads `envFiles` (the
+   * command side's own session files) where they exist.
+   */
+  separateCommands?: {
+    shared: readonly string[];
+    envFiles?: readonly string[];
+    /**
+     * The agent side's own limits; `resources` are the command side's,
+     * where the change's tests and services run. Defaults to
+     * {@link SEPARATE_AGENT_DEFAULT_RESOURCES}.
+     */
+    agentResources?: SeparateAgentResources;
+  };
 }
+
+/** The limits of the agent side of a sandbox that runs commands apart (ADR 0332). */
+export interface SeparateAgentResources {
+  cpuMillis?: number;
+  memoryMb?: number;
+}
+
+/**
+ * What the agent side of a sandbox that runs commands apart gets unless its
+ * Environment says otherwise (ADR 0332): enough for a harness and its
+ * runner, which run no tests or services. Its Allocation reserves it on
+ * top of the command side's limits.
+ */
+export const SEPARATE_AGENT_DEFAULT_RESOURCES = {
+  cpuMillis: 1000,
+  memoryMb: 2048,
+} as const;
+
+/**
+ * What the command side of such a sandbox gets when neither its
+ * Environment nor its machine names limits: the container backend's own
+ * default, named so the Allocation reserves it and the container is given
+ * it (ADR 0332).
+ */
+export const SEPARATE_COMMANDS_DEFAULT_RESOURCES = {
+  cpuMillis: 1000,
+  memoryMb: 1024,
+} as const;
+
+/**
+ * Refuse to run an agent's commands apart from it (ADR 0332) on a provider
+ * that cannot: placement never asks such a provider, and one asked anyway
+ * says so rather than running the commands beside the agent.
+ */
+export function refuseSeparateCommands(input: {
+  separateCommands: CreateSandboxOpts["separateCommands"];
+  provider: string;
+}): void {
+  if (input.separateCommands)
+    throw new Error(
+      `${input.provider} sandboxes cannot run an agent's commands apart from the agent; place the Environment on a machine whose container backend offers commands.separate`,
+    );
+}
+
+/**
+ * Where a provider offering `commands.separate` serves its command socket
+ * inside the agent side of a sandbox (ADR 0332). Nothing on the command
+ * side can reach it.
+ */
+export const SEPARATE_COMMANDS_SOCKET = "/run/work-commands/commands.sock";
 
 /**
  * A directory that persists on the machine across sandboxes (ADR 0208).
@@ -245,6 +327,8 @@ export function signInCapability(input: {
 }
 
 export interface ExecOpts {
+  /** Where in a sandbox that runs commands apart (ADR 0332); `commands` by default. */
+  side?: SandboxSide;
   cwd?: string;
   /** Seconds. */
   timeout?: number;
@@ -295,8 +379,13 @@ export interface SandboxProvider {
     sandboxId: string,
     files: Record<string, string>,
     basePath: string,
+    opts?: SandboxFileOpts,
   ): Promise<void>;
-  downloadFile(sandboxId: string, filePath: string): Promise<string>;
+  downloadFile(
+    sandboxId: string,
+    filePath: string,
+    opts?: SandboxFileOpts,
+  ): Promise<string>;
   gitClone(
     sandboxId: string,
     url: string,

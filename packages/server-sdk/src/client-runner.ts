@@ -414,9 +414,14 @@ async function executeClientOperation({
         operation.sandboxId,
         operation.files,
         operation.basePath,
+        operation.side ? { side: operation.side } : undefined,
       );
     case "download":
-      return provider.downloadFile(operation.sandboxId, operation.path);
+      return provider.downloadFile(
+        operation.sandboxId,
+        operation.path,
+        operation.side ? { side: operation.side } : undefined,
+      );
     case "clone":
       return provider.gitClone(
         operation.sandboxId,

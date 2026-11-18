@@ -263,6 +263,44 @@ separate `harnessPermissions` field in its native values:
 are in the definition's consent hash. The repository's `CLAUDE.md` and
 `.claude/` apply as in the CLI.
 
+### Commands apart from the agent
+
+An Environment with `"commands": { "separate": true }` runs everything the
+agent's shell runs in a command container beside the agent's, sharing only
+the checkout (ADR 0332), so code from the repository cannot read the
+chat's grants or call its model or Work's tools. Each harness takes it its
+own way:
+
+- **Claude Code** runs Bash, Monitor and background tasks through Work's
+  shim (`CLAUDE_CODE_SHELL`), finds Work's `git` first on its `PATH`, and
+  loads only its home's settings: the checkout's `CLAUDE.md` and `.claude/`
+  (hooks, MCP servers, skills) would run or steer it from the repository,
+  so they are not read there. Its file tools resolve links and stay in the
+  checkout and its temporary folder.
+- **ACP agents** run there only under a contract their definition states,
+  since Work cannot see inside them: every way the agent runs code goes
+  through `$SHELL` (`"shell": true`), and it loads no configuration,
+  plugins, MCP servers, language servers, formatters or instructions from
+  the checkout (`"projectConfig": false`), with `"env"` naming the
+  variables that make it so, which Work sets on its process. Work points
+  `SHELL` at the shim and puts its `git` first on `PATH`. Without both the
+  turn is refused. For OpenCode: `"acp": { "command": ["opencode", "acp"],
+  "shell": true, "projectConfig": false, "env": {
+  "OPENCODE_DISABLE_PROJECT_CONFIG": "1", "OPENCODE_DISABLE_LSP_DOWNLOAD":
+  "1", "OPENCODE_DISABLE_CLAUDE_CODE": "1" } }`, and `"lsp": false`,
+  `"formatter": false` and `"snapshot": false` in its baked configuration.
+- **Codex** is refused: it picks its own shell, so its commands cannot be
+  sent apart. Use it in Environments that run commands beside the agent.
+- **The built-in agent** runs on the control plane; its tools already run
+  in the command container.
+
+The agent's container runs as uid 10001, owning none of the checkout, so
+Git there refuses the repository; keep `safe.directory` out of the image's
+system Git configuration. It holds only the turn's model grant. An ACP
+agent's own file tools still follow links in the checkout, to that grant or
+its configuration; an agent that matters here should refuse paths outside
+the checkout itself.
+
 ## Verify
 
 From a chat with the agent: it edits a file and runs a command; `env` in

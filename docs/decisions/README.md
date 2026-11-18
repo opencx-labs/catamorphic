@@ -336,5 +336,6 @@ Settled design decisions live here as short Architecture Decision Records. They 
 | [0329](0329-model-usage-is-telemetry-and-a-session-read.md) | Model usage is telemetry and a session read | Accepted (amends 0180 and 0293) |
 | [0330](0330-enablements-follow-the-published-program.md) | Enablements follow the published program | Accepted (amends 0068, 0158, 0170) |
 | [0331](0331-project-deploy-workflow-and-host-project-hooks.md) | A project deploy workflow, and host project hooks that return secrets | Accepted (amends 0046) |
+| [0332](0332-commands-run-apart-from-the-agent.md) | The commands an agent runs execute apart from the agent | Accepted (amends 0175, 0180, 0204, 0208, 0257, 0259, 0324) |
 | [0333](0333-stalled-turns-are-visible-and-restartable.md) | A turn that stops making progress is visible, an event, and restartable | Accepted (amends 0198, 0245, 0328) |
 | [0334](0334-read-only-caches-only-a-trusted-fill-writes.md) | Read-only caches that only a trusted fill writes | Accepted (amends 0208, 0257) |

@@ -34,16 +34,20 @@ What runs where:
   change requests and thread resolution to people.
 - A **review machine** (a worker labelled `pool=review`, opened to the
   project) runs each pull request's chat in the `review` Environment: its own
-  sandbox from the project's image, with Docker inside it, checked out at the
-  pull request's head. It holds no credential; Git and the agent's tools go
-  through the gateway with the session's grant. The pull request's own code
-  runs there and can use that grant, so the chat's `github` binding only
-  reads (no `git:write`) and the reviewer's sandboxing is `contained`:
-  nothing on a review machine can write to GitHub, and whatever the code
-  forges in the chat is only a report the poster validates.
+  sandbox from the project's image, checked out at the pull request's head.
+  It holds no credential; Git and the agent's tools go through the gateway
+  with the session's grant. The sandbox is two containers (ADR 0332): the
+  reviewer's, holding its grants, model and Work tool endpoints and state,
+  and a command container sharing only the checkout, where the pull
+  request's install scripts, tests and Docker services run. That code reaches
+  Git reads through the gateway and nothing else of the chat's. The chat's
+  `github` binding only reads (no `git:write`) and the reviewer's sandboxing
+  is `contained`: nothing on a review machine can write to GitHub, and the
+  reviewer's report is only something the poster validates.
 
-The review is advice, not a merge gate. The code under review runs where
-the review is written, so it can sway the verdict and the "Work review" check.
+The review is advice, not a merge gate. The code under review cannot reach
+the reviewer, but what the pull request wrote still reaches it as content
+and can sway the verdict and the "Work review" check.
 Protect
 the base branch with a person's approval (branch protection or rulesets),
 and if you also require the "Work review" check, pick the App as its
@@ -121,14 +125,18 @@ not check.
 Review machines build the project's image, run Docker inside each sandbox,
 and give setup its own network while the agent reaches only the gateway, so
 they run the container backend under gVisor (`runsc` with `--net-raw` and
-`--host-uds=open`): it offers `containers`, `network.policy` and
-`network.setup`. Microsandbox fixes a sandbox's network when it is created,
-so it cannot host the `review` Environment ([Setup and
-volumes](cluster-deployment.md#setup-and-volumes)). The container backend
-also mounts the `review` Environment's pnpm cache read only (`caches`, ADR
-0334), filled from `main` by the pack's `fillReviewCache`: each machine
-keeps its own copy, so keep a few machines warm with `min` and their
-reviews install offline from it.
+`--host-uds=open`): it offers `containers`, `network.policy`,
+`network.setup`, `commands.separate`, which runs the reviewer's commands
+apart from it (the machine serves each sandbox's command socket over the
+same host sockets), and `caches`. Microsandbox fixes a sandbox's network
+when it is created and runs no command container, so it cannot host the
+`review` Environment ([Setup and
+volumes](cluster-deployment.md#setup-and-volumes)); nor can a machine
+running privileged runc containers. The container backend mounts the
+`review` Environment's pnpm cache read only into the command container
+(`caches`, ADR 0334), filled from `main` by the pack's `fillReviewCache`:
+each machine keeps its own copy, so keep a few machines warm with `min` and
+their reviews install from it, fetching only what main did not have.
 
 Reviews come in bursts, so let a machine rule create machines while reviews
 wait and destroy them once idle ([Machines on
@@ -169,9 +177,10 @@ Ask an agent in the project to install the `pull-request-reviews` pack:
 adds:
 
 - `.work/project.json`: the `review` Environment (pool, image, containers,
-  gateway-only egress, a `setup` whose network reaches the package
+  gateway-only egress, `commands` apart from the reviewer with only the
+  `git` binding (Git reads of the repository), a `setup` whose network reaches the package
   registries, `waitMinutes`, `idleReleaseMinutes`, `approvals.waitMinutes`,
-  and the read-only `github`, `prod`, and `slack` bindings) and the `github-poster` Environment
+  and the read-only `github`, `git`, `prod`, and `slack` bindings) and the `github-poster` Environment
   (workflows only; the `github` binding with the poster's typed write
   actions) merged beside the existing `default`. Fix branches are left out:
   `git:write` in `review` would let the pull request's code push with the
@@ -183,7 +192,8 @@ adds:
 - `.work/triggers/github.ts`: the GitHub trigger library.
 - `.work/agents/reviewer.json` and `reviewer.md`: the reviewer and its
   review doctrine. The `pull-request-reviews-opencode` pack runs OpenCode
-  over ACP on a model connection instead (its `effort`, if set, chosen
+  over ACP on a model connection instead (`acp.shell`, so its commands run
+  apart; its `effort`, if set, chosen
   among the model's variants; a chat whose sandbox was replaced continues
   from a hand-off that keeps its submitted reviews and the pushes and
   comments they do not answer yet, ADR 0328), such as OpenRouter, with

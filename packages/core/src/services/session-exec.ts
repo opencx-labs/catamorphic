@@ -8,9 +8,11 @@ import type { DB, Json, JsonObject } from "@catamorphic/db";
 import { shellQuote } from "@catamorphic/git";
 import { getTracer, withSpan } from "@catamorphic/otel";
 import {
+  commandSideProcesses,
   followProcess,
   type SandboxEgress,
   type SandboxProcessProvider,
+  type SandboxSide,
 } from "@catamorphic/sandbox";
 import {
   PROJECT_APP_DATA_DIR,
@@ -1027,38 +1029,42 @@ export class SessionExecService {
     projectId: string;
     commit: string;
   }): Promise<string> {
-    const { handle } = args;
     const folder = `../${PROGRAM_DIRECTORY}/${args.commit}`;
+    let program: Record<string, string> | undefined;
+    // Where the command runs, and beside the agent: in a sandbox that runs
+    // commands apart (ADR 0332) the agent's copy is the one its commands
+    // cannot change. One container is asked twice otherwise.
+    for (const side of ["commands", "agent"] as const) {
+      program = await this.copyProgramTo({ ...args, side, folder, program });
+    }
+    return folder;
+  }
+
+  /** One side's copy; returns the program's files once they were read. */
+  private async copyProgramTo(args: {
+    handle: SessionWorkspaceHandle;
+    tenantId: string;
+    projectId: string;
+    commit: string;
+    side: SandboxSide;
+    folder: string;
+    program: Record<string, string> | undefined;
+  }): Promise<Record<string, string> | undefined> {
+    const { handle, folder, side } = args;
     const present = await handle.provider.executeCommand(
       handle.sandboxId,
       `test -d ${shellQuote(folder)} && echo present || true`,
-      { cwd: handle.projectDirectory, timeout: 60 },
+      { cwd: handle.projectDirectory, timeout: 60, side },
     );
-    if (present.result.trim() === "present") return folder;
-    const prefix = `${PROJECT_WORKSPACE_ROOT}/`;
-    const appData = `${PROJECT_APP_DATA_DIR.slice(prefix.length)}/`;
-    const files = await withProgram(
-      this.deps.projectManager,
-      args.tenantId,
-      args.projectId,
-      (repo) => repo.readFilesAtRef(args.commit, { prefix }),
-    );
-    const program = Object.fromEntries(
-      Object.entries(files)
-        .map(([file, content]) => [file.slice(prefix.length), content])
-        .filter(
-          ([file]) =>
-            file !== undefined &&
-            !file.split("/").includes("node_modules") &&
-            !file.startsWith(appData),
-        ),
-    );
+    if (present.result.trim() === "present") return args.program;
+    const program = args.program ?? (await this.programFiles(args));
     const root = path.posix.dirname(handle.projectDirectory);
     const staging = `${PROGRAM_DIRECTORY}/.staging-${randomUUID()}`;
     await handle.provider.uploadFiles(
       handle.sandboxId,
       { ...program, ".work-program-commit": args.commit },
       `${root}/${staging}`,
+      { side },
     );
     // Renamed whole into place; a copy another start put there first wins.
     // A start that lost the race between its look and its rename moved its
@@ -1074,13 +1080,39 @@ export class SessionExecService {
         `if [ -e ${shellQuote(nested)} ]; then chmod -R u+w ${shellQuote(nested)} 2>/dev/null; rm -rf ${shellQuote(nested)}; fi`,
         `test -d ${shellQuote(folder)}`,
       ].join(" && "),
-      { cwd: handle.projectDirectory, timeout: 120 },
+      { cwd: handle.projectDirectory, timeout: 120, side },
     );
     if (placed.exitCode !== 0)
       throw new Error(
         `Could not copy the program into the workspace: ${placed.result.trim().slice(-500)}`,
       );
-    return folder;
+    return program;
+  }
+
+  /** The program's files at a commit: its `.work/` less dependencies and data. */
+  private async programFiles(args: {
+    tenantId: string;
+    projectId: string;
+    commit: string;
+  }): Promise<Record<string, string>> {
+    const prefix = `${PROJECT_WORKSPACE_ROOT}/`;
+    const appData = `${PROJECT_APP_DATA_DIR.slice(prefix.length)}/`;
+    const files = await withProgram(
+      this.deps.projectManager,
+      args.tenantId,
+      args.projectId,
+      (repo) => repo.readFilesAtRef(args.commit, { prefix }),
+    );
+    return Object.fromEntries(
+      Object.entries(files)
+        .map(([file, content]) => [file.slice(prefix.length), content])
+        .filter(
+          (entry): entry is [string, string] =>
+            entry[0] !== undefined &&
+            !entry[0].split("/").includes("node_modules") &&
+            !entry[0].startsWith(appData),
+        ),
+    );
   }
 
   private async programCommitOf(action: ActionRow): Promise<string | null> {
@@ -1185,7 +1217,8 @@ function processesOf(handle: SessionWorkspaceHandle): SandboxProcessProvider {
     throw new SessionExecRefusedError(
       "This machine cannot run a workflow's commands in a chat's workspace",
     );
-  return processes;
+  // A workflow's commands live on the command side alone (ADR 0332).
+  return commandSideProcesses(processes);
 }
 
 function progressJson(progress: ExecProgress): Json {

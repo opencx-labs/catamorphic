@@ -27,6 +27,11 @@ export const SANDBOX_CAPABILITIES = {
    * cannot remount them, and fills them in a sandbox of their own (ADR 0334).
    */
   caches: "caches",
+  /**
+   * Runs an agent's commands in a container of their own beside the
+   * agent's, sharing only the checkout (ADR 0332).
+   */
+  separateCommands: "commands.separate",
 } as const;
 
 export type SandboxCapability =

@@ -345,6 +345,9 @@ describe("the pull-request-reviews pack", () => {
       // The agent reaches only the gateway; registries are setup's alone,
       // with no volume to carry what agents wrote into it (ADR 0257).
       network: { egress: "gateway" },
+      // The pull request's code runs apart from the reviewer, reaching only
+      // Git reads through the gateway (ADR 0332).
+      commands: { separate: true, connections: ["git"] },
       setup: {
         network: { allow: expect.arrayContaining(["registry.npmjs.org"]) },
       },
@@ -380,6 +383,7 @@ describe("the pull-request-reviews pack", () => {
     );
     expect(Object.keys(review?.connections ?? {})).toEqual([
       "github",
+      "git",
       "prod",
       "slack",
     ]);
@@ -391,10 +395,24 @@ describe("the pull-request-reviews pack", () => {
     const reads = ["get", "pull_request_files", "review_threads"];
     // No git:write either: the pull request's code could push with the
     // chat's grant, and App pushes run the base repository's workflows.
-    expect(review?.connections?.github?.capabilities).toEqual([
-      ...reads,
-      "git:read",
-    ]);
+    expect(review?.connections?.github?.capabilities).toEqual(reads);
+    // The commands get Git reads of the project's repository alone (its
+    // default), through a binding of their own, not the reviewer's GitHub
+    // reads (ADR 0332).
+    expect(review?.connections?.git).toMatchObject({
+      provider: "github",
+      principal: "service",
+      capabilities: ["git:read"],
+    });
+    expect(review?.connections?.git?.git).toBeUndefined();
+    for (const reviewer of [
+      file(".work/agents/reviewer.json"),
+      OPENCODE.files[".work/agents/reviewer.json"] ?? "{}",
+    ])
+      expect(JSON.parse(reviewer).connections).toContainEqual({
+        alias: "git",
+        principal: "service",
+      });
     const poster = policy.environments["github-poster"];
     expect(poster).toMatchObject({ workloads: ["workflow"] });
     expect(Object.keys(poster?.connections ?? {})).toEqual(["github"]);
@@ -491,7 +509,14 @@ describe("the pull-request-reviews pack", () => {
     expect(agent.success, JSON.stringify(agent.error)).toBe(true);
     expect(agent.data).toMatchObject({
       kind: "acp",
-      acp: { command: ["opencode", "acp"] },
+      // OpenCode runs its commands with $SHELL and loads nothing from the
+      // checkout, so they run apart (ADR 0332).
+      acp: {
+        command: ["opencode", "acp"],
+        shell: true,
+        projectConfig: false,
+        env: { OPENCODE_DISABLE_PROJECT_CONFIG: "1" },
+      },
       credentials: { source: "connection", connection: "model" },
       sandboxing: "contained",
       environment: { allowed: ["review"] },
@@ -507,6 +532,29 @@ describe("the pull-request-reviews pack", () => {
     expect(REVIEW_OPENCODE_DOCKERFILE).toContain(
       "OPENCODE_DISABLE_PROJECT_CONFIG=1",
     );
+    // Beside the reviewer, OpenCode starts no language server or formatter
+    // (some resolve from the change's dependencies), downloads none, keeps
+    // no Git snapshots, and reads none of the change's Claude Code files.
+    const config = JSON.parse(
+      [...REVIEW_OPENCODE_DOCKERFILE.matchAll(/^\s*'(.*)' (?:\\$|>)/gm)]
+        .map((line) => line[1])
+        .join("\n"),
+    );
+    expect(config).toMatchObject({
+      lsp: false,
+      formatter: false,
+      snapshot: false,
+    });
+    for (const variable of [
+      "OPENCODE_DISABLE_LSP_DOWNLOAD=1",
+      "OPENCODE_DISABLE_CLAUDE_CODE=1",
+      "OPENCODE_DISABLE_EXTERNAL_SKILLS=1",
+    ])
+      expect(REVIEW_OPENCODE_DOCKERFILE).toContain(variable);
+    expect(agent.data?.acp?.env).toMatchObject({
+      OPENCODE_DISABLE_LSP_DOWNLOAD: "1",
+      OPENCODE_DISABLE_CLAUDE_CODE: "1",
+    });
   });
 
   it("parses as five workflows on the GitHub library, session events and a schedule", () => {

@@ -110,8 +110,10 @@ Postgres and one authority, with machines exposed as permitted Environments.
 Postgres mode shares origins, artifacts, credentials, auth, and leased execution.
 Each Environment can choose its sandbox image, give agents their own Docker,
 and limit which hosts they reach, with a wider list for its setup alone
-(package registries) while agents reach only the gateway, and mount
-read-only caches that only a trusted fill from the published main writes; an agent's
+(package registries) while agents reach only the gateway, run the agent's
+commands in a container of their own that shares only the checkout, out of
+reach of the agent's grants, model and tools, and mount read-only caches
+that only a trusted fill from the published main writes; an agent's
 sandboxing decides what leaves its sandbox, apart from its harness's own
 permission mode. Claude Code, Codex and ACP agents such as OpenCode run in
 those sandboxes on the organization's model keys, held by the gateway. New model
