@@ -13,8 +13,9 @@ const execute = promisify(execFile);
  * every bearer credential require), at an address of this machine its
  * sandboxes reach through their egress proxy. TLS ends here and the bytes
  * go on to the server unchanged. The certificate is for `host` alone,
- * issued by a CA made for this run with `openssl`; whatever must trust it
- * (a sandbox image) is given `ca`.
+ * issued with `openssl` by a CA made for the run, or kept in
+ * `caDirectory` and reused (an image that trusts it stays the same image);
+ * whatever must trust it (a sandbox image) is given `ca`.
  */
 export interface TlsFront {
   /** `https://<host>:<port>`. */
@@ -27,33 +28,41 @@ export interface TlsFront {
 export async function startTlsFront(input: {
   /** An IPv4 address of this machine: the certificate's only name. */
   host: string;
-  /** The server's port on 127.0.0.1. */
-  upstreamPort: number;
-  /** Where the run's keys and certificates are written. */
+  /** The server's port on 127.0.0.1, read when a connection arrives. */
+  upstreamPort: () => number;
+  /** Where the run's server key and certificate are written. */
   directory: string;
+  /** Where the CA is kept between runs; made there when missing. */
+  caDirectory?: string;
 }): Promise<TlsFront> {
   const file = (name: string) => path.join(input.directory, name);
-  fs.mkdirSync(input.directory, { recursive: true, mode: 0o700 });
+  const caFile = (name: string) =>
+    path.join(input.caDirectory ?? input.directory, name);
+  for (const directory of [input.directory, input.caDirectory])
+    if (directory) fs.mkdirSync(directory, { recursive: true, mode: 0o700 });
   const openssl = (args: readonly string[]) => execute("openssl", args);
-  await openssl([
-    "req",
-    "-x509",
-    "-newkey",
-    "rsa:2048",
-    "-nodes",
-    "-days",
-    "2",
-    "-subj",
-    "/CN=Work end-to-end test CA",
-    "-addext",
-    "basicConstraints=critical,CA:TRUE",
-    "-addext",
-    "keyUsage=critical,keyCertSign,cRLSign",
-    "-keyout",
-    file("ca.key"),
-    "-out",
-    file("ca.pem"),
-  ]);
+  if (!fs.existsSync(caFile("ca.pem")) || !fs.existsSync(caFile("ca.key")))
+    await openssl([
+      "req",
+      "-x509",
+      "-newkey",
+      "rsa:2048",
+      "-nodes",
+      // It outlives a cache of images that trust it; each run's server
+      // certificate does not.
+      "-days",
+      "3650",
+      "-subj",
+      "/CN=Work end-to-end test CA",
+      "-addext",
+      "basicConstraints=critical,CA:TRUE",
+      "-addext",
+      "keyUsage=critical,keyCertSign,cRLSign",
+      "-keyout",
+      caFile("ca.key"),
+      "-out",
+      caFile("ca.pem"),
+    ]);
   await openssl([
     "req",
     "-newkey",
@@ -76,10 +85,11 @@ export async function startTlsFront(input: {
     "-in",
     file("server.csr"),
     "-CA",
-    file("ca.pem"),
+    caFile("ca.pem"),
     "-CAkey",
-    file("ca.key"),
-    "-CAcreateserial",
+    caFile("ca.key"),
+    "-set_serial",
+    String(Date.now()),
     "-days",
     "2",
     "-extfile",
@@ -94,7 +104,7 @@ export async function startTlsFront(input: {
       cert: fs.readFileSync(file("server.pem")),
     },
     (socket) => {
-      const upstream = net.connect(input.upstreamPort, "127.0.0.1");
+      const upstream = net.connect(input.upstreamPort(), "127.0.0.1");
       for (const each of [socket, upstream]) {
         sockets.add(each);
         each.on("close", () => sockets.delete(each));
@@ -114,7 +124,7 @@ export async function startTlsFront(input: {
     throw new Error("The TLS front has no port");
   return {
     url: `https://${input.host}:${address.port}`,
-    ca: fs.readFileSync(file("ca.pem"), "utf8"),
+    ca: fs.readFileSync(caFile("ca.pem"), "utf8"),
     close: async () => {
       for (const socket of sockets) socket.destroy();
       await new Promise<void>((resolve) => server.close(() => resolve()));
