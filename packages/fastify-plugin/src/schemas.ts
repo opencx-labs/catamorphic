@@ -2137,11 +2137,16 @@ export const TurnIdParamsSchema = z.object({
 
 /** Restart a running turn's attempt (ADR 0333). */
 export const RestartTurnSchema = z.object({
+  /** The attempt to end: refused unless it is the turn's running attempt. */
+  attemptId: z.string().uuid(),
   reason: z.string().min(1).max(500),
+  /** Only while it is stalled. */
+  onlyIfStalled: z.boolean().optional(),
   idempotencyKey: z.string().min(1).max(300),
 });
 
 export const RestartTurnResultSchema = z.object({
+  restarted: z.literal(true),
   turnId: z.string(),
   attemptId: z.string(),
   attempt: z.number().int(),

@@ -126,11 +126,11 @@ export {
   AgentTurnUnsettledError,
   type ArchiveSessionResourcesHandler,
   type NativeAgentCheckout,
+  type RestartAnswer,
   type SessionDeliveryReceipt,
   type SessionPlacement,
   type SyncedFileChange,
   type ToolAlwaysAllowedEvent,
-  TurnNotRunningError,
   type UnsettledTurnState,
   UnsupportedAgentTopologyError,
 } from "./services/agent-sessions-service.js";

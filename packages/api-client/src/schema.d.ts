@@ -7662,7 +7662,10 @@ export interface paths {
             requestBody: {
                 content: {
                     "application/json": {
+                        /** Format: uuid */
+                        attemptId: string;
                         reason: string;
+                        onlyIfStalled?: boolean;
                         idempotencyKey: string;
                     };
                 };
@@ -7675,6 +7678,8 @@ export interface paths {
                     };
                     content: {
                         "application/json": {
+                            /** @enum {boolean} */
+                            restarted: true;
                             turnId: string;
                             attemptId: string;
                             attempt: number;

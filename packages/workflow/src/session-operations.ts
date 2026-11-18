@@ -367,24 +367,40 @@ export interface SessionHostOperations {
    * that is not open answers `{ closed: false }`.
    */
   close: Call<Action, { sessionId: string | null; closed: boolean }>;
-  interrupt: Call<Action>;
+  /** `turnId`: only that turn, and nothing when it no longer works. */
+  interrupt: Call<Action & { turnId?: string }, { interrupted: boolean }>;
   /**
    * End a running turn's attempt without asking its harness (it is killed,
    * its model grants revoked) and run the same turn again on a new attempt,
-   * told it was restarted and why (ADR 0333). Needs the authority that
-   * interrupts the chat; refuses a turn that is not running. Answers the
-   * attempt it ends and the turn's counts so far: bound your restarts with
-   * `restarts`.
+   * told it was restarted and why (ADR 0333). Name the attempt to end (a
+   * stall event's `detail.attemptId`): one that is no longer the turn's
+   * running attempt, or with `onlyIfStalled` no longer stalled, is not
+   * ended, and the answer says why (`restarted: false`), so treat that as
+   * nothing to do. Needs the authority that interrupts the chat. Bound your
+   * restarts with `restarts`.
    */
   restart: Call<
-    Action & { turnId: string; reason: string },
-    {
+    Action & {
       turnId: string;
       attemptId: string;
-      attempt: number;
-      attempts: number;
-      restarts: number;
-    }
+      reason: string;
+      onlyIfStalled?: boolean;
+    },
+    | {
+        restarted: true;
+        turnId: string;
+        attemptId: string;
+        attempt: number;
+        attempts: number;
+        restarts: number;
+      }
+    | {
+        restarted: false;
+        turnId: string;
+        attemptId: string;
+        refused: "not_running" | "not_current" | "not_stalled";
+        message: string;
+      }
   >;
   /** A turn's attempts with their diagnostics (ADR 0333), oldest first. */
   attempts: Call<

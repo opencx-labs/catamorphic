@@ -624,6 +624,25 @@ async function project(
         completed_at: turn.completedAt ? new Date(turn.completedAt) : null,
         updated_at: new Date(turn.updatedAt),
       };
+      // Entering or leaving a wait on a person starts the attempt's stall
+      // clock again (ADR 0333): that wait is the person's, never a silence.
+      if (turn.activeAttemptId)
+        await trx
+          .updateTable("agent_turn_attempts")
+          .set({ progress_at: sql<Date>`now()`, stalled_at: null })
+          .where("id", "=", turn.activeAttemptId)
+          .where("status", "in", ["preparing", "running"])
+          .where(({ exists, selectFrom }) =>
+            exists(
+              selectFrom("agent_turns")
+                .select("agent_turns.id")
+                .where("agent_turns.id", "=", turn.id)
+                .where(
+                  sql<boolean>`(agent_turns.status = 'waiting') <> ${turn.status === "waiting"}`,
+                ),
+            ),
+          )
+          .execute();
       await trx
         .insertInto("agent_turns")
         .values({

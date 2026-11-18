@@ -751,20 +751,26 @@ export class AgentSessionNotFoundError extends Error {
   }
 }
 
-/** A restart named a turn that is not running (ADR 0333). */
-export class TurnNotRunningError extends Error {
-  constructor(
-    readonly turnId: string,
-    readonly status: string | null,
-  ) {
-    super(
-      status === null
-        ? `This chat has no turn ${turnId}`
-        : `Turn ${turnId} is ${status}, not running: only a running turn can be restarted`,
-    );
-    this.name = "TurnNotRunningError";
-  }
-}
+/**
+ * What `restartTurn` answers (ADR 0333): the attempt it will end, with the
+ * turn's counts so far, or why it ends nothing.
+ */
+export type RestartAnswer =
+  | {
+      restarted: true;
+      turnId: string;
+      attemptId: string;
+      attempt: number;
+      attempts: number;
+      restarts: number;
+    }
+  | {
+      restarted: false;
+      turnId: string;
+      attemptId: string;
+      refused: "not_running" | "not_current" | "not_stalled";
+      message: string;
+    };
 
 export class AgentSessionClosedError extends Error {
   constructor(readonly sessionId: string) {
@@ -3803,73 +3809,106 @@ export class AgentSessionsService {
   /**
    * Restart a running turn's attempt (ADR 0333): the lease holder ends it
    * without asking its harness and runs the turn again on a new attempt.
-   * Refuses a turn that is not running or waiting. Answers the attempt it
-   * ends, with the turn's attempt and restart counts so far; asked again
-   * before the holder acted, it names the same attempt.
+   * Only `attemptId` is restarted, and only while it is the turn's running
+   * attempt (with `onlyIfStalled`, only while it is stalled, checked again
+   * when the holder acts): an attempt that moved on, or a newer one after
+   * another restart, is never ended by a request about an older one. A
+   * refusal is an answer, not an error, so a workflow can treat it as
+   * nothing to do. Asked again before the holder acted, it names the same
+   * attempt.
    */
   async restartTurn(
     identity: Identity,
     projectId: string,
     sessionId: string,
-    input: { turnId: string; reason: string; signal?: AbortSignal },
-  ): Promise<{
-    turnId: string;
-    attemptId: string;
-    attempt: number;
-    attempts: number;
-    restarts: number;
-  }> {
+    input: {
+      turnId: string;
+      attemptId: string;
+      reason: string;
+      onlyIfStalled?: boolean;
+      signal?: AbortSignal;
+    },
+  ): Promise<RestartAnswer> {
     await this.requireSession(identity, projectId, sessionId);
     const reason = input.reason.trim().slice(0, 500);
-    const answer = await this.db.transaction().execute(async (trx) => {
-      await this.log.lock(trx, sessionId);
-      const turn = await trx
-        .selectFrom("agent_turns")
-        .select(["id", "status", "active_attempt_id"])
-        .where("id", "=", input.turnId)
-        .where("session_id", "=", sessionId)
-        .executeTakeFirst();
-      const attempt =
-        turn && (turn.status === "running" || turn.status === "waiting")
-          ? await trx
-              .selectFrom("agent_turn_attempts")
-              .select(["id", "ordinal"])
-              .where("id", "=", turn.active_attempt_id ?? "")
-              .where("status", "=", "running")
-              .executeTakeFirst()
-          : undefined;
-      if (!turn || !attempt)
-        throw new TurnNotRunningError(input.turnId, turn?.status ?? null);
-      input.signal?.throwIfAborted();
-      const open = await trx
-        .selectFrom("agent_turn_commands")
-        .select("id")
-        .where("turn_id", "=", turn.id)
-        .where("attempt_id", "=", attempt.id)
-        .where("kind", "=", "restart")
-        .where("status", "in", ["pending", "sent"])
-        .executeTakeFirst();
-      if (!open)
-        await this.queue.enqueueCommand(trx, {
+    const answer = await this.db
+      .transaction()
+      .execute(async (trx): Promise<RestartAnswer> => {
+        await this.log.lock(trx, sessionId);
+        const turn = await trx
+          .selectFrom("agent_turns")
+          .select(["id", "status", "active_attempt_id"])
+          .where("id", "=", input.turnId)
+          .where("session_id", "=", sessionId)
+          .executeTakeFirst();
+        const refused = (
+          why: "not_running" | "not_current" | "not_stalled",
+          message: string,
+        ): RestartAnswer => ({
+          restarted: false,
+          turnId: input.turnId,
+          attemptId: input.attemptId,
+          refused: why,
+          message,
+        });
+        if (!turn || (turn.status !== "running" && turn.status !== "waiting"))
+          return refused(
+            "not_running",
+            turn
+              ? `Turn ${input.turnId} is ${turn.status}, not running: only a running turn can be restarted`
+              : `This chat has no turn ${input.turnId}`,
+          );
+        const attempt = await trx
+          .selectFrom("agent_turn_attempts")
+          .select(["id", "ordinal", "stalled_at"])
+          .where("id", "=", input.attemptId)
+          .where("turn_id", "=", turn.id)
+          .where("status", "=", "running")
+          .executeTakeFirst();
+        if (!attempt || turn.active_attempt_id !== attempt.id)
+          return refused(
+            "not_current",
+            `Attempt ${input.attemptId} is not the turn's running attempt`,
+          );
+        if (input.onlyIfStalled === true && attempt.stalled_at === null)
+          return refused(
+            "not_stalled",
+            `Attempt ${input.attemptId} made progress since it stalled`,
+          );
+        input.signal?.throwIfAborted();
+        const open = await trx
+          .selectFrom("agent_turn_commands")
+          .select("id")
+          .where("turn_id", "=", turn.id)
+          .where("attempt_id", "=", attempt.id)
+          .where("kind", "=", "restart")
+          .where("status", "in", ["pending", "sent"])
+          .executeTakeFirst();
+        if (!open)
+          await this.queue.enqueueCommand(trx, {
+            turnId: turn.id,
+            attemptId: attempt.id,
+            kind: "restart",
+            payload: {
+              reason,
+              ...(input.onlyIfStalled === true ? { onlyIfStalled: true } : {}),
+            },
+          });
+        const reasons = await trx
+          .selectFrom("agent_turn_attempts")
+          .select("reason")
+          .where("turn_id", "=", turn.id)
+          .execute();
+        return {
+          restarted: true,
           turnId: turn.id,
           attemptId: attempt.id,
-          kind: "restart",
-          payload: { reason },
-        });
-      const reasons = await trx
-        .selectFrom("agent_turn_attempts")
-        .select("reason")
-        .where("turn_id", "=", turn.id)
-        .execute();
-      return {
-        turnId: turn.id,
-        attemptId: attempt.id,
-        attempt: attempt.ordinal,
-        attempts: reasons.length,
-        restarts: reasons.filter((row) => row.reason === "restart").length,
-      };
-    });
-    this.kick(sessionId);
+          attempt: attempt.ordinal,
+          attempts: reasons.length,
+          restarts: reasons.filter((row) => row.reason === "restart").length,
+        };
+      });
+    if (answer.restarted) this.kick(sessionId);
     return answer;
   }
 

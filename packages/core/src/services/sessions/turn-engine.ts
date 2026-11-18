@@ -51,6 +51,7 @@ import {
   governApproval,
 } from "./request-policy.js";
 import {
+  endRunner,
   type RunnerChannel,
   type RunnerLocation,
   reattachInProcessRunner,
@@ -368,6 +369,11 @@ const ENDED_TOOL = "This turn already ended, so the tool did not run.";
 const THREAD_LOST_NOTICE = "thread_lost";
 /** The notice a restarted attempt leaves (ADR 0333). */
 const RESTARTED_NOTICE = "turn_restarted";
+/**
+ * How long a restarted attempt's runner has to exit once asked, before its
+ * process group is killed (ADR 0333).
+ */
+const RESTART_EXIT_GRACE_MS = 10_000;
 /** What a restarted attempt's error says, before the reason given. */
 const RESTARTED_PREFIX = "Restarted: ";
 /** How much of a runner's and a harness's own output an attempt keeps (ADR 0333). */
@@ -1693,6 +1699,20 @@ export class TurnEngine {
             kind: "restart",
             turn: await this.prepareAgain(local, turn, attempt),
           };
+        // Someone asked for a restart: the runner is gone, and the turn
+        // runs again as asked rather than being lost (ADR 0333).
+        const asked = await this.pendingRestart(turn.id, attempt.id);
+        if (asked) {
+          const restarted = await this.restartAttempt(local, {
+            ...ctx,
+            turn,
+            attempt,
+            channel: undefined,
+            cursor: runner.cursor,
+            ...asked,
+          });
+          if (restarted.kind !== "declined") return restarted;
+        }
         return {
           kind: "lost",
           turn,
@@ -1747,7 +1767,9 @@ export class TurnEngine {
     const agentId = ctx.session.agent_id;
 
     /** A restart asked of this attempt (ADR 0333): it ends here, unasked. */
-    let restart: { commandId: string; reason: string } | undefined;
+    let restart:
+      | { commandId: string; reason: string; onlyIfStalled: boolean }
+      | undefined;
     const sendCommands = async () => {
       const all = await queue.openCommands({ turnId: turn.id });
       if (all.length === 0) return;
@@ -1757,14 +1779,7 @@ export class TurnEngine {
         if (command.kind !== "restart") continue;
         // Meant for an attempt that already ended: nothing left to restart.
         if (command.attemptId !== attempt.id) moot.push(command.id);
-        else
-          restart ??= {
-            commandId: command.id,
-            reason:
-              typeof command.payload.reason === "string"
-                ? command.payload.reason
-                : "asked",
-          };
+        else restart ??= restartOf(command);
       }
       if (restart) {
         local.wake();
@@ -1818,14 +1833,18 @@ export class TurnEngine {
     for (;;) {
       if (local.abort.signal.aborted) return { kind: "aborted", channel };
       await this.resendResults(local, attempt.id, channel);
-      if (restart)
-        return this.restartAttempt(local, {
+      if (restart) {
+        const restarted = await this.restartAttempt(local, {
           ...ctx,
           turn,
           attempt,
           channel,
+          cursor: runner.cursor,
           ...restart,
         });
+        restart = undefined;
+        if (restarted.kind !== "declined") return restarted;
+      }
       if (!commandsInFlight)
         commandsInFlight = local.waiter?.then(async () => {
           rearm();
@@ -1986,7 +2005,19 @@ export class TurnEngine {
           cursor: runner.cursor,
         };
       }
-      if (read.exited)
+      if (read.exited) {
+        const asked = await this.pendingRestart(turn.id, attempt.id);
+        if (asked) {
+          const restarted = await this.restartAttempt(local, {
+            ...ctx,
+            turn,
+            attempt,
+            channel: undefined,
+            cursor: runner.cursor,
+            ...asked,
+          });
+          if (restarted.kind !== "declined") return restarted;
+        }
         return {
           kind: "lost",
           turn,
@@ -1994,6 +2025,7 @@ export class TurnEngine {
           reason:
             "The agent stopped unexpectedly before it finished this turn.",
         };
+      }
       if (
         interruptAt !== null &&
         Date.now() - interruptAt > INTERRUPT_GRACE_MS
@@ -2135,11 +2167,15 @@ export class TurnEngine {
   }
 
   /**
-   * End a running attempt without asking its harness (ADR 0333): its runner
-   * is killed with the harness under it, the attempt is `restarted` with the
-   * reason, its model grants are revoked, what it left open closes, and the
-   * same turn prepares its next attempt (`restart`), bound as any attempt
-   * is. A person's stop meanwhile ends the turn instead.
+   * End a running attempt without asking its harness (ADR 0333): the
+   * attempt is `restarted` with the reason, its model grants are revoked,
+   * what it left open closes, its runner is ended (asked, then its process
+   * group killed after {@link RESTART_EXIT_GRACE_MS}), and only then does
+   * the same turn prepare its next attempt (`restart`), bound as any
+   * attempt is. Nothing is ended by a holder that no longer owns the turn:
+   * the command waits for the next. One asked only if stalled is dropped
+   * when the attempt made progress since. A person's stop meanwhile ends
+   * the turn instead.
    */
   private async restartAttempt(
     local: LocalTurn,
@@ -2148,12 +2184,16 @@ export class TurnEngine {
       session: SessionRow;
       turn: Turn;
       attempt: Attempt;
-      channel: RunnerChannel;
+      /** Its runner, or none when it is already gone. */
+      channel: RunnerChannel | undefined;
+      cursor: number;
       commandId: string;
       reason: string;
+      onlyIfStalled: boolean;
     },
   ): Promise<
     | { kind: "restart"; turn: Turn }
+    | { kind: "declined" }
     | { kind: "aborted"; channel: RunnerChannel | undefined }
     | {
         kind: "completed";
@@ -2164,17 +2204,8 @@ export class TurnEngine {
   > {
     const { db, log, queue } = this.deps;
     const { turn, attempt } = ctx;
-    // It is not asked: a stuck harness would never answer.
-    await ctx.channel
-      .kill()
-      .catch((error) =>
-        console.warn("[catamorphic] Could not end a restarted runner", error),
-      );
-    local.channel = undefined;
-    local.waits.abort();
-    local.waits = new AbortController();
     if (local.abort.signal.aborted)
-      return { kind: "aborted", channel: undefined };
+      return { kind: "aborted", channel: ctx.channel };
     const now = new Date().toISOString();
     const reason = ctx.reason.trim().slice(0, 500) || "asked";
     const restarted: Attempt = {
@@ -2192,6 +2223,7 @@ export class TurnEngine {
       updatedAt: now,
     };
     let stopped = false;
+    let declined = false;
     await db.transaction().execute(async (trx) => {
       await this.assertOwned(local, trx);
       await log.lock(trx, turn.sessionId);
@@ -2200,6 +2232,21 @@ export class TurnEngine {
         .select("cancellation_requested_at")
         .where("id", "=", turn.id)
         .executeTakeFirstOrThrow();
+      const row = await trx
+        .selectFrom("agent_turn_attempts")
+        .select("stalled_at")
+        .where("id", "=", attempt.id)
+        .executeTakeFirstOrThrow();
+      // Asked only while stalled, and it made progress since: it runs on.
+      if (ctx.onlyIfStalled && row.stalled_at === null) {
+        declined = true;
+        await queue.markCommands({
+          ids: [ctx.commandId],
+          status: "dropped",
+          executor: trx,
+        });
+        return;
+      }
       await queue.markCommands({
         ids: [ctx.commandId],
         status: "acknowledged",
@@ -2258,6 +2305,25 @@ export class TurnEngine {
         ],
       });
     });
+    if (declined) return { kind: "declined" };
+    // It is not asked to finish: a stuck harness would never answer. Its
+    // process group goes before the next attempt starts on the same
+    // workspace and thread.
+    if (ctx.channel) {
+      const channel = ctx.channel;
+      local.channel = undefined;
+      local.waits.abort();
+      local.waits = new AbortController();
+      const ended = await endRunner({
+        channel,
+        cursor: ctx.cursor,
+        graceMs: RESTART_EXIT_GRACE_MS,
+      }).catch(() => "unknown" as const);
+      if (ended === "unknown" && channel.location.kind !== "in_process")
+        console.warn(
+          `[catamorphic] agent runner (turn ${turn.id}) was not seen to exit after its restart`,
+        );
+    }
     local.results.clear();
     // A person's stop stands: the turn ends, as for a harness that ignored it.
     if (stopped)
@@ -2289,6 +2355,19 @@ export class TurnEngine {
       status: "dropped",
       executor: trx,
     });
+  }
+
+  /** A restart asked of this attempt and not yet carried out (ADR 0333). */
+  private async pendingRestart(
+    turnId: string,
+    attemptId: string,
+  ): Promise<
+    { commandId: string; reason: string; onlyIfStalled: boolean } | undefined
+  > {
+    const command = (await this.deps.queue.openCommands({ turnId })).find(
+      (open) => open.kind === "restart" && open.attemptId === attemptId,
+    );
+    return command ? restartOf(command) : undefined;
   }
 
   /** A person stopped this attempt for it to read what they sent (ADR 0240). */
@@ -4094,6 +4173,22 @@ async function closeOpenWork(
 }
 
 export type { JsonObject };
+
+/** What a `restart` turn command asks (ADR 0333). */
+function restartOf(command: { id: string; payload: JsonObject }): {
+  commandId: string;
+  reason: string;
+  onlyIfStalled: boolean;
+} {
+  return {
+    commandId: command.id,
+    reason:
+      typeof command.payload.reason === "string"
+        ? command.payload.reason
+        : "asked",
+    onlyIfStalled: command.payload.onlyIfStalled === true,
+  };
+}
 
 /** New lines for an attempt's diagnostics tails, masked (ADR 0333). */
 interface DiagnosticLines {

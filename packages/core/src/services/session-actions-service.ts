@@ -113,7 +113,8 @@ export const SESSION_ACTION_SCHEMAS = {
   unarchive: chat(mutation),
   /** The end of a chat's life: its work, workspace and key are released. */
   close: chat(mutation),
-  interrupt: chat(mutation),
+  /** `turnId`: only that turn, and nothing when it no longer works. */
+  interrupt: chat({ ...mutation, turnId: z.string().uuid().optional() }),
   /**
    * End a running turn's attempt without asking its harness and run the
    * same turn again on a new attempt (ADR 0333), with the authority that
@@ -122,7 +123,11 @@ export const SESSION_ACTION_SCHEMAS = {
   restart: chat({
     ...mutation,
     turnId: z.string().uuid(),
+    /** The attempt to end: never whichever one runs by then. */
+    attemptId: z.string().uuid(),
     reason: z.string().min(1).max(500),
+    /** Only while it is stalled, as it was when the stall was reported. */
+    onlyIfStalled: z.boolean().optional(),
   }),
   /**
    * A turn's attempts, with their outcome and the masked tails of their
@@ -373,6 +378,17 @@ export class SessionActionsService {
                     .selectFrom("agent_turns")
                     .select("id")
                     .where("session_id", "=", args.sessionId)
+                    .$if(
+                      "turnId" in args && typeof args.turnId === "string",
+                      (query) =>
+                        query.where(
+                          "id",
+                          "=",
+                          "turnId" in args && typeof args.turnId === "string"
+                            ? args.turnId
+                            : "",
+                        ),
+                    )
                     .where("status", "in", [
                       "preparing",
                       "running",
@@ -570,13 +586,19 @@ export class SessionActionsService {
               result = { interrupted: action.target_turn_id !== null };
               break;
             case "restart": {
-              const { turnId, reason } =
+              const { turnId, attemptId, reason, onlyIfStalled } =
                 SESSION_ACTION_SCHEMAS.restart.parse(args);
               result = await this.sessions.restartTurn(
                 input.identity,
                 input.projectId,
                 args.sessionId,
-                { turnId, reason, signal: input.signal },
+                {
+                  turnId,
+                  attemptId,
+                  reason,
+                  ...(onlyIfStalled !== undefined ? { onlyIfStalled } : {}),
+                  signal: input.signal,
+                },
               );
               break;
             }

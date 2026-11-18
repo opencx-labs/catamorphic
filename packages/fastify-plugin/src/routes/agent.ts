@@ -29,7 +29,6 @@ import {
   SessionInputNotFoundError,
   SessionMirrorBehindError,
   SessionMirrorDivergedError,
-  TurnNotRunningError,
   UnsupportedAgentTopologyError,
 } from "@catamorphic/core";
 import type { FastifyInstance } from "fastify";
@@ -506,13 +505,23 @@ export function registerAgentRoutes(app: FastifyInstance, ctx: RouteContext) {
           args: {
             sessionId: request.params.sessionId,
             turnId: request.params.turnId,
+            attemptId: request.body.attemptId,
             reason: request.body.reason,
+            ...(request.body.onlyIfStalled !== undefined
+              ? { onlyIfStalled: request.body.onlyIfStalled }
+              : {}),
             idempotencyKey: request.body.idempotencyKey,
           },
           author: { kind: "user", externalUserId: identity.externalUserId },
         });
         const parsed = RestartTurnResultSchema.safeParse(result);
         if (parsed.success) return reply.send(parsed.data);
+        // Not the turn's running attempt, or no longer stalled: nothing ends.
+        const refused = z
+          .object({ restarted: z.literal(false), message: z.string() })
+          .safeParse(result);
+        if (refused.success)
+          return reply.status(409).send({ error: refused.data.message });
         // Another host holds the chat: delivered there, not yet applied.
         return reply.status(202).send({ delivery: "queued" as const });
       } catch (error) {
@@ -521,8 +530,6 @@ export function registerAgentRoutes(app: FastifyInstance, ctx: RouteContext) {
           error instanceof AgentSessionNotFoundError
         )
           return reply.status(404).send({ error: "Session not found" });
-        if (error instanceof TurnNotRunningError)
-          return reply.status(409).send({ error: error.message });
         throw error;
       }
     },

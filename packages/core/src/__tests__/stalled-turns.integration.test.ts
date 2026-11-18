@@ -16,10 +16,7 @@ import { pgcrypto } from "@electric-sql/pglite/contrib/pgcrypto";
 import { Kysely, PGliteDialect, sql, WithSchemaPlugin } from "kysely";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import type { Identity } from "../identity.js";
-import {
-  AgentSessionsService,
-  TurnNotRunningError,
-} from "../services/agent-sessions-service.js";
+import { AgentSessionsService } from "../services/agent-sessions-service.js";
 import type { RegisteredCodingAgent } from "../services/coding-agent-registry.js";
 import { hashBearer } from "../services/connections-service.js";
 import { ExecutionAllocationsService } from "../services/execution-allocations-service.js";
@@ -29,6 +26,8 @@ import { ProjectEnvironmentsService } from "../services/project-environments-ser
 import { ProjectsService } from "../services/projects-service.js";
 import type { SecretsService } from "../services/secrets-service.js";
 import { SessionActionsService } from "../services/session-actions-service.js";
+import { SessionLog } from "../services/sessions/session-log.js";
+import { turnFromRow } from "../services/sessions/session-rows.js";
 import { testEnvironmentProvider } from "./test-environment.js";
 
 /*
@@ -343,6 +342,7 @@ describe("stalled turns", () => {
     ).toBeLessThan(10_000);
     await sessions.restartTurn(identity, chat.projectId, chat.sessionId, {
       turnId: chat.turnId,
+      attemptId: chat.attemptId,
       reason: "done with this test",
     });
   }, 40_000);
@@ -390,6 +390,7 @@ describe("stalled turns", () => {
     expect(await stallEvents(chat.sessionId)).toHaveLength(2);
     await sessions.restartTurn(identity, chat.projectId, chat.sessionId, {
       turnId: chat.turnId,
+      attemptId: chat.attemptId,
       reason: "done with this test",
     });
   }, 40_000);
@@ -425,8 +426,173 @@ describe("stalled turns", () => {
     for (const chat of [grandchild, child, parent])
       await sessions.restartTurn(identity, chat.projectId, chat.sessionId, {
         turnId: chat.turnId,
+        attemptId: chat.attemptId,
         reason: "done with this test",
       });
+  }, 60_000);
+
+  /** Take a turn's lease from its holder, as when its replica dies, and let it notice. */
+  async function loseHolder(turnId: string) {
+    await db
+      .updateTable("agent_turns")
+      .set({
+        lease_owner: "gone",
+        lease_expires_at: new Date(Date.now() - 1_000),
+      })
+      .where("id", "=", turnId)
+      .execute();
+    // Its lease renews every second: it lets go, and its runner with it.
+    await new Promise((resolve) => setTimeout(resolve, 2_500));
+  }
+
+  it("starts the stall clock again whenever a turn starts or stops waiting on a person", async () => {
+    // A long wait on a person is the person's: answering it, or the agent
+    // asking, never leaves an old clock behind.
+    const chat = await hangingChat("Waiting on a person");
+    const log = new SessionLog(db);
+    const long = new Date(Date.now() - 30 * 60_000);
+    const moveTo = async (status: "waiting" | "running") => {
+      await db
+        .updateTable("agent_turn_attempts")
+        .set({ progress_at: long, stalled_at: long })
+        .where("id", "=", chat.attemptId)
+        .execute();
+      const before = Date.now();
+      await db.transaction().execute(async (trx) => {
+        const turn = turnFromRow(
+          await trx
+            .selectFrom("agent_turns")
+            .selectAll()
+            .where("id", "=", chat.turnId)
+            .executeTakeFirstOrThrow(),
+        );
+        await log.append(trx, {
+          sessionId: chat.sessionId,
+          // What unblockedTurn writes when an answer arrives, and ingest when
+          // the agent asks.
+          events: [{ type: "turn.changed", turn: { ...turn, status } }],
+        });
+      });
+      const row = await attemptRow(chat.attemptId);
+      expect(row.stalled_at).toBeNull();
+      expect(new Date(row.progress_at ?? 0).getTime()).toBeGreaterThanOrEqual(
+        before - 1_000,
+      );
+    };
+    await moveTo("waiting");
+    await moveTo("running");
+    // Running on as it was moves nothing.
+    await db
+      .updateTable("agent_turn_attempts")
+      .set({ progress_at: long })
+      .where("id", "=", chat.attemptId)
+      .execute();
+    await db.transaction().execute(async (trx) => {
+      const turn = turnFromRow(
+        await trx
+          .selectFrom("agent_turns")
+          .selectAll()
+          .where("id", "=", chat.turnId)
+          .executeTakeFirstOrThrow(),
+      );
+      await log.append(trx, {
+        sessionId: chat.sessionId,
+        events: [
+          { type: "turn.changed", turn: { ...turn, activity: "Still" } },
+        ],
+      });
+    });
+    expect((await attemptRow(chat.attemptId)).progress_at).toEqual(long);
+    await sessions.restartTurn(identity, chat.projectId, chat.sessionId, {
+      turnId: chat.turnId,
+      attemptId: chat.attemptId,
+      reason: "done with this test",
+    });
+  }, 40_000);
+
+  it("restarts, rather than loses, a turn whose runner went away with a restart asked of it", async () => {
+    const chat = await hangingChat("Restart after loss", "unwatched");
+    await loseHolder(chat.turnId);
+    // Asked of its attempt now; the next holder finds its runner gone.
+    expect(
+      await sessions.restartTurn(identity, chat.projectId, chat.sessionId, {
+        turnId: chat.turnId,
+        attemptId: chat.attemptId,
+        reason: "stalled",
+      }),
+    ).toMatchObject({ restarted: true });
+    const survivor = makeService();
+    const worker = survivor.startWorker({
+      resolveIdentity: async () => identity,
+      pollIntervalMs: 200,
+    });
+    try {
+      await vi.waitFor(
+        async () => {
+          const turns = await db
+            .selectFrom("agent_turns")
+            .select(["status", "continuation_of"])
+            .where("session_id", "=", chat.sessionId)
+            .execute();
+          expect(turns).toEqual([
+            { status: "completed", continuation_of: null },
+          ]);
+          const attempts = await db
+            .selectFrom("agent_turn_attempts")
+            .select(["reason", "status"])
+            .where("turn_id", "=", chat.turnId)
+            .orderBy("ordinal")
+            .execute();
+          expect(attempts).toEqual([
+            { reason: "initial", status: "restarted" },
+            { reason: "restart", status: "completed" },
+          ]);
+        },
+        { timeout: 30_000 },
+      );
+    } finally {
+      await worker.stop();
+      await survivor.stopLocalTurns();
+    }
+  }, 60_000);
+
+  it("drops a restart asked only while stalled once the attempt made progress", async () => {
+    const chat = await hangingChat("Moved on", "unwatched");
+    await loseHolder(chat.turnId);
+    // A restart queued while it was stalled; it made progress since.
+    await db
+      .insertInto("agent_turn_commands")
+      .values({
+        turn_id: chat.turnId,
+        attempt_id: chat.attemptId,
+        kind: "restart",
+        payload: JSON.stringify({ reason: "stalled", onlyIfStalled: true }),
+      })
+      .execute();
+    const survivor = makeService();
+    const worker = survivor.startWorker({
+      resolveIdentity: async () => identity,
+      pollIntervalMs: 200,
+    });
+    try {
+      await vi.waitFor(
+        async () => {
+          const command = await db
+            .selectFrom("agent_turn_commands")
+            .select("status")
+            .where("turn_id", "=", chat.turnId)
+            .where("kind", "=", "restart")
+            .executeTakeFirstOrThrow();
+          expect(command.status).toBe("dropped");
+          // Not restarted: its runner was gone, so it was lost as any is.
+          expect((await attemptRow(chat.attemptId)).status).toBe("lost");
+        },
+        { timeout: 30_000 },
+      );
+    } finally {
+      await worker.stop();
+      await survivor.stopLocalTurns();
+    }
   }, 60_000);
 
   it("records no stall for an agent without a threshold", async () => {
@@ -438,6 +604,7 @@ describe("stalled turns", () => {
     expect(await stallEvents(chat.sessionId)).toHaveLength(0);
     await sessions.restartTurn(identity, chat.projectId, chat.sessionId, {
       turnId: chat.turnId,
+      attemptId: chat.attemptId,
       reason: "done with this test",
     });
   }, 40_000);
@@ -449,7 +616,11 @@ describe("stalled turns", () => {
     expect(await dbModelGatewayStore(db).liveGrant({ token })).toMatchObject({
       attemptId: chat.attemptId,
     });
-    const restart = (idempotencyKey: string) =>
+    const restart = (
+      idempotencyKey: string,
+      attemptId = chat.attemptId,
+      onlyIfStalled = false,
+    ) =>
       actions.execute({
         identity,
         projectId: chat.projectId,
@@ -457,13 +628,26 @@ describe("stalled turns", () => {
         args: {
           sessionId: chat.sessionId,
           turnId: chat.turnId,
+          attemptId,
           reason: "no progress for 20 minutes",
           idempotencyKey,
+          ...(onlyIfStalled ? { onlyIfStalled } : {}),
         },
         author: { kind: "user", externalUserId: identity.externalUserId },
       });
+    // Only the turn's running attempt, and only while stalled when asked so.
+    const elsewhere = randomUUID();
+    expect(await restart("stall:other", elsewhere)).toMatchObject({
+      restarted: false,
+      attemptId: elsewhere,
+      refused: "not_current",
+    });
+    expect(
+      await restart("stall:unstalled", chat.attemptId, true),
+    ).toMatchObject({ restarted: false, refused: "not_stalled" });
     const answer = await restart("stall:1");
     expect(answer).toEqual({
+      restarted: true,
       turnId: chat.turnId,
       attemptId: chat.attemptId,
       attempt: 1,
@@ -536,10 +720,11 @@ describe("stalled turns", () => {
     expect(reply?.kind === "assistant_message" && reply.text).toContain(
       "restarted (no progress for 20 minutes)",
     );
-    // A settled turn is refused.
-    await expect(restart("stall:2")).rejects.toBeInstanceOf(
-      TurnNotRunningError,
-    );
+    // A settled turn is refused, as an answer.
+    expect(await restart("stall:2")).toMatchObject({
+      restarted: false,
+      refused: "not_running",
+    });
   }, 60_000);
 
   it("keeps masked diagnostics for restarted, failed and lost attempts", async () => {
@@ -570,7 +755,11 @@ describe("stalled turns", () => {
       identity,
       restarted.projectId,
       restarted.sessionId,
-      { turnId: restarted.turnId, reason: "stalled" },
+      {
+        turnId: restarted.turnId,
+        attemptId: restarted.attemptId,
+        reason: "stalled",
+      },
     );
     await vi.waitFor(
       async () => {
