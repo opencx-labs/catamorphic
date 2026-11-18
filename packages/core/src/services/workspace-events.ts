@@ -118,7 +118,7 @@ export async function recordWorkspaceGone(input: {
   change: "released" | "lost";
   reason: Extract<
     WorkspaceChangeReason,
-    "idle" | "closed" | "connection-ended" | "machine-lost"
+    "idle" | "closed" | "connection-ended" | "machine-lost" | "replaced"
   >;
 }): Promise<void> {
   await input.db

@@ -248,7 +248,12 @@ export type AllocationReleaseReason =
   | "connection_ended"
   | "retired"
   /** A rollback gave the workspace back, to be rebuilt at an earlier commit (ADR 0197). */
-  | "rollback";
+  | "rollback"
+  /**
+   * The chat's agent now needs another shape of sandbox (ADR 0332): its
+   * harness runs in the sandbox, which was made with no container for it.
+   */
+  | "replaced";
 
 export class ExecutionAllocationConflictError extends Error {
   constructor(readonly rootWorkloadId: string) {
@@ -435,7 +440,8 @@ function releaseReason(value: string | null): AllocationReleaseReason | null {
   return value === "idle" ||
     value === "node_lost" ||
     value === "connection_ended" ||
-    value === "retired"
+    value === "retired" ||
+    value === "replaced"
     ? value
     : null;
 }

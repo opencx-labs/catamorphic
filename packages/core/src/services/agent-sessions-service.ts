@@ -1350,7 +1350,7 @@ const ASK_USER_HOST_TOOL: ExtraTool = {
  * sandbox made without an agent container (ADR 0332).
  */
 export const SEPARATED_WITHOUT_AGENT_SIDE =
-  "This chat's sandbox runs its commands apart with no container beside them for an agent, since it was made for an agent that runs outside it (such as the built-in one). An agent whose harness runs in the sandbox needs a workspace of its own: start it in a new chat rather than in this one's workspace.";
+  'This workspace was made for an agent that runs outside its sandbox (such as the built-in one), so its commands run apart with no container beside them for an agent that runs in the sandbox. Such an agent works in a workspace of its own: a subagent starts with workspace: "own", and a chat whose agent changed gets a new workspace at its next turn.';
 
 /**
  * Why a harness cannot start in a sandbox, if it cannot (ADR 0332): one
@@ -5324,7 +5324,16 @@ export class AgentSessionsService {
       }
       if (
         allocation?.status === "active" &&
-        (await this.releaseEndedConnection({ identity, session, allocation }))
+        ((await this.releaseEndedConnection({
+          identity,
+          session,
+          allocation,
+        })) ||
+          (await this.releaseMisshapenWorkspace({
+            identity,
+            session,
+            allocation,
+          })))
       )
         continue;
       const ran = await this.engine.runNext({
@@ -5932,15 +5941,9 @@ export class AgentSessionsService {
       session,
       agent,
     );
-    // A sandbox made for a harness outside it has no agent container
-    // (ADR 0332): one that runs in the sandbox would run beside the pull
-    // request's code there, so it is refused before anything reaches it.
+    // A harness in the sandbox on a workspace with no agent container was
+    // refused above, before anything reached it (ADR 0332).
     const separated = runtime.allocation?.policy.sandbox?.separateCommands;
-    const refused = separatedHarnessRefusal({
-      placement: agent.harness.placement,
-      separateCommands: separated,
-    });
-    if (refused) throw new Error(refused);
     const notes: string[] = [];
     const ownerAuthored = await this.ownerAuthoredTurn({
       projectId,
@@ -10990,6 +10993,10 @@ export class AgentSessionsService {
       throw refuse(
         `${targetAgentId} cannot run in this chat's workspace: ${fit.refused}`,
       );
+    if (fit.mismatch === "sandbox")
+      throw refuse(
+        `${targetAgentId} runs in its sandbox, and this chat's workspace was made for an agent that runs outside it, with no container beside its commands for one that runs in it (ADR 0332).`,
+      );
     if (fit.mismatch)
       throw refuse(
         `${targetAgentId} needs ${fit.mismatch === "resources" ? "other resources" : "another machine binding"} than this chat's workspace was admitted with.`,
@@ -11442,6 +11449,87 @@ export class AgentSessionsService {
    * the runner is connected again under a new lease (ADR 0192). True when
    * this host released it.
    */
+  /**
+   * A chat whose agent now runs its harness in the sandbox, on a workspace
+   * made for one that runs outside it (ADR 0332): its commands run apart
+   * with no agent container. Between turns its workspace is given back, so
+   * the next turn is admitted again with one. A shared subsession's
+   * workspace is its workspace session's, which this never gives back.
+   */
+  private async releaseMisshapenWorkspace(input: {
+    identity: Identity;
+    session: SessionRow;
+    allocation: ExecutionAllocation;
+  }): Promise<boolean> {
+    const { allocation, session } = input;
+    if (session.workspace_session_id) return false;
+    const separate = allocation.policy.sandbox?.separateCommands;
+    if (!separate || separate.agentResources) return false;
+    const agent = await this.resolveAgent(
+      session.agent_id,
+      session.project_id,
+    ).catch(() => undefined);
+    if (
+      !agent ||
+      !separatedHarnessRefusal({
+        placement: agent.harness.placement,
+        separateCommands: separate,
+      })
+    )
+      return false;
+    // Personal logins and files leave with the workspace (ADR 0184).
+    if (session.sandbox_id)
+      await this.withdrawFromSessionSandbox({
+        identity: input.identity,
+        projectId: session.project_id,
+        sessionId: session.id,
+      });
+    const released = await this.db.transaction().execute(async (trx) => {
+      const current = await trx
+        .selectFrom("agent_sessions")
+        .select(["status", "allocation_id"])
+        .where("id", "=", session.id)
+        .forUpdate()
+        .executeTakeFirst();
+      if (
+        current?.status !== "active" ||
+        current.allocation_id !== allocation.id
+      )
+        return false;
+      const running = await trx
+        .selectFrom("agent_turns")
+        .select("id")
+        .where("session_id", "=", session.id)
+        .where("status", "in", [...ACTIVE_TURN_STATUSES])
+        .executeTakeFirst();
+      if (running) return false;
+      const done = await this.executionAllocations.release({
+        identity: input.identity,
+        allocationId: allocation.id,
+        reason: "replaced",
+        transaction: trx,
+      });
+      if (!done) return false;
+      await trx
+        .updateTable("agent_sessions")
+        .set({ sandbox_id: null })
+        .where("id", "=", session.id)
+        .execute();
+      await recordWorkspaceGone({
+        db: trx,
+        sessionId: session.id,
+        change: "released",
+        reason: "replaced",
+      });
+      return true;
+    });
+    if (released)
+      await this.connectionGrants
+        ?.revokeAllocation({ allocationId: allocation.id })
+        .catch(() => {});
+    return released;
+  }
+
   private async releaseEndedConnection(input: {
     identity: Identity;
     session: SessionRow;
@@ -13887,6 +13975,7 @@ export class AgentSessionsService {
       throw new Error(
         "This Environment's binding changed. Move the session explicitly before continuing.",
       );
+    if (mismatch === "sandbox") throw new Error(SEPARATED_WITHOUT_AGENT_SIDE);
     if (agent.topology === "native") {
       return {
         bindingId: allocation.bindingId,
@@ -13968,7 +14057,7 @@ export class AgentSessionsService {
     agent: RegisteredCodingAgent;
   }): Promise<{
     admitted: EnvironmentAdmission;
-    mismatch?: "resources" | "binding";
+    mismatch?: "resources" | "binding" | "sandbox";
   }> {
     const { allocation, agent } = input;
     const admitted = await this.executionEnvironments.admit({
@@ -13995,6 +14084,15 @@ export class AgentSessionsService {
     }
     if (admitted.binding.id !== allocation.bindingId)
       return { admitted, mismatch: "binding" };
+    // A harness in the sandbox needs the agent container a workspace made
+    // for one outside it lacks (ADR 0332).
+    if (
+      separatedHarnessRefusal({
+        placement: agent.harness.placement,
+        separateCommands: allocation.policy.sandbox?.separateCommands,
+      })
+    )
+      return { admitted, mismatch: "sandbox" };
     return { admitted };
   }
 
