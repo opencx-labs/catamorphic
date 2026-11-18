@@ -2111,6 +2111,8 @@ export const SessionResultsQuerySchema = z.object({
     .enum(["true", "false"])
     .transform((value) => value === "true")
     .optional(),
+  /** Only what one turn's attempts submitted. */
+  turnId: z.string().uuid().optional(),
   /** An input's message id: results that answer it or a later one. */
   afterInput: z.string().uuid().optional(),
   limit: z.coerce.number().int().min(1).max(100).optional(),

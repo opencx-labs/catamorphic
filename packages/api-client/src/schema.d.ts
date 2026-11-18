@@ -7464,6 +7464,7 @@ export interface paths {
                 query?: {
                     name?: string;
                     family?: "true" | "false";
+                    turnId?: string;
                     afterInput?: string;
                     limit?: number;
                 };

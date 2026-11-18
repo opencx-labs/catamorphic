@@ -216,6 +216,8 @@ export interface SessionHostOperations {
     Target & {
       name?: string;
       family?: boolean;
+      /** Only what one turn's attempts submitted, e.g. the turn being published. */
+      turnId?: string;
       afterInput?: string;
       limit?: number;
     },

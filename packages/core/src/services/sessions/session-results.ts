@@ -329,6 +329,8 @@ export async function readResults(
   input: {
     sessionIds: readonly string[];
     name?: string;
+    /** Only what this turn's attempts submitted. */
+    turnId?: string;
     afterInput?: { sessionId: string; position: number; createdAt: Date };
     limit: number;
   },
@@ -351,6 +353,9 @@ export async function readResults(
     )
     .$if(input.name !== undefined, (query) =>
       query.where(sql<string>`item.payload->>'name'`, "=", input.name ?? ""),
+    )
+    .$if(input.turnId !== undefined, (query) =>
+      query.where("item.turn_id", "=", input.turnId ?? ""),
     )
     .$if(after !== undefined, (query) =>
       query.where((eb) =>

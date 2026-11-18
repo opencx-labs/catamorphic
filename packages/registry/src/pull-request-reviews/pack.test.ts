@@ -714,7 +714,7 @@ describe("postReviews", () => {
     expect(result.writes).toEqual(["check:action_required"]);
   });
 
-  it("publishes the turn's newest current review from any attempt", async () => {
+  it("publishes the turn's newest review from any attempt", async () => {
     const result = await publish(`
       // Attempt 1 submits and its sandbox is lost; attempt 2 ends the turn
       // without submitting again: attempt 1's review is the turn's.
@@ -740,6 +740,24 @@ describe("postReviews", () => {
     expect(bodies).toEqual(["second"]);
   });
 
+  it("publishes the turn's own review though a comment reached the chat since, and many newer reviews exist", async () => {
+    const result = await publish(`
+      world.submit("t1", { verdict: "REQUEST_CHANGES", reviewedCommit: ${JSON.stringify(HEAD)} });
+      // An @work comment arrived before this queued publication ran, and
+      // later turns submitted many reviews of their own.
+      world.requestArrived();
+      for (let turn = 2; turn <= 25; turn += 1)
+        world.submit("t" + turn, { verdict: "COMMENT", reviewedCommit: ${JSON.stringify(HEAD)} });
+      return runWorkflow(postReviews, event("t1"), world.context);
+    `);
+    expect(result.outcomes).toEqual({
+      posted: "review",
+      verdict: "failure",
+      problem: null,
+    });
+    expect(result.writes).toEqual(["check:failure", "review:REQUEST_CHANGES"]);
+  });
+
   it("posts nothing once the head moves past the chat, and marks a missing review once", async () => {
     const result = await publish(`
       world.submit("t2", { verdict: "REQUEST_CHANGES", reviewedCommit: ${JSON.stringify(HEAD)} });
@@ -754,7 +772,7 @@ describe("postReviews", () => {
       {
         posted: "missing",
         verdict: "action_required",
-        problem: "The turn submitted no current review result.",
+        problem: "The turn submitted no review result.",
       },
       {
         posted: "missing",

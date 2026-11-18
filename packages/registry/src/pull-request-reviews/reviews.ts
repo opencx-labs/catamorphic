@@ -371,8 +371,15 @@ export const postReviews = defineWorkflow(({ defineBoundary }) => ({
         };
         if (publication.post === "nothing")
           return { result: null, state: publication };
+        // What this turn submitted, from any of its attempts: requests that
+        // reached the chat after it settled (a comment, a push) are later
+        // turns' to answer, and newer turns' reviews never hide it.
         return host["catamorphic.sessions"].results(
-          { sessionId: publication.sessionId, name: "review", limit: 20 },
+          {
+            sessionId: publication.sessionId,
+            name: "review",
+            turnId: publication.turnId,
+          },
           { state: publication },
         );
       },
@@ -390,19 +397,19 @@ export const postReviews = defineWorkflow(({ defineBoundary }) => ({
           return { result: null, state: input.state };
         // The newest review this turn submitted (ADR 0323), from any of its
         // attempts (one whose sandbox was lost after submitting counts),
-        // while it still answers the chat's newest request. Results come
-        // newest first. No result means no pass.
+        // whatever reached the chat after the turn. Results come newest
+        // first. No result means no pass; one made for another head is
+        // refused below.
         const submitted = (input.result?.results ?? []).find(
           (result) =>
             result.turnId === input.state.turnId &&
-            result.sessionId === input.state.sessionId &&
-            result.current,
+            result.sessionId === input.state.sessionId,
         );
         const head = input.state.commit ?? "";
         const checked = input.state.failed
           ? "The review turn failed."
           : !submitted
-            ? "The turn submitted no current review result."
+            ? "The turn submitted no review result."
             : checkWorkReview(submitted.value);
         // Two commits must both be the head being posted for: the one the
         // agent says it reviewed, and the one Work recorded its turn began

@@ -689,6 +689,37 @@ describe("typed results", () => {
       .execute();
   });
 
+  it("reads what one turn submitted, whatever came after it", async () => {
+    const project = await projects.create(identity, { name: "By turn" });
+    const session = await sessions.create(identity, project.id);
+    const first = await turn(
+      project.id,
+      session.id,
+      tool("submit_result", {
+        name: "review",
+        value: { verdict: "REQUEST_CHANGES", score: 2 },
+      }),
+    );
+    await turn(
+      project.id,
+      session.id,
+      tool("submit_result", {
+        name: "review",
+        value: { verdict: "COMMENT", score: 4 },
+      }),
+    );
+    const [turnOne] = orderedTurns(first);
+    const read = await sessions.results(identity, project.id, session.id, {
+      name: "review",
+      turnId: turnOne?.id ?? "",
+    });
+    expect(read.map((result) => result.value)).toEqual([
+      { verdict: "REQUEST_CHANGES", score: 2 },
+    ]);
+    // A later request made it stale; the turn's own read still finds it.
+    expect(read[0]).toMatchObject({ current: false, turnId: turnOne?.id });
+  });
+
   it("is current again once the request after it is rolled back", async () => {
     const project = await projects.create(identity, { name: "Rolled back" });
     const session = await sessions.create(identity, project.id);

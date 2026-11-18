@@ -417,6 +417,7 @@ export function registerAgentRoutes(app: FastifyInstance, ctx: RouteContext) {
           {
             ...(query.name ? { name: query.name } : {}),
             ...(query.family ? { family: true } : {}),
+            ...(query.turnId ? { turnId: query.turnId } : {}),
             ...(query.afterInput ? { afterInput: query.afterInput } : {}),
             ...(query.limit ? { limit: query.limit } : {}),
           },

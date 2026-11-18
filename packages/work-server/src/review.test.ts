@@ -1030,7 +1030,7 @@ describe.skipIf(!databaseUrl)("reviewing pull requests (#118)", () => {
     expect(checkCall?.body).toMatchObject({
       output: {
         title: "No review",
-        summary: expect.stringMatching(/no current review result/),
+        summary: expect.stringMatching(/submitted no review result/),
       },
     });
     expect(posted("POST", "/repos/acme/web/pulls/1/reviews")).toHaveLength(1);

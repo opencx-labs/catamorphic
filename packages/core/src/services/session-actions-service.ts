@@ -75,6 +75,7 @@ export const SESSION_ACTION_SCHEMAS = {
     ...target,
     name: z.string().min(1).max(64).optional(),
     family: z.boolean().optional(),
+    turnId: z.string().uuid().optional(),
     afterInput: z.string().uuid().optional(),
     limit: z.number().int().min(1).max(100).optional(),
   }),
@@ -310,6 +311,9 @@ export class SessionActionsService {
                 : {}),
               ...("family" in args && args.family === true
                 ? { family: true }
+                : {}),
+              ...("turnId" in args && typeof args.turnId === "string"
+                ? { turnId: args.turnId }
                 : {}),
               ...("afterInput" in args && typeof args.afterInput === "string"
                 ? { afterInput: args.afterInput }

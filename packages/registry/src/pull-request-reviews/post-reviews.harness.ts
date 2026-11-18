@@ -161,7 +161,18 @@ export function fakeWorld(input: { head: string }) {
       workspace: { ref: "refs/pull/42/head", commit: chat.commit },
       metadata: structuredClone(chat.metadata),
     }),
-    results: () => ({ results: structuredClone(chat.results) }),
+    // As core reads them: newest first, at most 100, by name and turn.
+    results: ({ name, turnId }: { name?: string; turnId?: string }) => ({
+      results: structuredClone(
+        chat.results
+          .filter(
+            (result) =>
+              (name === undefined || result.name === name) &&
+              (turnId === undefined || result.turnId === turnId),
+          )
+          .slice(0, 100),
+      ),
+    }),
     setMetadata: ({ set }: { set: Record<string, Json> }) => {
       if (chat.refuseMetadata) throw new Error(chat.refuseMetadata);
       for (const [key, value] of Object.entries(set)) {
@@ -191,6 +202,10 @@ export function fakeWorld(input: { head: string }) {
     context: {
       host: { "catamorphic.sessions": calls(sessions) },
       connections: { github: calls(connections.github) },
+    },
+    /** A request reached the chat after every result: none is current. */
+    requestArrived() {
+      for (const result of chat.results) result.current = false;
     },
     /** The reviewer's turn submits this review (ADR 0323). */
     submit(turnId: string, review: FakeReview | null) {

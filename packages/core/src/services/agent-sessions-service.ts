@@ -2695,6 +2695,8 @@ export class AgentSessionsService {
     input: {
       name?: string;
       family?: boolean;
+      /** Only what one turn's attempts submitted. */
+      turnId?: string;
       afterInput?: string;
       limit?: number;
     } = {},
@@ -2724,6 +2726,7 @@ export class AgentSessionsService {
     return readResults(this.db, {
       sessionIds,
       ...(input.name ? { name: input.name } : {}),
+      ...(input.turnId ? { turnId: input.turnId } : {}),
       ...(afterInput ? { afterInput } : {}),
       limit: Math.min(Math.max(input.limit ?? 100, 1), 100),
     });
