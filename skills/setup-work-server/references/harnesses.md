@@ -310,7 +310,9 @@ no-new-privileges, so a setuid program left in the checkout runs as the
 harness. Work's shim starts in its own folder, on Node where the image has
 it (else Bun with no configuration or `.env` files), and an ACP launcher
 starts in the harness's home, so a `bunfig.toml`, `.npmrc` or `.env` in
-the checkout loads into neither.
+the checkout loads into neither. So do the stdio MCP servers Work gives an
+agent, so `npx`, `bunx` or `uvx` there never resolve the checkout's
+`node_modules/.bin`, `.npmrc`, `bunfig.toml` or `uv.toml`.
 
 What it does not cover:
 

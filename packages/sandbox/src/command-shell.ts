@@ -215,7 +215,9 @@ export function commandShellFiles(input: {
       `# Work: this ${program} runs in the command container (ADR 0332).`,
       // It starts in its own folder and says where it was called from, so
       // nothing in the caller's folder loads into it.
-      "caller=$(pwd -P 2>/dev/null) || caller=/",
+      // Its folder's name may end in newlines, which $(...) strips: a
+      // mark after pwd's own newline keeps them.
+      `caller=$(pwd -P 2>/dev/null && printf x) && caller=\${caller%?x} || caller=/`,
       `cd ${quote(input.directory)} || exit 126`,
       "unset NODE_OPTIONS NODE_PATH BUN_OPTIONS",
       `exec ${quote(input.runtime)}${flags} ${quote(client)} "$caller" ${quote(input.socket)} ${quote(input.returnFolder ?? "")} ${program} "$@"`,
@@ -262,4 +264,29 @@ export async function writeCommandShell(input: {
 
 function quote(value: string): string {
   return `'${value.replaceAll("'", `'\\''`)}'`;
+}
+
+/**
+ * A stdio MCP server's command as a harness of its own user starts it
+ * (ADR 0332): in that user's home, never the checkout, where a launcher
+ * (`npx`, `bunx`, `uvx`) would resolve the pull request's
+ * `node_modules/.bin`, `.npmrc`, `bunfig.toml` or `uv.toml`; and without
+ * the variables that load code into Node or Bun.
+ */
+export function homeStartedCommand(input: {
+  command: string;
+  args?: readonly string[];
+  home: string;
+}): { command: string; args: string[] } {
+  return {
+    command: "/bin/sh",
+    args: [
+      "-c",
+      'cd "$1" || exit 126; shift; unset NODE_OPTIONS NODE_PATH BUN_OPTIONS; exec "$@"',
+      "work-mcp",
+      input.home,
+      input.command,
+      ...(input.args ?? []),
+    ],
+  };
 }

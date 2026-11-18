@@ -108,6 +108,7 @@ export {
   type CommandSignal,
   commandEnvironment,
   commandShellFiles,
+  homeStartedCommand,
   writeCommandShell,
 } from "./command-shell.js";
 export {

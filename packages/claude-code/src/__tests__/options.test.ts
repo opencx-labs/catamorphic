@@ -6,9 +6,14 @@ import {
   RUNNER_PROTOCOL_VERSION,
 } from "@catamorphic/agent-protocol/runner";
 import { MODEL_GRANT_READER } from "@catamorphic/sandbox";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { classifyClaudeError } from "../errors.js";
-import { buildQueryOptions, readAttemptOptions } from "../options.js";
+import {
+  buildQueryOptions,
+  dropConfigLinks,
+  harnessSpawnEnv,
+  readAttemptOptions,
+} from "../options.js";
 import { askUserAnswerInput } from "../questions.js";
 import { hostSessionStore } from "../session-store.js";
 
@@ -80,6 +85,75 @@ describe("commands apart from the agent (ADR 0332)", () => {
     // The checkout is the pull request's: its hooks, MCP servers and
     // instructions stay out of the agent's side.
     expect(built.settingSources).toEqual(["user"]);
+  });
+
+  it("hands a resumed thread's home over what is in it first, the folder last, links left alone", () => {
+    const home = fs.mkdtempSync(path.join(os.tmpdir(), "claude-resume-"));
+    try {
+      fs.mkdirSync(path.join(home, "projects", "key"), { recursive: true });
+      fs.writeFileSync(path.join(home, "projects", "key", "t.jsonl"), "{}\n");
+      fs.writeFileSync(path.join(home, ".claude.json"), "{}");
+      fs.symlinkSync("/etc/hosts", path.join(home, "link"));
+      const owned: string[] = [];
+      const lchown = vi.spyOn(fs, "lchownSync").mockImplementation((target) => {
+        owned.push(String(target));
+      });
+      const chown = vi.spyOn(fs, "chownSync");
+      try {
+        harnessSpawnEnv({
+          env: { CLAUDE_CONFIG_DIR: home },
+          harness: { uid: 10001, gid: 10001, home: "/harness" },
+        });
+      } finally {
+        lchown.mockRestore();
+        chown.mockRestore();
+      }
+      expect(chown).not.toHaveBeenCalled();
+      // Every folder after everything in it, the home last.
+      expect(owned.at(-1)).toBe(home);
+      for (const [index, target] of owned.entries())
+        for (const later of owned.slice(index + 1))
+          expect(
+            target.startsWith(`${later}/`) || !later.startsWith(target),
+          ).toBe(true);
+      expect(owned).toContain(path.join(home, "link"));
+      expect(owned).toContain(path.join(home, "projects", "key", "t.jsonl"));
+    } finally {
+      fs.rmSync(home, { recursive: true, force: true });
+    }
+  });
+
+  it("drops links anywhere in the harness's config home before root reads it", async () => {
+    const home = fs.mkdtempSync(path.join(os.tmpdir(), "claude-config-"));
+    const outside = fs.mkdtempSync(path.join(os.tmpdir(), "claude-outside-"));
+    try {
+      fs.writeFileSync(path.join(outside, "secret"), "secret");
+      fs.mkdirSync(path.join(home, "projects", "key"), { recursive: true });
+      fs.writeFileSync(path.join(home, "projects", "key", "t.jsonl"), "{}\n");
+      fs.symlinkSync(
+        path.join(outside, "secret"),
+        path.join(home, "projects", "key", "u.jsonl"),
+      );
+      fs.symlinkSync(
+        path.join(outside, "secret"),
+        path.join(home, ".claude.json"),
+      );
+      fs.symlinkSync(outside, path.join(home, "projects", "linked"));
+      await dropConfigLinks(home);
+      const left = fs.readdirSync(home, { recursive: true }).map(String).sort();
+      expect(left).toEqual([
+        "projects",
+        "projects/key",
+        "projects/key/t.jsonl",
+      ]);
+      // What the links named is untouched.
+      expect(fs.readFileSync(path.join(outside, "secret"), "utf8")).toBe(
+        "secret",
+      );
+    } finally {
+      fs.rmSync(home, { recursive: true, force: true });
+      fs.rmSync(outside, { recursive: true, force: true });
+    }
   });
 
   it("keeps its own shell and the checkout's settings otherwise", () => {

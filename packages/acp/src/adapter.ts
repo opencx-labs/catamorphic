@@ -23,6 +23,7 @@ import {
   NO_CAPABILITIES,
 } from "@catamorphic/agent-protocol/runner";
 import {
+  homeStartedCommand,
   type LoopbackModel,
   loopbackModelEnv,
   loopbackModelHeaders,
@@ -284,7 +285,7 @@ function startAttempt(
     tools = hostServers?.server;
     const mcpServers = [
       ...Object.entries(attempt.mcpServers).map(([name, spec]) =>
-        acpMcpServer({ name, spec }),
+        acpMcpServer({ name, spec, home: harness?.home }),
       ),
       ...(hostServers?.servers ?? []),
     ];
@@ -910,15 +911,19 @@ function promptBlocks({
 function acpMcpServer({
   name,
   spec,
+  home,
 }: {
   name: string;
   spec: McpServerSpec;
+  /** A harness of its own user starts its servers in its home (ADR 0332). */
+  home?: string | undefined;
 }): acp.McpServer {
   if (spec.transport === "stdio")
     return {
       name,
-      command: spec.command,
-      args: spec.args ?? [],
+      ...(home
+        ? homeStartedCommand({ ...spec, home })
+        : { command: spec.command, args: spec.args ?? [] }),
       env: Object.entries(spec.env ?? {}).map(([key, value]) => ({
         name: key,
         value,

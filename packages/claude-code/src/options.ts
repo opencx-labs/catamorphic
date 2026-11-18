@@ -17,7 +17,11 @@ import type {
   AttemptStart,
   McpServerSpec,
 } from "@catamorphic/agent-protocol/runner";
-import { type LoopbackModel, MODEL_GRANT_READER } from "@catamorphic/sandbox";
+import {
+  homeStartedCommand,
+  type LoopbackModel,
+  MODEL_GRANT_READER,
+} from "@catamorphic/sandbox";
 import { hostToolServer } from "./host-tools.js";
 
 /**
@@ -441,14 +445,21 @@ function routesToAnthropic(baseUrl: string | undefined): boolean {
   }
 }
 
-function mapMcpServer(spec: McpServerSpec): McpServerConfig {
+function mapMcpServer(spec: McpServerSpec, home?: string): McpServerConfig {
   if (spec.transport === "stdio")
-    return {
-      type: "stdio",
-      command: spec.command,
-      ...(spec.args ? { args: spec.args } : {}),
-      ...(spec.env ? { env: spec.env } : {}),
-    };
+    return home
+      ? {
+          // Started in the harness's home, not the checkout (ADR 0332).
+          type: "stdio",
+          ...homeStartedCommand({ ...spec, home }),
+          ...(spec.env ? { env: spec.env } : {}),
+        }
+      : {
+          type: "stdio",
+          command: spec.command,
+          ...(spec.args ? { args: spec.args } : {}),
+          ...(spec.env ? { env: spec.env } : {}),
+        };
   return {
     type: spec.transport,
     url: spec.url,
@@ -589,7 +600,7 @@ export function buildQueryOptions(input: QueryOptionInputs): Options {
   ];
   const external: Record<string, McpServerConfig> = {};
   for (const [name, spec] of Object.entries(attempt.mcpServers))
-    external[name] = mapMcpServer(spec);
+    external[name] = mapMcpServer(spec, attempt.commands?.harness?.home);
 
   const host = access.kind === "host";
   const separate = commandShellPaths(attempt);
@@ -794,18 +805,21 @@ export function harnessConfigHome(attempt: AttemptStart): string | undefined {
 
 /**
  * Before the SDK, as root, reads the CLI's config home (resuming a thread
- * it copies its settings and credentials files into the thread's home),
- * drop every link at its top: that home is the harness's to write, and a
- * link there would have root copy what it names into a home the harness
- * is then given.
+ * it copies its settings and credentials files into the thread's home, and
+ * it reads its transcripts under `projects/`), drop every link in it, at
+ * any depth: that home is the harness's to write, and a link there would
+ * have root read what it names, into a home the harness is then given.
+ * Folders are entered only as themselves, never through a link.
  */
 export async function dropConfigLinks(home: string): Promise<void> {
   const entries = await fs.promises
     .readdir(home, { withFileTypes: true })
     .catch(() => []);
-  for (const entry of entries)
-    if (entry.isSymbolicLink())
-      await fs.promises.unlink(path.join(home, entry.name));
+  for (const entry of entries) {
+    const target = path.join(home, entry.name);
+    if (entry.isSymbolicLink()) await fs.promises.unlink(target);
+    else if (entry.isDirectory()) await dropConfigLinks(target);
+  }
 }
 
 /**
@@ -832,14 +846,18 @@ export function harnessSpawnEnv(input: {
   return input.env;
 }
 
-/** Hand a folder root just made to a user, never through a link. */
+/**
+ * Hand a folder root just made to a user, never through a link: what is
+ * in it first and the folder last, so the user can change nothing in it
+ * while root still walks it.
+ */
 function giveTree(folder: string, owner: { uid: number; gid: number }): void {
   const stat = fs.lstatSync(folder);
   if (!stat.isDirectory()) return;
-  fs.lchownSync(folder, owner.uid, owner.gid);
   for (const entry of fs.readdirSync(folder, { withFileTypes: true })) {
     const target = path.join(folder, entry.name);
     if (entry.isDirectory()) giveTree(target, owner);
     else fs.lchownSync(target, owner.uid, owner.gid);
   }
+  fs.lchownSync(folder, owner.uid, owner.gid);
 }
