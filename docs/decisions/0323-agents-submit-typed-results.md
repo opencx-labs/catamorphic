@@ -1,6 +1,6 @@
 # 0323: Agents submit typed results
 
-- **Status:** Accepted (amends 0050, 0090, 0197, 0259)
+- **Status:** Accepted (amends 0050, 0090, 0197, 0259; results are bounded per turn, not per chat, by [0336](0336-reviews-show-progress-and-post-findings-as-verified.md))
 - **Date:** 2026-11-17
 
 ## Context

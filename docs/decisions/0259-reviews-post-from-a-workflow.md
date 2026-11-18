@@ -1,6 +1,6 @@
 # 0259: Reviews post from a workflow
 
-- **Status:** Accepted (the report is a typed `review` result, not a fenced block, by [0323](0323-agents-submit-typed-results.md); `postReviews` queues per pull request chat, keeps its state in the chat's metadata and dismisses nothing, by [0325](0325-runs-queue-per-key-and-workflows-keep-session-metadata.md); amended by [0332](0332-commands-run-apart-from-the-agent.md): where the `review` Environment runs commands apart, the pull request's code no longer reaches the chat's grants, model or Work tools; what it wrote still reaches the reviewer as content, so the review stays advice)
+- **Status:** Accepted (the report is a typed `review` result, not a fenced block, by [0323](0323-agents-submit-typed-results.md); `postReviews` queues per pull request chat, keeps its state in the chat's metadata and dismisses nothing, by [0325](0325-runs-queue-per-key-and-workflows-keep-session-metadata.md); amended by [0332](0332-commands-run-apart-from-the-agent.md): where the `review` Environment runs commands apart, the pull request's code no longer reaches the chat's grants, model or Work tools; what it wrote still reaches the reviewer as content, so the review stays advice; by [0336](0336-reviews-show-progress-and-post-findings-as-verified.md) the check shows the review in progress and each finding posts once it is verified)
 - **Date:** 2026-10-18
 - **Refines:** [0177](0177-github-is-a-connection.md), [0181](0181-project-chats-use-their-environments-bindings.md)
 
