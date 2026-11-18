@@ -317,11 +317,14 @@ describe("machines-ec2 pack (ADR 0327)", () => {
   });
 
   const ALIVE = ["pending", "running", "stopping", "stopped", "shutting-down"];
-  /** A destroy request; its create was asked for `minutesAgo` minutes ago. */
+  /**
+   * A destroy request; a launch can have been made until `minutesAgo`
+   * minutes ago (null: no such time is known).
+   */
   const destroy = (input: {
     ref: string | null;
     key?: string | null;
-    minutesAgo?: number;
+    minutesAgo?: number | null;
     options?: unknown;
   }) =>
     JSON.stringify({
@@ -330,9 +333,12 @@ describe("machines-ec2 pack (ADR 0327)", () => {
       rule: "review",
       ref: input.ref,
       idempotencyKey: input.key === undefined ? KEY : input.key,
-      requestedAt: new Date(
-        Date.now() - (input.minutesAgo ?? 60) * 60_000,
-      ).toISOString(),
+      requestedAt:
+        input.minutesAgo === null
+          ? null
+          : new Date(
+              Date.now() - (input.minutesAgo ?? 60) * 60_000,
+            ).toISOString(),
       options: input.options ?? OPTIONS,
     });
 
@@ -416,12 +422,15 @@ describe("machines-ec2 pack (ADR 0327)", () => {
         justLaunched: await destroyMachine.steps[0].run({ input: ${destroy({ ref: "i-0new", minutesAgo: 1 })} }),
         noRefYet: await destroyMachine.steps[0].run({ input: ${destroy({ ref: null, minutesAgo: 1 })} }),
         later: await destroyMachine.steps[0].run({ input: ${destroy({ ref: "i-0new", minutesAgo: 11 })} }),
+        unknownLaunch: await destroyMachine.steps[0].run({ input: ${destroy({ ref: null, minutesAgo: null })} }),
       };
     `);
     expect(result).toEqual({
       justLaunched: { done: false },
       noRefYet: { done: false },
       later: { done: true },
+      // With no launch time known, never gone: Work asks again.
+      unknownLaunch: { done: false },
     });
   });
 });

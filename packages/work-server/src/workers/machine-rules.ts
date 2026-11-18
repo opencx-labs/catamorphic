@@ -262,13 +262,19 @@ export interface MachineWorkflows {
 /** A provisioner run as the reconciler reads it. */
 export type MachineWorkflowRun =
   /** Still going; `ageMs` since it was created. */
-  | { status: "active"; ageMs: number }
-  | { status: "completed"; output: unknown }
-  /**
-   * Failed or canceled `endedForMs` ago; `failures` counts the runs under
-   * its key that did.
-   */
-  | { status: "failed"; error: string; endedForMs: number; failures: number };
+  (
+    | { status: "active"; ageMs: number }
+    /** Answered `endedForMs` ago, when known. */
+    | { status: "completed"; output: unknown; endedForMs?: number }
+    /**
+     * Failed or canceled `endedForMs` ago; `failures` counts the runs under
+     * its key that did.
+     */
+    | { status: "failed"; error: string; endedForMs: number; failures: number }
+  ) & {
+    /** Since the first run under its key was created, when known. */
+    firstAgeMs?: number;
+  };
 
 /**
  * How long a create run may go before a destroy that waits for it cancels
@@ -1428,6 +1434,10 @@ export class MachineReconciler {
     if (!workflows)
       throw new Error("This server runs no workflows for machine classes");
     const key = creatingKey(machine.ref);
+    // The latest moment a launch can have been made: no create call comes
+    // after its run ended (ADR 0327). A platform that lists new machines
+    // late counts its grace from here.
+    let launchedBy = machine.enrollment?.issuedAt.getTime();
     if (key !== undefined) {
       const create = {
         project: machineClass.project,
@@ -1444,6 +1454,14 @@ export class MachineReconciler {
           reason: "Its machine is being destroyed",
         });
       }
+      const endedAt =
+        created?.status === "active"
+          ? this.now()
+          : created && created.endedForMs !== undefined
+            ? this.now() - created.endedForMs
+            : undefined;
+      if (endedAt !== undefined)
+        launchedBy = Math.max(launchedBy ?? endedAt, endedAt);
       // Settle the ref before destroy is keyed by it.
       const result =
         created?.status === "completed"
@@ -1495,7 +1513,11 @@ export class MachineReconciler {
         rule: machine.rule,
         ref,
         idempotencyKey: launchKey ?? null,
-        requestedAt: machine.enrollment?.issuedAt.toISOString() ?? null,
+        // With no launch time known, when Work first asked to destroy it:
+        // the destroy runs' own history keeps it from pass to pass.
+        requestedAt: new Date(
+          launchedBy ?? this.now() - (run?.firstAgeMs ?? 0),
+        ).toISOString(),
         ...(machineClass.options ? { options: machineClass.options } : {}),
       },
       correlationKey,

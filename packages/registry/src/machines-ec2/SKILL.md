@@ -50,8 +50,10 @@ enrollment's `idempotencyKey`), so a launch whose answer was lost is found
 too, even after the class's tags or name changed, terminates what is
 still alive, and answers `{ done: true }` only once nothing is left. EC2
 can take a while to list a new instance, so for ten minutes after the
-create was asked for (`requestedAt`) nothing found still answers
-`{ done: false }`. Until done, Work runs it again on later passes.
+latest moment a launch can have been made (`requestedAt`: Work sends when
+the create run ended, even one it canceled as stuck) nothing found still
+answers `{ done: false }`, and without that time it never answers done.
+Until done, Work runs it again on later passes.
 
 The class's `options`, as the workflows read them:
 

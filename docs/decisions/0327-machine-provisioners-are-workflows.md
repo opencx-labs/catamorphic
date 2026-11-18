@@ -46,8 +46,11 @@ work needs), `labels`, and `enrollment` (`controlPlaneUrl`, `code`,
 `idempotencyKey`, `cloudInit`). It returns `{ ref }`, or `{ refused }` when
 the platform created nothing. `destroy` gets `{ name, class, rule, ref,
 idempotencyKey, requestedAt, options }` (`ref` null when none is known;
-the key finds a launch whose answer was lost, `requestedAt` lets a
-platform that lists new machines late wait before calling one gone) and
+the key finds a launch whose answer was lost; `requestedAt` is the latest
+moment a launch can have been made, when the create run ended, else when
+its create was asked for, else when Work first asked to destroy it, so a
+platform that lists new machines late waits from then before calling one
+gone) and
 returns `{ done }`. Both
 output shapes are part of the trigger kinds, so a workflow that returns
 anything else fails its check.

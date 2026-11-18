@@ -60,8 +60,10 @@ const destroyPayload = z.object({
    */
   idempotencyKey: z.string().nullable(),
   /**
-   * When its create was asked for (ISO 8601): a platform that lists new
-   * machines late should not call one gone this soon after.
+   * The latest moment a launch can have been made (ISO 8601): when its
+   * create run ended, else when its create was asked for, else when Work
+   * first asked to destroy it. A platform that lists new machines late
+   * should not call one gone this soon after.
    */
   requestedAt: z.string().nullable(),
   options: z.record(z.string(), z.unknown()).optional(),

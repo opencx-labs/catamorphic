@@ -547,7 +547,8 @@ describe("workflow machine classes (ADR 0327)", () => {
   });
 
   it("cancels a create run that never finishes, and destroys the machine by name", async () => {
-    const { workflows, reconciler, pass } = setup();
+    let clock = Date.now();
+    const { workflows, reconciler, pass } = setup({ now: () => clock });
     await reconciler.setRule(shared("fleet-m"));
     const name = sharedName("fleet-m", "fleet", ENG, 1);
     await pass();
@@ -556,12 +557,19 @@ describe("workflow machine classes (ADR 0327)", () => {
     const key = create.input.enrollment.idempotencyKey;
     await reconciler.deleteRule("fleet-m");
     // A create run paused or stuck retrying for 31 minutes.
+    clock += 31 * 60_000;
     workflows.runs.set(create.correlationKey, {
       status: "active",
       ageMs: 31 * 60_000,
     });
     await pass();
     expect(workflows.canceled).toEqual([create.correlationKey]);
+    // It may have launched until it was canceled: destroy's grace for a
+    // late listing counts from then, not from the enrollment.
+    const [stuckDestroy] = workflows.destroys();
+    expect(
+      Date.parse(String(stuckDestroy?.input.requestedAt)),
+    ).toBeGreaterThanOrEqual(clock);
     expect(workflows.destroys()).toEqual([
       expect.objectContaining({
         input: expect.objectContaining({ ref: null, idempotencyKey: key }),

@@ -146,8 +146,21 @@ export class ProjectMachineWorkflows implements MachineWorkflows {
       .limit(1)
       .executeTakeFirst();
     if (!run) return undefined;
+    const first = await runs
+      .select(
+        sql<number>`(extract(epoch from (now() - min(run.created_at))) * 1000)::float8`.as(
+          "first_age_ms",
+        ),
+      )
+      .executeTakeFirst();
+    const firstAgeMs = Number(first?.first_age_ms ?? 0);
     if (run.status === "completed")
-      return { status: "completed", output: run.result };
+      return {
+        status: "completed",
+        output: run.result,
+        endedForMs: Number(run.ended_for_ms),
+        firstAgeMs,
+      };
     if (run.status === "failed" || run.status === "canceled") {
       const failed = await runs
         .select(sql<number>`count(*)::int`.as("count"))
@@ -158,9 +171,10 @@ export class ProjectMachineWorkflows implements MachineWorkflows {
         error: run.error ?? run.cancel_reason ?? `the run was ${run.status}`,
         endedForMs: Number(run.ended_for_ms),
         failures: Number(failed?.count ?? 1),
+        firstAgeMs,
       };
     }
-    return { status: "active", ageMs: Number(run.age_ms) };
+    return { status: "active", ageMs: Number(run.age_ms), firstAgeMs };
   }
 
   async cancel(args: {

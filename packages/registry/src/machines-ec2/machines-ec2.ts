@@ -340,11 +340,17 @@ async function terminateInstances({
   );
   if (alive.length === 0) {
     // EC2 lists a new instance late: just after RunInstances it can be
-    // unknown by id and missing from filters. Gone only after a while.
+    // unknown by id and missing from filters. Gone only once the grace has
+    // passed since the latest moment a launch can have been made, which
+    // Work sends; with none known, never: Work asks again.
     const requested = request.requestedAt
       ? Date.parse(request.requestedAt)
       : Number.NaN;
-    return { done: !(Date.now() - requested < LISTING_GRACE_MS) };
+    return {
+      done:
+        Number.isFinite(requested) &&
+        Date.now() - requested >= LISTING_GRACE_MS,
+    };
   }
   const terminate = alive
     .filter((instance) => instance.State?.Name !== "shutting-down")
