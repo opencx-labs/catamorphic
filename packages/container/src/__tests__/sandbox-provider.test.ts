@@ -2,7 +2,12 @@ import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import net from "node:net";
 import path from "node:path";
-import { cacheVolumeKey, volumeKey } from "@catamorphic/sandbox";
+import {
+  cacheVolumeKey,
+  dockerfileDigest,
+  dockerfileImageReference,
+  volumeKey,
+} from "@catamorphic/sandbox";
 import { afterEach, describe, expect, it } from "vitest";
 import {
   type ContainerProviderConfig,
@@ -730,5 +735,121 @@ describe("ContainerSandboxProvider without Docker", () => {
     await provider().destroySandbox(agent);
     expect(fake.containers.has(sandbox.id)).toBe(false);
     expect(fake.containers.has(agent)).toBe(false);
+  });
+
+  it("removes images Work pulled or built once unused for the grace, never one in use, the machine's own, or one it found (ADR 0335)", async () => {
+    const { fake, provider } = await setup(undefined, {
+      images: {
+        "oven/bun": 1,
+        "example/found:1": 1,
+        // Built before this machine kept a log: counted from when it was made.
+        "work.local/images:0123456789abcdef0123456789abcdef01234567": 1,
+        // Another machine's build on the same daemon: never this one's.
+        "work.local/images:fedcba9876543210fedcba9876543210fedcba98": 1,
+      },
+    });
+    fake.imageLabels.set(
+      "work.local/images:fedcba9876543210fedcba9876543210fedcba98",
+      { "work.sandbox.owner": "another-machine" },
+    );
+    const machine = provider();
+    const pulled = await machine.createSandbox({
+      image: { kind: "oci", reference: "example/review:1" },
+    });
+    const found = await machine.createSandbox({
+      image: { kind: "oci", reference: "example/found:1" },
+    });
+    await machine.createSandbox({});
+    const kept = () => [...(fake.images?.keys() ?? [])].sort();
+    // Used just now: only the old build is past an hour's grace.
+    expect(await machine.disk.clean({ graceMs: 3_600_000 })).toEqual([
+      "Removed 1 unused image: work.local/images:0123456789abcdef0123456789abcdef01234567",
+    ]);
+    // In use by a sandbox (Docker refuses), or never Work's: kept.
+    expect(await machine.disk.clean({ graceMs: 0 })).toEqual([]);
+    await machine.destroySandbox(pulled.id);
+    await machine.destroySandbox(found.id);
+    expect(await machine.disk.clean({ graceMs: 0 })).toEqual([
+      "Removed 1 unused image: example/review:1",
+    ]);
+    // The machine's own image, one it had before Work, another's: never.
+    expect(kept()).toEqual([
+      "example/found:1",
+      "oven/bun",
+      "work.local/images:fedcba9876543210fedcba9876543210fedcba98",
+    ]);
+    // Its own builds carry its label, and go once unused.
+    const dockerfile = "FROM oven/bun\nRUN true\n";
+    const built = await machine.createSandbox({
+      image: {
+        kind: "dockerfile",
+        path: ".work/images/review.Dockerfile",
+        content: dockerfile,
+        digest: dockerfileDigest(dockerfile),
+      },
+    });
+    const reference = dockerfileImageReference(dockerfileDigest(dockerfile));
+    expect(fake.imageLabels.get(reference)?.["work.sandbox.owner"]).toMatch(
+      /^[0-9a-f]{16}$/,
+    );
+    await machine.destroySandbox(built.id);
+    await machine.disk.clean({ graceMs: 0 });
+    expect(kept()).not.toContain(reference);
+    // A later sandbox of a removed image pulls it again.
+    await machine.createSandbox({
+      image: { kind: "oci", reference: "example/review:1" },
+    });
+    expect(kept()).toContain("example/review:1");
+  });
+
+  it("prunes dangling images and build cache in running sandboxes with containers only (ADR 0335)", async () => {
+    const { fake, provider } = await setup();
+    const machine = provider();
+    const running = await machine.createSandbox({ containers: true });
+    const stopped = await machine.createSandbox({ containers: true });
+    await machine.createSandbox({});
+    await machine.stopSandbox(stopped.id);
+    const before = fake.execs.size;
+    expect(await machine.disk.clean({ graceMs: 24 * 3_600_000 })).toEqual([
+      "Pruned dangling images and build cache in 1 sandbox with containers",
+    ]);
+    const prunes = [...fake.execs.values()]
+      .slice(before)
+      .filter((exec) => exec.cmd.join(" ").includes("prune"));
+    expect(prunes.map((exec) => exec.container)).toEqual([running.id]);
+    const script = prunes[0]?.cmd.join(" ") ?? "";
+    expect(script).toContain("docker image prune --force --filter until=24h");
+    expect(script).toContain("docker builder prune --force --filter until=24h");
+    // Never a tagged image, a container or a volume.
+    expect(script).not.toMatch(
+      /--all|-a\b|system prune|volume|container prune/,
+    );
+  });
+
+  it("measures its state and Docker's data root where it sees it (ADR 0335)", async () => {
+    const root = fs.mkdtempSync(path.join(fs.realpathSync("/tmp"), "wdr-"));
+    try {
+      const seen = await setup(undefined, { dockerRootDir: root });
+      expect(await seen.provider().disk.paths()).toEqual([
+        seen.stateDirectory,
+        root,
+      ]);
+      const unseen = await setup(undefined, {
+        dockerRootDir: "/var/lib/docker-not-here",
+      });
+      expect(await unseen.provider().disk.paths()).toEqual([
+        unseen.stateDirectory,
+      ]);
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("is given no storage limit by an Allocation, and refuses one asked directly (ADR 0335)", async () => {
+    const { provider } = await setup();
+    expect(provider().resourceLimits).not.toContain("storageMb");
+    await expect(
+      provider().createSandbox({ resources: { storageMb: 1024 } }),
+    ).rejects.toThrow(/cannot limit a sandbox's disk/);
   });
 });

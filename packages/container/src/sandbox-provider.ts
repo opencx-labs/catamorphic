@@ -9,6 +9,7 @@ import type {
   ExecResult,
   GitCloneOpts,
   SandboxCapability,
+  SandboxDiskProvider,
   SandboxEgress,
   SandboxFileOpts,
   SandboxHandle,
@@ -51,7 +52,7 @@ import {
   type CommandSession,
   startCommandChannel,
 } from "./command-channel.js";
-import { DockerApiError, DockerClient } from "./docker-client.js";
+import { DockerApiError, DockerClient, withTag } from "./docker-client.js";
 import {
   type EgressLookup,
   type EgressPolicy,
@@ -60,7 +61,11 @@ import {
   samePolicy,
   startEgressProxy,
 } from "./egress-proxy.js";
-import { type HostPathOf, hostPathResolver } from "./host-paths.js";
+import {
+  type HostPathOf,
+  hostPathResolver,
+  ownContainerId,
+} from "./host-paths.js";
 import type { ContainerRuntime } from "./support.js";
 import { tarArchive } from "./tar.js";
 
@@ -397,10 +402,21 @@ export class ContainerSandboxProvider implements SandboxProvider {
     prune: (args) => this.pruneVolumes(args),
     removeAll: (args) => this.removeAllVolumes(args),
   };
+  /**
+   * Its state and Docker's data root, and what it leaves there (ADR 0335):
+   * images it built or pulled, and the Docker data inside sandboxes with
+   * containers.
+   */
+  readonly disk: Required<SandboxDiskProvider> = {
+    paths: () => this.diskPaths(),
+    clean: (args) => this.cleanDisk(args),
+  };
 
   private readonly docker: DockerClient;
   private readonly config: ContainerProviderConfig;
   private readonly usage: VolumeUsageLog;
+  /** When a sandbox was last made from each image Work built or pulled. */
+  private readonly imageUsage: VolumeUsageLog;
   private readonly creations: CreationRegistry;
   private readonly owner: string;
   private readonly records = new Map<string, SandboxRecord>();
@@ -430,6 +446,9 @@ export class ContainerSandboxProvider implements SandboxProvider {
     this.docker = config.docker ?? new DockerClient();
     this.usage = new VolumeUsageLog(
       path.join(config.stateDirectory, "volumes.json"),
+    );
+    this.imageUsage = new VolumeUsageLog(
+      path.join(config.stateDirectory, "images.json"),
     );
     this.creations = new CreationRegistry(
       path.join(config.stateDirectory, "creating.json"),
@@ -2145,9 +2164,15 @@ export class ContainerSandboxProvider implements SandboxProvider {
         this.config.image ??
         DEFAULT_IMAGE;
       await this.once(reference, async () => {
-        if (!(await this.docker.inspectImage(reference)))
+        if (!(await this.docker.inspectImage(reference))) {
           await this.docker.pullImage(reference);
+          // Pulled by Work: removed once unused (ADR 0335).
+          this.imageUsage.touch([reference]);
+        }
       });
+      // One the machine had before Work pulled it is never Work's.
+      if (this.imageUsage.lastUsed(reference) !== undefined)
+        this.imageUsage.touch([reference]);
       return reference;
     }
     if (!(this.config.imageBuild ?? true))
@@ -2160,9 +2185,141 @@ export class ContainerSandboxProvider implements SandboxProvider {
         await this.docker.buildImage({
           tag: reference,
           dockerfile: image.content,
+          // Which machine built it, so another sharing the daemon never
+          // removes it (ADR 0335).
+          labels: { [OWNER_LABEL]: this.owner },
         });
     });
+    this.imageUsage.touch([reference]);
     return reference;
+  }
+
+  /**
+   * A path on each filesystem this provider writes to that this process
+   * can measure (ADR 0335): its state directory, and Docker's data root
+   * (volumes, images, containers) where this process sees it at the same
+   * path, which a worker in a container of its own does not.
+   */
+  private async diskPaths(): Promise<string[]> {
+    const paths = [this.config.stateDirectory];
+    const root = await this.docker
+      .info()
+      .then((info) =>
+        typeof info.DockerRootDir === "string" ? info.DockerRootDir : "",
+      )
+      .catch(() => "");
+    if (!root) return paths;
+    const inContainer = (() => {
+      try {
+        return Boolean(
+          ownContainerId(fs.readFileSync("/proc/self/mountinfo", "utf8")),
+        );
+      } catch {
+        return false;
+      }
+    })();
+    const same = await this.hostPathOf()
+      .then((hostPathOf) => hostPathOf(root) === path.resolve(root))
+      .catch(() => false);
+    if ((!inContainer || same) && fs.existsSync(root)) paths.push(root);
+    return paths;
+  }
+
+  /**
+   * Remove what Work left on this machine that nothing used for
+   * `graceMs` (ADR 0335): images it built or pulled that no sandbox was
+   * made from since and no container uses (Docker refuses those), never
+   * the machine's own default image; and in each running sandbox with
+   * containers, its Docker's dangling images and build cache that old,
+   * never a tagged image, a container or a volume. Work builds with the
+   * classic builder, so the machine's daemon holds no build cache of
+   * Work's, and one shared with other software keeps its own.
+   */
+  private async cleanDisk(args: { graceMs: number }): Promise<string[]> {
+    await this.reclaimed;
+    const done: string[] = [];
+    const own = new Set(
+      [this.config.image ?? DEFAULT_IMAGE].flatMap((reference) => [
+        reference,
+        withTag(reference),
+      ]),
+    );
+    // Images this machine built are its own whether or not its log
+    // recorded them, and so are those built before builds were labeled.
+    // Another machine's on a shared daemon are not.
+    const repository = dockerfileImageReference("").slice(0, -1);
+    const built = new Map<string, number>();
+    for (const image of await this.docker.listImages({
+      reference: repository,
+    })) {
+      const builder = objectField(image, "Labels")[OWNER_LABEL];
+      if (builder !== undefined && builder !== this.owner) continue;
+      for (const tag of stringList(image.RepoTags))
+        if (tag.startsWith(`${repository}:`))
+          built.set(tag, Number(image.Created) * 1000);
+    }
+    const removed: string[] = [];
+    for (const reference of new Set([
+      ...Object.keys(this.imageUsage.entries()),
+      ...built.keys(),
+    ])) {
+      if (own.has(reference)) continue;
+      const since = built.get(reference);
+      if (
+        !this.imageUsage.unused({
+          key: reference,
+          unusedForMs: args.graceMs,
+          ...(since !== undefined && Number.isFinite(since) ? { since } : {}),
+        })
+      )
+        continue;
+      if ((await this.docker.removeImage(reference)) === "gone")
+        removed.push(reference);
+    }
+    this.imageUsage.forget(removed);
+    if (removed.length > 0)
+      done.push(
+        `Removed ${removed.length} unused image${removed.length === 1 ? "" : "s"}: ${removed.join(", ")}`,
+      );
+    const hours = Math.max(0, Math.floor(args.graceMs / 3_600_000));
+    let pruned = 0;
+    for (const container of await this.docker.listContainers({
+      label: [
+        `${SANDBOX_LABEL}=1`,
+        `${OWNER_LABEL}=${this.owner}`,
+        `${CONTAINERS_LABEL}=1`,
+      ],
+    })) {
+      if (container.State !== "running") continue;
+      const names = container.Names;
+      const name = Array.isArray(names)
+        ? String(names[0] ?? "").replace(/^\//, "")
+        : "";
+      if (!name) continue;
+      // The sandbox's own Docker, which Work started: what no image names
+      // and no build uses any more. Its output is the sandbox's, so only
+      // its status is read.
+      const result = await this.exec(name, {
+        cmd: [
+          "sh",
+          "-c",
+          [
+            "docker info >/dev/null 2>&1 || exit 0",
+            `docker image prune --force --filter until=${hours}h >/dev/null 2>&1`,
+            `docker builder prune --force --filter until=${hours}h >/dev/null 2>&1`,
+            "exit 0",
+          ].join("\n"),
+        ],
+        user: "0",
+        timeoutSeconds: 120,
+      }).catch(() => undefined);
+      if (result?.exitCode === 0) pruned += 1;
+    }
+    if (pruned > 0)
+      done.push(
+        `Pruned dangling images and build cache in ${pruned} sandbox${pruned === 1 ? "" : "es"} with containers`,
+      );
+    return done;
   }
 
   /** One pull or build per reference at a time. */

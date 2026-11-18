@@ -145,6 +145,8 @@ interface ExecProgress {
   build?: string;
   /** The widening of a command `in: "setup"` (ADR 0257). */
   widening?: string;
+  /** The program commit its `$WORK_PROGRAM` copy is of, kept while it runs. */
+  program?: string;
 }
 
 /** Why a command could not run here at all. */
@@ -472,6 +474,10 @@ export class SessionExecService {
           tenantId,
           projectId: action.project_id,
           commit,
+          keep: await this.programsInUse({
+            action,
+            sandboxId: handle.sandboxId,
+          }),
         })
       : undefined;
     const network = args.in === "setup" ? setup?.network : undefined;
@@ -557,6 +563,7 @@ export class SessionExecService {
         startedAt: new Date().toISOString(),
         ...base,
         ...(widening ? { widening } : {}),
+        ...(commit ? { program: commit } : {}),
       };
       await trx
         .updateTable("session_actions")
@@ -759,6 +766,7 @@ export class SessionExecService {
       action,
       args: args.args,
       progress,
+      handle,
       result: {
         exitCode: overdue
           ? null
@@ -867,6 +875,8 @@ export class SessionExecService {
     args: SessionExecInput;
     progress: ExecProgress;
     result: SessionExecResult;
+    /** The workspace it ran in, when it was reached. */
+    handle?: SessionWorkspaceHandle;
   }): Promise<HostCallFollowOutcome> {
     const { action } = args;
     if (args.progress.widening) await this.endWidening(args);
@@ -924,9 +934,39 @@ export class SessionExecService {
       .select(["result", "status", "error"])
       .where("id", "=", action.id)
       .executeTakeFirstOrThrow();
+    // Its result is kept; its streams' files leave the workspace (ADR 0335).
+    if (final.status === "completed")
+      await this.removeOutput(action, args.handle);
     return final.status === "completed"
       ? { status: "done", output: final.result }
       : { status: "failed", error: final.error ?? "The command failed" };
+  }
+
+  /**
+   * Remove an execution's folder from the chat's workspace once its result
+   * is recorded: a test run's output would otherwise stay there for the
+   * life of the workspace. Best effort; a workspace that went away took it.
+   */
+  private async removeOutput(
+    action: ActionRow,
+    reached?: SessionWorkspaceHandle,
+  ): Promise<void> {
+    const handle =
+      reached ??
+      (await this.deps.sessions
+        .chatSandbox({
+          projectId: action.project_id,
+          sessionId: action.session_id,
+        })
+        .catch(() => undefined));
+    if (!handle) return;
+    await handle.provider
+      .executeCommand(
+        handle.sandboxId,
+        `rm -rf ${shellQuote(execDirectory(action.id))}`,
+        { cwd: handle.projectDirectory, timeout: 60 },
+      )
+      .catch(() => {});
   }
 
   /**
@@ -1028,6 +1068,8 @@ export class SessionExecService {
     tenantId: string;
     projectId: string;
     commit: string;
+    /** Commits whose copies other running executions use. */
+    keep: readonly string[];
   }): Promise<string> {
     const folder = `../${PROGRAM_DIRECTORY}/${args.commit}`;
     let program: Record<string, string> | undefined;
@@ -1040,12 +1082,29 @@ export class SessionExecService {
     return folder;
   }
 
+  /** Program commits of the other executions running in this workspace. */
+  private async programsInUse(args: {
+    action: ActionRow;
+    sandboxId: string;
+  }): Promise<string[]> {
+    const shared = await this.workspaceOf(args.action);
+    const running = await runningExecs(this.deps.db, {
+      sessionIds: shared.sessionIds,
+      except: args.action.id,
+      sandboxId: args.sandboxId,
+    });
+    return running.flatMap((progress) =>
+      progress.program ? [progress.program] : [],
+    );
+  }
+
   /** One side's copy; returns the program's files once they were read. */
   private async copyProgramTo(args: {
     handle: SessionWorkspaceHandle;
     tenantId: string;
     projectId: string;
     commit: string;
+    keep: readonly string[];
     side: SandboxSide;
     folder: string;
     program: Record<string, string> | undefined;
@@ -1086,6 +1145,21 @@ export class SessionExecService {
       throw new Error(
         `Could not copy the program into the workspace: ${placed.result.trim().slice(-500)}`,
       );
+    // A new copy per main commit would otherwise pile up for the life of
+    // the workspace (ADR 0335): copies of other commits made over a day
+    // ago go, and staging a start left, unless a running execution uses
+    // them. A turn handed a path within the day keeps reading it.
+    await handle.provider
+      .executeCommand(
+        handle.sandboxId,
+        programCleanup({ keep: [args.commit, ...args.keep] }),
+        {
+          cwd: path.posix.dirname(handle.projectDirectory),
+          timeout: 120,
+          side,
+        },
+      )
+      .catch(() => {});
     return program;
   }
 
@@ -1175,6 +1249,31 @@ export class SessionExecService {
       .executeTakeFirstOrThrow();
     return row.tenant_id;
   }
+}
+
+/** Minutes a copy of another commit's program stays in a workspace. */
+const PROGRAM_COPY_RETENTION_MINUTES = 24 * 60;
+
+/**
+ * The script that removes old program copies from a workspace root (ADR
+ * 0335): every `.work-program/<commit>` and leftover staging folder
+ * modified over a day ago, except the commits named. It runs with any
+ * POSIX `sh` and busybox `find`.
+ */
+export function programCleanup(input: { keep: readonly string[] }): string {
+  const keep = [...new Set(input.keep)].map(shellQuote).join(" ");
+  return [
+    `for d in ${PROGRAM_DIRECTORY}/* ${PROGRAM_DIRECTORY}/.staging-*; do`,
+    '  [ -d "$d" ] || continue',
+    '  name=$(basename "$d")',
+    "  kept=",
+    `  for k in ${keep}; do [ "$name" = "$k" ] && kept=1; done`,
+    '  [ -n "$kept" ] && continue',
+    `  [ -n "$(find "$d" -maxdepth 0 -mmin +${PROGRAM_COPY_RETENTION_MINUTES})" ] || continue`,
+    '  chmod -R u+w "$d" 2>/dev/null; rm -rf "$d"',
+    "done",
+    "exit 0",
+  ].join("\n");
 }
 
 /** The execution's directory, from the project folder. */
@@ -1290,6 +1389,7 @@ function parseProgress(value: Json | null): ExecProgress | null {
     ...(text("deadlineAt") ? { deadlineAt: text("deadlineAt") } : {}),
     ...(text("build") ? { build: text("build") } : {}),
     ...(text("widening") ? { widening: text("widening") } : {}),
+    ...(text("program") ? { program: text("program") } : {}),
     ...(value.in === "session" || value.in === "setup" ? { in: value.in } : {}),
     ...(value.exited === true ? { exited: true } : {}),
   };
