@@ -76,6 +76,12 @@ function mount() {
 const closing = (menu: HTMLElement) =>
   menu.classList.contains("animate-pop-out");
 
+/** A frame's focus move finishes a task after its blur and focusin. */
+const settleFocusMove = () =>
+  act(async () => {
+    await new Promise((resolve) => setTimeout(resolve, 0));
+  });
+
 describe("placeMenu", () => {
   const size = { width: 200, height: 300 };
 
@@ -191,7 +197,7 @@ describe("MenuPortal", () => {
     expect(document.activeElement).toBe(palette);
   });
 
-  it("closes on Escape and when the window loses focus", () => {
+  it("closes on Escape and when the window loses focus", async () => {
     const first = mount();
     act(() =>
       window.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape" })),
@@ -202,8 +208,32 @@ describe("MenuPortal", () => {
     });
     const second = mount();
     act(() => window.dispatchEvent(new Event("blur")));
+    await settleFocusMove();
     expect(closing(second.menu)).toBe(true);
   });
+
+  for (const tag of ["iframe", "webview"])
+    it(`keeps the keys when a page's ${tag} takes focus late, as the window becomes key`, async () => {
+      const { menu } = mount();
+      const page = document.createElement(tag);
+      page.tabIndex = 0;
+      document.body.append(page);
+      containers.push(page);
+      const [, inspect] = [
+        ...menu.querySelectorAll<HTMLButtonElement>("button:not(:disabled)"),
+      ];
+      act(() => inspect?.focus());
+      // The page's own focus, asked for before the menu opened, lands in
+      // another process after it: the window blurs and the frame is focused.
+      act(() => {
+        page.focus();
+        window.dispatchEvent(new Event("blur"));
+      });
+      await settleFocusMove();
+      expect(closing(menu)).toBe(false);
+      expect(document.activeElement).toBe(inspect);
+      expect(menu.querySelector("[data-menu-focus]")).not.toBeNull();
+    });
 
   it("closes when its anchor turns inert, as a closing sidebar does", async () => {
     const { container, menu } = mount();

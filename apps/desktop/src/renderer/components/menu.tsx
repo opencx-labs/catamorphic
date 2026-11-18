@@ -188,6 +188,7 @@ export function MenuPortal<TEntry extends ContextMenuEntry>({
     if (active instanceof HTMLElement && inMenu(active)) active.blur();
   }, [open]);
 
+  // biome-ignore lint/correctness/useExhaustiveDependencies: inMenu reads refs
   useEffect(() => {
     if (!open) return;
     const dismiss = () => dismissRef.current();
@@ -228,25 +229,70 @@ export function MenuPortal<TEntry extends ContextMenuEntry>({
         return;
       dismiss();
     };
+    // The row the keys were on, to hand them back to.
+    let row: HTMLElement | null = null;
+    // A page can take focus after the menu did: a web page or app frame
+    // focused a moment before (or the window becoming key, which restores
+    // focus to the page that had it) finishes that focus later, in another
+    // process. The shield keeps every press from a page, so that focus is
+    // never the person's: the menu takes it back once the frame's focus
+    // has finished moving (a focus taken back during the move is
+    // overridden by it), as dialogs do. The window losing focus to
+    // another app still closes it.
+    let settle: ReturnType<typeof setTimeout> | undefined;
+    const afterFocusMove = () => {
+      clearTimeout(settle);
+      settle = setTimeout(() => {
+        const active = document.activeElement;
+        if (
+          !active ||
+          inMenu(active) ||
+          (active.tagName !== "IFRAME" && active.tagName !== "WEBVIEW")
+        ) {
+          dismiss();
+          return;
+        }
+        const back =
+          row?.isConnected && inMenu(row) ? row : menuButtons(ref)[0];
+        if (back) back.focus({ preventScroll: true });
+        else dismiss();
+      });
+    };
     // Focus leaving the menu without a press: Tab, or a shortcut that
     // opens the palette.
     const focus = (event: FocusEvent) => {
       if (
         event.target instanceof Element &&
         event.target.closest("[data-sidebar-menu]")
-      )
+      ) {
+        if (event.target instanceof HTMLElement) row = event.target;
         return;
+      }
+      if (
+        event.target instanceof Element &&
+        (event.target.tagName === "IFRAME" ||
+          event.target.tagName === "WEBVIEW")
+      ) {
+        afterFocusMove();
+        return;
+      }
       dismiss();
     };
+    row =
+      document.activeElement instanceof HTMLElement &&
+      inMenu(document.activeElement)
+        ? document.activeElement
+        : null;
     window.addEventListener("keydown", key);
-    window.addEventListener("blur", dismiss);
+    window.addEventListener("blur", afterFocusMove);
     window.addEventListener("scroll", scroll, true);
     window.addEventListener("pointerdown", press, true);
     document.addEventListener("focusin", focus);
     return () => {
+      clearTimeout(settle);
       observer?.disconnect();
       window.removeEventListener("keydown", key);
-      window.removeEventListener("blur", dismiss);
+      window.removeEventListener("blur", afterFocusMove);
       window.removeEventListener("scroll", scroll, true);
       window.removeEventListener("pointerdown", press, true);
       document.removeEventListener("focusin", focus);

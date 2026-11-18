@@ -5,7 +5,13 @@ import {
   setSpanCorrelation,
   withSpan,
 } from "@catamorphic/otel";
-import { type Kysely, type Selectable, sql, type Transaction } from "kysely";
+import {
+  type Expression,
+  type Kysely,
+  type Selectable,
+  sql,
+  type Transaction,
+} from "kysely";
 import type { WorkWakeups } from "./work-wakeups.js";
 
 export type ExecutionJobKind =
@@ -381,32 +387,47 @@ export class ExecutionJobsService {
   }): Promise<ExecutionJob | null> {
     const leaseSeconds = args.leaseSeconds ?? 60;
     const leaseToken = crypto.randomUUID();
-    const row = await this.db
-      .updateTable("execution_jobs")
-      .set((eb) => ({
-        status: "running",
-        leased_by: args.workerId,
-        lease_token: leaseToken,
-        lease_generation: sql<string>`lease_generation + 1`,
-        heartbeat_at: sql<Date>`clock_timestamp()`,
-        lease_expires_at: sql<Date>`clock_timestamp() + (${leaseSeconds} * interval '1 second')`,
-        attempt: eb("attempt", "+", 1),
-        updated_at: new Date(),
-      }))
-      .where("id", "=", args.jobId)
-      .where(
-        workerPlacement(
-          this.db,
-          this.workerNode,
-          "execution_jobs.workflow_run_id",
-          "execution_jobs.kind",
-        ),
-      )
-      .where("status", "=", "pending")
-      .where("available_at", "<=", sql<Date>`clock_timestamp()`)
-      .returningAll()
-      .executeTakeFirst();
-    return row ? mapExecutionJob(row) : null;
+    return this.db.transaction().execute(async (trx) => {
+      // The job row first, as the batch claim and the coordinator lock it:
+      // a run being cancelled or failed locks its jobs before it releases
+      // the Allocation, so taking the Allocation's share lock first could
+      // deadlock with it. A job someone holds is a lost race.
+      const locked = await trx
+        .selectFrom("execution_jobs")
+        .select("id")
+        .where("id", "=", args.jobId)
+        .where("status", "=", "pending")
+        .where("available_at", "<=", sql<Date>`clock_timestamp()`)
+        .forUpdate()
+        .skipLocked()
+        .executeTakeFirst();
+      if (!locked) return null;
+      const row = await trx
+        .updateTable("execution_jobs")
+        .set((eb) => ({
+          status: "running",
+          leased_by: args.workerId,
+          lease_token: leaseToken,
+          lease_generation: sql<string>`lease_generation + 1`,
+          heartbeat_at: sql<Date>`clock_timestamp()`,
+          lease_expires_at: sql<Date>`clock_timestamp() + (${leaseSeconds} * interval '1 second')`,
+          attempt: eb("attempt", "+", 1),
+          updated_at: new Date(),
+        }))
+        .where("id", "=", locked.id)
+        .where(
+          workerPlacement(
+            trx,
+            this.workerNode,
+            "execution_jobs.workflow_run_id",
+            "execution_jobs.kind",
+          ),
+        )
+        .where("status", "=", "pending")
+        .returningAll()
+        .executeTakeFirst();
+      return row ? mapExecutionJob(row) : null;
+    });
   }
 
   /**
@@ -449,11 +470,21 @@ export class ExecutionJobsService {
       })
       .where("id", "=", args.jobId)
       .where(
+        // A renewal checks its placement without the claimers' share lock.
+        // It would hold the Allocation while waiting for this job's row,
+        // which the coordinator locks before it releases the Allocation
+        // when the step ends the run: a deadlock. Without the lock, a
+        // renewal racing a release or a park (which does not count
+        // host_call_wait jobs as running) can extend this lease once, by
+        // at most leaseSeconds. It can never take back a job that was
+        // fenced, reclaimed or cancelled: the job row's status, token,
+        // generation and expiry are rechecked under its row lock.
         workerPlacement(
           this.db,
           this.workerNode,
           "execution_jobs.workflow_run_id",
           "execution_jobs.kind",
+          { lock: false },
         ),
       )
       .where("status", "=", "running")
@@ -1168,6 +1199,7 @@ function workerPlacement(
   node: { id: string; token: string } | undefined,
   runId: string,
   kind: string,
+  options: { lock: boolean } = { lock: true },
 ) {
   const placement = db
     .selectFrom("workflow_runs as placement_run")
@@ -1179,6 +1211,11 @@ function workerPlacement(
     .select("placement_run.id")
     .where("placement_run.id", "=", sql<string>`${sql.ref(runId)}`)
     .where("placement.status", "=", "active");
+  const lock = <
+    Query extends { modifyEnd(modifier: Expression<unknown>): Query },
+  >(
+    query: Query,
+  ) => (options.lock ? query.modifyEnd(sql`FOR SHARE OF placement`) : query);
   // Timeouts advance the journal only. They neither touch a sandbox nor
   // need one admitted, including when the original machine is gone.
   // Claiming and parking exclude each other on the Allocation alone;
@@ -1190,17 +1227,18 @@ function workerPlacement(
       .select("id")
       .where("id", "=", sql<string>`${sql.ref(runId)}`)
       .where("allocation_id", "is", null);
-    return sql<boolean>`(${timeout} OR EXISTS (${unplaced}) OR EXISTS (${placement
-      .where("placement.worker_node_id", "is", null)
-      .modifyEnd(sql`FOR SHARE OF placement`)}))`;
+    return sql<boolean>`(${timeout} OR EXISTS (${unplaced}) OR EXISTS (${lock(
+      placement.where("placement.worker_node_id", "is", null),
+    )}))`;
   }
-  return sql<boolean>`(${timeout} OR EXISTS (${placement
-    .innerJoin("worker_nodes as node", "node.id", "placement.worker_node_id")
-    .where("node.id", "=", node.id)
-    .where("node.lease_token", "=", node.token)
-    .where("node.enabled", "=", true)
-    .where("node.lease_expires_at", ">", sql<Date>`clock_timestamp()`)
-    .modifyEnd(sql`FOR SHARE OF placement`)}))`;
+  return sql<boolean>`(${timeout} OR EXISTS (${lock(
+    placement
+      .innerJoin("worker_nodes as node", "node.id", "placement.worker_node_id")
+      .where("node.id", "=", node.id)
+      .where("node.lease_token", "=", node.token)
+      .where("node.enabled", "=", true)
+      .where("node.lease_expires_at", ">", sql<Date>`clock_timestamp()`),
+  )}))`;
 }
 
 function escapeLike(value: string): string {

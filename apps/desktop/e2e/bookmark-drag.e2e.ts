@@ -103,6 +103,10 @@ describe("drag tabs and chats into bookmarks", () => {
     await run(
       "setReactValue($('[data-composer-input]'),'remember this pinned conversation');$('[data-composer-input]').focus()",
     );
+    // The native Enter goes to the focused element: the composer with the text.
+    await wait(
+      "document.hasFocus() && document.activeElement?.matches('[data-composer-input]') && document.activeElement.textContent.includes('remember this pinned conversation')",
+    );
     await app.press("Enter");
     await wait("!!$('aside [data-session-id]')");
     const sessionId = await run<string>(

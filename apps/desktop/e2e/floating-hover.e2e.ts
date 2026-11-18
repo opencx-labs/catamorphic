@@ -89,7 +89,29 @@ beforeAll(async () => {
     })()`,
   );
   await app.clickPointer(plus);
-  await app.waitFor(`!!${composer}`);
+  await app
+    .waitFor(`!!${composer}`, { label: "the + opened a floating chat" })
+    .catch(async (error: unknown) => {
+      // Which chats main and this window hold, and which project each
+      // side thinks is in front, when the + opened none.
+      const state = await app.eval(
+        `window.catamorphicDesktop.dockSnapshot().then(snapshot => ({
+          active: document.activeElement?.outerHTML.slice(0, 300),
+          windowFocused: document.hasFocus(),
+          visibleProject: document.querySelector('[data-project-runtime][data-workspace-visible="true"]')?.dataset.projectRuntime,
+          mainActiveProject: snapshot.activeProjectId ?? null,
+          mainActiveChat: snapshot.activeChatId ?? null,
+          mainChats: snapshot.chats.map(chat => ({
+            id: chat.entry.localId, project: chat.projectId, mode: chat.entry.mode, local: chat.local,
+          })),
+          sections: [...document.querySelectorAll('section[aria-label]')].map(section => ({
+            label: section.getAttribute('aria-label'), project: section.dataset.chatProject ?? null,
+            inert: !!section.closest('[inert]'), composer: !!section.querySelector('[data-composer-input]'),
+          })),
+        }))`,
+      );
+      throw new Error(`${String(error)}; dock state: ${JSON.stringify(state)}`);
+    });
   await focusWindow(app);
   await send(`show: http://127.0.0.1:${address.port}/`);
   await app.waitFor(

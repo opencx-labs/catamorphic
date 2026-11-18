@@ -74,15 +74,42 @@ export function Modal({
     // otherwise the panel takes it, so keys reach the dialog.
     if (!panelRef.current?.contains(document.activeElement))
       panelRef.current?.focus({ preventScroll: true });
-    const onKeyDown = (event: KeyboardEvent) => {
-      // A dialog stacked on top of this one (a confirm inside a settings
-      // modal) owns the keys; only the topmost open dialog reacts.
-      const dialogs = Array.from(
+    // A dialog stacked on top of this one (a confirm inside a settings
+    // modal) owns the keys; only the topmost open dialog reacts.
+    const topmost = () =>
+      Array.from(
         document.querySelectorAll<HTMLElement>(
           '[role="dialog"][aria-modal="true"]',
         ),
-      ).filter((element) => !element.closest("[inert]"));
-      if (dialogs.at(-1) !== panelRef.current) return;
+      )
+        .filter((element) => !element.closest("[inert]"))
+        .at(-1) === panelRef.current;
+    // A page beneath can take focus after the dialog did: a browser tab
+    // focused a moment before a request opened this dialog finishes its
+    // own focus later, in another process. Keys belong to the dialog, so
+    // it takes focus back from any frame outside it, once that frame's
+    // focus has finished moving: focus taken back during the move is
+    // overridden by it, and keys would still go to the page.
+    let reclaim: ReturnType<typeof setTimeout> | undefined;
+    const reclaimFromFrame = () => {
+      clearTimeout(reclaim);
+      reclaim = setTimeout(() => {
+        const panel = panelRef.current;
+        const active = document.activeElement;
+        if (
+          panel &&
+          active &&
+          (active.tagName === "IFRAME" || active.tagName === "WEBVIEW") &&
+          !panel.contains(active) &&
+          topmost()
+        )
+          panel.focus({ preventScroll: true });
+      });
+    };
+    window.addEventListener("blur", reclaimFromFrame);
+    document.addEventListener("focusin", reclaimFromFrame);
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (!topmost()) return;
       // The app-styled select owns Escape/Tab while its top-layer picker is
       // open. Dismiss that picker before dismissing or cycling this dialog.
       if (
@@ -128,6 +155,9 @@ export function Modal({
     };
     window.addEventListener("keydown", onKeyDown, { capture: true });
     return () => {
+      clearTimeout(reclaim);
+      window.removeEventListener("blur", reclaimFromFrame);
+      document.removeEventListener("focusin", reclaimFromFrame);
       window.removeEventListener("keydown", onKeyDown, { capture: true });
       const activeElement = document.activeElement;
       const focusStayedInModal =

@@ -403,11 +403,20 @@ it("renders an interactive project app without exposing the shell bridge or broa
     apiStatus: "blocked",
   });
   // The app remains useful inside that boundary, driven by the OS pointer.
-  const point = await guest.eval<{ x: number; y: number }>(
-    `(() => { const r=document.querySelector('#probe-button').getBoundingClientRect(); return {x:r.x+r.width/2,y:r.y+r.height/2}; })()`,
+  // One press counts: aim once the button and its frame are where they rest.
+  const point = await guest.waitFor<{ x: number; y: number }>(
+    `(() => { const button=document.querySelector('#probe-button'); const r=button.getBoundingClientRect();
+      const point={x:r.x+r.width/2,y:r.y+r.height/2};
+      return document.elementFromPoint(point.x,point.y)===button && point; })()`,
+    { label: "the probe button under its center" },
   );
-  const offset = await handle.eval<{ x: number; y: number }>(
-    `(() => { const r=document.querySelector('iframe[src^="work-guest:"]').getBoundingClientRect(); return {x:r.x,y:r.y}; })()`,
+  const offset = await handle.waitFor<{ x: number; y: number }>(
+    `(() => { const frame=document.querySelector('iframe[src^="work-guest:"]'); if (!frame) return false;
+      const r=frame.getBoundingClientRect();
+      const moving=document.getAnimations().some(a => a.playState==='running' &&
+        a.effect?.getTiming().iterations!==Infinity && a.effect?.target?.contains?.(frame));
+      return !moving && document.elementFromPoint(r.x+${point.x},r.y+${point.y})===frame && {x:r.x,y:r.y}; })()`,
+    { label: "the app frame at rest under the button" },
   );
   await handle.clickPointer({
     x: point.x + offset.x,
