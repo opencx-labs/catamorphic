@@ -33,10 +33,10 @@ const server = http.createServer((request, response) => {
       page(
         "Framed sign in",
         `
-      <iframe id=auth ${mode === "sandbox" ? 'sandbox="allow-scripts allow-forms"' : ""}
-        style="width:500px;height:400px" src="${authOrigin}/auth-frame?mode=${mode}${answer}"></iframe>
-      <iframe id=sibling src="/empty-frame"></iframe>
       <script>
+        // Listening before the frames exist: the authentication frame says
+        // its first step as soon as it runs, and a fast frame said it before
+        // a listener added after it was there to hear (macOS CI).
         addEventListener('message', ({data, source}) => {
           if (source !== document.querySelector('#auth')?.contentWindow) return;
           if (data.focused) document.body.dataset.focused = data.focused;
@@ -47,7 +47,10 @@ const server = http.createServer((request, response) => {
             if (${JSON.stringify(mode)} === 'remove') document.querySelector('#auth').remove();
           }
         });
-      </script>`,
+      </script>
+      <iframe id=auth ${mode === "sandbox" ? 'sandbox="allow-scripts allow-forms"' : ""}
+        style="width:500px;height:400px" src="${authOrigin}/auth-frame?mode=${mode}${answer}"></iframe>
+      <iframe id=sibling src="/empty-frame"></iframe>`,
       ),
     );
     return;

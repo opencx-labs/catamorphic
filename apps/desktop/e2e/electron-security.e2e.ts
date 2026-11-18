@@ -420,14 +420,24 @@ it("renders an interactive project app without exposing the shell bridge or broa
       return document.elementFromPoint(point.x,point.y)===button && point; })()`,
     { label: "the probe button under its center" },
   );
+  // At rest: two readings in a row agree on where the frame is (the
+  // sidebar opened just before slides the content beside it, which no
+  // animation on the frame's own ancestors shows), and none of those
+  // ancestors is mid-transform.
   const offset = await handle.waitFor<{ x: number; y: number }>(
     `(() => { const frame=document.querySelector('iframe[src^="work-guest:"]'); if (!frame) return false;
       const r=frame.getBoundingClientRect();
       const moving=document.getAnimations().some(a => a.playState==='running' &&
         a.effect?.getTiming().iterations!==Infinity && a.effect?.target?.contains?.(frame));
-      return !moving && document.elementFromPoint(r.x+${point.x},r.y+${point.y})===frame && {x:r.x,y:r.y}; })()`,
+      const last=window.__probeFrameAt; window.__probeFrameAt={x:r.x,y:r.y};
+      const still=!!last && Math.abs(last.x-r.x)<0.5 && Math.abs(last.y-r.y)<0.5;
+      return !moving && still && document.elementFromPoint(r.x+${point.x},r.y+${point.y})===frame && {x:r.x,y:r.y}; })()`,
     { label: "the app frame at rest under the button" },
   );
+  // Into the app's empty corner first: on Linux the native move is skipped
+  // when the pointer is already at its target (an earlier test on the same
+  // display can leave it there), and the app would never hear it arrive.
+  await handle.movePointer({ x: offset.x + 4, y: offset.y + 4 });
   // Pressed only once the app has seen the OS pointer arrive over the
   // button, so the press goes where the move went.
   await handle.clickPointer(
