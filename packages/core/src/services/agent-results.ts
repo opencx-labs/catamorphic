@@ -154,7 +154,11 @@ const TOO_MUCH_PATTERN_WORK: ResultFieldError = {
     "takes too long to check against the schema's patterns; send shorter text",
 };
 
-/** Compiled patterns by source, bounded by their instructions together. */
+/**
+ * Compiled patterns by source, bounded by their instructions together.
+ * Replica memory (b): a cache keyed by the pattern's own text, which every
+ * replica compiles alike.
+ */
 const compiledPatterns = new Map<
   string,
   { expression: RE2JS; size: number } | { problem: string }
