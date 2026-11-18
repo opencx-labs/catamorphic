@@ -1221,13 +1221,29 @@ describe("report text", () => {
     "<!-<!---->- x --<!---->>",
   ];
 
-  it("leaves no HTML comment, however it is nested, and no mention it uncovers", () => {
-    for (const text of planted)
-      expect(publicationText(text), text).not.toMatch(/<!--|-->/);
+  it("opens no HTML comment, declaration or processing instruction, however nested, and hides no word", () => {
+    const hiding = [
+      ...planted,
+      "<!DOCTYPE hidden words>",
+      "<![CDATA[ hidden words ]]>",
+      "<?php hidden words ?>",
+      "<?xml hidden words?>",
+      "<!<!X hidden>>",
+    ];
+    for (const text of hiding) {
+      const shown = publicationText(text);
+      // Nothing GitHub drops can open: no "<!" or "<?" is left.
+      expect(shown, text).not.toMatch(/<[!?]/);
+      // Nothing is removed: without the zero-width spaces it is the text.
+      expect(shown.replaceAll("\u200b", ""), text).toBe(text);
+    }
+    // Code spans read as written.
+    const code = "Use `<!-- keep -->` and `<?= $x ?>` in templates.";
+    expect(publicationText(code).replaceAll("\u200b", "")).toBe(code);
     expect(publicationText("@<!---->team, ask @grace")).toBe(
-      "@\u200bteam, ask @\u200bgrace",
+      "@<\u200b!---->team, ask @\u200bgrace",
     );
-    expect(publicationText("a < b && c --> d")).toBe("a < b && c  d");
+    expect(publicationText("a < b && c --> d")).toBe("a < b && c --> d");
   });
 
   it("defuses every field of a review that reaches a GitHub body", () => {
@@ -1242,7 +1258,7 @@ describe("report text", () => {
         reply: { inReplyTo: 7, body: text },
       });
       expect(typeof checked).toBe("object");
-      expect(JSON.stringify(checked), text).not.toMatch(/<!--|-->/);
+      expect(JSON.stringify(checked), text).not.toMatch(/<[!?]/);
     }
   });
 });

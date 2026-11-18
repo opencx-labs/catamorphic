@@ -59,17 +59,17 @@ export function diffLines(result: unknown): Set<string> {
 
 /**
  * Report text is posted as the App: it mentions no one and hides nothing.
- * HTML comment delimiters (a fake stamp, a summary marker) are taken out
- * until none is left, so a nested one such as `<!<!---->--` cannot
- * reassemble into one, and then "@name" and "@org/team" stop notifying.
+ * Every `<` that would open a comment (a fake stamp, a summary marker), a
+ * declaration such as `<!DOCTYPE …>` or `<![CDATA[`, or a processing
+ * instruction (`<?…?>`), all of which GitHub drops from a body, gets a
+ * zero-width space after it, so none opens, however the text nests them,
+ * and nothing is removed: the words, code spans included, read as written.
+ * "@name" and "@org/team" stop notifying the same way.
  */
 export function publicationText(text: string): string {
-  let shown = text;
-  for (let before = ""; before !== shown; ) {
-    before = shown;
-    shown = shown.replace(/<!--|-->/g, "");
-  }
-  return shown.replace(/@(?=[A-Za-z0-9])/g, "@​");
+  return text
+    .replace(/<(?=[!?])/g, "<\u200b")
+    .replace(/@(?=[A-Za-z0-9])/g, "@\u200b");
 }
 
 /**
