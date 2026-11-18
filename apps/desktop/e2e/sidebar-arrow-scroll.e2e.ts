@@ -222,8 +222,17 @@ it("follows the ring at the upper edge and when only the outer panel scrolls", a
   await place(0);
   await app.eval(`${viewport}.closest('.sidebar-tab-panel').scrollTop=0`);
   try {
+    // The last row clear of the panel's faded lower edge, with the section
+    // nudged down so the row after it crosses that edge by half a row. A
+    // row picked by rounding alone could cross it by a fraction of a pixel
+    // in some window sizes (the macOS runner's), which scrolls nothing.
     const edge = await app.eval<number>(
-      `(()=>{const view=${viewport},panel=view.closest('.sidebar-tab-panel'),padding=parseFloat(getComputedStyle(panel).scrollPaddingBottom)||0;return Math.floor((panel.getBoundingClientRect().bottom-padding-view.getBoundingClientRect().top)/28)-1})()`,
+      `(()=>{const view=${viewport},panel=view.closest('.sidebar-tab-panel'),section=document.querySelector('${section}'),padding=parseFloat(getComputedStyle(panel).scrollPaddingBottom)||0;
+        const bound=panel.getBoundingClientRect().top+panel.clientTop+panel.clientHeight-padding,top=view.getBoundingClientRect().top;
+        let edge=Math.floor((bound-top)/28)-1,shift=bound+14-(top+(edge+2)*28);
+        if(shift<0){edge-=1;shift+=28}
+        section.style.marginTop=shift+'px';
+        return edge})()`,
     );
     for (let i = 0; i < edge; i++) await app.press("ArrowDown");
     await settle();
