@@ -33,13 +33,19 @@ privileges the kernel refuses root a remount. Under gVisor a review sandbox
 with its own Docker holds every capability, and gVisor accepts the remount
 in its own mount table, but runsc opened the read-only mount read only on
 the host, so every write still fails (`EROFS`); a test proves both. Code the
-pull request controls reads a cache and never writes it.
+pull request controls reads a cache and never writes it. Placement is not the
+only guard: the Allocation's wrappers, the executor on the machine, and the
+local-process and microsandbox backends all refuse a cache on a provider that
+does not offer `caches`, since it would mount it writable.
 
-**Only a trusted fill writes.** A fill runs the cache's `fill.command`, read
-from the Environment as the published program declares it, at a published
-revision of `main`: `commit` must be one Work published for the project
-(ADR 0330), and by default it is the current one. No other ref is accepted,
-so no pull request, session branch or draft fills. The fill gets its own
+**Only a trusted fill writes.** A fill runs at a revision of `main` that
+went live through the deploy gate (ADR 0331): `commit` must be a published
+revision whose status is `applied` (ADR 0330), and by default it is the
+latest such. A pending, deploying, failed or superseded revision is refused,
+and no other ref is accepted, so no pull request, session branch or draft
+fills. Everything the fill takes from the program comes from that one
+revision's manifest: the cache's `fill.command`, `path` and `sizeMb`, and the
+setup's network and secrets. The fill gets its own
 Allocation on the machine, owned by the project and charged like any work:
 a fresh sandbox of the Environment's image, holding the revision's checkout
 alone, on the setup's network (the Environment's own when it has none), with
@@ -50,19 +56,33 @@ the cache's root, removes the sandbox (so nothing the command left running
 writes later), and only then publishes the generation by marking the fill
 succeeded: one row, so a sandbox sees the old generation or the new one,
 never a partial one. A failed, timed out or oversized fill leaves the old
-generation in place.
+generation in place, and what it wrote is removed before its sandbox goes.
+Every step of a fill goes through its Allocation's guard and its claim, so a
+released Allocation, a lost machine lease, or a claim another run took over
+stops it before it publishes. Before publishing, Work searches the generation
+for the values of the setup secrets the fill ran with (those of at least 8
+characters, as written); one found refuses the fill, since every sandbox of
+the Environment would read it (ADR 0257).
 
 **Requesting.** `host["catamorphic.environments"].fillCache({ environment,
 cache, commit?, idempotencyKey })` needs the new permission `caches:write`.
 The caller names neither the command nor a ref, so a workflow can trigger a
 fill but cannot run a command of its own with the cache writable. A project
-fills on a schedule, or from its deploy workflow with its `commit` (ADR
-0331). A request fills every machine holding a copy, or one placed machine
-when none does.
+fills on a schedule. A deploy workflow (ADR 0331) runs before its own
+revision goes live, so it cannot fill from it. A request fills every machine
+holding a copy, or one placed machine when none does.
 
 **Where caches live: on each machine.** A copy is a Docker volume per
-generation on the machine (`cache-<name>-<digest>-g<generation>`). Mounting a
-generation removes the older ones no sandbox mounts. We considered one
+generation on the machine (`cache-<name>-<digest>-g<generation>`). The
+control plane hands each mount the cache's other generations on that machine
+to retire: all but the published one and one being filled, so failed and
+superseded generations go once no sandbox mounts them. On the machine, one
+lock per cache spans finding a generation, creating the container that mounts
+it, and retiring or pruning, so a generation is never removed between a
+sandbox finding it and mounting it. A read-only generation the machine no
+longer has (pruned, reset, re-enrolled) is never created empty: the sandbox
+reports it skipped, Work forgets that copy and every older one, queues a fill,
+and tells the agent the cache is missing. We considered one
 archive in Work's storage that machines pull. It would move gigabytes
 through storage seams built for small objects (the Postgres object store
 included) and add a streaming transfer protocol for workers. A machine is as
@@ -76,8 +96,11 @@ that `demand.min` keeps idle stay warm.
 **One fill per cache and machine.** A unique index allows one running fill
 per cache and machine. A request while one is queued joins it. Replicas
 claim fills with `SKIP LOCKED` on the dispatch pass, and a claim that lapses
-is retried with a new generation, at most 3 times. A fill that finds no room
-on its machine backs off. One still queued after an hour fails.
+is retried with a new generation, at most 3 times; the last one releases the
+Allocation its attempt left, so the machine's cleanup frees its reservation. A
+fill that finds no room on its machine backs off. One still queued an hour
+after it last joined the queue fails, never counting time behind a running
+fill of the same cache.
 
 **Staleness and cleanup.** Each copy's commit and fill time are in its
 `.work-cache.json` and in the turn's note on a new workspace. Copies no
@@ -89,8 +112,13 @@ error.
 
 ## Consequences
 
-Review machines install from a cache filled at main, using the network only
-for what changed. A cache is as fresh as its last fill, and a project
+Review machines install from a cache filled at main. A setup that may mount
+(the review sandbox, which runs its own Docker) lays a writable overlay over
+the cache and fetches only what the pull request adds; the writes land in the
+workspace, never in the cache. A setup that cannot mount installs offline from
+the cache, and a pull request that changes the lockfile then downloads
+everything. A deploy workflow runs before its own revision goes live, so the
+next scheduled fill takes a new revision. A cache is as fresh as its last fill, and a project
 decides when that runs. Local-process, microsandbox and Cloudflare machines
 do not offer caches. A fill uses one workspace's capacity on its machine
 while it runs.

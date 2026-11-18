@@ -1041,21 +1041,26 @@ caches (ADR 0208):
   writes (ADR 0334): `"caches": { "pnpm": { "path":
   "~/.cache/work/pnpm-store", "sizeMb": 16384, "fill": { "command": "pnpm
   fetch --store-dir ~/.cache/work/pnpm-store", "timeoutMinutes": 30 } } }`.
-  A fill runs the cache's own command, read from the published program,
-  in a fresh sandbox of the Environment's image holding a revision Work
-  published from `main` alone, on the setup's network (the Environment's own
-  without one), with no grant and only the secrets `setup.secrets` names,
-  in an Allocation of its own on that machine. Work publishes the new
+  A fill runs at the revision of `main` that last went live (`applied`
+  after the deploy gate), with that revision's cache command, path, size and
+  setup network and secrets, in a fresh sandbox of the Environment's image
+  holding that revision alone, with no grant, in an Allocation of its own on
+  that machine. Work publishes the new
   generation only when the fill exited 0, stayed within `sizeMb` (10 GiB by
-  default) and its sandbox is gone, so a sandbox sees the old cache or the
-  new one. A workflow with `caches:write` asks for one with
+  default), holds none of its setup secrets' values, and its sandbox is
+  gone, so a sandbox sees the old cache or the new one; a failed fill's
+  generation is emptied. A workflow with `caches:write` asks for one with
   `host["catamorphic.environments"].fillCache({ environment, cache,
-  commit?, idempotencyKey })` on a schedule or from the project's deploy
-  workflow; it cannot name a command or any ref but a published revision.
+  commit?, idempotencyKey })`, on a schedule; it cannot name a command, nor
+  any revision but one that went live (a deploy workflow runs before its own
+  revision does, so it cannot fill from it).
   Copies live on each machine as Docker volumes, one per generation. A
-  machine with no copy mounts none (setup installs from the network as
-  before) and Work queues a fill for it; one fill per cache and machine
-  runs at a time. Each copy holds `.work-cache.json` (the commit of `main`
+  machine with no copy, or one that lost it, mounts none (setup installs
+  from the network as before) and Work queues a fill for it; one fill per
+  cache and machine runs at a time, and each mount retires the generations
+  that are neither published nor being filled. A setup that may mount (a
+  sandbox with its own Docker) can lay a writable overlay over a cache, so a
+  changed lockfile fetches only what is new (the review pack does). Each copy holds `.work-cache.json` (the commit of `main`
   that filled it and when), and a new workspace's agent is told the same.
   A copy no sandbox mounted for `WORK_VOLUME_RETENTION_DAYS` is evicted,
   and a pooled machine's reset forgets them all. `GET

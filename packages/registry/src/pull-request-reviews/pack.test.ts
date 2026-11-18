@@ -263,8 +263,18 @@ describe("the pull-request-reviews pack", () => {
         },
       },
     });
-    expect(review?.setup?.command).toContain(
-      "pnpm install --frozen-lockfile --offline --store-dir ~/.cache/work/pnpm-store || pnpm install --frozen-lockfile",
+    // A sandbox that can mount (a review's own Docker) extends the cache in
+    // an overlay, so a changed lockfile fetches only what is new; others
+    // install offline from it and fall back to the registries.
+    const command = review?.setup?.command ?? "";
+    expect(command).toContain(
+      'mount -t overlay overlay -o "lowerdir=$c,upperdir=$o/up,workdir=$o/work" "$s"',
+    );
+    expect(command).toContain(
+      'pnpm install --frozen-lockfile --prefer-offline --store-dir "$s"',
+    );
+    expect(command).toContain(
+      'pnpm install --frozen-lockfile --offline --store-dir "$c" || pnpm install --frozen-lockfile',
     );
     expect(Object.keys(review?.connections ?? {})).toEqual([
       "github",

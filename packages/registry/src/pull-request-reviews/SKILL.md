@@ -83,13 +83,17 @@ must never reach the next review.
 
 `caches.pnpm` is a pnpm store every review sandbox mounts read only, setup's
 included, at `~/.cache/work/pnpm-store` (ADR 0334). Only a fill writes it:
-Work runs the cache's own `fill.command` (`pnpm fetch`) in a fresh sandbox
-holding the published main alone, on the setup's network with nothing else,
+Work runs the cache's own `fill.command` (`pnpm fetch`), as the revision
+of main that last went live declares it, in a fresh sandbox holding that
+revision alone, on its setup's network with nothing else,
 and publishes the new store only when the fill succeeded and its sandbox is
-gone. Setup installs from it offline and falls back to the registries when
-the pull request needs a package main does not have (`pnpm install
---frozen-lockfile --offline --store-dir ... || pnpm install
---frozen-lockfile`). Copies live on each machine: the first review on a new
+gone. Setup lays a writable store over it (an overlay, which the review
+sandbox may mount because it runs its own Docker) and installs with
+`--prefer-offline`: what main already had comes from the cache, and only
+what the pull request adds is fetched, into the overlay's upper layer in
+the workspace, never into the cache. A sandbox that cannot mount installs
+offline from the cache and falls back to the registries, so there a pull
+request that changes the lockfile downloads everything. Copies live on each machine: the first review on a new
 machine installs from the network while Work fills that machine's copy, and
 machines kept idle (`machines.demand.min`) stay warm. `sizeMb` bounds a
 fill; a copy no review mounted for 30 days is evicted. Each copy holds
@@ -200,13 +204,14 @@ connection; enable it in `github-poster` so its runs use that
 Environment's binding.
 
 `fillReviewCache` asks Work every six hours to fill the `review`
-Environment's pnpm store from the published main
+Environment's pnpm store from the revision of main that last went live
 (`host["catamorphic.environments"].fillCache`, `permissions:
 ["caches:write"]`). It names only the Environment and the cache: the command
-is the one the published `.work/project.json` declares, so no workflow and no
-pull request chooses what runs with the store writable. A project with a
-deploy workflow (ADR 0331) can call `fillCache` there too, passing its
-`commit`, so the store follows each published revision.
+is the one `.work/project.json` declares at that live revision, so no
+workflow and no pull request chooses what runs with the store writable. A
+revision fills only once it went live: a deploy workflow (ADR 0331) runs
+before its own revision does, so it cannot fill from it; the next scheduled
+fill takes it.
 
 ## .work/workflows/src/review-report.ts
 

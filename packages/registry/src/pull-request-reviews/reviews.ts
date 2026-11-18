@@ -280,10 +280,10 @@ type Publication = {
  * @displayname Fill the review package cache
  *
  * Every six hours Work fills the `review` Environment's pnpm store from the
- * published main, with the command the Environment declares, on every
- * review machine that holds a copy (ADR 0334). Review setups install from
- * it read only and fetch only what a pull request changed. A project with
- * a deploy workflow (ADR 0331) can fill from there too, with its `commit`.
+ * revision of main that last went live, with the command that revision's
+ * Environment declares, on every review machine that holds a copy (ADR
+ * 0334). Review setups lay a writable store over it and fetch only what a
+ * pull request adds.
  */
 export const fillReviewCache = defineWorkflow(({ defineBoundary }) => ({
   permissions: ["caches:write"],
