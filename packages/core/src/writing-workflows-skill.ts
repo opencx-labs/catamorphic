@@ -115,7 +115,13 @@ no machine, until the runs ahead of it settle; its status reads \`queued\`.
 refuses. A run whose input has no value at the path runs unkeyed. Use
 \`queue\` whenever a run reads state and then writes based on it (a verdict,
 a counter, a posted comment), so two overlapping runs never both read the old
-state. A delivery's own id (a webhook's, a schedule occurrence, an event) is
+state. A key holds at most 100 queued runs; when events can flood (an
+agent's results, a busy chat's statuses), add \`coalesce: ["kind",
+"payload.detail.turnId"]\`, one to four more paths: a run that would queue
+while one with the same values still waits joins it instead, so a flood
+holds one waiting run. Coalesce only runs that read what is new when they
+start (results, the chat, GitHub), never ones that act on their own event
+alone. A delivery's own id (a webhook's, a schedule occurrence, an event) is
 already deduplicated: the same delivery never starts a second run.
 
 Webhooks use \`trigger("webhook", { name: "github" })\`: a lowercase name that

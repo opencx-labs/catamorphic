@@ -667,6 +667,19 @@ export function correlationKeyAtPath(
   return undefined;
 }
 
+/**
+ * What makes a queued run alike another of its key (ADR 0336): the values
+ * at the workflow's `coalesce` paths, as JSON, a missing one as null.
+ */
+export function coalesceKeyAtPaths(
+  input: unknown,
+  paths: readonly string[],
+): string {
+  return JSON.stringify(
+    paths.map((path) => correlationKeyAtPath(input, path) ?? null),
+  ).slice(0, 1000);
+}
+
 /** What starting a queued run needs beyond the run row (ADR 0325). */
 interface QueuedEnrollment {
   environment?: string;
@@ -2674,6 +2687,11 @@ export class RunsService {
     const onConflict: EnrollmentConflictPolicy = derivedKey
       ? (declared?.onConflict ?? "ignore")
       : (args.onConflict ?? "ignore");
+    // Queued runs alike by the workflow's own paths join (ADR 0336).
+    const coalesceKey =
+      derivedKey && onConflict === "queue" && declared?.coalesce
+        ? coalesceKeyAtPaths(input, declared.coalesce)
+        : null;
     let supersededRunId: string | null = null;
     let queue = false;
     if (correlationKey && !args.start) {
@@ -2786,6 +2804,7 @@ export class RunsService {
           }).catch(() => undefined)
         : undefined;
       let queued = false;
+      let joined: string | null = null;
       try {
         const invocations = await this.db.transaction().execute(async (trx) => {
           // Enrollment and retirement serialize on the retained source row.
@@ -2905,6 +2924,33 @@ export class RunsService {
                 .where("status", "not in", ["completed", "failed", "canceled"])
                 .executeTakeFirstOrThrow();
               queued = queue || Number(ahead.all) > 0;
+              // A run alike one still queued, of the same owner and
+              // enablement, joins it: that run reads the state when it
+              // starts, so it answers this one's event too (ADR 0336).
+              const alike =
+                queued && coalesceKey !== null
+                  ? await keyed
+                      .select("id")
+                      .where("status", "=", "queued")
+                      .where("coalesce_key", "=", coalesceKey)
+                      .where(
+                        "external_user_id",
+                        "=",
+                        args.identity.externalUserId,
+                      )
+                      .where(
+                        "workflow_enablement_id",
+                        args.workflowEnablementId ? "=" : "is",
+                        args.workflowEnablementId ?? null,
+                      )
+                      .orderBy("queued_at")
+                      .limit(1)
+                      .executeTakeFirst()
+                  : undefined;
+              if (alike) {
+                joined = alike.id;
+                return [];
+              }
               if (queued && Number(ahead.queued) >= MAX_QUEUED_RUNS_PER_KEY)
                 throw new RunQueueFullError(args.workflowName, correlationKey);
             }
@@ -2974,6 +3020,7 @@ export class RunsService {
                 ...setup,
                 environment_name: args.environment ?? null,
                 delivery_key: deliveryKey ?? null,
+                coalesce_key: coalesceKey,
                 status: "queued",
                 queued_at: sql<Date>`clock_timestamp()`,
                 enrollment: jsonColumn(toJson(enrollment)),
@@ -3113,7 +3160,7 @@ export class RunsService {
           workflowName: args.workflowName,
           correlationKey,
         }).catch(() => {});
-      return this.get({ identity: args.identity, runId });
+      return this.get({ identity: args.identity, runId: joined ?? runId });
     }
   }
 

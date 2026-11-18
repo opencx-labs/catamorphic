@@ -1383,6 +1383,7 @@ export interface WorkflowRuns {
   caller_scope: Json | null;
   cancel_reason: string | null;
   cancel_requested_at: Timestamp | null;
+  coalesce_key: string | null;
   completed_at: Timestamp | null;
   correlation_key: string | null;
   created_at: Generated<Timestamp>;
