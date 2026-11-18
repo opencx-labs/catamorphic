@@ -34,7 +34,10 @@ reported: tool calls and commands still in progress, with when each began.
 host agents set the same field. The threshold is copied onto the attempt
 when it starts. Work's agent worker, on every replica, records a stall once:
 an attempt running (not waiting on a person) whose `progress_at` is older
-than its threshold gets `stalled_at`, set by one conditional update, and a
+than its threshold, while no working turn of its subsessions at any depth
+(ADR 0322, shared or own workspace) made progress within that threshold
+either, gets `stalled_at`, set by one conditional update over a recursive
+walk of the session family, and a
 `session.turn-stalled` session event with `payload.session.key` and
 `detail: { turnId, attemptId, attempt, attempts, restarts, progressAt,
 stalledAt, stallMinutes, activity }`. Progress clears `stalled_at`; a later
@@ -86,7 +89,8 @@ does. The reviewer's definition sets a stall threshold.
 Considered: reusing `activityAt` (it moves only when the line changes);
 counting diagnostics as progress (a harness retrying in a loop logs while it
 does nothing); Work restarting stalled turns itself (whether a silence is a
-hang is the project's call: a coordinator waiting on subagents is silent);
+hang is the project's call); counting only the attempt's own progress (a
+coordinator waiting on subagents that work would be restarted mid-review);
 marking a restarted attempt `lost` and queuing a continuation turn (the turn
 would end interrupted, and `recovery: stop` would refuse what a person
 asked); stalls while waiting on a person (that wait is the person's).
@@ -95,8 +99,10 @@ asked); stalls while waiting on a person (that wait is the person's).
 
 A hung turn is noticed within its threshold plus one worker poll, shows what
 it was doing, and is restarted by project code with its evidence kept. Every
-frame batch and admitted model call writes one column. A host tool waiting
-longer than the threshold (a long `wait_for_subsessions`) reads as a stall;
-the event's `activity` names it, so a recipe can skip it. Diagnostics streamed
+frame batch and admitted model call writes one column. A coordinator stalls
+only once its whole family is silent; a subsession stalls on its own
+threshold, if its agent sets one. A host tool waiting longer than the
+threshold on something other than subsessions (a long external wait) reads
+as a stall; the event's `activity` names it, so a recipe can skip it. Diagnostics streamed
 from adapters add frames but never transcript items. Item A's separately run
 commands (ADR 0332) count as progress only through the frames they cause.

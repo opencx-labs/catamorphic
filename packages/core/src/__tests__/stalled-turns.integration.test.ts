@@ -203,9 +203,22 @@ describe("stalled turns", () => {
   });
 
   /** A chat whose agent runs `[[hang]]` turns into a hung call. */
-  async function hangingChat(name: string, agentId = "watched") {
-    const project = await projects.create(identity, { name });
+  async function hangingChat(
+    name: string,
+    agentId = "watched",
+    /** Its parent: a subsession of that chat, in its project (ADR 0322). */
+    parent?: { projectId: string; sessionId: string },
+  ) {
+    const project = parent
+      ? { id: parent.projectId }
+      : await projects.create(identity, { name });
     const session = await sessions.create(identity, project.id, { agentId });
+    if (parent)
+      await db
+        .updateTable("agent_sessions")
+        .set({ parent_session_id: parent.sessionId })
+        .where("id", "=", session.id)
+        .execute();
     // The chat received a secret (ADR 0206): its output is masked by it.
     await db
       .updateTable("agent_sessions")
@@ -380,6 +393,41 @@ describe("stalled turns", () => {
       reason: "done with this test",
     });
   }, 40_000);
+
+  it("never stalls a coordinator while a subsession at any depth makes progress", async () => {
+    // A coordinator, its subagent without a threshold, and that subagent's
+    // own subagent with one: the coordinator waits while they work.
+    const parent = await hangingChat("Coordinator");
+    const child = await hangingChat("Subagent", "unwatched", parent);
+    const grandchild = await hangingChat("Sub-subagent", "watched", child);
+    const minutes = (n: number) => new Date(Date.now() + n * 60_000);
+    const progressed = (attemptId: string, at: Date) =>
+      db
+        .updateTable("agent_turn_attempts")
+        .set({ progress_at: at })
+        .where("id", "=", attemptId)
+        .execute();
+    // The coordinator and its subagent are silent; the deepest one works.
+    await progressed(grandchild.attemptId, minutes(20));
+    await sessions.recordStalls({ at: minutes(25) });
+    for (const chat of [parent, child, grandchild])
+      expect(await stallEvents(chat.sessionId), chat.sessionId).toHaveLength(0);
+    // It keeps working: still no stall, however long the coordinator waits.
+    await progressed(grandchild.attemptId, minutes(59));
+    await sessions.recordStalls({ at: minutes(60) });
+    expect(await stallEvents(parent.sessionId)).toHaveLength(0);
+    // Once it goes silent too, the coordinator stalls, and so does the
+    // deepest subagent on its own threshold; the one with none never does.
+    await sessions.recordStalls({ at: minutes(80) });
+    expect(await stallEvents(parent.sessionId)).toHaveLength(1);
+    expect(await stallEvents(grandchild.sessionId)).toHaveLength(1);
+    expect(await stallEvents(child.sessionId)).toHaveLength(0);
+    for (const chat of [grandchild, child, parent])
+      await sessions.restartTurn(identity, chat.projectId, chat.sessionId, {
+        turnId: chat.turnId,
+        reason: "done with this test",
+      });
+  }, 60_000);
 
   it("records no stall for an agent without a threshold", async () => {
     const chat = await hangingChat("Unwatched", "unwatched");

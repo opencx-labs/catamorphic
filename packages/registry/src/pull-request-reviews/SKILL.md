@@ -133,7 +133,8 @@ with `review-report.ts`, which checks the value again before posting.
 
 Its `stall` (`{ "minutes": 20 }`) is how long a review turn may make no
 progress (nothing from its harness but log lines, no model call) before Work
-records a stall and emits `session.turn-stalled` (ADR 0333). Work only
+records a stall and emits `session.turn-stalled` (ADR 0333). Its subagents'
+progress counts: a reviewer waiting on subagents that work does not stall. Work only
 reports it; `restartStalledReviews` acts on it when it is on. Raise it for
 reviews that legitimately sit in one long command (a full test suite), or
 remove it to record no stalls.

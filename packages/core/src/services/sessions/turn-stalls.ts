@@ -155,7 +155,9 @@ export async function turnProgress(
  * Record every stall that fell due by `at` on chats this host holds, once
  * per silence, each with its `session.turn-stalled` event in the same
  * transaction. An attempt waiting on a person is not stalled: that wait
- * is theirs. Returns how many it recorded.
+ * is theirs. Nor is one whose subsessions, at any depth, made progress
+ * within its threshold: a coordinator waits while they work. One query
+ * finds them all. Returns how many it recorded.
  */
 export async function recordStalls(input: {
   db: Kysely<DB>;
@@ -164,7 +166,46 @@ export async function recordStalls(input: {
 }): Promise<number> {
   const at = input.at ?? new Date();
   return input.db.transaction().execute(async (trx) => {
+    // Silent by its own clock, as an attempt must be to stall.
+    const silent = sql<Date>`${at}::timestamptz - make_interval(secs => attempt.stall_after_seconds)`;
     const stalled = await trx
+      // Each candidate's session family: the candidate's session and its
+      // subsessions at every depth (ADR 0322). A coordinator waiting on
+      // subagents that work is not stalled. UNION ends a cycle.
+      .withRecursive("stall_family(root_id, session_id)", (db) =>
+        db
+          .selectFrom("agent_turn_attempts as attempt")
+          .innerJoin(
+            "agent_turns as turn",
+            "turn.active_attempt_id",
+            "attempt.id",
+          )
+          .innerJoin(
+            "agent_sessions as session",
+            "session.id",
+            "turn.session_id",
+          )
+          .select([
+            "attempt.session_id as root_id",
+            "attempt.session_id as session_id",
+          ])
+          .where("turn.status", "=", "running")
+          .where("attempt.status", "=", "running")
+          .where("attempt.stall_after_seconds", "is not", null)
+          .where("attempt.stalled_at", "is", null)
+          .where("attempt.progress_at", "<=", silent)
+          .where("session.authority_host_id", "in", [...input.hostIds])
+          .union((qb) =>
+            qb
+              .selectFrom("stall_family as family")
+              .innerJoin(
+                "agent_sessions as child",
+                "child.parent_session_id",
+                "family.session_id",
+              )
+              .select(["family.root_id as root_id", "child.id as session_id"]),
+          ),
+      )
       .updateTable("agent_turn_attempts as attempt")
       .from("agent_turns as turn")
       .innerJoin("agent_sessions as session", "session.id", "turn.session_id")
@@ -176,12 +217,32 @@ export async function recordStalls(input: {
       .where("attempt.stall_after_seconds", "is not", null)
       .where("attempt.stalled_at", "is", null)
       .where("attempt.progress_at", "is not", null)
-      .where(
-        "attempt.progress_at",
-        "<=",
-        sql<Date>`${at}::timestamptz - make_interval(secs => attempt.stall_after_seconds)`,
-      )
+      .where("attempt.progress_at", "<=", silent)
       .where("session.authority_host_id", "in", [...input.hostIds])
+      // ...and no subsession's working turn made progress within the
+      // threshold either.
+      .where(({ not, exists, selectFrom }) =>
+        not(
+          exists(
+            selectFrom("stall_family as family")
+              .innerJoin(
+                "agent_turns as child_turn",
+                "child_turn.session_id",
+                "family.session_id",
+              )
+              .innerJoin(
+                "agent_turn_attempts as child_attempt",
+                "child_attempt.id",
+                "child_turn.active_attempt_id",
+              )
+              .select("child_attempt.id")
+              .whereRef("family.root_id", "=", "attempt.session_id")
+              .whereRef("family.session_id", "!=", "family.root_id")
+              .where("child_turn.status", "in", [...ACTIVE])
+              .where("child_attempt.progress_at", ">", silent),
+          ),
+        ),
+      )
       .returning([
         "attempt.id as attemptId",
         "attempt.turn_id as turnId",
@@ -231,6 +292,13 @@ export async function nextStallAt(input: {
     .where("attempt.status", "=", "running")
     .where("attempt.stall_after_seconds", "is not", null)
     .where("attempt.stalled_at", "is", null)
+    // One already due but held off by its subsessions' progress is checked
+    // on the worker's regular polls, never in a busy loop.
+    .where(
+      sql<Date>`attempt.progress_at + make_interval(secs => attempt.stall_after_seconds)`,
+      ">",
+      sql<Date>`now()`,
+    )
     .where("session.authority_host_id", "in", [...input.hostIds])
     .executeTakeFirst();
   return row?.at ? new Date(row.at) : null;

@@ -342,7 +342,10 @@ since. An agent definition's "stall": { "minutes": 20 } (1 to 1440; absent,
 never) makes Work record a running turn silent that long once, as
 session.turn-stalled with detail { turnId, attemptId, attempt, attempts,
 restarts, progressAt, stalledAt, stallMinutes, activity }. Progress clears it;
-a later silence emits again. A turn waiting on a person never stalls. Work does
+a later silence emits again. A turn waiting on a person never stalls, nor does
+one whose subsessions, at any depth, made progress within its threshold (a
+coordinator waits while its subagents work); a subsession stalls on its own
+threshold. Work does
 nothing on its own: deciding a silence is a hang is the workflow's.
 
 restart({ sessionId | key, turnId, reason, idempotencyKey }) ends the turn's
