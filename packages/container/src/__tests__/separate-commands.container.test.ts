@@ -784,6 +784,24 @@ describe.skipIf(!enabled)("commands apart from the agent (ADR 0332)", () => {
   );
 
   it(
+    "runs a setuid program the command side leaves in the checkout as the harness",
+    async () => {
+      const id = await separated();
+      await provider.executeCommand(
+        id,
+        `cp "$(command -v id)" ${PROJECT}/raise && chown 0:0 ${PROJECT}/raise && chmod 4755 ${PROJECT}/raise`,
+      );
+      expect(
+        (await agent(id, `stat -c '%u %a' ${PROJECT}/raise`)).result.trim(),
+      ).toBe("0 4755");
+      expect((await harness(id, `${PROJECT}/raise -u`)).result.trim()).toBe(
+        "10001",
+      );
+    },
+    10 * MINUTES,
+  );
+
+  it(
     "stops a command that prints past its budget, with everything it started",
     async () => {
       const bounded = new ContainerSandboxProvider({

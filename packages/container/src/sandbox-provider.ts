@@ -761,6 +761,9 @@ export class ContainerSandboxProvider implements SandboxProvider {
             },
             HostConfig: {
               ...agentLimits,
+              // No program raises the harness: a setuid copy the command
+              // side's root leaves in the checkout runs as the harness.
+              SecurityOpt: ["no-new-privileges:true"],
               Mounts: [
                 { Type: "volume", Target: this.workspaceRoot },
                 ...shared,
