@@ -43,9 +43,15 @@ files are copied from there, never from the pull request.
   secrets file, only the secrets `setup.secrets` names, and with
   `setup.network` (ADR 0257) the sandbox widened for it. It is accepted only
   from the chat's own setup workflow while Work builds the workspace, and
-  ends by the setup's own time. Widenings are counted per command: the
-  sandbox narrows once the last one ends; no command `in: "session"` starts
-  while one is wide, and none widens while one runs. Elsewhere it is refused: a used sandbox is never widened
+  ends by the setup's own time. Widenings are counted per command, under a
+  lock per workspace (its sharers' commands run in one sandbox, ADR 0322):
+  the sandbox narrows once the last one ends; no command `in: "session"`
+  starts while one is wide, or while the Environment's own setup command
+  holds it on the setup's network (except the setup workflow's own), and
+  none widens while one runs. Under that lock a setup run's command starts
+  only while its setup is still the chat's current one, and a setup's end
+  first waits for starts already under way, so none starts after it.
+  Elsewhere it is refused: a used sandbox is never widened
   (ADR 0257), and a second sandbox cannot hand an installed dependency tree
   back. **Installing new dependencies while a turn runs is therefore not
   possible**: the reviewer reuses what setup installed, or moves the

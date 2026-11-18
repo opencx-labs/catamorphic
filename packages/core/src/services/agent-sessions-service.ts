@@ -8282,30 +8282,48 @@ export class AgentSessionsService {
       names: input.setup.secrets ?? [],
       ownerAuthored: input.ownerAuthored,
     });
-    return this.prepareWorkspaceSetup({
-      identity,
-      projectId,
-      session,
-      turn: input.turn,
-      runner: {
-        kind: "sandbox",
-        provider,
-        sandboxProviderId: input.sandboxProviderId,
-        network: { egress: input.egress, env },
-      },
-      environment: input.setup,
-      personalAllowed: false,
-      ownerAuthored: input.ownerAuthored,
-      moved: input.moved,
-      signal: input.signal,
-    }).catch(async (error: unknown) => {
+    // While it may hold the sandbox on its network, other workflows'
+    // session commands wait (ADR 0324); a crash leaves a bound, not a lock.
+    const widened = workspaceCopyId(session);
+    await this.db
+      .updateTable("agent_sessions")
+      .set({
+        setup_widened_until: sql<Date>`now() + make_interval(mins => ${input.setup.timeoutMinutes + 1})`,
+      })
+      .where("id", "=", widened)
+      .execute();
+    try {
+      return await this.prepareWorkspaceSetup({
+        identity,
+        projectId,
+        session,
+        turn: input.turn,
+        runner: {
+          kind: "sandbox",
+          provider,
+          sandboxProviderId: input.sandboxProviderId,
+          network: { egress: input.egress, env },
+        },
+        environment: input.setup,
+        personalAllowed: false,
+        ownerAuthored: input.ownerAuthored,
+        moved: input.moved,
+        signal: input.signal,
+      });
+    } catch (error) {
       // A sandbox that may still be wide fails the attempt (ADR 0257).
       if (error instanceof SetupNetworkError)
         await this.connectionGrants
           ?.revokeSession({ agentSessionId: session.id, channel: "sandbox" })
           .catch(() => {});
       throw error;
-    });
+    } finally {
+      await this.db
+        .updateTable("agent_sessions")
+        .set({ setup_widened_until: null })
+        .where("id", "=", widened)
+        .execute();
+    }
   }
 
   /**

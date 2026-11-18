@@ -182,6 +182,7 @@ export interface AgentSessions {
   secrets_delivered_ref: string | null;
   secrets_held_at: Timestamp | null;
   setup_run: Json | null;
+  setup_widened_until: Timestamp | null;
   source: Generated<string>;
   source_action_id: string | null;
   state_revision: Generated<Int8>;

@@ -486,16 +486,42 @@ export class SessionExecService {
       },
       `${handle.sessionDirectory}/exec/${action.id}`,
     );
-    // Network changes and starts are ordered per chat: a command never
-    // starts on a sandbox another's widening holds, nor widens one a
-    // session command runs in, and a narrowing waits for the last widening.
-    return this.withNetworkLock(action.session_id, async (trx) => {
+    // Network changes and starts are ordered per workspace (its sharers'
+    // commands run in one sandbox, ADR 0322): a command never starts on a
+    // sandbox another's widening holds, nor widens one a session command
+    // runs in, and a narrowing waits for the last widening.
+    const shared = await this.workspaceOf(action);
+    return this.withNetworkLock(shared.key, async (trx) => {
       const running = await runningExecs(trx, {
-        sessionId: action.session_id,
+        sessionIds: shared.sessionIds,
         except: action.id,
         sandboxId: handle.sandboxId,
       });
-      if (args.in === "session" && running.some((other) => other.widening))
+      // A command of a setup run starts only while that setup is the
+      // chat's current one: one that ended, or ran out of time, already
+      // stopped its commands and narrowed the sandbox (ADR 0324).
+      if (setup) {
+        const chat = await trx
+          .selectFrom("agent_sessions")
+          .select("setup_run")
+          .where("id", "=", action.session_id)
+          .executeTakeFirst();
+        const live = parseSetupRun(chat?.setup_run ?? null);
+        if (
+          live?.build !== setup.build ||
+          Date.parse(live.deadline) <= Date.now()
+        )
+          throw new SessionExecRefusedError(
+            "The setup ended before the command started",
+          );
+      }
+      // Nor while the Environment's own setup has it on the setup's
+      // network (ADR 0257), unless it is that setup's own workflow.
+      if (
+        args.in === "session" &&
+        (running.some((other) => other.widening) ||
+          (!setup && (await setupWidened(trx, shared.key))))
+      )
         throw new SessionExecRefusedError(
           "The chat's workspace is on its setup's network for a setup command; a command in the session runs once it is narrow again",
         );
@@ -596,20 +622,48 @@ export class SessionExecService {
   }
 
   /**
-   * Run `work` holding the chat's network lock (a transaction-scoped
+   * Run `work` holding the workspace's network lock (a transaction-scoped
    * advisory lock), so widenings, narrowings and starts in one sandbox
    * happen one at a time on every replica.
    */
   private withNetworkLock<T>(
-    sessionId: string,
+    workspaceSessionId: string,
     work: (trx: Transaction<DB>) => Promise<T>,
   ): Promise<T> {
     return this.deps.db.transaction().execute(async (trx) => {
-      await sql`select pg_advisory_xact_lock(hashtext(${`work-exec-network:${sessionId}`}))`.execute(
+      await sql`select pg_advisory_xact_lock(hashtext(${`work-exec-network:${workspaceSessionId}`}))`.execute(
         trx,
       );
       return work(trx);
     });
+  }
+
+  /**
+   * The workspace a chat's commands run in (ADR 0322): its workspace
+   * session, which keys the network lock, and every session sharing it.
+   */
+  private async workspaceOf(action: {
+    session_id: string;
+  }): Promise<{ key: string; sessionIds: string[] }> {
+    const chat = await this.deps.db
+      .selectFrom("agent_sessions")
+      .select("workspace_session_id")
+      .where("id", "=", action.session_id)
+      .executeTakeFirst();
+    const key = chat?.workspace_session_id ?? action.session_id;
+    const sharers = await this.deps.db
+      .selectFrom("agent_sessions")
+      .select("id")
+      .where((eb) =>
+        eb.or([eb("id", "=", key), eb("workspace_session_id", "=", key)]),
+      )
+      .execute();
+    return {
+      key,
+      sessionIds: [
+        ...new Set([action.session_id, ...sharers.map((row) => row.id)]),
+      ],
+    };
   }
 
   /** Follow a started command for one slice; record its end. */
@@ -752,6 +806,13 @@ export class SessionExecService {
     build: string;
     network: boolean;
   }): Promise<void> {
+    // The setup is no longer the chat's current one, so no command of it
+    // starts from now (the start checks under the lock); one that started
+    // already has recorded its process once the lock is free.
+    const shared = await this.workspaceOf({
+      session_id: input.sessionId,
+    });
+    await this.withNetworkLock(shared.key, async () => {});
     const actions = await this.deps.db
       .selectFrom("session_actions")
       .selectAll()
@@ -785,7 +846,7 @@ export class SessionExecService {
       sessionId: input.sessionId,
     });
     if (!sandbox) return;
-    await this.withNetworkLock(input.sessionId, () =>
+    await this.withNetworkLock(shared.key, () =>
       narrowSandboxEgress({
         provider: sandbox.provider,
         sandboxId: sandbox.sandboxId,
@@ -876,14 +937,15 @@ export class SessionExecService {
     progress: ExecProgress;
   }): Promise<void> {
     const { action, progress } = args;
-    await this.withNetworkLock(action.session_id, async (trx) => {
+    const shared = await this.workspaceOf(action);
+    await this.withNetworkLock(shared.key, async (trx) => {
       await trx
         .updateTable("session_actions")
         .set({ progress: sql<Json>`progress - 'widening'` })
         .where("id", "=", action.id)
         .execute();
       const others = await runningExecs(trx, {
-        sessionId: action.session_id,
+        sessionIds: shared.sessionIds,
         except: action.id,
         ...(progress.sandboxId ? { sandboxId: progress.sandboxId } : {}),
       });
@@ -1138,12 +1200,12 @@ function processName(actionId: string): string {
 /** Other executions running in a chat's sandbox, and what they hold. */
 async function runningExecs(
   db: Kysely<DB> | Transaction<DB>,
-  input: { sessionId: string; except: string; sandboxId?: string },
+  input: { sessionIds: readonly string[]; except: string; sandboxId?: string },
 ): Promise<ExecProgress[]> {
   const rows = await db
     .selectFrom("session_actions")
     .select("progress")
-    .where("session_id", "=", input.sessionId)
+    .where("session_id", "in", [...input.sessionIds])
     .where("operation", "=", "exec")
     .where("status", "=", "running")
     .where("id", "!=", input.except)
@@ -1157,6 +1219,23 @@ async function runningExecs(
           !progress.sandboxId ||
           progress.sandboxId === input.sandboxId),
     );
+}
+
+/**
+ * Whether the Environment's own setup has the workspace's sandbox on its
+ * network now (ADR 0257): only its commands run there meanwhile.
+ */
+async function setupWidened(
+  db: Kysely<DB> | Transaction<DB>,
+  workspaceSessionId: string,
+): Promise<boolean> {
+  const row = await db
+    .selectFrom("agent_sessions")
+    .select("id")
+    .where("id", "=", workspaceSessionId)
+    .where("setup_widened_until", ">", sql<Date>`now()`)
+    .executeTakeFirst();
+  return row !== undefined;
 }
 
 function parseProgress(value: Json | null): ExecProgress | null {

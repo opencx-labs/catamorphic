@@ -833,6 +833,181 @@ describeIf("workflows run commands in a chat's workspace (ADR 0324)", () => {
     }
   }, 120_000);
 
+  it("starts nothing for a setup that ended while it started, and keeps others off a sandbox the setup has on its network", async () => {
+    const { sessionId, runId, workspace } = await settingUp({
+      deadlineMs: 600_000,
+    });
+    // The setup ends between the command's look at it and its start.
+    const original = sessions().commandWorkspace.bind(sessions());
+    const ended = vi
+      .spyOn(sessions(), "commandWorkspace")
+      .mockImplementationOnce(async (args) => {
+        const found = await original(args);
+        await db
+          .updateTable("agent_sessions")
+          .set({ setup_run: null })
+          .where("id", "=", sessionId)
+          .execute();
+        return found;
+      });
+    try {
+      await expect(
+        call({
+          caller: root,
+          runId,
+          args: {
+            sessionId,
+            in: "setup",
+            idempotencyKey: "raced",
+            command: "echo started > raced.txt",
+          },
+        }),
+      ).rejects.toThrow("The setup ended before the command started");
+    } finally {
+      ended.mockRestore();
+    }
+    const raced = await workspace.provider.executeCommand(
+      workspace.sandboxId,
+      "test -f raced.txt && echo started || echo nothing",
+      { cwd: workspace.projectDirectory, timeout: 30 },
+    );
+    expect(raced.result.trim()).toBe("nothing");
+
+    // The Environment's own setup holds the sandbox on its network: another
+    // workflow's session command waits.
+    const other = (
+      await core.runs.triggerProduction({
+        identity: root,
+        projectId,
+        workflowName: "execInChat",
+        input: { exec: {} },
+      })
+    ).id;
+    await db
+      .updateTable("agent_sessions")
+      .set({ setup_widened_until: sql<Date>`now() + interval '10 minutes'` })
+      .where("id", "=", sessionId)
+      .execute();
+    await expect(
+      call({
+        caller: root,
+        runId: other,
+        args: {
+          sessionId,
+          in: "session",
+          idempotencyKey: "while-setup-wide",
+          command: "true",
+        },
+      }),
+    ).rejects.toThrow(/setup's network/);
+    await db
+      .updateTable("agent_sessions")
+      .set({ setup_widened_until: null })
+      .where("id", "=", sessionId)
+      .execute();
+    await expect(
+      call({
+        caller: root,
+        runId: other,
+        args: {
+          sessionId,
+          in: "session",
+          idempotencyKey: "once-narrow",
+          command: "true",
+        },
+      }),
+    ).resolves.toMatchObject({ exitCode: 0 });
+  }, 120_000);
+
+  it("orders network changes by the workspace, so a subagent's session command keeps its parent's setup narrow", async () => {
+    const spy = onSetupNetwork();
+    try {
+      const { sessionId, runId } = await settingUp({ deadlineMs: 600_000 });
+      await db
+        .updateTable("execution_allocations")
+        .set({
+          policy_snapshot: sql`policy_snapshot || jsonb_build_object('sandbox', coalesce(policy_snapshot->'sandbox', '{}'::jsonb) || jsonb_build_object('setupEgress', ${JSON.stringify(SETUP_EGRESS)}::jsonb))`,
+        })
+        .where(
+          "id",
+          "=",
+          db
+            .selectFrom("agent_sessions")
+            .select("allocation_id")
+            .where("id", "=", sessionId),
+        )
+        .execute();
+      // A subagent in the same workspace runs a long command there.
+      const child = await sessions().createSubsession(
+        root,
+        projectId,
+        sessionId,
+        { task: "Watch the logs" },
+      );
+      expect(
+        (
+          await db
+            .selectFrom("agent_sessions")
+            .select("workspace_session_id")
+            .where("id", "=", child.session.id)
+            .executeTakeFirstOrThrow()
+        ).workspace_session_id,
+      ).toBe(sessionId);
+      const other = (
+        await core.runs.triggerProduction({
+          identity: root,
+          projectId,
+          workflowName: "execInChat",
+          input: { exec: {} },
+        })
+      ).id;
+      const watching = call({
+        caller: root,
+        runId: other,
+        args: {
+          sessionId: child.session.id,
+          in: "session",
+          idempotencyKey: "child-watch",
+          command: "sleep 3",
+        },
+      });
+      await expect
+        .poll(
+          async () =>
+            (
+              await db
+                .selectFrom("session_actions")
+                .select("progress")
+                .where("session_id", "=", child.session.id)
+                .where("idempotency_key", "like", "%child-watch%")
+                .executeTakeFirst()
+            )?.progress,
+          { timeout: 20_000 },
+        )
+        .toMatchObject({ phase: "running" });
+      network.length = 0;
+      // The parent's setup cannot widen the sandbox the child works in.
+      await expect(
+        call({
+          caller: root,
+          runId,
+          args: {
+            sessionId,
+            in: "setup",
+            idempotencyKey: "widen-beside-child",
+            command: "true",
+          },
+        }),
+      ).rejects.toThrow(
+        /A command in the session is running in this workspace/,
+      );
+      expect(network.length).toBe(0);
+      await watching;
+    } finally {
+      spy.mockRestore();
+    }
+  }, 120_000);
+
   it("masks the chat's secret values in what a command prints", async () => {
     const sessionId = (await sessions().create(root, projectId)).id;
     if (!core.secrets) throw new Error("secrets not configured");

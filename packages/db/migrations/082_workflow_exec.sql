@@ -18,6 +18,9 @@ ALTER TABLE session_actions ADD COLUMN progress jsonb;
 -- why the last one went away.
 ALTER TABLE agent_sessions
   ADD COLUMN setup_run jsonb,
+  -- Until when the Environment's own setup may hold the sandbox on the
+  -- setup's network (ADR 0257): other workflows' session commands wait.
+  ADD COLUMN setup_widened_until timestamptz,
   ADD COLUMN workspace_generation integer NOT NULL DEFAULT 0,
   ADD COLUMN workspace_released_reason text;
 
