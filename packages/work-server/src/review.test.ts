@@ -166,6 +166,7 @@ async function fakeGithub(input: unknown, init?: RequestInit) {
         app: { slug: "work-acme" },
         status: body?.status ?? "queued",
         conclusion: body?.conclusion ?? null,
+        output: body?.output ?? null,
       };
       pull.checkRuns.push(run);
       return Response.json(run, { status: 201 });
@@ -215,6 +216,23 @@ async function fakeGithub(input: unknown, init?: RequestInit) {
         },
       });
   }
+  // The poster completes and rewrites only the runs it made (ADR 0336).
+  const checkRun = /^(GET|PATCH) \/repos\/acme\/web\/check-runs\/(\d+)$/.exec(
+    route,
+  );
+  const known = pull.checkRuns.find((run) => run.id === Number(checkRun?.[2]));
+  if (checkRun && known) {
+    if (checkRun[1] === "PATCH")
+      Object.assign(
+        known,
+        Object.fromEntries(
+          ["status", "conclusion", "output"].flatMap((field) =>
+            body?.[field] === undefined ? [] : [[field, body[field]]],
+          ),
+        ),
+      );
+    return Response.json(known);
+  }
   const checkRuns =
     /^GET \/repos\/acme\/web\/commits\/([0-9a-f]{40})\/check-runs$/.exec(route);
   if (checkRuns) {
@@ -240,6 +258,9 @@ async function fakeGithub(input: unknown, init?: RequestInit) {
 /** A turn's report, submitted by a fake agent step as its typed result. */
 const reportStep = (report: object) =>
   `tool submit_result ${JSON.stringify({ name: "review", value: report })}`;
+/** A finding the fake agent verified, submitted mid-turn (ADR 0336). */
+const findingStep = (finding: object) =>
+  `tool submit_result ${JSON.stringify({ name: "finding", value: finding })}`;
 
 /** Git smart HTTP for the repositories, behind installation tokens. */
 function gitHttpServer(projectRoot: string): http.Server {
@@ -387,13 +408,18 @@ describe.skipIf(!databaseUrl)("reviewing pull requests (#118)", () => {
     return {
       verdicts: entries("review.verdicts"),
       posted: entries("review.posted").map((entry) => String(entry.effect)),
+      progress: metadata?.["review.progress"],
     };
   };
   const assertAdvisoryPolicy = () => {
     expect(pull.body).toBe("Adds a total to every order.");
+    // The poster changes only the check runs it made: never a description,
+    // a review or a thread.
     expect(
       githubCalls.filter(
-        (call) => call.method === "PATCH" || call.method === "PUT",
+        (call) =>
+          (call.method === "PATCH" || call.method === "PUT") &&
+          !/^\/repos\/acme\/web\/check-runs\/\d+$/.test(call.path),
       ),
     ).toEqual([]);
     expect(
@@ -829,13 +855,15 @@ describe.skipIf(!databaseUrl)("reviewing pull requests (#118)", () => {
       summary: "One blocking issue: the new NOT NULL column rewrites orders.",
       checkSummary:
         "Fetched main, read the migration, counted 1200 orders on the replica.",
-      comments: [
-        {
-          path: "db/002_totals.sql",
-          line: 1,
-          body: "This rewrites 1200 rows under a lock; add the column nullable, backfill, then validate.",
-        },
-      ],
+      findings: ["orders-rewrite"],
+    };
+    const finding = {
+      id: "orders-rewrite",
+      path: "db/002_totals.sql",
+      line: 1,
+      severity: "blocking",
+      title: "The new NOT NULL column rewrites orders under a lock",
+      body: "This rewrites 1200 rows under a lock; add the column nullable, backfill, then validate.",
     };
     // The fake agent acts on the last line it is given: the author's text.
     // Its review chat tries to write to GitHub itself, and cannot.
@@ -847,6 +875,7 @@ describe.skipIf(!databaseUrl)("reviewing pull requests (#118)", () => {
       `mcp github create_review ${forgedReview}`,
       `mcp github post ${forgedComment}`,
       "run git push origin HEAD:refs/heads/work/review-1 2>&1; echo pushed=$?",
+      findingStep(finding),
       reportStep(report),
     ].join(" ;; ");
     const delivered = await fromGithub(
@@ -886,6 +915,7 @@ describe.skipIf(!databaseUrl)("reviewing pull requests (#118)", () => {
       reviewed,
       commented,
       pushed,
+      found,
       reported,
     ] = answer.split("\n---\n");
     // Git in the sandbox fetched through the gateway with the session's
@@ -917,50 +947,100 @@ describe.skipIf(!databaseUrl)("reviewing pull requests (#118)", () => {
         "refs/heads/work",
       ]),
     ).toBe("");
+    expect(found).toContain("Recorded the finding result");
     expect(reported).toContain("Recorded the review result");
 
-    // The poster ran on the control plane in `github-poster` and posted
-    // the report: the review with its inline comment on the chat's commit,
-    // the check run, and what it posted recorded on the chat itself.
+    // The poster ran on the control plane in `github-poster`: it showed
+    // the review in progress from the moment it was queued, posted the
+    // finding the moment it was recorded, then the review on the chat's
+    // commit, completed the check with its verdict, and recorded what it
+    // posted on the chat itself.
     await waitFor("the poster to finish", async () => {
       const runs = await posterRuns();
-      return runs.some((entry) => entry.status === "completed")
+      return posted("POST", "/repos/acme/web/pulls/1/reviews").length === 2 &&
+        runs.every((entry) => entry.status === "completed")
         ? runs
         : undefined;
     });
-    expect(await posterRuns()).toEqual([
-      { environment_name: "github-poster", status: "completed", error: null },
-    ]);
-    const [reviewCall] = posted("POST", "/repos/acme/web/pulls/1/reviews");
+    for (const run of await posterRuns())
+      expect(run).toEqual({
+        environment_name: "github-poster",
+        status: "completed",
+        error: null,
+      });
+    const [progressCall, ...otherChecks] = posted(
+      "POST",
+      "/repos/acme/web/check-runs",
+    );
+    expect(otherChecks).toEqual([]);
+    expect(progressCall?.body).toMatchObject({
+      name: "Work review",
+      head_sha: pullHead,
+      status: "in_progress",
+      external_id: "work-review:1:progress",
+    });
+    const updates = githubCalls.filter(
+      (call) =>
+        call.method === "PATCH" &&
+        call.path === "/repos/acme/web/check-runs/501",
+    );
+    expect(updates.at(-1)?.body).toMatchObject({
+      status: "completed",
+      conclusion: "failure",
+      output: { title: "Changes requested (score 2/5)" },
+    });
+    // Before the verdict, the check said what the review was doing, only
+    // ever moving forward (each status's run sees the turn as it is then).
+    const phases = ["Waiting to start", "Preparing the workspace", "Reviewing"];
+    const said = [progressCall, ...updates.slice(0, -1)].map((call) =>
+      phases.indexOf(
+        String(
+          (call?.body as { output?: { title?: string } } | undefined)?.output
+            ?.title,
+        ),
+      ),
+    );
+    expect(said.every((phase, index) => phase > (said[index - 1] ?? -1))).toBe(
+      true,
+    );
+    const [findingCall, reviewCall] = posted(
+      "POST",
+      "/repos/acme/web/pulls/1/reviews",
+    );
+    expect(findingCall?.body).toMatchObject({
+      event: "COMMENT",
+      commit_id: pullHead,
+      body: `<!-- work-review:${pullHead}:finding:orders-rewrite -->`,
+      comments: [{ path: "db/002_totals.sql", line: 1, side: "RIGHT" }],
+    });
+    expect(
+      (findingCall?.body as { comments?: Array<{ body: string }> } | undefined)
+        ?.comments?.[0]?.body,
+    ).toMatch(/^\*\*Blocking:\*\* The new NOT NULL column rewrites orders/);
+    // The review refers to the finding already posted, and does not repeat it.
     expect(reviewCall?.body).toMatchObject({
       event: "REQUEST_CHANGES",
       commit_id: pullHead,
-      comments: [{ path: "db/002_totals.sql", line: 1, side: "RIGHT" }],
     });
+    expect(reviewCall?.body).not.toHaveProperty("comments");
     expect(String((reviewCall?.body as { body?: string })?.body)).toMatch(
-      /^One blocking issue[\s\S]*Score: 2\/5[\s\S]*<!-- work-review:[0-9a-f-]{36}:review -->$/,
+      /^One blocking issue[\s\S]*Score: 2\/5\n\n<!-- work-review:[0-9a-f-]{36}:review -->$/,
     );
-    const [checkCall] = posted("POST", "/repos/acme/web/check-runs");
-    expect(checkCall?.body).toMatchObject({
-      name: "Work review",
-      head_sha: pullHead,
-      status: "completed",
-      conclusion: "failure",
-      external_id: expect.stringMatching(/^work-review:[0-9a-f-]{36}:check$/),
-      output: { title: "Changes requested (score 2/5)" },
-    });
+    const checkCall = progressCall;
     assertAdvisoryPolicy();
     // The commit's verdict and what was posted live on the review chat.
     const state = await reviewState();
     expect(state.verdicts).toEqual([{ commit: pullHead, verdict: "failure" }]);
     expect(state.posted).toEqual([
+      `work-review:${pullHead}:finding:orders-rewrite`,
       expect.stringMatching(/^work-review:[0-9a-f-]{36}:check$/),
       expect.stringMatching(/^work-review:[0-9a-f-]{36}:review$/),
     ]);
+    expect(state.progress).toEqual({ commit: pullHead, id: 501 });
     // Nothing the chat forged reached GitHub, and every call carried a
     // minted installation token.
     expect(JSON.stringify(githubCalls)).not.toMatch(/forged/);
-    for (const call of [reviewCall, checkCall])
+    for (const call of [findingCall, reviewCall, checkCall, ...updates])
       expect(issuedTokens.has(call?.authorization?.slice(7) ?? "")).toBe(true);
     expect(slackCalls).toEqual([
       { path: "/api/search.messages", authorization: `Bearer ${SLACK_TOKEN}` },
@@ -1027,20 +1107,28 @@ describe.skipIf(!databaseUrl)("reviewing pull requests (#118)", () => {
     expect(delivered2.text).toContain(
       `New commits since your last review (${previous}..${pullHead})`,
     );
-    // That turn reported nothing usable: the new head is marked
-    // action_required (never passing), and nothing else is posted.
+    // That turn reported nothing usable: the new head's check, in progress
+    // since its push was queued, is completed action_required (never
+    // passing), and nothing else is posted.
     const missing = await waitFor("the check run for the new head", () =>
-      pull.checkRuns.find((entry) => entry.head_sha === pullHead),
+      pull.checkRuns.find(
+        (entry) => entry.head_sha === pullHead && entry.status === "completed",
+      ),
     );
-    expect(missing).toMatchObject({ conclusion: "action_required" });
-    const [, checkCall] = posted("POST", "/repos/acme/web/check-runs");
-    expect(checkCall?.body).toMatchObject({
+    expect(missing).toMatchObject({
+      external_id: "work-review:1:progress",
+      conclusion: "action_required",
       output: {
         title: "No review",
         summary: expect.stringMatching(/submitted no review result/),
       },
     });
-    expect(posted("POST", "/repos/acme/web/pulls/1/reviews")).toHaveLength(1);
+    expect(posted("POST", "/repos/acme/web/check-runs")).toHaveLength(2);
+    // The earlier head kept its verdict.
+    expect(
+      pull.checkRuns.find((entry) => entry.head_sha === previous),
+    ).toMatchObject({ conclusion: "failure" });
+    expect(posted("POST", "/repos/acme/web/pulls/1/reviews")).toHaveLength(2);
   }, 120_000);
 
   it("a comment mentioning the reviewer reaches the same chat, whose answer the poster posts", async () => {
@@ -1087,7 +1175,7 @@ describe.skipIf(!databaseUrl)("reviewing pull requests (#118)", () => {
     });
     await waitFor("the poster to finish the answer", async () => {
       const runs = await posterRuns();
-      return runs.length === 3 &&
+      return posted("POST", "/repos/acme/web/pulls/1/reviews").length === 3 &&
         runs.every((run) => run.status === "completed")
         ? true
         : undefined;
@@ -1099,7 +1187,8 @@ describe.skipIf(!databaseUrl)("reviewing pull requests (#118)", () => {
     ).toEqual(["action_required", "success"]);
     // This new commit's passing advice leaves the earlier change request,
     // the author's description and thread resolution under human control.
-    expect(pull.reviews.find((entry) => entry.id === 9001)).toMatchObject({
+    // (9001 is the first head's finding, 9002 its review.)
+    expect(pull.reviews.find((entry) => entry.id === 9002)).toMatchObject({
       state: "CHANGES_REQUESTED",
     });
     assertAdvisoryPolicy();
@@ -1119,7 +1208,7 @@ describe.skipIf(!databaseUrl)("reviewing pull requests (#118)", () => {
       "failure",
       "success",
     ]);
-    expect(state.posted).toHaveLength(6);
+    expect(state.posted).toHaveLength(7);
     expect(
       state.posted.filter((id) =>
         id.startsWith(`work-review:${latestTurn?.id}:`),
