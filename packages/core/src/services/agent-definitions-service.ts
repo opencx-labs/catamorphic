@@ -390,6 +390,11 @@ export function agentDefinitionSchema(opts?: { allowE2eFake?: boolean }) {
         .object({
           endpoint: z.string().min(1).optional(),
           command: z.array(z.string().min(1)).optional(),
+          /**
+           * The agent runs its commands with `$SHELL`, so Work can run them
+           * apart from it (ADR 0332).
+           */
+          shell: z.boolean().optional(),
         })
         .optional(),
     })
@@ -433,7 +438,11 @@ export interface AgentDefinition {
   >;
   delegation?: AgentDelegationPolicy;
   results?: ResultSchemas;
-  acp?: { endpoint?: string; command?: string[] };
+  /**
+   * `shell`: the agent runs its commands with `$SHELL`, so Work can run
+   * them apart from it (ADR 0332).
+   */
+  acp?: { endpoint?: string; command?: string[]; shell?: boolean };
 }
 
 export interface ProjectAgentEntry {
@@ -519,6 +528,8 @@ export function definitionHash(
       ? {
           endpoint: definition.acp.endpoint ?? null,
           command: definition.acp.command ?? null,
+          // Only when named, so existing consent hashes stay valid.
+          ...(definition.acp.shell ? { shell: true } : {}),
         }
       : null,
     prompt:

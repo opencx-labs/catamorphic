@@ -10747,6 +10747,7 @@ export interface paths {
                                 acp?: {
                                     endpoint?: string;
                                     command?: string[];
+                                    shell?: boolean;
                                 };
                             };
                             promptFile?: string;

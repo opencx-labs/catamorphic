@@ -105,6 +105,10 @@ export function createCodexAdapter(
   };
 }
 
+/** Why Codex does not run where an Environment runs commands apart (ADR 0332). */
+export const CODEX_COMMANDS_APART_REFUSAL =
+  "Codex cannot run in an Environment that runs commands apart from the agent: it chooses its own shell (the login shell, or one the model names), so Work cannot send its commands to the command container. Use Claude Code, an ACP agent that runs commands through $SHELL, or the built-in agent there.";
+
 /** How long an interrupted turn may take to say so before Codex is stopped. */
 const INTERRUPT_GRACE_MS = 10_000;
 const THREAD_TIMEOUT_MS = 120_000;
@@ -328,6 +332,10 @@ class CodexAttempt {
 
   private async execute(): Promise<void> {
     const attempt = this.attempt;
+    // Codex takes its shell from the password database and lets the model
+    // name any shell binary, so its commands cannot be sent apart (ADR
+    // 0332): refused, never run beside the agent.
+    if (attempt.commands) throw new Error(CODEX_COMMANDS_APART_REFUSAL);
     const input = attempt.input;
     if (!input) {
       this.complete({

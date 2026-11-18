@@ -258,7 +258,11 @@ function sandboxProjectAgent(input: {
   const harness =
     definition.kind === "acp"
       ? command?.[0]
-        ? acpHarness({ id: input.id, command })
+        ? acpHarness({
+            id: input.id,
+            command,
+            shell: definition.acp?.shell === true,
+          })
         : undefined
       : sandboxHarness(definition.kind === "codex" ? "codex" : "claude-code");
   if (!harness) return undefined;
@@ -303,12 +307,20 @@ function sandboxProjectAgent(input: {
  * adapter, under a harness of its own so a chat stays with its agent. The
  * sandbox is the boundary, so the command needs no member's approval here.
  */
-function acpHarness(input: { id: string; command: readonly string[] }): {
+function acpHarness(input: {
+  id: string;
+  command: readonly string[];
+  /** It runs its commands with `$SHELL` (ADR 0332). */
+  shell: boolean;
+}): {
   harness: AgentHarness;
   options: RegisteredCodingAgent["options"];
 } {
   return {
     harness: { placement: "sandbox", id: `acp:${input.id}` },
-    options: { command: [...input.command] },
+    options: {
+      command: [...input.command],
+      ...(input.shell ? { shell: true } : {}),
+    },
   };
 }

@@ -442,6 +442,14 @@ const handlers = (() => {
         );
         return { stopReason: "end_turn" };
       }
+      if (words.includes("[[shell]]")) {
+        await say(
+          sessionId,
+          "agent_message_chunk",
+          `SHELL=${process.env.SHELL ?? "unset"}`,
+        );
+        return { stopReason: "end_turn" };
+      }
       if (words.includes("[[recall]]")) {
         await say(
           sessionId,

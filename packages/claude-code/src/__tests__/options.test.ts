@@ -60,6 +60,36 @@ function options(start: AttemptStart) {
   });
 }
 
+describe("commands apart from the agent (ADR 0332)", () => {
+  const gateway = {
+    kind: "gateway" as const,
+    api: "anthropic" as const,
+    baseUrl: "https://gateway.test/anthropic",
+    grantDirectory: "/state/grant",
+  };
+
+  it("points its shell at the shim and loads no settings from the checkout", () => {
+    const built = options(
+      attempt({
+        modelAccess: gateway,
+        commands: { socket: "/run/work-commands/commands.sock" },
+      }),
+    );
+    expect(built.env?.CLAUDE_CODE_SHELL).toBe("/state/commands/bin/bash");
+    expect(built.env?.CLAUDE_CODE_TMPDIR).toBe("/state/commands/tmp");
+    // The checkout is the pull request's: its hooks, MCP servers and
+    // instructions stay out of the agent's side.
+    expect(built.settingSources).toEqual(["user"]);
+  });
+
+  it("keeps its own shell and the checkout's settings otherwise", () => {
+    const built = options(attempt({ modelAccess: gateway }));
+    expect(built.env?.CLAUDE_CODE_SHELL).toBeUndefined();
+    expect(built.env?.CLAUDE_CODE_TMPDIR).toBeUndefined();
+    expect(built.settingSources).toEqual(["user", "project", "local"]);
+  });
+});
+
 describe("model access", () => {
   it("reaches the gateway with the grant read by the key helper, and nothing of the host", () => {
     process.env.WORK_TEST_HOST_SECRET = "host-only";

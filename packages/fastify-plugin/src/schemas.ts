@@ -2420,6 +2420,8 @@ export const ProjectAgentDefinitionSchema = z.object({
     .object({
       endpoint: z.string().optional(),
       command: z.array(z.string()).optional(),
+      /** The agent runs its commands with `$SHELL` (ADR 0332). */
+      shell: z.boolean().optional(),
     })
     .optional(),
 });

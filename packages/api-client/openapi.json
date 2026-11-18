@@ -32131,6 +32131,9 @@
                                 "items": {
                                   "type": "string"
                                 }
+                              },
+                              "shell": {
+                                "type": "boolean"
                               }
                             },
                             "additionalProperties": false

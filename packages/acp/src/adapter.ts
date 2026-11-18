@@ -21,7 +21,7 @@ import {
   type McpServerSpec,
   NO_CAPABILITIES,
 } from "@catamorphic/agent-protocol/runner";
-import { renderUserMessage } from "@catamorphic/sandbox";
+import { renderUserMessage, writeCommandShell } from "@catamorphic/sandbox";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
 import {
@@ -51,6 +51,10 @@ export const ACP_CAPABILITIES: HarnessCapabilities = {
   streamsReasoning: true,
   ids: { thread: "strong", turn: "none", item: "weak" },
 };
+
+/** Why an ACP agent without `acp.shell` does not run where commands run apart (ADR 0332). */
+export const ACP_COMMANDS_APART_REFUSAL =
+  'This Environment runs commands apart from the agent, and Work can send an ACP agent\'s commands there only when the agent runs them with $SHELL. Set "acp": { "shell": true } in the agent\'s definition if it does (OpenCode does), or use another agent there.';
 
 /** How long an agent gets to exit after its turn before it is killed. */
 const EXIT_GRACE_MS = 3_000;
@@ -140,6 +144,21 @@ function startAttempt(
       throw new Error(
         "ACP agents run on their own sign-in or a model connection, not a Work sign-in.",
       );
+    // Its commands apart from it (ADR 0332): only an agent whose
+    // definition says it runs them with `$SHELL` can be pointed at the
+    // command container; any other is refused, never run beside the agent.
+    let shell: string | undefined;
+    if (attempt.commands) {
+      if (attempt.options.shell !== true)
+        throw new Error(ACP_COMMANDS_APART_REFUSAL);
+      shell = (
+        await writeCommandShell({
+          directory: path.join(attempt.stateDirectory, "commands"),
+          socket: attempt.commands.socket,
+          runtime: process.execPath,
+        })
+      ).shell;
+    }
     if (access.kind === "gateway")
       model = await serveLoopbackModel({
         access,
@@ -157,6 +176,7 @@ function startAttempt(
               ...(attempt.model ? { modelId: attempt.model } : {}),
             })
           : {}),
+        ...(shell ? { SHELL: shell } : {}),
       },
       stdio: ["pipe", "pipe", "pipe"],
       // Its own process group, so stopping it stops what it started too

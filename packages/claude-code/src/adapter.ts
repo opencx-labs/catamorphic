@@ -28,6 +28,7 @@ import {
   type WarmSession,
   WarmSessions,
   type WarmSessionsOptions,
+  writeCommandShell,
 } from "@catamorphic/sandbox";
 import { classifyClaudeError } from "./errors.js";
 import { hostToolServer, hostToolServers } from "./host-tools.js";
@@ -35,6 +36,7 @@ import { inputUuid, renderPrompt } from "./input.js";
 import {
   buildQueryOptions,
   ClaudeStartError,
+  commandShellPaths,
   launchSignature,
   readAttemptOptions,
 } from "./options.js";
@@ -446,6 +448,15 @@ class ClaudeAttempt {
       const options = readAttemptOptions(this.attempt.options);
       signature = launchSignature({ attempt: this.attempt, options });
       debugging = options.debugFile !== undefined;
+      // Its shell, when its commands run apart (ADR 0332).
+      const shell = commandShellPaths(this.attempt);
+      if (shell && this.attempt.commands)
+        await writeCommandShell({
+          directory: shell.directory,
+          socket: this.attempt.commands.socket,
+          runtime: process.execPath,
+          returnFolder: shell.returnFolder,
+        });
     } catch (error) {
       this.settle({
         status: "failed",

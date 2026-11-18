@@ -16,6 +16,7 @@ import { InProcessRunner } from "@catamorphic/agent-runner";
 import { agentQuestionJsonSchema } from "@catamorphic/sandbox";
 import { afterEach, describe, expect, it } from "vitest";
 import {
+  ACP_COMMANDS_APART_REFUSAL,
   createAcpAdapter,
   effortChoice,
   modelChoice,
@@ -168,6 +169,37 @@ function run(start: AttemptStart) {
     finished: () => until(() => completed() !== undefined),
   };
 }
+
+describe("ACP agents whose commands run apart (ADR 0332)", () => {
+  const commands = { socket: "/run/work-commands/commands.sock" };
+
+  it("points an agent that runs its commands with $SHELL at the shim", async () => {
+    const space = workspace();
+    const turn = run(
+      attempt(space, "[[shell]]", {
+        commands,
+        options: { command: [process.execPath, AGENT], shell: true },
+      }),
+    );
+    await turn.finished();
+    const shim = path.join(space.dir, "commands", "bin", "bash");
+    expect(turn.completed()).toMatchObject({ status: "completed" });
+    expect(turn.text("assistant_message")).toBe(`SHELL=${shim}`);
+    expect(fs.readFileSync(shim, "utf8")).toContain(commands.socket);
+  });
+
+  it("refuses an agent whose definition does not say it uses $SHELL", async () => {
+    const space = workspace();
+    const turn = run(attempt(space, "[[shell]]", { commands }));
+    await turn.finished();
+    expect(turn.completed()).toMatchObject({
+      status: "failed",
+      error: { message: ACP_COMMANDS_APART_REFUSAL },
+    });
+    // The agent never started.
+    expect(fs.existsSync(space.stateFile)).toBe(false);
+  });
+});
 
 describe("ACP adapter", () => {
   it("runs a turn: a session in the workspace, thoughts and a streamed reply, Work's words apart from the person's", async () => {
