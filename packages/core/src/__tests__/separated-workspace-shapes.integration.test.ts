@@ -21,7 +21,7 @@ import { PROJECT_MANIFEST_PATH } from "@catamorphic/workflow/project-layout";
 import { PGlite } from "@electric-sql/pglite";
 import { pgcrypto } from "@electric-sql/pglite/contrib/pgcrypto";
 import { Kysely, PGliteDialect, WithSchemaPlugin } from "kysely";
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import type { Identity } from "../identity.js";
 import {
   AgentDelegationSettingsError,
@@ -95,6 +95,7 @@ describe("a separated sandbox's shape follows its chat's harness (ADR 0332)", ()
   let tmpDir: string;
   let projectId: string;
   let sessions: AgentSessionsService;
+  let environments: ExecutionEnvironmentsService;
   /** What each sandbox was asked to separate: undefined for one container. */
   const asked: Array<CreateSandboxOpts["separateCommands"]> = [];
   /** The registry, whose agents a project can redefine under the same id. */
@@ -254,20 +255,21 @@ describe("a separated sandbox's shape follows its chat's harness (ADR 0332)", ()
     agents.set("reviewer", builtin("reviewer"));
     agents.set("coder", sandboxed("coder"));
     const allocations = new ExecutionAllocationsService(db);
+    environments = new ExecutionEnvironmentsService(
+      new ProjectEnvironmentsService(db, projectManager),
+      {
+        get: ({ allocationBindingId, pool }) =>
+          pool.lane === "busy"
+            ? undefined
+            : !allocationBindingId || allocationBindingId === "machine"
+              ? binding
+              : undefined,
+      },
+    );
     sessions = new AgentSessionsService(db, {
       hostId: "separated-shapes-host",
       projectManager,
-      executionEnvironments: new ExecutionEnvironmentsService(
-        new ProjectEnvironmentsService(db, projectManager),
-        {
-          get: ({ allocationBindingId, pool }) =>
-            pool.lane === "busy"
-              ? undefined
-              : !allocationBindingId || allocationBindingId === "machine"
-                ? binding
-                : undefined,
-        },
-      ),
+      executionEnvironments: environments,
       executionAllocations: allocations,
       codingAgents: {
         defaultAgentId: () => "reviewer",
@@ -331,6 +333,43 @@ describe("a separated sandbox's shape follows its chat's harness (ADR 0332)", ()
       (await allocationOf(own.session.id)).separate?.agentResources,
     ).toBeDefined();
   });
+
+  it("admits a chat's workspace for where its harness runs at creation, at an agent switch and in discovery", async () => {
+    agents.set("reviewer", builtin("reviewer"));
+    // Created for each agent.
+    const chat = await sessions.create(identity, projectId, {});
+    expect(
+      (await allocationOf(chat.id)).separate?.agentResources,
+    ).toBeUndefined();
+    const coder = await sessions.create(identity, projectId, {
+      agentId: "coder",
+    });
+    expect(
+      (await allocationOf(coder.id)).separate?.agentResources,
+    ).toBeDefined();
+    // Switched to the agent whose harness runs in the sandbox, and back.
+    await sessions.update(identity, projectId, chat.id, { agentId: "coder" });
+    expect(
+      (await allocationOf(chat.id)).separate?.agentResources,
+    ).toBeDefined();
+    await sessions.update(identity, projectId, chat.id, {
+      agentId: "reviewer",
+    });
+    expect(
+      (await allocationOf(chat.id)).separate?.agentResources,
+    ).toBeUndefined();
+    // Discovery asks for each agent (the built-in one and the sandboxed
+    // one) where its harness runs.
+    const discover = vi.spyOn(environments, "discover");
+    try {
+      await sessions.catalog({ identity, projectId });
+      expect(
+        discover.mock.calls.map(([args]) => args.harnessInSandbox).sort(),
+      ).toEqual([false, true]);
+    } finally {
+      discover.mockRestore();
+    }
+  }, 120_000);
 
   it("issues no model grant for a built-in chat's turns, which nothing in its sandbox would read", async () => {
     agents.set("reviewer", builtin("reviewer"));
