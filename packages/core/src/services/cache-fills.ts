@@ -5,6 +5,7 @@ import {
   cacheVolumeKey,
   followProcess,
   resolveSetupEgress,
+  SANDBOX_CAPABILITIES,
   type SandboxProvider,
 } from "@catamorphic/sandbox";
 import { PROJECT_MANIFEST_PATH } from "@catamorphic/workflow/project-layout";
@@ -56,6 +57,15 @@ const CLAIM_LIMIT = 8;
 
 /** Where the helper that checks a filled generation mounts it. */
 const CHECK_PATH = "/work-cache-check";
+
+/**
+ * The shell command that measures a generation in KiB (ADR 0334): du's own
+ * status, so a du that could not read part of it fails the check rather
+ * than passing with an undercount.
+ */
+export function cacheSizeCommand(path: string): string {
+  return `s=$(du -sk -- ${shellQuote(path)}) || exit 1; printf '%s\\n' "\${s%%[[:space:]]*}"`;
+}
 
 /**
  * The shell script that searches a generation for secret values (ADR
@@ -499,9 +509,12 @@ export class CacheFillsService {
         sql<boolean>`coalesce(last_used_at, finished_at, created_at) < now() - make_interval(days => ${days})`,
       )
       .execute();
+    // A fill whose helper is not yet removed stays until it is: its row is
+    // the only record of that helper (ADR 0334).
     await this.deps.db
       .deleteFrom("environment_cache_fills")
       .where("status", "in", ["failed", "evicted"])
+      .where("check_sandbox_id", "is", null)
       .where(
         sql<boolean>`coalesce(finished_at, created_at) < now() - make_interval(days => ${days})`,
       )
@@ -1283,6 +1296,12 @@ export class CacheFillsService {
     },
     work: (helper: { sandboxId: string; skipped: boolean }) => Promise<T>,
   ): Promise<T> {
+    // Only a machine that offers caches cuts a sandbox off entirely; one
+    // that does not would make the helper with a network (ADR 0334).
+    if (!args.machine.capabilities?.includes(SANDBOX_CAPABILITIES.caches))
+      throw new Error(
+        "This machine cannot make a sandbox cut off from every network, so it cannot check a cache",
+      );
     const helper = await args.machine.createSandbox({
       internal: true,
       volumes: [
@@ -1343,7 +1362,7 @@ export class CacheFillsService {
         throw new Error("The machine lost the generation the fill wrote");
       const measured = await args.machine.executeCommand(
         helper.sandboxId,
-        `du -sk -- ${CHECK_PATH} | cut -f1`,
+        cacheSizeCommand(CHECK_PATH),
         { cwd: args.machine.workspaceRoot, timeout: 600 },
       );
       const kib = Number.parseInt(measured.result.trim(), 10);
@@ -1460,7 +1479,14 @@ export class CacheFillsService {
           },
         });
         const machine = admission.runtime.sandboxProvider;
-        if (!machine || admission.runtime.workerNodeId !== node) continue;
+        // Not reachable now: the row keeps the helper and the next pass
+        // tries again.
+        if (!machine || admission.runtime.workerNodeId !== node) {
+          console.warn(
+            `[catamorphic] Cache check helper ${helper} waits for machine ${node}`,
+          );
+          continue;
+        }
         await machine.destroySandbox(helper);
         await this.deps.db
           .updateTable("environment_cache_fills")

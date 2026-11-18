@@ -3,7 +3,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { secretScanScript } from "../services/cache-fills.js";
+import { cacheSizeCommand, secretScanScript } from "../services/cache-fills.js";
 
 /** The search a cache check runs over a filled generation (ADR 0334). */
 describe("the cache secret scan", () => {
@@ -55,6 +55,47 @@ describe("the cache secret scan", () => {
       const unreadable = scan({ "a.json": "{}" }, true);
       expect(unreadable.status).toBe(3);
       expect(unreadable.stdout.trim()).toBe("");
+    },
+  );
+});
+
+/** The size a cache check measures (ADR 0334). */
+describe("the cache size check", () => {
+  const roots: string[] = [];
+  afterEach(() => {
+    for (const root of roots.splice(0)) {
+      const locked = path.join(root, "locked");
+      if (fs.existsSync(locked)) fs.chmodSync(locked, 0o700);
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  const measure = (locked?: boolean) => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "cache-size-"));
+    roots.push(root);
+    fs.writeFileSync(path.join(root, "package"), "x".repeat(64 * 1024));
+    if (locked) {
+      fs.mkdirSync(path.join(root, "locked"));
+      fs.writeFileSync(path.join(root, "locked", "big"), "y".repeat(1024));
+      fs.chmodSync(path.join(root, "locked"), 0);
+    }
+    return spawnSync("sh", ["-c", cacheSizeCommand(root)], {
+      encoding: "utf8",
+    });
+  };
+
+  it("answers the size in KiB", () => {
+    const measured = measure();
+    expect(measured.status).toBe(0);
+    expect(Number.parseInt(measured.stdout.trim(), 10)).toBeGreaterThanOrEqual(
+      64,
+    );
+  });
+
+  it.skipIf(process.getuid?.() === 0)(
+    "fails when du cannot read part of the cache, rather than undercounting",
+    () => {
+      expect(measure(true).status).not.toBe(0);
     },
   );
 });
