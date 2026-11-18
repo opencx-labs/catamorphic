@@ -215,7 +215,9 @@ export function commandShellFiles(input: {
       `# Work: this ${program} runs in the command container (ADR 0332).`,
       // It starts in its own folder and says where it was called from, so
       // nothing in the caller's folder loads into it.
-      "caller=$(pwd -P 2>/dev/null) || caller=/",
+      // Its folder's name may end in newlines, which $(...) strips: a
+      // mark after pwd's own newline keeps them.
+      "caller=$(pwd -P 2>/dev/null && printf x) && caller=${caller%?x} || caller=/",
       `cd ${quote(input.directory)} || exit 126`,
       "unset NODE_OPTIONS NODE_PATH BUN_OPTIONS",
       `exec ${quote(input.runtime)}${flags} ${quote(client)} "$caller" ${quote(input.socket)} ${quote(input.returnFolder ?? "")} ${program} "$@"`,

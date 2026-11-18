@@ -80,12 +80,12 @@ describe("separated command channel", () => {
 
   const shim = (
     args: string[],
-    options: { input?: string; env?: NodeJS.ProcessEnv } = {},
+    options: { input?: string; env?: NodeJS.ProcessEnv; cwd?: string } = {},
   ) =>
     new Promise<{ code: number | null; stdout: string; stderr: string }>(
       (resolve) => {
         const child = spawn(shell, args, {
-          cwd: root,
+          cwd: options.cwd ?? root,
           env: { ...process.env, ...options.env },
         });
         let stdout = "";
@@ -111,6 +111,14 @@ describe("separated command channel", () => {
       "-c",
       "echo out; echo err >&2; pwd -P; exit 7",
     ]);
+  });
+
+  it("runs the command in its caller's folder, whatever its name ends with", async () => {
+    const folder = path.join(root, "ends in newlines\n\n");
+    fs.mkdirSync(folder);
+    const ran = await shim(["-c", "true"], { cwd: folder });
+    expect(ran.code).toBe(0);
+    expect(sessions[0]?.request.cwd).toBe(folder);
   });
 
   it("passes standard input through and ends it", async () => {
