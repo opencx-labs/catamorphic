@@ -805,18 +805,21 @@ export function harnessConfigHome(attempt: AttemptStart): string | undefined {
 
 /**
  * Before the SDK, as root, reads the CLI's config home (resuming a thread
- * it copies its settings and credentials files into the thread's home),
- * drop every link at its top: that home is the harness's to write, and a
- * link there would have root copy what it names into a home the harness
- * is then given.
+ * it copies its settings and credentials files into the thread's home, and
+ * it reads its transcripts under `projects/`), drop every link in it, at
+ * any depth: that home is the harness's to write, and a link there would
+ * have root read what it names, into a home the harness is then given.
+ * Folders are entered only as themselves, never through a link.
  */
 export async function dropConfigLinks(home: string): Promise<void> {
   const entries = await fs.promises
     .readdir(home, { withFileTypes: true })
     .catch(() => []);
-  for (const entry of entries)
-    if (entry.isSymbolicLink())
-      await fs.promises.unlink(path.join(home, entry.name));
+  for (const entry of entries) {
+    const target = path.join(home, entry.name);
+    if (entry.isSymbolicLink()) await fs.promises.unlink(target);
+    else if (entry.isDirectory()) await dropConfigLinks(target);
+  }
 }
 
 /**
@@ -843,14 +846,18 @@ export function harnessSpawnEnv(input: {
   return input.env;
 }
 
-/** Hand a folder root just made to a user, never through a link. */
+/**
+ * Hand a folder root just made to a user, never through a link: what is
+ * in it first and the folder last, so the user can change nothing in it
+ * while root still walks it.
+ */
 function giveTree(folder: string, owner: { uid: number; gid: number }): void {
   const stat = fs.lstatSync(folder);
   if (!stat.isDirectory()) return;
-  fs.lchownSync(folder, owner.uid, owner.gid);
   for (const entry of fs.readdirSync(folder, { withFileTypes: true })) {
     const target = path.join(folder, entry.name);
     if (entry.isDirectory()) giveTree(target, owner);
     else fs.lchownSync(target, owner.uid, owner.gid);
   }
+  fs.lchownSync(folder, owner.uid, owner.gid);
 }
