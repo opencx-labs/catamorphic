@@ -24,10 +24,13 @@ describe("diagnosticStream (ADR 0333)", () => {
         message: "opencode: starting\nopencode: connecting to github",
       },
     ]);
-    // A partial line goes out when the attempt ends.
-    log.write("stuck on a tool call");
+    // A line never finished when the attempt ends is left out whole: it
+    // may stop inside a secret.
+    log.write("stuck on a tool call, token=sk-live-01");
     log.flush();
-    expect(events.at(-1)?.message).toBe("opencode: stuck on a tool call");
+    expect(events.at(-1)?.message).toBe(
+      "opencode: [an unfinished 38-character line was left out]",
+    );
   });
 
   it("keeps the newest whole lines of a burst, never part of one", () => {

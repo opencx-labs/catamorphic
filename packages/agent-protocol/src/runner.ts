@@ -619,8 +619,9 @@ export interface HarnessAdapter {
  * crashed harness leaves its last words. Lines are sent at most once a
  * second. Work masks secrets after this, so nothing here is cut inside a
  * line, where part of a secret could survive the cut: a line longer than
- * `maxLineChars` is left out whole (and said so), and a burst keeps its
- * newest whole lines up to `maxBytes`. Nothing reaches the transcript.
+ * `maxLineChars`, or one never finished when the stream ends, is left out
+ * whole (and said so), and a burst keeps its newest whole lines up to
+ * `maxBytes`. Nothing reaches the transcript.
  */
 export function diagnosticStream(input: {
   emit: (event: Extract<HarnessEvent, { type: "diagnostic" }>) => void;
@@ -696,8 +697,13 @@ export function diagnosticStream(input: {
       for (const line of split.lines) if (line.trim()) push(kept(line));
     },
     flush() {
-      if (partialDropped > 0) push(kept("", partialDropped));
-      else if (partial.trim()) push(kept(partial));
+      // A line the harness never finished may stop inside a secret: it is
+      // left out whole like any line that cannot be kept.
+      const unfinished = partialDropped > 0 ? partialDropped : partial.length;
+      if (partialDropped > 0 || partial.trim())
+        push(
+          `${prefix}[an unfinished ${unfinished}-character line was left out]`,
+        );
       partial = "";
       partialDropped = 0;
       flush();
