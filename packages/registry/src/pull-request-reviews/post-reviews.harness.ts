@@ -46,6 +46,7 @@ export function fakeWorld(input: { head: string }) {
       externalId: string | null;
       headSha: string;
       title: string | null;
+      summary?: string | null;
     }>,
     reviews: [] as Array<{
       id: number;
@@ -62,6 +63,8 @@ export function fakeWorld(input: { head: string }) {
     writes: [] as string[],
     /** Every call made to GitHub, reads included. */
     calls: 0,
+    /** While set, reading the pull request waits for it: a run held mid-flight. */
+    gate: null as Promise<void> | null,
   };
   const chat = {
     metadata: {} as Record<string, Json>,
@@ -69,6 +72,8 @@ export function fakeWorld(input: { head: string }) {
     commit: input.head,
     /** The turn working now (ADR 0333), as inspect reports it. */
     turn: null as { id: string; status: string } | null,
+    /** The chat's turns waiting to run, oldest first. */
+    queued: [] as string[],
     /** Where the chat runs; a chat waiting for a machine has no placement yet. */
     placement: { environment: "review" } as { environment: string } | null,
     /** Why a metadata write is refused (the cap an agent filled), if it is. */
@@ -83,7 +88,8 @@ export function fakeWorld(input: { head: string }) {
   };
   const connections = {
     github: {
-      get: ({ path }: { path: string }) => {
+      get: async ({ path }: { path: string }) => {
+        if (github.gate) await github.gate;
         const run = /\/check-runs\/(\d+)$/.exec(path);
         if (!run)
           return {
@@ -109,13 +115,13 @@ export function fakeWorld(input: { head: string }) {
       check_runs: ({ commit }: { commit: string }) => ({
         runs: github.checks
           .filter((run) => run.headSha === commit)
-          .map(({ title: _title, ...run }) => run),
+          .map(({ title: _title, summary: _summary, ...run }) => run),
       }),
       create_check_run: (args: {
         headSha: string;
         status?: string;
         conclusion?: string;
-        output?: { title: string };
+        output?: { title: string; summary?: string };
         stamp: string;
       }) => {
         const existing = github.checks.find(
@@ -133,6 +139,7 @@ export function fakeWorld(input: { head: string }) {
           externalId: args.stamp,
           headSha: args.headSha,
           title: args.output?.title ?? null,
+          summary: args.output?.summary ?? null,
         };
         github.checks.push(run);
         github.writes.push(`check:${args.conclusion ?? run.status}`);
@@ -142,13 +149,16 @@ export function fakeWorld(input: { head: string }) {
         checkRunId: number;
         status?: string;
         conclusion?: string;
-        output?: { title: string };
+        output?: { title: string; summary?: string };
       }) => {
         const run = github.checks.find((entry) => entry.id === args.checkRunId);
         if (!run) throw new Error(`No check run ${args.checkRunId}`);
         if (args.status) run.status = args.status;
         if (args.conclusion) run.conclusion = args.conclusion;
-        if (args.output) run.title = args.output.title;
+        if (args.output) {
+          run.title = args.output.title;
+          run.summary = args.output.summary ?? null;
+        }
         github.writes.push(
           `update:${run.headSha.slice(0, 1)}:${args.conclusion ?? args.output?.title}`,
         );
@@ -231,27 +241,35 @@ export function fakeWorld(input: { head: string }) {
       workspace: { ref: "refs/pull/42/head", commit: chat.commit },
       metadata: structuredClone(chat.metadata),
       turn: structuredClone(chat.turn),
+      queued: [...chat.queued],
     }),
-    // As core reads them: newest first, at most `limit` (100), by name and turn.
+    // As core reads them: newest first (or oldest, by `order`), at most
+    // `limit` (100), by name and turn.
     results: ({
       name,
       turnId,
       limit,
+      order,
     }: {
       name?: string;
       turnId?: string;
       limit?: number;
-    }) => ({
-      results: structuredClone(
-        chat.results
-          .filter(
-            (result) =>
-              (name === undefined || result.name === name) &&
-              (turnId === undefined || result.turnId === turnId),
-          )
-          .slice(0, Math.min(limit ?? 100, 100)),
-      ),
-    }),
+      order?: "newest" | "oldest";
+    }) => {
+      const kept = chat.results.filter(
+        (result) =>
+          (name === undefined || result.name === name) &&
+          (turnId === undefined || result.turnId === turnId),
+      );
+      return {
+        results: structuredClone(
+          (order === "oldest" ? [...kept].reverse() : kept).slice(
+            0,
+            Math.min(limit ?? 100, 100),
+          ),
+        ),
+      };
+    },
     setMetadata: ({ set }: { set: Record<string, Json> }) => {
       if (chat.refuseMetadata) throw new Error(chat.refuseMetadata);
       for (const [key, value] of Object.entries(set)) {
@@ -352,6 +370,7 @@ export function fakeWorld(input: { head: string }) {
 /** A turn's status change, as `session.turn-changed` carries it. */
 export function turnEvent(turnId: string, status = "completed") {
   return {
+    id: `event-${turnId}-${status}`,
     kind: "session.turn-changed",
     payload: {
       sessionId: "session-1",
@@ -364,6 +383,7 @@ export function turnEvent(turnId: string, status = "completed") {
 /** A recorded result, as `session.result-recorded` carries it. */
 function resultEvent(result: Record<string, Json>) {
   return {
+    id: `event-${String(result.id)}`,
     kind: "session.result-recorded",
     payload: {
       sessionId: "session-1",

@@ -190,9 +190,11 @@ a malformed report is fixed before the turn ends instead of being lost.
 Change the schemas together with `review-report.ts`, which checks each value
 again before posting. A turn records at most 1,000 results (ADR 0336), so a
 chat that lives as long as its pull request never runs out; the poster
-posts a turn's first 30 findings, and none of a turn that submits 100 or
-more. Patterns in the schemas run on a linear-time engine (RE2), so one
-with a backreference or lookaround is refused when the reviewer loads.
+posts a turn's first 30 findings (a commit holds 30) and says how many more
+there were. Patterns in the schemas run on a linear-time engine (RE2), so
+one with a backreference or lookaround is refused when the reviewer loads;
+the shipped ones say "not blank" as `[^\s\v\p{Z}\uFEFF]`, which under RE2
+means what the poster's own check means.
 
 Its `stall` (`{ "minutes": 20 }`) is how long a review turn may make no
 progress (nothing from its harness but log lines, no model call) before Work
@@ -295,8 +297,8 @@ a path, a line (or a range ending there), a side, a `blocking`,
 up to 1,500. Unknown fields, including the old `comments` and `resolve`,
 are rejected. Mentions and HTML comment delimiters are removed before
 publication, nested ones too, so a report cannot ping people or forge a
-stamp. `turnFindings` picks a turn's first 30 distinct findings, each as
-first and as last submitted.
+stamp. `turnFindings` picks a turn's first 30 distinct valid findings, each
+as first submitted, and counts the distinct ones after them.
 
 ## .work/workflows/src/stalled-reviews.ts
 
@@ -421,10 +423,12 @@ result the moment it is recorded (`session.result-recorded`). It declares
 ["kind", "payload.detail.turnId", "payload.detail.status"] }`: publications
 for one pull request chat take turns, each starting only after the one
 before it has finished, holding no machine while it waits (ADR 0325), and
-an event alike one whose publication still waits (the same kind, turn and
-status: a burst of findings, a second `running`) joins it instead of
-queuing another (ADR 0336). Every publication reads the chat, its results
-and GitHub when it starts, so it answers every event it joined, and a key
+an event alike one whose publication still waits joins it instead of
+queuing another (ADR 0336): a turn's findings (which carry no status) join
+one waiting publication, and a turn's statuses one each. A publication
+takes nothing from its event but its kind, turn and status, which are what
+make events alike, and reads the chat, its results and GitHub when it
+starts, so it answers every event that joined it, in any order. A key
 never fills the 100 runs it may queue: the turn's verdict always gets in.
 Publications for different pull requests run side by side.
 
@@ -446,25 +450,27 @@ Each boundary returns one call and carries the publication to the next:
 2. Read what the turn submitted (`results`, ADR 0323): for a settled turn,
    the newest `review` it submitted, from any of its attempts (a sandbox
    lost after the review was submitted does not lose it), and the turn's
-   `finding` results (its newest 100); for a finding, the turn's findings.
-   A finding's publication decides from these alone, with no GitHub call,
-   whether it has anything to post. No review, or a
+   `finding` results, first submitted first (`order: "oldest"`, its first
+   100); for a finding, the same findings. The turn's state comes from the
+   chat (`turn`, at work, and `queued`): a status whose turn no longer works
+   or waits shows nothing. No review, or a
    turn that failed, means no pass; a stopped turn publishes the review it
    submitted, and with none means no pass. Two commits must both be the
    head it posts for: the one the review names (`reviewedCommit`) and the
    one Work recorded the turn began on (the result's `commit`). Either one
    elsewhere refuses the review: the commit is marked `action_required` with
-   which one differed, unless a newer turn of the chat already works, which
-   then speaks for the head.
+   which one differed, unless another turn of the chat works or waits,
+   which then speaks for the head.
 3. Read the pull request: nothing posts once it is closed or GitHub's head
    has moved past the chat's commit (the chat's next turn reviews the new
    head). A closed pull request's check still in progress is cancelled, and
-   so is the head's when a queued turn is cancelled with no other at work.
+   so is the head's when a queued turn is cancelled with no other turn at
+   work or waiting.
 4. Show the review in progress: for a working turn, GitHub's head gets a
    run of the App's `in_progress` (external id
-   `work-review:<number>:progress:<turn>`) unless the commit already has a
-   verdict; one an earlier turn left cancelled (a head pushed again, a pull
-   request reopened) does not stop it. Its title says *Waiting to start*,
+   `work-review:<number>:progress:<event>`, the event that made it) unless
+   the commit already has a verdict; one left cancelled (a head pushed
+   again, a pull request reopened) does not stop a new one. Its title says *Waiting to start*,
    *Preparing the workspace* (the turn is preparing: a machine, setup) or
    *Reviewing*, from the chat's turn state; it is rewritten only after
    reading the run by id, never once completed, and a status that arrives
@@ -479,20 +485,21 @@ Each boundary returns one call and carries the publication to the next:
    while nothing has. This pull request's own run in progress always ends,
    with the verdict the commit holds when another pull request on the same
    head holds a stronger one.
-6. Post findings the moment they are recorded: of the turn's first 30
-   distinct findings, those first submitted since the event that started
-   this publication, as first submitted, while each answers the chat's
-   newest request (`current`), on lines the diff has, when the commit their
-   turn began on is GitHub's head and no review of the App's on the pull
-   request carries their marker (`<!-- work-review:<commit>:finding:<id>
+6. Post findings the moment they are recorded: every one of the turn's
+   first 30 distinct valid findings, as first submitted, that still answers
+   the chat's newest request (`current`), on lines the diff has, when the
+   commit its turn began on is GitHub's head and no review of the App's on
+   the pull request carries its marker (`<!-- work-review:<commit>:finding:<id>
    -->`). They go in one review whose body is their markers, each comment
-   ending with its own, while the commit holds fewer than 30 posted so. A
-   turn that submitted 100 findings or more posts none. What a question
-   made stale, what is outside the diff, and corrections wait for the
+   ending with its own, while the commit holds fewer than 30 findings. When
+   every one was decided by an earlier publication (the chat's
+   `review.findings`), nothing new came, and it calls GitHub not at all.
+   What a question made stale, and what is outside the diff, wait for the
    review.
-7. Post the review with the turn's findings no review carries yet, each as
-   last submitted: inline on lines the diff has, the rest listed in its
-   body, their markers with them. A turn that only answers a question adds no review while one
+7. Post the review with the turn's first 30 findings no review carries yet,
+   as first submitted: inline on lines the diff has, the rest listed in its
+   body, their markers with them, while the commit has room. The review and
+   the check's summary say how many more there were. A turn that only answers a question adds no review while one
    of the App's stands for the commit (reviews of findings alone do not
    count), and a passing review is never posted on a commit whose verdict is
    a failure: its findings still are, without it. No approval is ever
@@ -513,10 +520,15 @@ keys that start with `review.`:
 verdict), `review.posted` (a list of `{ effect, id }`: each write's identity,
 `work-review:<turn>:<check|review|reply>` or
 `work-review:<commit>:finding:<id>`, and GitHub's id for it), the newest 30
-of each, newest last, and `review.progress` (`{ commit, id }`, the run the
-review last showed in progress). That last one only says where to look: a
-newer head's publication cancels a run there only when GitHub says it is
-the App's own, still in progress, with this pull request's progress id.
+of each, newest last, `review.progress` (`{ commit, id }`, the run the
+review last showed in progress), and `review.findings` (`{ turn, decided
+}`, the first results of the turn's findings a publication has decided).
+`review.progress` only says where to look: a newer head's publication
+cancels a run there only when GitHub says it is the App's own, still in
+progress, with this pull request's progress id. `review.findings` only
+lets a finding's publication skip GitHub when nothing new came; written by
+the reviewer it can delay a finding to the turn's review, which decides
+from GitHub alone.
 Session metadata is bounded (ADR 0226); keep larger records elsewhere.
 
 Every write goes through the `github` connection's typed actions with a

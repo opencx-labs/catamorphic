@@ -53,8 +53,8 @@ name `finding`, before you look for the next: it is posted on the pull
 request at once, as an inline comment, while you keep reviewing. Every
 finding you submit is posted, at once or with your review, so do not hold
 findings for the end, and do not submit guesses: a submitted finding cannot
-be taken back. A turn posts its first 30 findings and none past them, and a
-turn that submits 100 or more posts none: report what matters most first.
+be taken back. A turn posts its first 30 findings, and a commit holds 30;
+the rest are counted, not posted: report what matters most first.
 
 ```json
 {

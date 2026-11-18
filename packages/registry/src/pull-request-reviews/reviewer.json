@@ -66,12 +66,12 @@
         },
         "summary": {
           "type": "string",
-          "pattern": "\\S",
+          "pattern": "[^\\s\\v\\p{Z}\\uFEFF]",
           "maxLength": 4000
         },
         "checkSummary": {
           "type": "string",
-          "pattern": "\\S",
+          "pattern": "[^\\s\\v\\p{Z}\\uFEFF]",
           "maxLength": 4000
         },
         "reply": {
@@ -85,7 +85,7 @@
             },
             "body": {
               "type": "string",
-              "pattern": "\\S",
+              "pattern": "[^\\s\\v\\p{Z}\\uFEFF]",
               "maxLength": 4000
             }
           }
@@ -104,7 +104,7 @@
         },
         "path": {
           "type": "string",
-          "pattern": "\\S",
+          "pattern": "[^\\s\\v\\p{Z}\\uFEFF]",
           "maxLength": 300
         },
         "line": {
@@ -125,12 +125,12 @@
         },
         "title": {
           "type": "string",
-          "pattern": "\\S",
+          "pattern": "[^\\s\\v\\p{Z}\\uFEFF]",
           "maxLength": 200
         },
         "body": {
           "type": "string",
-          "pattern": "\\S",
+          "pattern": "[^\\s\\v\\p{Z}\\uFEFF]",
           "maxLength": 1500
         }
       }

@@ -38,12 +38,12 @@ export type WorkFinding = {
 export const FINDING_ID = /^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$/;
 
 /**
- * Findings a turn posts, and a commit holds from findings posted on their
- * own: a turn's first 30 distinct ids, as a review once had 30 comments.
+ * Findings a turn posts, and a commit holds: a turn's first 30 distinct
+ * ids, as a review once had 30 comments.
  */
 export const MAX_FINDINGS = 30;
 
-/** Findings of a turn read at once; a turn that submitted more posts none on its own. */
+/** Findings of a turn read, its first submitted first. */
 export const FINDINGS_READ = 100;
 
 /** A recorded finding as the poster reads it: Work's record of a `finding` result. */
@@ -55,50 +55,44 @@ export type RecordedFinding = {
 };
 
 /**
- * A turn's findings, from its results newest first (at most
+ * A turn's findings, from its results first submitted first (at most
  * {@link FINDINGS_READ}): its first {@link MAX_FINDINGS} distinct valid
- * ids in the order they were first submitted, each with its first result
- * (what posts on its own) and its newest (what the review posts, a
- * correction included). `cut` says the read was full, so first submissions
- * may be missing from it.
+ * ids, each as first submitted, and how many distinct valid ids came after
+ * them (`withheld`; `more` when the read was full, so there may be more).
+ * A value the check refuses, or a second submission of an id, takes no
+ * place among the 30.
  */
-export function turnFindings(newestFirst: readonly RecordedFinding[]): {
-  findings: Array<{
-    first: RecordedFinding;
-    newest: RecordedFinding;
-    finding: WorkFinding;
-    latest: WorkFinding;
-  }>;
-  cut: boolean;
+export function turnFindings(oldestFirst: readonly RecordedFinding[]): {
+  findings: Array<{ first: RecordedFinding; finding: WorkFinding }>;
+  withheld: number;
+  more: boolean;
 } {
-  const byId = new Map<
-    string,
-    {
-      first: RecordedFinding;
-      newest: RecordedFinding;
-      finding: WorkFinding;
-      latest: WorkFinding;
-    }
-  >();
-  for (const result of [...newestFirst].reverse()) {
+  const seen = new Set<string>();
+  const findings: Array<{ first: RecordedFinding; finding: WorkFinding }> = [];
+  for (const result of oldestFirst) {
     const checked = checkFinding(result.value);
-    if (typeof checked === "string") continue;
-    const known = byId.get(checked.id);
-    if (known) {
-      known.newest = result;
-      known.latest = checked;
-    } else if (byId.size < MAX_FINDINGS)
-      byId.set(checked.id, {
-        first: result,
-        newest: result,
-        finding: checked,
-        latest: checked,
-      });
+    if (typeof checked === "string" || seen.has(checked.id)) continue;
+    seen.add(checked.id);
+    if (findings.length < MAX_FINDINGS)
+      findings.push({ first: result, finding: checked });
   }
   return {
-    findings: [...byId.values()],
-    cut: newestFirst.length >= FINDINGS_READ,
+    findings,
+    withheld: seen.size - findings.length,
+    more: oldestFirst.length >= FINDINGS_READ,
   };
+}
+
+/** What a review says of the findings it could not post. */
+export function withheldNote(input: {
+  count: number;
+  more: boolean;
+  full: number;
+}): string {
+  const count = input.count + input.full;
+  if (count === 0 && !input.more) return "";
+  const many = `${input.more ? "At least " : ""}${count} more finding${count === 1 && !input.more ? " was" : "s were"} not posted`;
+  return `${many}: a review posts the first ${MAX_FINDINGS} findings of its turn, and a commit holds ${MAX_FINDINGS}.`;
 }
 
 export function record(value: unknown): Record<string, unknown> {

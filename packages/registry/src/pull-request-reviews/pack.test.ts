@@ -515,6 +515,17 @@ describe("the pull-request-reviews pack", () => {
     expect(checkResultValue({ schema: finding, value: verified })).toEqual({
       value: verified,
     });
+    // Blank as JavaScript reads it (a no-break space, say) is blank to
+    // the schema too, so the poster never drops what Work accepted.
+    for (const blank of ["\u00a0", "\ufeff\u2028", " \t"])
+      expect(
+        "errors" in
+          checkResultValue({
+            schema: finding,
+            value: { ...verified, title: blank },
+          }),
+        JSON.stringify(blank),
+      ).toBe(true);
     const unusable = checkResultValue({
       schema: finding,
       value: { ...verified, id: "x -->", severity: "nit" },
@@ -527,7 +538,8 @@ describe("the pull-request-reviews pack", () => {
     expect(persona).toContain("`submit_result`");
     expect(persona).toContain("name `finding`, before you look for the next");
     expect(persona).toContain("name `review`");
-    expect(persona).not.toContain("work-review");
+    // A report is a result, never a fenced block.
+    expect(persona).not.toMatch(/```work-review/);
   });
 
   it("swaps in a valid OpenCode reviewer on a model connection", () => {
@@ -1012,16 +1024,26 @@ describe("postReviews", () => {
     run({
       script: `
       const world = fakeWorld({ head: ${JSON.stringify(HEAD)} });
-      const event = (turnId, status = "completed") => ({
+      // A turn's status as Work records it: a queued turn waits in the
+      // chat's queue until it works or ends. lateEvent changes nothing.
+      let events = 0;
+      const lateEvent = (turnId, status = "completed") => ({
         ...${JSON.stringify(turnEvent({ key: "pr-acme/web-42" }))},
+        id: "event-" + (events += 1),
         payload: { ...${JSON.stringify(turnEvent({ key: "pr-acme/web-42" }).payload)}, detail: { turnId, messageId: "input-" + turnId, status } },
       });
+      const event = (turnId, status = "completed") => {
+        world.chat.queued = world.chat.queued.filter((id) => id !== turnId);
+        if (status === "queued") world.chat.queued.push(turnId);
+        return lateEvent(turnId, status);
+      };
       const outcomes = await (async () => { ${script} })();
       console.log(JSON.stringify({
         outcomes,
         writes: world.github.writes,
         checks: world.github.checks.map(run => run.conclusion),
         runs: world.github.checks.map(run => ({ commit: run.headSha.slice(0, 1), status: run.status, conclusion: run.conclusion, title: run.title })),
+        summaries: world.github.checks.map(run => run.summary ?? null),
         reviews: world.github.reviews.map(review => ({ body: review.body, comments: review.comments.map(comment => comment.path + ":" + comment.line) })),
         bodies: world.github.reviews.map(review => review.comments.map(comment => comment.body)),
         calls: world.github.calls,
@@ -1040,6 +1062,7 @@ describe("postReviews", () => {
       }>;
       reviews: Array<{ body: string; comments: string[] }>;
       bodies: string[][];
+      summaries: Array<string | null>;
       calls: number;
       metadata: Record<string, unknown>;
     }>;
@@ -1386,7 +1409,7 @@ describe("postReviews", () => {
       posted: "nothing",
       verdict: null,
       problem:
-        "Its findings are on lines outside the diff; the turn's review lists them.",
+        "Its findings are posted, or outside the diff for the turn's review to list.",
     });
     expect(settled).toEqual({
       posted: "review",
@@ -1557,7 +1580,7 @@ describe("postReviews", () => {
     ]);
   });
 
-  it("never fills the queue with a flood of findings: the verdict posts, and finding runs past the cap call GitHub no more", async () => {
+  it("never fills the queue with a flood of findings: the verdict posts, the first 30 post once, and the rest are counted", async () => {
     const result = await publish(`
       world.chat.turn = { id: "t1", status: "running" };
       const queue = workflowQueue(postReviews, world.context);
@@ -1585,11 +1608,95 @@ describe("postReviews", () => {
       verdict: "failure",
       problem: null,
     });
-    // A turn of 100 findings or more cannot tell its first ones from the
-    // newest it reads: it posts none, on their own or with its review, and
-    // its finding runs read nothing of GitHub.
-    expect(result.writes).toEqual(["check:failure", "review:REQUEST_CHANGES"]);
-    expect(result.calls).toBeLessThanOrEqual(6);
+    // The first publication posts the turn's first 30 in one review; the
+    // one that joined finds them decided and calls GitHub not at all.
+    const markers = result.reviews.flatMap(
+      (review) => review.body.match(/:finding:f\d+ -->/g) ?? [],
+    );
+    expect(markers).toHaveLength(30);
+    expect(markers).toContain(":finding:f29 -->");
+    expect(result.writes).toHaveLength(3);
+    expect(result.calls).toBeLessThanOrEqual(12);
+    // The rest are counted, where people look: the review and the check.
+    const note = "At least 70 more findings were not posted";
+    expect(result.reviews.at(-1)?.body).toContain(note);
+    expect(result.summaries[0]).toContain(note);
+  });
+
+  it("answers findings whose events join out of order: a publication takes nothing from its event", async () => {
+    const result = await publish(`
+      world.chat.turn = { id: "t1", status: "running" };
+      const queue = workflowQueue(postReviews, world.context);
+      // The first publication reads f0 alone, then waits on GitHub.
+      let release;
+      world.github.gate = new Promise((resolve) => { release = resolve; });
+      queue.deliver(world.find("t1", { id: "f0", line: 2 }));
+      await new Promise((resolve) => setTimeout(resolve, 10));
+      // f2 then f5 are recorded; their events arrive the other way round.
+      const two = world.find("t1", { id: "f2", line: 1 });
+      const five = world.find("t1", { id: "f5", line: 2 });
+      const delivered = [queue.deliver(five), queue.deliver(two)];
+      world.github.gate = null;
+      release();
+      await queue.drain();
+      return delivered;
+    `);
+    expect(result.outcomes).toEqual(["queued", "joined"]);
+    const markers = result.reviews.flatMap(
+      (review) => review.body.match(/:finding:f\d+ -->/g) ?? [],
+    );
+    expect(markers.sort()).toEqual([
+      ":finding:f0 -->",
+      ":finding:f2 -->",
+      ":finding:f5 -->",
+    ]);
+  });
+
+  it("counts each finding id once, and values the poster refuses not at all", async () => {
+    const result = await publish(`
+      world.chat.turn = { id: "t1", status: "running" };
+      world.find("t1", { id: "f1", line: 2 });
+      // A resubmission, and a value a schema change would let through.
+      world.find("t1", { id: "f1", line: 2, title: "Again" });
+      world.find("t1", { id: "bad", line: 2, severity: "nit" });
+      for (let index = 2; index <= 31; index += 1)
+        world.find("t1", { id: "f" + index, line: 2 });
+      world.submit("t1", { verdict: "COMMENT", reviewedCommit: ${JSON.stringify(HEAD)} });
+      world.chat.turn = null;
+      return runWorkflow(postReviews, event("t1"), world.context);
+    `);
+    const markers = result.reviews.flatMap(
+      (review) => review.body.match(/:finding:[a-z]+\d* -->/g) ?? [],
+    );
+    // The first 30 distinct ids, each once: the resubmission took no place.
+    expect(new Set(markers).size).toBe(30);
+    expect(markers).toHaveLength(30);
+    expect(markers).toContain(":finding:f30 -->");
+    expect(markers).not.toContain(":finding:bad -->");
+    expect(markers).not.toContain(":finding:f31 -->");
+    expect(result.reviews[0]?.body).toContain("1 more finding was not posted");
+  });
+
+  it("shows nothing for a turn no longer queued or at work, and lets a turn still queued speak for the head", async () => {
+    const result = await publish(`
+      // t1's queued event arrives after it was cancelled.
+      const late = await runWorkflow(postReviews, lateEvent("t1", "queued"), world.context);
+      // t2 shows it waits; t3 queues behind it, then t2 is cancelled.
+      await runWorkflow(postReviews, event("t2", "queued"), world.context);
+      await runWorkflow(postReviews, event("t3", "queued"), world.context);
+      await runWorkflow(postReviews, event("t2", "cancelled"), world.context);
+      return late;
+    `);
+    expect(result.outcomes).toMatchObject({ posted: "nothing" });
+    // One run, still waiting for t3: nothing ended it as not reviewed.
+    expect(result.runs).toEqual([
+      {
+        commit: "a",
+        status: "in_progress",
+        conclusion: null,
+        title: "Waiting to start",
+      },
+    ]);
   });
 
   it("posts findings that arrive one by one in batches, at most 30 a turn, each once", async () => {
@@ -1624,26 +1731,6 @@ describe("postReviews", () => {
     expect(result.calls).toBeLessThanOrEqual(4 * outcome.runs + 6);
   });
 
-  it("posts none past a turn's first 30, even from a run whose read no longer holds the turn's first findings", async () => {
-    const result = await publish(`
-      world.chat.turn = { id: "t1", status: "running" };
-      for (let index = 0; index < 25; index += 1)
-        await runWorkflow(postReviews, world.find("t1", { id: "f" + index, line: 2 }), world.context);
-      // f25's publication waits while 94 more are recorded: its read of
-      // the newest 100 starts at f20.
-      const waited = world.find("t1", { id: "f25", line: 2 });
-      for (let index = 26; index < 120; index += 1)
-        world.find("t1", { id: "f" + index, line: 2 });
-      return runWorkflow(postReviews, waited, world.context);
-    `);
-    const markers = result.reviews.flatMap(
-      (review) => review.body.match(/:finding:f\d+ -->/g) ?? [],
-    );
-    expect(markers).toHaveLength(25);
-    expect(markers).not.toContain(":finding:f30 -->");
-    expect(result.outcomes).toMatchObject({ posted: "nothing" });
-  });
-
   it("holds a commit to 30 findings posted on their own, across its turns", async () => {
     const result = await publish(`
       for (const turn of ["t1", "t2"]) {
@@ -1660,14 +1747,16 @@ describe("postReviews", () => {
     expect(markers.filter((entry) => entry.includes("t2-"))).toHaveLength(10);
   });
 
-  it("shows progress again on a head an earlier turn's cancelled run sits on", async () => {
+  it("shows progress again on a head an earlier run sits on cancelled, the same turn's included", async () => {
     const result = await publish(`
       await runWorkflow(postReviews, event("t1", "queued"), world.context);
-      // A push supersedes the head, then the author pushes it back.
+      // A push supersedes the head, then the author pushes it back, and the
+      // same turn t1 runs on it after all.
       world.github.head = ${JSON.stringify(OTHER)};
       await runWorkflow(postReviews, event("t2", "queued"), world.context);
       world.github.head = ${JSON.stringify(HEAD)};
-      await runWorkflow(postReviews, event("t3", "queued"), world.context);
+      world.chat.turn = { id: "t1", status: "running" };
+      await runWorkflow(postReviews, event("t1", "running"), world.context);
       return world.github.checks.map((run) => run.externalId);
     `);
     expect(result.runs.map((run) => [run.commit, run.status])).toEqual([
@@ -1675,10 +1764,11 @@ describe("postReviews", () => {
       ["d", "completed"],
       ["a", "in_progress"],
     ]);
+    // Each run is stamped by the event that made it, never taken up again.
     expect(result.outcomes).toEqual([
-      "work-review:42:progress:t1",
-      "work-review:42:progress:t2",
-      "work-review:42:progress:t3",
+      "work-review:42:progress:event-1",
+      "work-review:42:progress:event-2",
+      "work-review:42:progress:event-3",
     ]);
   });
 

@@ -24,6 +24,7 @@ import {
   turnFindings,
   type WorkFinding,
   type WorkReview,
+  withheldNote,
 } from "./review-report";
 
 /**
@@ -256,6 +257,13 @@ const VERDICTS_KEY = "review.verdicts";
 const POSTED_KEY = "review.posted";
 /** Where the review's in progress check is: a hint where to look, no more. */
 const PROGRESS_KEY = "review.progress";
+/**
+ * The findings of a turn the poster has decided (posted, or left for its
+ * review): a hint that lets a finding's publication skip GitHub when
+ * nothing new came. Written by the reviewer it can only delay a finding to
+ * the turn's review, which decides from GitHub alone.
+ */
+const FINDINGS_KEY = "review.findings";
 /** Commits and posts kept, newest last, so the chat's metadata stays small. */
 const KEPT = 30;
 
@@ -308,10 +316,20 @@ type Publication = {
   verdict: Verdict | null;
   /** The inline comment an @work question came from, when it is this pull request's. */
   askedIn: number | null;
-  /** A newer turn of the chat works: its publication speaks for the head. */
+  /** Another turn of the chat works or waits: it speaks for the head. */
   newer: boolean;
+  /** The event's own turn still works or waits to run. */
+  alive: boolean;
+  /** The event's id: what this publication's in progress run is stamped by. */
+  eventId: string;
   /** The status the event carries, for a turn's. */
   status: string;
+  /** The first results of the turn's findings already decided, by the hint. */
+  decided: string[];
+  /** How many the hint held when read: more now means a write. */
+  decidedRead: number;
+  /** Findings of the turn past its first 30, not posted; `more`: maybe more. */
+  withheld: { count: number; more: boolean };
   /** The chat's working turn: preparing its workspace, or running. */
   working: "preparing" | "running" | null;
   /** Null when the event's turn no longer works: the check keeps its words. */
@@ -450,6 +468,7 @@ export const postReviews = defineWorkflow(({ defineBoundary }) => ({
           kind,
           sessionId: event.sessionId,
           turnId: String(event.detail.turnId),
+          eventId: input.id,
           status,
           unfinished:
             status === "failed" ||
@@ -473,6 +492,10 @@ export const postReviews = defineWorkflow(({ defineBoundary }) => ({
           verdict: null,
           askedIn: null,
           newer: false,
+          alive: false,
+          decided: [],
+          decidedRead: 0,
+          withheld: { count: 0, more: false },
           working: null,
           phase: null,
           hint: null,
@@ -507,6 +530,10 @@ export const postReviews = defineWorkflow(({ defineBoundary }) => ({
           chat.keyWorkflows.includes("reviewPullRequests");
         const commit = chat.workspace?.commit ?? null;
         const working = chat.turn?.status ?? null;
+        // The turn's state now, not the event's: a status that arrives
+        // after its turn was cancelled or settled speaks for nothing.
+        const turnId = input.state.turnId;
+        const queued = chat.queued ?? [];
         const publication: Publication = {
           ...input.state,
           ours: ours && input.state.post !== "nothing",
@@ -515,7 +542,12 @@ export const postReviews = defineWorkflow(({ defineBoundary }) => ({
           verdicts: verdictsOf(chat.metadata[VERDICTS_KEY]),
           posted: postedOf(chat.metadata[POSTED_KEY]),
           hint: progressOf(chat.metadata[PROGRESS_KEY]),
-          newer: Boolean(chat.turn && chat.turn.id !== input.state.turnId),
+          decided: decidedOf(chat.metadata[FINDINGS_KEY], turnId),
+          decidedRead: decidedOf(chat.metadata[FINDINGS_KEY], turnId).length,
+          newer:
+            Boolean(chat.turn && chat.turn.id !== turnId) ||
+            queued.some((id) => id !== turnId),
+          alive: chat.turn?.id === turnId || queued.includes(turnId),
           working:
             working === "preparing"
               ? "preparing"
@@ -529,18 +561,33 @@ export const postReviews = defineWorkflow(({ defineBoundary }) => ({
           !publication.commit
         )
           publication.post = "nothing";
+        if (publication.kind === "progress" && !publication.alive)
+          return {
+            result: null,
+            state: nothing(
+              publication,
+              "The turn no longer works or waits: nothing to show.",
+            ),
+          };
         if (publication.post === "nothing" || publication.kind === "progress")
           return { result: null, state: publication };
         // What this turn submitted, from any of its attempts: requests that
         // reached the chat after it settled (a comment, a push) are later
         // turns' to answer, and newer turns' results never hide it.
         return host["catamorphic.sessions"].results(
-          {
-            sessionId: publication.sessionId,
-            name: publication.kind === "finding" ? "finding" : "review",
-            turnId: publication.turnId,
-            limit: FINDINGS_READ,
-          },
+          publication.kind === "finding"
+            ? {
+                sessionId: publication.sessionId,
+                name: "finding",
+                turnId: publication.turnId,
+                order: "oldest",
+                limit: FINDINGS_READ,
+              }
+            : {
+                sessionId: publication.sessionId,
+                name: "review",
+                turnId: publication.turnId,
+              },
           { state: publication },
         );
       },
@@ -555,7 +602,8 @@ export const postReviews = defineWorkflow(({ defineBoundary }) => ({
         Carried<{ results: SessionResult[] } | null, Publication>
       >) => {
         const state = input.state;
-        // The turn's own results, newest first (ADR 0323).
+        // The turn's own results (ADR 0323): its reviews newest first, its
+        // findings oldest first.
         const own = (input.result?.results ?? []).filter(
           (result) =>
             result.turnId === state.turnId &&
@@ -588,6 +636,7 @@ export const postReviews = defineWorkflow(({ defineBoundary }) => ({
             sessionId: publication.sessionId,
             name: "finding",
             turnId: publication.turnId,
+            order: "oldest",
             limit: FINDINGS_READ,
           },
           { state: publication },
@@ -810,11 +859,15 @@ export const postReviews = defineWorkflow(({ defineBoundary }) => ({
               conclusion: VERDICTS[strongest] ?? "action_required",
               output: {
                 title: VERDICT_TITLES[VERDICTS[strongest] ?? "action_required"],
-                summary:
-                  "An earlier review of this commit holds this verdict. " +
-                  (review
+                summary: [
+                  "An earlier review of this commit holds this verdict.",
+                  review
                     ? review.checkSummary
-                    : (state.problem ?? "No review was reported.")),
+                    : (state.problem ?? "No review was reported."),
+                  withheldNote({ ...state.withheld, full: 0 }),
+                ]
+                  .filter((part) => part.length > 0)
+                  .join("\n\n"),
               },
             },
             { state: publication },
@@ -831,7 +884,12 @@ export const postReviews = defineWorkflow(({ defineBoundary }) => ({
                   " (score " +
                   review.score +
                   "/5)",
-                summary: review.checkSummary,
+                summary: [
+                  review.checkSummary,
+                  withheldNote({ ...state.withheld, full: 0 }),
+                ]
+                  .filter((part) => part.length > 0)
+                  .join("\n\n"),
               }
             : {
                 title: "No review",
@@ -1055,16 +1113,18 @@ export const postReviews = defineWorkflow(({ defineBoundary }) => ({
           );
         const findings = state.findings.filter((entry) => !posted(entry));
         const outside = state.outside.filter((entry) => !posted(entry));
+        // A commit holds 30 findings, however they were posted.
+        const room = Math.max(
+          0,
+          MAX_FINDINGS -
+            own
+              .filter((entry) => entry.commitId === commit)
+              .flatMap((entry) => findingMarkersIn(entry.body)).length,
+        );
         if (state.post === "finding") {
           // Every finding still to post goes in one review whose body is
-          // their markers, while the commit holds fewer than 30 posted so.
-          const onCommit = own
-            .filter(
-              (entry) =>
-                entry.commitId === commit && isFindingReview(entry.body),
-            )
-            .flatMap((entry) => findingMarkersIn(entry.body)).length;
-          const batch = findings.slice(0, Math.max(0, MAX_FINDINGS - onCommit));
+          // their markers.
+          const batch = findings.slice(0, room);
           const [first] = batch;
           if (!first)
             return {
@@ -1072,8 +1132,10 @@ export const postReviews = defineWorkflow(({ defineBoundary }) => ({
               state: nothing(
                 state,
                 findings.length > 0
-                  ? `This commit has ${MAX_FINDINGS} findings posted on their own; the turn's review posts the rest.`
-                  : "Its findings were already posted.",
+                  ? `This commit holds ${MAX_FINDINGS} findings already.`
+                  : state.outside.length > 0
+                    ? "Its findings are posted, or outside the diff for the turn's review to list."
+                    : "Its findings were already posted.",
               ),
             };
           // The first marker is the stamp a retry finds the review by.
@@ -1105,12 +1167,17 @@ export const postReviews = defineWorkflow(({ defineBoundary }) => ({
             (entry.state === "CHANGES_REQUESTED" ||
               (review.verdict === "COMMENT" && entry.state === "COMMENTED")),
         );
-        const fresh = findings.length + outside.length;
+        // What is left, while the commit has room; the rest is counted.
+        const inline = findings.slice(0, room);
+        const listed = outside.slice(0, room - inline.length);
+        const full =
+          findings.length + outside.length - inline.length - listed.length;
+        const fresh = inline.length + listed.length;
         const failed =
           state.verdict === "failure" && review.verdict === "COMMENT";
         if (fresh === 0 && (failed || stands)) return { result: null, state };
         const stamp = marker(state, "review");
-        const markers = [...findings, ...outside].map((finding) =>
+        const markers = [...inline, ...listed].map((finding) =>
           findingMarker(commit, finding.id),
         );
         // Never APPROVE: the verdict is COMMENT or REQUEST_CHANGES.
@@ -1121,18 +1188,17 @@ export const postReviews = defineWorkflow(({ defineBoundary }) => ({
             event: review.verdict,
             commitId: commit,
             body: [
-              reviewBody({ review, outside, summary: !failed }),
+              reviewBody({ review, outside: listed, summary: !failed }),
+              withheldNote({ ...state.withheld, full }),
               ...markers,
               stamp,
             ]
               .filter((part) => part.length > 0)
               .join("\n\n"),
-            comments: findings.map((finding) =>
-              findingComment(finding, commit),
-            ),
+            comments: inline.map((finding) => findingComment(finding, commit)),
             stamp,
           },
-          { state: { ...state, findings, outside } },
+          { state: { ...state, findings: inline, outside: listed } },
         );
       },
     }),
@@ -1239,8 +1305,18 @@ export const postReviews = defineWorkflow(({ defineBoundary }) => ({
                 })),
                 [POSTED_KEY]: postedList(posted),
               }
-            : state.kind === "finding" && state.post === "finding"
-              ? { [POSTED_KEY]: postedList(posted) }
+            : state.kind === "finding" &&
+                (state.post === "finding" ||
+                  state.decided.length > state.decidedRead)
+              ? {
+                  ...(state.post === "finding"
+                    ? { [POSTED_KEY]: postedList(posted) }
+                    : {}),
+                  [FINDINGS_KEY]: {
+                    turn: state.turnId,
+                    decided: state.decided,
+                  },
+                }
               : state.kind === "progress" &&
                   state.progress &&
                   (state.hint?.commit !== state.progress.commit ||
@@ -1325,7 +1401,9 @@ function checkedReview(
     review,
     problem,
     post: review ? "review" : "missing",
-    findings: review ? reviewFindings(state, findings, head) : [],
+    ...(review
+      ? reviewFindings(state, findings, head)
+      : { findings: none, withheld: { count: 0, more: false } }),
   };
 }
 
@@ -1333,74 +1411,67 @@ function checkedReview(
  * The turn's findings its review posts unless a review of the App's
  * carries them already: its first 30, so one a question made stale, or on
  * lines outside the diff, is not lost, whether or not the agent still
- * remembers it after a hand-off. Each as last submitted, on the head the
- * review is for. A turn that submitted 100 findings or more cannot tell
- * its first ones from the newest it reads, and posts none.
+ * remembers it after a hand-off. Each as first submitted, on the head the
+ * review is for.
  */
 function reviewFindings(
   state: Publication,
-  results: readonly SessionResult[],
+  oldestFirst: readonly SessionResult[],
   head: string,
-): WorkFinding[] {
-  const { findings, cut } = turnFindings(
-    results.filter(
+): Pick<Publication, "findings" | "withheld"> {
+  const { findings, withheld, more } = turnFindings(
+    oldestFirst.filter(
       (entry) =>
         entry.turnId === state.turnId && entry.sessionId === state.sessionId,
     ),
   );
-  return cut
-    ? []
-    : findings
-        .filter((entry) => entry.newest.commit === head)
-        .map((entry) => entry.latest);
+  return {
+    findings: findings
+      .filter((entry) => entry.first.commit === head)
+      .map((entry) => entry.finding),
+    withheld: { count: withheld, more },
+  };
 }
 
 /**
- * The findings a finding's publication posts, from Work's record alone, so
- * one with nothing to post makes no GitHub call: of the turn's first 30
- * distinct findings, those first submitted at or after the event that
- * started this run (an earlier one had a run of its own, which started
- * after it was recorded), as first submitted, while each still answers the
- * chat's newest request (ADR 0323 `current`). A turn that submitted 100 or
- * more posts none on its own. What a question made stale, a correction, and
- * anything left waits for the turn's review.
+ * The findings a finding's publication posts, from Work's record alone: it
+ * takes nothing from its event but the turn, so events that join it in any
+ * order are all answered. Of the turn's first 30 findings, every one still
+ * answering the chat's newest request (ADR 0323 `current`), as first
+ * submitted; GitHub's markers decide which are posted already. When every
+ * one was decided before (the chat's hint), nothing new came: no GitHub
+ * call. A question's stale findings, outside-diff ones and the rest wait
+ * for the turn's review.
  */
 function findingsToPost(
   state: Publication,
-  newestFirst: readonly SessionResult[],
+  oldestFirst: readonly SessionResult[],
 ): Publication {
   if (state.post === "nothing") return state;
-  const { findings, cut } = turnFindings(newestFirst);
-  if (cut)
-    return nothing(
-      state,
-      `The turn submitted ${FINDINGS_READ} findings or more; its review posts its first ${MAX_FINDINGS}.`,
-    );
-  const order = [...newestFirst].reverse().map((result) => result.id);
-  const from = order.indexOf(state.resultId ?? "");
-  if (from < 0)
-    return nothing(state, "The finding is not among the turn's results.");
-  const mine = findings.filter(
-    (entry) => order.indexOf(entry.first.id) >= from,
-  );
-  const commit = mine.find((entry) => entry.first.current)?.first.commit;
+  const { findings } = turnFindings(oldestFirst);
+  const commit = findings.find((entry) => entry.first.current)?.first.commit;
   const ready =
     commit && /^[0-9a-f]{40}$/.test(commit)
-      ? mine.filter(
+      ? findings.filter(
           (entry) => entry.first.current && entry.first.commit === commit,
         )
       : [];
   if (ready.length === 0)
     return nothing(
       state,
-      mine.length === 0
-        ? `Its findings are past the turn's first ${MAX_FINDINGS}, or had a publication already.`
+      findings.length === 0
+        ? "The turn has no finding to post."
         : "A newer request reached the chat; the turn's review posts its findings.",
     );
+  if (ready.every((entry) => state.decided.includes(entry.first.id)))
+    return nothing(state, "Its findings were decided already.");
   return {
     ...state,
     commit: commit ?? null,
     findings: ready.map((entry) => entry.finding),
+    decided: [
+      ...new Set([...state.decided, ...ready.map((entry) => entry.first.id)]),
+    ],
   };
 }
 
@@ -1443,12 +1514,13 @@ function marker(state: Publication, action: "review" | "reply") {
 }
 
 /**
- * The external id of the run a turn shows in progress: this pull request's
- * and that turn's, so a turn of a head pushed again, or of a reopened pull
- * request, starts a new one where an earlier was cancelled.
+ * The external id of the run a publication shows in progress: this pull
+ * request's, and the event's that started it, so a retry finds the run it
+ * made, and a later event never takes up one an earlier left cancelled (a
+ * head pushed again, a pull request reopened).
  */
 function progressStamp(state: Publication) {
-  return `work-review:${state.number}:progress:${state.turnId}`;
+  return `work-review:${state.number}:progress:${state.eventId}`;
 }
 
 /** A run this pull request showed in progress, by any of its turns. */
@@ -1522,6 +1594,16 @@ function postedOf(value: unknown): Array<[string, number]> {
           : [],
       ),
   );
+}
+
+/** The turn's findings the hint says were decided, by their first results. */
+function decidedOf(value: unknown, turnId: string): string[] {
+  const entry = record(value);
+  return entry.turn === turnId
+    ? list(entry.decided)
+        .filter((id): id is string => typeof id === "string")
+        .slice(0, MAX_FINDINGS)
+    : [];
 }
 
 function progressOf(value: unknown): { commit: string; id: number } | null {
