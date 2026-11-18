@@ -172,6 +172,54 @@ describe("the stand-in GitHub", () => {
     expect(github.repository("acme/api").checkRuns).toEqual([]);
     expect((await api("/repos/acme/api/pulls/1", token)).status).toBe(404);
     expect((await api("/repos/acme/other/pulls", token)).status).toBe(404);
+    // A push is refused unless the test accepts pushes, and is a write.
+    fs.writeFileSync(path.join(root, "cloned", "b.txt"), "pushed\n");
+    await execute("git", ["-C", path.join(root, "cloned"), "add", "-A"]);
+    await execute("git", [
+      "-C",
+      path.join(root, "cloned"),
+      "-c",
+      "user.name=Ada",
+      "-c",
+      "user.email=ada@example.test",
+      "commit",
+      "-q",
+      "-m",
+      "pushed",
+    ]);
+    await expect(
+      execute("git", [
+        "-C",
+        path.join(root, "cloned"),
+        "push",
+        "-q",
+        "origin",
+        "HEAD:refs/heads/work",
+      ]),
+    ).rejects.toThrow();
+    expect(
+      web.writes().map((call) => `${call.method} ${call.path} ${call.status}`),
+    ).toEqual([
+      "POST /repos/acme/web/check-runs 201",
+      // Git asks without its credentials first.
+      "GET /acme/web.git/info/refs 401",
+      "GET /acme/web.git/info/refs 403",
+    ]);
+    // A review keeps what it was sent: no commit is no commit.
+    const posted = await api("/repos/acme/web/pulls/1/reviews", token, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ event: "COMMENT", body: "No commit named" }),
+    });
+    expect(posted.status).toBe(200);
+    expect(web.reviews.at(-1)?.commit_id).toBeNull();
+    // A body it cannot parse is answered, as GitHub answers it.
+    const unparsed = await api("/repos/acme/web/check-runs", token, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: "{",
+    });
+    expect(unparsed.status).toBe(400);
     // Its fetch reaches it and nothing else.
     await expect(github.fetch("https://api.github.com/zen")).rejects.toThrow(
       "refused",

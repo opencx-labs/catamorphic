@@ -27,7 +27,7 @@ export interface GithubStandIn {
   calls: GithubCall[];
   /** Installation tokens the App's token flow minted. */
   tokens: ReadonlySet<string>;
-  /** Requests that changed GitHub: every method but GET and HEAD. */
+  /** Calls that changed GitHub or tried to, Git pushes included. */
   writes(): GithubCall[];
   /** One of its repositories, by `owner/name`. */
   repository(fullName: string): StandInRepository;
@@ -51,7 +51,7 @@ export interface StandInRepository {
   issueComments: StandInComment[];
   /** Inline review comments, by everyone. */
   reviewComments: StandInComment[];
-  /** The writes that reached this repository's API. */
+  /** The writes that reached this repository, through its API or Git. */
   writes(): GithubCall[];
   /**
    * Open pull request `number` whose head is already at
@@ -183,6 +183,11 @@ export async function startGithubStandIn(input: {
   gitRoot: string;
   /** The GitHub App the `github` service connection authorizes as. */
   app: { id: string; slug: string; installationId: number; privateKey: string };
+  /**
+   * Accept Git pushes. Off by default: a push is refused (403) and still
+   * recorded as a write, so a test sees any attempt.
+   */
+  pushes?: boolean;
 }): Promise<GithubStandIn> {
   const appKey = createPublicKey(input.app.privateKey);
   const bot: GithubActor = {
@@ -291,7 +296,25 @@ export async function startGithubStandIn(input: {
     );
   };
 
-  const server = http.createServer(async (request, response) => {
+  const server = http.createServer((request, response) => {
+    handle(request, response).catch((error: unknown) => {
+      // A route that failed answers instead of leaving the caller waiting.
+      const last = calls.at(-1);
+      if (last && last.status === 0) last.status = 500;
+      if (!response.headersSent) {
+        response.writeHead(500, { "content-type": "application/json" });
+        response.end(
+          JSON.stringify({
+            message: error instanceof Error ? error.message : String(error),
+          }),
+        );
+      } else response.destroy();
+    });
+  });
+  async function handle(
+    request: http.IncomingMessage,
+    response: http.ServerResponse,
+  ): Promise<void> {
     const requestUrl = new URL(request.url ?? "/", "http://stand-in");
     const pathname = decodeURIComponent(requestUrl.pathname);
     const authorization = request.headers.authorization ?? "";
@@ -321,20 +344,34 @@ export async function startGithubStandIn(input: {
         return;
       }
       call.credential = "git";
+      if (isPush(call) && !input.pushes) {
+        call.status = 403;
+        response.writeHead(403, { "content-type": "text/plain" });
+        response.end("Pushes are not accepted here");
+        return;
+      }
       call.status = 200;
       gitHttpBackend({ request, response, projectRoot: input.gitRoot });
       return;
     }
-    const chunks: Buffer[] = [];
-    for await (const chunk of request) chunks.push(Buffer.from(chunk));
-    const text = Buffer.concat(chunks).toString("utf8");
-    const body: Json = text ? json(JSON.parse(text)) : {};
-    call.body = text ? JSON.parse(text) : undefined;
     const answer = (status: number, value: unknown) => {
       call.status = status;
       response.writeHead(status, { "content-type": "application/json" });
       response.end(JSON.stringify(value));
     };
+    const chunks: Buffer[] = [];
+    for await (const chunk of request) chunks.push(Buffer.from(chunk));
+    const text = Buffer.concat(chunks).toString("utf8");
+    let parsed: unknown;
+    try {
+      parsed = text ? JSON.parse(text) : undefined;
+    } catch {
+      // As GitHub answers a body it cannot parse.
+      answer(400, { message: "Problems parsing JSON" });
+      return;
+    }
+    const body: Json = json(parsed);
+    call.body = parsed;
     const routes = [
       ...appRoutes,
       ...[...repositories.values()].flatMap((entry) => entry.routes),
@@ -365,7 +402,7 @@ export async function startGithubStandIn(input: {
       return;
     }
     answer(404, { message: "Not Found" });
-  });
+  }
   await new Promise<void>((resolve) =>
     server.listen(0, "127.0.0.1", () => resolve()),
   );
@@ -379,13 +416,7 @@ export async function startGithubStandIn(input: {
     bot,
     calls,
     tokens,
-    writes: () =>
-      calls.filter(
-        (call) =>
-          !["GET", "HEAD"].includes(call.method) &&
-          !call.path.endsWith("/git-upload-pack") &&
-          call.path !== "/graphql",
-      ),
+    writes: () => calls.filter(isWrite),
     repository: (fullName) => {
       const found = repositories.get(fullName);
       if (!found)
@@ -592,8 +623,8 @@ async function standInRepository(args: {
               : body.event === "APPROVE"
                 ? "APPROVED"
                 : "COMMENTED",
-          commit_id:
-            typeof body.commit_id === "string" ? body.commit_id : pull.head.sha,
+          // Missing stays missing: a poster that drops it shows.
+          commit_id: typeof body.commit_id === "string" ? body.commit_id : null,
           submitted_at: githubTime(),
           html_url: `${web()}/pull/${pull.number}#pullrequestreview-${id}`,
           pull_request_url: `${args.origin.url}${repo}/pulls/${pull.number}`,
@@ -782,8 +813,9 @@ async function standInRepository(args: {
     writes: () =>
       args.calls.filter(
         (call) =>
-          !["GET", "HEAD"].includes(call.method) &&
-          call.path.startsWith(`${repo}/`),
+          isWrite(call) &&
+          (call.path.startsWith(`${repo}/`) ||
+            call.path.startsWith(`/${fullName}.git/`)),
       ),
     openPullRequest: async (input) => {
       const at = githubTime();
@@ -831,6 +863,27 @@ async function standInRepository(args: {
 }
 
 class NotFound extends Error {}
+
+/** A Git push, or the start of one. */
+function isPush(call: GithubCall): boolean {
+  return (
+    call.path.endsWith("/git-receive-pack") ||
+    call.query.service === "git-receive-pack"
+  );
+}
+
+/**
+ * A call that changes GitHub or tries to: every method but GET and HEAD
+ * other than reads over POST (Git fetches, GraphQL queries), and pushes.
+ */
+function isWrite(call: GithubCall): boolean {
+  return (
+    isPush(call) ||
+    (!["GET", "HEAD"].includes(call.method) &&
+      !call.path.endsWith("/git-upload-pack") &&
+      call.path !== "/graphql")
+  );
+}
 
 /** Git smart HTTP for the repositories under `projectRoot`. */
 function gitHttpBackend(args: {
@@ -883,5 +936,13 @@ function gitHttpBackend(args: {
     const rest = head.subarray(end + 4);
     if (rest.length > 0) response.write(rest);
   });
-  child.stdout.on("end", () => response.end());
+  child.stdout.on("end", () => {
+    // A backend that printed no headers failed: answer rather than hang.
+    if (!started) response.writeHead(500);
+    response.end();
+  });
+  child.on("error", () => {
+    if (!response.headersSent) response.writeHead(500);
+    response.end();
+  });
 }
