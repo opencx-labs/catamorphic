@@ -103,7 +103,15 @@ const AllocationPolicySchema = z.object({
       egress: EgressSchema.optional(),
       setupEgress: EgressSchema.optional(),
       separateCommands: z
-        .object({ connections: z.array(z.string()).readonly() })
+        .object({
+          connections: z.array(z.string()).readonly(),
+          agentResources: z
+            .object({
+              cpuMillis: z.number().int().positive(),
+              memoryMb: z.number().int().positive(),
+            })
+            .optional(),
+        })
         .optional(),
       volumes: z
         .array(
@@ -136,7 +144,14 @@ export interface EnvironmentSandbox {
    * The agent's commands run apart from the agent (ADR 0332), reaching
    * through the gateway only these bindings.
    */
-  separateCommands?: { connections: readonly string[] };
+  separateCommands?: {
+    connections: readonly string[];
+    /**
+     * The agent container's limits, reserved on top of the command
+     * container's (`requirements.resources`).
+     */
+    agentResources?: { cpuMillis: number; memoryMb: number };
+  };
   /** The Environment's volumes, keyed for the work's owner (ADR 0208). */
   volumes?: readonly EnvironmentSandboxVolume[];
 }
@@ -204,6 +219,29 @@ export class ExecutionAllocationConflictError extends Error {
   }
 }
 
+/**
+ * What an Allocation reserves on its machine (ADR 0100): its sandbox's
+ * limits, and where its commands run apart (ADR 0332) the agent
+ * container's on top, so admission counts both containers.
+ */
+export function reservedOf(policy: EnvironmentAllocationPolicy): {
+  cpuMillis?: number;
+  memoryMb?: number;
+} {
+  const own = policy.requirements.resources;
+  const agent = policy.sandbox?.separateCommands?.agentResources;
+  const sum = (left?: number, right?: number) =>
+    left === undefined && right === undefined
+      ? undefined
+      : (left ?? 0) + (right ?? 0);
+  const cpuMillis = sum(own?.cpuMillis, agent?.cpuMillis);
+  const memoryMb = sum(own?.memoryMb, agent?.memoryMb);
+  return {
+    ...(cpuMillis !== undefined ? { cpuMillis } : {}),
+    ...(memoryMb !== undefined ? { memoryMb } : {}),
+  };
+}
+
 export class ExecutionAllocationsService {
   constructor(private readonly db: Kysely<DB>) {}
 
@@ -260,13 +298,13 @@ export class ExecutionAllocationsService {
           capacity: WorkerCapacitySchema.parse(node.capacity),
           usage: await workerUsage({ db: executor, nodeId: node.id }),
           resources:
-            args.policy.binding.trust === "managed"
-              ? (policy.requirements.resources ?? {})
-              : {},
+            args.policy.binding.trust === "managed" ? reservedOf(policy) : {},
         })
       )
         throw new EnvironmentCapacityError(node.id);
     }
+    const reserved =
+      args.policy.binding.trust === "managed" ? reservedOf(policy) : {};
     await requireTenantProject(
       executor,
       args.identity.tenantId,
@@ -284,14 +322,8 @@ export class ExecutionAllocationsService {
           root_workload_id: args.rootWorkloadId,
           worker_node_id: args.workerNodeId ?? null,
           policy_snapshot: toJson(policy),
-          reserved_cpu_millis:
-            args.policy.binding.trust === "managed"
-              ? (policy.requirements.resources?.cpuMillis ?? 0)
-              : 0,
-          reserved_memory_mb:
-            args.policy.binding.trust === "managed"
-              ? (policy.requirements.resources?.memoryMb ?? 0)
-              : 0,
+          reserved_cpu_millis: reserved.cpuMillis ?? 0,
+          reserved_memory_mb: reserved.memoryMb ?? 0,
         })
         .returningAll()
         .executeTakeFirstOrThrow();

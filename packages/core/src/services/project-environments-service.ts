@@ -300,6 +300,22 @@ const ProjectEnvironmentDefinitionSchema = z
           .array(z.string().regex(CONNECTION_ALIAS_PATTERN))
           .max(64)
           .optional(),
+        /**
+         * The agent container's own limits (ADR 0332); the Environment's
+         * `requirements.resources` are the command container's. 1 CPU and
+         * 2 GiB by default; the Allocation reserves both.
+         */
+        agentResources: z
+          .strictObject({
+            cpuMillis: z.number().int().positive().max(1_024_000).optional(),
+            memoryMb: z
+              .number()
+              .int()
+              .positive()
+              .max(4 * 1024 * 1024)
+              .optional(),
+          })
+          .optional(),
       })
       .optional(),
   })
@@ -330,6 +346,13 @@ const ProjectEnvironmentDefinitionSchema = z
   .superRefine((definition, ctx) => {
     const commands = definition.commands;
     if (!commands) return;
+    if (!commands.separate && commands.agentResources)
+      ctx.addIssue({
+        code: "custom",
+        path: ["commands", "agentResources"],
+        message:
+          "commands.agentResources limits the agent's own container, which exists only when commands run apart: set commands.separate",
+      });
     if (!commands.separate && commands.connections?.length)
       ctx.addIssue({
         code: "custom",
@@ -417,6 +440,8 @@ export interface EnvironmentCommands {
   separate: boolean;
   /** Bindings of the Environment commands may reach; none by default. */
   connections?: readonly string[];
+  /** The agent container's own limits; 1 CPU and 2 GiB by default. */
+  agentResources?: { cpuMillis?: number; memoryMb?: number };
 }
 
 /**

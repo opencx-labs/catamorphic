@@ -271,6 +271,7 @@ export type {
   SandboxType,
   SandboxVolume,
   SandboxVolumeProvider,
+  SeparateAgentResources,
   StepEntry,
 } from "./types.js";
 export {
@@ -279,6 +280,7 @@ export {
   RuntimeEventReportingError,
   RuntimeInfrastructureError,
   refuseSeparateCommands,
+  SEPARATE_AGENT_DEFAULT_RESOURCES,
   SEPARATE_COMMANDS_SOCKET,
   SIGN_IN_HARNESSES,
   type SignInHarness,

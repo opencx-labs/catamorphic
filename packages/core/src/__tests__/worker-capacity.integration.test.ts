@@ -218,3 +218,76 @@ it.skipIf(!db)(
     ).toBe(true);
   },
 );
+
+it.skipIf(!db)(
+  "reserves both containers of a sandbox whose commands run apart (ADR 0332)",
+  async () => {
+    if (!db) return;
+    const identity = { tenantId: randomUUID(), externalUserId: "member" };
+    const projectId = randomUUID();
+    const descriptor = {
+      id: randomUUID(),
+      label: "Review",
+      trust: "managed" as const,
+      isolation: "sandbox" as const,
+      workloads: ["agent" as const],
+      agentTopologies: ["controller" as const],
+      capabilities: ["commands.separate"],
+      resourceLimits: ["cpuMillis" as const, "memoryMb" as const],
+      resources: { cpuMillis: 6000, memoryMb: 12288 },
+    };
+    const nodes = new WorkerNodesService(db);
+    const lease = await nodes.register({
+      tenantId: identity.tenantId,
+      authorityId: "test",
+      descriptor,
+      // Room for two pairs and a third command container, not a third pair.
+      capacity: { workspaces: 4, cpuMillis: 8500, memoryMb: 17000 },
+      defaults: { cpuMillis: 2000, memoryMb: 4096 },
+    });
+    await db
+      .insertInto("projects")
+      .values({ id: projectId, tenant_id: identity.tenantId, name: "Review" })
+      .execute();
+    const allocations = new ExecutionAllocationsService(db);
+    const create = () =>
+      allocations.create({
+        identity,
+        projectId,
+        environmentName: "review",
+        workloadKind: "agent",
+        rootWorkloadId: randomUUID(),
+        workerNodeId: lease.id,
+        policy: {
+          binding: descriptor,
+          requirements: { workload: "agent" },
+          sandbox: {
+            separateCommands: {
+              connections: [],
+              agentResources: { cpuMillis: 1000, memoryMb: 2048 },
+            },
+          },
+        },
+      });
+    // The command container's limits (the machine's defaults here) and the
+    // agent container's on top.
+    const first = await create();
+    const reserved = await db
+      .selectFrom("execution_allocations")
+      .select(["reserved_cpu_millis", "reserved_memory_mb"])
+      .where("id", "=", first.id)
+      .executeTakeFirstOrThrow();
+    expect(reserved).toEqual({
+      reserved_cpu_millis: 3000,
+      reserved_memory_mb: 6144,
+    });
+    await create();
+    // A third command container's limits alone would fit; the pair does not.
+    await expect(create()).rejects.toBeInstanceOf(EnvironmentCapacityError);
+    expect(
+      (
+        await nodes.list({ tenantId: identity.tenantId, authorityId: "test" })
+      )[0]?.usage,
+    ).toMatchObject({ workspaces: 2, cpuMillis: 6000, memoryMb: 12288 });
+  },
+);

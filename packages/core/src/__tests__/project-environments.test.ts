@@ -1,5 +1,8 @@
 import { describe, expect, it } from "vitest";
-import { sandboxCapabilitiesFor } from "../services/execution-environments-service.js";
+import {
+  sandboxCapabilitiesFor,
+  separateAgentResources,
+} from "../services/execution-environments-service.js";
 import { parseProjectEnvironmentPolicy } from "../services/project-environments-service.js";
 
 describe("project Environment policy", () => {
@@ -390,6 +393,29 @@ describe("project Environment policy", () => {
       separate: true,
       connections: ["github"],
     });
+    // The agent container's own share is the Environment's to set.
+    const sized = parseProjectEnvironmentPolicy({
+      environments: {
+        review: {
+          workloads: ["agent"],
+          requirements: { resources: { cpuMillis: 4000, memoryMb: 8192 } },
+          commands: {
+            separate: true,
+            agentResources: { cpuMillis: 500, memoryMb: 1536 },
+          },
+        },
+      },
+    }).environments.review;
+    expect(sized && separateAgentResources(sized)).toEqual({
+      cpuMillis: 500,
+      memoryMb: 1536,
+    });
+    expect(
+      separateAgentResources({
+        workloads: ["agent"],
+        commands: { separate: true },
+      }),
+    ).toEqual({ cpuMillis: 1000, memoryMb: 2048 });
     expect(
       sandboxCapabilitiesFor(
         parsed.environments.review ?? { workloads: ["agent"] },
@@ -420,6 +446,11 @@ describe("project Environment policy", () => {
         commands: { separate: true, connections: ["model"] },
       },
       "is a model connection",
+    ],
+    [
+      "an agent share for commands that do not run apart",
+      { commands: { separate: false, agentResources: { cpuMillis: 500 } } },
+      "set commands.separate",
     ],
     [
       "connections for commands that do not run apart",

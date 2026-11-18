@@ -79,7 +79,9 @@ of its own beside the reviewer's, sharing only the checkout (ADR 0332).
 Docker runs there, not beside the reviewer. Its one connection is
 `github`, a read binding, so its commands (and `exec` from workflows) can
 `git fetch`; add another binding only when the change's tests need it, and
-never a write one. Only container machines (the Work server's
+never a write one. `requirements.resources` limits the command container;
+the reviewer's own container takes `commands.agentResources` (1 CPU and
+2 GiB by default) on top, and a machine reserves both. Only container machines (the Work server's
 `WORK_SANDBOX=container`, gVisor or runc without privileged containers)
 take this Environment.
 

@@ -67,12 +67,16 @@ function separateCommandsOf(args: {
   allocation: ExecutionAllocation;
   provider: SandboxProvider;
 }): Pick<CreateSandboxOpts, "separateCommands"> {
-  if (!args.allocation.policy.sandbox?.separateCommands) return {};
+  const separate = args.allocation.policy.sandbox?.separateCommands;
+  if (!separate) return {};
   const workspaceRoot = args.provider.workspaceRoot;
   return {
     separateCommands: {
       shared: [sandboxProjectDirectory({ workspaceRoot })],
       envFiles: sandboxEnvFiles({ workspaceRoot }),
+      ...(separate.agentResources
+        ? { agentResources: separate.agentResources }
+        : {}),
     },
   };
 }

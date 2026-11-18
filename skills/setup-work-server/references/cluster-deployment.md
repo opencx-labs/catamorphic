@@ -1017,8 +1017,11 @@ caches (ADR 0208):
   alone and runs what arrives there in the command container. Commands hold
   grants only for the bindings `connections` lists, never a model's. It
   needs `commands.separate`: the container backend wherever it enforces
-  `network.policy` and runs no privileged containers. A sandbox costs two
-  containers, each with the Environment's limits. Codex cannot run in such
+  `network.policy` and runs no privileged containers. The command container
+  gets the Environment's `requirements.resources`; the agent container its
+  own share, `"agentResources": { "cpuMillis": 1000, "memoryMb": 2048 }` by
+  default, and the Allocation reserves both, so size `capacity` for the
+  pair. Codex cannot run in such
   an Environment (it picks its own shell); Claude Code loads only its home's
   settings there; an ACP agent needs `"acp": { "shell": true }` in its
   definition.

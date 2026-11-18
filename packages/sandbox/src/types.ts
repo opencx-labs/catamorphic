@@ -111,8 +111,31 @@ export interface CreateSandboxOpts {
   separateCommands?: {
     shared: readonly string[];
     envFiles?: readonly string[];
+    /**
+     * The agent side's own limits; `resources` are the command side's,
+     * where the change's tests and services run. Defaults to
+     * {@link SEPARATE_AGENT_DEFAULT_RESOURCES}.
+     */
+    agentResources?: SeparateAgentResources;
   };
 }
+
+/** The limits of the agent side of a sandbox that runs commands apart (ADR 0332). */
+export interface SeparateAgentResources {
+  cpuMillis?: number;
+  memoryMb?: number;
+}
+
+/**
+ * What the agent side of a sandbox that runs commands apart gets unless its
+ * Environment says otherwise (ADR 0332): enough for a harness and its
+ * runner, which run no tests or services. Its Allocation reserves it on
+ * top of the command side's limits.
+ */
+export const SEPARATE_AGENT_DEFAULT_RESOURCES = {
+  cpuMillis: 1000,
+  memoryMb: 2048,
+} as const;
 
 /**
  * Refuse to run an agent's commands apart from it (ADR 0332) on a provider

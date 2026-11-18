@@ -587,7 +587,9 @@ provide it take the work:
   beside the agent's, sharing only the checkout. The agent's grants, model,
   Work tools and state stay out of their reach; \`connections\` names the
   bindings commands may use through the gateway (none by default, never a
-  model): list only a read binding. Use it wherever the agent runs code it
+  model): list only a read binding. The agent's own container takes
+  \`agentResources\` (1 CPU and 2 GiB by default) on top of the Environment's
+  limits, which the commands' container gets. Use it wherever the agent runs code it
   does not trust, such as a pull request's. Claude Code then loads no
   settings from the checkout, an ACP agent needs \`"acp": { "shell": true }\`,
   and Codex cannot run there. Only container machines take such work.

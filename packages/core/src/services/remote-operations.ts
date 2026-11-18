@@ -100,6 +100,12 @@ export const RemoteOperationSchema = z.discriminatedUnion("kind", [
             .max(8)
             .readonly()
             .optional(),
+          agentResources: z
+            .object({
+              cpuMillis: z.number().int().positive().optional(),
+              memoryMb: z.number().int().positive().optional(),
+            })
+            .optional(),
         })
         .optional(),
     }),

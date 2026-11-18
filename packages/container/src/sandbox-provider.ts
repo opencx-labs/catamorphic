@@ -30,6 +30,7 @@ import {
   isAgentProcessId,
   machineSignInHome,
   SANDBOX_CAPABILITIES,
+  SEPARATE_AGENT_DEFAULT_RESOURCES,
   SEPARATE_COMMANDS_SOCKET,
   StdioDeploymentRuntimeProvider,
   shellSandboxProcesses,
@@ -585,15 +586,25 @@ export class ContainerSandboxProvider implements SandboxProvider {
     const memoryMb =
       opts.resources?.memoryMb ?? this.config.memoryMb ?? DEFAULT_MEMORY_MB;
     const runtime = this.config.runtime;
-    const limits = {
+    const limitsOf = (cpu: number, memory: number) => ({
       ...(runtime.name ? { Runtime: runtime.name } : {}),
       Init: true,
-      NanoCpus: cpuMillis * 1_000_000,
-      Memory: memoryMb * 1024 * 1024,
-      MemorySwap: memoryMb * 1024 * 1024,
+      NanoCpus: cpu * 1_000_000,
+      Memory: memory * 1024 * 1024,
+      MemorySwap: memory * 1024 * 1024,
       PidsLimit: this.config.pidsLimit ?? DEFAULT_PIDS_LIMIT,
       NetworkMode: restricted ? "none" : SANDBOX_NETWORK,
-    };
+    });
+    // The command side runs the change's tests and services: the
+    // Environment's limits. The agent side runs the harness: its own
+    // share, which the Allocation reserves on top (ADR 0332).
+    const limits = limitsOf(cpuMillis, memoryMb);
+    const agentLimits = limitsOf(
+      separate?.agentResources?.cpuMillis ??
+        SEPARATE_AGENT_DEFAULT_RESOURCES.cpuMillis,
+      separate?.agentResources?.memoryMb ??
+        SEPARATE_AGENT_DEFAULT_RESOURCES.memoryMb,
+    );
     const labels: Record<string, string> = {
       ...opts.labels,
       [SANDBOX_LABEL]: "1",
@@ -679,7 +690,7 @@ export class ContainerSandboxProvider implements SandboxProvider {
                 : {}),
             },
             HostConfig: {
-              ...limits,
+              ...agentLimits,
               Mounts: [
                 { Type: "volume", Target: this.workspaceRoot },
                 ...shared,
@@ -1304,6 +1315,7 @@ export class ContainerSandboxProvider implements SandboxProvider {
         throw new Error(
           `'${shared}' is not a directory of the workspace to share`,
         );
+    assertSandboxResources(separate.agentResources, this.resourceLimits);
     for (const file of separate.envFiles ?? [])
       if (!path.posix.isAbsolute(file) || /[\0\n:]/.test(file))
         throw new Error(`'${file}' is not a session file for commands to load`);

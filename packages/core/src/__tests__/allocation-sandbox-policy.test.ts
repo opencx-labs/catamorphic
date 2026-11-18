@@ -3,7 +3,10 @@ import type { CreateSandboxOpts, SandboxProvider } from "@catamorphic/sandbox";
 import type { Kysely } from "kysely";
 import { describe, expect, it } from "vitest";
 import { withAllocationSandboxPolicy } from "../services/allocation-sandbox-provider.js";
-import type { ExecutionAllocation } from "../services/execution-allocations-service.js";
+import {
+  type ExecutionAllocation,
+  reservedOf,
+} from "../services/execution-allocations-service.js";
 
 /** No volumes here, so the policy never asks the database for holds. */
 const db = new Proxy({} as Kysely<DB>, {
@@ -86,7 +89,12 @@ describe("withAllocationSandboxPolicy", () => {
     const machine = new MemberMachine();
     const provider = withAllocationSandboxPolicy({
       db,
-      allocation: allocation({ separateCommands: { connections: [] } }),
+      allocation: allocation({
+        separateCommands: {
+          connections: [],
+          agentResources: { cpuMillis: 1000, memoryMb: 2048 },
+        },
+      }),
       provider: machine as unknown as SandboxProvider,
     });
     await provider.createSandbox({});
@@ -98,9 +106,38 @@ describe("withAllocationSandboxPolicy", () => {
             "/workspace/.work-session/env/gateway.sh",
             "/workspace/.work-session/env/secrets.sh",
           ],
+          agentResources: { cpuMillis: 1000, memoryMb: 2048 },
         },
       },
     ]);
+  });
+
+  it("reserves the agent container on top of the command container's limits (ADR 0332)", () => {
+    const separated = allocation({
+      separateCommands: {
+        connections: [],
+        agentResources: { cpuMillis: 1000, memoryMb: 2048 },
+      },
+    });
+    expect(
+      reservedOf({
+        ...separated.policy,
+        requirements: {
+          workload: "agent",
+          resources: { cpuMillis: 4000, memoryMb: 8192 },
+        },
+      }),
+    ).toEqual({ cpuMillis: 5000, memoryMb: 10240 });
+    expect(
+      reservedOf({
+        ...allocation(undefined).policy,
+        requirements: {
+          workload: "agent",
+          resources: { cpuMillis: 4000, memoryMb: 8192 },
+        },
+      }),
+    ).toEqual({ cpuMillis: 4000, memoryMb: 8192 });
+    expect(reservedOf(allocation(undefined).policy)).toEqual({});
   });
 
   it("returns the provider itself when the Environment sets nothing", () => {

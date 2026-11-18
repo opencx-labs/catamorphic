@@ -406,6 +406,32 @@ describe.skipIf(!enabled)("commands apart from the agent (ADR 0332)", () => {
   );
 
   it(
+    "limits the command side as the Environment says and the agent side to its own share",
+    async () => {
+      const { id } = await provider.createSandbox({
+        resources: { cpuMillis: 2000, memoryMb: 1536 },
+        separateCommands: {
+          shared: [PROJECT],
+          agentResources: { cpuMillis: 500, memoryMb: 768 },
+        },
+      });
+      sandboxes.push(id);
+      const limits = async (name: string) => {
+        const host = (await docker.inspectContainer(name))?.HostConfig as
+          | { NanoCpus?: number; Memory?: number }
+          | undefined;
+        return [host?.NanoCpus, host?.Memory];
+      };
+      expect(await limits(id)).toEqual([2000 * 1_000_000, 1536 * 1024 * 1024]);
+      expect(await limits(`${id}-agent`)).toEqual([
+        500 * 1_000_000,
+        768 * 1024 * 1024,
+      ]);
+    },
+    10 * MINUTES,
+  );
+
+  it(
     "starts, stops and ends both sides as one sandbox",
     async () => {
       const id = await separated();

@@ -18,6 +18,7 @@ import {
   resolveEgress,
   resolveSetupEgress,
   SANDBOX_CAPABILITIES,
+  SEPARATE_AGENT_DEFAULT_RESOURCES,
   signInCapability,
   volumeKey,
 } from "@catamorphic/sandbox";
@@ -877,7 +878,10 @@ export class ExecutionEnvironmentsService {
           environmentName: args.name,
           pool: definition.pool ?? {},
           owner,
-          requirements: waitRequirements(effectiveRequirements),
+          requirements: waitRequirements({
+            requirements: effectiveRequirements,
+            definition,
+          }),
           waitMinutes: definition.waitMinutes ?? 0,
         },
       },
@@ -919,6 +923,9 @@ export class ExecutionEnvironmentsService {
         ? {
             separateCommands: {
               connections: [...(definition.commands.connections ?? [])],
+              // Fixed at admission, so the reservation and the container
+              // agree (ADR 0332).
+              agentResources: separateAgentResources(definition),
             },
           }
         : {}),
@@ -980,11 +987,41 @@ function effectiveRequirementsOf(args: {
   });
 }
 
-/** The part of a workload's needs that sizes a machine. */
-function waitRequirements(
-  requirements: EnvironmentRequirements,
-): PlacementWaitTarget["requirements"] {
-  const { cpuMillis, memoryMb, storageMb, gpu } = requirements.resources ?? {};
+/**
+ * The agent container's limits where an Environment runs commands apart
+ * (ADR 0332): its own, or 1 CPU and 2 GiB.
+ */
+export function separateAgentResources(
+  definition: ProjectEnvironmentDefinition,
+): { cpuMillis: number; memoryMb: number } {
+  return {
+    cpuMillis:
+      definition.commands?.agentResources?.cpuMillis ??
+      SEPARATE_AGENT_DEFAULT_RESOURCES.cpuMillis,
+    memoryMb:
+      definition.commands?.agentResources?.memoryMb ??
+      SEPARATE_AGENT_DEFAULT_RESOURCES.memoryMb,
+  };
+}
+
+/**
+ * The part of a workload's needs that sizes a machine: with commands apart,
+ * the agent container's share on top (ADR 0332).
+ */
+function waitRequirements(input: {
+  requirements: EnvironmentRequirements;
+  definition: ProjectEnvironmentDefinition;
+}): PlacementWaitTarget["requirements"] {
+  const { requirements } = input;
+  const agent = input.definition.commands?.separate
+    ? separateAgentResources(input.definition)
+    : undefined;
+  const own = requirements.resources ?? {};
+  const cpuMillis = agent
+    ? (own.cpuMillis ?? 0) + agent.cpuMillis
+    : own.cpuMillis;
+  const memoryMb = agent ? (own.memoryMb ?? 0) + agent.memoryMb : own.memoryMb;
+  const { storageMb, gpu } = own;
   return {
     resources: {
       ...(cpuMillis !== undefined ? { cpuMillis } : {}),
@@ -1020,9 +1057,10 @@ function waitTargetOf(args: {
       reason: args.reason,
       pool: args.definition.pool ?? {},
       owner,
-      requirements: waitRequirements(
-        effectiveRequirementsOf({ ...args, owner }),
-      ),
+      requirements: waitRequirements({
+        requirements: effectiveRequirementsOf({ ...args, owner }),
+        definition: args.definition,
+      }),
       waitMinutes: args.definition.waitMinutes ?? 0,
     },
   ];

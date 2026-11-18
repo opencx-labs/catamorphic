@@ -45,6 +45,11 @@ idle release, rebuild, destroy and shared subsessions (0322) act on both.
   nothing else: each has its own `/workspace`, session folder, `/tmp`,
   network namespace and egress proxy. Commands never see the agent's
   loopback.
+- **Limits:** the command container gets the Environment's
+  `requirements.resources` (it runs the tests and services); the agent
+  container its own share, `commands.agentResources`, 1 CPU and 2 GiB by
+  default, fixed at admission. The Allocation reserves the sum, and a
+  placement wait sizes machines for it, so admission (0100) stays truthful.
 
 **Operations name their side.** `side: "agent" | "commands"` on commands,
 uploads, downloads and process starts, carried by the worker queue; the
@@ -73,7 +78,10 @@ the agent container, so it has no channel back.
 - **Codex:** refused. It takes the login shell from the password database
   and lets the model name any shell binary.
 - **The built-in agent** runs on the control plane; its tools already run
-  through the provider.
+  through the provider, on the command side. Separation keeps the grants
+  not listed for commands out of its sandbox and gives it no trusted file
+  copy, which it does not need: its instructions come from the control
+  plane.
 
 **Git and the program.** Work's Git on the checkout runs in the command
 container: Git in the agent container on a repository the pull request
@@ -88,14 +96,19 @@ agent's is beyond its reach, and a workflow can name its path to the agent.
 
 Considered: wrapping each harness's shell in project code (what the reviewer
 did; every harness again), a daemon inside the command container reached
-over a shared network (a route between the two), and a shared temporary
-folder (Claude Code keeps sockets there).
+over a shared network (a route between the two), a shared temporary
+folder (Claude Code keeps sockets there), and each container with the full
+limits (twice the reservation's worth on the machine).
 
 ## Consequences
 
 Code a pull request runs reaches the checkout, the test services and the
 listed connections, never the session's other authority. A pair costs two
-containers, each with the Environment's limits, and one exec per command.
+containers and the agent's share on top of the Environment's limits, and
+one exec per command. Breaking: Claude Code in such an Environment no
+longer loads the repository's `CLAUDE.md`, hooks or settings. Follow-up:
+ACP client terminals (`terminal/create`), for agents that run commands
+through their client rather than `$SHELL`.
 Microsandbox, local-process and Cloudflare sandboxes do not offer it, nor
 machines running privileged containers. What remains: the agent reads what
 the pull request wrote, links included, so hostile content can still talk
