@@ -240,18 +240,18 @@ it("orders frequent rows by use, once each, with pages capped", async () => {
 
 it("lists one row per destination", async () => {
   const { oneRowPerDestination } = await import("./rank.js");
-  const page = "web:https://app.example.com/inbox";
+  const page = "web:https://platform.open.cx/inbox";
   const ids = (rows: Row[]) => oneRowPerDestination(rows).map((row) => row.id);
   // A pinned page also in the imported library: the listed copy wins,
   // wherever it comes.
   expect(
     ids([
-      row("library", "Acme", {
+      row("library", "OpenCX", {
         usage: page,
         category: "bookmark",
         searchOnly: true,
       }),
-      row("pinned", "Acme", { usage: page, category: "bookmark" }),
+      row("pinned", "OpenCX", { usage: page, category: "bookmark" }),
       row("other", "Open", { category: "bookmark" }),
     ]),
   ).toEqual(["pinned", "other"]);
@@ -259,7 +259,7 @@ it("lists one row per destination", async () => {
   // ranked with the sidebar.
   expect(
     oneRowPerDestination([
-      row("bookmark", "Acme", {
+      row("bookmark", "OpenCX", {
         usage: page,
         category: "bookmark",
         bookmarked: true,
@@ -271,7 +271,7 @@ it("lists one row per destination", async () => {
       }),
     ]),
   ).toEqual([
-    row("bookmark", "Acme", {
+    row("bookmark", "OpenCX", {
       usage: page,
       category: "bookmark",
       bookmarked: true,
@@ -281,9 +281,9 @@ it("lists one row per destination", async () => {
   // An open tab stands in for the page; two tabs of it are two places.
   expect(
     ids([
-      row("bookmark", "Acme", { usage: page, category: "bookmark" }),
-      row("tab-1", "Acme", { usage: page, category: "tab" }),
-      row("tab-2", "Acme", { usage: page, category: "tab" }),
+      row("bookmark", "OpenCX", { usage: page, category: "bookmark" }),
+      row("tab-1", "OpenCX", { usage: page, category: "tab" }),
+      row("tab-2", "OpenCX", { usage: page, category: "tab" }),
     ]),
   ).toEqual(["tab-1", "tab-2"]);
   // The tab standing in for a bookmark is that bookmark open: one row,
@@ -296,7 +296,7 @@ it("lists one row per destination", async () => {
       bookmarked: true,
       keywords: ["docs"],
     }),
-    row("tab", "Inbox · Acme", {
+    row("tab", "Inbox · OpenCX", {
       usage: page,
       category: "tab",
       searchOnly: true,

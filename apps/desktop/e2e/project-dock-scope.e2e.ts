@@ -15,7 +15,7 @@ beforeAll(async () => {
     await api.agentsSetDefault(agent.id);
     await api.setPrefs({dockMultiProject:false,dockCollapsed:false});
     const first=await api.createProject({name:'Catamorphic QA',rootPath:${JSON.stringify(`${app.userDataDir}/catamorphic-qa`)}});
-    const second=await api.createProject({name:'Acme QA',rootPath:${JSON.stringify(`${app.userDataDir}/acme-qa`)}});
+    const second=await api.createProject({name:'Opencx QA',rootPath:${JSON.stringify(`${app.userDataDir}/opencx-qa`)}});
     await api.workspaceNavigate({projectId:first.id});
     return [first.id,second.id];
   })()`);

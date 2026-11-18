@@ -88,8 +88,8 @@ let root: Root;
 let container: HTMLDivElement;
 beforeEach(() => {
   state.snapshot = {
-    chats: [chat("acme", "own"), chat("catamorphic", "foreign")],
-    activeProjectId: "acme",
+    chats: [chat("opencx", "own"), chat("catamorphic", "foreign")],
+    activeProjectId: "opencx",
     detached: false,
     multiProject: false,
     side: "right",
@@ -108,7 +108,7 @@ afterEach(() => {
   expect(state.listeners.size).toBe(0);
 });
 async function mount() {
-  await act(async () => root.render(<DockHost activeProjectId="acme" />));
+  await act(async () => root.render(<DockHost activeProjectId="opencx" />));
 }
 async function publish(snapshot: DockSnapshot) {
   state.snapshot = snapshot;
@@ -120,7 +120,7 @@ async function publish(snapshot: DockSnapshot) {
 describe("dock project scope", () => {
   it("lets a fork's tab take over when the parent's remote activation arrived before its local presentation", async () => {
     if (!state.snapshot) throw new Error("Missing fixture snapshot");
-    const parent = chat("acme", "parent");
+    const parent = chat("opencx", "parent");
     parent.entry.mode = "partial";
     parent.selected = true;
     state.snapshot = {
@@ -134,7 +134,7 @@ describe("dock project scope", () => {
       container.querySelector('[data-chat="parent"][data-mode="partial"]'),
     ).not.toBeNull();
 
-    const fork = chat("acme", "fork", true);
+    const fork = chat("opencx", "fork", true);
     fork.entry.mode = "tab";
     fork.tabActive = true;
     fork.selected = true;
@@ -162,7 +162,7 @@ describe("dock project scope", () => {
     if (!state.snapshot) throw new Error("Missing fixture snapshot");
     state.snapshot = { ...state.snapshot, chats: [] };
     await mount();
-    const opening = chat("acme", "opening");
+    const opening = chat("opencx", "opening");
     opening.entry.mode = "partial";
     opening.selected = true;
     await act(async () => localPresentations.publish(opening));
@@ -202,7 +202,7 @@ describe("dock project scope", () => {
     foreign.entry.mode = "partial";
     state.snapshot = {
       ...state.snapshot,
-      chats: [chat("acme", "own"), foreign],
+      chats: [chat("opencx", "own"), foreign],
       multiProject: true,
       activeChatId: "foreign",
     };
@@ -226,7 +226,7 @@ describe("dock project scope", () => {
 
   it("keeps the owning project's chat open after its attention is acknowledged", async () => {
     if (!state.snapshot) throw new Error("Missing fixture snapshot");
-    const own = chat("acme", "own");
+    const own = chat("opencx", "own");
     own.entry.mode = "partial";
     state.snapshot = {
       ...state.snapshot,

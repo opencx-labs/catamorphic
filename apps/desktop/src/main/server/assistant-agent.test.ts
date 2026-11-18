@@ -210,7 +210,7 @@ describe("the assistant", () => {
     const windowsOf = () => ({
       personProject: () => "catamorphic",
       projectNamed: async (name: string) =>
-        name.toLowerCase() === "acme" ? "acme" : null,
+        name.toLowerCase() === "opencx" ? "opencx" : null,
       seenElsewhere: new Map<string, string>(),
     });
     const home = { projectId: "home", sessionId: "assistant" };
@@ -289,13 +289,12 @@ describe("the assistant", () => {
       );
       expect(overview?.parameters).toHaveProperty("project");
       expect(read?.parameters).toHaveProperty("project");
-      expect(await overview?.execute({ project: "Acme" }, home)).toMatchObject({
-        project: "acme",
-        input: {},
-      });
+      expect(
+        await overview?.execute({ project: "OpenCX" }, home),
+      ).toMatchObject({ project: "opencx", input: {} });
       expect(
         await read?.execute({ key: "browser:elsewhere-pr" }, home),
-      ).toMatchObject({ project: "acme" });
+      ).toMatchObject({ project: "opencx" });
       // A key made from a name is in every window: the person's is meant.
       expect(await read?.execute({ key: "app:dashboard" }, home)).toMatchObject(
         { project: "catamorphic" },

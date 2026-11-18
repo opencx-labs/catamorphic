@@ -8,7 +8,7 @@ and typechecks are static validation, not substitutes for the walkthrough.
 
 Private repository: [catamorphic-demo-brain](https://github.com/m-tabaza/catamorphic-demo-brain).
 The builder has repository write access and reviews as m-tabaza. The company
-service opens proposals as its own GitHub account so the human can review its work.
+service opens proposals as tabaza-opencx so the human can review its work.
 Demo Builder and Demo CSM have separate ordinary company accounts. The CSM role
 can read the playbooks and propose changes, but has no builder permissions.
 

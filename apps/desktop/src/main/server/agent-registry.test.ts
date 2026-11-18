@@ -743,7 +743,7 @@ describe("the assistant sees where the person is (ADR 0265)", () => {
     const context = async (turnId = "turn") =>
       (
         (await harness.context?.({
-          projectId: "acme",
+          projectId: "opencx",
           sessionId: "assistant",
           turnId,
         })) ?? []
@@ -760,7 +760,7 @@ describe("the assistant sees where the person is (ADR 0265)", () => {
     expect(text).toContain("Project: catamorphic\nFolder: /work/catamorphic");
     expect(text).toContain("This chat is kept in another project");
     expect(text).toContain("catamorphic pull request");
-    expect(text).not.toContain("acme pull request");
+    expect(text).not.toContain("opencx pull request");
     expect(asked).toEqual(["catamorphic"]);
   });
 
@@ -839,7 +839,7 @@ describe("the assistant sees where the person is (ADR 0265)", () => {
     const peers = vi.fn(async () => [
       {
         id: "peer",
-        title: "Acme deploy",
+        title: "OpenCX deploy",
         agentId: null,
         running: true,
         task: null,
@@ -857,14 +857,14 @@ describe("the assistant sees where the person is (ADR 0265)", () => {
     const { harness } = hostOf(registry, "work-assistant:claude");
     const text = (
       (await harness.context?.({
-        projectId: "acme",
+        projectId: "opencx",
         sessionId: "assistant",
         turnId: "turn",
       })) ?? []
     )
       .map((fragment) => fragment.text)
       .join("\n");
-    expect(text).not.toContain("Acme deploy");
+    expect(text).not.toContain("OpenCX deploy");
     expect((harness.hostTools ?? []).map((tool) => tool.name)).toContain(
       "screen_when_spoken",
     );
@@ -872,14 +872,14 @@ describe("the assistant sees where the person is (ADR 0265)", () => {
     const base = hostOf(registry, "claude").harness;
     const own = (
       (await base.context?.({
-        projectId: "acme",
+        projectId: "opencx",
         sessionId: "chat",
         turnId: "turn",
       })) ?? []
     )
       .map((fragment) => fragment.text)
       .join("\n");
-    expect(own).toContain("Acme deploy");
+    expect(own).toContain("OpenCX deploy");
   });
 
   it("is the only agent whose screen follows the person", async () => {
@@ -903,14 +903,14 @@ describe("the assistant sees where the person is (ADR 0265)", () => {
     const { harness } = hostOf(registry, "claude");
     const text = (
       (await harness.context?.({
-        projectId: "acme",
+        projectId: "opencx",
         sessionId: "chat",
         turnId: "turn",
       })) ?? []
     )
       .map((fragment) => fragment.text)
       .join("\n");
-    expect(text).toContain('"acme"');
+    expect(text).toContain('"opencx"');
     expect(text).not.toContain("Project:");
   });
 });

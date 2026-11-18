@@ -10,7 +10,7 @@ and Language Detector APIs). Electron ships Blink's half of them, so Work's
 tabs expose both classes, but the browser-process half lives in `//chrome`
 and is absent: `LanguageDetector.availability()` reports `"unavailable"` and
 `Translator.availability()` and `create()` never settle (issue #445). Sites
-that feature-detect the classes, such as a support inbox's message
+that feature-detect the classes, such as the OpenCX inbox's message
 translation, conclude translation works and wait forever.
 
 Chrome answers them with Google's translation library, closed source and
