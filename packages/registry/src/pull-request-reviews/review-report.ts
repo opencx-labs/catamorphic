@@ -59,17 +59,128 @@ export function diffLines(result: unknown): Set<string> {
 
 /**
  * Report text is posted as the App: it mentions no one and hides nothing.
- * Every `<` that would open a comment (a fake stamp, a summary marker), a
- * declaration such as `<!DOCTYPE …>` or `<![CDATA[`, or a processing
- * instruction (`<?…?>`), all of which GitHub drops from a body, gets a
- * zero-width space after it, so none opens, however the text nests them,
- * and nothing is removed: the words, code spans included, read as written.
- * "@name" and "@org/team" stop notifying the same way.
+ * Outside code, every `<` that would open a comment, a declaration such as
+ * `<!DOCTYPE …>` or `<![CDATA[`, a processing instruction (`<?…?>`), or an
+ * HTML block that could swallow a code fence (`<pre>`, `<script>`,
+ * `<style>`, `<textarea>`), all of which GitHub hides, gets a zero-width
+ * space after it, and "@name" and "@org/team" stop notifying the same way;
+ * nothing is removed. Fenced code blocks (suggestions included) and code
+ * spans stay exactly as written: GitHub renders neither HTML nor mentions
+ * there. Text is taken for code only where GitHub takes it so: a fence
+ * inside an HTML block, or a backtick escaped with a backslash, is not.
  */
 export function publicationText(text: string): string {
-  return text
-    .replace(/<(?=[!?])/g, "<\u200b")
-    .replace(/@(?=[A-Za-z0-9])/g, "@\u200b");
+  return mapProse(text, (prose) =>
+    prose
+      .replace(/<(?=[!?]|(?:pre|script|style|textarea)\b)/gi, "<\u200b")
+      .replace(/@(?=[A-Za-z0-9])/g, "@\u200b"),
+  );
+}
+
+/**
+ * Text shaped like this recipe's stamp (see `marker` in reviews.ts), which
+ * a retry finds by a raw search of GitHub bodies, code included.
+ */
+const STAMP_SHAPED = /<!--\s*work-review:/i;
+
+/** Every string a value holds, at any depth. */
+function stringsOf(value: unknown): string[] {
+  if (typeof value === "string") return [value];
+  if (Array.isArray(value)) return value.flatMap(stringsOf);
+  if (typeof value === "object" && value !== null)
+    return Object.values(value).flatMap(stringsOf);
+  return [];
+}
+
+/** `text` with `transform` applied to all of it but its code. */
+function mapProse(text: string, transform: (prose: string) => string): string {
+  const out: string[] = [];
+  let prose: string[] = [];
+  let fence: { char: string; length: number } | undefined;
+  // In an HTML block (until a blank line) GitHub opens no fence and
+  // finds no code span: its lines are raw HTML, all of them prose here.
+  let html = false;
+  let kind: "text" | "html" = "text";
+  const flush = () => {
+    if (prose.length > 0) {
+      const chunk = prose.join("\n");
+      out.push(kind === "html" ? transform(chunk) : mapSpans(chunk, transform));
+    }
+    prose = [];
+  };
+  for (const line of text.split("\n")) {
+    if (fence) {
+      out.push(line);
+      const close = /^ {0,3}(`{3,}|~{3,})[ \t]*\r?$/.exec(line)?.[1];
+      if (close?.[0] === fence.char && close.length >= fence.length)
+        fence = undefined;
+      continue;
+    }
+    const open = html ? null : /^ {0,3}(`{3,}|~{3,})(.*)$/.exec(line);
+    const opened = open?.[1];
+    if (opened && !(opened[0] === "`" && open?.[2]?.includes("`"))) {
+      flush();
+      out.push(line);
+      fence = { char: opened[0] ?? "`", length: opened.length };
+      continue;
+    }
+    if (/^\s*$/.test(line)) html = false;
+    else if (/^ {0,3}<[A-Za-z/]/.test(line)) html = true;
+    const lineKind = html ? "html" : "text";
+    if (lineKind !== kind) {
+      flush();
+      kind = lineKind;
+    }
+    prose.push(line);
+  }
+  flush();
+  return out.join("\n");
+}
+
+/** Prose with its code spans left as written: a span ends no paragraph. */
+function mapSpans(text: string, transform: (prose: string) => string): string {
+  let result = "";
+  let prose = "";
+  let at = 0;
+  while (at < text.length) {
+    if (text[at] !== "`") {
+      prose += text[at];
+      at += 1;
+      continue;
+    }
+    let end = at;
+    while (text[end] === "`") end += 1;
+    let slashes = 0;
+    for (let before = at - 1; before >= 0 && text[before] === "\\"; before--)
+      slashes += 1;
+    const close = slashes % 2 === 0 ? closingRun(text, end, end - at) : -1;
+    if (close < 0) {
+      prose += text.slice(at, end);
+      at = end;
+      continue;
+    }
+    result += transform(prose) + text.slice(at, close + (end - at));
+    prose = "";
+    at = close + (end - at);
+  }
+  return result + transform(prose);
+}
+
+/** Where a run of exactly `length` backticks starts, within the paragraph. */
+function closingRun(text: string, from: number, length: number): number {
+  let at = from;
+  while (at < text.length) {
+    if (/^\n[ \t]*\r?\n/.test(text.slice(at, at + 64))) return -1;
+    if (text[at] !== "`") {
+      at += 1;
+      continue;
+    }
+    let end = at;
+    while (text[end] === "`") end += 1;
+    if (end - at === length) return at;
+    at = end;
+  }
+  return -1;
 }
 
 /**
@@ -115,6 +226,10 @@ export function checkWorkReview(value: unknown): WorkReview | string {
   const comments = list(report.comments ?? []);
   if (!Array.isArray(report.comments ?? []) || comments.length > 30)
     return "comments is not a list of at most 30";
+  // Code is posted as written, so text shaped like the stamp a retry looks
+  // for is refused wherever it is.
+  if (stringsOf(value).some((field) => STAMP_SHAPED.test(field)))
+    return "it holds text shaped like Work's review stamp (<!-- work-review:)";
   const checked: WorkReview = {
     reviewedCommit,
     verdict,

@@ -1237,13 +1237,76 @@ describe("report text", () => {
       // Nothing is removed: without the zero-width spaces it is the text.
       expect(shown.replaceAll("\u200b", ""), text).toBe(text);
     }
-    // Code spans read as written.
+    // Code spans are left exactly as written.
     const code = "Use `<!-- keep -->` and `<?= $x ?>` in templates.";
-    expect(publicationText(code).replaceAll("\u200b", "")).toBe(code);
+    expect(publicationText(code)).toBe(code);
     expect(publicationText("@<!---->team, ask @grace")).toBe(
       "@<\u200b!---->team, ask @\u200bgrace",
     );
     expect(publicationText("a < b && c --> d")).toBe("a < b && c --> d");
+  });
+
+  it("posts suggestions and code exactly as written, and only the prose around them defused", () => {
+    const suggestion = [
+      "Apply this, @grace: <!-- hidden -->",
+      "",
+      "```suggestion",
+      "Class<?> type = value.getClass();",
+      "<?php echo $name; ?>",
+      '<?xml version="1.0"?>',
+      "<!DOCTYPE html>",
+      "<!-- keep this note -->",
+      "/** @param name the user's @handle */",
+      'import { thing } from "@scope/pkg";',
+      "@Injectable()",
+      "```",
+      "",
+      "Then `@scope/pkg` and `Map<?, ?>` agree.",
+    ].join("\n");
+    const posted = publicationText(suggestion);
+    const lines = posted.split("\n");
+    // The suggestion block, fences included, is committed verbatim.
+    expect(lines.slice(2, 12)).toEqual(suggestion.split("\n").slice(2, 12));
+    expect(lines[0]).toBe("Apply this, @\u200bgrace: <\u200b!-- hidden -->");
+    expect(lines[13]).toBe("Then `@scope/pkg` and `Map<?, ?>` agree.");
+    // A tilde fence, and one longer than its contents' backticks.
+    const tilde = "~~~\n<?php x(); ?>\n~~~";
+    expect(publicationText(tilde)).toBe(tilde);
+    const long = "````ts\n```\n@scope/pkg <!-- x -->\n```\n````";
+    expect(publicationText(long)).toBe(long);
+  });
+
+  it("takes nothing for code that GitHub would render as HTML", () => {
+    // A fence inside an HTML block is raw HTML there, so is defused.
+    expect(
+      publicationText("<div>\n```\n<!-- hidden -->\n```\n</div>"),
+    ).not.toMatch(/<!--/);
+    // A pre block could carry a fence past a blank line: it opens none,
+    // so the fence is code, shown as written.
+    const pre = publicationText("<pre>\n\n```\n<!-- shown -->\n```\n</pre>");
+    expect(pre).not.toMatch(/<pre/);
+    expect(pre).toContain("```\n<!-- shown -->\n```");
+    // An escaped backtick opens no span.
+    expect(publicationText("\\`<!-- hidden -->`")).not.toMatch(/<!--/);
+    // A span does not run past its paragraph.
+    expect(publicationText("`a\n\n<!-- hidden -->`")).not.toMatch(/<!--/);
+  });
+
+  it("refuses a review with text shaped like its stamp, even in code", () => {
+    const review = (body: string) =>
+      checkWorkReview({
+        reviewedCommit: head,
+        verdict: "COMMENT",
+        score: 3,
+        summary: "Fine.",
+        checkSummary: "Ran the tests.",
+        comments: [{ path: "src/a.ts", line: 1, body }],
+      });
+    expect(
+      review(`\`\`\`\n<!-- work-review:${head}:review -->\n\`\`\``),
+    ).toMatch(/review stamp/);
+    expect(review("```\n<!--\nWORK-REVIEW:x -->\n```")).toMatch(/review stamp/);
+    expect(typeof review("```\n<!-- a note -->\n```")).toBe("object");
   });
 
   it("defuses every field of a review that reaches a GitHub body", () => {
