@@ -58,6 +58,12 @@ export interface SessionSnapshot {
    * `stallMinutes` lasts.
    */
   turn?: SessionTurnProgress | null;
+  /**
+   * The chat's turns waiting to run, oldest first (ADR 0336), from
+   * `inspect` and `find`: with `turn`, what tells a turn still to come from
+   * one that settled or was withdrawn.
+   */
+  queued?: string[];
 }
 /** A working turn's progress (ADR 0333). */
 export interface SessionTurnProgress {
@@ -272,7 +278,8 @@ export interface SessionHostOperations {
    * max 100). `name` keeps one result name; `family: true` adds its
    * subsessions' results at every depth, each naming its chat;
    * `afterInput` (an input's message id, such as a delivery's `messageId`)
-   * keeps results that answer that input or a later one.
+   * keeps results that answer that input or a later one. `order: "oldest"`
+   * reads the first submitted first, as a turn's first findings.
    */
   results: Call<
     Target & {
@@ -282,6 +289,8 @@ export interface SessionHostOperations {
       turnId?: string;
       afterInput?: string;
       limit?: number;
+      /** `oldest`: the first submitted first (ADR 0336). */
+      order?: "newest" | "oldest";
     },
     { sessionId: string; key: string | null; results: SessionResult[] }
   >;

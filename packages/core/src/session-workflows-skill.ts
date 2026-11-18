@@ -340,7 +340,8 @@ export const prepareReview = defineWorkflow(({ defineBoundary }) => ({
 
 ### Turns that stop making progress
 
-inspect (and find) answer turn: the turn working now, or null, with its
+inspect (and find) answer queued, the ids of the chat's turns waiting to run,
+oldest first, and turn: the turn working now, or null, with its
 attempt { id, ordinal, reason, startedAt }, attempts and restarts so far,
 progressAt (when its attempt last made progress: anything from its harness but
 a log line, or a model call), stalledAt, stallMinutes, and activity { tools,
@@ -558,7 +559,8 @@ sandboxes need it.
   detail.resultMessageId names, even after later turns.
 - results reads the typed values an agent submitted with submit_result
   (ADR 0323), newest first: { sessionId | key, name?, family?, turnId?,
-  afterInput?, limit? }. An agent submits only results its committed definition declares
+  afterInput?, limit?, order? } (order: "oldest" reads the first submitted
+  first). An agent submits only results its committed definition declares
   (\`"results": { "<name>": <JSON Schema> }\` in .work/agents/<slug>.json),
   and only a value its schema accepts is recorded, so read results, never
   parse a reply. Each result names its chat (family: true adds subsessions at

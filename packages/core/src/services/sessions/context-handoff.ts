@@ -239,8 +239,8 @@ async function keptSections(input: {
   budget: number;
 }): Promise<string> {
   const { db, sessionId, ordinals, current } = input;
-  /** The latest result of each name, of the current turn or the rest. */
-  const latestByName = async (ofCurrent: boolean) =>
+  /** The latest result of each name, of the turns before the current one. */
+  const latestSettled = async () =>
     (
       await db
         .selectFrom("agent_items as item")
@@ -260,14 +260,12 @@ async function keptSections(input: {
           ]),
         )
         .$if(current !== undefined, (query) =>
-          ofCurrent
-            ? query.where("item.turn_id", "=", current?.id ?? "")
-            : query.where((eb) =>
-                eb.or([
-                  eb("item.turn_id", "is", null),
-                  eb("item.turn_id", "<>", current?.id ?? ""),
-                ]),
-              ),
+          query.where((eb) =>
+            eb.or([
+              eb("item.turn_id", "is", null),
+              eb("item.turn_id", "<>", current?.id ?? ""),
+            ]),
+          ),
         )
         .orderBy(sql`item.payload->>'name'`)
         .orderBy("item.position", "desc")
@@ -279,9 +277,29 @@ async function keptSections(input: {
       })
       .sort((a, b) => b.item.position - a.item.position);
   // Submitted by an earlier attempt of the turn being handed off: that
-  // turn is still open, so they answer nothing settled.
-  const earlier = current ? await latestByName(true) : [];
-  const settled = await latestByName(false);
+  // turn is still open, so they answer nothing settled. Every one, newest
+  // first, not only each name's latest (ADR 0336): a restarted attempt
+  // sees each finding it already submitted, by id, and does not submit it
+  // again under another.
+  const earlier = current
+    ? (
+        await db
+          .selectFrom("agent_items as item")
+          .leftJoin("agent_turns as turn", "turn.id", "item.turn_id")
+          .select(["item.payload", "turn.ordinal"])
+          .where("item.session_id", "=", sessionId)
+          .where("item.turn_id", "=", current.id)
+          .where("item.kind", "=", "result")
+          .where("item.status", "=", "completed")
+          .orderBy("item.position", "desc")
+          .limit(EARLIER_RESULTS)
+          .execute()
+      ).flatMap((row) => {
+        const item = itemFromRow(row);
+        return item.kind === "result" ? [{ item, ordinal: row.ordinal }] : [];
+      })
+    : [];
+  const settled = await latestSettled();
   const results = [...earlier, ...settled];
   const newest = settled[0]?.item;
   const answered = [
@@ -455,6 +473,8 @@ async function keptSections(input: {
   return sections.join("\n\n");
 }
 
+/** Results of the turn being handed off it lists, newest first. */
+const EARLIER_RESULTS = 100;
 const EARLIER_HEADING =
   "Submitted by an earlier attempt of this turn, which did not finish (this turn's request is still open; submit again if they are still right):";
 const RESULTS_HEADING =

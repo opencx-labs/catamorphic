@@ -2802,6 +2802,8 @@ export class AgentSessionsService {
       turnId?: string;
       afterInput?: string;
       limit?: number;
+      /** `oldest`: the first submitted first, as a turn's first findings. */
+      order?: "newest" | "oldest";
     } = {},
   ): Promise<SessionResult[]> {
     await this.requireSession(identity, projectId, sessionId, "read");
@@ -2831,6 +2833,7 @@ export class AgentSessionsService {
       ...(input.name ? { name: input.name } : {}),
       ...(input.turnId ? { turnId: input.turnId } : {}),
       ...(afterInput ? { afterInput } : {}),
+      ...(input.order === "oldest" ? { oldestFirst: true } : {}),
       limit: Math.min(Math.max(input.limit ?? 100, 1), 100),
     });
   }

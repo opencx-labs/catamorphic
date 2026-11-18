@@ -333,6 +333,8 @@ export async function readResults(
     /** Only what this turn's attempts submitted. */
     turnId?: string;
     afterInput?: { sessionId: string; position: number; createdAt: Date };
+    /** The first submitted first, instead of the newest. */
+    oldestFirst?: boolean;
     limit: number;
   },
 ): Promise<SessionResult[]> {
@@ -376,8 +378,8 @@ export async function readResults(
         ]),
       ),
     )
-    .orderBy("item.created_at", "desc")
-    .orderBy("item.position", "desc")
+    .orderBy("item.created_at", input.oldestFirst ? "asc" : "desc")
+    .orderBy("item.position", input.oldestFirst ? "asc" : "desc")
     .limit(input.limit)
     .execute();
   const newest = await newestRequests(db, [

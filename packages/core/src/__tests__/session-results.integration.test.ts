@@ -466,6 +466,41 @@ describe("typed results", () => {
     ).toBeNull();
   });
 
+  it("hands an attempt every result its turn submitted before, not only each name's latest", async () => {
+    const project = await projects.create(identity, { name: "Every one" });
+    const session = await sessions.create(identity, project.id);
+    // Three notes under one name, as a reviewer's findings are.
+    const state = await turn(
+      project.id,
+      session.id,
+      ["first finding", "second finding", "third finding"]
+        .map((note) => tool("submit_result", { name: "notes", value: note }))
+        .join(" "),
+    );
+    const [only] = orderedTurns(state);
+    const text =
+      (
+        await buildContextHandoff({
+          db,
+          sessionId: session.id,
+          fromOrdinal: 1,
+          toOrdinal: 0,
+          strategy: "full",
+          currentTurn: { id: only?.id ?? "", ordinal: 1 },
+        })
+      )?.text ?? "";
+    // That section alone: the turn's request below it quotes every note.
+    const earlier =
+      text
+        .split(
+          "Submitted by an earlier attempt of this turn, which did not finish",
+        )[1]
+        ?.split("\n\n")[0] ?? "";
+    // Each result's value is on its own line, under the request it answers.
+    for (const note of ["first finding", "second finding", "third finding"])
+      expect(earlier).toContain(`\n  "${note}"`);
+  });
+
   it("tells a turn's next attempt what an earlier attempt of it submitted, and keeps that turn's request open", async () => {
     const project = await projects.create(identity, { name: "Earlier" });
     const session = await sessions.create(identity, project.id);
@@ -847,6 +882,68 @@ describe("typed results", () => {
     expect(await names()).toEqual(["notes"]);
     expect(await handoff()).toContain("- notes, from turn 2");
     expect(await handoff()).not.toContain("- review, from turn 1");
+  });
+
+  it("reads a turn's results oldest first, and tells workflows which turns wait to run", async () => {
+    const project = await projects.create(identity, { name: "Oldest" });
+    const session = await sessions.create(identity, project.id);
+    const state = await turn(
+      project.id,
+      session.id,
+      [1, 2, 3]
+        .map((score) =>
+          tool("submit_result", {
+            name: "review",
+            value: { verdict: "COMMENT", score },
+          }),
+        )
+        .join(" "),
+    );
+    const [settled] = orderedTurns(state);
+    const read = async (order?: "oldest") =>
+      (
+        (await actions.execute({
+          identity,
+          projectId: project.id,
+          operation: "results",
+          args: {
+            sessionId: session.id,
+            turnId: settled?.id ?? "",
+            limit: 2,
+            ...(order ? { order } : {}),
+          },
+          author: { kind: "user", externalUserId: identity.externalUserId },
+        })) as { results: Array<{ value: { score: number } }> }
+      ).results.map((result) => result.value.score);
+    expect(await read()).toEqual([3, 2]);
+    expect(await read("oldest")).toEqual([1, 2]);
+    // A turn waiting to run is named; one that settled is not.
+    const inspect = async () =>
+      (await actions.execute({
+        identity,
+        projectId: project.id,
+        operation: "inspect",
+        args: { sessionId: session.id },
+        author: { kind: "user", externalUserId: identity.externalUserId },
+      })) as { queued: string[]; turn: unknown };
+    expect(await inspect()).toMatchObject({ queued: [], turn: null });
+    const waiting = randomUUID();
+    await db
+      .insertInto("agent_turns")
+      .values({
+        id: waiting,
+        session_id: session.id,
+        ordinal: 99,
+        status: "queued",
+      })
+      .execute();
+    expect((await inspect()).queued).toEqual([waiting]);
+    await db
+      .updateTable("agent_turns")
+      .set({ status: "cancelled" })
+      .where("id", "=", waiting)
+      .execute();
+    expect((await inspect()).queued).toEqual([]);
   });
 
   it("reads what one turn submitted, whatever came after it", async () => {

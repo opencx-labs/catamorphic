@@ -67,9 +67,10 @@ export const SESSION_ACTION_SCHEMAS = {
     through: z.string().uuid().optional(),
   }),
   /**
-   * The chat's accepted results, newest first (ADR 0323). `family` adds
-   * its subsessions' results; `afterInput` (an input's message id) keeps
-   * results that answer that input or a later one.
+   * The chat's accepted results, newest first (ADR 0323), or oldest first
+   * with `order: "oldest"` (ADR 0336). `family` adds its subsessions'
+   * results; `afterInput` (an input's message id) keeps results that answer
+   * that input or a later one.
    */
   results: chat({
     ...target,
@@ -78,6 +79,7 @@ export const SESSION_ACTION_SCHEMAS = {
     turnId: z.string().uuid().optional(),
     afterInput: z.string().uuid().optional(),
     limit: z.number().int().min(1).max(100).optional(),
+    order: z.enum(["newest", "oldest"]).optional(),
   }),
   /**
    * The chat's model usage through the gateway (ADR 0329); `family` adds
@@ -223,7 +225,9 @@ export class SessionActionsService {
             });
         if (input.operation === "find") {
           const detail = open ? await read(open) : null;
-          return detail ? snapshotOf(detail) : null;
+          return detail
+            ? snapshotOf(detail, await this.queued(detail.id))
+            : null;
         }
         const key =
           "idempotencyKey" in parsed &&
@@ -284,7 +288,8 @@ export class SessionActionsService {
           throw new SessionKeyNotFoundError(keyed?.key ?? "");
         }
         const session = detail;
-        if (input.operation === "inspect") return snapshotOf(session);
+        if (input.operation === "inspect")
+          return snapshotOf(session, await this.queued(session.id));
         if (input.operation === "usage")
           return json(
             await this.sessions.usage({
@@ -351,6 +356,9 @@ export class SessionActionsService {
                 : {}),
               ...("limit" in args && typeof args.limit === "number"
                 ? { limit: args.limit }
+                : {}),
+              ...("order" in args && args.order === "oldest"
+                ? { order: "oldest" as const }
                 : {}),
             },
           );
@@ -739,6 +747,22 @@ export class SessionActionsService {
       },
     );
   }
+  /**
+   * The chat's turns waiting to run, oldest first (queued or held): with
+   * `turn`, the one at work, what a workflow needs to tell a turn still to
+   * come from one that settled or was withdrawn (ADR 0336).
+   */
+  private async queued(sessionId: string): Promise<string[]> {
+    const rows = await this.db
+      .selectFrom("agent_turns")
+      .select("id")
+      .where("session_id", "=", sessionId)
+      .where("status", "in", ["queued", "held"])
+      .orderBy("ordinal")
+      .limit(100)
+      .execute();
+    return rows.map((row) => row.id);
+  }
 }
 function actionLabel(operation: SessionActionOperation): string {
   return {
@@ -793,8 +817,12 @@ function actorIdentity(author: SessionMessageAuthor): SessionMessageAuthor {
  * copy: half of a surrogate pair and U+0000 are U+FFFD there.
  */
 /** A chat as workflows read it: its fields and its metadata (ADR 0325). */
-function snapshotOf(session: AgentSessionDetail): Json {
-  return json({ ...session, metadata: session.snapshot.session.metadata });
+function snapshotOf(session: AgentSessionDetail, queued: string[]): Json {
+  return json({
+    ...session,
+    metadata: session.snapshot.session.metadata,
+    queued,
+  });
 }
 
 export function json(value: unknown): Json {
