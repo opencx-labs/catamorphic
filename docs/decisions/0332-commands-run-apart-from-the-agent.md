@@ -52,7 +52,9 @@ variables; the machine runs the command with `docker exec` in its own
 process group, returning at most 64 MiB of output and the exit code. A
 signal, a lost connection or the budget stops the group, as root, only
 after reading its leader back by the command's own token. Claude Code's
-working-directory files come back.
+working-directory files come back. Work-given stdio MCP servers start, for
+either kind of harness, through `/bin/sh` in the harness's home with
+`NODE_OPTIONS`, `NODE_PATH` and `BUN_OPTIONS` unset, never in the checkout.
 
 - **Claude Code:** `CLAUDE_CODE_SHELL`, the `git` shim, no settings
   sources and only Work's MCP servers (native tests plant every project
