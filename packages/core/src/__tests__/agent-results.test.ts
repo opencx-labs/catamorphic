@@ -3,6 +3,7 @@ import { validateAgentDefinition } from "../services/agent-definitions-service.j
 import {
   checkResultValue,
   PATTERN_INPUT_MAX,
+  PATTERN_PROGRAM_MAX,
   ResultValidators,
   unusablePattern,
 } from "../services/agent-results.js";
@@ -62,11 +63,14 @@ describe("result schemas", () => {
   });
 
   it.each([
-    ["^(a)\\1$", /invalid escape sequence/],
+    ["^(a)\\1$", /without backreferences/],
+    ["(?<n>a)\\k<n>", /without backreferences/],
     ["(?=a)b", /unsupported Perl syntax/],
     ["(?!a)b", /unsupported Perl syntax/],
     ["(?<=a)b", /invalid named capture/],
     ["a{1001}", /invalid repeat count/],
+    ["(?:[a-z]{1000}){1000}", /invalid repeat count/],
+    ["[a-z]{999}".repeat(11), /instructions, over 10,000/],
     ["a".repeat(1_001), /over 1,000/],
   ])(
     "refuses the pattern %s, which RE2 cannot run, when the definition loads",
@@ -163,40 +167,88 @@ describe("result schemas", () => {
       );
     }
     // Bounded repeats: about 10^11 steps of backtracking on 4,001
-    // characters; here a check refuses the work before it starts.
+    // characters; here one linear match.
     const repeated = timed(
       { type: "string", pattern: "^a{0,999}a{0,999}a{0,999}a{0,999}$" },
       "a".repeat(4_001),
     );
-    expect(repeated.ms).toBeLessThan(500);
-    expect(repeated.checked).toEqual({
-      errors: [
-        {
-          path: "",
-          message:
-            "takes too long to check against the schema's patterns; send shorter text",
-        },
-      ],
-    });
-    // Many strings, each cheap alone, share one budget.
+    expect(repeated.ms).toBeLessThan(1_000);
+    expect(
+      "errors" in repeated.checked && repeated.checked.errors[0]?.message,
+    ).toMatch(/must match pattern/);
+    // A large ordinary value against a modest bounded repeat is checked
+    // whole: the budget is the time matching takes, not an estimate.
     const many = timed(
       {
         type: "array",
         items: { type: "string", pattern: "^[a-z]{0,999}$" },
       },
-      Array.from({ length: 64 }, () => "a".repeat(4_000)),
+      Array.from({ length: 64 }, () => "a".repeat(999)),
     );
+    expect(many.checked).toHaveProperty("value");
     expect(many.ms).toBeLessThan(1_000);
-    expect("errors" in many.checked && many.checked.errors[0]?.message).toMatch(
-      /too long to check/,
+  });
+
+  it("refuses at load what compiles too large, alone or together, and compiles a pattern once", () => {
+    const started = performance.now();
+    expect(unusablePattern("(?:[a-z]{1000}){1000}")).toMatch(/repeat count/);
+    expect(performance.now() - started).toBeLessThan(100);
+    const big = "[a-z]{999}".repeat(9);
+    expect(unusablePattern(big)).toBeUndefined();
+    const together = definition({
+      review: {
+        type: "object",
+        properties: Object.fromEntries(
+          [1, 2, 3, 4, 5, 6].map((n) => [
+            `f${n}`,
+            { type: "string", pattern: `${big}${n}` },
+          ]),
+        ),
+      },
+    });
+    expect("error" in together && together.error).toMatch(
+      /instructions, over 50,000/,
     );
-    // An ordinary value is checked whole.
-    expect(
-      timed(
-        { type: "array", items: { type: "string", pattern: "^[a-z]{0,999}$" } },
-        Array.from({ length: 64 }, () => "a".repeat(100)),
-      ).checked,
-    ).toHaveProperty("value");
+    expect(PATTERN_PROGRAM_MAX).toBe(10_000);
+    // A pattern compiles once, however often its definition loads.
+    const again = performance.now();
+    for (let load = 0; load < 50; load += 1) unusablePattern(big);
+    expect(performance.now() - again).toBeLessThan(20);
+  });
+
+  it("reads ECMAScript pattern syntax with RE2's meaning", () => {
+    const ok = (pattern: string, value: string) =>
+      "value" in
+      checkResultValue({ schema: { type: "string", pattern }, value });
+    expect(ok("^\\u00e9$", "é")).toBe(true);
+    expect(ok("^\\u{1F600}$", "😀")).toBe(true);
+    expect(ok("^[^]$", "\n")).toBe(true);
+    expect(ok("^\\cJ$", "\n")).toBe(true);
+    expect(ok("^\\u00e9$", "e")).toBe(false);
+  });
+
+  it("refuses text too long to match, wherever a pattern applies", () => {
+    const long = "x".repeat(PATTERN_INPUT_MAX + 1);
+    for (const [schema, value] of [
+      [{ type: "string", pattern: "x" }, long],
+      [{ not: { type: "string", pattern: "^safe$" } }, long],
+      [
+        {
+          type: "object",
+          patternProperties: { "^a": { type: "number" } },
+        },
+        { [`a${long}`]: "not a number" },
+      ],
+    ] as const)
+      expect(checkResultValue({ schema, value })).toEqual({
+        errors: [
+          {
+            path: "",
+            message:
+              "has text over 4,096 characters where a pattern applies; send shorter text",
+          },
+        ],
+      });
   });
 
   it("tries a pattern on no string longer than the cap, so one quantifier stays fast", () => {

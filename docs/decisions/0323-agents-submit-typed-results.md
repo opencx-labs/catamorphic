@@ -32,13 +32,15 @@ values in the server's process, so they run with RE2's semantics on a
 linear-time engine (re2js, through Ajv's `code.regExp`), never JavaScript's
 backtracking one. (Corrected by ADR 0336: the first version kept
 JavaScript's engine behind load-time heuristics, which missed bounded
-repeats, and Ajv applied one pattern to all of a schema's.) A pattern RE2
-cannot run (backreferences, lookaround, a repeat over 1,000) or over 1,000
-characters is refused when the definition loads, saying why. A pattern is
-never tried on a string over 4,096 characters, which does not match it, and
-one check of a value spends at most 20 million steps of pattern work
-(characters tried times the compiled program's size), about a tenth of a
-second; a value that needs more is refused with a field error saying so.
+repeats, and Ajv applied one pattern to all of a schema's.) ECMAScript
+syntax is translated first (`\uXXXX`, `[^]`, `\cX`). A pattern RE2 cannot run
+(backreferences, lookaround, a repeat over 1,000), over 1,000 characters,
+or compiling to over 10,000 instructions (50,000 for a definition's
+together) is refused when the definition loads, saying why; compiled
+patterns are cached by source. A value with text over 4,096 characters
+where a pattern applies is refused (under `not` and `patternProperties`
+too), and one check spends at most 250 ms matching; a value that needs more
+is refused with a field error saying so.
 Results name the agent's output, not its authority, so they stay outside
 the consent hash, like `skills`.
 

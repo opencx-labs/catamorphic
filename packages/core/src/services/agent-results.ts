@@ -102,39 +102,128 @@ function compileSchema(schema: JsonSchemaObject): ValidateFunction {
 const PATTERN_MAX = 1_000;
 
 /**
- * The longest string a schema's pattern is tried on; a longer one does not
- * match it.
+ * The longest string a schema's pattern is tried on. A longer one refuses
+ * the value (it fails closed, under `not` and `patternProperties` too).
  */
 export const PATTERN_INPUT_MAX = 4_096;
 
 /**
- * The pattern work one check of a value may do: the characters each
- * pattern is tried on times the size of its compiled program, which bounds
- * a linear-time match. About a tenth of a second; a value that needs more
- * is refused, and says so.
+ * The largest program one pattern may compile to, in RE2 instructions,
+ * and all of a definition's together: a match takes time linear in its
+ * input times its program, and compiling takes time in its program.
  */
-export const PATTERN_WORK_MAX = 20_000_000;
+export const PATTERN_PROGRAM_MAX = 10_000;
+export const PATTERN_PROGRAMS_MAX = 50_000;
 
-/** What the patterns of the check in progress may still spend. */
-const patternWork = { left: PATTERN_WORK_MAX, exceeded: false };
+/**
+ * The time one check of a value may spend matching patterns, in
+ * milliseconds; a check that needs more is refused, and says so. One match
+ * is at most {@link PATTERN_INPUT_MAX} characters through
+ * {@link PATTERN_PROGRAM_MAX} instructions, a fraction of a second.
+ */
+export const PATTERN_TIME_MAX = 250;
+
+/**
+ * The check of a value in progress: when it began, and why it stopped, if
+ * it did. Outside one (Ajv checking a schema against its meta-schema while
+ * it compiles) patterns run unbudgeted, on the schema's own short strings.
+ */
+const patternWork = {
+  active: false,
+  since: 0,
+  refused: null as ResultFieldError | null,
+};
+
+const TOO_LONG_TO_MATCH: ResultFieldError = {
+  path: "",
+  message: `has text over ${PATTERN_INPUT_MAX.toLocaleString("en-US")} characters where a pattern applies; send shorter text`,
+};
+const TOO_MUCH_PATTERN_WORK: ResultFieldError = {
+  path: "",
+  message:
+    "takes too long to check against the schema's patterns; send shorter text",
+};
+
+/** Compiled patterns by source, bounded: definitions load on every turn. */
+const compiledPatterns = new Map<
+  string,
+  { expression: RE2JS; size: number } | { problem: string }
+>();
+const COMPILED_PATTERNS_MAX = 1_000;
+
+/**
+ * A pattern compiled with RE2's semantics: ECMAScript syntax is translated
+ * first (`\uXXXX`, `\u{...}`, `[^]`, `\cX`), and what RE2 cannot run is
+ * refused with its reason. A backreference is refused before translating,
+ * which would otherwise read `\k<name>` as plain text.
+ */
+function compilePattern(
+  pattern: string,
+): { expression: RE2JS; size: number } | { problem: string } {
+  const known = compiledPatterns.get(pattern);
+  if (known) return known;
+  const compiled = (():
+    | { expression: RE2JS; size: number }
+    | { problem: string } => {
+    if (pattern.length > PATTERN_MAX)
+      return {
+        problem: `it is over ${PATTERN_MAX.toLocaleString("en-US")} characters`,
+      };
+    if (/\\[1-9]|\\k</.test(pattern))
+      return {
+        problem:
+          "Work matches patterns in linear time (RE2), without backreferences",
+      };
+    try {
+      const expression = RE2JS.compile(RE2JS.translateRegExp(pattern));
+      const size = expression.programSize();
+      return size > PATTERN_PROGRAM_MAX
+        ? {
+            problem: `it compiles to ${size.toLocaleString("en-US")} instructions, over ${PATTERN_PROGRAM_MAX.toLocaleString("en-US")}`,
+          }
+        : { expression, size };
+    } catch (error) {
+      const reason = error instanceof Error ? error.message : String(error);
+      return {
+        problem: `Work matches patterns in linear time (RE2), without backreferences or lookaround: ${reason}`,
+      };
+    }
+  })();
+  compiledPatterns.set(pattern, compiled);
+  for (const oldest of compiledPatterns.keys()) {
+    if (compiledPatterns.size <= COMPILED_PATTERNS_MAX) break;
+    compiledPatterns.delete(oldest);
+  }
+  return compiled;
+}
 
 /**
  * Ajv's regular expressions for result schemas (ADR 0336): RE2's, which
  * match in time linear in the input, through re2js, so an agent's value
  * cannot make a project's pattern backtrack on the server's event loop.
- * Each test spends from {@link patternWork}. Ajv keeps one per
- * `toString()`, so each says its own pattern.
+ * Each match spends from the check's time, and a string too long to match
+ * refuses the value. Ajv keeps one per `toString()`, so each says its own
+ * pattern.
  */
 const linearRegExp = Object.assign(
   (pattern: string) => {
-    const expression = RE2JS.compile(pattern);
-    const size = expression.programSize();
+    const compiled = compilePattern(pattern);
+    if ("problem" in compiled)
+      throw new Error(
+        `pattern ${JSON.stringify(pattern)}: ${compiled.problem}`,
+      );
+    const { expression } = compiled;
     return {
       test: (value: string) => {
-        if (value.length > PATTERN_INPUT_MAX) return false;
-        patternWork.left -= Math.max(1, value.length) * size;
-        if (patternWork.left < 0) {
-          patternWork.exceeded = true;
+        if (!patternWork.active)
+          return value.length <= PATTERN_INPUT_MAX && expression.test(value);
+        if (patternWork.refused) return false;
+        if (value.length > PATTERN_INPUT_MAX) {
+          patternWork.refused = TOO_LONG_TO_MATCH;
+          return false;
+        }
+        if (performance.now() - patternWork.since > PATTERN_TIME_MAX) {
+          patternWork.refused = TOO_MUCH_PATTERN_WORK;
           return false;
         }
         return expression.test(value);
@@ -148,18 +237,12 @@ const linearRegExp = Object.assign(
 /**
  * Why a pattern is refused when its definition loads, or undefined:
  * patterns run with RE2's semantics, which has no backreferences or
- * lookaround, so a pattern RE2 cannot compile is refused with its reason.
+ * lookaround, and a program over {@link PATTERN_PROGRAM_MAX} instructions
+ * is refused too.
  */
 export function unusablePattern(pattern: string): string | undefined {
-  if (pattern.length > PATTERN_MAX)
-    return `it is over ${PATTERN_MAX.toLocaleString("en-US")} characters`;
-  try {
-    RE2JS.compile(pattern);
-    return undefined;
-  } catch (error) {
-    const reason = error instanceof Error ? error.message : String(error);
-    return `Work matches patterns in linear time (RE2), without backreferences or lookaround: ${reason}`;
-  }
+  const compiled = compilePattern(pattern);
+  return "problem" in compiled ? compiled.problem : undefined;
 }
 
 /** Every regular expression a schema holds: `pattern`s and `patternProperties` keys. */
@@ -177,11 +260,15 @@ function schemaPatterns(node: unknown, found: string[] = []): string[] {
 }
 
 function schemaProblem(schema: JsonSchemaObject): string | undefined {
+  let programs = 0;
   for (const pattern of schemaPatterns(schema)) {
-    const unusable = unusablePattern(pattern);
-    if (unusable)
-      return `pattern ${JSON.stringify(pattern)} is refused: ${unusable}`;
+    const compiled = compilePattern(pattern);
+    if ("problem" in compiled)
+      return `pattern ${JSON.stringify(pattern)} is refused: ${compiled.problem}`;
+    programs += compiled.size;
   }
+  if (programs > PATTERN_PROGRAMS_MAX)
+    return `its patterns compile to ${programs.toLocaleString("en-US")} instructions, over ${PATTERN_PROGRAMS_MAX.toLocaleString("en-US")}`;
   try {
     compileSchema(schema);
     return undefined;
@@ -274,13 +361,13 @@ function checkWith(
     return { errors: [{ path: "", message: "must be a JSON value" }] };
   const value = JSON.parse(text) as JsonValue;
   if (validated(validate, value)) return { value };
-  if (patternWork.exceeded) return { errors: [TOO_MUCH_PATTERN_WORK] };
+  if (patternWork.refused) return { errors: [patternWork.refused] };
   const errors = fieldErrors(validate.errors);
   if (typeof value !== "string") return { errors };
   const decoded = decodeOnce(value);
   if (decoded === undefined || typeof decoded === "string") return { errors };
   if (validated(validate, decoded)) return { value: decoded };
-  if (patternWork.exceeded) return { errors: [TOO_MUCH_PATTERN_WORK] };
+  if (patternWork.refused) return { errors: [patternWork.refused] };
   // It was the right kind of value sent as text: say so, and what to fix in it.
   return {
     errors: [
@@ -294,17 +381,16 @@ function checkWith(
   };
 }
 
-const TOO_MUCH_PATTERN_WORK: ResultFieldError = {
-  path: "",
-  message:
-    "takes too long to check against the schema's patterns; send shorter text",
-};
-
-/** One check of a value, with its own budget of pattern work. */
+/** One check of a value, with its own time for patterns. */
 function validated(validate: ValidateFunction, value: JsonValue): boolean {
-  patternWork.left = PATTERN_WORK_MAX;
-  patternWork.exceeded = false;
-  return validate(value) && !patternWork.exceeded;
+  patternWork.active = true;
+  patternWork.since = performance.now();
+  patternWork.refused = null;
+  try {
+    return validate(value) && !patternWork.refused;
+  } finally {
+    patternWork.active = false;
+  }
 }
 
 function decodeOnce(text: string): JsonValue | undefined {
