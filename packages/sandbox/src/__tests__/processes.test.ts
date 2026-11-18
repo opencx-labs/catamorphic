@@ -118,6 +118,42 @@ describe("shellSandboxProcesses", () => {
     }
   }, 20_000);
 
+  it("reads as running while setsid has not yet made its process group", async () => {
+    // A `setsid` slow to start its session: until it runs, the child has no
+    // group of its own, which a busy machine shows right after the start.
+    const bin = path.join(root, "slow-setsid-bin");
+    fs.mkdirSync(bin, { recursive: true });
+    fs.writeFileSync(
+      path.join(bin, "setsid"),
+      [
+        "#!/bin/bash",
+        "sleep 0.5",
+        'exec perl -MPOSIX -e \'POSIX::setsid() or die "setsid: $!"; exec @ARGV or die "exec: $!"\' -- "$@"',
+      ].join("\n"),
+      { mode: 0o755 },
+    );
+    const slow = shellSandboxProcesses({
+      executeCommand: (id, command, opts) =>
+        hostExecute(id, `export PATH=${bin}:"$PATH"; ${command}`, opts),
+      workspaceRoot: root,
+      stateDirectory: path.join(root, "slow-state"),
+    });
+    const started = await slow.startProcess({
+      sandboxId,
+      command: "sleep 30",
+      name: "Slow group",
+    });
+    try {
+      expect(started).toMatchObject({ status: "running", name: "Slow group" });
+    } finally {
+      await slow.signalProcess({
+        sandboxId,
+        processId: started.processId,
+        signal: "SIGKILL",
+      });
+    }
+  }, 20_000);
+
   it("waits for a line, then stops the whole process group", async () => {
     const pidFile = path.join(root, "grandchild.pid");
     const started = await processes.startProcess({

@@ -489,7 +489,13 @@ export function shellSandboxProcesses(args: {
           "  set -m",
           '  bash "$dir/run.sh" >/dev/null 2>&1 < /dev/null &',
           "fi",
-          'printf %s "$!" > "$dir/pid"',
+          "pid=$!",
+          // The child has a group of its own only once setsid has run in
+          // it: a state read before then would call a live process
+          // exited. Wait for the group, or for an exit that came first.
+          "tries=0",
+          'while ! kill -0 -- "-$pid" 2>/dev/null && [ ! -f "$dir/exit" ] && [ "$tries" -lt 500 ]; do sleep 0.01; tries=$((tries + 1)); done',
+          'printf %s "$pid" > "$dir/pid"',
         ].join("\n"),
       );
       return one(start.sandboxId, processId);
