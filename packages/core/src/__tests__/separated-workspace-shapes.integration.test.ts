@@ -26,6 +26,7 @@ import type { Identity } from "../identity.js";
 import {
   AgentDelegationSettingsError,
   AgentSessionsService,
+  AgentTurnUnsettledError,
 } from "../services/agent-sessions-service.js";
 import type { RegisteredCodingAgent } from "../services/coding-agent-registry.js";
 import { ConnectionAdmissionService } from "../services/connection-admission.js";
@@ -188,6 +189,14 @@ describe("a separated sandbox's shape follows its chat's harness (ADR 0332)", ()
               workloads: ["agent"],
               commands: { separate: true },
             },
+            // Its machines all busy: chats wait for one (ADR 0258).
+            busy: {
+              workloads: ["agent"],
+              commands: { separate: true },
+              pool: { lane: "busy" },
+              waitMinutes: 30,
+              requirements: { resources: { cpuMillis: 2000, memoryMb: 4096 } },
+            },
           },
           defaultEnvironment: "review",
         }),
@@ -251,10 +260,12 @@ describe("a separated sandbox's shape follows its chat's harness (ADR 0332)", ()
       executionEnvironments: new ExecutionEnvironmentsService(
         new ProjectEnvironmentsService(db, projectManager),
         {
-          get: ({ allocationBindingId }) =>
-            !allocationBindingId || allocationBindingId === "machine"
-              ? binding
-              : undefined,
+          get: ({ allocationBindingId, pool }) =>
+            pool.lane === "busy"
+              ? undefined
+              : !allocationBindingId || allocationBindingId === "machine"
+                ? binding
+                : undefined,
         },
       ),
       executionAllocations: allocations,
@@ -320,6 +331,43 @@ describe("a separated sandbox's shape follows its chat's harness (ADR 0332)", ()
       (await allocationOf(own.session.id)).separate?.agentResources,
     ).toBeDefined();
   });
+
+  it("waits for a machine sized for the agent container only when the chat's harness runs in the sandbox", async () => {
+    const waitOf = async (agentId: string) => {
+      const chat = await sessions.create(identity, projectId, {
+        agentId,
+        environment: "busy",
+      });
+      expect(chat.allocationId).toBeNull();
+      // Its message waits for a machine, which sending says.
+      await sessions
+        .sendMessage(identity, projectId, chat.id, "hello")
+        .catch((error: unknown) => {
+          if (!(error instanceof AgentTurnUnsettledError)) throw error;
+        });
+      let row: { requirements: unknown } | undefined;
+      await until("its wait is recorded", async () => {
+        row = await db
+          .selectFrom("placement_waits")
+          .select("requirements")
+          .where("root_workload_id", "=", chat.id)
+          .executeTakeFirst();
+        return Boolean(row);
+      });
+      return (row?.requirements as { resources?: unknown }).resources;
+    };
+    agents.set("reviewer", builtin("reviewer"));
+    // The built-in agent's workspace is the command container alone.
+    expect(await waitOf("reviewer")).toEqual({
+      cpuMillis: 2000,
+      memoryMb: 4096,
+    });
+    // A harness in the sandbox adds its container's share (1 CPU, 2 GiB).
+    expect(await waitOf("coder")).toEqual({
+      cpuMillis: 3000,
+      memoryMb: 6144,
+    });
+  }, 120_000);
 
   it("gives a chat whose agent now runs in the sandbox a workspace with an agent container at its next turn", async () => {
     agents.set("reviewer", builtin("reviewer"));

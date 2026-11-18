@@ -902,6 +902,7 @@ export class ExecutionEnvironmentsService {
           requirements: waitRequirements({
             requirements: effectiveRequirements,
             definition,
+            ...(args.harnessInSandbox ? { harnessInSandbox: true } : {}),
           }),
           waitMinutes: definition.waitMinutes ?? 0,
         },
@@ -1040,17 +1041,20 @@ export function separateAgentResources(
 }
 
 /**
- * The part of a workload's needs that sizes a machine: with commands apart,
- * the agent container's share on top (ADR 0332).
+ * The part of a workload's needs that sizes a machine: with commands apart
+ * and a harness in the sandbox, the agent container's share on top (ADR
+ * 0332). A harness outside it (the built-in agent) has no agent container.
  */
 function waitRequirements(input: {
   requirements: EnvironmentRequirements;
   definition: ProjectEnvironmentDefinition;
+  harnessInSandbox?: boolean;
 }): PlacementWaitTarget["requirements"] {
   const { requirements } = input;
-  const agent = input.definition.commands?.separate
-    ? separateAgentResources(input.definition)
-    : undefined;
+  const agent =
+    input.definition.commands?.separate && input.harnessInSandbox
+      ? separateAgentResources(input.definition)
+      : undefined;
   const own = requirements.resources ?? {};
   const cpuMillis = agent
     ? (own.cpuMillis ?? 0) + agent.cpuMillis
@@ -1080,6 +1084,7 @@ function waitTargetOf(args: {
   owner?: PlacementOwner;
   requirements: EnvironmentRequirements;
   signIn?: SignInHarness;
+  harnessInSandbox?: boolean;
   name: string;
   definition: ProjectEnvironmentDefinition;
   reason: PlacementWaitReason;
@@ -1095,6 +1100,7 @@ function waitTargetOf(args: {
       requirements: waitRequirements({
         requirements: effectiveRequirementsOf({ ...args, owner }),
         definition: args.definition,
+        ...(args.harnessInSandbox ? { harnessInSandbox: true } : {}),
       }),
       waitMinutes: args.definition.waitMinutes ?? 0,
     },
