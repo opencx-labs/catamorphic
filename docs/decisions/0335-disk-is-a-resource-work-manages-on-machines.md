@@ -97,7 +97,9 @@ conditional update), and ends it when free space is back above 1.1 times
 the floor. A machine of a `workflow` class (ADR 0327) then records the
 project event `machine.disk-low` (source `machines`) with its name, class,
 rule, ref and the report, once per episode, so a workflow can replace or
-grow it. Only Work's own measurement starts an episode. Policy stays in
+grow it. A recording that fails is tried again on each later report of
+the episode until it lands; the event's id names the episode, so it is
+recorded once. Only Work's own measurement starts an episode. Policy stays in
 the project: the `machines-ec2` recipe documents root volume sizes and
 ships an optional workflow that terminates a machine on `machine.disk-low`,
 which Work then replaces on demand.

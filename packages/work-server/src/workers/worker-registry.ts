@@ -430,33 +430,44 @@ export class WorkWorkerRegistry {
       lease: { id: args.nodeId, token: args.session },
       disk: args.disk,
     });
-    if (episode.state !== "started") return;
+    // Every report in an episode whose event is not recorded tries again;
+    // the event names its episode, so it is never recorded twice.
+    if (
+      (episode.state !== "started" && episode.state !== "ongoing") ||
+      !episode.unrecorded
+    )
+      return;
     const worker = await this.deps.db
       .selectFrom("work_workers")
       .select(["name", "machine_rule", "machine_ref", "labels"])
       .where("node_id", "=", args.nodeId)
       .executeTakeFirst();
     if (!worker) return;
-    this.deps.log?.(
-      `Worker ${worker.name} is short of disk: ${describeDisk(args.disk)}`,
-    );
+    if (episode.state === "started")
+      this.deps.log?.(
+        `Worker ${worker.name} is short of disk: ${describeDisk(args.disk)}`,
+      );
     const labels = NodeLabelsSchema.safeParse(worker.labels);
-    await this.deps
-      .diskLow?.({
+    try {
+      await this.deps.diskLow?.({
         name: worker.name,
         rule: worker.machine_rule,
         ref: worker.machine_ref,
         class: labels.success ? (labels.data.class ?? null) : null,
         disk: args.disk,
         since: episode.since,
-      })
-      .catch((error: unknown) =>
-        this.deps.log?.(
-          `Machine ${worker.name} is short of disk, and recording it failed: ${
-            error instanceof Error ? error.message : String(error)
-          }`,
-        ),
+      });
+      await this.deps.nodes.diskLowRecorded({
+        nodeId: args.nodeId,
+        since: episode.since,
+      });
+    } catch (error) {
+      this.deps.log?.(
+        `Machine ${worker.name} is short of disk, and recording it failed (tried again on its next report): ${
+          error instanceof Error ? error.message : String(error)
+        }`,
       );
+    }
   }
 
   /**
@@ -678,7 +689,12 @@ export class WorkWorkerRegistry {
       // new machine: nothing of the old one's disk (ADR 0335).
       await trx
         .updateTable("worker_nodes")
-        .set({ enabled: true, disk: null, disk_low_at: null })
+        .set({
+          enabled: true,
+          disk: null,
+          disk_low_at: null,
+          disk_low_recorded_at: null,
+        })
         .where("id", "=", nodeId)
         .where("tenant_id", "=", this.deps.tenantId)
         .execute();

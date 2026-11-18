@@ -1277,6 +1277,7 @@ export interface WorkerNodes {
   descriptor: Json;
   disk: Json | null;
   disk_low_at: Timestamp | null;
+  disk_low_recorded_at: Timestamp | null;
   disposable: Generated<boolean>;
   enabled: Generated<boolean>;
   id: string;

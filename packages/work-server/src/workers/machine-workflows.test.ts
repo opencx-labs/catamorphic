@@ -103,7 +103,21 @@ class FakeWorkflows implements MachineWorkflows {
     });
   }
 
+  /** Recordings that fail before one lands. */
+  failRecords = 0;
+
   async record(args: Parameters<MachineWorkflows["record"]>[0]) {
+    if (this.failRecords > 0) {
+      this.failRecords -= 1;
+      throw new Error("The project's event log did not answer");
+    }
+    // As the project's event log: one event per external id.
+    if (
+      this.events.some(
+        (event) => event.event.externalId === args.event.externalId,
+      )
+    )
+      return;
     this.events.push(args);
   }
 
@@ -713,6 +727,10 @@ describe("workflow machine classes (ADR 0327)", () => {
         (event) => event.event.kind === "machine.disk-low",
       );
     await workers.renew({ nodeId, session, disk: disk(50e9) });
+    expect(lowEvents()).toEqual([]);
+    // The first recording fails: the next report in the episode records it.
+    workflows.failRecords = 1;
+    await workers.renew({ nodeId, session, disk: disk(4e9) });
     expect(lowEvents()).toEqual([]);
     // Every replica hears its renewals; the episode is told once.
     await Promise.all(

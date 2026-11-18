@@ -1610,7 +1610,9 @@ export class MachineReconciler {
     const machineClass = args.class ? this.classOf(args.class) : undefined;
     if (machineClass?.platform !== "workflow" || !args.class || !args.rule)
       return;
+    // A failure throws, so the episode's next report tries again.
     await this.recordFor({
+      rethrow: true,
       kind: "machine.disk-low",
       project: machineClass.project,
       name: args.name,
@@ -1633,6 +1635,7 @@ export class MachineReconciler {
     disk?: MachineDisk;
     episode?: Date;
     options?: JsonObject;
+    rethrow?: boolean;
   }): Promise<void> {
     try {
       await this.deps.workflows?.record({
@@ -1656,6 +1659,7 @@ export class MachineReconciler {
         },
       });
     } catch (error) {
+      if (args.rethrow) throw error;
       this.deps.log?.(
         `Recording ${args.kind} for machine ${args.name} failed: ${message(error)}`,
       );

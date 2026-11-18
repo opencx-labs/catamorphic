@@ -105,7 +105,12 @@ export interface WorkerNode {
  * heard it), `ongoing`, `ended` by this report, or `none`.
  */
 export type DiskEpisode =
-  | { state: "started" | "ongoing"; since: Date }
+  | {
+      state: "started" | "ongoing";
+      since: Date;
+      /** Its event is not recorded yet: record it, then say so. */
+      unrecorded: boolean;
+    }
   | { state: "ended" | "none" };
 
 /** Every node lease lasts this long unless renewed (the SQL's 45 seconds). */
@@ -466,7 +471,7 @@ export class WorkerNodesService {
     return this.db.transaction().execute(async (trx) => {
       const row = await trx
         .selectFrom("worker_nodes")
-        .select("disk_low_at")
+        .select(["disk_low_at", "disk_low_recorded_at"])
         .where("id", "=", args.lease.id)
         .where("lease_token", "=", args.lease.token)
         .forUpdate()
@@ -490,10 +495,26 @@ export class WorkerNodesService {
         })
         .where("id", "=", args.lease.id)
         .execute();
-      if (since && !before) return { state: "started", since };
-      if (since) return { state: "ongoing", since };
+      const unrecorded =
+        since !== null &&
+        row.disk_low_recorded_at?.getTime() !== since.getTime();
+      if (since && !before) return { state: "started", since, unrecorded };
+      if (since) return { state: "ongoing", since, unrecorded };
       return { state: before ? "ended" : "none" };
     });
+  }
+
+  /**
+   * The event of the episode that began at `since` is recorded (ADR 0335):
+   * later reports in it record nothing more.
+   */
+  async diskLowRecorded(args: { nodeId: string; since: Date }): Promise<void> {
+    await this.db
+      .updateTable("worker_nodes")
+      .set({ disk_low_recorded_at: args.since })
+      .where("id", "=", args.nodeId)
+      .where("disk_low_at", "=", args.since)
+      .execute();
   }
 
   async renew(args: { lease: WorkerNodeLease }): Promise<boolean> {
