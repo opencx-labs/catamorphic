@@ -162,7 +162,12 @@ function stateOf(row: FillRow): CacheFillState {
  * dispatch pass runs on each machine, eviction, and their state.
  */
 export class CacheFillsService {
-  /** Fills this process runs, so a host (or a test) can wait for them. */
+  /**
+   * Fills this process runs, so a host (or a test) can wait for them.
+   * Replica memory (a): each is a fill this replica claimed through its
+   * renewed Postgres claim; if the replica dies the claim lapses and another
+   * replica retries the fill.
+   */
   private readonly running = new Set<Promise<void>>();
 
   constructor(
