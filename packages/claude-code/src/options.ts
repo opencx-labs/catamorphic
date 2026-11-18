@@ -17,7 +17,11 @@ import type {
   AttemptStart,
   McpServerSpec,
 } from "@catamorphic/agent-protocol/runner";
-import { type LoopbackModel, MODEL_GRANT_READER } from "@catamorphic/sandbox";
+import {
+  homeStartedCommand,
+  type LoopbackModel,
+  MODEL_GRANT_READER,
+} from "@catamorphic/sandbox";
 import { hostToolServer } from "./host-tools.js";
 
 /**
@@ -441,14 +445,21 @@ function routesToAnthropic(baseUrl: string | undefined): boolean {
   }
 }
 
-function mapMcpServer(spec: McpServerSpec): McpServerConfig {
+function mapMcpServer(spec: McpServerSpec, home?: string): McpServerConfig {
   if (spec.transport === "stdio")
-    return {
-      type: "stdio",
-      command: spec.command,
-      ...(spec.args ? { args: spec.args } : {}),
-      ...(spec.env ? { env: spec.env } : {}),
-    };
+    return home
+      ? {
+          // Started in the harness's home, not the checkout (ADR 0332).
+          type: "stdio",
+          ...homeStartedCommand({ ...spec, home }),
+          ...(spec.env ? { env: spec.env } : {}),
+        }
+      : {
+          type: "stdio",
+          command: spec.command,
+          ...(spec.args ? { args: spec.args } : {}),
+          ...(spec.env ? { env: spec.env } : {}),
+        };
   return {
     type: spec.transport,
     url: spec.url,
@@ -589,7 +600,7 @@ export function buildQueryOptions(input: QueryOptionInputs): Options {
   ];
   const external: Record<string, McpServerConfig> = {};
   for (const [name, spec] of Object.entries(attempt.mcpServers))
-    external[name] = mapMcpServer(spec);
+    external[name] = mapMcpServer(spec, attempt.commands?.harness?.home);
 
   const host = access.kind === "host";
   const separate = commandShellPaths(attempt);

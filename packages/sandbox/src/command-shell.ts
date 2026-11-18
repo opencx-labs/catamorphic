@@ -263,3 +263,28 @@ export async function writeCommandShell(input: {
 function quote(value: string): string {
   return `'${value.replaceAll("'", `'\\''`)}'`;
 }
+
+/**
+ * A stdio MCP server's command as a harness of its own user starts it
+ * (ADR 0332): in that user's home, never the checkout, where a launcher
+ * (`npx`, `bunx`, `uvx`) would resolve the pull request's
+ * `node_modules/.bin`, `.npmrc`, `bunfig.toml` or `uv.toml`; and without
+ * the variables that load code into Node or Bun.
+ */
+export function homeStartedCommand(input: {
+  command: string;
+  args?: readonly string[];
+  home: string;
+}): { command: string; args: string[] } {
+  return {
+    command: "/bin/sh",
+    args: [
+      "-c",
+      'cd "$1" || exit 126; shift; unset NODE_OPTIONS NODE_PATH BUN_OPTIONS; exec "$@"',
+      "work-mcp",
+      input.home,
+      input.command,
+      ...(input.args ?? []),
+    ],
+  };
+}

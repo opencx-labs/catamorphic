@@ -231,6 +231,68 @@ describe("ACP agents whose commands run apart (ADR 0332)", () => {
     expect(fs.existsSync(path.join(space.dir, "commands"))).toBe(false);
   });
 
+  it("starts a harness's stdio MCP servers in its home, not the checkout", async () => {
+    const space = workspace();
+    const home = path.join(space.dir, "harness-home");
+    fs.mkdirSync(home);
+    // What the pull request plants for a launcher such as npx.
+    fs.mkdirSync(path.join(space.dir, "node_modules", ".bin"), {
+      recursive: true,
+    });
+    fs.writeFileSync(
+      path.join(space.dir, "node_modules", ".bin", "planted"),
+      "",
+    );
+    fs.writeFileSync(path.join(space.dir, ".npmrc"), "planted=1\n");
+    const harness = {
+      uid: process.getuid?.() ?? 0,
+      gid: process.getgid?.() ?? 0,
+      home,
+      temporary: path.join(space.dir, "harness-tmp"),
+      shim: "/workspace/.work-shim",
+      media: path.join(space.dir, "harness-media"),
+      config: path.join(space.dir, "harness-config"),
+    };
+    const turn = run(
+      attempt(space, "[[harness]]", {
+        commands: { ...commands, harness },
+        mcpServers: {
+          probe: {
+            transport: "stdio",
+            command: "sh",
+            args: [
+              "-c",
+              'pwd; [ -e node_modules/.bin/planted ] && echo planted-bin; [ -e .npmrc ] && echo npmrc; echo "[$NODE_OPTIONS]"',
+            ],
+          },
+          remote: { transport: "http", url: "http://127.0.0.1:9/mcp" },
+        },
+        options: {
+          command: [process.execPath, AGENT],
+          shell: true,
+          projectConfig: false,
+        },
+      }),
+    );
+    await turn.finished();
+    expect(turn.completed()).toMatchObject({ status: "completed" });
+    const [session] = Object.values(space.state().sessions);
+    const probe = session?.mcpServers.find((server) => server.name === "probe");
+    const spec = probe as { command?: string; args?: string[] } | undefined;
+    if (!spec?.command) throw new Error("The agent got no stdio server");
+    // Started as the agent would, from its session's folder, the checkout.
+    const started = spawnSync(spec.command, spec.args ?? [], {
+      cwd: space.dir,
+      env: { ...process.env, NODE_OPTIONS: "--no-warnings" },
+      encoding: "utf8",
+    });
+    expect(started.stdout).toBe(`${home}\n[]\n`);
+    // An HTTP server is the agent's to reach, as it was.
+    expect(
+      session?.mcpServers.find((server) => server.name === "remote"),
+    ).toMatchObject({ url: "http://127.0.0.1:9/mcp" });
+  });
+
   it("refuses the review pack's OpenCode, which loads plugins from the checkout", async () => {
     const space = workspace();
     const definition = JSON.parse(

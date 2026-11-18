@@ -485,6 +485,15 @@ it("starts a harness of its own user on the loopback model, loading nothing from
     runtime: process.execPath,
     returnFolder: harness.temporary,
   });
+  const serverStarted = path.join(root, "server-started");
+  await mkdir(path.join(directories.here.cwd, "node_modules", ".bin"), {
+    recursive: true,
+  });
+  await writeFile(
+    path.join(directories.here.cwd, "node_modules", ".bin", "planted"),
+    "",
+  );
+  await writeFile(path.join(directories.here.cwd, ".npmrc"), "planted=1\n");
   // The pinned CLI behind a wrapper that records how it was started.
   const started = path.join(root, "started.json");
   const wrapper = path.join(root, "claude-wrapper");
@@ -527,6 +536,17 @@ it("starts a harness of its own user on the loopback model, loading nothing from
             env: { ...start.env, CLAUDE_CONFIG_DIR: directories.here.home },
             options: { ...start.options, command: wrapper },
             commands: { socket: side.socket, harness },
+            // A Work-given stdio server, which records where it started.
+            mcpServers: {
+              probe: {
+                transport: "stdio",
+                command: "sh",
+                args: [
+                  "-c",
+                  `{ pwd; [ -e node_modules/.bin/planted ] && echo planted-bin; [ -e .npmrc ] && echo npmrc; } > '${serverStarted}'`,
+                ],
+              },
+            },
           };
         },
       },
@@ -584,6 +604,10 @@ it("starts a harness of its own user on the loopback model, loading nothing from
     expect(seen).not.toContain("PLANTED-SKILL");
     expect(seen).not.toContain("planted-skill");
     expect(fs.existsSync(marker)).toBe(false);
+    // Its stdio server started in its home, not the checkout, so what the
+    // pull request planted for a launcher there (npx's node_modules/.bin,
+    // .npmrc) is not in reach.
+    expect(fs.readFileSync(serverStarted, "utf8")).toBe(`${harness.home}\n`);
   } finally {
     await model.close();
     await side.close();
