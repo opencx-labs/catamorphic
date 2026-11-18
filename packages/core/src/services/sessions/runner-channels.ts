@@ -450,10 +450,13 @@ export function sandboxChannel(input: {
           partialBytes = 0;
         }
         if (output.status === "exited" && !output.more) {
-          // The last line has no newline, and never will.
+          // The last line has no newline, and never will. A runner stopped
+          // mid-line (a restart kills it) may have stopped inside a secret
+          // no mask then matches: the line is left out whole (ADR 0333). A
+          // frame always ends with its newline, so none is lost.
           if (skipped !== undefined) diagnostics.push(skippedLine(skipped));
           skipped = undefined;
-          if (partialBytes > 0) take(partial.join(""));
+          if (partialBytes > 0) diagnostics.push(unfinishedLine(partialBytes));
           partial = [];
           partialBytes = 0;
           break;
@@ -503,7 +506,9 @@ export function sandboxChannel(input: {
       await provider
         .executeCommand(
           location.sandboxId,
-          `kill -KILL ${valid.map((group) => `-- -${group}`).join(" ")} 2>/dev/null; true`,
+          // POSIX's form, one `--`, then every group: dash refuses
+          // `-KILL --`, and stops at a second `--`.
+          `kill -s KILL -- ${valid.map((group) => `-${group}`).join(" ")} 2>/dev/null; true`,
           { side: "agent" },
         )
         .catch(() => {});
@@ -527,6 +532,10 @@ export function diagnostic(line: string): string {
   return line.length > DIAGNOSTIC_CHARS
     ? `[A ${line.length}-character line of output was left out]`
     : line;
+}
+
+function unfinishedLine(bytes: number): string {
+  return `[An unfinished ${bytes}-byte line of output was left out]`;
 }
 
 function skippedLine(bytes: number): string {

@@ -1,4 +1,5 @@
-import { spawn } from "node:child_process";
+import { execFileSync, spawn } from "node:child_process";
+import { existsSync } from "node:fs";
 import type { SandboxProvider } from "@catamorphic/sandbox";
 import { describe, expect, it } from "vitest";
 import {
@@ -117,7 +118,7 @@ describe("endRunner", () => {
     // Its harness's own groups, inside the sandbox; nothing a harness could
     // not have reported.
     await channel.killGroups([4242, 77, 1, -3, 2.5]);
-    expect(commands).toEqual(["kill -KILL -- -4242 -- -77 2>/dev/null; true"]);
+    expect(commands).toEqual(["kill -s KILL -- -4242 -77 2>/dev/null; true"]);
   });
 
   it("kills a harness's groups beside the runner, never in the command container of a sandbox that runs commands apart", async () => {
@@ -125,8 +126,8 @@ describe("endRunner", () => {
     // names the harness's agent beside the runner and an unrelated command
     // of the pull request's.
     const groups = {
-      agent: new Set([42]),
-      commands: new Set([42]),
+      agent: new Set([42, 77]),
+      commands: new Set([42, 77]),
     };
     const provider = {
       processes: { signalProcess: async () => {} },
@@ -136,7 +137,10 @@ describe("endRunner", () => {
         opts?: { side?: "agent" | "commands" },
       ) => {
         const side = groups[opts?.side ?? "commands"];
-        for (const [, group] of command.matchAll(/-- -(\d+)/g))
+        // Every group named after the kill's `--`.
+        for (const [, group] of (command.split(" -- ")[1] ?? "").matchAll(
+          /(?:^|\s)-(\d+)/g,
+        ))
           side.delete(Number(group));
         return { exitCode: 0, result: "" };
       },
@@ -150,10 +154,84 @@ describe("endRunner", () => {
         processId: "proc-agent-runner",
       } as Parameters<typeof sandboxChannel>[0]["location"],
     });
-    await channel.killGroups([42]);
-    expect(groups.agent.has(42)).toBe(false);
-    expect(groups.commands.has(42)).toBe(true);
+    await channel.killGroups([42, 77]);
+    expect([...groups.agent]).toEqual([]);
+    expect([...groups.commands]).toEqual([42, 77]);
   });
+});
+
+it("kills every reported group with one command, under dash as under bash (ADR 0333)", async () => {
+  const shells = ["/bin/sh", "/bin/dash", "/bin/bash"].filter((shell) =>
+    existsSync(shell),
+  );
+  expect(shells.length).toBeGreaterThan(0);
+  for (const shell of shells) {
+    // Two agents, each in a group of its own.
+    const agents = [0, 1].map(() =>
+      spawn("sleep", ["300"], { detached: true, stdio: "ignore" }),
+    );
+    const groups = agents.map((agent) => agent.pid ?? 0);
+    const gone = agents.map(
+      (agent) => new Promise((resolve) => agent.once("exit", resolve)),
+    );
+    let command = "";
+    const channel = sandboxChannel({
+      provider: {
+        processes: { signalProcess: async () => {} },
+        executeCommand: async (_sandboxId: string, line: string) => {
+          command = line;
+          return { exitCode: 0, stdout: "", stderr: "" };
+        },
+      } as unknown as SandboxProvider,
+      location: {
+        kind: "sandbox_process",
+        allocationId: "allocation",
+        sandboxId: "sandbox",
+        processId: "runner",
+      },
+    });
+    await channel.killGroups(groups);
+    // The sandbox runs it with its shell: here, each one in turn.
+    execFileSync(shell, ["-c", command]);
+    await Promise.all(gone);
+    for (const group of groups)
+      expect(() => process.kill(-group, 0), `${shell} ${group}`).toThrow();
+  }
+}, 15_000);
+
+it("leaves out the unfinished last line of a runner that exited mid-line, as a restart kills it", async () => {
+  const secret = "sk-live-0123456789abcdef";
+  const output = `a warning\nretrying with ${secret.slice(0, 10)}`;
+  const channel = sandboxChannel({
+    provider: {
+      processes: {
+        readProcessOutput: async ({ cursor }: { cursor?: number }) => ({
+          processId: "runner",
+          chunk: (cursor ?? 0) === 0 ? output : "",
+          cursor: cursor ?? 0,
+          nextCursor: Buffer.byteLength(output),
+          more: false,
+          outputBytes: Buffer.byteLength(output),
+          status: "exited",
+          exitCode: null,
+          signal: "SIGKILL",
+        }),
+      },
+    } as unknown as SandboxProvider,
+    location: {
+      kind: "sandbox_process",
+      allocationId: "allocation",
+      sandboxId: "sandbox",
+      processId: "runner",
+    },
+  });
+  const read = await channel.read({ cursor: 0, waitMs: 0 });
+  expect(read.exited).toBe(true);
+  expect(read.diagnostics).toEqual([
+    "a warning",
+    "[An unfinished 24-byte line of output was left out]",
+  ]);
+  expect(read.diagnostics.join("\n")).not.toContain("sk-live");
 });
 
 it("keeps a runner's line whole or leaves it out, never part of one", () => {

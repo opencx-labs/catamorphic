@@ -69,7 +69,15 @@ A harness that starts a process in a group of its own (the ACP adapter's
 agent) reports it as a `process.group` runner event, recorded on the
 attempt; those groups are killed too, after the runner exits or with its
 group, and once more after a final 5 seconds if it was never seen to exit,
-so nothing of the old attempt runs beside the next, which starts only then. A holder that
+so nothing of the old attempt runs beside the next, which starts only then.
+A group id is a process id the system may reuse once its group ended. In a
+sandbox of its own the only processes are the chat's; on hosts that run
+harnesses beside other processes (local-process, in-process runners on the
+desktop), a group that ended on its own could, in the seconds before the
+kill, have had its number reused by an unrelated process group, which the
+kill would then end. The window is the restart's few seconds, and reuse of a
+just-freed number is rare; it is accepted rather than tracking each group's
+start time. A holder that
 finds the runner already gone (taken over, or exited) carries out a pending
 restart instead of losing the attempt. The same turn then
 runs a new attempt with reason `restart`, bound as every attempt is (ADR
