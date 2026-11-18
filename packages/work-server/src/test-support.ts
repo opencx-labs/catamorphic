@@ -19,7 +19,8 @@ import {
   type DirectoryProvider,
   DirectoryUnavailableError,
 } from "./identity/directory.js";
-import type { WorkServerOptions } from "./server.js";
+import type { WorkServer, WorkServerOptions } from "./server.js";
+import { startWorkWorker } from "./workers/worker-runtime.js";
 
 /**
  * A directory (ADR 0161) governing Better Auth's local "credential"
@@ -401,4 +402,80 @@ export function registryPack(name: string): Record<string, string> {
   return Object.fromEntries(
     item.files.map((file) => [file.target ?? file.path, file.content]),
   );
+}
+
+/**
+ * A machine enrolled the way an operator enrolls one (ADR 0164): the
+ * operator route mints a one-time code for its name, labels and access, the
+ * worker connects with it from its own data directory and offers what its
+ * sandbox backend can do, and this resolves once the control plane lists
+ * the machine as available. A worker the control plane refuses (an offer it
+ * rejects, a code it does not know) fails this with the worker's own log.
+ */
+export async function enrollMachine(input: {
+  server: WorkServer;
+  /** The control plane's `operator-secret` (in its data directory). */
+  operatorSecret: string;
+  /** The control plane's address the worker calls: HTTPS, or loopback. */
+  controlPlaneUrl: string;
+  name: string;
+  labels: Record<string, string>;
+  access: { projects: string[] } | { everyone: true };
+  dataDir: string;
+  execution: WorkExecutionSettings;
+  timeoutMs?: number;
+}): Promise<{
+  nodeId: string;
+  /** What the worker logged, oldest first. */
+  log: string[];
+  stop(): Promise<void>;
+}> {
+  const operator = async (
+    method: "GET" | "POST",
+    url: string,
+    body?: unknown,
+  ) =>
+    input.server.operatorApp.inject({
+      method,
+      url,
+      headers: {
+        authorization: `Bearer ${input.operatorSecret}`,
+        ...(body ? { "content-type": "application/json" } : {}),
+      },
+      ...(body ? { payload: JSON.stringify(body) } : {}),
+    });
+  const enrollment = await operator("POST", "/_work/operator/workers", {
+    name: input.name,
+    labels: input.labels,
+    access: input.access,
+    trusted: true,
+  });
+  if (enrollment.statusCode !== 201)
+    throw new Error(
+      `Enrolling ${input.name} failed (${enrollment.statusCode}): ${enrollment.body}`,
+    );
+  const log: string[] = [];
+  const worker = await startWorkWorker({
+    controlPlaneUrl: input.controlPlaneUrl,
+    dataDir: input.dataDir,
+    enrollmentCode: enrollment.json().code,
+    execution: input.execution,
+    log: (line) => log.push(line),
+  });
+  const machineId = `worker.${input.name}`;
+  const deadline = Date.now() + (input.timeoutMs ?? 120_000);
+  for (;;) {
+    const listed = (await operator("GET", "/_work/operator/machines")).json();
+    const machine = (
+      listed.machines as Array<{ id: string; available: boolean }>
+    ).find((entry) => entry.id === machineId);
+    if (machine?.available) return { ...worker, log };
+    if (Date.now() > deadline) {
+      await worker.stop();
+      throw new Error(
+        `Timed out waiting for machine ${machineId} to be available: ${JSON.stringify(machine ?? null)}\nIts log:\n${log.slice(-40).join("\n")}`,
+      );
+    }
+    await new Promise((resolve) => setTimeout(resolve, 250));
+  }
 }

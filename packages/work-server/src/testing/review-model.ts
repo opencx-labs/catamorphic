@@ -1,0 +1,242 @@
+import type { JsonObject, JsonValue } from "@catamorphic/agent-protocol";
+import {
+  type ScriptedReply,
+  type ScriptedRequest,
+  startScriptedModel,
+} from "@catamorphic/claude-code/testing";
+
+/**
+ * A model on loopback that drives a harness through a pull request review,
+ * for end-to-end tests: each turn runs the change's tests with the
+ * harness's shell tool, reads one file with its read tool, and submits a
+ * typed `review` result with Work's `submit_result`, then ends. It speaks
+ * the Anthropic Messages API, so it stands in for a provider wherever one
+ * is reached (a server's own model, a model connection behind the
+ * gateway), and it drives either harness Work runs a reviewer on: the
+ * built-in agent (`bash`, `read`, `submit_result`) or Claude Code (`Bash`,
+ * `Read`, `mcp__workspace__submit_result`). Each step follows from the
+ * conversation it is sent (which tool results it already has), never from
+ * how many calls came before, so side calls and retries change nothing;
+ * each conversation is one chat, told apart by its first message.
+ */
+export interface ReviewModel {
+  url: string;
+  /** Every Messages API call, with its headers. */
+  requests: ScriptedRequest[];
+  /** The review turns of the chat whose first message includes `text`. */
+  turnsOf(text: string): ReviewTurn[];
+  close(): Promise<void>;
+}
+
+export interface ReviewTurn {
+  /** What the tests printed (the shell tool's result). */
+  commandOutput?: string;
+  /** The file the read tool returned. */
+  readOutput?: string;
+  /** The review it submitted. */
+  submitted?: JsonObject;
+  /** What `submit_result` answered. */
+  submitAnswer?: string;
+}
+
+/** Which chat and turn a step belongs to. */
+export interface ReviewStep {
+  /** The chat's first message. */
+  prompt: string;
+  /** 1 for the chat's first review turn. */
+  turn: number;
+}
+
+export interface ReviewScript {
+  /** The shell command each turn runs first: the change's tests. */
+  command: string;
+  /** A file each turn reads with the harness's read tool, in the checkout. */
+  read: string;
+  /** The review a turn submits, from what its command printed. */
+  review(input: ReviewStep & { commandOutput: string }): JsonObject;
+  /**
+   * Called on each turn's first model call, before it is answered: the
+   * harness is alive and waiting on it.
+   */
+  onTurnStart?(step: ReviewStep): Promise<void>;
+}
+
+const RUN = "toolu_run_";
+const READ = "toolu_read_";
+const SUBMIT = "toolu_submit_";
+
+export async function startReviewModel(
+  script: ReviewScript,
+): Promise<ReviewModel> {
+  const chats = new Map<string, ReviewTurn[]>();
+  const started = new Set<string>();
+  const reply = async (request: ScriptedRequest): Promise<ScriptedReply> => {
+    const tools = toolNames(request.body);
+    const claudeCode = tools.includes("Bash");
+    // The harness's own calls (titles, summaries) carry no shell tool.
+    if (!claudeCode && !tools.includes("bash"))
+      return { blocks: [{ type: "text", text: "Pull request review" }] };
+    const messages = list(request.body.messages);
+    const prompt = textOf(record(messages[0]));
+    const chat = chats.get(prompt) ?? [];
+    chats.set(prompt, chat);
+    // Each finished turn submitted once before the message answered now.
+    const earlier = messages
+      .slice(0, -1)
+      .flatMap((message) =>
+        record(message).role === "user" ? toolResults(record(message)) : [],
+      );
+    const turn =
+      earlier.filter((result) => result.id.startsWith(SUBMIT)).length + 1;
+    const current: ReviewTurn = chat[turn - 1] ?? {};
+    chat[turn - 1] = current;
+    const answered = toolResults(record(messages.at(-1))).at(-1);
+    const step = { prompt, turn };
+    if (!answered) {
+      const key = `${prompt}\n${turn}`;
+      if (!started.has(key)) {
+        started.add(key);
+        await script.onTurnStart?.(step);
+      }
+      return {
+        blocks: [
+          {
+            type: "tool_use",
+            id: `${RUN}${turn}`,
+            name: claudeCode ? "Bash" : "bash",
+            input: {
+              command: script.command,
+              description: "Run the change's tests",
+            },
+          },
+        ],
+      };
+    }
+    if (answered.id.startsWith(RUN)) {
+      current.commandOutput = answered.text;
+      return {
+        blocks: [
+          {
+            type: "tool_use",
+            id: `${READ}${turn}`,
+            ...(claudeCode
+              ? {
+                  name: "Read",
+                  input: {
+                    file_path: `${workingDirectory(request.body)}/${script.read}`,
+                  },
+                }
+              : { name: "read", input: { path: script.read } }),
+          },
+        ],
+      };
+    }
+    if (answered.id.startsWith(READ)) {
+      current.readOutput = answered.text;
+      const submit = tools.find(
+        (name) => name === "submit_result" || name.endsWith("__submit_result"),
+      );
+      if (!submit)
+        return {
+          blocks: [{ type: "text", text: "Work's submit_result is missing." }],
+        };
+      const value = script.review({
+        ...step,
+        commandOutput: current.commandOutput ?? "",
+      });
+      current.submitted = value;
+      return {
+        blocks: [
+          {
+            type: "tool_use",
+            id: `${SUBMIT}${turn}`,
+            name: submit,
+            input: { name: "review", value },
+          },
+        ],
+      };
+    }
+    if (answered.id.startsWith(SUBMIT)) current.submitAnswer = answered.text;
+    return { blocks: [{ type: "text", text: "Submitted the review." }] };
+  };
+  const model = await startScriptedModel({ reply });
+  return {
+    url: model.url,
+    requests: model.requests,
+    turnsOf: (text) =>
+      [...chats.entries()].find(([prompt]) => prompt.includes(text))?.[1] ?? [],
+    close: () => model.close(),
+  };
+}
+
+function record(value: JsonValue | undefined): JsonObject {
+  return value && typeof value === "object" && !Array.isArray(value)
+    ? value
+    : {};
+}
+
+function list(value: JsonValue | undefined): JsonValue[] {
+  return Array.isArray(value) ? value : [];
+}
+
+function toolNames(body: JsonObject): string[] {
+  return list(body.tools).flatMap((tool) => {
+    const name = record(tool).name;
+    return typeof name === "string" ? [name] : [];
+  });
+}
+
+/** A message's text, whether a string or text blocks. */
+function textOf(message: JsonObject): string {
+  const content = message.content;
+  return typeof content === "string"
+    ? content
+    : list(content)
+        .map((part) => record(part).text)
+        .filter((part) => typeof part === "string")
+        .join("\n");
+}
+
+/** A user message's tool results, with their text. */
+function toolResults(message: JsonObject): Array<{ id: string; text: string }> {
+  return list(message.content).flatMap((block) => {
+    const entry = record(block);
+    if (entry.type !== "tool_result" || typeof entry.tool_use_id !== "string")
+      return [];
+    return [{ id: entry.tool_use_id, text: shellOutput(textOf(entry)) }];
+  });
+}
+
+/**
+ * The built-in agent's shell answers `{ exitCode, output }`, which reaches
+ * the model as JSON: its output, as Claude Code's Bash gives it.
+ */
+function shellOutput(text: string): string {
+  try {
+    const parsed: unknown = JSON.parse(text);
+    return parsed &&
+      typeof parsed === "object" &&
+      "output" in parsed &&
+      typeof parsed.output === "string"
+      ? parsed.output
+      : text;
+  } catch {
+    return text;
+  }
+}
+
+/** The checkout, as Claude Code's system prompt names it. */
+function workingDirectory(body: JsonObject): string {
+  const system =
+    typeof body.system === "string"
+      ? body.system
+      : list(body.system)
+          .map((part) => record(part).text)
+          .filter((part) => typeof part === "string")
+          .join("\n");
+  return (
+    /(?:Primary working directory|Working directory): (\/\S+)/
+      .exec(system)?.[1]
+      ?.replace(/\/$/, "") ?? "/workspace/project"
+  );
+}
