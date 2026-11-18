@@ -14,10 +14,24 @@ export interface FakeReview {
   verdict: "COMMENT" | "REQUEST_CHANGES";
   reviewedCommit: string;
   reply?: { inReplyTo?: number; body: string } | null;
-  comments?: Array<{ path: string; line: number; side?: string; body: string }>;
+  /** The ids of the turn's findings it stands behind. */
+  findings?: string[];
   /** The attempt that submitted it; the turn may have later attempts. */
   attemptId?: string;
   /** The commit Work recorded the turn began on; the chat's commit when absent. */
+  turnCommit?: string | null;
+}
+
+export interface FakeFinding {
+  id: string;
+  path?: string;
+  line?: number;
+  startLine?: number | null;
+  side?: "LEFT" | "RIGHT" | null;
+  severity?: "blocking" | "important" | "minor";
+  title?: string;
+  body?: string;
+  attemptId?: string;
   turnCommit?: string | null;
 }
 
@@ -29,9 +43,11 @@ export function fakeWorld(input: { head: string }) {
     checks: [] as Array<{
       id: number;
       own: boolean;
-      conclusion: string;
+      status: string;
+      conclusion: string | null;
       externalId: string | null;
       headSha: string;
+      title: string | null;
     }>,
     reviews: [] as Array<{
       id: number;
@@ -39,6 +55,7 @@ export function fakeWorld(input: { head: string }) {
       state: string;
       commitId: string;
       body: string;
+      comments: Array<{ path: string; line: number; body: string }>;
     }>,
     comments: [] as Array<{ id: number; own: boolean; body: string }>,
     replies: [] as Array<{ id: number; commentId: number; body: string }>,
@@ -50,6 +67,10 @@ export function fakeWorld(input: { head: string }) {
     metadata: {} as Record<string, Json>,
     results: [] as Array<Record<string, Json>>,
     commit: input.head,
+    /** The turn working now (ADR 0333), as inspect reports it. */
+    turn: null as { id: string; status: string } | null,
+    /** Where the chat runs; a chat waiting for a machine has no placement yet. */
+    placement: { environment: "review" } as { environment: string } | null,
     /** Why a metadata write is refused (the cap an agent filled), if it is. */
     refuseMetadata: null as string | null,
   };
@@ -62,32 +83,76 @@ export function fakeWorld(input: { head: string }) {
   };
   const connections = {
     github: {
-      get: () => ({
-        status: 200,
-        body: { state: github.state, head: { sha: github.head } },
-      }),
+      get: ({ path }: { path: string }) => {
+        const run = /\/check-runs\/(\d+)$/.exec(path);
+        if (!run)
+          return {
+            status: 200,
+            body: { state: github.state, head: { sha: github.head } },
+          };
+        const found = github.checks.find(
+          (entry) => entry.id === Number(run[1]),
+        );
+        return found
+          ? {
+              status: 200,
+              body: {
+                id: found.id,
+                status: found.status,
+                conclusion: found.conclusion,
+                output: { title: found.title },
+              },
+            }
+          : { status: 404, body: { message: "Not Found" } };
+      },
+      // As the typed action lists them: the run's title is not among them.
       check_runs: ({ commit }: { commit: string }) => ({
-        runs: github.checks.filter((run) => run.headSha === commit),
+        runs: github.checks
+          .filter((run) => run.headSha === commit)
+          .map(({ title: _title, ...run }) => run),
       }),
       create_check_run: (args: {
         headSha: string;
-        conclusion: string;
+        status?: string;
+        conclusion?: string;
+        output?: { title: string };
         stamp: string;
       }) => {
         const existing = github.checks.find(
-          (run) => run.own && run.externalId === args.stamp,
+          (run) =>
+            run.own &&
+            run.externalId === args.stamp &&
+            run.headSha === args.headSha,
         );
         if (existing) return { ...existing, existing: true };
         const run = {
           id: nextId++,
           own: true,
-          conclusion: args.conclusion,
+          status: args.status ?? "completed",
+          conclusion: args.conclusion ?? null,
           externalId: args.stamp,
           headSha: args.headSha,
+          title: args.output?.title ?? null,
         };
         github.checks.push(run);
-        github.writes.push(`check:${args.conclusion}`);
+        github.writes.push(`check:${args.conclusion ?? run.status}`);
         return answered("create_check_run", { id: run.id });
+      },
+      update_check_run: (args: {
+        checkRunId: number;
+        status?: string;
+        conclusion?: string;
+        output?: { title: string };
+      }) => {
+        const run = github.checks.find((entry) => entry.id === args.checkRunId);
+        if (!run) throw new Error(`No check run ${args.checkRunId}`);
+        if (args.status) run.status = args.status;
+        if (args.conclusion) run.conclusion = args.conclusion;
+        if (args.output) run.title = args.output.title;
+        github.writes.push(
+          `update:${run.headSha.slice(0, 1)}:${args.conclusion ?? args.output?.title}`,
+        );
+        return answered("update_check_run", { id: run.id });
       },
       pull_request_files: () => ({
         files: [{ path: "src/orders.ts", patch: "@@ -1,1 +1,2 @@\n a\n+b" }],
@@ -97,6 +162,7 @@ export function fakeWorld(input: { head: string }) {
         event: string;
         commitId: string;
         body: string;
+        comments?: Array<{ path: string; line: number; body: string }>;
         stamp: string;
       }) => {
         const existing = github.reviews.find(
@@ -112,9 +178,12 @@ export function fakeWorld(input: { head: string }) {
               : "COMMENTED",
           commitId: args.commitId,
           body: args.body,
+          comments: args.comments ?? [],
         };
         github.reviews.push(review);
-        github.writes.push(`review:${args.event}`);
+        github.writes.push(
+          `review:${args.event}${review.comments.map((comment) => `:${comment.path}:${comment.line}`).join("")}`,
+        );
         return answered("create_review", { id: review.id });
       },
       review_threads: () => ({
@@ -156,10 +225,12 @@ export function fakeWorld(input: { head: string }) {
       projectId: "project-1",
       owner: "project",
       agentId: "project:project-1:reviewer",
-      placement: { environment: "review" },
+      environment: "review",
+      placement: structuredClone(chat.placement),
       keyWorkflows: ["reviewPullRequests"],
       workspace: { ref: "refs/pull/42/head", commit: chat.commit },
       metadata: structuredClone(chat.metadata),
+      turn: structuredClone(chat.turn),
     }),
     // As core reads them: newest first, at most 100, by name and turn.
     results: ({ name, turnId }: { name?: string; turnId?: string }) => ({
@@ -225,10 +296,67 @@ export function fakeWorld(input: { head: string }) {
           score: review.verdict === "REQUEST_CHANGES" ? 2 : 4,
           summary: `Review of ${turnId}`,
           checkSummary: `Check of ${turnId}`,
-          comments: review.comments ?? [],
+          findings: review.findings ?? [],
           reply: review.reply ?? null,
         },
       });
+    },
+    /**
+     * The reviewer's turn submits a verified finding (ADR 0336), and Work
+     * records `session.result-recorded`: this returns that event.
+     */
+    find(turnId: string, finding: FakeFinding) {
+      const { attemptId, turnCommit, ...fields } = finding;
+      const result = {
+        id: `finding-${turnId}-${chat.results.length}`,
+        sessionId: "session-1",
+        turnId,
+        attemptId: attemptId ?? `${turnId}-attempt-1`,
+        name: "finding",
+        current: true,
+        commit: turnCommit === undefined ? chat.commit : turnCommit,
+        value: {
+          path: "src/orders.ts",
+          line: 2,
+          severity: "blocking",
+          title: `Finding ${finding.id}`,
+          body: `Why ${finding.id} is wrong.`,
+          ...fields,
+        },
+      };
+      chat.results.unshift(result);
+      return resultEvent(result);
+    },
+  };
+}
+
+/** A turn's status change, as `session.turn-changed` carries it. */
+export function turnEvent(turnId: string, status = "completed") {
+  return {
+    kind: "session.turn-changed",
+    payload: {
+      sessionId: "session-1",
+      session: { id: "session-1", key: "pr-acme/web-42", status: "active" },
+      detail: { turnId, messageId: `input-${turnId}`, status },
+    },
+  };
+}
+
+/** A recorded result, as `session.result-recorded` carries it. */
+function resultEvent(result: Record<string, Json>) {
+  return {
+    kind: "session.result-recorded",
+    payload: {
+      sessionId: "session-1",
+      session: { id: "session-1", key: "pr-acme/web-42", status: "active" },
+      detail: {
+        resultId: result.id,
+        name: result.name,
+        value: result.value,
+        turnId: result.turnId,
+        attemptId: result.attemptId,
+        commit: result.commit,
+      },
     },
   };
 }

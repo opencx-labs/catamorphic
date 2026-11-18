@@ -6,6 +6,7 @@
 /**
  * What the reviewer reports, once checked: its `review` result (ADR 0323),
  * which Work accepted against the schema in `.work/agents/reviewer.json`.
+ * `findings` names the `finding` results of its turn it stands behind.
  */
 export type WorkReview = {
   reviewedCommit: string;
@@ -13,14 +14,32 @@ export type WorkReview = {
   score: number;
   summary: string;
   checkSummary: string;
-  comments: Array<{
-    path: string;
-    line: number;
-    side: "LEFT" | "RIGHT";
-    body: string;
-  }>;
+  findings: string[];
   reply: { inReplyTo?: number; body: string } | null;
 };
+
+/**
+ * One verified finding, once checked: a `finding` result (ADR 0336), posted
+ * as an inline comment the moment it is recorded. `id` names the problem;
+ * on one head it posts once.
+ */
+export type WorkFinding = {
+  id: string;
+  path: string;
+  line: number;
+  /** The first line of a range ending at `line`; null for one line. */
+  startLine: number | null;
+  side: "LEFT" | "RIGHT";
+  severity: "blocking" | "important" | "minor";
+  title: string;
+  body: string;
+};
+
+/** A finding's id: letters, digits, `.`, `_` and `-`, so its marker stays whole. */
+export const FINDING_ID = /^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$/;
+
+/** A review names at most this many findings, as it once had 30 comments. */
+export const MAX_FINDINGS = 30;
 
 export function record(value: unknown): Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value)
@@ -88,7 +107,7 @@ export function checkWorkReview(value: unknown): WorkReview | string {
     "score",
     "summary",
     "checkSummary",
-    "comments",
+    "findings",
     "reply",
   ];
   const extra = Object.keys(report).find((key) => !fields.includes(key));
@@ -112,36 +131,24 @@ export function checkWorkReview(value: unknown): WorkReview | string {
     return "summary is missing or over 4,000 characters";
   if (!text(checkSummary, 4000))
     return "checkSummary is missing or over 4,000 characters";
-  const comments = list(report.comments ?? []);
-  if (!Array.isArray(report.comments ?? []) || comments.length > 30)
-    return "comments is not a list of at most 30";
+  // A field it may leave out may also be null, as models often write it.
+  const findings = list(report.findings ?? []);
+  if (
+    !Array.isArray(report.findings ?? []) ||
+    findings.length > MAX_FINDINGS ||
+    findings.some((id) => typeof id !== "string" || !FINDING_ID.test(id)) ||
+    new Set(findings).size !== findings.length
+  )
+    return `findings is not a list of at most ${MAX_FINDINGS} distinct finding ids`;
   const checked: WorkReview = {
     reviewedCommit,
     verdict,
     score,
     summary: publicationText(summary),
     checkSummary: publicationText(checkSummary),
-    comments: [],
+    findings: findings.filter((id) => typeof id === "string"),
     reply: null,
   };
-  // A field it may leave out may also be null, as models often write it.
-  for (const entry of comments.map(record)) {
-    const { path, line, body } = entry;
-    const side = entry.side ?? "RIGHT";
-    if (
-      Object.keys(entry).some(
-        (key) => !["path", "line", "side", "body"].includes(key),
-      ) ||
-      !text(path, 300) ||
-      typeof line !== "number" ||
-      !Number.isInteger(line) ||
-      line < 1 ||
-      (side !== "LEFT" && side !== "RIGHT") ||
-      !text(body, 1500)
-    )
-      return "a comment is not { path, line, side?, body } within its limits";
-    checked.comments.push({ path, line, side, body: publicationText(body) });
-  }
   if (report.reply != null) {
     const reply = record(report.reply);
     const { inReplyTo, body } = reply;
@@ -160,6 +167,118 @@ export function checkWorkReview(value: unknown): WorkReview | string {
     };
   }
   return checked;
+}
+
+/**
+ * A `finding` result, checked field by field again, as a review is: the
+ * sandbox that submitted it is untrusted. A string says why it cannot be used.
+ */
+export function checkFinding(value: unknown): WorkFinding | string {
+  if (typeof value !== "object" || value === null || Array.isArray(value))
+    return "the finding is not a JSON object";
+  const entry = record(value);
+  const fields = [
+    "id",
+    "path",
+    "line",
+    "startLine",
+    "side",
+    "severity",
+    "title",
+    "body",
+  ];
+  if (Object.keys(entry).some((key) => !fields.includes(key)))
+    return "it has an unknown field";
+  const { id, path, line, title, body } = entry;
+  const startLine = entry.startLine ?? null;
+  const side = entry.side ?? "RIGHT";
+  const severity = entry.severity;
+  if (typeof id !== "string" || !FINDING_ID.test(id))
+    return "id is not a finding id";
+  if (!text(path, 300)) return "path is missing or over 300 characters";
+  if (typeof line !== "number" || !Number.isInteger(line) || line < 1)
+    return "line is not a line number";
+  if (
+    startLine !== null &&
+    (typeof startLine !== "number" ||
+      !Number.isInteger(startLine) ||
+      startLine < 1 ||
+      startLine >= line)
+  )
+    return "startLine is not a line before line";
+  if (side !== "LEFT" && side !== "RIGHT")
+    return "side is neither LEFT nor RIGHT";
+  if (
+    severity !== "blocking" &&
+    severity !== "important" &&
+    severity !== "minor"
+  )
+    return "severity is not blocking, important or minor";
+  if (!text(title, 200)) return "title is missing or over 200 characters";
+  if (!text(body, 1500)) return "body is missing or over 1,500 characters";
+  return {
+    id,
+    path,
+    line,
+    startLine: typeof startLine === "number" ? startLine : null,
+    side,
+    severity,
+    title: publicationText(title),
+    body: publicationText(body),
+  };
+}
+
+/**
+ * The stamp a finding carries wherever it is posted, in a review's body: a
+ * second post of it on this head finds it and posts nothing.
+ */
+export function findingMarker(commit: string, id: string): string {
+  return `<!-- work-review:${commit}:finding:${id} -->`;
+}
+
+/** A review the poster made of findings alone: its body is their markers. */
+export function isFindingReview(body: unknown): boolean {
+  return (
+    typeof body === "string" &&
+    /^(?:<!-- work-review:[0-9a-f]{40}:finding:[A-Za-z0-9_.-]+ -->\s*)+$/.test(
+      body.trim(),
+    )
+  );
+}
+
+/** Every line a finding covers is one the diff shows on its side. */
+export function findingFits(lines: Set<string>, finding: WorkFinding): boolean {
+  for (
+    let line = finding.startLine ?? finding.line;
+    line <= finding.line;
+    line++
+  )
+    if (!lines.has(`${finding.path}:${finding.side}:${line}`)) return false;
+  return true;
+}
+
+const SEVERITY_LABELS: Record<WorkFinding["severity"], string> = {
+  blocking: "Blocking",
+  important: "Important",
+  minor: "Minor",
+};
+
+/** A finding as an inline comment of a review. */
+export function findingComment(finding: WorkFinding) {
+  return {
+    path: finding.path,
+    line: finding.line,
+    side: finding.side,
+    ...(finding.startLine === null
+      ? {}
+      : { startLine: finding.startLine, startSide: finding.side }),
+    body: `**${SEVERITY_LABELS[finding.severity]}:** ${finding.title}\n\n${finding.body}`,
+  };
+}
+
+/** A finding listed in a review's body, for one the diff cannot hold. */
+export function findingLine(finding: WorkFinding): string {
+  return `${renderedPath(finding.path)}:${finding.line}: **${SEVERITY_LABELS[finding.severity]}:** ${finding.title}. ${finding.body}`;
 }
 
 function text(value: unknown, max: number): value is string {

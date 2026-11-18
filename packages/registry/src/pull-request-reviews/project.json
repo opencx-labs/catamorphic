@@ -95,6 +95,7 @@
             "list_reviews",
             "create_review",
             "create_check_run",
+            "update_check_run",
             "reply_to_review_comment",
             "issue_comment"
           ]
