@@ -596,7 +596,8 @@ export function useAgentChat(
         : sending
           ? "Sending message"
           : starting
-            ? "Waiting for agent"
+            ? // What it waits for, when Work says (its workspace, ADR 0332).
+              (starting.activity ?? "Waiting for agent")
             : undefined,
     connection: live.connection,
     connectionLost,
