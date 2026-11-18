@@ -144,16 +144,26 @@ const recordDismissals = () =>
   app.eval(`(() => {
     window.__menuEvents = [];
     window.__menuSince = performance.now();
+    window.__menuOpened = false;
     if (window.__menuWatched) return true;
     window.__menuWatched = true;
     const name = (target) => target === window ? 'window' : !(target instanceof Element) ? String(target) : target.tagName.toLowerCase() + (target.getAttribute('aria-label') ? '[' + target.getAttribute('aria-label') + ']' : '');
     const note = (what) => window.__menuEvents.push(Math.round(performance.now() - window.__menuSince) + 'ms ' + what);
     addEventListener('blur', (event) => { if (event.target === window) note('blur window'); }, true);
-    for (const type of ['focusin', 'pointerdown', 'keydown', 'scroll'])
+    for (const type of ['focusin', 'pointerdown', 'contextmenu', 'keydown', 'scroll'])
       addEventListener(type, (event) => note(type + ' ' + name(event.target) + (event.key ? ' ' + event.key : '')), true);
     new MutationObserver((records) => {
       for (const record of records) note(record.attributeName + ' ' + name(record.target));
     }).observe(document.body, { subtree: true, attributes: true, attributeFilter: ['inert', 'hidden'] });
+    // A menu can open and go between two polls: its arrival is kept.
+    let shown = false;
+    new MutationObserver(() => {
+      const now = !!document.querySelector('[data-sidebar-menu]');
+      if (now === shown) return;
+      shown = now;
+      if (now) window.__menuOpened = true;
+      note(now ? 'menu opened' : 'menu removed');
+    }).observe(document.body, { childList: true });
     return true;
   })()`);
 /**
@@ -162,8 +172,10 @@ const recordDismissals = () =>
  * naming what happened, rather than waiting out the timeout.
  */
 const settled = async () => {
+  // A menu is open while its shield is: one going keeps its panel for its
+  // exit, whose motion ends too, and is no settled menu.
   const state = await app.waitFor<string>(
-    `!${menu} ? 'dismissed' : [...document.querySelectorAll('[data-sidebar-menu]')].every(panel => panel.getAnimations({ subtree: true }).every(animation => animation.playState === 'finished')) && 'settled'`,
+    `!${menu} || !document.querySelector('[data-menu-shield]') ? 'dismissed' : [...document.querySelectorAll('[data-sidebar-menu]')].every(panel => panel.getAnimations({ subtree: true }).every(animation => animation.playState === 'finished')) && 'settled'`,
     { label: "menu settled" },
   );
   if (state === "dismissed") {
@@ -275,15 +287,32 @@ const rowMenu = async (label: string) => {
     await focusWindow(app);
     await recordDismissals();
     await mouse(point, "right");
-    await app.waitFor(`!!${menu}`, { label: `${label} menu open` });
+    // Opened, even if it has gone again since: settling says why it went.
+    await app
+      .waitFor("window.__menuOpened === true", { label: `${label} menu open` })
+      .catch(async (error: unknown) => {
+        const seen = await app.eval<string[]>(
+          "(window.__menuEvents ?? []).slice(-16)",
+        );
+        throw new Error(
+          `${String(error)}; since the right-click: ${seen.join("; ")}`,
+        );
+      });
     try {
       await settled();
       return point;
     } catch (cause) {
-      // The OS took key status from the window as the menu opened (once on
-      // macOS CI, right after a dialog closed): the window is made key again
-      // and the row right-clicked again. Anything else closing it fails.
-      if (attempt >= 1 || !String(cause).includes("blur window")) throw cause;
+      // The OS took key status from the window as the menu opened, or
+      // handed focus back to the page as it made the window key (macOS
+      // CI, right after the window was made key or a dialog closed): the
+      // window is made key again and the row right-clicked again. Anything
+      // else closing it fails.
+      const reason = String(cause);
+      if (
+        attempt >= 1 ||
+        !(reason.includes("blur window") || reason.includes("focusin webview"))
+      )
+        throw cause;
     }
   }
 };
