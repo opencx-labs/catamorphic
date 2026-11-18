@@ -261,9 +261,13 @@ type Publication = {
   review: WorkReview | null;
   /** Why no review posts. */
   problem: string | null;
-  /** The chat's record: each commit's strongest verdict, and what was posted. */
-  verdicts: Record<string, Verdict>;
-  posted: Record<string, number>;
+  /**
+   * The chat's record: each commit's strongest verdict, and what was posted,
+   * as [key, value] lists, newest last. Carried state is stored as jsonb,
+   * which reorders an object's keys, so a list keeps the order.
+   */
+  verdicts: Array<[string, Verdict]>;
+  posted: Array<[string, number]>;
   /** The verdict this turn leaves on its commit. */
   verdict: Verdict | null;
   /** Inline comments on lines outside the diff, moved into the review's body. */
@@ -331,8 +335,8 @@ export const postReviews = defineWorkflow(({ defineBoundary }) => ({
             Number.isSafeInteger(number) && number > 0 ? "missing" : "nothing",
           review: null,
           problem: null,
-          verdicts: {},
-          posted: {},
+          verdicts: [],
+          posted: [],
           verdict: null,
           outside: [],
           askedIn: null,
@@ -730,9 +734,10 @@ export const postReviews = defineWorkflow(({ defineBoundary }) => ({
           {
             sessionId: state.sessionId,
             set: {
-              [VERDICTS_KEY]: Object.entries(state.verdicts).map(
-                ([commit, verdict]) => ({ commit, verdict }),
-              ),
+              [VERDICTS_KEY]: state.verdicts.map(([commit, verdict]) => ({
+                commit,
+                verdict,
+              })),
               [POSTED_KEY]: postedList(posted),
             },
           },
@@ -776,8 +781,8 @@ function strength(value: unknown): number {
  * The chat keeps both records as lists, newest last: a JSON object's key
  * order does not survive the database.
  */
-function verdictsOf(value: unknown): Record<string, Verdict> {
-  return Object.fromEntries(
+function verdictsOf(value: unknown): Array<[string, Verdict]> {
+  return dedupe(
     list(value)
       .map(record)
       .flatMap((entry) => {
@@ -785,38 +790,48 @@ function verdictsOf(value: unknown): Record<string, Verdict> {
         return typeof entry.commit === "string" &&
           /^[0-9a-f]{40}$/.test(entry.commit) &&
           known
-          ? [[entry.commit, known]]
+          ? [[entry.commit, known] as [string, Verdict]]
           : [];
       }),
   );
 }
 
-function postedOf(value: unknown): Record<string, number> {
-  return Object.fromEntries(
+function postedOf(value: unknown): Array<[string, number]> {
+  return dedupe(
     list(value)
       .map(record)
       .flatMap((entry) =>
         typeof entry.effect === "string" &&
         typeof entry.id === "number" &&
         Number.isSafeInteger(entry.id)
-          ? [[entry.effect, entry.id]]
+          ? [[entry.effect, entry.id] as [string, number]]
           : [],
       ),
   );
 }
 
-function postedList(posted: Record<string, number>) {
-  return Object.entries(posted).map(([effect, id]) => ({ effect, id }));
+function postedList(posted: Array<[string, number]>) {
+  return posted.map(([effect, id]) => ({ effect, id }));
+}
+
+/** A record's entries with each key once, where it was last. */
+function dedupe<Value>(
+  entries: Array<[string, Value]>,
+): Array<[string, Value]> {
+  return entries.filter(
+    ([key], index) =>
+      !entries.slice(index + 1).some(([later]) => later === key),
+  );
 }
 
 /** The record with `key` set last, keeping the newest entries. */
 function withEntry<Value>(
-  entries: Record<string, Value>,
+  entries: Array<[string, Value]>,
   key: string,
   value: Value,
-): Record<string, Value> {
-  const rest = Object.entries(entries).filter(([name]) => name !== key);
-  return Object.fromEntries([...rest, [key, value] as const].slice(-KEPT));
+): Array<[string, Value]> {
+  const rest = entries.filter(([name]) => name !== key);
+  return [...rest, [key, value] as [string, Value]].slice(-KEPT);
 }
 
 /** The id GitHub gave a write, or null for a step that wrote nothing. */

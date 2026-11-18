@@ -758,6 +758,23 @@ describe("postReviews", () => {
     expect(result.writes).toEqual(["check:failure", "review:REQUEST_CHANGES"]);
   });
 
+  it("keeps the chat's record newest last, whatever order its commits sort in", async () => {
+    const LATER = "0".repeat(40);
+    const result = await publish(`
+      world.submit("t1", { verdict: "REQUEST_CHANGES", reviewedCommit: ${JSON.stringify(HEAD)} });
+      await runWorkflow(postReviews, event("t1"), world.context);
+      // A push to a head that sorts before the first.
+      world.github.head = ${JSON.stringify(LATER)};
+      world.chat.commit = ${JSON.stringify(LATER)};
+      world.submit("t2", { verdict: "COMMENT", reviewedCommit: ${JSON.stringify(LATER)} });
+      return runWorkflow(postReviews, event("t2"), world.context);
+    `);
+    expect(result.metadata["review.verdicts"]).toEqual([
+      { commit: HEAD, verdict: "failure" },
+      { commit: LATER, verdict: "success" },
+    ]);
+  });
+
   it("posts nothing once the head moves past the chat, and marks a missing review once", async () => {
     const result = await publish(`
       world.submit("t2", { verdict: "REQUEST_CHANGES", reviewedCommit: ${JSON.stringify(HEAD)} });

@@ -241,6 +241,29 @@ type Workflow = {
   }>;
 };
 
+/**
+ * A value as Work keeps it between boundaries: jsonb, whose objects order
+ * their keys by length, then bytewise. Arrays keep their order.
+ */
+function asJsonb(value: Json): Json {
+  if (Array.isArray(value)) return value.map(asJsonb);
+  if (value === null || typeof value !== "object") return value;
+  return Object.fromEntries(
+    Object.entries(value)
+      .filter(([, item]) => item !== undefined)
+      .sort(([left], [right]) =>
+        left.length !== right.length
+          ? left.length - right.length
+          : left < right
+            ? -1
+            : left > right
+              ? 1
+              : 0,
+      )
+      .map(([key, item]) => [key, asJsonb(item as Json)]),
+  );
+}
+
 /** One run: each boundary's call, retried from its own input when it throws. */
 export async function runWorkflow(
   workflow: Workflow,
@@ -258,8 +281,10 @@ export async function runWorkflow(
         if (returned && typeof returned === "object" && "__call" in returned) {
           const call = returned as Call;
           const result = await call.__call();
-          current = "state" in call ? { result, state: call.state } : result;
-        } else current = returned;
+          current = asJsonb(
+            "state" in call ? { result, state: call.state } : result,
+          );
+        } else current = asJsonb(returned);
         break;
       } catch (error) {
         if (attempt >= attempts) throw error;
