@@ -528,6 +528,9 @@ screen, or under reduced motion.
 | Reply image reveal (Web Animations in `components/remote-image.tsx`: the line the image's name held opens to the picture's height as the picture fades in from 98%) | 200ms | — (one-shot content-ready reveal; nothing leaves) |
 | `bubble-ask` (agent question arrival) | 280ms | — (one-shot nudge on a persistent bubble; no exit to pair) |
 | `input-recall-{up,down}-{a,b}` (composer ↑/↓ history) | 150ms | — (transform-only directional content signal; paired names replay rapid same-direction recalls without a classless frame) |
+| Composer and palette input glide (`lib/use-gliding-height.ts`: the frame's `height` transition follows the input; a draft scrolled past the input's height that an edit shortens is drawn where it was and glides down by Web Animations, `transform`, added to any glide still running, at most one input's height) | 150ms | each other: the text keeps pace with the frame, so a line leaving moves as a line arriving at every height |
+| `composer-placeholder-in` (the composer's placeholder returning as the last character goes or the draft is sent) | 150ms | — (opacity only; typing replaces it at once) |
+| Send / Stop glyph (one button in the send button's place: the arrow and the square cross over by opacity and scale 0.5↔1; its dimming eases with `.button-primary`) | 150ms | each other |
 | `cat-swap-out` / `cat-swap-in` (text changing in place: the agent's activity line, a steps line's count and word; shared from `@catamorphic/ui/styles.css` with `cat-fade-in`, `cat-fold-away` and `cat-step-in`) | 200ms / 200ms | each other (opacity only: the old text fades out from the opacity it had, the activity line's breath included, then the new fades in; the activity line resumes `animate-pulse`) |
 | `.cat-swap-slot` transition (a changing label's place, so what follows it slides to the new width) | 200ms | itself, only while a swap plays |
 | `.cat-reveal` transition (the activity line and the turn line above it opening and closing their height; `@starting-style` for arrival) | 200ms | itself: one transition both ways, giving back the column's gap when closed |
@@ -882,6 +885,37 @@ the historical log explains how it arrived here.
 - [Performance](docs/performance.md): idle lifecycle checks and sustained measurement.
 
 ## Design log
+
+### 2026-11-17: The composer shrinks as it grows; actions give it the keys
+
+Backspace shrank the composer smoothly only while the draft fit inside it.
+Past its four lines the draft scrolls inside the input, and deleting a line
+let Chromium pull the scroll back to the shorter end in one frame: the text
+dropped a line at once, and half a line where the draft came back under the
+input's height, while the frame around it glided. The gliding frame now
+draws that text where it was and glides it down on the frame's curve, added
+to any glide still running, so held Backspace sums rather than jumps. Only
+that pull counts: the person's scrolling, the caret being revealed and a
+draft replaced in place keep theirs. Emptying the last line of a draft just
+past that height dropped the text too, with nothing shorter about it:
+Chromium lays the draft out for a moment without the line and kept the
+scroll that allowed, cutting the caret's line off. Editing at the draft's
+end now keeps its end in view. The palette's text input has both, through
+the textarea that scrolls inside its frame. `e2e/composer-shrink.e2e.ts`
+presses real Backspaces at each height and follows a surviving line through
+every painted frame, with the page's animations at a tenth of their pace.
+
+Send and Stop were two buttons that swapped at every turn's start and end.
+They are one now, the glyph crossing over, and the placeholder fades back
+in as the last character goes.
+
+Submitting a question's answers, pressing Retry, an approval, Send or Stop
+left focus on the control or, once it went, nowhere, so the next keys were
+lost. Those presses now give the composer its keys back
+([workspace interactions](docs/workspace-interactions.md#keyboard-and-chat-identity)).
+A question being answered, the chips and the header's popovers keep the
+focus they move themselves. `e2e/chat-focus-return.e2e.ts` presses Submit
+and Retry with the pointer and Retry with Enter.
 
 ### 2026-11-14: A shared tab keeps painting; sound is a choice
 

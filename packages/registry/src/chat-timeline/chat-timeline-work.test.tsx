@@ -498,6 +498,8 @@ describe("ChatTimeline work display", () => {
         ?.click(),
     );
     expect(restored).toEqual([]);
+    // Asking takes the focus the button had, on the side that keeps.
+    expect(document.activeElement?.textContent).toBe("Cancel");
     await act(async () =>
       container
         .querySelector<HTMLButtonElement>(
