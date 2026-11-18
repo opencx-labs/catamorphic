@@ -11742,12 +11742,22 @@ export class AgentSessionsService {
     projectId: string;
     sessionId: string;
   }): Promise<SessionWorkspaceHandle | undefined> {
-    const session = await this.db
+    const chat = await this.db
       .selectFrom("agent_sessions")
       .selectAll()
       .where("id", "=", input.sessionId)
       .where("project_id", "=", input.projectId)
       .executeTakeFirst();
+    // A shared subsession's sandbox is its workspace session's (ADR 0322);
+    // its own copy of the record can be stale once that one is rebuilt.
+    const session = chat?.workspace_session_id
+      ? await this.db
+          .selectFrom("agent_sessions")
+          .selectAll()
+          .where("id", "=", chat.workspace_session_id)
+          .where("project_id", "=", input.projectId)
+          .executeTakeFirst()
+      : chat;
     if (!session?.allocation_id || !session.sandbox_id) return undefined;
     const owner = await this.ownerOf(session);
     if (!owner) return undefined;
@@ -11768,16 +11778,43 @@ export class AgentSessionsService {
     projectId: string;
     sessionId: string;
   }): Promise<SecretMask> {
-    return new SecretMask(
-      await this.sessionSecretValues({
-        identity: {
-          tenantId: input.tenantId,
-          externalUserId: PROJECT_PRINCIPAL_ID,
-        },
-        projectId: input.projectId,
-        sessionId: input.sessionId,
-      }),
-    );
+    // Every session sharing the workspace may have delivered secrets into
+    // it (ADR 0322): its command's output masks them all.
+    const chat = await this.db
+      .selectFrom("agent_sessions")
+      .select("workspace_session_id")
+      .where("id", "=", input.sessionId)
+      .where("project_id", "=", input.projectId)
+      .executeTakeFirst();
+    const workspaceSessionId = chat?.workspace_session_id ?? input.sessionId;
+    const sharers = await this.db
+      .selectFrom("agent_sessions")
+      .select("id")
+      .where("project_id", "=", input.projectId)
+      .where((eb) =>
+        eb.or([
+          eb("id", "=", workspaceSessionId),
+          eb("workspace_session_id", "=", workspaceSessionId),
+        ]),
+      )
+      .execute();
+    const values: Record<string, string[]> = {};
+    for (const sessionId of new Set([
+      input.sessionId,
+      ...sharers.map((row) => row.id),
+    ]))
+      for (const [name, held] of Object.entries(
+        await this.sessionSecretValues({
+          identity: {
+            tenantId: input.tenantId,
+            externalUserId: PROJECT_PRINCIPAL_ID,
+          },
+          projectId: input.projectId,
+          sessionId,
+        }),
+      ))
+        values[name] = [...new Set([...(values[name] ?? []), ...held])];
+    return new SecretMask(values);
   }
 
   /** The running workspace of a chat, through its Allocation's machine. */

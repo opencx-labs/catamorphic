@@ -884,6 +884,43 @@ describe("subagents of a server agent (ADR 0322)", () => {
     expect(await status()).toBe("released");
   }, 120_000);
 
+  it("masks what any sharer delivered in a workflow command's output, and finds the sandbox through the workspace", async () => {
+    const parent = await sessions.create(identity, projectId, {
+      workspace: { ref: "pr" },
+    });
+    // The child arrives first: its turn delivers the Environment's secret
+    // into the parent's workspace; the parent has run nothing yet.
+    const child = await sessions.createSubsession(
+      identity,
+      projectId,
+      parent.id,
+      { task: "First look" },
+    );
+    await until("the child rests", async () => idle(child.session.id));
+    expect((await session(parent.id)).secrets_held_at).toBeNull();
+    expect((await session(child.session.id)).secrets_held_at).not.toBeNull();
+    const mask = await sessions.chatSecretMask({
+      tenantId: identity.tenantId,
+      projectId,
+      sessionId: parent.id,
+    });
+    expect(mask.text("token=review-token-value")).not.toContain(
+      "review-token-value",
+    );
+    // The child's own copy of the sandbox record goes stale; its commands
+    // still reach the workspace's sandbox.
+    await db
+      .updateTable("agent_sessions")
+      .set({ sandbox_id: null })
+      .where("id", "=", child.session.id)
+      .execute();
+    const reached = await sessions.chatSandbox({
+      projectId,
+      sessionId: child.session.id,
+    });
+    expect(reached?.sandboxId).toBe(await sandboxOf(parent.id));
+  }, 120_000);
+
   it("starts a child that asks for its own workspace at the parent's base", async () => {
     const parent = await sessions.create(identity, projectId, {
       workspace: { ref: "pr" },
