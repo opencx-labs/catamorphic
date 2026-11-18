@@ -34,17 +34,23 @@ idle release, rebuild, destroy and shared subsessions (0322) act on both.
   a workspace runs there unless it names the agent side: setup (0208, 0257),
   `exec` in either mode (0324), terminals (0209), background processes
   (0174), previews, Work's own Git on the checkout (seed, sync, checkpoint),
-  the built-in agent's tools, and every shell command a harness runs. It
-  gets the containers capability, the volumes, the setup network while setup
-  runs, the Environment's secrets, and grants only for `commands.connections`.
-- The **agent container** (`<id>-agent`) holds the runner, the harness, every
-  grant, the model and Work tool endpoints, the harness's state, sign-ins and
-  the trusted `$WORK_PROGRAM` copy. No volume, no container runtime, never
-  widened.
+  the built-in agent's tools, and every shell command and Git a harness
+  runs. It gets the containers capability, the volumes, the setup network
+  while setup runs, the Environment's secrets, and its own grants for
+  `commands.connections` alone.
+- The **agent container** (`<id>-agent`) holds the runner, the harness, its
+  attempt's model grant (no other grant: its Git and HTTP run where commands
+  run), the model and Work tool endpoints, the harness's state, sign-ins and
+  the trusted `$WORK_PROGRAM` copy. It runs as uid 10001 with a home of its
+  own, owning none of the checkout. No volume, no container runtime, never
+  widened. People, models and workflows reach none of its processes.
 - They share the checkout (`/workspace/project`, one Docker volume) and
   nothing else: each has its own `/workspace`, session folder, `/tmp`,
   network namespace and egress proxy. Commands never see the agent's
-  loopback.
+  loopback. The checkout belongs to the command side and passes a shared
+  group (gid 10001) to everything made in it (setgid, umask 002 on both
+  sides), so the agent edits it and Git beside the agent refuses it as a
+  repository it does not own.
 - **Limits:** the command container gets the Environment's
   `requirements.resources` (it runs the tests and services); the agent
   container its own share, `commands.agentResources`, 1 CPU and 2 GiB by
@@ -59,20 +65,28 @@ provider without the capability has one side.
 
 **Harness shells go to the command container.** A provider with the
 capability serves a Unix socket from the machine into the agent container
-alone (`/run/work-commands/commands.sock`). The runner writes a `bash` shim
-beside its state; it forwards argv, cwd, stdin, signals and the
-environment less Work's variables and model keys, and the machine runs the
-command in the command container in its own process group (`docker exec`),
-streaming output and the exit code back. A signal or a dropped connection
-stops the whole group. Files a command writes directly in a return folder
-the shim names (Claude Code's working-directory file) come back, small and
-regular only. The command container holds no socket, address or file of
-the agent container, so it has no channel back.
+alone (`/run/work-commands/commands.sock`). The runner writes a `bash` shim,
+the harness's shell, and a `git` shim, first on its `PATH`, beside its
+state. They forward argv, cwd, stdin, signals and an allowlist of variables
+(locale, terminal, time zone, CI, colors; the command side keeps its own
+`PATH`, `HOME` and session files), and the machine runs the command in the
+command container in its own process group (`docker exec`), streaming
+output, at most 64 MiB, and the exit code back. A signal, a dropped
+connection or the budget stops the whole group, signalled as the
+container's own user. Claude Code's working-directory files come back,
+small and regular only. The command container holds no socket, address or
+file of the agent container, so it has no channel back.
 
 - **Claude Code:** `CLAUDE_CODE_SHELL` (Bash, Monitor, background tasks),
-  and only its home's settings: the checkout's `.claude` settings, hooks,
-  MCP servers, skills and `CLAUDE.md` would run or steer the agent from the
-  pull request, so they are not loaded.
+  the `git` shim (it runs Git itself for its context), and only its home's
+  settings: the checkout's `.claude` settings, hooks, MCP servers, skills and
+  `CLAUDE.md` would run or steer the agent from the pull request. A
+  Work-owned PreToolUse hook resolves each file tool's path to its real file
+  and refuses one outside the checkout and the CLI's temporary folder
+  (reads of the program copy excepted), so a link cannot lead it to the
+  model grant or its settings. Docker's volume driver does not apply
+  `nosymfollow` to a bind view under runc or gVisor (tested), so no mount
+  option does this for every harness.
 - **ACP agents** run apart only under a contract their definition states,
   which Work cannot check: `"shell": true` (every way the agent runs code
   goes through `$SHELL`) and `"projectConfig": false` (it loads no
@@ -94,7 +108,8 @@ container: Git in the agent container on a repository the pull request
 controls would run its configuration (hooks, `core.fsmonitor`, credential
 helpers) there. Seeding needs no grant. Commands that fetch, `exec
 in: "session"` included, use a Git binding listed in
-`commands.connections`, so list only a read binding (`git:read`). A fetch
+`commands.connections`, so list only a read binding (`git:read`), one of
+its own rather than the agent's. A fetch
 helper in the agent container lost for the same reason. `exec` copies
 `$WORK_PROGRAM` to both sides at the same path: the command's copy is as
 trustworthy as the command container once the pull request's code ran; the
@@ -117,5 +132,8 @@ ACP client terminals (`terminal/create`), for agents that run commands
 through their client rather than `$SHELL`.
 Microsandbox, local-process and Cloudflare sandboxes do not offer it, nor
 machines running privileged containers. What remains: the agent reads what
-the pull request wrote, links included, so hostile content can still talk
-the agent into misusing its own authority; the review stays advice (0259).
+the pull request wrote, so hostile content can still talk it into misusing
+its own authority; an ACP agent's file tools are its own, so a link can
+still lead one to its model grant or its own configuration; an image whose
+system Git configuration trusts every directory (`safe.directory=*`) undoes
+the ownership refusal. The review stays advice (0259).

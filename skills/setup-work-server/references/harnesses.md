@@ -272,9 +272,11 @@ chat's grants or call its model or Work's tools. Each harness takes it its
 own way:
 
 - **Claude Code** runs Bash, Monitor and background tasks through Work's
-  shim (`CLAUDE_CODE_SHELL`) and loads only its home's settings: the
-  checkout's `CLAUDE.md` and `.claude/` (hooks, MCP servers, skills) would
-  run or steer it from the repository, so they are not read there.
+  shim (`CLAUDE_CODE_SHELL`), finds Work's `git` first on its `PATH`, and
+  loads only its home's settings: the checkout's `CLAUDE.md` and `.claude/`
+  (hooks, MCP servers, skills) would run or steer it from the repository,
+  so they are not read there. Its file tools resolve links and stay in the
+  checkout and its temporary folder.
 - **ACP agents** run there only under a contract their definition states,
   since Work cannot see inside them: every way the agent runs code goes
   through `$SHELL` (`"shell": true`), and it loads no configuration,
@@ -291,6 +293,13 @@ own way:
   sent apart. Use it in Environments that run commands beside the agent.
 - **The built-in agent** runs on the control plane; its tools already run
   in the command container.
+
+The agent's container runs as uid 10001, owning none of the checkout, so
+Git there refuses the repository; keep `safe.directory` out of the image's
+system Git configuration. It holds only the turn's model grant. An ACP
+agent's own file tools still follow links in the checkout, to that grant or
+its configuration; an agent that matters here should refuse paths outside
+the checkout itself.
 
 ## Verify
 

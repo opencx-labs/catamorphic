@@ -1021,7 +1021,10 @@ caches (ADR 0208):
   gets the Environment's `requirements.resources`; the agent container its
   own share, `"agentResources": { "cpuMillis": 1000, "memoryMb": 2048 }` by
   default, and the Allocation reserves both, so size `capacity` for the
-  pair. Codex cannot run in such
+  pair. The agent container runs as uid 10001 and the checkout's group is
+  gid 10001; an image whose system Git configuration sets
+  `safe.directory=*` undoes Git's refusal of a checkout it does not own.
+  Codex cannot run in such
   an Environment (it picks its own shell); Claude Code loads only its home's
   settings there; an ACP agent needs `"acp": { "shell": true }` in its
   definition.
