@@ -303,9 +303,9 @@ already admitted may finish streaming; clean up cloud resources independently
 and enforce spending policy in connection guards.
 While one `postReviews` run publishes, later runs for the same pull request
 (a turn's status, a finding, a settled turn) show as `queued` and start in
-turn, alike events joining the one waiting; the chat's `review.verdicts`, `review.posted` and `review.progress`
-metadata say what each commit carries, what was posted, and which run shows
-the review in progress. A stamp finds a write GitHub accepted when its answer
+turn, alike events joining the one waiting; the chat's `review.verdicts` and `review.posted`
+metadata say what each commit carries and what was posted, and the pull
+request's checks which run shows the review in progress. A stamp finds a write GitHub accepted when its answer
 was lost, and a finding's marker finds it wherever it was posted; a write
 GitHub's lists do not show yet can still be posted twice by one retry or
 the publication right behind it. This is application policy built from ordinary workflow primitives, not

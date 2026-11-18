@@ -1359,10 +1359,12 @@ describe("postReviews", () => {
       { posted: "progress", verdict: null, problem: null },
       { posted: "review", verdict: "failure", problem: null },
     ]);
-    expect(result.metadata["review.progress"]).toEqual({
-      commit: HEAD,
-      id: 100,
-    });
+    // The chat records what was posted, never where a check is: GitHub
+    // says that.
+    expect(Object.keys(result.metadata).sort()).toEqual([
+      "review.posted",
+      "review.verdicts",
+    ]);
     expect(posted(result.metadata)).toEqual([
       "work-review:t1:check",
       "work-review:t1:review",
@@ -1516,10 +1518,64 @@ describe("postReviews", () => {
     const [, late, settled] = result.outcomes as unknown[];
     expect(late).toMatchObject({ posted: "nothing" });
     expect(settled).toMatchObject({ posted: "nothing" });
-    expect(result.metadata["review.progress"]).toEqual({
-      commit: OTHER,
-      id: 102,
-    });
+    expect(result.metadata["review.progress"]).toBeUndefined();
+  });
+
+  it("ends every run a lagging list let it make, with the verdict", async () => {
+    const result = await publish(`
+      await runWorkflow(postReviews, event("t1", "queued"), world.context);
+      // GitHub's list lags the run just made: the next status makes another.
+      world.github.lagging.add(world.github.checks[0].id);
+      world.chat.turn = { id: "t1", status: "preparing" };
+      await runWorkflow(postReviews, event("t1", "preparing"), world.context);
+      world.github.lagging.clear();
+      world.submit("t1", { verdict: "COMMENT", reviewedCommit: ${JSON.stringify(HEAD)} });
+      world.chat.turn = null;
+      return runWorkflow(postReviews, event("t1"), world.context);
+    `);
+    expect(result.writes).toEqual([
+      "check:in_progress",
+      "check:in_progress",
+      "update:a:success",
+      "update:a:success",
+      "review:COMMENT",
+    ]);
+    const done = {
+      commit: "a",
+      status: "completed",
+      conclusion: "success",
+      title: "Nothing blocks (score 4/5)",
+    };
+    expect(result.runs).toEqual([done, done]);
+  });
+
+  it("ends every run a lagging list let it make, when a push supersedes the head and when the pull request closes", async () => {
+    const result = await publish(`
+      await runWorkflow(postReviews, event("t1", "queued"), world.context);
+      world.github.lagging.add(world.github.checks[0].id);
+      world.chat.turn = { id: "t1", status: "preparing" };
+      await runWorkflow(postReviews, event("t1", "preparing"), world.context);
+      world.github.lagging.clear();
+      // A push: the new head's run ends both of the earlier head's.
+      world.github.head = ${JSON.stringify(OTHER)};
+      await runWorkflow(postReviews, event("t2", "queued"), world.context);
+      world.github.lagging.add(world.github.checks[2].id);
+      world.chat.turn = { id: "t2", status: "preparing" };
+      await runWorkflow(postReviews, event("t2", "preparing"), world.context);
+      world.github.lagging.clear();
+      // The pull request closes: both of the head's end.
+      world.github.state = "closed";
+      world.chat.turn = null;
+      return runWorkflow(postReviews, event("t2", "cancelled"), world.context);
+    `);
+    expect(
+      result.runs.map((run) => [run.commit, run.status, run.title]),
+    ).toEqual([
+      ["a", "completed", "Superseded"],
+      ["a", "completed", "Superseded"],
+      ["d", "completed", "Not reviewed"],
+      ["d", "completed", "Not reviewed"],
+    ]);
   });
 
   it("lets a newer turn speak for the head: a stale settle never completes its check", async () => {
@@ -1561,22 +1617,26 @@ describe("postReviews", () => {
     expect(result.outcomes).toMatchObject({ posted: "nothing" });
   });
 
-  it("follows the chat's progress record only to the App's own run of this pull request", async () => {
+  it("ends only the App's own runs of this pull request on its earlier heads, whatever the chat's metadata says", async () => {
     const result = await publish(`
-      // Planted by the reviewer: another pull request's run in progress on
-      // another commit, and another app's run with this one's id.
+      // An earlier head of this pull request carries this pull request's
+      // run, another pull request's, and another app's with this one's id;
+      // the reviewer's planted record points at the other pull request's.
+      world.github.commits = [${JSON.stringify(OTHER)}];
       world.github.checks.push(
-        { id: 7, own: true, status: "in_progress", conclusion: null, externalId: "work-review:43:progress", headSha: ${JSON.stringify(OTHER)}, title: "Reviewing" },
-        { id: 8, own: false, status: "in_progress", conclusion: null, externalId: "work-review:42:progress", headSha: ${JSON.stringify(OTHER)}, title: "Reviewing" },
+        { id: 7, own: true, status: "in_progress", conclusion: null, externalId: "work-review:43:progress:x", headSha: ${JSON.stringify(OTHER)}, title: "Reviewing" },
+        { id: 8, own: false, status: "in_progress", conclusion: null, externalId: "work-review:42:progress:x", headSha: ${JSON.stringify(OTHER)}, title: "Reviewing" },
+        { id: 9, own: true, status: "in_progress", conclusion: null, externalId: "work-review:42:progress:x", headSha: ${JSON.stringify(OTHER)}, title: "Reviewing" },
       );
       world.chat.metadata["review.progress"] = { commit: ${JSON.stringify(OTHER)}, id: 7 };
       return runWorkflow(postReviews, event("t1", "queued"), world.context);
     `);
-    expect(result.writes).toEqual(["check:in_progress"]);
-    expect(result.runs.map((run) => run.status)).toEqual([
-      "in_progress",
-      "in_progress",
-      "in_progress",
+    expect(result.writes).toEqual(["check:in_progress", "update:d:cancelled"]);
+    expect(result.runs.map((run) => [run.commit, run.status])).toEqual([
+      ["d", "in_progress"],
+      ["d", "in_progress"],
+      ["d", "completed"],
+      ["a", "in_progress"],
     ]);
   });
 
@@ -1585,8 +1645,9 @@ describe("postReviews", () => {
       world.chat.turn = { id: "t1", status: "running" };
       const queue = workflowQueue(postReviews, world.context);
       const delivered = [];
-      // Hundreds of findings arrive while the first publication runs.
-      for (let index = 0; index < 400; index += 1)
+      // A turn's most findings (100 submissions, its review among them)
+      // arrive while the first publication runs.
+      for (let index = 0; index < 99; index += 1)
         delivered.push(queue.deliver(world.find("t1", { id: "f" + index, line: 2 })));
       world.submit("t1", { verdict: "REQUEST_CHANGES", reviewedCommit: ${JSON.stringify(HEAD)} });
       world.chat.turn = null;
@@ -1609,16 +1670,18 @@ describe("postReviews", () => {
       problem: null,
     });
     // The first publication posts the turn's first 30 in one review; the
-    // one that joined finds them decided and calls GitHub not at all.
+    // one that joined finds them posted, by their markers, and writes
+    // nothing.
     const markers = result.reviews.flatMap(
       (review) => review.body.match(/:finding:f\d+ -->/g) ?? [],
     );
     expect(markers).toHaveLength(30);
     expect(markers).toContain(":finding:f29 -->");
     expect(result.writes).toHaveLength(3);
-    expect(result.calls).toBeLessThanOrEqual(12);
-    // The rest are counted, where people look: the review and the check.
-    const note = "At least 70 more findings were not posted";
+    expect(result.calls).toBeLessThanOrEqual(14);
+    // The rest are counted exactly, where people look: the review and the
+    // check.
+    const note = "69 more findings were not posted";
     expect(result.reviews.at(-1)?.body).toContain(note);
     expect(result.summaries[0]).toContain(note);
   });
@@ -1675,6 +1738,38 @@ describe("postReviews", () => {
     expect(markers).not.toContain(":finding:bad -->");
     expect(markers).not.toContain(":finding:f31 -->");
     expect(result.reviews[0]?.body).toContain("1 more finding was not posted");
+  });
+
+  it("counts nothing withheld when a turn's every submission is one of its first 30 findings", async () => {
+    const result = await publish(`
+      world.chat.turn = { id: "t1", status: "running" };
+      for (let index = 0; index < 99; index += 1)
+        world.find("t1", { id: "f" + (index % 30), line: 2 });
+      world.submit("t1", { verdict: "COMMENT", reviewedCommit: ${JSON.stringify(HEAD)} });
+      world.chat.turn = null;
+      return runWorkflow(postReviews, event("t1"), world.context);
+    `);
+    expect(result.reviews).toHaveLength(1);
+    expect(result.reviews[0]?.body).not.toContain("not posted");
+    expect(result.summaries[0]).not.toContain("not posted");
+  });
+
+  it("counts the findings a full commit had no room for, in the review and its check", async () => {
+    const result = await publish(`
+      world.chat.turn = { id: "t1", status: "running" };
+      for (let index = 0; index < 30; index += 1)
+        await runWorkflow(postReviews, world.find("t1", { id: "f" + index, line: 2 }), world.context);
+      world.chat.turn = { id: "t2", status: "running" };
+      for (let index = 0; index < 5; index += 1)
+        world.find("t2", { id: "g" + index, line: 2 });
+      world.submit("t2", { verdict: "REQUEST_CHANGES", reviewedCommit: ${JSON.stringify(HEAD)} });
+      world.chat.turn = null;
+      return runWorkflow(postReviews, event("t2"), world.context);
+    `);
+    expect(result.outcomes).toMatchObject({ verdict: "failure" });
+    const note = "5 more findings were not posted";
+    expect(result.reviews.at(-1)?.body).toContain(note);
+    expect(result.summaries.at(-1)).toContain(note);
   });
 
   it("shows nothing for a turn no longer queued or at work, and lets a turn still queued speak for the head", async () => {

@@ -171,6 +171,16 @@ async function fakeGithub(input: unknown, init?: RequestInit) {
       pull.checkRuns.push(run);
       return Response.json(run, { status: 201 });
     }
+    case "GET /repos/acme/web/pulls/1/commits":
+      // Every head the pull request had, oldest first: its commits.
+      return Response.json(
+        [
+          ...new Set([
+            ...pull.checkRuns.map((run) => String(run.head_sha)),
+            pull.head,
+          ]),
+        ].map((sha) => ({ sha })),
+      );
     case "GET /repos/acme/web/pulls/1":
       return Response.json({
         number: 1,
@@ -408,7 +418,7 @@ describe.skipIf(!databaseUrl)("reviewing pull requests (#118)", () => {
     return {
       verdicts: entries("review.verdicts"),
       posted: entries("review.posted").map((entry) => String(entry.effect)),
-      progress: metadata?.["review.progress"],
+      keys: Object.keys(metadata ?? {}).sort(),
     };
   };
   const assertAdvisoryPolicy = () => {
@@ -1044,7 +1054,8 @@ describe.skipIf(!databaseUrl)("reviewing pull requests (#118)", () => {
       expect.stringMatching(/^work-review:[0-9a-f-]{36}:check$/),
       expect.stringMatching(/^work-review:[0-9a-f-]{36}:review$/),
     ]);
-    expect(state.progress).toEqual({ commit: pullHead, id: 501 });
+    // GitHub, not the chat, says which run shows the review in progress.
+    expect(state.keys).toEqual(["review.posted", "review.verdicts"]);
     // Nothing the chat forged reached GitHub, and every call carried a
     // minted installation token.
     expect(JSON.stringify(githubCalls)).not.toMatch(/forged/);

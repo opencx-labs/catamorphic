@@ -35,8 +35,16 @@ export interface FakeFinding {
 
 export function fakeWorld(input: { head: string }) {
   let nextId = 100;
+  let head = input.head;
   const github = {
-    head: input.head,
+    /** GitHub's head; a push keeps the commits before it in the pull request. */
+    get head() {
+      return head;
+    },
+    set head(commit: string) {
+      if (!github.commits.includes(head)) github.commits.push(head);
+      head = commit;
+    },
     state: "open",
     checks: [] as Array<{
       id: number;
@@ -65,7 +73,18 @@ export function fakeWorld(input: { head: string }) {
     calls: 0,
     /** While set, reading the pull request waits for it: a run held mid-flight. */
     gate: null as Promise<void> | null,
+    /** The pull request's commits before its head, oldest first. */
+    commits: [] as string[],
+    /** Check runs GitHub's lists leave out for now, as they can after a write. */
+    lagging: new Set<number>(),
   };
+  /** The pull request's commits as GitHub lists them, its head last. */
+  const pullCommits = () => [
+    ...new Set([
+      ...github.commits.filter((commit) => commit !== github.head),
+      github.head,
+    ]),
+  ];
   const chat = {
     metadata: {} as Record<string, Json>,
     results: [] as Array<Record<string, Json>>,
@@ -78,6 +97,13 @@ export function fakeWorld(input: { head: string }) {
     placement: { environment: "review" } as { environment: string } | null,
     /** Why a metadata write is refused (the cap an agent filled), if it is. */
     refuseMetadata: null as string | null,
+  };
+  /** As core's submit_result: a turn makes at most 100 submissions. */
+  const submitted = (turnId: string) => {
+    if (chat.results.filter((result) => result.turnId === turnId).length >= 100)
+      throw new Error(
+        "This turn has made 100 submissions, the most one turn makes.",
+      );
   };
   const answered = (action: string, value: Json) => {
     if (github.loseNextAnswer.delete(action))
@@ -114,9 +140,48 @@ export function fakeWorld(input: { head: string }) {
       // As the typed action lists them: the run's title is not among them.
       check_runs: ({ commit }: { commit: string }) => ({
         runs: github.checks
-          .filter((run) => run.headSha === commit)
+          .filter(
+            (run) => run.headSha === commit && !github.lagging.has(run.id),
+          )
           .map(({ title: _title, summary: _summary, ...run }) => run),
       }),
+      // As the typed action does: every run of the App's in progress on
+      // the commits (or the pull request's last 20 but one), by name and
+      // external id prefix, as GitHub lists them.
+      complete_check_runs: (args: {
+        commits?: string[];
+        pullRequest?: { number: number; except?: string };
+        externalIdPrefix: string;
+        conclusion: string;
+        output: { title: string; summary: string };
+      }) => {
+        const pull = args.pullRequest;
+        const commits = pull
+          ? pullCommits()
+              .filter((commit) => commit !== pull.except)
+              .slice(-20)
+          : (args.commits ?? []);
+        const completed: Array<{ id: number; commit: string }> = [];
+        for (const commit of new Set(commits))
+          for (const run of github.checks)
+            if (
+              run.headSha === commit &&
+              run.own &&
+              !github.lagging.has(run.id) &&
+              run.status !== "completed" &&
+              run.externalId?.startsWith(args.externalIdPrefix)
+            ) {
+              run.status = "completed";
+              run.conclusion = args.conclusion;
+              run.title = args.output.title;
+              run.summary = args.output.summary;
+              github.writes.push(
+                `update:${commit.slice(0, 1)}:${args.conclusion}`,
+              );
+              completed.push({ id: run.id, commit });
+            }
+        return answered("complete_check_runs", { completed });
+      },
       create_check_run: (args: {
         headSha: string;
         status?: string;
@@ -319,6 +384,7 @@ export function fakeWorld(input: { head: string }) {
     /** The reviewer's turn submits this review (ADR 0323). */
     submit(turnId: string, review: FakeReview | null) {
       if (!review) return;
+      submitted(turnId);
       chat.results.unshift({
         id: `result-${turnId}-${chat.results.length}`,
         sessionId: "session-1",
@@ -344,6 +410,7 @@ export function fakeWorld(input: { head: string }) {
      */
     find(turnId: string, finding: FakeFinding) {
       const { attemptId, turnCommit, ...fields } = finding;
+      submitted(turnId);
       const result = {
         id: `finding-${turnId}-${chat.results.length}`,
         sessionId: "session-1",

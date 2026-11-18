@@ -43,7 +43,10 @@ export const FINDING_ID = /^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$/;
  */
 export const MAX_FINDINGS = 30;
 
-/** Findings of a turn read, its first submitted first. */
+/**
+ * Findings of a turn read, its first submitted first: every one, since a
+ * turn makes at most 100 submissions.
+ */
 export const FINDINGS_READ = 100;
 
 /** A recorded finding as the poster reads it: Work's record of a `finding` result. */
@@ -55,17 +58,15 @@ export type RecordedFinding = {
 };
 
 /**
- * A turn's findings, from its results first submitted first (at most
- * {@link FINDINGS_READ}): its first {@link MAX_FINDINGS} distinct valid
- * ids, each as first submitted, and how many distinct valid ids came after
- * them (`withheld`; `more` when the read was full, so there may be more).
- * A value the check refuses, or a second submission of an id, takes no
- * place among the 30.
+ * A turn's findings, from all its results first submitted first: its
+ * first {@link MAX_FINDINGS} distinct valid ids, each as first submitted,
+ * and how many distinct valid ids came after them (`withheld`). A value
+ * the check refuses, or a second submission of an id, takes no place
+ * among the 30.
  */
 export function turnFindings(oldestFirst: readonly RecordedFinding[]): {
   findings: Array<{ first: RecordedFinding; finding: WorkFinding }>;
   withheld: number;
-  more: boolean;
 } {
   const seen = new Set<string>();
   const findings: Array<{ first: RecordedFinding; finding: WorkFinding }> = [];
@@ -76,23 +77,21 @@ export function turnFindings(oldestFirst: readonly RecordedFinding[]): {
     if (findings.length < MAX_FINDINGS)
       findings.push({ first: result, finding: checked });
   }
-  return {
-    findings,
-    withheld: seen.size - findings.length,
-    more: oldestFirst.length >= FINDINGS_READ,
-  };
+  return { findings, withheld: seen.size - findings.length };
 }
 
-/** What a review says of the findings it could not post. */
+/**
+ * What a review and its check say of the findings that were not posted:
+ * the turn's beyond its first 30 (`withheld`), and those the commit had no
+ * room for (`full`).
+ */
 export function withheldNote(input: {
-  count: number;
-  more: boolean;
+  withheld: number;
   full: number;
 }): string {
-  const count = input.count + input.full;
-  if (count === 0 && !input.more) return "";
-  const many = `${input.more ? "At least " : ""}${count} more finding${count === 1 && !input.more ? " was" : "s were"} not posted`;
-  return `${many}: a review posts the first ${MAX_FINDINGS} findings of its turn, and a commit holds ${MAX_FINDINGS}.`;
+  const count = input.withheld + input.full;
+  if (count === 0) return "";
+  return `${count} more finding${count === 1 ? " was" : "s were"} not posted: a review posts the first ${MAX_FINDINGS} findings of its turn, and a commit holds ${MAX_FINDINGS}.`;
 }
 
 export function record(value: unknown): Record<string, unknown> {
