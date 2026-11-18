@@ -114,6 +114,21 @@ export const SESSION_ACTION_SCHEMAS = {
   /** The end of a chat's life: its work, workspace and key are released. */
   close: chat(mutation),
   interrupt: chat(mutation),
+  /**
+   * End a running turn's attempt without asking its harness and run the
+   * same turn again on a new attempt (ADR 0333), with the authority that
+   * interrupts the chat. Refuses a turn that is not running.
+   */
+  restart: chat({
+    ...mutation,
+    turnId: z.string().uuid(),
+    reason: z.string().min(1).max(500),
+  }),
+  /**
+   * A turn's attempts, with their outcome and the masked tails of their
+   * runner's and harness's own output (ADR 0333).
+   */
+  attempts: chat({ ...target, turnId: z.string().uuid() }),
   complete: chat({ ...mutation, content: z.string().min(1) }),
   reopen: chat(mutation),
   stopWatcher: chat({ ...mutation, watcherId: z.string().uuid() }),
@@ -300,6 +315,17 @@ export class SessionActionsService {
             throw new Error("No message in this chat has that id");
           return json({ sessionId: session.id, key: session.key, messages });
         }
+        if (input.operation === "attempts")
+          return json({
+            sessionId: session.id,
+            key: session.key,
+            attempts: await this.sessions.attempts(
+              input.identity,
+              input.projectId,
+              session.id,
+              { turnId: SESSION_ACTION_SCHEMAS.attempts.parse(args).turnId },
+            ),
+          });
         if (input.operation === "results") {
           const results = await this.sessions.results(
             input.identity,
@@ -543,6 +569,17 @@ export class SessionActionsService {
                 );
               result = { interrupted: action.target_turn_id !== null };
               break;
+            case "restart": {
+              const { turnId, reason } =
+                SESSION_ACTION_SCHEMAS.restart.parse(args);
+              result = await this.sessions.restartTurn(
+                input.identity,
+                input.projectId,
+                args.sessionId,
+                { turnId, reason, signal: input.signal },
+              );
+              break;
+            }
             case "stopWatcher":
               result = {
                 stopped: await this.watchers()?.stop({
@@ -696,6 +733,8 @@ function actionLabel(operation: SessionActionOperation): string {
     unarchive: "Unarchived this session",
     close: "Closed this chat",
     interrupt: "Interrupted this session",
+    restart: "Restarted the agent's attempt",
+    attempts: "Read a turn's attempts",
     complete: "Marked work finished",
     reopen: "Reopened the work",
     stopWatcher: "Stopped a watcher",

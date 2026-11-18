@@ -6997,6 +6997,35 @@ export interface paths {
                             /** Format: date-time */
                             updatedAt: string;
                             snapshot: components["schemas"]["SessionSnapshot"];
+                            turn: {
+                                id: string;
+                                ordinal: number;
+                                /** @enum {string} */
+                                status: "preparing" | "running" | "waiting" | "finalizing";
+                                attempt: {
+                                    id: string;
+                                    ordinal: number;
+                                    reason: string;
+                                    startedAt: string | null;
+                                } | null;
+                                attempts: number;
+                                restarts: number;
+                                progressAt: string | null;
+                                stalledAt: string | null;
+                                stallMinutes: number | null;
+                                activity: {
+                                    tools: {
+                                        name: string;
+                                        description: string | null;
+                                        since: string;
+                                    }[];
+                                    commands: {
+                                        command: string;
+                                        description: string | null;
+                                        since: string;
+                                    }[];
+                                };
+                            } | null;
                         };
                     };
                 };
@@ -7525,6 +7554,184 @@ export interface paths {
         };
         put?: never;
         post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/projects/{projectId}/agent/sessions/{sessionId}/turns/{turnId}/attempts": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    projectId: string;
+                    sessionId: string;
+                    turnId: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description Default Response */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            attempts: {
+                                id: string;
+                                ordinal: number;
+                                reason: string;
+                                status: string;
+                                error: {
+                                    message: string;
+                                } | null;
+                                startedAt: string | null;
+                                completedAt: string | null;
+                                progressAt: string | null;
+                                stalledAt: string | null;
+                                diagnostics: {
+                                    runner: string;
+                                    harness: string;
+                                } | null;
+                            }[];
+                        };
+                    };
+                };
+                /** @description Default Response */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                503: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                        };
+                    };
+                };
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/projects/{projectId}/agent/sessions/{sessionId}/turns/{turnId}/restart": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    projectId: string;
+                    sessionId: string;
+                    turnId: string;
+                };
+                cookie?: never;
+            };
+            requestBody: {
+                content: {
+                    "application/json": {
+                        reason: string;
+                        idempotencyKey: string;
+                    };
+                };
+            };
+            responses: {
+                /** @description Default Response */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            turnId: string;
+                            attemptId: string;
+                            attempt: number;
+                            attempts: number;
+                            restarts: number;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                202: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            /** @enum {string} */
+                            delivery: "queued";
+                        } & {
+                            [key: string]: unknown;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                409: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                503: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                        };
+                    };
+                };
+            };
+        };
         delete?: never;
         options?: never;
         head?: never;
@@ -19894,9 +20101,9 @@ export interface components {
             sessionId: string;
             ordinal: number;
             /** @enum {string} */
-            reason: "initial" | "retry" | "steer_restart" | "recovery";
+            reason: "initial" | "retry" | "steer_restart" | "recovery" | "restart";
             /** @enum {string} */
-            status: "preparing" | "running" | "completed" | "failed" | "interrupted" | "lost" | "superseded";
+            status: "preparing" | "running" | "completed" | "failed" | "interrupted" | "lost" | "superseded" | "restarted";
             providerThreadId: string | null;
             nativeTurnRef: {
                 id: string;
@@ -20825,9 +21032,9 @@ export interface components {
             sessionId: string;
             ordinal: number;
             /** @enum {string} */
-            reason: "initial" | "retry" | "steer_restart" | "recovery";
+            reason: "initial" | "retry" | "steer_restart" | "recovery" | "restart";
             /** @enum {string} */
-            status: "preparing" | "running" | "completed" | "failed" | "interrupted" | "lost" | "superseded";
+            status: "preparing" | "running" | "completed" | "failed" | "interrupted" | "lost" | "superseded" | "restarted";
             providerThreadId: string | null;
             nativeTurnRef: {
                 id: string;

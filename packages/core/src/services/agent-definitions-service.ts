@@ -273,6 +273,12 @@ export const AgentDelegationGrantSchema = z.object({
 
 export type AgentDelegationGrant = z.infer<typeof AgentDelegationGrantSchema>;
 
+/** A stall threshold (ADR 0333): whole minutes, one to a day. */
+export const AgentStallSchema = z.strictObject({
+  minutes: z.number().int().min(1).max(1440),
+});
+export type AgentStall = z.infer<typeof AgentStallSchema>;
+
 export const AgentDelegationPolicySchema = z.object({
   enabled: z.boolean().default(true),
   maxConcurrentChildren: z.number().int().min(1).max(100).default(10),
@@ -385,6 +391,13 @@ export function agentDefinitionSchema(opts?: { allowE2eFake?: boolean }) {
        * authority: outside the consent hash.
        */
       results: ResultSchemasSchema.optional(),
+      /**
+       * How long a running turn may make no progress before Work records a
+       * stall and emits `session.turn-stalled` (ADR 0333). Absent, never.
+       * Work only reports it; a workflow decides what to do. Outside the
+       * consent hash: it grants nothing.
+       */
+      stall: AgentStallSchema.optional(),
       /** For kind "acp": the command that starts the agent, or its endpoint. */
       acp: z
         .object({
@@ -433,6 +446,7 @@ export interface AgentDefinition {
   >;
   delegation?: AgentDelegationPolicy;
   results?: ResultSchemas;
+  stall?: AgentStall;
   acp?: { endpoint?: string; command?: string[] };
 }
 

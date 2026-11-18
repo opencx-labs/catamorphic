@@ -136,6 +136,8 @@ function harness(options: {
   const reviews: Array<{ action: string; input: JsonObject }> = [];
   const refusals: Array<{ action: string; reason: string }> = [];
   const counts = { resolved: 0, liveGrant: 0 };
+  /** Attempts whose progress an admitted call recorded (ADR 0333). */
+  const progressed: string[] = [];
   const slow = () =>
     options.writeDelayMs ? until(options.writeDelayMs) : Promise.resolve();
   const gateway = new ModelGatewayService({
@@ -155,6 +157,7 @@ function harness(options: {
           agentSessionId: "session-1",
           alias: "model",
           turnId: options.runningTurn || "turn-1",
+          attemptId: "attempt-1",
           session: {
             ownerId: "member-1",
             active: options.sessionActive ?? true,
@@ -167,6 +170,9 @@ function harness(options: {
             expiresAt: null,
           },
         };
+      },
+      progress: async ({ attemptId }) => {
+        progressed.push(attemptId);
       },
       openUsage: async () => {
         const id = String(open.size + recorded.length + 1);
@@ -224,6 +230,7 @@ function harness(options: {
     gateway,
     state,
     counts,
+    progressed,
     upstreamCalls,
     recorded,
     audits,
@@ -454,6 +461,22 @@ describe("the model gateway", () => {
     expect(JSON.stringify([reviews, audits, recorded])).not.toContain(
       "secret prompt",
     );
+  });
+
+  it("records the attempt's progress for each admitted call, never a refused one (ADR 0333)", async () => {
+    const { gateway, progressed } = harness({ api: "anthropic" });
+    const call = (key: string | null) =>
+      gateway.handle(
+        messages({ model: "claude-test-1", max_tokens: 8, messages: [] }, key),
+      );
+    expect((await call(GRANT)).status).toBe(200);
+    await waitFor(() => progressed.length > 0);
+    expect(new Set(progressed)).toEqual(new Set(["attempt-1"]));
+    // A refused call is no progress.
+    const before = progressed.length;
+    expect((await call("not-the-grant")).status).toBe(401);
+    await until(20);
+    expect(progressed).toHaveLength(before);
   });
 
   it("forwards the request body byte for byte, JSON or not", async () => {

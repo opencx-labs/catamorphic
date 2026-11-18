@@ -105,6 +105,7 @@ const ATTEMPT_REASONS: readonly AttemptReason[] = [
   "retry",
   "steer_restart",
   "recovery",
+  "restart",
 ];
 const ATTEMPT_STATUSES: readonly AttemptStatus[] = [
   "preparing",
@@ -114,6 +115,7 @@ const ATTEMPT_STATUSES: readonly AttemptStatus[] = [
   "interrupted",
   "lost",
   "superseded",
+  "restarted",
 ];
 
 export function attemptFromRow(row: AttemptRow): Attempt {

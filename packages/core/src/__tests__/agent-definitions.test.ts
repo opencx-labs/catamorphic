@@ -27,6 +27,24 @@ describe("validateAgentDefinition", () => {
     });
     expect("error" in invalid).toBe(true);
   });
+  it("takes a stall threshold of whole minutes from one to a day (ADR 0333)", () => {
+    expect(
+      validateAgentDefinition({ ...base, stall: { minutes: 20 } }),
+    ).toMatchObject({ definition: { stall: { minutes: 20 } } });
+    for (const stall of [
+      { minutes: 0 },
+      { minutes: 1441 },
+      { minutes: 2.5 },
+      { minutes: "20" },
+      { seconds: 30 },
+      {},
+    ])
+      expect("error" in validateAgentDefinition({ ...base, stall })).toBe(true);
+    // The threshold grants nothing: it leaves consent alone.
+    expect(definitionHash({ ...base, stall: { minutes: 5 } })).toBe(
+      definitionHash(base),
+    );
+  });
   it("accepts a minimal definition", () => {
     const result = validateAgentDefinition(base);
     expect(result).toEqual({

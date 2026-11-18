@@ -30,6 +30,7 @@ import {
   ConnectionUnavailableError,
   hashBearer,
 } from "./connections-service.js";
+import { touchProgress } from "./sessions/turn-stalls.js";
 
 const tracer = getTracer("@catamorphic/core");
 const encoder = new TextEncoder();
@@ -497,6 +498,8 @@ export interface LiveModelGrant {
   agentSessionId: string | null;
   /** The exact turn authorized by this grant, also used for accounting. */
   turnId: string;
+  /** The attempt it was issued to: a call admitted on it is progress (ADR 0333). */
+  attemptId?: string;
   alias: string;
   /** The grant's session: its owner, whether it is open, and its agent. */
   session?: { ownerId: string; active: boolean; agentId?: string };
@@ -519,6 +522,8 @@ export const MAX_OPEN_CALL_MINUTES = 30;
 export interface ModelGatewayStore {
   /** The live grant a bearer names, or undefined. */
   liveGrant(args: { token: string }): Promise<LiveModelGrant | undefined>;
+  /** Record that the attempt made progress: a call was admitted (ADR 0333). */
+  progress?(args: { attemptId: string }): Promise<void>;
   /**
    * Open a session's call before its answer ends (ADR 0193): its usage
    * row, settled by `recordUsage`, so totals read on any replica wait for
@@ -598,6 +603,7 @@ export function dbModelGatewayStore(db: Kysely<DB>): ModelGatewayStore {
           "grant.allocation_id as allocationId",
           "grant.agent_session_id as agentSessionId",
           "turn.id as turnId",
+          "attempt.id as attemptId",
           "grant.alias as alias",
           "connection.id as connectionId",
           "connection.revision as revision",
@@ -615,6 +621,7 @@ export function dbModelGatewayStore(db: Kysely<DB>): ModelGatewayStore {
         allocationId: row.allocationId,
         agentSessionId: row.agentSessionId,
         turnId: row.turnId,
+        attemptId: row.attemptId,
         alias: row.alias,
         ...(row.sessionOwnerId
           ? {
@@ -633,6 +640,7 @@ export function dbModelGatewayStore(db: Kysely<DB>): ModelGatewayStore {
         },
       };
     },
+    progress: ({ attemptId }) => touchProgress({ db, attemptId }),
     openUsage: async ({ record }) =>
       (
         await db
@@ -1233,6 +1241,13 @@ export class ModelGatewayService {
         "authentication_error",
         "This session is closed",
       );
+    // An admitted call is the attempt's progress (ADR 0333), never its delay.
+    if (grant.attemptId)
+      void this.deps.store
+        .progress?.({ attemptId: grant.attemptId })
+        .catch(() =>
+          console.warn("[catamorphic] Could not record a turn's progress"),
+        );
     const identity: Identity = {
       tenantId: grant.tenantId,
       externalUserId:

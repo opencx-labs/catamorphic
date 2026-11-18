@@ -346,6 +346,13 @@ import {
 } from "./sessions/turn-engine.js";
 import { TurnQueue } from "./sessions/turn-queue.js";
 import {
+  attemptRecords,
+  nextStallAt,
+  recordStalls,
+  type TurnProgress,
+  turnProgress,
+} from "./sessions/turn-stalls.js";
+import {
   documentsClientFor,
   shipRemoteProject,
   syncRemoteProject,
@@ -681,6 +688,13 @@ export interface AgentTodoInput {
  */
 export interface AgentSessionDetail extends AgentSession {
   snapshot: SessionSnapshot;
+  /**
+   * The turn working now and its progress (ADR 0333): its attempt, how
+   * many it made and restarted, when it last made progress, a stall, and
+   * the tool calls and commands it reported still running. Null when no
+   * turn works.
+   */
+  turn: TurnProgress | null;
 }
 
 export interface AgentSessionPeer {
@@ -734,6 +748,21 @@ export class AgentSessionNotFoundError extends Error {
   constructor(readonly sessionId: string) {
     super(`Agent session '${sessionId}' not found`);
     this.name = "AgentSessionNotFoundError";
+  }
+}
+
+/** A restart named a turn that is not running (ADR 0333). */
+export class TurnNotRunningError extends Error {
+  constructor(
+    readonly turnId: string,
+    readonly status: string | null,
+  ) {
+    super(
+      status === null
+        ? `This chat has no turn ${turnId}`
+        : `Turn ${turnId} is ${status}, not running: only a running turn can be restarted`,
+    );
+    this.name = "TurnNotRunningError";
   }
 }
 
@@ -1570,6 +1599,9 @@ export class AgentSessionsService {
       await this.expireRequests().catch((error) =>
         console.warn("[catamorphic] Request expiry failed", error),
       );
+      await this.recordStalls().catch((error) =>
+        console.warn("[catamorphic] Recording stalled turns failed", error),
+      );
       if (Date.now() >= nextIdleSweep) {
         nextIdleSweep = Date.now() + (input.idleReleaseIntervalMs ?? 60_000);
         await this.releaseIdleWorkspaces().catch((error) =>
@@ -1700,10 +1732,25 @@ export class AgentSessionsService {
           .as("expires"),
       ])
       .executeTakeFirst();
-    const times = [row?.queued, row?.waits, row?.lapses, row?.expires]
+    // A running turn's silence falls due as a stall (ADR 0333).
+    const stall = await nextStallAt({ db: this.db, hostIds: [this.hostId] });
+    const times = [row?.queued, row?.waits, row?.lapses, row?.expires, stall]
       .filter((at) => at !== null && at !== undefined)
       .map((at) => new Date(at).getTime());
     return times.length > 0 ? new Date(Math.min(...times)) : null;
+  }
+
+  /**
+   * Record the stalls that fell due by `at` (default now) on chats this
+   * host holds (ADR 0333): each once per silence, with its
+   * `session.turn-stalled` event. Returns how many.
+   */
+  async recordStalls(input: { at?: Date } = {}): Promise<number> {
+    return recordStalls({
+      db: this.db,
+      hostIds: [this.hostId],
+      ...(input.at ? { at: input.at } : {}),
+    });
   }
 
   /**
@@ -2649,7 +2696,23 @@ export class AgentSessionsService {
       ),
       attentionMessage: await this.attentionItem(sessionId),
       snapshot,
+      turn: await turnProgress(this.db, sessionId),
     };
+  }
+
+  /**
+   * A turn's attempts with their outcome and the masked tails of their
+   * runner's and harness's own output (ADR 0333), for anyone who may read
+   * the chat.
+   */
+  async attempts(
+    identity: Identity,
+    projectId: string,
+    sessionId: string,
+    input: { turnId: string },
+  ) {
+    await this.requireSession(identity, projectId, sessionId, "read");
+    return attemptRecords(this.db, { sessionId, turnId: input.turnId });
   }
 
   /** Older items of a session, before a position (paging back through history). */
@@ -3735,6 +3798,79 @@ export class AgentSessionsService {
     if (options.notifyParent !== false)
       await this.interruptDelegation(identity, projectId, sessionId);
     this.kick(sessionId);
+  }
+
+  /**
+   * Restart a running turn's attempt (ADR 0333): the lease holder ends it
+   * without asking its harness and runs the turn again on a new attempt.
+   * Refuses a turn that is not running or waiting. Answers the attempt it
+   * ends, with the turn's attempt and restart counts so far; asked again
+   * before the holder acted, it names the same attempt.
+   */
+  async restartTurn(
+    identity: Identity,
+    projectId: string,
+    sessionId: string,
+    input: { turnId: string; reason: string; signal?: AbortSignal },
+  ): Promise<{
+    turnId: string;
+    attemptId: string;
+    attempt: number;
+    attempts: number;
+    restarts: number;
+  }> {
+    await this.requireSession(identity, projectId, sessionId);
+    const reason = input.reason.trim().slice(0, 500);
+    const answer = await this.db.transaction().execute(async (trx) => {
+      await this.log.lock(trx, sessionId);
+      const turn = await trx
+        .selectFrom("agent_turns")
+        .select(["id", "status", "active_attempt_id"])
+        .where("id", "=", input.turnId)
+        .where("session_id", "=", sessionId)
+        .executeTakeFirst();
+      const attempt =
+        turn && (turn.status === "running" || turn.status === "waiting")
+          ? await trx
+              .selectFrom("agent_turn_attempts")
+              .select(["id", "ordinal"])
+              .where("id", "=", turn.active_attempt_id ?? "")
+              .where("status", "=", "running")
+              .executeTakeFirst()
+          : undefined;
+      if (!turn || !attempt)
+        throw new TurnNotRunningError(input.turnId, turn?.status ?? null);
+      input.signal?.throwIfAborted();
+      const open = await trx
+        .selectFrom("agent_turn_commands")
+        .select("id")
+        .where("turn_id", "=", turn.id)
+        .where("attempt_id", "=", attempt.id)
+        .where("kind", "=", "restart")
+        .where("status", "in", ["pending", "sent"])
+        .executeTakeFirst();
+      if (!open)
+        await this.queue.enqueueCommand(trx, {
+          turnId: turn.id,
+          attemptId: attempt.id,
+          kind: "restart",
+          payload: { reason },
+        });
+      const reasons = await trx
+        .selectFrom("agent_turn_attempts")
+        .select("reason")
+        .where("turn_id", "=", turn.id)
+        .execute();
+      return {
+        turnId: turn.id,
+        attemptId: attempt.id,
+        attempt: attempt.ordinal,
+        attempts: reasons.length,
+        restarts: reasons.filter((row) => row.reason === "restart").length,
+      };
+    });
+    this.kick(sessionId);
+    return answer;
   }
 
   /**
@@ -5277,6 +5413,7 @@ export class AgentSessionsService {
           harness: harnessIdOf(agent),
           agentId: session.agent_id,
           recovery: agent.recovery ?? "continue",
+          ...(agent.stall ? { stallMinutes: agent.stall.minutes } : {}),
           ...(agent.unavailable
             ? { unavailable: { message: agent.unavailable } }
             : {}),
@@ -15375,6 +15512,8 @@ function withDefinitionPolicy(
       : {}),
     // The committed definition names its results (ADR 0323).
     ...(definition.results ? { results: definition.results } : {}),
+    // And how long its turns may be silent (ADR 0333).
+    ...(definition.stall ? { stall: definition.stall } : {}),
   };
 }
 

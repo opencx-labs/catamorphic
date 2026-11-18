@@ -130,6 +130,7 @@ export {
   type SessionPlacement,
   type SyncedFileChange,
   type ToolAlwaysAllowedEvent,
+  TurnNotRunningError,
   type UnsettledTurnState,
   UnsupportedAgentTopologyError,
 } from "./services/agent-sessions-service.js";

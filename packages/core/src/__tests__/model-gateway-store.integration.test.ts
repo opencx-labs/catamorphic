@@ -163,6 +163,35 @@ describeIf("the model gateway's store (ADR 0180)", () => {
     expect(await store.liveGrant({ token })).toBeUndefined();
   });
 
+  it("names the grant's attempt, and records its progress at most once a second (ADR 0333)", async () => {
+    const store = dbModelGatewayStore(db);
+    const { token, attemptId } = await grant();
+    expect(await store.liveGrant({ token })).toMatchObject({ attemptId });
+    const read = () =>
+      db
+        .selectFrom("agent_turn_attempts")
+        .select(["progress_at", "stalled_at"])
+        .where("id", "=", attemptId)
+        .executeTakeFirstOrThrow();
+    await db
+      .updateTable("agent_turn_attempts")
+      .set({
+        progress_at: new Date(Date.now() - 60_000),
+        stalled_at: new Date(),
+      })
+      .where("id", "=", attemptId)
+      .execute();
+    await store.progress?.({ attemptId });
+    const first = await read();
+    expect(first.stalled_at).toBeNull();
+    expect(
+      Date.now() - new Date(first.progress_at ?? 0).getTime(),
+    ).toBeLessThan(10_000);
+    // Within the second: no second write.
+    await store.progress?.({ attemptId });
+    expect((await read()).progress_at).toEqual(first.progress_at);
+  });
+
   it("ends a grant with its Allocation or its revocation", async () => {
     const store = dbModelGatewayStore(db);
     const released = await grant();

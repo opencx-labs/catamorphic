@@ -29,6 +29,7 @@ import {
   SessionInputNotFoundError,
   SessionMirrorBehindError,
   SessionMirrorDivergedError,
+  TurnNotRunningError,
   UnsupportedAgentTopologyError,
 } from "@catamorphic/core";
 import type { FastifyInstance } from "fastify";
@@ -73,6 +74,8 @@ import {
   ProjectAgentEntrySchema,
   ProjectIdParamsSchema,
   RenameAgentSessionSchema,
+  RestartTurnResultSchema,
+  RestartTurnSchema,
   ResumeAgentSessionSchema,
   SessionCommandSchema,
   SessionConflictSchema,
@@ -84,6 +87,8 @@ import {
   SessionResultsSchema,
   SessionStreamMessageSchema,
   SkillSchema,
+  TurnAttemptsSchema,
+  TurnIdParamsSchema,
   UpdateAgentSessionActivitySchema,
   UpdateAgentSessionMetadataSchema,
   UpdateAgentSessionSchema,
@@ -431,6 +436,93 @@ export function registerAgentRoutes(app: FastifyInstance, ctx: RouteContext) {
           return reply.status(404).send({ error: "Session not found" });
         if (error instanceof SessionInputNotFoundError)
           return reply.status(400).send({ error: error.message });
+        throw error;
+      }
+    },
+  });
+
+  // A turn's attempts with the masked tails of their runner's and harness's
+  // own output (ADR 0333), for anyone who may read the chat.
+  typed.route({
+    method: "GET",
+    url: "/projects/:projectId/agent/sessions/:sessionId/turns/:turnId/attempts",
+    schema: {
+      params: TurnIdParamsSchema,
+      response: {
+        200: TurnAttemptsSchema,
+        404: ErrorSchema,
+        503: ErrorSchema,
+      },
+    },
+    handler: async (request, reply) => {
+      const agentSessions = ctx.core?.agentSessions;
+      if (!agentSessions)
+        return reply.status(503).send({ error: "Coding agent not configured" });
+      try {
+        const attempts = await agentSessions.attempts(
+          resolveIdentity(request),
+          request.params.projectId,
+          request.params.sessionId,
+          { turnId: request.params.turnId },
+        );
+        return reply.send({ attempts });
+      } catch (error) {
+        if (
+          error instanceof ProjectNotFoundError ||
+          error instanceof AgentSessionNotFoundError
+        )
+          return reply.status(404).send({ error: "Session not found" });
+        throw error;
+      }
+    },
+  });
+
+  // Restart a running turn's attempt (ADR 0333): the same session action
+  // workflows and the project MCP use, recorded under the caller's key.
+  typed.route({
+    method: "POST",
+    url: "/projects/:projectId/agent/sessions/:sessionId/turns/:turnId/restart",
+    schema: {
+      params: TurnIdParamsSchema,
+      body: RestartTurnSchema,
+      response: {
+        200: RestartTurnResultSchema,
+        202: z.object({ delivery: z.literal("queued") }).passthrough(),
+        404: ErrorSchema,
+        409: ErrorSchema,
+        503: ErrorSchema,
+      },
+    },
+    handler: async (request, reply) => {
+      const actions = ctx.core?.sessionActions;
+      if (!actions)
+        return reply.status(503).send({ error: "Coding agent not configured" });
+      const identity = resolveIdentity(request);
+      try {
+        const result = await actions.execute({
+          identity,
+          projectId: request.params.projectId,
+          operation: "restart",
+          args: {
+            sessionId: request.params.sessionId,
+            turnId: request.params.turnId,
+            reason: request.body.reason,
+            idempotencyKey: request.body.idempotencyKey,
+          },
+          author: { kind: "user", externalUserId: identity.externalUserId },
+        });
+        const parsed = RestartTurnResultSchema.safeParse(result);
+        if (parsed.success) return reply.send(parsed.data);
+        // Another host holds the chat: delivered there, not yet applied.
+        return reply.status(202).send({ delivery: "queued" as const });
+      } catch (error) {
+        if (
+          error instanceof ProjectNotFoundError ||
+          error instanceof AgentSessionNotFoundError
+        )
+          return reply.status(404).send({ error: "Session not found" });
+        if (error instanceof TurnNotRunningError)
+          return reply.status(409).send({ error: error.message });
         throw error;
       }
     },

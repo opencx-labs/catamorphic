@@ -175,6 +175,11 @@ export interface TurnEngineHost {
     harness: string;
     agentId: string | null;
     recovery: "continue" | "stop";
+    /**
+     * How long an attempt may make no progress before a stall is recorded
+     * (ADR 0333); absent, never.
+     */
+    stallMinutes?: number;
     /** Why the agent cannot run now: the turn fails with it. */
     unavailable?: Omit<TurnError, "retrySafe">;
   }>;
@@ -361,6 +366,17 @@ const TAKEN_OVER_TOOL =
 const ENDED_TOOL = "This turn already ended, so the tool did not run.";
 /** The notice a turn whose thread was lost gets as it starts over (ADR 0245). */
 const THREAD_LOST_NOTICE = "thread_lost";
+/** The notice a restarted attempt leaves (ADR 0333). */
+const RESTARTED_NOTICE = "turn_restarted";
+/** What a restarted attempt's error says, before the reason given. */
+const RESTARTED_PREFIX = "Restarted: ";
+/** How much of a runner's and a harness's own output an attempt keeps (ADR 0333). */
+export const DIAGNOSTICS_TAIL_CHARS = 16_000;
+
+/** What the attempt after a restart is told (ADR 0333). */
+export function restartedPrompt(reason: string): string {
+  return `Your previous attempt at this turn was stopped and restarted (${reason}). Continue where you left off. First check what was already done (files, commands, messages) so you do not repeat anything that had side effects.`;
+}
 
 /**
  * Drives claimed turns (ADR 0198): prepares an attempt, starts its runner
@@ -946,6 +962,7 @@ export class TurnEngine {
     if (previous.status === "superseded")
       return { reason: "steer_restart", previous };
     if (previous.status === "lost") return { reason: "recovery", previous };
+    if (previous.status === "restarted") return { reason: "restart", previous };
     return { reason: "retry", previous };
   }
 
@@ -1078,6 +1095,13 @@ export class TurnEngine {
             ownerOnly: prepared.ownerOnly === true,
           })
         : [];
+    const restartReason =
+      reason === "restart" &&
+      previous?.error?.message.startsWith(RESTARTED_PREFIX)
+        ? previous.error.message.slice(RESTARTED_PREFIX.length)
+        : undefined;
+    const continuing =
+      binding.binding.mode === "resume" || binding.binding.mode === "restore";
     const { input, steered, read } = await this.attemptInput({
       turn,
       attempt,
@@ -1085,11 +1109,18 @@ export class TurnEngine {
       inputItem: inputItem ? itemFromRow(inputItem) : null,
       riders,
       handoff:
-        [binding.handoff, ...(prepared.notes ?? [])]
+        [
+          binding.handoff,
+          // A restart on a new thread starts the turn's input over, told why.
+          reason === "restart" && !continuing
+            ? restartedPrompt(restartReason ?? "asked")
+            : null,
+          ...(prepared.notes ?? []),
+        ]
           .filter(Boolean)
           .join("\n\n") || null,
-      continuing:
-        binding.binding.mode === "resume" || binding.binding.mode === "restore",
+      continuing,
+      ...(restartReason ? { restartReason } : {}),
     });
     if (
       prepared.checkpointBefore !== undefined &&
@@ -1144,6 +1175,12 @@ export class TurnEngine {
         .set({
           runner: runner as unknown as Json,
           provider_started_at: new Date(),
+          // Its clock starts now (ADR 0333).
+          progress_at: sql<Date>`now()`,
+          stall_after_seconds: harness.stallMinutes
+            ? harness.stallMinutes * 60
+            : null,
+          stalled_at: null,
         })
         .where("id", "=", attempt.id)
         .execute();
@@ -1301,6 +1338,8 @@ export class TurnEngine {
     handoff: string | null;
     /** The attempt resumes the thread earlier attempts of the turn ran on. */
     continuing: boolean;
+    /** Why the attempt before was restarted, for a `restart` (ADR 0333). */
+    restartReason?: string;
   }): Promise<{
     input: AttemptStart["input"];
     steered: string[];
@@ -1339,17 +1378,24 @@ export class TurnEngine {
     const taken = new Set(began.flatMap((runner) => runner?.consumed ?? []));
     // A restart goes on from where the thread is, unless no attempt ever
     // began the turn: then its input starts over, with what was steered.
-    const restart = input.reason === "steer_restart" && began.length > 0;
+    const restart =
+      (input.reason === "steer_restart" || input.reason === "restart") &&
+      began.length > 0;
     const base =
       input.inputItem && isInputItem(input.inputItem) ? input.inputItem : null;
     if (restart) {
       const steeredItems = others.filter((item) => !taken.has(item.id));
       const steerTexts = steeredItems.map((item) => this.deps.inputText(item));
       const body =
-        steerTexts.length > 0
-          ? `Your previous attempt at this turn was stopped so you can take in these messages that arrived while you worked:\n\n${steerTexts.join("\n\n")}`
-          : // Read meanwhile, by the attempt that stopped for them.
-            STEER_RESTART_CONTINUE;
+        input.reason === "restart"
+          ? [
+              restartedPrompt(input.restartReason ?? "asked"),
+              ...steerTexts,
+            ].join("\n\n")
+          : steerTexts.length > 0
+            ? `Your previous attempt at this turn was stopped so you can take in these messages that arrived while you worked:\n\n${steerTexts.join("\n\n")}`
+            : // Read meanwhile, by the attempt that stopped for them.
+              STEER_RESTART_CONTINUE;
       return {
         input: {
           itemId: input.inputItem?.id ?? derivedId(input.attempt.id, "input"),
@@ -1700,11 +1746,33 @@ export class TurnEngine {
       : null;
     const agentId = ctx.session.agent_id;
 
+    /** A restart asked of this attempt (ADR 0333): it ends here, unasked. */
+    let restart: { commandId: string; reason: string } | undefined;
     const sendCommands = async () => {
-      const commands = await queue.openCommands({ turnId: turn.id });
-      if (commands.length === 0) return;
-      const frames: RunnerCommandFrame[] = [];
+      const all = await queue.openCommands({ turnId: turn.id });
+      if (all.length === 0) return;
+      const commands = all.filter((command) => command.kind !== "restart");
       const moot: string[] = [];
+      for (const command of all) {
+        if (command.kind !== "restart") continue;
+        // Meant for an attempt that already ended: nothing left to restart.
+        if (command.attemptId !== attempt.id) moot.push(command.id);
+        else
+          restart ??= {
+            commandId: command.id,
+            reason:
+              typeof command.payload.reason === "string"
+                ? command.payload.reason
+                : "asked",
+          };
+      }
+      if (restart) {
+        local.wake();
+        if (moot.length > 0)
+          await queue.markCommands({ ids: moot, status: "dropped" });
+        return;
+      }
+      const frames: RunnerCommandFrame[] = [];
       for (const command of commands) {
         const frame = await this.commandFrame(command, {
           attemptId: attempt.id,
@@ -1750,6 +1818,14 @@ export class TurnEngine {
     for (;;) {
       if (local.abort.signal.aborted) return { kind: "aborted", channel };
       await this.resendResults(local, attempt.id, channel);
+      if (restart)
+        return this.restartAttempt(local, {
+          ...ctx,
+          turn,
+          attempt,
+          channel,
+          ...restart,
+        });
       if (!commandsInFlight)
         commandsInFlight = local.waiter?.then(async () => {
           rearm();
@@ -1789,6 +1865,7 @@ export class TurnEngine {
           thread,
           runner,
           frames: read.frames,
+          diagnostics: read.diagnostics,
           cursor: read.cursor,
           agentId,
         });
@@ -2058,6 +2135,142 @@ export class TurnEngine {
   }
 
   /**
+   * End a running attempt without asking its harness (ADR 0333): its runner
+   * is killed with the harness under it, the attempt is `restarted` with the
+   * reason, its model grants are revoked, what it left open closes, and the
+   * same turn prepares its next attempt (`restart`), bound as any attempt
+   * is. A person's stop meanwhile ends the turn instead.
+   */
+  private async restartAttempt(
+    local: LocalTurn,
+    ctx: {
+      identity: Identity;
+      session: SessionRow;
+      turn: Turn;
+      attempt: Attempt;
+      channel: RunnerChannel;
+      commandId: string;
+      reason: string;
+    },
+  ): Promise<
+    | { kind: "restart"; turn: Turn }
+    | { kind: "aborted"; channel: RunnerChannel | undefined }
+    | {
+        kind: "completed";
+        turn: Turn;
+        attempt: Attempt;
+        completion: { status: "interrupted" };
+      }
+  > {
+    const { db, log, queue } = this.deps;
+    const { turn, attempt } = ctx;
+    // It is not asked: a stuck harness would never answer.
+    await ctx.channel
+      .kill()
+      .catch((error) =>
+        console.warn("[catamorphic] Could not end a restarted runner", error),
+      );
+    local.channel = undefined;
+    local.waits.abort();
+    local.waits = new AbortController();
+    if (local.abort.signal.aborted)
+      return { kind: "aborted", channel: undefined };
+    const now = new Date().toISOString();
+    const reason = ctx.reason.trim().slice(0, 500) || "asked";
+    const restarted: Attempt = {
+      ...attempt,
+      status: "restarted",
+      completedAt: now,
+      error: { message: `${RESTARTED_PREFIX}${reason}` },
+    };
+    const preparing: Turn = {
+      ...turn,
+      status: "preparing",
+      activity: "Restarting the agent",
+      activityAt: now,
+      providerRetry: null,
+      updatedAt: now,
+    };
+    let stopped = false;
+    await db.transaction().execute(async (trx) => {
+      await this.assertOwned(local, trx);
+      await log.lock(trx, turn.sessionId);
+      const current = await trx
+        .selectFrom("agent_turns")
+        .select("cancellation_requested_at")
+        .where("id", "=", turn.id)
+        .executeTakeFirstOrThrow();
+      await queue.markCommands({
+        ids: [ctx.commandId],
+        status: "acknowledged",
+        executor: trx,
+      });
+      // Nobody reattaches it, and its model calls end now.
+      await trx
+        .updateTable("agent_turn_attempts")
+        .set({ runner: sql`jsonb_set(runner, '{ended}', 'true'::jsonb)` })
+        .where("id", "=", attempt.id)
+        .execute();
+      await trx
+        .updateTable("connection_capability_grants")
+        .set({ revoked_at: new Date() })
+        .where("model_attempt_id", "=", attempt.id)
+        .where("revoked_at", "is", null)
+        .execute();
+      if (current.cancellation_requested_at !== null) {
+        stopped = true;
+        return;
+      }
+      await this.dropCarriedCommands(trx, turn.id);
+      await log.append(trx, {
+        sessionId: turn.sessionId,
+        events: [
+          { type: "attempt.changed", attempt: restarted },
+          ...(await closeOpenWork(trx, {
+            turn,
+            attemptId: attempt.id,
+            onlyAttempt: true,
+            reason: "The agent was restarted before it was answered.",
+            now,
+          })),
+          {
+            type: "item.added",
+            item: {
+              id: derivedId(attempt.id, "restarted"),
+              sessionId: turn.sessionId,
+              turnId: turn.id,
+              attemptId: attempt.id,
+              parentItemId: null,
+              position: 0,
+              status: "completed",
+              nativeRef: null,
+              createdAt: now,
+              updatedAt: now,
+              startedAt: now,
+              endedAt: now,
+              kind: "notice",
+              code: RESTARTED_NOTICE,
+              text: `The agent was restarted: ${reason}`,
+              data: { attemptId: attempt.id, reason },
+            },
+          },
+          { type: "turn.changed", turn: preparing },
+        ],
+      });
+    });
+    local.results.clear();
+    // A person's stop stands: the turn ends, as for a harness that ignored it.
+    if (stopped)
+      return {
+        kind: "completed",
+        turn,
+        attempt,
+        completion: { status: "interrupted" },
+      };
+    return { kind: "restart", turn: preparing };
+  }
+
+  /**
    * A new attempt's prompt carries every steered message, so no steer is
    * sent again, and an interrupt meant for the attempt it replaces has done
    * its work: neither may reach the new one.
@@ -2183,6 +2396,9 @@ export class TurnEngine {
           return null;
         return { id, command: { kind: "release", requestKey, reason } };
       }
+      // The lease holder ends the attempt itself; the runner hears nothing.
+      case "restart":
+        return null;
     }
   }
 
@@ -2196,6 +2412,8 @@ export class TurnEngine {
       thread: ProviderThread;
       runner: RunnerState;
       frames: readonly RunnerFrame[];
+      /** The runner's own lines that were not frames (ADR 0333). */
+      diagnostics?: readonly string[];
       cursor: number;
       agentId: string | null;
     },
@@ -2472,6 +2690,12 @@ export class TurnEngine {
         executor: trx,
       });
       const appended = appends.map((append) => append.callId);
+      // Any frame but a log line is progress (ADR 0333), and clears a stall.
+      const progressed = input.frames.some(
+        (frame) =>
+          !(frame.type === "event" && frame.event.type === "diagnostic"),
+      );
+      const logged = diagnosticLines(local, input.frames, input.diagnostics);
       await trx
         .updateTable("agent_turn_attempts")
         .set({
@@ -2486,6 +2710,10 @@ export class TurnEngine {
             ],
             appended,
           ),
+          ...(progressed
+            ? { progress_at: sql<Date>`now()`, stalled_at: null }
+            : {}),
+          ...(logged ? { diagnostics: diagnosticsWrite(logged) } : {}),
         })
         .where("id", "=", attempt.id)
         .execute();
@@ -2845,6 +3073,11 @@ export class TurnEngine {
           console.warn(
             `[catamorphic] agent runner (turn ${ctx.turn.id}): ${local.mask?.text(line) ?? line}`,
           );
+        // What it says on its way out (a crash trace) stays with the attempt.
+        await this.recordDiagnostics(
+          ctx.attempt.id,
+          diagnosticLines(local, read.frames, read.diagnostics),
+        );
         cursor = read.cursor;
         const calls: Array<[string, HostCall]> = [];
         for (const frame of read.frames) {
@@ -2882,6 +3115,22 @@ export class TurnEngine {
           await this.markEnded(local, ctx.attempt.id);
       }
     }
+  }
+
+  /** Append to an attempt's diagnostics tails (ADR 0333). */
+  private async recordDiagnostics(
+    attemptId: string,
+    lines: DiagnosticLines | undefined,
+  ): Promise<void> {
+    if (!lines) return;
+    await this.deps.db
+      .updateTable("agent_turn_attempts")
+      .set({ diagnostics: diagnosticsWrite(lines) })
+      .where("id", "=", attemptId)
+      .execute()
+      .catch((error) =>
+        console.warn("[catamorphic] Could not keep a runner's output", error),
+      );
   }
 
   /** Record that an ended attempt's runner needs nobody any more. */
@@ -3219,6 +3468,13 @@ export class TurnEngine {
           },
         });
       await log.append(trx, { sessionId: input.turn.sessionId, events });
+      // A completed attempt's output tails are not kept (ADR 0333).
+      if (input.status === "completed")
+        await trx
+          .updateTable("agent_turn_attempts")
+          .set({ diagnostics: null })
+          .where("id", "=", input.attempt.id)
+          .execute();
       await queue.markCommands({
         ids: (
           await queue.openCommands({ turnId: input.turn.id, executor: trx })
@@ -3743,7 +3999,8 @@ function attemptOutcome(
     ? "completed"
     : attempt.status === "interrupted" ||
         attempt.status === "superseded" ||
-        attempt.status === "lost"
+        attempt.status === "lost" ||
+        attempt.status === "restarted"
       ? "interrupted"
       : "failed";
 }
@@ -3769,7 +4026,14 @@ function itemText(item: Item): string {
  */
 async function closeOpenWork(
   trx: Transaction<DB>,
-  input: { turn: Turn; attemptId: string; reason: string; now: string },
+  input: {
+    turn: Turn;
+    attemptId: string;
+    /** Only what this attempt opened: the turn goes on (ADR 0333). */
+    onlyAttempt?: boolean;
+    reason: string;
+    now: string;
+  },
 ): Promise<SessionEvent[]> {
   const events: SessionEvent[] = [];
   const requests = await trx
@@ -3778,6 +4042,9 @@ async function closeOpenWork(
     .where("session_id", "=", input.turn.sessionId)
     .where("turn_id", "=", input.turn.id)
     .where("status", "=", "pending")
+    .$if(input.onlyAttempt === true, (query) =>
+      query.where("attempt_id", "=", input.attemptId),
+    )
     .execute();
   // A non-blocking question outlives its turn: its answer becomes a message.
   const outliving = new Set(
@@ -3792,6 +4059,9 @@ async function closeOpenWork(
     .where("turn_id", "=", input.turn.id)
     .where("status", "=", "in_progress")
     .where("kind", "not in", [...INPUT_ITEM_KINDS])
+    .$if(input.onlyAttempt === true, (query) =>
+      query.where("attempt_id", "=", input.attemptId),
+    )
     .execute();
   for (const row of items) {
     const item = itemFromRow(row);
@@ -3824,6 +4094,42 @@ async function closeOpenWork(
 }
 
 export type { JsonObject };
+
+/** New lines for an attempt's diagnostics tails, masked (ADR 0333). */
+interface DiagnosticLines {
+  runner: string;
+  harness: string;
+}
+
+/**
+ * The runner's own lines and the harness's `diagnostic` events in a read,
+ * masked by every secret value the chat received (ADR 0206); undefined
+ * when there are none.
+ */
+function diagnosticLines(
+  local: Pick<LocalTurn, "mask">,
+  frames: readonly RunnerFrame[],
+  lines: readonly string[] = [],
+): DiagnosticLines | undefined {
+  const mask = (text: string) => local.mask?.text(text) ?? text;
+  const runner = lines.map((line) => `${mask(line)}\n`).join("");
+  const harness = frames
+    .flatMap((frame) =>
+      frame.type === "event" && frame.event.type === "diagnostic"
+        ? [`[${frame.event.level}] ${mask(frame.event.message)}\n`]
+        : [],
+    )
+    .join("");
+  return runner || harness ? { runner, harness } : undefined;
+}
+
+/** Each tail keeps its last {@link DIAGNOSTICS_TAIL_CHARS} characters. */
+function diagnosticsWrite(lines: DiagnosticLines) {
+  return sql<Json>`jsonb_build_object(
+    'runner', right(coalesce(diagnostics ->> 'runner', '') || ${lines.runner}::text, ${DIAGNOSTICS_TAIL_CHARS}::int),
+    'harness', right(coalesce(diagnostics ->> 'harness', '') || ${lines.harness}::text, ${DIAGNOSTICS_TAIL_CHARS}::int),
+    'updatedAt', to_jsonb(now()))`;
+}
 
 /** Sleep, ending early when `signal` aborts or `wake` resolves. */
 function abortableSleep(

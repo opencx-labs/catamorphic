@@ -156,6 +156,11 @@ export interface RegisteredCodingAgent {
    */
   recovery?: "continue" | "stop";
   /**
+   * How long a running turn may make no progress before Work records a
+   * stall and emits `session.turn-stalled` (ADR 0333); absent, never.
+   */
+  stall?: { minutes: number };
+  /**
    * Why the agent cannot run now (a definition to fix, an approval to
    * give). Its turns fail with this reason before binding a native
    * thread (ADR 0276).

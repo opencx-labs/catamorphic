@@ -955,7 +955,7 @@
           },
           "reason": {
             "type": "string",
-            "enum": ["initial", "retry", "steer_restart", "recovery"]
+            "enum": ["initial", "retry", "steer_restart", "recovery", "restart"]
           },
           "status": {
             "type": "string",
@@ -966,7 +966,8 @@
               "failed",
               "interrupted",
               "lost",
-              "superseded"
+              "superseded",
+              "restarted"
             ]
           },
           "providerThreadId": {
@@ -4537,7 +4538,7 @@
           },
           "reason": {
             "type": "string",
-            "enum": ["initial", "retry", "steer_restart", "recovery"]
+            "enum": ["initial", "retry", "steer_restart", "recovery", "restart"]
           },
           "status": {
             "type": "string",
@@ -4548,7 +4549,8 @@
               "failed",
               "interrupted",
               "lost",
-              "superseded"
+              "superseded",
+              "restarted"
             ]
           },
           "providerThreadId": {
@@ -23091,6 +23093,134 @@
                     },
                     "snapshot": {
                       "$ref": "#/components/schemas/SessionSnapshot"
+                    },
+                    "turn": {
+                      "nullable": true,
+                      "type": "object",
+                      "properties": {
+                        "id": {
+                          "type": "string"
+                        },
+                        "ordinal": {
+                          "type": "integer",
+                          "minimum": -9007199254740991,
+                          "maximum": 9007199254740991
+                        },
+                        "status": {
+                          "type": "string",
+                          "enum": [
+                            "preparing",
+                            "running",
+                            "waiting",
+                            "finalizing"
+                          ]
+                        },
+                        "attempt": {
+                          "nullable": true,
+                          "type": "object",
+                          "properties": {
+                            "id": {
+                              "type": "string"
+                            },
+                            "ordinal": {
+                              "type": "integer",
+                              "minimum": -9007199254740991,
+                              "maximum": 9007199254740991
+                            },
+                            "reason": {
+                              "type": "string"
+                            },
+                            "startedAt": {
+                              "nullable": true,
+                              "type": "string"
+                            }
+                          },
+                          "required": ["id", "ordinal", "reason", "startedAt"],
+                          "additionalProperties": false
+                        },
+                        "attempts": {
+                          "type": "integer",
+                          "minimum": -9007199254740991,
+                          "maximum": 9007199254740991
+                        },
+                        "restarts": {
+                          "type": "integer",
+                          "minimum": -9007199254740991,
+                          "maximum": 9007199254740991
+                        },
+                        "progressAt": {
+                          "nullable": true,
+                          "type": "string"
+                        },
+                        "stalledAt": {
+                          "nullable": true,
+                          "type": "string"
+                        },
+                        "stallMinutes": {
+                          "nullable": true,
+                          "type": "number"
+                        },
+                        "activity": {
+                          "type": "object",
+                          "properties": {
+                            "tools": {
+                              "type": "array",
+                              "items": {
+                                "type": "object",
+                                "properties": {
+                                  "name": {
+                                    "type": "string"
+                                  },
+                                  "description": {
+                                    "nullable": true,
+                                    "type": "string"
+                                  },
+                                  "since": {
+                                    "type": "string"
+                                  }
+                                },
+                                "required": ["name", "description", "since"],
+                                "additionalProperties": false
+                              }
+                            },
+                            "commands": {
+                              "type": "array",
+                              "items": {
+                                "type": "object",
+                                "properties": {
+                                  "command": {
+                                    "type": "string"
+                                  },
+                                  "description": {
+                                    "nullable": true,
+                                    "type": "string"
+                                  },
+                                  "since": {
+                                    "type": "string"
+                                  }
+                                },
+                                "required": ["command", "description", "since"],
+                                "additionalProperties": false
+                              }
+                            }
+                          },
+                          "required": ["tools", "commands"],
+                          "additionalProperties": false
+                        }
+                      },
+                      "required": [
+                        "id",
+                        "ordinal",
+                        "status",
+                        "attempt",
+                        "attempts",
+                        "restarts",
+                        "progressAt",
+                        "stalledAt",
+                        "stallMinutes",
+                        "activity"
+                      ],
+                      "additionalProperties": false
                     }
                   },
                   "required": [
@@ -23139,7 +23269,8 @@
                     "baseCommitSha",
                     "createdAt",
                     "updatedAt",
-                    "snapshot"
+                    "snapshot",
+                    "turn"
                   ],
                   "additionalProperties": false
                 }
@@ -23832,6 +23963,339 @@
             }
           },
           "404": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    }
+                  },
+                  "required": ["error"],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    }
+                  },
+                  "required": ["error"],
+                  "additionalProperties": false
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/projects/{projectId}/agent/sessions/{sessionId}/turns/{turnId}/attempts": {
+      "get": {
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+            },
+            "in": "path",
+            "name": "projectId",
+            "required": true
+          },
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+            },
+            "in": "path",
+            "name": "sessionId",
+            "required": true
+          },
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+            },
+            "in": "path",
+            "name": "turnId",
+            "required": true
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "attempts": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "id": {
+                            "type": "string"
+                          },
+                          "ordinal": {
+                            "type": "integer",
+                            "minimum": -9007199254740991,
+                            "maximum": 9007199254740991
+                          },
+                          "reason": {
+                            "type": "string"
+                          },
+                          "status": {
+                            "type": "string"
+                          },
+                          "error": {
+                            "nullable": true,
+                            "type": "object",
+                            "properties": {
+                              "message": {
+                                "type": "string"
+                              }
+                            },
+                            "required": ["message"],
+                            "additionalProperties": false
+                          },
+                          "startedAt": {
+                            "nullable": true,
+                            "type": "string"
+                          },
+                          "completedAt": {
+                            "nullable": true,
+                            "type": "string"
+                          },
+                          "progressAt": {
+                            "nullable": true,
+                            "type": "string"
+                          },
+                          "stalledAt": {
+                            "nullable": true,
+                            "type": "string"
+                          },
+                          "diagnostics": {
+                            "nullable": true,
+                            "type": "object",
+                            "properties": {
+                              "runner": {
+                                "type": "string"
+                              },
+                              "harness": {
+                                "type": "string"
+                              }
+                            },
+                            "required": ["runner", "harness"],
+                            "additionalProperties": false
+                          }
+                        },
+                        "required": [
+                          "id",
+                          "ordinal",
+                          "reason",
+                          "status",
+                          "error",
+                          "startedAt",
+                          "completedAt",
+                          "progressAt",
+                          "stalledAt",
+                          "diagnostics"
+                        ],
+                        "additionalProperties": false
+                      }
+                    }
+                  },
+                  "required": ["attempts"],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    }
+                  },
+                  "required": ["error"],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    }
+                  },
+                  "required": ["error"],
+                  "additionalProperties": false
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/projects/{projectId}/agent/sessions/{sessionId}/turns/{turnId}/restart": {
+      "post": {
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "reason": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 500
+                  },
+                  "idempotencyKey": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 300
+                  }
+                },
+                "required": ["reason", "idempotencyKey"]
+              }
+            }
+          }
+        },
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+            },
+            "in": "path",
+            "name": "projectId",
+            "required": true
+          },
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+            },
+            "in": "path",
+            "name": "sessionId",
+            "required": true
+          },
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+            },
+            "in": "path",
+            "name": "turnId",
+            "required": true
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "turnId": {
+                      "type": "string"
+                    },
+                    "attemptId": {
+                      "type": "string"
+                    },
+                    "attempt": {
+                      "type": "integer",
+                      "minimum": -9007199254740991,
+                      "maximum": 9007199254740991
+                    },
+                    "attempts": {
+                      "type": "integer",
+                      "minimum": -9007199254740991,
+                      "maximum": 9007199254740991
+                    },
+                    "restarts": {
+                      "type": "integer",
+                      "minimum": -9007199254740991,
+                      "maximum": 9007199254740991
+                    }
+                  },
+                  "required": [
+                    "turnId",
+                    "attemptId",
+                    "attempt",
+                    "attempts",
+                    "restarts"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "202": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "delivery": {
+                      "type": "string",
+                      "enum": ["queued"]
+                    }
+                  },
+                  "required": ["delivery"],
+                  "additionalProperties": {}
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    }
+                  },
+                  "required": ["error"],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "409": {
             "description": "Default Response",
             "content": {
               "application/json": {
