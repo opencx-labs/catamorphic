@@ -261,9 +261,13 @@ export type {
 } from "./types.js";
 export {
   assertSandboxResources,
+  CACHE_VOLUME_KEY_PATTERN,
+  cacheVolumeKey,
+  parseCacheVolumeKey,
   positiveTokenCount,
   RuntimeEventReportingError,
   RuntimeInfrastructureError,
+  SANDBOX_VOLUME_KEY_PATTERN,
   SIGN_IN_HARNESSES,
   type SignInHarness,
   signInCapability,

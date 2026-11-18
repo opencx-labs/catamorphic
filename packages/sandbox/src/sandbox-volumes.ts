@@ -1,6 +1,10 @@
 import fs from "node:fs";
 import path from "node:path";
-import { type SandboxVolume, VOLUME_KEY_PATTERN } from "./types.js";
+import {
+  CACHE_VOLUME_KEY_PATTERN,
+  type SandboxVolume,
+  VOLUME_KEY_PATTERN,
+} from "./types.js";
 
 /**
  * Check the volumes a sandbox is handed (ADR 0208): keys from `volumeKey`,
@@ -14,8 +18,13 @@ export function assertSandboxVolumes(
 ): void {
   const seen: string[] = [];
   for (const volume of volumes ?? []) {
-    if (!VOLUME_KEY_PATTERN.test(volume.key))
+    const cache = CACHE_VOLUME_KEY_PATTERN.test(volume.key);
+    if (!cache && !VOLUME_KEY_PATTERN.test(volume.key))
       throw new Error(`'${volume.key}' is not a volume key`);
+    // A cache generation is shared by the project's sandboxes, never one
+    // sandbox's alone, and an empty stand-in would read as a cache.
+    if (cache && (volume.exclusive || volume.temporary))
+      throw new Error(`Cache '${volume.key}' cannot be exclusive or temporary`);
     if (
       volume.path !== "~" &&
       !volume.path.startsWith("~/") &&

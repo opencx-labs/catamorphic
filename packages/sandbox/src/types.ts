@@ -109,6 +109,13 @@ export interface SandboxVolume {
    * by another sandbox of the same owner.
    */
   temporary?: boolean;
+  /**
+   * Mounted read only (ADR 0334): a cache generation only a trusted fill
+   * writes. Needs the `caches` capability; a provider that cannot enforce
+   * it refuses. Mounting a cache generation read only lets the provider
+   * remove that cache's older generations no sandbox mounts.
+   */
+  readOnly?: boolean;
 }
 
 /** Volume names an Environment may declare (ADR 0208). */
@@ -135,6 +142,50 @@ export function volumeKey(input: {
 
 /** Keys {@link volumeKey} produces, for providers checking what they are handed. */
 export const VOLUME_KEY_PATTERN = /^[a-z0-9][a-z0-9-]{0,39}-[0-9a-f]{24}$/;
+
+/**
+ * One generation of a project's Environment cache on a machine (ADR 0334):
+ * `cache-<name>-<digest>-g<generation>`. Every generation of one cache
+ * shares the part before `-g` (its family), so a provider can tell which
+ * of its volumes an older generation of the same cache is.
+ */
+export function cacheVolumeKey(input: {
+  projectId: string;
+  environment: string;
+  name: string;
+  generation: number;
+}): string {
+  if (!VOLUME_NAME_PATTERN.test(input.name))
+    throw new Error(`'${input.name}' is not a cache name`);
+  if (!Number.isSafeInteger(input.generation) || input.generation < 1)
+    throw new Error(`'${input.generation}' is not a cache generation`);
+  const digest = createHash("sha256")
+    .update(`cache\0${input.projectId}\0${input.environment}\0${input.name}`)
+    .digest("hex")
+    .slice(0, 24);
+  return `cache-${input.name}-${digest}-g${input.generation}`;
+}
+
+/** Keys {@link cacheVolumeKey} produces. */
+export const CACHE_VOLUME_KEY_PATTERN =
+  /^cache-[a-z0-9][a-z0-9-]{0,39}-[0-9a-f]{24}-g[1-9][0-9]{0,15}$/;
+
+/** A key any volume of a sandbox may have: a volume's or a cache generation's. */
+export const SANDBOX_VOLUME_KEY_PATTERN = new RegExp(
+  `${VOLUME_KEY_PATTERN.source}|${CACHE_VOLUME_KEY_PATTERN.source}`,
+);
+
+/** A cache generation's family and number, or undefined for another key. */
+export function parseCacheVolumeKey(
+  key: string,
+): { family: string; generation: number } | undefined {
+  if (!CACHE_VOLUME_KEY_PATTERN.test(key)) return undefined;
+  const at = key.lastIndexOf("-g");
+  return {
+    family: key.slice(0, at),
+    generation: Number(key.slice(at + 2)),
+  };
+}
 
 /**
  * A provider's volumes on its machine (ADR 0208): forgotten when unused for

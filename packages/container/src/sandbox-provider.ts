@@ -25,11 +25,12 @@ import {
   gitCloneUrl,
   imageUserHome,
   machineSignInHome,
+  parseCacheVolumeKey,
   SANDBOX_CAPABILITIES,
+  SANDBOX_VOLUME_KEY_PATTERN,
   StdioDeploymentRuntimeProvider,
   shellSandboxProcesses,
   signInHomePath,
-  VOLUME_KEY_PATTERN,
   VolumeUsageLog,
   volumeMountPath,
 } from "@catamorphic/sandbox";
@@ -304,6 +305,12 @@ export class ContainerSandboxProvider implements SandboxProvider {
         : []),
       ...(this.nested ? [SANDBOX_CAPABILITIES.containers] : []),
       SANDBOX_CAPABILITIES.volumes,
+      // Read-only mounts the sandbox's root cannot remount (ADR 0334). A
+      // machine that runs privileged runc containers could, so it offers
+      // none, and createSandbox refuses them in such a sandbox anyway.
+      ...(runtime.kind === "runc" && config.privilegedContainers
+        ? []
+        : [SANDBOX_CAPABILITIES.caches]),
     ];
     this.deploymentRuntime = new StdioDeploymentRuntimeProvider({
       uploadFiles: (sandboxId, files, basePath) =>
@@ -360,6 +367,13 @@ export class ContainerSandboxProvider implements SandboxProvider {
           : "This machine runs privileged containers, which can leave their network, so it cannot enforce an egress policy",
       );
     assertSandboxVolumes(opts.volumes);
+    const privileged =
+      Boolean(opts.containers) && this.config.runtime.kind === "runc";
+    // A privileged container's root can remount anything writable.
+    if (privileged && opts.volumes?.some((volume) => volume.readOnly))
+      throw new Error(
+        "This machine runs containers in sandboxes as privileged runc containers, which could remount a read-only cache writable; run gVisor (runsc) to give such an Environment caches",
+      );
     const signIns = this.signInMounts(opts);
     await this.reclaimed;
     const image = await this.imageFor(opts);
@@ -367,10 +381,29 @@ export class ContainerSandboxProvider implements SandboxProvider {
     const imageConfig = objectField(inspected, "Config");
     const user = typeof imageConfig.User === "string" ? imageConfig.User : "";
     const home = imageUserHome({ user, env: stringList(imageConfig.Env) });
-    const volumes = (opts.volumes ?? []).map((volume) => ({
-      ...volume,
-      target: volumeMountPath({ path: volume.path, home }),
-    }));
+    // A cache generation this machine no longer has (pruned, or the
+    // machine was reset) is not mounted: an empty one would read as a
+    // cache. Only a fill, which mounts it writable, makes one.
+    const absent = new Set<string>();
+    for (const volume of opts.volumes ?? [])
+      if (
+        volume.readOnly &&
+        (
+          await this.docker.listVolumes({
+            label: [
+              `${VOLUME_LABEL}=${volume.key}`,
+              `${OWNER_LABEL}=${this.owner}`,
+            ],
+          })
+        ).length === 0
+      )
+        absent.add(volume.key);
+    const volumes = (opts.volumes ?? [])
+      .filter((volume) => !absent.has(volume.key))
+      .map((volume) => ({
+        ...volume,
+        target: volumeMountPath({ path: volume.path, home }),
+      }));
     // `~/x` and `/root/x` are one place once the home is known.
     assertSandboxVolumes(
       volumes.map((volume) => ({ ...volume, path: volume.target })),
@@ -416,6 +449,7 @@ export class ContainerSandboxProvider implements SandboxProvider {
         ...(volume.temporary
           ? {}
           : { Source: `${VOLUME_PREFIX}${volume.key}` }),
+        ...(volume.readOnly ? { ReadOnly: true } : {}),
       })),
       ...signIns.map((signIn) => ({
         Type: "bind",
@@ -503,7 +537,9 @@ export class ContainerSandboxProvider implements SandboxProvider {
             ...(opts.containers
               ? runtime.kind === "runsc"
                 ? { CapAdd: ["ALL"] }
-                : { Privileged: true }
+                : privileged
+                  ? { Privileged: true }
+                  : {}
               : {}),
           },
         },
@@ -517,7 +553,43 @@ export class ContainerSandboxProvider implements SandboxProvider {
       throw error;
     }
     this.creations.end(id);
+    await this.retireCacheGenerations(
+      volumes.filter((volume) => volume.readOnly).map((volume) => volume.key),
+    );
     return { id, providerId: id, sandboxType: "execution", status: "started" };
+  }
+
+  /**
+   * A cache generation mounted read only is published (ADR 0334): remove
+   * the older generations of the same cache that no sandbox mounts. Never
+   * a newer one, which a fill may be writing or Work may have published
+   * since this sandbox's generation was chosen.
+   */
+  private async retireCacheGenerations(keys: readonly string[]): Promise<void> {
+    const removed: string[] = [];
+    for (const key of keys) {
+      const mounted = parseCacheVolumeKey(key);
+      if (!mounted) continue;
+      for (const volume of await this.docker.listVolumes({
+        label: [VOLUME_LABEL, `${OWNER_LABEL}=${this.owner}`],
+      })) {
+        const other = volumeKeyOf(volume);
+        const parsed = other ? parseCacheVolumeKey(other) : undefined;
+        if (
+          !other ||
+          !parsed ||
+          parsed.family !== mounted.family ||
+          parsed.generation >= mounted.generation
+        )
+          continue;
+        // Docker keeps one a sandbox still mounts, even a stopped one.
+        if (
+          await this.docker.removeVolume(String(volume.Name)).catch(() => false)
+        )
+          removed.push(other);
+      }
+    }
+    this.usage.forget(removed);
   }
 
   /**
@@ -1575,7 +1647,7 @@ function parsePolicy(raw: string): EgressPolicy | undefined {
 function volumeKeyOf(volume: Record<string, unknown>): string | undefined {
   const labels = objectField(volume, "Labels");
   const key = labels[VOLUME_LABEL];
-  return typeof key === "string" && VOLUME_KEY_PATTERN.test(key)
+  return typeof key === "string" && SANDBOX_VOLUME_KEY_PATTERN.test(key)
     ? key
     : undefined;
 }
