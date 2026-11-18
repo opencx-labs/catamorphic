@@ -205,24 +205,57 @@ async function serve(
   );
 }
 
-async function clickGuest(id: string): Promise<void> {
-  const point = await mounted().waitFor<{ x: number; y: number }>(
-    `(() => {
-    const element=document.getElementById(${JSON.stringify(id)});if(!element)return false;
-    const rect=element.getBoundingClientRect();return {x:rect.x+rect.width/2,y:rect.y+rect.height/2};
-  })()`,
-    { label: `${id} MCP app button ready` },
+/**
+ * Where a native click lands on an MCP app button: its center in window
+ * coordinates once the app view has stopped moving and nothing covers it.
+ * The view can still be settling (opening, resizing) right after its
+ * document initializes; a point read then sends the click past the button.
+ */
+async function settledGuestPoint(
+  id: string,
+): Promise<{ x: number; y: number }> {
+  const deadline = performance.now() + 15_000;
+  let previous = "";
+  let last: unknown;
+  while (performance.now() < deadline) {
+    const inner = await mounted().eval<{ x: number; y: number } | false>(
+      `(() => {
+      const element=document.getElementById(${JSON.stringify(id)});if(!element)return false;
+      const rect=element.getBoundingClientRect();const point={x:rect.x+rect.width/2,y:rect.y+rect.height/2};
+      return rect.width>0&&rect.height>0&&element.contains(document.elementFromPoint(point.x,point.y))&&point;
+    })()`,
+    );
+    last = inner
+      ? await running().eval<{ x: number; y: number } | false>(`(() => {
+      const frame=document.querySelector('iframe[title^="mcp-app-"]');if(!frame)return false;
+      const moving=document.getAnimations().some(animation=>{
+        const target=animation.effect?.target;
+        return animation.effect?.getTiming().iterations!==Infinity&&
+          (animation.pending||animation.playState==='running')&&
+          target instanceof Element&&target.contains(frame);
+      });
+      const rect=frame.getBoundingClientRect();
+      const point={x:rect.x+frame.clientLeft+${inner.x},y:rect.y+frame.clientTop+${inner.y}};
+      return !moving&&document.elementFromPoint(point.x,point.y)===frame&&point;
+    })()`)
+      : false;
+    const reading = JSON.stringify(last);
+    // Two equal readings a poll apart: the button is where it will stay.
+    if (last && reading === previous) return last as { x: number; y: number };
+    previous = reading;
+    await new Promise((resolve) => setTimeout(resolve, 100));
+  }
+  throw new Error(
+    `${id} MCP app button never settled under the pointer; last: ${JSON.stringify(last)}`,
   );
-  const offset = await running().eval<{ x: number; y: number }>(`(() => {
-    const rect=document.querySelector('iframe[title^="mcp-app-"]').getBoundingClientRect();return {x:rect.x,y:rect.y};
-  })()`);
+}
+
+async function clickGuest(id: string): Promise<void> {
+  const point = await settledGuestPoint(id);
   const before = await mounted().eval<number>("probe.clicks.length");
-  await running().clickPointer({
-    x: point.x + offset.x,
-    y: point.y + offset.y,
-  });
+  await running().clickPointer(point);
   await mounted().waitFor(`probe.clicks.length > ${before}`, {
-    label: `${id} MCP app received the native click`,
+    label: `${id} MCP app received the native click at ${JSON.stringify(point)}`,
   });
   expect(await mounted().eval(`probe.clicks.slice(${before})`)).toEqual([
     { id, trusted: true },
