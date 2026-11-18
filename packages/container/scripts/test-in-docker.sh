@@ -46,7 +46,9 @@ case "$suite" in
     workspace=@catamorphic/work-server
     directory=packages/work-server
     [ "$runtime" = runsc ] || { echo "The review suite runs under gVisor only" >&2; exit 2; }
-    test_env=(-e "DATABASE_URL=postgresql://catamorphic:catamorphic@127.0.0.1:5432/catamorphic")
+    # The CA its review images trust stays in the machine, so a kept
+    # machine reuses the images it built.
+    test_env=(-e "DATABASE_URL=postgresql://catamorphic:catamorphic@127.0.0.1:5432/catamorphic" -e "WORK_TEST_REVIEW_CACHE=/root/.cache/work-review")
     [ ${#args[@]} -gt 0 ] || args=(--pool=forks src/review.container.test.ts)
     ;;
   *) echo "Unknown suite $suite: use container or review" >&2; exit 2 ;;

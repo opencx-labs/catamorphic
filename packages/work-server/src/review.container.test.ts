@@ -1,7 +1,6 @@
 import { execFile } from "node:child_process";
 import { createHash, generateKeyPairSync, randomBytes } from "node:crypto";
 import fs from "node:fs";
-import net from "node:net";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -70,8 +69,21 @@ const MINUTES = 60_000;
 const SANDBOX_IMAGE =
   "oven/bun:1.4.4-alpine@sha256:4cf82f5686b196504fe119db3fcd9185b191f82ece82c40680e597228ec6070a";
 const MODEL = "claude-sonnet-5-5";
-/** The one key either path reaches the stand-in model with. */
-const MODEL_KEY = `sk-ant-stand-in-${randomBytes(12).toString("hex")}`;
+/** The server's own model key, which the built-in reviewer runs on. */
+const SERVER_MODEL_KEY = `sk-ant-server-${randomBytes(12).toString("hex")}`;
+/** The model connection's key, which Claude Code reaches through the gateway. */
+const CONNECTION_MODEL_KEY = `sk-ant-connection-${randomBytes(12).toString("hex")}`;
+/**
+ * What the probe's own model requests say (`test/probe.js`); it never
+ * prints it, so a model call carrying it came from the probe.
+ */
+const PROBE_MARK = "a key this pull request found";
+/**
+ * Every wait ends by then, with where things stand, inside CI's job
+ * timeout (60 minutes, about 10 of them spent before this test).
+ */
+const DEADLINE =
+  Date.now() + Number(process.env.WORK_TEST_REVIEW_MINUTES ?? 45) * 60_000;
 const WEBHOOK_SECRET = `whsec-${randomBytes(12).toString("hex")}`;
 /** A server on Postgres names its secrets (every replica shares them). */
 const SERVER_SECRET = randomBytes(32).toString("hex");
@@ -201,18 +213,6 @@ function claudeCodeReviewPack(
   };
 }
 
-function freePort(): Promise<number> {
-  return new Promise((resolve, reject) => {
-    const probe = net.createServer();
-    probe.once("error", reject);
-    probe.listen(0, "127.0.0.1", () => {
-      const address = probe.address();
-      const port = typeof address === "object" && address ? address.port : 0;
-      probe.close(() => resolve(port));
-    });
-  });
-}
-
 interface DockerMount {
   Type?: string;
   Name?: string;
@@ -298,7 +298,14 @@ describe.skipIf(!enabled)(
     const runsOf = (projectId: string, workflowName: string) =>
       db()
         .selectFrom("workflow_runs")
-        .select(["id", "status", "error", "environment_name", "created_at"])
+        .select([
+          "id",
+          "status",
+          "error",
+          "environment_name",
+          "created_at",
+          "delivery_key",
+        ])
         .where("project_id", "=", projectId)
         .where("workflow_name", "=", workflowName)
         .orderBy("created_at", "asc")
@@ -346,7 +353,7 @@ describe.skipIf(!enabled)(
       probe: () => Promise<T | undefined> | T | undefined,
       timeoutMs: number,
     ): Promise<T> {
-      const deadline = Date.now() + timeoutMs;
+      const deadline = Math.min(Date.now() + timeoutMs, DEADLINE);
       const started = Date.now();
       console.log(`[review] waiting for ${what}`);
       for (;;) {
@@ -368,7 +375,9 @@ describe.skipIf(!enabled)(
     /**
      * Fire a project's named schedule workflows now, as their schedules
      * would: Work's own schedule dispatch, on a clock moved to when the
-     * last of them is due. Resolves once each one's new run completed.
+     * last of them is due. Resolves once the run of each one's due
+     * occurrence (its delivery key, `<activation>:<when>`) completed,
+     * whichever tick started it: the server's own ticker runs too.
      */
     async function fire(projectId: string, workflowNames: readonly string[]) {
       const core = server.catamorphic.core;
@@ -385,19 +394,17 @@ describe.skipIf(!enabled)(
           "enablement.id",
           "activation.enablement_id",
         )
-        .select(["enablement.workflow_name", "binding.next_fire_at"])
+        .select([
+          "enablement.workflow_name",
+          "binding.activation_id",
+          "binding.next_fire_at",
+        ])
         .where("enablement.project_id", "=", projectId)
         .where("enablement.workflow_name", "in", [...workflowNames])
         .execute();
       expect(bindings.map((binding) => binding.workflow_name).sort()).toEqual(
         [...workflowNames].sort(),
       );
-      const before = new Map<string, Set<string>>();
-      for (const name of workflowNames)
-        before.set(
-          name,
-          new Set((await runsOf(projectId, name)).map((run) => run.id)),
-        );
       clock = Math.max(
         clock + 1_000,
         ...bindings.map((binding) =>
@@ -410,20 +417,23 @@ describe.skipIf(!enabled)(
         now: new Date(clock),
       });
       return Promise.all(
-        workflowNames.map((name) =>
-          waitFor(
-            `the scheduled run of ${name} to complete`,
+        bindings.map((binding) => {
+          const key = `${binding.activation_id}:${new Date(binding.next_fire_at ?? 0).toISOString()}`;
+          return waitFor(
+            `the scheduled run of ${binding.workflow_name} to complete`,
             async () => {
-              const run = (await runsOf(projectId, name)).find(
-                (entry) => !before.get(name)?.has(entry.id),
+              const run = (await runsOf(projectId, binding.workflow_name)).find(
+                (entry) => entry.delivery_key === key,
               );
               if (run?.status === "failed")
-                throw new Error(`${name} failed: ${JSON.stringify(run.error)}`);
+                throw new Error(
+                  `${binding.workflow_name} failed: ${JSON.stringify(run.error)}`,
+                );
               return run?.status === "completed" ? run : undefined;
             },
             5 * MINUTES,
-          ),
-        ),
+          );
+        }),
       );
     }
 
@@ -861,24 +871,67 @@ describe.skipIf(!enabled)(
       expect(reviewTurn?.readOutput).toContain("isNumber(line.amount)");
       expect(reviewTurn?.submitAnswer).toMatch(/Recorded the review result/);
 
-      // The probe found the gateway and tried what it could read there;
-      // every try was refused, none reached the model, and nothing it
-      // read was the server's model key.
+      // The probe found the gateway and tried everything it read as a key
+      // there, through the egress proxy and TLS: the gateway refused every
+      // try, none reached the model, and nothing it read was either model
+      // key.
       const probed = JSON.parse(PROBE.exec(output)?.[1] ?? "null");
       expect(probed, output).not.toBeNull();
       expect(probed.gateways.length).toBeGreaterThan(0);
       expect(probed.attempts).toBeGreaterThan(0);
+      expect(probed.skipped).toBe(0);
       expect(
-        Object.keys(probed.statuses).filter((status) => status.startsWith("2")),
+        Object.keys(probed.statuses).filter(
+          (status) => status !== "401" && status !== "403",
+        ),
+        JSON.stringify(probed.statuses),
       ).toEqual([]);
-      expect(probed.candidates).not.toContain(hash(MODEL_KEY));
+      for (const key of [SERVER_MODEL_KEY, CONNECTION_MODEL_KEY])
+        expect(probed.candidates).not.toContain(hash(key));
       expect(
         model.requests.filter((request) =>
-          JSON.stringify(request.body.metadata ?? null).includes("work-probe"),
+          JSON.stringify(request.body).includes(PROBE_MARK),
         ),
       ).toEqual([]);
       return { look, probed };
     }
+
+    /**
+     * Once a project's work has settled: no run of it still queued or
+     * running and no turn of its chat still working, so a late duplicate
+     * publication would have been made by now.
+     */
+    async function settle(project: Reviewed) {
+      const chat = await reviewChat(project);
+      await waitFor(
+        `${project.repository}'s runs and turns to settle`,
+        async () => {
+          const runs = await db()
+            .selectFrom("workflow_runs")
+            .select("status")
+            .where("project_id", "=", project.projectId)
+            .where("status", "not in", ["completed", "failed", "canceled"])
+            .execute();
+          const turns = await db()
+            .selectFrom("agent_turns")
+            .select("status")
+            .where("session_id", "=", chat?.id ?? "")
+            .where("status", "in", ["queued", "preparing", "running"])
+            .execute();
+          return runs.length === 0 && turns.length === 0 ? true : undefined;
+        },
+        5 * MINUTES,
+      );
+    }
+
+    /** Git pushes, or starts of them, to a repository: none, ever. */
+    const pushesTo = (repository: string) =>
+      github.calls.filter(
+        (call) =>
+          call.path.startsWith(`/${repository}.git/`) &&
+          (call.path.endsWith("/git-receive-pack") ||
+            call.query.service === "git-receive-pack"),
+      );
 
     /** One check run and one review on the commit, by the App. */
     function expectPublishedOnce(
@@ -896,6 +949,12 @@ describe.skipIf(!enabled)(
           app: { slug: "work-acme" },
         },
       ]);
+      // Every review names the commit it is for.
+      expect(
+        project.github.reviews.filter(
+          (entry) => !project.heads.includes(entry.commit_id ?? ""),
+        ),
+      ).toEqual([]);
       const reviews = project.github.reviews.filter(
         (entry) => entry.commit_id === commit,
       );
@@ -1013,11 +1072,16 @@ describe.skipIf(!enabled)(
           ],
         }),
       );
-      const port = await freePort();
+      // The server listens on a port it is given; the front reads it then.
+      const listening = { port: 0 };
       front = await startTlsFront({
         host: hostIp,
-        upstreamPort: port,
+        upstreamPort: () => listening.port,
         directory: path.join(root, "tls"),
+        // CI keeps the CA with the review images it built, which trust it.
+        ...(process.env.WORK_TEST_REVIEW_CACHE
+          ? { caDirectory: path.join(process.env.WORK_TEST_REVIEW_CACHE, "ca") }
+          : {}),
       });
       // The server's own model, which the built-in reviewer runs on: its
       // provider reads the API's address from the host's environment.
@@ -1025,13 +1089,13 @@ describe.skipIf(!enabled)(
       server = await createWorkServer({
         ...testServerOptions({
           dataDir: path.join(root, "control-plane"),
-          publicBases: [front.url, `http://127.0.0.1:${port}`],
+          publicBases: [front.url],
           env: {
             DATABASE_URL: database.url,
             WORK_SECRET: SERVER_SECRET,
             WORK_OPERATOR_SECRET: OPERATOR_SECRET,
             WORK_VAULT_KEY: VAULT_KEY,
-            ANTHROPIC_API_KEY: MODEL_KEY,
+            ANTHROPIC_API_KEY: SERVER_MODEL_KEY,
             WORK_MODEL: MODEL,
             WORK_CONTROL_PLANE_WORKLOADS: "workflow",
             WORK_GATEWAY_CONFIG: gatewayFile,
@@ -1046,7 +1110,11 @@ describe.skipIf(!enabled)(
           },
         },
       });
-      await server.app.listen({ port, host: "127.0.0.1" });
+      await server.app.listen({ port: 0, host: "127.0.0.1" });
+      const address = server.app.server.address();
+      listening.port =
+        typeof address === "object" && address ? address.port : 0;
+      const port = listening.port;
       const connections = server.catamorphic.core.connections;
       if (!connections) throw new Error("Connections are required");
       // The organization's GitHub App, and a model key for reviewers that
@@ -1058,7 +1126,7 @@ describe.skipIf(!enabled)(
           "github",
           { appId: "123", privateKey: APP_KEY, installationId: "77" },
         ],
-        ["anthropic", "anthropic", { apiKey: MODEL_KEY }],
+        ["anthropic", "anthropic", { apiKey: CONNECTION_MODEL_KEY }],
       ] as const) {
         const created = await connections.createService({
           identity: setup,
@@ -1117,12 +1185,23 @@ describe.skipIf(!enabled)(
       await front?.close();
       await github?.close();
       await model?.close();
-      // What the machine made: its sandboxes.
+      // What this run's machine made, and nothing else on the daemon: its
+      // containers, then its volumes (caches included). Its images stay
+      // for the next run.
+      const owner = `work.sandbox.owner=${createHash("sha256")
+        .update(path.resolve(path.join(root, "review-1", "container")))
+        .digest("hex")
+        .slice(0, 16)}`;
       for (const container of await docker
-        .listContainers({ label: ["work.sandbox"] })
+        .listContainers({ label: [owner] })
         .catch(() => []))
         if (typeof container.Id === "string")
           await docker.removeContainer(container.Id).catch(() => {});
+      for (const volume of await docker
+        .listVolumes({ label: [owner] })
+        .catch(() => []))
+        if (typeof volume.Name === "string")
+          await docker.removeVolume(volume.Name).catch(() => {});
       await database?.drop();
       if (root) {
         const writable = (directory: string) => {
@@ -1153,6 +1232,7 @@ describe.skipIf(!enabled)(
         "reviews an opened pull request in the command container and publishes it once",
         async () => {
           const project = reviewed(SHIPPED);
+          const asked = model.requests.length;
           const head = await openPullRequest(project);
           await waitFor(
             "the first head's review on GitHub",
@@ -1166,12 +1246,16 @@ describe.skipIf(!enabled)(
           ).toBe(true);
           await expectReviewed(project, 1, head);
           // The reviewer ran on the control plane, on the server's model.
-          for (const request of model.requests)
-            expect(request.headers?.["x-api-key"]).toBe(MODEL_KEY);
+          const calls = model.requests.slice(asked);
+          expect(calls.length).toBeGreaterThan(0);
+          for (const request of calls)
+            expect(request.headers?.["x-api-key"]).toBe(SERVER_MODEL_KEY);
+          await settle(project);
           expectPublishedOnce(project, head, {
             conclusion: "failure",
             state: "CHANGES_REQUESTED",
           });
+          expect(pushesTo(SHIPPED)).toEqual([]);
           for (const write of project.github.writes())
             expect(write.credential).toBe("installation");
           expect(
@@ -1191,6 +1275,7 @@ describe.skipIf(!enabled)(
         "moves the same chat to a pushed head and publishes its review",
         async () => {
           const project = reviewed(SHIPPED);
+          const asked = model.requests.length;
           const before = (await reviewChat(project))?.id;
           const previous = project.heads.at(-1) ?? "";
           const head = await push(project, "pull-2", "Total in cents");
@@ -1216,6 +1301,9 @@ describe.skipIf(!enabled)(
             `New commits since your last review (${previous}..${head})`,
           );
           await expectReviewed(project, 2, head);
+          for (const request of model.requests.slice(asked))
+            expect(request.headers?.["x-api-key"]).toBe(SERVER_MODEL_KEY);
+          await settle(project);
           // Each head carries its own check run and review, once.
           expectPublishedOnce(project, previous, {
             conclusion: "failure",
@@ -1225,6 +1313,7 @@ describe.skipIf(!enabled)(
             conclusion: "success",
             state: "COMMENTED",
           });
+          expect(pushesTo(SHIPPED)).toEqual([]);
         },
         30 * MINUTES,
       );
@@ -1280,6 +1369,7 @@ describe.skipIf(!enabled)(
             `POST /repos/${SHIPPED}/pulls/1/reviews`,
             `POST /repos/${SHIPPED}/pulls/1/reviews`,
           ]);
+          expect(pushesTo(SHIPPED)).toEqual([]);
         },
         15 * MINUTES,
       );
@@ -1344,17 +1434,33 @@ describe.skipIf(!enabled)(
           expect(agent.loopbackKeyHash).not.toBe("");
           for (const secret of [...agent.grantHashes, agent.loopbackKeyHash])
             expect(probed.candidates).not.toContain(secret);
-          // Its model calls came through the gateway, which alone holds the
-          // organization's key.
+          // Its model calls came only through the gateway, which alone
+          // holds the model connection's key: never the server's own.
           const calls = model.requests.slice(asked);
           expect(calls.length).toBeGreaterThan(0);
           for (const request of calls)
-            expect(request.headers?.["x-api-key"]).toBe(MODEL_KEY);
+            expect(request.headers?.["x-api-key"]).toBe(CONNECTION_MODEL_KEY);
 
+          // Published once, and still once when everything has settled.
           expectPublishedOnce(project, head, {
             conclusion: "failure",
             state: "CHANGES_REQUESTED",
           });
+          await settle(project);
+          expectPublishedOnce(project, head, {
+            conclusion: "failure",
+            state: "CHANGES_REQUESTED",
+          });
+          expect(
+            project.github
+              .writes()
+              .map((write) => `${write.method} ${write.path}`)
+              .sort(),
+          ).toEqual([
+            `POST /repos/${CLAUDE_CODE}/check-runs`,
+            `POST /repos/${CLAUDE_CODE}/pulls/1/reviews`,
+          ]);
+          expect(pushesTo(CLAUDE_CODE)).toEqual([]);
         },
         30 * MINUTES,
       );
