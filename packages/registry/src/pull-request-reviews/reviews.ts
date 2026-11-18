@@ -11,8 +11,10 @@ import {
   checkWorkReview,
   diffLines,
   list,
+  publicationText,
   record,
   renderedPath,
+  stampedBody,
   type WorkReview,
 } from "./review-report";
 
@@ -561,11 +563,13 @@ export const postReviews = defineWorkflow(({ defineBoundary }) => ({
                     " (score " +
                     review.score +
                     "/5)",
-                  summary: review.checkSummary,
+                  summary: publicationText(review.checkSummary),
                 }
               : {
                   title: "No review",
-                  summary: state.problem ?? "No review was reported.",
+                  summary: publicationText(
+                    state.problem ?? "No review was reported.",
+                  ),
                 },
             stamp: effect(state, "check"),
           },
@@ -673,8 +677,12 @@ export const postReviews = defineWorkflow(({ defineBoundary }) => ({
             number: state.number,
             event: review.verdict,
             commitId: state.commit,
-            body: `${reviewBody(state, review)}\n\n${stamp}`,
-            comments: review.comments,
+            // Defused as GitHub reads it: the whole body at once.
+            body: stampedBody(reviewBody(state, review), stamp),
+            comments: review.comments.map((comment) => ({
+              ...comment,
+              body: publicationText(comment.body),
+            })),
             stamp,
           },
           { state },
@@ -724,7 +732,7 @@ export const postReviews = defineWorkflow(({ defineBoundary }) => ({
           .flatMap((thread) => list(record(thread).comments).map(record))
           .find((comment) => comment.id === reply.inReplyTo);
         const stamp = marker(state, "reply");
-        const body = `${reply.body}\n\n${stamp}`;
+        const body = stampedBody(reply.body, stamp);
         return typeof asked?.id === "number"
           ? connections.github.reply_to_review_comment(
               {

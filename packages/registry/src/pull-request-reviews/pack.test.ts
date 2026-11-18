@@ -56,6 +56,11 @@ async function run(input: {
       path.join(import.meta.dirname, "post-reviews.harness.ts"),
       path.join(directory, "harness.ts"),
     );
+    // The pack's own dependencies, as the project installs them.
+    await fs.symlink(
+      path.resolve(import.meta.dirname, "../../node_modules"),
+      path.join(directory, "node_modules"),
+    );
     await fs.writeFile(
       path.join(directory, "verify.ts"),
       `
@@ -213,6 +218,11 @@ async function runStalled(script: string): Promise<unknown> {
       path.join(import.meta.dirname, "post-reviews.harness.ts"),
       path.join(directory, "harness.ts"),
     );
+    // The pack's own dependencies, as the project installs them.
+    await fs.symlink(
+      path.resolve(import.meta.dirname, "../../node_modules"),
+      path.join(directory, "node_modules"),
+    );
     await fs.writeFile(
       path.join(directory, "verify.ts"),
       `
@@ -330,6 +340,14 @@ describe("the pull-request-reviews pack", () => {
       expect(skill, target).toContain(`## ${target}`);
     // The docs say what to replace before it reviews anything.
     expect(PACK.manifest.docs).toContain("acme/web");
+    // The poster reads report text with a Markdown parser the project
+    // installs, at the versions its tests ran.
+    expect(PACK.manifest.dependencies).toEqual([
+      "mdast-util-from-markdown@2.0.3",
+      "mdast-util-gfm@3.1.0",
+      "micromark-extension-gfm@3.0.0",
+    ]);
+    expect(PACK.manifest.docs).toContain(".work/workflows/package.json");
   });
 
   it("commits a valid review Environment and reviewer", () => {
@@ -1190,6 +1208,49 @@ describe("postReviews", () => {
     expect(result.writes).toEqual(["check:failure", "review:REQUEST_CHANGES"]);
   });
 
+  it("defuses each body GitHub gets as a whole, and keeps the stamp out of an open code block", async () => {
+    const result = await publish(`
+      // The summary leaves a fence open; a comment outside the diff closes it.
+      world.submit("t1", {
+        verdict: "COMMENT",
+        reviewedCommit: ${JSON.stringify(HEAD)},
+        summary: "Looks fine.\\n\\\`\\\`\\\`",
+        checkSummary: "Ran it, @org/team <!-- hidden -->",
+        comments: [
+          { path: "src/other.ts", line: 9, body: "See\\n\\\`\\\`\\\`\\n@org/team <!-- hidden -->" },
+          { path: "src/orders.ts", line: 2, body: "Ask @org/team <!-- hidden -->" },
+        ],
+        reply: { body: "Answer:\\n\\\`\\\`\\\`" },
+      });
+      await runWorkflow(postReviews, event("t1"), world.context);
+      return { reviews: world.github.reviews, checks: world.github.checks, comments: world.github.comments };
+    `);
+    const { reviews, checks, comments } = result.outcomes as {
+      reviews: Array<{ body: string; comments: Array<{ body: string }> }>;
+      checks: Array<{ summary: string }>;
+      comments: Array<{ body: string }>;
+    };
+    const bodies = [
+      reviews[0]?.body ?? "",
+      ...(reviews[0]?.comments ?? []).map((comment) => comment.body),
+      checks[0]?.summary ?? "",
+      comments[0]?.body ?? "",
+    ];
+    for (const body of bodies) {
+      expect(body, body).not.toContain("@org/team");
+      expect(
+        body.replace(/<!-- work-review:t1:\w+ -->$/, ""),
+        body,
+      ).not.toMatch(/<[!?]/);
+    }
+    // Joined, the comment's fence closes the summary's: its line is prose.
+    expect(reviews[0]?.body).toContain("@\u200borg/team <\u200b!-- hidden -->");
+    // A body that ends inside a code block has it closed before the stamp.
+    expect(comments[0]?.body).toBe(
+      "Answer:\n```\n```\n\n<!-- work-review:t1:reply -->",
+    );
+  });
+
   it("answers an inline question in its own thread", async () => {
     const result = await publish(`
       world.submit("t1", { verdict: "COMMENT", reviewedCommit: ${JSON.stringify(HEAD)}, reply: { inReplyTo: 7, body: "It rounds half up." } });
@@ -1281,11 +1342,11 @@ describe("report text", () => {
     expect(
       publicationText("<div>\n```\n<!-- hidden -->\n```\n</div>"),
     ).not.toMatch(/<!--/);
-    // A pre block could carry a fence past a blank line: it opens none,
-    // so the fence is code, shown as written.
+    // A pre block carries a fence past a blank line as raw HTML: all of
+    // it is defused, and once it opens none, the fence shows it.
     const pre = publicationText("<pre>\n\n```\n<!-- shown -->\n```\n</pre>");
-    expect(pre).not.toMatch(/<pre/);
-    expect(pre).toContain("```\n<!-- shown -->\n```");
+    expect(pre).not.toMatch(/<pre|<!--/);
+    expect(pre).toContain("```\n<\u200b!-- shown -->\n```");
     // An escaped backtick opens no span.
     expect(publicationText("\\`<!-- hidden -->`")).not.toMatch(/<!--/);
     // A span does not run past its paragraph.
@@ -1309,19 +1370,51 @@ describe("report text", () => {
     expect(typeof review("```\n<!-- a note -->\n```")).toBe("object");
   });
 
-  it("defuses every field of a review that reaches a GitHub body", () => {
-    for (const text of planted) {
-      const checked = checkWorkReview({
-        reviewedCommit: head,
-        verdict: "COMMENT",
-        score: 3,
-        summary: `Fine. ${text}`,
-        checkSummary: text,
-        comments: [{ path: "src/a.ts", line: 1, body: text }],
-        reply: { inReplyTo: 7, body: text },
-      });
-      expect(typeof checked).toBe("object");
-      expect(JSON.stringify(checked), text).not.toMatch(/<[!?]/);
-    }
+  it("reads lists, block quotes, headings and HTML blocks as GitHub does", () => {
+    const fires = "@org/team <!-- hidden -->";
+    const defused = "@\u200borg/team <\u200b!-- hidden -->";
+    // A fence in a list item ends with the item.
+    expect(publicationText(`- item\n  \`\`\`\n  code\n- next ${fires}`)).toBe(
+      `- item\n  \`\`\`\n  code\n- next ${defused}`,
+    );
+    // An HTML block in a list or a block quote is raw HTML, fence and all.
+    for (const text of [
+      `- <div>\n  \`\`\`\n  ${fires}\n  \`\`\`\n  </div>`,
+      `> <div>\n> \`\`\`\n> ${fires}\n> \`\`\``,
+    ])
+      expect(publicationText(text), text).toContain(defused);
+    // A code span never pairs across blocks.
+    expect(publicationText(`# Note \`\n${fires}\n- see \``)).toBe(
+      `# Note \`\n${defused}\n- see \``,
+    );
+    // A link reference definition shows nothing on GitHub: it is escaped
+    // to show as text. An `@` written as an entity mentions no one.
+    expect(publicationText("[//]: # (hidden @team words)\n\nShown.")).toBe(
+      "\\[//]: # (hidden @\u200bteam words)\n\nShown.",
+    );
+    expect(publicationText("Thanks &#64;org/team and &commat;grace")).toBe(
+      "Thanks @\u200borg/team and @\u200bgrace",
+    );
+  });
+
+  it("commits suggestions in block quotes, lists, after inline HTML and with CRLF exactly as written", () => {
+    const suggestion =
+      "```suggestion\n@Override\npublic String toString() {\n```";
+    // Inline HTML opens no HTML block, so the fence after it is code.
+    const inline = `<b>Note</b> keep this\n${suggestion}`;
+    expect(publicationText(inline)).toBe(inline);
+    const quoted = "> ```suggestion\n> @Override\n> ```\n\nAsk @grace.";
+    expect(publicationText(quoted)).toBe(
+      "> ```suggestion\n> @Override\n> ```\n\nAsk @\u200bgrace.",
+    );
+    const listed = "- ```ts\n  @scope/pkg\n  ```\n- ask @grace";
+    expect(publicationText(listed)).toBe(
+      "- ```ts\n  @scope/pkg\n  ```\n- ask @\u200bgrace",
+    );
+    const crlf =
+      "Ask @grace <!-- x -->\r\n\r\n```suggestion\r\n@Override\r\n```\r\n";
+    expect(publicationText(crlf)).toBe(
+      "Ask @\u200bgrace <\u200b!-- x -->\r\n\r\n```suggestion\r\n@Override\r\n```\r\n",
+    );
   });
 });

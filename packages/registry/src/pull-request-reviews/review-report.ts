@@ -3,6 +3,10 @@
  * so every boundary that calls them replays alike.
  */
 
+import { fromMarkdown } from "mdast-util-from-markdown";
+import { gfmFromMarkdown } from "mdast-util-gfm";
+import { gfm } from "micromark-extension-gfm";
+
 /**
  * What the reviewer reports, once checked: its `review` result (ADR 0323),
  * which Work accepted against the schema in `.work/agents/reviewer.json`.
@@ -59,22 +63,129 @@ export function diffLines(result: unknown): Set<string> {
 
 /**
  * Report text is posted as the App: it mentions no one and hides nothing.
- * Outside code, every `<` that would open a comment, a declaration such as
- * `<!DOCTYPE …>` or `<![CDATA[`, a processing instruction (`<?…?>`), or an
- * HTML block that could swallow a code fence (`<pre>`, `<script>`,
- * `<style>`, `<textarea>`), all of which GitHub hides, gets a zero-width
- * space after it, and "@name" and "@org/team" stop notifying the same way;
- * nothing is removed. Fenced code blocks (suggestions included) and code
- * spans stay exactly as written: GitHub renders neither HTML nor mentions
- * there. Text is taken for code only where GitHub takes it so: a fence
- * inside an HTML block, or a backtick escaped with a backslash, is not.
+ * GitHub reads it as CommonMark with GitHub's extensions, and so does
+ * this, with a maintained parser: its code blocks (suggestions included)
+ * and code spans stay exactly as written, since GitHub renders neither
+ * HTML nor mentions there. Everywhere else, every `<` that would open a
+ * comment, a declaration such as `<!DOCTYPE …>` or `<![CDATA[`, a
+ * processing instruction (`<?…?>`), or an HTML block that could swallow
+ * a code fence (`<pre>`, `<script>`, `<style>`, `<textarea>`), all of
+ * which GitHub hides, gets a zero-width space after it; "@name",
+ * "@org/team" and an `@` written as an entity stop notifying the same
+ * way; and a link reference definition (`[//]: # (…)`), which GitHub
+ * shows nothing of, is escaped to show as text. Nothing is removed.
+ *
+ * Defusing can change how the rest reads (a comment that hid a fence no
+ * longer does), so the result is read again until nothing changes; text
+ * that keeps changing is defused whole, code included. Run it once on
+ * the whole body GitHub gets, never on its parts one by one.
  */
 export function publicationText(text: string): string {
-  return mapProse(text, (prose) =>
-    prose
-      .replace(/<(?=[!?]|(?:pre|script|style|textarea)\b)/gi, "<\u200b")
-      .replace(/@(?=[A-Za-z0-9])/g, "@\u200b"),
+  let current = text;
+  for (let pass = 0; pass < 8; pass += 1) {
+    const next = defuse(current, codeOf(current));
+    if (next === current) return current;
+    current = next;
+  }
+  for (;;) {
+    const next = defuse(current, {
+      code: [],
+      definitions: definitionsOf(current),
+    });
+    if (next === current) return current;
+    current = next;
+  }
+}
+
+/**
+ * A body to post with this recipe's `stamp` after it: the body defused,
+ * and a code block it leaves open closed first, so the stamp is the HTML
+ * comment GitHub hides and not text in the block.
+ */
+export function stampedBody(body: string, stamp: string): string {
+  let text = publicationText(body);
+  for (let pass = 0; pass < 2; pass += 1) {
+    const stamped = `${text}\n\n${stamp}`;
+    const at = text.length + 2;
+    const open = codeOf(stamped).code.find(
+      ([start, end]) => start < at && end > at,
+    );
+    if (!open) return stamped;
+    const fence = /^[ \t>]*(`{3,}|~{3,})/.exec(stamped.slice(open[0]))?.[1];
+    text = `${text}\n${fence ?? "```"}`;
+  }
+  return `${text}\n\n${stamp}`;
+}
+
+/** Where `text` is code as GitHub reads it, and where its link reference definitions start. */
+function codeOf(text: string): {
+  code: Array<[number, number]>;
+  definitions: number[];
+} {
+  const code: Array<[number, number]> = [];
+  const definitions: number[] = [];
+  const visit = (node: MarkdownNode) => {
+    const start = node.position?.start.offset;
+    const end = node.position?.end.offset;
+    if (start === undefined || end === undefined) return;
+    if (node.type === "code" || node.type === "inlineCode") {
+      code.push([start, end]);
+      return;
+    }
+    if (node.type === "definition") definitions.push(start);
+    for (const child of "children" in node ? node.children : []) visit(child);
+  };
+  visit(parsed(text));
+  return { code: code.sort((left, right) => left[0] - right[0]), definitions };
+}
+
+function definitionsOf(text: string): number[] {
+  return codeOf(text).definitions;
+}
+
+type MarkdownRoot = ReturnType<typeof fromMarkdown>;
+type MarkdownNode = MarkdownRoot | MarkdownRoot["children"][number];
+
+function parsed(text: string): MarkdownRoot {
+  return fromMarkdown(text, {
+    extensions: [gfm()],
+    mdastExtensions: [gfmFromMarkdown()],
+  });
+}
+
+/** `text` with everything but `code` defused, and its definitions escaped. */
+function defuse(
+  text: string,
+  read: { code: Array<[number, number]>; definitions: number[] },
+): string {
+  // A definition's `[` gets a backslash before it, so it reads as text.
+  const escapes = new Set(
+    read.definitions
+      .map((start) => text.indexOf("[", start))
+      .filter((at) => at >= 0),
   );
+  let out = "";
+  let at = 0;
+  const prose = (end: number) => {
+    let segment = "";
+    for (let index = at; index < end; index += 1) {
+      if (escapes.has(index)) segment += "\\";
+      segment += text[index];
+    }
+    out += segment
+      .replace(/<(?=[!?]|(?:pre|script|style|textarea)\b)/gi, "<\u200b")
+      .replace(/&(?:#0*64|#x0*40|commat);/gi, "@\u200b")
+      .replace(/@(?=[A-Za-z0-9])/g, "@\u200b");
+    at = end;
+  };
+  for (const [start, end] of read.code) {
+    if (start < at) continue;
+    prose(start);
+    out += text.slice(start, end);
+    at = end;
+  }
+  prose(text.length);
+  return out;
 }
 
 /**
@@ -92,101 +203,11 @@ function stringsOf(value: unknown): string[] {
   return [];
 }
 
-/** `text` with `transform` applied to all of it but its code. */
-function mapProse(text: string, transform: (prose: string) => string): string {
-  const out: string[] = [];
-  let prose: string[] = [];
-  let fence: { char: string; length: number } | undefined;
-  // In an HTML block (until a blank line) GitHub opens no fence and
-  // finds no code span: its lines are raw HTML, all of them prose here.
-  let html = false;
-  let kind: "text" | "html" = "text";
-  const flush = () => {
-    if (prose.length > 0) {
-      const chunk = prose.join("\n");
-      out.push(kind === "html" ? transform(chunk) : mapSpans(chunk, transform));
-    }
-    prose = [];
-  };
-  for (const line of text.split("\n")) {
-    if (fence) {
-      out.push(line);
-      const close = /^ {0,3}(`{3,}|~{3,})[ \t]*\r?$/.exec(line)?.[1];
-      if (close?.[0] === fence.char && close.length >= fence.length)
-        fence = undefined;
-      continue;
-    }
-    const open = html ? null : /^ {0,3}(`{3,}|~{3,})(.*)$/.exec(line);
-    const opened = open?.[1];
-    if (opened && !(opened[0] === "`" && open?.[2]?.includes("`"))) {
-      flush();
-      out.push(line);
-      fence = { char: opened[0] ?? "`", length: opened.length };
-      continue;
-    }
-    if (/^\s*$/.test(line)) html = false;
-    else if (/^ {0,3}<[A-Za-z/]/.test(line)) html = true;
-    const lineKind = html ? "html" : "text";
-    if (lineKind !== kind) {
-      flush();
-      kind = lineKind;
-    }
-    prose.push(line);
-  }
-  flush();
-  return out.join("\n");
-}
-
-/** Prose with its code spans left as written: a span ends no paragraph. */
-function mapSpans(text: string, transform: (prose: string) => string): string {
-  let result = "";
-  let prose = "";
-  let at = 0;
-  while (at < text.length) {
-    if (text[at] !== "`") {
-      prose += text[at];
-      at += 1;
-      continue;
-    }
-    let end = at;
-    while (text[end] === "`") end += 1;
-    let slashes = 0;
-    for (let before = at - 1; before >= 0 && text[before] === "\\"; before--)
-      slashes += 1;
-    const close = slashes % 2 === 0 ? closingRun(text, end, end - at) : -1;
-    if (close < 0) {
-      prose += text.slice(at, end);
-      at = end;
-      continue;
-    }
-    result += transform(prose) + text.slice(at, close + (end - at));
-    prose = "";
-    at = close + (end - at);
-  }
-  return result + transform(prose);
-}
-
-/** Where a run of exactly `length` backticks starts, within the paragraph. */
-function closingRun(text: string, from: number, length: number): number {
-  let at = from;
-  while (at < text.length) {
-    if (/^\n[ \t]*\r?\n/.test(text.slice(at, at + 64))) return -1;
-    if (text[at] !== "`") {
-      at += 1;
-      continue;
-    }
-    let end = at;
-    while (text[end] === "`") end += 1;
-    if (end - at === length) return at;
-    at = end;
-  }
-  return -1;
-}
-
 /**
  * The turn's `review` result, checked field by field again: the sandbox
  * that submitted it is untrusted, and its schema is project code. A string
- * says why it cannot be used.
+ * says why it cannot be used. Its text is kept as written: each body is
+ * defused whole as it is posted (`publicationText`, `stampedBody`).
  */
 export function checkWorkReview(value: unknown): WorkReview | string {
   if (typeof value !== "object" || value === null || Array.isArray(value))
@@ -234,8 +255,8 @@ export function checkWorkReview(value: unknown): WorkReview | string {
     reviewedCommit,
     verdict,
     score,
-    summary: publicationText(summary),
-    checkSummary: publicationText(checkSummary),
+    summary,
+    checkSummary,
     comments: [],
     reply: null,
   };
@@ -255,7 +276,7 @@ export function checkWorkReview(value: unknown): WorkReview | string {
       !text(body, 1500)
     )
       return "a comment is not { path, line, side?, body } within its limits";
-    checked.comments.push({ path, line, side, body: publicationText(body) });
+    checked.comments.push({ path, line, side, body });
   }
   if (report.reply != null) {
     const reply = record(report.reply);
@@ -271,7 +292,7 @@ export function checkWorkReview(value: unknown): WorkReview | string {
       return "reply is not { inReplyTo?, body } within its limits";
     checked.reply = {
       ...(typeof inReplyTo === "number" ? { inReplyTo } : {}),
-      body: publicationText(body),
+      body,
     };
   }
   return checked;

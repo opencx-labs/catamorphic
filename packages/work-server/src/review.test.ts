@@ -25,6 +25,7 @@ import {
   filesHolding,
   filesUnder,
   registryPack,
+  registryPackDependencies,
   testServerOptions,
 } from "./test-support.js";
 
@@ -32,6 +33,9 @@ import { startWorkWorker } from "./workers/worker-runtime.js";
 
 /** What an agent installs from the `pull-request-reviews` pack. */
 const REVIEW_AUTOMATION_FILES = registryPack("pull-request-reviews");
+const REVIEW_PACK_DEPENDENCIES = registryPackDependencies(
+  "pull-request-reviews",
+);
 
 /**
  * Code and security review of pull requests (#118), end to end on a Work
@@ -684,7 +688,16 @@ describe.skipIf(!databaseUrl)("reviewing pull requests (#118)", () => {
             name: "@acme/workflows",
             private: true,
             type: "module",
-            dependencies: { "@catamorphic/workflow": WORKFLOW_PACKAGE_VERSION },
+            dependencies: {
+              "@catamorphic/workflow": WORKFLOW_PACKAGE_VERSION,
+              // The pack's own, as its install steps add them.
+              ...Object.fromEntries(
+                REVIEW_PACK_DEPENDENCIES.map((pinned) => {
+                  const at = pinned.lastIndexOf("@");
+                  return [pinned.slice(0, at), pinned.slice(at + 1)];
+                }),
+              ),
+            },
           }),
         },
       },

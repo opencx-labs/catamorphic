@@ -83,6 +83,17 @@ async function typecheck(files: Record<string, string>): Promise<void> {
             "@catamorphic/workflow": [
               path.join(root, "packages/workflow/src/index.ts"),
             ],
+            // A pack's npm dependencies, as its project installs them.
+            ...Object.fromEntries(
+              [
+                "mdast-util-from-markdown",
+                "mdast-util-gfm",
+                "micromark-extension-gfm",
+              ].map((name) => [
+                name,
+                [path.join(root, "packages/registry/node_modules", name)],
+              ]),
+            ),
           },
         },
         include: ["*.ts"],

@@ -273,9 +273,15 @@ Pure helpers `postReviews` checks a review with, with no IO, so a retried
 boundary computes the same thing. The `review` result has one full commit, a
 COMMENT or REQUEST_CHANGES verdict, a score from 1 to 5, summaries up to
 4,000 characters, at most 30 bounded inline comments, and an optional reply.
-Unknown fields, including the old `resolve`, are rejected. Mentions and HTML
-comment delimiters are removed before publication, so a report cannot ping
-people or forge a stamp.
+Unknown fields, including the old `resolve`, are rejected, and so is a
+report holding text shaped like the stamp anywhere, so it cannot forge one.
+Each body is defused whole as it is posted, read as GitHub reads it
+(CommonMark with GitHub's extensions, through `mdast-util-from-markdown`):
+code blocks, suggestions included, and code spans are posted exactly as
+written; everywhere else mentions stop notifying, and HTML comments,
+declarations, processing instructions and link reference definitions show
+as text, so a report cannot ping people or hide words. They need the
+manifest's three dependencies in `.work/workflows/package.json`.
 
 ## .work/workflows/src/stalled-reviews.ts
 
