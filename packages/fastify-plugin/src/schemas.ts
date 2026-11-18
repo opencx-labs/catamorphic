@@ -1637,7 +1637,13 @@ export const AttemptSchema = describes<Attempt>()(
       turnId: z.string(),
       sessionId: z.string(),
       ordinal: z.number().int(),
-      reason: z.enum(["initial", "retry", "steer_restart", "recovery"]),
+      reason: z.enum([
+        "initial",
+        "retry",
+        "steer_restart",
+        "recovery",
+        "restart",
+      ]),
       status: z.enum([
         "preparing",
         "running",
@@ -1646,6 +1652,7 @@ export const AttemptSchema = describes<Attempt>()(
         "interrupted",
         "lost",
         "superseded",
+        "restarted",
       ]),
       providerThreadId: z.string().nullable(),
       nativeTurnRef: NativeRefSchema.nullable(),
@@ -2061,8 +2068,90 @@ export const CommandReceiptSchema = describes<CommandReceipt>()(
 export const SessionCommandSchema =
   describes<SessionCommand>()(sessionCommandSchema);
 
+/** The turn working now and its progress (ADR 0333). */
+export const TurnProgressSchema = z.object({
+  id: z.string(),
+  ordinal: z.number().int(),
+  status: z.enum(["preparing", "running", "waiting", "finalizing"]),
+  attempt: z
+    .object({
+      id: z.string(),
+      ordinal: z.number().int(),
+      reason: z.string(),
+      startedAt: z.string().nullable(),
+    })
+    .nullable(),
+  attempts: z.number().int(),
+  restarts: z.number().int(),
+  progressAt: z.string().nullable(),
+  stalledAt: z.string().nullable(),
+  stallMinutes: z.number().nullable(),
+  activity: z.object({
+    tools: z.array(
+      z.object({
+        name: z.string(),
+        description: z.string().nullable(),
+        since: z.string(),
+      }),
+    ),
+    commands: z.array(
+      z.object({
+        command: z.string(),
+        description: z.string().nullable(),
+        since: z.string(),
+      }),
+    ),
+  }),
+});
+
 export const AgentSessionDetailSchema = AgentSessionSchema.extend({
   snapshot: SessionSnapshotSchema,
+  turn: TurnProgressSchema.nullable(),
+});
+
+/** A turn's attempts with their diagnostics (ADR 0333). */
+export const TurnAttemptsSchema = z.object({
+  attempts: z.array(
+    z.object({
+      id: z.string(),
+      ordinal: z.number().int(),
+      reason: z.string(),
+      status: z.string(),
+      error: z.object({ message: z.string() }).nullable(),
+      startedAt: z.string().nullable(),
+      completedAt: z.string().nullable(),
+      progressAt: z.string().nullable(),
+      stalledAt: z.string().nullable(),
+      diagnostics: z
+        .object({ runner: z.string(), harness: z.string() })
+        .nullable(),
+    }),
+  ),
+});
+
+export const TurnIdParamsSchema = z.object({
+  projectId: z.string().uuid(),
+  sessionId: z.string().uuid(),
+  turnId: z.string().uuid(),
+});
+
+/** Restart a running turn's attempt (ADR 0333). */
+export const RestartTurnSchema = z.object({
+  /** The attempt to end: refused unless it is the turn's running attempt. */
+  attemptId: z.string().uuid(),
+  reason: z.string().min(1).max(500),
+  /** Only while it is stalled. */
+  onlyIfStalled: z.boolean().optional(),
+  idempotencyKey: z.string().min(1).max(300),
+});
+
+export const RestartTurnResultSchema = z.object({
+  restarted: z.literal(true),
+  turnId: z.string(),
+  attemptId: z.string(),
+  attempt: z.number().int(),
+  attempts: z.number().int(),
+  restarts: z.number().int(),
 });
 
 export const SessionItemsQuerySchema = z.object({

@@ -374,3 +374,62 @@ it("the shipped onboarding recipe issues one key per joiner, stores it as theirs
     await fs.rm(directory, { recursive: true, force: true });
   }
 });
+
+it("the stalled-turn recipe parses, restarts the turn, and stops it past its bound (ADR 0333)", async () => {
+  const recipe = [
+    ...SESSION_WORKFLOWS_SKILL.matchAll(/```typescript\n([\s\S]*?)```/g),
+  ]
+    .map((match) => match[1] ?? "")
+    .find((source) => source.includes("restartStalled"));
+  if (!recipe) throw new Error("Missing the stalled-turn example");
+  expect(parseWorkflow(recipe).triggers.map((binding) => binding.kind)).toEqual(
+    ["session.turn-stalled"],
+  );
+  const directory = await fs.mkdtemp(path.join(os.tmpdir(), "stall-recipe-"));
+  try {
+    const workflowModule = path.resolve(
+      import.meta.dirname,
+      "../../../workflow/src/index.ts",
+    );
+    await fs.writeFile(
+      path.join(directory, "recipe.ts"),
+      recipe.replace('"@catamorphic/workflow"', JSON.stringify(workflowModule)),
+    );
+    await fs.writeFile(
+      path.join(directory, "verify.ts"),
+      `
+      import { restartStalled } from "./recipe.ts";
+      const host = { "catamorphic.sessions": Object.fromEntries(["restart", "interrupt"].map(operation => [operation, args => ({ operation, args })])) };
+      const stall = (restarts) => ({ payload: { sessionId: "s1", detail: { turnId: "t1", attemptId: "a" + restarts, restarts, stallMinutes: 20 } } });
+      console.log(JSON.stringify([0, 2].map((restarts) => restartStalled.steps[0].run({ input: stall(restarts), host }))));
+    `,
+    );
+    const result = await promisify(execFile)("bun", ["run", "verify.ts"], {
+      cwd: directory,
+      timeout: 10000,
+    });
+    expect(JSON.parse(result.stdout)).toEqual([
+      {
+        operation: "restart",
+        args: {
+          sessionId: "s1",
+          turnId: "t1",
+          attemptId: "a0",
+          onlyIfStalled: true,
+          reason: "no progress for 20 minutes",
+          idempotencyKey: "stall:a0",
+        },
+      },
+      {
+        operation: "interrupt",
+        args: {
+          sessionId: "s1",
+          turnId: "t1",
+          idempotencyKey: "stall-stop:t1",
+        },
+      },
+    ]);
+  } finally {
+    await fs.rm(directory, { recursive: true, force: true });
+  }
+});

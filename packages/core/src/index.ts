@@ -126,6 +126,7 @@ export {
   AgentTurnUnsettledError,
   type ArchiveSessionResourcesHandler,
   type NativeAgentCheckout,
+  type RestartAnswer,
   type SessionDeliveryReceipt,
   type SessionPlacement,
   type SyncedFileChange,

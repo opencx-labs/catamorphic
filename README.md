@@ -302,6 +302,14 @@ agent submits them with `submit_result`, Work records only a value its schema
 accepts and returns field errors to the agent in the same turn, and parents,
 workflows (`results`, `session.result-recorded`), the project MCP and REST read
 them with the chat, turn and input that produced them.
+A running turn shows when it last made progress and the tool calls and
+commands it is in; an agent's definition can set a stall threshold
+(`"stall": { "minutes": 20 }`), after which Work emits
+`session.turn-stalled` once per silence, and a workflow (or person, over REST
+and the project MCP) can `restart` the turn: its attempt is killed and the same
+turn runs again, while each unfinished attempt keeps the masked tail of its
+runner's and harness's own output (ADR
+[0333](docs/decisions/0333-stalled-turns-are-visible-and-restartable.md)).
 Archive recursively stops active work only after reporting its impact, while
 keeping the session tree restorable and searchable. Session source records
 whether a conversation began on desktop, mobile, Slack, Claude, MCP, or API.

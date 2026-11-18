@@ -620,6 +620,11 @@ same turn. Workflows read them with \`results\` or trigger on
 subagents' in their messages and in list and wait outputs. Prefer a result to
 asking an agent to end its reply with a block of JSON.
 
+\`stall\` is how long a running turn may make no progress before Work records a
+stall (ADR 0333): \`{ "minutes": 20 }\`, whole minutes from 1 to 1440; absent,
+none is recorded. Work only emits \`session.turn-stalled\`; a workflow decides
+whether to collect diagnostics and \`restart\` the turn (session-workflows).
+
 A remote project keeps one authority for membership, connections, and history.
 \`device: "member"\` offers an authenticated member's own computer when the
 host supports client execution. It never requires the member to receive

@@ -1,6 +1,6 @@
 # 0328: Hand-offs keep results and open requests; ACP agents take effort and report their turn
 
-- **Status:** Accepted (amends 0198, 0241, 0255, 0298)
+- **Status:** Accepted (amends 0198, 0241, 0255, 0298; a restart's new thread gets the same hand-off, by 0333)
 - **Date:** 2026-11-17
 
 ## Context

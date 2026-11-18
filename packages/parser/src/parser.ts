@@ -206,6 +206,8 @@ const SESSION_OPERATION_LABELS: Record<string, string> = {
   archive: "Archive a chat",
   unarchive: "Restore a chat",
   interrupt: "Interrupt a chat",
+  restart: "Restart a chat's turn",
+  attempts: "Read a turn's attempts",
   complete: "Mark a chat's work done",
   reopen: "Reopen a chat's work",
   stopWatcher: "Stop a watcher",

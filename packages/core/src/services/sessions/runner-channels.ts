@@ -57,8 +57,46 @@ export interface RunnerChannel {
   send(frames: readonly RunnerCommandFrame[]): Promise<void>;
   /** Frames after `cursor`, waiting up to `waitMs` for the first. */
   read(input: { cursor: number; waitMs: number }): Promise<RunnerRead>;
-  /** End the runner process (it should have exited already). */
-  kill(): Promise<void>;
+  /**
+   * End the runner process (it should have exited already): SIGTERM to
+   * its process group, which lets it stop its harness first; `force`
+   * sends SIGKILL to the group instead (ADR 0333).
+   */
+  kill(input?: { force?: boolean }): Promise<void>;
+}
+
+/**
+ * End a runner that will not end itself (a restart, ADR 0333): ask it to
+ * stop, wait up to `graceMs` for its process to exit, then kill its process
+ * group. An in-process runner has no process: it is told to stop and let go.
+ * Says whether it was seen gone.
+ */
+export async function endRunner(input: {
+  channel: RunnerChannel;
+  cursor: number;
+  graceMs: number;
+}): Promise<"exited" | "killed" | "unknown"> {
+  const { channel } = input;
+  await channel.kill().catch(() => {});
+  if (channel.location.kind === "in_process") return "unknown";
+  let cursor = input.cursor;
+  const gone = async (deadline: number) => {
+    while (Date.now() < deadline) {
+      const read = await channel
+        .read({
+          cursor,
+          waitMs: Math.min(1_000, Math.max(1, deadline - Date.now())),
+        })
+        .catch(() => undefined);
+      if (!read) return false;
+      cursor = read.cursor;
+      if (read.exited) return true;
+    }
+    return false;
+  };
+  if (await gone(Date.now() + input.graceMs)) return "exited";
+  await channel.kill({ force: true }).catch(() => {});
+  return (await gone(Date.now() + 5_000)) ? "killed" : "unknown";
 }
 
 /**
@@ -121,7 +159,10 @@ export async function reattachInProcessRunner(
   if (location.process !== PROCESS_INSTANCE) return undefined;
   const runner = inProcessRunners.get(location.runnerId);
   if (runner?.stopping) {
-    await runner.kill();
+    // Stopped by its last holder: gone, whether or not a stuck harness let
+    // go in time, so a takeover loses or restarts it instead of failing.
+    await runner.kill().catch(() => {});
+    inProcessRunners.delete(location.runnerId);
     return undefined;
   }
   return runner ? inProcessChannel(location.runnerId, runner) : undefined;
@@ -399,12 +440,12 @@ export function sandboxChannel(input: {
         next >= output.outputBytes;
       return { frames, diagnostics, cursor: next, exited };
     },
-    kill: async () => {
+    kill: async (options) => {
       await processes
         .signalProcess({
           sandboxId: location.sandboxId,
           processId: location.processId,
-          signal: "SIGTERM",
+          signal: options?.force ? "SIGKILL" : "SIGTERM",
         })
         .catch(() => {});
     },
@@ -415,12 +456,17 @@ export function sandboxChannel(input: {
 const WRITE_PIECE_BYTES = Math.floor(PROCESS_WRITE_MAX_BYTES / 2);
 /** Pages one read passes over inside a skipped line before answering. */
 const SKIP_PAGES = 8;
-/** Characters of one diagnostic line kept for the log. */
+/** The longest diagnostic line kept; a longer one is left out whole. */
 const DIAGNOSTIC_CHARS = 4_000;
 
-function diagnostic(line: string): string {
+/**
+ * A runner's line as kept, whole or not at all: masking happens after this,
+ * and a cut inside a line could keep part of a secret no mask matches
+ * (ADR 0333).
+ */
+export function diagnostic(line: string): string {
   return line.length > DIAGNOSTIC_CHARS
-    ? `${line.slice(0, DIAGNOSTIC_CHARS)} [${line.length - DIAGNOSTIC_CHARS} more characters]`
+    ? `[A ${line.length}-character line of output was left out]`
     : line;
 }
 

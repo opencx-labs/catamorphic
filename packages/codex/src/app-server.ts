@@ -74,10 +74,13 @@ export class CodexAppServer {
     onRequest?: (request: CodexServerRequest) => Promise<JsonValue>;
     /** Codex resolved a request before the client answered it. */
     onWithdrawn?: (id: JsonRpcId) => void;
+    /** Codex's standard error as it writes it (ADR 0333). */
+    onStderr?: (chunk: string) => void;
   }) {
     const factory = input.transport ?? processTransport;
     this.transport = factory({
       ...input.spawn,
+      ...(input.onStderr ? { onStderr: input.onStderr } : {}),
       onMessage: (message) => {
         if (typeof message.method === "string") {
           const params = isObject(message.params) ? message.params : {};

@@ -296,5 +296,7 @@ export type {
   SessionHostOperations,
   SessionResult,
   SessionSnapshot,
+  SessionTurnAttempt,
+  SessionTurnProgress,
   SessionUsage,
 } from "./session-operations.js";

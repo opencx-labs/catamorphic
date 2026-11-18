@@ -212,15 +212,19 @@ export interface AgentSessionViews {
 export interface AgentTurnAttempts {
   completed_at: Timestamp | null;
   created_at: Generated<Timestamp>;
+  diagnostics: Json | null;
   error: Json | null;
   id: Generated<string>;
   native_turn_ref: Json | null;
   ordinal: number;
+  progress_at: Timestamp | null;
   provider_started_at: Timestamp | null;
   provider_thread_id: string | null;
   reason: string;
   runner: Json | null;
   session_id: string;
+  stall_after_seconds: number | null;
+  stalled_at: Timestamp | null;
   started_at: Timestamp | null;
   status: string;
   turn_id: string;

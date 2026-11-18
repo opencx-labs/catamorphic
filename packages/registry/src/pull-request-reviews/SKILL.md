@@ -1,7 +1,7 @@
 ---
 name: pull-request-reviews
 title: Pull request reviews
-description: How this project reviews its pull requests: a review chat per pull request on the review pool, its Environments, reviewer and doctrine, and the workflow that posts the review, check run and replies to GitHub. Use when adapting, debugging, or explaining the reviews.
+description: How this project reviews its pull requests: a review chat per pull request on the review pool, its Environments, reviewer and doctrine, the workflow that posts the review, check run and replies to GitHub, and an optional one that restarts a stalled review. Use when adapting, debugging, or explaining the reviews.
 ---
 
 # Pull request reviews
@@ -10,7 +10,8 @@ This project reviews its pull requests with its own code, installed from the
 `pull-request-reviews` pack and the team's to change: the GitHub trigger
 library, a `review` Environment with its own image and read-only bindings, a
 `github-poster` Environment for workflows only, a `reviewer` agent whose
-persona is the review doctrine, and four workflows. With the workflows on,
+persona is the review doctrine, four workflows, and an optional fifth that
+restarts a review that stopped making progress. With the workflows on,
 every non-draft pull request gets a project chat keyed
 `pr-<repository>-<number>`:
 
@@ -130,6 +131,14 @@ failing field back to the agent in the same turn, so a malformed report is
 fixed before the turn ends instead of being lost. Change the schema together
 with `review-report.ts`, which checks the value again before posting.
 
+Its `stall` (`{ "minutes": 20 }`) is how long a review turn may make no
+progress (nothing from its harness but log lines, no model call) before Work
+records a stall and emits `session.turn-stalled` (ADR 0333). Its subagents'
+progress counts: a reviewer waiting on subagents that work does not stall. Work only
+reports it; `restartStalledReviews` acts on it when it is on. Raise it for
+reviews that legitimately sit in one long command (a full test suite), or
+remove it to record no stalls.
+
 ## .work/agents/reviewer.md
 
 The review doctrine. Edit it to match the team: what matters in this
@@ -189,6 +198,44 @@ COMMENT or REQUEST_CHANGES verdict, a score from 1 to 5, summaries up to
 Unknown fields, including the old `resolve`, are rejected. Mentions and HTML
 comment delimiters are removed before publication, so a report cannot ping
 people or forge a stamp.
+
+## .work/workflows/src/stalled-reviews.ts
+
+Optional: `restartStalledReviews` runs on `session.turn-stalled` for this
+repository's review chats, one stall per chat at a time. A review whose
+agent hangs (a tool call that never returns, a harness stuck on its model)
+otherwise keeps its turn, and the pull request its "Work review" check,
+until someone stops it. For each stall it:
+
+1. Inspects the chat, and does nothing unless it is this repository's review
+   chat exactly (its key names a pull request of `REVIEWED_REPOSITORY`, and
+   it is the reviewer's project chat in `review` that `reviewPullRequests`
+   started, as `postReviews` checks), and the stalled attempt is still the
+   turn's and still silent.
+2. Runs a diagnosis in the chat's workspace with `exec`: the process list and
+   the newest log of a harness that keeps one in the sandbox (OpenCode,
+   Codex, Claude Code). Output is masked by the chat's secrets.
+3. Reads the turn's attempts with `attempts`: each one's outcome and the
+   tails of its runner's and harness's own output Work kept.
+4. Writes both to `store/reviews/stalls/<number>/<attempt>.json`.
+5. Inspects the chat again, since the diagnosis took a while, and acts only
+   if that attempt is still stalled.
+6. Restarts that attempt (`restart` with its `attemptId` and `onlyIfStalled`,
+   keyed by it, so a retried run restarts once): Work ends it without asking
+   its harness, revokes its model grant, and runs the same turn again,
+   telling the agent it was restarted and to check what it already did. A
+   restart Work refuses (the attempt moved on) is nothing to do. After
+   `MAX_RESTARTS` (2) restarts of a turn it stops that turn instead
+   (`interrupt` with its `turnId`), and `postReviews` marks the commit
+   `action_required`: "The review turn was stopped before it finished."
+   A stopped turn that had already submitted its review for the head
+   publishes that review instead.
+
+It declares `sessions:write`, which `exec` and `restart` need on the
+project's chat; whoever turns it on needs that permission too. It is the
+place to change the policy: skip a stall whose `activity` shows a command
+that is expected to be slow, change the bound, or notify someone instead of
+restarting.
 
 ## Optional: a trusted procedure, and pushes during a review
 
@@ -272,7 +319,8 @@ Each boundary returns one call and carries the publication to the next:
 2. Read the turn's `review` result (`results`, ADR 0323): the newest one the
    turn submitted, from any of its attempts (a sandbox lost after the review
    was submitted does not lose it), while it still answered the chat's newest
-   request. No result, or a failed turn, means no pass. Two commits must both
+   request. No result, or a turn that failed, means no pass; a stopped turn
+   publishes the review it submitted, and with none means no pass. Two commits must both
    be the head it posts for: the one the review names (`reviewedCommit`) and
    the one Work recorded the turn began on (the result's `commit`). Either
    one elsewhere refuses the review: the commit is marked `action_required`
@@ -332,7 +380,7 @@ merge gate.
 2. Store `GITHUB_WEBHOOK_SECRET` as a project secret (the server does this
    when it registered the App for this project) and turn on
    `reviewPullRequests`, `answerReviewComments`, and `closePullRequestChats`
-   for the project, and `postReviews` for the project in the `github-poster`
+   (and, if wanted, `restartStalledReviews`) for the project, and `postReviews` for the project in the `github-poster`
    Environment with its `github` connection. Whoever turns them on needs
    `automations:write` in a role whose `environments` list both
    Environments the workflows run in (`default` and `github-poster`) and
@@ -351,8 +399,8 @@ means the secret differs), the workflow's runs (a filtered-out event starts
 none), and the chat's placement (no machine in the pool, or one not opened to
 the project). When the chat reviewed but nothing reached GitHub, open the
 `postReviews` run, and the "Work review" check: an `action_required`
-run's summary says why a report was unusable (no result, a failed turn, or
-a review of another commit), and nothing posts while GitHub's head is past
+run's summary says why a report was unusable (no result, a turn that failed
+or was stopped, or a review of another commit), and nothing posts while GitHub's head is past
 the chat's commit.
 
 To see the queue at work, open the pull request chat's runs of

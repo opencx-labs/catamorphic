@@ -38,6 +38,9 @@ export function readEnvFile(path: string): Record<string, string> | undefined {
  * output keeps them apart from anything a harness prints. Exits once its
  * attempt has exited and its frames are flushed.
  */
+/** How long a terminated runner gives its harness to stop what it started. */
+const TERMINATE_GRACE_MS = 8_000;
+
 export async function runStdioRunner(input: {
   adapters: Readonly<Record<string, HarnessAdapter>>;
   version: string;
@@ -78,6 +81,17 @@ export async function runStdioRunner(input: {
       }
     }
   });
+  // Ended from outside (a restart, a wind-down that ran out of time, ADR
+  // 0333): the harness is stopped with what it started, even a process
+  // group of its own, before the runner goes, at most a few seconds later.
+  if (!input.stdin) {
+    const ended = () => {
+      runner.kill();
+      setTimeout(() => process.exit(143), TERMINATE_GRACE_MS).unref();
+      void runner.done.then(() => process.exit(143));
+    };
+    process.once("SIGTERM", ended);
+  }
   // A host that went away for good closes nothing: input stays open while
   // the sandbox lives, so a replica that takes over can keep writing.
   await runner.done;

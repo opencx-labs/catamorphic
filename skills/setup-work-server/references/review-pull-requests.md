@@ -188,6 +188,13 @@ adds:
   ([Harnesses on the server](harnesses.md#pin-what-requests-carry-your-own-server-image)).
 - `.work/workflows/src/reviews.ts`: `reviewPullRequests`,
   `answerReviewComments`, `closePullRequestChats`, and `postReviews`.
+- `.work/workflows/src/stalled-reviews.ts`: the optional
+  `restartStalledReviews`. The reviewer's `stall` (20 minutes) makes Work
+  emit `session.turn-stalled` when a review turn stops making progress (a
+  hung tool call, a stuck harness, ADR 0333); this workflow keeps the
+  sandbox's process list, the harness's log and Work's diagnostics in the
+  project store, restarts the turn, and after two restarts stops it, so the
+  commit's check says the review did not finish.
 
 Replace `acme/web` in each trigger's `where` and in `REVIEWED_REPOSITORY`
 with the project's repository. Events from the App's other repositories must start nothing. Map GitHub logins
@@ -205,7 +212,9 @@ Someone with `automations:write`, in a role whose `environments` list
 workflows for the project:
 `reviewPullRequests`, `answerReviewComments`, and `closePullRequestChats` in
 the `default` Environment, and `postReviews` in `github-poster`, with its
-`github` connection consented. The `github` webhook listens once they are on;
+`github` connection consented. Turn `restartStalledReviews` on in `default`
+too to restart hung reviews (it declares `sessions:write`, so the person
+needs it). The `github` webhook listens once they are on;
 `GET /api/projects/:id/webhooks` shows its URL, which the App registered from
 a manifest already uses.
 

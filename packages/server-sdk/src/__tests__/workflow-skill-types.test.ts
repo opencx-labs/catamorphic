@@ -142,7 +142,7 @@ it("shipped workflow recipes typecheck against the public API and real host trig
     skills.files[".work/triggers/github.ts"],
   );
   const files = { ...skills.files, ...packs };
-  expect(skills.count).toBe(12);
+  expect(skills.count).toBe(13);
   expect(parseProject(files).triggerKinds.map((kind) => kind.name)).toEqual([
     "github.delivery",
     "github.issue_comment",

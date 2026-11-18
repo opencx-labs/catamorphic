@@ -43,8 +43,8 @@ not this one), and that archiving the chat cancels it. Say it in plain words.
 
 Session event kinds: session.created, session.message-received, session.message-sent,
 session.turn-changed, session.state-changed, session.work-changed,
-session.authority-changed, session.result-recorded, and
-session.workspace-changed. Config may select sessionId, agentId, statuses,
+session.authority-changed, session.result-recorded, session.workspace-changed,
+and session.turn-stalled. Config may select sessionId, agentId, statuses,
 workStatus, and (for results) names. Omitting sessionId observes authorized
 matching sessions in the project. Example: trigger("session.turn-changed", { sessionId: "actual-id",
 statuses: ["completed", "failed"] }). Never guess an id. Keyed chats carry their
@@ -81,7 +81,8 @@ and session_reopen for new work. Observe session.work-changed with
 
 context.host["catamorphic.sessions"] provides typed inspect, list, history,
 results, usage, deliver, create, fork, spawn, archive, unarchive, interrupt,
-complete, reopen, exec, stopWatcher, stop, and setMetadata operations. Every
+restart, attempts, complete, reopen, exec, stopWatcher, stop, and setMetadata
+operations. Every
 host call is a boundary transition: RETURN it. Consume its result as the next
 boundary's input
 (pass { state } as a second argument to keep data across it; the next boundary
@@ -325,6 +326,88 @@ export const prepareReview = defineWorkflow(({ defineBoundary }) => ({
             'rm -rf .work/skills/review && cp -R "$WORK_PROGRAM/skills/review" .work/skills/review && chmod -R u+w .work/skills/review',
           idempotencyKey: "trusted:" + input.reason,
         }),
+    }),
+  ],
+}));
+\`\`\`
+
+### Turns that stop making progress
+
+inspect (and find) answer turn: the turn working now, or null, with its
+attempt { id, ordinal, reason, startedAt }, attempts and restarts so far,
+progressAt (when its attempt last made progress: anything from its harness but
+a log line, or a model call), stalledAt, stallMinutes, and activity { tools,
+commands }: the tool calls and commands it reported still running, each with
+since. An agent definition's "stall": { "minutes": 20 } (1 to 1440; absent,
+never) makes Work record a running turn silent that long once, as
+session.turn-stalled with detail { turnId, attemptId, attempt, attempts,
+restarts, progressAt, stalledAt, stallMinutes, activity }. Progress clears it;
+a later silence emits again. A turn waiting on a person never stalls, nor does
+one whose subsessions, at any depth, made progress within its threshold (a
+coordinator waits while its subagents work); a subsession stalls on its own
+threshold. Work does
+nothing on its own: deciding a silence is a hang is the workflow's.
+
+restart({ sessionId | key, turnId, attemptId, reason, onlyIfStalled?,
+idempotencyKey }) ends that attempt without asking its harness (its runner is
+asked to stop, its process group killed after ten seconds, its model grant
+revoked, its open tool calls closed) and runs the same turn again on a new
+attempt, told it was restarted and why and to check what it already did. It
+needs the authority interrupt needs. It ends only the attempt named, while it
+is the turn's running attempt (and, with onlyIfStalled, while it is stalled,
+checked again when Work acts): otherwise it answers { restarted: false,
+refused: "not_running" | "not_current" | "not_stalled", message }, which is
+nothing to do, never an error. A restart answers { restarted: true, turnId,
+attemptId, attempt, attempts, restarts }; key it by the stalled attempt so a
+retry restarts once, and bound it with restarts. interrupt takes turnId too:
+it stops that turn only, and answers { interrupted: false } when it no longer
+works. attempts({ sessionId | key, turnId }) reads a turn's attempts: status,
+error, progressAt, and diagnostics { runner, harness }, the last 16 000
+characters of the runner's and the harness's own output, masked, in whole
+lines, kept for attempts that did not complete. Collect more with exec before
+a restart (ps, the harness's log files), and inspect again before acting: a
+diagnosis takes time. The pull-request-reviews pack's restartStalledReviews
+is a complete recipe: inspect, exec, attempts, a store document, inspect,
+then restart, or interrupt past its bound.
+
+\`\`\`typescript
+import {
+  type BoundaryContext,
+  defineWorkflow,
+  type TriggerPayload,
+  trigger,
+} from "@catamorphic/workflow";
+
+/** @displayname Restart stalled chats */
+export const restartStalled = defineWorkflow(({ defineBoundary }) => ({
+  triggers: [
+    trigger("session.turn-stalled", {
+      where: { payload: { session: { key: { $prefix: "pr-" } } } },
+    }),
+  ],
+  permissions: ["sessions:write"],
+  steps: [
+    /** @displayname Restart the turn, twice at most */
+    defineBoundary({
+      run: ({ input, host }: BoundaryContext<TriggerPayload<"session.turn-stalled">>) => {
+        const { sessionId, detail } = input.payload;
+        // This turn only: a newer one may be running by now.
+        if (Number(detail.restarts) >= 2)
+          return host["catamorphic.sessions"].interrupt({
+            sessionId,
+            turnId: String(detail.turnId),
+            idempotencyKey: "stall-stop:" + String(detail.turnId),
+          });
+        // This attempt only, while it is still stalled.
+        return host["catamorphic.sessions"].restart({
+          sessionId,
+          turnId: String(detail.turnId),
+          attemptId: String(detail.attemptId),
+          onlyIfStalled: true,
+          reason: "no progress for " + String(detail.stallMinutes) + " minutes",
+          idempotencyKey: "stall:" + String(detail.attemptId),
+        });
+      },
     }),
   ],
 }));

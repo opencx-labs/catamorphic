@@ -45,6 +45,63 @@ export interface SessionSnapshot {
    * workflows. Keys a workflow owns carry its purpose (`review.verdicts`).
    */
   metadata: Record<string, JsonValue>;
+  /**
+   * The turn working now and its progress (ADR 0333), from `inspect` and
+   * `find`; null when no turn works. `progressAt` is when its attempt last
+   * made progress (a frame from its harness other than a log line, or a
+   * model request); `stalledAt` is set while a silence longer than
+   * `stallMinutes` lasts.
+   */
+  turn?: SessionTurnProgress | null;
+}
+/** A working turn's progress (ADR 0333). */
+export interface SessionTurnProgress {
+  id: string;
+  ordinal: number;
+  status: "preparing" | "running" | "waiting" | "finalizing";
+  attempt: {
+    id: string;
+    ordinal: number;
+    /** `initial`, `retry`, `steer_restart`, `recovery` or `restart`. */
+    reason: string;
+    startedAt: string | null;
+  } | null;
+  /** Attempts so far, this one included. */
+  attempts: number;
+  /** Attempts that ran because someone restarted the one before. */
+  restarts: number;
+  progressAt: string | null;
+  stalledAt: string | null;
+  /** The agent's stall threshold; null when it sets none. */
+  stallMinutes: number | null;
+  /** The tool calls and commands the attempt reported still running. */
+  activity: {
+    tools: Array<{ name: string; description: string | null; since: string }>;
+    commands: Array<{
+      command: string;
+      description: string | null;
+      since: string;
+    }>;
+  };
+}
+/** One attempt of a turn, as `attempts` reads it (ADR 0333). */
+export interface SessionTurnAttempt {
+  id: string;
+  ordinal: number;
+  reason: string;
+  /** `running`, `completed`, `failed`, `interrupted`, `lost`, `superseded` or `restarted`. */
+  status: string;
+  error: { message: string } | null;
+  startedAt: string | null;
+  completedAt: string | null;
+  progressAt: string | null;
+  stalledAt: string | null;
+  /**
+   * The last 16 000 characters of the runner's own output that was not a
+   * frame and of the harness's own log, masked by the chat's secret values.
+   * Null once the attempt completed, or when there was none.
+   */
+  diagnostics: { runner: string; harness: string } | null;
 }
 /**
  * Where a chat's workspace starts (ADR 0178): a branch, tag, commit, or
@@ -310,7 +367,46 @@ export interface SessionHostOperations {
    * that is not open answers `{ closed: false }`.
    */
   close: Call<Action, { sessionId: string | null; closed: boolean }>;
-  interrupt: Call<Action>;
+  /** `turnId`: only that turn, and nothing when it no longer works. */
+  interrupt: Call<Action & { turnId?: string }, { interrupted: boolean }>;
+  /**
+   * End a running turn's attempt without asking its harness (it is killed,
+   * its model grants revoked) and run the same turn again on a new attempt,
+   * told it was restarted and why (ADR 0333). Name the attempt to end (a
+   * stall event's `detail.attemptId`): one that is no longer the turn's
+   * running attempt, or with `onlyIfStalled` no longer stalled, is not
+   * ended, and the answer says why (`restarted: false`), so treat that as
+   * nothing to do. Needs the authority that interrupts the chat. Bound your
+   * restarts with `restarts`.
+   */
+  restart: Call<
+    Action & {
+      turnId: string;
+      attemptId: string;
+      reason: string;
+      onlyIfStalled?: boolean;
+    },
+    | {
+        restarted: true;
+        turnId: string;
+        attemptId: string;
+        attempt: number;
+        attempts: number;
+        restarts: number;
+      }
+    | {
+        restarted: false;
+        turnId: string;
+        attemptId: string;
+        refused: "not_running" | "not_current" | "not_stalled";
+        message: string;
+      }
+  >;
+  /** A turn's attempts with their diagnostics (ADR 0333), oldest first. */
+  attempts: Call<
+    Target & { turnId: string },
+    { sessionId: string; key: string | null; attempts: SessionTurnAttempt[] }
+  >;
   complete: Call<Action & { content: string }>;
   reopen: Call<Action>;
   stopWatcher: Call<Action & { watcherId: string }>;

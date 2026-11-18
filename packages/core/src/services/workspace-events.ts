@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import type { DB, Json } from "@catamorphic/db";
-import { type Kysely, sql, type Transaction } from "kysely";
+import { type Kysely, type RawBuilder, sql, type Transaction } from "kysely";
 
 /*
  * `session.workspace-changed` (ADR 0324): a chat's workspace was made,
@@ -44,6 +44,32 @@ export async function recordWorkspaceChange(input: {
   change: WorkspaceChange;
   reason: WorkspaceChangeReason;
 }): Promise<void> {
+  await recordSessionEvent({
+    db: input.db,
+    sessionId: input.sessionId,
+    kind: WORKSPACE_CHANGED_EVENT,
+    detail: sql<Json>`jsonb_build_object(
+      'change', ${input.change}::text,
+      'reason', ${input.reason}::text,
+      'workspace', CASE WHEN jsonb_typeof(session.workspace) = 'object'
+        THEN jsonb_build_object('ref', session.workspace->'ref', 'commit', session.workspace->'commit')
+        ELSE 'null'::jsonb END,
+      'generation', session.workspace_generation)`,
+  });
+}
+
+/**
+ * Record a session event the host states (ADRs 0324, 0333): the chat's
+ * snapshot as every session event carries it (`payload.session.key`
+ * included), Work as its actor, and `detail`, an expression that may read
+ * the session's row as `session`.
+ */
+export async function recordSessionEvent(input: {
+  db: Kysely<DB> | Transaction<DB>;
+  sessionId: string;
+  kind: string;
+  detail: RawBuilder<Json>;
+}): Promise<void> {
   // Built, not raw: a host's schema applies to every table named here.
   await input.db
     .insertInto("project_events")
@@ -62,7 +88,7 @@ export async function recordWorkspaceChange(input: {
         .select([
           "session.project_id",
           sql<string>`${"session"}::text`.as("source"),
-          sql<string>`${WORKSPACE_CHANGED_EVENT}::text`.as("kind"),
+          sql<string>`${input.kind}::text`.as("kind"),
           sql<string>`${randomUUID()}::text`.as("external_id"),
           sql<Date>`now()`.as("occurred_at"),
           sql<Json>`jsonb_build_object(
@@ -74,15 +100,9 @@ export async function recordWorkspaceChange(input: {
               'activity', session.activity, 'parentSessionId', session.parent_session_id,
               'stateRevision', session.state_revision, 'authorityHostId', session.authority_host_id,
               'authorityRevision', session.authority_revision),
-            'actor', jsonb_build_object('kind', 'system', 'code', ${WORKSPACE_CHANGED_EVENT}::text),
+            'actor', jsonb_build_object('kind', 'system', 'code', ${input.kind}::text),
             'causation', '[]'::jsonb,
-            'detail', jsonb_build_object(
-              'change', ${input.change}::text,
-              'reason', ${input.reason}::text,
-              'workspace', CASE WHEN jsonb_typeof(session.workspace) = 'object'
-                THEN jsonb_build_object('ref', session.workspace->'ref', 'commit', session.workspace->'commit')
-                ELSE 'null'::jsonb END,
-              'generation', session.workspace_generation))`.as("payload"),
+            'detail', ${input.detail})`.as("payload"),
         ]),
     )
     .execute();

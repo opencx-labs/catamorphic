@@ -13,6 +13,7 @@ import {
   type AttemptControl,
   type AttemptHost,
   type AttemptStart,
+  diagnosticStream,
   type HarnessAdapter,
   type HarnessCapabilities,
   type HostToolDescriptor,
@@ -213,6 +214,8 @@ class CodexAttempt {
   private readonly fileChangePaths = new Map<string, string[]>();
   private readonly hostTools = new Map<string, HostToolDescriptor>();
   private readonly items: CodexItems;
+  /** Codex's own log while this attempt is its own (ADR 0333). */
+  readonly log: ReturnType<typeof diagnosticStream>;
   private inputDirectory?: string;
   /** The working directory as given and as Codex reports it (resolved). */
   private workRoots: string[] = [];
@@ -234,6 +237,10 @@ class CodexAttempt {
     private readonly transport: CodexTransportFactory | undefined,
     private readonly sessions: WarmSessions<CodexSession> | undefined,
   ) {
+    this.log = diagnosticStream({
+      emit: (event) => host.emit(event),
+      prefix: "codex: ",
+    });
     for (const tool of attempt.hostTools) {
       const taken = this.hostTools.has(tool.name);
       this.hostTools.set(
@@ -494,14 +501,15 @@ class CodexAttempt {
               new Error("Codex asked for something between turns."),
             ),
       onWithdrawn: (id) => session.attempt?.onWithdrawn(id),
+      onStderr: (chunk) => session.attempt?.log.write(chunk),
     });
     session.client = client;
     this.client = client;
     const sessions = this.sessions;
-    void client.exited.then((exit) => {
+    void client.exited.then(() => {
       session.ended();
       if (session.thread) sessions?.forget(session.thread.id, session);
-      session.attempt?.codexExited(exit);
+      session.attempt?.codexExited();
     });
     await client.initialize();
     const thread = await this.openThread(client, binding);
@@ -532,14 +540,10 @@ class CodexAttempt {
   }
 
   /** Codex's process ended while this attempt was its own. */
-  private codexExited(exit: Awaited<CodexAppServer["exited"]>): void {
+  private codexExited(): void {
     if (this.completed || this.finishing) return;
-    if (exit.stderr.trim())
-      this.host.emit({
-        type: "diagnostic",
-        level: "error",
-        message: exit.stderr.trim().slice(-2_000),
-      });
+    // Its stderr already reached Work as it was written (ADR 0333).
+    this.log.flush();
     this.items.closeOpen(this.interruptRequested ? "interrupted" : "failed");
     this.complete(
       this.interruptRequested
@@ -1088,6 +1092,7 @@ class CodexAttempt {
     this.finishing = true;
     clearTimeout(this.interruptTimer);
     if (event.ref && this.session) this.session.lastTurn = event.ref.id;
+    this.log.flush();
     this.host.emit({ type: "turn.completed", ...event });
     this.resolveTurnReady();
     this.resolveTurn();
