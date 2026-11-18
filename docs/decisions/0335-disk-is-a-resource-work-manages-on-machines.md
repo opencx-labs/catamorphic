@@ -59,9 +59,12 @@ cache unused for as long; and in each running sandbox with containers,
 its Docker's dangling images and build cache unused for as long, never a
 tagged image, a container or a volume. Volumes keep their retention (ADR
 0208); caches keep theirs (ADR 0334). In a workspace: each exec's output
-folder goes once its result is recorded, and before an exec copies the
-program, copies of other commits not used for 24 hours go, except those
-of execs still running there (ADR 0324). Nothing of the project's own
+folder goes once its result is recorded, and placing a program copy
+removes copies of commits no exec of the workspace used within 24 hours,
+nor since its oldest turn still queued or working began (a workflow hands
+the path to a turn), nor is starting or running now; an exec names its
+commit as it starts, and a copy used again is touched, its time being
+what counts for a copy Work has no record of (ADR 0324). Nothing of the project's own
 (the checkout, its volumes, its caches, its tagged images) is removed.
 
 **Out of disk is a reason.** When a turn fails, a workflow run fails, an

@@ -863,9 +863,10 @@ The machine removes what Work left that nothing used for
 images it built or pulled that no container uses (never its default image or
 one it found there), and the dangling images and build cache of each running
 sandbox with containers. A workspace keeps one `$WORK_PROGRAM` copy per
-program commit it ran; copies of other commits go after a day unless a
-running command uses them, and each `exec`'s output files go once its result
-is recorded. Volumes and caches keep their own retention. A failed turn,
+program commit it ran; a copy goes once no `exec` there used it for a day,
+none used it since the workspace's oldest active turn began, and none
+starting or running uses it, and each `exec`'s output files go once its
+result is recorded. Volumes and caches keep their own retention. A failed turn,
 run, `exec` or cache fill on a machine under its floor says so with the
 machine's numbers (the turn's error kind is `out_of_disk`, and its attempt's
 diagnostics keep the line); output that says `ENOSPC` gets the same

@@ -135,7 +135,11 @@ const network = Object.assign(
   { failNarrow: false, stopped: [] as string[] },
 );
 /** While set, another start places the program folder first (a race). */
-const programRace = { placeFirst: false };
+const programRace: {
+  placeFirst: boolean;
+  /** Called as a start looks for its program's copy. */
+  onLook?: () => Promise<void>;
+} = { placeFirst: false };
 
 describeIf("workflows run commands in a chat's workspace (ADR 0324)", () => {
   let tmpDir: string;
@@ -179,6 +183,16 @@ describeIf("workflows run commands in a chat's workspace (ADR 0324)", () => {
         if (property === "stopSandbox")
           return async (sandboxId: string) => {
             network.stopped.push(sandboxId);
+          };
+        if (property === "executeCommand" && programRace.onLook)
+          return async (
+            sandboxId: string,
+            command: string,
+            options: { cwd?: string; timeout?: number },
+          ) => {
+            if (command.startsWith("test -d '../.work-program/"))
+              await programRace.onLook?.();
+            return target.executeCommand(sandboxId, command, options);
           };
         if (property === "executeCommand" && programRace.placeFirst)
           return async (
@@ -1048,6 +1062,132 @@ describeIf("workflows run commands in a chat's workspace (ADR 0324)", () => {
       (plain.result as { result: { outOfDisk?: string } }).result.outOfDisk,
     ).toBeUndefined();
   }, 120_000);
+
+  it("names its program commit from the moment it starts, before it looks for its copy (ADR 0335)", async () => {
+    const sessionId = (await sessions().create(root, projectId)).id;
+    const named: Array<string | undefined> = [];
+    programRace.onLook = async () => {
+      const starting = await db
+        .selectFrom("session_actions")
+        .select("progress")
+        .where("session_id", "=", sessionId)
+        .where("operation", "=", "exec")
+        .where("status", "=", "running")
+        .executeTakeFirst();
+      const progress = starting?.progress;
+      named.push(
+        progress && typeof progress === "object" && !Array.isArray(progress)
+          ? String(progress.program ?? "")
+          : undefined,
+      );
+    };
+    try {
+      const { run } = await runExec({
+        sessionId,
+        in: "session",
+        idempotencyKey: "named",
+        command: 'basename "$WORK_PROGRAM"',
+      });
+      const commit = (
+        run.result as { result: { stdout: string } }
+      ).result.stdout.trim();
+      expect(commit).toMatch(/^[0-9a-f]{40}$/);
+      // Both sides looked, and the start already named its commit: a
+      // cleanup another start runs meanwhile keeps it.
+      expect(named.length).toBeGreaterThan(0);
+      expect(new Set(named)).toEqual(new Set([commit]));
+    } finally {
+      programRace.onLook = undefined;
+    }
+  }, 120_000);
+
+  it("keeps a program copy a chat may still read, and removes it once none may (ADR 0335)", async () => {
+    const sessionId = (await sessions().create(root, projectId)).id;
+    const programOf = async (idempotencyKey: string) => {
+      const { run } = await runExec({
+        sessionId,
+        in: "session",
+        idempotencyKey,
+        command: 'basename "$WORK_PROGRAM"',
+      });
+      return (
+        run.result as { result: { stdout: string } }
+      ).result.stdout.trim();
+    };
+    const workspace = await sessions().personWorkspace({
+      identity: root,
+      projectId,
+      sessionId,
+      start: true,
+    });
+    const copies = async () =>
+      (
+        await workspace.provider.executeCommand(
+          workspace.sandboxId,
+          "ls ../.work-program",
+          { cwd: workspace.projectDirectory },
+        )
+      ).result
+        .split("\n")
+        .filter(Boolean)
+        .sort();
+    /** Its copy made, and every execution of it run, over a day ago. */
+    const age = async (commit: string, hours: number) => {
+      await workspace.provider.executeCommand(
+        workspace.sandboxId,
+        `touch -t 202601010000 ../.work-program/${commit}`,
+        { cwd: workspace.projectDirectory },
+      );
+      await db
+        .updateTable("session_actions")
+        .set({ updated_at: new Date(Date.now() - hours * 3_600_000) })
+        .where("session_id", "=", sessionId)
+        .where("operation", "=", "exec")
+        .where(sql<boolean>`progress->>'program' = ${commit}`)
+        .execute();
+    };
+    const x = await programOf("keep-x");
+    await age(x, 25);
+    // A workflow runs at X again now, to hand its path to a turn: the old
+    // copy is used now, and a cleanup at another commit keeps it.
+    expect(await programOf("keep-x-again")).toBe(x);
+    await writeAndDeploy({
+      ".work/skills/review/SKILL.md": "# Review\n\nThe Y procedure.\n",
+    });
+    const y = await programOf("keep-y");
+    expect(await copies()).toEqual([x, y].sort());
+    // A turn that began before X was last handed over still works: kept.
+    await age(x, 26);
+    await db
+      .insertInto("agent_turns")
+      .values({
+        session_id: sessionId,
+        ordinal: 1,
+        status: "waiting",
+        created_at: new Date(Date.now() - 30 * 3_600_000),
+      })
+      .execute();
+    await writeAndDeploy({
+      ".work/skills/review/SKILL.md": "# Review\n\nThe Z procedure.\n",
+    });
+    const z = await programOf("keep-z");
+    expect(await copies()).toEqual([x, y, z].sort());
+    // Once no turn works and nothing used it for a day, it goes.
+    await db
+      .updateTable("agent_turns")
+      .set({ status: "completed" })
+      .where("session_id", "=", sessionId)
+      .execute();
+    await writeAndDeploy({
+      ".work/skills/review/SKILL.md": "# Review\n\nThe W procedure.\n",
+    });
+    const w = await programOf("keep-w");
+    expect(await copies()).toEqual([y, z, w].sort());
+    // The project's program as the other cases expect it.
+    await writeAndDeploy({
+      ".work/skills/review/SKILL.md": "# Review\n\nThe trusted procedure.\n",
+    });
+  }, 180_000);
 
   it("masks the chat's secret values in what a command prints", async () => {
     const sessionId = (await sessions().create(root, projectId)).id;

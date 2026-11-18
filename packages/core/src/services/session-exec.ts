@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import path from "node:path";
 import {
+  ACTIVE_TURN_STATUSES,
   type SessionMessageAuthor,
   sessionMessageAuthorSchema,
 } from "@catamorphic/agent-protocol";
@@ -474,16 +475,22 @@ export class SessionExecService {
         "The setup's time is up, so the command did not start",
       );
     const commit = await this.programCommitOf(action);
+    // Named from the start, so a cleanup another start runs meanwhile
+    // keeps this commit's copy (ADR 0335).
+    if (commit)
+      await this.deps.db
+        .updateTable("session_actions")
+        .set({ progress: progressJson({ ...claim, program: commit }) })
+        .where("id", "=", action.id)
+        .where(sql<boolean>`progress->>'at' = ${claim.at}`)
+        .execute();
     const program = commit
       ? await this.copyProgram({
           handle,
           tenantId,
           projectId: action.project_id,
           commit,
-          keep: await this.programsInUse({
-            action,
-            sandboxId: handle.sandboxId,
-          }),
+          keep: await this.programsInUse({ action }),
         })
       : undefined;
     const network = args.in === "setup" ? setup?.network : undefined;
@@ -1110,19 +1117,40 @@ export class SessionExecService {
   }
 
   /** Program commits of the other executions running in this workspace. */
-  private async programsInUse(args: {
-    action: ActionRow;
-    sandboxId: string;
-  }): Promise<string[]> {
+  /**
+   * The program commits a workspace's chats may still read (ADR 0335): those
+   * of its executions still running or starting, of any that ran within the
+   * retention, and of any that ran since the oldest turn still queued or
+   * working there began, since a workflow hands the path to a turn.
+   */
+  private async programsInUse(args: { action: ActionRow }): Promise<string[]> {
     const shared = await this.workspaceOf(args.action);
-    const running = await runningExecs(this.deps.db, {
-      sessionIds: shared.sessionIds,
-      except: args.action.id,
-      sandboxId: args.sandboxId,
-    });
-    return running.flatMap((progress) =>
-      progress.program ? [progress.program] : [],
+    const turn = await this.deps.db
+      .selectFrom("agent_turns")
+      .select(sql<Date | null>`min(created_at)`.as("since"))
+      .where("session_id", "in", shared.sessionIds)
+      .where("status", "in", ["queued", ...ACTIVE_TURN_STATUSES])
+      .executeTakeFirst();
+    const retention = new Date(
+      Date.now() - PROGRAM_COPY_RETENTION_MINUTES * 60_000,
     );
+    const since =
+      turn?.since && turn.since < retention ? turn.since : retention;
+    const rows = await this.deps.db
+      .selectFrom("session_actions")
+      .select("progress")
+      .where("session_id", "in", shared.sessionIds)
+      .where("operation", "=", "exec")
+      .where("id", "!=", args.action.id)
+      .where((eb) =>
+        eb.or([eb("status", "=", "running"), eb("updated_at", ">=", since)]),
+      )
+      .execute();
+    return [
+      ...new Set(
+        rows.flatMap((row) => parseProgress(row.progress)?.program ?? []),
+      ),
+    ];
   }
 
   /** One side's copy; returns the program's files once they were read. */
@@ -1137,9 +1165,11 @@ export class SessionExecService {
     program: Record<string, string> | undefined;
   }): Promise<Record<string, string> | undefined> {
     const { handle, folder, side } = args;
+    // A copy used again is used now: its time is what a cleanup reads for
+    // a copy Work has no record of (ADR 0335).
     const present = await handle.provider.executeCommand(
       handle.sandboxId,
-      `test -d ${shellQuote(folder)} && echo present || true`,
+      `test -d ${shellQuote(folder)} && { touch -c ${shellQuote(folder)} 2>/dev/null; echo present; } || true`,
       { cwd: handle.projectDirectory, timeout: 60, side },
     );
     if (present.result.trim() === "present") return args.program;
