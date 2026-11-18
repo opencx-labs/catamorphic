@@ -161,6 +161,7 @@ describe("PGlite migrations", () => {
       "084_enablements_follow_published.sql",
       "085_queued_runs.sql",
       "086_shared_subsession_workspaces.sql",
+      "089_environment_caches.sql",
     ]);
 
     const rerun = await migrateToLatest({ db });
@@ -186,7 +187,7 @@ describe("PGlite migrations", () => {
       WHERE table_schema = ${DEFAULT_SCHEMA}
         AND table_type = 'BASE TABLE'
     `.execute(db);
-    expect(tables.rows[0]?.count).toBe(104);
+    expect(tables.rows[0]?.count).toBe(106);
   });
 
   it("supports the runtime primitives core relies on", {

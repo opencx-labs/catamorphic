@@ -563,6 +563,39 @@ export interface DeploymentRuntimes {
   status: Generated<string>;
 }
 
+export interface EnvironmentCacheFills {
+  allocation_id: string | null;
+  attempts: Generated<number>;
+  cache_name: string;
+  claimed_until: Timestamp | null;
+  commit_sha: string | null;
+  created_at: Generated<Timestamp>;
+  environment_name: string;
+  error: string | null;
+  finished_at: Timestamp | null;
+  generation: Int8 | null;
+  id: Generated<string>;
+  last_used_at: Timestamp | null;
+  project_id: string;
+  reason: string;
+  retry_at: Timestamp | null;
+  size_bytes: Int8 | null;
+  started_at: Timestamp | null;
+  status: Generated<string>;
+  tenant_id: string;
+  worker_node_id: string | null;
+}
+
+export interface EnvironmentCacheRequests {
+  cache_name: string;
+  commit_sha: string | null;
+  created_at: Generated<Timestamp>;
+  environment_name: string;
+  fill_ids: Json;
+  idempotency_key: string;
+  project_id: string;
+}
+
 export interface ExecutionAllocations {
   binding_id: string;
   capacity_released_at: Timestamp | null;
@@ -1611,6 +1644,8 @@ export interface DB {
   connections: Connections;
   deployment_artifacts: DeploymentArtifacts;
   deployment_runtimes: DeploymentRuntimes;
+  environment_cache_fills: EnvironmentCacheFills;
+  environment_cache_requests: EnvironmentCacheRequests;
   execution_allocations: ExecutionAllocations;
   execution_jobs: ExecutionJobs;
   executor_keys: ExecutorKeys;

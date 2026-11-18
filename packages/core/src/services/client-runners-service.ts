@@ -35,6 +35,7 @@ const capabilitiesSchema = z.array(
     SANDBOX_CAPABILITIES.egressPolicy,
     SANDBOX_CAPABILITIES.setupNetwork,
     SANDBOX_CAPABILITIES.volumes,
+    SANDBOX_CAPABILITIES.caches,
   ]),
 );
 /** Authenticated member clients provide execution, never database access. */

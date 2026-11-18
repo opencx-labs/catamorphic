@@ -9,6 +9,7 @@ import {
   sameEgress,
 } from "@catamorphic/sandbox";
 import { type Kysely, sql } from "kysely";
+import { cacheMounts } from "./cache-mounts.js";
 import type { ExecutionAllocation } from "./execution-allocations-service.js";
 import {
   holdVolumes,
@@ -75,14 +76,18 @@ export function withAllocationSandboxPolicy(args: {
     !sandbox?.containers &&
     !sandbox?.egress &&
     !sandbox?.volumes?.length &&
+    !sandbox?.caches?.length &&
+    !sandbox?.fill &&
     !provider.widenEgress
   )
     return provider;
   const createSandbox = async (opts: CreateSandboxOpts) => {
-    const volumes = await holdVolumes({
-      db: args.db,
-      allocation: args.allocation,
-    });
+    // The Environment's caches, read only at the machine's generation
+    // (ADR 0334), or a fill's one writable generation.
+    const volumes = [
+      ...(await holdVolumes({ db: args.db, allocation: args.allocation })),
+      ...(await cacheMounts({ db: args.db, allocation: args.allocation })),
+    ];
     return provider.createSandbox({
       ...opts,
       ...(sandbox?.image ? { image: sandbox.image } : {}),
@@ -167,7 +172,12 @@ export function allocationSandboxProvider(args: {
     // readmitted right after it idled).
     const sandbox = allocation.policy.sandbox;
     await retireVolumeHolders({ db, allocation, provider });
-    const volumes = await holdVolumes({ db, allocation });
+    // Its caches are read when it is made (ADR 0334): the generation its
+    // machine holds now, read only, or a fill's own writable one.
+    const volumes = [
+      ...(await holdVolumes({ db, allocation })),
+      ...(await cacheMounts({ db, allocation })),
+    ];
     const handle = await provider.createSandbox({
       ...opts,
       ...(sandbox?.image ? { image: sandbox.image } : {}),

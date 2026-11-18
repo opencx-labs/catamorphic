@@ -280,6 +280,10 @@ export function defineTrigger(
 export const WORKFLOW_PACKAGE_VERSION = packageJson.version;
 
 export type {
+  CacheFill,
+  EnvironmentHostOperations,
+} from "./environment-operations.js";
+export type {
   EventHostOperations,
   RecordableTriggerKind,
   RecordedEvent,

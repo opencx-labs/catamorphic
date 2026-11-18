@@ -9585,6 +9585,222 @@
         }
       }
     },
+    "/api/projects/{projectId}/environment-caches": {
+      "get": {
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+            },
+            "in": "path",
+            "name": "projectId",
+            "required": true
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "items": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "environment": {
+                            "type": "string"
+                          },
+                          "cache": {
+                            "type": "string"
+                          },
+                          "path": {
+                            "type": "string"
+                          },
+                          "sizeMb": {
+                            "type": "number"
+                          },
+                          "copies": {
+                            "type": "array",
+                            "items": {
+                              "type": "object",
+                              "properties": {
+                                "machine": {
+                                  "type": "string"
+                                },
+                                "generation": {
+                                  "type": "number"
+                                },
+                                "commit": {
+                                  "nullable": true,
+                                  "type": "string"
+                                },
+                                "filledAt": {
+                                  "nullable": true,
+                                  "type": "string"
+                                },
+                                "sizeBytes": {
+                                  "nullable": true,
+                                  "type": "number"
+                                },
+                                "lastUsedAt": {
+                                  "nullable": true,
+                                  "type": "string"
+                                }
+                              },
+                              "required": [
+                                "machine",
+                                "generation",
+                                "commit",
+                                "filledAt",
+                                "sizeBytes",
+                                "lastUsedAt"
+                              ],
+                              "additionalProperties": false
+                            }
+                          },
+                          "fills": {
+                            "type": "array",
+                            "items": {
+                              "type": "object",
+                              "properties": {
+                                "id": {
+                                  "type": "string"
+                                },
+                                "environment": {
+                                  "type": "string"
+                                },
+                                "cache": {
+                                  "type": "string"
+                                },
+                                "machine": {
+                                  "nullable": true,
+                                  "type": "string"
+                                },
+                                "status": {
+                                  "type": "string",
+                                  "enum": [
+                                    "queued",
+                                    "running",
+                                    "succeeded",
+                                    "failed",
+                                    "evicted"
+                                  ]
+                                },
+                                "reason": {
+                                  "type": "string",
+                                  "enum": ["requested", "first-use"]
+                                },
+                                "commit": {
+                                  "nullable": true,
+                                  "type": "string"
+                                },
+                                "generation": {
+                                  "nullable": true,
+                                  "type": "number"
+                                },
+                                "attempts": {
+                                  "type": "number"
+                                },
+                                "sizeBytes": {
+                                  "nullable": true,
+                                  "type": "number"
+                                },
+                                "error": {
+                                  "nullable": true,
+                                  "type": "string"
+                                },
+                                "createdAt": {
+                                  "type": "string"
+                                },
+                                "finishedAt": {
+                                  "nullable": true,
+                                  "type": "string"
+                                },
+                                "lastUsedAt": {
+                                  "nullable": true,
+                                  "type": "string"
+                                }
+                              },
+                              "required": [
+                                "id",
+                                "environment",
+                                "cache",
+                                "machine",
+                                "status",
+                                "reason",
+                                "commit",
+                                "generation",
+                                "attempts",
+                                "sizeBytes",
+                                "error",
+                                "createdAt",
+                                "finishedAt",
+                                "lastUsedAt"
+                              ],
+                              "additionalProperties": false
+                            }
+                          }
+                        },
+                        "required": [
+                          "environment",
+                          "cache",
+                          "path",
+                          "sizeMb",
+                          "copies",
+                          "fills"
+                        ],
+                        "additionalProperties": false
+                      }
+                    }
+                  },
+                  "required": ["items"],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    }
+                  },
+                  "required": ["error"],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    }
+                  },
+                  "required": ["error"],
+                  "additionalProperties": false
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/projects/{projectId}/personal-environment": {
       "put": {
         "requestBody": {
@@ -32249,7 +32465,8 @@
                         "containers",
                         "network.policy",
                         "network.setup",
-                        "volumes"
+                        "volumes",
+                        "caches"
                       ]
                     }
                   },

@@ -3,6 +3,7 @@ import {
   createBatch,
   type DefineBatch,
 } from "./batch.js";
+import type { EnvironmentHostOperations } from "./environment-operations.js";
 import type { EventHostOperations } from "./event-operations.js";
 import type { OutputTemplateMatches, PayloadTemplateMatches } from "./holes.js";
 import type { TriggerBinding } from "./index.js";
@@ -350,6 +351,7 @@ export interface BoundaryContext<Input> {
     readonly "catamorphic.sessions": SessionHostOperations;
     readonly "catamorphic.secrets": SecretHostOperations;
     readonly "catamorphic.events": EventHostOperations;
+    readonly "catamorphic.environments": EnvironmentHostOperations;
     readonly "catamorphic.privateState": {
       read: TransitionCall<
         { key: string },

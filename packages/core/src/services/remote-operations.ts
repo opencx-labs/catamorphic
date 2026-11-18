@@ -7,12 +7,12 @@ import {
   openOperation,
   PROCESS_SIGNALS,
   redactUrlCredentials,
+  SANDBOX_VOLUME_KEY_PATTERN,
   type SandboxProcessProvider,
   type SandboxProvider,
   SealedOperationOpenError,
   SealedOperationSchema,
   sealOperation,
-  VOLUME_KEY_PATTERN,
 } from "@catamorphic/sandbox";
 import type { Span } from "@opentelemetry/api";
 import { type Kysely, sql, type Transaction } from "kysely";
@@ -75,15 +75,18 @@ export const RemoteOperationSchema = z.discriminatedUnion("kind", [
         )
         .readonly()
         .optional(),
-      // Directories the executor keeps across sandboxes (ADR 0208).
+      // Directories the executor keeps across sandboxes (ADR 0208), and
+      // cache generations it mounts read only (ADR 0334). Only executors
+      // that advertise `caches` are handed a read-only one.
       volumes: z
         .array(
           z.object({
-            key: z.string().regex(VOLUME_KEY_PATTERN),
+            key: z.string().regex(SANDBOX_VOLUME_KEY_PATTERN),
             path: z.string().min(1).max(1024),
             exclusive: z.boolean().optional(),
             sizeMb: z.number().int().positive().optional(),
             temporary: z.boolean().optional(),
+            readOnly: z.boolean().optional(),
           }),
         )
         .readonly()

@@ -1526,6 +1526,14 @@ export class WorkWorkerRegistry {
       attributes: { "catamorphic.worker.id": nodeId },
       ...(args.timeoutMs !== undefined ? { timeoutMs: args.timeoutMs } : {}),
     });
+    // Its volumes are gone, cache copies included (ADR 0334): none is
+    // mounted again, and the next workspace there queues a fill.
+    await this.deps.db
+      .updateTable("environment_cache_fills")
+      .set({ status: "evicted" })
+      .where("worker_node_id", "=", nodeId)
+      .where("status", "=", "succeeded")
+      .execute();
   }
 
   /** A reset pooled machine is free in its pool again, serving nobody. */

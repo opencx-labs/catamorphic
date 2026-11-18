@@ -573,7 +573,7 @@ provide it take the work:
   runs, in a workspace at a ref of the project's remote: a new sandbox
   holding the base commit, with only the secrets \`"secrets"\` names, narrow
   again before the session's work arrives. Such an Environment declares no
-  volumes; its image holds the caches.
+  volumes; it declares read-only \`caches\` instead.
 - \`volumes\`: directories kept on the machine for each owner and project,
   so later workspaces start warm: \`{ "pnpm": "~/.local/share/pnpm/store",
   "docker": { "path": "/var/lib/docker", "exclusive": true, "sizeMb":
@@ -581,6 +581,19 @@ provide it take the work:
   volume (a Docker data root, a database) is mounted into one sandbox at a
   time; a workspace that finds it held gets an empty one and is told. Only
   machines that keep volumes take such work.
+- \`caches\`: directories every sandbox of the Environment mounts read only,
+  setup's included, that only a trusted fill writes (ADR 0334): \`{ "pnpm":
+  { "path": "~/.cache/work/pnpm-store", "fill": { "command": "pnpm fetch
+  --store-dir ~/.cache/work/pnpm-store" } } }\`. A fill runs that command at
+  the published \`main\` in a sandbox of its own on the setup's network, and
+  the new cache is published only when it succeeds. A workflow declaring
+  \`caches:write\` asks for one with
+  \`host["catamorphic.environments"].fillCache({ environment, cache,
+  idempotencyKey })\`, on a schedule or from the deploy workflow; it never
+  names the command. Each machine keeps its own copy; one without a copy
+  mounts none and fills one. Install from it offline and fall back to the
+  network: \`pnpm install --frozen-lockfile --offline --store-dir
+  ~/.cache/work/pnpm-store || pnpm install --frozen-lockfile\`.
 
 An agent definition's \`sandboxing\` says what may leave its sandbox, and the
 host enforces it: \`contained\` agents may do anything inside their sandbox,
