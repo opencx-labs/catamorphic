@@ -583,6 +583,57 @@ describe("a separated sandbox's shape follows its chat's harness (ADR 0332)", ()
     }
   }, 120_000);
 
+  it("reshapes a workspace while a message waits held for editing in a subagent's chat", async () => {
+    agents.set("reviewer", builtin("reviewer"));
+    const parent = await sessions.create(identity, projectId, {});
+    const before = (await allocationOf(parent.id)).id;
+    const child = await sessions.createSubsession(
+      identity,
+      projectId,
+      parent.id,
+      { agentId: "helper", task: "[[wait 3000]] helping" },
+    );
+    await until(
+      "the child works",
+      async () => (await latestTurn(child.session.id)).status === "running",
+    );
+    // A person queues a message for the subagent and holds it to edit.
+    const late = await sessions.deliver(identity, projectId, child.session.id, {
+      content: "Later",
+      author: { kind: "user", externalUserId: identity.externalUserId },
+      mode: "queue",
+    });
+    await sessions.command(identity, projectId, child.session.id, {
+      type: "edit_queued",
+      commandId: randomUUID(),
+      turnId: late.turnId ?? "",
+      held: true,
+    });
+    await until(
+      "the child's turn ends",
+      async () =>
+        (
+          await db
+            .selectFrom("agent_turns")
+            .select("status")
+            .where("session_id", "=", child.session.id)
+            .orderBy("ordinal")
+            .executeTakeFirstOrThrow()
+        ).status === "completed",
+    );
+    expect((await turnRow(late.turnId ?? "")).status).toBe("held");
+    redefine();
+    const worker = workerFor();
+    try {
+      await send(parent.id, "hello");
+      await reshaped(parent.id, before);
+      // The held message waits as it was.
+      expect((await turnRow(late.turnId ?? "")).status).toBe("held");
+    } finally {
+      await worker.stop();
+    }
+  }, 120_000);
+
   it("fails a turn whose workspace stays held past the reshape deadline, saying what kept it and how to free it", async () => {
     agents.set("reviewer", builtin("reviewer"));
     // A deadline of 3 seconds rather than 10 minutes.

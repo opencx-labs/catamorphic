@@ -443,10 +443,10 @@ export async function claimAllocationMaintenance(args: {
   status: "active" | "released";
   sessionId?: string;
   /**
-   * Turns waiting to start do not refuse the claim: queued ones, and one
-   * whose holder went away before its harness started. They wait for the
-   * workspace to be given back and admitted again, reshaped (ADR 0332).
-   * Held ones and those at work still do.
+   * Turns that have not started do not refuse the claim: queued ones,
+   * messages held for editing, and one whose holder went away before its
+   * harness started. They wait for the workspace to be given back and
+   * admitted again, reshaped (ADR 0332). Those at work still do.
    */
   waitingTurns?: boolean;
 }): Promise<AllocationMaintenanceClaim | undefined> {
@@ -509,13 +509,14 @@ export async function claimAllocationMaintenance(args: {
 }
 
 /**
- * A turn that keeps a workspace from being reshaped (ADR 0332): held for
- * editing, or at work, except one still preparing whose holder's lease
- * lapsed (its harness never started; it waits for the new workspace).
+ * A turn that keeps a workspace from being reshaped (ADR 0332): one at
+ * work, except one still preparing whose holder's lease lapsed (its
+ * harness never started; it waits for the new workspace). A message held
+ * for editing has not started and puts nothing in the workspace.
  */
 export function holdsReshape(): RawBuilder<SqlBool> {
   const status = sql.ref("agent_turns.status");
-  return sql<SqlBool>`(${status} in ('held', 'running', 'waiting', 'finalizing') or (${status} = 'preparing' and ${sql.ref("agent_turns.lease_expires_at")} > now()))`;
+  return sql<SqlBool>`(${status} in ('running', 'waiting', 'finalizing') or (${status} = 'preparing' and ${sql.ref("agent_turns.lease_expires_at")} > now()))`;
 }
 
 /**

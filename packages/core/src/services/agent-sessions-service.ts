@@ -1380,13 +1380,13 @@ interface ReshapeWait {
 }
 
 /**
- * What keeps a workspace from being given back (ADR 0332): a turn at
- * work, a question waiting for an answer, a message held for editing (in
- * any chat working in it), a person using it, a machine this server
- * cannot reach, other work on the workspace, or a save that failed.
+ * What keeps a workspace from being given back (ADR 0332): a turn at work
+ * or a question waiting for an answer (in any chat working in it), a
+ * person using it, a machine this server cannot reach, other work on the
+ * workspace, or a save that failed.
  */
 type WorkspaceHold =
-  | { kind: "turn" | "question" | "edit" | "person" | "machine" | "saving" }
+  | { kind: "turn" | "question" | "person" | "machine" | "saving" }
   | { kind: "sync"; error: string };
 
 /** What holds a workspace, as a waiting turn and its failure name it. */
@@ -1396,8 +1396,6 @@ function workspaceHoldText(hold: WorkspaceHold): string {
       return "a turn still running in a chat working in it";
     case "question":
       return "an unanswered question in a chat working in it";
-    case "edit":
-      return "a message held for editing in a chat working in it";
     case "person":
       return "someone using it (an open terminal or preview)";
     case "machine":
@@ -1416,8 +1414,6 @@ function workspaceHoldRemedy(hold: WorkspaceHold): string {
       return "Let that turn finish or stop it, then send this message again.";
     case "question":
       return "Answer the question, then send this message again.";
-    case "edit":
-      return "Send or discard the held message, then send this message again.";
     case "person":
       return "Close the workspace's terminals and previews, then send this message again.";
     case "machine":
@@ -1430,9 +1426,9 @@ function workspaceHoldRemedy(hold: WorkspaceHold): string {
 
 /**
  * The turns that keep a workspace from being reshaped (ADR 0332), in any
- * chat working in it: one at work, one waiting for an answer, a message
- * held for editing. A turn whose holder went away before its harness
- * started waits for the reshaped workspace like a queued one.
+ * chat working in it: one at work or waiting for an answer. A message
+ * held for editing, and a turn whose holder went away before its harness
+ * started, wait for the reshaped workspace like a queued one.
  */
 async function reshapeTurnHold(
   db: Kysely<DB> | Transaction<DB>,
@@ -1451,8 +1447,7 @@ async function reshapeTurnHold(
     .execute();
   if (turns.some((turn) => turn.status === "waiting"))
     return { kind: "question" };
-  if (turns.some((turn) => turn.status !== "held")) return { kind: "turn" };
-  if (turns.length > 0) return { kind: "edit" };
+  if (turns.length > 0) return { kind: "turn" };
   return undefined;
 }
 
