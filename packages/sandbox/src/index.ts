@@ -284,6 +284,7 @@ export {
   RuntimeInfrastructureError,
   refuseSeparateCommands,
   SEPARATE_AGENT_DEFAULT_RESOURCES,
+  SEPARATE_COMMANDS_DEFAULT_RESOURCES,
   SEPARATE_COMMANDS_SOCKET,
   SIGN_IN_HARNESSES,
   type SignInHarness,

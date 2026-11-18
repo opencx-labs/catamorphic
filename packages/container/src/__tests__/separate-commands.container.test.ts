@@ -91,17 +91,15 @@ describe.skipIf(!enabled)("commands apart from the agent (ADR 0332)", () => {
   }, 5 * MINUTES);
 
   /** A separated sandbox reaching only the "gateway", with the shim on its agent side. */
-  const separated = async () => {
-    expect(provider.capabilities).toContain(
-      SANDBOX_CAPABILITIES.separateCommands,
-    );
-    const { id } = await provider.createSandbox({
+  const separated = async (owner: ContainerSandboxProvider = provider) => {
+    expect(owner.capabilities).toContain(SANDBOX_CAPABILITIES.separateCommands);
+    const { id } = await owner.createSandbox({
       egress: { mode: "allowlist", allow: [`${hostIp}:${portOf(server)}`] },
       separateCommands: { shared: [PROJECT], envFiles: [SECRETS] },
     });
     sandboxes.push(id);
     const runtimePath = (
-      await agent(id, "command -v bun || command -v node")
+      await agent(id, "command -v bun || command -v node", undefined, owner)
     ).result.trim();
     const { files } = commandShellFiles({
       directory: SHIM,
@@ -109,7 +107,7 @@ describe.skipIf(!enabled)("commands apart from the agent (ADR 0332)", () => {
       runtime: runtimePath,
       returnFolder: RETURNS,
     });
-    await provider.uploadFiles(
+    await owner.uploadFiles(
       id,
       Object.fromEntries(
         Object.entries(files).map(([file, { content }]) => [
@@ -120,7 +118,12 @@ describe.skipIf(!enabled)("commands apart from the agent (ADR 0332)", () => {
       SHIM,
       { side: "agent" },
     );
-    await agent(id, `chmod 700 ${SHIM}/bin/bash && mkdir -p ${RETURNS}`);
+    await agent(
+      id,
+      `chmod 700 ${SHIM}/bin/bash ${SHIM}/path/git && mkdir -p ${RETURNS}`,
+      undefined,
+      owner,
+    );
     // What the agent side holds and its commands must not reach.
     await provider.uploadFiles(
       id,
@@ -147,8 +150,13 @@ describe.skipIf(!enabled)("commands apart from the agent (ADR 0332)", () => {
     return id;
   };
 
-  const agent = (id: string, command: string, env?: Record<string, string>) =>
-    provider.executeCommand(id, command, {
+  const agent = (
+    id: string,
+    command: string,
+    env?: Record<string, string>,
+    owner: ContainerSandboxProvider = provider,
+  ) =>
+    owner.executeCommand(id, command, {
       side: "agent",
       timeout: 120,
       ...(env ? { env } : {}),
@@ -469,6 +477,44 @@ describe.skipIf(!enabled)("commands apart from the agent (ADR 0332)", () => {
           ).result.trim(),
         ).toBe("not");
       }
+    },
+    10 * MINUTES,
+  );
+
+  it(
+    "stops a command that prints past its budget, with everything it started",
+    async () => {
+      const bounded = new ContainerSandboxProvider({
+        docker,
+        runtime,
+        stateDirectory: path.join(root, "state"),
+        image: IMAGE,
+        namePrefix: "work-sep",
+        setupCommand: "",
+        separateCommandOutputBytes: 1024 * 1024,
+      });
+      const id = await separated(bounded);
+      const ran = await agent(
+        id,
+        `cd ${PROJECT} && ${SHIM}/bin/bash -c ${quote("head -c 8000000 /dev/zero | tr '\\0' a; echo never")} | wc -c`,
+        undefined,
+        bounded,
+      );
+      const printed = Number(ran.result.trim().split("\n")[0]);
+      expect(printed).toBeLessThan(2 * 1024 * 1024);
+      expect(ran.result).not.toContain("never");
+      // Within budget it runs as before.
+      expect(
+        (
+          await agent(
+            id,
+            `cd ${PROJECT} && ${SHIM}/bin/bash -c 'echo fine'`,
+            undefined,
+            bounded,
+          )
+        ).result.trim(),
+      ).toBe("fine");
+      await bounded.destroySandbox(id);
     },
     10 * MINUTES,
   );

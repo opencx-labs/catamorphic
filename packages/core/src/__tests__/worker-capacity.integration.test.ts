@@ -291,3 +291,66 @@ it.skipIf(!db)(
     ).toMatchObject({ workspaces: 2, cpuMillis: 6000, memoryMb: 12288 });
   },
 );
+
+it.skipIf(!db)(
+  "reserves the command side's default where no limits are named, for a sandbox whose commands run apart (ADR 0332)",
+  async () => {
+    if (!db) return;
+    const identity = { tenantId: randomUUID(), externalUserId: "member" };
+    const projectId = randomUUID();
+    const descriptor = {
+      id: randomUUID(),
+      label: "Review",
+      trust: "managed" as const,
+      isolation: "sandbox" as const,
+      workloads: ["agent" as const],
+      agentTopologies: ["controller" as const],
+      capabilities: ["commands.separate"],
+      resourceLimits: ["cpuMillis" as const, "memoryMb" as const],
+      resources: { cpuMillis: 8000, memoryMb: 16384 },
+    };
+    const nodes = new WorkerNodesService(db);
+    // A machine with no CPU or memory budget, so no defaults of its own.
+    const lease = await nodes.register({
+      tenantId: identity.tenantId,
+      authorityId: "test",
+      descriptor,
+      capacity: { workspaces: 4 },
+    });
+    await db
+      .insertInto("projects")
+      .values({ id: projectId, tenant_id: identity.tenantId, name: "Review" })
+      .execute();
+    const allocation = await new ExecutionAllocationsService(db).create({
+      identity,
+      projectId,
+      environmentName: "review",
+      workloadKind: "agent",
+      rootWorkloadId: randomUUID(),
+      workerNodeId: lease.id,
+      policy: {
+        binding: descriptor,
+        requirements: { workload: "agent" },
+        sandbox: {
+          separateCommands: {
+            connections: [],
+            agentResources: { cpuMillis: 1000, memoryMb: 2048 },
+          },
+        },
+      },
+    });
+    // The command side is given the default it gets anyway, and both are
+    // reserved.
+    expect(allocation.policy.requirements.resources).toMatchObject({
+      cpuMillis: 1000,
+      memoryMb: 1024,
+    });
+    expect(
+      await db
+        .selectFrom("execution_allocations")
+        .select(["reserved_cpu_millis", "reserved_memory_mb"])
+        .where("id", "=", allocation.id)
+        .executeTakeFirstOrThrow(),
+    ).toEqual({ reserved_cpu_millis: 2000, reserved_memory_mb: 3072 });
+  },
+);

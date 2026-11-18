@@ -127,6 +127,8 @@ const MAX_WIDENING_MS = 245 * 60_000;
 /** Where a sandbox sees its proxy's socket and forwarder. */
 const PROXY_MOUNT = "/run/work";
 const PROXY_PORT = 3128;
+/** The most output one of an agent's separated commands sends back (ADR 0332). */
+const SEPARATE_COMMAND_OUTPUT_BYTES = 64 * 1024 * 1024;
 /** Process state of tracked commands, inside the sandbox. */
 const EXEC_STATE = "/tmp/.work-exec";
 
@@ -282,6 +284,11 @@ export interface ContainerProviderConfig {
   hostPathOf?: HostPathOf;
   /** Name resolution for egress proxies; the system resolver by default. */
   lookup?: EgressLookup;
+  /**
+   * The most output one of an agent's separated commands sends back
+   * (ADR 0332); 64 MiB by default.
+   */
+  separateCommandOutputBytes?: number;
   /** Machine log lines: refused egress, for example. */
   log?: (line: string) => void;
 }
@@ -836,7 +843,9 @@ export class ContainerSandboxProvider implements SandboxProvider {
   }
 
   async stopSandbox(sandboxId: string): Promise<void> {
-    const record = this.records.get(sandboxId);
+    // Read from the container's labels, so a process that restarted still
+    // stops the pair (ADR 0332).
+    const record = await this.record(sandboxId).catch(() => undefined);
     if (record?.agentOf) return this.stopSandbox(record.agentOf);
     for (const name of [sandboxId, agentName(sandboxId)]) {
       const known = this.records.get(name);
@@ -933,7 +942,7 @@ export class ContainerSandboxProvider implements SandboxProvider {
 
   /** Remove the container and its temporary volumes; a missing one is gone already. */
   async destroySandbox(sandboxId: string): Promise<void> {
-    const pair = this.records.get(sandboxId)?.agentOf;
+    const pair = (await this.record(sandboxId).catch(() => undefined))?.agentOf;
     if (pair) return this.destroySandbox(pair);
     this.endedWidenings.delete(sandboxId);
     await this.removePair(sandboxId);
@@ -1495,8 +1504,20 @@ export class ContainerSandboxProvider implements SandboxProvider {
         })
         .catch(() => {});
     });
+    // Output crosses this process to the shim: past its budget the command
+    // is stopped, group and all.
+    const budget =
+      this.config.separateCommandOutputBytes ?? SEPARATE_COMMAND_OUTPUT_BYTES;
+    let forwarded = 0;
+    let overflowed = false;
     try {
       for await (const frame of exec.frames) {
+        forwarded += frame.data.length;
+        if (forwarded > budget) {
+          overflowed = true;
+          void this.killTracked(sandboxId, token).catch(() => {});
+          break;
+        }
         if (frame.stream === "stdout") session.stdout(frame.data);
         else if (frame.stream === "stderr") session.stderr(frame.data);
       }
@@ -1505,6 +1526,15 @@ export class ContainerSandboxProvider implements SandboxProvider {
       exec.close();
     }
     if (session.aborted.aborted) return;
+    if (overflowed) {
+      session.stderr(
+        Buffer.from(
+          `\n[container] the command printed more than ${budget} bytes, so it was stopped with everything it started\n`,
+        ),
+      );
+      session.exit(137);
+      return;
+    }
     let code = await this.docker.settledExitCode(exec.execId);
     if (code !== 0) {
       const died = await this.diedUnder(sandboxId, "");

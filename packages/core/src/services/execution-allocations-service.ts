@@ -6,7 +6,11 @@ import type {
   SandboxImage,
   WorkloadKind,
 } from "@catamorphic/sandbox";
-import { VOLUME_KEY_PATTERN, VOLUME_NAME_PATTERN } from "@catamorphic/sandbox";
+import {
+  SEPARATE_COMMANDS_DEFAULT_RESOURCES,
+  VOLUME_KEY_PATTERN,
+  VOLUME_NAME_PATTERN,
+} from "@catamorphic/sandbox";
 import { type Kysely, type Selectable, sql, type Transaction } from "kysely";
 import { z } from "zod";
 import type { Identity } from "../identity.js";
@@ -274,10 +278,24 @@ export class ExecutionAllocationsService {
         .forUpdate()
         .executeTakeFirst();
       if (!node) throw new EnvironmentCapacityError(args.workerNodeId);
-      const defaults =
+      const machine =
         args.policy.binding.trust === "managed"
           ? WorkerResourceDefaultsSchema.parse(node.default_resources)
           : {};
+      // A pair's command side with no limits named anywhere gets the
+      // backend's default explicitly, so it is reserved too (ADR 0332).
+      const defaults =
+        args.policy.binding.trust === "managed" &&
+        args.policy.sandbox?.separateCommands
+          ? {
+              cpuMillis:
+                machine.cpuMillis ??
+                SEPARATE_COMMANDS_DEFAULT_RESOURCES.cpuMillis,
+              memoryMb:
+                machine.memoryMb ??
+                SEPARATE_COMMANDS_DEFAULT_RESOURCES.memoryMb,
+            }
+          : machine;
       policy = {
         ...args.policy,
         requirements: {

@@ -138,6 +138,17 @@ export const SEPARATE_AGENT_DEFAULT_RESOURCES = {
 } as const;
 
 /**
+ * What the command side of such a sandbox gets when neither its
+ * Environment nor its machine names limits: the container backend's own
+ * default, named so the Allocation reserves it and the container is given
+ * it (ADR 0332).
+ */
+export const SEPARATE_COMMANDS_DEFAULT_RESOURCES = {
+  cpuMillis: 1000,
+  memoryMb: 1024,
+} as const;
+
+/**
  * Refuse to run an agent's commands apart from it (ADR 0332) on a provider
  * that cannot: placement never asks such a provider, and one asked anyway
  * says so rather than running the commands beside the agent.

@@ -514,4 +514,19 @@ describe("ContainerSandboxProvider without Docker", () => {
     for (const id of [sandbox.id, plain.id])
       await provider().destroySandbox(id);
   });
+  it("stops and destroys a pair named by either side after this process restarted (ADR 0332)", async () => {
+    const { fake, provider } = await setup();
+    const sandbox = await provider().createSandbox({
+      separateCommands: { shared: ["/workspace/project"] },
+    });
+    const agent = `${sandbox.id}-agent`;
+    // Another process, which never saw the pair made.
+    const restarted = provider();
+    await restarted.stopSandbox(agent);
+    const running = (name: string) => fake.containers.get(name)?.running;
+    expect([running(sandbox.id), running(agent)]).toEqual([false, false]);
+    await provider().destroySandbox(agent);
+    expect(fake.containers.has(sandbox.id)).toBe(false);
+    expect(fake.containers.has(agent)).toBe(false);
+  });
 });
