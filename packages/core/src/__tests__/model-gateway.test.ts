@@ -469,14 +469,21 @@ describe("the model gateway", () => {
       gateway.handle(
         messages({ model: "claude-test-1", max_tokens: 8, messages: [] }, key),
       );
+    // Once per call, though its grant is checked more than once.
     expect((await call(GRANT)).status).toBe(200);
-    await waitFor(() => progressed.length > 0);
-    expect(new Set(progressed)).toEqual(new Set(["attempt-1"]));
-    // A refused call is no progress.
-    const before = progressed.length;
+    expect((await call(GRANT)).status).toBe(200);
+    await waitFor(() => progressed.length === 2);
+    expect(progressed).toEqual(["attempt-1", "attempt-1"]);
+    // A refused call is no progress: no grant, or a path the gateway refuses
+    // after the grant passed.
     expect((await call("not-the-grant")).status).toBe(401);
+    const escaped = await gateway.handle({
+      ...messages({ model: "claude-test-1", max_tokens: 8, messages: [] }),
+      path: "../v1/messages",
+    });
+    expect(escaped.status).toBe(404);
     await until(20);
-    expect(progressed).toHaveLength(before);
+    expect(progressed).toHaveLength(2);
   });
 
   it("forwards the request body byte for byte, JSON or not", async () => {

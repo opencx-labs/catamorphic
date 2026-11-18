@@ -765,6 +765,8 @@ interface ModelAccess {
   allocationId: string;
   sessionId: string | null;
   turnId: string;
+  /** The grant's attempt, whose progress an admitted call is (ADR 0333). */
+  attemptId?: string;
   /** The session's agent, when it has one. */
   agentId?: string;
   alias: string;
@@ -951,6 +953,14 @@ export class ModelGatewayService {
         "permission_error",
         "Connection authorization changed; retry the request",
       );
+    // A call past every check is the attempt's progress (ADR 0333), once,
+    // never its delay: a harness looping on refused calls is not working.
+    if (access.attemptId)
+      void this.deps.store
+        .progress?.({ attemptId: access.attemptId })
+        .catch(() =>
+          console.warn("[catamorphic] Could not record a turn's progress"),
+        );
     // Authority and usage refer to the grant's attempt, never a newer turn.
     const outgoing = upstreamRequestHeaders(request.headers, access.headers);
     if (rewritten) outgoing.set("content-type", "application/json");
@@ -1241,13 +1251,6 @@ export class ModelGatewayService {
         "authentication_error",
         "This session is closed",
       );
-    // An admitted call is the attempt's progress (ADR 0333), never its delay.
-    if (grant.attemptId)
-      void this.deps.store
-        .progress?.({ attemptId: grant.attemptId })
-        .catch(() =>
-          console.warn("[catamorphic] Could not record a turn's progress"),
-        );
     const identity: Identity = {
       tenantId: grant.tenantId,
       externalUserId:
@@ -1265,6 +1268,7 @@ export class ModelGatewayService {
       allocationId: grant.allocationId,
       sessionId: grant.agentSessionId,
       turnId: grant.turnId,
+      ...(grant.attemptId ? { attemptId: grant.attemptId } : {}),
       ...(grant.session?.agentId ? { agentId: grant.session.agentId } : {}),
       alias: grant.alias,
       connectionId: resolved.binding.connectionId,
