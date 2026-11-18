@@ -617,8 +617,10 @@ export interface HarnessAdapter {
  * A harness's own log (a CLI's stderr) as `diagnostic` events, while it is
  * written (ADR 0333): Work keeps their tail with the attempt, so a hung or
  * crashed harness leaves its last words. Lines are sent at most once a
- * second, newest kept when one second's lines pass `maxBytes`; nothing in
- * them reaches the transcript.
+ * second. Work masks secrets after this, so nothing here is cut inside a
+ * line, where part of a secret could survive the cut: a line longer than
+ * `maxLineChars` is left out whole (and said so), and a burst keeps its
+ * newest whole lines up to `maxBytes`. Nothing reaches the transcript.
  */
 export function diagnosticStream(input: {
   emit: (event: Extract<HarnessEvent, { type: "diagnostic" }>) => void;
@@ -627,39 +629,77 @@ export function diagnosticStream(input: {
   level?: "info" | "warn" | "error";
   intervalMs?: number;
   maxBytes?: number;
+  maxLineChars?: number;
 }): { write(chunk: string): void; flush(): void } {
   const intervalMs = input.intervalMs ?? 1_000;
   const maxBytes = input.maxBytes ?? 8_000;
+  const maxLineChars = Math.min(input.maxLineChars ?? 2_000, maxBytes);
+  const prefix = input.prefix ?? "";
   let partial = "";
+  /** The unfinished line grew past the limit: it is left out when it ends. */
+  let partialDropped = 0;
   let lines: string[] = [];
   let timer: ReturnType<typeof setTimeout> | undefined;
+  const kept = (line: string, length = line.length) =>
+    length > maxLineChars
+      ? `${prefix}[a ${length}-character line was left out]`
+      : `${prefix}${line}`;
   const flush = () => {
     if (timer) clearTimeout(timer);
     timer = undefined;
-    if (lines.length === 0) return;
-    let message = lines.join("\n");
+    // The newest whole lines that fit; never part of one.
+    const out: string[] = [];
+    let size = 0;
+    for (let index = lines.length - 1; index >= 0; index--) {
+      const line = lines[index] ?? "";
+      if (size + line.length + 1 > maxBytes) break;
+      out.unshift(line);
+      size += line.length + 1;
+    }
+    const left = lines.length - out.length;
     lines = [];
-    if (message.length > maxBytes)
-      message = `…${message.slice(message.length - maxBytes)}`;
-    input.emit({ type: "diagnostic", level: input.level ?? "info", message });
+    if (out.length === 0) return;
+    if (left > 0) out.unshift(`${prefix}[${left} earlier lines were left out]`);
+    input.emit({
+      type: "diagnostic",
+      level: input.level ?? "info",
+      message: out.join("\n"),
+    });
+  };
+  const push = (line: string) => {
+    lines.push(line);
+    if (lines.length > 200) lines = lines.slice(-200);
+    if (!timer) {
+      timer = setTimeout(flush, intervalMs);
+      timer.unref?.();
+    }
   };
   return {
     write(chunk) {
-      const split = splitLines(partial + chunk);
-      partial = split.rest.slice(-maxBytes);
-      for (const line of split.lines)
-        if (line.trim())
-          lines.push(`${input.prefix ?? ""}${line.slice(0, 2_000)}`);
-      if (lines.length > 200) lines = lines.slice(-200);
-      if (lines.length > 0 && !timer) {
-        timer = setTimeout(flush, intervalMs);
-        timer.unref?.();
+      if (partialDropped > 0) {
+        // Inside a line already too long: only where it ends matters.
+        const end = chunk.indexOf("\n");
+        if (end < 0) {
+          partialDropped += chunk.length;
+          return;
+        }
+        push(kept("", partialDropped + end));
+        partialDropped = 0;
+        chunk = chunk.slice(end + 1);
       }
+      const split = splitLines(partial + chunk);
+      partial = split.rest;
+      if (partial.length > maxLineChars) {
+        partialDropped = partial.length;
+        partial = "";
+      }
+      for (const line of split.lines) if (line.trim()) push(kept(line));
     },
     flush() {
-      if (partial.trim())
-        lines.push(`${input.prefix ?? ""}${partial.slice(0, 2_000)}`);
+      if (partialDropped > 0) push(kept("", partialDropped));
+      else if (partial.trim()) push(kept(partial));
       partial = "";
+      partialDropped = 0;
       flush();
     },
   };

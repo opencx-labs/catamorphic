@@ -244,9 +244,32 @@ class ClaudeSession implements WarmSession {
   nativeId?: string;
   /** The native turn its last attempt ended on (an assistant uuid). */
   lastTurn?: string;
-  stderr = "";
-  /** The serving attempt's log: the CLI's stderr reaches Work as written (ADR 0333). */
-  log?: (data: string) => void;
+  /**
+   * The serving attempt's log: the CLI's stderr reaches Work as written
+   * (ADR 0333). What it writes while no attempt serves (starting up, between
+   * turns) waits here, whole lines only, for the next.
+   */
+  private log?: (data: string) => void;
+  private unheard = "";
+  logTo(log: ((data: string) => void) | undefined): void {
+    this.log = log;
+    if (log && this.unheard) {
+      log(this.unheard);
+      this.unheard = "";
+    }
+  }
+  stderr(data: string): void {
+    if (this.log) {
+      this.log(data);
+      return;
+    }
+    this.unheard += data;
+    // Too much waiting: its oldest lines go whole, never part of one.
+    if (this.unheard.length > 16_000) {
+      const cut = this.unheard.indexOf("\n", this.unheard.length - 16_000);
+      this.unheard = cut < 0 ? "" : this.unheard.slice(cut + 1);
+    }
+  }
   private handle?: ClaudeQueryHandle;
   private serving?: ClaudeAttempt;
   private ended = false;
@@ -353,8 +376,6 @@ class ClaudeAttempt {
   private readonly servers: readonly string[];
   readonly transcript: ClaudeTranscript;
   private session?: ClaudeSession;
-  /** Where the session's stderr stood when this attempt began. */
-  private stderrFrom = 0;
   /** Steered inputs not yet taken into the turn, by SDK uuid. */
   private readonly pendingSteers = new Map<string, string>();
   /** The SDK uuid of this attempt's own input, once sent. */
@@ -484,8 +505,7 @@ class ClaudeAttempt {
     const session = warm ?? this.coldSession(signature);
     if (!session) return;
     this.session = session;
-    this.stderrFrom = session.stderr.length;
-    session.log = (data) => this.log.write(data);
+    session.logTo((data) => this.log.write(data));
     this.ownInputUuid = message.uuid;
     session.inputs.push(message);
     this.resolveInputSent();
@@ -709,16 +729,10 @@ class ClaudeAttempt {
       this.settle({ status: "interrupted" });
       return;
     }
-    const stderr = (this.session?.stderr ?? "").slice(this.stderrFrom).trim();
+    // Its stderr already reached Work as it was written (ADR 0333).
     const message = error
       ? errorMessage(error)
       : "Claude Code stopped before finishing its turn.";
-    if (stderr)
-      this.host.emit({
-        type: "diagnostic",
-        level: "error",
-        message: `Claude Code: ${stderr.slice(-2_000)}`,
-      });
     this.settle({
       status: "failed",
       error: this.turnError({ message, providerRejected: false }),
@@ -753,7 +767,7 @@ class ClaudeAttempt {
     if (this.settled) return;
     this.settled = true;
     this.log.flush();
-    if (this.session?.log) this.session.log = undefined;
+    this.session?.logTo(undefined);
     this.resolveInputSent();
     this.failed = input.status === "failed";
     clearTimeout(this.interruptTimer);
@@ -911,8 +925,7 @@ class ClaudeAttempt {
       }),
       abortController: session.abort,
       stderr: (data) => {
-        session.stderr = (session.stderr + data).slice(-8_000);
-        session.log?.(data);
+        session.stderr(data);
       },
     });
   }

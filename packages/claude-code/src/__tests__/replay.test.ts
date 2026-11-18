@@ -318,3 +318,43 @@ it("an interrupt the CLI does not stop for aborts it and still reads as interrup
   expect(outcome?.completed?.error).toBeUndefined();
   expect(JSON.stringify(outcome?.events)).not.toContain("aborted by user");
 });
+
+it("sends the CLI's stderr once, as written, never again cut when the turn fails (ADR 0333)", async () => {
+  const places = await directories();
+  const scenario = CLAUDE_SCENARIOS.find(
+    (entry) => entry.name === "simple-reply",
+  );
+  if (!scenario) throw new Error("simple-reply is missing");
+  const transcript = await loadClaudeTranscript({
+    scenario: "simple-reply",
+    tokens: scenarioTokens({ directories: places, modelUrl: MODEL_URL }),
+  });
+  const first = transcript.attempts[0];
+  if (!first) throw new Error("no attempt");
+  transcript.source = "authored";
+  // The CLI's stream ends with no result: the turn fails.
+  first.messages = first.messages.filter((entry) => entry.type !== "result");
+  const replay = replayQuery(transcript);
+  const query: ClaudeQuery = (params) => {
+    params.options.stderr?.("upstream said: connection reset\n");
+    return replay(params);
+  };
+  const outcomes = await runScenario({
+    scenario: { ...scenario, check: () => {} },
+    directories: places,
+    modelUrl: MODEL_URL,
+    fixtureServer: { transport: "stdio", command: "fixture-mcp-server" },
+    runner: () =>
+      new InProcessRunner({
+        adapters: { "claude-code": createClaudeCodeAdapter({ query }) },
+        version: "replay",
+      }),
+  });
+  const [outcome] = outcomes;
+  expect(outcome?.completed?.status).toBe("failed");
+  const said = (outcome?.events ?? []).flatMap((event) =>
+    event.type === "diagnostic" ? [event.message] : [],
+  );
+  expect(said.join("\n").split("connection reset")).toHaveLength(2);
+  expect(said).toContain("claude: upstream said: connection reset");
+});

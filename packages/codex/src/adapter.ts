@@ -506,10 +506,10 @@ class CodexAttempt {
     session.client = client;
     this.client = client;
     const sessions = this.sessions;
-    void client.exited.then((exit) => {
+    void client.exited.then(() => {
       session.ended();
       if (session.thread) sessions?.forget(session.thread.id, session);
-      session.attempt?.codexExited(exit);
+      session.attempt?.codexExited();
     });
     await client.initialize();
     const thread = await this.openThread(client, binding);
@@ -540,14 +540,10 @@ class CodexAttempt {
   }
 
   /** Codex's process ended while this attempt was its own. */
-  private codexExited(exit: Awaited<CodexAppServer["exited"]>): void {
+  private codexExited(): void {
     if (this.completed || this.finishing) return;
-    if (exit.stderr.trim())
-      this.host.emit({
-        type: "diagnostic",
-        level: "error",
-        message: exit.stderr.trim().slice(-2_000),
-      });
+    // Its stderr already reached Work as it was written (ADR 0333).
+    this.log.flush();
     this.items.closeOpen(this.interruptRequested ? "interrupted" : "failed");
     this.complete(
       this.interruptRequested
