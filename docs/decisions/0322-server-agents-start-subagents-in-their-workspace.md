@@ -55,7 +55,8 @@ Spawn takes `workspace: "shared" | "own"`, default `shared`, on every host.
   setup's timeout. The step is the workspace session's whoever runs it: a
   setup workflow (ADR 0324) runs and is stamped for that session, and the
   workspace's events name it. Work under these claims stops once its claim
-  could be lost, before it delivers Git access, secrets or personal files. Idle release counts the workspace in use while any
+  could be lost, before it delivers Git access, secrets or personal files.
+  Idle release counts the workspace in use while any
   session in it works or someone uses it through any of them (a terminal,
   a preview, a workflow's command); a child whose workspace was released admits it
   again for that session. Closing or archiving the child gives back only
