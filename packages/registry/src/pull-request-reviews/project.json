@@ -21,7 +21,7 @@
       },
       "commands": {
         "separate": true,
-        "connections": ["github"]
+        "connections": ["git"]
       },
       "setup": {
         "command": "if [ -f pnpm-lock.yaml ]; then pnpm install --frozen-lockfile; elif [ -f bun.lock ] || [ -f bun.lockb ]; then bun install --frozen-lockfile; elif [ -f package-lock.json ]; then npm ci --no-audit --no-fund; fi; for f in compose.yaml compose.yml docker-compose.yaml docker-compose.yml; do if [ -f \"$f\" ]; then docker compose -f \"$f\" pull --ignore-buildable --ignore-pull-failures --quiet; break; fi; done",
@@ -47,12 +47,13 @@
           "provider": "github",
           "principal": "service",
           "service": "github",
-          "capabilities": [
-            "get",
-            "pull_request_files",
-            "review_threads",
-            "git:read"
-          ]
+          "capabilities": ["get", "pull_request_files", "review_threads"]
+        },
+        "git": {
+          "provider": "github",
+          "principal": "service",
+          "service": "github",
+          "capabilities": ["git:read"]
         },
         "prod": {
           "provider": "prod-replica",

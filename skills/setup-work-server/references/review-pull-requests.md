@@ -173,9 +173,9 @@ adds:
 
 - `.work/project.json`: the `review` Environment (pool, image, containers,
   gateway-only egress, `commands` apart from the reviewer with only the
-  `github` read binding, a `setup` whose network reaches the package
+  `git` binding (Git reads of the repository), a `setup` whose network reaches the package
   registries, `waitMinutes`, `idleReleaseMinutes`, `approvals.waitMinutes`,
-  and the read-only `github`, `prod`, and `slack` bindings) and the `github-poster` Environment
+  and the read-only `github`, `git`, `prod`, and `slack` bindings) and the `github-poster` Environment
   (workflows only; the `github` binding with the poster's typed write
   actions) merged beside the existing `default`. Fix branches are left out:
   `git:write` in `review` would let the pull request's code push with the

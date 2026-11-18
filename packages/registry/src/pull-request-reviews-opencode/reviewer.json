@@ -31,6 +31,10 @@
       "principal": "service"
     },
     {
+      "alias": "git",
+      "principal": "service"
+    },
+    {
       "alias": "prod",
       "principal": "service",
       "optional": true

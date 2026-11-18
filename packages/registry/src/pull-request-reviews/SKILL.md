@@ -76,10 +76,12 @@ bindings, and its model.
 `commands` runs everything the reviewer runs (its shell, setup, `exec`,
 terminals, the change's tests and Compose services) in a command container
 of its own beside the reviewer's, sharing only the checkout (ADR 0332).
-Docker runs there, not beside the reviewer. Its one connection is
-`github`, a read binding, so its commands (and `exec` from workflows) can
-`git fetch`; add another binding only when the change's tests need it, and
-never a write one. `requirements.resources` limits the command container;
+Docker runs there, not beside the reviewer. Its one connection is `git`, a
+binding of its own with `git:read` alone, which reaches only the project's
+linked repository (a binding's default), so its commands (and `exec` from
+workflows) can `git fetch`; the reviewer's `github` binding keeps the
+GitHub reads and gives the commands nothing. Add another binding only when
+the change's tests need it, and never a write one. `requirements.resources` limits the command container;
 the reviewer's own container takes `commands.agentResources` (1 CPU and
 2 GiB by default) on top, and a machine reserves both. Only container machines (the Work server's
 `WORK_SANDBOX=container`, gVisor or runc without privileged containers)
@@ -103,8 +105,9 @@ on the next push. `approvals.waitMinutes` is how long an escalation waits
 for the pull request's people.
 
 The bindings name service connections an administrator set up. In `review`:
-`github` (the GitHub App installation; reads, review threads, and Git
-fetches), `prod` (a read-only role on a production replica: `query`,
+`github` (the GitHub App installation; reads and review threads), `git`
+(the same installation for Git fetches of the repository, the only binding
+the change's commands reach), `prod` (a read-only role on a production replica: `query`,
 `explain`, `schema`), and `slack` (a user token for `search.messages` and
 `conversations.replies`). Leave out what the organization does not have; the
 agent treats `prod` and `slack` as optional. `github-poster` runs no

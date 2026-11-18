@@ -245,7 +245,7 @@ describe("the pull-request-reviews pack", () => {
       network: { egress: "gateway" },
       // The pull request's code runs apart from the reviewer, reaching only
       // Git reads through the gateway (ADR 0332).
-      commands: { separate: true, connections: ["github"] },
+      commands: { separate: true, connections: ["git"] },
       setup: {
         network: { allow: expect.arrayContaining(["registry.npmjs.org"]) },
       },
@@ -255,6 +255,7 @@ describe("the pull-request-reviews pack", () => {
     expect(review?.volumes).toBeUndefined();
     expect(Object.keys(review?.connections ?? {})).toEqual([
       "github",
+      "git",
       "prod",
       "slack",
     ]);
@@ -266,10 +267,24 @@ describe("the pull-request-reviews pack", () => {
     const reads = ["get", "pull_request_files", "review_threads"];
     // No git:write either: the pull request's code could push with the
     // chat's grant, and App pushes run the base repository's workflows.
-    expect(review?.connections?.github?.capabilities).toEqual([
-      ...reads,
-      "git:read",
-    ]);
+    expect(review?.connections?.github?.capabilities).toEqual(reads);
+    // The commands get Git reads of the project's repository alone (its
+    // default), through a binding of their own, not the reviewer's GitHub
+    // reads (ADR 0332).
+    expect(review?.connections?.git).toMatchObject({
+      provider: "github",
+      principal: "service",
+      capabilities: ["git:read"],
+    });
+    expect(review?.connections?.git?.git).toBeUndefined();
+    for (const reviewer of [
+      file(".work/agents/reviewer.json"),
+      OPENCODE.files[".work/agents/reviewer.json"] ?? "{}",
+    ])
+      expect(JSON.parse(reviewer).connections).toContainEqual({
+        alias: "git",
+        principal: "service",
+      });
     const poster = policy.environments["github-poster"];
     expect(poster).toMatchObject({ workloads: ["workflow"] });
     expect(Object.keys(poster?.connections ?? {})).toEqual(["github"]);
