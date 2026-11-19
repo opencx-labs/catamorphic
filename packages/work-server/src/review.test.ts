@@ -844,6 +844,23 @@ describe.skipIf(!databaseUrl)("reviewing pull requests (#118)", () => {
   let sandboxDir = "";
 
   /** The poster's GitHub writes, once its run for a turn completes. */
+  /**
+   * A last step that holds the fake agent's turn until `file` exists, at
+   * most a minute: the test makes it once the head's check is in progress
+   * (`releaseWhenInProgress`), so the check shows the review before its
+   * turn ends however fast the turn runs.
+   */
+  const holdStep = (file: string) =>
+    `run i=0; while [ ! -e '${file}' ] && [ $i -lt 600 ]; do sleep 0.1; i=$((i+1)); done; echo held`;
+  /** Make `file` once the head's "Work review" check is in progress. */
+  const releaseWhenInProgress = (head: string, file: string) =>
+    waitFor(`the check of ${head.slice(0, 7)} in progress`, () =>
+      pull.checkRuns.find(
+        (entry) => entry.head_sha === head && entry.status === "in_progress",
+      )
+        ? true
+        : undefined,
+    ).finally(() => fs.writeFileSync(file, ""));
   const posterRuns = () =>
     server.catamorphic.core.db
       .selectFrom("workflow_runs")
@@ -899,12 +916,18 @@ describe.skipIf(!databaseUrl)("reviewing pull requests (#118)", () => {
       "run git push origin HEAD:refs/heads/work/review-1 2>&1; echo pushed=$?",
       findingStep(finding),
       reportStep(report),
+      holdStep(path.join(root, "first-head-in-progress")),
     ].join(" ;; ");
+    const inProgress = releaseWhenInProgress(
+      pullHead,
+      path.join(root, "first-head-in-progress"),
+    );
     const delivered = await fromGithub(
       "pull_request",
       pullRequestEvent("opened", `Adds a total to every order.\n${script}`),
     );
     expect(delivered.statusCode, delivered.body).toBe(202);
+    await inProgress;
 
     const chat = await waitFor("the review chat", async () => {
       const found = await reviewChat();
@@ -1111,17 +1134,22 @@ describe.skipIf(!databaseUrl)("reviewing pull requests (#118)", () => {
       repository,
       "HEAD:refs/pull/1/head",
     ]);
+    const held = path.join(root, "pushed-head-in-progress");
+    const inProgress = releaseWhenInProgress(pullHead, held);
     const delivered = await fromGithub("pull_request", {
       ...pullRequestEvent(
         "synchronize",
-        "Adds a total to every order.\nrun git rev-parse HEAD",
+        `Adds a total to every order.\nrun git rev-parse HEAD ;; ${holdStep(held)}`,
       ),
       before: previous,
       after: pullHead,
     });
     expect(delivered.statusCode).toBe(202);
+    await inProgress;
     await waitFor("the review of the new head", async () =>
-      (await answers(sessionId)).includes(`exit=0\n${pullHead}`)
+      (await answers(sessionId)).some((answer) =>
+        answer.startsWith(`exit=0\n${pullHead}\n---\n`),
+      )
         ? true
         : undefined,
     );
