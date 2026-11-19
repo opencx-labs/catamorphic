@@ -2280,6 +2280,39 @@ describe("report text", () => {
     expect(liveIn(posted)).toEqual([]);
   });
 
+  it("measures text as its schema does, in code points", () => {
+    // 1,500 code points, 3,000 UTF-16 units: the schema's longest body.
+    const emoji = "\u{1F600}".repeat(1500);
+    const finding = checkFinding({
+      id: "f1",
+      path: "src/a.ts",
+      line: 1,
+      severity: "minor",
+      title: "\u{1F600}".repeat(200),
+      body: emoji,
+    });
+    expect(typeof finding).toBe("object");
+    expect(
+      typeof checkWorkReview({
+        reviewedCommit: "a".repeat(40),
+        verdict: "COMMENT",
+        score: 3,
+        summary: "\u{1F600}".repeat(4000),
+        checkSummary: "Ran the tests.",
+      }),
+    ).toBe("object");
+    expect(
+      checkFinding({
+        id: "f1",
+        path: "src/a.ts",
+        line: 1,
+        severity: "minor",
+        title: "T",
+        body: `${emoji}\u{1F600}`,
+      }),
+    ).toMatch(/body is missing or over 1,500 characters/);
+  });
+
   it("escapes a body once, read or escaped whole, and keeps a path's brackets either way", () => {
     const finding = checkFinding({
       id: "f1",

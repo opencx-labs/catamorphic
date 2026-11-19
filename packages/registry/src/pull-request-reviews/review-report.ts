@@ -659,9 +659,12 @@ export function findingLine(finding: WorkFinding): string {
   return `${renderedPath(finding.path)}:${finding.line}: **${SEVERITY_LABELS[finding.severity]}:** ${finding.title}. ${finding.body}`;
 }
 
+/** Text that is not blank, at most `max` code points, as its schema counts. */
 function text(value: unknown, max: number): value is string {
   return (
-    typeof value === "string" && value.trim().length > 0 && value.length <= max
+    typeof value === "string" &&
+    value.trim().length > 0 &&
+    [...value].length <= max
   );
 }
 
