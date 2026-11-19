@@ -1361,6 +1361,10 @@ describe("postReviews", () => {
 
   it("defuses each body GitHub gets as a whole, and keeps the stamp out of an open code block", async () => {
     const result = await publish(`
+      // A run in progress: the verdict completes it with its summary.
+      world.chat.turn = { id: "t1", status: "running" };
+      await runWorkflow(postReviews, event("t1", "running"), world.context);
+      world.chat.turn = null;
       // The summary leaves a fence open; a finding outside the diff,
       // listed in the review's body, closes it.
       world.find("t1", { id: "outside", path: "src/other.ts", line: 9, body: "See\\n\\\`\\\`\\\`\\n@org/team <!-- hidden -->" });
@@ -1387,6 +1391,11 @@ describe("postReviews", () => {
       comments[0]?.body ?? "",
     ];
     expect(reviews[0]?.comments).toHaveLength(1);
+    // The run in progress took the verdict and its summary.
+    expect(result.writes).toEqual(
+      expect.arrayContaining(["check:in_progress", "update:a:success"]),
+    );
+    expect(checks).toHaveLength(1);
     for (const body of bodies) {
       expect(body, body).not.toContain("@org/team");
       // Only the markers and stamp after it are HTML comments.
@@ -1400,6 +1409,38 @@ describe("postReviews", () => {
     // A body that ends inside a code block has it closed before the stamp.
     expect(comments[0]?.body).toBe(
       "Answer:\n```\n```\n\n<!-- work-review:t1:reply -->",
+    );
+  });
+
+  it("defuses a finding's title, body and path where its own event posts it, and where the review lists it", async () => {
+    const result = await publish(`
+      const hostile = "@org/team <!-- x -->";
+      // Posted by its own event, while the turn works.
+      await runWorkflow(postReviews, world.find("t1", { id: "inline", path: "src/orders.ts", line: 2, title: hostile, body: hostile }), world.context);
+      // Outside the diff: the turn's review lists it.
+      world.find("t1", { id: "outside", path: "src/" + hostile + ".ts", line: 9, title: hostile, body: hostile });
+      world.submit("t1", { verdict: "COMMENT", reviewedCommit: ${JSON.stringify(HEAD)} });
+      await runWorkflow(postReviews, event("t1"), world.context);
+      return world.github.reviews;
+    `);
+    const reviews = result.outcomes as Array<{
+      body: string;
+      comments: Array<{ body: string }>;
+    }>;
+    const comments = reviews.flatMap((review) =>
+      review.comments.map((comment) => comment.body),
+    );
+    expect(comments).toHaveLength(1);
+    const listing = reviews.at(-1)?.body ?? "";
+    expect(listing).toContain("work-review:t1:review");
+    for (const body of [...comments, listing]) {
+      // Only the markers and stamp after it are HTML comments.
+      const shown = body.replace(/(?:\n\n<!-- work-review:[\w:-]+ -->)+$/, "");
+      expect(liveIn(shown), body).toEqual([]);
+      expect(shown, body).not.toMatch(/<[!?]/);
+    }
+    expect(shownText(listing)).toContain(
+      "src/@\u200borg/team <!-- x -->.ts:9:",
     );
   });
 
