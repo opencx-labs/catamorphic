@@ -111,6 +111,8 @@ describe("a separated sandbox's shape follows its chat's harness (ADR 0332)", ()
   let beforeCommand: ((command: string) => Promise<void>) | undefined;
   /** Holds each sandbox the machine makes until it resolves, while set. */
   let makeGate: { entered: boolean; open: Promise<void> } | undefined;
+  /** The machine is out of reach, while set. */
+  let offline = false;
 
   /** As the built-in agent: its harness on this host, driving the sandbox. */
   const builtin = (id: string): RegisteredCodingAgent => ({
@@ -284,7 +286,7 @@ describe("a separated sandbox's shape follows its chat's harness (ADR 0332)", ()
       new ProjectEnvironmentsService(db, projectManager),
       {
         get: ({ allocationBindingId, pool }) =>
-          pool.lane === "busy"
+          pool.lane === "busy" || offline
             ? undefined
             : !allocationBindingId || allocationBindingId === "machine"
               ? binding
@@ -654,6 +656,149 @@ describe("a separated sandbox's shape follows its chat's harness (ADR 0332)", ()
       );
       expect((await allocationOf(chat.id)).id).toBe(before);
     } finally {
+      await worker.stop();
+    }
+  }, 120_000);
+
+  it("fails a message sent while a turn waits at the same deadline, not one of its own", async () => {
+    agents.set("reviewer", builtin("reviewer"));
+    const bounded = service({ reshapeWaitMinutes: 0.05 });
+    const chat = await bounded.create(identity, projectId, {});
+    await personUses(chat.id);
+    redefine();
+    const worker = workerFor(bounded);
+    // Sent without waiting for them: sending waits for a queued turn
+    // longer than this deadline.
+    const sends: Promise<unknown>[] = [];
+    const queued = async (text: string) => {
+      const before = (await latestTurn(chat.id)).id;
+      sends.push(send(chat.id, text, bounded));
+      await until(
+        "it is queued",
+        async () => (await latestTurn(chat.id)).id !== before,
+      );
+      return latestTurn(chat.id);
+    };
+    try {
+      const first = await queued("first");
+      await until(
+        "the first waits",
+        async () =>
+          (await turnRow(first.id)).activity?.includes("someone using it") ===
+          true,
+      );
+      await new Promise((resolve) => setTimeout(resolve, 1_500));
+      const second = await queued("second");
+      await settled(first.id);
+      // The second waited with it, so its wait ends with the first's.
+      await until(
+        "the second fails with it",
+        async () => (await turnRow(second.id)).status === "failed",
+        1_500,
+      );
+      expect(JSON.stringify((await turnRow(second.id)).error)).toContain(
+        "within 3 seconds: someone using it",
+      );
+    } finally {
+      await worker.stop();
+      await Promise.all(sends);
+    }
+  }, 120_000);
+
+  it("keeps a wait's deadline across a restart, as every replica reads it", async () => {
+    agents.set("reviewer", builtin("reviewer"));
+    const before = service({ reshapeWaitMinutes: 0.05 });
+    const chat = await before.create(identity, projectId, {});
+    await personUses(chat.id);
+    redefine();
+    const first = workerFor(before);
+    // Not waited for: sending waits for a queued turn longer than this
+    // deadline.
+    const sending = send(chat.id, "hello", before);
+    await until(
+      "it is queued",
+      async () => (await latestTurn(chat.id)).status !== "none",
+    );
+    const turn = await latestTurn(chat.id);
+    await until(
+      "it waits",
+      async () =>
+        (await turnRow(turn.id)).activity?.includes("someone using it") ===
+        true,
+    );
+    const started = Date.now();
+    // That host stops; another, knowing nothing of the wait, takes over.
+    await first.stop();
+    await before.stopLocalTurns();
+    const worker = workerFor(service({ reshapeWaitMinutes: 0.05 }));
+    try {
+      await settled(turn.id);
+      expect((await turnRow(turn.id)).status).toBe("failed");
+      // Its first look is the deadline's: it does not wait 3 seconds anew.
+      expect(Date.now() - started).toBeLessThan(7_500);
+    } finally {
+      await worker.stop();
+      await sending;
+    }
+  }, 120_000);
+
+  it("clears what held the workspace once it is given back, while the chat waits for a machine", async () => {
+    agents.set("reviewer", builtin("reviewer"));
+    const chat = await sessions.create(identity, projectId, {});
+    const hello = await sessions.sendMessage(
+      identity,
+      projectId,
+      chat.id,
+      "hello",
+    );
+    expect(hello.turn.status).toBe("completed");
+    const before = (await allocationOf(chat.id)).id;
+    await personUses(chat.id);
+    redefine();
+    const worker = workerFor();
+    try {
+      await send(chat.id, "again");
+      const turn = await latestTurn(chat.id);
+      await until(
+        "it shows what holds the workspace",
+        async () =>
+          (await turnRow(turn.id)).activity?.includes("someone using it") ===
+          true,
+      );
+      // They leave, and its machine goes away as the workspace is saved:
+      // the new one waits for a machine.
+      beforeCommand = async () => {
+        offline = true;
+      };
+      await personUses(chat.id, new Date(Date.now() - 10 * 60_000));
+      await until("the chat waits for a machine", async () =>
+        Boolean(
+          await db
+            .selectFrom("placement_waits")
+            .select("root_workload_id")
+            .where("root_workload_id", "=", chat.id)
+            .executeTakeFirst(),
+        ),
+      );
+      expect(
+        (
+          await db
+            .selectFrom("execution_allocations")
+            .select("status")
+            .where("id", "=", before)
+            .executeTakeFirstOrThrow()
+        ).status,
+      ).toBe("released");
+      expect((await turnRow(turn.id)).activity ?? "").not.toContain(
+        "Waiting to make this chat's workspace again",
+      );
+      // The machine comes back.
+      beforeCommand = undefined;
+      offline = false;
+      await reshaped(chat.id, before);
+    } finally {
+      beforeCommand = undefined;
+      offline = false;
       await worker.stop();
     }
   }, 120_000);

@@ -1369,15 +1369,9 @@ const RESHAPE_SYNC_TRIES = 3;
  * A wait nothing looked at again for this long was left behind (its turns
  * stopped): the chat's next turn waits from its own start.
  */
-const RESHAPE_WAIT_LEFT_MS = 5 * 60_000;
-
-/** A chat's wait for its reshaped workspace (ADR 0332). */
-interface ReshapeWait {
-  since: number;
-  nextAt: number;
-  syncFailures: number;
-  activity: string;
-}
+const RESHAPE_WAIT_LEFT_SECONDS = 5 * 60;
+/** How a waiting turn's activity begins, so the wait can clear it. */
+const RESHAPE_ACTIVITY = "Waiting to make this chat's workspace again";
 
 /**
  * What keeps a workspace from being given back (ADR 0332): a turn at work
@@ -1494,12 +1488,6 @@ export class AgentSessionsService {
   readonly authorityLeaseMs: number;
   private readonly workspaceClaimSeconds: number;
   private readonly reshapeWaitMs: number;
-  /**
-   * The chats whose turn waits for a reshaped workspace (ADR 0332): since
-   * when, when to look again, and how many saves in a row failed. Held by
-   * the process draining the chat; another starts the wait again.
-   */
-  private readonly reshapeWaits = new Map<string, ReshapeWait>();
   private readonly wakeups?: WorkWakeups;
   private readonly idlePollMs?: number;
   private readonly projectManager: ProjectManager;
@@ -12613,8 +12601,12 @@ export class AgentSessionsService {
           .where("id", "=", input.session.workspace_session_id)
           .executeTakeFirst()
       : input.session;
-    const fits = () => {
-      this.reshapeWaits.delete(sessionId);
+    const fits = async () => {
+      if (
+        input.session.reshape_waiting_since !== null ||
+        input.session.reshape_look_at !== null
+      )
+        await this.endReshapeWait(sessionId);
       return "fits" as const;
     };
     if (!owner || owner.allocation_id !== allocation.id) return fits();
@@ -12627,20 +12619,21 @@ export class AgentSessionsService {
       }))
     )
       return fits();
-    const now = Date.now();
-    const recorded = this.reshapeWaits.get(sessionId);
-    // The chat's wait, whichever of its turns is first: a message sent
-    // meanwhile waits with it, never ahead of it or from its own start.
-    const waiting =
-      recorded && now - recorded.nextAt < RESHAPE_WAIT_LEFT_MS
-        ? recorded
-        : undefined;
-    if (waiting && now < waiting.nextAt) {
-      await this.holdForReshape({
-        sessionId,
-        until: new Date(waiting.nextAt),
-        activity: waiting.activity,
-      });
+    // The chat's wait as the database keeps it, the same for every replica
+    // and restart: a message sent meanwhile waits with it, never ahead of
+    // it or from its own start. One nothing looked at again for a while
+    // was left behind (its turns stopped) and starts over.
+    const current = sql<boolean>`reshape_waiting_since is not null and reshape_look_at > now() - make_interval(secs => ${RESHAPE_WAIT_LEFT_SECONDS})`;
+    const wait = await this.db
+      .selectFrom("agent_sessions")
+      .select([
+        current.as("current"),
+        sql<boolean>`coalesce(reshape_look_at > now(), false)`.as("resting"),
+      ])
+      .where("id", "=", sessionId)
+      .executeTakeFirstOrThrow();
+    if (wait.current && wait.resting) {
+      await this.holdForReshape({ sessionId });
       return "waiting";
     }
     const placed = await this.db
@@ -12676,62 +12669,71 @@ export class AgentSessionsService {
           placed.sandbox_provider_id ?? sandbox?.provider_id ?? null,
         external_user_id: owner.external_user_id,
       },
-      idleSince: new Date(now),
+      idleSince: new Date(),
       reshape: true,
     });
     if (outcome === true) {
-      this.reshapeWaits.delete(sessionId);
+      await this.endReshapeWait(sessionId);
       return "released";
     }
-    const syncFailures =
-      outcome.kind === "sync" ? (waiting?.syncFailures ?? 0) + 1 : 0;
-    const since = waiting?.since ?? now;
+    // Recorded in one statement: since when it waits (set once), saves in
+    // a row that failed, and when to look again: half the time waited, 5
+    // seconds at first, at most a minute.
+    const failedSave = outcome.kind === "sync";
+    const recorded = await this.db
+      .updateTable("agent_sessions")
+      .set({
+        reshape_waiting_since: sql<Date>`case when ${current} then reshape_waiting_since else now() end`,
+        reshape_save_failures: failedSave
+          ? sql<number>`case when ${current} then reshape_save_failures + 1 else 1 end`
+          : 0,
+        reshape_look_at: sql<Date>`now() + make_interval(secs => case when ${current} then least(${sql.lit(RESHAPE_RETRY_MAX_SECONDS)}, greatest(${sql.lit(RESHAPE_RETRY_SECONDS)}, round(extract(epoch from now() - reshape_waiting_since) / 2)))::float8 else ${sql.lit(RESHAPE_RETRY_SECONDS)} end)`,
+      })
+      .where("id", "=", sessionId)
+      .returning([
+        "reshape_save_failures",
+        sql<boolean>`now() - reshape_waiting_since >= make_interval(secs => ${this.reshapeWaitMs / 1000})`.as(
+          "expired",
+        ),
+      ])
+      .executeTakeFirstOrThrow();
     const agent = await this.resolveAgent(owner.agent_id, owner.project_id)
       .then((resolved) => resolved.name ?? resolved.id)
       .catch(() => "its agents");
     const failure =
-      outcome.kind === "sync" && syncFailures >= RESHAPE_SYNC_TRIES
+      failedSave && recorded.reshape_save_failures >= RESHAPE_SYNC_TRIES
         ? `This chat's workspace could not be saved before it was made again for ${agent}: ${outcome.error}`
-        : now - since >= this.reshapeWaitMs
+        : recorded.expired
           ? `This chat's workspace could not be made again for ${agent} within ${formatWaitMinutes(this.reshapeWaitMs)}: ${workspaceHoldText(outcome)} kept it. ${workspaceHoldRemedy(outcome)}`
           : undefined;
     if (failure) {
-      this.reshapeWaits.delete(sessionId);
-      await this.engine.runNext({
-        sessionId,
-        ...(this.workerNode ? { localNode: this.workerNode } : {}),
-        refusal: failure,
-      });
+      // Every message waiting with it fails at the same deadline.
+      while (
+        await this.engine.runNext({
+          sessionId,
+          ...(this.workerNode ? { localNode: this.workerNode } : {}),
+          refusal: failure,
+        })
+      );
+      await this.endReshapeWait(sessionId);
       return "failed";
     }
-    const delaySeconds = Math.min(
-      RESHAPE_RETRY_MAX_SECONDS,
-      Math.max(RESHAPE_RETRY_SECONDS, Math.round((now - since) / 2000)),
-    );
-    const wait: ReshapeWait = {
-      since,
-      nextAt: now + delaySeconds * 1000,
-      syncFailures,
-      activity: `Waiting to make this chat's workspace again for ${agent}: ${workspaceHoldText(outcome)} keeps it`,
-    };
-    this.reshapeWaits.set(sessionId, wait);
     await this.holdForReshape({
       sessionId,
-      until: new Date(wait.nextAt),
-      activity: wait.activity,
+      activity: `${RESHAPE_ACTIVITY} for ${agent}: ${workspaceHoldText(outcome)} keeps it`,
     });
     return "waiting";
   }
 
   /**
-   * Show a chat's waiting turns what holds its workspace, and move those
-   * already due to when it looks again (ADR 0332). A turn waiting on a
-   * provider's backoff keeps its own time.
+   * Move a chat's turns already due to when it looks again for its
+   * reshaped workspace (ADR 0332), and show its waiting turns what holds
+   * it: `activity`, or what its other waiting turns show. A turn waiting
+   * on a provider's backoff keeps its own time.
    */
   private async holdForReshape(input: {
     sessionId: string;
-    until: Date;
-    activity: string;
+    activity?: string;
   }): Promise<void> {
     await this.db.transaction().execute(async (trx) => {
       await this.log.lock(trx, input.sessionId);
@@ -12746,27 +12748,105 @@ export class AgentSessionsService {
       if (due.length > 0)
         await trx
           .updateTable("agent_turns")
-          .set({ available_at: input.until })
+          .set({
+            available_at: (eb) =>
+              eb
+                .selectFrom("agent_sessions")
+                .select(sql<Date>`coalesce(reshape_look_at, now())`.as("at"))
+                .where("id", "=", input.sessionId),
+          })
           .where(
             "id",
             "in",
             due.map((row) => row.id),
           )
           .execute();
+      const activity =
+        input.activity ??
+        (
+          await trx
+            .selectFrom("agent_turns")
+            .select("activity")
+            .where("session_id", "=", input.sessionId)
+            .where("status", "=", "queued")
+            .where("activity", "like", `${RESHAPE_ACTIVITY}%`)
+            .executeTakeFirst()
+        )?.activity ??
+        undefined;
+      if (!activity) return;
       const now = new Date().toISOString();
       const events: SessionEvent[] = rows
-        .filter((row) => row.activity !== input.activity)
+        .filter((row) => row.activity !== activity)
         .map((row) => ({
           type: "turn.changed",
           turn: {
             ...turnFromRow(row),
-            activity: input.activity,
+            activity,
             activityAt: now,
             updatedAt: now,
           },
         }));
       if (events.length > 0)
         await this.log.append(trx, { sessionId: input.sessionId, events });
+    });
+  }
+
+  /**
+   * The chat's reshape wait is over (ADR 0332): its workspace was given
+   * back, fits again, or the wait failed. Turns it moved are due again
+   * (so they run in order), what they showed of it is cleared (a chat that
+   * now waits for a machine says so instead), and the wait is forgotten.
+   */
+  private async endReshapeWait(sessionId: string): Promise<void> {
+    await this.db.transaction().execute(async (trx) => {
+      await this.log.lock(trx, sessionId);
+      await trx
+        .updateTable("agent_turns")
+        .set({ available_at: sql<Date>`now()` })
+        .where("session_id", "=", sessionId)
+        .where("status", "=", "queued")
+        .where("available_at", ">", sql<Date>`now()`)
+        .where((eb) =>
+          eb(
+            "available_at",
+            "=",
+            eb
+              .selectFrom("agent_sessions")
+              .select(sql<Date>`reshape_look_at`.as("at"))
+              .where("id", "=", sessionId),
+          ),
+        )
+        .execute();
+      const rows = await trx
+        .selectFrom("agent_turns")
+        .selectAll()
+        .where("session_id", "=", sessionId)
+        .where("status", "in", ["queued", "preparing"])
+        .where("activity", "like", `${RESHAPE_ACTIVITY}%`)
+        .execute();
+      const now = new Date().toISOString();
+      if (rows.length > 0)
+        await this.log.append(trx, {
+          sessionId,
+          events: rows.map((row) => ({
+            type: "turn.changed",
+            turn: {
+              ...turnFromRow(row),
+              activity: null,
+              activityAt: null,
+              updatedAt: now,
+            },
+          })),
+        });
+      await trx
+        .updateTable("agent_sessions")
+        .set({
+          reshape_waiting_since: null,
+          reshape_look_at: null,
+          reshape_save_failures: 0,
+        })
+        .where("id", "=", sessionId)
+        .execute();
     });
   }
 

@@ -177,6 +177,9 @@ export interface AgentSessions {
   placement: Json | null;
   project_id: string;
   read_only: Generated<boolean>;
+  reshape_look_at: Timestamp | null;
+  reshape_save_failures: Generated<number>;
+  reshape_waiting_since: Timestamp | null;
   rewind_until: Timestamp | null;
   sandbox_id: string | null;
   secrets_delivered_ref: string | null;
