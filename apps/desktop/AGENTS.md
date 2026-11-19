@@ -151,7 +151,7 @@ test without an explicit request. Prefer the isolated Electron harness.
 | Tabs, splits, floating chats, opening | [Workspace interactions](docs/workspace-interactions.md) | `renderer/lib/workspace-state.ts`, `shared/open-mode.ts` |
 | Preferences and reset | [Settings](docs/settings.md) | `shared/settings.ts`, `main/settings-store.ts` |
 | Delivery and embedding | [Chat state](docs/chat-state.md) | `packages/react` hook/reducer, registry source |
-| Idle CPU and memory | [Performance](docs/performance.md) | `scripts/desktop-soak.ts`, `e2e/runtime-idle.e2e.ts` |
+| Idle CPU and memory | [Performance](docs/performance.md) | `scripts/desktop-soak.ts`, `e2e/runtime-idle.e2e.ts`, `scripts/live-probe.py` (freezes in an installed app) |
 | Browser control and native computer use | [Computer use](docs/computer-use.md) | `main/browser-driver.ts`, `packages/codex` |
 | Chrome extensions | [Browser extensions](docs/browser-extensions.md) | `main/extensions/`, `preload/session.ts` (also the passkey bridge, `preload/passkeys.ts`), `renderer/components/extensions/` |
 | Pages' Translator and LanguageDetector | [ADR 0320](../../docs/decisions/0320-pages-translate-on-the-device.md) | `main/translation/` (catalog from `scripts/translation-catalog.ts`), `preload/page-translation.ts` |

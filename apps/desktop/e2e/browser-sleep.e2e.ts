@@ -196,6 +196,18 @@ describe("sleeping tabs", () => {
     await pageReady("Sleep fixture c");
     await app.waitFor(asleep("Sleep form"), { label: "restored tab asleep" });
     expect(await pageTargets()).not.toContain(`${origin}/form`);
+    // A sleeping tab is data (ADR 0338): it has no screen, so no toolbar
+    // holds its address. Empty New Tabs have nothing to unload and stay.
+    expect(
+      await app.eval(
+        `[...document.querySelectorAll('[data-browser-toolbar] input')].map((input) => input.value)`,
+      ),
+    ).toEqual(expect.not.arrayContaining([expect.stringContaining("/form")]));
+    expect(
+      await app.eval(
+        `[...document.querySelectorAll('[data-browser-toolbar] input')].some((input) => input.value.includes('/long/c'))`,
+      ),
+    ).toBe(true);
 
     await showTab("Sleep form");
     await pageReady("Sleep form");

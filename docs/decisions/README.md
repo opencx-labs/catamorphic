@@ -206,10 +206,10 @@ Settled design decisions live here as short Architecture Decision Records. They 
 | [0191](0191-member-drafts-are-refs-in-the-project-origin.md) | Member drafts are refs in the project origin | Accepted |
 | [0192](0192-workers-own-their-lease.md) | Workers own their lease: any replica runs any worker's turns | Accepted (turn status and guards from Postgres by 0193; sealed operations by 0207) |
 | [0193](0193-no-cross-replica-state-in-replica-memory.md) | No cross-replica state in replica memory: turn status, singleton work, caches | Accepted (amended by 0197, 0198; machine classes and pools by 0205; sealed operations by 0207) |
-| [0194](0194-browser-tabs-load-like-chrome-and-sleep-when-unused.md) | Browser tabs load like Chrome's and sleep when unused | Accepted (amended by 0203) |
+| [0194](0194-browser-tabs-load-like-chrome-and-sleep-when-unused.md) | Browser tabs load like Chrome's and sleep when unused | Accepted (amended by 0203; a sleeping tab mounts nothing by 0338) |
 | [0195](0195-conversation-continues-around-agent-questions.md) | The conversation continues around agent questions: replies defer, agents close, no "Other" row | Accepted (amended by 0197; Other answers return by 0244) |
 | [0196](0196-installed-claude-code-first.md) | The person's own Claude Code runs first; Claude Code and Codex pins move by scheduled pull request | Accepted |
-| [0197](0197-agent-sessions-are-an-event-log-of-turns.md) | Agent sessions are an event log of turns | Accepted (amends 0195: replies to a waiting question steer the turn; input item kinds by 0217; result items by 0323) |
+| [0197](0197-agent-sessions-are-an-event-log-of-turns.md) | Agent sessions are an event log of turns | Accepted (amends 0195: replies to a waiting question steer the turn; input item kinds by 0217; result items by 0323; a reader without a stream reads what it missed by 0338) |
 | [0198](0198-agent-runners-run-harnesses-beside-their-workspace.md) | Agent runners run harnesses beside their workspace | Accepted (amended by 0276: a chat can switch harnesses; by 0222: desktop harnesses stay warm; by 0225: a mounted connector's endpoint decides its calls; by 0245: a lost thread is replaced, handed the conversation; by 0275: a resumed Claude Code keeps its sign-in; by 0333: progress, stalls and restarts) |
 | [0199](0199-subscription-sign-ins-stay-on-the-machine.md) | Subscription sign-ins stay on the machine they were made on | Accepted (amended by 0213: Codex only, on a member's own machine; who delivered an input is a typed field by 0219) |
 | [0200](0200-sidebars-move-first-content-settles-after.md) | Sidebars move first; the content settles after them | Accepted |
@@ -259,7 +259,7 @@ Settled design decisions live here as short Architecture Decision Records. They 
 | [0246](0246-a-restart-never-waits-on-work.md) | A restart never waits on work: working agents continue after it, a downloaded update stays downloaded | Accepted (amends 0083, 0198) |
 | [0247](0247-a-person-names-a-chat-and-it-keeps-the-name.md) | A person names a chat from its menu, and it keeps the name | Accepted (amends 0202) |
 | [0248](0248-sidebar-thumbs-take-lanes.md) | Sidebar thumbs take lanes, hidden at rest: the sidebar's own on its edge, a section's one lane in | Accepted (amends 0237) |
-| [0249](0249-a-window-coming-back-reads-only-what-it-missed.md) | A window coming back reads only what it missed: no refetch on focus, one catch-up for a hidden window | Accepted (refines 0229) |
+| [0249](0249-a-window-coming-back-reads-only-what-it-missed.md) | A window coming back reads only what it missed: no refetch on focus, one catch-up for a hidden window | Accepted (refines 0229; extended to query-backed chat lists by 0338) |
 | [0250](0250-a-message-from-another-agent-reaches-a-working-agent.md) | A message from another agent reaches a working agent at its next step; a subagent's always reaches its parent | Accepted (extends 0240) |
 | [0255](0255-acp-agents-run-on-the-work-server.md) | ACP agents run on the Work server, their model through the gateway on loopback | Accepted (builds on 0180, 0198, 0241; amends 0212) |
 | [0256](0256-the-gateway-rewrites-model-requests.md) | The gateway rewrites model requests: host rewrites, then a connection's override and paths, before policy, failing closed | Accepted (amends 0180; amended by 0261) |
@@ -342,3 +342,4 @@ Settled design decisions live here as short Architecture Decision Records. They 
 | [0335](0335-workflows-declare-their-store-documents.md) | Workflows declare the store documents they use | Accepted (amends 0055, 0158, 0330) |
 | [0336](0336-disk-is-a-resource-work-manages-on-machines.md) | Disk is a resource Work manages on machines | Accepted (amends 0100, 0204, 0208, 0324, 0327, 0333) |
 | [0337](0337-reviews-show-progress-and-post-findings-as-verified.md) | Reviews show progress at once and post findings as they are verified | Accepted (amends 0259, 0323, 0325) |
+| [0338](0338-what-is-out-of-sight-is-data.md) | What is out of sight is data: sleeping tabs mount nothing, and a chat without a stream reads what it missed | Accepted (amends 0194, 0197; refines 0229, 0249) |

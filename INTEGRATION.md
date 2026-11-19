@@ -522,6 +522,11 @@ and the pure reducer are `@catamorphic/agent-protocol`.
 - `GET .../events?after=<sequence>` streams events over SSE (`events`,
   `reset` with a fresh snapshot when the gap is too large, `heartbeat`).
   Fold them with `applySessionEvents`; resume from the last sequence.
+- `GET .../events/missed?after=<sequence>` answers once with the messages a
+  stream opens with (`{ messages }`: the events since, or a `reset`; empty
+  when current). A reader that holds no stream (off screen, or past a
+  browser's connection limit) follows a long session with it, never by
+  reading the snapshot again (ADR 0338). `@catamorphic/react` does this.
 - `POST .../commands` takes one `SessionCommand` (`send` with `dispatch:
   queue | steer | interrupt`, `interrupt`, `retry`, `edit_queued`,
   `cancel_queued`, `send_now`, `steer_now`, `respond`, `rollback`) with a

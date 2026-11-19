@@ -82,6 +82,8 @@ import {
   SessionItemsPageSchema,
   SessionItemsQuerySchema,
   SessionMirrorQuerySchema,
+  SessionMissedEventsQuerySchema,
+  SessionMissedEventsSchema,
   SessionResultsQuerySchema,
   SessionResultsSchema,
   SessionStreamMessageSchema,
@@ -605,6 +607,46 @@ export function registerAgentRoutes(app: FastifyInstance, ctx: RouteContext) {
       reply.hijack();
       stream.open(reply.getHeaders());
       return reply;
+    },
+  });
+
+  // What a reader has missed since its sequence, read once (ADR 0197): the
+  // messages the stream above opens with, for a reader that holds no
+  // stream (off screen, or past a client's connection limit). It pays for
+  // what changed; reading the snapshot again pays for the whole chat.
+  typed.route({
+    method: "GET",
+    url: "/projects/:projectId/agent/sessions/:sessionId/events/missed",
+    schema: {
+      params: AgentSessionIdParamsSchema,
+      querystring: SessionMissedEventsQuerySchema,
+      response: {
+        200: SessionMissedEventsSchema,
+        404: ErrorSchema,
+        503: ErrorSchema,
+      },
+    },
+    handler: async (request, reply) => {
+      const agentSessions = ctx.core?.agentSessions;
+      if (!agentSessions)
+        return reply.status(503).send({ error: "Coding agent not configured" });
+      try {
+        return reply.send({
+          messages: await agentSessions.missedEvents(
+            resolveIdentity(request),
+            request.params.projectId,
+            request.params.sessionId,
+            { after: request.query.after },
+          ),
+        });
+      } catch (error) {
+        if (
+          error instanceof ProjectNotFoundError ||
+          error instanceof AgentSessionNotFoundError
+        )
+          return reply.status(404).send({ error: "Session not found" });
+        throw error;
+      }
     },
   });
 

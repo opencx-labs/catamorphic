@@ -102,6 +102,32 @@ export class SessionFeed {
     };
   }
 
+  /**
+   * What a reader at `after` has missed, read once: the gap, or a fresh
+   * snapshot when it is too large to replay; nothing when it is current.
+   * For a reader without a stream (off screen, or waiting for a slot),
+   * which then pays for what changed, not for the whole conversation.
+   */
+  async missed(input: {
+    sessionId: string;
+    after: number;
+  }): Promise<SessionStreamMessage[]> {
+    const gap = await this.log.eventsAfter(input);
+    if (gap.reset)
+      return [
+        {
+          type: "reset",
+          snapshot: await readSnapshot({
+            db: this.db,
+            sessionId: input.sessionId,
+          }),
+        },
+      ];
+    return gap.events.length > 0
+      ? [{ type: "events", events: gap.events }]
+      : [];
+  }
+
   private ensureTimer(): void {
     if (this.polling) return;
     const stop = new AbortController();

@@ -3041,6 +3041,21 @@ export class AgentSessionsService {
     return stop;
   }
 
+  /**
+   * What a reader at `after` has missed (ADR 0197), read once: the events
+   * since, or a `reset` with a fresh snapshot when they are too many to
+   * replay. The same messages a stream opens with, without the stream.
+   */
+  async missedEvents(
+    identity: Identity,
+    projectId: string,
+    sessionId: string,
+    input: { after: number },
+  ): Promise<SessionStreamMessage[]> {
+    await this.requireSession(identity, projectId, sessionId, "read");
+    return this.feed.missed({ sessionId, after: input.after });
+  }
+
   /** The latest message that asked the owner to look, for attention lists. */
   private async attentionItem(
     sessionId: string,

@@ -151,3 +151,23 @@ it("reads again soon when a write is hinted while a poll is in flight", async ()
   expect(received).toEqual([{ type: "events", events: [event(1)] }]);
   unsubscribe();
 });
+
+it("reads what a reader missed once, without subscribing it", async () => {
+  const log = logOf([]);
+  const feed = new SessionFeed(db, log);
+  expect(await feed.missed({ sessionId: "session", after: 2 })).toEqual([]);
+
+  log.eventsAfter.mockResolvedValueOnce({
+    reset: false,
+    events: [event(3), event(4)],
+  } as never);
+  expect(await feed.missed({ sessionId: "session", after: 2 })).toEqual([
+    { type: "events", events: [event(3), event(4)] },
+  ]);
+  expect(log.eventsAfter).toHaveBeenLastCalledWith({
+    sessionId: "session",
+    after: 2,
+  });
+  // No stream was opened: nothing polls.
+  expect(log.eventsAfterMany).not.toHaveBeenCalled();
+});
