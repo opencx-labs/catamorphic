@@ -427,9 +427,6 @@ describe("remote development on a Work server", () => {
         WORK_MDNS: "off",
         WORK_FAKE_AGENT: "1",
         WORK_SANDBOX: "local-process",
-        // The test machine's own free disk is not what this test checks
-        // (ADR 0335): under the default floor a full host makes chats wait.
-        WORK_DISK_FLOOR_MB: "0",
         // A member's own chat is theirs alone here (ADR 0184), so it
         // receives the Environment's secrets (ADR 0206).
         WORK_PERSONAL_CREDENTIALS: "accept",

@@ -43,19 +43,50 @@ export interface MachineDisk {
 }
 
 /**
+ * The floor a machine keeps when the operator sets none (ADR 0335):
+ * `workspaces`, the full floor, for a machine many workspaces share (an
+ * enrolled worker, a container or microsandbox machine), where one busy
+ * workspace must not take the room the others need; `critical`, only the
+ * critical floor, for a single server's own machine running its work as
+ * local processes on the disk its database and its people's files share,
+ * where holding chats back frees nothing.
+ */
+export type DiskFloorDefault = "workspaces" | "critical";
+
+/**
  * The floor of a filesystem of `totalBytes`: `floorMb` when the operator
- * set one (`WORK_DISK_FLOOR_MB`, 0 keeps none), else 10% of it, at most
- * 10 GiB.
+ * set one (`WORK_DISK_FLOOR_MB`, 0 keeps none), else by the machine's
+ * `defaultFloor`: 10% of it, at most 10 GiB, or its critical floor.
  */
 export function diskFloorBytes(args: {
   totalBytes: number;
   floorMb?: number;
+  criticalMb?: number;
+  defaultFloor?: DiskFloorDefault;
 }): number {
   if (args.floorMb !== undefined) return Math.max(0, args.floorMb) * MIB;
+  if (args.defaultFloor === "critical")
+    return criticalFloorBytes({
+      totalBytes: args.totalBytes,
+      ...(args.criticalMb !== undefined ? { criticalMb: args.criticalMb } : {}),
+    });
   return Math.min(
     Math.floor(args.totalBytes * 0.1),
     DEFAULT_DISK_FLOOR_MAX_BYTES,
   );
+}
+
+/** `criticalMb` when set (0 keeps none), else 1% of the filesystem, at most 1 GiB. */
+function criticalFloorBytes(args: {
+  totalBytes: number;
+  criticalMb?: number;
+}): number {
+  return args.criticalMb !== undefined
+    ? Math.max(0, args.criticalMb) * MIB
+    : Math.min(
+        Math.floor(args.totalBytes * 0.01),
+        DEFAULT_DISK_CRITICAL_MAX_BYTES,
+      );
 }
 
 /**
@@ -68,14 +99,7 @@ export function diskCriticalBytes(args: {
   criticalMb?: number;
   floorBytes: number;
 }): number {
-  const critical =
-    args.criticalMb !== undefined
-      ? Math.max(0, args.criticalMb) * MIB
-      : Math.min(
-          Math.floor(args.totalBytes * 0.01),
-          DEFAULT_DISK_CRITICAL_MAX_BYTES,
-        );
-  return Math.min(critical, args.floorBytes);
+  return Math.min(criticalFloorBytes(args), args.floorBytes);
 }
 
 /**
@@ -88,6 +112,8 @@ export function measureDisk(args: {
   paths: readonly string[];
   floorMb?: number;
   criticalMb?: number;
+  /** The floor this machine keeps when no `floorMb` is set. */
+  defaultFloor?: DiskFloorDefault;
   now?: Date;
   /** For tests: statfs and stat as Node's. */
   statfs?: (path: string) => { bsize: number; blocks: number; bavail: number };
@@ -109,6 +135,10 @@ export function measureDisk(args: {
       const floorBytes = diskFloorBytes({
         totalBytes,
         ...(args.floorMb !== undefined ? { floorMb: args.floorMb } : {}),
+        ...(args.criticalMb !== undefined
+          ? { criticalMb: args.criticalMb }
+          : {}),
+        ...(args.defaultFloor ? { defaultFloor: args.defaultFloor } : {}),
       });
       measured = {
         path,

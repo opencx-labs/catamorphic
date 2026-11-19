@@ -58,6 +58,15 @@ reviews gets a fresh machine without paying for idle ones.
 See [ADR 0164](../../docs/decisions/0164-control-plane-and-enrolled-workers.md)
 and the [machines reference](../../skills/setup-work-server/references/cluster-deployment.md).
 
+Every machine measures its disk and keeps some of it free (ADR 0335). A single
+server running its work as local processes keeps only a small critical floor
+by default (1% of its disk, at most 1 GiB), so its chats are not held back on
+a full disk where holding them frees nothing; enrolled workers and a server
+whose sandboxes are containers or microVMs keep 10%, at most 10 GiB, so one
+busy workspace cannot take the room the others need. `WORK_DISK_FLOOR_MB` and
+`WORK_DISK_CRITICAL_MB` set them. Work that a full disk refuses says what the
+machine has free and keeps: free space on it, then try again.
+
 ## First brain
 
 For the shortest path from nothing to a running brain an MCP client can

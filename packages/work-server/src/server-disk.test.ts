@@ -108,3 +108,61 @@ describe("a server short of disk", () => {
     );
   });
 });
+
+/**
+ * A single server running its work as local processes shares one disk
+ * with its database and its people's files: by default it keeps only the
+ * critical floor, so its chats are not held back to keep room nothing
+ * else on that machine needs (ADR 0335).
+ */
+describe("a single server's own machine", () => {
+  let root: string;
+  let server: WorkServer;
+  let operatorSecret: string;
+
+  beforeAll(async () => {
+    root = fs.mkdtempSync(path.join(os.tmpdir(), "work-server-floor-"));
+    const dataDir = path.join(root, "server");
+    server = await createWorkServer(
+      testServerOptions({
+        dataDir,
+        // The default, as a stock server boots.
+        env: { WORK_DISK_FLOOR_MB: undefined, PATH: process.env.PATH },
+      }),
+    );
+    operatorSecret = fs
+      .readFileSync(path.join(dataDir, "operator-secret"), "utf8")
+      .trim();
+  }, 120_000);
+
+  afterAll(async () => {
+    await server?.shutdown();
+    fs.rmSync(root, { recursive: true, force: true });
+  });
+
+  it("keeps only the critical floor unless the operator sets one", async () => {
+    const response = await server.operatorApp.inject({
+      method: "GET",
+      url: "/_work/operator/machines",
+      headers: { authorization: `Bearer ${operatorSecret}` },
+    });
+    const { machines } = response.json() as {
+      machines: Array<{
+        descriptor: { labels?: Record<string, string> };
+        disk?: {
+          totalBytes: number;
+          floorBytes: number;
+          criticalBytes: number;
+        };
+      }>;
+    };
+    const disk = machines.find(
+      (machine) => machine.descriptor.labels?.plane === "control",
+    )?.disk;
+    if (!disk) throw new Error("The server's own machine reports no disk");
+    expect(disk.floorBytes).toBe(disk.criticalBytes);
+    expect(disk.floorBytes).toBe(
+      Math.min(Math.floor(disk.totalBytes * 0.01), 1024 ** 3),
+    );
+  });
+});

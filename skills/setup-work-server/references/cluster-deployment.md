@@ -854,8 +854,14 @@ WORK_IMAGE_RETENTION_HOURS=24    # unused images and sandboxes' Docker data
 ```
 
 Without `WORK_DISK_FLOOR_MB` the floor is 10% of the filesystem, at most 10
-GiB. A machine whose free space is under its floor takes no new workspace or
-cache fill: the work waits as it does for CPU or memory. On demand it still
+GiB, on every machine many workspaces share: an enrolled worker, and a
+server whose own sandboxes are containers or microVMs. A server that runs its
+work as local processes (a single stock server's default) keeps only the
+critical floor by default: its chats share one disk with its database and its
+people's files, and holding them back would free nothing. A machine whose
+free space is under its floor takes no new workspace or cache fill: the work
+waits as it does for CPU or memory, and the refusal says what the machine has
+free and keeps, and that freeing space on it is what helps. On demand it still
 counts toward the rule's `max` and is destroyed once it holds no work, and
 Work makes another machine within `max`. A rule whose machines come up short
 within 30 minutes of enrolling makes no new machines for an hour (or until

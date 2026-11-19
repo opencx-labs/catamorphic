@@ -34,8 +34,13 @@ floorBytes, criticalBytes, measuredAt }`: a remote worker in its connect
 offer and on its lease renewals, the server's own machine on its
 heartbeat. The floor is `WORK_DISK_FLOOR_MB` (MiB, the same for every
 filesystem; 0 keeps none), by default 10% of the filesystem and at most
-10 GiB; the critical floor is `WORK_DISK_CRITICAL_MB`, by default 1% and
-at most 1 GiB, never above the floor. A machine that
+10 GiB on a machine many workspaces share (an enrolled worker, a server
+whose sandboxes are containers or microVMs); the critical floor is
+`WORK_DISK_CRITICAL_MB`, by default 1% and at most 1 GiB, never above the
+floor. A server that runs its work as local processes keeps only the
+critical floor by default: its chats share one disk with its database and
+its people's files, so holding them back would free nothing. The desktop
+reports no disk. A machine that
 reports offers the machine capability `disk`. Operators see the report
 and since when it is short with every machine, the server's own included
 (`GET /_work/operator/machines`).
@@ -46,13 +51,17 @@ arrives, never by the machine's), a workspace is admitted only while free space 
 `storageMb` stays at or above the floor, and `storageMb` is reserved like
 memory (ADR 0100): the Allocation records `reserved_storage_mb`, and the
 reservations on a machine never exceed its total less its floor, which is
-also the machine's `storageMb` ceiling. A workspace that does not fit
-waits for room as one that does not fit by memory does; it never fails.
+also the machine's `storageMb` ceiling, from its latest report. A
+workspace that does not fit waits for room where its Environment lets work
+wait, as one that does not fit by memory does; the refusal says what the
+machine has free and keeps and that freeing space on it helps, never to
+archive a chat or choose another Environment, which free no disk.
 A workflow run is held to the critical floor instead, so the workflows
 that free or replace a machine (provisioners, publishers) still run when
 chats stop, and nothing starts into a truly full disk. Reservations and
 the budget apply to every workload, and a cache fill reserves its cache's
-size, so it starts only where that fits above its floor (on its one
+size and meets the full floor whatever its Environment's workload, so it
+starts only where that fits above the floor (on its one
 machine; one that does not fit backs off, as ADR 0334 says). Placement
 and admission apply the same rule.
 Machines on demand count a machine under its floor as having no room, so

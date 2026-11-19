@@ -126,6 +126,7 @@ export {
   DEFAULT_DISK_FLOOR_MAX_BYTES,
   DISK_RECOVERY_FACTOR,
   DISK_REPORT_FRESH_MS,
+  type DiskFloorDefault,
   describeDisk,
   diskBudgetMb,
   diskCriticalBytes,

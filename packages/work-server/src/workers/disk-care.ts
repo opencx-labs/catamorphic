@@ -1,4 +1,5 @@
 import {
+  type DiskFloorDefault,
   describeDisk,
   diskLow,
   type MachineDisk,
@@ -36,6 +37,8 @@ export function startDiskCare(args: {
   floorMb?: number;
   /** `WORK_DISK_CRITICAL_MB`; the default critical floor when absent. */
   criticalMb?: number;
+  /** The floor kept when `floorMb` is absent (ADR 0335); `workspaces` when absent. */
+  defaultFloor?: DiskFloorDefault;
   /** `WORK_IMAGE_RETENTION_HOURS`, in milliseconds. */
   graceMs: number;
   measureEveryMs?: number;
@@ -74,6 +77,7 @@ export function startDiskCare(args: {
       paths,
       ...(args.floorMb !== undefined ? { floorMb: args.floorMb } : {}),
       ...(args.criticalMb !== undefined ? { criticalMb: args.criticalMb } : {}),
+      ...(args.defaultFloor ? { defaultFloor: args.defaultFloor } : {}),
     });
     if (stopped) return latest;
     latest = measured;

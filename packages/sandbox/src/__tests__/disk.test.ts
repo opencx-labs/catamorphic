@@ -35,6 +35,41 @@ describe("machine disk (ADR 0335)", () => {
     expect(diskFloorBytes({ totalBytes: 50 * GIB, floorMb: 0 })).toBe(0);
   });
 
+  it("keeps only the critical floor by default on a single server's own machine, or what the operator sets", () => {
+    // Its work runs as local processes on its own disk, the disk its
+    // database and its people's files share: 1%, at most 1 GiB.
+    expect(
+      diskFloorBytes({ totalBytes: 50 * GIB, defaultFloor: "critical" }),
+    ).toBe(Math.floor(50 * GIB * 0.01));
+    expect(
+      diskFloorBytes({ totalBytes: 1000 * GIB, defaultFloor: "critical" }),
+    ).toBe(GIB);
+    expect(
+      diskFloorBytes({
+        totalBytes: 50 * GIB,
+        defaultFloor: "critical",
+        criticalMb: 512,
+      }),
+    ).toBe(512 * 1024 * 1024);
+    expect(
+      diskFloorBytes({
+        totalBytes: 50 * GIB,
+        defaultFloor: "critical",
+        floorMb: 2048,
+      }),
+    ).toBe(2 * GIB);
+    const own = measureDisk({
+      paths: ["/data"],
+      defaultFloor: "critical",
+      statfs: () => ({ bsize: 1024, blocks: 50 * 1024 * 1024, bavail: 1024 }),
+      device: () => 1,
+    });
+    expect(own).toMatchObject({
+      floorBytes: Math.floor(50 * GIB * 0.01),
+      criticalBytes: Math.floor(50 * GIB * 0.01),
+    });
+  });
+
   it("keeps a lower critical floor for workflow runs: 1%, at most 1 GiB, never above the floor", () => {
     expect(
       diskCriticalBytes({ totalBytes: 50 * GIB, floorBytes: 5 * GIB }),

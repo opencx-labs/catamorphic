@@ -64,9 +64,6 @@ describe.skipIf(!chromeBinary())("pwa against the stock server", () => {
           WORK_DATA_DIR: dataDir,
           WORK_FAKE_AGENT: "1",
           WORK_SANDBOX: "local-process",
-          // The test machine's own free disk is not what this test checks
-          // (ADR 0335).
-          WORK_DISK_FLOOR_MB: "0",
           WORK_MDNS: "off",
         },
       }),

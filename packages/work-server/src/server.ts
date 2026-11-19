@@ -433,8 +433,14 @@ async function createWorkServerInner(
   });
   disposers.push(async () => stopVolumePruning());
   // This machine measures its disk and removes what Work left (ADR 0335).
+  // Run as local processes, its work shares one disk with the server's
+  // database and its people's files, where holding chats back frees
+  // nothing: it keeps only the critical floor unless the operator sets one.
+  // Sandboxes many workspaces share keep the full floor, as workers do.
   const diskCare = startDiskCare({
     provider: sandboxProvider,
+    defaultFloor:
+      resolvedExecution.backend === "local-process" ? "critical" : "workspaces",
     ...(execution.diskFloorMb !== undefined
       ? { floorMb: execution.diskFloorMb }
       : {}),
