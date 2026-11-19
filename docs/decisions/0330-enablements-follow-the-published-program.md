@@ -1,6 +1,6 @@
 # 0330 — Enablements follow the published program
 
-- **Status:** Accepted (amends 0068, 0158, 0170; builds on 0040, 0193)
+- **Status:** Accepted (amends 0068, 0158, 0170; builds on 0040, 0193; amended by 0335: declared store documents compare by coverage, so a narrower declaration follows)
 - **Date:** 2026-11-17
 
 ## Context
