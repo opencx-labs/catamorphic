@@ -186,22 +186,29 @@ function escapedWhole(text: string): string {
 /** The longest text read as Markdown: anything longer is escaped whole. */
 const PARSED_LIMIT = 16_384;
 
-/** The longest body this recipe posts before its stamp (GitHub takes 65,536). */
-const BODY_LIMIT = 65_536 - 256;
+/** The most GitHub takes in a body. */
+const GITHUB_BODY_LIMIT = 65_536;
+
+/**
+ * Room kept beyond the stamp: the blank line before it, and a fence closed
+ * before it (twice at most).
+ */
+const STAMP_HEADROOM = 256;
 
 /**
  * A body to post with this recipe's `stamp` after it: the body defused,
- * cut to fit GitHub's limit after defusing, and a code block it leaves
+ * cut to fit GitHub's limit after defusing with the stamp (which may be a
+ * review's finding markers and its own stamp), and a code block it leaves
  * open closed first, so the stamp is the HTML comment GitHub hides and not
  * text in the block.
  */
 export function stampedBody(body: string, stamp: string): string {
+  const limit = Math.max(0, GITHUB_BODY_LIMIT - STAMP_HEADROOM - stamp.length);
   let text = publicationText(body);
-  if (text.length > BODY_LIMIT)
-    text = publicationText(text.slice(0, BODY_LIMIT));
+  if (text.length > limit) text = publicationText(text.slice(0, limit));
   // Escaped whole, it fits: no character grows past ten.
-  if (text.length > BODY_LIMIT)
-    text = escapedWhole(body.slice(0, BODY_LIMIT / 10));
+  if (text.length > limit)
+    text = escapedWhole(body.slice(0, Math.floor(limit / 10)));
   // Escaped whole, nothing in it is code that could take the stamp.
   if (text.length > PARSED_LIMIT || tooDeep(text))
     return `${escapedWhole(text)}\n\n${stamp}`;
