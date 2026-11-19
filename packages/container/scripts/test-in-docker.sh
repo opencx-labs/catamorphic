@@ -13,8 +13,9 @@
 # src/review.container.test.ts) on a Work server with a disposable Postgres
 # in the machine, under gVisor. --keep leaves the machine running and prints
 # how to reuse it; --machine NAME reuses one kept that way (its images and
-# installed packages stay). Without either the machine and its volumes are
-# removed when the run ends.
+# installed packages stay, and files the checkout no longer has, a renamed
+# migration's old name included, are removed from its copy). Without either
+# the machine and its volumes are removed when the run ends.
 set -euo pipefail
 
 here="$(cd "$(dirname "$0")" && pwd)"
@@ -88,6 +89,13 @@ docker exec "$name" mkdir -p /work
     tr "\0" "\n" | sort -u > /tmp/work-copied
     if [ -f /work/.work-copied ]; then
       comm -23 /work/.work-copied /tmp/work-copied | while IFS= read -r file; do rm -f "/work/$file"; done
+    else
+      # Kept before this list existed: its migrations, which a rename would
+      # run twice, are made to match the checkout.
+      for file in /work/packages/db/migrations/*.sql; do
+        [ -e "$file" ] || continue
+        grep -qxF "${file#/work/}" /tmp/work-copied || rm -f "$file"
+      done
     fi
     mv /tmp/work-copied /work/.work-copied
   '
