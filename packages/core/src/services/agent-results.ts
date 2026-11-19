@@ -98,6 +98,8 @@ export const ResultSchemasSchema = z
 function compileSchema(schema: JsonSchemaObject): ValidateFunction {
   return new Ajv2020({
     allErrors: true,
+    // Each error carries its schema, so a refusing `not` can say what.
+    verbose: true,
     allowUnionTypes: true,
     // Formats would need ajv-formats; an unknown one is accepted unchecked.
     validateFormats: false,
@@ -408,9 +410,19 @@ function fieldErrors(
         : error.keyword === "enum" && Array.isArray(error.params.allowedValues)
           ? `: ${error.params.allowedValues.map((value: unknown) => JSON.stringify(value)).join(", ")}`
           : "";
+    // A `not` says what it refuses with its own description, if it has one.
+    const refusing =
+      error.keyword === "not" &&
+      typeof error.schema === "object" &&
+      error.schema !== null &&
+      "description" in error.schema &&
+      typeof error.schema.description === "string"
+        ? error.schema.description
+        : undefined;
     return {
       path: error.instancePath,
-      message: `${error.message ?? `fails ${error.keyword}`}${extra}`,
+      message:
+        refusing ?? `${error.message ?? `fails ${error.keyword}`}${extra}`,
     };
   });
 }

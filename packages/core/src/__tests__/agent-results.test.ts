@@ -294,6 +294,36 @@ describe("result schemas", () => {
     ).toHaveProperty("value");
   });
 
+  it("says what a refusing `not` names, so the agent knows what to correct", () => {
+    const schema = {
+      type: "object",
+      properties: {
+        body: {
+          type: "string",
+          not: {
+            description: "holds a marker Work writes itself: leave it out",
+            pattern: "<!--\\s*marker:",
+          },
+        },
+        other: { type: "string", not: { pattern: "x" } },
+      },
+    };
+    expect(
+      checkResultValue({
+        schema,
+        value: { body: "see <!-- marker: 1 -->", other: "x" },
+      }),
+    ).toEqual({
+      errors: [
+        {
+          path: "/body",
+          message: "holds a marker Work writes itself: leave it out",
+        },
+        { path: "/other", message: "must NOT be valid" },
+      ],
+    });
+  });
+
   it("reports the decoded value's fields when a value arrives as JSON text", () => {
     const schema = {
       type: "object",

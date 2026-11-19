@@ -648,7 +648,9 @@ uses a backreference or lookaround, \`\\S\` inside a class, or compiles to more
 than 2,000 instructions (two \`[a-z]{999}\` in a row do). JavaScript's \`\\s\`, \`\\S\` and
 \`.\` hold; Unicode properties are RE2's (scripts and general categories, not
 \`\\p{Emoji}\`). Text over 4,096 code points where a pattern applies is
-refused. Workflows read them with \`results\` or trigger on
+refused. Without lookaround, "must not contain" is a \`not\` with a
+\`pattern\`; give it a \`description\`, which the agent gets as the field's
+error, saying what to leave out. Workflows read them with \`results\` or trigger on
 \`session.result-recorded\` (session-workflows), and a parent reads its
 subagents' in their messages and in list and wait outputs. Prefer a result to
 asking an agent to end its reply with a block of JSON.
