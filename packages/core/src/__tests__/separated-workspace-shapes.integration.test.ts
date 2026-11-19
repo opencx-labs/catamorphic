@@ -742,6 +742,116 @@ describe("a separated sandbox's shape follows its chat's harness (ADR 0332)", ()
     }
   }, 120_000);
 
+  it("counts a slow save toward the deadline from before it began", async () => {
+    agents.set("reviewer", builtin("reviewer"));
+    const bounded = service({ reshapeWaitMinutes: 0.05 });
+    const chat = await bounded.create(identity, projectId, {});
+    const hello = await bounded.sendMessage(
+      identity,
+      projectId,
+      chat.id,
+      "hello",
+    );
+    expect(hello.turn.status).toBe("completed");
+    redefine();
+    // Its save takes longer than the whole wait may, and then fails.
+    beforeCommand = async () => {
+      await new Promise((resolve) => setTimeout(resolve, 4_000));
+      throw new Error("the machine timed out reading the workspace");
+    };
+    const worker = workerFor(bounded);
+    const started = Date.now();
+    const sending = send(chat.id, "again", bounded);
+    try {
+      await until(
+        "it is queued",
+        async () => (await latestTurn(chat.id)).id !== hello.turn.id,
+      );
+      const turn = await latestTurn(chat.id);
+      await settled(turn.id);
+      const failed = await turnRow(turn.id);
+      expect(failed.status).toBe("failed");
+      expect(JSON.stringify(failed.error)).toContain("within 3 seconds");
+      // At the end of its first look, not after a wait started anew.
+      expect(Date.now() - started).toBeLessThan(9_000);
+    } finally {
+      beforeCommand = undefined;
+      await worker.stop();
+      await sending;
+    }
+  }, 120_000);
+
+  it("lets a chat rest until its next look while a recovered turn waits for the reshape", async () => {
+    agents.set("reviewer", builtin("reviewer"));
+    // Another host takes the chat's first turn and stops while making its
+    // workspace; then the agent is redefined, and a person uses it.
+    const doomed = service();
+    const chat = await doomed.create(identity, projectId, {});
+    const before = (await allocationOf(chat.id)).id;
+    let open = () => {};
+    makeGate = {
+      entered: false,
+      open: new Promise<void>((resolve) => {
+        open = resolve;
+      }),
+    };
+    const sent = doomed
+      .sendMessage(identity, projectId, chat.id, "hello")
+      .catch(() => undefined);
+    const holds = vi.spyOn(
+      sessions as unknown as {
+        holdForReshape: (...args: never[]) => Promise<void>;
+      },
+      "holdForReshape",
+    );
+    try {
+      await until("its workspace is being made", async () =>
+        Boolean(makeGate?.entered),
+      );
+      const turn = await latestTurn(chat.id);
+      redefine();
+      await personUses(chat.id);
+      const stopping = doomed.stopLocalTurns({
+        handBack: "all",
+        timeoutMs: 10_000,
+      });
+      await until("its holder hands it back", async () => {
+        const row = await turnRow(turn.id);
+        return (
+          row.lease_expires_at !== null &&
+          row.lease_expires_at.getTime() <= Date.now()
+        );
+      });
+      makeGate = undefined;
+      open();
+      await stopping;
+      const worker = workerFor();
+      try {
+        await until(
+          "it shows what holds the workspace",
+          async () =>
+            (await turnRow(turn.id)).activity?.includes("someone using it") ===
+            true,
+        );
+        // Resting until its next look: nobody wakes the chat meanwhile.
+        const looked = holds.mock.calls.length;
+        await new Promise((resolve) => setTimeout(resolve, 2_500));
+        expect(holds.mock.calls.length - looked).toBeLessThanOrEqual(1);
+        // They leave: the turn runs in a reshaped workspace.
+        await personUses(chat.id, new Date(Date.now() - 10 * 60_000));
+        await reshaped(chat.id, before);
+        expect((await turnRow(turn.id)).status).toBe("completed");
+      } finally {
+        await worker.stop();
+      }
+    } finally {
+      makeGate = undefined;
+      open();
+      holds.mockRestore();
+      await sent;
+    }
+  }, 120_000);
+
   it("clears what held the workspace once it is given back, while the chat waits for a machine", async () => {
     agents.set("reviewer", builtin("reviewer"));
     const chat = await sessions.create(identity, projectId, {});

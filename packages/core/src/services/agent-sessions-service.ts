@@ -107,7 +107,13 @@ import {
   AGENT_COMMIT_AUTHOR,
   PROJECT_MANIFEST_PATH,
 } from "@catamorphic/workflow/project-layout";
-import { type Insertable, type Kysely, sql, type Transaction } from "kysely";
+import {
+  type ExpressionBuilder,
+  type Insertable,
+  type Kysely,
+  sql,
+  type Transaction,
+} from "kysely";
 import { z } from "zod";
 import {
   type AgentRef,
@@ -1365,11 +1371,6 @@ const RESHAPE_RETRY_MAX_SECONDS = 60;
 /** Saves in a row that fail before a waiting turn fails with the error. */
 const RESHAPE_SYNC_TRIES = 3;
 
-/**
- * A wait nothing looked at again for this long was left behind (its turns
- * stopped): the chat's next turn waits from its own start.
- */
-const RESHAPE_WAIT_LEFT_SECONDS = 5 * 60;
 /** How a waiting turn's activity begins, so the wait can clear it. */
 const RESHAPE_ACTIVITY = "Waiting to make this chat's workspace again";
 
@@ -1707,13 +1708,24 @@ export class AgentSessionsService {
                     eb("agent_turns.status", "=", "queued"),
                     eb("agent_turns.available_at", "<=", sql<Date>`now()`),
                   ]),
-                  // A turn whose holder's lease lapsed is recovered (ADR 0198).
+                  // A turn whose holder's lease lapsed is recovered (ADR 0198),
+                  // unless it waits for its chat's reshaped workspace: then
+                  // at the chat's next look (ADR 0332).
                   and([
                     eb("agent_turns.status", "in", [...ACTIVE_TURN_STATUSES]),
                     or([
                       eb("agent_turns.lease_expires_at", "is", null),
                       eb(
                         "agent_turns.lease_expires_at",
+                        "<=",
+                        sql<Date>`now()`,
+                      ),
+                    ]),
+                    or([
+                      eb("agent_turns.status", "!=", "preparing"),
+                      eb("agent_sessions.reshape_look_at", "is", null),
+                      eb(
+                        "agent_sessions.reshape_look_at",
                         "<=",
                         sql<Date>`now()`,
                       ),
@@ -1851,7 +1863,22 @@ export class AgentSessionsService {
           .select(({ fn }) => fn.min("agent_turns.lease_expires_at").as("at"))
           .where("agent_sessions.authority_host_id", "=", this.hostId)
           .where("agent_turns.status", "in", [...ACTIVE_TURN_STATUSES])
+          // One waiting for its reshaped workspace falls due at its chat's
+          // next look (ADR 0332), below.
+          .where((eb) =>
+            eb.or([
+              eb("agent_turns.status", "!=", "preparing"),
+              eb("agent_sessions.reshape_look_at", "is", null),
+              eb("agent_sessions.reshape_look_at", "<=", sql<Date>`now()`),
+            ]),
+          )
           .as("lapses"),
+        eb
+          .selectFrom("agent_sessions")
+          .select(({ fn }) => fn.min("agent_sessions.reshape_look_at").as("at"))
+          .where("agent_sessions.authority_host_id", "=", this.hostId)
+          .where("agent_sessions.reshape_look_at", ">", sql<Date>`now()`)
+          .as("reshapes"),
         eb
           .selectFrom("agent_runtime_requests")
           .innerJoin(
@@ -1872,7 +1899,14 @@ export class AgentSessionsService {
       .executeTakeFirst();
     // A running turn's silence falls due as a stall (ADR 0333).
     const stall = await nextStallAt({ db: this.db, hostIds: [this.hostId] });
-    const times = [row?.queued, row?.waits, row?.lapses, row?.expires, stall]
+    const times = [
+      row?.queued,
+      row?.waits,
+      row?.lapses,
+      row?.reshapes,
+      row?.expires,
+      stall,
+    ]
       .filter((at) => at !== null && at !== undefined)
       .map((at) => new Date(at).getTime());
     return times.length > 0 ? new Date(Math.min(...times)) : null;
@@ -12602,10 +12636,13 @@ export class AgentSessionsService {
           .executeTakeFirst()
       : input.session;
     const fits = async () => {
-      if (
-        input.session.reshape_waiting_since !== null ||
-        input.session.reshape_look_at !== null
-      )
+      // As the row is now, not as this drain first read it.
+      const row = await this.db
+        .selectFrom("agent_sessions")
+        .select(["reshape_waiting_since", "reshape_look_at"])
+        .where("id", "=", sessionId)
+        .executeTakeFirst();
+      if (row?.reshape_waiting_since || row?.reshape_look_at)
         await this.endReshapeWait(sessionId);
       return "fits" as const;
     };
@@ -12621,13 +12658,29 @@ export class AgentSessionsService {
       return fits();
     // The chat's wait as the database keeps it, the same for every replica
     // and restart: a message sent meanwhile waits with it, never ahead of
-    // it or from its own start. One nothing looked at again for a while
-    // was left behind (its turns stopped) and starts over.
-    const current = sql<boolean>`reshape_waiting_since is not null and reshape_look_at > now() - make_interval(secs => ${RESHAPE_WAIT_LEFT_SECONDS})`;
+    // it or from its own start. It is current while a turn that already
+    // waited at its last look still waits; one whose turns all left (they
+    // were stopped) is over, and the next turn waits from its own start.
+    const current = (eb: ExpressionBuilder<DB, "agent_sessions">) =>
+      eb.and([
+        eb("agent_sessions.reshape_waiting_since", "is not", null),
+        eb.exists(
+          eb
+            .selectFrom("agent_turns")
+            .select("agent_turns.id")
+            .whereRef("agent_turns.session_id", "=", "agent_sessions.id")
+            .where("agent_turns.status", "in", ["queued", "preparing"])
+            .whereRef(
+              "agent_turns.created_at",
+              "<=",
+              "agent_sessions.reshape_look_at",
+            ),
+        ),
+      ]);
     const wait = await this.db
       .selectFrom("agent_sessions")
-      .select([
-        current.as("current"),
+      .select((eb) => [
+        current(eb).as("current"),
         sql<boolean>`coalesce(reshape_look_at > now(), false)`.as("resting"),
       ])
       .where("id", "=", sessionId)
@@ -12636,6 +12689,17 @@ export class AgentSessionsService {
       await this.holdForReshape({ sessionId });
       return "waiting";
     }
+    // The look starts, recorded before the save it waits on: however long
+    // that takes, the deadline and the saves that failed count from here.
+    await this.db
+      .updateTable("agent_sessions")
+      .set((eb) => ({
+        reshape_waiting_since: sql<Date>`case when ${current(eb)} then reshape_waiting_since else now() end`,
+        reshape_save_failures: sql<number>`case when ${current(eb)} then reshape_save_failures else 0 end`,
+        reshape_look_at: sql<Date>`now()`,
+      }))
+      .where("id", "=", sessionId)
+      .execute();
     const placed = await this.db
       .selectFrom("execution_allocations")
       .innerJoin("projects", "projects.id", "execution_allocations.project_id")
@@ -12676,18 +12740,17 @@ export class AgentSessionsService {
       await this.endReshapeWait(sessionId);
       return "released";
     }
-    // Recorded in one statement: since when it waits (set once), saves in
-    // a row that failed, and when to look again: half the time waited, 5
-    // seconds at first, at most a minute.
+    // The look ends, in one statement: saves in a row that failed, and
+    // when to look again: half the time waited, 5 seconds at first, at
+    // most a minute.
     const failedSave = outcome.kind === "sync";
     const recorded = await this.db
       .updateTable("agent_sessions")
       .set({
-        reshape_waiting_since: sql<Date>`case when ${current} then reshape_waiting_since else now() end`,
         reshape_save_failures: failedSave
-          ? sql<number>`case when ${current} then reshape_save_failures + 1 else 1 end`
+          ? sql<number>`reshape_save_failures + 1`
           : 0,
-        reshape_look_at: sql<Date>`now() + make_interval(secs => case when ${current} then least(${sql.lit(RESHAPE_RETRY_MAX_SECONDS)}, greatest(${sql.lit(RESHAPE_RETRY_SECONDS)}, round(extract(epoch from now() - reshape_waiting_since) / 2)))::float8 else ${sql.lit(RESHAPE_RETRY_SECONDS)} end)`,
+        reshape_look_at: sql<Date>`now() + make_interval(secs => least(${sql.lit(RESHAPE_RETRY_MAX_SECONDS)}, greatest(${sql.lit(RESHAPE_RETRY_SECONDS)}, round(extract(epoch from now() - reshape_waiting_since) / 2)))::float8)`,
       })
       .where("id", "=", sessionId)
       .returning([
