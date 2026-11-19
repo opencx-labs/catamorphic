@@ -115,10 +115,25 @@ it("reopens the hidden workspace when an empty window selects its profile", asyn
   await source.eval(
     "Array.from(document.querySelectorAll('[role=\"dialog\"][aria-label=\"Profiles\"] button')).find(button => button.textContent.includes('Default Profile')).click()",
   );
-  await handle.waitFor(
-    "window.catamorphicDesktop.devWindow('get').then(state => state.visible && state.focused)",
-    { label: "the hidden Personal workspace comes forward" },
-  );
+  await handle
+    .waitFor(
+      "window.catamorphicDesktop.devWindow('get').then(state => state.visible && state.focused)",
+      { label: "the hidden Personal workspace comes forward" },
+    )
+    .catch(async (error: unknown) => {
+      // Which window has the keys, if either, as the OS and as each page
+      // sees it: a workspace left hidden, one shown without the keys and
+      // keys taken back by the empty window fail differently.
+      const state = (frame: Pick<FrameHandle, "eval">) =>
+        frame
+          .eval(
+            "window.catamorphicDesktop.devWindow('get').then(({ visible, focused }) => ({ visible, focused, page: document.hasFocus() }))",
+          )
+          .catch(() => null);
+      throw new Error(
+        `${error instanceof Error ? error.message : String(error)}; personal: ${JSON.stringify(await state(handle))}; empty: ${JSON.stringify(await state(source))}`,
+      );
+    });
   await source.waitFor(
     "!!document.querySelector('[aria-label=\"Switch profile: Empty source\"]') && !document.querySelector('.animate-profile-veil-in, .animate-profile-veil-out')",
   );
