@@ -5,7 +5,6 @@ import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
-import { pinnedClaudeCodeVersion } from "@catamorphic/claude-code/testing";
 import { DockerClient, dockerEndpoint } from "@catamorphic/container";
 import type { Identity } from "@catamorphic/core";
 import { cacheVolumeKey, SEPARATE_HARNESS } from "@catamorphic/sandbox";
@@ -30,6 +29,10 @@ import {
   type StandInRepository,
   startGithubStandIn,
 } from "./testing/github-stand-in.js";
+import {
+  reviewImageTrusting,
+  reviewImageWithClaudeCode,
+} from "./testing/review-images.js";
 import {
   type ReviewModel,
   type ReviewStep,
@@ -84,11 +87,16 @@ const CONNECTION_MODEL_KEY = `sk-ant-connection-${randomBytes(12).toString("hex"
  */
 const PROBE_MARK = "a key this pull request found";
 /**
- * Every wait ends by then, with where things stand, inside CI's job
- * timeout (60 minutes, about 10 of them spent before this test).
+ * Every wait ends by then, with where things stand: CI passes a time
+ * measured from its job's start (`WORK_TEST_REVIEW_DEADLINE`, epoch
+ * milliseconds), so a cold run reports before the job's timeout however
+ * long the steps before this test took; otherwise 45 minutes from now
+ * (`WORK_TEST_REVIEW_MINUTES`).
  */
-const DEADLINE =
-  Date.now() + Number(process.env.WORK_TEST_REVIEW_MINUTES ?? 45) * 60_000;
+const DEADLINE = Math.min(
+  Date.now() + Number(process.env.WORK_TEST_REVIEW_MINUTES ?? 45) * 60_000,
+  Number(process.env.WORK_TEST_REVIEW_DEADLINE ?? Number.POSITIVE_INFINITY),
+);
 const WEBHOOK_SECRET = `whsec-${randomBytes(12).toString("hex")}`;
 /** A server on Postgres names its secrets (every replica shares them). */
 const SERVER_SECRET = randomBytes(32).toString("hex");
@@ -186,23 +194,14 @@ function reviewPack(input: {
   manifest.environments["github-poller"] = JSON.parse(
     polling[".work/project.json"] ?? "{}",
   ).environments["github-poller"];
-  const image = pack[".work/images/review.Dockerfile"] ?? "";
   return {
     ...polling,
     ...pack,
     ".work/project.json": JSON.stringify(manifest, null, 2),
-    ".work/images/review.Dockerfile": [
-      image.trimEnd(),
-      `RUN printf '%s\\n' ${input.ca
-        .trim()
-        .split("\n")
-        .map((line) => `'${line}'`)
-        .join(
-          " ",
-        )} > /usr/local/share/ca-certificates/work-test-ca.crt && update-ca-certificates`,
-      "ENV NODE_EXTRA_CA_CERTS=/usr/local/share/ca-certificates/work-test-ca.crt",
-      "",
-    ].join("\n"),
+    ".work/images/review.Dockerfile": reviewImageTrusting({
+      dockerfile: pack[".work/images/review.Dockerfile"] ?? "",
+      ca: input.ca,
+    }),
   };
 }
 
@@ -226,14 +225,13 @@ function claudeCodeReviewPack(
   reviewer.kind = "claude-code";
   reviewer.model = MODEL;
   reviewer.credentials = { source: "connection", connection: "anthropic" };
-  // A layer of its own on the shipped image's, which the machine reuses.
-  const image = files[".work/images/review.Dockerfile"] ?? "";
-  const withCli = `${image}RUN npm install --global @anthropic-ai/claude-code@${pinnedClaudeCodeVersion()}\n`;
   return {
     ...files,
     ".work/project.json": JSON.stringify(manifest, null, 2),
     ".work/agents/reviewer.json": JSON.stringify(reviewer, null, 2),
-    ".work/images/review.Dockerfile": withCli,
+    ".work/images/review.Dockerfile": reviewImageWithClaudeCode(
+      files[".work/images/review.Dockerfile"] ?? "",
+    ),
   };
 }
 
@@ -1468,10 +1466,39 @@ describe.skipIf(!enabled)(
       // What this run's machine made, and nothing else on the daemon: its
       // containers, then its volumes (caches included). Its images stay
       // for the next run.
-      const owner = `work.sandbox.owner=${createHash("sha256")
+      const ownerHash = createHash("sha256")
         .update(path.resolve(path.join(root, "review-1", "container")))
         .digest("hex")
-        .slice(0, 16)}`;
+        .slice(0, 16);
+      const owner = `work.sandbox.owner=${ownerHash}`;
+      // The review images this run's machine built, which CI keeps for the
+      // next run: only those, never another test's images on the daemon.
+      if (process.env.WORK_TEST_REVIEW_CACHE) {
+        const built = (
+          await docker
+            .listImages({ reference: "work.local/images" })
+            .catch(() => [])
+        ).flatMap((image) => {
+          const labels = image.Labels;
+          const tags = image.RepoTags;
+          return labels &&
+            typeof labels === "object" &&
+            "work.sandbox.owner" in labels &&
+            labels["work.sandbox.owner"] === ownerHash &&
+            Array.isArray(tags)
+            ? tags.filter(
+                (tag): tag is string =>
+                  typeof tag === "string" &&
+                  tag.startsWith("work.local/images:"),
+              )
+            : [];
+        });
+        fs.mkdirSync(process.env.WORK_TEST_REVIEW_CACHE, { recursive: true });
+        fs.writeFileSync(
+          path.join(process.env.WORK_TEST_REVIEW_CACHE, "images.txt"),
+          built.map((tag) => `${tag}\n`).join(""),
+        );
+      }
       for (const container of await docker
         .listContainers({ label: [owner] })
         .catch(() => []))

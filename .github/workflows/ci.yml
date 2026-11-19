@@ -377,10 +377,14 @@ jobs:
     # the job reconfigures with a gVisor runtime (ADR 0204).
     runs-on: ubuntu-24.04
     # The review recipe's end-to-end run builds its review images when the
-    # cache has none (about 15 minutes), and bounds its own waits to end,
-    # with where things stand, within 45 (WORK_TEST_REVIEW_MINUTES).
+    # cache has none (about 15 minutes), and ends every wait, with where
+    # things stand, by the deadline noted at the job's start.
     timeout-minutes: 60
     steps:
+      # 55 of the job's 60 minutes, so a run that is slow from its first
+      # step still reports and cleans up before the job is stopped.
+      - name: Note when the review recipe's run must report
+        run: echo "WORK_TEST_REVIEW_DEADLINE=$(( ($(date +%s) + 55 * 60) * 1000 ))" >> "$GITHUB_ENV"
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: ./.github/actions/test-setup
         id: setup
@@ -432,13 +436,14 @@ jobs:
           exit 1
       # The review images the end-to-end run builds, and the CA they trust,
       # kept by what decides them (the pack's Dockerfile, the test's changes
-      # to it, the pinned Claude Code): building them takes most of a run.
+      # to it in review-images.ts, the pinned Claude Code), not by the test:
+      # building them takes most of a run.
       - name: Restore the review images
         id: review-images
         uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: ${{ runner.temp }}/review-images
-          key: review-images-v1-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('packages/registry/src/pull-request-reviews/review.Dockerfile', 'packages/work-server/src/review.container.test.ts', 'packages/claude-code/package.json') }}
+          key: review-images-v2-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('packages/registry/src/pull-request-reviews/review.Dockerfile', 'packages/work-server/src/testing/review-images.ts', 'packages/claude-code/package.json') }}
       - name: Load the review images
         if: steps.review-images.outputs.cache-hit == 'true'
         run: docker load --input "$RUNNER_TEMP/review-images/images.tar"
@@ -449,10 +454,12 @@ jobs:
           DATABASE_URL: postgresql://catamorphic:catamorphic@127.0.0.1:5432/catamorphic
           WORK_TEST_REVIEW_CACHE: ${{ runner.temp }}/review-images
         run: bun scripts/tool-runtime.ts vitest --tool-cwd packages/work-server --config ../../vitest.config.ts --pool=forks src/review.container.test.ts
+      # Only the images the run's review machine built, which the test
+      # lists: not the other container tests' builds on this daemon.
       - name: Keep the review images
         if: steps.review-images.outputs.cache-hit != 'true' && steps.review.outcome == 'success'
         run: |
-          images=$(docker images --format '{{.Repository}}:{{.Tag}}' | grep '^work.local/images:' || true)
+          images=$(cat "$RUNNER_TEMP/review-images/images.txt")
           test -n "$images"
           docker save --output "$RUNNER_TEMP/review-images/images.tar" $images
       - uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
