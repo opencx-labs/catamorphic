@@ -80,6 +80,17 @@ trap cleanup EXIT
 
 echo "Copying the checkout..."
 docker exec "$name" mkdir -p /work
+# A reused machine first drops what an earlier copy brought and this
+# checkout no longer has: a renamed migration would otherwise run twice.
+(cd "$repo" && git ls-files -z --cached --others --exclude-standard) |
+  docker exec -i "$name" bash -c '
+    set -euo pipefail
+    tr "\0" "\n" | sort -u > /tmp/work-copied
+    if [ -f /work/.work-copied ]; then
+      comm -23 /work/.work-copied /tmp/work-copied | while IFS= read -r file; do rm -f "/work/$file"; done
+    fi
+    mv /tmp/work-copied /work/.work-copied
+  '
 (cd "$repo" && git ls-files -z --cached --others --exclude-standard) |
   (cd "$repo" && COPYFILE_DISABLE=1 tar --null -T - -cf -) |
   docker exec -i "$name" tar -x --warning=no-unknown-keyword -C /work
