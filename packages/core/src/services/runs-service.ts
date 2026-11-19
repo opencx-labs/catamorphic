@@ -2933,21 +2933,20 @@ export class RunsService {
           const caller = {
             external_user_id: args.identity.externalUserId,
             // Who triggered the run, as verified by the host (ADR 0055):
-            // the caller's scope, or null for the root identity. An
-            // automation's run reaches only the store paths its workflow
-            // declares, of what its owner reaches (ADR 0335).
+            // the caller's scope, or null for the root identity. A scoped
+            // caller's run reaches only the store paths its workflow
+            // declares, of what the caller reaches (ADR 0335), whoever
+            // started it.
             caller_scope:
               args.identity.scope === undefined
                 ? null
                 : jsonColumn(
                     toJson(
-                      args.workflowEnablementId === undefined
-                        ? args.identity.scope
-                        : narrowStoreDocuments({
-                            scope: args.identity.scope,
-                            projectId: args.projectId,
-                            documents: source.graph.documents,
-                          }),
+                      narrowStoreDocuments({
+                        scope: args.identity.scope,
+                        projectId: args.projectId,
+                        documents: source.graph.documents,
+                      }),
                     ),
                   ),
             caller_execution_scope:

@@ -23,10 +23,11 @@ import { testEnvironmentProvider } from "./test-environment.js";
 /**
  * ADR 0335: a workflow declares the store paths its runs read or write.
  * A project automation runs as the project principal holding exactly the
- * consented paths; a member's own automation holds what both the
- * declaration and the member reach; a child holds what its parent holds
- * of its own declaration; and a revision that widens the declaration waits
- * for consent while a narrower one follows. The runtime is faked at the
+ * consented paths; any other scoped run (a member's own automation, a run
+ * a member starts directly) holds what both the declaration and its caller
+ * reach; a child holds what its parent holds of its own declaration; and a
+ * revision that widens the declaration waits for consent while a narrower
+ * one follows. The runtime is faked at the
  * invocation boundary: each workflow's first step returns the documents
  * call its input names, its second returns that call's result.
  */
@@ -486,16 +487,55 @@ describeIf("workflows declare the store documents they use (ADR 0335)", () => {
     expect(
       await as({ op: "write", path: "store/polling/mira/web.json" }),
     ).toMatchObject({ status: "failed" });
+  });
 
-    // A run she starts herself, with no enablement, keeps her own reach.
-    expect(
-      await core.runs.call({
-        identity: mira,
+  it("a run a member starts directly reaches only the store paths its workflow declares", async () => {
+    const ola = member("ola", {
+      scope: [
+        { kind: "document", projectId, path: "store/**", access: "write" },
+      ],
+    });
+    const call = (workflowName: string, input: Op, identity = ola) =>
+      core.runs.call({
+        identity,
         projectId,
-        workflowName: "keepCursor",
-        input: { op: "read", path: "store/secrets.json" },
+        workflowName,
+        input,
         budgetMs: 20_000,
-      }),
+      });
+    // Declared, and ola writes the whole store.
+    expect(
+      await call("keepCursor", { op: "write", path: "store/polling/ola.json" }),
+    ).toMatchObject({ status: "completed" });
+    // Ola writes it too, but the workflow does not declare it.
+    const undeclared = await call("keepCursor", {
+      op: "write",
+      path: "store/secrets.json",
+    });
+    expect(undeclared.status).toBe("failed");
+    if (undeclared.status === "failed")
+      expect(undeclared.error).toMatch(
+        /Host call catamorphic\.documents\.write failed/,
+      );
+    // Declared read only: no write, whoever starts it.
+    expect(
+      await call("keepCursor", { op: "write", path: "store/config.json" }),
+    ).toMatchObject({ status: "failed" });
+    // Each workflow by its own list: readConfig declares only the config.
+    expect(
+      await call("readConfig", { op: "read", path: "store/config.json" }),
+    ).toMatchObject({ status: "completed" });
+    expect(
+      await call("readConfig", { op: "read", path: "store/polling/ola.json" }),
+    ).toMatchObject({ status: "failed" });
+    // The root identity (a desktop's own projects, a host's service) is
+    // not narrowed.
+    expect(
+      await call(
+        "keepCursor",
+        { op: "read", path: "store/secrets.json" },
+        root,
+      ),
     ).toMatchObject({ status: "completed" });
   });
 

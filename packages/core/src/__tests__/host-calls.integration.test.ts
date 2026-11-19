@@ -50,6 +50,7 @@ const root: Identity = {
 
 const WORKFLOWS = `
 export const briefCustomer = defineWorkflow(({ defineBoundary }) => ({
+  documents: [{ path: "store/customers/", access: "read" }],
   steps: [
     defineBoundary({
       run: ({ input, documents }: BoundaryContext<{ customer: string }>) =>
@@ -730,10 +731,12 @@ describeIf("host calls from workflows (ADR 0055)", () => {
     });
     expect(outcome.status).toBe("completed");
     if (outcome.status !== "completed") return;
+    // The caller as the run holds it: whoAmI declares no store paths, so
+    // none of alice's rides along (ADR 0335).
     expect(outcome.output).toEqual({
       caller: {
         externalUserId: "alice",
-        scope: alice.scope,
+        scope: [{ kind: "workflow", projectId, name: "whoAmI" }],
       },
     });
     // The host started it as root → no caller narrowing.

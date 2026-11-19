@@ -1,6 +1,6 @@
 # 0335 — Workflows declare the store documents they use
 
-- **Status:** Accepted (amends 0158, 0330)
+- **Status:** Accepted (amends 0055, 0158, 0330)
 - **Date:** 2026-11-19
 
 ## Context
@@ -19,7 +19,7 @@ enforce scope.
 
 **A workflow declares the store paths its runs read or write. Whoever turns
 it on consents to them as to its permissions, and its runs reach those and
-nothing else of the store.**
+nothing else of the store, whoever starts them.**
 
 - **Declaring.** `defineWorkflow({ documents: [{ path: "store/polling/",
   access: "write" }] })`. `write` also reads. A path ending in `/` is a
@@ -44,16 +44,18 @@ nothing else of the store.**
   narrower declaration follows, and the enablement then keeps the narrower
   list, so widening it again asks again. The documents stay out of the
   authority digest itself so that narrowing can be told from widening.
-- **Running (amends 0158).** A run of an enablement holds, of its owner's
-  store refs, only the declared paths (or the parts of them its owner
-  reaches), with write only where both give it. The project principal of a
-  project automation holds exactly the consented paths. A member's own
-  automation holds the overlap of the declaration and what the member
-  reaches now, checked again at every run. A child run holds what its
-  parent run holds of the child's own declaration, as with permissions.
-  Program paths and every other ref are untouched. A run started directly
-  by a person or an app (no enablement) keeps its caller's store refs, as
-  before (ADR 0055).
+- **Running (amends 0055, 0158).** Like permissions, one rule for every
+  run: a scoped caller's run holds, of the caller's store refs, only the
+  declared paths (or the parts of them the caller reaches), with write only
+  where both give it. `context.documents` still runs as the caller, narrowed
+  to the declaration. The project principal of a project automation holds
+  exactly the consented paths. A member's own automation holds the overlap
+  of the declaration and what the member reaches now, checked again at
+  every run; so does a run a member, an agent, a watcher or an app starts
+  directly. A child run holds what its parent run holds of the child's own
+  declaration. Program paths and every other ref are untouched, and the
+  root identity (a desktop's own projects, a host's service) is not
+  narrowed.
 - **Nothing inherits them.** A project chat a run delivers into runs as the
   project principal without documents; a member's chat runs as that member;
   their subsessions run as the chat's owner; workflows started by events a
@@ -69,5 +71,7 @@ computed paths (a person could not see what they approve).
 
 Recipes that keep state in the store declare it and run as project
 automations, with no member stand-in. Turning such a workflow on for the
-project needs someone who reaches those paths. Follow-up: whether runs
-started directly by a member or an app should be narrowed the same way.
+project needs someone who reaches those paths. A workflow that touches the
+store without declaring it is refused there, whether a member runs it by
+hand, an agent calls it as a tool, or a session watcher or artifact runs
+it; a workflow an app calls already held no documents and is unchanged.
