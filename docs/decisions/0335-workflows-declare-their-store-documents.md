@@ -26,7 +26,10 @@ nothing else of the store, whoever starts them.**
   folder and covers what is under it; any other path is one document. A
   folder never covers a sibling with a longer name (`store/a/` does not
   cover `store/ab`). Only plain `store/` paths: no `..`, `.`, empty
-  segments, leading `/`, backslashes, patterns or control characters. Each
+  segments, leading `/`, backslashes, patterns or control characters, and
+  only in Unicode NFC. A local store names a file only as it is spelled on
+  disk, so a filesystem that ignores case or Unicode form never lets one
+  path reach the file another names. Each
   entry is written in place with string literals, as `permissions` is, so
   the paths a person approves are the paths in the source. The parser, and
   so the capability check, refuses anything else and says why.
@@ -43,7 +46,9 @@ nothing else of the store, whoever starts them.**
   path, or read becoming write, waits for consent like a new permission; a
   narrower declaration follows, and the enablement then keeps the narrower
   list, so widening it again asks again. The documents stay out of the
-  authority digest itself so that narrowing can be told from widening.
+  authority digest itself so that narrowing can be told from widening. A
+  project automation follows as whoever last consented to it, so another
+  admin's consent keeps it following after the first one leaves.
 - **Running (amends 0055, 0158).** Like permissions, one rule for every
   run: a scoped caller's run holds, of the caller's store refs, only the
   declared paths (or the parts of them the caller reaches), with write only
@@ -53,13 +58,19 @@ nothing else of the store, whoever starts them.**
   of the declaration and what the member reaches now, checked again at
   every run; so does a run a member, an agent, a watcher or an app starts
   directly. A child run holds what its parent run holds of the child's own
-  declaration. Program paths and every other ref are untouched, and the
-  root identity (a desktop's own projects, a host's service) is not
-  narrowed.
+  declaration. A queued run takes its caller when it starts, at the
+  enablement's commit then. Program paths and every other ref are
+  untouched, and the root identity (a desktop's own projects, a host's
+  service) is not narrowed.
 - **Nothing inherits them.** A project chat a run delivers into runs as the
   project principal without documents; a member's chat runs as that member;
   their subsessions run as the chat's owner; workflows started by events a
   run records run as their own enablements.
+- **What it limits.** The declaration limits the documents host calls a
+  run makes, not the workflow's own code. Code that runs as a local process
+  (ADR 0047) shares the server's filesystem, local stores included, so
+  only trusted single-tenant hosts run it that way; a sandbox sees only
+  its own workspace.
 
 Alternatives: give project automations the whole store (every automation a
 store administrator); a role file for the project principal (consent

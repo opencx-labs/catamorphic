@@ -214,7 +214,9 @@ paths, and only someone who reaches them can turn it on for the project; any
 other run reaches the part of them its caller does. A store call outside the
 list fails with \`Not authorized\`. Only the host's root identity (a desktop's
 own projects) is not narrowed, so a run you start there passing does not show
-it works for members.
+it works for members. The declaration limits the documents calls a run makes,
+not the workflow's own code: run as a local process (trusted single-tenant
+hosts only), that code shares the server's filesystem.
 
 ## Project trigger kinds
 
