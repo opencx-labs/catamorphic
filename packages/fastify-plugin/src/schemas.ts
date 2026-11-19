@@ -249,6 +249,15 @@ export const TriggerBindingInfoSchema = z.object({
   outputSchema: JsonOutSchema,
 });
 
+/**
+ * A project store path a workflow reads or writes (ADR 0335): one
+ * document, or a folder (ending in `/`) and everything under it.
+ */
+export const WorkflowDocumentAccessSchema = z.object({
+  path: z.string(),
+  access: z.enum(["read", "write"]),
+});
+
 export const WorkflowEnablementOwnerSchema = z.discriminatedUnion("type", [
   z.object({ type: z.literal("member"), externalUserId: z.string().min(1) }),
   z.object({ type: z.literal("project") }),
@@ -283,6 +292,11 @@ const WorkflowEnablementTargetSchema = z.object({
   capabilities: z.array(z.string()),
   /** Project permissions the workflow declares (ADR 0158). */
   permissions: z.array(z.string()),
+  /**
+   * Project store paths the workflow reads or writes (ADR 0335); a path
+   * ending in `/` is a folder.
+   */
+  documents: z.array(WorkflowDocumentAccessSchema),
   consentDigest: z.string().length(64),
 });
 
@@ -512,6 +526,8 @@ export const WorkflowGraphSchema = z.object({
     }),
   ),
   permissions: z.array(z.string()),
+  /** Project store paths its runs read or write (ADR 0335). */
+  documents: z.array(WorkflowDocumentAccessSchema),
   canSuspend: z.boolean(),
   nodes: z.array(WorkflowNodeSchema),
   edges: z.array(WorkflowEdgeSchema),

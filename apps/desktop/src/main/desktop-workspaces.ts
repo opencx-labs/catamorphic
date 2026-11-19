@@ -878,6 +878,10 @@ export class DesktopWorkspaces {
     if (!window) return false;
     if (window.isMinimized()) window.restore();
     window.show();
+    // The person chose this profile in Work. On macOS a key window alone
+    // leaves Work inactive when hiding its key window deactivated it, and
+    // the workspace would then show behind without the keyboard.
+    if (process.platform === "darwin") app.focus({ steal: true });
     window.focus();
     return true;
   }

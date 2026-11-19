@@ -164,6 +164,7 @@ describe("PGlite migrations", () => {
       "088_stalled_turns.sql",
       "089_environment_caches.sql",
       "090_reshape_waits.sql",
+      "091_workflow_documents.sql",
       "092_machine_disk.sql",
       "093_coalesced_runs_and_result_submissions.sql",
     ]);

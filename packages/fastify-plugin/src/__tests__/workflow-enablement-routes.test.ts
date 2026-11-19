@@ -28,6 +28,7 @@ const enablement = {
   },
   connections: [],
   permissions: [],
+  documents: [{ path: "store/inbox/", access: "write" as const }],
   capabilities: [],
   consentDigest: "d".repeat(64),
   status: "active" as const,

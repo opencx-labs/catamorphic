@@ -321,6 +321,11 @@ export async function chatOwner(input: {
 function projectChatScope(principal: Identity, projectId: string): Identity {
   return {
     ...principal,
+    // An automation's store paths are its run's alone (ADR 0335): the
+    // project chat it reaches never holds them.
+    ...(principal.scope
+      ? { scope: principal.scope.filter((ref) => ref.kind !== "document") }
+      : {}),
     executionScope: [{ projectId, name: EVERY_ARTIFACT }],
     connectionScope: [
       { projectId, environment: EVERY_ARTIFACT, alias: EVERY_ARTIFACT },

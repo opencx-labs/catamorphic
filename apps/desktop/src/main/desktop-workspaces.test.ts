@@ -173,3 +173,31 @@ describe("workspace focus ownership", () => {
     expect(profileFor).not.toHaveBeenCalledWith(popup.webContents);
   });
 });
+
+describe("activating a profile", () => {
+  it("brings its hidden workspace forward as the key window of an active Work on macOS", () => {
+    const { window, workspaces } = fixture();
+    const workspace = Object.assign(window("profile"), {
+      show: vi.fn(),
+      focus: vi.fn(),
+    });
+    workspaces.track(workspace);
+    const focus = vi.fn();
+    const appFocus = Object.getOwnPropertyDescriptor(app, "focus");
+    Object.assign(app, { focus });
+    const platform = Object.getOwnPropertyDescriptor(process, "platform");
+    Object.defineProperty(process, "platform", { value: "darwin" });
+    try {
+      expect(workspaces.activateProfile("profile")).toBe(true);
+    } finally {
+      if (platform) Object.defineProperty(process, "platform", platform);
+      // The mocked app is shared by the file's later tests.
+      if (appFocus) Object.defineProperty(app, "focus", appFocus);
+      else Reflect.deleteProperty(app, "focus");
+    }
+    expect(workspace.show).toHaveBeenCalledOnce();
+    expect(focus).toHaveBeenCalledWith({ steal: true });
+    expect(workspace.focus).toHaveBeenCalledOnce();
+    expect(workspaces.activateProfile("missing")).toBe(false);
+  });
+});

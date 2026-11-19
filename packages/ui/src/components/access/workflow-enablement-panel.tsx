@@ -29,6 +29,7 @@ import { PendingButton } from "./pending-button.js";
 import {
   describeAutomationPause,
   describeProjectPermission,
+  describeWorkflowDocument,
 } from "./permission-words.js";
 
 type Requirement = AgentAuthenticationRequired["requirements"][number];
@@ -255,8 +256,8 @@ export function WorkflowEnablementPanel({
       >
         <p className="text-fg-muted">
           {canManageProjectAutomations
-            ? "Choose who this workflow runs for. It uses only the environment, connections and permissions shown here."
-            : "Enable this reviewed workflow for your account. It uses only the environment, connections and permissions shown here."}
+            ? "Choose who this workflow runs for. It uses only the environment, connections, permissions and documents shown here."
+            : "Enable this reviewed workflow for your account. It uses only the environment, connections, permissions and documents shown here."}
         </p>
 
         {canManageProjectAutomations && (
@@ -416,6 +417,12 @@ export function WorkflowEnablementPanel({
                   ? review.permissions.map(describeProjectPermission).join("; ")
                   : "None"}
               </dd>
+              <dt>Documents</dt>
+              <dd className="text-fg" data-testid="consent-documents">
+                {review.documents.length
+                  ? review.documents.map(describeWorkflowDocument).join("; ")
+                  : "None"}
+              </dd>
               <dt>Actions</dt>
               <dd className="text-fg">
                 {review.capabilities.length
@@ -534,6 +541,11 @@ export function WorkflowEnablementPanel({
                       {item.permissions
                         .map(describeProjectPermission)
                         .join("; ")}
+                    </p>
+                  )}
+                  {item.documents.length > 0 && (
+                    <p className="mt-1 text-fg-muted">
+                      {item.documents.map(describeWorkflowDocument).join("; ")}
                     </p>
                   )}
                   {item.suspensionReason && (

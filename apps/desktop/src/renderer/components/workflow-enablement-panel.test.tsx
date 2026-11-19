@@ -25,6 +25,7 @@ const memberEnablement = {
   connections: [],
   capabilities: [],
   permissions: [],
+  documents: [],
   consentDigest: "c".repeat(64),
   status: "active",
   suspensionReason: null,
@@ -159,6 +160,7 @@ describe("WorkflowEnablementPanel", () => {
       connections: [],
       capabilities: ["messages.search"],
       permissions: [],
+      documents: [],
       consentDigest: "d".repeat(64),
       triggerCount: 1,
       triggers: [{ kind: "schedule", config: { cron: "0 9 * * *" } }],
@@ -231,6 +233,10 @@ it("returns to exact consent review after account authorization without enabling
     connectionLabels: { account: "Alice at Company" },
     capabilities: ["messages.search"],
     permissions: ["sessions:write"],
+    documents: [
+      { path: "store/config.json", access: "read" },
+      { path: "store/inbox/", access: "write" },
+    ],
     triggers: [{ kind: "schedule", config: { cron: "0 9 * * *" } }],
     consentDigest: "reviewed-digest",
   });
@@ -261,6 +267,10 @@ it("returns to exact consent review after account authorization without enabling
   expect(
     container.querySelector('[data-testid="consent-permissions"]')?.textContent,
   ).toBe("Post into anyone's chat");
+  // So do the store paths it reads and writes (ADR 0335).
+  expect(
+    container.querySelector('[data-testid="consent-documents"]')?.textContent,
+  ).toBe("Read store/config.json; Write store/inbox/ and everything in it");
   expect(create).not.toHaveBeenCalled();
   expect(update).not.toHaveBeenCalled();
   await act(async () => button("Confirm update")?.click());
@@ -284,6 +294,7 @@ it("enables a workflow for the project and shows its webhook URL to automation m
     connectionLabels: {},
     capabilities: [],
     permissions: [],
+    documents: [],
     triggers: [
       {
         kind: "webhook",
@@ -379,6 +390,7 @@ it("offers to publish a saved workflow before turning it on", async () => {
     connectionLabels: {},
     capabilities: [],
     permissions: [],
+    documents: [],
     triggers: [],
     consentDigest: "after-publish",
   });

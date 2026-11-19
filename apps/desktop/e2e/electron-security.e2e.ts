@@ -15,6 +15,7 @@ import { assertIsolatedDesktopTestHost } from "../../../scripts/desktop-test-env
 import {
   type AppHandle,
   type FrameHandle,
+  focusWindow,
   launchApp,
   removeE2eDirectory,
 } from "./harness.js";
@@ -403,16 +404,53 @@ it("renders an interactive project app without exposing the shell bridge or broa
     apiStatus: "blocked",
   });
   // The app remains useful inside that boundary, driven by the OS pointer.
-  const point = await guest.eval<{ x: number; y: number }>(
-    `(() => { const r=document.querySelector('#probe-button').getBoundingClientRect(); return {x:r.x+r.width/2,y:r.y+r.height/2}; })()`,
+  // One press counts: aim once the button and its frame are where they rest.
+  // On macOS a press on a window that is not key only makes it key, and
+  // the app never hears it (twice in CI, the probe left at "Ready"): the
+  // window is made key first.
+  await focusWindow(handle);
+  await guest.eval(`(() => { window.__probeUnderPointer = false;
+    const button = document.querySelector('#probe-button');
+    for (const type of ['pointerover', 'pointermove'])
+      button.addEventListener(type, () => { window.__probeUnderPointer = true; });
+    return true; })()`);
+  const point = await guest.waitFor<{ x: number; y: number }>(
+    `(() => { const button=document.querySelector('#probe-button'); const r=button.getBoundingClientRect();
+      const point={x:r.x+r.width/2,y:r.y+r.height/2};
+      return document.elementFromPoint(point.x,point.y)===button && point; })()`,
+    { label: "the probe button under its center" },
   );
-  const offset = await handle.eval<{ x: number; y: number }>(
-    `(() => { const r=document.querySelector('iframe[src^="work-guest:"]').getBoundingClientRect(); return {x:r.x,y:r.y}; })()`,
+  // At rest: two readings in a row agree on where the frame is (the
+  // sidebar opened just before slides the content beside it, which no
+  // animation on the frame's own ancestors shows), and none of those
+  // ancestors is mid-transform.
+  const offset = await handle.waitFor<{ x: number; y: number }>(
+    `(() => { const frame=document.querySelector('iframe[src^="work-guest:"]'); if (!frame) return false;
+      const r=frame.getBoundingClientRect();
+      const moving=document.getAnimations().some(a => a.playState==='running' &&
+        a.effect?.getTiming().iterations!==Infinity && a.effect?.target?.contains?.(frame));
+      const last=window.__probeFrameAt; window.__probeFrameAt={x:r.x,y:r.y};
+      const still=!!last && Math.abs(last.x-r.x)<0.5 && Math.abs(last.y-r.y)<0.5;
+      return !moving && still && document.elementFromPoint(r.x+${point.x},r.y+${point.y})===frame && {x:r.x,y:r.y}; })()`,
+    { label: "the app frame at rest under the button" },
   );
-  await handle.clickPointer({
-    x: point.x + offset.x,
-    y: point.y + offset.y,
-  });
+  // Into the app's empty corner first: on Linux the native move is skipped
+  // when the pointer is already at its target (an earlier test on the same
+  // display can leave it there), and the app would never hear it arrive.
+  await handle.movePointer({ x: offset.x + 4, y: offset.y + 4 });
+  // Pressed only once the app has seen the OS pointer arrive over the
+  // button, so the press goes where the move went.
+  await handle.clickPointer(
+    { x: point.x + offset.x, y: point.y + offset.y },
+    {
+      beforePress: async () => {
+        await guest.waitFor(
+          "window.__probeUnderPointer === true || document.querySelector('#probe-button').matches(':hover')",
+          { label: "the app sees the OS pointer over the probe button" },
+        );
+      },
+    },
+  );
   await guest.waitFor(
     "document.querySelector('#probe-result')?.textContent === 'The isolated app is interactive'",
   );

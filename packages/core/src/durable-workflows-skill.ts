@@ -235,6 +235,11 @@ type Order = { orderId: string; customer: string };
 
 /** @displayname Brief an order's customer */
 export const briefOrder = defineWorkflow(({ defineBoundary }) => ({
+  // The store paths its runs read and write (see writing-workflows).
+  documents: [
+    { path: "store/customers/", access: "read" },
+    { path: "store/orders/", access: "write" },
+  ],
   steps: [
     /** @displayname Read the customer's notes */
     defineBoundary({

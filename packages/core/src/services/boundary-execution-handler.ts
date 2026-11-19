@@ -101,6 +101,7 @@ export class BoundaryExecutionHandler {
         capabilities: WorkflowCapabilities;
         execution: WorkflowExecutionDescriptor;
         permissions: readonly string[];
+        documents: ReadonlyArray<{ path: string; access: "read" | "write" }>;
         displayName?: string;
       }>;
       /**
@@ -403,6 +404,7 @@ export class BoundaryExecutionHandler {
           capabilities: child.capabilities,
           execution: child.execution,
           permissions: child.permissions,
+          documents: child.documents,
           ...(child.displayName ? { displayName: child.displayName } : {}),
           input: toJson(transition.input),
         },

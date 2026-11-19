@@ -26,15 +26,17 @@ const server = http.createServer((request, response) => {
   response.setHeader("Content-Type", "text/html");
   if (url.pathname === "/framed") {
     const mode = url.searchParams.get("mode") ?? "inline";
+    const answer =
+      url.searchParams.get("answer") === "now" ? "&answer=now" : "";
     const authOrigin = origin.replace("127.0.0.1", "localhost");
     response.end(
       page(
         "Framed sign in",
         `
-      <iframe id=auth ${mode === "sandbox" ? 'sandbox="allow-scripts allow-forms"' : ""}
-        style="width:500px;height:400px" src="${authOrigin}/auth-frame?mode=${mode}"></iframe>
-      <iframe id=sibling src="/empty-frame"></iframe>
       <script>
+        // Listening before the frames exist: the authentication frame says
+        // its first step as soon as it runs, and a fast frame said it before
+        // a listener added after it was there to hear (macOS CI).
         addEventListener('message', ({data, source}) => {
           if (source !== document.querySelector('#auth')?.contentWindow) return;
           if (data.focused) document.body.dataset.focused = data.focused;
@@ -45,7 +47,10 @@ const server = http.createServer((request, response) => {
             if (${JSON.stringify(mode)} === 'remove') document.querySelector('#auth').remove();
           }
         });
-      </script>`,
+      </script>
+      <iframe id=auth ${mode === "sandbox" ? 'sandbox="allow-scripts allow-forms"' : ""}
+        style="width:500px;height:400px" src="${authOrigin}/auth-frame?mode=${mode}${answer}"></iframe>
+      <iframe id=sibling src="/empty-frame"></iframe>`,
       ),
     );
     return;
@@ -57,6 +62,7 @@ const server = http.createServer((request, response) => {
   if (url.pathname === "/auth-frame") {
     const mode = url.searchParams.get("mode") ?? "inline";
     const rejected = url.searchParams.has("rejected");
+    const answerNow = url.searchParams.get("answer") === "now";
     response.end(
       page(
         "Authentication",
@@ -87,23 +93,35 @@ const server = http.createServer((request, response) => {
             ready();
           }
         });
+        // The site answers a submitted password when the test says its
+        // server has: after the key that submitted it has been delivered.
+        // With answer=now it answers inside its submit handler, as a site
+        // that removes or replaces its frame at once does.
+        let answer;
+        addEventListener('message', ({data}) => {
+          if (data.answer && answer) { const next = answer; answer = undefined; next(); }
+        });
         form.addEventListener('submit', (event) => {
           event.preventDefault();
           if (!document.querySelector('#pw')) { passwordStep(); return; }
-          if (document.querySelector('#pw').value !== 'correct horse') {
-            location.href = '/auth-frame?rejected=1';
-            return;
-          }
-          if (${JSON.stringify(mode)} === 'pending') {
+          if (${JSON.stringify(mode)} === 'pending' && document.querySelector('#pw').value === 'correct horse') {
             parent.postMessage({phase:'pending'}, '*');
             return;
           }
-          if (${JSON.stringify(mode)} === 'top') {
-            top.location.href = ${JSON.stringify(`${origin}/welcome`)};
-            return;
-          }
-          if (${JSON.stringify(mode)} !== 'remove') form.remove();
-          parent.postMessage({done:true}, '*');
+          answer = () => {
+            if (document.querySelector('#pw').value !== 'correct horse') {
+              location.href = '/auth-frame?rejected=1';
+              return;
+            }
+            if (${JSON.stringify(mode)} === 'top') {
+              top.location.href = ${JSON.stringify(`${origin}/welcome`)};
+              return;
+            }
+            if (${JSON.stringify(mode)} !== 'remove') form.remove();
+            parent.postMessage({done:true}, '*');
+          };
+          if (${answerNow}) { const now = answer; answer = undefined; now(); }
+          else parent.postMessage({phase:'submitted'}, '*');
         });
         if (${rejected}) {
           passwordStep();
@@ -215,12 +233,13 @@ async function pressUntil(
   key: "Enter" | "ArrowDown",
   effect: string,
   label: string,
+  send: (key: "Enter" | "ArrowDown") => Promise<void> = app.press,
 ) {
   // A guest between documents throws instead of answering; that is "not yet".
   const settled = `Promise.resolve().then(() => ${effect}).catch(() => false)`;
   for (let attempt = 0; attempt < 3; attempt++) {
     if (attempt > 0 && (await app.eval(settled))) return;
-    await app.press(key);
+    await send(key);
     try {
       await app.waitFor(settled, { timeoutMs: 3_000, label });
       return;
@@ -254,6 +273,10 @@ async function typeInFrame(field: string, text: string) {
       document.body.dataset.focused = '';
       document.body.dataset.typed = '';
       const frame = document.querySelector('#auth');
+      // A retry hands focus back to this page first. Focusing a frame that
+      // already holds focus changes nothing, so the retry would otherwise
+      // repeat whatever focus state lost the first input.
+      if (${attempt > 0} && document.activeElement === frame) frame.blur();
       frame.focus();
       frame.contentWindow.postMessage({focus:${JSON.stringify(field)},text:${JSON.stringify(text)}}, '*');
     })()`);
@@ -271,10 +294,37 @@ async function typeInFrame(field: string, text: string) {
     } catch (error) {
       // Native macOS can drop the first input after switching frames.
       // The fixture clears the field before retrying, so text never doubles.
-      if (attempt === 2) throw error;
+      if (attempt < 2) continue;
+      const focus = await app.eval(`(async () => ({
+        hostFocused: document.hasFocus(),
+        hostActive: document.activeElement?.tagName,
+        page: await ${guest}.executeJavaScript("({focused: document.hasFocus(), active: document.activeElement?.id})"),
+      }))()`);
+      throw new Error(
+        `${field} in the authentication frame never received ${JSON.stringify(text)}: ${JSON.stringify(focus)}`,
+        { cause: error },
+      );
     }
   }
 }
+
+/**
+ * Enter into the page with nothing waiting on its acknowledgement. CDP's
+ * Input.dispatchKeyEvent answers once the focused frame acknowledges the
+ * key, and a frame the key removes never does; this sends the press as an
+ * OS key arrives, and judges it by its effect. (Electron's sendInputEvent
+ * delivers keys to the page's main frame, never into a focused iframe.)
+ */
+const enterWithoutWaiting = async () => {
+  const enter = {
+    key: "Enter",
+    code: "Enter",
+    windowsVirtualKeyCode: 13,
+    text: "\r",
+  };
+  for (const type of ["keyDown", "keyUp"])
+    app.cdp("Input.dispatchKeyEvent", { type, ...enter }).catch(() => {});
+};
 
 const framePhase = (phase: string) =>
   app.waitFor(
@@ -282,8 +332,16 @@ const framePhase = (phase: string) =>
     { label: `${phase} step in authentication frame` },
   );
 
-async function framedLogin(mode: string, username: string, password: string) {
-  await navigate(`/framed?mode=${mode}`, "Framed sign in");
+async function framedLogin(
+  mode: string,
+  username: string,
+  password: string,
+  { answerInSubmit = false } = {},
+) {
+  await navigate(
+    `/framed?mode=${mode}${answerInSubmit ? "&answer=now" : ""}`,
+    "Framed sign in",
+  );
   await framePhase("email");
   await typeInFrame("email", username);
   await pressUntil(
@@ -292,7 +350,31 @@ async function framedLogin(mode: string, username: string, password: string) {
     "password step in authentication frame",
   );
   await typeInFrame("pw", password);
-  await app.press("Enter");
+  if (answerInSubmit) {
+    // The site removes its frame inside the submit the key starts.
+    await pressUntil(
+      "Enter",
+      `${guest}.getTitle() === 'Frame finished'`,
+      "frame answered inside its submit",
+      enterWithoutWaiting,
+    );
+    return;
+  }
+  // Enter submits; the site answers only once the key is fully delivered.
+  // A frame removed or navigated while CDP still waits for its key's
+  // acknowledgement never acknowledges it: Chromium's DevTools input
+  // injector keeps the callback of an event its target widget dropped, so
+  // Input.dispatchKeyEvent hung for 60 seconds whenever the answer won.
+  const pending = mode === "pending" && password === "correct horse";
+  await pressUntil(
+    "Enter",
+    `${guest}.executeJavaScript(${JSON.stringify(`document.body.dataset.phase === ${JSON.stringify(pending ? "pending" : "submitted")}`)})`,
+    "password submitted in authentication frame",
+  );
+  if (pending) return;
+  await inGuest(
+    `document.querySelector('#auth').contentWindow.postMessage({answer:true}, '*')`,
+  );
 }
 
 describe("browser passwords", () => {
@@ -548,42 +630,59 @@ describe("browser passwords", () => {
     ).toEqual(["Recovery code 1234", users.get("carol@example.com")]);
   });
 
+  /** A framed sign-in that lands offers to save, and Save keeps its password. */
+  async function savesFramedLogin(
+    mode: string,
+    username: string,
+    options: { answerInSubmit?: boolean } = {},
+  ) {
+    await app.waitFor(`!${prompt}`, {
+      label: "previous password card closed",
+    });
+    await framedLogin(mode, username, "correct horse", options);
+    await pageReady(mode === "top" ? "Welcome" : "Frame finished");
+    await app.waitFor(`${prompt}?.dataset.kind === 'save'`, {
+      label: "framed sign-in offers to save",
+    });
+    expect(await app.eval(`${prompt}.textContent`)).toContain(username);
+    if (mode === "inline" && process.env.CATAMORPHIC_E2E_ARTIFACTS_DIR) {
+      await app.waitFor(
+        `${prompt}.getAnimations().every((animation) => animation.playState === 'finished')`,
+        { label: "save card settled" },
+      );
+      await app.screenshot(
+        path.join(
+          process.env.CATAMORPHIC_E2E_ARTIFACTS_DIR,
+          "framed-password-offer.png",
+        ),
+      );
+    }
+    await clickInApp('[data-testid="password-prompt-save"]');
+    await app.waitFor(`!${prompt}`, { label: "framed login saved" });
+    const login = (await saved()).find((item) => item.username === username);
+    expect(login?.origin).toBe(origin.replace("127.0.0.1", "localhost"));
+    expect(
+      await app.eval(
+        `window.catamorphicDesktop.vaultReveal({ profileId: ${JSON.stringify(await profileId())}, id: ${JSON.stringify(login?.id)} }).then((secret) => secret.password)`,
+      ),
+    ).toBe("correct horse");
+  }
+
   it.each(["inline", "top", "remove"])(
     "saves an email-first iframe login when it lands via %s",
     async (mode) => {
-      await app.waitFor(`!${prompt}`, {
-        label: "previous password card closed",
-      });
-      const username = `${mode}@framed.example`;
-      await framedLogin(mode, username, "correct horse");
-      await pageReady(mode === "top" ? "Welcome" : "Frame finished");
-      await app.waitFor(`${prompt}?.dataset.kind === 'save'`, {
-        label: "framed sign-in offers to save",
-      });
-      expect(await app.eval(`${prompt}.textContent`)).toContain(username);
-      if (mode === "inline" && process.env.CATAMORPHIC_E2E_ARTIFACTS_DIR) {
-        await app.waitFor(
-          `${prompt}.getAnimations().every((animation) => animation.playState === 'finished')`,
-          { label: "save card settled" },
-        );
-        await app.screenshot(
-          path.join(
-            process.env.CATAMORPHIC_E2E_ARTIFACTS_DIR,
-            "framed-password-offer.png",
-          ),
-        );
-      }
-      await clickInApp('[data-testid="password-prompt-save"]');
-      await app.waitFor(`!${prompt}`, { label: "framed login saved" });
-      const login = (await saved()).find((item) => item.username === username);
-      expect(login?.origin).toBe(origin.replace("127.0.0.1", "localhost"));
-      expect(
-        await app.eval(
-          `window.catamorphicDesktop.vaultReveal({ profileId: ${JSON.stringify(await profileId())}, id: ${JSON.stringify(login?.id)} }).then((secret) => secret.password)`,
-        ),
-      ).toBe("correct horse");
+      await savesFramedLogin(mode, `${mode}@framed.example`);
     },
   );
+
+  it("keeps the password of a frame that removes itself inside its submit", async () => {
+    // The page reports the password as Enter goes down; the site removes
+    // the frame from the submit that same key starts, so the report can
+    // reach the app with its frame already leaving.
+    await savesFramedLogin("remove", "instant@framed.example", {
+      answerInSubmit: true,
+    });
+  });
 
   it("does not offer a rejected iframe password or an opaque frame's login", async () => {
     await app.eval(`window.__frameOffers = [];

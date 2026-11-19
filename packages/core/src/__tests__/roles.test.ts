@@ -1,4 +1,8 @@
+import fs from "node:fs";
+import path from "node:path";
 import { describe, expect, it } from "vitest";
+import { scopeCovers } from "../identity.js";
+import { SEED_SKILLS } from "../seeds.js";
 import {
   expandRole,
   expandRolePermissions,
@@ -156,4 +160,40 @@ describe("roles as files (ADR 0055): expansion", () => {
       }),
     ).toMatchObject({ error: expect.stringMatching(/permissions\.0/) });
   });
+});
+
+describe("the example admin role writes the project store (ADR 0335)", () => {
+  // A project automation that keeps state in the store (the GitHub poller's
+  // cursor, a stalled review's evidence) is turned on by someone who
+  // writes that folder; an admin who could not would be surprising.
+  const examples = {
+    seed: SEED_SKILLS[".work/skills/work-projects/SKILL.md"] ?? "",
+    guide: fs.readFileSync(
+      path.resolve(import.meta.dirname, "../../../../INTEGRATION.md"),
+      "utf8",
+    ),
+  };
+  for (const [where, text] of Object.entries(examples))
+    it(`in ${where}`, () => {
+      const line = text
+        .split("\n")
+        .find((candidate) => candidate.includes('"name": "Admin"'));
+      if (!line) throw new Error(`No admin role in ${where}`);
+      const validated = validateRoleDefinition(JSON.parse(line));
+      if ("error" in validated) throw new Error(validated.error);
+      const scope = expandRole(validated.definition, "p1", {});
+      for (const folder of [
+        "store/github-polling/**",
+        "store/reviews/stalls/**",
+      ])
+        expect(
+          scopeCovers(scope, {
+            kind: "document",
+            projectId: "p1",
+            path: folder,
+            access: "write",
+          }),
+          folder,
+        ).toBe(true);
+    });
 });

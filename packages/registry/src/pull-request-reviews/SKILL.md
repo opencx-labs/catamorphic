@@ -346,7 +346,9 @@ until someone stops it. For each stall it:
    its only evidence: a command run in the review's workspace would print
    what the pull request's code wants, and may run apart from the agent,
    seeing neither its processes nor its logs.
-3. Writes it to `store/reviews/stalls/<number>/<attempt>.json`.
+3. Writes it to `store/reviews/stalls/<number>/<attempt>.json`. The
+   workflow declares that folder in `documents` (ADR 0335): turned on for
+   the project, its runs reach only it of the store.
 4. Inspects the chat again, and acts only if that attempt is still stalled.
 5. Restarts that attempt (`restart` with its `attemptId` and `onlyIfStalled`,
    keyed by it, so a retried run restarts once): Work ends it without asking
@@ -599,7 +601,13 @@ merge gate.
    Environments the workflows run in (`default` and `github-poster`) and
    whose `connections` include
    `{ "environment": "github-poster", "alias": "github" }`. The `github`
-   webhook listens once they are on.
+   webhook listens once they are on. `restartStalledReviews` also declares
+   `sessions:write` and writes `store/reviews/stalls/`: its consent lists
+   both, so whoever turns it on needs that permission and a role whose
+   `documents` include `{ "path": "store/reviews/stalls/**", "access":
+   "write" }` or a wider write, such as the seeded admin's
+   `{ "path": "store/**", "access": "write" }`. A plain `"store/**"` entry
+   only reads, and the consent is refused.
 3. Open a small pull request. Within a minute a chat `pr-<repository>-<number>`
    appears and the "Work review" check shows it in progress; inspect the
    chat: Environment `review`, a review-pool machine, and a workspace at the

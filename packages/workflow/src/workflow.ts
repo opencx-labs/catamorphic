@@ -3,6 +3,7 @@ import {
   createBatch,
   type DefineBatch,
 } from "./batch.js";
+import type { WorkflowDocumentAccess } from "./document-access.js";
 import type { EnvironmentHostOperations } from "./environment-operations.js";
 import type { EventHostOperations } from "./event-operations.js";
 import type { OutputTemplateMatches, PayloadTemplateMatches } from "./holes.js";
@@ -139,6 +140,7 @@ class WorkflowDefinitionImpl<Input, Output, Steps extends readonly unknown[]> {
   readonly concurrency?: WorkflowConcurrency;
   readonly connections?: readonly (string | WorkflowConnectionRequirement)[];
   readonly permissions?: readonly WorkflowPermission[];
+  readonly documents?: readonly WorkflowDocumentAccess[];
 
   constructor(args: {
     steps: Steps;
@@ -147,6 +149,7 @@ class WorkflowDefinitionImpl<Input, Output, Steps extends readonly unknown[]> {
     concurrency?: WorkflowConcurrency;
     connections?: readonly (string | WorkflowConnectionRequirement)[];
     permissions?: readonly WorkflowPermission[];
+    documents?: readonly WorkflowDocumentAccess[];
   }) {
     this.steps = args.steps;
     this.controls = args.controls;
@@ -154,6 +157,7 @@ class WorkflowDefinitionImpl<Input, Output, Steps extends readonly unknown[]> {
     this.concurrency = args.concurrency;
     this.connections = args.connections;
     this.permissions = args.permissions;
+    this.documents = args.documents;
     Object.defineProperty(this, "kind", { value: "durable-workflow" });
   }
 }
@@ -633,6 +637,13 @@ export function defineWorkflow<
      * gets only what it declares, and only while its owner may grant it.
      */
     readonly permissions?: readonly WorkflowPermission[];
+    /**
+     * Project store paths this workflow's runs read or write (ADR 0335),
+     * shown beside its permissions when it is turned on: e.g.
+     * `{ path: "store/cursors/", access: "write" }`. A path ending in `/`
+     * is a folder. A run reaches only these, and only what its owner may.
+     */
+    readonly documents?: readonly WorkflowDocumentAccess[];
   } & ValidateSteps<Steps> &
     ValidateTriggers<
       Triggers,
@@ -652,5 +663,6 @@ export function defineWorkflow<
     concurrency: definition.concurrency,
     connections: definition.connections,
     permissions: definition.permissions,
+    documents: definition.documents,
   });
 }

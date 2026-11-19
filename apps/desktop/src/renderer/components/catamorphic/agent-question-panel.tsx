@@ -247,17 +247,28 @@ export function AgentQuestionPanel({
   // Moving on keeps focus in the panel: the question left behind turns
   // inert, which drops focus to the page, where the next Escape would
   // dismiss every question. Its answer box takes the caret if it is open,
-  // else its first option takes focus.
+  // else its first option takes focus, as soon as React has drawn that
+  // question active: a frame can come before it, when the question is
+  // still inert and focusing it keeps nothing.
+  const [optionFocus, setOptionFocus] = useState<{
+    index: number;
+    request: number;
+  }>();
+  useLayoutEffect(() => {
+    if (!optionFocus) return;
+    panelRefs.current[optionFocus.index]
+      ?.querySelector<HTMLElement>("button")
+      ?.focus({ preventScroll: true });
+  }, [optionFocus]);
   const showQuestion = (index: number) => {
     setActiveIndex(index);
     if (answers[index]?.other || questions[index]?.options.length === 0)
       requestFocus(index);
     else
-      requestAnimationFrame(() =>
-        panelRefs.current[index]
-          ?.querySelector<HTMLElement>("button")
-          ?.focus({ preventScroll: true }),
-      );
+      setOptionFocus((current) => ({
+        index,
+        request: (current?.request ?? 0) + 1,
+      }));
   };
 
   // Enter in an Other answer: on to the next unanswered question, or send

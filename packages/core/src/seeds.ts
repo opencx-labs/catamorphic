@@ -459,7 +459,9 @@ A project has one path namespace with two backings:
   a repository-root \`store/\` directory for these documents. Put audience-specific or fast-changing
   content there, never next to the handbook. Read and write it through the
   documents surface (\`documents_*\` MCP tools, \`context.documents\` in a
-  workflow, or the folder itself in the desktop) — not by committing.
+  workflow, or the folder itself in the desktop) — not by committing. A
+  workflow declares each store path it reads or writes in \`documents\`
+  (see \`writing-workflows\`) and reaches no other.
 
 Access is enforced by the host from **roles you commit** as
 \`.work/roles/<slug>.json\`, next to \`.work/agents/<slug>.json\`:
@@ -481,7 +483,7 @@ Access is enforced by the host from **roles you commit** as
   ]
 }
 // .work/roles/admin.json
-{ "version": 1, "name": "Admin", "description": "Runs the brain: builds workflows, apps and agents. Comfortable with technical detail.", "agents": ["*"], "workflows": ["*"], "apps": ["*"], "environments": ["*"], "permissions": ["*"], "documents": ["store/**"] }
+{ "version": 1, "name": "Admin", "description": "Runs the brain: builds workflows, apps and agents. Comfortable with technical detail.", "agents": ["*"], "workflows": ["*"], "apps": ["*"], "environments": ["*"], "permissions": ["*"], "documents": [{ "path": "store/**", "access": "write" }] }
 // .work/roles/engineer.json
 { "version": 1, "name": "Engineer", "description": "Builds workflows and apps; ships them after review. Technical.", "agents": ["*"], "workflows": ["*"], "apps": ["*"], "environments": ["default"], "permissions": ["program:write", "runs:read", "secrets:read"] }
 // .work/roles/brain-maintainer.json
@@ -1369,12 +1371,15 @@ corpora, or ranking across thousands of documents. Then:
    re-embed on model change.
 3. **Index on write**: a workflow triggered when a store document changes
    (or a periodic sweep) that reads the document through
-   \`context.documents.read\` and upserts chunks. Reading through
+   \`context.documents.read\` and upserts chunks. It declares the store
+   folders it indexes in \`documents\` (\`[{ path: "store/customers/",
+   access: "read" }]\`); it reaches no others. Reading through
    \`context.documents\` is what keeps the index honest about scope: the
    indexer only sees what its caller may.
 4. **Serve as a workflow tool** (\`ai.tool-call\` trigger kind) that takes
    \`{ query, prefix?, limit? }\`, embeds the query, ranks, and — before
-   returning — re-reads each hit through \`context.documents.read\` so a
+   returning — re-reads each hit through \`context.documents.read\` (the
+   tool declares the same store folders) so a
    caller who cannot read a document never sees its chunk. That final read
    is not optional: the index is a hint, the documents surface is the law.
 5. Return the same shape as the primitives (\`path\`, \`source\`, \`lines\`)

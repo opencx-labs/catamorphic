@@ -503,25 +503,35 @@ describe("ProjectInspectorView", () => {
     });
     const values = () =>
       [...container.querySelectorAll("dd")].map((value) => value.textContent);
-    // React Query hands results over on a later task.
-    const arrive = (resolve: () => void) =>
-      act(async () => {
-        resolve();
-        await new Promise((done) => setTimeout(done, 5));
-      });
+    // React Query hands results over on a later task, and a busy machine
+    // can delay that task: wait for the line each read fills.
+    const arrive = async (resolve: () => void, shown: () => boolean) => {
+      await act(async () => resolve());
+      const deadline = Date.now() + 2_000;
+      while (!shown() && Date.now() < deadline)
+        await act(() => new Promise((done) => setTimeout(done, 1)));
+    };
     const loading = lineHeights();
     expect(values()).toEqual(["Loading", "None", "Loading"]);
-    await arrive(() => rootRead.resolve("/projects/alpha"));
+    await arrive(
+      () => rootRead.resolve("/projects/alpha"),
+      () => values()[0] === "/projects/alpha",
+    );
     expect(values()).toEqual(["/projects/alpha", "None", "Loading"]);
     expect(lineHeights()).toEqual(loading);
     // A project on no server is an answer, not a failure.
-    await arrive(() => serverRead.resolve(null));
+    await arrive(
+      () => serverRead.resolve(null),
+      () => values()[2] !== "Loading",
+    );
     expect(values()).toEqual(["/projects/alpha", "None", "None"]);
     expect(lineHeights()).toEqual(loading);
-    await arrive(() =>
-      sessionsRead.resolve({
-        items: [{ id: "session-1", title: "Working chat", running: true }],
-      }),
+    await arrive(
+      () =>
+        sessionsRead.resolve({
+          items: [{ id: "session-1", title: "Working chat", running: true }],
+        }),
+      () => text().includes("Working chat"),
     );
     expect(lineHeights()).toEqual(loading);
     expect(text()).toContain("Working chat");

@@ -39,7 +39,9 @@ and component libraries take precedence over these defaults.
 - To edit, read the artifact, then update its explicit changed files with the
   returned revision. A null file value deletes that file. Re-read on a revision conflict. Updates build apps again.
 - For a workflow, source exports an ordinary defineWorkflow whose name matches
-  name. Use writing-workflows for authoring. Creation retains source; action run
+  name. Use writing-workflows for authoring. A workflow that reads or writes the
+  project store declares each store path in documents; its runs, and a
+  watcher's, reach no other. Creation retains source; action run
   starts one ordinary immutable Run in an allowed Environment. It does not
   enable schedules. For temporary unattended execution use the watcher tools.
   Existing watcher activations stay pinned when source changes; stop and recreate

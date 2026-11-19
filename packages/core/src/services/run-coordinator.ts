@@ -10,7 +10,9 @@ import { type Kysely, type Selectable, sql, type Transaction } from "kysely";
 import {
   type Identity,
   intersectProjectPermissions,
+  narrowStoreDocuments,
   type ProjectPermissionRef,
+  type WorkflowDocumentDeclaration,
 } from "../identity.js";
 import { DeploymentPreparationError } from "./deployment-runtime-service.js";
 import type {
@@ -816,6 +818,8 @@ export class RunCoordinator {
       execution: WorkflowExecutionDescriptor;
       /** The child's declared permissions; it gets what the parent run holds of them. */
       permissions: readonly string[];
+      /** The child's declared store paths; it gets what the parent run holds of them. */
+      documents: readonly WorkflowDocumentDeclaration[];
       /** The child's own display name, never the parent's. */
       displayName?: string;
       input: Json;
@@ -866,10 +870,24 @@ export class RunCoordinator {
           deployment_artifact_id: parent.deployment_artifact_id,
           session_artifact_id: parent.session_artifact_id,
           external_user_id: parent.external_user_id,
+          // What the parent holds of the child's own store paths, and
+          // nothing more of the store (ADR 0335).
           caller_scope:
             parent.caller_scope === null
               ? null
-              : jsonColumn(parent.caller_scope),
+              : jsonColumn(
+                  toJson(
+                    narrowStoreDocuments({
+                      scope: Array.isArray(parent.caller_scope)
+                        ? (parent.caller_scope as unknown as NonNullable<
+                            Identity["scope"]
+                          >)
+                        : [],
+                      projectId: parent.project_id,
+                      documents: args.child.documents,
+                    }),
+                  ),
+                ),
           caller_execution_scope:
             parent.caller_execution_scope === null
               ? null

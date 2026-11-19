@@ -376,9 +376,13 @@ characters of the runner's and the harness's own output, masked, in whole
 lines, kept for attempts that did not complete. Keep those as the evidence,
 not exec output: code the chat runs can forge what a command prints, and
 commands may run apart from the agent, seeing neither its processes nor its
-logs. Inspect again before acting. The pull-request-reviews pack's
+logs. Inspect again before acting. To keep the evidence in the project
+store, declare its folder in documents, such as
+[{ path: "store/stalls/", access: "write" }]: a workflow, a watcher's
+included, reaches no store path it does not declare, whoever runs it. The pull-request-reviews pack's
 restartStalledReviews is a complete recipe: inspect, attempts, a store
-document, inspect, then restart, or interrupt past its bound.
+document under its declared folder, inspect, then restart, or interrupt past
+its bound.
 
 \`\`\`typescript
 import {

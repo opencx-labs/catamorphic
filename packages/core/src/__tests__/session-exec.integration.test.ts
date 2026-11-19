@@ -1000,7 +1000,10 @@ describeIf("workflows run commands in a chat's workspace (ADR 0324)", () => {
         )
         .toMatchObject({ phase: "running" });
       network.length = 0;
-      // The parent's setup cannot widen the sandbox the child works in.
+      // The parent's setup cannot widen the sandbox the child works in. The
+      // child's own turns prepare the shared workspace meanwhile, and each
+      // preparation narrows it first (fail closed), so only a widening
+      // would be the setup's network.
       await expect(
         call({
           caller: root,
@@ -1015,7 +1018,10 @@ describeIf("workflows run commands in a chat's workspace (ADR 0324)", () => {
       ).rejects.toThrow(
         /A command in the session is running in this workspace/,
       );
-      expect(network.length).toBe(0);
+      expect(
+        network.filter((change) => change.kind === "widen"),
+        JSON.stringify(network),
+      ).toEqual([]);
       await watching;
     } finally {
       spy.mockRestore();

@@ -900,8 +900,11 @@ export class CustomizationProcesses {
       this.deps.root,
       `${createHash("sha256").update(PROCESS_WORKER).digest("hex").slice(0, 16)}.mjs`,
     );
-    // Existing children may still be loading this shared path. Publish a
-    // complete private inode instead of truncating one of their readers.
+    // Children may still be loading this shared path, and Bun on Linux
+    // reopens its entry through /proc: a file replaced under a loading child
+    // reads as "(deleted)" and the child exits. Keep a published worker that
+    // is already exact; replace anything else with a complete private inode.
+    if (publishedWorker(file)) return file;
     const temporary = `${file}.${randomBytes(8).toString("hex")}.tmp`;
     try {
       fs.writeFileSync(temporary, PROCESS_WORKER, {
@@ -913,6 +916,19 @@ export class CustomizationProcesses {
       fs.rmSync(temporary, { force: true });
     }
     return file;
+  }
+}
+
+function publishedWorker(file: string) {
+  try {
+    const stat = fs.lstatSync(file);
+    return (
+      stat.isFile() &&
+      (stat.mode & 0o777) === 0o600 &&
+      fs.readFileSync(file, "utf8") === PROCESS_WORKER
+    );
+  } catch {
+    return false;
   }
 }
 

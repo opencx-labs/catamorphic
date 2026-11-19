@@ -67,7 +67,7 @@ Settled design decisions live here as short Architecture Decision Records. They 
 | [0052](0052-skills-as-commands.md) | Skills as commands, and the agent-initiated auth loop | Accepted; paths superseded by 0142, composer menu by 0270, then 0274 |
 | [0053](0053-identity-scope-and-app-routes.md) | Identity scope: one artifact vocabulary, structural narrowing, synchronous calls | Accepted |
 | [0054](0054-tool-permissions.md) | Tool permissions: layered connection/agent policies that intersect; ask via host prompt | Accepted (enforcement transport refined by 0067; server-side definition policies by 0176) |
-| [0055](0055-company-brain-roles-store-and-change-loop.md) | Company brain: program vs. project store, roles as files, scoped agents, the change loop | Accepted; paths superseded by 0142; the builder flag superseded by 0158; the loopback API guard by 0211 |
+| [0055](0055-company-brain-roles-store-and-change-loop.md) | Company brain: program vs. project store, roles as files, scoped agents, the change loop | Accepted; paths superseded by 0142; the builder flag superseded by 0158; the loopback API guard by 0211; workflow store access narrowed to declared documents by 0335 |
 | [0056](0056-agent-configuration.md) | Agent configuration: one surface, layered defaults, enforced capabilities | Accepted; paths superseded by 0142; normalized `mode` superseded by 0182 |
 | [0057](0057-agent-usage-and-cost.md) | Agent usage and cost: transcript-scanned page, per-turn usage in metadata | Accepted; composer context ring removed 2026-10-21 |
 | [0058](0058-mobile-pwa.md) | The mobile PWA: chats on the go, wrapper-ready; tool asks answerable over HTTP | Accepted |
@@ -170,7 +170,7 @@ Settled design decisions live here as short Architecture Decision Records. They 
 | [0155](0155-shells-background-commands-and-live-status.md) | Native shells, host background commands, and the agent's live status | Accepted (refined by 0174; wakes are task notifications by 0217; terminals end with their command by 0223) |
 | [0156](0156-project-automations-webhooks-and-command-watches.md) | Project automations, one deliver, webhooks, and command watches | Accepted (webhook ingress refined by 0171; keys and chat placement by 0173) |
 | [0157](0157-workflow-status-chrome.md) | Workflow tabs: status chrome and a panel that follows its subject | Accepted |
-| [0158](0158-project-permissions.md) | Project permissions: read, write, publish, and what workflows declare | Accepted (directory events by 0210) |
+| [0158](0158-project-permissions.md) | Project permissions: read, write, publish, and what workflows declare | Accepted (directory events by 0210; store documents workflows declare by 0335) |
 | [0159](0159-work-server-identity-and-image.md) | The Work server: product identity and a published image | Accepted |
 | [0160](0160-work-server-package.md) | The Work server is a package with typed hooks | Accepted (config as typed data by 0183; your own image by 0261) |
 | [0161](0161-company-identity-and-deprovisioning.md) | Company identity: Google Workspace sign-in and deprovisioning | Accepted (directory events by 0210) |
@@ -334,10 +334,11 @@ Settled design decisions live here as short Architecture Decision Records. They 
 | [0327](0327-machine-provisioners-are-workflows.md) | Machine provisioners are workflows | Accepted (refines 0205, 0258; amended by 0336) |
 | [0328](0328-hand-offs-keep-results-acp-reports-its-turn.md) | Hand-offs keep results and open requests; ACP agents take effort and report their turn | Accepted (amends 0198, 0241, 0255, 0298; amended by 0333) |
 | [0329](0329-model-usage-is-telemetry-and-a-session-read.md) | Model usage is telemetry and a session read | Accepted (amends 0180 and 0293) |
-| [0330](0330-enablements-follow-the-published-program.md) | Enablements follow the published program | Accepted (amends 0068, 0158, 0170) |
+| [0330](0330-enablements-follow-the-published-program.md) | Enablements follow the published program | Accepted (amends 0068, 0158, 0170; amended by 0335: declared store documents compare by coverage) |
 | [0331](0331-project-deploy-workflow-and-host-project-hooks.md) | A project deploy workflow, and host project hooks that return secrets | Accepted (amends 0046) |
 | [0332](0332-commands-run-apart-from-the-agent.md) | The commands an agent runs execute apart from the agent | Accepted (amends 0175, 0180, 0204, 0208, 0257, 0259, 0324) |
 | [0333](0333-stalled-turns-are-visible-and-restartable.md) | A turn that stops making progress is visible, an event, and restartable | Accepted (amends 0198, 0245, 0328; amended by 0336) |
 | [0334](0334-read-only-caches-only-a-trusted-fill-writes.md) | Read-only caches that only a trusted fill writes | Accepted (amends 0208, 0257) |
+| [0335](0335-workflows-declare-their-store-documents.md) | Workflows declare the store documents they use | Accepted (amends 0055, 0158, 0330) |
 | [0336](0336-disk-is-a-resource-work-manages-on-machines.md) | Disk is a resource Work manages on machines | Accepted (amends 0100, 0204, 0208, 0324, 0327, 0333) |
 | [0337](0337-reviews-show-progress-and-post-findings-as-verified.md) | Reviews show progress at once and post findings as they are verified | Accepted (amends 0259, 0323, 0325) |

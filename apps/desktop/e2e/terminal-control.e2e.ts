@@ -90,8 +90,15 @@ async function showChat() {
   await app.waitFor(`!!document.querySelector(${JSON.stringify(composer)})`);
 }
 
+const terminalChips = `[...document.querySelectorAll('[data-testid="chip"][data-kind="terminal"]')]`;
+
 async function startTerminal(command: string) {
   await showChat();
+  // A terminal an earlier command left open keeps its chip beside the new
+  // one's: the new command's chip is the one that was not there before.
+  const knownChips = await app.eval<string[]>(
+    `${terminalChips}.map(chip=>chip.dataset.chipId)`,
+  );
   await click(composer);
   await app.insertText(`start: ${command}`);
   await app.press("Enter");
@@ -104,7 +111,15 @@ async function startTerminal(command: string) {
     { timeoutMs: 30_000, label: "new command's terminal id" },
   );
   lastTerminalId = terminalId;
-  await click('[data-testid="chip"][data-kind="terminal"] [data-chip-main]');
+  const chip = await app.waitFor<string>(
+    `(() => {
+      const known=new Set(${JSON.stringify(knownChips)});
+      const chip=${terminalChips}.find(chip=>!known.has(chip.dataset.chipId));
+      return chip?'[data-chip-id="'+CSS.escape(chip.dataset.chipId)+'"] [data-chip-main]':false;
+    })()`,
+    { label: "new command's terminal chip" },
+  );
+  await click(chip);
   await app.waitFor(
     `!!document.querySelector(${JSON.stringify(`${pane} canvas`)})`,
     { label: "agent terminal mounted" },
@@ -293,7 +308,11 @@ it("streams terminal output, activity and exit while voice's profileless audio p
   const audio = await app.connectToFrame("voice.html");
   const gate = path.join(checkout, "terminal-voice-gate");
   try {
-    expect(await audio.eval("location.pathname")).toBe("/voice.html");
+    // The frame is found by its address, which it reports as its load
+    // starts, while its document can still be the initial blank one.
+    await audio.waitFor("location.pathname === '/voice.html'", {
+      label: "the audio page's document",
+    });
     await app.eval(`
       window.__terminalVoiceBusy=[];
       window.__terminalVoiceExits=[];

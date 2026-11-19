@@ -168,6 +168,88 @@ export const onboard = defineWorkflow(({ defineBoundary }) => ({
     expect(declared.findings).toEqual([]);
   });
 
+  it("reports a document declaration outside the store, or computed, with its file", () => {
+    const poller = (documents: string) => ({
+      ".work/workflows/src/poll.ts": `
+import { type BoundaryContext, defineWorkflow } from "@catamorphic/workflow";
+const FOLDER = "store/polling/";
+export const poll = defineWorkflow(({ defineBoundary }) => ({
+  documents: ${documents},
+  steps: [defineBoundary({ run: async ({ input }: BoundaryContext<{ id: string }>) => input })],
+}));
+`,
+    });
+    const outside = checkProject(
+      poller('[{ path: "docs/notes.md", access: "read" }]'),
+    );
+    expect(outside.ok).toBe(false);
+    expect(outside.findings).toEqual([
+      expect.objectContaining({
+        level: "error",
+        file: ".work/workflows/src/poll.ts",
+        message: expect.stringContaining(
+          "Workflow document 'docs/notes.md' must be in the project store: start it with store/",
+        ),
+      }),
+    ]);
+    const computed = checkProject(
+      poller('[{ path: FOLDER, access: "write" }]'),
+    );
+    expect(computed.ok).toBe(false);
+    expect(computed.findings[0]?.message).toContain(
+      "Workflow document path must be a string written in place, not FOLDER",
+    );
+    expect(
+      checkProject(poller('[{ path: "store/polling/", access: "write" }]'))
+        .findings,
+    ).toEqual([]);
+  });
+
+  it("warns when a workflow calls the documents host without declaring store documents", () => {
+    const keeper = (documents: string, call: string) => ({
+      ".work/workflows/src/keeper.ts": `
+import { type BoundaryContext, defineWorkflow } from "@catamorphic/workflow";
+export const keeper = defineWorkflow(({ defineBoundary }) => ({
+  ${documents}
+  steps: [
+    defineBoundary({
+      run: (context: BoundaryContext<{ path: string }>) => ${call},
+    }),
+  ],
+}));
+`,
+    });
+    const undeclared = checkProject(
+      keeper(
+        "",
+        'context.documents.write({ path: context.input.path, text: "x" })',
+      ),
+    );
+    expect(undeclared.ok).toBe(true);
+    expect(undeclared.findings).toEqual([
+      {
+        level: "warning",
+        file: ".work/workflows/src/keeper.ts",
+        message:
+          'Workflow \'keeper\' calls context.documents.write but declares no store documents, so its runs reach no store path. Declare each one it reads or writes, such as documents: [{ path: "store/notes/", access: "write" }]; program files need none',
+      },
+    ]);
+    expect(
+      checkProject(
+        keeper(
+          'documents: [{ path: "store/notes/", access: "write" }],',
+          'context.documents.write({ path: context.input.path, text: "x" })',
+        ),
+      ).findings,
+    ).toEqual([]);
+    // Other host calls are not documents calls.
+    expect(
+      checkProject(
+        keeper("", 'context.host["catamorphic.events"].record({ events: [] })'),
+      ).findings,
+    ).toEqual([]);
+  });
+
   it("applies the host's webhook settings rules without a host", () => {
     const hook = (name: string, config: string) => `
 export const ${name} = defineWorkflow(({ defineBoundary }) => ({

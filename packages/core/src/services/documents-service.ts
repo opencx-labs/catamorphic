@@ -15,6 +15,10 @@ import {
 import type { AppBundleStore } from "./app-bundle-store.js";
 import { AccessDeniedError } from "./artifact-scope.js";
 import {
+  DocumentNotFoundError,
+  LocalDocumentSpellingError,
+} from "./document-errors.js";
+import {
   listLocalDocuments,
   localDocumentPath,
   protectLocalDocuments,
@@ -100,12 +104,7 @@ export interface DocumentMatch {
   lines: Array<{ line: number; text: string }>;
 }
 
-export class DocumentNotFoundError extends Error {
-  constructor(readonly path: string) {
-    super(`Document '${path}' not found`);
-    this.name = "DocumentNotFoundError";
-  }
-}
+export { DocumentNotFoundError, LocalDocumentSpellingError };
 
 export class DocumentBlobUnavailableError extends Error {
   constructor() {
@@ -457,14 +456,7 @@ export class DocumentsService {
         .orderBy("path", "asc")
         .execute();
       for (const row of rows) {
-        if (
-          root &&
-          !(await fs.stat(await localDocumentPath(root, row.path)).then(
-            () => true,
-            () => false,
-          ))
-        )
-          continue;
+        if (root && !(await localFileExists(root, row.path))) continue;
         if (
           !documentAccessAllowed(
             args.identity,
@@ -908,7 +900,13 @@ export class DocumentsService {
           "write",
           args.audience,
         );
-        if (!args.audience) await this.refreshLocal({ ...args, path });
+        if (!args.audience)
+          await this.refreshLocal({ ...args, path }).catch((error: unknown) => {
+            // A row kept from before paths had to match the disk's
+            // spelling (ADR 0335): it is deleted without touching the
+            // file, which another spelling names.
+            if (!(error instanceof LocalDocumentSpellingError)) throw error;
+          });
         args.signal?.throwIfAborted();
         return this.deleteInner({ ...args, path });
       },
@@ -982,8 +980,15 @@ export class DocumentsService {
         projectId: args.projectId,
       });
       args.signal?.throwIfAborted();
-      if (root && !localRefresh && !args.audience)
-        await fs.rm(await localDocumentPath(root, path), { force: true });
+      if (root && !localRefresh && !args.audience) {
+        const target = await localDocumentPath(root, path).catch(
+          (error: unknown) => {
+            if (error instanceof LocalDocumentSpellingError) return null;
+            throw error;
+          },
+        );
+        if (target) await fs.rm(target, { force: true });
+      }
       args.signal?.throwIfAborted();
       return { version };
     });
@@ -1301,4 +1306,26 @@ function matchLines(
     if (test(line)) out.push({ line: i + 1, text: line.slice(0, 400) });
   }
   return out;
+}
+
+/**
+ * Whether a store row's file is on disk. A row spelled otherwise than the
+ * disk (kept from before paths had to match it, ADR 0335) is not, and is
+ * left out with a warning rather than failing the whole list.
+ */
+async function localFileExists(root: string, path: string): Promise<boolean> {
+  const target = await localDocumentPath(root, path).catch((error: unknown) => {
+    if (!(error instanceof LocalDocumentSpellingError)) throw error;
+    console.warn(
+      `[catamorphic] Store document ${path} is left out: ${error.message}`,
+    );
+    return null;
+  });
+  return (
+    target !== null &&
+    fs.stat(target).then(
+      () => true,
+      () => false,
+    )
+  );
 }

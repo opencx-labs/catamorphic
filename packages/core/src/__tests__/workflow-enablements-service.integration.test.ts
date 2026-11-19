@@ -76,6 +76,7 @@ beforeAll(async () => {
       artifact,
       requirements: [],
       permissions: declared,
+      documents: [],
     })),
     ensureTriggerDefinitions: vi.fn(async () => undefined),
     assertWorkflowAccess: vi.fn(async ({ identity, workflowName }) => {
@@ -437,6 +438,7 @@ describe("WorkflowEnablementsService", () => {
           artifact,
           requirements: [],
           permissions: declared,
+          documents: [],
         })),
         ensureTriggerDefinitions: vi.fn(async () => undefined),
         assertWorkflowAccess: vi.fn(async () => undefined),

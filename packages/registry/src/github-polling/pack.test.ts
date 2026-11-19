@@ -12,6 +12,7 @@ import {
 } from "@catamorphic/parser";
 import { expect, it } from "vitest";
 import { packFiles } from "../pack-files.js";
+import { projectStoreCheck } from "../store-scope.js";
 
 const PACK = packFiles("github-polling");
 const REVIEWS = packFiles("pull-request-reviews");
@@ -43,7 +44,9 @@ interface PollResult {
  * Runs the shipped poller under bun, step by step like the host: each
  * returned call is executed by a fake (documents in a store, `get` on a
  * fake GitHub, `record` into an event table that keeps one event per id),
- * and its result, with any carried state, is the next step's input.
+ * and its result, with any carried state, is the next step's input. The
+ * store refuses what Work refuses a project automation (ADR 0335): the
+ * poller is turned on for the project, so it reaches only what it declares.
  * Timestamps written `T+60` are seconds from the start of the script.
  */
 async function polls(sequence: Poll[]): Promise<PollResult[]> {
@@ -62,6 +65,7 @@ async function polls(sequence: Poll[]): Promise<PollResult[]> {
       path.join(directory, "verify.ts"),
       `
       import { pollGithub } from "./recipe.ts";
+      ${projectStoreCheck({ files: PACK.files, workflowName: "pollGithub" })}
       const start = Date.now();
       const time = (value) => JSON.parse(JSON.stringify(value), (_key, item) =>
         typeof item === "string" && /^T[+-]\\d+$/.test(item)
@@ -85,13 +89,15 @@ async function polls(sequence: Poll[]): Promise<PollResult[]> {
         const execute = ({ call, args }) => {
           // As Work lists: a prefix is a folder, and lists what is under it.
           if (call === "documents.list")
-            return [...store.entries()].filter(([path]) => path.startsWith(args.prefix.endsWith("/") ? args.prefix : args.prefix + "/")).map(([path, doc]) => ({ path, source: "store", contentType: "application/json", size: doc.text.length, version: doc.version }));
+            return [...store.entries()].filter(([path]) => path.startsWith(args.prefix.endsWith("/") ? args.prefix : args.prefix + "/") && mayReach(path, "read")).map(([path, doc]) => ({ path, source: "store", contentType: "application/json", size: doc.text.length, version: doc.version }));
           if (call === "documents.read") {
+            authorize(args.path, "read");
             const doc = store.get(args.path);
             if (poll.overlapped) store.set(args.path, { ...doc, version: doc.version + 1 });
             return { path: args.path, source: "store", version: doc.version, text: doc.text };
           }
           if (call === "documents.write") {
+            authorize(args.path, "write");
             const current = store.get(args.path)?.version ?? 0;
             if (args.ifVersion !== current) throw new Error("version conflict: the document is at " + current);
             result.writes.push(args.ifVersion);
@@ -229,6 +235,10 @@ it("installs the poller, the GitHub library the reviews use, and a project skill
   const [workflow] = parsed.workflows;
   expect(workflow?.functionName).toBe("pollGithub");
   expect(workflow?.graph.permissions).toEqual(["events:write"]);
+  // Its cursor's folder, consented to when it is turned on (ADR 0335).
+  expect(workflow?.graph.documents).toEqual([
+    { path: "store/github-polling/", access: "write" },
+  ]);
   expect(workflow?.graph.connections).toEqual([
     { alias: "github", principal: "service", capabilities: ["get"] },
   ]);

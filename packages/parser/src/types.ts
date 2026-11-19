@@ -388,6 +388,12 @@ export interface WorkflowGraph {
    */
   permissions: string[];
   /**
+   * Project store paths the workflow's runs read or write (ADR 0335): a
+   * path ending in `/` is a folder. Turning it on consents to these, and
+   * its runs reach nothing else of the store. Sorted, unique by path.
+   */
+  documents: WorkflowDocumentAccess[];
+  /**
    * Whether any execution path can leave the run waiting on the clock or the
    * queue — a pause, a retry policy, a rate limit, a batch, or a child
    * workflow call. `false` is a hard guarantee that a sync trigger firing
@@ -399,6 +405,11 @@ export interface WorkflowGraph {
   sourceCode: string;
   filePath?: string;
   projectFiles?: string[];
+}
+
+export interface WorkflowDocumentAccess {
+  path: string;
+  access: "read" | "write";
 }
 
 export interface WorkflowConcurrency {
