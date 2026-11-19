@@ -130,6 +130,12 @@ export interface EnvironmentProvider {
     requirements?: EnvironmentRequirements;
     /** Preserve an existing Allocation's physical owner when resolving a pool. */
     workerNodeId?: string;
+    /**
+     * A cache fill of this size (ADR 0334, 0335): placed only where it
+     * fits above the machine's full disk floor, whatever the workload. Not
+     * a requirement: a machine that reports no disk still takes it.
+     */
+    fill?: { storageMb: number };
   }):
     | Promise<EnvironmentRuntimeBinding | undefined>
     | EnvironmentRuntimeBinding

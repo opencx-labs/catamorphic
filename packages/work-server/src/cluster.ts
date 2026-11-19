@@ -153,6 +153,7 @@ export async function registerWorkMachine(args: {
       workerNodeId,
       allocationBindingId,
       requirements,
+      fill,
     }) => {
       const candidates = await nodes.list({
         tenantId,
@@ -217,14 +218,19 @@ export async function registerWorkMachine(args: {
         { strict },
       );
       // The rule admission applies (ADR 0335): a workflow run down to the
-      // critical floor, everything with the storage it reserves.
+      // critical floor, everything with the storage it reserves, and a cache
+      // fill with its cache's size above the full floor.
+      const storageMb =
+        (requirements?.resources?.storageMb ?? 0) + (fill?.storageMb ?? 0);
+      const workload =
+        requirements?.workload && !fill
+          ? { workload: requirements.workload }
+          : {};
       const roomy = ({ node }: (typeof ordered)[number]) =>
         diskFits({
           usage: node.usage,
-          resources: { ...requirements?.resources },
-          ...(requirements?.workload
-            ? { workload: requirements.workload }
-            : {}),
+          resources: storageMb > 0 ? { storageMb } : {},
+          ...workload,
           ...(node.disk && node.diskFresh ? { disk: node.disk } : {}),
         });
       const chosen = ordered.find(
@@ -251,15 +257,8 @@ export async function registerWorkMachine(args: {
             disk
               ? {
                   disk,
-                  floorBytes: floorFor({
-                    disk,
-                    ...(requirements?.workload
-                      ? { workload: requirements.workload }
-                      : {}),
-                  }),
-                  ...(requirements?.resources?.storageMb
-                    ? { storageMb: requirements.resources.storageMb }
-                    : {}),
+                  floorBytes: floorFor({ disk, ...workload }),
+                  ...(storageMb > 0 ? { storageMb } : {}),
                 }
               : undefined,
           );

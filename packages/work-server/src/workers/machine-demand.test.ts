@@ -516,6 +516,57 @@ describe("machines on demand (ADR 0258)", () => {
     await deleteRule("burst");
   });
 
+  it("scales for a cache fill waiting for room, and not once it has run (ADR 0335)", async () => {
+    await putRule("fills", {
+      projects: [projectId],
+      machines: { demand: { max: 2 } },
+      class: "review-16",
+      labels: { pool: "fills" },
+    });
+    try {
+      const fill = await db()
+        .insertInto("environment_cache_fills")
+        .values({
+          tenant_id: SERVER_TENANT_ID,
+          project_id: projectId,
+          environment_name: "review",
+          cache_name: "pnpm",
+          reason: "requested",
+          status: "queued",
+        })
+        .returning("id")
+        .executeTakeFirstOrThrow();
+      // As the fill records it when no machine has room for its size.
+      await db()
+        .insertInto("placement_waits")
+        .values({
+          root_workload_id: fill.id,
+          tenant_id: SERVER_TENANT_ID,
+          project_id: projectId,
+          workload_kind: "agent",
+          environment_name: "review",
+          pool: { pool: "fills" },
+          owner: null,
+          requirements: { resources: { storageMb: 512 }, capabilities: [] },
+          reason: "capacity",
+        })
+        .execute();
+      await reconcile();
+      expect((await status()).fills).toMatchObject({ desired: 1, queued: 1 });
+      await db()
+        .updateTable("environment_cache_fills")
+        .set({ status: "succeeded", finished_at: new Date() })
+        .where("id", "=", fill.id)
+        .execute();
+      await reconcile();
+      expect((await status()).fills).toMatchObject({ queued: 0 });
+    } finally {
+      await forgetWaits();
+      await db().deleteFrom("environment_cache_fills").execute();
+      await deleteRule("fills");
+    }
+  });
+
   it("scales for a runnable workflow continuation, excluding a parked journal and timeout jobs", async () => {
     await putRule("continuation", {
       projects: [projectId],

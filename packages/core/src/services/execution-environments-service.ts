@@ -124,6 +124,12 @@ export interface EnvironmentAdmitArgs {
    * its sandbox from the revision that went live.
    */
   commit?: string;
+  /**
+   * A cache fill of this size (ADR 0334, 0335): placed only where it fits
+   * above the machine's full disk floor. Not a requirement, so a machine
+   * that reports no disk still takes it.
+   */
+  fill?: { storageMb: number };
 }
 
 /** An Environment's setup as admission reads it (ADRs 0208, 0257). */
@@ -607,14 +613,15 @@ export class ExecutionEnvironmentsService {
   async admitOrWait(
     args: EnvironmentAdmitArgs & { always?: boolean },
   ): Promise<
-    { admission: EnvironmentAdmission } | { wait: PlacementWaitTarget }
+    | { admission: EnvironmentAdmission }
+    | { wait: PlacementWaitTarget; error: Error }
   > {
     const placed = await this.place(args);
     if ("admission" in placed) return placed;
     const wait = placed.waits.find(
       (candidate) => args.always || candidate.waitMinutes > 0,
     );
-    if (wait) return { wait };
+    if (wait) return { wait, error: placed.error };
     throw placed.error;
   }
 
@@ -807,6 +814,7 @@ export class ExecutionEnvironmentsService {
     signIn?: SignInHarness;
     harnessInSandbox?: boolean;
     commit?: string;
+    fill?: { storageMb: number };
   }): Promise<
     | { admission: EnvironmentAdmission }
     | { bindingUnavailable: true; reasons: [] }
@@ -839,6 +847,7 @@ export class ExecutionEnvironmentsService {
       clientRunnerId: args.identity.clientRunnerId,
       allocationBindingId: args.allocationBindingId,
       workerNodeId: args.workerNodeId,
+      ...(args.fill ? { fill: args.fill } : {}),
     });
     if (!runtime) return { bindingUnavailable: true, reasons: [] };
     const compatibility = environmentSatisfies(

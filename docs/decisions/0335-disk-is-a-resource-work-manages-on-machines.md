@@ -60,10 +60,12 @@ A workflow run is held to the critical floor instead, so the workflows
 that free or replace a machine (provisioners, publishers) still run when
 chats stop, and nothing starts into a truly full disk. Reservations and
 the budget apply to every workload, and a cache fill reserves its cache's
-size and meets the full floor whatever its Environment's workload, so it
-starts only where that fits above the floor (on its one
-machine; one that does not fit backs off, as ADR 0334 says). Placement
-and admission apply the same rule.
+size and meets the full floor whatever its Environment's workload:
+placement is told its size (not as a requirement, so machines that report
+no disk still fill), it is pinned to a machine only once admitted there,
+so a machine that refused it does not hold it, and while it waits it is
+demand for machines on demand. Placement and admission apply the same
+rule.
 Machines on demand count a machine under its floor as having no room, so
 waiting work gets a new machine (ADR 0258). An Environment's `storageMb`
 needs a machine that enforces it (microsandbox, which sizes its VM's root

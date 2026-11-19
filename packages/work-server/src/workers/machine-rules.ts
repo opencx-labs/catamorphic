@@ -2634,7 +2634,11 @@ function canonical(value: unknown): string {
   );
 }
 
-/** Both kinds of work reuse placement demand; waiting journals alone are no demand. */
+/**
+ * Both kinds of work reuse placement demand, and a cache fill that waits for
+ * a machine with room for its size (ADR 0335); waiting journals alone are
+ * no demand.
+ */
 function queuedPlacementWait(db: Kysely<DB>) {
   const turns = db
     .selectFrom("agent_turns")
@@ -2656,6 +2660,12 @@ function queuedPlacementWait(db: Kysely<DB>) {
     .where("job.status", "=", "pending")
     .where("job.kind", "!=", "durable_pause_timeout")
     .where("job.available_at", "<=", sql<Date>`now()`);
+  const fills = db
+    .selectFrom("environment_cache_fills")
+    .select("id")
+    .where("id", "=", sql<string>`placement_waits.root_workload_id`)
+    .where("status", "=", "queued");
   return sql<boolean>`((placement_waits.workload_kind = 'agent' AND EXISTS (${turns})) OR
-    (placement_waits.workload_kind = 'workflow' AND EXISTS (${jobs})))`;
+    (placement_waits.workload_kind = 'workflow' AND EXISTS (${jobs})) OR
+    EXISTS (${fills}))`;
 }
