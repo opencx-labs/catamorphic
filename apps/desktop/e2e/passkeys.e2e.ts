@@ -135,13 +135,16 @@ const inGuest = <T>(code: string) =>
 /**
  * Starts a request the way a person does, from the tab in front: a tab
  * without focus is Chromium's to refuse, and Work shows no sheet for it.
+ * The page calls `call` only while it has focus, in the same moment, as a
+ * press reaches a focused page: focus read a moment earlier can lapse, as
+ * when a sign-in popup that just closed hands focus back to the window.
  */
-const startInGuest = async <T>(code: string) => {
+const startInGuest = async (call: string) => {
   await app.eval(`${guest}.focus(); true`);
-  await app.waitFor(`${guest}.executeJavaScript('document.hasFocus()', true)`, {
-    label: "tab focused",
-  });
-  return inGuest<T>(code);
+  await app.waitFor(
+    `${guest}.executeJavaScript(${JSON.stringify(`document.hasFocus() && (${call}, true)`)}, true)`,
+    { label: "request started from the focused tab" },
+  );
 };
 const titleIs = (title: string, timeoutMs?: number) =>
   app.waitFor(`${guest}.getTitle() === ${JSON.stringify(title)}`, {
@@ -157,10 +160,22 @@ const pageReady = () =>
 // keys, so a focused sheet is one that Escape reaches.
 // Answers count once the sheet's input protection has passed.
 const sheetShown = (label: string) =>
-  app.waitFor(
-    `${sheet}?.dataset.armed === 'true' && !!${sheet}?.closest('[role="dialog"]')?.contains(document.activeElement)`,
-    { label },
-  );
+  app
+    .waitFor(
+      `${sheet}?.dataset.armed === 'true' && !!${sheet}?.closest('[role="dialog"]')?.contains(document.activeElement)`,
+      { label },
+    )
+    .catch(async (error: unknown) => {
+      // Refused (the page's title says how), or up without focus.
+      const state = await app
+        .eval(
+          `({ title: ${guest}.getTitle(), sheet: !!${sheet}, armed: ${sheet}?.dataset.armed ?? null, focus: document.activeElement?.tagName ?? null })`,
+        )
+        .catch(() => null);
+      throw new Error(
+        `${error instanceof Error ? error.message : String(error)}; state: ${JSON.stringify(state)}`,
+      );
+    });
 const sheetGone = (label: string) => app.waitFor(`!${sheet}`, { label });
 const click = (selector: string) =>
   app.eval(
@@ -229,7 +244,7 @@ describe("passkeys", () => {
   });
 
   it("shows a sign-in Work cannot answer and cancels it into NotAllowedError", async () => {
-    await startInGuest("signIn(); true");
+    await startInGuest("signIn()");
     await sheetShown("passkey sheet");
     const text = await app.eval<string>(`${sheet}.textContent`);
     expect(text).toContain(
@@ -246,7 +261,7 @@ describe("passkeys", () => {
 
   it("frees the page for the next attempt, and Escape cancels too", async () => {
     // Before, the stuck request made this one fail as already pending.
-    await startInGuest("signIn(); true");
+    await startInGuest("signIn()");
     await sheetShown("sheet for the retry");
     await app.press("Escape");
     await titleIs("get:NotAllowedError");
@@ -254,7 +269,7 @@ describe("passkeys", () => {
   });
 
   it("keeps one sheet for the request that is really waiting", async () => {
-    await startInGuest("signIn(); true");
+    await startInGuest("signIn()");
     await sheetShown("sheet for the first request");
     // The sheet holds focus, so a second request comes from a page
     // without it and is refused, as Chrome refuses one behind its dialog.
@@ -271,7 +286,7 @@ describe("passkeys", () => {
   });
 
   it("closes by itself when the page gives up", async () => {
-    await startInGuest("register(); true");
+    await startInGuest("register()");
     await sheetShown("sheet for creating a passkey");
     expect(await app.eval<string>(`${sheet}.textContent`)).toContain(
       "wants to create a passkey",
@@ -284,7 +299,7 @@ describe("passkeys", () => {
   it("keeps the site's deadline instead of waiting forever", async () => {
     // Chrome holds a timeout to at least ten seconds.
     const started = performance.now();
-    await startInGuest("signIn({ timeout: 1000 }); true");
+    await startInGuest("signIn({ timeout: 1000 })");
     await sheetShown("sheet for the timed request");
     await titleIs("get:NotAllowedError", 20_000);
     expect(performance.now() - started).toBeGreaterThanOrEqual(9_000);
@@ -297,7 +312,7 @@ describe("passkeys", () => {
     await new Promise((resolve) => setTimeout(resolve, 500));
     expect(await app.eval(`!!${sheet}`)).toBe(false);
     // The page's own passkey button still works alongside it.
-    await startInGuest("signIn(); true");
+    await startInGuest("signIn()");
     await sheetShown("sheet beside a pending autofill");
     await app.press("Escape");
     await titleIs("get:NotAllowedError");
@@ -325,7 +340,7 @@ describe("passkeys", () => {
   });
 
   it("withdraws the sheet when the page moves on", async () => {
-    await startInGuest("signIn(); true");
+    await startInGuest("signIn()");
     await sheetShown("sheet before navigating");
     await inGuest("location.href = '/signin?moved'; true");
     await sheetGone("sheet withdrawn on navigation");
@@ -333,7 +348,7 @@ describe("passkeys", () => {
   });
 
   it("saves a new passkey in Work, and the site accepts it", async () => {
-    await startInGuest("register(); true");
+    await startInGuest("register()");
     await sheetShown("sheet offering to save");
     expect(
       await app.eval<string>(
@@ -365,7 +380,7 @@ describe("passkeys", () => {
   });
 
   it("signs in with the saved passkey from the sheet", async () => {
-    await startInGuest("signIn(); true");
+    await startInGuest("signIn()");
     await sheetShown("sheet listing the saved passkey");
     expect(await choices()).toEqual(["adaPasskey saved in Work"]);
     expect(await app.eval<string>(`${sheet}.textContent`)).toContain(
@@ -388,7 +403,7 @@ describe("passkeys", () => {
   // Chromium, which shows nothing, so the popup's Continue did nothing.
   it("answers a passkey request in a sign-in popup, in the popup", async () => {
     await startInGuest(
-      `window.open("/signin?popup", "signin", "width=520,height=640"); true`,
+      `window.open("/signin?popup", "signin", "width=520,height=640")`,
     );
     const popup = await app.connectToFrame("/signin?popup");
     const frames = [popup];
@@ -469,7 +484,7 @@ describe("passkeys", () => {
 
   it("offers only the passkeys a site asks for", async () => {
     await startInGuest(
-      `signIn({ allowCredentials: [{ type: "public-key", id: new Uint8Array([1, 2, 3]) }] }); true`,
+      `signIn({ allowCredentials: [{ type: "public-key", id: new Uint8Array([1, 2, 3]) }] })`,
     );
     await sheetShown("sheet for an unknown credential");
     expect(await choices()).toEqual([]);
@@ -477,7 +492,7 @@ describe("passkeys", () => {
     await titleIs("get:NotAllowedError");
     await sheetGone("sheet closed");
     await startInGuest(
-      `signIn({ allowCredentials: [{ type: "public-key", id: unb64(${JSON.stringify(created.id)}) }] }); true`,
+      `signIn({ allowCredentials: [{ type: "public-key", id: unb64(${JSON.stringify(created.id)}) }] })`,
     );
     await sheetShown("sheet for the known credential");
     expect(await choices()).toEqual(["adaPasskey saved in Work"]);
@@ -488,7 +503,7 @@ describe("passkeys", () => {
 
   it("tells a site the account already has a passkey here", async () => {
     await startInGuest(
-      `register({ excludeCredentials: [{ type: "public-key", id: unb64(${JSON.stringify(created.id)}) }] }); true`,
+      `register({ excludeCredentials: [{ type: "public-key", id: unb64(${JSON.stringify(created.id)}) }] })`,
     );
     await sheetShown("sheet for an excluded account");
     expect(await app.eval<string>(`${sheet}.textContent`)).toContain(
@@ -503,7 +518,7 @@ describe("passkeys", () => {
     const verifies = await inGuest<boolean>(
       "PublicKeyCredential.isUserVerifyingPlatformAuthenticatorAvailable()",
     );
-    await startInGuest(`signIn({ userVerification: "required" }); true`);
+    await startInGuest(`signIn({ userVerification: "required" })`);
     await sheetShown("sheet for a request that requires verification");
     if (verifies) expect(await choices()).toHaveLength(1);
     else {
@@ -601,7 +616,7 @@ describe("passkeys", () => {
       skipped: 0,
     });
 
-    await startInGuest("signIn(); true");
+    await startInGuest("signIn()");
     await sheetShown("sheet listing both passkeys");
     expect(await choices()).toEqual([
       "adaPasskey saved in Work",
@@ -648,7 +663,7 @@ describe("passkeys", () => {
 
     // The sheet's way to Passwords, for a site Work has no passkey for.
     await startInGuest(
-      `signIn({ allowCredentials: [{ type: "public-key", id: new Uint8Array([9]) }] }); true`,
+      `signIn({ allowCredentials: [{ type: "public-key", id: new Uint8Array([9]) }] })`,
     );
     await sheetShown("sheet without a passkey for the request");
     await click('[data-testid="passkey-sheet-import"]');
