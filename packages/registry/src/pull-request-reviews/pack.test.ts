@@ -2178,6 +2178,41 @@ describe("report text", () => {
     expect(publicationText(ordinary)).toBe(ordinary);
   });
 
+  it("shows a finding's path as written where the review's body lists it", () => {
+    const finding = checkFinding({
+      id: "f1",
+      path: "src/a<b>&c_d.ts",
+      line: 3,
+      severity: "minor",
+      title: "T",
+      body: "B",
+    });
+    if (typeof finding === "string") throw new Error(finding);
+    const posted = stampedBody(findingLine(finding), "<!-- s -->").replace(
+      /\n\n<!-- s -->$/,
+      "",
+    );
+    // Cleaned once with the whole body, it reads as written.
+    const shown: string[] = [];
+    const walk = (node: {
+      type: string;
+      value?: string;
+      children?: unknown[];
+    }) => {
+      if (node.type === "text" && node.value) shown.push(node.value);
+      for (const child of node.children ?? [])
+        walk(child as { type: string; value?: string; children?: unknown[] });
+    };
+    walk(
+      fromMarkdown(posted, {
+        extensions: [gfm()],
+        mdastExtensions: [gfmFromMarkdown()],
+      }),
+    );
+    expect(shown.join("")).toBe("src/a<b>&c_d.ts:3: Minor: T. B");
+    expect(liveIn(posted)).toEqual([]);
+  });
+
   it("defuses a finding's words wherever they reach a GitHub body", () => {
     for (const text of planted) {
       const finding = checkFinding({

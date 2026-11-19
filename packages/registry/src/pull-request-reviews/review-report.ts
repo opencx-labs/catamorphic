@@ -636,12 +636,11 @@ function text(value: unknown, max: number): value is string {
   );
 }
 
-/** A filename rendered as literal Markdown text, with no code-span breakout. */
+/**
+ * A filename rendered as literal Markdown text, with no code-span breakout.
+ * HTML is left to the cleaning of the whole body it is posted in
+ * (`stampedBody`), so a path is escaped once and reads as written.
+ */
 export function renderedPath(path: string): string {
-  return path
-    .replace(/&/g, "&amp;")
-    .replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;")
-    .replace(/[\r\n]/g, " ")
-    .replace(/[\\`*_{}[\]()#+.!|~-]/g, "\\$&");
+  return path.replace(/[\r\n]/g, " ").replace(/[\\`*_{}[\]()#+.!|~-]/g, "\\$&");
 }
