@@ -7,6 +7,7 @@ import type {
 } from "@catamorphic/react";
 import { Check, PencilLine, X } from "lucide-react";
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
+import { fadeEdges } from "../edge-fade/edge-fade.js";
 
 /** An Other answer: the words, and the pills its markers stand for. */
 export interface OtherAnswer {
@@ -91,6 +92,22 @@ const isAnswered = (answer: Answer): boolean =>
   answer.selected.length > 0 || ownWords(answer) !== null;
 
 /**
+ * The most a question and its options take before they scroll, between the
+ * header and the footer: the panel's room around them is about 6rem, so the
+ * whole panel stays within half the window. A host may set
+ * `--cat-question-max-height` on or around the panel instead.
+ */
+const QUESTION_MAX_HEIGHT =
+  "var(--cat-question-max-height, max(8rem, calc(50vh - 7rem)))";
+
+/** How long an Other answer's box takes to open (its grid transition). */
+const OTHER_OPEN_MS = 200;
+
+/** A question that scrolls fades where it continues, as every list does. */
+const fadeQuestion = (body: HTMLDivElement | null) =>
+  body ? fadeEdges(body) : undefined;
+
+/**
  * Tabbed question form for agent `ask_user` turns, styled after the Claude
  * Code VSCode extension: one tab per question, animated slide between them,
  * and options with effect descriptions. Each question has an Other answer
@@ -130,6 +147,7 @@ export function AgentQuestionPanel({
   // Height follows the active panel so the slide never clips or jumps. A
   // ResizeObserver (not a one-shot measure) because question text reflows
   // when the panel's width changes and an Other answer grows as it is typed.
+  // A panel stops growing at its most (QUESTION_MAX_HEIGHT) and scrolls.
   const panelRefs = useRef<(HTMLDivElement | null)[]>([]);
   const [panelHeight, setPanelHeight] = useState<number>();
   useLayoutEffect(() => {
@@ -143,6 +161,32 @@ export function AgentQuestionPanel({
     observer.observe(panel);
     return () => observer.disconnect();
   }, [safeIndex, collapsed]);
+
+  // Other opening at the foot of a question that scrolls grows past its
+  // visible end: the question follows it down as it opens, so the box the
+  // caret went to is in view once it is open.
+  const followRef = useRef(0);
+  useEffect(() => () => cancelAnimationFrame(followRef.current), []);
+  const followOther = (index: number) => {
+    cancelAnimationFrame(followRef.current);
+    const started = performance.now();
+    const follow = () => {
+      const body = panelRefs.current[index]?.querySelector<HTMLElement>(
+        "[data-question-body]",
+      );
+      const box = body?.querySelector<HTMLElement>("[data-other-answer]");
+      if (!body || !box) return;
+      const end =
+        body.getBoundingClientRect().bottom -
+        Number.parseFloat(getComputedStyle(body).paddingBottom);
+      const past = box.getBoundingClientRect().bottom - end;
+      if (past > 0.5) body.scrollTop += past;
+      // The box opens over 200ms; a frame or two more lets it settle.
+      if (performance.now() - started < OTHER_OPEN_MS + 100)
+        followRef.current = requestAnimationFrame(follow);
+    };
+    followRef.current = requestAnimationFrame(follow);
+  };
 
   const submit = () => {
     if (!allAnswered || disabled) return;
@@ -234,7 +278,10 @@ export function AgentQuestionPanel({
       other,
       selected: question.multiSelect ? current.selected : [],
     }));
-    if (other) requestFocus(index);
+    if (other) {
+      requestFocus(index);
+      followOther(index);
+    }
   };
 
   const requestFocus = (index: number) =>
@@ -380,7 +427,9 @@ export function AgentQuestionPanel({
 
       {/* Clip, never scroll: a hidden overflow is a scroll container, and
           focus landing in a question mid-slide scrolled it, leaving the
-          next panel (invisible) in view or the question cut off at the top. */}
+          next panel (invisible) in view or the question cut off at the top.
+          A long question scrolls inside its own panel instead, between the
+          header and the footer, which stay where they are. */}
       <div
         className="overflow-clip transition-[height] duration-250 ease-[cubic-bezier(0.2,0,0,1)]"
         style={panelHeight === undefined ? undefined : { height: panelHeight }}
@@ -401,70 +450,78 @@ export function AgentQuestionPanel({
                   panelRefs.current[index] = node;
                 }}
                 role={questions.length > 1 ? "tabpanel" : undefined}
-                className={`w-full shrink-0 p-3 transition-opacity duration-200 ${
+                className={`w-full shrink-0 transition-opacity duration-200 ${
                   active ? "opacity-100" : "pointer-events-none opacity-0"
                 }`}
                 aria-hidden={!active}
                 inert={active ? undefined : true}
               >
-                <p className="mb-2.5 whitespace-pre-wrap break-words text-sm font-medium leading-5">
-                  {question.question}
-                </p>
-                <div className="flex flex-col gap-1.5">
-                  {question.options.map((option) => {
-                    const selected = answer.selected.includes(option.label);
-                    return (
+                <div
+                  ref={fadeQuestion}
+                  data-question-body
+                  className="cat-edge-fade overflow-y-auto overscroll-contain p-3"
+                  style={{ maxHeight: QUESTION_MAX_HEIGHT }}
+                >
+                  <p className="mb-2.5 whitespace-pre-wrap break-words text-sm font-medium leading-5">
+                    {question.question}
+                  </p>
+                  <div className="flex flex-col gap-1.5">
+                    {question.options.map((option) => {
+                      const selected = answer.selected.includes(option.label);
+                      return (
+                        <OptionRow
+                          key={option.label}
+                          label={option.label}
+                          description={option.description}
+                          selected={selected}
+                          multiSelect={question.multiSelect}
+                          disabled={disabled}
+                          onSelect={() => selectOption(index, option.label)}
+                        />
+                      );
+                    })}
+                    {question.options.length > 0 && (
                       <OptionRow
-                        key={option.label}
-                        label={option.label}
-                        description={option.description}
-                        selected={selected}
+                        label="Other"
+                        description="Answer this one in your own words."
+                        selected={answer.other}
                         multiSelect={question.multiSelect}
                         disabled={disabled}
-                        onSelect={() => selectOption(index, option.label)}
+                        icon={<PencilLine className="size-3" />}
+                        onSelect={() => toggleOther(index)}
                       />
-                    );
-                  })}
-                  {question.options.length > 0 && (
-                    <OptionRow
-                      label="Other"
-                      description="Answer this one in your own words."
-                      selected={answer.other}
-                      multiSelect={question.multiSelect}
-                      disabled={disabled}
-                      icon={<PencilLine className="size-3" />}
-                      onSelect={() => toggleOther(index)}
-                    />
-                  )}
-                  <div
-                    className={`grid transition-[grid-template-rows,opacity] duration-200 ease-[cubic-bezier(0.2,0,0,1)] ${
-                      otherOpen
-                        ? "grid-rows-[1fr] opacity-100"
-                        : "grid-rows-[0fr] opacity-0"
-                    }`}
-                    inert={otherOpen ? undefined : true}
-                  >
-                    {/* Clip, never scroll: a hidden overflow is a scroll
+                    )}
+                    <div
+                      className={`grid transition-[grid-template-rows,opacity] duration-200 ease-[cubic-bezier(0.2,0,0,1)] ${
+                        otherOpen
+                          ? "grid-rows-[1fr] opacity-100"
+                          : "grid-rows-[0fr] opacity-0"
+                      }`}
+                      inert={otherOpen ? undefined : true}
+                    >
+                      {/* Clip, never scroll: a hidden overflow is a scroll
                         container, and typing into the answer while it
                         opened scrolled it to the caret and left text
                         behind the caret. The padding is room for the
                         field's focus glow. */}
-                    <div className="min-h-0 overflow-clip" data-other-answer>
-                      <div className="-mx-[3px] px-[3px] pt-1.5 pb-[3px]">
-                        {renderOtherInput({
-                          ariaLabel: `Your answer: ${question.header || question.question}`,
-                          placeholder: "Type your answer…",
-                          disabled,
-                          focusRequest: focusRequests[index] ?? 0,
-                          onChange: (otherAnswer) =>
-                            setAnswer(index, (current) => ({
-                              ...current,
-                              otherAnswer,
-                              other:
-                                current.other || question.options.length === 0,
-                            })),
-                          onEnter: () => answeredOther(index),
-                        })}
+                      <div className="min-h-0 overflow-clip" data-other-answer>
+                        <div className="-mx-[3px] px-[3px] pt-1.5 pb-[3px]">
+                          {renderOtherInput({
+                            ariaLabel: `Your answer: ${question.header || question.question}`,
+                            placeholder: "Type your answer…",
+                            disabled,
+                            focusRequest: focusRequests[index] ?? 0,
+                            onChange: (otherAnswer) =>
+                              setAnswer(index, (current) => ({
+                                ...current,
+                                otherAnswer,
+                                other:
+                                  current.other ||
+                                  question.options.length === 0,
+                              })),
+                            onEnter: () => answeredOther(index),
+                          })}
+                        </div>
                       </div>
                     </div>
                   </div>

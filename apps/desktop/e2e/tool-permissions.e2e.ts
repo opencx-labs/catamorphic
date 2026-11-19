@@ -578,6 +578,96 @@ describe("talking around questions", () => {
     );
   }, 60_000);
 
+  it("a long question scrolls inside its panel; the header and footer stay", async () => {
+    await settled();
+    await run(`sendHere('a long question to scroll'); return true;`);
+    await runWait(
+      `return !!modal() && modal().textContent.includes('Which benchmark should I run');`,
+      { timeoutMs: 30_000, label: "long question" },
+    );
+    await settle();
+    const chrome = `
+      const m = modal();
+      const body = [...m.querySelectorAll('[data-question-body]')].find((el) => !el.closest('[inert]'));
+      const box = (el) => { const r = el.getBoundingClientRect(); return { top: Math.round(r.top), bottom: Math.round(r.bottom) }; };
+      const scrolled = [];
+      for (let el = m.parentElement; el; el = el.parentElement)
+        if (el.scrollTop > 0) scrolled.push(el.className);
+    `;
+    const before = await run<{
+      header: { top: number; bottom: number };
+      footer: { top: number; bottom: number };
+      scrolls: boolean;
+      fitsAboveComposer: boolean;
+    }>(`${chrome}
+      return {
+        header: box(m.querySelector('header')),
+        footer: box(m.querySelector('footer')),
+        scrolls: body.scrollHeight > body.clientHeight + 1,
+        fitsAboveComposer: m.getBoundingClientRect().bottom <= here().closest('form').getBoundingClientRect().top,
+      };`);
+    expect(before.scrolls).toBe(true);
+    expect(before.fitsAboveComposer).toBe(true);
+    await app.screenshot("/tmp/catamorphic-long-question-top.png");
+    // A real wheel over the options scrolls the question, and only it.
+    const point = await run<{ x: number; y: number }>(`${chrome}
+      const r = body.getBoundingClientRect();
+      return { x: Math.round(r.left + r.width / 2), y: Math.round(r.top + r.height / 2) };`);
+    await app.cdp("Input.dispatchMouseEvent", { type: "mouseMoved", ...point });
+    for (let i = 0; i < 6; i += 1)
+      await app.cdp("Input.dispatchMouseEvent", {
+        type: "mouseWheel",
+        ...point,
+        deltaX: 0,
+        deltaY: 400,
+      });
+    await runWait(
+      `${chrome} return body.scrollTop > 0 && body.scrollTop >= body.scrollHeight - body.clientHeight - 1;`,
+      { label: "the question scrolled to its end" },
+    );
+    await settle();
+    expect(
+      await run(`${chrome}
+        return {
+          header: box(m.querySelector('header')),
+          footer: box(m.querySelector('footer')),
+          faded: body.hasAttribute('data-edge-faded'),
+          scrolled,
+        };`),
+    ).toEqual({
+      header: before.header,
+      footer: before.footer,
+      faded: true,
+      scrolled: [],
+    });
+    await app.screenshot("/tmp/catamorphic-long-question-end.png");
+    // Other, at the foot, opens into view with the caret in it.
+    await run(`answer('Other'); return true;`);
+    await runWait(
+      `return document.activeElement?.dataset.testid === 'question-answer-input';`,
+      { label: "the answer takes the caret" },
+    );
+    await settle();
+    expect(
+      await run(`${chrome}
+        const input = body.querySelector('[data-other-answer]').getBoundingClientRect();
+        return {
+          inView: input.bottom <= body.getBoundingClientRect().bottom,
+          header: box(m.querySelector('header')),
+          scrolled,
+        };`),
+    ).toEqual({ inView: true, header: before.header, scrolled: [] });
+    await run(`answer('Micro-benchmark only'); return true;`);
+    await runWait(
+      `const submit = byText('section[aria-label="The agent has a question"] button', 'Submit'); if (!submit || submit.disabled) return false; submit.click(); return true;`,
+      { label: "answered" },
+    );
+    await runWait(
+      `return !modal() && hereLog().includes('Running: Micro-benchmark only');`,
+      { timeoutMs: 30_000, label: "the answer reached the agent" },
+    );
+  }, 60_000);
+
   it("the agent closes a question the conversation settled", async () => {
     await run(`sendHere('blocking question again'); return true;`);
     await runWait(`return !!modal();`, { timeoutMs: 30_000 });
