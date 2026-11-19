@@ -820,5 +820,37 @@ describeIf("workflows declare the store documents they use (ADR 0335)", () => {
       });
       expect(await startBehind(queued)).toMatchObject({ status: "failed" });
     });
+
+    it("another admin's consent keeps a project automation following after its first consenter leaves", async () => {
+      const ada = admin("ada");
+      const bea = admin("bea");
+      members.set("ada", ada);
+      members.set("bea", bea);
+      const notes = await enableQueue({
+        workflowName: "noteKeeper",
+        identity: ada,
+        owner: { type: "project" },
+      });
+      members.delete("ada");
+      const preview = await core.workflowEnablements.preview({
+        identity: bea,
+        projectId: queueProject,
+        workflowName: "noteKeeper",
+        owner: { type: "project" },
+      });
+      await core.workflowEnablements.updateDeployment({
+        identity: bea,
+        enablementId: notes.id,
+        consentDigest: preview.consentDigest,
+      });
+      const consented = await enablement(notes.id);
+      // A narrower revision follows, previewed as bea.
+      await deployQueue({ notes: NOTES_READ });
+      const followed = await enablement(notes.id);
+      expect(followed.commitSha).not.toBe(consented.commitSha);
+      expect(followed.documents).toEqual([
+        { path: "store/notes/", access: "read" },
+      ]);
+    });
   });
 });

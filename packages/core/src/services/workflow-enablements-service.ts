@@ -635,6 +635,7 @@ export class WorkflowEnablementsService {
         row,
         preview,
         actor: input.identity,
+        consentedBy: input.identity,
         eventType: "deployment_updated",
         followedSequence: await latestRevisionSequence(trx, current.projectId),
       });
@@ -973,6 +974,13 @@ export class WorkflowEnablementsService {
     row: Selectable<DB["workflow_enablements"]>;
     preview: WorkflowEnablementPreview;
     actor: Identity;
+    /**
+     * Who consented to this deployment. For a project automation they
+     * become the one following previews as (ADR 0330), so another admin's
+     * consent keeps it following after the first one leaves. A member's
+     * automation stays its member's.
+     */
+    consentedBy?: Identity;
     eventType: string;
     /** The latest revision it now stands for, so none older moves it. */
     followedSequence?: number | string | null;
@@ -992,6 +1000,9 @@ export class WorkflowEnablementsService {
         capabilities: toJson(preview.capabilities),
         permissions: toJson(preview.permissions),
         documents: toJson(preview.documents),
+        ...(input.consentedBy && row.owner_kind === "project"
+          ? { owner_identity: toJson(input.consentedBy) }
+          : {}),
         update_available: false,
         ...(input.keepStatus
           ? {}
