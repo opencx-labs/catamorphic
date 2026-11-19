@@ -114,7 +114,9 @@ record the same events.
 
 A server GitHub cannot reach (a private company server with no public URL)
 gets the same events by polling instead: install the `github-polling` pack
-(`registry.read`) into the project and turn `pollGithub` on. It reads the
+(`registry.read`) into the project and turn `pollGithub` on for the
+project (its consent lists `events:write` and the cursor folder
+`store/github-polling/`, ADR 0335). It reads the
 repository through the `github` service connection every minute and records
 `github.pull_request`, `github.issue_comment` and
 `github.pull_request_review_comment` events shaped like the webhook's

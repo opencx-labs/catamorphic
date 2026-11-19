@@ -233,15 +233,20 @@ Someone with `automations:write`, in a role whose `environments` list
 workflows for the project:
 `reviewPullRequests`, `answerReviewComments`, and `closePullRequestChats` in
 the `default` Environment, and `postReviews` in `github-poster`, with its
-`github` connection consented. Turn `restartStalledReviews` on in `default`
-too to restart hung reviews (it declares `sessions:write`, so the person
-needs it). The `github` webhook listens once they are on;
+`github` connection consented. Turn `restartStalledReviews` on for the
+project in `default` too to restart hung reviews. It declares
+`sessions:write` and writes `store/reviews/stalls/` (ADR 0335): the consent
+lists both, and the person needs that permission and a role whose
+`documents` write that folder (an admin's `store/**` does). Its runs reach
+no other store path. The `github` webhook listens once they are on;
 `GET /api/projects/:id/webhooks` shows its URL, which the App registered from
 a manifest already uses.
 
 **A private server.** When GitHub cannot reach the server, install the
-`github-polling` pack beside this one and turn `pollGithub` on in its
-`github-poller` Environment (the person needs `events:write` too). It polls
+`github-polling` pack beside this one and turn `pollGithub` on for the
+project in its `github-poller` Environment. Its consent lists `events:write`
+and its cursor folder, `store/github-polling/` (write): the person needs the
+permission and a role whose `documents` write that folder. It polls
 the repository every minute and records the same pull request and comment
 events the webhook would deliver (ADR 0326), so the review workflows above
 run unchanged; skip the webhook URL and `GITHUB_WEBHOOK_SECRET`. Events
