@@ -1523,12 +1523,21 @@ describeIf("Environment caches (ADR 0334)", () => {
       );
       if (current?.status !== "running") return;
       takenOver = true;
-      await db!
-        .updateTable("environment_cache_fills")
-        .set({ claimed_until: sql<Date>`now() - interval '1 second'` })
-        .where("id", "=", row?.id ?? "")
-        .execute();
-      expect(await fills.dispatch()).toBe(1);
+      // The run still renews its claim while it destroys, as a live run
+      // does. A renewal that lands between expiring the claim and the
+      // takeover's dispatch keeps the claim, and one still writing the row
+      // when the takeover looks makes it skip the row; so expire it again
+      // until the takeover has it.
+      let claimed = 0;
+      for (let attempt = 0; attempt < 10 && claimed === 0; attempt += 1) {
+        await db!
+          .updateTable("environment_cache_fills")
+          .set({ claimed_until: sql<Date>`now() - interval '1 second'` })
+          .where("id", "=", row?.id ?? "")
+          .execute();
+        claimed = await fills.dispatch();
+      }
+      expect(claimed).toBe(1);
       await new Promise((resolve) => setTimeout(resolve, 600));
     };
     await slow.dispatch();
@@ -1537,7 +1546,16 @@ describeIf("Environment caches (ADR 0334)", () => {
     const after = (await rowsOf(lease.id)).find(
       (entry) => entry.id === row?.id,
     );
-    expect(after?.status).toBe("succeeded");
+    // A failure says why, with what the run saw of its claim.
+    expect(
+      after?.status,
+      JSON.stringify({
+        error: after?.error,
+        attempts: after?.attempts,
+        generation: after?.generation,
+        takenOver,
+      }),
+    ).toBe("succeeded");
     const abandoned = (after?.abandoned_generations ?? []) as number[];
     expect(abandoned.map(Number)).toEqual(expect.arrayContaining([901]));
     expect(abandoned.length).toBeGreaterThanOrEqual(2);
