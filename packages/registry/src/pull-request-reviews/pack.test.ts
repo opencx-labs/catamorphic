@@ -2022,6 +2022,23 @@ describe("postReviews", () => {
   });
 });
 
+/** The text GitHub shows for `posted`, read as it reads it, formatting left out. */
+function shownText(posted: string): string {
+  type Node = { type: string; value?: string; children?: Node[] };
+  const shown: string[] = [];
+  const visit = (node: Node) => {
+    if (node.type === "text" && node.value) shown.push(node.value);
+    for (const child of node.children ?? []) visit(child);
+  };
+  visit(
+    fromMarkdown(posted, {
+      extensions: [gfm()],
+      mdastExtensions: [gfmFromMarkdown()],
+    }) as Node,
+  );
+  return shown.join("");
+}
+
 /**
  * What GitHub would act on in `posted`, read as it reads it (HTML and all):
  * HTML, a definition, an image, a link title, a mention or a hidden
@@ -2230,6 +2247,35 @@ describe("report text", () => {
     );
     expect(shown.join("")).toBe("src/a<b>&c_d.ts:3: Minor: T. B");
     expect(liveIn(posted)).toEqual([]);
+  });
+
+  it("escapes a body once, read or escaped whole, and keeps a path's brackets either way", () => {
+    const finding = checkFinding({
+      id: "f1",
+      path: "app/[slug]/page.tsx",
+      line: 3,
+      severity: "minor",
+      title: "T",
+      body: "B",
+    });
+    if (typeof finding === "string") throw new Error(finding);
+    // Read as GitHub reads it, and over 16 KB escaped whole: the path shows
+    // as written both ways.
+    for (const before of ["Intro.", "word ".repeat(3400)]) {
+      const posted = stampedBody(
+        `${before}\n\n- ${findingLine(finding)}`,
+        "<!-- s -->",
+      ).replace(/\n\n<!-- s -->$/, "");
+      expect(shownText(posted)).toContain("app/[slug]/page.tsx:3:");
+    }
+    // A rewrite that grows past 16 KB is escaped once, from what was
+    // written, not again over its own escapes.
+    expect(publicationText("a & b ".repeat(2700))).not.toContain("&amp;amp;");
+    // A link with `&` in a body over 16 KB shows as written.
+    const link = publicationText(
+      `${"word ".repeat(3400)}[docs](https://x.test/?a=1&b=2)`,
+    );
+    expect(shownText(link)).toContain("[docs](https://x.test/?a=1&b=2)");
   });
 
   it("defuses a finding's words wherever they reach a GitHub body", () => {

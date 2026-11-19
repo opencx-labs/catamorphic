@@ -172,16 +172,31 @@ export function publicationText(text: string): string {
   } catch {
     // Too deep or too odd to read: escaped whole below.
   }
-  return escapedWhole(current);
+  // Escaped whole from what was written, never over a pass's own escapes.
+  return escapedWhole(text);
 }
 
 /**
  * Text escaped whole, code included: nothing in it is HTML, an entity, a
  * mention, a link, a definition or code, so GitHub shows it as written.
+ * Only an `&` that would start a character reference is escaped: a bare
+ * URL GitHub still links shows a reference in it as written, so one like
+ * `?a=1&b=2` keeps its `&`.
  */
 function escapedWhole(text: string): string {
-  return prose(text).replace(/[[`~]/g, (char) => `&#${char.charCodeAt(0)};`);
+  return visible(text)
+    .replace(CHARACTER_REFERENCE, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/@(?!\u200b)/g, "@\u200b")
+    .replace(/[[`~]/g, (char) => `&#${char.charCodeAt(0)};`);
 }
+
+/**
+ * An `&` that starts a character reference, other than those this file
+ * writes itself (`&amp;`, `&lt;`, and `[`, a backtick and `~` written out).
+ */
+const CHARACTER_REFERENCE =
+  /&(?!amp;|lt;|#91;|#96;|#126;)(?=#[0-9]{1,7};|#[xX][0-9A-Fa-f]{1,6};|[A-Za-z][A-Za-z0-9]{1,31};)/g;
 
 /** The longest text read as Markdown: anything longer is escaped whole. */
 const PARSED_LIMIT = 16_384;
@@ -652,9 +667,14 @@ function text(value: unknown, max: number): value is string {
 
 /**
  * A filename rendered as literal Markdown text, with no code-span breakout.
- * HTML is left to the cleaning of the whole body it is posted in
- * (`stampedBody`), so a path is escaped once and reads as written.
+ * `[`, a backtick and `~` are character references, which a body escaped
+ * whole keeps too (a backslash before one there would show); HTML is left
+ * to the cleaning of the whole body it is posted in (`stampedBody`), so a
+ * path is escaped once and reads as written.
  */
 export function renderedPath(path: string): string {
-  return path.replace(/[\r\n]/g, " ").replace(/[\\`*_{}[\]()#+.!|~-]/g, "\\$&");
+  return path
+    .replace(/[\r\n]/g, " ")
+    .replace(/[\\*_{}\]()#+.!|-]/g, "\\$&")
+    .replace(/[[`~]/g, (char) => `&#${char.charCodeAt(0)};`);
 }
