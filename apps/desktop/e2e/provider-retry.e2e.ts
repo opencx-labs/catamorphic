@@ -71,7 +71,13 @@ async function createChat(title: string, text: string) {
   const row = `aside [data-session-id="${id}"] [data-tree-primary]`;
   await app.waitFor(`!!document.querySelector(${JSON.stringify(row)})`);
   await app.eval(`document.querySelector(${JSON.stringify(row)}).click()`);
-  await app.waitFor(`!!document.querySelector(${JSON.stringify(front)})`);
+  // The chat in front must be this one. A chat opened before it stays in
+  // front until this one loads, matches the same selector and holds the
+  // same fixture's lines: what follows would watch the wrong chat.
+  await app.waitFor(
+    `document.querySelector(${JSON.stringify(front)})?.textContent.includes(${JSON.stringify(text)})`,
+    { label: "the new chat in front" },
+  );
   return id;
 }
 
