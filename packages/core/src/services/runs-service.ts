@@ -555,9 +555,12 @@ function queuedStartOutcome(
 ): "not_ready" | "room" | "refused" | "retry" {
   if (
     error instanceof QueuedRunNotReadyError ||
+    error instanceof EnablementMovedError ||
     isCorrelationKeyConflict(error)
   )
     return "not_ready";
+  if (error instanceof WorkflowRevisionUnavailableError)
+    return error.kind === "retry" ? "retry" : "refused";
   if (
     error instanceof EnvironmentCapacityError ||
     error instanceof EnvironmentBindingUnavailableError ||
@@ -606,6 +609,18 @@ class QueuedRunNotReadyError extends Error {
   constructor(readonly runId: string) {
     super(`Queued run '${runId}' cannot start yet`);
     this.name = "QueuedRunNotReadyError";
+  }
+}
+
+/**
+ * The enablement moved (a following revision, an update) between reading
+ * it and starting the run. A run started by a caller is refused; a queued
+ * run starts again at the new revision.
+ */
+class EnablementMovedError extends AccessDeniedError {
+  constructor() {
+    super("The automation moved to another revision while the run started");
+    this.name = "EnablementMovedError";
   }
 }
 
@@ -674,6 +689,11 @@ interface QueuedEnrollment {
   unattended?: boolean;
   enablementId?: string;
   commitSha?: string;
+  /**
+   * It runs at `commitSha`, a revision its enablement has not moved to yet
+   * (a project's deploy workflow, ADR 0331), not where the enablement is.
+   */
+  atRevision?: true;
   remoteBranch?: string;
   /** The enrolling identity's narrowing; absent for the host root. */
   owner?: OwnerNarrowing;
@@ -727,25 +747,14 @@ export function queuedRunOwner(input: {
   return {
     ...live,
     scope: intersectScope(owner.scope ?? [], live),
-    ...(owner.executionScope
-      ? {
-          executionScope: owner.executionScope.filter((ref) =>
-            identityMayUseEnvironment(live, ref.projectId, ref.name),
-          ),
-        }
-      : {}),
-    ...(owner.connectionScope
-      ? {
-          connectionScope: owner.connectionScope.filter((ref) =>
-            identityMayUseConnection(
-              live,
-              ref.projectId,
-              ref.environment,
-              ref.alias,
-            ),
-          ),
-        }
-      : {}),
+    // A scoped identity without Environments or connections had none, so
+    // the member's own never reach the run it queued.
+    executionScope: (owner.executionScope ?? []).filter((ref) =>
+      identityMayUseEnvironment(live, ref.projectId, ref.name),
+    ),
+    connectionScope: (owner.connectionScope ?? []).filter((ref) =>
+      identityMayUseConnection(live, ref.projectId, ref.environment, ref.alias),
+    ),
     projectPermissions: intersectProjectPermissions(
       owner.projectPermissions ?? [],
       live,
@@ -767,6 +776,7 @@ function queuedEnrollment(value: unknown): QueuedEnrollment {
     ...(record.unattended === true ? { unattended: true } : {}),
     ...(enablementId ? { enablementId } : {}),
     ...(commitSha ? { commitSha } : {}),
+    ...(record.atRevision === true ? { atRevision: true as const } : {}),
     ...(remoteBranch ? { remoteBranch } : {}),
     // Written by this service from an Identity (as enablements store theirs).
     ...(Array.isArray(owner.scope)
@@ -1478,6 +1488,7 @@ export class RunsService {
         revision: enablement.revision,
       },
       unattended: true,
+      atRevision: true,
     });
   }
 
@@ -1920,27 +1931,59 @@ export class RunsService {
             const service = this.deps.workflowEnablements?.();
             if (!service)
               throw new Error("Workflow enablements are not configured");
+            const enablementId = enrollment.enablementId;
             // The automation's current consent starts it, at the commit the
-            // enablement holds now: nothing of a queued run has run yet.
-            const { enablement, ownerIdentity } = await service.revalidate({
-              identity: mechanics,
-              enablementId: enrollment.enablementId,
-            });
-            await this.triggerInner({
-              ...common,
-              identity: ownerIdentity,
-              environment: enablement.environment,
-              commitSha: enablement.commitSha,
-              remoteBranch: enablement.remoteBranch,
-              connectionAuthorizationSnapshot: enablement.connections,
-              workflowEnablementId: enablement.id,
-              enablementSnapshot: {
-                commitSha: enablement.commitSha,
-                consentDigest: enablement.consentDigest,
-                revision: enablement.revision,
-              },
-              unattended: true,
-            });
+            // enablement holds now: nothing of a queued run has run yet. A
+            // revision landing meanwhile moves it, and it starts there.
+            for (let attempt = 1; ; attempt++) {
+              const { enablement, ownerIdentity } = await service.revalidate({
+                identity: mechanics,
+                enablementId,
+              });
+              // A run queued at a later revision (the project's deploy
+              // workflow, ADR 0331) runs there, under the consent it holds.
+              let commitSha = enablement.commitSha;
+              if (
+                enrollment.atRevision &&
+                enrollment.commitSha &&
+                enrollment.commitSha !== enablement.commitSha
+              ) {
+                const ready = await service.previewAtRevision({
+                  enablementId,
+                  commitSha: enrollment.commitSha,
+                });
+                if (ready.kind !== "ready")
+                  throw new WorkflowRevisionUnavailableError(
+                    ready.reason,
+                    ready.kind,
+                  );
+                commitSha = ready.preview.commitSha;
+              }
+              try {
+                await this.triggerInner({
+                  ...common,
+                  identity: ownerIdentity,
+                  environment: enablement.environment,
+                  commitSha,
+                  remoteBranch: enablement.remoteBranch,
+                  connectionAuthorizationSnapshot: enablement.connections,
+                  workflowEnablementId: enablement.id,
+                  enablementSnapshot: {
+                    commitSha: enablement.commitSha,
+                    consentDigest: enablement.consentDigest,
+                    revision: enablement.revision,
+                  },
+                  unattended: true,
+                  ...(enrollment.atRevision
+                    ? { atRevision: true as const }
+                    : {}),
+                });
+                break;
+              } catch (error) {
+                if (!(error instanceof EnablementMovedError) || attempt >= 3)
+                  throw error;
+              }
+            }
           } else {
             const member =
               enrollment.owner && !isProjectPrincipal(mechanics.externalUserId);
@@ -2554,6 +2597,8 @@ export class RunsService {
       >;
       commitSha?: string;
       remoteBranch?: string;
+      /** Runs at `commitSha`, ahead of its enablement (ADR 0331). */
+      atRevision?: true;
     },
     internal: RunInternalFacts = {},
   ): Promise<Run> {
@@ -2634,6 +2679,8 @@ export class RunsService {
       >;
       commitSha?: string;
       remoteBranch?: string;
+      /** Runs at `commitSha`, ahead of its enablement (ADR 0331). */
+      atRevision?: true;
       /** Start this queued run instead of enrolling a new one (ADR 0325). */
       start?: { runId: string };
     },
@@ -2756,6 +2803,9 @@ export class RunsService {
       ...(args.workflowEnablementId
         ? { enablementId: args.workflowEnablementId }
         : {}),
+      ...(args.workflowEnablementId && args.atRevision
+        ? { atRevision: true as const }
+        : {}),
       commitSha: source.commitSha,
       ...(args.remoteBranch ? { remoteBranch: args.remoteBranch } : {}),
       ...(ownerNarrowing(args.identity)
@@ -2850,12 +2900,15 @@ export class RunsService {
               .executeTakeFirst();
             if (
               live?.status !== "active" ||
-              (live.expires_at && live.expires_at <= new Date()) ||
+              (live.expires_at && live.expires_at <= new Date())
+            )
+              throw new AccessDeniedError();
+            if (
               live.commit_sha !== args.enablementSnapshot.commitSha ||
               live.consent_digest !== args.enablementSnapshot.consentDigest ||
               live.revision !== args.enablementSnapshot.revision
             )
-              throw new AccessDeniedError();
+              throw new EnablementMovedError();
           }
           if (correlationKey && onConflict === "queue") {
             // Enrollment and start decide under one lock per key, so a run

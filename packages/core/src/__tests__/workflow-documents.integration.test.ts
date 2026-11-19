@@ -13,7 +13,15 @@ import type {
 } from "@catamorphic/sandbox";
 import { DOCUMENTS_CAPABILITY } from "@catamorphic/sandbox";
 import { sql } from "kysely";
-import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
+import {
+  afterAll,
+  afterEach,
+  beforeAll,
+  describe,
+  expect,
+  it,
+  vi,
+} from "vitest";
 import { CatamorphicCore } from "../core.js";
 import type { Identity } from "../identity.js";
 import { AccessDeniedError } from "../services/artifact-scope.js";
@@ -80,8 +88,13 @@ type Op = {
  * A second project's workflows: runs of queuedCursor about one key take
  * turns, and noteKeeper keeps notes.
  */
-const queueWorkflows = (input: { queued: string; notes: string }) => `
+const queueWorkflows = (input: {
+  queued: string;
+  notes: string;
+  note?: string;
+}) => `
 import { type BoundaryContext, defineWorkflow } from "@catamorphic/workflow";
+// ${input.note ?? "first"}
 
 type Op = { op: string; path?: string; key?: string };
 
@@ -666,13 +679,21 @@ describeIf("workflows declare the store documents they use (ADR 0335)", () => {
       ],
     });
 
-    async function deployQueue(change: Partial<typeof sources>) {
-      sources = { ...sources, ...change };
+    /** A new revision; following moves enablements there unless held. */
+    async function deployQueue(
+      change: Partial<typeof sources> & { note?: string },
+      options: { follow?: boolean } = {},
+    ) {
+      const { note, ...documents } = change;
+      sources = { ...sources, ...documents };
       await core.projects.writeFile(
         root,
         queueProject,
         ".work/workflows/src/queue.ts",
-        { content: queueWorkflows(sources), commitMessage: "Queue" },
+        {
+          content: queueWorkflows({ ...sources, note: note ?? "unchanged" }),
+          commitMessage: "Queue",
+        },
       );
       const deployed = await core.deployment.deploy(
         root.tenantId,
@@ -681,7 +702,7 @@ describeIf("workflows declare the store documents they use (ADR 0335)", () => {
         { message: "Queue" },
       );
       expect(deployed.status).toBe("deployed");
-      await core.publishedRevisions.advance();
+      if (options.follow !== false) await core.publishedRevisions.advance();
     }
 
     async function enableQueue(input: {
@@ -851,6 +872,87 @@ describeIf("workflows declare the store documents they use (ADR 0335)", () => {
       expect(followed.documents).toEqual([
         { path: "store/notes/", access: "read" },
       ]);
+    });
+
+    it("a revision landing while a queued run starts moves the run there, and it runs", async () => {
+      const queued = await queueBehind({
+        enablementId: queueAutomation,
+        identity: root,
+        key: "moving",
+        op: { op: "write", path: "store/queue/moving.json" },
+      });
+      const before = await enablement(queueAutomation);
+      const service = core.workflowEnablements;
+      const revalidate = service.revalidate.bind(service);
+      let landed = false;
+      // Main moves on between reading the automation and starting its run.
+      const spy = vi
+        .spyOn(service, "revalidate")
+        .mockImplementation(async (input) => {
+          const validated = await revalidate(input);
+          if (!landed && input.enablementId === queueAutomation) {
+            landed = true;
+            await deployQueue({ note: "landed while starting" });
+          }
+          return validated;
+        });
+      try {
+        expect(await startBehind(queued)).toMatchObject({
+          status: "completed",
+        });
+      } finally {
+        spy.mockRestore();
+      }
+      expect(landed).toBe(true);
+      const moved = await enablement(queueAutomation);
+      expect(moved.commitSha).not.toBe(before.commitSha);
+      expect(
+        (await core.runs.get({ identity: root, runId: queued.behind }))
+          .provenance,
+      ).toMatchObject({ commitSha: moved.commitSha });
+    });
+
+    it("a run queued at a later revision runs at that revision, not where its automation is", async () => {
+      const before = await enablement(queueAutomation);
+      // Published, not followed yet (as while the deploy workflow runs).
+      await deployQueue({ note: "the revision ahead" }, { follow: false });
+      const { commit_sha: ahead } = await db
+        .selectFrom("published_revisions")
+        .select("commit_sha")
+        .where("project_id", "=", queueProject)
+        .orderBy("sequence", "desc")
+        .executeTakeFirstOrThrow();
+      expect(ahead).not.toBe(before.commitSha);
+      const live = await core.runs.triggerWithEnablement({
+        identity: root,
+        projectId: queueProject,
+        workflowName: "queuedCursor",
+        enablementId: queueAutomation,
+        input: { op: "read", path: "store/queue/none", key: "at-revision" },
+      });
+      const behind = await core.runs.triggerWithEnablementAtRevision({
+        identity: root,
+        projectId: queueProject,
+        workflowName: "queuedCursor",
+        enablementId: queueAutomation,
+        commitSha: ahead,
+        input: {
+          op: "write",
+          path: "store/queue/at-revision.json",
+          key: "at-revision",
+        },
+      });
+      expect(behind.status).toBe("queued");
+      expect(
+        await startBehind({ ahead: live.id, behind: behind.id }),
+      ).toMatchObject({ status: "completed" });
+      expect((await enablement(queueAutomation)).commitSha).toBe(
+        before.commitSha,
+      );
+      expect(
+        (await core.runs.get({ identity: root, runId: behind.id })).provenance,
+      ).toMatchObject({ commitSha: ahead });
+      await core.publishedRevisions.advance();
     });
   });
 });

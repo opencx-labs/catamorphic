@@ -49,6 +49,24 @@ describe("queuedRunOwner", () => {
     });
   });
 
+  it("gives no Environment or connection to a run whose scoped enroller held none", () => {
+    // An identity scoped to one workflow, with no Environment or
+    // connection of its own, queued the run.
+    const owner = {
+      scope: [{ kind: "workflow" as const, projectId, name: "publish" }],
+    };
+    const live: Identity = {
+      tenantId,
+      externalUserId: "ada",
+      scope: [{ kind: "workflow", projectId, name: "*" }],
+      executionScope: [{ projectId, name: "*" }],
+      connectionScope: [{ projectId, environment: "*", alias: "*" }],
+    };
+    expect(
+      queuedRunOwner({ tenantId, externalUserId: "ada", owner, live }),
+    ).toMatchObject({ executionScope: [], connectionScope: [] });
+  });
+
   it("drops what the member lost since enrolling", () => {
     const owner = {
       scope: [{ kind: "workflow" as const, projectId, name: "publish" }],
