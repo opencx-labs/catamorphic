@@ -1,4 +1,4 @@
-# 0335 — Workflows declare the store documents they use
+# 0335: Workflows declare the store documents they use
 
 - **Status:** Accepted (amends 0055, 0158, 0330)
 - **Date:** 2026-11-19
