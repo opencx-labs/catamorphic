@@ -10,7 +10,7 @@ import type { PGlite } from "@electric-sql/pglite";
  * what survives a restart); main stores it as opaque JSON.
  */
 export class WorkspaceStateStore {
-  constructor(private readonly pglite: PGlite) {}
+  constructor(private readonly pglite: Pick<PGlite, "query" | "exec">) {}
 
   async init(): Promise<void> {
     await this.pglite.exec(`

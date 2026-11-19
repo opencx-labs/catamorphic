@@ -42,6 +42,11 @@ export default defineConfig({
             import.meta.dirname,
             "src/main/sidebar-source-worker.ts",
           ),
+          // The database's own thread.
+          "database-thread-worker": path.resolve(
+            import.meta.dirname,
+            "src/main/server/database-thread-worker.ts",
+          ),
           // The speech worker, an Electron utility process (ADR 0216).
           "voice-worker": path.resolve(
             import.meta.dirname,

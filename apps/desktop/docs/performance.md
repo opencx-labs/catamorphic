@@ -1015,3 +1015,42 @@ stretch a main thread was fully busy, each event-loop stall of the main
 process, and a summary every 30 seconds. It names the process, not the
 function; a function needs a development build and a profile. The isolated
 suite was temporary, as in "Idle work and live chats".
+
+## The database's own thread (2026-11-19)
+
+ADR 0339 records the decision. The embedded server runs on the main
+process's thread, which also routes every window's input, and PGlite runs
+each statement to its end on the thread that issued it.
+
+**Where the main thread's time went.** The isolated test desktop, the
+built app launched with `--inspect`, a CPU profile of the main process
+over the inspector at 200 µs, self time grouped by where the function
+lives. Nothing read the chat but the session feed.
+
+| Main thread busy, ms per second | In process | Own thread |
+| --- | ---: | ---: |
+| A live turn (30 steps, a quiet step, a streamed answer; 20 s) | 153 | 60 |
+| of which inside PGlite | 93 | 0 |
+| Ten openings of a 1,000-item chat (2.3 s) | 177 | 92 |
+| of which inside PGlite | 75 | 0 |
+| Writing 1,000 command steps as fast as the fake agent emits them | 1,093 | 480 |
+| Idle | 37 | 22 |
+
+The turn took 20.4 s and 20.3 s: the hop between threads costs it nothing
+measurable. What remains on the main thread during a turn is query
+building (7 ms a second), response validation (8), Node's own stream and
+process work (13), garbage collection (5) and native work the profiler
+does not name (18). Those leave with the server (ADR 0339, step 2).
+
+One run each, on one machine, under software compositing; the profiler
+itself slows what it samples. The split between PGlite and the rest is the
+evidence, not the absolute times. The same read on the long-used profile
+that started this (117 ms for a 3 MB chat) was not repeated with the
+thread: the installed app cannot be profiled.
+
+The suite was temporary. To repeat it, launch the built app from an e2e
+suite with `urls: ["--inspect=127.0.0.1:9229"]`, read
+`http://127.0.0.1:9229/json/list` for the inspector's socket, and drive
+`Profiler.start` and `Profiler.stop` around the fake agent's
+`retained history fixture` and `perf turn` scenarios.
+

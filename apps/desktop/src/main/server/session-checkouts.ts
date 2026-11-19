@@ -74,7 +74,7 @@ export interface ClassifiedRepositoryWorktree extends RepositoryWorktree {
 }
 
 interface SessionCheckoutsOptions {
-  pglite: PGlite;
+  pglite: Pick<PGlite, "query" | "exec">;
   worktreesDirectory: string;
   projectRoot: (projectId: string) => string | undefined;
   /**
@@ -301,7 +301,7 @@ export function parseWorktreePorcelain(output: string): RepositoryWorktree[] {
  * while the chat needs it (ADR 0215).
  */
 export class SessionCheckouts {
-  private readonly pglite: PGlite;
+  private readonly pglite: Pick<PGlite, "query" | "exec">;
   private readonly worktreesDirectory: string;
   private readonly projectRoot: SessionCheckoutsOptions["projectRoot"];
   private readonly sessionRunning: NonNullable<

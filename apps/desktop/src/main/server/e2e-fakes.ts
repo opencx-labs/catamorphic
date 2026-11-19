@@ -1380,6 +1380,10 @@ async function* fakeScript(turn: FakeTurn): AsyncGenerator<FakeStep> {
       message: "Docs pages: Which pages should I keep?",
       delivery_mode: "steer",
     });
+    // Long enough for the question to start the assistant's turn before
+    // this session's end reaches it: they are two turns there. Ending at
+    // once, both can be read into one, which answers the later.
+    await turn.pause(2_000);
     yield { type: "text", content: "I asked which pages to keep." };
     return;
   }

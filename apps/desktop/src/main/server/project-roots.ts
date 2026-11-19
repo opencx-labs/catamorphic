@@ -20,7 +20,7 @@ export class ProjectRootsStore {
   private readonly automaticCheckpoints = new Set<string>();
   private registration = Promise.resolve();
 
-  constructor(private readonly pglite: PGlite) {}
+  constructor(private readonly pglite: Pick<PGlite, "query" | "exec">) {}
 
   async init(relocation?: { from: string; to: string }): Promise<void> {
     await this.pglite.exec(`

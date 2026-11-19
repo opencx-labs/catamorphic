@@ -37,8 +37,6 @@ import {
   githubCodeHost,
 } from "@catamorphic/server-sdk";
 import { createPushTransport } from "@catamorphic/server-sdk/web-push";
-import { PGlite } from "@electric-sql/pglite";
-import { pgcrypto } from "@electric-sql/pglite/contrib/pgcrypto";
 import cors from "@fastify/cors";
 import { BrowserWindow, app as electronApp } from "electron";
 import Fastify, { type FastifyInstance } from "fastify";
@@ -106,6 +104,7 @@ import {
   registerConnectorMcpRoute,
 } from "./connector-mcp.js";
 import { validateDatabaseFiles } from "./database-files.js";
+import { openDatabaseThread } from "./database-thread.js";
 import { desktopCapabilitySource } from "./desktop-capabilities.js";
 import { DESKTOP_SETTINGS_SKILL } from "./desktop-settings-skill.js";
 import { E2eLocalSandboxProvider } from "./e2e-fakes.js";
@@ -249,7 +248,9 @@ export async function startEmbeddedServer(
   fs.mkdirSync(paths.db, { recursive: true });
   const hostId = loadOrCreateHostId(path.join(paths.root, "host-id"));
 
-  const pglite = new PGlite(paths.db, { extensions: { pgcrypto } });
+  // The database runs on a thread of its own: a statement never holds up
+  // the thread that routes every window's input.
+  const pglite = openDatabaseThread(paths.db);
   const db = new Kysely<DB>({
     dialect: new PGliteDialect({ pglite }),
     plugins: [new WithSchemaPlugin(DEFAULT_SCHEMA)],
