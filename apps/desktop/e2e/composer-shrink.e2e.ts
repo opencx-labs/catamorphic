@@ -140,31 +140,44 @@ async function stop(): Promise<Frame[]> {
   }
 }
 
+/** The glide as recorded: 150ms at a tenth of the pace. */
+const RECORDED_GLIDE_MS = 1500;
+
 /**
  * The watched text rides one way through the frames between: never back,
  * and no single frame carries much of the way (a snap carries all of it,
- * the step back within the composer's height half of it).
+ * the step back within the composer's height half of it). A runner that
+ * paints no frame for a while records that stretch as one step, so a step
+ * may carry what the glide covers in its time: the standard curve's
+ * steepest stretch runs about four times its average pace.
  */
 function expectGlide(frames: Frame[], label: string) {
-  const ys = frames.flatMap((frame) => (frame.y === null ? [] : [frame.y]));
+  const painted = frames.filter(
+    (frame): frame is Frame & { y: number } => frame.y !== null,
+  );
   const trace = `${label}: ${JSON.stringify(frames)}`;
-  const first = ys[0] ?? 0,
-    last = ys.at(-1) ?? 0;
+  const first = painted[0]?.y ?? 0,
+    last = painted.at(-1)?.y ?? 0;
   const total = last - first;
   expect(Math.abs(total), trace).toBeGreaterThan(5);
   const direction = Math.sign(total);
-  let largest = 0;
-  for (let index = 1; index < ys.length; index += 1) {
-    const step = (ys[index] ?? 0) - (ys[index - 1] ?? 0);
+  for (let index = 1; index < painted.length; index += 1) {
+    const previous = painted[index - 1],
+      current = painted[index];
+    if (!previous || !current) continue;
+    const step = current.y - previous.y;
     expect(
       step * direction,
       `${trace}\nback at frame ${index}`,
     ).toBeGreaterThan(-0.6);
-    largest = Math.max(largest, Math.abs(step));
+    const share = Math.max(
+      0.25,
+      (5 * (current.at - previous.at)) / RECORDED_GLIDE_MS,
+    );
+    expect(Math.abs(step), `${trace}\nsnap at frame ${index}`).toBeLessThan(
+      Math.abs(total) * share,
+    );
   }
-  expect(largest, `${trace}\nlargest step`).toBeLessThan(
-    Math.abs(total) * 0.25,
-  );
 }
 
 /** The watched text stays where it was painted, and the scroll with it. */
