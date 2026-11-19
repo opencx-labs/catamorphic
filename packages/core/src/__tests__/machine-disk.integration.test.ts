@@ -105,7 +105,7 @@ describe.skipIf(!db)("machine disk (ADR 0335)", () => {
     const refused = await admit().catch((error: unknown) => error);
     expect(refused).toBeInstanceOf(EnvironmentCapacityError);
     expect(String(refused)).toMatch(
-      /short of disk \(4\.3 GB free of 107 GB, where Work keeps 10\.7 GB free\)/,
+      /: This machine has 4\.3 GB free of 107 GB, and Work keeps 10\.7 GB free on it, so this work cannot start on it\. Free space on it, then try again\.$/,
     );
     expect(await list()).toMatchObject({
       acceptingWork: false,
@@ -150,7 +150,7 @@ describe.skipIf(!db)("machine disk (ADR 0335)", () => {
     );
     // Free space is above the floor: the words name what the work reserves.
     await expect(fresh.admit(3 * 1024)).rejects.toThrow(
-      /^This machine is short of disk for the 3\.2 GB this work reserves \(12\.9 GB free of 107 GB, where Work keeps 10\.7 GB free\), so it waits for room\./,
+      /^This machine has 12\.9 GB free of 107 GB, and Work keeps 10\.7 GB free on it, so it has no room for the 3\.2 GB this work reserves\. Free space on it, then try again\.$/,
     );
     await expect(fresh.admit(1024)).resolves.toMatchObject({
       status: "active",
@@ -243,12 +243,15 @@ describe.skipIf(!db)("machine disk (ADR 0335)", () => {
           },
         },
       });
-    await expect(fill(64)).rejects.toThrow(/short of disk/);
+    await expect(fill(64)).rejects.toThrow(/no room for the 67\.1 MB this work reserves/);
     await nodes.reportDisk({ lease, disk: report({ free: 20 * GIB }) });
     await expect(fill(64)).resolves.toMatchObject({ status: "active" });
-    // Under the critical floor nothing more starts.
+    // Under the critical floor nothing more starts, and its words name the
+    // floor that holds it.
     await nodes.reportDisk({ lease, disk: report({ free: 0.5 * GIB }) });
-    await expect(workflow()).rejects.toBeInstanceOf(EnvironmentCapacityError);
+    await expect(workflow()).rejects.toThrow(
+      /^This machine has 537 MB free of 107 GB, and Work keeps 1\.1 GB free on it, so this work cannot start on it\./,
+    );
   });
 
   it("judges a report's age by the database's clock, not this replica's (ADR 0335)", async () => {

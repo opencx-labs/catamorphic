@@ -4,6 +4,7 @@ import {
   cleanupWorkerAllocations,
   diskFits,
   EnvironmentCapacityError,
+  floorFor,
   WORKER_NODE_LEASE_MS,
   type WorkerCapacity,
   WorkerNodeLeaseHeldError,
@@ -243,11 +244,24 @@ export async function registerWorkMachine(args: {
       if (!chosen) {
         const full = ordered[0];
         // Short of disk is a wait like any other (ADR 0335), said as such.
+        const disk = full && !roomy(full) ? full.node.disk : undefined;
         if (full)
           throw new EnvironmentCapacityError(
             full.node.id,
-            roomy(full) ? undefined : full.node.disk,
-            requirements?.resources?.storageMb,
+            disk
+              ? {
+                  disk,
+                  floorBytes: floorFor({
+                    disk,
+                    ...(requirements?.workload
+                      ? { workload: requirements.workload }
+                      : {}),
+                  }),
+                  ...(requirements?.resources?.storageMb
+                    ? { storageMb: requirements.resources.storageMb }
+                    : {}),
+                }
+              : undefined,
           );
         return undefined;
       }

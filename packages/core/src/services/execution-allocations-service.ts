@@ -26,6 +26,7 @@ import {
   diskFits,
   diskFreshSql,
   EnvironmentCapacityError,
+  floorFor,
   machineDiskOf,
   WorkerCapacitySchema,
   WorkerResourceDefaultsSchema,
@@ -371,20 +372,28 @@ export class ExecutionAllocationsService {
         // and every reservation (a cache fill's size too) needs its room. A
         // cache fill is held to the full floor whatever its Environment's
         // workload: it fills the disk for the work that comes after it.
+        const workload = args.policy.sandbox?.fill
+          ? {}
+          : { workload: args.workloadKind };
         if (
           !diskFits({
             usage,
             resources,
-            ...(args.policy.sandbox?.fill
-              ? {}
-              : { workload: args.workloadKind }),
+            ...workload,
             ...(disk ? { disk } : {}),
           })
         )
           throw new EnvironmentCapacityError(
             node.id,
-            disk,
-            resources.storageMb,
+            disk
+              ? {
+                  disk,
+                  floorBytes: floorFor({ disk, ...workload }),
+                  ...(resources.storageMb
+                    ? { storageMb: resources.storageMb }
+                    : {}),
+                }
+              : undefined,
           );
         if (
           node.capacity &&

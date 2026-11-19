@@ -943,8 +943,10 @@ export type {
 } from "./services/worker-capacity.js";
 export {
   capacityFits,
+  type DiskShortfall,
   diskFits,
   EnvironmentCapacityError,
+  floorFor,
   MachineDiskSchema,
   machineDiskOf,
   WorkerCapacitySchema,

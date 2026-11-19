@@ -1,7 +1,6 @@
 import type { DB } from "@catamorphic/db";
 import {
   DISK_REPORT_FRESH_MS,
-  describeDisk,
   diskBudgetMb,
   type EnvironmentResourcePolicy,
   formatBytes,
@@ -45,26 +44,67 @@ export const WorkerResourceDefaultsSchema = z.strictObject({
   memoryMb: z.number().int().positive().optional(),
 });
 
+/**
+ * Why a machine's disk refused work (ADR 0335): its report, what the work
+ * reserves of it, and the floor that held it (the critical floor for a
+ * workflow run).
+ */
+export interface DiskShortfall {
+  disk: MachineDisk;
+  storageMb?: number;
+  floorBytes: number;
+}
+
 export class EnvironmentCapacityError extends Error {
+  /** The machine's disk report when its disk refused the work. */
+  readonly disk?: MachineDisk;
+
   constructor(
     readonly nodeId: string,
-    /** The machine is short of disk (ADR 0335): its report, to say so. */
-    readonly disk?: MachineDisk,
-    /**
-     * What the refused work reserves of that disk (its `storageMb`, a
-     * cache fill's size): with free space above the floor, the reason.
-     */
-    readonly storageMb?: number,
+    /** The machine is short of disk for the work (ADR 0335), to say so. */
+    readonly short?: DiskShortfall,
   ) {
     super(
-      disk
-        ? storageMb
-          ? `This machine is short of disk for the ${formatBytes(storageMb * MIB)} this work reserves (${describeDisk(disk)}), so it waits for room. Archive an unused session or choose another Environment, then retry.`
-          : `This machine is short of disk (${describeDisk(disk)}), so the workspace waits for room. Archive an unused session or choose another Environment, then retry.`
+      short
+        ? shortOfDiskMessage(short)
         : "This server has no workspace capacity available. Archive an unused session or choose another Environment, then retry.",
     );
     this.name = "EnvironmentCapacityError";
+    if (short) this.disk = short.disk;
   }
+}
+
+/**
+ * A disk refusal in plain words: what the machine has and keeps, and that
+ * only free space on it helps. Archiving a chat or choosing another
+ * Environment frees no disk, and no other machine had room when this was
+ * said, so neither is suggested.
+ */
+function shortOfDiskMessage(short: DiskShortfall): string {
+  const { disk } = short;
+  const has = `This machine has ${formatBytes(disk.freeBytes)} free of ${formatBytes(disk.totalBytes)}${
+    short.floorBytes > 0
+      ? `, and Work keeps ${formatBytes(short.floorBytes)} free on it`
+      : ""
+  }`;
+  const why = short.storageMb
+    ? `so it has no room for the ${formatBytes(short.storageMb * MIB)} this work reserves`
+    : "so this work cannot start on it";
+  return `${has}, ${why}. Free space on it, then try again.`;
+}
+
+/**
+ * The floor that holds work of `workload` on a machine (ADR 0335): the
+ * critical floor for a workflow run, else the full floor. A cache fill
+ * names no workload: it meets the full floor.
+ */
+export function floorFor(args: {
+  disk: MachineDisk;
+  workload?: WorkloadKind;
+}): number {
+  return args.workload === "workflow"
+    ? args.disk.criticalBytes
+    : args.disk.floorBytes;
 }
 
 /** What a machine has reserved: workspaces and their CPU, memory and storage. */
@@ -137,8 +177,10 @@ export function diskFits(args: {
   const { disk } = args;
   if (!disk) return true;
   const storageMb = args.resources.storageMb ?? 0;
-  const floor =
-    args.workload === "workflow" ? disk.criticalBytes : disk.floorBytes;
+  const floor = floorFor({
+    disk,
+    ...(args.workload ? { workload: args.workload } : {}),
+  });
   return (
     disk.freeBytes - storageMb * MIB >= floor &&
     args.usage.storageMb + storageMb <= diskBudgetMb(disk)
