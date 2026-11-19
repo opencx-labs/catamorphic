@@ -1,7 +1,11 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, beforeEach, expect, it } from "vitest";
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import {
+  DocumentNotFoundError,
+  LocalDocumentSpellingError,
+} from "../services/document-errors.js";
 import { localDocumentPath } from "../services/local-document-files.js";
 import { localDocumentRelativePath } from "../services/project-workspace.js";
 
@@ -46,7 +50,7 @@ it("a store path names the file on disk only as it is spelled there (ADR 0335)",
   const otherCase = "store/Github-Polling/acme-web.json";
   if (await aliases(otherCase))
     await expect(localDocumentPath(root, otherCase)).rejects.toThrow(
-      "Document paths must match the names on disk exactly, in case and Unicode form",
+      LocalDocumentSpellingError,
     );
   // Where case matters it is simply another file, which does not exist.
   else await expect(localDocumentPath(root, otherCase)).resolves.toBeTruthy();
@@ -63,8 +67,60 @@ it("nor in another Unicode form of the same name", async () => {
   await create(composed);
   if (await aliases(decomposed))
     await expect(localDocumentPath(root, decomposed)).rejects.toThrow(
-      "Document paths must match the names on disk exactly",
+      LocalDocumentSpellingError,
     );
   else await expect(localDocumentPath(root, decomposed)).resolves.toBeTruthy();
   await expect(localDocumentPath(root, composed)).resolves.toBeTruthy();
+});
+
+it("costs the same in a folder of thousands: no folder is read whole", async () => {
+  const fill = async (folderPath: string, count: number) => {
+    const folder = path.join(root, localDocumentRelativePath(folderPath));
+    await fs.mkdir(folder, { recursive: true });
+    const names = Array.from(
+      { length: count },
+      (_, index) => `n-${index}.json`,
+    );
+    for (const name of names) await fs.writeFile(path.join(folder, name), "{}");
+    return names;
+  };
+  const one = await fill("store/one/", 1);
+  const many = await fill("store/many/", 4000);
+  const readdir = vi.spyOn(fs, "readdir");
+  /** Milliseconds per check of 400 files in the folder. */
+  const perCall = async (folder: string, names: string[]) => {
+    const started = performance.now();
+    for (let index = 0; index < 400; index++)
+      await localDocumentPath(root, `${folder}${names[index % names.length]}`);
+    return (performance.now() - started) / 400;
+  };
+  await perCall("store/one/", one);
+  const small = await perCall("store/one/", one);
+  const large = await perCall("store/many/", many);
+  expect(readdir).not.toHaveBeenCalled();
+  readdir.mockRestore();
+  // Reading the folder for each check made one in 4000 files 7 times slower.
+  expect(large).toBeLessThan(small * 3 + 0.2);
+}, 120_000);
+
+it("a folder removed while it is checked is simply not found", async () => {
+  await create("store/gone/notes.md");
+  const folder = path.join(root, localDocumentRelativePath("store/gone"));
+  const original = fs.lstat;
+  // The folder disappears between looking at the path and reading its
+  // spelling, as when another process deletes it.
+  const lstat = async (...args: Parameters<typeof fs.lstat>) => {
+    const stat = await original(...args);
+    if (String(args[0]) === path.join(folder, "notes.md"))
+      await fs.rm(folder, { recursive: true, force: true });
+    return stat;
+  };
+  Object.assign(fs, { lstat });
+  try {
+    await expect(
+      localDocumentPath(root, "store/gone/notes.md"),
+    ).rejects.toThrow(DocumentNotFoundError);
+  } finally {
+    Object.assign(fs, { lstat: original });
+  }
 });
