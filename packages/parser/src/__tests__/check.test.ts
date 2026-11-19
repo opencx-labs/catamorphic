@@ -205,6 +205,51 @@ export const poll = defineWorkflow(({ defineBoundary }) => ({
     ).toEqual([]);
   });
 
+  it("warns when a workflow calls the documents host without declaring store documents", () => {
+    const keeper = (documents: string, call: string) => ({
+      ".work/workflows/src/keeper.ts": `
+import { type BoundaryContext, defineWorkflow } from "@catamorphic/workflow";
+export const keeper = defineWorkflow(({ defineBoundary }) => ({
+  ${documents}
+  steps: [
+    defineBoundary({
+      run: (context: BoundaryContext<{ path: string }>) => ${call},
+    }),
+  ],
+}));
+`,
+    });
+    const undeclared = checkProject(
+      keeper(
+        "",
+        'context.documents.write({ path: context.input.path, text: "x" })',
+      ),
+    );
+    expect(undeclared.ok).toBe(true);
+    expect(undeclared.findings).toEqual([
+      {
+        level: "warning",
+        file: ".work/workflows/src/keeper.ts",
+        message:
+          'Workflow \'keeper\' calls context.documents.write but declares no store documents, so its runs reach no store path. Declare each one it reads or writes, such as documents: [{ path: "store/notes/", access: "write" }]; program files need none',
+      },
+    ]);
+    expect(
+      checkProject(
+        keeper(
+          'documents: [{ path: "store/notes/", access: "write" }],',
+          'context.documents.write({ path: context.input.path, text: "x" })',
+        ),
+      ).findings,
+    ).toEqual([]);
+    // Other host calls are not documents calls.
+    expect(
+      checkProject(
+        keeper("", 'context.host["catamorphic.events"].record({ events: [] })'),
+      ).findings,
+    ).toEqual([]);
+  });
+
   it("applies the host's webhook settings rules without a host", () => {
     const hook = (name: string, config: string) => `
 export const ${name} = defineWorkflow(({ defineBoundary }) => ({
