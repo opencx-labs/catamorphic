@@ -5,13 +5,17 @@ import {
   renewReplicaClaim,
   takeReplicaClaim,
 } from "@catamorphic/core";
-import type { DB } from "@catamorphic/db";
+import type { DB, JsonObject } from "@catamorphic/db";
 import {
   HetznerCloudError,
   type HetznerCloudMachines,
 } from "@catamorphic/hetzner";
 import { getTracer, withSpan } from "@catamorphic/otel";
-import { environmentSatisfies, poolMatches } from "@catamorphic/sandbox";
+import {
+  environmentSatisfies,
+  type MachineDisk,
+  poolMatches,
+} from "@catamorphic/sandbox";
 import {
   type MachineEventKind,
   machineCreateResult,
@@ -1591,6 +1595,60 @@ export class MachineReconciler {
     });
   }
 
+  /**
+   * A rule's class came up short of disk (ADR 0336): a workflow class's
+   * project hears `machine.disk-too-small`, once per brake (every pass of
+   * the brake asks; the event's id names it).
+   */
+  private async diskTooSmall(args: {
+    rule: string;
+    definition: MachineRule;
+    at: Date;
+  }): Promise<void> {
+    const machineClass = this.classOf(args.definition.class);
+    if (machineClass?.platform !== "workflow") return;
+    await this.recordFor({
+      kind: "machine.disk-too-small",
+      project: machineClass.project,
+      name: args.rule,
+      class: args.definition.class,
+      rule: args.rule,
+      ref: null,
+      episode: args.at,
+      ...(machineClass.options ? { options: machineClass.options } : {}),
+    });
+  }
+
+  /**
+   * A machine of a rule began an episode under its disk floor (ADR 0336):
+   * its class's project hears `machine.disk-low` once per episode.
+   */
+  async machineDiskLow(args: {
+    name: string;
+    rule: string | null;
+    ref: string | null;
+    class: string | null;
+    disk: MachineDisk;
+    since: Date;
+  }): Promise<void> {
+    const machineClass = args.class ? this.classOf(args.class) : undefined;
+    if (machineClass?.platform !== "workflow" || !args.class || !args.rule)
+      return;
+    // A failure throws, so the episode's next report tries again.
+    await this.recordFor({
+      rethrow: true,
+      kind: "machine.disk-low",
+      project: machineClass.project,
+      name: args.name,
+      class: args.class,
+      rule: args.rule,
+      ref: args.ref,
+      disk: args.disk,
+      episode: args.since,
+      ...(machineClass.options ? { options: machineClass.options } : {}),
+    });
+  }
+
   private async recordFor(args: {
     kind: MachineEventKind;
     project: string;
@@ -1598,6 +1656,10 @@ export class MachineReconciler {
     class: string;
     rule: string;
     ref: string | null;
+    disk?: MachineDisk;
+    episode?: Date;
+    options?: JsonObject;
+    rethrow?: boolean;
   }): Promise<void> {
     try {
       await this.deps.workflows?.record({
@@ -1609,13 +1671,19 @@ export class MachineReconciler {
             class: args.class,
             rule: args.rule,
             ref: platformRef(args.ref),
-            occurredAt: new Date(),
+            occurredAt: args.episode ?? new Date(),
+            ...(args.disk ? { disk: args.disk } : {}),
+            ...(args.options ? { options: args.options } : {}),
           }),
-          // Once per machine: Work's own markers name a machine with no ref.
-          externalId: `${args.kind}:${args.name}:${args.ref ?? "none"}`,
+          // Once per machine (per episode, for one short of disk): Work's
+          // own markers name a machine with no ref.
+          externalId: `${args.kind}:${args.name}:${args.ref ?? "none"}${
+            args.episode ? `:${args.episode.toISOString()}` : ""
+          }`,
         },
       });
     } catch (error) {
+      if (args.rethrow) throw error;
       this.deps.log?.(
         `Recording ${args.kind} for machine ${args.name} failed: ${message(error)}`,
       );
@@ -1843,6 +1911,14 @@ export class MachineReconciler {
               definition,
             }),
           ]);
+        const brake = demand.shortClasses.get(rule);
+        if (brake) {
+          notices.set(rule, [
+            ...(notices.get(rule) ?? []),
+            `Machines of class '${definition.class}' came up short of disk soon after connecting (${brake.at.toISOString()}): its disk is too small for this rule's work. This rule makes no new machines until ${brake.until.toISOString()}, or until it is written again; give the class a larger disk.`,
+          ]);
+          await this.diskTooSmall({ rule, definition, at: brake.at });
+        }
         const planned = demandMachines({
           rule,
           definition,
@@ -1850,7 +1926,7 @@ export class MachineReconciler {
           machines: demand.machines.filter((machine) => machine.rule === rule),
           loads: demand.loads,
           waits,
-          stalled: Boolean(stalled),
+          stalled: Boolean(stalled) || Boolean(brake),
         });
         for (const machine of planned.machines)
           desired.provisioned.set(machine.name, machine);
@@ -1935,7 +2011,9 @@ export class MachineReconciler {
     machines: ProvisionedMachine[];
     loads: Map<string, MachineLoad>;
     stalled: Array<{ rule: string; name: string; enrolledForMs: number }>;
+    shortClasses: Map<string, DiskBrake>;
   }> {
+    const shortClasses = await this.diskBrakes();
     const [rows, machines, loads, stalled] = await Promise.all([
       this.deps.db
         .selectFrom("placement_waits")
@@ -2011,12 +2089,81 @@ export class MachineReconciler {
       waits,
       machines,
       loads,
+      shortClasses,
       stalled: stalled.map((row) => ({
         rule: row.machine_rule ?? "",
         name: row.name,
         enrolledForMs: Number(row.enrolled_for_ms),
       })),
     };
+  }
+
+  /**
+   * Rules whose class's disk is too small for their work (ADR 0336): a
+   * machine they made came up under its disk floor within
+   * {@link DISK_SHORT_AFTER_ENROLL_MINUTES} of enrolling. Each such rule
+   * makes no new machines for {@link DISK_BRAKE_MINUTES} after the latest,
+   * or until it is written again, so machines are not made and destroyed
+   * in a loop; a workflow class's project hears `machine.disk-too-small`
+   * once per brake.
+   */
+  private async diskBrakes(): Promise<Map<string, DiskBrake>> {
+    const tenantId = this.deps.tenantId;
+    const shortSoon = this.deps.db
+      .selectFrom("work_workers")
+      .innerJoin("worker_nodes", "worker_nodes.id", "work_workers.node_id")
+      .select([
+        "work_workers.machine_rule",
+        sql<Date>`max(worker_nodes.disk_low_at)`.as("at"),
+      ])
+      .where("work_workers.tenant_id", "=", tenantId)
+      .where("work_workers.machine_rule", "is not", null)
+      .where("work_workers.pool", "=", false)
+      .where("work_workers.revoked_at", "is", null)
+      .where("worker_nodes.disk_low_at", "is not", null)
+      .where(
+        sql<boolean>`worker_nodes.disk_low_at < work_workers.enrolled_at + make_interval(mins => ${DISK_SHORT_AFTER_ENROLL_MINUTES})`,
+      )
+      .groupBy("work_workers.machine_rule")
+      .as("short");
+    await this.deps.db
+      .updateTable("work_machine_rules")
+      .from(shortSoon)
+      .set({ disk_short_at: sql`short.at` })
+      .whereRef("work_machine_rules.name", "=", "short.machine_rule")
+      .where("work_machine_rules.tenant_id", "=", tenantId)
+      .where((eb) =>
+        eb.or([
+          eb("work_machine_rules.disk_short_at", "is", null),
+          eb("work_machine_rules.disk_short_at", "<", sql<Date>`short.at`),
+        ]),
+      )
+      .execute();
+    const rows = await this.deps.db
+      .selectFrom("work_machine_rules")
+      .select([
+        "name",
+        "disk_short_at",
+        sql<Date>`disk_short_at + make_interval(mins => ${DISK_BRAKE_MINUTES})`.as(
+          "until",
+        ),
+      ])
+      .where("tenant_id", "=", tenantId)
+      .where("disk_short_at", "is not", null)
+      .whereRef("disk_short_at", ">", "updated_at")
+      .where(
+        "disk_short_at",
+        ">",
+        sql<Date>`now() - make_interval(mins => ${DISK_BRAKE_MINUTES})`,
+      )
+      .execute();
+    return new Map(
+      rows.flatMap((row) =>
+        row.disk_short_at
+          ? [[row.name, { at: row.disk_short_at, until: row.until }]]
+          : [],
+      ),
+    );
   }
 
   /**
@@ -2218,6 +2365,22 @@ function demandWaitMatches(rule: MachineRule, wait: DemandWait): boolean {
   );
 }
 
+/**
+ * A machine under its disk floor this soon after enrolling came up short:
+ * its class's disk is too small for the rule's work (ADR 0336).
+ */
+const DISK_SHORT_AFTER_ENROLL_MINUTES = 30;
+/** How long a rule whose class came up short makes no new machines. */
+const DISK_BRAKE_MINUTES = 60;
+
+/** A rule braked because its class's disk is too small (ADR 0336). */
+interface DiskBrake {
+  /** When its latest machine came up short. */
+  at: Date;
+  /** When it makes machines again, unless written again before. */
+  until: Date;
+}
+
 /** Since when a wait for a machine still counts as demand (ADR 0258). */
 function waitFresh() {
   return sql<Date>`now() - make_interval(secs => ${PLACEMENT_WAIT_FRESH_SECONDS})`;
@@ -2273,19 +2436,28 @@ function neverConnectedNotice(args: {
 
 /** What one machine has room for, as admission charges it. */
 function roomFor(
-  room: { workspaces: number; cpuMillis?: number; memoryMb?: number },
+  room: {
+    workspaces: number;
+    cpuMillis?: number;
+    memoryMb?: number;
+    storageMb?: number;
+  },
   defaults: { cpuMillis?: number; memoryMb?: number },
   wait: DemandWait,
-): { cpuMillis: number; memoryMb: number } | undefined {
+): { cpuMillis: number; memoryMb: number; storageMb: number } | undefined {
   const cpuMillis =
     wait.requirements.resources.cpuMillis ?? defaults.cpuMillis ?? 0;
   const memoryMb =
     wait.requirements.resources.memoryMb ?? defaults.memoryMb ?? 0;
+  const storageMb = wait.requirements.resources.storageMb ?? 0;
   if (room.workspaces < 1) return undefined;
   if (room.cpuMillis !== undefined && room.cpuMillis < cpuMillis)
     return undefined;
   if (room.memoryMb !== undefined && room.memoryMb < memoryMb) return undefined;
-  return { cpuMillis, memoryMb };
+  // A machine short of disk has none (ADR 0336).
+  if (room.storageMb !== undefined && room.storageMb < storageMb)
+    return undefined;
+  return { cpuMillis, memoryMb, storageMb };
 }
 
 /**
@@ -2365,6 +2537,13 @@ function demandMachines(args: {
       lost.push(machine.name);
       continue;
     }
+    if (load.shortOfDisk) {
+      // One holding work finishes it, taking no new work and still
+      // counting toward `max`; an idle one goes, and a machine with room
+      // may take its place (ADR 0336).
+      if (load.holding > 0) kept.push(machine);
+      continue;
+    }
     if (load.holding > 0) kept.push(machine);
     else if (load.neverConnected) {
       // Enrolled, and still starting its worker.
@@ -2393,6 +2572,8 @@ function demandMachines(args: {
         slot.room.cpuMillis -= charged.cpuMillis;
       if (slot.room.memoryMb !== undefined)
         slot.room.memoryMb -= charged.memoryMb;
+      if (slot.room.storageMb !== undefined)
+        slot.room.storageMb -= charged.storageMb;
       return false;
     }
     return true;
@@ -2453,7 +2634,11 @@ function canonical(value: unknown): string {
   );
 }
 
-/** Both kinds of work reuse placement demand; waiting journals alone are no demand. */
+/**
+ * Both kinds of work reuse placement demand, and a cache fill that waits for
+ * a machine with room for its size (ADR 0336); waiting journals alone are
+ * no demand.
+ */
 function queuedPlacementWait(db: Kysely<DB>) {
   const turns = db
     .selectFrom("agent_turns")
@@ -2475,6 +2660,12 @@ function queuedPlacementWait(db: Kysely<DB>) {
     .where("job.status", "=", "pending")
     .where("job.kind", "!=", "durable_pause_timeout")
     .where("job.available_at", "<=", sql<Date>`now()`);
+  const fills = db
+    .selectFrom("environment_cache_fills")
+    .select("id")
+    .where("id", "=", sql<string>`placement_waits.root_workload_id`)
+    .where("status", "=", "queued");
   return sql<boolean>`((placement_waits.workload_kind = 'agent' AND EXISTS (${turns})) OR
-    (placement_waits.workload_kind = 'workflow' AND EXISTS (${jobs})))`;
+    (placement_waits.workload_kind = 'workflow' AND EXISTS (${jobs})) OR
+    EXISTS (${fills}))`;
 }

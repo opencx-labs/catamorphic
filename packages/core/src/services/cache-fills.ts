@@ -7,6 +7,7 @@ import {
   resolveSetupEgress,
   SANDBOX_CAPABILITIES,
   type SandboxProvider,
+  type WorkloadKind,
 } from "@catamorphic/sandbox";
 import { PROJECT_MANIFEST_PATH } from "@catamorphic/workflow/project-layout";
 import { type Kysely, sql } from "kysely";
@@ -24,6 +25,11 @@ import {
   admissionPolicy,
   type ExecutionEnvironmentsService,
 } from "./execution-environments-service.js";
+import { outOfDiskFor, withOutOfDisk } from "./out-of-disk.js";
+import {
+  PlacementWaitsService,
+  type PlacementWaitTarget,
+} from "./placement-waits.js";
 import { readProgramFile } from "./program-reader.js";
 import {
   DEFAULT_CACHE_FILL_TIMEOUT_MINUTES,
@@ -219,6 +225,9 @@ export class CacheFillsService {
    */
   private readonly running = new Set<Promise<void>>();
 
+  /** Fills waiting for a machine with room, as demand reads them (ADR 0258). */
+  private readonly placementWaits: PlacementWaitsService;
+
   constructor(
     private readonly deps: {
       db: Kysely<DB>;
@@ -233,7 +242,9 @@ export class CacheFillsService {
       /** How often a running fill renews its claim; a quarter of it by default. */
       claimRenewMs?: number;
     },
-  ) {}
+  ) {
+    this.placementWaits = new PlacementWaitsService(deps.db);
+  }
 
   /**
    * Fill a cache from a published revision of `main` (ADR 0334): on every
@@ -710,7 +721,16 @@ export class CacheFillsService {
     renew.unref?.();
     let mask = new SecretMask({});
     const fail = async (error: unknown) => {
-      const message = error instanceof Error ? error.message : String(error);
+      const said = error instanceof Error ? error.message : String(error);
+      // A fill that found no room says so (ADR 0336).
+      const message = withOutOfDisk(
+        said,
+        await outOfDiskFor({
+          db: this.deps.db,
+          nodeId: fill.worker_node_id,
+          texts: [said],
+        }),
+      );
       await mine()
         .set({
           status: "failed",
@@ -825,9 +845,11 @@ export class CacheFillsService {
     const workload = definition.workloads.includes("agent")
       ? "agent"
       : "workflow";
-    let admission: Awaited<ReturnType<ExecutionEnvironmentsService["admit"]>>;
-    try {
-      admission = await this.deps.executionEnvironments.admit({
+    // It writes up to its size: placement and admission keep that room
+    // above the full floor (ADR 0336).
+    const sizeMb = cache.sizeMb ?? DEFAULT_CACHE_SIZE_MB;
+    const placed = await this.deps.executionEnvironments
+      .admitOrWait({
         identity,
         projectId: fill.project_id,
         owner: null,
@@ -837,12 +859,23 @@ export class CacheFillsService {
         // Image, Dockerfile, containers and network of that same revision,
         // never a newer main whose deploy is pending or failed.
         commit,
+        fill: { storageMb: sizeMb },
+        always: true,
+      })
+      .catch((error: unknown) => {
+        if (error instanceof EnvironmentCapacityError) return { error };
+        throw error;
       });
-    } catch (error) {
-      if (error instanceof EnvironmentCapacityError)
-        return this.requeue(fill, args.generation, error.message);
-      throw error;
+    if (!("admission" in placed)) {
+      // No machine open to it had room: it waits, where machines on demand
+      // see it. Any other refusal (none online) fails the attempt.
+      if ("wait" in placed && placed.wait.reason !== "capacity")
+        throw placed.error;
+      if ("wait" in placed)
+        await this.waitForRoom({ fill, target: placed.wait, workload, sizeMb });
+      return this.requeue(fill, args.generation, placed.error.message);
     }
+    const admission = placed.admission;
     const node = admission.runtime.workerNodeId;
     const machine = admission.runtime.sandboxProvider;
     if (!node || !machine)
@@ -855,22 +888,6 @@ export class CacheFillsService {
         args.generation,
         "Its machine is not available to this Environment now",
       );
-    if (!fill.worker_node_id) {
-      // A request that found no copy anywhere takes the machine admission
-      // chose; one already filling there makes this one redundant.
-      const placed = await this.deps.db
-        .updateTable("environment_cache_fills")
-        .set({ worker_node_id: node })
-        .where("id", "=", fill.id)
-        .where("generation", "=", String(args.generation))
-        .execute()
-        .then(() => true)
-        .catch(() => false);
-      if (!placed)
-        throw new Error(
-          `A fill of this cache already runs on machine ${node}; this request joined it`,
-        );
-    }
     const key = cacheVolumeKey({
       projectId: fill.project_id,
       environment: fill.environment_name,
@@ -902,15 +919,56 @@ export class CacheFillsService {
             ...(sandboxPolicy.image ? { image: sandboxPolicy.image } : {}),
             ...(sandboxPolicy.containers ? { containers: true } : {}),
             ...(egress ? { egress } : {}),
-            fill: { name: fill.cache_name, path: cache.path, key },
+            // It writes up to its size, reserved like storage: it starts
+            // only where that fits above its floor (ADR 0336).
+            fill: {
+              name: fill.cache_name,
+              path: cache.path,
+              key,
+              sizeMb,
+            },
           },
         },
       });
     } catch (error) {
-      if (error instanceof EnvironmentCapacityError)
+      if (error instanceof EnvironmentCapacityError) {
+        // Not pinned yet: its next attempt is placed again, so a machine
+        // that refused it does not hold it.
+        await this.waitForRoom({
+          fill,
+          target: { ...admission.wait, reason: "capacity" },
+          workload,
+          sizeMb,
+        });
         return this.requeue(fill, args.generation, error.message);
+      }
       throw error;
     }
+    if (!fill.worker_node_id) {
+      // A request that found no copy anywhere takes the machine it was
+      // admitted on; one already filling there makes this one redundant.
+      const pinned = await this.deps.db
+        .updateTable("environment_cache_fills")
+        .set({ worker_node_id: node })
+        .where("id", "=", fill.id)
+        .where("generation", "=", String(args.generation))
+        .execute()
+        .then(() => true)
+        .catch(() => false);
+      if (!pinned) {
+        await this.deps.executionAllocations.release({
+          identity,
+          allocationId: allocation.id,
+          reason: "retired",
+        });
+        throw new Error(
+          `A fill of this cache already runs on machine ${node}; this request joined it`,
+        );
+      }
+    }
+    await this.placementWaits
+      .clear({ rootWorkloadIds: [fill.id] })
+      .catch(() => undefined);
     await this.deps.db
       .updateTable("environment_cache_fills")
       .set({ allocation_id: allocation.id })
@@ -1072,6 +1130,39 @@ export class CacheFillsService {
         { cwd: args.provider.workspaceRoot, timeout: 600 },
       )
       .catch(() => {});
+  }
+
+  /**
+   * Record that the fill waits for a machine with room (ADR 0258), with the
+   * room it needs on disk, so machines on demand count it. Best effort:
+   * the fill retries on its own either way.
+   */
+  private async waitForRoom(args: {
+    fill: FillRow;
+    target: PlacementWaitTarget;
+    workload: WorkloadKind;
+    sizeMb: number;
+  }): Promise<void> {
+    const { resources } = args.target.requirements;
+    await this.placementWaits
+      .record({
+        tenantId: args.fill.tenant_id,
+        projectId: args.fill.project_id,
+        workloadKind: args.workload,
+        rootWorkloadId: args.fill.id,
+        target: {
+          ...args.target,
+          requirements: {
+            ...args.target.requirements,
+            resources: {
+              ...resources,
+              storageMb: (resources.storageMb ?? 0) + args.sizeMb,
+            },
+          },
+        },
+        limitMinutes: null,
+      })
+      .catch(() => undefined);
   }
 
   /** Back to the queue, its attempt not counted: the machine had no room. */

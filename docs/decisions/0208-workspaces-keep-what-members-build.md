@@ -1,6 +1,6 @@
 # 0208 — Workspaces keep what members build: setup and volumes
 
-- **Status:** Accepted (amended by [0257](0257-setup-has-its-own-network.md): `setup` is an object with its own network, and runs again when the workspace's base moves; by [0324](0324-workflows-run-commands-in-a-chats-workspace.md): setup can be a workflow; by [0332](0332-commands-run-apart-from-the-agent.md): where commands run apart, setup and volumes belong to the command container; by [0334](0334-read-only-caches-only-a-trusted-fill-writes.md): read-only caches that only a trusted fill writes)
+- **Status:** Accepted (amended by [0257](0257-setup-has-its-own-network.md): `setup` is an object with its own network, and runs again when the workspace's base moves; by [0324](0324-workflows-run-commands-in-a-chats-workspace.md): setup can be a workflow; by [0332](0332-commands-run-apart-from-the-agent.md): where commands run apart, setup and volumes belong to the command container; by [0334](0334-read-only-caches-only-a-trusted-fill-writes.md): read-only caches that only a trusted fill writes; by [0336](0336-disk-is-a-resource-work-manages-on-machines.md): images, sandboxes' Docker data and other leftovers of Work's go once unused, volumes keep their retention)
 - **Date:** 2026-10-06
 - **Refines:** 0173, 0176, 0184
 

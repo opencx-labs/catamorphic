@@ -129,6 +129,8 @@ export const MACHINE_EVENT_KINDS = [
   "machine.lost",
   "machine.released",
   "machine.destroyed",
+  "machine.disk-low",
+  "machine.disk-too-small",
 ] as const;
 export type MachineEventKind = (typeof MACHINE_EVENT_KINDS)[number];
 
@@ -142,13 +144,33 @@ const DESCRIPTIONS: Record<MachineEventKind, string> = {
   "machine.released":
     "A machine serves nobody any more; it is destroyed after its retention.",
   "machine.destroyed": "A machine's destroy workflow answered that it is gone.",
+  "machine.disk-low":
+    "A machine has less free disk than its floor, once per episode (ADR 0336): it takes no new workspaces until there is room. input.payload.disk has its path, totalBytes, freeBytes, floorBytes and measuredAt; input.payload.options is the class's options.",
+  "machine.disk-too-small":
+    "A rule's machines came up short of disk soon after connecting (ADR 0336): the class's disk is too small for the rule's work, and the rule makes no new machines for an hour or until it is written again. input.payload.name and rule name the rule; input.payload.options is the class's options.",
 };
+
+/** A machine's disk report, on `machine.disk-low` (ADR 0336). */
+const machineDisk = z.object({
+  path: z.string(),
+  totalBytes: z.number(),
+  freeBytes: z.number(),
+  floorBytes: z.number(),
+  criticalBytes: z.number().optional(),
+  measuredAt: z.string(),
+});
 
 const machineEvent = z.object({
   name: z.string(),
   class: z.string(),
   rule: z.string(),
   ref: z.string().nullable(),
+  disk: machineDisk.optional(),
+  /**
+   * `machine.disk-low` only: the class's `options` as written, which its
+   * create and destroy runs are given too, so a workflow can act on it.
+   */
+  options: z.record(z.string(), z.unknown()).optional(),
 });
 
 const config = z.strictObject({
@@ -202,6 +224,13 @@ export function machineProjectEvent(args: {
   rule: string;
   ref: string | null;
   occurredAt: Date;
+  /**
+   * `machine.disk-low` only: the report that began the episode, and when
+   * it began, which makes the event one per episode.
+   */
+  disk?: z.output<typeof machineDisk>;
+  episode?: Date;
+  options?: JsonObject;
 }): {
   source: typeof MACHINE_EVENT_SOURCE;
   kind: MachineEventKind;
@@ -212,13 +241,17 @@ export function machineProjectEvent(args: {
   return {
     source: MACHINE_EVENT_SOURCE,
     kind: args.kind,
-    externalId: `${args.kind}:${args.name}:${args.ref ?? "none"}`,
+    externalId: `${args.kind}:${args.name}:${args.ref ?? "none"}${
+      args.episode ? `:${args.episode.toISOString()}` : ""
+    }`,
     occurredAt: args.occurredAt.toISOString(),
     payload: {
       name: args.name,
       class: args.class,
       rule: args.rule,
       ref: args.ref,
+      ...(args.disk ? { disk: { ...args.disk } } : {}),
+      ...(args.options ? { options: args.options } : {}),
     },
   };
 }

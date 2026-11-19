@@ -3,7 +3,7 @@
   "name": "pull-request-reviews",
   "type": "registry:item",
   "title": "Pull request reviews",
-  "description": "Project-owned pull request review chats, a workflow that posts each review, check run and answer to GitHub one at a time per pull request, keeping its state on the review chat, and an optional one that diagnoses and restarts a review that stops making progress.",
+  "description": "Project-owned pull request review chats, a workflow that shows each review in progress on GitHub, posts its findings as they are verified and then its review, check run and answer, one at a time per pull request, keeping its state on the review chat, and an optional one that diagnoses and restarts a review that stops making progress.",
   "files": [
     {
       "path": ".work/project.json",

@@ -1,6 +1,6 @@
 # 0324: Workflows run commands in a chat's workspace, setup can be a workflow, and workspaces report their changes
 
-- **Status:** Accepted (amends 0208, 0257; amended by [0332](0332-commands-run-apart-from-the-agent.md): where commands run apart, `exec` in either mode runs in the command container, with the grants only of `commands.connections`; `$WORK_PROGRAM` is copied beside the agent too, out of commands' reach)
+- **Status:** Accepted (amends 0208, 0257; amended by [0332](0332-commands-run-apart-from-the-agent.md): where commands run apart, `exec` in either mode runs in the command container, with the grants only of `commands.connections`; `$WORK_PROGRAM` is copied beside the agent too, out of commands' reach; by [0336](0336-disk-is-a-resource-work-manages-on-machines.md): copies of other commits leave a workspace after a day unless a running command uses them, output files go once recorded, and a failed command says when the disk is to blame)
 - **Date:** 2026-11-17
 - **Refines:** 0156, 0158, 0173, 0178, 0209, 0260, 0289, 0295
 

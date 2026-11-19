@@ -19,6 +19,7 @@ import { Kysely, PGliteDialect, sql, WithSchemaPlugin } from "kysely";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import type { Identity } from "../identity.js";
 import { validateAgentDefinition } from "../services/agent-definitions-service.js";
+import { RESULT_LIMITS } from "../services/agent-results.js";
 import { AgentSessionsService } from "../services/agent-sessions-service.js";
 import type { RegisteredCodingAgent } from "../services/coding-agent-registry.js";
 import { ExecutionAllocationsService } from "../services/execution-allocations-service.js";
@@ -30,6 +31,8 @@ import { buildContextHandoff } from "../services/sessions/context-handoff.js";
 import { copySettledHistory } from "../services/sessions/session-copy.js";
 import { readFullSnapshot } from "../services/sessions/session-reads.js";
 import {
+  latestResults,
+  RESULT_READ_WINDOW,
   recordResult,
   SessionResultAttemptError,
 } from "../services/sessions/session-results.js";
@@ -462,6 +465,46 @@ describe("typed results", () => {
     ).toBeNull();
   });
 
+  it("hands an attempt every result its turn submitted before, not only each name's latest", async () => {
+    const project = await projects.create(identity, { name: "Every one" });
+    const session = await sessions.create(identity, project.id);
+    // Three notes under one name, as a reviewer's findings are.
+    const state = await turn(
+      project.id,
+      session.id,
+      ["first finding", "second finding", "third finding", "x".repeat(300)]
+        .map((note) => tool("submit_result", { name: "notes", value: note }))
+        .join(" "),
+    );
+    const [only] = orderedTurns(state);
+    const text =
+      (
+        await buildContextHandoff({
+          db,
+          sessionId: session.id,
+          fromOrdinal: 1,
+          toOrdinal: 0,
+          strategy: "full",
+          currentTurn: { id: only?.id ?? "", ordinal: 1 },
+        })
+      )?.text ?? "";
+    // That section alone: the turn's request below it quotes every note.
+    const earlier =
+      text
+        .split(
+          "Submitted by an earlier attempt of this turn, which did not finish",
+        )[1]
+        ?.split("\n\n")[0] ?? "";
+    // Each in short, by name and its short fields, newest first.
+    for (const note of ["first finding", "second finding", "third finding"])
+      expect(earlier).toContain(`\n- notes: "${note}"`);
+    // A long value is named, never loaded whole.
+    expect(earlier).toMatch(
+      /\n- notes: \(read it with session_results, result [0-9a-f-]{36}\)/,
+    );
+    expect(earlier).not.toContain("x".repeat(300));
+  });
+
   it("tells a turn's next attempt what an earlier attempt of it submitted, and keeps that turn's request open", async () => {
     const project = await projects.create(identity, { name: "Earlier" });
     const session = await sessions.create(identity, project.id);
@@ -498,10 +541,10 @@ describe("typed results", () => {
     const [, earlier = ""] = text.split(
       "Submitted by an earlier attempt of this turn, which did not finish",
     );
+    // In short: the result's name and short fields.
     expect(earlier).toContain(
-      'answering Person in turn 3 (this turn): "Review the new push.',
+      '\n- review: {"score":2,"verdict":"REQUEST_CHANGES"}',
     );
-    expect(earlier).toContain('\n  {"score":2,"verdict":"REQUEST_CHANGES"}');
     expect(earlier).toContain("submit again if they are still right");
     const [, accepted = ""] = text.split("Your accepted results");
     expect(accepted).toContain('{"score":4,"verdict":"COMMENT"}');
@@ -731,6 +774,158 @@ describe("typed results", () => {
       .set({ status: "completed" })
       .where("id", "=", settled?.id ?? "")
       .execute();
+  });
+
+  it("bounds the submissions of a turn, refused ones too, not of the chat", async () => {
+    const project = await projects.create(identity, { name: "Bounded" });
+    const session = await sessions.create(identity, project.id);
+    // A turn of refused submissions, then one the schema accepts.
+    const refused = tool("submit_result", {
+      name: "review",
+      value: { verdict: "APPROVE", score: 9 },
+    });
+    const accepted = tool("submit_result", {
+      name: "review",
+      value: { verdict: "COMMENT", score: 4 },
+    });
+    const full = await turn(
+      project.id,
+      session.id,
+      [
+        ...Array.from({ length: RESULT_LIMITS.perTurn }, () => refused),
+        accepted,
+      ].join(" "),
+    );
+    const answers = toolResults(full);
+    expect(answers.at(-2)).toContain("does not match the review schema");
+    expect(answers.at(-1)).toContain(
+      `This turn has made ${RESULT_LIMITS.perTurn} submissions`,
+    );
+    expect(full.items.filter((item) => item.kind === "result")).toEqual([]);
+    // The chat's next turn records.
+    const next = await turn(project.id, session.id, accepted);
+    expect(toolResults(next).at(-1)).toContain("Recorded the review result");
+  });
+
+  it("finds each name's latest among a chat's newest results, so its reads stay bounded", async () => {
+    const project = await projects.create(identity, { name: "Window" });
+    const session = await sessions.create(identity, project.id);
+    await turn(
+      project.id,
+      session.id,
+      tool("submit_result", {
+        name: "review",
+        value: { verdict: "COMMENT", score: 4 },
+      }),
+    );
+    const state = await turn(
+      project.id,
+      session.id,
+      tool("submit_result", { name: "notes", value: "first note" }),
+    );
+    const notes = state.items.find(
+      (item) => item.kind === "result" && item.name === "notes",
+    );
+    const names = async () =>
+      (await latestResults(db, [session.id]))
+        .get(session.id)
+        ?.map((result) => result.name);
+    // The hand-off's section of results, without the requests after it.
+    const handoff = async () =>
+      (
+        (
+          await buildContextHandoff({
+            db,
+            sessionId: session.id,
+            fromOrdinal: 1,
+            toOrdinal: 2,
+            strategy: "full",
+          })
+        )?.text ?? ""
+      )
+        .split("Your accepted results")[1]
+        ?.split("Requests that arrived after")[0] ?? "";
+    expect((await names())?.sort()).toEqual(["notes", "review"]);
+    expect(await handoff()).toContain("- review, from turn 1");
+    // A later turn fills the window with notes, written as history is.
+    await db.transaction().execute(async (trx) => {
+      await sql`select set_config('catamorphic.suppress_session_events', 'true', true)`.execute(
+        trx,
+      );
+      await sql`
+        insert into ${sql.id(schema, "agent_items")} (id, session_id, turn_id, attempt_id, position, kind, status, payload, created_at)
+        select gen_random_uuid(), item.session_id, item.turn_id, item.attempt_id,
+               item.position + n, item.kind, item.status, item.payload, item.created_at + make_interval(secs => n)
+          from ${sql.id(schema, "agent_items")} item, generate_series(1, ${RESULT_READ_WINDOW}) n
+         where item.id = ${notes?.id ?? ""}`.execute(trx);
+    });
+    // The review is older than the chat's newest results: no read of each
+    // name's latest scans past them to find it.
+    expect(await names()).toEqual(["notes"]);
+    expect(await handoff()).toContain("- notes, from turn 2");
+    expect(await handoff()).not.toContain("- review, from turn 1");
+  });
+
+  it("reads a turn's results oldest first, and tells workflows which turns wait to run", async () => {
+    const project = await projects.create(identity, { name: "Oldest" });
+    const session = await sessions.create(identity, project.id);
+    const state = await turn(
+      project.id,
+      session.id,
+      [1, 2, 3]
+        .map((score) =>
+          tool("submit_result", {
+            name: "review",
+            value: { verdict: "COMMENT", score },
+          }),
+        )
+        .join(" "),
+    );
+    const [settled] = orderedTurns(state);
+    const read = async (order?: "oldest") =>
+      (
+        (await actions.execute({
+          identity,
+          projectId: project.id,
+          operation: "results",
+          args: {
+            sessionId: session.id,
+            turnId: settled?.id ?? "",
+            limit: 2,
+            ...(order ? { order } : {}),
+          },
+          author: { kind: "user", externalUserId: identity.externalUserId },
+        })) as { results: Array<{ value: { score: number } }> }
+      ).results.map((result) => result.value.score);
+    expect(await read()).toEqual([3, 2]);
+    expect(await read("oldest")).toEqual([1, 2]);
+    // A turn waiting to run is named; one that settled is not.
+    const inspect = async () =>
+      (await actions.execute({
+        identity,
+        projectId: project.id,
+        operation: "inspect",
+        args: { sessionId: session.id },
+        author: { kind: "user", externalUserId: identity.externalUserId },
+      })) as { queued: string[]; turn: unknown };
+    expect(await inspect()).toMatchObject({ queued: [], turn: null });
+    const waiting = randomUUID();
+    await db
+      .insertInto("agent_turns")
+      .values({
+        id: waiting,
+        session_id: session.id,
+        ordinal: 99,
+        status: "queued",
+      })
+      .execute();
+    expect((await inspect()).queued).toEqual([waiting]);
+    await db
+      .updateTable("agent_turns")
+      .set({ status: "cancelled" })
+      .where("id", "=", waiting)
+      .execute();
+    expect((await inspect()).queued).toEqual([]);
   });
 
   it("reads what one turn submitted, whatever came after it", async () => {

@@ -1,6 +1,6 @@
 # 0325: Runs queue per key, and workflows keep state in session metadata
 
-- **Status:** Accepted (amends 0027, 0226, 0259, 0262; supersedes 0292)
+- **Status:** Accepted (amends 0027, 0226, 0259, 0262; supersedes 0292; `postReviews` also runs on progress and findings in the same queue, by [0337](0337-reviews-show-progress-and-post-findings-as-verified.md))
 - **Date:** 2026-11-17
 
 ## Context

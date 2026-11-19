@@ -67,9 +67,10 @@ export const SESSION_ACTION_SCHEMAS = {
     through: z.string().uuid().optional(),
   }),
   /**
-   * The chat's accepted results, newest first (ADR 0323). `family` adds
-   * its subsessions' results; `afterInput` (an input's message id) keeps
-   * results that answer that input or a later one.
+   * The chat's accepted results, newest first (ADR 0323), or oldest first
+   * with `order: "oldest"` (ADR 0337). `family` adds its subsessions'
+   * results; `afterInput` (an input's message id) keeps results that answer
+   * that input or a later one.
    */
   results: chat({
     ...target,
@@ -78,6 +79,7 @@ export const SESSION_ACTION_SCHEMAS = {
     turnId: z.string().uuid().optional(),
     afterInput: z.string().uuid().optional(),
     limit: z.number().int().min(1).max(100).optional(),
+    order: z.enum(["newest", "oldest"]).optional(),
   }),
   /**
    * The chat's model usage through the gateway (ADR 0329); `family` adds
@@ -351,6 +353,9 @@ export class SessionActionsService {
                 : {}),
               ...("limit" in args && typeof args.limit === "number"
                 ? { limit: args.limit }
+                : {}),
+              ...("order" in args && args.order === "oldest"
+                ? { order: "oldest" as const }
                 : {}),
             },
           );

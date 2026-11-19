@@ -71,6 +71,8 @@ describe("stalled turns", () => {
   const hung = new Map<string, AttemptHost>();
   /** The process group a hung harness's agent runs in, by session. */
   const agentGroups = new Map<string, number>();
+  /** What a disk-full harness does just before it fails, by session. */
+  const beforeFailing = new Map<string, () => Promise<void>>();
 
   beforeAll(async () => {
     await migrateToLatest({ db, schema });
@@ -161,6 +163,47 @@ describe("stalled turns", () => {
         };
       },
     };
+    // Fails as an install that filled the disk (ADR 0336).
+    const diskFullAdapter: HarnessAdapter = {
+      id: "echo",
+      capabilities: () => inner.capabilities(),
+      start: (attempt, host) => {
+        host.emit({
+          type: "thread",
+          ref: { id: randomUUID(), strength: "strong" },
+        });
+        host.emit({ type: "turn.started" });
+        if (attempt.input?.text.includes("[[enospc]]"))
+          host.emit({
+            type: "diagnostic",
+            level: "error",
+            message: "npm ERR! code ENOSPC: no space left on device, write",
+          });
+        // A provider's own failure, with a kind of its own, beside output
+        // that says the disk is full.
+        if (attempt.input?.text.includes("[[auth]]")) {
+          host.emit({
+            type: "turn.completed",
+            status: "failed",
+            error: { message: "The key was revoked", kind: "auth" },
+          });
+          return {
+            steer: async () => false,
+            interrupt: () => {},
+            finished: Promise.resolve(),
+          };
+        }
+        const before = beforeFailing.get(attempt.sessionId);
+        return {
+          steer: async () => false,
+          interrupt: () => {},
+          finished: (async () => {
+            await before?.();
+            throw new Error("The install failed");
+          })(),
+        };
+      },
+    };
     const watched: RegisteredCodingAgent = {
       id: "watched",
       harness: { placement: "host", adapter: hangingAdapter },
@@ -177,7 +220,12 @@ describe("stalled turns", () => {
       id: "crashing",
       harness: { placement: "host", adapter: crashingAdapter },
     };
-    const agents = [watched, unwatched, crashing];
+    const diskFull: RegisteredCodingAgent = {
+      ...watched,
+      id: "disk-full",
+      harness: { placement: "host", adapter: diskFullAdapter },
+    };
+    const agents = [watched, unwatched, crashing, diskFull];
     const secrets = {
       valuesForMasking: async () => ({ API_TOKEN: [SECRET] }),
     } as unknown as SecretsService;
@@ -903,6 +951,108 @@ describe("stalled turns", () => {
       await survivor.stopLocalTurns();
     }
   }, 90_000);
+
+  it("says a failed turn ran out of disk, from the machine's report or the output (ADR 0336)", async () => {
+    const failedTurn = async (args: { text: string; machineLow?: boolean }) => {
+      const project = await projects.create(identity, { name: "Disk" });
+      const chat = await sessions.create(identity, project.id, {
+        agentId: "disk-full",
+      });
+      if (args.machineLow)
+        beforeFailing.set(chat.id, async () => {
+          // Its workspace's machine reports free space under its floor.
+          const nodeId = `disk-${randomUUID()}`;
+          await db
+            .insertInto("tenants")
+            .values({ id: identity.tenantId, name: "tenant" })
+            .onConflict((oc) => oc.column("id").doNothing())
+            .execute();
+          await db
+            .insertInto("worker_nodes")
+            .values({
+              id: nodeId,
+              tenant_id: identity.tenantId,
+              authority_id: "test",
+              descriptor: JSON.stringify({}),
+              lease_token: randomUUID(),
+              lease_expires_at: new Date(Date.now() + 60_000),
+              disk: JSON.stringify({
+                path: "/var/lib/docker",
+                totalBytes: 100e9,
+                freeBytes: 2e9,
+                floorBytes: 10e9,
+                criticalBytes: 1e9,
+                measuredAt: new Date().toISOString(),
+              }),
+            })
+            .execute();
+          const own = await db
+            .selectFrom("agent_sessions")
+            .select("allocation_id")
+            .where("id", "=", chat.id)
+            .executeTakeFirstOrThrow();
+          if (!own.allocation_id) throw new Error("The chat has no Allocation");
+          await db
+            .updateTable("execution_allocations")
+            .set({ worker_node_id: nodeId })
+            .where("id", "=", own.allocation_id)
+            .execute();
+        });
+      const { turn } = await sessions.sendMessage(
+        identity,
+        project.id,
+        chat.id,
+        args.text,
+      );
+      return vi.waitFor(
+        async () => {
+          const row = await db
+            .selectFrom("agent_turns")
+            .selectAll()
+            .where("id", "=", turn.id)
+            .executeTakeFirstOrThrow();
+          const settled = turnFromRow(row);
+          expect(settled.status).toBe("failed");
+          const attempt = await db
+            .selectFrom("agent_turn_attempts")
+            .select("diagnostics")
+            .where("turn_id", "=", turn.id)
+            .executeTakeFirstOrThrow();
+          return { error: settled.error, diagnostics: attempt.diagnostics };
+        },
+        { timeout: 15_000 },
+      );
+    };
+    const fromOutput = await failedTurn({ text: "install [[enospc]]" });
+    expect(fromOutput.error).toEqual({
+      kind: "out_of_disk",
+      message:
+        "The workspace ran out of disk space (no space left on device). The install failed",
+    });
+    expect(JSON.stringify(fromOutput.diagnostics)).toContain(
+      "work: The workspace ran out of disk space",
+    );
+    const fromMachine = await failedTurn({
+      text: "install",
+      machineLow: true,
+    });
+    expect(fromMachine.error).toEqual({
+      kind: "out_of_disk",
+      message:
+        "The machine ran out of disk: 2.0 GB free of 100 GB, where Work keeps 10.0 GB free. The install failed",
+    });
+    // A more specific kind keeps its actions (reconnect, choose an agent):
+    // the disk does not take its place.
+    const auth = await failedTurn({ text: "install [[enospc]] [[auth]]" });
+    expect(auth.error).toEqual({
+      message: "The key was revoked",
+      kind: "auth",
+    });
+    // Nothing about the disk: the failure stands as it was.
+    const plain = await failedTurn({ text: "install" });
+    expect(plain.error?.kind).toBeUndefined();
+    expect(plain.error?.message).toContain("The install failed");
+  });
 
   /** A model grant bound to the chat's running attempt. */
   async function modelGrant(chat: {

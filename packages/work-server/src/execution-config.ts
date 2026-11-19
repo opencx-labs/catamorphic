@@ -101,6 +101,25 @@ export interface WorkExecutionSettings {
    * `WORK_VOLUME_RETENTION_DAYS`, default 30).
    */
   volumeRetentionDays: number;
+  /**
+   * What the machine keeps free on each filesystem it writes to, in MiB
+   * (ADR 0336, `WORK_DISK_FLOOR_MB`): admission never goes below it. 0
+   * keeps none; absent, 10% of the filesystem and at most 10 GiB.
+   */
+  diskFloorMb?: number;
+  /**
+   * The lower floor workflow runs start down to, in MiB (ADR 0336,
+   * `WORK_DISK_CRITICAL_MB`): so the workflows that free or replace
+   * machines still run when chats stop. 0 keeps none; absent, 1% of the
+   * filesystem and at most 1 GiB.
+   */
+  diskCriticalMb?: number;
+  /**
+   * Hours an image Work built or pulled, and the Docker data inside
+   * sandboxes, may go unused before the machine removes it (ADR 0336,
+   * `WORK_IMAGE_RETENTION_HOURS`, default 24).
+   */
+  imageRetentionHours: number;
 }
 
 /** The settings once the backend is known: what a machine runs with. */
@@ -121,6 +140,12 @@ export function executionSettingsFromEnv(
     const value = env[name] === undefined ? fallback : Number(env[name]);
     if (!Number.isSafeInteger(value) || value <= 0)
       throw new Error(`${name} must be a positive integer`);
+    return value;
+  };
+  const nonNegative = (name: string): number => {
+    const value = Number(env[name]);
+    if (!Number.isSafeInteger(value) || value < 0)
+      throw new Error(`${name} must be a whole number of MiB, 0 or more`);
     return value;
   };
   const backend = env.WORK_SANDBOX ?? "auto";
@@ -178,6 +203,13 @@ export function executionSettingsFromEnv(
     workloads: workloadsFromEnv(env.WORK_CONTROL_PLANE_WORKLOADS),
     trustControlPlaneAgents: env.WORK_TRUST_CONTROL_PLANE_AGENTS === "1",
     volumeRetentionDays: positive("WORK_VOLUME_RETENTION_DAYS", 30),
+    imageRetentionHours: positive("WORK_IMAGE_RETENTION_HOURS", 24),
+    ...(env.WORK_DISK_FLOOR_MB !== undefined
+      ? { diskFloorMb: nonNegative("WORK_DISK_FLOOR_MB") }
+      : {}),
+    ...(env.WORK_DISK_CRITICAL_MB !== undefined
+      ? { diskCriticalMb: nonNegative("WORK_DISK_CRITICAL_MB") }
+      : {}),
     ...(env.WORK_SANDBOX_PIDS_LIMIT !== undefined
       ? { pidsLimit: positive("WORK_SANDBOX_PIDS_LIMIT", 4096) }
       : {}),
@@ -629,5 +661,13 @@ export function workExecution(args: {
       reason: settings.reason,
     },
     volumeRetentionMs: settings.volumeRetentionDays * 24 * 60 * 60 * 1000,
+    /** What the machine keeps free on its disk (ADR 0336). */
+    ...(settings.diskFloorMb !== undefined
+      ? { diskFloorMb: settings.diskFloorMb }
+      : {}),
+    ...(settings.diskCriticalMb !== undefined
+      ? { diskCriticalMb: settings.diskCriticalMb }
+      : {}),
+    imageRetentionMs: settings.imageRetentionHours * 60 * 60 * 1000,
   };
 }

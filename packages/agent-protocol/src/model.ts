@@ -62,7 +62,9 @@ export type AgentErrorKind =
   | "rate_limit"
   | "unavailable"
   | "model_incompat"
-  | "agent_missing";
+  | "agent_missing"
+  /** The machine ran out of disk, or the output says so (ADR 0336). */
+  | "out_of_disk";
 
 /**
  * Per-turn token and cost accounting (ADR 0057). Every field is optional:

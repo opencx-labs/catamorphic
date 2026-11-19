@@ -182,7 +182,12 @@ export function allocationSandboxProvider(args: {
   const resources: SandboxResources = {
     cpuMillis: limits?.cpuMillis,
     memoryMb: limits?.memoryMb,
-    storageMb: limits?.storageMb,
+    // A limit only where the machine enforces it (microsandbox's root
+    // disk); elsewhere admission reserved it and the machine measures
+    // (ADR 0336).
+    storageMb: allocation.policy.binding.resourceLimits?.includes("storageMb")
+      ? limits?.storageMb
+      : undefined,
     gpu: limits?.gpu,
   };
   const requireActive = (sandboxId?: string) =>

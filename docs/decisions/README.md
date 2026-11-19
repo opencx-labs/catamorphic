@@ -112,7 +112,7 @@ Settled design decisions live here as short Architecture Decision Records. They 
 | [0097](0097-host-owned-workflow-inspectors.md) | Host-owned workflow inspectors | Accepted (layout and packaged toolbar amended by 0157) |
 | [0098](0098-project-authorized-local-and-remote-agents.md) | Project-authorized local and remote agent execution | Accepted (`this-machine` binding is `device: "member"`, 0167; terminals and previews by 0209) |
 | [0099](0099-shared-postgres-server-environments.md) | Shared-Postgres server instances as managed Environments | Accepted (execution machines superseded by 0164; replica working state superseded by 0190; member drafts leave instance disks per 0191) |
-| [0100](0100-workspace-resource-admission.md) | Workspace reservations and provider-enforced resource limits | Accepted (idle release refined by 0173; container usage by 0176) |
+| [0100](0100-workspace-resource-admission.md) | Workspace reservations and provider-enforced resource limits | Accepted (idle release refined by 0173; container usage by 0176; disk by 0336) |
 | [0101](0101-harness-capabilities-and-session-monitors.md) | Harness capabilities and session monitors | Accepted |
 | [0102](0102-tabbed-sidebars-and-app-widgets.md) | Tabbed sidebars and compact app widgets | Accepted (refined by 0107) |
 | [0103](0103-agent-context-and-deferred-capabilities.md) | Agent context and deferred capabilities | Accepted (connectors for harnesses with tool search by 0225) |
@@ -216,11 +216,11 @@ Settled design decisions live here as short Architecture Decision Records. They 
 | [0201](0201-work-keeps-passkeys-in-the-profile-vault.md) | Work keeps passkeys in the profile's vault: the sheet saves and signs in, autofill offers them, Bitwarden and KeePassXC files import | Accepted (amends 0185, 0151; browsing windows by 0220) |
 | [0202](0202-agents-see-the-browser-subagents-and-their-path.md) | Agents see the browser, their subagents and their PATH | Accepted (amends 0133, 0090, 0112, 0093; server delegation amended by 0322) |
 | [0203](0203-work-runs-chrome-extensions-from-the-web-store.md) | Work runs Chrome extensions from the Chrome Web Store: a host-owned `chrome.*` API on Electron, verified store installs, Chrome's toolbar, popups, side panel and dialogs | Accepted (amends 0194; amended by 0235) |
-| [0204](0204-sandboxes-on-any-linux-machine.md) | Sandboxes on any Linux machine: the container backend | Accepted |
+| [0204](0204-sandboxes-on-any-linux-machine.md) | Sandboxes on any Linux machine: the container backend | Accepted (amended by 0332, 0336) |
 | [0205](0205-machine-classes-pools-and-retention.md) | Machine classes: cloud servers, pooled machines, and retention | Accepted (machines on demand by 0258) |
 | [0206](0206-project-secrets-reach-environments-per-member.md) | Project secrets reach Environments, with a value per member | Accepted (amends 0162, 0175, 0184; refined by 0212; directory events by 0210) |
 | [0207](0207-operations-are-sealed-to-their-executor.md) | Operations are sealed to their executor; worker credentials rotate | Accepted (terminals and previews by 0209) |
-| [0208](0208-workspaces-keep-what-members-build.md) | Workspaces keep what members build: setup and volumes | Accepted (refined by 0215: setup also runs in a chat's own worktree; amended by 0257: setup is an object with its own network, and runs again when the base moves; by 0324: setup can be a workflow) |
+| [0208](0208-workspaces-keep-what-members-build.md) | Workspaces keep what members build: setup and volumes | Accepted (refined by 0215: setup also runs in a chat's own worktree; amended by 0257: setup is an object with its own network, and runs again when the base moves; by 0324: setup can be a workflow; by 0336: Work's leftovers go once unused) |
 | [0209](0209-people-reach-their-sandboxes.md) | People reach their sandboxes: terminals and previews | Accepted (the loopback API guard by 0211) |
 | [0210](0210-directory-events-start-workflows.md) | Directory events start workflows; workflows set members' secrets | Accepted |
 | [0211](0211-the-desktop-api-refuses-web-pages.md) | The desktop's loopback API refuses web pages | Accepted |
@@ -265,7 +265,7 @@ Settled design decisions live here as short Architecture Decision Records. They 
 | [0256](0256-the-gateway-rewrites-model-requests.md) | The gateway rewrites model requests: host rewrites, then a connection's override and paths, before policy, failing closed | Accepted (amends 0180; amended by 0261) |
 | [0257](0257-setup-has-its-own-network.md) | Setup has its own network: the base checkout alone, widened for a while, narrow before the session's work arrives | Accepted (amends 0208; amended by 0324: `exec in: "setup"` from a setup workflow) |
 | [0258](0258-machines-on-demand.md) | Machines on demand: work waits for a machine, rules scale with it, and a machine drains under its node lock | Accepted (refines 0173, 0193, 0205) |
-| [0259](0259-reviews-post-from-a-workflow.md) | Reviews post from a workflow: the review chat never writes to GitHub | Accepted (refines 0177, 0181; the report is a typed result by 0323; publication queues per chat by 0325) |
+| [0259](0259-reviews-post-from-a-workflow.md) | Reviews post from a workflow: the review chat never writes to GitHub | Accepted (refines 0177, 0181; the report is a typed result by 0323; publication queues per chat by 0325; progress and findings post as verified by 0337) |
 | [0260](0260-every-returned-call-carries-state.md) | Every returned call carries state to the next step | Accepted (amends 0020, 0024) |
 | [0261](0261-customize-the-work-server-with-your-own-image.md) | Customize the Work server with your own image: the stock server is one file, and its configuration does not grow | Superseded by 0294 |
 | [0262](0262-recipes-are-registry-packs.md) | Recipes are registry packs: installed into a project and owned there, served by `registry.read` on every host | Accepted (refines 0126, 0179, 0181; amended by 0325) |
@@ -327,16 +327,18 @@ Settled design decisions live here as short Architecture Decision Records. They 
 | [0320](0320-pages-translate-on-the-device.md) | Pages translate on the device | Accepted |
 | [0321](0321-runner-state-stays-out-of-the-checkout.md) | Runner state stays out of the checkout | Accepted (amends 0198) |
 | [0322](0322-server-agents-start-subagents-in-their-workspace.md) | Agents on a server start subagents, which share their workspace by default | Accepted (amends 0090, 0202, 0278) |
-| [0323](0323-agents-submit-typed-results.md) | Agents submit typed results | Accepted (amends 0050, 0090, 0197, 0259) |
-| [0324](0324-workflows-run-commands-in-a-chats-workspace.md) | Workflows run commands in a chat's workspace, setup can be a workflow, and workspaces report their changes | Accepted (amends 0208, 0257) |
-| [0325](0325-runs-queue-per-key-and-workflows-keep-session-metadata.md) | Runs queue per key, and workflows keep state in session metadata | Accepted (amends 0027, 0226, 0259, 0262; supersedes 0292) |
+| [0323](0323-agents-submit-typed-results.md) | Agents submit typed results | Accepted (amends 0050, 0090, 0197, 0259; results are bounded per turn and patterns run in linear time by 0337) |
+| [0324](0324-workflows-run-commands-in-a-chats-workspace.md) | Workflows run commands in a chat's workspace, setup can be a workflow, and workspaces report their changes | Accepted (amends 0208, 0257; amended by 0332, 0336) |
+| [0325](0325-runs-queue-per-key-and-workflows-keep-session-metadata.md) | Runs queue per key, and workflows keep state in session metadata | Accepted (amends 0027, 0226, 0259, 0262; supersedes 0292; the review publisher hears progress and findings by 0337) |
 | [0326](0326-workflows-record-project-events.md) | Workflows record project events | Accepted (amends 0156, 0158, 0171, 0177) |
-| [0327](0327-machine-provisioners-are-workflows.md) | Machine provisioners are workflows | Accepted (refines 0205, 0258) |
+| [0327](0327-machine-provisioners-are-workflows.md) | Machine provisioners are workflows | Accepted (refines 0205, 0258; amended by 0336) |
 | [0328](0328-hand-offs-keep-results-acp-reports-its-turn.md) | Hand-offs keep results and open requests; ACP agents take effort and report their turn | Accepted (amends 0198, 0241, 0255, 0298; amended by 0333) |
 | [0329](0329-model-usage-is-telemetry-and-a-session-read.md) | Model usage is telemetry and a session read | Accepted (amends 0180 and 0293) |
 | [0330](0330-enablements-follow-the-published-program.md) | Enablements follow the published program | Accepted (amends 0068, 0158, 0170; amended by 0335: declared store documents compare by coverage) |
 | [0331](0331-project-deploy-workflow-and-host-project-hooks.md) | A project deploy workflow, and host project hooks that return secrets | Accepted (amends 0046) |
 | [0332](0332-commands-run-apart-from-the-agent.md) | The commands an agent runs execute apart from the agent | Accepted (amends 0175, 0180, 0204, 0208, 0257, 0259, 0324) |
-| [0333](0333-stalled-turns-are-visible-and-restartable.md) | A turn that stops making progress is visible, an event, and restartable | Accepted (amends 0198, 0245, 0328) |
+| [0333](0333-stalled-turns-are-visible-and-restartable.md) | A turn that stops making progress is visible, an event, and restartable | Accepted (amends 0198, 0245, 0328; amended by 0336) |
 | [0334](0334-read-only-caches-only-a-trusted-fill-writes.md) | Read-only caches that only a trusted fill writes | Accepted (amends 0208, 0257) |
 | [0335](0335-workflows-declare-their-store-documents.md) | Workflows declare the store documents they use | Accepted (amends 0055, 0158, 0330) |
+| [0336](0336-disk-is-a-resource-work-manages-on-machines.md) | Disk is a resource Work manages on machines | Accepted (amends 0100, 0204, 0208, 0324, 0327, 0333) |
+| [0337](0337-reviews-show-progress-and-post-findings-as-verified.md) | Reviews show progress at once and post findings as they are verified | Accepted (amends 0259, 0323, 0325) |

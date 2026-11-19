@@ -1,6 +1,6 @@
 # 0333: A turn that stops making progress is visible, an event, and restartable
 
-- **Status:** Accepted (amends 0198, 0245, 0328)
+- **Status:** Accepted (amends 0198, 0245, 0328; amended by [0336](0336-disk-is-a-resource-work-manages-on-machines.md): a failed attempt's diagnostics say when the machine ran out of disk)
 - **Date:** 2026-11-18
 
 ## Context

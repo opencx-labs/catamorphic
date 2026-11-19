@@ -5,6 +5,7 @@ import { nodeExecutor, RETIRED_KEY_RETENTION_MS } from "@catamorphic/core";
 import {
   executorPublicKey,
   generateExecutorKeyPair,
+  MACHINE_CAPABILITIES,
   type SandboxProvider,
 } from "@catamorphic/sandbox";
 import {
@@ -21,6 +22,7 @@ import {
   workExecution,
 } from "../execution-config.js";
 import { CodexSignIns } from "./codex-sign-ins.js";
+import { startDiskCare } from "./disk-care.js";
 import { removeMachineSignIns, signInCapabilities } from "./sign-ins.js";
 import { startVolumePruning } from "./volume-pruning.js";
 import {
@@ -217,26 +219,47 @@ export async function startWorkWorker(options: WorkWorkerOptions): Promise<{
     retentionMs: execution.volumeRetentionMs,
     log,
   });
+  // Its disk, measured and reported with its offer and its renewals, and
+  // what Work left there removed (ADR 0336).
+  const diskCare = startDiskCare({
+    provider,
+    ...(execution.diskFloorMb !== undefined
+      ? { floorMb: execution.diskFloorMb }
+      : {}),
+    ...(execution.diskCriticalMb !== undefined
+      ? { criticalMb: execution.diskCriticalMb }
+      : {}),
+    graceMs: execution.imageRetentionMs,
+    log,
+  });
+  await diskCare.measure();
+  /** The measurement a renewal last carried: each is sent once. */
+  let diskSent: string | undefined;
   /**
    * What this worker offers, read again for every connect: members'
    * sign-ins come and go on the machine (ADR 0199), and only the fact that
    * one exists is reported.
    */
-  const currentOffer = (): WorkerOffer => ({
-    isolation: execution.isolation,
-    resourceLimits: [...(provider.resourceLimits ?? [])],
-    workspaceRoot: provider.workspaceRoot ?? "/workspace",
-    processes: Boolean(provider.processes),
-    capabilities: [
-      ...(provider.capabilities ?? []),
-      ...execution.machineCapabilities,
-      ...signInCapabilities(execution.signInRoot),
-    ],
-    capacity: execution.capacity,
-    defaults: execution.defaults,
-    ...(options.version ? { version: options.version } : {}),
-    backend: execution.backend,
-  });
+  const currentOffer = (): WorkerOffer => {
+    const disk = diskCare.latest();
+    return {
+      isolation: execution.isolation,
+      resourceLimits: [...(provider.resourceLimits ?? [])],
+      workspaceRoot: provider.workspaceRoot ?? "/workspace",
+      processes: Boolean(provider.processes),
+      capabilities: [
+        ...(provider.capabilities ?? []),
+        ...execution.machineCapabilities,
+        ...(disk ? [MACHINE_CAPABILITIES.disk] : []),
+        ...signInCapabilities(execution.signInRoot),
+      ],
+      capacity: execution.capacity,
+      defaults: execution.defaults,
+      ...(options.version ? { version: options.version } : {}),
+      ...(disk ? { disk } : {}),
+      backend: execution.backend,
+    };
+  };
   // This process's epoch: the node's lease token while it runs. A restart
   // chooses a later one, and the control plane fails what the old one was
   // sent as uncertain.
@@ -474,9 +497,16 @@ export async function startWorkWorker(options: WorkWorkerOptions): Promise<{
         once: true,
       });
     });
+    diskSent = offer.disk?.measuredAt;
     const transport: ClientRunnerTransport = {
       renew: async () => {
-        await call({ route: "renew", body: { session: token } });
+        const disk = diskCare.latest();
+        const fresh = disk && disk.measuredAt !== diskSent ? disk : undefined;
+        await call({
+          route: "renew",
+          body: { session: token, ...(fresh ? { disk: fresh } : {}) },
+        });
+        if (fresh) diskSent = fresh.measuredAt;
       },
       poll: async ({ pollId, max, signal }) => {
         const polled = await call({
@@ -623,6 +653,7 @@ export async function startWorkWorker(options: WorkWorkerOptions): Promise<{
     stop: async () => {
       stopping.abort();
       stopPruning();
+      diskCare.stop();
       codexSignIns.stop();
       await loop;
       await Promise.allSettled(

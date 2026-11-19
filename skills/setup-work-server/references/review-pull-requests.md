@@ -3,8 +3,10 @@
 Every pull request in a company repository gets a code and security review
 from an agent that checks out the change, verifies it by running it, reads
 production's shape from a read-only replica, and reports a review with inline
-comments and a check run. It is ordinary project code (issue #118, ADRs 0181
-and 0259):
+comments and a check run. The check shows the review in progress from the
+moment it is queued, and each finding is posted as soon as the agent has
+verified it. It is ordinary project code (issue #118, ADRs 0181, 0259 and
+0337):
 the `pull-request-reviews` pack holds every file. This guide is the
 server side: GitHub, the service connections, and the review machines.
 
@@ -12,8 +14,11 @@ For a different review algorithm, cloud allocator or external Postgres ledger,
 compose the same primitives rather than requiring a native integration or
 forcing this recipe onto the application. See [workflow composition](workflow-composition.md).
 Nothing installs into the server: publication is the pack's `postReviews`
-workflow. It queues per pull request chat (ADR 0325), so overlapping turns
-publish one at a time, decides from what GitHub shows (the chat's metadata
+workflow. It queues per pull request chat (ADR 0325), so overlapping turns,
+progress and findings publish one at a time, and a burst of alike events
+(an agent's findings) joins the one publication still waiting, so the queue
+never fills and the verdict always gets in (ADR 0337). It decides from what
+GitHub shows (the chat's metadata
 holds a record of each commit's verdict and what it posted, never trusted
 for what to post), and writes through the GitHub connection's typed actions
 with stamps, so a retry after a lost answer finds the write instead of
@@ -24,13 +29,16 @@ What runs where:
 - The **control plane** receives GitHub's signed webhook (or, on a server
   GitHub cannot reach, polls GitHub with the `github-polling` pack, below),
   runs the workflows, and holds every credential: the App's key, the replica's
-  password, Slack's token. It also **posts**: when a review chat's turn ends,
-  the `postReviews` workflow (in the workflow-only `github-poster`
-  Environment) reads the turn's typed `review` result (the reviewer submits
-  it with `submit_result`, and Work records only a value its schema accepts),
-  validates it again, checks the pull request's head,
-  then posts a commit-bound review, check run and optional reply through the
-  `github` connection. It leaves description edits, dismissal of earlier
+  password, Slack's token. It also **posts**, with the `postReviews`
+  workflow (in the workflow-only `github-poster` Environment): while a
+  review chat's turn is queued, preparing or running, it shows the "Work
+  review" check in progress on the head; each `finding` result the reviewer
+  submits (with `submit_result`; Work records only a value its schema
+  accepts) it validates again and posts at once as an inline comment; when
+  the turn ends it reads the turn's typed `review` result, validates it,
+  checks the pull request's head, then posts a commit-bound review with the
+  findings not posted yet, completes the check run with the verdict, and
+  posts an optional reply, through the `github` connection. It leaves description edits, dismissal of earlier
   change requests and thread resolution to people.
 - A **review machine** (a worker labelled `pool=review`, opened to the
   project) runs each pull request's chat in the `review` Environment: its own
@@ -69,7 +77,8 @@ needs, and the manifest requests:
 
 - **Pull requests: write**: reviews and inline comments, and replies to
   review comments.
-- **Checks: write**: the "Work review" check run.
+- **Checks: write**: the "Work review" check run, in progress and then
+  completed.
 - **Contents: read**: fetching the change. Reviews need no more; the
   manifest asks for write, which the project's own sync uses.
 
@@ -163,6 +172,17 @@ demand](cluster-deployment.md#machines-on-demand)):
 3. A review that finds no machine waits up to the Environment's
    `waitMinutes`; the rule's status (`GET /_work/operator/machine-rules`)
    counts it as `queued` and shows the machine starting.
+4. Give each machine disk for its reviews: every review keeps its checkout,
+   its installed dependencies and its sandbox's Docker data there for as
+   long as its pull request is open, and each fill of the review cache
+   reserves the cache's `sizeMb` (16 GiB in the pack) while it runs. About
+   100 GB per machine for one review per machine (`rootVolumeGb` on EC2; a
+   Hetzner server type's own disk). A machine under its disk floor takes
+   no new review, which waits
+   for another machine, and its failures say the machine ran out of disk
+   ([Disk](cluster-deployment.md#disk)). On demand, Work replaces such a
+   machine once its reviews are done; a `workflow` class's project hears
+   `machine.disk-low` for its own alerts.
 
 For a fixed fleet instead, enroll each machine yourself:
 `POST /_work/operator/workers` with
@@ -262,11 +282,15 @@ the open pull requests as they are.
 1. Open a small pull request. A project chat `pr-acme/web-<number>` appears:
    Environment `review`, a review machine (created for it when none was
    free), workspace at the pull request's head commit, and its setup's log
-   in `.work-session/setup.log`. When its turn ends, a `postReviews` run posts the
-   commit-bound review with inline comments and a "Work review" check run.
-   The description and earlier change requests remain under human control.
-2. Push to the branch: the same chat moves to the new head. Nothing posts for
-   a head the chat has not reached yet. Each commit's check only holds or tightens, so an overlapping
+   in `.work-session/setup.log`. Within a minute the "Work review" check is in
+   progress (*Waiting to start*, *Preparing the workspace*, *Reviewing*), and
+   each finding appears as an inline comment as it is verified. When its turn
+   ends, a `postReviews` run posts the commit-bound review and completes the
+   check run with its verdict. The description and earlier change requests
+   remain under human control.
+2. Push to the branch: the same chat moves to the new head, and the earlier
+   head's check, if still in progress, is cancelled. Nothing posts for a head
+   the chat has not reached yet, and nothing more for one it left. Each commit's check only holds or tightens, so an overlapping
    passing report cannot replace a failure on that commit.
 3. Comment `@work is this migration safe on production?`: the answer arrives
    as a reply, with no new review when nothing else changed.
@@ -282,11 +306,14 @@ chat that never starts a turn usually has no review machine available to the
 project (check the chat's placement, `GET /_work/operator/machines`, and the
 rule's `problem` and `failure` in `GET /_work/operator/machine-rules`). A
 review that never reaches GitHub shows in `postReviews`' runs: a turn that
-submitted no current `review` result (none, or one made before a later push
-or question reached the chat) marks the commit `action_required`
+submitted no `review` result marks the commit `action_required`
 with the reason (when no review marked it yet), and so does a review whose
 named commit, or the commit its turn began on, is not the head. Nothing posts
-while GitHub's head is past the chat's commit.
+while GitHub's head is past the chat's commit. A check that stays at *Waiting
+to start* has no review machine yet; one at *Preparing the workspace* is in
+setup. A finding's run says why it did not post (a later request made it
+stale, it is outside the diff, it was already posted, it is past the turn's
+first 30); the turn's review posts what is left of its first 30.
 
 Model access through the gateway lasts only for the exact review turn attempt
 and its live lease (ADR 0293). Background code cannot start model requests with
@@ -294,12 +321,14 @@ that turn's old grant after interruption, completion or lease loss, or during a
 later turn. Git and HTTP grants keep their normal background lifetime. Calls
 already admitted may finish streaming; clean up cloud resources independently
 and enforce spending policy in connection guards.
-While one `postReviews` run publishes, a later turn's run for the same pull
-request shows as `queued` and starts when it settles; the chat's
-`review.verdicts` and `review.posted` metadata say what each commit carries
-and what was posted. A stamp finds a write GitHub accepted when its answer was
-lost; a write GitHub's lists do not show yet can still be posted twice by one
-retry. This is application policy built from ordinary workflow primitives, not
+While one `postReviews` run publishes, later runs for the same pull request
+(a turn's status, a finding, a settled turn) show as `queued` and start in
+turn, alike events joining the one waiting; the chat's `review.verdicts` and `review.posted`
+metadata say what each commit carries and what was posted, and the pull
+request's checks which run shows the review in progress. A stamp finds a write GitHub accepted when its answer
+was lost, and a finding's marker finds it wherever it was posted; a write
+GitHub's lists do not show yet can still be posted twice by one retry or
+the publication right behind it. This is application policy built from ordinary workflow primitives, not
 a universal exactly-once external write guarantee. A deployment that ran the
 earlier server publisher removes its hook registration and its
 `work_review_publication` schema once its last runs have finished.

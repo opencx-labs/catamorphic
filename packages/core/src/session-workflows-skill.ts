@@ -267,7 +267,8 @@ export const closePullRequestChats = defineWorkflow(({ defineBoundary }) => ({
 
 exec runs a shell command in a chat's workspace and answers { exitCode, stdout,
 stderr, durationMs, timedOut } (the last 16 000 characters of each stream, the
-chat's secret values masked). Name
+chat's secret values masked), and outOfDisk when it failed while its machine
+is short of disk or its output says no space was left. Name
 the chat by sessionId or key, pass command, in, idempotencyKey, and optionally
 cwd (beneath the checkout), env and timeoutSeconds (default 600, at most 14 400).
 in: "session" runs as the agent's commands do: the chat's network, grants and
@@ -340,7 +341,8 @@ export const prepareReview = defineWorkflow(({ defineBoundary }) => ({
 
 ### Turns that stop making progress
 
-inspect (and find) answer turn: the turn working now, or null, with its
+inspect (and find) answer queued, the ids of the chat's turns waiting to run,
+oldest first, and turn: the turn working now, or null, with its
 attempt { id, ordinal, reason, startedAt }, attempts and restarts so far,
 progressAt (when its attempt last made progress: anything from its harness but
 a log line, or a model call), stalledAt, stallMinutes, and activity { tools,
@@ -562,7 +564,8 @@ sandboxes need it.
   detail.resultMessageId names, even after later turns.
 - results reads the typed values an agent submitted with submit_result
   (ADR 0323), newest first: { sessionId | key, name?, family?, turnId?,
-  afterInput?, limit? }. An agent submits only results its committed definition declares
+  afterInput?, limit?, order? } (order: "oldest" reads the first submitted
+  first). An agent submits only results its committed definition declares
   (\`"results": { "<name>": <JSON Schema> }\` in .work/agents/<slug>.json),
   and only a value its schema accepts is recorded, so read results, never
   parse a reply. Each result names its chat (family: true adds subsessions at
@@ -575,8 +578,12 @@ sandboxes need it.
   answer it, or turnId: <the settled turn's id> to read what that turn
   submitted, whatever came after it. session.result-recorded fires
   the moment one is recorded, mid-turn, with the result in input.payload.detail
-  (name, value, turnId, input, commit); select { names: ["review"] }. Compute
-  final checks (votes, coverage) in code over results, not in an agent.
+  (name, value, turnId, input, commit); select { names: ["review"] }. The
+  pull-request-reviews pack posts each verified finding that way, in the same
+  per-key queue as the turn's review. A turn makes at most 100 submissions,
+  rejected ones included, so one read of a turn's results holds them all.
+  Compute final checks (votes, coverage) in code over results, not in an
+  agent.
 - usage is an authorized read of a chat's model calls through the gateway:
   tokens per model, the summed cost providers reported (costUsd, US dollars,
   null when none did), unpricedCalls (so the cost is a lower bound when

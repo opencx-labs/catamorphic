@@ -269,6 +269,7 @@ export interface AgentTurns {
   priority: Generated<number>;
   provider_retry: Json | null;
   provider_thread_id: string | null;
+  result_submissions: Generated<number>;
   session_id: string;
   started_at: Timestamp | null;
   status: Generated<string>;
@@ -620,6 +621,7 @@ export interface ExecutionAllocations {
   released_at: Timestamp | null;
   reserved_cpu_millis: Generated<number>;
   reserved_memory_mb: Generated<number>;
+  reserved_storage_mb: Generated<number>;
   root_workload_id: string;
   sandbox_creation_started: Generated<boolean>;
   sandbox_provider_id: string | null;
@@ -1277,6 +1279,9 @@ export interface WorkerNodes {
   capacity: Json | null;
   default_resources: Generated<Json>;
   descriptor: Json;
+  disk: Json | null;
+  disk_low_at: Timestamp | null;
+  disk_low_recorded_at: Timestamp | null;
   disposable: Generated<boolean>;
   enabled: Generated<boolean>;
   id: string;
@@ -1378,6 +1383,14 @@ export interface WorkflowRunEvents {
   type: string;
 }
 
+export interface WorkflowRunJoins {
+  created_at: Generated<Timestamp>;
+  delivery_key: string;
+  project_id: string;
+  run_id: string;
+  workflow_name: string;
+}
+
 export interface WorkflowRuns {
   allocation_id: string | null;
   attempt: Generated<number>;
@@ -1387,6 +1400,7 @@ export interface WorkflowRuns {
   caller_scope: Json | null;
   cancel_reason: string | null;
   cancel_requested_at: Timestamp | null;
+  coalesce_key: string | null;
   completed_at: Timestamp | null;
   correlation_key: string | null;
   created_at: Generated<Timestamp>;
@@ -1496,6 +1510,7 @@ export interface WorkGithubAppRegistrations {
 export interface WorkMachineRules {
   created_at: Generated<Timestamp>;
   definition: Json;
+  disk_short_at: Timestamp | null;
   last_failure: string | null;
   last_failure_at: Timestamp | null;
   name: string;
@@ -1725,6 +1740,7 @@ export interface DB {
   workflow_enablements: WorkflowEnablements;
   workflow_pauses: WorkflowPauses;
   workflow_run_events: WorkflowRunEvents;
+  workflow_run_joins: WorkflowRunJoins;
   workflow_run_states: WorkflowRunStates;
   workflow_run_steps: WorkflowRunSteps;
   workflow_runs: WorkflowRuns;

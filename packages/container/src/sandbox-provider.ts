@@ -9,6 +9,7 @@ import type {
   ExecResult,
   GitCloneOpts,
   SandboxCapability,
+  SandboxDiskProvider,
   SandboxEgress,
   SandboxFileOpts,
   SandboxHandle,
@@ -51,7 +52,7 @@ import {
   type CommandSession,
   startCommandChannel,
 } from "./command-channel.js";
-import { DockerApiError, DockerClient } from "./docker-client.js";
+import { DockerApiError, DockerClient, withTag } from "./docker-client.js";
 import {
   type EgressLookup,
   type EgressPolicy,
@@ -60,7 +61,11 @@ import {
   samePolicy,
   startEgressProxy,
 } from "./egress-proxy.js";
-import { type HostPathOf, hostPathResolver } from "./host-paths.js";
+import {
+  type HostPathOf,
+  hostPathResolver,
+  ownContainerId,
+} from "./host-paths.js";
 import type { ContainerRuntime } from "./support.js";
 import { tarArchive } from "./tar.js";
 
@@ -99,6 +104,31 @@ const INTERNAL_LABEL = "work.sandbox.internal";
 const VOLUMES_LABEL = "work.sandbox.volumes";
 /** Names a Docker volume as one of this machine's sandbox volumes. */
 export const VOLUME_LABEL = "work.volume";
+/**
+ * Where each machine sharing a daemon keeps a reference of its own to an
+ * image it uses (ADR 0336): an image another machine claims is kept.
+ */
+const CLAIM_REPOSITORY = "work.local/claims";
+/** A claim no machine renewed for this many days is ignored and removed. */
+const CLAIM_STALE_DAYS = 7;
+
+/** The day a claim is made on, `yyyymmdd` in UTC. */
+function claimDay(at: number): string {
+  return new Date(at).toISOString().slice(0, 10).replaceAll("-", "");
+}
+
+/** The day a claim reference names, or undefined for one that names none. */
+function dayOfClaim(tag: string): string | undefined {
+  const day = tag.slice(tag.lastIndexOf("-") + 1);
+  return /^\d{8}$/.test(day) ? day : undefined;
+}
+
+/** A reference's repository and tag (`latest` when it names none). */
+function splitReference(reference: string): [string, string] {
+  const tagged = withTag(reference);
+  const at = tagged.lastIndexOf(":");
+  return [tagged.slice(0, at), tagged.slice(at + 1)];
+}
 const VOLUME_PREFIX = "work-volume-";
 /**
  * The agent container of a sandbox whose commands run apart (ADR 0332)
@@ -397,10 +427,23 @@ export class ContainerSandboxProvider implements SandboxProvider {
     prune: (args) => this.pruneVolumes(args),
     removeAll: (args) => this.removeAllVolumes(args),
   };
+  /**
+   * Its state and Docker's data root, and what it leaves there (ADR 0336):
+   * images it built or pulled, and the Docker data inside sandboxes with
+   * containers.
+   */
+  readonly disk: Required<SandboxDiskProvider> = {
+    paths: () => this.diskPaths(),
+    clean: (args) => this.cleanDisk(args),
+  };
 
   private readonly docker: DockerClient;
   private readonly config: ContainerProviderConfig;
   private readonly usage: VolumeUsageLog;
+  /** When a sandbox was last made from each image this machine used. */
+  private readonly imageUsage: VolumeUsageLog;
+  /** The images this machine pulled itself, which are its to remove. */
+  private readonly pulledImages: VolumeUsageLog;
   private readonly creations: CreationRegistry;
   private readonly owner: string;
   private readonly records = new Map<string, SandboxRecord>();
@@ -415,6 +458,8 @@ export class ContainerSandboxProvider implements SandboxProvider {
   /** Widenings each sandbox has seen end, refused should they arrive late. */
   private readonly endedWidenings = new Map<string, string[]>();
   private readonly images = new Map<string, Promise<void>>();
+  /** Each image's lock on this machine (ADR 0336). */
+  private readonly imageLocks = new Map<string, Promise<void>>();
   /** Each cache's lock on this machine, by family (ADR 0334). */
   private readonly cacheLocks = new Map<string, Promise<void>>();
   private hostPaths: Promise<HostPathOf> | undefined;
@@ -430,6 +475,12 @@ export class ContainerSandboxProvider implements SandboxProvider {
     this.docker = config.docker ?? new DockerClient();
     this.usage = new VolumeUsageLog(
       path.join(config.stateDirectory, "volumes.json"),
+    );
+    this.imageUsage = new VolumeUsageLog(
+      path.join(config.stateDirectory, "images.json"),
+    );
+    this.pulledImages = new VolumeUsageLog(
+      path.join(config.stateDirectory, "pulled-images.json"),
     );
     this.creations = new CreationRegistry(
       path.join(config.stateDirectory, "creating.json"),
@@ -2144,9 +2195,17 @@ export class ContainerSandboxProvider implements SandboxProvider {
         opts.snapshotName ??
         this.config.image ??
         DEFAULT_IMAGE;
-      await this.once(reference, async () => {
-        if (!(await this.docker.inspectImage(reference)))
-          await this.docker.pullImage(reference);
+      // Under the image's lock on this machine: cleanup never removes it
+      // between this sandbox finding it and claiming it (ADR 0336).
+      await this.withImageLock(reference, async () => {
+        await this.once(reference, async () => {
+          if (!(await this.docker.inspectImage(reference))) {
+            await this.docker.pullImage(reference);
+            // Pulled by this machine: its to remove once unused.
+            this.pulledImages.touch([reference]);
+          }
+        });
+        await this.claimImage(reference);
       });
       return reference;
     }
@@ -2155,14 +2214,270 @@ export class ContainerSandboxProvider implements SandboxProvider {
         `This machine cannot build ${image.path}; place the Environment on a machine that builds images`,
       );
     const reference = dockerfileImageReference(image.digest);
-    await this.once(reference, async () => {
-      if (!(await this.docker.inspectImage(reference)))
-        await this.docker.buildImage({
-          tag: reference,
-          dockerfile: image.content,
-        });
+    await this.withImageLock(reference, async () => {
+      await this.once(reference, async () => {
+        if (!(await this.docker.inspectImage(reference)))
+          await this.docker.buildImage({
+            tag: reference,
+            dockerfile: image.content,
+            // Which machine built it, so another sharing the daemon never
+            // removes it (ADR 0336).
+            labels: { [OWNER_LABEL]: this.owner },
+          });
+      });
+      await this.claimImage(reference);
     });
     return reference;
+  }
+
+  /** One image's lock on this machine: sandboxes using it, and cleanup. */
+  private async withImageLock<T>(
+    reference: string,
+    run: () => Promise<T>,
+  ): Promise<T> {
+    const before = this.imageLocks.get(reference) ?? Promise.resolve();
+    let release = () => {};
+    const held = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const mine = before.then(() => held);
+    this.imageLocks.set(reference, mine);
+    await before;
+    try {
+      return await run();
+    } finally {
+      release();
+      if (this.imageLocks.get(reference) === mine)
+        this.imageLocks.delete(reference);
+    }
+  }
+
+  /**
+   * Record that this machine uses an image (ADR 0336): when, in its own
+   * log, and on the daemon a reference of its own to the image, so
+   * another machine sharing the daemon keeps an image while this one uses
+   * it. The machine's default image is its own, never claimed or removed.
+   */
+  private async claimImage(reference: string): Promise<void> {
+    if (this.defaultImages().has(reference)) return;
+    this.imageUsage.touch([reference]);
+    // Today's claim, and none of this machine's older ones: a claim is
+    // renewed as long as the machine uses the image (ADR 0336).
+    const today = claimDay(Date.now());
+    await this.docker
+      .tagImage({
+        source: reference,
+        repo: CLAIM_REPOSITORY,
+        tag: `${this.claimPrefix(reference)}${today}`,
+      })
+      .catch(() => {});
+    const inspected = await this.docker
+      .inspectImage(reference)
+      .catch(() => undefined);
+    for (const tag of stringList(inspected?.RepoTags))
+      if (
+        tag.startsWith(`${CLAIM_REPOSITORY}:${this.claimPrefix(reference)}`) &&
+        !tag.endsWith(`-${today}`)
+      )
+        await this.docker.removeImage(tag).catch(() => {});
+  }
+
+  /** The start of this machine's claims on an image, before their day. */
+  private claimPrefix(reference: string): string {
+    return `${this.owner}-${createHash("sha256").update(reference).digest("hex").slice(0, 24)}-`;
+  }
+
+  private defaultImages(): Set<string> {
+    return new Set(
+      [this.config.image ?? DEFAULT_IMAGE].flatMap((reference) => [
+        reference,
+        withTag(reference),
+      ]),
+    );
+  }
+
+  /**
+   * Let go of an image this machine stopped using (ADR 0336), under its
+   * lock: its claims go, and it is removed if this machine pulled or built
+   * it and no other machine's live claim remains. A claim no machine
+   * renewed for {@link CLAIM_STALE_DAYS} is a machine that left: ignored,
+   * and removed. A claim made while this machine removed the image gets
+   * the image's name back.
+   */
+  private async releaseImage(
+    reference: string,
+  ): Promise<"removed" | "forgotten" | "kept"> {
+    const inspected = await this.docker.inspectImage(reference);
+    if (!inspected) return "forgotten";
+    const tags = stringList(inspected.RepoTags);
+    const claims = tags.filter((tag) => tag.startsWith(`${CLAIM_REPOSITORY}:`));
+    const mineClaims = claims.filter((tag) =>
+      tag.startsWith(`${CLAIM_REPOSITORY}:${this.claimPrefix(reference)}`),
+    );
+    for (const tag of mineClaims)
+      await this.docker.removeImage(tag).catch(() => {});
+    const oldest = claimDay(Date.now() - CLAIM_STALE_DAYS * 86_400_000);
+    const others = claims.filter((tag) => !mineClaims.includes(tag));
+    const live = others.filter((tag) => (dayOfClaim(tag) ?? "") >= oldest);
+    for (const tag of others)
+      if (!live.includes(tag))
+        await this.docker.removeImage(tag).catch(() => {});
+    // Only an image this machine pulled or built is its to remove; one it
+    // found on the daemon never is.
+    const builder = objectField(objectField(inspected, "Config"), "Labels")[
+      OWNER_LABEL
+    ];
+    const mine =
+      this.pulledImages.lastUsed(reference) !== undefined ||
+      builder === this.owner;
+    if (!mine) return "forgotten";
+    // Another machine sharing the daemon still uses it: kept, and asked
+    // again on a later pass.
+    if (live.length > 0) return "kept";
+    const id = typeof inspected.Id === "string" ? inspected.Id : undefined;
+    if ((await this.docker.removeImage(reference)) !== "gone") return "kept";
+    // Another machine claimed it meanwhile: it keeps its name (a digest
+    // reference cannot be named again; the claim keeps the image, and its
+    // next use pulls the name back without downloading it).
+    if (id && !reference.includes("@")) {
+      const claimed = (
+        await this.docker.listImages({ reference: CLAIM_REPOSITORY })
+      ).some((image) => image.Id === id);
+      if (claimed) {
+        const [repo = reference, tag = "latest"] = splitReference(reference);
+        await this.docker.tagImage({ source: id, repo, tag }).catch(() => {});
+        return "kept";
+      }
+    }
+    return "removed";
+  }
+
+  /**
+   * A path on each filesystem this provider writes to that this process
+   * can measure (ADR 0336): its state directory, and Docker's data root
+   * (volumes, images, containers) where this process sees it at the same
+   * path, which a worker in a container of its own does not.
+   */
+  private async diskPaths(): Promise<string[]> {
+    const paths = [this.config.stateDirectory];
+    const root = await this.docker
+      .info()
+      .then((info) =>
+        typeof info.DockerRootDir === "string" ? info.DockerRootDir : "",
+      )
+      .catch(() => "");
+    if (!root) return paths;
+    const inContainer = (() => {
+      try {
+        return Boolean(
+          ownContainerId(fs.readFileSync("/proc/self/mountinfo", "utf8")),
+        );
+      } catch {
+        return false;
+      }
+    })();
+    const same = await this.hostPathOf()
+      .then((hostPathOf) => hostPathOf(root) === path.resolve(root))
+      .catch(() => false);
+    if ((!inContainer || same) && fs.existsSync(root)) paths.push(root);
+    return paths;
+  }
+
+  /**
+   * Remove what Work left on this machine that nothing used for
+   * `graceMs` (ADR 0336): images this machine pulled or built itself that
+   * no sandbox of its was made from since, no other machine sharing the
+   * daemon claims and no container uses (Docker refuses those), never the
+   * machine's own default image nor one it found; its claim on any other
+   * image it stopped using goes. And in each running sandbox with
+   * containers, its Docker's dangling images and build cache that old,
+   * never a tagged image, a container or a volume. Work builds with the
+   * classic builder, so the machine's daemon holds no build cache of
+   * Work's, and one shared with other software keeps its own.
+   */
+  private async cleanDisk(args: { graceMs: number }): Promise<string[]> {
+    await this.reclaimed;
+    const done: string[] = [];
+    const own = this.defaultImages();
+    // Builds carry their builder's label: this machine's are its own even
+    // where its log lost them. Another's, and unlabeled ones, never are.
+    const repository = dockerfileImageReference("").slice(0, -1);
+    const built = new Map<string, number>();
+    for (const image of await this.docker.listImages({
+      reference: repository,
+    })) {
+      if (objectField(image, "Labels")[OWNER_LABEL] !== this.owner) continue;
+      for (const tag of stringList(image.RepoTags))
+        if (tag.startsWith(`${repository}:`))
+          built.set(tag, Number(image.Created) * 1000);
+    }
+    const removed: string[] = [];
+    const forgotten: string[] = [];
+    for (const reference of new Set([
+      ...Object.keys(this.imageUsage.entries()),
+      ...built.keys(),
+    ])) {
+      if (own.has(reference)) continue;
+      const since = built.get(reference);
+      if (
+        !this.imageUsage.unused({
+          key: reference,
+          unusedForMs: args.graceMs,
+          ...(since !== undefined && Number.isFinite(since) ? { since } : {}),
+        })
+      )
+        continue;
+      const outcome = await this.withImageLock(reference, () =>
+        this.releaseImage(reference),
+      );
+      if (outcome === "removed") removed.push(reference);
+      if (outcome === "forgotten") forgotten.push(reference);
+    }
+    this.imageUsage.forget([...removed, ...forgotten]);
+    this.pulledImages.forget([...removed, ...forgotten]);
+    if (removed.length > 0)
+      done.push(
+        `Removed ${removed.length} unused image${removed.length === 1 ? "" : "s"}: ${removed.join(", ")}`,
+      );
+    const hours = Math.max(0, Math.floor(args.graceMs / 3_600_000));
+    let pruned = 0;
+    for (const container of await this.docker.listContainers({
+      label: [
+        `${SANDBOX_LABEL}=1`,
+        `${OWNER_LABEL}=${this.owner}`,
+        `${CONTAINERS_LABEL}=1`,
+      ],
+    })) {
+      if (container.State !== "running") continue;
+      const names = container.Names;
+      const name = Array.isArray(names)
+        ? String(names[0] ?? "").replace(/^\//, "")
+        : "";
+      if (!name) continue;
+      // The sandbox's own Docker, which Work started: what no image names
+      // and no build uses any more. Its output is the sandbox's, so only
+      // its status is read.
+      const result = await this.exec(name, {
+        cmd: [
+          "sh",
+          "-c",
+          [
+            "docker info >/dev/null 2>&1 || exit 0",
+            `docker image prune --force --filter until=${hours}h >/dev/null 2>&1`,
+            `docker builder prune --force --filter until=${hours}h >/dev/null 2>&1`,
+            "exit 0",
+          ].join("\n"),
+        ],
+        user: "0",
+        timeoutSeconds: 120,
+      }).catch(() => undefined);
+      if (result?.exitCode === 0) pruned += 1;
+    }
+    if (pruned > 0)
+      done.push(
+        `Pruned dangling images and build cache in ${pruned} sandbox${pruned === 1 ? "" : "es"} with containers`,
+      );
+    return done;
   }
 
   /** One pull or build per reference at a time. */

@@ -20,6 +20,7 @@ import type {
   ExecutionJobsService,
 } from "./execution-jobs-service.js";
 import { ExecutionJobDeferredError } from "./execution-worker-service.js";
+import { outOfDiskFor, withOutOfDisk } from "./out-of-disk.js";
 import {
   RUN_SIGNAL_MAX_PENDING,
   RUN_SIGNAL_MAX_RECEIPTS,
@@ -1478,7 +1479,7 @@ export class RunCoordinator {
     });
   }
 
-  private async failRun(args: {
+  private async failRun(given: {
     trx: Transaction<DB>;
     runId: string;
     error: string;
@@ -1487,6 +1488,24 @@ export class RunCoordinator {
     /** The statuses a run may fail from; active ones unless named. */
     statuses?: readonly string[];
   }): Promise<void> {
+    // A run whose machine is short of disk, or whose error says a write
+    // found no room, says so (ADR 0336).
+    const placed = await given.trx
+      .selectFrom("workflow_runs")
+      .select("allocation_id")
+      .where("id", "=", given.runId)
+      .executeTakeFirst();
+    const args = {
+      ...given,
+      error: withOutOfDisk(
+        given.error,
+        await outOfDiskFor({
+          db: given.trx,
+          allocationId: placed?.allocation_id,
+          texts: [given.error],
+        }),
+      ),
+    };
     await this.cleanupRunScope(args);
     const failed = await args.trx
       .updateTable("workflow_runs")

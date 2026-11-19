@@ -7,6 +7,7 @@ import type {
   ExecResult,
   GitCloneOpts,
   SandboxCapability,
+  SandboxDiskProvider,
   SandboxHandle,
   SandboxProcessProvider,
   SandboxProvider,
@@ -177,6 +178,8 @@ export class MicrosandboxSandboxProvider implements SandboxProvider {
   });
   /** Named volumes kept across sandboxes (ADR 0208), with `stateDirectory`. */
   readonly volumes?: SandboxVolumeProvider;
+  /** Its state directory, where its volumes live (ADR 0336). */
+  readonly disk?: SandboxDiskProvider;
   private readonly config: Required<
     Omit<
       MicrosandboxProviderConfig,
@@ -225,6 +228,7 @@ export class MicrosandboxSandboxProvider implements SandboxProvider {
         prune: (args) => this.pruneVolumes(args),
         removeAll: (args) => this.removeAllVolumes(args),
       };
+    if (stateDirectory) this.disk = { paths: async () => [stateDirectory] };
     // No `network.setup` (ADR 0257): a VM's network policy is fixed when
     // it is created.
     this.capabilities = [

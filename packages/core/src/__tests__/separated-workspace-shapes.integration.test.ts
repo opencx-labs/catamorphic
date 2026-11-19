@@ -39,6 +39,8 @@ import { ExecutionEnvironmentsService } from "../services/execution-environments
 import { ProjectEnvironmentsService } from "../services/project-environments-service.js";
 import { ProjectsService } from "../services/projects-service.js";
 import { SessionWorkspaces } from "../services/session-workspaces.js";
+import { EnvironmentCapacityError } from "../services/worker-capacity.js";
+import { WorkerNodesService } from "../services/worker-nodes-service.js";
 
 /**
  * A separated sandbox's shape follows where its chat's harness runs (ADR
@@ -113,6 +115,15 @@ describe("a separated sandbox's shape follows its chat's harness (ADR 0332)", ()
   let makeGate: { entered: boolean; open: Promise<void> } | undefined;
   /** The machine is out of reach, while set. */
   let offline = false;
+  /**
+   * A registered machine sized for a workspace of the `tight` Environment
+   * as it is, not with an agent container beside it; `full` while no
+   * machine has room for new work.
+   */
+  const tight: {
+    lease?: { id: string; token: string };
+    full: boolean;
+  } = { full: false };
 
   /** As the built-in agent: its harness on this host, driving the sandbox. */
   const builtin = (id: string): RegisteredCodingAgent => ({
@@ -204,6 +215,14 @@ describe("a separated sandbox's shape follows its chat's harness (ADR 0332)", ()
               workloads: ["agent"],
               commands: { separate: true },
             },
+            // On a machine with room for its workspace as it is (ADR 0100).
+            tight: {
+              workloads: ["agent"],
+              commands: { separate: true },
+              pool: { lane: "tight" },
+              waitMinutes: 30,
+              requirements: { resources: { cpuMillis: 1000, memoryMb: 2048 } },
+            },
             // Its machines all busy: chats wait for one (ADR 0258).
             busy: {
               workloads: ["agent"],
@@ -251,7 +270,13 @@ describe("a separated sandbox's shape follows its chat's harness (ADR 0332)", ()
               gate.entered = true;
               await gate.open;
             }
-            const { separateCommands: _separate, ...rest } = opts;
+            // One process sandbox, which enforces no limits: the machine
+            // only reserves what a binding that names them asks.
+            const {
+              separateCommands: _separate,
+              resources: _resources,
+              ...rest
+            } = opts;
             return target.createSandbox(rest);
           };
         if (property === "executeCommand")
@@ -282,15 +307,51 @@ describe("a separated sandbox's shape follows its chat's harness (ADR 0332)", ()
     agents.set("coder", sandboxed("coder"));
     agents.set("helper", builtin("helper"));
     const allocations = new ExecutionAllocationsService(db);
+    const nodes = new WorkerNodesService(db);
+    tight.lease = await nodes.register({
+      tenantId: identity.tenantId,
+      authorityId: "separated-shapes-tight",
+      descriptor: {
+        ...binding.descriptor,
+        id: "tight",
+        label: "Tight",
+        resourceLimits: ["cpuMillis", "memoryMb"],
+      },
+      capacity: { workspaces: 4, memoryMb: 3072 },
+      defaults: { memoryMb: 1024 },
+    });
+    await db
+      .updateTable("worker_nodes")
+      .set({ lease_expires_at: new Date(Date.now() + 60 * 60_000) })
+      .where("id", "=", tight.lease.id)
+      .execute();
+    const tightBinding: EnvironmentRuntimeBinding = {
+      ...binding,
+      descriptor: {
+        ...binding.descriptor,
+        id: tight.lease.id,
+        resourceLimits: ["cpuMillis", "memoryMb"],
+      },
+      workerNodeId: tight.lease.id,
+      workerLeaseToken: tight.lease.token,
+    };
     environments = new ExecutionEnvironmentsService(
       new ProjectEnvironmentsService(db, projectManager),
       {
-        get: ({ allocationBindingId, pool }) =>
-          pool.lane === "busy" || offline
+        get: ({ allocationBindingId, pool }) => {
+          if (pool.lane === "tight") {
+            // Its own Allocation's machine resolves again; new work finds
+            // room only while the machine is not full.
+            if (allocationBindingId) return tightBinding;
+            if (tight.full) throw new EnvironmentCapacityError("tight");
+            return tightBinding;
+          }
+          return pool.lane === "busy" || offline
             ? undefined
             : !allocationBindingId || allocationBindingId === "machine"
               ? binding
-              : undefined,
+              : undefined;
+        },
       },
     );
     const deps: ConstructorParameters<typeof AgentSessionsService>[1] = {
@@ -530,6 +591,55 @@ describe("a separated sandbox's shape follows its chat's harness (ADR 0332)", ()
       expect((await latestTurn(child.session.id)).status).toBe("completed");
     } finally {
       await worker.stop();
+    }
+  }, 120_000);
+
+  it("keeps a workspace no machine has room to make again, showing the turn why, then reshapes it", async () => {
+    agents.set("reviewer", builtin("reviewer"));
+    tight.full = false;
+    const chat = await sessions.create(identity, projectId, {
+      environment: "tight",
+    });
+    const before = (await allocationOf(chat.id)).id;
+    // Its machine has room for it as it is (2 GiB of 3), not with an agent
+    // container beside it (2 GiB more), and no other machine has room.
+    tight.full = true;
+    redefine();
+    // The host holding the machine runs the chat's turns there.
+    const onMachine = service({ workerNode: tight.lease });
+    const worker = workerFor(onMachine);
+    try {
+      await send(chat.id, "hello", onMachine);
+      const first = await latestTurn(chat.id);
+      await until(
+        "the turn shows what holds its workspace",
+        async () =>
+          (await turnRow(first.id)).activity?.includes(
+            "too little room for it on its machines keeps it",
+          ) === true,
+      );
+      // The chat keeps the workspace it has.
+      expect((await allocationOf(chat.id)).id).toBe(before);
+      expect(
+        await db
+          .selectFrom("execution_allocations")
+          .select("status")
+          .where("id", "=", before)
+          .executeTakeFirstOrThrow(),
+      ).toEqual({ status: "active" });
+      expect((await turnRow(first.id)).status).toBe("queued");
+      // Room on its machine again: made again there.
+      await db
+        .updateTable("worker_nodes")
+        .set({ capacity: { workspaces: 4, memoryMb: 8192 } })
+        .where("id", "=", tight.lease?.id ?? "")
+        .execute();
+      tight.full = false;
+      await reshaped(chat.id, before);
+      expect((await turnRow(first.id)).status).toBe("completed");
+    } finally {
+      await worker.stop();
+      agents.set("reviewer", builtin("reviewer"));
     }
   }, 120_000);
 

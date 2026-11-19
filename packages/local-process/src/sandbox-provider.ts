@@ -11,6 +11,7 @@ import type {
   ProcessOutput,
   ReadProcessOutputArgs,
   SandboxCapability,
+  SandboxDiskProvider,
   SandboxEgress,
   SandboxHandle,
   SandboxProcess,
@@ -195,6 +196,10 @@ export class LocalProcessSandboxProvider implements SandboxProvider {
   readonly volumes: SandboxVolumeProvider = {
     prune: (args) => this.pruneVolumes(args),
     removeAll: (args) => this.removeAllVolumes(args),
+  };
+  /** Its sandboxes and volumes live under its root (ADR 0336). */
+  readonly disk: SandboxDiskProvider = {
+    paths: async () => [this.root],
   };
 
   constructor(config?: LocalProcessProviderConfig) {

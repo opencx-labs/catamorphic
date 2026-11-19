@@ -28,6 +28,8 @@ const describeIf =
   EXTERNAL_INTEGRATIONS && S3_BUCKET ? describe : describe.skip;
 ```
 
+- `*.container.test.ts`: real container sandboxes under gVisor. They gate on `WORK_TEST_CONTAINER=1` (and `DATABASE_URL` where they start a Work server) and run in CI's `container` job, whose default sandbox image is the pinned `oven/bun` Alpine image. Locally, `packages/container/scripts/test-in-docker.sh` runs them on a Linux test machine with gVisor; `--suite review` runs the review recipe end to end (`packages/work-server/src/review.container.test.ts`) and `--keep` / `--machine NAME` keep one machine and its images between runs. Shared stand-ins for such tests (GitHub, a scripted reviewer model, an HTTPS front) live in `packages/work-server/src/testing/`.
+
 ## Isolation
 
 Tests run in parallel: Turbo runs up to two packages at once and Vitest runs up to two files per package (`pool: "threads"`; the stock server uses `--pool=forks` because PGlite's WebAssembly crashed under worker threads). So:

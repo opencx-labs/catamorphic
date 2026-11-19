@@ -82,6 +82,14 @@ export const publish = defineWorkflow(({ defineBoundary }) => ({
     defineBoundary({ run: ({ input }: BoundaryContext<{ reason: string; value: { n: number } }>) => input.value }),
   ],
 }));
+// Alike runs join while one waits: a run reads what is new when it starts.
+export const digest = defineWorkflow(({ defineBoundary }) => ({
+  concurrency: { key: "subject.id", onConflict: "queue", coalesce: ["subject.kind"] },
+  steps: [
+    defineBoundary({ run: ({ pause }: BoundaryContext<{ subject: { id: string; kind?: unknown }; n: number }>) => pause({ signal: "go" }) }),
+    defineBoundary({ run: ({ input }: BoundaryContext<{ reason: string; value: { n: number } }>) => input.value }),
+  ],
+}));
 export const cleanup = defineWorkflow(({ defineBoundary }) => ({ steps: [
   defineBoundary({ run: ({ input }: BoundaryContext<{ id: string }>) => ({ cleaned: input.id }) }),
 ] }));`,
@@ -315,6 +323,143 @@ describe.skipIf(!process.env.DATABASE_URL)(
       expect(settled.map((run) => run.id)).toEqual([first.id, ...order]);
       await release(other.id, 20);
       await release(unkeyed.id, 30);
+    }, 120_000);
+
+    it("joins a run alike one still queued, so a flood holds one waiting run and never fills the queue (ADR 0337)", async () => {
+      core.runs.startWorker({
+        pollIntervalMs: 10,
+        idlePollIntervalMs: 50,
+        leaseSeconds: 30,
+      });
+      // Events the host delivers, as a trigger's async dispatch does.
+      const digest = (kind: string, n: number) =>
+        core.runs.triggerProduction(
+          {
+            identity,
+            projectId,
+            workflowName: "digest",
+            input: { subject: { id: "pr-7", kind }, n },
+          },
+          { kind: "test.event", mode: "async" },
+        );
+      const first = await digest("finding", 1);
+      expect(first.status).toBe("pending");
+      // More than a key's queue holds, all alike: one run waits for them.
+      const flood = [];
+      for (let n = 2; n <= 151; n += 1) flood.push(await digest("finding", n));
+      expect(new Set(flood.map((run) => run.id)).size).toBe(1);
+      const [waiting] = flood;
+      expect(waiting?.status).toBe("queued");
+      // Another kind queues its own run, behind it; an alike one after that
+      // still joins the run that waits, which keeps its place.
+      const settled = await digest("settled", 200);
+      expect(settled.status).toBe("queued");
+      expect(settled.id).not.toBe(waiting?.id);
+      expect((await digest("finding", 201)).id).toBe(waiting?.id);
+      const queued = await db
+        .selectFrom("workflow_runs")
+        .select(["id", "coalesce_key"])
+        .where("workflow_name", "=", "digest")
+        .where("status", "=", "queued")
+        .orderBy("queued_at")
+        .execute();
+      expect(queued.map((row) => row.id)).toEqual([waiting?.id, settled.id]);
+      // What makes runs alike is kept as a digest: no value is cut short.
+      for (const row of queued)
+        expect(row.coalesce_key).toMatch(/^[0-9a-f]{64}$/);
+      expect(queued[0]?.coalesce_key).not.toBe(queued[1]?.coalesce_key);
+      // Once the waiting run starts, an alike event queues a new one.
+      await release(first.id, 1);
+      await expect
+        .poll(() => status(waiting?.id ?? ""), { timeout: 20_000 })
+        .toBe("waiting");
+      const next = await digest("finding", 300);
+      expect(next.status).toBe("queued");
+      expect(next.id).not.toBe(waiting?.id);
+      await release(waiting?.id ?? "", 2);
+      await release(settled.id, 200);
+      await release(next.id, 300);
+    }, 120_000);
+
+    it("joins only runs alike in their values and in what they run as; a waiting caller never joins, and a joined delivery stays the run's", async () => {
+      core.runs.startWorker({
+        pollIntervalMs: 10,
+        idlePollIntervalMs: 50,
+        leaseSeconds: 30,
+      });
+      type Kind = string | boolean | null | { a: number } | undefined;
+      const run = (
+        kind: Kind,
+        n: number,
+        extra: {
+          deliveryKey?: string;
+          externalUserId?: string;
+          mode?: "async" | "sync" | "none";
+        } = {},
+      ) =>
+        core.runs.triggerProduction(
+          {
+            identity: {
+              ...identity,
+              externalUserId: extra.externalUserId ?? identity.externalUserId,
+            },
+            projectId,
+            workflowName: "digest",
+            input: {
+              subject: { id: "pr-8", ...(kind === undefined ? {} : { kind }) },
+              n,
+            },
+            ...(extra.deliveryKey ? { deliveryKey: extra.deliveryKey } : {}),
+          },
+          extra.mode === "none"
+            ? undefined
+            : { kind: "test.event", mode: extra.mode ?? "async" },
+        );
+      const active = await run("first", 1);
+      expect(active.status).toBe("pending");
+      // Values that differ never join: not booleans, objects, an empty
+      // string and a missing value, null, or long strings alike at first.
+      const kinds: Kind[] = [
+        true,
+        false,
+        { a: 1 },
+        { a: 2 },
+        "",
+        undefined,
+        null,
+        `${"x".repeat(600)}1`,
+        `${"x".repeat(600)}2`,
+      ];
+      const waiting: string[] = [];
+      for (const [index, kind] of kinds.entries())
+        waiting.push((await run(kind, 10 + index)).id);
+      expect(new Set(waiting).size).toBe(kinds.length);
+      // Alike values join, a delivery that joins is recorded for its run,
+      // and its redelivery returns that run.
+      expect((await run({ a: 1 }, 30)).id).toBe(waiting[2]);
+      expect((await run(true, 31, { deliveryKey: "joined-1" })).id).toBe(
+        waiting[0],
+      );
+      expect((await run(true, 32, { deliveryKey: "joined-1" })).id).toBe(
+        waiting[0],
+      );
+      // Another owner's run never joins.
+      const other = await run(true, 33, { externalUserId: "someone-else" });
+      expect(waiting).not.toContain(other.id);
+      // Only an event no caller waits for joins: not a synchronous fire,
+      // not a run started without the host's dispatch (a caller's, or a
+      // setup run), and not a call.
+      for (const mode of ["sync", "none"] as const)
+        expect(waiting).not.toContain((await run(true, 40, { mode })).id);
+      const called = await core.runs.call({
+        identity,
+        projectId,
+        workflowName: "digest",
+        input: { subject: { id: "pr-8", kind: true }, n: 34 },
+        budgetMs: 1_000,
+      });
+      expect(called.runId).not.toBe(waiting[0]);
+      expect(waiting).not.toContain(called.runId);
     }, 120_000);
 
     it("a failed or canceled run frees the key, and a canceled queued run is skipped", async () => {

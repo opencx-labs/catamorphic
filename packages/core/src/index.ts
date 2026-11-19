@@ -844,7 +844,6 @@ export {
 export {
   SessionInputNotFoundError,
   type SessionResult,
-  SessionResultLimitError,
 } from "./services/sessions/session-results.js";
 export {
   SUBSESSION_TOOL_NAMES,
@@ -941,13 +940,22 @@ export {
   type WorkTopic,
   WorkWakeups,
 } from "./services/work-wakeups.js";
-export type { WorkerCapacity } from "./services/worker-capacity.js";
+export type {
+  WorkerCapacity,
+  WorkerUsage,
+} from "./services/worker-capacity.js";
 export {
   capacityFits,
+  type DiskShortfall,
+  diskFits,
   EnvironmentCapacityError,
+  floorFor,
+  MachineDiskSchema,
+  machineDiskOf,
   WorkerCapacitySchema,
 } from "./services/worker-capacity.js";
 export {
+  type DiskEpisode,
   REMOTE_EPOCH_PATTERN,
   RemoteEpochSupersededError,
   type RemoteNodeOffer,

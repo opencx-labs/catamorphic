@@ -450,10 +450,18 @@ export type WorkflowConflictPolicy = "queue" | "ignore" | "restart" | "error";
  * the run's input (`"payload.session.key"`); its value, a string or a
  * number, names the subject. A run whose input has no value there runs
  * without a key. Constant data: the host reads it statically.
+ *
+ * `coalesce` (with `queue` only, ADR 0337) names up to four more paths
+ * whose values say what a run is for, such as an event's kind, turn and
+ * status. A run that would queue while a queued run of its key has the
+ * same values joins that run instead: a flood of alike events holds one
+ * waiting run, which reads the state when it starts. Coalesce only what a
+ * run reads afresh rather than takes from its own event.
  */
 export interface WorkflowConcurrency {
   readonly key: string;
   readonly onConflict: WorkflowConflictPolicy;
+  readonly coalesce?: readonly string[];
 }
 
 type ExecutionUnitInput<Unit> =

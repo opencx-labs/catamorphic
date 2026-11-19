@@ -165,6 +165,8 @@ describe("PGlite migrations", () => {
       "089_environment_caches.sql",
       "090_reshape_waits.sql",
       "091_workflow_documents.sql",
+      "092_machine_disk.sql",
+      "093_coalesced_runs_and_result_submissions.sql",
     ]);
 
     const rerun = await migrateToLatest({ db });
@@ -190,8 +192,45 @@ describe("PGlite migrations", () => {
       WHERE table_schema = ${DEFAULT_SCHEMA}
         AND table_type = 'BASE TABLE'
     `.execute(db);
-    expect(tables.rows[0]?.count).toBe(106);
+    expect(tables.rows[0]?.count).toBe(107);
   });
+
+  // Development profiles applied them under earlier numbers: 090 and 091
+  // before the reshape waits took 090, then 091 and 092 before the
+  // workflow documents took 091.
+  it.each([
+    ["090_machine_disk.sql", "091_coalesced_runs_and_result_submissions.sql"],
+    ["091_machine_disk.sql", "092_coalesced_runs_and_result_submissions.sql"],
+  ])(
+    "applies the disk and coalesced-run migrations again over a profile that ran them as %s and %s",
+    async (disk, coalesced) => {
+      await migrateToLatest({ db });
+      await sql`
+      DELETE FROM catamorphic._migrations
+      WHERE name IN ('092_machine_disk.sql', '093_coalesced_runs_and_result_submissions.sql')
+    `.execute(db);
+      await sql`
+      INSERT INTO catamorphic._migrations (name)
+      VALUES (${disk}), (${coalesced})
+      ON CONFLICT (name) DO NOTHING
+    `.execute(db);
+
+      const result = await migrateToLatest({ db });
+      expect(result.applied).toEqual([
+        "092_machine_disk.sql",
+        "093_coalesced_runs_and_result_submissions.sql",
+      ]);
+      const columns = await sql<{ count: number }>`
+      SELECT COUNT(*)::int AS count
+      FROM information_schema.columns
+      WHERE table_schema = ${DEFAULT_SCHEMA}
+        AND table_name = 'execution_allocations'
+        AND column_name = 'reserved_storage_mb'
+    `.execute(db);
+      expect(columns.rows[0]?.count).toBe(1);
+    },
+    PGLITE_TIMEOUT,
+  );
 
   it("supports the runtime primitives core relies on", {
     timeout: PGLITE_TIMEOUT,

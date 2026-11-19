@@ -1601,6 +1601,7 @@ const TurnErrorSchema = describes<TurnError>()(
         "unavailable",
         "model_incompat",
         "agent_missing",
+        "out_of_disk",
       ])
       .optional(),
     retrySafe: z.boolean().optional(),

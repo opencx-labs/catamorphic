@@ -220,6 +220,10 @@ describeIf("Environment caches (ADR 0334)", () => {
       defaultEnvironment: "review",
     });
 
+  /** Where the fake places an unpinned fill, and the sizes it was told. */
+  const fillPlacement: { on?: string; seen: Array<{ storageMb: number }> } = {
+    seen: [],
+  };
   const addMachine = async (
     name: string,
     options: {
@@ -283,18 +287,21 @@ describeIf("Environment caches (ADR 0334)", () => {
       projectManager,
     );
     environments = new ExecutionEnvironmentsService(projectEnvironments, {
-      get: ({ requirements, workerNodeId }) => {
+      get: ({ requirements, workerNodeId, fill }) => {
         const entries = [...machines.values()];
+        if (fill) fillPlacement.seen.push(fill);
         const chosen = workerNodeId
           ? machines.get(workerNodeId)
-          : entries.find(
-              (entry) =>
-                !requirements ||
-                environmentSatisfies(
-                  { ...descriptor, id: entry.lease.id },
-                  requirements,
-                ).compatible,
-            );
+          : fill && fillPlacement.on
+            ? machines.get(fillPlacement.on)
+            : entries.find(
+                (entry) =>
+                  !requirements ||
+                  environmentSatisfies(
+                    { ...descriptor, id: entry.lease.id },
+                    requirements,
+                  ).compatible,
+              );
         if (!chosen) return undefined;
         const binding: EnvironmentRuntimeBinding = {
           descriptor: {
@@ -816,6 +823,76 @@ describeIf("Environment caches (ADR 0334)", () => {
     expect(listed[0]?.copies.map((copy) => copy.machine)).toEqual(
       expect.arrayContaining([a.lease.id, b.lease.id]),
     );
+  });
+
+  it("places a fill with its size, pins it only once admitted, and places it again when its machine refuses it", async () => {
+    const short = await addMachine("short");
+    const roomy = await addMachine("roomy");
+    const disk = (free: number) => ({
+      path: "/var/lib/docker",
+      totalBytes: 100 * 1024 ** 3,
+      freeBytes: free,
+      floorBytes: 10 * 1024 ** 3,
+      criticalBytes: 1024 ** 3,
+      measuredAt: new Date().toISOString(),
+    });
+    // Just over its floor: not room for the cache's 4 MiB above it.
+    await nodes.reportDisk({
+      lease: short.lease,
+      disk: disk(10 * 1024 ** 3 + 2 * 1024 ** 2),
+    });
+    await nodes.reportDisk({ lease: roomy.lease, disk: disk(40 * 1024 ** 3) });
+    // Placement chose the machine without room (as a list that lagged
+    // the machine's last report would): admission refuses it there.
+    fillPlacement.on = short.lease.id;
+    fillPlacement.seen.length = 0;
+    await fills.request({
+      identity: ada,
+      projectId,
+      environment: "review",
+      cache: "pnpm",
+      idempotencyKey: "placed-again",
+    });
+    await fillAll();
+    expect(fillPlacement.seen).toContainEqual({ storageMb: 4 });
+    const [refused] = await fillRows();
+    expect(refused).toMatchObject({
+      status: "queued",
+      worker_node_id: null,
+      error: expect.stringMatching(
+        /no room for the 4\.2 MB this work reserves/,
+      ),
+    });
+    // It waits for room where machines on demand see it.
+    const wait = await db!
+      .selectFrom("placement_waits")
+      .select(["reason", "requirements"])
+      .where("root_workload_id", "=", refused?.id ?? "")
+      .executeTakeFirst();
+    expect(wait).toMatchObject({
+      reason: "capacity",
+      requirements: { resources: { storageMb: 4 } },
+    });
+    // Placed again, on the machine with room.
+    fillPlacement.on = roomy.lease.id;
+    await db!
+      .updateTable("environment_cache_fills")
+      .set({ retry_at: null })
+      .execute();
+    await fillAll();
+    const [filled] = await fillRows();
+    expect(filled).toMatchObject({
+      status: "succeeded",
+      worker_node_id: roomy.lease.id,
+    });
+    expect(
+      await db!
+        .selectFrom("placement_waits")
+        .select("root_workload_id")
+        .where("root_workload_id", "=", filled?.id ?? "")
+        .executeTakeFirst(),
+    ).toBeUndefined();
+    fillPlacement.on = undefined;
   });
 
   it("evicts a copy nobody mounted for the retention period", async () => {
@@ -1446,12 +1523,21 @@ describeIf("Environment caches (ADR 0334)", () => {
       );
       if (current?.status !== "running") return;
       takenOver = true;
-      await db!
-        .updateTable("environment_cache_fills")
-        .set({ claimed_until: sql<Date>`now() - interval '1 second'` })
-        .where("id", "=", row?.id ?? "")
-        .execute();
-      expect(await fills.dispatch()).toBe(1);
+      // The run still renews its claim while it destroys, as a live run
+      // does. A renewal that lands between expiring the claim and the
+      // takeover's dispatch keeps the claim, and one still writing the row
+      // when the takeover looks makes it skip the row; so expire it again
+      // until the takeover has it.
+      let claimed = 0;
+      for (let attempt = 0; attempt < 10 && claimed === 0; attempt += 1) {
+        await db!
+          .updateTable("environment_cache_fills")
+          .set({ claimed_until: sql<Date>`now() - interval '1 second'` })
+          .where("id", "=", row?.id ?? "")
+          .execute();
+        claimed = await fills.dispatch();
+      }
+      expect(claimed).toBe(1);
       await new Promise((resolve) => setTimeout(resolve, 600));
     };
     await slow.dispatch();
@@ -1460,7 +1546,16 @@ describeIf("Environment caches (ADR 0334)", () => {
     const after = (await rowsOf(lease.id)).find(
       (entry) => entry.id === row?.id,
     );
-    expect(after?.status).toBe("succeeded");
+    // A failure says why, with what the run saw of its claim.
+    expect(
+      after?.status,
+      JSON.stringify({
+        error: after?.error,
+        attempts: after?.attempts,
+        generation: after?.generation,
+        takenOver,
+      }),
+    ).toBe("succeeded");
     const abandoned = (after?.abandoned_generations ?? []) as number[];
     expect(abandoned.map(Number)).toEqual(expect.arrayContaining([901]));
     expect(abandoned.length).toBeGreaterThanOrEqual(2);

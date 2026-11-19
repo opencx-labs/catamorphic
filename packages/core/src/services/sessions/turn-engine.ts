@@ -43,6 +43,7 @@ import {
   type RenewedTurnLease,
   startTurnLeaseRenewal,
 } from "../agent-turn-leases.js";
+import { outOfDiskFor, withOutOfDisk } from "../out-of-disk.js";
 import { ExecutorNotConnectedError } from "../remote-operations.js";
 import { buildContextHandoff } from "./context-handoff.js";
 import { NativeStateStore } from "./native-state.js";
@@ -3220,6 +3221,54 @@ export class TurnEngine {
     }
   }
 
+  /**
+   * A failed turn whose machine is short of disk, or whose error or
+   * diagnostics say a write found no room, says so (ADR 0336): its error
+   * leads with the reason and is `out_of_disk`, and its attempt's
+   * diagnostics keep the same line. A failure that already has a kind
+   * (a provider's limit or outage, a lost sign-in, a missing agent, a
+   * history to repair) keeps it.
+   */
+  private async withDiskReason(input: {
+    session: SessionRow;
+    attempt: Attempt;
+    status: "completed" | "failed" | "interrupted";
+    error?: TurnError | null;
+  }): Promise<TurnError | null | undefined> {
+    const { error } = input;
+    // A failure the harness or Work already named keeps its kind and the
+    // actions that come with it (retry, reconnect, choose an agent).
+    if (input.status !== "failed" || error?.kind !== undefined) return error;
+    const row = await this.deps.db
+      .selectFrom("agent_turn_attempts")
+      .select("diagnostics")
+      .where("id", "=", input.attempt.id)
+      .executeTakeFirst()
+      .catch(() => undefined);
+    const tails = row?.diagnostics;
+    const tail = (key: "runner" | "harness") =>
+      typeof tails === "object" &&
+      tails !== null &&
+      !Array.isArray(tails) &&
+      typeof tails[key] === "string"
+        ? tails[key]
+        : undefined;
+    const reason = await outOfDiskFor({
+      db: this.deps.db,
+      sessionId: input.session.id,
+      texts: [error?.message, tail("runner"), tail("harness")],
+    });
+    if (!reason) return error;
+    await this.recordDiagnostics(input.attempt.id, {
+      runner: `work: ${reason}\n`,
+      harness: "",
+    });
+    return {
+      message: withOutOfDisk(error?.message ?? "The turn failed.", reason),
+      kind: "out_of_disk",
+    };
+  }
+
   /** Append to an attempt's diagnostics tails (ADR 0333). */
   private async recordDiagnostics(
     attemptId: string,
@@ -3429,7 +3478,7 @@ export class TurnEngine {
 
   private async settle(
     local: LocalTurn,
-    input: {
+    given: {
       identity: Identity;
       session: SessionRow;
       turn: Turn;
@@ -3441,6 +3490,7 @@ export class TurnEngine {
     },
   ): Promise<void> {
     const { db, log, queue } = this.deps;
+    const input = { ...given, error: await this.withDiskReason(given) };
     const now = new Date().toISOString();
     let transient =
       input.status === "failed" &&

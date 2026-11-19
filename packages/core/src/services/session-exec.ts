@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import path from "node:path";
 import {
+  ACTIVE_TURN_STATUSES,
   type SessionMessageAuthor,
   sessionMessageAuthorSchema,
 } from "@catamorphic/agent-protocol";
@@ -35,6 +36,7 @@ import {
 } from "./chat-delivery.js";
 import type { HostCallFollowOutcome } from "./host-call-waits.js";
 import { HostCallParkedError } from "./host-call-waits.js";
+import { outOfDiskFor, withOutOfDisk } from "./out-of-disk.js";
 import { withProgram } from "./program-reader.js";
 import { sandboxSecretsPrelude } from "./sandbox-secrets.js";
 import {
@@ -126,6 +128,11 @@ export interface SessionExecResult {
   stderr: string;
   durationMs: number;
   timedOut: boolean;
+  /**
+   * Why it failed when the disk is to blame (ADR 0336): its machine is
+   * short of disk, or its output says a write found no room.
+   */
+  outOfDisk?: string;
 }
 
 /** Where a started execution is, as `session_actions.progress` holds it. */
@@ -145,6 +152,8 @@ interface ExecProgress {
   build?: string;
   /** The widening of a command `in: "setup"` (ADR 0257). */
   widening?: string;
+  /** The program commit its `$WORK_PROGRAM` copy is of, kept while it runs. */
+  program?: string;
 }
 
 /** Why a command could not run here at all. */
@@ -466,12 +475,22 @@ export class SessionExecService {
         "The setup's time is up, so the command did not start",
       );
     const commit = await this.programCommitOf(action);
+    // Named from the start, so a cleanup another start runs meanwhile
+    // keeps this commit's copy (ADR 0336).
+    if (commit)
+      await this.deps.db
+        .updateTable("session_actions")
+        .set({ progress: progressJson({ ...claim, program: commit }) })
+        .where("id", "=", action.id)
+        .where(sql<boolean>`progress->>'at' = ${claim.at}`)
+        .execute();
     const program = commit
       ? await this.copyProgram({
           handle,
           tenantId,
           projectId: action.project_id,
           commit,
+          keep: await this.programsInUse({ action }),
         })
       : undefined;
     const network = args.in === "setup" ? setup?.network : undefined;
@@ -557,6 +576,7 @@ export class SessionExecService {
         startedAt: new Date().toISOString(),
         ...base,
         ...(widening ? { widening } : {}),
+        ...(commit ? { program: commit } : {}),
       };
       await trx
         .updateTable("session_actions")
@@ -759,6 +779,7 @@ export class SessionExecService {
       action,
       args: args.args,
       progress,
+      handle,
       result: {
         exitCode: overdue
           ? null
@@ -867,6 +888,8 @@ export class SessionExecService {
     args: SessionExecInput;
     progress: ExecProgress;
     result: SessionExecResult;
+    /** The workspace it ran in, when it was reached. */
+    handle?: SessionWorkspaceHandle;
   }): Promise<HostCallFollowOutcome> {
     const { action } = args;
     if (args.progress.widening) await this.endWidening(args);
@@ -875,10 +898,19 @@ export class SessionExecService {
       projectId: action.project_id,
       sessionId: action.session_id,
     });
+    const failed = args.result.exitCode !== 0 || args.result.timedOut;
+    const outOfDisk = failed
+      ? await outOfDiskFor({
+          db: this.deps.db,
+          sessionId: action.session_id,
+          texts: [args.result.stderr, args.result.stdout],
+        })
+      : undefined;
     const result: SessionExecResult = {
       ...args.result,
       stdout: mask.text(args.result.stdout),
       stderr: mask.text(args.result.stderr),
+      ...(outOfDisk ? { outOfDisk } : {}),
     };
     const output = json(result);
     const actor = actorOf(action);
@@ -924,9 +956,39 @@ export class SessionExecService {
       .select(["result", "status", "error"])
       .where("id", "=", action.id)
       .executeTakeFirstOrThrow();
+    // Its result is kept; its streams' files leave the workspace (ADR 0336).
+    if (final.status === "completed")
+      await this.removeOutput(action, args.handle);
     return final.status === "completed"
       ? { status: "done", output: final.result }
       : { status: "failed", error: final.error ?? "The command failed" };
+  }
+
+  /**
+   * Remove an execution's folder from the chat's workspace once its result
+   * is recorded: a test run's output would otherwise stay there for the
+   * life of the workspace. Best effort; a workspace that went away took it.
+   */
+  private async removeOutput(
+    action: ActionRow,
+    reached?: SessionWorkspaceHandle,
+  ): Promise<void> {
+    const handle =
+      reached ??
+      (await this.deps.sessions
+        .chatSandbox({
+          projectId: action.project_id,
+          sessionId: action.session_id,
+        })
+        .catch(() => undefined));
+    if (!handle) return;
+    await handle.provider
+      .executeCommand(
+        handle.sandboxId,
+        `rm -rf ${shellQuote(execDirectory(action.id))}`,
+        { cwd: handle.projectDirectory, timeout: 60 },
+      )
+      .catch(() => {});
   }
 
   /**
@@ -977,11 +1039,23 @@ export class SessionExecService {
       .execute();
   }
 
-  private async fail(args: {
+  private async fail(given: {
     action: ActionRow;
     error: string;
   }): Promise<HostCallFollowOutcome> {
-    const { action } = args;
+    const { action } = given;
+    // A start that found no room says so (ADR 0336).
+    const args = {
+      ...given,
+      error: withOutOfDisk(
+        given.error,
+        await outOfDiskFor({
+          db: this.deps.db,
+          sessionId: action.session_id,
+          texts: [given.error],
+        }),
+      ),
+    };
     const actor = actorOf(action);
     await this.deps.db.transaction().execute(async (trx) => {
       const failed = await trx
@@ -1028,6 +1102,8 @@ export class SessionExecService {
     tenantId: string;
     projectId: string;
     commit: string;
+    /** Commits whose copies other running executions use. */
+    keep: readonly string[];
   }): Promise<string> {
     const folder = `../${PROGRAM_DIRECTORY}/${args.commit}`;
     let program: Record<string, string> | undefined;
@@ -1040,20 +1116,67 @@ export class SessionExecService {
     return folder;
   }
 
+  /** Program commits of the other executions running in this workspace. */
+  /**
+   * The program commits a workspace's chats may still read (ADR 0336): those
+   * of its executions still running or starting, of any that ran within the
+   * retention, and of any that ran since the oldest turn still queued or
+   * working there began (at most a week back), since a workflow hands the
+   * path to a turn.
+   */
+  private async programsInUse(args: { action: ActionRow }): Promise<string[]> {
+    const shared = await this.workspaceOf(args.action);
+    const turn = await this.deps.db
+      .selectFrom("agent_turns")
+      .select(sql<Date | null>`min(created_at)`.as("since"))
+      .where("session_id", "in", shared.sessionIds)
+      .where("status", "in", ["queued", ...ACTIVE_TURN_STATUSES])
+      .executeTakeFirst();
+    const retention = new Date(
+      Date.now() - PROGRAM_COPY_RETENTION_MINUTES * 60_000,
+    );
+    // A turn waiting for days keeps no more than a week back.
+    const cap = new Date(Date.now() - PROGRAM_COPY_TURN_CAP_DAYS * 86_400_000);
+    const since =
+      turn?.since && turn.since < retention
+        ? turn.since < cap
+          ? cap
+          : turn.since
+        : retention;
+    const rows = await this.deps.db
+      .selectFrom("session_actions")
+      .select("progress")
+      .where("session_id", "in", shared.sessionIds)
+      .where("operation", "=", "exec")
+      .where("id", "!=", args.action.id)
+      .where((eb) =>
+        eb.or([eb("status", "=", "running"), eb("updated_at", ">=", since)]),
+      )
+      .execute();
+    return [
+      ...new Set(
+        rows.flatMap((row) => parseProgress(row.progress)?.program ?? []),
+      ),
+    ];
+  }
+
   /** One side's copy; returns the program's files once they were read. */
   private async copyProgramTo(args: {
     handle: SessionWorkspaceHandle;
     tenantId: string;
     projectId: string;
     commit: string;
+    keep: readonly string[];
     side: SandboxSide;
     folder: string;
     program: Record<string, string> | undefined;
   }): Promise<Record<string, string> | undefined> {
     const { handle, folder, side } = args;
+    // A copy used again is used now: its time is what a cleanup reads for
+    // a copy Work has no record of (ADR 0336).
     const present = await handle.provider.executeCommand(
       handle.sandboxId,
-      `test -d ${shellQuote(folder)} && echo present || true`,
+      `test -d ${shellQuote(folder)} && { touch -c ${shellQuote(folder)} 2>/dev/null; echo present; } || true`,
       { cwd: handle.projectDirectory, timeout: 60, side },
     );
     if (present.result.trim() === "present") return args.program;
@@ -1086,6 +1209,21 @@ export class SessionExecService {
       throw new Error(
         `Could not copy the program into the workspace: ${placed.result.trim().slice(-500)}`,
       );
+    // A new copy per main commit would otherwise pile up for the life of
+    // the workspace (ADR 0336): copies of other commits made over a day
+    // ago go, and staging a start left, unless a running execution uses
+    // them. A turn handed a path within the day keeps reading it.
+    await handle.provider
+      .executeCommand(
+        handle.sandboxId,
+        programCleanup({ keep: [args.commit, ...args.keep] }),
+        {
+          cwd: path.posix.dirname(handle.projectDirectory),
+          timeout: 120,
+          side,
+        },
+      )
+      .catch(() => {});
     return program;
   }
 
@@ -1175,6 +1313,33 @@ export class SessionExecService {
       .executeTakeFirstOrThrow();
     return row.tenant_id;
   }
+}
+
+/** Minutes a copy of another commit's program stays in a workspace. */
+const PROGRAM_COPY_RETENTION_MINUTES = 24 * 60;
+/** The furthest back a working turn keeps program copies, in days. */
+const PROGRAM_COPY_TURN_CAP_DAYS = 7;
+
+/**
+ * The script that removes old program copies from a workspace root (ADR
+ * 0336): every `.work-program/<commit>` and leftover staging folder
+ * modified over a day ago, except the commits named. It runs with any
+ * POSIX `sh` and busybox `find`.
+ */
+export function programCleanup(input: { keep: readonly string[] }): string {
+  const keep = [...new Set(input.keep)].map(shellQuote).join(" ");
+  return [
+    `for d in ${PROGRAM_DIRECTORY}/* ${PROGRAM_DIRECTORY}/.staging-*; do`,
+    '  [ -d "$d" ] || continue',
+    '  name=$(basename "$d")',
+    "  kept=",
+    `  for k in ${keep}; do [ "$name" = "$k" ] && kept=1; done`,
+    '  [ -n "$kept" ] && continue',
+    `  [ -n "$(find "$d" -maxdepth 0 -mmin +${PROGRAM_COPY_RETENTION_MINUTES})" ] || continue`,
+    '  chmod -R u+w "$d" 2>/dev/null; rm -rf "$d"',
+    "done",
+    "exit 0",
+  ].join("\n");
 }
 
 /** The execution's directory, from the project folder. */
@@ -1290,6 +1455,7 @@ function parseProgress(value: Json | null): ExecProgress | null {
     ...(text("deadlineAt") ? { deadlineAt: text("deadlineAt") } : {}),
     ...(text("build") ? { build: text("build") } : {}),
     ...(text("widening") ? { widening: text("widening") } : {}),
+    ...(text("program") ? { program: text("program") } : {}),
     ...(value.in === "session" || value.in === "setup" ? { in: value.in } : {}),
     ...(value.exited === true ? { exited: true } : {}),
   };

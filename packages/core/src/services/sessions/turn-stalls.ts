@@ -102,13 +102,44 @@ export async function turnProgress(
   db: Executor,
   sessionId: string,
 ): Promise<TurnProgress | null> {
-  const turn = await db
+  return (await turnState(db, sessionId)).turn;
+}
+
+/**
+ * The session's active turn with its progress, and its turns waiting to
+ * run, oldest first (ADR 0337), read together: a turn moving from one to
+ * the other is in one of them.
+ */
+export async function turnState(
+  db: Executor,
+  sessionId: string,
+): Promise<{ turn: TurnProgress | null; queued: string[] }> {
+  const rows = await db
     .selectFrom("agent_turns")
     .select(["id", "ordinal", "status", "active_attempt_id"])
     .where("session_id", "=", sessionId)
-    .where("status", "in", [...ACTIVE])
-    .executeTakeFirst();
-  if (!turn) return null;
+    .where("status", "in", [...ACTIVE, "queued", "held"])
+    .orderBy("ordinal")
+    .execute();
+  const queued = rows
+    .filter((row) => row.status === "queued" || row.status === "held")
+    .map((row) => row.id)
+    .slice(0, 100);
+  const turn = rows.find((row) =>
+    ACTIVE.some((status) => status === row.status),
+  );
+  return { turn: turn ? await progressOf(db, turn) : null, queued };
+}
+
+async function progressOf(
+  db: Executor,
+  turn: {
+    id: string;
+    ordinal: number;
+    status: string;
+    active_attempt_id: string | null;
+  },
+): Promise<TurnProgress> {
   const attempts = await db
     .selectFrom("agent_turn_attempts")
     .select([

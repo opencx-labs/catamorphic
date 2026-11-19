@@ -81,8 +81,9 @@ either kind of harness, through `/bin/sh` in the harness's home with
   share: its command container is the sandbox. A harness that runs in the
   sandbox never starts there: a subagent sharing it is refused, and a chat
   whose agents now need one has it given back and made again at its next
-  turn once nothing holds it, the turn failing after 10 minutes
-  (configurable) with what held it.
+  turn once nothing holds it and a machine has room for it made again (its
+  own, its reservation counted as given back), the turn failing after 10
+  minutes (configurable) with what held it.
 
 `exec` copies `$WORK_PROGRAM` to both sides; the agent's copy is beyond the
 commands' reach. Considered: wrapping each harness's shell in project code,

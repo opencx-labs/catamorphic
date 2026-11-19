@@ -122,6 +122,25 @@ export {
   redactUrlCredentials,
 } from "./credential-redaction.js";
 export {
+  DEFAULT_DISK_CRITICAL_MAX_BYTES,
+  DEFAULT_DISK_FLOOR_MAX_BYTES,
+  DISK_RECOVERY_FACTOR,
+  DISK_REPORT_FRESH_MS,
+  type DiskFloorDefault,
+  describeDisk,
+  diskBudgetMb,
+  diskCriticalBytes,
+  diskFloorBytes,
+  diskLow,
+  diskRecovered,
+  formatBytes,
+  headroom,
+  type MachineDisk,
+  measureDisk,
+  outOfDiskReason,
+  saysOutOfDisk,
+} from "./disk.js";
+export {
   type AgentExecutionTopology,
   accessTier,
   type EnvironmentBinding,
@@ -275,6 +294,7 @@ export type {
   RuntimeInvocationRequest,
   RuntimeStepEntry,
   RuntimeTerminalResult,
+  SandboxDiskProvider,
   SandboxFileOpts,
   SandboxHandle,
   SandboxManager,

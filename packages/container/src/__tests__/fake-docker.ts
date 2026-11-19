@@ -34,6 +34,16 @@ export async function startFakeDocker(options?: {
     container: FakeContainer;
     cmd: string[];
   }) => { exitCode: number; stdout?: string; stderr?: string } | undefined;
+  /**
+   * Keep images (ADR 0336): only these exist at first, with when each was
+   * made (Unix seconds); pulls and builds add to them. Without it every
+   * image exists.
+   */
+  images?: Record<string, number>;
+  /** What `/info` names as Docker's data root. */
+  dockerRootDir?: string;
+  /** Awaited as a reference is about to be removed: another machine acts. */
+  beforeRemoveImage?: (reference: string) => Promise<void>;
 }) {
   // Unix socket paths are short; macOS's temporary directory is not.
   const directory = fs.mkdtempSync(
@@ -48,6 +58,18 @@ export async function startFakeDocker(options?: {
     { container: string; cmd: string[]; exitCode?: number }
   >();
   const requests: string[] = [];
+  const images = options?.images
+    ? new Map<string, number>(Object.entries(options.images))
+    : undefined;
+  /** Labels a build or a test gave each image, by reference. */
+  const imageLabels = new Map<string, Record<string, string>>();
+  /** Which image each reference names: its own unless a tag shares one. */
+  const imageIds = new Map<string, string>();
+  const idOf = (reference: string) => imageIds.get(reference) ?? reference;
+  const sameImage = (reference: string) =>
+    [...(images?.keys() ?? [])].filter(
+      (other) => idOf(other) === idOf(reference),
+    );
   /** Exec streams, which the HTTP server no longer tracks once upgraded. */
   const upgraded = new Set<Duplex>();
   let nextExec = 0;
@@ -81,17 +103,137 @@ export async function startFakeDocker(options?: {
       const route = `${request.method} ${url.pathname}`;
       requests.push(route);
       const text = Buffer.concat(chunks).toString("utf8");
-      const body: Record<string, unknown> = text ? JSON.parse(text) : {};
+      // A build's body is a tar archive, not JSON.
+      const body: Record<string, unknown> =
+        text && route !== "POST /build" ? JSON.parse(text) : {};
       const json = (status: number, value?: unknown) => {
         response.writeHead(status, { "content-type": "application/json" });
         response.end(value === undefined ? "" : JSON.stringify(value));
+      };
+      const removeImage = (reference: string) => {
+        if (!images?.has(reference))
+          return json(404, { message: `No such image: ${reference}` });
+        // Another reference keeps the image: this one is only untagged.
+        const shared = sameImage(reference).length > 1;
+        const used = [...containers.values()].some((container) =>
+          sameImage(reference).includes(String(container.body.Image)),
+        );
+        if (used && !shared)
+          return json(409, {
+            message: `conflict: unable to remove ${reference}: image is being used by a container`,
+          });
+        images.delete(reference);
+        return json(200, [{ Untagged: reference }]);
       };
       const containerMatch = url.pathname.match(
         /^\/containers\/([^/]+)(\/[a-z]+)?$/,
       );
       if (route === "GET /_ping") return response.end("OK");
-      if (/^GET \/images\/.+\/json$/.test(route))
-        return json(200, { Config: options?.image ?? {} });
+      if (route === "GET /info")
+        return json(200, {
+          DockerRootDir: options?.dockerRootDir ?? "/var/lib/docker",
+        });
+      if (route === "GET /images/json") {
+        const filters: unknown = JSON.parse(
+          url.searchParams.get("filters") ?? "{}",
+        );
+        const wanted =
+          typeof filters === "object" && filters !== null
+            ? Reflect.get(filters, "reference")
+            : undefined;
+        const prefix = Array.isArray(wanted) ? String(wanted[0] ?? "") : "";
+        const ids = new Set(
+          [...(images?.keys() ?? [])]
+            .filter(
+              (reference) =>
+                !prefix ||
+                reference === prefix ||
+                reference.startsWith(`${prefix}:`),
+            )
+            .map(idOf),
+        );
+        return json(
+          200,
+          [...ids].map((id) => {
+            const tags = [...(images?.keys() ?? [])].filter(
+              (reference) => idOf(reference) === id,
+            );
+            const first = tags[0] ?? id;
+            return {
+              Id: id,
+              RepoTags: tags,
+              Created: images?.get(first) ?? 0,
+              Labels: imageLabels.get(first) ?? null,
+            };
+          }),
+        );
+      }
+      const tagMatch = url.pathname.match(/^\/images\/(.+)\/tag$/);
+      if (request.method === "POST" && tagMatch) {
+        const named = decodeURIComponent(tagMatch[1] ?? "");
+        // By reference, or by the image's id while any reference keeps it.
+        const source = images?.has(named)
+          ? named
+          : [...(images?.keys() ?? [])].find(
+              (reference) => idOf(reference) === named,
+            );
+        if (!images || !source)
+          return json(404, { message: `No such image: ${named}` });
+        const target = `${url.searchParams.get("repo")}:${url.searchParams.get("tag")}`;
+        images.set(target, images.get(source) ?? 0);
+        imageIds.set(target, idOf(source));
+        return json(201);
+      }
+      const imageMatch = url.pathname.match(/^\/images\/(.+?)(\/json)?$/);
+      if (request.method === "GET" && imageMatch?.[2]) {
+        const reference = decodeURIComponent(imageMatch[1] ?? "");
+        if (images && !images.has(reference))
+          return json(404, { message: `No such image: ${reference}` });
+        return json(200, {
+          Id: idOf(reference),
+          RepoTags: images ? sameImage(reference) : [reference],
+          Config: {
+            ...(options?.image ?? {}),
+            Labels: imageLabels.get(reference) ?? null,
+          },
+        });
+      }
+      if (route === "POST /images/create") {
+        const reference = url.searchParams.get("fromImage") ?? "";
+        images?.set(reference.replace(/:latest$/, ""), Date.now() / 1000);
+        images?.set(reference, Date.now() / 1000);
+        return json(200, { status: "pulled" });
+      }
+      if (route === "POST /build") {
+        const tag = url.searchParams.get("t") ?? "";
+        images?.set(tag, Date.now() / 1000);
+        const labels: unknown = JSON.parse(
+          url.searchParams.get("labels") ?? "{}",
+        );
+        if (labels && typeof labels === "object")
+          imageLabels.set(
+            tag,
+            Object.fromEntries(
+              Object.entries(labels).map(([key, value]) => [
+                key,
+                String(value),
+              ]),
+            ),
+          );
+        return json(200, { stream: "built" });
+      }
+      if (request.method === "DELETE" && imageMatch && !imageMatch[2]) {
+        const reference = decodeURIComponent(imageMatch[1] ?? "");
+        if (options?.beforeRemoveImage) {
+          void options.beforeRemoveImage(reference).then(() => {
+            removeImage(reference);
+          });
+          return;
+        }
+        removeImage(reference);
+        return;
+      }
+
       if (route === "POST /volumes/create") {
         const name = String(body.Name);
         if (!volumes.has(name)) volumes.set(name, labelsOf(body));
@@ -147,6 +289,7 @@ export async function startFakeDocker(options?: {
             .map((container) => ({
               Id: container.id,
               Names: [`/${container.id}`],
+              State: container.running ? "running" : "exited",
             })),
         );
       }
@@ -253,6 +396,8 @@ export async function startFakeDocker(options?: {
     volumes,
     networks,
     execs,
+    images,
+    imageLabels,
     requests,
     /** Every exec's argv, in order. */
     commands: () => [...execs.values()].map((exec) => exec.cmd),
