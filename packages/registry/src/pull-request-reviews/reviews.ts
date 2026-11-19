@@ -17,6 +17,7 @@ import {
   findingLine,
   findingMarker,
   findingMarkersIn,
+  fitsGithub,
   isFindingReview,
   list,
   MAX_FINDINGS,
@@ -1072,19 +1073,9 @@ export const postReviews = defineWorkflow(({ defineBoundary }) => ({
           return { result: null, state };
         const stamp = marker(state, "review");
         // Defused as GitHub reads it, the whole body at once; the findings'
-        // markers and the stamp follow it as written.
-        const prose = [
-          reviewBody({ review, outside: state.outside, summary: !failed }),
-          withheldNote(state),
-        ]
-          .filter((part) => part.length > 0)
-          .join("\n\n");
-        const stamps = [
-          ...[...state.findings, ...state.outside].map((finding) =>
-            findingMarker(commit, finding.id),
-          ),
-          stamp,
-        ].join("\n\n");
+        // markers and the stamp follow it as written. It lists only what
+        // fits whole (see weighed), so every marker's finding is in it.
+        const { prose, stamps } = verdictReviewParts(state, review);
         // Never APPROVE: the verdict is COMMENT or REQUEST_CHANGES.
         return connections.github.create_review(
           {
@@ -1399,7 +1390,7 @@ function weighed(state: Publication, reviews: unknown): Publication {
   const review = state.review;
   const inline = findings.slice(0, room);
   const listed = outside.slice(0, room - inline.length);
-  return {
+  let publication: Publication = {
     ...state,
     findings: inline,
     outside: listed,
@@ -1411,6 +1402,47 @@ function weighed(state: Publication, reviews: unknown): Publication {
         (entry.state === "CHANGES_REQUESTED" ||
           (review?.verdict === "COMMENT" && entry.state === "COMMENTED")),
     ),
+  };
+  // The review lists findings outside the diff as many as fit GitHub whole
+  // with every marker after them: a cut would drop a finding and keep its
+  // marker. The rest count as not posted, in the review and its check.
+  while (review && publication.outside.length > 0) {
+    const { prose, stamps } = verdictReviewParts(publication, review);
+    if (fitsGithub(prose, stamps)) break;
+    publication = {
+      ...publication,
+      outside: publication.outside.slice(0, -1),
+      full: publication.full + 1,
+    };
+  }
+  return publication;
+}
+
+/**
+ * The verdict review's prose, which is defused whole, and what follows it
+ * as written: the markers of the findings it posts or lists, and its stamp.
+ */
+function verdictReviewParts(
+  state: Publication,
+  review: WorkReview,
+): { prose: string; stamps: string } {
+  const commit = state.commit ?? "";
+  // A passing review on a commit whose verdict is a failure posts only its
+  // findings.
+  const failed = state.verdict === "failure" && review.verdict === "COMMENT";
+  return {
+    prose: [
+      reviewBody({ review, outside: state.outside, summary: !failed }),
+      withheldNote(state),
+    ]
+      .filter((part) => part.length > 0)
+      .join("\n\n"),
+    stamps: [
+      ...[...state.findings, ...state.outside].map((finding) =>
+        findingMarker(commit, finding.id),
+      ),
+      marker(state, "review"),
+    ].join("\n\n"),
   };
 }
 

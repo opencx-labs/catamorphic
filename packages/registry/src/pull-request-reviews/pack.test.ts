@@ -1385,12 +1385,31 @@ describe("postReviews", () => {
         summary: "@a ".repeat(1333),
       });
       await runWorkflow(postReviews, event("t1"), world.context);
-      return world.github.reviews.map((review) => review.body);
+      return {
+        bodies: world.github.reviews.map((review) => review.body),
+        checks: world.github.checks.map((check) => check.summary),
+      };
     `);
-    const [body] = result.outcomes as string[];
-    expect(body?.length).toBeLessThanOrEqual(65_536);
+    const { bodies, checks } = result.outcomes as {
+      bodies: string[];
+      checks: string[];
+    };
+    const [body = ""] = bodies;
+    expect(body.length).toBeLessThanOrEqual(65_536);
     expect(body).toMatch(/\n\n<!-- work-review:t1:review -->$/);
     expect(body).not.toMatch(/@[A-Za-z0-9]/);
+    // Every finding the body carries a marker for is listed in it: only
+    // what fits is listed, and the rest count as not posted.
+    const marked = [
+      ...body.matchAll(/<!-- work-review:[0-9a-f]{40}:finding:(f\d+) -->/g),
+    ].map((match) => match[1]);
+    expect(marked.length).toBeGreaterThan(0);
+    expect(marked.length).toBeLessThan(30);
+    const prose = body.slice(0, body.indexOf("<!-- work-review:"));
+    for (const id of marked) expect(prose).toContain(`Finding ${id}.`);
+    const withheld = `${30 - marked.length} more findings were not posted`;
+    expect(prose).toContain(withheld);
+    expect(checks.at(-1)).toContain(withheld);
   });
 
   it("answers an inline question in its own thread", async () => {

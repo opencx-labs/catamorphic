@@ -195,6 +195,20 @@ const GITHUB_BODY_LIMIT = 65_536;
  */
 const STAMP_HEADROOM = 256;
 
+/** The most of a body posted with `stamp` after it: GitHub's limit less the stamp and its headroom. */
+function bodyLimit(stamp: string): number {
+  return Math.max(0, GITHUB_BODY_LIMIT - STAMP_HEADROOM - stamp.length);
+}
+
+/**
+ * Whether `body`, defused, fits GitHub with `stamp` after it, so
+ * {@link stampedBody} posts it whole: what a review lists is decided by
+ * this, never cut from its end.
+ */
+export function fitsGithub(body: string, stamp: string): boolean {
+  return publicationText(body).length <= bodyLimit(stamp);
+}
+
 /**
  * A body to post with this recipe's `stamp` after it: the body defused,
  * cut to fit GitHub's limit after defusing with the stamp (which may be a
@@ -203,7 +217,7 @@ const STAMP_HEADROOM = 256;
  * text in the block.
  */
 export function stampedBody(body: string, stamp: string): string {
-  const limit = Math.max(0, GITHUB_BODY_LIMIT - STAMP_HEADROOM - stamp.length);
+  const limit = bodyLimit(stamp);
   let text = publicationText(body);
   if (text.length > limit) text = publicationText(text.slice(0, limit));
   // Escaped whole, it fits: no character grows past ten.
