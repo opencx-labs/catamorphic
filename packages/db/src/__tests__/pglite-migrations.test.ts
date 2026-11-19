@@ -164,6 +164,7 @@ describe("PGlite migrations", () => {
       "088_stalled_turns.sql",
       "089_environment_caches.sql",
       "090_reshape_waits.sql",
+      "091_workflow_documents.sql",
     ]);
 
     const rerun = await migrateToLatest({ db });
