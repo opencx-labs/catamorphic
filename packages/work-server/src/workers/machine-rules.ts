@@ -1596,7 +1596,7 @@ export class MachineReconciler {
   }
 
   /**
-   * A rule's class came up short of disk (ADR 0335): a workflow class's
+   * A rule's class came up short of disk (ADR 0336): a workflow class's
    * project hears `machine.disk-too-small`, once per brake (every pass of
    * the brake asks; the event's id names it).
    */
@@ -1620,7 +1620,7 @@ export class MachineReconciler {
   }
 
   /**
-   * A machine of a rule began an episode under its disk floor (ADR 0335):
+   * A machine of a rule began an episode under its disk floor (ADR 0336):
    * its class's project hears `machine.disk-low` once per episode.
    */
   async machineDiskLow(args: {
@@ -2099,7 +2099,7 @@ export class MachineReconciler {
   }
 
   /**
-   * Rules whose class's disk is too small for their work (ADR 0335): a
+   * Rules whose class's disk is too small for their work (ADR 0336): a
    * machine they made came up under its disk floor within
    * {@link DISK_SHORT_AFTER_ENROLL_MINUTES} of enrolling. Each such rule
    * makes no new machines for {@link DISK_BRAKE_MINUTES} after the latest,
@@ -2367,13 +2367,13 @@ function demandWaitMatches(rule: MachineRule, wait: DemandWait): boolean {
 
 /**
  * A machine under its disk floor this soon after enrolling came up short:
- * its class's disk is too small for the rule's work (ADR 0335).
+ * its class's disk is too small for the rule's work (ADR 0336).
  */
 const DISK_SHORT_AFTER_ENROLL_MINUTES = 30;
 /** How long a rule whose class came up short makes no new machines. */
 const DISK_BRAKE_MINUTES = 60;
 
-/** A rule braked because its class's disk is too small (ADR 0335). */
+/** A rule braked because its class's disk is too small (ADR 0336). */
 interface DiskBrake {
   /** When its latest machine came up short. */
   at: Date;
@@ -2454,7 +2454,7 @@ function roomFor(
   if (room.cpuMillis !== undefined && room.cpuMillis < cpuMillis)
     return undefined;
   if (room.memoryMb !== undefined && room.memoryMb < memoryMb) return undefined;
-  // A machine short of disk has none (ADR 0335).
+  // A machine short of disk has none (ADR 0336).
   if (room.storageMb !== undefined && room.storageMb < storageMb)
     return undefined;
   return { cpuMillis, memoryMb, storageMb };
@@ -2540,7 +2540,7 @@ function demandMachines(args: {
     if (load.shortOfDisk) {
       // One holding work finishes it, taking no new work and still
       // counting toward `max`; an idle one goes, and a machine with room
-      // may take its place (ADR 0335).
+      // may take its place (ADR 0336).
       if (load.holding > 0) kept.push(machine);
       continue;
     }
@@ -2636,7 +2636,7 @@ function canonical(value: unknown): string {
 
 /**
  * Both kinds of work reuse placement demand, and a cache fill that waits for
- * a machine with room for its size (ADR 0335); waiting journals alone are
+ * a machine with room for its size (ADR 0336); waiting journals alone are
  * no demand.
  */
 function queuedPlacementWait(db: Kysely<DB>) {

@@ -26,7 +26,7 @@ export const RESULT_LIMITS = {
   /** One submitted value, as JSON. */
   valueBytes: 256 * 1024,
   /**
-   * Submissions one turn may make, accepted or refused (ADR 0336): per
+   * Submissions one turn may make, accepted or refused (ADR 0337): per
    * turn, not per chat, since a review chat lives as long as its pull
    * request; and refused ones count, since checking each costs the server.
    * A turn's results therefore fit one read of `results`.
@@ -273,7 +273,7 @@ function tooLongToMatch(value: string): boolean {
 }
 
 /**
- * Ajv's regular expressions for result schemas (ADR 0336): RE2's, which
+ * Ajv's regular expressions for result schemas (ADR 0337): RE2's, which
  * match in time linear in the input, through re2js, so an agent's value
  * cannot make a project's pattern backtrack on the server's event loop.
  * Each match spends from the check's time, and a string too long to match

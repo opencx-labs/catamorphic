@@ -221,7 +221,7 @@ describe("the stand-in GitHub", () => {
     });
     expect(unparsed.status).toBe(400);
     // A run in progress is read and rewritten by id, as the review's
-    // progress is (ADR 0336); a conclusion completes it.
+    // progress is (ADR 0337); a conclusion completes it.
     const started = (await (
       await api("/repos/acme/web/check-runs", token, {
         method: "POST",

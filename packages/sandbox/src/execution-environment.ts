@@ -85,7 +85,7 @@ export const MACHINE_CAPABILITIES = {
   /** The Codex CLI is on the machine's path. */
   codex: "harness.codex",
   /**
-   * The machine reports its disk (ADR 0335), so admission keeps its floor
+   * The machine reports its disk (ADR 0336), so admission keeps its floor
    * and reserves an Environment's `storageMb` there.
    */
   disk: "disk",
@@ -131,7 +131,7 @@ export interface EnvironmentProvider {
     /** Preserve an existing Allocation's physical owner when resolving a pool. */
     workerNodeId?: string;
     /**
-     * A cache fill of this size (ADR 0334, 0335): placed only where it
+     * A cache fill of this size (ADR 0334, 0336): placed only where it
      * fits above the machine's full disk floor, whatever the workload. Not
      * a requirement: a machine that reports no disk still takes it.
      */
@@ -257,7 +257,7 @@ export function environmentSatisfies(
       requirements.resources?.[key] &&
       !binding.resourceLimits?.includes(key) &&
       // Storage is reserved where it cannot be enforced, on a machine that
-      // reports its disk (ADR 0335).
+      // reports its disk (ADR 0336).
       !(key === "storageMb" && binding.capabilities.includes("disk"))
     ) {
       reasons.push(

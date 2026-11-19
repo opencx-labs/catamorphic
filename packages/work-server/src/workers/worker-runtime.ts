@@ -220,7 +220,7 @@ export async function startWorkWorker(options: WorkWorkerOptions): Promise<{
     log,
   });
   // Its disk, measured and reported with its offer and its renewals, and
-  // what Work left there removed (ADR 0335).
+  // what Work left there removed (ADR 0336).
   const diskCare = startDiskCare({
     provider,
     ...(execution.diskFloorMb !== undefined

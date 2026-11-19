@@ -163,7 +163,7 @@ describe("stalled turns", () => {
         };
       },
     };
-    // Fails as an install that filled the disk (ADR 0335).
+    // Fails as an install that filled the disk (ADR 0336).
     const diskFullAdapter: HarnessAdapter = {
       id: "echo",
       capabilities: () => inner.capabilities(),
@@ -952,7 +952,7 @@ describe("stalled turns", () => {
     }
   }, 90_000);
 
-  it("says a failed turn ran out of disk, from the machine's report or the output (ADR 0335)", async () => {
+  it("says a failed turn ran out of disk, from the machine's report or the output (ADR 0336)", async () => {
     const failedTurn = async (args: { text: string; machineLow?: boolean }) => {
       const project = await projects.create(identity, { name: "Disk" });
       const chat = await sessions.create(identity, project.id, {

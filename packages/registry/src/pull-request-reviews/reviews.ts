@@ -264,7 +264,7 @@ const KEPT = 30;
 /** A turn that settled, a turn at work, or a finding the reviewer verified. */
 type Kind = "review" | "progress" | "finding";
 
-/** What the in progress check says the review is doing (ADR 0336). */
+/** What the in progress check says the review is doing (ADR 0337). */
 type Phase = "waiting" | "preparing" | "reviewing";
 
 /** One publication, carried from call to call. */
@@ -407,7 +407,7 @@ export const postReviews = defineWorkflow(({ defineBoundary }) => ({
   ],
   // One publication per pull request chat at a time: each reads what the
   // one before it posted (ADR 0325). Events of one turn alike in kind and
-  // status join a publication still waiting (ADR 0336): every run reads
+  // status join a publication still waiting (ADR 0337): every run reads
   // the chat, its results and GitHub afresh, so a burst of findings holds
   // one waiting run and never fills the queue the turn's verdict needs.
   concurrency: {
@@ -1545,7 +1545,7 @@ const VERDICT_TITLES: Record<Verdict, string> = {
   failure: "Changes requested",
 };
 
-/** What the in progress check says, by phase (ADR 0336). */
+/** What the in progress check says, by phase (ADR 0337). */
 function progressOutput(state: Publication) {
   const commit = (state.commit ?? "").slice(0, 7);
   const findings =

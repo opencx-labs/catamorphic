@@ -35,7 +35,7 @@ export async function startFakeDocker(options?: {
     cmd: string[];
   }) => { exitCode: number; stdout?: string; stderr?: string } | undefined;
   /**
-   * Keep images (ADR 0335): only these exist at first, with when each was
+   * Keep images (ADR 0336): only these exist at first, with when each was
    * made (Unix seconds); pulls and builds add to them. Without it every
    * image exists.
    */

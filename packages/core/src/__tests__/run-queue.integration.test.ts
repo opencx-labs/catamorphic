@@ -325,7 +325,7 @@ describe.skipIf(!process.env.DATABASE_URL)(
       await release(unkeyed.id, 30);
     }, 120_000);
 
-    it("joins a run alike one still queued, so a flood holds one waiting run and never fills the queue (ADR 0336)", async () => {
+    it("joins a run alike one still queued, so a flood holds one waiting run and never fills the queue (ADR 0337)", async () => {
       core.runs.startWorker({
         pollIntervalMs: 10,
         idlePollIntervalMs: 50,

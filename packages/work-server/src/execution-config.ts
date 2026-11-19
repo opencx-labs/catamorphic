@@ -103,12 +103,12 @@ export interface WorkExecutionSettings {
   volumeRetentionDays: number;
   /**
    * What the machine keeps free on each filesystem it writes to, in MiB
-   * (ADR 0335, `WORK_DISK_FLOOR_MB`): admission never goes below it. 0
+   * (ADR 0336, `WORK_DISK_FLOOR_MB`): admission never goes below it. 0
    * keeps none; absent, 10% of the filesystem and at most 10 GiB.
    */
   diskFloorMb?: number;
   /**
-   * The lower floor workflow runs start down to, in MiB (ADR 0335,
+   * The lower floor workflow runs start down to, in MiB (ADR 0336,
    * `WORK_DISK_CRITICAL_MB`): so the workflows that free or replace
    * machines still run when chats stop. 0 keeps none; absent, 1% of the
    * filesystem and at most 1 GiB.
@@ -116,7 +116,7 @@ export interface WorkExecutionSettings {
   diskCriticalMb?: number;
   /**
    * Hours an image Work built or pulled, and the Docker data inside
-   * sandboxes, may go unused before the machine removes it (ADR 0335,
+   * sandboxes, may go unused before the machine removes it (ADR 0336,
    * `WORK_IMAGE_RETENTION_HOURS`, default 24).
    */
   imageRetentionHours: number;
@@ -661,7 +661,7 @@ export function workExecution(args: {
       reason: settings.reason,
     },
     volumeRetentionMs: settings.volumeRetentionDays * 24 * 60 * 60 * 1000,
-    /** What the machine keeps free on its disk (ADR 0335). */
+    /** What the machine keeps free on its disk (ADR 0336). */
     ...(settings.diskFloorMb !== undefined
       ? { diskFloorMb: settings.diskFloorMb }
       : {}),

@@ -587,7 +587,7 @@ export const plain = defineWorkflow(({ defineBoundary }) => ({
     ).toThrow("takes only key, onConflict and coalesce");
   });
 
-  it("records what makes queued runs alike, which join (ADR 0336)", () => {
+  it("records what makes queued runs alike, which join (ADR 0337)", () => {
     expect(
       parseWorkflow(
         withConcurrency(

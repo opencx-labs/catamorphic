@@ -59,7 +59,7 @@ export interface SessionSnapshot {
    */
   turn?: SessionTurnProgress | null;
   /**
-   * The chat's turns waiting to run, oldest first (ADR 0336), from
+   * The chat's turns waiting to run, oldest first (ADR 0337), from
    * `inspect` and `find`: with `turn`, what tells a turn still to come from
    * one that settled or was withdrawn.
    */
@@ -253,7 +253,7 @@ export interface SessionExecResult {
   durationMs: number;
   timedOut: boolean;
   /**
-   * Set when it failed and the disk is to blame (ADR 0335): its machine is
+   * Set when it failed and the disk is to blame (ADR 0336): its machine is
    * short of disk, or its output says a write found no room.
    */
   outOfDisk?: string;
@@ -294,7 +294,7 @@ export interface SessionHostOperations {
       turnId?: string;
       afterInput?: string;
       limit?: number;
-      /** `oldest`: the first submitted first (ADR 0336). */
+      /** `oldest`: the first submitted first (ADR 0337). */
       order?: "newest" | "oldest";
     },
     { sessionId: string; key: string | null; results: SessionResult[] }

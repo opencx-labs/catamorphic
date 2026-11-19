@@ -8,7 +8,7 @@ import { PROGRAM_DIRECTORY, programCleanup } from "../services/session-exec.js";
 /**
  * A workspace gets a `$WORK_PROGRAM` copy per main commit (ADR 0324);
  * placing a new one removes copies of other commits made over a day ago
- * and leftover staging, except those running executions use (ADR 0335).
+ * and leftover staging, except those running executions use (ADR 0336).
  */
 describe("program copy cleanup", () => {
   const roots: string[] = [];

@@ -106,7 +106,7 @@ const VOLUMES_LABEL = "work.sandbox.volumes";
 export const VOLUME_LABEL = "work.volume";
 /**
  * Where each machine sharing a daemon keeps a reference of its own to an
- * image it uses (ADR 0335): an image another machine claims is kept.
+ * image it uses (ADR 0336): an image another machine claims is kept.
  */
 const CLAIM_REPOSITORY = "work.local/claims";
 /** A claim no machine renewed for this many days is ignored and removed. */
@@ -428,7 +428,7 @@ export class ContainerSandboxProvider implements SandboxProvider {
     removeAll: (args) => this.removeAllVolumes(args),
   };
   /**
-   * Its state and Docker's data root, and what it leaves there (ADR 0335):
+   * Its state and Docker's data root, and what it leaves there (ADR 0336):
    * images it built or pulled, and the Docker data inside sandboxes with
    * containers.
    */
@@ -458,7 +458,7 @@ export class ContainerSandboxProvider implements SandboxProvider {
   /** Widenings each sandbox has seen end, refused should they arrive late. */
   private readonly endedWidenings = new Map<string, string[]>();
   private readonly images = new Map<string, Promise<void>>();
-  /** Each image's lock on this machine (ADR 0335). */
+  /** Each image's lock on this machine (ADR 0336). */
   private readonly imageLocks = new Map<string, Promise<void>>();
   /** Each cache's lock on this machine, by family (ADR 0334). */
   private readonly cacheLocks = new Map<string, Promise<void>>();
@@ -2196,7 +2196,7 @@ export class ContainerSandboxProvider implements SandboxProvider {
         this.config.image ??
         DEFAULT_IMAGE;
       // Under the image's lock on this machine: cleanup never removes it
-      // between this sandbox finding it and claiming it (ADR 0335).
+      // between this sandbox finding it and claiming it (ADR 0336).
       await this.withImageLock(reference, async () => {
         await this.once(reference, async () => {
           if (!(await this.docker.inspectImage(reference))) {
@@ -2221,7 +2221,7 @@ export class ContainerSandboxProvider implements SandboxProvider {
             tag: reference,
             dockerfile: image.content,
             // Which machine built it, so another sharing the daemon never
-            // removes it (ADR 0335).
+            // removes it (ADR 0336).
             labels: { [OWNER_LABEL]: this.owner },
           });
       });
@@ -2253,7 +2253,7 @@ export class ContainerSandboxProvider implements SandboxProvider {
   }
 
   /**
-   * Record that this machine uses an image (ADR 0335): when, in its own
+   * Record that this machine uses an image (ADR 0336): when, in its own
    * log, and on the daemon a reference of its own to the image, so
    * another machine sharing the daemon keeps an image while this one uses
    * it. The machine's default image is its own, never claimed or removed.
@@ -2262,7 +2262,7 @@ export class ContainerSandboxProvider implements SandboxProvider {
     if (this.defaultImages().has(reference)) return;
     this.imageUsage.touch([reference]);
     // Today's claim, and none of this machine's older ones: a claim is
-    // renewed as long as the machine uses the image (ADR 0335).
+    // renewed as long as the machine uses the image (ADR 0336).
     const today = claimDay(Date.now());
     await this.docker
       .tagImage({
@@ -2297,7 +2297,7 @@ export class ContainerSandboxProvider implements SandboxProvider {
   }
 
   /**
-   * Let go of an image this machine stopped using (ADR 0335), under its
+   * Let go of an image this machine stopped using (ADR 0336), under its
    * lock: its claims go, and it is removed if this machine pulled or built
    * it and no other machine's live claim remains. A claim no machine
    * renewed for {@link CLAIM_STALE_DAYS} is a machine that left: ignored,
@@ -2354,7 +2354,7 @@ export class ContainerSandboxProvider implements SandboxProvider {
 
   /**
    * A path on each filesystem this provider writes to that this process
-   * can measure (ADR 0335): its state directory, and Docker's data root
+   * can measure (ADR 0336): its state directory, and Docker's data root
    * (volumes, images, containers) where this process sees it at the same
    * path, which a worker in a container of its own does not.
    */
@@ -2385,7 +2385,7 @@ export class ContainerSandboxProvider implements SandboxProvider {
 
   /**
    * Remove what Work left on this machine that nothing used for
-   * `graceMs` (ADR 0335): images this machine pulled or built itself that
+   * `graceMs` (ADR 0336): images this machine pulled or built itself that
    * no sandbox of its was made from since, no other machine sharing the
    * daemon claims and no container uses (Docker refuses those), never the
    * machine's own default image nor one it found; its claim on any other

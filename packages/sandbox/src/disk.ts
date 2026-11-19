@@ -1,7 +1,7 @@
 import fs from "node:fs";
 
 /**
- * Disk is a resource Work manages on machines (ADR 0335): each machine
+ * Disk is a resource Work manages on machines (ADR 0336): each machine
  * measures the filesystems Work writes to and reports the one with the
  * least room above its floor.
  */
@@ -43,7 +43,7 @@ export interface MachineDisk {
 }
 
 /**
- * The floor a machine keeps when the operator sets none (ADR 0335):
+ * The floor a machine keeps when the operator sets none (ADR 0336):
  * `workspaces`, the full floor, for a machine many workspaces share (an
  * enrolled worker, a container or microsandbox machine), where one busy
  * workspace must not take the room the others need; `critical`, only the
@@ -174,7 +174,7 @@ export function diskLow(disk: MachineDisk): boolean {
   return disk.floorBytes > 0 && disk.freeBytes < disk.floorBytes;
 }
 
-/** Whether an episode under the floor is over (ADR 0335). */
+/** Whether an episode under the floor is over (ADR 0336). */
 export function diskRecovered(disk: MachineDisk): boolean {
   return disk.freeBytes >= disk.floorBytes * DISK_RECOVERY_FACTOR;
 }
@@ -216,7 +216,7 @@ export function describeDisk(disk: MachineDisk): string {
 }
 
 /**
- * Why a failure happened when the disk is to blame (ADR 0335), or
+ * Why a failure happened when the disk is to blame (ADR 0336), or
  * undefined: the machine reported free space under its floor (Work's own
  * measurement), or the output says a write found no room (a hint: code
  * the chat runs can print it).

@@ -432,7 +432,7 @@ async function createWorkServerInner(
     log,
   });
   disposers.push(async () => stopVolumePruning());
-  // This machine measures its disk and removes what Work left (ADR 0335).
+  // This machine measures its disk and removes what Work left (ADR 0336).
   // Run as local processes, its work shares one disk with the server's
   // database and its people's files, where holding chats back frees
   // nothing: it keeps only the critical floor unless the operator sets one.
@@ -540,7 +540,7 @@ async function createWorkServerInner(
     ref: string | null;
     class: string | null;
   }) => Promise<void> = async () => {};
-  /** A machine short of disk, for workflow classes (ADR 0335). */
+  /** A machine short of disk, for workflow classes (ADR 0336). */
   let machineDiskLow: NonNullable<
     ConstructorParameters<typeof WorkWorkerRegistry>[0]["diskLow"]
   > = async () => {};

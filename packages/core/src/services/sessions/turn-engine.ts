@@ -3223,7 +3223,7 @@ export class TurnEngine {
 
   /**
    * A failed turn whose machine is short of disk, or whose error or
-   * diagnostics say a write found no room, says so (ADR 0335): its error
+   * diagnostics say a write found no room, says so (ADR 0336): its error
    * leads with the reason and is `out_of_disk`, and its attempt's
    * diagnostics keep the same line. A failure that already has a kind
    * (a provider's limit or outage, a lost sign-in, a missing agent, a

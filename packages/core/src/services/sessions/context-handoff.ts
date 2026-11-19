@@ -248,7 +248,7 @@ async function keptSections(input: {
         .select(["item.payload", "turn.ordinal"])
         .distinctOn(sql`item.payload->>'name'`)
         .where("item.session_id", "=", sessionId)
-        // Among the chat's newest results, through their index (ADR 0336).
+        // Among the chat's newest results, through their index (ADR 0337).
         .where("item.id", "in", newestResultIds(db, sessionId))
         .where("item.kind", "=", "result")
         // A result this side did not accept (a mirror's) is no result.
@@ -278,7 +278,7 @@ async function keptSections(input: {
       .sort((a, b) => b.item.position - a.item.position);
   // Submitted by an earlier attempt of the turn being handed off: that
   // turn is still open, so they answer nothing settled. Every one, newest
-  // first, not only each name's latest (ADR 0336): a restarted attempt
+  // first, not only each name's latest (ADR 0337): a restarted attempt
   // sees each finding it already submitted, by id, and does not submit it
   // again under another.
   // Each in short: its name and short fields (an id, a title), never its

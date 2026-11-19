@@ -361,7 +361,7 @@ export interface TriggerProductionRunInput {
 interface RunInternalFacts {
   setupFor?: { sessionId: string; build: string };
   /**
-   * An event the host delivers and no caller waits for (ADR 0336): the only
+   * An event the host delivers and no caller waits for (ADR 0337): the only
    * enrollment that may join a queued run alike it. Calls, synchronous
    * fires and setup runs report their own run's outcome, so never join.
    */
@@ -681,7 +681,7 @@ export function correlationKeyAtPath(
 }
 
 /**
- * The values at a workflow's `coalesce` paths (ADR 0336), exactly: a
+ * The values at a workflow's `coalesce` paths (ADR 0337), exactly: a
  * missing one apart from null, and booleans, objects and long strings as
  * themselves, so runs whose values differ never compare equal.
  */
@@ -706,7 +706,7 @@ export function coalesceValuesAtPaths(
 }
 
 /**
- * What makes a queued run alike another (ADR 0336), as a digest: its
+ * What makes a queued run alike another (ADR 0337), as a digest: its
  * coalesce values, and everything a run runs as, so only runs that would
  * do the same thing join: the program and session artifact, the
  * Environment, the owner and their scopes, and the enablement.
@@ -2722,7 +2722,7 @@ export class RunsService {
     const onConflict: EnrollmentConflictPolicy = derivedKey
       ? (declared?.onConflict ?? "ignore")
       : (args.onConflict ?? "ignore");
-    // Queued runs alike by the workflow's own paths join (ADR 0336), and
+    // Queued runs alike by the workflow's own paths join (ADR 0337), and
     // only an event delivery no caller waits for joins one.
     const coalesceValues =
       derivedKey &&
@@ -2921,7 +2921,7 @@ export class RunsService {
               correlationKey,
             });
             // A delivery that joined a run while this one waited for the
-            // lock is that run's (ADR 0336).
+            // lock is that run's (ADR 0337).
             const rejoined = deliveryKey
               ? await trx
                   .selectFrom("workflow_run_joins")
@@ -2999,7 +2999,7 @@ export class RunsService {
                     });
               // A run alike one still queued joins it: that run reads the
               // state when it starts, so it answers this one's event too
-              // (ADR 0336). Its delivery is recorded against that run, so
+              // (ADR 0337). Its delivery is recorded against that run, so
               // a redelivery returns it.
               const alike =
                 queued && coalesceKey !== null
@@ -3252,7 +3252,7 @@ export class RunsService {
       .where("delivery_key", "=", args.deliveryKey)
       .executeTakeFirst();
     if (row) return row.id;
-    // A delivery that joined a queued run alike it (ADR 0336).
+    // A delivery that joined a queued run alike it (ADR 0337).
     const joined = await this.db
       .selectFrom("workflow_run_joins")
       .select("run_id")

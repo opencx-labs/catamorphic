@@ -6,7 +6,7 @@ production's shape from a read-only replica, and reports a review with inline
 comments and a check run. The check shows the review in progress from the
 moment it is queued, and each finding is posted as soon as the agent has
 verified it. It is ordinary project code (issue #118, ADRs 0181, 0259 and
-0336):
+0337):
 the `pull-request-reviews` pack holds every file. This guide is the
 server side: GitHub, the service connections, and the review machines.
 
@@ -17,7 +17,7 @@ Nothing installs into the server: publication is the pack's `postReviews`
 workflow. It queues per pull request chat (ADR 0325), so overlapping turns,
 progress and findings publish one at a time, and a burst of alike events
 (an agent's findings) joins the one publication still waiting, so the queue
-never fills and the verdict always gets in (ADR 0336). It decides from what
+never fills and the verdict always gets in (ADR 0337). It decides from what
 GitHub shows (the chat's metadata
 holds a record of each commit's verdict and what it posted, never trusted
 for what to post), and writes through the GitHub connection's typed actions

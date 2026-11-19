@@ -7,7 +7,7 @@ import {
   type SandboxProvider,
 } from "@catamorphic/sandbox";
 
-/** How often a machine measures its disk (ADR 0335). */
+/** How often a machine measures its disk (ADR 0336). */
 export const DISK_MEASURE_INTERVAL_MS = 30_000;
 /** How often it removes what Work left that nothing uses. */
 export const DISK_CLEAN_INTERVAL_MS = 60 * 60_000;
@@ -23,7 +23,7 @@ export interface DiskCare {
 }
 
 /**
- * A machine's care of its disk (ADR 0335): it measures the filesystems its
+ * A machine's care of its disk (ADR 0336): it measures the filesystems its
  * provider writes to every 30 seconds (not the rest of its data folder,
  * such as a database, which Work's cleanup cannot free), keeping the one
  * with the least room above its floor for the machine to report, and
@@ -37,7 +37,7 @@ export function startDiskCare(args: {
   floorMb?: number;
   /** `WORK_DISK_CRITICAL_MB`; the default critical floor when absent. */
   criticalMb?: number;
-  /** The floor kept when `floorMb` is absent (ADR 0335); `workspaces` when absent. */
+  /** The floor kept when `floorMb` is absent (ADR 0336); `workspaces` when absent. */
   defaultFloor?: DiskFloorDefault;
   /** `WORK_IMAGE_RETENTION_HOURS`, in milliseconds. */
   graceMs: number;

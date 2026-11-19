@@ -189,7 +189,7 @@ export interface EnvironmentSandbox {
   /**
    * A cache fill's own Allocation (ADR 0334): the one cache generation its
    * sandbox mounts writable, and no other cache, and the most it writes,
-   * reserved as storage (ADR 0335).
+   * reserved as storage (ADR 0336).
    */
   fill?: EnvironmentSandboxCache & { key: string; sizeMb?: number };
 }
@@ -272,7 +272,7 @@ export class ExecutionAllocationConflictError extends Error {
  * What an Allocation reserves on its machine (ADR 0100): its sandbox's
  * limits, and where its commands run apart (ADR 0332) the agent
  * container's on top, so admission counts both containers; and its
- * Environment's `storageMb` (ADR 0335), which both share.
+ * Environment's `storageMb` (ADR 0336), which both share.
  */
 export function reservedOf(policy: EnvironmentAllocationPolicy): {
   cpuMillis?: number;
@@ -287,7 +287,7 @@ export function reservedOf(policy: EnvironmentAllocationPolicy): {
       : (left ?? 0) + (right ?? 0);
   const cpuMillis = sum(own?.cpuMillis, agent?.cpuMillis);
   const memoryMb = sum(own?.memoryMb, agent?.memoryMb);
-  // A cache fill writes up to its size (ADR 0335).
+  // A cache fill writes up to its size (ADR 0336).
   const storageMb = sum(own?.storageMb, policy.sandbox?.fill?.sizeMb);
   return {
     ...(cpuMillis !== undefined ? { cpuMillis } : {}),
@@ -322,7 +322,7 @@ export class ExecutionAllocationsService {
   }
 
   /**
-   * Admission on one machine (ADRs 0100, 0335): its Environment's defaults
+   * Admission on one machine (ADRs 0100, 0336): its Environment's defaults
    * filled in, and refused with {@link EnvironmentCapacityError} where the
    * machine has no room. The policy as it will be reserved.
    */
@@ -390,7 +390,7 @@ export class ExecutionAllocationsService {
       const resources =
         args.policy.binding.trust === "managed" ? reservedOf(policy) : {};
       // A machine short of disk takes no new workspace; the work waits
-      // (ADR 0335). A workflow run starts down to the lower critical
+      // (ADR 0336). A workflow run starts down to the lower critical
       // floor, so the workflows that free or replace a machine still run,
       // and every reservation (a cache fill's size too) needs its room. A
       // cache fill is held to the full floor whatever its Environment's

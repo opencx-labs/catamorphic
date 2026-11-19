@@ -720,7 +720,7 @@ describe("the pull-request-reviews pack", () => {
         workflow.functionName === "postReviews" ? ["github"] : [],
       );
     // A turn at work shows the review in progress; a settled one posts it;
-    // each finding posts the moment it is recorded (ADR 0336).
+    // each finding posts the moment it is recorded (ADR 0337).
     expect(workflows.postReviews?.graph.triggers[0]?.config).toEqual({
       statuses: [
         "queued",
@@ -736,7 +736,7 @@ describe("the pull-request-reviews pack", () => {
       names: ["finding"],
     });
     // One publication per pull request chat at a time (ADR 0325); a
-    // turn's alike events join one still waiting (ADR 0336).
+    // turn's alike events join one still waiting (ADR 0337).
     expect(workflows.postReviews?.graph.concurrency).toEqual({
       key: "payload.session.key",
       onConflict: "queue",

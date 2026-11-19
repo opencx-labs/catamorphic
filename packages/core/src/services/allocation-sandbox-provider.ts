@@ -184,7 +184,7 @@ export function allocationSandboxProvider(args: {
     memoryMb: limits?.memoryMb,
     // A limit only where the machine enforces it (microsandbox's root
     // disk); elsewhere admission reserved it and the machine measures
-    // (ADR 0335).
+    // (ADR 0336).
     storageMb: allocation.policy.binding.resourceLimits?.includes("storageMb")
       ? limits?.storageMb
       : undefined,

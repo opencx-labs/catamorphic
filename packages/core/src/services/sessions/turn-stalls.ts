@@ -107,7 +107,7 @@ export async function turnProgress(
 
 /**
  * The session's active turn with its progress, and its turns waiting to
- * run, oldest first (ADR 0336), read together: a turn moving from one to
+ * run, oldest first (ADR 0337), read together: a turn moving from one to
  * the other is in one of them.
  */
 export async function turnState(

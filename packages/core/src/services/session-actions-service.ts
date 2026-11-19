@@ -68,7 +68,7 @@ export const SESSION_ACTION_SCHEMAS = {
   }),
   /**
    * The chat's accepted results, newest first (ADR 0323), or oldest first
-   * with `order: "oldest"` (ADR 0336). `family` adds its subsessions'
+   * with `order: "oldest"` (ADR 0337). `family` adds its subsessions'
    * results; `afterInput` (an input's message id) keeps results that answer
    * that input or a later one.
    */

@@ -958,7 +958,7 @@ describe.skipIf(!enabled)("container sandboxes (ADR 0204)", () => {
   );
 
   it(
-    "measures its disk, keeps an image a sandbox uses, and removes it once unused (ADR 0335)",
+    "measures its disk, keeps an image a sandbox uses, and removes it once unused (ADR 0336)",
     async () => {
       const dockerfile = `FROM ${IMAGE}\nRUN echo disk-${Date.now()} > /built\n`;
       const sandboxProvider = provider({ setupCommand: "" });

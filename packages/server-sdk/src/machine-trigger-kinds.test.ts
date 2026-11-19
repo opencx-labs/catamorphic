@@ -77,7 +77,7 @@ describe("machine trigger kinds (ADR 0327)", () => {
     ).toBe(false);
   });
 
-  it("records a machine short of disk once per episode, with its report (ADR 0335)", () => {
+  it("records a machine short of disk once per episode, with its report (ADR 0336)", () => {
     const disk = {
       path: "/var/lib/docker",
       totalBytes: 100e9,

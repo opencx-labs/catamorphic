@@ -1,6 +1,6 @@
 # 0100: Workspace resource admission
 
-- **Status:** Accepted (amended by [0335](0335-disk-is-a-resource-work-manages-on-machines.md): admission also keeps a machine's disk floor and reserves `storageMb`, enforced only where the provider can)
+- **Status:** Accepted (amended by [0336](0336-disk-is-a-resource-work-manages-on-machines.md): admission also keeps a machine's disk floor and reserves `storageMb`, enforced only where the provider can)
 - **Date:** 2026-09-07
 
 ## Context

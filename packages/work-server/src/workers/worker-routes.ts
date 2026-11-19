@@ -23,7 +23,7 @@ import {
 } from "./worker-registry.js";
 
 const Session = z.strictObject({ session: z.string().uuid() });
-/** A renewal may carry the worker's latest disk measurement (ADR 0335). */
+/** A renewal may carry the worker's latest disk measurement (ADR 0336). */
 const Renewal = Session.extend({ disk: MachineDiskSchema.optional() });
 /** A retried poll repeats its id and receives what that poll took. */
 const Poll = Session.extend({

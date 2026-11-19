@@ -1,4 +1,4 @@
-# 0335: Disk is a resource Work manages on machines
+# 0336: Disk is a resource Work manages on machines
 
 - **Status:** Accepted (amends 0100, 0204, 0208, 0324, 0327, 0333)
 - **Date:** 2026-11-18

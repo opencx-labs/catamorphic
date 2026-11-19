@@ -178,7 +178,7 @@ export class MicrosandboxSandboxProvider implements SandboxProvider {
   });
   /** Named volumes kept across sandboxes (ADR 0208), with `stateDirectory`. */
   readonly volumes?: SandboxVolumeProvider;
-  /** Its state directory, where its volumes live (ADR 0335). */
+  /** Its state directory, where its volumes live (ADR 0336). */
   readonly disk?: SandboxDiskProvider;
   private readonly config: Required<
     Omit<

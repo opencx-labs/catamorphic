@@ -700,7 +700,7 @@ describe("workflow machine classes (ADR 0327)", () => {
     await reconciler.deleteRule("fleet-g");
   });
 
-  it("tells it once per episode when a machine falls under its disk floor, with its report and the class's options (ADR 0335)", async () => {
+  it("tells it once per episode when a machine falls under its disk floor, with its report and the class's options (ADR 0336)", async () => {
     const { workflows, reconciler, workers, pass } = setup();
     await reconciler.setRule(shared("fleet-k"));
     const name = sharedName("fleet-k", "fleet", ENG, 1);
@@ -802,7 +802,7 @@ describe("workflow machine classes (ADR 0327)", () => {
     await reconciler.deleteRule("fleet-k");
   });
 
-  it("tells it once when a rule's machines come up short of disk, and makes no more for a while (ADR 0335)", async () => {
+  it("tells it once when a rule's machines come up short of disk, and makes no more for a while (ADR 0336)", async () => {
     const { workflows, reconciler, workers, pass } = setup();
     await reconciler.setRule({
       name: "fleet-s",

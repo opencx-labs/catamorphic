@@ -1,4 +1,4 @@
--- ADR 0336: a queued run joins one of its key that waits for the same thing.
+-- ADR 0337: a queued run joins one of its key that waits for the same thing.
 --
 -- A workflow may declare `concurrency.coalesce`, paths into the run input
 -- whose values say what a run is for (an event's kind, turn and status). A run
@@ -28,6 +28,6 @@ CREATE TABLE IF NOT EXISTS workflow_run_joins (
 );
 CREATE INDEX IF NOT EXISTS idx_workflow_run_joins_run ON workflow_run_joins (run_id);
 
--- ADR 0336: every result a turn's agent submits counts toward the turn's
+-- ADR 0337: every result a turn's agent submits counts toward the turn's
 -- limit, accepted or refused, before it is checked.
 ALTER TABLE agent_turns ADD COLUMN IF NOT EXISTS result_submissions integer NOT NULL DEFAULT 0;

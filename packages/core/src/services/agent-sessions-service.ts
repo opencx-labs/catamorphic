@@ -709,7 +709,7 @@ export interface AgentSessionDetail extends AgentSession {
    * turn works.
    */
   turn: TurnProgress | null;
-  /** Its turns waiting to run, oldest first, read with `turn` (ADR 0336). */
+  /** Its turns waiting to run, oldest first, read with `turn` (ADR 0337). */
   queued: string[];
 }
 
@@ -5824,7 +5824,7 @@ export class AgentSessionsService {
         if (!turnId || !attemptId)
           return refuse("Results are submitted during a turn.");
         // Every submission counts toward the turn's, accepted or refused,
-        // before any is checked (ADR 0336).
+        // before any is checked (ADR 0337).
         const counted = await this.db
           .updateTable("agent_turns")
           .set({ result_submissions: sql`result_submissions + 1` })
@@ -11844,7 +11844,7 @@ export class AgentSessionsService {
 
   /**
    * Whether a workspace made again in its new shape (ADR 0332) would be
-   * admitted (disk and memory, ADRs 0100, 0335): on its own machine with
+   * admitted (disk and memory, ADRs 0100, 0336): on its own machine with
    * its own reservation given back, or on another with room now. The hold
    * when no machine would take it, so the live workspace is kept.
    */

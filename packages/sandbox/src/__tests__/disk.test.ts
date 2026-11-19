@@ -25,7 +25,7 @@ const disk = (free: number, total = 100 * GIB, floor = 10 * GIB) =>
     measuredAt: at,
   }) satisfies MachineDisk;
 
-describe("machine disk (ADR 0335)", () => {
+describe("machine disk (ADR 0336)", () => {
   it("keeps 10% of a filesystem free by default, at most 10 GiB, or what the operator sets", () => {
     expect(diskFloorBytes({ totalBytes: 50 * GIB })).toBe(5 * GIB);
     expect(diskFloorBytes({ totalBytes: 1000 * GIB })).toBe(10 * GIB);

@@ -10,7 +10,7 @@ import {
  * for end-to-end tests: each turn runs the change's tests with the
  * harness's shell tool, reads one file with its read tool, submits each
  * verified problem as a typed `finding` result and then its `review` with
- * Work's `submit_result` (ADR 0336), then ends. It speaks
+ * Work's `submit_result` (ADR 0337), then ends. It speaks
  * the Anthropic Messages API, so it stands in for a provider wherever one
  * is reached (a server's own model, a model connection behind the
  * gateway), and it drives either harness Work runs a reviewer on: the

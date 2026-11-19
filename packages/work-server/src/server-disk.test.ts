@@ -11,7 +11,7 @@ import {
 import { testServerOptions } from "./test-support.js";
 
 /**
- * The server's own machine reports its disk like any machine (ADR 0335):
+ * The server's own machine reports its disk like any machine (ADR 0336):
  * an operator sees it short of disk, chats wait, and workflow runs, which
  * hold no checkout, still run.
  */
@@ -68,7 +68,7 @@ describe("a server short of disk", () => {
     expect(own?.acceptingWork).toBe(false);
   });
 
-  it("places workflow runs, never chats, while it is under its floor (ADR 0335)", async () => {
+  it("places workflow runs, never chats, while it is under its floor (ADR 0336)", async () => {
     const core = server.catamorphic.core;
     const builder = {
       tenantId: SERVER_TENANT_ID,
@@ -113,7 +113,7 @@ describe("a server short of disk", () => {
  * A single server running its work as local processes shares one disk
  * with its database and its people's files: by default it keeps only the
  * critical floor, so its chats are not held back to keep room nothing
- * else on that machine needs (ADR 0335).
+ * else on that machine needs (ADR 0336).
  */
 describe("a single server's own machine", () => {
   let root: string;

@@ -1,6 +1,6 @@
 # 0323: Agents submit typed results
 
-- **Status:** Accepted (amends 0050, 0090, 0197, 0259; results are bounded per turn, not per chat, and patterns run in linear time, by [0336](0336-reviews-show-progress-and-post-findings-as-verified.md))
+- **Status:** Accepted (amends 0050, 0090, 0197, 0259; results are bounded per turn, not per chat, and patterns run in linear time, by [0337](0337-reviews-show-progress-and-post-findings-as-verified.md))
 - **Date:** 2026-11-17
 
 ## Context
@@ -30,7 +30,7 @@ another definition's; a core keeps a bounded cache of compiled schemas keyed
 by digest (replica memory (b), ADR 0193). Patterns run on agent-submitted
 values in the server's process, so they run on a linear-time engine (RE2
 semantics, re2js, through Ajv's `code.regExp`), never JavaScript's
-backtracking one, with ECMAScript's meaning (corrected by ADR 0336: the
+backtracking one, with ECMAScript's meaning (corrected by ADR 0337: the
 first version kept JavaScript's engine behind heuristics that missed bounded
 repeats). A pattern is refused when the definition loads unless JavaScript
 accepts it with the `u` flag; where RE2 reads alike syntax otherwise, `\s`,
@@ -42,7 +42,7 @@ code points where a pattern applies is refused. One check of a value (its
 JSON-text decoding included) stops matching once 100 ms have passed, so its
 worst case is about that plus one match (4,096 code points through 2,000
 instructions, tens of milliseconds); refused submissions count toward a
-turn's 100 (ADR 0336), so a turn's checks block the event loop for at most
+turn's 100 (ADR 0337), so a turn's checks block the event loop for at most
 about 15 seconds in all, spread over its submissions. Results name the agent's output, not its authority, so they stay outside
 the consent hash, like `skills`.
 

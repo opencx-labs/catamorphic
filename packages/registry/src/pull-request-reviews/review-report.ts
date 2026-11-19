@@ -22,7 +22,7 @@ export type WorkReview = {
 };
 
 /**
- * One verified finding, once checked: a `finding` result (ADR 0336), posted
+ * One verified finding, once checked: a `finding` result (ADR 0337), posted
  * as an inline comment the moment it is recorded. `id` names the problem;
  * on one head it posts once.
  */

@@ -3,7 +3,7 @@ import { describe, expect, it } from "vitest";
 import { startDiskCare } from "./disk-care.js";
 
 /**
- * A machine's care of its disk (ADR 0335): it measures its provider's
+ * A machine's care of its disk (ADR 0336): it measures its provider's
  * filesystems, and cleans once at start, hourly, and sooner while under its
  * floor.
  */

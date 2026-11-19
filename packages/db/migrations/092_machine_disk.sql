@@ -1,4 +1,4 @@
--- Disk is a resource Work manages on machines (ADR 0335).
+-- Disk is a resource Work manages on machines (ADR 0336).
 --
 -- disk: the machine's latest report of the filesystem it writes to with
 -- the least room above its floor: { path, totalBytes, freeBytes,

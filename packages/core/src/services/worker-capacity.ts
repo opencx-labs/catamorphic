@@ -10,7 +10,7 @@ import {
 import { type Kysely, sql, type Transaction } from "kysely";
 import { z } from "zod";
 
-/** A machine's disk report (ADR 0335), as stored with its node. */
+/** A machine's disk report (ADR 0336), as stored with its node. */
 export const MachineDiskSchema = z.strictObject({
   path: z.string().max(4096),
   totalBytes: z.number().nonnegative(),
@@ -27,7 +27,7 @@ export function machineDiskOf(value: unknown): MachineDisk | undefined {
 }
 
 /**
- * Whether a node's report is recent enough to admit by (ADR 0335), judged
+ * Whether a node's report is recent enough to admit by (ADR 0336), judged
  * by the database's clock against the time it stamped on arrival, so no
  * replica's clock decides.
  */
@@ -45,7 +45,7 @@ export const WorkerResourceDefaultsSchema = z.strictObject({
 });
 
 /**
- * Why a machine's disk refused work (ADR 0335): its report, what the work
+ * Why a machine's disk refused work (ADR 0336): its report, what the work
  * reserves of it, and the floor that held it (the critical floor for a
  * workflow run).
  */
@@ -61,7 +61,7 @@ export class EnvironmentCapacityError extends Error {
 
   constructor(
     readonly nodeId: string,
-    /** The machine is short of disk for the work (ADR 0335), to say so. */
+    /** The machine is short of disk for the work (ADR 0336), to say so. */
     readonly short?: DiskShortfall,
   ) {
     super(
@@ -94,7 +94,7 @@ function shortOfDiskMessage(short: DiskShortfall): string {
 }
 
 /**
- * The floor that holds work of `workload` on a machine (ADR 0335): the
+ * The floor that holds work of `workload` on a machine (ADR 0336): the
  * critical floor for a workflow run, else the full floor. A cache fill
  * names no workload: it meets the full floor.
  */
@@ -112,7 +112,7 @@ export interface WorkerUsage {
   workspaces: number;
   cpuMillis: number;
   memoryMb: number;
-  /** `storageMb` reserved by its Allocations (ADR 0335). */
+  /** `storageMb` reserved by its Allocations (ADR 0336). */
   storageMb: number;
 }
 
@@ -148,7 +148,7 @@ export function capacityFits(args: {
   capacity: WorkerCapacity;
   usage: WorkerUsage;
   resources: EnvironmentResourcePolicy;
-  /** The machine's disk report, when it sends one (ADR 0335). */
+  /** The machine's disk report, when it sends one (ADR 0336). */
   disk?: MachineDisk;
 }): boolean {
   return (
@@ -166,7 +166,7 @@ export function capacityFits(args: {
 const MIB = 1024 * 1024;
 
 /**
- * Whether work fits a machine's disk (ADR 0335): free space less its
+ * Whether work fits a machine's disk (ADR 0336): free space less its
  * `storageMb` stays at or above the floor (a workflow run's, the lower
  * critical floor), and the machine's reservations stay within its total
  * less its floor. `disk` is the machine's recent report (see

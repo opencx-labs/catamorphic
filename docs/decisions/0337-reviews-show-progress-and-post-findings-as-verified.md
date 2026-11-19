@@ -1,4 +1,4 @@
-# 0336: Reviews show progress at once and post findings as they are verified
+# 0337: Reviews show progress at once and post findings as they are verified
 
 - **Status:** Accepted (amends 0259, 0323, 0325)
 - **Date:** 2026-11-18
@@ -20,7 +20,7 @@ burst of findings could fill the queue and lose the turn's verdict.
 event the host delivers with no one waiting for its outcome joins a queued
 run of its key with exactly the same values, program, session artifact,
 Environment, owner, scopes and enablement (hashed together), under the
-key's lock and before the queue's bound (migration 091). Calls, synchronous
+key's lock and before the queue's bound (migration 093). Calls, synchronous
 fires and setup runs report their own run and never join. A joined
 delivery's redelivery returns the run it joined; cancelling that run ends
 every delivery that joined it.

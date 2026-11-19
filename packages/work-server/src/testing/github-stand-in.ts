@@ -17,7 +17,7 @@ const execute = promisify(execFile);
  *
  * Routes are a table keyed by method and path pattern: an endpoint a
  * recipe starts calling is one entry. The review recipe's progress (ADR
- * 0336) reads and rewrites a check run by id and lists a pull request's
+ * 0337) reads and rewrites a check run by id and lists a pull request's
  * commits; its findings are reviews of their own.
  */
 export interface GithubStandIn {

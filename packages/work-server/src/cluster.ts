@@ -74,7 +74,7 @@ export async function registerWorkMachine(args: {
    */
   ownSignIns?: boolean;
   /**
-   * This machine's latest disk measurement (ADR 0335), sent with each
+   * This machine's latest disk measurement (ADR 0336), sent with each
    * heartbeat; admission keeps its floor and reserves `storageMb` here.
    */
   disk?: () => MachineDisk | undefined;
@@ -111,7 +111,7 @@ export async function registerWorkMachine(args: {
     resources: {
       cpuMillis: args.capacity?.cpuMillis,
       memoryMb: args.capacity?.memoryMb,
-      // The most a workspace may reserve here (ADR 0335).
+      // The most a workspace may reserve here (ADR 0336).
       ...(firstDisk ? { storageMb: diskBudgetMb(firstDisk) } : {}),
     },
     resourceLimits: args.sandboxProvider.resourceLimits,
@@ -217,7 +217,7 @@ export async function registerWorkMachine(args: {
           }),
         { strict },
       );
-      // The rule admission applies (ADR 0335): a workflow run down to the
+      // The rule admission applies (ADR 0336): a workflow run down to the
       // critical floor, everything with the storage it reserves, and a cache
       // fill with its cache's size above the full floor.
       const storageMb =
@@ -249,7 +249,7 @@ export async function registerWorkMachine(args: {
       );
       if (!chosen) {
         const full = ordered[0];
-        // Short of disk is a wait like any other (ADR 0335), said as such.
+        // Short of disk is a wait like any other (ADR 0336), said as such.
         const disk = full && !roomy(full) ? full.node.disk : undefined;
         if (full)
           throw new EnvironmentCapacityError(
@@ -345,7 +345,7 @@ export async function registerWorkMachine(args: {
     isLost = true;
     markLost();
   };
-  // The disk is reported under the lease it holds (ADR 0335); an episode
+  // The disk is reported under the lease it holds (ADR 0336); an episode
   // under the floor is logged once, where any replica could hear it.
   const reportDisk = async () => {
     const disk = args.disk?.();

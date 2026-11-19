@@ -230,7 +230,7 @@ async function fakeGithub(input: unknown, init?: RequestInit) {
         },
       });
   }
-  // The poster completes and rewrites only the runs it made (ADR 0336).
+  // The poster completes and rewrites only the runs it made (ADR 0337).
   const checkRun = /^(GET|PATCH) \/repos\/acme\/web\/check-runs\/(\d+)$/.exec(
     route,
   );
@@ -272,7 +272,7 @@ async function fakeGithub(input: unknown, init?: RequestInit) {
 /** A turn's report, submitted by a fake agent step as its typed result. */
 const reportStep = (report: object) =>
   `tool submit_result ${JSON.stringify({ name: "review", value: report })}`;
-/** A finding the fake agent verified, submitted mid-turn (ADR 0336). */
+/** A finding the fake agent verified, submitted mid-turn (ADR 0337). */
 const findingStep = (finding: object) =>
   `tool submit_result ${JSON.stringify({ name: "finding", value: finding })}`;
 

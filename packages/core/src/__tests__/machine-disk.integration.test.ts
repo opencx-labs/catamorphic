@@ -16,7 +16,7 @@ import { EnvironmentCapacityError } from "../services/worker-capacity.js";
 import { WorkerNodesService } from "../services/worker-nodes-service.js";
 
 /**
- * Disk is a resource Work manages on machines (ADR 0335): admission keeps
+ * Disk is a resource Work manages on machines (ADR 0336): admission keeps
  * a machine's floor and reserves `storageMb`, an episode under the floor
  * is recorded once, and failures there name the disk.
  */
@@ -98,7 +98,7 @@ async function machine() {
   return { identity, projectId, nodes, lease, allocations, admit, list };
 }
 
-describe.skipIf(!db)("machine disk (ADR 0335)", () => {
+describe.skipIf(!db)("machine disk (ADR 0336)", () => {
   it("admits nothing while free space is under the floor, so the work waits", async () => {
     const { nodes, lease, admit, list } = await machine();
     await nodes.reportDisk({ lease, disk: report({ free: 4 * GIB }) });
@@ -173,7 +173,7 @@ describe.skipIf(!db)("machine disk (ADR 0335)", () => {
     });
   });
 
-  it("holds a workflow run only to the critical floor, and every workload to the storage it reserves (ADR 0335)", async () => {
+  it("holds a workflow run only to the critical floor, and every workload to the storage it reserves (ADR 0336)", async () => {
     if (!db) return;
     const { identity, projectId, nodes, lease, admit, allocations } =
       await machine();
@@ -256,7 +256,7 @@ describe.skipIf(!db)("machine disk (ADR 0335)", () => {
     );
   });
 
-  it("judges a report's age by the database's clock, not this replica's (ADR 0335)", async () => {
+  it("judges a report's age by the database's clock, not this replica's (ADR 0336)", async () => {
     const { nodes, lease, admit } = await machine();
     await nodes.reportDisk({ lease, disk: report({ free: 1 * GIB }) });
     // This replica's clock runs ten minutes ahead of the database's.
@@ -358,7 +358,7 @@ describe.skipIf(!db)("machine disk (ADR 0335)", () => {
     );
   });
 
-  it("names the disk in a failed run's error (ADR 0335)", async () => {
+  it("names the disk in a failed run's error (ADR 0336)", async () => {
     if (!db) return;
     const { projectId, nodes, lease, admit } = await machine();
     const coordinator = new RunCoordinator(db, new ExecutionJobsService(db));

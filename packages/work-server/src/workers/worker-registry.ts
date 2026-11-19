@@ -88,7 +88,7 @@ export const WorkerOfferSchema = z.strictObject({
     .default({}),
   version: z.string().max(100).optional(),
   /**
-   * Its disk (ADR 0335): the filesystem it writes to with the least room
+   * Its disk (ADR 0336): the filesystem it writes to with the least room
    * above its floor. Later measurements come with its lease renewals.
    */
   disk: MachineDiskSchema.optional(),
@@ -210,7 +210,7 @@ export interface MachineLoad {
   /** It enrolled and has not connected yet. */
   neverConnected: boolean;
   /**
-   * Its recent disk report is under its floor (ADR 0335): it takes no new
+   * Its recent disk report is under its floor (ADR 0336): it takes no new
    * work, so it is no machine to keep warm or to count against a maximum.
    */
   shortOfDisk: boolean;
@@ -225,7 +225,7 @@ export interface MachineLoad {
       cpuMillis?: number;
       memoryMb?: number;
       /**
-       * Storage it can still reserve above its disk floor (ADR 0335): none
+       * Storage it can still reserve above its disk floor (ADR 0336): none
        * once it is short of disk. Absent without a recent report.
        */
       storageMb?: number;
@@ -326,7 +326,7 @@ export class WorkWorkerRegistry {
       }) => Promise<void>;
       /**
        * A machine's report began an episode under its disk floor (ADR
-       * 0335), once per episode: a rule's machine of a workflow class
+       * 0336), once per episode: a rule's machine of a workflow class
        * records `machine.disk-low` for its class's project.
        */
       diskLow?: (machine: {
@@ -403,7 +403,7 @@ export class WorkWorkerRegistry {
   async renew(args: {
     nodeId: string;
     session: string;
-    /** Its latest disk measurement (ADR 0335). */
+    /** Its latest disk measurement (ADR 0336). */
     disk?: MachineDisk;
   }): Promise<void> {
     await this.renewOrThrow(args);
@@ -416,7 +416,7 @@ export class WorkWorkerRegistry {
   }
 
   /**
-   * Store a worker's disk report under its epoch (ADR 0335). One that
+   * Store a worker's disk report under its epoch (ADR 0336). One that
    * begins an episode under the floor is logged and handed to `diskLow`
    * once, whichever replica heard it.
    */
@@ -685,7 +685,7 @@ export class WorkWorkerRegistry {
         .where("revoked_at", "is not", null)
         .execute();
       // A re-enrolled name gets its (revoked, disabled) node back, as a
-      // new machine: nothing of the old one's disk (ADR 0335).
+      // new machine: nothing of the old one's disk (ADR 0336).
       await trx
         .updateTable("worker_nodes")
         .set({
@@ -932,7 +932,7 @@ export class WorkWorkerRegistry {
         ...args.offer.capabilities.filter(
           (capability) => capability !== MACHINE_CAPABILITIES.disk,
         ),
-        // It reports its disk, so admission reserves storage here (ADR 0335).
+        // It reports its disk, so admission reserves storage here (ADR 0336).
         ...(args.offer.disk ? [MACHINE_CAPABILITIES.disk] : []),
       ],
       resources: {
@@ -1263,7 +1263,7 @@ export class WorkWorkerRegistry {
       rows.map((row) => {
         const node = byId.get(row.node_id);
         const capacity = node?.capacity;
-        // Short of disk, it takes nothing at all (ADR 0335).
+        // Short of disk, it takes nothing at all (ADR 0336).
         const roomy =
           !node ||
           diskFits({

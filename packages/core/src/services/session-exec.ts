@@ -129,7 +129,7 @@ export interface SessionExecResult {
   durationMs: number;
   timedOut: boolean;
   /**
-   * Why it failed when the disk is to blame (ADR 0335): its machine is
+   * Why it failed when the disk is to blame (ADR 0336): its machine is
    * short of disk, or its output says a write found no room.
    */
   outOfDisk?: string;
@@ -476,7 +476,7 @@ export class SessionExecService {
       );
     const commit = await this.programCommitOf(action);
     // Named from the start, so a cleanup another start runs meanwhile
-    // keeps this commit's copy (ADR 0335).
+    // keeps this commit's copy (ADR 0336).
     if (commit)
       await this.deps.db
         .updateTable("session_actions")
@@ -956,7 +956,7 @@ export class SessionExecService {
       .select(["result", "status", "error"])
       .where("id", "=", action.id)
       .executeTakeFirstOrThrow();
-    // Its result is kept; its streams' files leave the workspace (ADR 0335).
+    // Its result is kept; its streams' files leave the workspace (ADR 0336).
     if (final.status === "completed")
       await this.removeOutput(action, args.handle);
     return final.status === "completed"
@@ -1044,7 +1044,7 @@ export class SessionExecService {
     error: string;
   }): Promise<HostCallFollowOutcome> {
     const { action } = given;
-    // A start that found no room says so (ADR 0335).
+    // A start that found no room says so (ADR 0336).
     const args = {
       ...given,
       error: withOutOfDisk(
@@ -1118,7 +1118,7 @@ export class SessionExecService {
 
   /** Program commits of the other executions running in this workspace. */
   /**
-   * The program commits a workspace's chats may still read (ADR 0335): those
+   * The program commits a workspace's chats may still read (ADR 0336): those
    * of its executions still running or starting, of any that ran within the
    * retention, and of any that ran since the oldest turn still queued or
    * working there began (at most a week back), since a workflow hands the
@@ -1173,7 +1173,7 @@ export class SessionExecService {
   }): Promise<Record<string, string> | undefined> {
     const { handle, folder, side } = args;
     // A copy used again is used now: its time is what a cleanup reads for
-    // a copy Work has no record of (ADR 0335).
+    // a copy Work has no record of (ADR 0336).
     const present = await handle.provider.executeCommand(
       handle.sandboxId,
       `test -d ${shellQuote(folder)} && { touch -c ${shellQuote(folder)} 2>/dev/null; echo present; } || true`,
@@ -1210,7 +1210,7 @@ export class SessionExecService {
         `Could not copy the program into the workspace: ${placed.result.trim().slice(-500)}`,
       );
     // A new copy per main commit would otherwise pile up for the life of
-    // the workspace (ADR 0335): copies of other commits made over a day
+    // the workspace (ADR 0336): copies of other commits made over a day
     // ago go, and staging a start left, unless a running execution uses
     // them. A turn handed a path within the day keeps reading it.
     await handle.provider
@@ -1322,7 +1322,7 @@ const PROGRAM_COPY_TURN_CAP_DAYS = 7;
 
 /**
  * The script that removes old program copies from a workspace root (ADR
- * 0335): every `.work-program/<commit>` and leftover staging folder
+ * 0336): every `.work-program/<commit>` and leftover staging folder
  * modified over a day ago, except the commits named. It runs with any
  * POSIX `sh` and busybox `find`.
  */

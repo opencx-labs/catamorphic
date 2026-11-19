@@ -12,7 +12,7 @@ import { registerWorkMachine } from "../cluster.js";
 import type { ScheduledPlacement } from "./placement.js";
 
 /**
- * A cache fill is placed with its size (ADR 0334, 0335): on a machine
+ * A cache fill is placed with its size (ADR 0334, 0336): on a machine
  * whose free disk less the cache's size stays above its full floor, as
  * admission will then require, never on the first machine of its pool
  * whatever room it has.
@@ -102,7 +102,7 @@ afterAll(async () => {
   if (root) fs.rmSync(root, { recursive: true, force: true });
 });
 
-describe.skipIf(!db)("placing a cache fill (ADR 0335)", () => {
+describe.skipIf(!db)("placing a cache fill (ADR 0336)", () => {
   it("places it where its size fits above the full floor, which the first machine lacks", async () => {
     const place = (fill?: { storageMb: number }) =>
       machine?.environmentProvider.get({

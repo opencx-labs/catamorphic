@@ -722,7 +722,7 @@ export class CacheFillsService {
     let mask = new SecretMask({});
     const fail = async (error: unknown) => {
       const said = error instanceof Error ? error.message : String(error);
-      // A fill that found no room says so (ADR 0335).
+      // A fill that found no room says so (ADR 0336).
       const message = withOutOfDisk(
         said,
         await outOfDiskFor({
@@ -846,7 +846,7 @@ export class CacheFillsService {
       ? "agent"
       : "workflow";
     // It writes up to its size: placement and admission keep that room
-    // above the full floor (ADR 0335).
+    // above the full floor (ADR 0336).
     const sizeMb = cache.sizeMb ?? DEFAULT_CACHE_SIZE_MB;
     const placed = await this.deps.executionEnvironments
       .admitOrWait({
@@ -920,7 +920,7 @@ export class CacheFillsService {
             ...(sandboxPolicy.containers ? { containers: true } : {}),
             ...(egress ? { egress } : {}),
             // It writes up to its size, reserved like storage: it starts
-            // only where that fits above its floor (ADR 0335).
+            // only where that fits above its floor (ADR 0336).
             fill: {
               name: fill.cache_name,
               path: cache.path,

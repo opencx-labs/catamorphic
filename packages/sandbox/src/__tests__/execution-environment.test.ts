@@ -28,7 +28,7 @@ const binding: EnvironmentBinding = {
 };
 
 describe("environmentSatisfies", () => {
-  it("takes storageMb where the machine enforces it or reports its disk (ADR 0335)", () => {
+  it("takes storageMb where the machine enforces it or reports its disk (ADR 0336)", () => {
     const container = {
       ...binding,
       resourceLimits: ["cpuMillis", "memoryMb"] as const,

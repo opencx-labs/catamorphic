@@ -19,7 +19,7 @@ every non-draft pull request gets a project chat keyed
   Environment on a machine of the review pool, with its workspace checked out
   at `refs/pull/<number>/head`. Within a minute the "Work review" check shows
   the review in progress: waiting to start, preparing the workspace, then
-  reviewing (ADR 0336).
+  reviewing (ADR 0337).
 - **While it reviews:** the agent submits each finding it has verified as a
   typed `finding` result (`submit_result`, ADR 0323), and `postReviews`
   posts it at once as an inline comment.
@@ -128,7 +128,7 @@ offline from the cache and falls back to the registries, so there a pull
 request that changes the lockfile downloads everything. Copies live on each machine: the first review on a new
 machine installs from the network while Work fills that machine's copy, and
 machines kept idle (`machines.demand.min`) stay warm. `sizeMb` bounds a
-fill, and a fill reserves it on its machine (ADR 0335): it starts only
+fill, and a fill reserves it on its machine (ADR 0336): it starts only
 while the machine's free disk less `sizeMb` stays above its floor, so size
 it to the machines (the pack's 16 GiB suits machines of about 100 GB). A
 copy no review mounted for 30 days is evicted. Each copy holds
@@ -452,7 +452,7 @@ result the moment it is recorded (`session.result-recorded`). It declares
 for one pull request chat take turns, each starting only after the one
 before it has finished, holding no machine while it waits (ADR 0325), and
 an event alike one whose publication still waits joins it instead of
-queuing another (ADR 0336): a turn's findings (which carry no status) join
+queuing another (ADR 0337): a turn's findings (which carry no status) join
 one waiting publication, and a turn's statuses one each. A publication
 takes nothing from its event but its kind, turn and status, which are what
 make events alike, and reads the chat, its results and GitHub when it

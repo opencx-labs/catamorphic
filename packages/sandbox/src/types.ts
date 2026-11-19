@@ -461,13 +461,13 @@ export interface SandboxProvider {
   readonly volumes?: SandboxVolumeProvider;
 
   /**
-   * The disk the provider writes to and what it leaves there (ADR 0335);
+   * The disk the provider writes to and what it leaves there (ADR 0336);
    * present when it has either.
    */
   readonly disk?: SandboxDiskProvider;
 }
 
-/** What a provider tells its machine about disk (ADR 0335). */
+/** What a provider tells its machine about disk (ADR 0336). */
 export interface SandboxDiskProvider {
   /**
    * Paths on this process's filesystem, one on each filesystem the
@@ -693,7 +693,7 @@ export type AgentErrorKind =
   | "unavailable"
   | "model_incompat"
   | "agent_missing"
-  /** The machine ran out of disk, or the output says so (ADR 0335). */
+  /** The machine ran out of disk, or the output says so (ADR 0336). */
   | "out_of_disk";
 
 /**

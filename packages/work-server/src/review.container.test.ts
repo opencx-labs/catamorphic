@@ -50,9 +50,9 @@ import { startTlsFront, type TlsFront } from "./testing/tls-front.js";
  * the model as stand-ins on loopback. The real workflows review and
  * publish: the check shows each review in progress from before its turn
  * starts, every finding posts inline while its turn still works, and the
- * verdict completes the same check (ADR 0336); the machine reports its
+ * verdict completes the same check (ADR 0337); the machine reports its
  * disk, and admission places the fill and the reviews within its floor
- * (ADR 0335).
+ * (ADR 0336).
  *
  * - `acme/web` runs the pack as it ships: the built-in reviewer on the
  *   control plane on the server's own model, its tools in the review
@@ -123,7 +123,7 @@ const PROBE = /^WORK-PROBE (\{.*\})$/m;
 const MIB = 1024 * 1024;
 /**
  * The review machine's disk floor and the review cache's size, set as a
- * team sizes them to its machines (ADR 0335): admission keeps the floor
+ * team sizes them to its machines (ADR 0336): admission keeps the floor
  * free and a fill reserves its cache's whole size, so the pack's 16 GiB
  * cache and the default floor (10% of the disk) would make this test
  * depend on how much free disk the machine running it has.
@@ -131,7 +131,7 @@ const MIB = 1024 * 1024;
 const DISK_FLOOR_MB = 256;
 const REVIEW_CACHE_MB = 512;
 const MACHINE_ID = "worker.review-1";
-/** What the check says while a review is under way (ADR 0336). */
+/** What the check says while a review is under way (ADR 0337). */
 const PHASES = ["Waiting to start", "Preparing the workspace", "Reviewing"];
 /** A finding's marker, which its inline comment ends with. */
 const findingMarker = (commit: string, id: string) =>
@@ -964,7 +964,7 @@ describe.skipIf(!enabled)(
       expect(output).toContain("tests passed");
       expect(reviewTurn?.readOutput).toContain("isNumber(line.amount)");
       // Each finding was recorded as it was submitted, a resubmission
-      // too, and then the review, which lists none (ADR 0336).
+      // too, and then the review, which lists none (ADR 0337).
       expect(reviewTurn?.findings?.length).toBeGreaterThan(0);
       for (const finding of reviewTurn?.findings ?? [])
         expect(finding.answer).toMatch(/Recorded the finding result/);
@@ -1045,7 +1045,7 @@ describe.skipIf(!enabled)(
      * progress and completed by the verdict, saying only what the review
      * was doing until then; each finding once, inline, in a review of its
      * own; and one review with the verdict that repeats none of them
-     * (ADR 0336).
+     * (ADR 0337).
      */
     function expectPublished(
       project: Reviewed,
@@ -1249,7 +1249,7 @@ describe.skipIf(!enabled)(
           }
         },
         // One verified problem a turn, submitted again after it posted: a
-        // resubmission posts nothing (ADR 0336).
+        // resubmission posts nothing (ADR 0337).
         findings: (step) => {
           const project = reviewed(repositoryOf(step));
           const finding =
@@ -1586,7 +1586,7 @@ describe.skipIf(!enabled)(
           ]);
 
           // The machine reports its disk, and admission placed the fill and
-          // the review within it (ADR 0335): the fill reserved its cache's
+          // the review within it (ADR 0336): the fill reserved its cache's
           // size; the review's Environment asks for no storage.
           const listed = (await operatorMachines()).machines.find(
             (entry) => entry.id === MACHINE_ID,

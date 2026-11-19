@@ -516,7 +516,7 @@ describe("machines on demand (ADR 0258)", () => {
     await deleteRule("burst");
   });
 
-  it("scales for a cache fill waiting for room, and not once it has run (ADR 0335)", async () => {
+  it("scales for a cache fill waiting for room, and not once it has run (ADR 0336)", async () => {
     await putRule("fills", {
       projects: [projectId],
       machines: { demand: { max: 2 } },
@@ -954,7 +954,7 @@ describe("machines on demand (ADR 0258)", () => {
     await deleteRule("apart");
   }, 120_000);
 
-  it("gives work a new machine while its machine is short of disk (ADR 0335)", async () => {
+  it("gives work a new machine while its machine is short of disk (ADR 0336)", async () => {
     await putRule("full", {
       projects: [projectId],
       machines: { demand: { max: 3 } },
@@ -979,7 +979,7 @@ describe("machines on demand (ADR 0258)", () => {
     await deleteRule("full");
   });
 
-  it("replaces a machine short of disk although the rule keeps one warm and allows one (ADR 0335)", async () => {
+  it("replaces a machine short of disk although the rule keeps one warm and allows one (ADR 0336)", async () => {
     await putRule("diskwarm", {
       projects: [projectId],
       machines: { demand: { min: 1, max: 1, idleMinutes: 1 } },
@@ -1013,7 +1013,7 @@ describe("machines on demand (ADR 0258)", () => {
     await deleteRule("diskwarm");
   });
 
-  it("keeps max a ceiling: a machine short of disk still holding work counts until it drains (ADR 0335)", async () => {
+  it("keeps max a ceiling: a machine short of disk still holding work counts until it drains (ADR 0336)", async () => {
     await putRule("ceiling", {
       projects: [projectId],
       machines: { demand: { max: 1 } },
@@ -1040,7 +1040,7 @@ describe("machines on demand (ADR 0258)", () => {
     await deleteRule("ceiling");
   });
 
-  it("stops replacing a class's machines that come up short of disk, and says its disk is too small (ADR 0335)", async () => {
+  it("stops replacing a class's machines that come up short of disk, and says its disk is too small (ADR 0336)", async () => {
     await putRule("tiny", {
       projects: [projectId],
       machines: { demand: { max: 3 } },

@@ -737,7 +737,7 @@ describe("ContainerSandboxProvider without Docker", () => {
     expect(fake.containers.has(agent)).toBe(false);
   });
 
-  it("removes images Work pulled or built once unused for the grace, never one in use, the machine's own, or one it found (ADR 0335)", async () => {
+  it("removes images Work pulled or built once unused for the grace, never one in use, the machine's own, or one it found (ADR 0336)", async () => {
     const { fake, provider } = await setup(undefined, {
       images: {
         "oven/bun": 1,
@@ -806,7 +806,7 @@ describe("ContainerSandboxProvider without Docker", () => {
     expect(kept()).toContain("example/review:1");
   });
 
-  it("never removes an image another machine sharing the daemon uses, nor one it found (ADR 0335)", async () => {
+  it("never removes an image another machine sharing the daemon uses, nor one it found (ADR 0336)", async () => {
     const { fake, provider } = await setup(undefined, {
       images: { "oven/bun": 1 },
     });
@@ -847,7 +847,7 @@ describe("ContainerSandboxProvider without Docker", () => {
     expect(images()).toEqual(["oven/bun"]);
   });
 
-  it("restores an image another machine claimed while this one removed it (ADR 0335)", async () => {
+  it("restores an image another machine claimed while this one removed it (ADR 0336)", async () => {
     const today = new Date().toISOString().slice(0, 10).replaceAll("-", "");
     let raced = false;
     const { fake, provider } = await setup(undefined, {
@@ -875,7 +875,7 @@ describe("ContainerSandboxProvider without Docker", () => {
     expect(await fake.docker.inspectImage("example/review:3")).toBeDefined();
   });
 
-  it("ignores and removes a claim no machine renewed for a week (ADR 0335)", async () => {
+  it("ignores and removes a claim no machine renewed for a week (ADR 0336)", async () => {
     const { fake, provider } = await setup(undefined, {
       images: { "oven/bun": 1 },
     });
@@ -902,7 +902,7 @@ describe("ContainerSandboxProvider without Docker", () => {
     expect(fake.images?.has(stale)).toBe(false);
   });
 
-  it("prunes dangling images and build cache in running sandboxes with containers only (ADR 0335)", async () => {
+  it("prunes dangling images and build cache in running sandboxes with containers only (ADR 0336)", async () => {
     const { fake, provider } = await setup();
     const machine = provider();
     const running = await machine.createSandbox({ containers: true });
@@ -926,7 +926,7 @@ describe("ContainerSandboxProvider without Docker", () => {
     );
   });
 
-  it("measures its state and Docker's data root where it sees it (ADR 0335)", async () => {
+  it("measures its state and Docker's data root where it sees it (ADR 0336)", async () => {
     const root = fs.mkdtempSync(path.join(fs.realpathSync("/tmp"), "wdr-"));
     try {
       const seen = await setup(undefined, { dockerRootDir: root });
@@ -945,7 +945,7 @@ describe("ContainerSandboxProvider without Docker", () => {
     }
   });
 
-  it("is given no storage limit by an Allocation, and refuses one asked directly (ADR 0335)", async () => {
+  it("is given no storage limit by an Allocation, and refuses one asked directly (ADR 0336)", async () => {
     const { provider } = await setup();
     expect(provider().resourceLimits).not.toContain("storageMb");
     await expect(

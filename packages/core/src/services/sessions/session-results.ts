@@ -412,7 +412,7 @@ export async function sessionFamily(
 
 /**
  * The newest results of a chat a read of each name's latest looks at
- * (ADR 0336): a chat records at most 1,000 results a turn, but over its
+ * (ADR 0337): a chat records at most 1,000 results a turn, but over its
  * life it keeps every one, so the latest of each name is found among these,
  * through the results index, and a name only older results carry is left
  * out.

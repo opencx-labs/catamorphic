@@ -1471,7 +1471,7 @@ export class RunCoordinator {
     statuses?: readonly string[];
   }): Promise<void> {
     // A run whose machine is short of disk, or whose error says a write
-    // found no room, says so (ADR 0335).
+    // found no room, says so (ADR 0336).
     const placed = await given.trx
       .selectFrom("workflow_runs")
       .select("allocation_id")

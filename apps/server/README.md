@@ -58,7 +58,7 @@ reviews gets a fresh machine without paying for idle ones.
 See [ADR 0164](../../docs/decisions/0164-control-plane-and-enrolled-workers.md)
 and the [machines reference](../../skills/setup-work-server/references/cluster-deployment.md).
 
-Every machine measures its disk and keeps some of it free (ADR 0335). A single
+Every machine measures its disk and keeps some of it free (ADR 0336). A single
 server running its work as local processes keeps only a small critical floor
 by default (1% of its disk, at most 1 GiB), so its chats are not held back on
 a full disk where holding them frees nothing; enrolled workers and a server

@@ -407,7 +407,7 @@ export function fakeWorld(input: { head: string }) {
       });
     },
     /**
-     * The reviewer's turn submits a verified finding (ADR 0336), and Work
+     * The reviewer's turn submits a verified finding (ADR 0337), and Work
      * records `session.result-recorded`: this returns that event.
      */
     find(turnId: string, finding: FakeFinding) {
@@ -547,7 +547,7 @@ function valueAt(input: Json, path: string): unknown {
 }
 
 /**
- * One key's queue as Work keeps it (ADRs 0325, 0336): runs take turns; a
+ * One key's queue as Work keeps it (ADRs 0325, 0337): runs take turns; a
  * run delivered while one with the same `coalesce` values still waits joins
  * it; a key holds at most 100 waiting runs, and refuses a delivery beyond.
  */

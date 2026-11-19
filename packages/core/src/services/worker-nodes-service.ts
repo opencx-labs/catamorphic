@@ -90,7 +90,7 @@ export interface WorkerNode {
   capacity?: WorkerCapacity;
   defaults: { cpuMillis?: number; memoryMb?: number };
   usage: WorkerUsage;
-  /** Its latest disk report (ADR 0335); absent for a machine that sends none. */
+  /** Its latest disk report (ADR 0336); absent for a machine that sends none. */
   disk?: MachineDisk;
   /** The report is recent enough to admit by, by the database's clock. */
   diskFresh: boolean;
@@ -106,7 +106,7 @@ export interface WorkerNode {
 
 /**
  * Where a disk report left a machine's episode under its floor (ADR
- * 0335): `started` by this report (once per episode, whichever replica
+ * 0336): `started` by this report (once per episode, whichever replica
  * heard it), `ongoing`, `ended` by this report, or `none`.
  */
 export type DiskEpisode =
@@ -461,7 +461,7 @@ export class WorkerNodesService {
   }
 
   /**
-   * Record a machine's disk report (ADR 0335) while `lease` holds it,
+   * Record a machine's disk report (ADR 0336) while `lease` holds it,
    * dated when it arrived. The
    * row's lock orders reports from every replica, so the episode under its
    * floor starts once: when a report first shows free space under the
@@ -510,7 +510,7 @@ export class WorkerNodesService {
   }
 
   /**
-   * The event of the episode that began at `since` is recorded (ADR 0335):
+   * The event of the episode that began at `since` is recorded (ADR 0336):
    * later reports in it record nothing more.
    */
   async diskLowRecorded(args: { nodeId: string; since: Date }): Promise<void> {
@@ -581,7 +581,7 @@ export class WorkerNodesService {
         const disk = machineDiskOf(row.disk);
         const fresh = disk !== undefined && row.disk_fresh;
         const stored = descriptorSchema.parse(row.descriptor);
-        // What may be reserved is the latest report's (ADR 0335): the
+        // What may be reserved is the latest report's (ADR 0336): the
         // tightest of a machine's filesystems can change after it connects.
         const descriptor =
           disk && stored.capabilities.includes(MACHINE_CAPABILITIES.disk)

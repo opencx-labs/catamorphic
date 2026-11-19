@@ -95,7 +95,7 @@ export function rewriteAgentError(
         `Retry repairs the history and continues.`
       );
     // Core's own words, about the chat rather than a provider (ADR 0314),
-    // or its machine's disk (ADR 0335).
+    // or its machine's disk (ADR 0336).
     case "agent_missing":
     case "out_of_disk":
       return original;

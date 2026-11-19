@@ -1022,7 +1022,7 @@ describeIf("workflows run commands in a chat's workspace (ADR 0324)", () => {
     }
   }, 120_000);
 
-  it("says a command ran out of disk, and leaves no output files in the workspace (ADR 0335)", async () => {
+  it("says a command ran out of disk, and leaves no output files in the workspace (ADR 0336)", async () => {
     const sessionId = (await sessions().create(root, projectId)).id;
     const { run } = await runExec({
       sessionId,
@@ -1063,7 +1063,7 @@ describeIf("workflows run commands in a chat's workspace (ADR 0324)", () => {
     ).toBeUndefined();
   }, 120_000);
 
-  it("names its program commit from the moment it starts, before it looks for its copy (ADR 0335)", async () => {
+  it("names its program commit from the moment it starts, before it looks for its copy (ADR 0336)", async () => {
     const sessionId = (await sessions().create(root, projectId)).id;
     const named: Array<string | undefined> = [];
     programRace.onLook = async () => {
@@ -1101,7 +1101,7 @@ describeIf("workflows run commands in a chat's workspace (ADR 0324)", () => {
     }
   }, 120_000);
 
-  it("keeps a program copy a chat may still read, and removes it once none may (ADR 0335)", async () => {
+  it("keeps a program copy a chat may still read, and removes it once none may (ADR 0336)", async () => {
     const sessionId = (await sessions().create(root, projectId)).id;
     const programOf = async (idempotencyKey: string) => {
       const { run } = await runExec({

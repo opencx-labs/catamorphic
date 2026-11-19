@@ -2881,7 +2881,7 @@ function concurrencyOf(config: ObjectLiteralExpression): {
   }
   if (!("coalesce" in value))
     return { concurrency: { key, onConflict: policy } };
-  // Queued runs that wait for the same thing join (ADR 0336).
+  // Queued runs that wait for the same thing join (ADR 0337).
   const coalesce = value.coalesce;
   if (
     policy !== "queue" ||

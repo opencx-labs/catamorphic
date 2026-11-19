@@ -63,7 +63,7 @@ export type AgentErrorKind =
   | "unavailable"
   | "model_incompat"
   | "agent_missing"
-  /** The machine ran out of disk, or the output says so (ADR 0335). */
+  /** The machine ran out of disk, or the output says so (ADR 0336). */
   | "out_of_disk";
 
 /**

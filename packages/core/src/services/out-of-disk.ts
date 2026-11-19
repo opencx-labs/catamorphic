@@ -4,7 +4,7 @@ import type { Kysely, Transaction } from "kysely";
 import { diskFreshSql, machineDiskOf } from "./worker-capacity.js";
 
 /**
- * The recent disk report of the machine an Allocation is on (ADR 0335),
+ * The recent disk report of the machine an Allocation is on (ADR 0336),
  * or undefined: no Allocation, a machine that reports none, or a report
  * too old to speak for it now.
  */
@@ -66,7 +66,7 @@ async function sessionAllocation(args: {
 
 /**
  * Why a failure in an Allocation's workspace happened, when the disk is
- * to blame (ADR 0335): its machine is under its floor, or the output says
+ * to blame (ADR 0336): its machine is under its floor, or the output says
  * a write found no room. Undefined otherwise, and when the lookup fails:
  * a reason is an explanation, never in the way of recording the failure.
  */

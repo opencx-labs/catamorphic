@@ -125,7 +125,7 @@ export interface EnvironmentAdmitArgs {
    */
   commit?: string;
   /**
-   * A cache fill of this size (ADR 0334, 0335): placed only where it fits
+   * A cache fill of this size (ADR 0334, 0336): placed only where it fits
    * above the machine's full disk floor. Not a requirement, so a machine
    * that reports no disk still takes it.
    */

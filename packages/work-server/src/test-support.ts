@@ -68,7 +68,7 @@ export function testServerOptions(args: {
         // Tests run trusted subprocesses unless they choose a backend.
         WORK_SANDBOX: "local-process",
         // The test machine's own free disk is not what a test checks; the
-        // disk tests set a floor of their own (ADR 0335).
+        // disk tests set a floor of their own (ADR 0336).
         WORK_DISK_FLOOR_MB: "0",
         ...args.env,
       }),

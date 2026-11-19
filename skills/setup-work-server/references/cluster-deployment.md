@@ -796,7 +796,7 @@ the workspace. The container backend enforces CPU in any millicores and
 memory in MiB (Docker's `NanoCpus` and `Memory`, without swap). It cannot
 cap a workspace's disk (the workspace is a Docker volume), so there
 `storageMb` is reserved at admission and the machine's disk measured, not
-enforced (ADR 0335; see [Disk](#disk)). GPU limits are rejected by the stock
+enforced (ADR 0336; see [Disk](#disk)). GPU limits are rejected by the stock
 providers.
 Native host CLI execution does not enforce these sandbox limits; use controller
 agents for this setup. The stock controller and connection broker remain outside
@@ -838,7 +838,7 @@ are rejected before use, and requested limits travel with sandbox creation.
 
 ### Disk
 
-Disk is a resource Work manages on each machine (ADR 0335). Every 30
+Disk is a resource Work manages on each machine (ADR 0336). Every 30
 seconds a machine measures the filesystems its sandboxes write to (the
 backend's state and, for the container backend, Docker's data root where the
 worker sees it at the same path; a worker in its own container measures its
@@ -1008,7 +1008,7 @@ An Environment chooses its sandbox (ADR 0176) in `.work/project.json`:
 
 Machines advertise `images`, `images.build`, `containers`,
 `network.policy`, `network.setup`, `commands.separate`, `caches`, `disk`
-(it reports its disk, ADR 0335), and `volumes`, `sign-ins` and one
+(it reports its disk, ADR 0336), and `volumes`, `sign-ins` and one
 `sign-in:<harness>:<member>` per member signed in on them, and a
 local-process machine `harness.claude-code` and `harness.codex` when those
 CLIs are on its `PATH`; `GET /_work/operator/machines` shows them with the
@@ -1134,7 +1134,7 @@ caches (ADR 0208):
   after the deploy gate), with that revision's cache command, path, size and
   setup network and secrets, in a fresh sandbox of the Environment's image
   holding that revision alone, with no grant, in an Allocation of its own on
-  that machine, which reserves `sizeMb` of its disk (ADR 0335). Work
+  that machine, which reserves `sizeMb` of its disk (ADR 0336). Work
   publishes the new
   generation only when the fill exited 0, stayed within `sizeMb` (10 GiB by
   default) and holds none of its setup secrets' values, both checked once
