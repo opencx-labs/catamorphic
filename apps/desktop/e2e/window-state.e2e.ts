@@ -57,7 +57,16 @@ describe("window state", () => {
       focusable: true,
       opacity: 1,
     });
-    expect(await app.eval("document.hasFocus()")).toBe(true);
+    // The page hears its window took focus a moment after the window
+    // manager gives it, and later still on a display that has just
+    // started (the first launch of a test shard): it must arrive, not
+    // have arrived by the time the maximize did.
+    await expect
+      .poll(() => app?.eval<boolean>("document.hasFocus()"), {
+        timeout: 15_000,
+        message: "the first window's page has keyboard focus",
+      })
+      .toBe(true);
     const { userDataDir } = app;
     // This is crash recovery: wait for the debounced state write before SIGKILL.
     await expect

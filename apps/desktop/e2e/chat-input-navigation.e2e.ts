@@ -132,18 +132,30 @@ it("keeps character-by-character edits and caret order while the agent works", a
     ),
   ).toBe(true);
   await shot("chat-typing-caret");
-  // Chromium groups the replacement with its preceding deletion. CDP skips
-  // macOS's native key binding lookup, so supply its editing command too.
-  for (const type of ["keyDown", "keyUp"])
-    await app.cdp("Input.dispatchKeyEvent", {
-      type,
-      key: "z",
-      code: "KeyZ",
-      windowsVirtualKeyCode: 90,
-      modifiers: process.platform === "darwin" ? 4 : 2,
-      ...(type === "keyDown" ? { commands: ["undo"] } : {}),
-    });
-  expect(await app.eval(`${editor}.textContent`)).toBe(text);
+  // Undo walks the edit back to exactly what was typed. Chromium usually
+  // groups the replacement with its preceding deletion, but may keep them
+  // as two steps; each step must leave the text as it stood between them.
+  // CDP skips macOS's native key binding lookup, so supply its editing
+  // command too.
+  const undo = async () => {
+    for (const type of ["keyDown", "keyUp"])
+      await app.cdp("Input.dispatchKeyEvent", {
+        type,
+        key: "z",
+        code: "KeyZ",
+        windowsVirtualKeyCode: 90,
+        modifiers: process.platform === "darwin" ? 4 : 2,
+        ...(type === "keyDown" ? { commands: ["undo"] } : {}),
+      });
+    return app.eval<string>(`${editor}.textContent`);
+  };
+  const deleted = `${text.slice(0, -7)}${text.slice(-6)}`;
+  const steps = [await undo()];
+  if (steps[0] !== text) steps.push(await undo());
+  expect(
+    steps,
+    "each undo step leaves the text as it stood within the edit",
+  ).toEqual(steps.length === 1 ? [text] : [deleted, text]);
   const stop = await app.eval<boolean>(
     `!!${dock}.querySelector('[aria-label="Stop the agent"]')`,
   );

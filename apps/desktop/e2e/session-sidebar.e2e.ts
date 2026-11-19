@@ -303,26 +303,47 @@ it("leaves with the chat, and comes back to the person's choice", async () => {
 it("turns back from a quick change on the same tab", async () => {
   // Away and straight back, inside one motion: the tab that was leaving
   // returns as the same element, and nothing is left leaving. The way back
-  // is clicked in the page the moment the tab starts leaving: the round
-  // trips of a wait and another eval could outlast the 200 ms leave on a
-  // slow runner, and a tab that finished leaving comes back as a new one.
-  await app.eval(`(async () => {
-    window.__thisSessionTab = document.querySelector('${thisSessionTab}');
-    const leaving = () => document.querySelector('${right} [data-sidebar-tab-leaving]');
-    const started = new Promise((resolve, reject) => {
-      const observer = new MutationObserver(() => {
-        if (leaving()) { observer.disconnect(); resolve(); }
+  // is clicked in the page the moment the tab starts leaving. Its chat can
+  // still take longer than the 200 ms leave to come forward on a slow
+  // runner (macOS CI did, twice): the tab then finishes leaving and
+  // arrives again as a new one, which is right too, but not this test's
+  // case. That round is noted and the change is made again, up to three
+  // times; the reversal itself is also covered on the component
+  // ("reverses a quick change back on the same elements").
+  let reversed = false;
+  for (let round = 0; round < 3 && !reversed; round += 1) {
+    await app.eval(`(async () => {
+      const tab = document.querySelector('${thisSessionTab}');
+      window.__quickChange = { tab, left: false };
+      const leaving = () => document.querySelector('${right} [data-sidebar-tab-leaving]');
+      const gone = new MutationObserver(() => {
+        if (!tab.isConnected) { window.__quickChange.left = true; gone.disconnect(); }
       });
-      observer.observe(document.body, { subtree: true, childList: true, attributes: true });
-      setTimeout(() => { observer.disconnect(); reject(new Error("This session never started leaving")); }, 5000);
-    });
-    document.querySelector('${visible} [aria-label="New tab"]').click();
-    await started;
-    document.querySelector('${visible} [data-sidebar="left"] [data-sidebar-item-id="${sessionId}"] [data-tree-primary]').click();
-  })()`);
-  await app.waitFor(
-    `document.querySelector('${thisSessionTab}') === window.__thisSessionTab && !document.querySelector('${right} [data-sidebar-tab-leaving]') && !document.querySelector('${right} .sidebar-tab-slot-leaving, ${right} .sidebar-strip-folding')`,
-    { label: "the same tab back, settled" },
-  );
+      gone.observe(document.body, { subtree: true, childList: true });
+      const started = new Promise((resolve, reject) => {
+        const observer = new MutationObserver(() => {
+          if (leaving()) { observer.disconnect(); resolve(); }
+        });
+        observer.observe(document.body, { subtree: true, childList: true, attributes: true });
+        setTimeout(() => { observer.disconnect(); reject(new Error("This session never started leaving")); }, 5000);
+      });
+      document.querySelector('${visible} [aria-label="New tab"]').click();
+      await started;
+      document.querySelector('${visible} [data-sidebar="left"] [data-sidebar-item-id="${sessionId}"] [data-tree-primary]').click();
+    })()`);
+    // Back and settled, whichever way it came back.
+    await app.waitFor(
+      `!!document.querySelector('${thisSessionTab}') && !document.querySelector('${right} [data-sidebar-tab-leaving]') && !document.querySelector('${right} .sidebar-tab-slot-leaving, ${right} .sidebar-strip-folding, ${right} .sidebar-tab-slot-arriving')`,
+      { label: "This session back, settled" },
+    );
+    const back = await app.eval<{ left: boolean; same: boolean }>(
+      `({ left: window.__quickChange.left, same: document.querySelector('${thisSessionTab}') === window.__quickChange.tab })`,
+    );
+    // Back while it was still leaving: it must be the same tab, reversed.
+    if (!back.left) {
+      expect(back.same, "the tab back is the one that was leaving").toBe(true);
+      reversed = true;
+    }
+  }
   expect(app.getRendererErrors()).toEqual([]);
 });

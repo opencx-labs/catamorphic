@@ -45,12 +45,19 @@ if (command === "login") {
   const outcome = path.dirname(path.dirname(home));
   for (;;) {
     const approve = path.join(outcome, "approve");
-    if (fs.existsSync(approve)) {
+    // A test's write can be seen created but still empty: the approval
+    // counts once its token has landed, as a real login issues one.
+    const token = (() => {
+      try {
+        return fs.readFileSync(approve, "utf8").trim();
+      } catch {
+        return "";
+      }
+    })();
+    if (token) {
       fs.writeFileSync(
         path.join(home, "auth.json"),
-        JSON.stringify({
-          tokens: { access_token: fs.readFileSync(approve, "utf8").trim() },
-        }),
+        JSON.stringify({ tokens: { access_token: token } }),
         { mode: 0o600 },
       );
       console.log("Successfully logged in");

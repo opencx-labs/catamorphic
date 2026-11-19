@@ -54,24 +54,37 @@ runs:
     # time something loads it, inside whichever test does. Jobs that load it
     # fetch it here instead: from a cache of its own, keyed by its version,
     # and retried, so a GitHub release outage fails setup, not a test.
+    # The cache is saved as soon as the download lands, not when the job
+    # passes: a job whose tests fail still spares every later run the fetch.
     - id: electron
       if: inputs.electron == 'true'
       shell: bash
       run: echo "version=$(node -p "require('./apps/desktop/node_modules/electron/package.json').version")" >> "$GITHUB_OUTPUT"
-    - if: inputs.electron == 'true'
-      uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+    - id: electron-cache
+      if: inputs.electron == 'true'
+      uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
       with:
         path: |
           ~/.cache/electron
           ~/Library/Caches/electron
         key: electron-v1-${{ runner.os }}-${{ runner.arch }}-${{ steps.electron.outputs.version }}
+    # GitHub's release downloads have answered 504 for minutes at a time:
+    # five tries spread over about six minutes, then setup fails.
     - name: Install Electron
       if: inputs.electron == 'true'
       shell: bash
       run: |
-        for attempt in 1 2 3; do
+        for attempt in 1 2 3 4 5; do
           node apps/desktop/node_modules/electron/install.js && exit 0
           echo "Electron download failed (attempt $attempt)" >&2
-          if [ "$attempt" -lt 3 ]; then sleep $((attempt * 15)); fi
+          if [ "$attempt" -lt 5 ]; then sleep $((attempt * 30)); fi
         done
         exit 1
+    - if: inputs.electron == 'true' && steps.electron-cache.outputs.cache-hit != 'true'
+      uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+      continue-on-error: true
+      with:
+        path: |
+          ~/.cache/electron
+          ~/Library/Caches/electron
+        key: electron-v1-${{ runner.os }}-${{ runner.arch }}-${{ steps.electron.outputs.version }}

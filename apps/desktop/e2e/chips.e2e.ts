@@ -666,9 +666,21 @@ it("anchors each group to its own chip through switching and wrapped reflow", as
   );
   const panel =
     "document.querySelector('[data-testid=\"chip-group-members\"]:not([inert])')";
+  // A sentence an action reports takes a line below the chips for a few
+  // seconds. As it goes, the bottom-anchored chips and their group drop
+  // by that line: a point measured before then misses what it measured.
+  // Native presses are measured once the rail holds no such sentence and
+  // the dock is still.
+  const still = `!rail().querySelector('[role="status"]')?.textContent&&!dock().getAnimations({subtree:true}).some(a=>a.playState==='running'&&a.effect?.getTiming().iterations!==Infinity)`;
+  // A member of the open group, once its panel rests against its chip.
+  const member = (id: string) =>
+    wait<{ x: number; y: number }>(
+      `const trigger=chip(${JSON.stringify(id)})?.querySelector('[data-chip-main]'),list=${panel},button=list?.querySelector('[data-member-main]');if(!trigger||!button||!(${still})||trigger.getAttribute('aria-controls')!==list.id||list.getAnimations().some(a=>a.playState==='running'))return false;const a=trigger.getBoundingClientRect(),p=list.getBoundingClientRect();if(Math.abs(a.top-p.bottom-8)>=2)return false;const r=button.getBoundingClientRect();return{x:r.left+20,y:r.top+r.height/2}`,
+      { label: `a member of ${id}, its group at rest` },
+    );
   const clickChip = async (id: string) => {
     const point = await wait<{ x: number; y: number }>(
-      `const button=chip(${JSON.stringify(id)})?.querySelector('[data-chip-main]');if(!button||rail().getAnimations({subtree:true}).some(a=>a.playState==='running'&&a.effect?.getTiming().iterations!==Infinity))return false;const r=button.getBoundingClientRect();return {x:r.left+r.width/2,y:r.top+r.height/2}`,
+      `const button=chip(${JSON.stringify(id)})?.querySelector('[data-chip-main]');if(!button||!(${still}))return false;const r=button.getBoundingClientRect();return {x:r.left+r.width/2,y:r.top+r.height/2}`,
     );
     await app.movePointer(point);
     await app.clickPointer(point);
@@ -716,9 +728,7 @@ it("anchors each group to its own chip through switching and wrapped reflow", as
         ),
       );
     // A member's menu sits above the group and its shield, never underneath it.
-    const point = await wait<{ x: number; y: number }>(
-      `const button=${panel}?.querySelector('[data-member-main]');if(!button)return false;const r=button.getBoundingClientRect();return{x:r.left+20,y:r.top+r.height/2}`,
-    );
+    const point = await member("notes-group");
     for (const type of ["mousePressed", "mouseReleased"])
       await app.cdp("Input.dispatchMouseEvent", {
         type,
@@ -732,7 +742,8 @@ it("anchors each group to its own chip through switching and wrapped reflow", as
     );
     await app.press("Escape");
     await app.waitFor("!document.querySelector('[data-menu-shield]')");
-    await app.clickPointer(point);
+    // The same member, where it is now.
+    await app.clickPointer(await member("notes-group"));
     await wait(
       `return rail().querySelector('[role="status"]')?.textContent==='Opened note-0';`,
     );
@@ -763,9 +774,7 @@ it("anchors each group to its own chip through switching and wrapped reflow", as
     );
     await clickChip("notes-group");
     await aligned("notes-group");
-    const memberPoint = await wait<{ x: number; y: number }>(
-      `const button=${panel}?.querySelector('[data-member-main]');if(!button)return false;const r=button.getBoundingClientRect();return{x:r.left+20,y:r.top+r.height/2}`,
-    );
+    const memberPoint = await member("notes-group");
     for (const type of ["mousePressed", "mouseReleased"])
       await app.cdp("Input.dispatchMouseEvent", {
         type,
