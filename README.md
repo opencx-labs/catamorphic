@@ -343,9 +343,10 @@ enables an exact deployed workflow with its trigger, Environment, agent, and
 connection requirements. Connecting an account may complete that chosen flow;
 it never silently enables every compatible automation. A workflow also
 declares the project permissions and the store paths it reads or writes
-(`documents`), and consent lists both: a project automation's runs reach
-exactly those paths of the store, a member's the part of them the member
-does ([0335](docs/decisions/0335-workflows-declare-their-store-documents.md)).
+(`documents`), and consent lists both. Every run reaches only those paths
+of the store, whoever starts it: a project automation exactly those, any
+other run the part of them its caller reaches
+([0335](docs/decisions/0335-workflows-declare-their-store-documents.md)).
 
 Project automations follow the published program: each revision of `main`
 that builds and asks for no new authority goes live by itself, after the

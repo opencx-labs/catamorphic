@@ -124,15 +124,16 @@ who holds every declared permission can turn the workflow on; a member's
 automation pauses when its member loses one, and a project automation keeps
 what was consented to.
 
-Declare the project store paths its runs read or write in \`documents\`
+Declare every project store path its runs read or write in \`documents\`
 (\`[{ path: "store/cursors/", access: "write" }]\`; a path ending in \`/\` is a
-folder, \`write\` also reads), written out as literals. An automation's run
-reaches only those of the store. A project automation reaches exactly them,
-and turning it on needs someone who reaches them all; a member's own
-automation reaches the part of them its member reaches at each run. A child
-workflow reaches what its parent holds of its own declaration. Chats the run
-delivers into never get them. A run someone starts directly, with no
-enablement, keeps its caller's own store access.
+folder, \`write\` also reads), written out as literals. A run reaches only
+those of the store, whoever starts it. A project automation reaches exactly
+them, and turning it on needs someone who reaches them all; any other run (a
+member's own automation, a run started by hand, an agent's tool call, a
+watcher, a session artifact's run) reaches the part of them its caller
+reaches at that run. A child workflow reaches what its parent holds of its
+own declaration. Chats the run delivers into never get them. Only the host's
+root identity is not narrowed.
 
 The enablement's Environment places the workflow's runs, nothing else. A chat
 a workflow delivers to is placed by its own Environment: the \`environment\`

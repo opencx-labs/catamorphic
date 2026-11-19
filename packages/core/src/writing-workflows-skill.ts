@@ -199,18 +199,22 @@ holds every permission can turn it on. A member's automation keeps them only
 while that member does; a project automation keeps what was consented to.
 Declare the fewest that work; see \`workflow-lifecycle\`.
 
-The project store works the same way. An automation's run reaches only the
-\`store/\` paths its workflow declares in an inline \`documents\` array, such
-as \`documents: [{ path: "store/github-polling/", access: "write" }]\` for a
+The project store works the same way. A run reaches only the \`store/\` paths
+its workflow declares in an inline \`documents\` array, whoever starts it (an
+automation, a person by hand, an agent's tool call, a watcher), so declare
+every store path the workflow reads or writes, such as
+\`documents: [{ path: "store/github-polling/", access: "write" }]\` for a
 cursor it reads and rewrites. A path ending in \`/\` is a folder and covers
 what is under it (\`store/a/\` never covers \`store/ab\`); any other path is
 one document; \`write\` also reads. Write each entry out with plain string
 literals, never a variable or a template with values: the paths a person
 approves are the paths in the source. Turning the workflow on shows them
 beside its permissions. A project automation's runs reach exactly those
-paths, and only someone who reaches them can turn it on for the project; a
-member's own automation reaches the part of them that member does. A store
-call outside the list fails with \`Not authorized\`.
+paths, and only someone who reaches them can turn it on for the project; any
+other run reaches the part of them its caller does. A store call outside the
+list fails with \`Not authorized\`. Only the host's root identity (a desktop's
+own projects) is not narrowed, so a run you start there passing does not show
+it works for members.
 
 ## Project trigger kinds
 
