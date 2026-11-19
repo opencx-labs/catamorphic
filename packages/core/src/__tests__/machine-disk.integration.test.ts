@@ -243,7 +243,9 @@ describe.skipIf(!db)("machine disk (ADR 0335)", () => {
           },
         },
       });
-    await expect(fill(64)).rejects.toThrow(/no room for the 67\.1 MB this work reserves/);
+    await expect(fill(64)).rejects.toThrow(
+      /no room for the 67\.1 MB this work reserves/,
+    );
     await nodes.reportDisk({ lease, disk: report({ free: 20 * GIB }) });
     await expect(fill(64)).resolves.toMatchObject({ status: "active" });
     // Under the critical floor nothing more starts, and its words name the
