@@ -219,6 +219,73 @@ it("stale animation completion cannot undo later navigation or resize", () => {
     }),
   ).toBe(resized);
 });
+describe("a chat's chip-only surfaces", () => {
+  const page = (localId: string, extra: object = {}) => ({
+    localId,
+    profileId: "p",
+    initialUrl: "https://example.com/",
+    url: "https://example.com/",
+    title: localId,
+    faviconUrl: null,
+    ...extra,
+  });
+  const ws: Workspace = {
+    ...emptyUtilityWorkspace(),
+    chats: [
+      { localId: "c", mode: "tab", sessionId: "s" },
+      { localId: "other", mode: "partial", sessionId: "s2" },
+    ],
+    browsers: [
+      page("tab", { chatLocalId: "c" }),
+      page("chip", { chatLocalId: "c", background: true }),
+      page("kept", { chatLocalId: "other", background: true }),
+    ],
+    editors: [
+      {
+        localId: "clean",
+        filePath: "a.md",
+        dirty: false,
+        chatLocalId: "c",
+        background: true,
+      },
+      {
+        localId: "dirty",
+        filePath: "b.md",
+        dirty: true,
+        chatLocalId: "c",
+        background: true,
+      },
+    ],
+    activeTabKey: "chat:c",
+  };
+
+  it("go with their chat when it closes", () => {
+    const closed = transitionWorkspace(ws, { type: "close", key: "chat:c" });
+    expect(closed.browsers.map((browser) => browser.localId)).toEqual([
+      "tab",
+      "kept",
+    ]);
+    // Unsaved edits come back as a tab of their own.
+    expect(closed.editors).toEqual([
+      { localId: "dirty", filePath: "b.md", dirty: true },
+    ]);
+    expect(orderedTabKeys(closed)).toContain("editor:dirty");
+  });
+
+  it("are dropped from a snapshot whose chat is gone", () => {
+    const restored = hydrateWorkspace(
+      serializeWorkspace({
+        ...ws,
+        chats: ws.chats.filter((chat) => chat.localId !== "c"),
+      }),
+    );
+    expect(restored?.browsers.map((browser) => browser.localId)).toEqual([
+      "tab",
+      "kept",
+    ]);
+  });
+});
+
 describe("closing from a tab's menu", () => {
   const page = (localId: string, chatLocalId?: string) => ({
     localId,

@@ -68,6 +68,8 @@ export interface AppPrefs {
   /** Workspace tabs can live above the content or in the sidebar. */
   tabPlacement: "top" | "sidebar";
   tabAlignment: "start" | "center";
+  /** A full top bar scrolls, or shrinks every tab to fit (Chrome). */
+  tabOverflow: "scroll" | "shrink";
   headerPlacement: "top" | "sidebar";
   /**
    * Framed content insets the workspace as a rounded, bordered window;
@@ -159,6 +161,7 @@ export const DEFAULT_PREFS: AppPrefs = {
   sidebarOpen: true,
   tabPlacement: "top",
   tabAlignment: "start",
+  tabOverflow: "scroll",
   headerPlacement: "top",
   contentFrame: false,
   sidebarDividers: false,
@@ -268,6 +271,7 @@ export function normalizePrefs(raw: unknown): AppPrefs {
         : DEFAULT_PREFS.sidebarOpen,
     tabPlacement: record.tabPlacement === "sidebar" ? "sidebar" : "top",
     tabAlignment: record.tabAlignment === "center" ? "center" : "start",
+    tabOverflow: record.tabOverflow === "shrink" ? "shrink" : "scroll",
     headerPlacement: record.headerPlacement === "sidebar" ? "sidebar" : "top",
     contentFrame: record.contentFrame === true,
     sidebarDividers: record.sidebarDividers === true,

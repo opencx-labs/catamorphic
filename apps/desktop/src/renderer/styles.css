@@ -1796,6 +1796,28 @@ kbd {
   mask-image: linear-gradient(to left, var(--tab-title-end) 12px, #000 28px);
   transition: --tab-title-end 150ms var(--ease-standard);
 }
+/* Shrink to fit (the "When tabs fill the bar" setting): a tab narrowed
+   past its title's room is its icon, as Chrome's narrowest tabs are, and
+   its hover card names it. The title is hidden in place, so the tab's
+   size does not change with it. Only the tab in front keeps its close
+   button, which takes the icon's place while pointed at. */
+.workspace-tab[data-tab-narrow] .workspace-tab-title {
+  visibility: hidden;
+}
+.workspace-tab[data-tab-narrow] .workspace-tab-label > span:first-child {
+  translate: var(--tab-narrow-shift, 0) 0;
+}
+.workspace-tab[data-tab-narrow]:not([data-tab-active]) .workspace-tab-close {
+  display: none;
+}
+.workspace-tab[data-tab-narrow][data-tab-active] .workspace-tab-close {
+  inset-inline-start: calc(var(--tab-narrow-shift, 0px) + 7px);
+}
+.workspace-tab[data-tab-narrow][data-tab-active]:hover
+  .workspace-tab-label
+  > span:first-child {
+  opacity: 0;
+}
 [data-tab-orientation="horizontal"]:not([data-tab-dragging])
   .workspace-tab:hover
   .workspace-tab-close,

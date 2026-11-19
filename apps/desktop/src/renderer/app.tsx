@@ -7825,6 +7825,7 @@ export function App({
   const workspaceTabBar = (
     <WorkspaceTabBar
       alignment={prefs?.tabAlignment ?? "start"}
+      overflow={prefs?.tabOverflow ?? "scroll"}
       tabs={allTabs}
       activeKey={focusedTabKey}
       secondaryKey={splitCompanionKey}

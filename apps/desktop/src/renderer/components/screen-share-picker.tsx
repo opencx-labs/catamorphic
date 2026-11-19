@@ -220,10 +220,12 @@ function ScreenSharePicker({
       (entry) => ids?.get(entry.localId) === request.guestId,
     );
     // Only pages of the asking page's profile and session: an incognito
-    // page shares, and is shared with, incognito pages alone.
+    // page shares, and is shared with, incognito pages alone. A page kept
+    // only as a chat's chip is no tab, unless it is the one asking.
     return entries
       .filter(
         (entry) =>
+          (!entry.background || entry === asker) &&
           isPage(pageUrl(entry)) &&
           Boolean(entry.incognito) === Boolean(asker?.incognito) &&
           (!asker || entry.profileId === asker.profileId),

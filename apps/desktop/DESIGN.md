@@ -4307,3 +4307,20 @@ answers them itself, shaped as Chrome's, with Firefox's on-device
 translator and Google's CLD3 detector. A pair's model downloads the first
 time a page asks after a click, with the page's own progress, and text
 never leaves the computer (ADR 0320).
+
+### 2026-11-19: A chat's hidden pages close with it, and full tabs can shrink
+
+Closing a tab a chat holds only tucks it behind that chat's chip. Closing
+the chat itself left those pages behind: still loaded, out of sight,
+restored with the window, and listed in a call's "Choose what to share"
+as tabs the person had closed. A chip-only page, shell or note now goes
+with its chat (a note with unsaved edits comes back as a tab), and a saved
+window drops ones whose chat is already gone. The share picker lists the
+strip's tabs, and a chip's page only when it is the one asking.
+
+"When tabs fill the bar" (Settings, Workspace) can now shrink every tab
+to fit, as Chrome does, instead of scrolling the bar. Tabs keep their size
+until the bar is full, then narrow together; one too narrow for its title
+is its icon, named by its hover card, and only the tab in front keeps its
+close button. Pinned tabs keep their size. Past every tab's icon the bar
+still scrolls.
