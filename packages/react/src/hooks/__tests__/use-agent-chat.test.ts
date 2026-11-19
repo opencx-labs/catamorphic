@@ -791,13 +791,15 @@ describe("useAgentChat commands", () => {
     expect(events.filter((event) => event.startsWith("send:"))).toHaveLength(2);
   });
 
-  it("off screen, keeps loading past a snapshot read before a sent message, until one reaches its receipt", async () => {
+  it("off screen, keeps reading past a snapshot read before a sent message, until it reaches its receipt", async () => {
     // The first snapshot of a new session is read before the message is
     // accepted and answered only after the receipt has been handled, so the
     // refresh the receipt asks for is that same load. It shows nothing
-    // running.
+    // running. What follows is read as the events it missed, never as the
+    // whole snapshot again.
     let current = snapshot();
     let snapshots = 0;
+    const missedAfter: number[] = [];
     let getRead = () => {};
     const readBeforeSend = new Promise<void>((resolve) => {
       getRead = resolve;
@@ -818,6 +820,33 @@ describe("useAgentChat commands", () => {
           await released;
         }
         return HttpResponse.json(sessionDetail(read));
+      }),
+      http.get(apiUrl(`${BASE}/events/missed`), ({ request }) => {
+        const after = Number(new URL(request.url).searchParams.get("after"));
+        missedAfter.push(after);
+        return HttpResponse.json({
+          messages:
+            after < current.sequence
+              ? [
+                  {
+                    type: "events",
+                    events: [
+                      stored(2, {
+                        type: "item.added",
+                        item: userMessage("m1", 2, "t1", "Work slowly"),
+                      }),
+                      stored(3, {
+                        type: "turn.changed",
+                        turn: turn("t1", 1, {
+                          status: "running",
+                          inputItemId: "m1",
+                        }),
+                      }),
+                    ],
+                  },
+                ]
+              : [],
+        });
       }),
       http.post(apiUrl(`${BASE}/commands`), async ({ request }) => {
         const body = (await request.json()) as Record<string, unknown>;
@@ -852,7 +881,10 @@ describe("useAgentChat commands", () => {
     await waitFor(() => expect(result.current.isWorking).toBe(true), {
       timeout: 4_000,
     });
-    expect(snapshots).toBeGreaterThan(1);
+    expect(missedAfter[0]).toBe(snapshot().sequence);
+    // The receipt's own refresh may read the snapshot once more; following
+    // the turn never does.
+    expect(snapshots).toBeLessThanOrEqual(2);
     await waitFor(() => expect(result.current.pending).toEqual([]));
   });
 

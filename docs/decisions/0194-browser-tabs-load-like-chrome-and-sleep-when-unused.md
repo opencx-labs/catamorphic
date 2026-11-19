@@ -1,6 +1,6 @@
 # 0194 — Browser tabs load like Chrome's and sleep when unused
 
-- **Status:** Accepted (amended by 0203)
+- **Status:** Accepted (amended by 0203; a sleeping tab mounts nothing by [0338](0338-what-is-out-of-sight-is-data.md))
 - **Date:** 2026-10-01
 
 > Amended by [0203](0203-work-runs-chrome-extensions-from-the-web-store.md):

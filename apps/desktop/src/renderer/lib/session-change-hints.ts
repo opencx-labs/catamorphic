@@ -30,17 +30,34 @@ export function readsChats(queryKey: readonly unknown[]): boolean {
  * not an invalidation: the sidebar's chat lists follow the hints on their
  * own, reading only their first page.) Mount once per window, beside its
  * query client.
+ *
+ * A window nobody can see (covered, minimised) reads nothing for a hint:
+ * every chat's turn hints several times a second, and each read is a
+ * request to the main process and a render here. It reads once as it
+ * shows again, and only if it dropped a hint (ADR 0249).
  */
 export function useSessionChangeHints(): void {
   const client = useQueryClient();
-  useEffect(
-    () =>
-      desktopApi.onSessionsChanged(() => {
-        void client.refetchQueries({
-          type: "active",
-          predicate: (query) => readsChats(query.queryKey),
-        });
-      }),
-    [client],
-  );
+  useEffect(() => {
+    let missed = false;
+    const read = () =>
+      void client.refetchQueries({
+        type: "active",
+        predicate: (query) => readsChats(query.queryKey),
+      });
+    const hinted = desktopApi.onSessionsChanged(() => {
+      if (document.hidden) missed = true;
+      else read();
+    });
+    const shown = () => {
+      if (document.hidden || !missed) return;
+      missed = false;
+      read();
+    };
+    document.addEventListener("visibilitychange", shown);
+    return () => {
+      hinted();
+      document.removeEventListener("visibilitychange", shown);
+    };
+  }, [client]);
 }

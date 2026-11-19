@@ -2274,6 +2274,20 @@ export const SessionEventsQuerySchema = z.object({
   after: z.coerce.number().int().nonnegative().optional(),
 });
 
+export const SessionMissedEventsQuerySchema = z.object({
+  /** The last sequence the reader applied. */
+  after: z.coerce.number().int().nonnegative(),
+});
+
+/**
+ * What a reader has missed since its sequence, read once: the messages a
+ * stream opens with (the events since, or a `reset` with a fresh snapshot
+ * when they are too many to replay); empty when it is current.
+ */
+export const SessionMissedEventsSchema = z.object({
+  messages: z.array(SessionStreamMessageSchema),
+});
+
 export const SessionMirrorQuerySchema = z.object({
   /** The copy's last sequence; omitted for a copy that does not exist yet. */
   after: z.coerce.number().int().nonnegative().optional(),

@@ -47,7 +47,9 @@ function serveSession({
     signal: AbortSignal;
   }> = [];
   let snapshots = 0;
+  let missed = 0;
   let currentTitle = title;
+  let missedSupported = true;
   server.use(
     http.get(apiUrl(base), () => {
       snapshots += 1;
@@ -69,12 +71,40 @@ function serveSession({
       streams.push({ stream, signal: request.signal });
       return stream.response();
     }),
+    // What a reader without a stream has missed: here, a rename.
+    http.get(apiUrl(`${base}/events/missed`), ({ request }) => {
+      if (!missedSupported)
+        return HttpResponse.json({ error: "Not found" }, { status: 404 });
+      missed += 1;
+      const after = Number(new URL(request.url).searchParams.get("after"));
+      return HttpResponse.json({
+        messages:
+          currentTitle !== title && after < 4
+            ? [
+                {
+                  type: "events",
+                  events: [
+                    stored(4, {
+                      type: "session.changed",
+                      session: { title: currentTitle },
+                    }),
+                  ],
+                },
+              ]
+            : [],
+      });
+    }),
   );
   return {
     streams,
     snapshots: () => snapshots,
+    missed: () => missed,
     rename: (value: string) => {
       currentTitle = value;
+    },
+    /** A server from before this read: it answers 404. */
+    withoutMissedEvents: () => {
+      missedSupported = false;
     },
   };
 }
@@ -228,7 +258,7 @@ describe("useAgentSessionInfos", () => {
     queryClient.clear();
   });
 
-  it("polls while stream slots are full, then shares the existing queued-stream recovery", async () => {
+  it("reads what it missed while stream slots are full, never the snapshot again, then shares the existing queued-stream recovery", async () => {
     const served = serveSession();
     const slots = Array.from({ length: MAX_SESSION_STREAMS }, () =>
       acquireStreamSlot(streamSlotKey(TEST_API_BASE_URL), () => {}),
@@ -250,8 +280,40 @@ describe("useAgentSessionInfos", () => {
           "Changed while waiting for a slot",
         ),
       );
+      expect(served.missed()).toBeGreaterThan(0);
+      expect(served.snapshots()).toBe(1);
       act(() => slots[0]?.release());
       await waitFor(() => expect(served.streams).toHaveLength(1));
+      expect(view.result.current.error).toBeNull();
+    } finally {
+      view.unmount();
+      for (const slot of slots) slot.release();
+    }
+  });
+
+  it("reads the snapshot again from a server that predates the missed-events read", async () => {
+    const served = serveSession();
+    served.withoutMissedEvents();
+    const slots = Array.from({ length: MAX_SESSION_STREAMS }, () =>
+      acquireStreamSlot(streamSlotKey(TEST_API_BASE_URL), () => {}),
+    );
+    const view = renderHookWithProviders(() =>
+      useAgentSessionInfos(PROJECT_ID, [SESSION_ID], {
+        live: true,
+        pollIntervalMs: 25,
+      }),
+    );
+    try {
+      await waitFor(() =>
+        expect(view.result.current.sessions[0]?.title).toBe("Older chat"),
+      );
+      served.rename("Changed on an older server");
+      await waitFor(() =>
+        expect(view.result.current.sessions[0]?.title).toBe(
+          "Changed on an older server",
+        ),
+      );
+      expect(served.snapshots()).toBeGreaterThan(1);
       expect(view.result.current.error).toBeNull();
     } finally {
       view.unmount();

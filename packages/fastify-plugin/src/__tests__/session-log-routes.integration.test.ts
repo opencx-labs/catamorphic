@@ -286,6 +286,52 @@ describe("session log routes", () => {
     await resumed.close();
   });
 
+  it("answers what a reader has missed once, without a stream", async () => {
+    const { base, projectId } = await chat("Missed");
+    await command(base, { type: "send", commandId: randomUUID(), text: "one" });
+    const first = await settled(base, 1);
+    const missed = (after: number) =>
+      source.app.inject({
+        method: "GET",
+        url: `${base}/events/missed?after=${after}`,
+      });
+
+    // A reader at the snapshot's sequence has missed nothing.
+    const current = await missed(first.sequence);
+    expect(current.statusCode).toBe(200);
+    expect(current.json()).toEqual({ messages: [] });
+
+    await command(base, { type: "send", commandId: randomUUID(), text: "two" });
+    const second = await settled(base, 2);
+    const behind = await missed(first.sequence);
+    expect(behind.statusCode).toBe(200);
+    const { messages } = behind.json() as {
+      messages: Array<{
+        type: string;
+        events?: Array<{ sequence: number }>;
+      }>;
+    };
+    // The same message a stream opens with: the events since, gapless.
+    expect(messages.map((message) => message.type)).toEqual(["events"]);
+    const sequences = messages[0]?.events?.map((event) => event.sequence);
+    expect(sequences?.[0]).toBe(first.sequence + 1);
+    expect(sequences?.at(-1)).toBe(second.sequence);
+    expect(sequences).toEqual(
+      sequences?.map((_, index) => first.sequence + 1 + index),
+    );
+
+    const unreachable = await source.app.inject({
+      method: "GET",
+      url: `/api/projects/${projectId}/agent/sessions/${randomUUID()}/events/missed?after=0`,
+    });
+    expect(unreachable.statusCode).toBe(404);
+    const cursorless = await source.app.inject({
+      method: "GET",
+      url: `${base}/events/missed`,
+    });
+    expect(cursorless.statusCode).toBe(400);
+  });
+
   it("refuses a stream of a session the caller cannot reach", async () => {
     const { projectId } = await chat("Missing");
     const response = await fetch(

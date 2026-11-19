@@ -2749,22 +2749,42 @@ export function App({
 
   const onBrowserState = useCallback(
     (localId: string, state: BrowserPageState) =>
-      updateWorkspace((ws) => ({
-        ...ws,
-        browsers: ws.browsers.map((browser) =>
-          browser.localId === localId
-            ? {
-                ...browser,
-                url: state.url || browser.url,
-                title: state.title || browser.title,
-                faviconUrl: state.faviconUrl ?? browser.faviconUrl,
-                ...(state.history !== undefined
-                  ? { history: state.history ?? undefined }
-                  : {}),
-              }
-            : browser,
-        ),
-      })),
+      updateWorkspace((ws) => {
+        const browser = ws.browsers.find((item) => item.localId === localId);
+        if (!browser) return ws;
+        const url = state.url || browser.url;
+        const title = state.title || browser.title;
+        const faviconUrl = state.faviconUrl ?? browser.faviconUrl;
+        const history =
+          state.history !== undefined
+            ? (state.history ?? undefined)
+            : browser.history;
+        // A page reports on every navigation, title, icon and history
+        // read, and most reports say what its tab already holds. One that
+        // changes nothing must not render the window again.
+        if (
+          url === browser.url &&
+          title === browser.title &&
+          faviconUrl === browser.faviconUrl &&
+          (history === browser.history ||
+            JSON.stringify(history) === JSON.stringify(browser.history))
+        )
+          return ws;
+        return {
+          ...ws,
+          browsers: ws.browsers.map((item) =>
+            item === browser
+              ? {
+                  ...item,
+                  url,
+                  title,
+                  faviconUrl,
+                  ...(state.history !== undefined ? { history } : {}),
+                }
+              : item,
+          ),
+        };
+      }),
     [updateWorkspace],
   );
 
@@ -2974,6 +2994,7 @@ export function App({
       const commands = browserCommandsRef.current.get(localId);
       return commands ? commands.sleepBlocker() : "shared";
     },
+    guestFor: (localId) => browserGuestIdsRef.current.get(localId) ?? null,
   });
   const wakeTab = tabSleep.wake;
   const tabAsleepRef = useRef(tabSleep.asleep);
@@ -8090,15 +8111,22 @@ export function App({
                       (item) => browserTabKey(item.localId) === request.key,
                     );
                     if (!browser) return;
+                    const navigate = browserNavigatorsRef.current.get(
+                      browser.localId,
+                    );
+                    // A sleeping tab has no page to send there: it wakes
+                    // on the renamed file, not on the way back it saved.
+                    if (!navigate) tabSleep.discard(browser.localId);
                     updateWorkspace((ws) => ({
                       ...ws,
-                      browsers: ws.browsers.map((item) =>
-                        item.localId === browser.localId
-                          ? { ...item, url, initialUrl: url }
-                          : item,
-                      ),
+                      browsers: ws.browsers.map((item) => {
+                        if (item.localId !== browser.localId) return item;
+                        if (navigate) return { ...item, url, initialUrl: url };
+                        const { history: _saved, ...rest } = item;
+                        return { ...rest, url, initialUrl: url };
+                      }),
                     }));
-                    browserNavigatorsRef.current.get(browser.localId)?.(url);
+                    navigate?.(url);
                   },
                 }
               }
@@ -8592,164 +8620,169 @@ export function App({
                       ))}
 
                     {/* Browser tabs stay mounted while hidden — unmounting a
-                  webview would reload the page on every tab switch. */}
-                    {workspace.browsers.map((browser) => (
-                      <SurfacePane
-                        key={browser.localId}
-                        label={browser.label || browser.title || "Page"}
-                        onDismiss={() =>
-                          closeTab(browserTabKey(browser.localId))
-                        }
-                        className={paneClass(browserTabKey(browser.localId))}
-                        style={paneStyle(browserTabKey(browser.localId))}
-                        {...paneFocusProps(browserTabKey(browser.localId))}
-                      >
-                        {floatingBar(browserTabKey(browser.localId))}
-                        <BrowserScreen
-                          profileId={browser.profileId}
-                          projectId={projectId}
-                          projectName={
-                            projects.find((item) => item.id === projectId)?.name
+                  webview would reload the page on every tab switch. A
+                  sleeping tab (ADR 0194) has no page to keep: it is data
+                  until it is shown, and mounts nothing. */}
+                    {workspace.browsers.map((browser) =>
+                      tabSleep.asleep(browser.localId) ? null : (
+                        <SurfacePane
+                          key={browser.localId}
+                          label={browser.label || browser.title || "Page"}
+                          onDismiss={() =>
+                            closeTab(browserTabKey(browser.localId))
                           }
-                          // Remounts (project/profile switches) resume at the
-                          // last known URL, not the tab's original one.
-                          initialUrl={browser.url || browser.initialUrl}
-                          history={browser.history}
-                          incognito={browser.incognito}
-                          surfaceKey={browserTabKey(browser.localId)}
-                          active={
-                            runtime.visible &&
-                            browser.localId === activeBrowserTabId
-                          }
-                          toolbarActive={
-                            runtime.visible &&
-                            browser.localId === chromeBrowserId
-                          }
-                          integratedToolbar={
-                            tabsInSidebar &&
-                            viewSlots[browserTabKey(browser.localId)] !==
-                              "floating"
-                          }
-                          toolbarHost={browserToolbarHost}
-                          sidebarToolbar={
-                            headerInSidebar &&
-                            viewSlots[browserTabKey(browser.localId)] !==
-                              "floating"
-                          }
-                          navigationHost={browserNavigationHost}
-                          onRevealToolbar={() => {
-                            if (!sidebarOpen) {
-                              void updateProfilePrefs({ sidebarOpen: true });
+                          className={paneClass(browserTabKey(browser.localId))}
+                          style={paneStyle(browserTabKey(browser.localId))}
+                          {...paneFocusProps(browserTabKey(browser.localId))}
+                        >
+                          {floatingBar(browserTabKey(browser.localId))}
+                          <BrowserScreen
+                            profileId={browser.profileId}
+                            projectId={projectId}
+                            projectName={
+                              projects.find((item) => item.id === projectId)
+                                ?.name
                             }
-                          }}
-                          visible={
-                            runtime.visible &&
-                            Boolean(viewSlots[browserTabKey(browser.localId)])
-                          }
-                          keepAwake={heldBrowser(browser.localId)}
-                          asleep={tabSleep.asleep(browser.localId)}
-                          onStateChange={(state) =>
-                            onBrowserState(browser.localId, state)
-                          }
-                          onPageClose={() =>
-                            closeTab(browserTabKey(browser.localId), {
-                              final: true,
-                            })
-                          }
-                          onPagePress={focusPaneOnPagePress(
-                            browserTabKey(browser.localId),
-                          )}
-                          onOpenSiteSettings={setSiteSettingsOrigin}
-                          onOpenPasswords={() =>
-                            openPasswords(browser.profileId)
-                          }
-                          onOpenExtensions={() =>
-                            openTab({
-                              kind: "extensions",
-                              name: "extensions",
-                              label: "Extensions",
-                            })
-                          }
-                          onOpenUrl={(url) => openBrowserTab(url)}
-                          previewLinksWithAlt={
-                            prefs?.previewLinksWithAlt ?? true
-                          }
-                          floatingDismissShortcut={
-                            keybindings["dismiss-floating"]
-                          }
-                          onDismissFloating={
-                            workspace.floatingKey ===
-                            browserTabKey(browser.localId)
-                              ? dismissFloating
-                              : undefined
-                          }
-                          onPreviewLink={(url, mode) =>
-                            openBrowserTab(url, {
-                              floating: mode === "floating",
-                              side: mode === "side",
-                              incognito: browser.incognito,
-                            })
-                          }
-                          registerCommands={(commands) => {
-                            if (commands)
-                              browserCommandsRef.current.set(
-                                browser.localId,
-                                commands,
-                              );
-                            else
-                              browserCommandsRef.current.delete(
-                                browser.localId,
-                              );
-                          }}
-                          registerNavigate={(navigate) =>
-                            browserNavigatorsRef.current.set(
-                              browser.localId,
-                              navigate,
-                            )
-                          }
-                          registerHistoryNavigate={(navigate) =>
-                            browserHistoryNavigatorsRef.current.set(
-                              browser.localId,
-                              navigate,
-                            )
-                          }
-                          registerGuest={(guestId) => {
-                            if (guestId === null) {
-                              browserGuestIdsRef.current.delete(
-                                browser.localId,
-                              );
-                            } else {
-                              browserGuestIdsRef.current.set(
-                                browser.localId,
-                                guestId,
-                              );
+                            // Remounts (project/profile switches) resume at the
+                            // last known URL, not the tab's original one.
+                            initialUrl={browser.url || browser.initialUrl}
+                            history={browser.history}
+                            incognito={browser.incognito}
+                            surfaceKey={browserTabKey(browser.localId)}
+                            active={
+                              runtime.visible &&
+                              browser.localId === activeBrowserTabId
                             }
-                            reportExtensionTabsRef.current();
-                          }}
-                          onUnsplit={
-                            isSplitSlot(browserTabKey(browser.localId))
-                              ? () =>
-                                  openSurface(
-                                    browserTabKey(browser.localId),
-                                    "tab",
-                                  )
-                              : undefined
-                          }
-                        />
-                        <AgentControlOverlay
-                          kind="page"
-                          active={Boolean(browser.agentControlled)}
-                          onTakeOver={() =>
-                            takeOverSurface(browserTabKey(browser.localId))
-                          }
-                          onGoToChat={
-                            browser.chatLocalId
-                              ? () => goToChat(browser.chatLocalId as string)
-                              : undefined
-                          }
-                        />
-                      </SurfacePane>
-                    ))}
+                            toolbarActive={
+                              runtime.visible &&
+                              browser.localId === chromeBrowserId
+                            }
+                            integratedToolbar={
+                              tabsInSidebar &&
+                              viewSlots[browserTabKey(browser.localId)] !==
+                                "floating"
+                            }
+                            toolbarHost={browserToolbarHost}
+                            sidebarToolbar={
+                              headerInSidebar &&
+                              viewSlots[browserTabKey(browser.localId)] !==
+                                "floating"
+                            }
+                            navigationHost={browserNavigationHost}
+                            onRevealToolbar={() => {
+                              if (!sidebarOpen) {
+                                void updateProfilePrefs({ sidebarOpen: true });
+                              }
+                            }}
+                            visible={
+                              runtime.visible &&
+                              Boolean(viewSlots[browserTabKey(browser.localId)])
+                            }
+                            keepAwake={heldBrowser(browser.localId)}
+                            resume={tabSleep.resume(browser.localId)}
+                            onStateChange={(state) =>
+                              onBrowserState(browser.localId, state)
+                            }
+                            onPageClose={() =>
+                              closeTab(browserTabKey(browser.localId), {
+                                final: true,
+                              })
+                            }
+                            onPagePress={focusPaneOnPagePress(
+                              browserTabKey(browser.localId),
+                            )}
+                            onOpenSiteSettings={setSiteSettingsOrigin}
+                            onOpenPasswords={() =>
+                              openPasswords(browser.profileId)
+                            }
+                            onOpenExtensions={() =>
+                              openTab({
+                                kind: "extensions",
+                                name: "extensions",
+                                label: "Extensions",
+                              })
+                            }
+                            onOpenUrl={(url) => openBrowserTab(url)}
+                            previewLinksWithAlt={
+                              prefs?.previewLinksWithAlt ?? true
+                            }
+                            floatingDismissShortcut={
+                              keybindings["dismiss-floating"]
+                            }
+                            onDismissFloating={
+                              workspace.floatingKey ===
+                              browserTabKey(browser.localId)
+                                ? dismissFloating
+                                : undefined
+                            }
+                            onPreviewLink={(url, mode) =>
+                              openBrowserTab(url, {
+                                floating: mode === "floating",
+                                side: mode === "side",
+                                incognito: browser.incognito,
+                              })
+                            }
+                            registerCommands={(commands) => {
+                              if (commands)
+                                browserCommandsRef.current.set(
+                                  browser.localId,
+                                  commands,
+                                );
+                              else
+                                browserCommandsRef.current.delete(
+                                  browser.localId,
+                                );
+                            }}
+                            registerNavigate={(navigate) =>
+                              browserNavigatorsRef.current.set(
+                                browser.localId,
+                                navigate,
+                              )
+                            }
+                            registerHistoryNavigate={(navigate) =>
+                              browserHistoryNavigatorsRef.current.set(
+                                browser.localId,
+                                navigate,
+                              )
+                            }
+                            registerGuest={(guestId) => {
+                              if (guestId === null) {
+                                browserGuestIdsRef.current.delete(
+                                  browser.localId,
+                                );
+                              } else {
+                                browserGuestIdsRef.current.set(
+                                  browser.localId,
+                                  guestId,
+                                );
+                              }
+                              reportExtensionTabsRef.current();
+                            }}
+                            onUnsplit={
+                              isSplitSlot(browserTabKey(browser.localId))
+                                ? () =>
+                                    openSurface(
+                                      browserTabKey(browser.localId),
+                                      "tab",
+                                    )
+                                : undefined
+                            }
+                          />
+                          <AgentControlOverlay
+                            kind="page"
+                            active={Boolean(browser.agentControlled)}
+                            onTakeOver={() =>
+                              takeOverSurface(browserTabKey(browser.localId))
+                            }
+                            onGoToChat={
+                              browser.chatLocalId
+                                ? () => goToChat(browser.chatLocalId as string)
+                                : undefined
+                            }
+                          />
+                        </SurfacePane>
+                      ),
+                    )}
 
                     {/* Terminals stay mounted while hidden — unmounting kills
                   the shell. Editors likewise, preserving undo history,
@@ -9273,99 +9306,105 @@ export function App({
                     />
                   ) : workspace.browsers.length > 0 ? (
                     <div className="relative flex min-h-0 flex-1 flex-col">
-                      {workspace.browsers.map((browser) => (
-                        <SurfacePane
-                          key={browser.localId}
-                          label={browser.label || browser.title || "Page"}
-                          onDismiss={() =>
-                            closeTab(browserTabKey(browser.localId))
-                          }
-                          className={paneClass(browserTabKey(browser.localId))}
-                          style={paneStyle(browserTabKey(browser.localId))}
-                          {...paneFocusProps(browserTabKey(browser.localId))}
-                        >
-                          <BrowserScreen
-                            profileId={browser.profileId}
-                            projectId={null}
-                            floatingDismissShortcut={
-                              keybindings["dismiss-floating"]
+                      {workspace.browsers.map((browser) =>
+                        tabSleep.asleep(browser.localId) ? null : (
+                          <SurfacePane
+                            key={browser.localId}
+                            label={browser.label || browser.title || "Page"}
+                            onDismiss={() =>
+                              closeTab(browserTabKey(browser.localId))
                             }
-                            initialUrl={browser.url || browser.initialUrl}
-                            history={browser.history}
-                            incognito={browser.incognito}
-                            surfaceKey={browserTabKey(browser.localId)}
-                            active={
-                              runtime.visible &&
-                              browser.localId === activeBrowserTabId
-                            }
-                            visible={
-                              runtime.visible &&
-                              Boolean(viewSlots[browserTabKey(browser.localId)])
-                            }
-                            keepAwake={heldBrowser(browser.localId)}
-                            asleep={tabSleep.asleep(browser.localId)}
-                            onStateChange={(state) =>
-                              onBrowserState(browser.localId, state)
-                            }
-                            onPageClose={() =>
-                              closeTab(browserTabKey(browser.localId), {
-                                final: true,
-                              })
-                            }
-                            onPagePress={focusPaneOnPagePress(
+                            className={paneClass(
                               browserTabKey(browser.localId),
                             )}
-                            onOpenSiteSettings={setSiteSettingsOrigin}
-                            onOpenPasswords={() =>
-                              openPasswords(browser.profileId)
-                            }
-                            onOpenExtensions={() =>
-                              openTab({
-                                kind: "extensions",
-                                name: "extensions",
-                                label: "Extensions",
-                              })
-                            }
-                            onOpenUrl={(url) => openBrowserTab(url)}
-                            registerCommands={(commands) => {
-                              if (commands)
-                                browserCommandsRef.current.set(
-                                  browser.localId,
-                                  commands,
-                                );
-                              else
-                                browserCommandsRef.current.delete(
-                                  browser.localId,
-                                );
-                            }}
-                            registerNavigate={(navigate) =>
-                              browserNavigatorsRef.current.set(
-                                browser.localId,
-                                navigate,
-                              )
-                            }
-                            registerHistoryNavigate={(navigate) =>
-                              browserHistoryNavigatorsRef.current.set(
-                                browser.localId,
-                                navigate,
-                              )
-                            }
-                            registerGuest={(guestId) => {
-                              if (guestId === null) {
-                                browserGuestIdsRef.current.delete(
-                                  browser.localId,
-                                );
-                              } else {
-                                browserGuestIdsRef.current.set(
-                                  browser.localId,
-                                  guestId,
-                                );
+                            style={paneStyle(browserTabKey(browser.localId))}
+                            {...paneFocusProps(browserTabKey(browser.localId))}
+                          >
+                            <BrowserScreen
+                              profileId={browser.profileId}
+                              projectId={null}
+                              floatingDismissShortcut={
+                                keybindings["dismiss-floating"]
                               }
-                              reportExtensionTabsRef.current();
-                            }}
-                          />
-                        </SurfacePane>
-                      ))}
+                              initialUrl={browser.url || browser.initialUrl}
+                              history={browser.history}
+                              incognito={browser.incognito}
+                              surfaceKey={browserTabKey(browser.localId)}
+                              active={
+                                runtime.visible &&
+                                browser.localId === activeBrowserTabId
+                              }
+                              visible={
+                                runtime.visible &&
+                                Boolean(
+                                  viewSlots[browserTabKey(browser.localId)],
+                                )
+                              }
+                              keepAwake={heldBrowser(browser.localId)}
+                              resume={tabSleep.resume(browser.localId)}
+                              onStateChange={(state) =>
+                                onBrowserState(browser.localId, state)
+                              }
+                              onPageClose={() =>
+                                closeTab(browserTabKey(browser.localId), {
+                                  final: true,
+                                })
+                              }
+                              onPagePress={focusPaneOnPagePress(
+                                browserTabKey(browser.localId),
+                              )}
+                              onOpenSiteSettings={setSiteSettingsOrigin}
+                              onOpenPasswords={() =>
+                                openPasswords(browser.profileId)
+                              }
+                              onOpenExtensions={() =>
+                                openTab({
+                                  kind: "extensions",
+                                  name: "extensions",
+                                  label: "Extensions",
+                                })
+                              }
+                              onOpenUrl={(url) => openBrowserTab(url)}
+                              registerCommands={(commands) => {
+                                if (commands)
+                                  browserCommandsRef.current.set(
+                                    browser.localId,
+                                    commands,
+                                  );
+                                else
+                                  browserCommandsRef.current.delete(
+                                    browser.localId,
+                                  );
+                              }}
+                              registerNavigate={(navigate) =>
+                                browserNavigatorsRef.current.set(
+                                  browser.localId,
+                                  navigate,
+                                )
+                              }
+                              registerHistoryNavigate={(navigate) =>
+                                browserHistoryNavigatorsRef.current.set(
+                                  browser.localId,
+                                  navigate,
+                                )
+                              }
+                              registerGuest={(guestId) => {
+                                if (guestId === null) {
+                                  browserGuestIdsRef.current.delete(
+                                    browser.localId,
+                                  );
+                                } else {
+                                  browserGuestIdsRef.current.set(
+                                    browser.localId,
+                                    guestId,
+                                  );
+                                }
+                                reportExtensionTabsRef.current();
+                              }}
+                            />
+                          </SurfacePane>
+                        ),
+                      )}
                     </div>
                   ) : (
                     <EmptyState

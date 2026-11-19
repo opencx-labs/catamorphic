@@ -14,6 +14,7 @@ import {
 } from "@catamorphic/agent-protocol";
 import type { CatamorphicApiClient } from "@catamorphic/api-client";
 import {
+  focusManager,
   type QueryClient,
   queryOptions,
   useQueries,
@@ -144,15 +145,19 @@ export function useAgentSession(
     // The stream keeps it current; a refetch is a resync, not a poll.
     staleTime: Number.POSITIVE_INFINITY,
     refetchOnWindowFocus: false,
-    refetchInterval: (current) =>
-      snapshotRefetchInterval({
-        error: current.state.error,
-        data: current.state.data,
-        streaming,
-        onScreen: live,
-        awaitSequence,
-        pollIntervalMs,
-      }),
+    refetchInterval: (current) => snapshotRetryInterval(current.state.error),
+  });
+  useFollowWithoutStream({
+    projectId,
+    sessionId,
+    intervalMs: snapshotRefetchInterval({
+      error: query.error,
+      data: query.data,
+      streaming,
+      onScreen: live,
+      awaitSequence,
+      pollIntervalMs,
+    }),
   });
 
   const { connection, streamError } = useSessionEventStream({
@@ -611,18 +616,39 @@ export function useAgentSessionInfos(
         staleTime: Number.POSITIVE_INFINITY,
         refetchOnWindowFocus: false,
         refetchInterval: (current) =>
-          liveIds.has(sessionId) &&
-          snapshotRefetchInterval({
-            error: current.state.error,
-            data: current.state.data,
-            streaming: statuses.get(sessionId)?.streaming ?? false,
-            onScreen: true,
-            pollIntervalMs,
-          }),
+          liveIds.has(sessionId) && snapshotRetryInterval(current.state.error),
         select: selectSessionInfo,
       }),
     ),
   });
+  // Followed sessions waiting for a stream slot read what they missed.
+  const waiting = ids
+    .filter(
+      (sessionId, index) =>
+        liveIds.has(sessionId) &&
+        snapshotRefetchInterval({
+          error: queries[index]?.error ?? null,
+          loaded: queries[index]?.data !== undefined,
+          streaming: statuses.get(sessionId)?.streaming ?? false,
+          onScreen: true,
+          pollIntervalMs,
+        }) !== false,
+    )
+    .join(" ");
+  useEffect(() => {
+    if (!waiting || !projectId) return;
+    const timer = setInterval(() => {
+      if (!focusManager.isFocused()) return;
+      for (const sessionId of waiting.split(" "))
+        void catchUpAgentSession({
+          apiClient,
+          queryClient,
+          projectId,
+          sessionId,
+        });
+    }, pollIntervalMs);
+    return () => clearInterval(timer);
+  }, [waiting, projectId, pollIntervalMs, apiClient, queryClient]);
 
   useEffect(() => {
     const owned = subscriptions.current;
@@ -721,15 +747,22 @@ export function useAgentSessionFields(
     staleTime: Number.POSITIVE_INFINITY,
     refetchOnWindowFocus: false,
     refetchInterval: (current) =>
+      live && snapshotRetryInterval(current.state.error),
+    select: (data) => data.state.session,
+  });
+  useFollowWithoutStream({
+    projectId,
+    sessionId,
+    intervalMs:
       live &&
       snapshotRefetchInterval({
-        error: current.state.error,
-        data: current.state.data,
+        error: query.error,
+        // The reader holds the session's fields; what it follows is loaded.
+        loaded: query.data !== undefined,
         streaming,
         onScreen: true,
         pollIntervalMs,
       }),
-    select: (data) => data.state.session,
   });
   const { streamError } = useSessionEventStream({
     projectId,
@@ -747,40 +780,159 @@ export function useAgentSessionFields(
 }
 
 /**
- * When to load the snapshot again. A failed load retries every 3s unless
- * it was refused (gone, access removed): that answers the same way again.
- * Without a stream, a reader on screen (waiting for a stream slot) polls,
- * so nothing it shows goes stale; one off screen polls only while
- * anything is unsettled: a turn running, waiting to start, or waiting to
- * retry, or the snapshot still behind something the caller sent.
+ * When a failed snapshot load is tried again: every 3s, unless it was
+ * refused (gone, access removed), which answers the same way again.
+ */
+export function snapshotRetryInterval(error: unknown): number | false {
+  if (!error) return false;
+  return isPermanentFailure(error) ? false : 3_000;
+}
+
+/**
+ * How often a loaded reader without a stream reads again. A failed load
+ * retries every 3s unless it was refused. A reader on screen (waiting
+ * for a stream slot) reads on, so nothing it shows goes stale; one off
+ * screen reads only while anything is unsettled: a turn running, waiting
+ * to start, or waiting to retry, or the session still behind something
+ * the caller sent. What it reads is the events it missed
+ * ({@link catchUpAgentSession}), never the whole snapshot again.
  */
 export function snapshotRefetchInterval({
   error,
   data,
+  loaded = data !== undefined,
   streaming,
   onScreen = false,
   awaitSequence,
   pollIntervalMs,
 }: {
   error: unknown;
-  data: AgentSessionData | undefined;
+  data?: AgentSessionData | undefined;
+  /** For a reader that selects from the session: whether it has loaded. */
+  loaded?: boolean;
   streaming: boolean;
   onScreen?: boolean;
   awaitSequence?: number | undefined;
   pollIntervalMs: number;
 }): number | false {
-  if (error) return isPermanentFailure(error) ? false : 3_000;
-  if (streaming || !data) return false;
+  if (error) return snapshotRetryInterval(error);
+  if (streaming || !loaded) return false;
   if (
     onScreen ||
-    (awaitSequence !== undefined && data.state.sequence < awaitSequence)
+    (awaitSequence !== undefined &&
+      data !== undefined &&
+      data.state.sequence < awaitSequence)
   )
     return pollIntervalMs;
-  return Object.values(data.state.turns).some(
-    (turn) => !isSettledTurnStatus(turn.status),
-  )
+  return data !== undefined &&
+    Object.values(data.state.turns).some(
+      (turn) => !isSettledTurnStatus(turn.status),
+    )
     ? pollIntervalMs
     : false;
+}
+
+// One read at a time for a cached session, however many views follow it.
+const catchUps = new WeakMap<QueryClient, Map<string, Promise<void>>>();
+
+/**
+ * Bring a cached session up to date without a stream (ADR 0197): read the
+ * events after its sequence and fold them in, as a stream's opening does.
+ * A reader off screen, or one waiting for a stream slot, follows a long
+ * conversation for the price of what changed. Reading the snapshot again
+ * costs the server and the reader the whole conversation each time.
+ *
+ * A server that refuses (the session is gone, access was removed, or it
+ * predates this read) is asked for the snapshot, which says which.
+ */
+export function catchUpAgentSession({
+  apiClient,
+  queryClient,
+  projectId,
+  sessionId,
+}: {
+  apiClient: CatamorphicApiClient;
+  queryClient: QueryClient;
+  projectId: string;
+  sessionId: string;
+}): Promise<void> {
+  const key = agentSessionQueryKey(projectId, sessionId);
+  const id = JSON.stringify(key);
+  let reading = catchUps.get(queryClient);
+  if (!reading) {
+    reading = new Map();
+    catchUps.set(queryClient, reading);
+  }
+  const current = reading.get(id);
+  if (current) return current;
+  const owned = reading;
+  const reload = () =>
+    queryClient.invalidateQueries({ queryKey: key, exact: true });
+  const read = (async () => {
+    const state = queryClient.getQueryData<AgentSessionData>(key)?.state;
+    if (!state) return;
+    // A gap is the snapshot's to repair.
+    if (state.stale) return reload();
+    try {
+      const { messages }: { messages: SessionStreamMessage[] } = JSON.parse(
+        await runWithCatamorphicError(async () =>
+          assertApiOk(
+            await apiClient.GET(
+              "/api/projects/{projectId}/agent/sessions/{sessionId}/events/missed",
+              {
+                signal: AbortSignal.timeout(15_000),
+                params: {
+                  path: { projectId, sessionId },
+                  query: { after: state.sequence },
+                },
+                parseAs: "text",
+              },
+            ),
+            "Missed events response empty",
+          ),
+        ),
+      );
+      for (const message of messages)
+        applyStreamMessage({ queryClient, key, message });
+      if (queryClient.getQueryData<AgentSessionData>(key)?.state.stale)
+        await reload();
+    } catch (error) {
+      // Anything else (offline, a timeout) waits for the next read.
+      if (isPermanentFailure(error)) await reload();
+    }
+  })().finally(() => {
+    if (owned.get(id) === read) owned.delete(id);
+  });
+  owned.set(id, read);
+  return read;
+}
+
+/** Follows a session that has no stream, while `intervalMs` says to. */
+function useFollowWithoutStream({
+  projectId,
+  sessionId,
+  intervalMs,
+}: {
+  projectId: string | undefined;
+  sessionId: string | undefined;
+  intervalMs: number | false;
+}): void {
+  const { apiClient } = useCatamorphic();
+  const queryClient = useQueryClient();
+  useEffect(() => {
+    if (!intervalMs || !projectId || !sessionId) return;
+    const timer = setInterval(() => {
+      // As a query's own interval: nothing is read in a hidden page.
+      if (!focusManager.isFocused()) return;
+      void catchUpAgentSession({
+        apiClient,
+        queryClient,
+        projectId,
+        sessionId,
+      });
+    }, intervalMs);
+    return () => clearInterval(timer);
+  }, [intervalMs, projectId, sessionId, apiClient, queryClient]);
 }
 
 /** Fold one stream message into the cached session. */

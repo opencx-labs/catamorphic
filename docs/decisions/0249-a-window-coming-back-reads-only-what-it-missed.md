@@ -1,6 +1,6 @@
 # 0249 — A window coming back reads only what it missed
 
-- **Status:** Accepted (refines [0229](0229-idle-pollers-wait-for-hints.md))
+- **Status:** Accepted (refines [0229](0229-idle-pollers-wait-for-hints.md); extended to query-backed chat lists by [0338](0338-what-is-out-of-sight-is-data.md))
 - **Date:** 2026-10-18
 
 ## Context

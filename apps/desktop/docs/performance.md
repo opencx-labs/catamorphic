@@ -215,9 +215,10 @@ do in Chrome:
 - **No global V8 flags.** `js-flags` set at runtime reach every renderer,
   including every web page, and not the main process.
 - **Unused tabs sleep.** `renderer/lib/tab-sleep.ts` unloads browser tabs
-  out of sight for the profile's `browserTabSleep` time and mounts a
+  out of sight for the profile's `browserTabSleep` time and starts a
   restored workspace's hidden tabs asleep; `main/browser-sleep.ts` keeps
-  their page state and decides what keeps a page awake. Native camera,
+  their page state and decides what keeps a page awake. A sleeping tab
+  mounts no screen at all (ADR 0338, "What is out of sight" below). Native camera,
   microphone and screen sharing grants conservatively keep a tab awake until
   navigation, including capture in an extension's private world. Changing a site
   permission away from Allow ends matching page-owned capture in that profile
@@ -803,7 +804,8 @@ The next background target is incremental session-log refresh after the cached
 sequence, instead of parsing and reconstructing an unchanged full snapshot every
 1.5 seconds. Full snapshots remain useful for initial load and resynchronization.
 The expanded-header follow-up is recorded below. Incremental background refresh
-remains a separate target. Animation removal is not justified by the native evidence.
+landed on 2026-11-19 ("What is out of sight" below, ADR 0338). Animation removal
+is not justified by the native evidence.
 
 
 ## Bounded expanded step headers (2026-11-01)
@@ -937,3 +939,79 @@ main process and the multi-second freezes were not reproduced in isolation.
 A replay of a send's queries against that database cost 130 to 170 ms with or
 without compaction, because those queries are indexed. The freeze itself
 needs a recording from the affected machine.
+
+## What is out of sight (2026-11-19)
+
+ADR 0338 records the decision. A profile with three windows, 138 tabs (127
+asleep) and five open chats lagged and froze on tab and chat switches.
+
+**The installed app, sampled from outside.** A packaged Work refuses a
+debugging port, so two probes ran beside the installed alpha.39 without
+touching it. One read each process's per-thread CPU time every 100 ms
+(`proc_pidinfo`) and reported stretches where a main thread was busy for
+85% or more of consecutive samples. The other timed an unrouted GET to the
+embedded server every 20 ms: its latency is the main process's event-loop
+delay. Over 30-second windows while agents worked (one chat streaming,
+six subagents and two chats in another project running):
+
+| Thread | Busy | Fully busy stretches |
+| --- | ---: | --- |
+| Front window's main thread | 9 to 15% | 3 to 6, of 200 to 414 ms |
+| A covered window's main thread | 19 to 27% | 1 to 3, of 205 to 345 ms |
+| Main process's main thread | 11 to 23% | none over 114 ms |
+
+The two windows stalled at the same instants. With those agents finished
+the same probes read 1 to 5%, 1 to 2% and 3 to 4%. Server reads on that
+profile's database (6.6 GB) took 5 ms for a page of 20 chats, 117 ms for
+one chat's 3 MB snapshot (57 ms read again at once) and 11 to 76 ms for
+snapshots under 1 MB. Of a snapshot's
+bytes, 82% were tool results and command output. Validating and
+serialising that response takes about 5 ms (Bun, same machine): the time
+is the database's. The profile's 3.7 MB history file takes 8 ms to write.
+
+**What changed.** A sleeping tab mounts nothing; the dock mounts a chat
+only in a window that can show it; a chat without a stream reads the
+events it missed (`events/missed`) where it read its whole snapshot; a
+covered window drops chat-list hints and reads once when shown; a page
+report that changes nothing no longer renders the window.
+
+**Isolated before and after.** The Linux test desktop (Docker on an Apple
+M3 Pro, software compositing), `277ac13a` against this change, one run
+each, garbage collected before each reading. Tab switches are 20 presses
+between two internal pages, 250 ms apart; times are CDP
+`Performance.getMetrics` deltas per press.
+
+| 128 sleeping page tabs | Before | After |
+| --- | ---: | ---: |
+| Script per switch | 42.5 ms | 30.3 ms |
+| Main-thread task time per switch | 124 ms | 110 ms |
+| DOM nodes in the window | 15,446 | 11,269 |
+| Event listeners | 1,972 | 1,125 |
+| JS heap | 46.6 MB | 37.5 MB |
+
+| A 1,000-item chat working behind another tab, 16 s | Before | After |
+| --- | ---: | ---: |
+| Whole-snapshot reads | 10 | 0 |
+| Missed-event reads | 0 | 11 |
+| Main process stalls of 20 ms or more | 9 (223 ms) | 1 (42 ms) |
+| Window script per second | 9.2 ms | 6.0 ms |
+
+Task and style times moved by up to a third between identical runs (the
+unchanged no-tabs case read 49 and 66 ms), so only the counts and the
+script time are evidence. Switches among chats did not change and were not
+a target. Other windows' chats and covered windows were not measured in
+isolation; their cost is removed by construction.
+
+**What this leaves.** In the same benchmark a switch to a chat tab took 23
+React commits and a switch between chats 10; the tab strip still holds
+about 45 elements per tab; the window renders as one component per change
+(`app.tsx`); a 3 MB snapshot is still read whole when a chat opens; and
+every running turn writes about 80 statements a second on the main
+process's thread. Those are the next targets.
+
+To repeat the outside probes on any installed Work (macOS), run
+`python3 apps/desktop/scripts/live-probe.py --seconds 300`: it prints each
+stretch a main thread was fully busy, each event-loop stall of the main
+process, and a summary every 30 seconds. It names the process, not the
+function; a function needs a development build and a profile. The isolated
+suite was temporary, as in "Idle work and live chats".

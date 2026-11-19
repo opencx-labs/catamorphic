@@ -73,6 +73,7 @@ import { formatBinding, useKeybindings } from "../lib/keybindings.js";
 import { setPageDialogWaiting } from "../lib/page-dialogs.js";
 import { pageThemeCss } from "../lib/page-theme.js";
 import { pointerMoved } from "../lib/pointer-moved.js";
+import type { TabResume } from "../lib/tab-sleep.js";
 import { useTheme } from "../lib/theme.js";
 
 /**
@@ -207,7 +208,7 @@ export function BrowserScreen({
   toolbarActive = active,
   visible = active,
   keepAwake = false,
-  asleep = false,
+  resume,
   integratedToolbar = false,
   toolbarHost,
   sidebarToolbar = false,
@@ -263,11 +264,11 @@ export function BrowserScreen({
    */
   keepAwake?: boolean;
   /**
-   * Unload the page to free its memory (ADR 0194); it loads again, at
-   * the same place, when this turns false. A tab that starts asleep loads
-   * only once woken.
+   * The tab is coming back from sleep (ADR 0194): a sleeping tab has no
+   * screen, so its page loads here, at the same place, from what main
+   * kept of it or from the tab's saved history. Read as the screen mounts.
    */
-  asleep?: boolean;
+  resume?: TabResume;
   integratedToolbar?: boolean;
   toolbarHost?: HTMLElement | null;
   sidebarToolbar?: boolean;
@@ -380,9 +381,12 @@ export function BrowserScreen({
   // Read by the guest's listeners, which attach once per guest.
   const incognitoRef = useRef(incognito);
   incognitoRef.current = incognito;
-  const [historySource, setHistorySource] = useState(() =>
-    history ? browserHistorySource(history) : null,
-  );
+  const [historySource, setHistorySource] = useState(() => {
+    const saved = history ? browserHistorySource(history) : null;
+    return resume?.snapshotId
+      ? browserWakeSource(resume.snapshotId, saved ?? initialUrl)
+      : saved;
+  });
   const pageUrlRef = useRef(pageUrl);
   pageUrlRef.current = pageUrl;
   // Navigations issued before the guest can accept them (not yet
@@ -559,7 +563,10 @@ export function BrowserScreen({
   // animation keeps the open smooth; the load cost then lands on frames
   // where nothing is animating, which is what a real browser does too.
   // A tab opened with no URL has nothing to show and mounts on navigate.
-  const [mountReady, setMountReady] = useState(initialUrl === "");
+  // A tab back from sleep has no opening to wait out: its page loads at once.
+  const [mountReady, setMountReady] = useState(
+    initialUrl === "" || resume !== undefined,
+  );
   useEffect(() => {
     if (mountReady) return;
     const timer = setTimeout(() => setMountReady(true), TAB_OPEN_ANIMATION_MS);
@@ -631,73 +638,6 @@ export function BrowserScreen({
     setWebviewNonce((nonce) => nonce + 1);
   }, []);
   const attachWatchdogRef = useRef<number | undefined>(undefined);
-
-  // Asleep, the tab has no guest at all. Main keeps the page's state when
-  // it sleeps; the wake builds a fresh guest from it, or from the tab's
-  // saved history when there is none.
-  const [slept, setSlept] = useState(asleep);
-  const wakeSourceRef = useRef<string | null>(null);
-  const snapshotRef = useRef<string | null>(null);
-  // A tab closed in its sleep never claims what main kept for it.
-  useEffect(
-    () => () => {
-      const snapshotId = snapshotRef.current;
-      if (snapshotId) void desktopApi.browserSleepRelease({ snapshotId });
-    },
-    [],
-  );
-  useEffect(() => {
-    if (!asleep) {
-      if (!slept) return;
-      recoveriesRef.current = 0;
-      guestReadyRef.current = false;
-      setLoadError(null);
-      const saved = historyRef.current;
-      setHistorySource(
-        wakeSourceRef.current ?? (saved ? browserHistorySource(saved) : null),
-      );
-      wakeSourceRef.current = null;
-      snapshotRef.current = null;
-      if (pageUrlRef.current) setFirstUrl(pageUrlRef.current);
-      setWebviewNonce((nonce) => nonce + 1);
-      setSlept(false);
-      return;
-    }
-    if (slept) return;
-    let cancelled = false;
-    let guestId: number | null = null;
-    try {
-      guestId = guestReadyRef.current
-        ? (webviewRef.current?.getWebContentsId() ?? null)
-        : null;
-    } catch {
-      guestId = null;
-    }
-    void (
-      guestId === null
-        ? Promise.resolve(null)
-        : desktopApi.browserSleep({ guestId }).catch(() => null)
-    ).then((snapshot) => {
-      if (cancelled) {
-        if (snapshot)
-          void desktopApi.browserSleepRelease({ snapshotId: snapshot });
-        return;
-      }
-      snapshotRef.current = snapshot;
-      const saved = historyRef.current;
-      wakeSourceRef.current = snapshot
-        ? browserWakeSource(
-            snapshot,
-            saved ? browserHistorySource(saved) : pageUrlRef.current,
-          )
-        : null;
-      setLoading(false);
-      setSlept(true);
-    });
-    return () => {
-      cancelled = true;
-    };
-  }, [asleep, slept]);
 
   const guestListenersRef = useRef<AbortController | null>(null);
   const attachWebview = useCallback(
@@ -1921,7 +1861,7 @@ export function BrowserScreen({
           ref={pageAreaRef}
           className="relative min-h-0 min-w-0 flex-1 bg-bg"
         >
-          {ready && firstUrl && !slept ? (
+          {ready && firstUrl ? (
             <webview
               key={webviewNonce}
               ref={attachWebview}
