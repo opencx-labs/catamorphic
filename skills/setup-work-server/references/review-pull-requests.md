@@ -237,7 +237,10 @@ the `default` Environment, and `postReviews` in `github-poster`, with its
 project in `default` too to restart hung reviews. It declares
 `sessions:write` and writes `store/reviews/stalls/` (ADR 0335): the consent
 lists both, and the person needs that permission and a role whose
-`documents` write that folder (an admin's `store/**` does). Its runs reach
+`documents` include `{ "path": "store/reviews/stalls/**", "access": "write" }`
+or a wider write, such as the admin role's
+`{ "path": "store/**", "access": "write" }` ([First brain](first-brain.md)).
+A plain `"store/**"` entry only reads, and the consent is refused. Its runs reach
 no other store path. The `github` webhook listens once they are on;
 `GET /api/projects/:id/webhooks` shows its URL, which the App registered from
 a manifest already uses.
@@ -246,7 +249,8 @@ a manifest already uses.
 `github-polling` pack beside this one and turn `pollGithub` on for the
 project in its `github-poller` Environment. Its consent lists `events:write`
 and its cursor folder, `store/github-polling/` (write): the person needs the
-permission and a role whose `documents` write that folder. It polls
+permission and a role whose `documents` include
+`{ "path": "store/github-polling/**", "access": "write" }` or a wider write. It polls
 the repository every minute and records the same pull request and comment
 events the webhook would deliver (ADR 0326), so the review workflows above
 run unchanged; skip the webhook URL and `GITHUB_WEBHOOK_SECRET`. Events

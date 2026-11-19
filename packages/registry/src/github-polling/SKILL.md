@@ -113,8 +113,11 @@ late and arrive in the order the poll finds them, not GitHub's.
    with its `github` connection. Its consent lists what it declares:
    `events:write`, which recording needs, and the cursor folder
    `store/github-polling/` (write). Whoever turns it on needs
-   `automations:write`, `events:write`, and a role whose `documents` write
-   that folder (an admin's `store/**` does).
+   `automations:write` and `events:write`, and a role whose `documents`
+   include `{ "path": "store/github-polling/**", "access": "write" }` or a
+   wider write, such as the seeded admin's
+   `{ "path": "store/**", "access": "write" }`. A plain `"store/**"` entry
+   only reads, and the consent is refused.
 3. After the first run, the cursor document exists and no event was
    recorded. Open a pull request: within two polls an event
    `pull_request:<number>:opened:<sha>` exists and the workflows bound to

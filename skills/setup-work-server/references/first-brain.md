@@ -57,7 +57,7 @@ const r = await fetch("http://127.0.0.1:4701/_work/operator/projects", {
   body: JSON.stringify({
     name: "Company brain",
     roles: [
-      { slug: "admin", definition: { version: 1, name: "Admin", agents: ["*"], workflows: ["*"], apps: ["*"], permissions: ["*"], environments: ["default"] } },
+      { slug: "admin", definition: { version: 1, name: "Admin", agents: ["*"], workflows: ["*"], apps: ["*"], permissions: ["*"], environments: ["default"], documents: [{ path: "store/**", access: "write" }] } },
       { slug: "member", definition: { version: 1, name: "Member", agents: ["*"], environments: ["default"] } },
     ],
     admission: { mode: "invitation_only", defaultRole: "member" },

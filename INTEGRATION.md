@@ -437,7 +437,7 @@ Most hosts do not want to hand-write scopes. Commit roles into the project — `
   "documents": ["docs/**", { "path": "store/customers/{customer}/**", "access": "write" }]
 }
 // .work/roles/admin.json
-{ "version": 1, "name": "Admin", "agents": ["*"], "workflows": ["*"], "apps": ["*"], "environments": ["*"], "permissions": ["*"], "documents": ["store/**"] }
+{ "version": 1, "name": "Admin", "agents": ["*"], "workflows": ["*"], "apps": ["*"], "environments": ["*"], "permissions": ["*"], "documents": [{ "path": "store/**", "access": "write" }] }
 // .work/roles/brain-maintainer.json
 { "version": 1, "name": "Brain Maintainer", "permissions": ["brain:maintain"], "agents": ["brain-maintainer"] }
 ```

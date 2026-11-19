@@ -497,7 +497,10 @@ merge gate.
    webhook listens once they are on. `restartStalledReviews` also declares
    `sessions:write` and writes `store/reviews/stalls/`: its consent lists
    both, so whoever turns it on needs that permission and a role whose
-   `documents` write that folder (an admin's `store/**` does).
+   `documents` include `{ "path": "store/reviews/stalls/**", "access":
+   "write" }` or a wider write, such as the seeded admin's
+   `{ "path": "store/**", "access": "write" }`. A plain `"store/**"` entry
+   only reads, and the consent is refused.
 3. Open a small pull request. Within a minute a chat `pr-<repository>-<number>`
    appears; inspect it: Environment `review`, a review-pool machine, and a
    workspace at the head commit. When its turn ends, a `postReviews` run
