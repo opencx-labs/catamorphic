@@ -12,6 +12,7 @@ export { PendingButton } from "./components/access/pending-button.js";
 export {
   describeAutomationPause,
   describeProjectPermission,
+  describeWorkflowDocument,
 } from "./components/access/permission-words.js";
 export { ProjectWorkflows } from "./components/access/project-workflows.js";
 export { WorkflowEnablementPanel } from "./components/access/workflow-enablement-panel.js";

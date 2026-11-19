@@ -30,6 +30,7 @@ import {
   ConnectionUnavailableError,
   hashBearer,
 } from "./connections-service.js";
+import { touchProgress } from "./sessions/turn-stalls.js";
 
 const tracer = getTracer("@catamorphic/core");
 const encoder = new TextEncoder();
@@ -497,6 +498,8 @@ export interface LiveModelGrant {
   agentSessionId: string | null;
   /** The exact turn authorized by this grant, also used for accounting. */
   turnId: string;
+  /** The attempt it was issued to: a call admitted on it is progress (ADR 0333). */
+  attemptId?: string;
   alias: string;
   /** The grant's session: its owner, whether it is open, and its agent. */
   session?: { ownerId: string; active: boolean; agentId?: string };
@@ -519,6 +522,8 @@ export const MAX_OPEN_CALL_MINUTES = 30;
 export interface ModelGatewayStore {
   /** The live grant a bearer names, or undefined. */
   liveGrant(args: { token: string }): Promise<LiveModelGrant | undefined>;
+  /** Record that the attempt made progress: a call was admitted (ADR 0333). */
+  progress?(args: { attemptId: string }): Promise<void>;
   /**
    * Open a session's call before its answer ends (ADR 0193): its usage
    * row, settled by `recordUsage`, so totals read on any replica wait for
@@ -598,6 +603,7 @@ export function dbModelGatewayStore(db: Kysely<DB>): ModelGatewayStore {
           "grant.allocation_id as allocationId",
           "grant.agent_session_id as agentSessionId",
           "turn.id as turnId",
+          "attempt.id as attemptId",
           "grant.alias as alias",
           "connection.id as connectionId",
           "connection.revision as revision",
@@ -615,6 +621,7 @@ export function dbModelGatewayStore(db: Kysely<DB>): ModelGatewayStore {
         allocationId: row.allocationId,
         agentSessionId: row.agentSessionId,
         turnId: row.turnId,
+        attemptId: row.attemptId,
         alias: row.alias,
         ...(row.sessionOwnerId
           ? {
@@ -633,6 +640,7 @@ export function dbModelGatewayStore(db: Kysely<DB>): ModelGatewayStore {
         },
       };
     },
+    progress: ({ attemptId }) => touchProgress({ db, attemptId }),
     openUsage: async ({ record }) =>
       (
         await db
@@ -757,6 +765,8 @@ interface ModelAccess {
   allocationId: string;
   sessionId: string | null;
   turnId: string;
+  /** The grant's attempt, whose progress an admitted call is (ADR 0333). */
+  attemptId?: string;
   /** The session's agent, when it has one. */
   agentId?: string;
   alias: string;
@@ -943,6 +953,14 @@ export class ModelGatewayService {
         "permission_error",
         "Connection authorization changed; retry the request",
       );
+    // A call past every check is the attempt's progress (ADR 0333), once,
+    // never its delay: a harness looping on refused calls is not working.
+    if (access.attemptId)
+      void this.deps.store
+        .progress?.({ attemptId: access.attemptId })
+        .catch(() =>
+          console.warn("[catamorphic] Could not record a turn's progress"),
+        );
     // Authority and usage refer to the grant's attempt, never a newer turn.
     const outgoing = upstreamRequestHeaders(request.headers, access.headers);
     if (rewritten) outgoing.set("content-type", "application/json");
@@ -1250,6 +1268,7 @@ export class ModelGatewayService {
       allocationId: grant.allocationId,
       sessionId: grant.agentSessionId,
       turnId: grant.turnId,
+      ...(grant.attemptId ? { attemptId: grant.attemptId } : {}),
       ...(grant.session?.agentId ? { agentId: grant.session.agentId } : {}),
       alias: grant.alias,
       connectionId: resolved.binding.connectionId,

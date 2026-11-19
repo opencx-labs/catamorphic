@@ -67,7 +67,7 @@ Settled design decisions live here as short Architecture Decision Records. They 
 | [0052](0052-skills-as-commands.md) | Skills as commands, and the agent-initiated auth loop | Accepted; paths superseded by 0142, composer menu by 0270, then 0274 |
 | [0053](0053-identity-scope-and-app-routes.md) | Identity scope: one artifact vocabulary, structural narrowing, synchronous calls | Accepted |
 | [0054](0054-tool-permissions.md) | Tool permissions: layered connection/agent policies that intersect; ask via host prompt | Accepted (enforcement transport refined by 0067; server-side definition policies by 0176) |
-| [0055](0055-company-brain-roles-store-and-change-loop.md) | Company brain: program vs. project store, roles as files, scoped agents, the change loop | Accepted; paths superseded by 0142; the builder flag superseded by 0158; the loopback API guard by 0211 |
+| [0055](0055-company-brain-roles-store-and-change-loop.md) | Company brain: program vs. project store, roles as files, scoped agents, the change loop | Accepted; paths superseded by 0142; the builder flag superseded by 0158; the loopback API guard by 0211; workflow store access narrowed to declared documents by 0335 |
 | [0056](0056-agent-configuration.md) | Agent configuration: one surface, layered defaults, enforced capabilities | Accepted; paths superseded by 0142; normalized `mode` superseded by 0182 |
 | [0057](0057-agent-usage-and-cost.md) | Agent usage and cost: transcript-scanned page, per-turn usage in metadata | Accepted; composer context ring removed 2026-10-21 |
 | [0058](0058-mobile-pwa.md) | The mobile PWA: chats on the go, wrapper-ready; tool asks answerable over HTTP | Accepted |
@@ -170,7 +170,7 @@ Settled design decisions live here as short Architecture Decision Records. They 
 | [0155](0155-shells-background-commands-and-live-status.md) | Native shells, host background commands, and the agent's live status | Accepted (refined by 0174; wakes are task notifications by 0217; terminals end with their command by 0223) |
 | [0156](0156-project-automations-webhooks-and-command-watches.md) | Project automations, one deliver, webhooks, and command watches | Accepted (webhook ingress refined by 0171; keys and chat placement by 0173) |
 | [0157](0157-workflow-status-chrome.md) | Workflow tabs: status chrome and a panel that follows its subject | Accepted |
-| [0158](0158-project-permissions.md) | Project permissions: read, write, publish, and what workflows declare | Accepted (directory events by 0210) |
+| [0158](0158-project-permissions.md) | Project permissions: read, write, publish, and what workflows declare | Accepted (directory events by 0210; store documents workflows declare by 0335) |
 | [0159](0159-work-server-identity-and-image.md) | The Work server: product identity and a published image | Accepted |
 | [0160](0160-work-server-package.md) | The Work server is a package with typed hooks | Accepted (config as typed data by 0183; your own image by 0261) |
 | [0161](0161-company-identity-and-deprovisioning.md) | Company identity: Google Workspace sign-in and deprovisioning | Accepted (directory events by 0210) |
@@ -210,7 +210,7 @@ Settled design decisions live here as short Architecture Decision Records. They 
 | [0195](0195-conversation-continues-around-agent-questions.md) | The conversation continues around agent questions: replies defer, agents close, no "Other" row | Accepted (amended by 0197; Other answers return by 0244) |
 | [0196](0196-installed-claude-code-first.md) | The person's own Claude Code runs first; Claude Code and Codex pins move by scheduled pull request | Accepted |
 | [0197](0197-agent-sessions-are-an-event-log-of-turns.md) | Agent sessions are an event log of turns | Accepted (amends 0195: replies to a waiting question steer the turn; input item kinds by 0217; result items by 0323) |
-| [0198](0198-agent-runners-run-harnesses-beside-their-workspace.md) | Agent runners run harnesses beside their workspace | Accepted (amended by 0276: a chat can switch harnesses; by 0222: desktop harnesses stay warm; by 0225: a mounted connector's endpoint decides its calls; by 0245: a lost thread is replaced, handed the conversation; by 0275: a resumed Claude Code keeps its sign-in) |
+| [0198](0198-agent-runners-run-harnesses-beside-their-workspace.md) | Agent runners run harnesses beside their workspace | Accepted (amended by 0276: a chat can switch harnesses; by 0222: desktop harnesses stay warm; by 0225: a mounted connector's endpoint decides its calls; by 0245: a lost thread is replaced, handed the conversation; by 0275: a resumed Claude Code keeps its sign-in; by 0333: progress, stalls and restarts) |
 | [0199](0199-subscription-sign-ins-stay-on-the-machine.md) | Subscription sign-ins stay on the machine they were made on | Accepted (amended by 0213: Codex only, on a member's own machine; who delivered an input is a typed field by 0219) |
 | [0200](0200-sidebars-move-first-content-settles-after.md) | Sidebars move first; the content settles after them | Accepted |
 | [0201](0201-work-keeps-passkeys-in-the-profile-vault.md) | Work keeps passkeys in the profile's vault: the sheet saves and signs in, autofill offers them, Bitwarden and KeePassXC files import | Accepted (amends 0185, 0151; browsing windows by 0220) |
@@ -255,7 +255,7 @@ Settled design decisions live here as short Architecture Decision Records. They 
 | [0240](0240-a-message-sent-while-the-agent-works-reaches-it.md) | A message sent while the agent works reaches it at its next step, and can stop it to be read now | Accepted (amends 0197, 0217) |
 | [0241](0241-acp-agents-run-their-own-command.md) | Hermes and other ACP agents run their own command: added in Settings, or approved from a project | Accepted (builds on 0050, 0198; amended by 0245; on the Work server by 0255; amended by 0277) |
 | [0244](0244-each-question-takes-its-own-answer-with-pills.md) | Each question takes its own answer, pills and all | Accepted (amends 0195) |
-| [0245](0245-a-harness-says-its-thread-is-gone.md) | A harness says its thread is gone; the turn goes on in a new one, handed the conversation | Accepted (amends 0198, 0241) |
+| [0245](0245-a-harness-says-its-thread-is-gone.md) | A harness says its thread is gone; the turn goes on in a new one, handed the conversation | Accepted (amends 0198, 0241; amended by 0333) |
 | [0246](0246-a-restart-never-waits-on-work.md) | A restart never waits on work: working agents continue after it, a downloaded update stays downloaded | Accepted (amends 0083, 0198) |
 | [0247](0247-a-person-names-a-chat-and-it-keeps-the-name.md) | A person names a chat from its menu, and it keeps the name | Accepted (amends 0202) |
 | [0248](0248-sidebar-thumbs-take-lanes.md) | Sidebar thumbs take lanes, hidden at rest: the sidebar's own on its edge, a section's one lane in | Accepted (amends 0237) |
@@ -332,7 +332,11 @@ Settled design decisions live here as short Architecture Decision Records. They 
 | [0325](0325-runs-queue-per-key-and-workflows-keep-session-metadata.md) | Runs queue per key, and workflows keep state in session metadata | Accepted (amends 0027, 0226, 0259, 0262; supersedes 0292) |
 | [0326](0326-workflows-record-project-events.md) | Workflows record project events | Accepted (amends 0156, 0158, 0171, 0177) |
 | [0327](0327-machine-provisioners-are-workflows.md) | Machine provisioners are workflows | Accepted (refines 0205, 0258) |
-| [0328](0328-hand-offs-keep-results-acp-reports-its-turn.md) | Hand-offs keep results and open requests; ACP agents take effort and report their turn | Accepted (amends 0198, 0241, 0255, 0298) |
+| [0328](0328-hand-offs-keep-results-acp-reports-its-turn.md) | Hand-offs keep results and open requests; ACP agents take effort and report their turn | Accepted (amends 0198, 0241, 0255, 0298; amended by 0333) |
 | [0329](0329-model-usage-is-telemetry-and-a-session-read.md) | Model usage is telemetry and a session read | Accepted (amends 0180 and 0293) |
-| [0330](0330-enablements-follow-the-published-program.md) | Enablements follow the published program | Accepted (amends 0068, 0158, 0170) |
+| [0330](0330-enablements-follow-the-published-program.md) | Enablements follow the published program | Accepted (amends 0068, 0158, 0170; amended by 0335: declared store documents compare by coverage) |
 | [0331](0331-project-deploy-workflow-and-host-project-hooks.md) | A project deploy workflow, and host project hooks that return secrets | Accepted (amends 0046) |
+| [0332](0332-commands-run-apart-from-the-agent.md) | The commands an agent runs execute apart from the agent | Accepted (amends 0175, 0180, 0204, 0208, 0257, 0259, 0324) |
+| [0333](0333-stalled-turns-are-visible-and-restartable.md) | A turn that stops making progress is visible, an event, and restartable | Accepted (amends 0198, 0245, 0328) |
+| [0334](0334-read-only-caches-only-a-trusted-fill-writes.md) | Read-only caches that only a trusted fill writes | Accepted (amends 0208, 0257) |
+| [0335](0335-workflows-declare-their-store-documents.md) | Workflows declare the store documents they use | Accepted (amends 0055, 0158, 0330) |

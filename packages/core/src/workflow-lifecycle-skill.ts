@@ -48,7 +48,7 @@ Use \`durable-workflows\` for retry, cancellation and external-effect limits.
 | Remind me, follow up in this chat, or watch Project Events | Pass TypeScript directly to \`create_watcher\` (with \`eventSource\` for a host-polled source such as GitHub on the desktop). The host retains an isolated revision with this session. | Session-owned, with no default expiry. See \`session-workflows\` for time, attention, and cancellation. |
 | Save reusable automation for the project | Use \`.work/workflows/src/<name>.ts\`. | Deploy an immutable revision, then enable it for unattended execution. |
 | Run a reviewed workflow for one member | Reuse committed project source. | A member-owned enablement uses that member's authorized connections and Environment. |
-| Run it for the whole project (webhooks, PR reviews, shared inboxes) | Reuse committed project source. | A project enablement, turned on by someone with \`automations:write\`, runs as the project with shared connections and the permissions consented to. Its chats are project chats. |
+| Run it for the whole project (webhooks, PR reviews, shared inboxes) | Reuse committed project source. | A project enablement, turned on by someone with \`automations:write\`, runs as the project with shared connections and the permissions and store documents consented to. Its chats are project chats. |
 | Keep a private workflow independent of its creating chat | Discover \`private.workflow\`. It retains self-contained TypeScript and explicit files in a member-owned immutable artifact outside project files and Git. | Create saves source; run invokes once; preview and activate enable its ordinary triggers. Stop disables activation and cancels its active runs. |
 
 Personal execution alone does not make project source private. Member-owned
@@ -124,6 +124,17 @@ who holds every declared permission can turn the workflow on; a member's
 automation pauses when its member loses one, and a project automation keeps
 what was consented to.
 
+Declare every project store path its runs read or write in \`documents\`
+(\`[{ path: "store/cursors/", access: "write" }]\`; a path ending in \`/\` is a
+folder, \`write\` also reads), written out as literals. A run reaches only
+those of the store, whoever starts it. A project automation reaches exactly
+them, and turning it on needs someone who reaches them all; any other run (a
+member's own automation, a run started by hand, an agent's tool call, a
+watcher, a session artifact's run) reaches the part of them its caller
+reaches at that run. A child workflow reaches what its parent holds of its
+own declaration. Chats the run delivers into never get them. Only the host's
+root identity is not narrowed.
+
 The enablement's Environment places the workflow's runs, nothing else. A chat
 a workflow delivers to is placed by its own Environment: the \`environment\`
 the delivery names, else the agent's preferred Environment, else the project
@@ -151,7 +162,7 @@ their roles; a project chat may use any project Environment) and the agent's
    connections, and triggers. In the desktop, the member opens the workflow's
    status, chooses **Automatic** (shown when the code declares triggers), and
    **Enable for me**; someone with \`automations:write\` can choose **The project**
-   instead. The consent lists the declared permissions. Connecting an account may finish that initiated flow; connecting an
+   instead. The consent lists the declared permissions and store documents. Connecting an account may finish that initiated flow; connecting an
    account by itself never initiates it.
 
 ## Following main, and the deploy workflow
@@ -164,7 +175,9 @@ code before it uses them. On each newly published revision, Work moves a
 following enablement there when the workflow builds and parses at that revision
 and the authority consented to is unchanged: same Environment, connections,
 capabilities and permissions, the same triggers (kind, configuration and
-filters) and the same declared secret names. If the revision asks for more, the enablement
+filters) and the same declared secret names, and store documents the
+consented ones still cover (a narrower list follows and becomes the
+consented one; a new path, or read becoming write, asks again). If the revision asks for more, the enablement
 stays on its commit, shows an update, and its owner is notified to review it. A
 revision whose workflow does not parse, is gone, or whose triggers do not
 register is skipped and reported; the next good one is followed. A failure that

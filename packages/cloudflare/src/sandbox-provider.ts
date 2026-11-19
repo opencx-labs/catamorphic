@@ -7,6 +7,7 @@ import {
   type ExecResult,
   type GitCloneOpts,
   gitCloneFailure,
+  refuseSeparateCommands,
   refuseSignIns,
   type SandboxHandle,
   type SandboxProvider,
@@ -72,6 +73,10 @@ export class CloudflareSandboxProvider implements SandboxProvider {
 
   async createSandbox(opts: CreateSandboxOpts): Promise<SandboxHandle> {
     assertSandboxResources(opts.resources, []);
+    refuseSeparateCommands({
+      separateCommands: opts.separateCommands,
+      provider: "Cloudflare",
+    });
     refuseSignIns({ signIns: opts.signIns, provider: "Cloudflare" });
     const response = await this.request("POST", "/v1/sandbox");
     const body = (await response.json()) as { id: string };

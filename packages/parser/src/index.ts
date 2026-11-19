@@ -72,6 +72,7 @@ export type {
   TriggerKindDisplay,
   WorkflowCallTargetDescriptor,
   WorkflowCapabilities,
+  WorkflowDocumentAccess,
   WorkflowEdge,
   WorkflowExecutionDescriptor,
   WorkflowExecutionUnitDescriptor,

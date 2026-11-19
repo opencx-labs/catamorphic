@@ -402,6 +402,28 @@ describe("useAgentChat commands", () => {
       item: { text: "Second question" },
     });
     expect(result.current.activity).toBe("Waiting for agent");
+    // Work says what it waits for.
+    act(() =>
+      served.latest()?.send({
+        type: "events",
+        events: [
+          stored(7, {
+            type: "turn.changed",
+            turn: turn("t2", 2, {
+              status: "queued",
+              inputItemId: "m2",
+              activity:
+                "Waiting to make this chat's workspace again for Reviewer: someone using it (an open terminal or preview) keeps it",
+            }),
+          }),
+        ],
+      }),
+    );
+    await waitFor(() =>
+      expect(result.current.activity).toBe(
+        "Waiting to make this chat's workspace again for Reviewer: someone using it (an open terminal or preview) keeps it",
+      ),
+    );
   });
 
   it("resends the same command id after a server error", async () => {

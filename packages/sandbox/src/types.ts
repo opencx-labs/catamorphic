@@ -18,6 +18,20 @@ import type {
 
 export type SandboxType = "execution" | "dev";
 
+/**
+ * Where in a sandbox that runs commands apart (ADR 0332) an operation
+ * happens: beside the agent (its runner, grants and state) or where its
+ * commands run. `commands` is the default everywhere, so an operation that
+ * names no side runs where the pull request's code already is. A provider
+ * without `commands.separate` has one side and ignores it.
+ */
+export type SandboxSide = "agent" | "commands";
+
+/** Options naming the side of a file operation (ADR 0332). */
+export interface SandboxFileOpts {
+  side?: SandboxSide;
+}
+
 export type SandboxStatus =
   | "creating"
   | "started"
@@ -30,6 +44,12 @@ export interface SandboxHandle {
   providerId: string;
   sandboxType: SandboxType;
   status: SandboxStatus;
+  /**
+   * Read-only cache generations it was handed and did not mount, because
+   * the machine no longer has them (ADR 0334). The control plane forgets
+   * those copies and fills the machine again.
+   */
+  skippedVolumes?: string[];
 }
 
 /** Hard sandbox limits. A provider must reject limits it cannot enforce. */
@@ -86,7 +106,101 @@ export interface CreateSandboxOpts {
    * at their paths. Needs the `volumes` capability.
    */
   volumes?: readonly SandboxVolume[];
+  /**
+   * Run commands apart from the agent (ADR 0332): needs
+   * `commands.separate`. The sandbox becomes an agent side and a command
+   * side sharing only the `shared` directories (the checkout). The
+   * provider serves {@link SEPARATE_COMMANDS_SOCKET} on the agent side;
+   * every command it runs there for the agent first loads `envFiles` (the
+   * command side's own session files) where they exist.
+   */
+  separateCommands?: {
+    shared: readonly string[];
+    envFiles?: readonly string[];
+    /**
+     * The agent side's own limits; `resources` are the command side's,
+     * where the change's tests and services run. Defaults to
+     * {@link SEPARATE_AGENT_DEFAULT_RESOURCES}.
+     */
+    agentResources?: SeparateAgentResources;
+  };
+  /**
+   * A sandbox Work makes for its own commands alone, such as checking a
+   * filled cache generation (ADR 0334): no network at all, no setup command,
+   * no proxy, nothing of an Environment's. Needs the `caches` capability; a
+   * provider that cannot cut a sandbox off entirely refuses it.
+   */
+  internal?: boolean;
 }
+
+/** The limits of the agent side of a sandbox that runs commands apart (ADR 0332). */
+export interface SeparateAgentResources {
+  cpuMillis?: number;
+  memoryMb?: number;
+}
+
+/**
+ * What the agent side of a sandbox that runs commands apart gets unless its
+ * Environment says otherwise (ADR 0332): enough for a harness and its
+ * runner, which run no tests or services. Its Allocation reserves it on
+ * top of the command side's limits.
+ */
+export const SEPARATE_AGENT_DEFAULT_RESOURCES = {
+  cpuMillis: 1000,
+  memoryMb: 2048,
+} as const;
+
+/**
+ * What the command side of such a sandbox gets when neither its
+ * Environment nor its machine names limits: the container backend's own
+ * default, named so the Allocation reserves it and the container is given
+ * it (ADR 0332).
+ */
+export const SEPARATE_COMMANDS_DEFAULT_RESOURCES = {
+  cpuMillis: 1000,
+  memoryMb: 1024,
+} as const;
+
+/**
+ * Refuse to run an agent's commands apart from it (ADR 0332) on a provider
+ * that cannot: placement never asks such a provider, and one asked anyway
+ * says so rather than running the commands beside the agent.
+ */
+export function refuseSeparateCommands(input: {
+  separateCommands: CreateSandboxOpts["separateCommands"];
+  provider: string;
+}): void {
+  if (input.separateCommands)
+    throw new Error(
+      `${input.provider} sandboxes cannot run an agent's commands apart from the agent; place the Environment on a machine whose container backend offers commands.separate`,
+    );
+}
+
+/**
+ * Who the harness runs as on the agent side of a sandbox whose commands
+ * run apart, and where (ADR 0332). Work's runner and every operation of
+ * Work's run as root there; the harness as this user, which owns none of
+ * the checkout (it edits it through the shared group) and can read no
+ * grant or runner state: `/workspace/.work-session` is root's alone, and
+ * the shim root's to write.
+ */
+export const SEPARATE_HARNESS = {
+  uid: 10001,
+  /** The group the checkout shares between both sides. */
+  gid: 10001,
+  home: "/workspace/.work-harness/home",
+  temporary: "/workspace/.work-harness/tmp",
+  shim: "/workspace/.work-shim",
+  media: "/workspace/.work-harness/media",
+  config: "/workspace/.work-harness/config",
+} as const;
+
+/**
+ * Where a provider offering `commands.separate` serves its command socket
+ * inside the agent side of a sandbox (ADR 0332). Nothing on the command
+ * side can reach it.
+ */
+export const SEPARATE_COMMANDS_SOCKET = "/run/work-commands/commands.sock";
 
 /**
  * A directory that persists on the machine across sandboxes (ADR 0208).
@@ -109,6 +223,20 @@ export interface SandboxVolume {
    * by another sandbox of the same owner.
    */
   temporary?: boolean;
+  /**
+   * Mounted read only (ADR 0334): a cache generation only a trusted fill
+   * writes. Needs the `caches` capability; a provider that cannot enforce
+   * it refuses. Mounting a cache generation read only lets the provider
+   * remove that cache's older generations no sandbox mounts.
+   */
+  readOnly?: boolean;
+  /**
+   * Other generations of the same cache to remove once no sandbox mounts
+   * them (ADR 0334): those that are neither published nor being filled.
+   * The control plane names them; a provider removes only keys of the same
+   * cache, never one it mounts here.
+   */
+  retire?: readonly string[];
 }
 
 /** Volume names an Environment may declare (ADR 0208). */
@@ -135,6 +263,50 @@ export function volumeKey(input: {
 
 /** Keys {@link volumeKey} produces, for providers checking what they are handed. */
 export const VOLUME_KEY_PATTERN = /^[a-z0-9][a-z0-9-]{0,39}-[0-9a-f]{24}$/;
+
+/**
+ * One generation of a project's Environment cache on a machine (ADR 0334):
+ * `cache-<name>-<digest>-g<generation>`. Every generation of one cache
+ * shares the part before `-g` (its family), so a provider can tell which
+ * of its volumes an older generation of the same cache is.
+ */
+export function cacheVolumeKey(input: {
+  projectId: string;
+  environment: string;
+  name: string;
+  generation: number;
+}): string {
+  if (!VOLUME_NAME_PATTERN.test(input.name))
+    throw new Error(`'${input.name}' is not a cache name`);
+  if (!Number.isSafeInteger(input.generation) || input.generation < 1)
+    throw new Error(`'${input.generation}' is not a cache generation`);
+  const digest = createHash("sha256")
+    .update(`cache\0${input.projectId}\0${input.environment}\0${input.name}`)
+    .digest("hex")
+    .slice(0, 24);
+  return `cache-${input.name}-${digest}-g${input.generation}`;
+}
+
+/** Keys {@link cacheVolumeKey} produces. */
+export const CACHE_VOLUME_KEY_PATTERN =
+  /^cache-[a-z0-9][a-z0-9-]{0,39}-[0-9a-f]{24}-g[1-9][0-9]{0,15}$/;
+
+/** A key any volume of a sandbox may have: a volume's or a cache generation's. */
+export const SANDBOX_VOLUME_KEY_PATTERN = new RegExp(
+  `${VOLUME_KEY_PATTERN.source}|${CACHE_VOLUME_KEY_PATTERN.source}`,
+);
+
+/** A cache generation's family and number, or undefined for another key. */
+export function parseCacheVolumeKey(
+  key: string,
+): { family: string; generation: number } | undefined {
+  if (!CACHE_VOLUME_KEY_PATTERN.test(key)) return undefined;
+  const at = key.lastIndexOf("-g");
+  return {
+    family: key.slice(0, at),
+    generation: Number(key.slice(at + 2)),
+  };
+}
 
 /**
  * A provider's volumes on its machine (ADR 0208): forgotten when unused for
@@ -181,6 +353,8 @@ export function signInCapability(input: {
 }
 
 export interface ExecOpts {
+  /** Where in a sandbox that runs commands apart (ADR 0332); `commands` by default. */
+  side?: SandboxSide;
   cwd?: string;
   /** Seconds. */
   timeout?: number;
@@ -231,8 +405,13 @@ export interface SandboxProvider {
     sandboxId: string,
     files: Record<string, string>,
     basePath: string,
+    opts?: SandboxFileOpts,
   ): Promise<void>;
-  downloadFile(sandboxId: string, filePath: string): Promise<string>;
+  downloadFile(
+    sandboxId: string,
+    filePath: string,
+    opts?: SandboxFileOpts,
+  ): Promise<string>;
   gitClone(
     sandboxId: string,
     url: string,

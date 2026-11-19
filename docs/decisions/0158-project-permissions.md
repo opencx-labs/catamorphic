@@ -2,7 +2,7 @@
 
 - **Status:** Accepted
 - **Date:** 2026-09-24
-- **Amended by:** 0326 (`events:write`)
+- **Amended by:** 0326 (`events:write`), 0334 (`caches:write`), 0335 (workflows declare store documents)
 - **Supersedes:** the `builder` role flag and project ref of 0055, the `memberships:manage` / `roles:manage` names of 0072, the `when.builder` predicate of 0092, and the `connections:manage_service` / `connections:view_audit` names
 - **Builds on:** 0053 (identity scope), 0055 (roles as files), 0156 (project automations)
 

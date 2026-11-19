@@ -98,6 +98,20 @@ export {
 } from "./coding-agent/warm-sessions.js";
 export { CommandDeploymentRuntimeProvider } from "./command-deployment-runtime.js";
 export {
+  COMMAND_PROGRAMS,
+  COMMAND_RETURN_LIMIT,
+  COMMAND_RETURN_NAME,
+  COMMAND_SHELL_CLIENT_SOURCE,
+  COMMAND_SIGNALS,
+  COMMAND_VARIABLES,
+  type CommandRequest,
+  type CommandSignal,
+  commandEnvironment,
+  commandShellFiles,
+  homeStartedCommand,
+  writeCommandShell,
+} from "./command-shell.js";
+export {
   CONNECTION_GRANT_READER,
   MODEL_GRANT_READER,
   readConnectionGrant,
@@ -129,6 +143,15 @@ export {
 } from "./execution-environment.js";
 export { instrumentSandboxProvider } from "./instrumented-provider.js";
 export {
+  type GatewayModelAccess,
+  type LoopbackModel,
+  loopbackModelEnv,
+  loopbackModelHeaders,
+  type ModelRefusal,
+  passingRefusal,
+  serveLoopbackModel,
+} from "./model-endpoint.js";
+export {
   type ExecutorKeyPair,
   ExecutorPublicKeySchema,
   executorPublicKey,
@@ -146,10 +169,12 @@ export {
 export {
   assertProcessId,
   assertWriteSize,
+  commandSideProcesses,
   decodeProcessChunk,
   decodeUtf8Prefix,
   type FollowProcessResult,
   followProcess,
+  isAgentProcessId,
   newProcessId,
   OutputWindow,
   PROCESS_READ_DEFAULT_BYTES,
@@ -201,6 +226,7 @@ export {
 export {
   assertSandboxVolumes,
   imageUserHome,
+  refuseCacheVolumes,
   VolumeUsageLog,
   volumeMountPath,
 } from "./sandbox-volumes.js";
@@ -249,21 +275,33 @@ export type {
   RuntimeInvocationRequest,
   RuntimeStepEntry,
   RuntimeTerminalResult,
+  SandboxFileOpts,
   SandboxHandle,
   SandboxManager,
   SandboxProvider,
   SandboxResources,
+  SandboxSide,
   SandboxStatus,
   SandboxType,
   SandboxVolume,
   SandboxVolumeProvider,
+  SeparateAgentResources,
   StepEntry,
 } from "./types.js";
 export {
   assertSandboxResources,
+  CACHE_VOLUME_KEY_PATTERN,
+  cacheVolumeKey,
+  parseCacheVolumeKey,
   positiveTokenCount,
   RuntimeEventReportingError,
   RuntimeInfrastructureError,
+  refuseSeparateCommands,
+  SANDBOX_VOLUME_KEY_PATTERN,
+  SEPARATE_AGENT_DEFAULT_RESOURCES,
+  SEPARATE_COMMANDS_DEFAULT_RESOURCES,
+  SEPARATE_COMMANDS_SOCKET,
+  SEPARATE_HARNESS,
   SIGN_IN_HARNESSES,
   type SignInHarness,
   signInCapability,

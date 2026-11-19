@@ -10,9 +10,11 @@ import type {
   GitCloneOpts,
   SandboxCapability,
   SandboxEgress,
+  SandboxFileOpts,
   SandboxHandle,
   SandboxProcessProvider,
   SandboxProvider,
+  SandboxSide,
   SandboxStatus,
   SandboxVolumeProvider,
   SupervisorProcessHandle,
@@ -20,16 +22,23 @@ import type {
 import {
   assertSandboxResources,
   assertSandboxVolumes,
+  COMMAND_RETURN_LIMIT,
+  commandShellFiles,
   dockerfileImageReference,
   gitCloneFailure,
   gitCloneUrl,
   imageUserHome,
+  isAgentProcessId,
   machineSignInHome,
+  parseCacheVolumeKey,
   SANDBOX_CAPABILITIES,
+  SANDBOX_VOLUME_KEY_PATTERN,
+  SEPARATE_AGENT_DEFAULT_RESOURCES,
+  SEPARATE_COMMANDS_SOCKET,
+  SEPARATE_HARNESS,
   StdioDeploymentRuntimeProvider,
   shellSandboxProcesses,
   signInHomePath,
-  VOLUME_KEY_PATTERN,
   VolumeUsageLog,
   volumeMountPath,
 } from "@catamorphic/sandbox";
@@ -37,6 +46,11 @@ import {
   APP_DATA_ENV,
   APP_DATA_MOUNT,
 } from "@catamorphic/workflow/project-layout";
+import {
+  type CommandChannel,
+  type CommandSession,
+  startCommandChannel,
+} from "./command-channel.js";
 import { DockerApiError, DockerClient } from "./docker-client.js";
 import {
   type EgressLookup,
@@ -79,11 +93,77 @@ const FALLBACK_NAMESERVERS = ["8.8.8.8", "8.8.4.4"];
 const EGRESS_LABEL = "work.sandbox.egress";
 /** Present when the sandbox runs its own Docker daemon. */
 const CONTAINERS_LABEL = "work.sandbox.containers";
+/** Marks Work's own sandbox: no network, no setup (ADR 0334). */
+const INTERNAL_LABEL = "work.sandbox.internal";
 /** The persistent volumes it mounts, comma-separated keys. */
 const VOLUMES_LABEL = "work.sandbox.volumes";
 /** Names a Docker volume as one of this machine's sandbox volumes. */
 export const VOLUME_LABEL = "work.volume";
 const VOLUME_PREFIX = "work-volume-";
+/**
+ * The agent container of a sandbox whose commands run apart (ADR 0332)
+ * names its pair, the command container, which keeps the sandbox's id.
+ */
+const AGENT_OF_LABEL = "work.sandbox.agent-of";
+/** On a command container whose agent runs apart: what its commands load, as JSON. */
+const SEPARATE_LABEL = "work.sandbox.separate";
+/** A directory both sides of a sandbox share, named for the sandbox. */
+const SHARED_LABEL = "work.shared";
+const SHARED_PREFIX = "work-shared-";
+/** Where the agent side sees its command socket's folder. */
+const COMMANDS_MOUNT = path.posix.dirname(SEPARATE_COMMANDS_SOCKET);
+/**
+ * On the agent side (ADR 0332) Work's runner and operations run as root
+ * and the harness as a user of its own ({@link SEPARATE_HARNESS}), which
+ * owns none of the checkout (Git there refuses a repository it does not
+ * own), reads no grant or runner state, and writes none of the shim. It
+ * edits the checkout through the group both sides share, which every
+ * checkout folder passes on (setgid) and every command writes for (umask
+ * 002).
+ */
+const HARNESS_UID = SEPARATE_HARNESS.uid;
+const SHARED_GID = SEPARATE_HARNESS.gid;
+/** Root's alone on the agent side: grants, the runner and its state. */
+const AGENT_SESSION = "/workspace/.work-session";
+
+/**
+ * Lays out the agent side for its harness (ADR 0332): the session folder
+ * root's alone, the harness's own home and temporary folder, the shim
+ * root's (its files written beforehand), and every Git the image has
+ * replaced by the shim's, so even a Git named by its absolute path runs
+ * where commands run; Git's own helper folders are root's alone. Arguments:
+ * the harness's user and group, then the Git shim.
+ */
+const AGENT_LAYOUT = [
+  'u="$1"; g="$2"; shim_git="$3"',
+  `mkdir -p ${AGENT_SESSION} && chown 0:0 ${AGENT_SESSION} && chmod 700 ${AGENT_SESSION}`,
+  // The harness's folder is root's: it writes its home and temporary
+  // folder, and only reads its media and configuration home.
+  `mkdir -p ${SEPARATE_HARNESS.home} ${SEPARATE_HARNESS.temporary} ${SEPARATE_HARNESS.media} ${SEPARATE_HARNESS.config}`,
+  `chown 0:0 ${path.posix.dirname(SEPARATE_HARNESS.home)} ${SEPARATE_HARNESS.config} && chmod 755 ${path.posix.dirname(SEPARATE_HARNESS.home)} ${SEPARATE_HARNESS.config}`,
+  `chown "0:$g" ${SEPARATE_HARNESS.media} && chmod 750 ${SEPARATE_HARNESS.media}`,
+  `chown "$u:$g" ${SEPARATE_HARNESS.home} ${SEPARATE_HARNESS.temporary} && chmod 700 ${SEPARATE_HARNESS.home} ${SEPARATE_HARNESS.temporary}`,
+  // The shim is root's: the harness reads and runs it, never rewrites it.
+  `chown -R 0:0 ${SEPARATE_HARNESS.shim} && chmod -R a+rX,go-w ${SEPARATE_HARNESS.shim} && chmod 755 ${SEPARATE_HARNESS.shim}/bin/bash "$shim_git"`,
+  'for d in $(printf %s "$PATH" | tr : " ") /usr/bin /usr/local/bin /bin /usr/sbin /usr/local/sbin; do',
+  '  [ -e "$d/git" ] || [ -L "$d/git" ] || continue',
+  '  [ "$d/git" = "$shim_git" ] && continue',
+  '  rm -f "$d/git" && cp "$shim_git" "$d/git" && chmod 755 "$d/git" || exit 1',
+  "done",
+  "for d in /usr/lib/git-core /usr/libexec/git-core /usr/local/libexec/git-core; do",
+  '  [ -d "$d" ] && chown 0:0 "$d" && chmod 700 "$d"',
+  "done",
+  "exit 0",
+].join("\n");
+
+/**
+ * The end of the command side's /etc/profile when it shares the checkout
+ * (ADR 0332): what login shells make there stays group-writable.
+ */
+const SHARED_PROFILE = [
+  "grep -qxF '# Work: the checkout is shared with the agent side (ADR 0332).' /etc/profile 2>/dev/null && exit 0",
+  "printf '\\n%s\\numask 002\\n' '# Work: the checkout is shared with the agent side (ADR 0332).' >> /etc/profile",
+].join("\n");
 
 /**
  * The longest a sandbox stays widened (ADR 0257): the longest setup, 240
@@ -93,6 +173,13 @@ const MAX_WIDENING_MS = 245 * 60_000;
 /** Where a sandbox sees its proxy's socket and forwarder. */
 const PROXY_MOUNT = "/run/work";
 const PROXY_PORT = 3128;
+/** The most output one of an agent's separated commands sends back (ADR 0332). */
+const SEPARATE_COMMAND_OUTPUT_BYTES = 64 * 1024 * 1024;
+/**
+ * Every tracked command carries its token in its environment, so a root
+ * kill reads its group's leader back from `/proc` before it signals.
+ */
+const TRACKED_TOKEN = "WORK_TRACKED";
 /** Process state of tracked commands, inside the sandbox. */
 const EXEC_STATE = "/tmp/.work-exec";
 
@@ -135,12 +222,63 @@ const TRACKED = [
   'exit "$s"',
 ].join("\n");
 
+/**
+ * A command of the agent's, on the command side (ADR 0332). Arguments: the
+ * session files to load (colon-separated), the folder its returned files
+ * go in (or empty), then argv. Its input arrives as base64 lines, an empty
+ * line ending it, through a pipe a relay fills, so a command that never
+ * reads it still ends.
+ */
+const SEPARATED_COMMAND = [
+  'files="$1"; back="$2"; shift 2',
+  // bash as the harness asked; an image without it still runs commands.
+  'if [ "$1" = bash ] && ! command -v bash >/dev/null 2>&1; then shift; set -- sh "$@"; fi',
+  "old_ifs=$IFS; IFS=:",
+  'for f in $files; do IFS=$old_ifs; [ -f "$f" ] && . "$f"; IFS=:; done',
+  "IFS=$old_ifs",
+  '[ -n "$back" ] && mkdir -p "$back" 2>/dev/null',
+  'p="/tmp/.work-command-$$"',
+  'rm -f "$p"; mkfifo "$p" || { echo "Work could not pass this command its input" >&2; exit 126; }',
+  '{ while IFS= read -r l; do [ -n "$l" ] || break; printf %s "$l" | base64 -d 2>/dev/null; done; } > "$p" &',
+  "relay=$!",
+  '"$@" < "$p"; s=$?',
+  'kill "$relay" 2>/dev/null; rm -f "$p"',
+  'exit "$s"',
+].join("\n");
+
+/** Sends a signal to a tracked command's process group (ADR 0332). */
+const SIGNAL_TRACKED = [
+  `f="${EXEC_STATE}/$1"`,
+  'i=0; while [ ! -s "$f" ] && [ $i -lt 50 ]; do sleep 0.1; i=$((i+1)); done',
+  'p=$(cat "$f" 2>/dev/null)',
+  // The pid comes from a folder commands can write: signal only the group
+  // whose leader carries this command's own token (ADR 0332).
+  'case "$p" in ""|*[!0-9]*) exit 0;; esac',
+  `tr '\\0' '\\n' < "/proc/$p/environ" 2>/dev/null | grep -qxF "${TRACKED_TOKEN}=$1" || exit 0`,
+  'kill -"$2" -"$p" 2>/dev/null',
+  "exit 0",
+].join("\n");
+
+/** Returned files (ADR 0332): each regular one, base64, then removed. */
+const COLLECT_RETURNS = [
+  'for f in "$@"; do',
+  '  if [ -f "$f" ] && [ ! -L "$f" ]; then',
+  `    printf 'file\\t%s\\t' "$f"; head -c ${COMMAND_RETURN_LIMIT.bytes + 1} "$f" | base64 | tr -d '\\n'; printf '\\n'; rm -f "$f"`,
+  "  fi",
+  "done",
+  "exit 0",
+].join("\n");
+
 /** Stops a tracked command's process group (it may not have recorded it yet). */
 const KILL_TRACKED = [
   `f="${EXEC_STATE}/$1"`,
   'i=0; while [ ! -s "$f" ] && [ $i -lt 50 ]; do sleep 0.1; i=$((i+1)); done',
   'p=$(cat "$f" 2>/dev/null)',
-  '[ -n "$p" ] && kill -9 -"$p" 2>/dev/null',
+  // The pid comes from a folder commands can write: signal only the group
+  // whose leader carries this command's own token (ADR 0332).
+  'case "$p" in ""|*[!0-9]*) exit 0;; esac',
+  `tr '\\0' '\\n' < "/proc/$p/environ" 2>/dev/null | grep -qxF "${TRACKED_TOKEN}=$1" || exit 0`,
+  'kill -9 -"$p" 2>/dev/null',
   "exit 0",
 ].join("\n");
 
@@ -205,6 +343,11 @@ export interface ContainerProviderConfig {
   hostPathOf?: HostPathOf;
   /** Name resolution for egress proxies; the system resolver by default. */
   lookup?: EgressLookup;
+  /**
+   * The most output one of an agent's separated commands sends back
+   * (ADR 0332); 64 MiB by default.
+   */
+  separateCommandOutputBytes?: number;
   /** Machine log lines: refused egress, for example. */
   log?: (line: string) => void;
 }
@@ -213,9 +356,18 @@ export interface ContainerProviderConfig {
 interface SandboxRecord {
   proxy?: EgressPolicy;
   containers: boolean;
+  /** Work's own sandbox: no network and no setup (ADR 0334). */
+  internal?: boolean;
   volumes: string[];
   /** Whether this process saw it running and started what it needs. */
   ready: boolean;
+  /**
+   * A command container whose agent runs apart (ADR 0332): the session
+   * files the agent's commands load.
+   */
+  separate?: { envFiles: string[] };
+  /** An agent container (ADR 0332): the sandbox it is the agent side of. */
+  agentOf?: string;
 }
 
 /**
@@ -234,13 +386,12 @@ export class ContainerSandboxProvider implements SandboxProvider {
   readonly deploymentRuntime: DeploymentRuntimeProvider;
   /**
    * Background processes (ADR 0174) run inside the container in their own
-   * session; their output and state live there, so they end with it.
+   * session; their output and state live there, so they end with it. In a
+   * sandbox that runs commands apart (ADR 0332) a process lives on the side
+   * it was started on, which its id names: the runner beside the agent,
+   * everything else where commands run.
    */
-  readonly processes: SandboxProcessProvider = shellSandboxProcesses({
-    executeCommand: (sandboxId, command, opts) =>
-      this.executeCommand(sandboxId, command, opts),
-    workspaceRoot: this.workspaceRoot,
-  });
+  readonly processes: SandboxProcessProvider;
   /** Docker volumes named for their keys (ADR 0208). */
   readonly volumes: SandboxVolumeProvider = {
     prune: (args) => this.pruneVolumes(args),
@@ -254,6 +405,8 @@ export class ContainerSandboxProvider implements SandboxProvider {
   private readonly owner: string;
   private readonly records = new Map<string, SandboxRecord>();
   private readonly proxies = new Map<string, Promise<EgressProxy>>();
+  /** Each separated sandbox's command socket (ADR 0332), served by this process. */
+  private readonly channels = new Map<string, Promise<CommandChannel>>();
   /** Each sandbox's current widening (ADR 0257), ended when its time is up. */
   private readonly widenings = new Map<
     string,
@@ -262,6 +415,8 @@ export class ContainerSandboxProvider implements SandboxProvider {
   /** Widenings each sandbox has seen end, refused should they arrive late. */
   private readonly endedWidenings = new Map<string, string[]>();
   private readonly images = new Map<string, Promise<void>>();
+  /** Each cache's lock on this machine, by family (ADR 0334). */
+  private readonly cacheLocks = new Map<string, Promise<void>>();
   private hostPaths: Promise<HostPathOf> | undefined;
   private network: Promise<void> | undefined;
   /** Sandboxes an earlier process left half made, removed once (see {@link reclaim}). */
@@ -295,15 +450,60 @@ export class ContainerSandboxProvider implements SandboxProvider {
       (runtime.kind === "runsc"
         ? runtime.netRaw
         : Boolean(config.privilegedContainers));
+    const commandProcesses = shellSandboxProcesses({
+      executeCommand: (sandboxId, command, opts) =>
+        this.executeCommand(sandboxId, command, { ...opts, side: "commands" }),
+      workspaceRoot: this.workspaceRoot,
+    });
+    const agentProcesses = shellSandboxProcesses({
+      executeCommand: (sandboxId, command, opts) =>
+        this.executeCommand(sandboxId, command, { ...opts, side: "agent" }),
+      workspaceRoot: this.workspaceRoot,
+      side: "agent",
+    });
+    const owning = (processId: string) =>
+      isAgentProcessId(processId) ? agentProcesses : commandProcesses;
+    this.processes = {
+      startProcess: (args) =>
+        (args.side === "agent"
+          ? agentProcesses
+          : commandProcesses
+        ).startProcess(args),
+      readProcessOutput: (args) =>
+        owning(args.processId).readProcessOutput(args),
+      signalProcess: (args) => owning(args.processId).signalProcess(args),
+      writeProcessInput: (args) =>
+        owning(args.processId).writeProcessInput(args),
+      // One side lists everything when both are one container.
+      listProcesses: async (args) =>
+        (await this.record(args.sandboxId)).separate
+          ? [
+              ...(await commandProcesses.listProcesses(args)),
+              ...(await agentProcesses.listProcesses(args)),
+            ]
+          : commandProcesses.listProcesses(args),
+    };
     this.capabilities = [
       SANDBOX_CAPABILITIES.images,
       ...((config.imageBuild ?? true) ? [SANDBOX_CAPABILITIES.imageBuild] : []),
-      // The proxy that enforces a policy switches it too (ADR 0257).
+      // The proxy that enforces a policy switches it too (ADR 0257), and
+      // the socket that carries an agent's commands needs the same host
+      // sockets and a container that cannot leave its namespace (ADR 0332).
       ...(this.hostSockets
-        ? [SANDBOX_CAPABILITIES.egressPolicy, SANDBOX_CAPABILITIES.setupNetwork]
+        ? [
+            SANDBOX_CAPABILITIES.egressPolicy,
+            SANDBOX_CAPABILITIES.setupNetwork,
+            SANDBOX_CAPABILITIES.separateCommands,
+          ]
         : []),
       ...(this.nested ? [SANDBOX_CAPABILITIES.containers] : []),
       SANDBOX_CAPABILITIES.volumes,
+      // Read-only mounts the sandbox's root cannot remount (ADR 0334). A
+      // machine that runs privileged runc containers could, so it offers
+      // none, and createSandbox refuses them in such a sandbox anyway.
+      ...(runtime.kind === "runc" && config.privilegedContainers
+        ? []
+        : [SANDBOX_CAPABILITIES.caches]),
     ];
     this.deploymentRuntime = new StdioDeploymentRuntimeProvider({
       uploadFiles: (sandboxId, files, basePath) =>
@@ -332,9 +532,7 @@ export class ContainerSandboxProvider implements SandboxProvider {
    */
   private async reclaim(): Promise<void> {
     for (const id of this.creations.abandoned()) {
-      await this.docker.removeContainer(id);
-      await this.closeProxy(id);
-      fs.rmSync(this.egressDirectory(id), { recursive: true, force: true });
+      await this.removePair(id);
       this.creations.end(id);
       this.config.log?.(`Removed sandbox ${id}, left half made`);
     }
@@ -352,6 +550,19 @@ export class ContainerSandboxProvider implements SandboxProvider {
           ? "This machine's gVisor runtime has no --net-raw, so its sandboxes cannot run containers"
           : "This machine runs containers in sandboxes only when its operator accepts privileged containers (WORK_CONTAINER_PRIVILEGED=1)",
       );
+    // Work's own sandbox, for its own commands alone (ADR 0334): no network
+    // of any kind, no setup, nothing an Environment asks for.
+    const internal = opts.internal === true;
+    if (
+      internal &&
+      (opts.egress ||
+        opts.containers ||
+        opts.signIns?.length ||
+        opts.separateCommands)
+    )
+      throw new Error(
+        "A sandbox Work makes for its own commands takes no egress, containers, sign-ins or separated commands",
+      );
     const restricted = opts.egress?.mode === "allowlist";
     if (restricted && !this.hostSockets)
       throw new Error(
@@ -360,6 +571,13 @@ export class ContainerSandboxProvider implements SandboxProvider {
           : "This machine runs privileged containers, which can leave their network, so it cannot enforce an egress policy",
       );
     assertSandboxVolumes(opts.volumes);
+    const privileged =
+      Boolean(opts.containers) && this.config.runtime.kind === "runc";
+    // A privileged container's root can remount anything writable.
+    if (privileged && opts.volumes?.some((volume) => volume.readOnly))
+      throw new Error(
+        "This machine runs containers in sandboxes as privileged runc containers, which could remount a read-only cache writable; run gVisor (runsc) to give such an Environment caches",
+      );
     const signIns = this.signInMounts(opts);
     await this.reclaimed;
     const image = await this.imageFor(opts);
@@ -367,157 +585,379 @@ export class ContainerSandboxProvider implements SandboxProvider {
     const imageConfig = objectField(inspected, "Config");
     const user = typeof imageConfig.User === "string" ? imageConfig.User : "";
     const home = imageUserHome({ user, env: stringList(imageConfig.Env) });
-    const volumes = (opts.volumes ?? []).map((volume) => ({
-      ...volume,
-      target: volumeMountPath({ path: volume.path, home }),
-    }));
-    // `~/x` and `/root/x` are one place once the home is known.
-    assertSandboxVolumes(
-      volumes.map((volume) => ({ ...volume, path: volume.target })),
+    // Each cache's generations are checked, mounted and retired one
+    // sandbox at a time on this machine (ADR 0334): a generation found here
+    // cannot be removed before the container holding it exists.
+    const releaseCaches = await this.lockCaches(
+      (opts.volumes ?? []).flatMap(
+        (volume) => parseCacheVolumeKey(volume.key)?.family ?? [],
+      ),
     );
-    const hostPathOf = await this.hostPathOf();
-    if (!restricted) await this.ensureNetwork();
-    const id = `${this.config.namePrefix ?? "work"}-${randomUUID().replaceAll("-", "").slice(0, 12)}`;
-    // Nested containers under gVisor have no route but the proxy, so an
-    // open sandbox that runs containers gets one that admits anything.
-    const proxy: EgressPolicy | undefined =
-      opts.egress?.mode === "allowlist"
-        ? { allow: opts.egress.allow }
-        : opts.containers &&
-            this.config.runtime.kind === "runsc" &&
-            this.hostSockets
-          ? { any: true }
+    // A cache generation this machine no longer has (pruned, or the
+    // machine was reset) is not mounted, never created: an empty one would
+    // read as a cache. Only a fill, which mounts it writable, makes one.
+    // The handle reports it, so the control plane fills the machine again.
+    const absent = new Set<string>();
+    try {
+      for (const volume of opts.volumes ?? [])
+        if (
+          volume.readOnly &&
+          (
+            await this.docker.listVolumes({
+              label: [
+                `${VOLUME_LABEL}=${volume.key}`,
+                `${OWNER_LABEL}=${this.owner}`,
+              ],
+            })
+          ).length === 0
+        )
+          absent.add(volume.key);
+      const volumes = (opts.volumes ?? [])
+        .filter((volume) => !absent.has(volume.key))
+        .map((volume) => ({
+          ...volume,
+          target: volumeMountPath({ path: volume.path, home }),
+        }));
+      // `~/x` and `/root/x` are one place once the home is known.
+      assertSandboxVolumes(
+        volumes.map((volume) => ({ ...volume, path: volume.target })),
+      );
+      const separate = this.separateOf(opts);
+      const hostPathOf = await this.hostPathOf();
+      if (!restricted && !internal) await this.ensureNetwork();
+      const id = `${this.config.namePrefix ?? "work"}-${randomUUID().replaceAll("-", "").slice(0, 12)}`;
+      // Nested containers under gVisor have no route but the proxy, so an
+      // open sandbox that runs containers gets one that admits anything.
+      const proxy: EgressPolicy | undefined =
+        opts.egress?.mode === "allowlist"
+          ? { allow: opts.egress.allow }
+          : opts.containers &&
+              this.config.runtime.kind === "runsc" &&
+              this.hostSockets
+            ? { any: true }
+            : undefined;
+      // The agent side runs no containers: only a restricted policy needs
+      // its own proxy there.
+      const agentProxy: EgressPolicy | undefined =
+        opts.egress?.mode === "allowlist"
+          ? { allow: opts.egress.allow }
           : undefined;
-    const persistent = volumes.filter((volume) => !volume.temporary);
-    for (const volume of persistent)
-      await this.docker.createVolume({
-        name: `${VOLUME_PREFIX}${volume.key}`,
-        labels: { [VOLUME_LABEL]: volume.key, [OWNER_LABEL]: this.owner },
-      });
-    this.usage.touch(persistent.map((volume) => volume.key));
-    const dataDirectory =
-      opts.labels?.purpose === "deployment-runtime" && opts.labels.projectId
-        ? await this.config.projectDataDirectory?.({
-            projectId: opts.labels.projectId,
-          })
-        : undefined;
-    const env: Record<string, string> = {
-      ...opts.envVars,
-      ...(dataDirectory ? { [APP_DATA_ENV]: APP_DATA_MOUNT } : {}),
-      ...(restricted ? PROXY_ENV : {}),
-    };
-    const mounts: unknown[] = [
-      // The workspace is a volume of the container's own, removed with it:
-      // gVisor's root filesystem does not survive a restart.
-      { Type: "volume", Target: this.workspaceRoot },
-      ...volumes.map((volume) => ({
+      const persistent = volumes.filter((volume) => !volume.temporary);
+      for (const volume of persistent)
+        await this.docker.createVolume({
+          name: `${VOLUME_PREFIX}${volume.key}`,
+          labels: { [VOLUME_LABEL]: volume.key, [OWNER_LABEL]: this.owner },
+        });
+      this.usage.touch(persistent.map((volume) => volume.key));
+      const dataDirectory =
+        opts.labels?.purpose === "deployment-runtime" && opts.labels.projectId
+          ? await this.config.projectDataDirectory?.({
+              projectId: opts.labels.projectId,
+            })
+          : undefined;
+      const env: Record<string, string> = {
+        ...opts.envVars,
+        ...(dataDirectory ? { [APP_DATA_ENV]: APP_DATA_MOUNT } : {}),
+        ...(restricted ? PROXY_ENV : {}),
+      };
+      // What both sides of a sandbox that runs commands apart share: each
+      // directory one volume of its own (ADR 0332), removed with the sandbox.
+      const shared = (separate?.shared ?? []).map((target, index) => ({
         Type: "volume",
-        Target: volume.target,
-        ...(volume.temporary
-          ? {}
-          : { Source: `${VOLUME_PREFIX}${volume.key}` }),
-      })),
-      ...signIns.map((signIn) => ({
+        Source: `${SHARED_PREFIX}${id}-${index}`,
+        Target: target,
+      }));
+      const signInMounts = signIns.map((signIn) => ({
         Type: "bind",
         Source: hostPathOf(signIn.host),
         Target: signIn.guest,
-      })),
-      ...(dataDirectory
-        ? [
-            {
-              Type: "bind",
-              Source: hostPathOf(dataDirectory),
-              Target: APP_DATA_MOUNT,
-            },
-          ]
-        : []),
-      ...(proxy
-        ? [
-            {
-              Type: "bind",
-              Source: hostPathOf(this.egressDirectory(id)),
-              Target: PROXY_MOUNT,
-              ReadOnly: true,
-            },
-          ]
-        : []),
-      // The sandbox network's own resolver may not answer inside gVisor;
-      // sandboxes ask the machine's name servers, as on Docker's bridge.
-      ...(restricted
-        ? []
-        : [
-            {
-              Type: "bind",
-              Source: hostPathOf(this.resolvConf()),
-              Target: "/etc/resolv.conf",
-              ReadOnly: true,
-            },
-          ]),
-    ];
-    const cpuMillis =
-      opts.resources?.cpuMillis ?? this.config.cpuMillis ?? DEFAULT_CPU_MILLIS;
-    const memoryMb =
-      opts.resources?.memoryMb ?? this.config.memoryMb ?? DEFAULT_MEMORY_MB;
-    const runtime = this.config.runtime;
-    const labels: Record<string, string> = {
-      ...opts.labels,
-      [SANDBOX_LABEL]: "1",
-      [OWNER_LABEL]: this.owner,
-      ...(proxy ? { [EGRESS_LABEL]: JSON.stringify(proxy) } : {}),
-      ...(opts.containers ? { [CONTAINERS_LABEL]: "1" } : {}),
-      ...(persistent.length > 0
-        ? { [VOLUMES_LABEL]: persistent.map((volume) => volume.key).join(",") }
-        : {}),
-    };
-    const record: SandboxRecord = {
-      ...(proxy ? { proxy } : {}),
-      containers: Boolean(opts.containers),
-      volumes: persistent.map((volume) => volume.key),
-      ready: false,
-    };
-    // Recorded before the container exists: a process that dies before it
-    // hands the sandbox over leaves a record the next one reclaims.
-    this.creations.begin(id);
-    try {
-      if (proxy) await this.ensureProxy(id, proxy);
-      await this.docker.createContainer({
-        name: id,
-        body: {
-          Image: image,
-          // The sandbox stays up until stopped; tini reaps what commands
-          // leave behind and forwards the stop signal.
-          Entrypoint: ["sleep"],
-          Cmd: ["infinity"],
-          WorkingDir: this.workspaceRoot,
-          Env: Object.entries(env).map(([name, value]) => `${name}=${value}`),
-          Labels: labels,
-          HostConfig: {
-            ...(runtime.name ? { Runtime: runtime.name } : {}),
-            Init: true,
-            NanoCpus: cpuMillis * 1_000_000,
-            Memory: memoryMb * 1024 * 1024,
-            MemorySwap: memoryMb * 1024 * 1024,
-            PidsLimit: this.config.pidsLimit ?? DEFAULT_PIDS_LIMIT,
-            NetworkMode: restricted ? "none" : SANDBOX_NETWORK,
-            Mounts: mounts,
-            ...(opts.containers
-              ? runtime.kind === "runsc"
-                ? { CapAdd: ["ALL"] }
-                : { Privileged: true }
-              : {}),
-          },
-        },
+      }));
+      const resolverMounts =
+        restricted || internal
+          ? []
+          : [
+              // The sandbox network's own resolver may not answer inside
+              // gVisor; sandboxes ask the machine's name servers, as on
+              // Docker's bridge.
+              {
+                Type: "bind",
+                Source: hostPathOf(this.resolvConf()),
+                Target: "/etc/resolv.conf",
+                ReadOnly: true,
+              },
+            ];
+      const proxyMount = (name: string) => ({
+        Type: "bind",
+        Source: hostPathOf(this.egressDirectory(name)),
+        Target: PROXY_MOUNT,
+        ReadOnly: true,
       });
-      this.records.set(id, record);
-      await this.docker.startContainer(id);
-      await this.prepare({ id, record, fresh: true });
-    } catch (error) {
-      // One that cannot be removed now stays recorded, for reclaiming.
-      await this.destroySandbox(id).catch(() => {});
-      throw error;
+      const mounts: unknown[] = [
+        // The workspace is a volume of the container's own, removed with it:
+        // gVisor's root filesystem does not survive a restart.
+        { Type: "volume", Target: this.workspaceRoot },
+        ...shared,
+        ...volumes.map((volume) => ({
+          Type: "volume",
+          Target: volume.target,
+          ...(volume.temporary
+            ? {}
+            : { Source: `${VOLUME_PREFIX}${volume.key}` }),
+          ...(volume.readOnly ? { ReadOnly: true } : {}),
+        })),
+        // A member's sign-in is the harness's, which runs beside the agent.
+        ...(separate ? [] : signInMounts),
+        ...(dataDirectory
+          ? [
+              {
+                Type: "bind",
+                Source: hostPathOf(dataDirectory),
+                Target: APP_DATA_MOUNT,
+              },
+            ]
+          : []),
+        ...(proxy ? [proxyMount(id)] : []),
+        ...resolverMounts,
+      ];
+      const cpuMillis =
+        opts.resources?.cpuMillis ??
+        this.config.cpuMillis ??
+        DEFAULT_CPU_MILLIS;
+      const memoryMb =
+        opts.resources?.memoryMb ?? this.config.memoryMb ?? DEFAULT_MEMORY_MB;
+      const runtime = this.config.runtime;
+      const limitsOf = (cpu: number, memory: number) => ({
+        ...(runtime.name ? { Runtime: runtime.name } : {}),
+        Init: true,
+        NanoCpus: cpu * 1_000_000,
+        Memory: memory * 1024 * 1024,
+        MemorySwap: memory * 1024 * 1024,
+        PidsLimit: this.config.pidsLimit ?? DEFAULT_PIDS_LIMIT,
+        NetworkMode: restricted || internal ? "none" : SANDBOX_NETWORK,
+      });
+      // The command side runs the change's tests and services: the
+      // Environment's limits. The agent side runs the harness: its own
+      // share, which the Allocation reserves on top (ADR 0332).
+      const limits = limitsOf(cpuMillis, memoryMb);
+      const agentLimits = limitsOf(
+        separate?.agentResources?.cpuMillis ??
+          SEPARATE_AGENT_DEFAULT_RESOURCES.cpuMillis,
+        separate?.agentResources?.memoryMb ??
+          SEPARATE_AGENT_DEFAULT_RESOURCES.memoryMb,
+      );
+      const labels: Record<string, string> = {
+        ...opts.labels,
+        [SANDBOX_LABEL]: "1",
+        [OWNER_LABEL]: this.owner,
+        ...(proxy ? { [EGRESS_LABEL]: JSON.stringify(proxy) } : {}),
+        ...(opts.containers ? { [CONTAINERS_LABEL]: "1" } : {}),
+        ...(internal ? { [INTERNAL_LABEL]: "1" } : {}),
+        ...(persistent.length > 0
+          ? {
+              [VOLUMES_LABEL]: persistent.map((volume) => volume.key).join(","),
+            }
+          : {}),
+        ...(separate
+          ? {
+              [SEPARATE_LABEL]: JSON.stringify({
+                envFiles: separate.envFiles ?? [],
+              }),
+            }
+          : {}),
+      };
+      const record: SandboxRecord = {
+        ...(proxy ? { proxy } : {}),
+        containers: Boolean(opts.containers),
+        ...(internal ? { internal: true } : {}),
+        volumes: persistent.map((volume) => volume.key),
+        ready: false,
+        ...(separate
+          ? { separate: { envFiles: [...(separate.envFiles ?? [])] } }
+          : {}),
+      };
+      const agent = agentName(id);
+      // Recorded before the container exists: a process that dies before it
+      // hands the sandbox over leaves a record the next one reclaims.
+      this.creations.begin(id);
+      try {
+        if (proxy) await this.ensureProxy(id, proxy);
+        for (const volume of shared)
+          await this.docker.createVolume({
+            name: volume.Source,
+            labels: { [SHARED_LABEL]: id, [OWNER_LABEL]: this.owner },
+          });
+        await this.docker.createContainer({
+          name: id,
+          body: {
+            Image: image,
+            // The sandbox stays up until stopped; tini reaps what commands
+            // leave behind and forwards the stop signal.
+            Entrypoint: ["sleep"],
+            Cmd: ["infinity"],
+            WorkingDir: this.workspaceRoot,
+            Env: Object.entries(env).map(([name, value]) => `${name}=${value}`),
+            Labels: labels,
+            HostConfig: {
+              ...limits,
+              Mounts: mounts,
+              // Writes what the agent side made, through the shared group.
+              ...(separate ? { GroupAdd: [String(SHARED_GID)] } : {}),
+              ...(opts.containers
+                ? runtime.kind === "runsc"
+                  ? { CapAdd: ["ALL"] }
+                  : privileged
+                    ? { Privileged: true }
+                    : {}
+                : {}),
+            },
+          },
+        });
+        // Created: Docker now keeps its volumes, so others may retire.
+        releaseCaches();
+        this.records.set(id, record);
+        if (separate) {
+          // The agent's side (ADR 0332): the harness, its grants and state,
+          // the checkout it shares, and the command socket, nothing else.
+          if (agentProxy) await this.ensureProxy(agent, agentProxy);
+          await this.ensureChannel(id);
+          await this.docker.createContainer({
+            name: agent,
+            body: {
+              Image: image,
+              Entrypoint: ["sleep"],
+              Cmd: ["infinity"],
+              WorkingDir: this.workspaceRoot,
+              // Work's runner as root; the harness as its own user (see
+              // HARNESS_UID), whatever the image's own user is.
+              User: "0:0",
+              Env: Object.entries({
+                ...opts.envVars,
+                ...(restricted ? PROXY_ENV : {}),
+              }).map(([name, value]) => `${name}=${value}`),
+              Labels: {
+                ...opts.labels,
+                [AGENT_OF_LABEL]: id,
+                [OWNER_LABEL]: this.owner,
+                ...(agentProxy
+                  ? { [EGRESS_LABEL]: JSON.stringify(agentProxy) }
+                  : {}),
+              },
+              HostConfig: {
+                ...agentLimits,
+                // No program raises the harness: a setuid copy the command
+                // side's root leaves in the checkout runs as the harness.
+                SecurityOpt: ["no-new-privileges:true"],
+                Mounts: [
+                  { Type: "volume", Target: this.workspaceRoot },
+                  ...shared,
+                  ...signInMounts,
+                  ...(agentProxy ? [proxyMount(agent)] : []),
+                  ...resolverMounts,
+                  {
+                    Type: "bind",
+                    Source: hostPathOf(this.channelDirectory(id)),
+                    Target: COMMANDS_MOUNT,
+                    ReadOnly: true,
+                  },
+                ],
+              },
+            },
+          });
+          this.records.set(agent, {
+            ...(agentProxy ? { proxy: agentProxy } : {}),
+            containers: false,
+            volumes: [],
+            ready: false,
+            agentOf: id,
+          });
+        }
+        await this.docker.startContainer(id);
+        await this.prepare({ id, record, fresh: true });
+        if (separate) {
+          const agentRecord = await this.record(agent);
+          await this.docker.startContainer(agent);
+          await this.prepare({ id: agent, record: agentRecord, fresh: true });
+        }
+      } catch (error) {
+        releaseCaches();
+        // One that cannot be removed now stays recorded, for reclaiming.
+        await this.destroySandbox(id).catch(() => {});
+        throw error;
+      }
+      this.creations.end(id);
+      await this.retireCacheGenerations(volumes);
+      return {
+        id,
+        providerId: id,
+        sandboxType: "execution",
+        status: "started",
+        ...(absent.size > 0 ? { skippedVolumes: [...absent] } : {}),
+      };
+    } finally {
+      releaseCaches();
     }
-    this.creations.end(id);
-    return { id, providerId: id, sandboxType: "execution", status: "started" };
+  }
+
+  /**
+   * Hold each named cache's lock (ADR 0334), in one order so two sandboxes
+   * never wait on each other. Answers the release, safe to call twice.
+   */
+  private async lockCaches(families: readonly string[]): Promise<() => void> {
+    const releases: Array<() => void> = [];
+    for (const family of [...new Set(families)].sort()) {
+      const previous = this.cacheLocks.get(family) ?? Promise.resolve();
+      let release: () => void = () => {};
+      const held = new Promise<void>((resolve) => {
+        release = resolve;
+      });
+      const chained = previous.then(() => held);
+      this.cacheLocks.set(family, chained);
+      await previous;
+      releases.push(() => {
+        release();
+        if (this.cacheLocks.get(family) === chained)
+          this.cacheLocks.delete(family);
+      });
+    }
+    let released = false;
+    return () => {
+      if (released) return;
+      released = true;
+      for (const release of releases.reverse()) release();
+    };
+  }
+
+  /**
+   * Remove the generations of a cache the control plane named as neither
+   * published nor being filled (ADR 0334), under that cache's lock, once
+   * no sandbox mounts them: Docker keeps one a sandbox still mounts, even a
+   * stopped one. Never a key of another cache, nor one this sandbox mounts.
+   */
+  private async retireCacheGenerations(
+    volumes: ReadonlyArray<{ key: string; retire?: readonly string[] }>,
+  ): Promise<void> {
+    const mounted = new Set(volumes.map((volume) => volume.key));
+    const removed: string[] = [];
+    for (const volume of volumes) {
+      const family = parseCacheVolumeKey(volume.key)?.family;
+      if (!family || !volume.retire?.length) continue;
+      const release = await this.lockCaches([family]);
+      try {
+        for (const key of volume.retire) {
+          if (mounted.has(key) || parseCacheVolumeKey(key)?.family !== family)
+            continue;
+          if (
+            await this.docker
+              .removeVolume(`${VOLUME_PREFIX}${key}`)
+              .catch(() => false)
+          )
+            removed.push(key);
+        }
+      } finally {
+        release();
+      }
+    }
+    this.usage.forget(removed);
   }
 
   /**
@@ -571,37 +1011,61 @@ export class ContainerSandboxProvider implements SandboxProvider {
   /**
    * Start a stopped sandbox and what does not survive a stop. One still
    * running (this process restarted, the sandbox did not) only gets its
-   * proxy served again.
+   * proxy served again. A sandbox whose commands run apart (ADR 0332)
+   * starts both its sides and serves its command socket.
    */
   async startSandbox(sandboxId: string): Promise<void> {
     const record = await this.record(sandboxId);
+    // An agent side starts with its pair.
+    if (record.agentOf) return this.startSandbox(record.agentOf);
+    await this.startContainer(sandboxId, record);
+    if (record.separate) {
+      await this.ensureChannel(sandboxId);
+      const agent = agentName(sandboxId);
+      await this.startContainer(agent, await this.record(agent));
+    }
+  }
+
+  private async startContainer(
+    name: string,
+    record: SandboxRecord,
+  ): Promise<void> {
     const proxy = record.proxy
-      ? await this.ensureProxy(sandboxId, record.proxy)
+      ? await this.ensureProxy(name, record.proxy)
       : undefined;
-    const inspected = await this.docker.inspectContainer(sandboxId);
-    if (!inspected) throw new Error(`Sandbox '${sandboxId}' does not exist`);
+    const inspected = await this.docker.inspectContainer(name);
+    if (!inspected) throw new Error(`Sandbox '${name}' does not exist`);
     if (objectField(inspected, "State").Running !== true) {
       // A sandbox that starts again starts with its own policy (ADR 0257),
       // whatever it was widened to before it stopped.
-      this.endWidening(sandboxId);
+      this.endWidening(name);
       if (proxy && record.proxy && !samePolicy(proxy.policy, record.proxy))
         proxy.setPolicy(record.proxy);
-      await this.docker.startContainer(sandboxId);
-      await this.prepare({ id: sandboxId, record, fresh: false });
+      await this.docker.startContainer(name);
+      await this.prepare({ id: name, record, fresh: false });
     }
     record.ready = true;
     this.usage.touch(record.volumes);
   }
 
   async stopSandbox(sandboxId: string): Promise<void> {
-    const record = this.records.get(sandboxId);
-    if (record) record.ready = false;
+    // Read from the container's labels, so a process that restarted still
+    // stops the pair (ADR 0332).
+    const record = await this.record(sandboxId).catch(() => undefined);
+    if (record?.agentOf) return this.stopSandbox(record.agentOf);
+    for (const name of [sandboxId, agentName(sandboxId)]) {
+      const known = this.records.get(name);
+      if (known) known.ready = false;
+    }
     this.endWidening(sandboxId);
-    await this.docker.stopContainer(sandboxId, 5).catch((error: unknown) => {
-      if (!(error instanceof DockerApiError && error.status === 404))
-        throw error;
-    });
-    await this.closeProxy(sandboxId);
+    await this.closeChannel(sandboxId);
+    for (const name of [sandboxId, agentName(sandboxId)]) {
+      await this.docker.stopContainer(name, 5).catch((error: unknown) => {
+        if (!(error instanceof DockerApiError && error.status === 404))
+          throw error;
+      });
+      await this.closeProxy(name);
+    }
     await this.deploymentRuntime.releaseSandbox?.({ sandboxId });
   }
 
@@ -684,20 +1148,54 @@ export class ContainerSandboxProvider implements SandboxProvider {
 
   /** Remove the container and its temporary volumes; a missing one is gone already. */
   async destroySandbox(sandboxId: string): Promise<void> {
-    this.records.delete(sandboxId);
-    this.endWidening(sandboxId);
+    const pair = (await this.record(sandboxId).catch(() => undefined))?.agentOf;
+    if (pair) return this.destroySandbox(pair);
     this.endedWidenings.delete(sandboxId);
-    await this.docker.removeContainer(sandboxId);
-    await this.closeProxy(sandboxId);
-    fs.rmSync(this.egressDirectory(sandboxId), {
-      recursive: true,
-      force: true,
-    });
+    await this.removePair(sandboxId);
     this.creations.end(sandboxId);
     await this.deploymentRuntime.releaseSandbox?.({ sandboxId });
   }
 
+  /**
+   * Remove a sandbox's containers (its agent side too, ADR 0332), what
+   * serves them, and the directories they shared.
+   */
+  private async removePair(sandboxId: string): Promise<void> {
+    this.endWidening(sandboxId);
+    await this.closeChannel(sandboxId);
+    for (const name of [sandboxId, agentName(sandboxId)]) {
+      this.records.delete(name);
+      await this.docker.removeContainer(name);
+      await this.closeProxy(name);
+      fs.rmSync(this.egressDirectory(name), { recursive: true, force: true });
+    }
+    fs.rmSync(this.channelDirectory(sandboxId), {
+      recursive: true,
+      force: true,
+    });
+    for (const volume of await this.docker.listVolumes({
+      label: [`${SHARED_LABEL}=${sandboxId}`, `${OWNER_LABEL}=${this.owner}`],
+    }))
+      await this.docker.removeVolume(String(volume.Name));
+  }
+
   async getSandboxStatus(sandboxId: string): Promise<SandboxStatus> {
+    const record = await this.record(sandboxId);
+    if (record.agentOf) return this.getSandboxStatus(record.agentOf);
+    const status = await this.containerStatus(sandboxId);
+    if (!record.separate || status !== "started") return status;
+    // Both sides run, or the sandbox is stopped and starts whole again.
+    const agent = await this.containerStatus(agentName(sandboxId)).catch(
+      () => "error" as const,
+    );
+    return agent === "started"
+      ? status
+      : agent === "error"
+        ? "error"
+        : "stopped";
+  }
+
+  private async containerStatus(sandboxId: string): Promise<SandboxStatus> {
     const inspected = await this.docker.inspectContainer(sandboxId);
     if (!inspected) throw new Error(`Sandbox '${sandboxId}' does not exist`);
     const state = objectField(inspected, "State");
@@ -720,7 +1218,8 @@ export class ContainerSandboxProvider implements SandboxProvider {
     command: string,
     opts?: ExecOpts,
   ): Promise<ExecResult> {
-    const output = await this.tracked(sandboxId, {
+    const target = await this.sideContainer(sandboxId, opts?.side);
+    const output = await this.tracked(target, {
       // bash as on microsandbox; an image without it still runs commands.
       argv: [
         "sh",
@@ -749,7 +1248,7 @@ export class ContainerSandboxProvider implements SandboxProvider {
         result: `${result}\n[container] command was cancelled`,
       };
     if (output.exitCode !== 0) {
-      const died = await this.diedUnder(sandboxId, output.stderr);
+      const died = await this.diedUnder(target, output.stderr);
       if (died)
         return {
           exitCode: 137,
@@ -790,17 +1289,19 @@ export class ContainerSandboxProvider implements SandboxProvider {
     sandboxId: string,
     files: Record<string, string>,
     basePath: string,
+    opts?: SandboxFileOpts,
   ): Promise<void> {
     const entries = Object.entries(files);
     if (entries.length === 0) return;
     const archive = tarArchive(
       entries.map(([filePath, content]) => ({ path: filePath, content })),
     );
-    const extracted = await this.execRunning(sandboxId, {
+    const target = await this.sideContainer(sandboxId, opts?.side);
+    const extracted = await this.execRunning(target, {
       cmd: [
         "sh",
         "-c",
-        'mkdir -p "$2" && head -c "$1" | tar -xof - -C "$2"',
+        `${(await this.sharesCheckout(target)) ? "umask 002; " : ""}mkdir -p "$2" && head -c "$1" | tar -xof - -C "$2"`,
         "work-upload",
         String(archive.length),
         basePath || "/",
@@ -813,8 +1314,13 @@ export class ContainerSandboxProvider implements SandboxProvider {
       );
   }
 
-  async downloadFile(sandboxId: string, filePath: string): Promise<string> {
-    const read = await this.execRunning(sandboxId, {
+  async downloadFile(
+    sandboxId: string,
+    filePath: string,
+    opts?: SandboxFileOpts,
+  ): Promise<string> {
+    const target = await this.sideContainer(sandboxId, opts?.side);
+    const read = await this.execRunning(target, {
       cmd: ["cat", "--", filePath],
     });
     if (read.exitCode !== 0)
@@ -882,7 +1388,11 @@ export class ContainerSandboxProvider implements SandboxProvider {
     // A restricted sandbox's setup may reach only what the proxy admits;
     // an open one installs Bun or Node for its forwarder first.
     if (restricted) await this.startForwarder(id);
-    const setup = this.config.setupCommand ?? DEFAULT_SETUP_COMMAND;
+    // Work's own sandbox runs no setup: its commands need only the image's
+    // shell utilities, and it has no network to install anything with.
+    const setup = record.internal
+      ? ""
+      : (this.config.setupCommand ?? DEFAULT_SETUP_COMMAND);
     if (setup && (args.fresh || this.config.runtime.kind === "runsc")) {
       const prepared = await this.exec(id, {
         cmd: ["sh", "-c", setup],
@@ -899,17 +1409,60 @@ export class ContainerSandboxProvider implements SandboxProvider {
         );
     }
     if (record.proxy && !restricted) await this.startForwarder(id);
+    const mounts = Array.isArray(inspected.Mounts) ? inspected.Mounts : [];
+    const sharedTargets = mounts.flatMap((mount: unknown) => {
+      if (typeof mount !== "object" || mount === null) return [];
+      const name = Reflect.get(mount, "Name");
+      const destination = Reflect.get(mount, "Destination");
+      return typeof name === "string" &&
+        name.startsWith(SHARED_PREFIX) &&
+        typeof destination === "string"
+        ? [destination]
+        : [];
+    });
+    // The checkout both sides share (ADR 0332): its group the shared one,
+    // passed on to everything made in it, and writable through it.
+    if (args.fresh && record.separate && sharedTargets.length > 0) {
+      const shared = await this.exec(id, {
+        cmd: [
+          "sh",
+          "-c",
+          'g="$1"; shift; for d in "$@"; do chgrp "$g" "$d" && chmod 2775 "$d" || exit 1; done',
+          "work-share",
+          String(SHARED_GID),
+          ...sharedTargets,
+        ],
+        user: "0",
+      });
+      if (shared.exitCode !== 0)
+        throw new Error(`Sharing the checkout failed: ${shared.stderr}`);
+    }
+    // Login shells (setup, exec, Work's Git) read /etc/profile, which on
+    // Alpine sets umask 022 over the one Work gives each command, so the
+    // agent's side could not edit what they make in the checkout. At every
+    // start: gVisor's root filesystem starts over.
+    if (record.separate && sharedTargets.length > 0) {
+      const profiled = await this.exec(id, {
+        cmd: ["sh", "-c", SHARED_PROFILE],
+        user: "0",
+      });
+      if (profiled.exitCode !== 0)
+        throw new Error(
+          `Sharing the checkout failed: ${profiled.stderr || profiled.stdout}`,
+        );
+    }
+    if (record.agentOf) await this.layOutAgentSide(id);
     if (user && !isRoot(user)) {
       // Docker creates volumes (the workspace's included) and the
       // directories leading to them as root; the image's user owns them.
       // Bind mounts (sign-ins, project data) are the machine's own files.
-      const volumes = (
-        Array.isArray(inspected.Mounts) ? inspected.Mounts : []
-      ).flatMap((mount: unknown) => {
+      // The shared checkout stays the command side's (see HARNESS_UID).
+      const volumes = mounts.flatMap((mount: unknown) => {
         if (typeof mount !== "object" || mount === null) return [];
         const destination = Reflect.get(mount, "Destination");
         return Reflect.get(mount, "Type") === "volume" &&
-          typeof destination === "string"
+          typeof destination === "string" &&
+          !(record.agentOf && sharedTargets.includes(destination))
           ? [destination]
           : [];
       });
@@ -929,6 +1482,67 @@ export class ContainerSandboxProvider implements SandboxProvider {
     }
     if (record.containers) await this.ensureDocker(id, record, home);
     record.ready = true;
+  }
+
+  /**
+   * The agent side's folders and shim for its harness (ADR 0332): written
+   * as root at every start, since gVisor's root filesystem starts over.
+   */
+  private async layOutAgentSide(name: string): Promise<void> {
+    const runtime = await this.exec(name, {
+      // Node first: it loads nothing from where it starts. Bun runs the
+      // shim with an empty configuration and no .env files.
+      cmd: ["sh", "-c", "command -v node || command -v bun"],
+      user: "0",
+    });
+    const runtimePath = runtime.stdout.trim();
+    if (runtime.exitCode !== 0 || !runtimePath)
+      throw new Error(
+        "The agent's side needs Bun or Node to run its harness's shell",
+      );
+    const shim = commandShellFiles({
+      directory: SEPARATE_HARNESS.shim,
+      socket: SEPARATE_COMMANDS_SOCKET,
+      runtime: runtimePath,
+      returnFolder: SEPARATE_HARNESS.temporary,
+    });
+    // Written directly: the side is still being prepared.
+    const archive = tarArchive(
+      Object.entries(shim.files).map(([file, { content }]) => ({
+        path: path.posix.relative(SEPARATE_HARNESS.shim, file),
+        content,
+      })),
+    );
+    const written = await this.exec(name, {
+      cmd: [
+        "sh",
+        "-c",
+        'mkdir -p "$2" && head -c "$1" | tar -xof - -C "$2"',
+        "work-shim",
+        String(archive.length),
+        SEPARATE_HARNESS.shim,
+      ],
+      input: archive,
+      user: "0",
+    });
+    if (written.exitCode !== 0)
+      throw new Error(`Writing the agent's shell failed: ${written.stderr}`);
+    const laid = await this.exec(name, {
+      cmd: [
+        "sh",
+        "-c",
+        AGENT_LAYOUT,
+        "work-agent-layout",
+        String(HARNESS_UID),
+        String(SHARED_GID),
+        path.posix.join(shim.path, "git"),
+      ],
+      user: "0",
+    });
+    if (laid.exitCode !== 0)
+      throw new Error(
+        `Preparing the agent's side failed: ${laid.stderr || laid.stdout}`,
+      );
   }
 
   /**
@@ -1007,6 +1621,251 @@ export class ContainerSandboxProvider implements SandboxProvider {
       );
   }
 
+  /**
+   * What a sandbox that runs commands apart asks for (ADR 0332), checked:
+   * this machine must serve host sockets into sandboxes and run no
+   * privileged ones, and every shared directory lies inside the workspace.
+   */
+  private separateOf(
+    opts: CreateSandboxOpts,
+  ): CreateSandboxOpts["separateCommands"] {
+    const separate = opts.separateCommands;
+    if (!separate) return undefined;
+    if (!this.hostSockets)
+      throw new Error(
+        this.config.runtime.kind === "runsc"
+          ? "This machine's gVisor runtime cannot open host sockets (--host-uds=open), so it cannot run an agent's commands apart from the agent"
+          : "This machine runs privileged containers, which can leave their namespaces, so it cannot run an agent's commands apart from the agent",
+      );
+    if (opts.labels?.purpose === "deployment-runtime")
+      throw new Error(
+        "A deployment runtime has no agent to run commands apart from",
+      );
+    if (separate.shared.length === 0 || separate.shared.length > 4)
+      throw new Error(
+        "A sandbox that runs commands apart shares one to four directories",
+      );
+    for (const shared of separate.shared)
+      if (
+        !shared.startsWith(`${this.workspaceRoot}/`) ||
+        shared.split("/").some((part) => part === ".." || part === ".") ||
+        /[\0\n:]/.test(shared)
+      )
+        throw new Error(
+          `'${shared}' is not a directory of the workspace to share`,
+        );
+    assertSandboxResources(separate.agentResources, this.resourceLimits);
+    for (const file of separate.envFiles ?? [])
+      if (!path.posix.isAbsolute(file) || /[\0\n:]/.test(file))
+        throw new Error(`'${file}' is not a session file for commands to load`);
+    return separate;
+  }
+
+  /**
+   * The container an operation on `side` runs in: the agent container of
+   * a sandbox whose commands run apart for `agent`, else the sandbox's own
+   * (ADR 0332).
+   */
+  private async sideContainer(
+    sandboxId: string,
+    side: SandboxSide | undefined,
+  ): Promise<string> {
+    if (side !== "agent") return sandboxId;
+    return (await this.record(sandboxId)).separate
+      ? agentName(sandboxId)
+      : sandboxId;
+  }
+
+  private channelDirectory(sandboxId: string): string {
+    return path.join(this.config.stateDirectory, "commands", sandboxId);
+  }
+
+  /** A separated sandbox's command socket, served once per process (ADR 0332). */
+  private ensureChannel(sandboxId: string): Promise<CommandChannel> {
+    const running = this.channels.get(sandboxId);
+    if (running) return running;
+    const socketPath = path.join(
+      this.channelDirectory(sandboxId),
+      path.posix.basename(SEPARATE_COMMANDS_SOCKET),
+    );
+    if (Buffer.byteLength(socketPath) > 100)
+      throw new Error(
+        `The command socket path ${socketPath} is too long for a Unix socket; use a shorter data directory`,
+      );
+    const starting = startCommandChannel({
+      socketPath,
+      run: (session) => this.runSeparated(sandboxId, session),
+      ...(this.config.log ? { log: this.config.log } : {}),
+    });
+    this.channels.set(sandboxId, starting);
+    starting.catch(() => this.channels.delete(sandboxId));
+    return starting;
+  }
+
+  private async closeChannel(sandboxId: string): Promise<void> {
+    const channel = this.channels.get(sandboxId);
+    this.channels.delete(sandboxId);
+    await (await channel?.catch(() => undefined))?.close();
+  }
+
+  /**
+   * Run one of the agent's commands on the command side (ADR 0332): in its
+   * own process group, after the command side's session files, its output
+   * streamed back as it comes and its exit code at the end. A signal goes
+   * to the group; a shim that went away stops the group. Files it was
+   * asked to return come back once it ended.
+   */
+  private async runSeparated(
+    sandboxId: string,
+    session: CommandSession,
+  ): Promise<void> {
+    const record = await this.record(sandboxId);
+    if (!record.separate)
+      throw new Error("This sandbox does not run commands apart");
+    const { request } = session;
+    const back = request.returns[0]
+      ? path.posix.dirname(request.returns[0])
+      : "";
+    const token = randomUUID();
+    const script = await this.trackedScript(sandboxId);
+    const exec = await this.whileRunning(sandboxId, () =>
+      this.docker.openExec({
+        container: sandboxId,
+        cmd: [
+          "sh",
+          "-c",
+          script,
+          "work-command",
+          token,
+          request.cwd,
+          "sh",
+          "-c",
+          SEPARATED_COMMAND,
+          "work-command",
+          record.separate?.envFiles.join(":") ?? "",
+          back,
+          ...request.argv,
+        ],
+        env: { ...request.env, [TRACKED_TOKEN]: token },
+        stdin: true,
+      }),
+    );
+    const stop = () => {
+      void this.killTracked(sandboxId, token).catch(() => {});
+      exec.close();
+    };
+    if (session.aborted.aborted) stop();
+    session.aborted.addEventListener("abort", stop, { once: true });
+    let writing: Promise<void> = Promise.resolve();
+    session.onInput((data) => {
+      if (data !== null && data.length === 0) return;
+      const line = data === null ? "\n" : `${data.toString("base64")}\n`;
+      writing = writing.then(() => exec.write(line)).catch(() => {});
+    });
+    session.onSignal((signal) => {
+      void this.docker
+        .exec({
+          container: sandboxId,
+          // As root, only to the group that carries its token, like a kill.
+          cmd: [
+            "sh",
+            "-c",
+            SIGNAL_TRACKED,
+            "work-signal",
+            token,
+            signal.slice(3),
+          ],
+          user: "0",
+        })
+        .catch(() => {});
+    });
+    // Output crosses this process to the shim: past its budget the command
+    // is stopped, group and all.
+    const budget =
+      this.config.separateCommandOutputBytes ?? SEPARATE_COMMAND_OUTPUT_BYTES;
+    let forwarded = 0;
+    let overflowed = false;
+    try {
+      for await (const frame of exec.frames) {
+        forwarded += frame.data.length;
+        if (forwarded > budget) {
+          overflowed = true;
+          void this.killTracked(sandboxId, token).catch(() => {});
+          break;
+        }
+        // Held until the shim takes it in: a slow reader slows the command.
+        if (frame.stream === "stdout") await session.stdout(frame.data);
+        else if (frame.stream === "stderr") await session.stderr(frame.data);
+      }
+    } finally {
+      session.aborted.removeEventListener("abort", stop);
+      exec.close();
+    }
+    if (session.aborted.aborted) return;
+    if (overflowed) {
+      await session.stderr(
+        Buffer.from(
+          `\n[container] the command printed more than ${budget} bytes, so it was stopped with everything it started\n`,
+        ),
+      );
+      session.exit(137);
+      return;
+    }
+    let code = await this.docker.settledExitCode(exec.execId);
+    if (code !== 0) {
+      const died = await this.diedUnder(sandboxId, "");
+      if (died) {
+        await session.stderr(
+          Buffer.from(
+            `\n[container] the command container ${died.outOfMemory ? "ran out of memory" : "stopped"}, which ended every process in it; the next command starts it again\n`,
+          ),
+        );
+        code = 137;
+      }
+    }
+    if (request.returns.length > 0)
+      session.returned(await this.collectReturns(sandboxId, request.returns));
+    session.exit(code);
+  }
+
+  /** Whether a container is one side of a sandbox that runs commands apart. */
+  private async sharesCheckout(name: string): Promise<boolean> {
+    const record = await this.record(name);
+    return Boolean(record.separate || record.agentOf);
+  }
+
+  /**
+   * {@link TRACKED}, writing for the shared group on either side of a
+   * sandbox that runs commands apart (ADR 0332), so what one side makes in
+   * the checkout the other can change.
+   */
+  private async trackedScript(name: string): Promise<string> {
+    return (await this.sharesCheckout(name))
+      ? `umask 002\n${TRACKED}`
+      : TRACKED;
+  }
+
+  /** The files a command was asked to return, removed where it wrote them. */
+  private async collectReturns(
+    sandboxId: string,
+    files: readonly string[],
+  ): Promise<Record<string, Buffer>> {
+    const listed = await this.docker
+      .exec({
+        container: sandboxId,
+        cmd: ["sh", "-c", COLLECT_RETURNS, "work-returns", ...files],
+      })
+      .catch(() => undefined);
+    const returned: Record<string, Buffer> = {};
+    for (const line of listed?.stdout.split("\n") ?? []) {
+      const [kind, file, content] = line.split("\t");
+      if (kind !== "file" || !file || !files.includes(file)) continue;
+      const data = Buffer.from(content ?? "", "base64");
+      if (data.length <= COMMAND_RETURN_LIMIT.bytes) returned[file] = data;
+    }
+    return returned;
+  }
+
   /** The proxy server for a sandbox, started once per process. */
   private ensureProxy(
     sandboxId: string,
@@ -1057,14 +1916,22 @@ export class ContainerSandboxProvider implements SandboxProvider {
       typeof labels[EGRESS_LABEL] === "string"
         ? parsePolicy(labels[EGRESS_LABEL])
         : undefined;
+    const separate =
+      typeof labels[SEPARATE_LABEL] === "string"
+        ? parseSeparate(labels[SEPARATE_LABEL])
+        : undefined;
+    const agentOf = labels[AGENT_OF_LABEL];
     const record: SandboxRecord = {
       ...(egress ? { proxy: egress } : {}),
       containers: labels[CONTAINERS_LABEL] === "1",
+      ...(labels[INTERNAL_LABEL] === "1" ? { internal: true } : {}),
       volumes:
         typeof labels[VOLUMES_LABEL] === "string"
           ? labels[VOLUMES_LABEL].split(",").filter(Boolean)
           : [],
       ready: false,
+      ...(separate ? { separate } : {}),
+      ...(typeof agentOf === "string" && agentOf ? { agentOf } : {}),
     };
     this.records.set(sandboxId, record);
     return record;
@@ -1076,8 +1943,10 @@ export class ContainerSandboxProvider implements SandboxProvider {
    * started as microsandbox boots a stopped VM.
    */
   private async ready(sandboxId: string): Promise<void> {
-    if ((await this.record(sandboxId)).ready) return;
-    await this.startSandbox(sandboxId);
+    const record = await this.record(sandboxId);
+    if (record.ready) return;
+    // Either side not ready starts the sandbox whole (ADR 0332).
+    await this.startSandbox(record.agentOf ?? sandboxId);
   }
 
   /**
@@ -1103,7 +1972,7 @@ export class ContainerSandboxProvider implements SandboxProvider {
         throw error;
       const record = await this.record(sandboxId);
       record.ready = false;
-      await this.startSandbox(sandboxId);
+      await this.startSandbox(record.agentOf ?? sandboxId);
       return run();
     }
   }
@@ -1176,11 +2045,12 @@ export class ContainerSandboxProvider implements SandboxProvider {
     ended: "exited" | "timeout" | "cancelled";
   }> {
     const token = randomUUID();
+    const script = await this.trackedScript(sandboxId);
     const session = await this.whileRunning(sandboxId, () =>
       this.docker.openExec({
         container: sandboxId,
-        cmd: ["sh", "-c", TRACKED, "work-exec", token, args.cwd, ...args.argv],
-        ...(args.env ? { env: args.env } : {}),
+        cmd: ["sh", "-c", script, "work-exec", token, args.cwd, ...args.argv],
+        env: { ...args.env, [TRACKED_TOKEN]: token },
       }),
     );
     let ended: "exited" | "timeout" | "cancelled" = "exited";
@@ -1216,6 +2086,12 @@ export class ContainerSandboxProvider implements SandboxProvider {
     };
   }
 
+  /**
+   * Stop a tracked command's group, as root, so what it started under
+   * another user (sudo) stops too. The pid comes from a folder commands can
+   * write, so {@link KILL_TRACKED} signals it only when that process
+   * carries the command's own token.
+   */
   private async killTracked(sandboxId: string, token: string): Promise<void> {
     await this.docker.exec({
       container: sandboxId,
@@ -1245,7 +2121,7 @@ export class ContainerSandboxProvider implements SandboxProvider {
           "run",
           "entry.mjs",
         ],
-        env: args.env,
+        env: { ...args.env, [TRACKED_TOKEN]: token },
         stdin: true,
       }),
     );
@@ -1356,9 +2232,17 @@ export class ContainerSandboxProvider implements SandboxProvider {
         })
       )
         continue;
-      // A sandbox that still exists, even stopped, keeps its volumes.
-      if (await this.docker.removeVolume(String(volume.Name)))
-        removed.push(key);
+      // A sandbox that still exists, even stopped, keeps its volumes. A
+      // cache generation goes under its cache's lock, never between a
+      // sandbox finding it and mounting it (ADR 0334).
+      const family = parseCacheVolumeKey(key)?.family;
+      const release = await this.lockCaches(family ? [family] : []);
+      try {
+        if (await this.docker.removeVolume(String(volume.Name)))
+          removed.push(key);
+      } finally {
+        release();
+      }
     }
     this.usage.forget(removed);
     return removed;
@@ -1384,6 +2268,17 @@ export class ContainerSandboxProvider implements SandboxProvider {
           : "";
         await this.destroySandbox(name || String(container.Id));
       }
+    if (args?.destroySandboxes) {
+      // An agent side whose pair is gone, and what pairs shared (ADR 0332).
+      for (const container of await this.docker.listContainers({
+        label: [AGENT_OF_LABEL, `${OWNER_LABEL}=${this.owner}`],
+      }))
+        await this.docker.removeContainer(String(container.Id));
+      for (const volume of await this.docker.listVolumes({
+        label: [SHARED_LABEL, `${OWNER_LABEL}=${this.owner}`],
+      }))
+        await this.docker.removeVolume(String(volume.Name));
+    }
     const kept: string[] = [];
     const removed: string[] = [];
     for (const volume of await this.docker.listVolumes({
@@ -1391,9 +2286,16 @@ export class ContainerSandboxProvider implements SandboxProvider {
     })) {
       const key = volumeKeyOf(volume);
       if (!key) continue;
-      if (await this.docker.removeVolume(String(volume.Name)))
-        removed.push(key);
-      else kept.push(key);
+      // Under its cache's lock, like retiring and pruning (ADR 0334).
+      const family = parseCacheVolumeKey(key)?.family;
+      const release = await this.lockCaches(family ? [family] : []);
+      try {
+        if (await this.docker.removeVolume(String(volume.Name)))
+          removed.push(key);
+        else kept.push(key);
+      } finally {
+        release();
+      }
     }
     this.usage.forget(removed);
     if (kept.length > 0)
@@ -1560,6 +2462,26 @@ function parentsWithin(home: string, targets: readonly string[]): string[] {
   return [...directories].sort();
 }
 
+/** The agent container of a sandbox whose commands run apart (ADR 0332). */
+function agentName(sandboxId: string): string {
+  return `${sandboxId}-agent`;
+}
+
+function parseSeparate(raw: string): { envFiles: string[] } | undefined {
+  try {
+    const parsed: unknown = JSON.parse(raw);
+    if (typeof parsed !== "object" || parsed === null) return undefined;
+    const envFiles = Reflect.get(parsed, "envFiles");
+    return {
+      envFiles: Array.isArray(envFiles)
+        ? envFiles.filter((file): file is string => typeof file === "string")
+        : [],
+    };
+  } catch {
+    return undefined;
+  }
+}
+
 function parsePolicy(raw: string): EgressPolicy | undefined {
   try {
     const parsed: unknown = JSON.parse(raw);
@@ -1575,7 +2497,7 @@ function parsePolicy(raw: string): EgressPolicy | undefined {
 function volumeKeyOf(volume: Record<string, unknown>): string | undefined {
   const labels = objectField(volume, "Labels");
   const key = labels[VOLUME_LABEL];
-  return typeof key === "string" && VOLUME_KEY_PATTERN.test(key)
+  return typeof key === "string" && SANDBOX_VOLUME_KEY_PATTERN.test(key)
     ? key
     : undefined;
 }

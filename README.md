@@ -110,7 +110,10 @@ Postgres and one authority, with machines exposed as permitted Environments.
 Postgres mode shares origins, artifacts, credentials, auth, and leased execution.
 Each Environment can choose its sandbox image, give agents their own Docker,
 and limit which hosts they reach, with a wider list for its setup alone
-(package registries) while agents reach only the gateway; an agent's
+(package registries) while agents reach only the gateway, run the agent's
+commands in a container of their own that shares only the checkout, out of
+reach of the agent's grants, model and tools, and mount read-only caches
+that only a trusted fill from the published main writes; an agent's
 sandboxing decides what leaves its sandbox, apart from its harness's own
 permission mode. Claude Code, Codex and ACP agents such as OpenCode run in
 those sandboxes on the organization's model keys, held by the gateway. New model
@@ -302,6 +305,14 @@ agent submits them with `submit_result`, Work records only a value its schema
 accepts and returns field errors to the agent in the same turn, and parents,
 workflows (`results`, `session.result-recorded`), the project MCP and REST read
 them with the chat, turn and input that produced them.
+A running turn shows when it last made progress and the tool calls and
+commands it is in; an agent's definition can set a stall threshold
+(`"stall": { "minutes": 20 }`), after which Work emits
+`session.turn-stalled` once per silence, and a workflow (or person, over REST
+and the project MCP) can `restart` the turn: its attempt is killed and the same
+turn runs again, while each unfinished attempt keeps the masked tail of its
+runner's and harness's own output (ADR
+[0333](docs/decisions/0333-stalled-turns-are-visible-and-restartable.md)).
 Archive recursively stops active work only after reporting its impact, while
 keeping the session tree restorable and searchable. Session source records
 whether a conversation began on desktop, mobile, Slack, Claude, MCP, or API.
@@ -330,7 +341,12 @@ below.
 Role access is separate from unattended consent. Each member previews and
 enables an exact deployed workflow with its trigger, Environment, agent, and
 connection requirements. Connecting an account may complete that chosen flow;
-it never silently enables every compatible automation.
+it never silently enables every compatible automation. A workflow also
+declares the project permissions and the store paths it reads or writes
+(`documents`), and consent lists both. Every run reaches only those paths
+of the store, whoever starts it: a project automation exactly those, any
+other run the part of them its caller reaches
+([0335](docs/decisions/0335-workflows-declare-their-store-documents.md)).
 
 Project automations follow the published program: each revision of `main`
 that builds and asks for no new authority goes live by itself, after the
@@ -477,7 +493,7 @@ Supporting packages (consumed through the surface above, importable directly for
 | `@catamorphic/agent-runner` | The harness-agnostic runner that drives one attempt of a turn on an adapter, in-process or over stdio. |
 | `@catamorphic/runner-bundle` | The runner and its Claude Code and Codex adapters as one hash-addressed file a sandbox runs with Bun or Node. |
 | `@catamorphic/microsandbox` | Local sandbox provider over the microsandbox SDK: the desktop's default execution. |
-| `@catamorphic/container` | Sandboxes as OCI containers through the Docker Engine API, under gVisor (`runsc`) or runc: images, Dockerfile builds, CPU and memory limits, egress policy through a proxy socket, nested Docker, and volumes (ADR 0204). |
+| `@catamorphic/container` | Sandboxes as OCI containers through the Docker Engine API, under gVisor (`runsc`) or runc: images, Dockerfile builds, CPU and memory limits, egress policy through a proxy socket, nested Docker, volumes, and read-only caches (ADRs 0204, 0334). |
 | `@catamorphic/local-process` | Sandboxless execution as plain subprocesses with an explicit env. Trusted single-tenant hosts only (ADR 0047). |
 | `@catamorphic/cloudflare` | Cloudflare backend plugin: `CloudflareSandboxProvider` (execution via Bridge Worker) + `ArtifactsRemoteBackend` (Cloudflare-native code storage when available). |
 | `@catamorphic/s3` | S3-compatible git origin backend for Cloudflare R2, AWS S3, MinIO, and similar stores. |

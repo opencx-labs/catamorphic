@@ -1,6 +1,6 @@
 # 0245 — A harness says its thread is gone
 
-- **Status:** Accepted (amends 0198, 0241)
+- **Status:** Accepted (amends 0198, 0241; a restarted attempt's next one binds the same way, by 0333)
 - **Date:** 2026-10-18
 
 ## Context

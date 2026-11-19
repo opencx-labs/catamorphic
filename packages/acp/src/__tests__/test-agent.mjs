@@ -442,6 +442,22 @@ const handlers = (() => {
         );
         return { stopReason: "end_turn" };
       }
+      if (words.includes("[[shell]]")) {
+        await say(
+          sessionId,
+          "agent_message_chunk",
+          `SHELL=${process.env.SHELL ?? "unset"} PATH=${(process.env.PATH ?? "").split(":")[0]} MARK=${process.env.TEST_AGENT_MARK ?? "unset"}`,
+        );
+        return { stopReason: "end_turn" };
+      }
+      if (words.includes("[[harness]]")) {
+        await say(
+          sessionId,
+          "agent_message_chunk",
+          `SHELL=${process.env.SHELL ?? "unset"} PATH=${(process.env.PATH ?? "").split(":")[0]} HOME=${process.env.HOME ?? "unset"} CONFIG=${process.env.XDG_CONFIG_HOME ?? "unset"} UID=${process.getuid?.()} STARTED=${process.cwd()} SESSION=${session.cwd}`,
+        );
+        return { stopReason: "end_turn" };
+      }
       if (words.includes("[[recall]]")) {
         await say(
           sessionId,

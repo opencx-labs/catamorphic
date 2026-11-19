@@ -5,6 +5,7 @@ import os from "node:os";
 import path from "node:path";
 import { RUNTIME_PROTOCOL_VERSION } from "@catamorphic/runtime";
 import {
+  cacheVolumeKey,
   dockerfileDigest,
   followProcess,
   machineSignInHome,
@@ -506,6 +507,332 @@ describe.skipIf(!enabled)("container sandboxes (ADR 0204)", () => {
       ).toEqual([]);
     },
     10 * MINUTES,
+  );
+
+  it(
+    "mounts a cache read only, so its root cannot write or remount it, and retires older generations (ADR 0334)",
+    async () => {
+      const sandboxProvider = provider({ setupCommand: "" });
+      const generation = (n: number) =>
+        cacheVolumeKey({
+          projectId: `p-${path.basename(root)}`,
+          environment: "review",
+          name: "pnpm",
+          generation: n,
+        });
+      // A fill writes its generation.
+      const fill = await created(sandboxProvider, {
+        volumes: [{ key: generation(1), path: "/cache" }],
+      });
+      const wrote = await sandboxProvider.executeCommand(
+        fill,
+        "echo one > /cache/package && echo ok",
+      );
+      expect(wrote.result.trim(), wrote.result).toBe("ok");
+      await sandboxProvider.destroySandbox(fill);
+
+      // Every other sandbox reads it and cannot change it, even as root.
+      const reader = await created(sandboxProvider, {
+        volumes: [{ key: generation(1), path: "/cache", readOnly: true }],
+      });
+      const read = await sandboxProvider.executeCommand(
+        reader,
+        "id -u; cat /cache/package",
+      );
+      expect(read.result.split("\n").slice(0, 2)).toEqual(["0", "one"]);
+      for (const attempt of [
+        "echo two > /cache/package",
+        "touch /cache/new",
+        "rm -f /cache/package",
+        "mount -o remount,rw /cache",
+      ]) {
+        const refused = await sandboxProvider.executeCommand(reader, attempt);
+        expect(refused.exitCode, `${attempt}: ${refused.result}`).not.toBe(0);
+      }
+      const after = await sandboxProvider.executeCommand(
+        reader,
+        "cat /cache/package; ls /cache",
+      );
+      expect(after.result.trim().split("\n")).toEqual(["one", "package"]);
+
+      // A newer generation mounted read only retires the ones the control
+      // plane names once no sandbox mounts them; the reader still holds
+      // generation 1, so it stays until the reader is gone.
+      const next = await created(sandboxProvider, {
+        volumes: [{ key: generation(2), path: "/cache" }],
+      });
+      await sandboxProvider.executeCommand(next, "echo two > /cache/package");
+      await sandboxProvider.destroySandbox(next);
+      const volumeNames = async () =>
+        (await docker.listVolumes({ label: ["work.volume"] }))
+          .map((volume) => String(volume.Name))
+          .filter((name) => name.includes(generation(1).slice(0, -3)));
+      const second = await created(sandboxProvider, {
+        volumes: [
+          {
+            key: generation(2),
+            path: "/cache",
+            readOnly: true,
+            retire: [generation(1)],
+          },
+        ],
+      });
+      expect(
+        (await sandboxProvider.executeCommand(second, "cat /cache/package"))
+          .result,
+      ).toBe("two\n");
+      expect(await volumeNames()).toContain(`work-volume-${generation(1)}`);
+      await sandboxProvider.destroySandbox(reader);
+      await sandboxProvider.destroySandbox(second);
+      const third = await created(sandboxProvider, {
+        volumes: [
+          {
+            key: generation(2),
+            path: "/cache",
+            readOnly: true,
+            retire: [generation(1)],
+          },
+        ],
+      });
+      expect(await volumeNames()).toEqual([`work-volume-${generation(2)}`]);
+
+      // A generation this machine no longer has is not mounted at all.
+      const gone = await created(sandboxProvider, {
+        volumes: [{ key: generation(1), path: "/cache", readOnly: true }],
+      });
+      const missing = await sandboxProvider.executeCommand(
+        gone,
+        "test -e /cache/package && echo present || echo absent",
+      );
+      expect(missing.result.trim()).toBe("absent");
+      expect(await volumeNames()).toEqual([`work-volume-${generation(2)}`]);
+      await sandboxProvider.destroySandbox(third);
+      await sandboxProvider.destroySandbox(gone);
+      expect(await sandboxProvider.volumes.prune({ unusedForMs: 0 })).toContain(
+        generation(2),
+      );
+    },
+    10 * MINUTES,
+  );
+
+  it(
+    "makes Work's own sandbox cut off from every network, without setup, able to check a cache (ADR 0334)",
+    async () => {
+      // The machine's default setup would install git; Work's own sandbox
+      // runs none of it.
+      const sandboxProvider = provider();
+      const key = cacheVolumeKey({
+        projectId: `internal-${path.basename(root)}`,
+        environment: "review",
+        name: "pnpm",
+        generation: 1,
+      });
+      const fill = await created(sandboxProvider, {
+        volumes: [{ key, path: "/cache" }],
+      });
+      await sandboxProvider.executeCommand(fill, "echo one > /cache/package");
+      await sandboxProvider.destroySandbox(fill);
+      const helper = await created(sandboxProvider, {
+        internal: true,
+        volumes: [{ key, path: "/work-cache-check", readOnly: true }],
+      });
+      const reached = await sandboxProvider.executeCommand(
+        helper,
+        `wget -q -T 5 -O- http://${hostIp}:${port}/internal`,
+      );
+      expect(reached.exitCode).not.toBe(0);
+      expect(reached.result).not.toContain("allowed");
+      const tools = await sandboxProvider.executeCommand(
+        helper,
+        "command -v git >/dev/null && echo has-git; for t in du cut grep basename find rm; do command -v $t >/dev/null || echo missing-$t; done; du -sk /work-cache-check | cut -f1; grep -rqF one /work-cache-check && echo found",
+      );
+      expect(tools.result).not.toContain("has-git");
+      expect(tools.result).not.toContain("missing-");
+      expect(tools.result).toContain("found");
+    },
+    10 * MINUTES,
+  );
+
+  it.skipIf(process.env.WORK_TEST_CONTAINER_RUNTIME === "runc")(
+    "keeps a cache read only in a review sandbox under gVisor: root with every capability and its own Docker cannot write it, even after remounting it read-write (ADR 0334)",
+    async () => {
+      const filler = provider({ setupCommand: "" });
+      const key = cacheVolumeKey({
+        projectId: `review-${path.basename(root)}`,
+        environment: "review",
+        name: "pnpm",
+        generation: 1,
+      });
+      const fill = await created(filler, {
+        volumes: [{ key, path: "/cache" }],
+      });
+      await filler.executeCommand(fill, "echo one > /cache/package");
+      await filler.destroySandbox(fill);
+
+      // As a review Environment's sandbox is made: its own Docker, so
+      // under gVisor every capability (CapAdd ALL), CAP_SYS_ADMIN included.
+      const sandboxProvider = provider({ image: DIND_IMAGE });
+      expect(sandboxProvider.capabilities).toContain("caches");
+      const id = await created(sandboxProvider, {
+        containers: true,
+        volumes: [{ key, path: "/cache", readOnly: true }],
+      });
+      const capabilities = await sandboxProvider.executeCommand(
+        id,
+        "id -u; grep CapEff /proc/self/status",
+      );
+      expect(capabilities.result).toMatch(/^0\n/);
+      expect(capabilities.result).not.toMatch(/CapEff:\s+0+\n/);
+      for (const attempt of [
+        "echo two > /cache/package",
+        "touch /cache/new",
+        "rm -f /cache/package",
+        "mkdir /cache/dir",
+        // gVisor accepts the remount (its own mount table then says rw),
+        // but runsc opened the read-only mount read only on the host, below
+        // the sandbox's kernel, so every write still fails with EROFS.
+        "mount -o remount,rw /cache && echo two > /cache/package",
+        "mount -o remount,rw,bind /cache && echo two > /cache/package",
+        "mkdir -p /tmp/again && mount --bind /cache /tmp/again && mount -o remount,rw,bind /tmp/again && echo two > /tmp/again/package",
+      ]) {
+        const refused = await sandboxProvider.executeCommand(id, attempt);
+        expect(refused.exitCode, `${attempt}: ${refused.result}`).not.toBe(0);
+      }
+      // The sandbox's own Docker cannot reach past the read-only mount.
+      const nested = await sandboxProvider.executeCommand(
+        id,
+        `${PULL_NESTED} >/dev/null && docker run --rm -v /cache:/c ${NESTED_IMAGE} sh -c 'echo two > /c/package'; echo "exit=$?"`,
+        { timeout: 300 },
+      );
+      expect(nested.result).toMatch(/exit=[1-9]/);
+      // Setup's writable store: an overlay whose lower layer is the cache.
+      // Writes land in the upper layer, never in the cache.
+      const overlay = await sandboxProvider.executeCommand(
+        id,
+        "mkdir -p /workspace/.work-pnpm/up /workspace/.work-pnpm/work /root/store && mount -t overlay overlay -o lowerdir=/cache,upperdir=/workspace/.work-pnpm/up,workdir=/workspace/.work-pnpm/work /root/store && echo three > /root/store/package && echo added > /root/store/added && cat /root/store/package /root/store/added",
+      );
+      expect(overlay.exitCode, overlay.result).toBe(0);
+      expect(overlay.result).toBe("three\nadded\n");
+      // Taking the mount away only uncovers the sandbox's own directory:
+      // what it writes there never reaches the volume (checked below).
+      await sandboxProvider.executeCommand(
+        id,
+        "umount -l /cache; echo two > /cache/package",
+      );
+      // Whatever it tried, the volume is as the fill left it.
+      const reader = await created(filler, {
+        volumes: [{ key, path: "/cache", readOnly: true }],
+      });
+      const after = await filler.executeCommand(
+        reader,
+        "cat /cache/package; ls -A /cache",
+      );
+      expect(after.result.trim().split("\n")).toEqual(["one", "package"]);
+    },
+    15 * MINUTES,
+  );
+
+  it.skipIf(process.env.WORK_TEST_CONTAINER_RUNTIME === "runc")(
+    "runs the review pack's fill and setup under gVisor: setup extends the read-only cache in an overlay and fetches only what is new (ADR 0334)",
+    async () => {
+      // The pack's own commands, as it ships them.
+      const pack = JSON.parse(
+        fs.readFileSync(
+          new URL(
+            "../../../registry/src/pull-request-reviews/project.json",
+            import.meta.url,
+          ),
+          "utf8",
+        ),
+      );
+      const review = pack.environments.review;
+      const cachePath: string = review.caches.pnpm.path;
+      const fillCommand: string = review.caches.pnpm.fill.command;
+      const setupCommand: string = review.setup.command;
+      const key = cacheVolumeKey({
+        projectId: `pnpm-${path.basename(root)}`,
+        environment: "review",
+        name: "pnpm",
+        generation: 1,
+      });
+      const pnpm =
+        "command -v pnpm >/dev/null || { apk add --no-cache nodejs npm >/dev/null && npm install -g pnpm@10.34.9 >/dev/null; }";
+      const project = (dependencies: Record<string, string>) =>
+        `mkdir -p /workspace/project && cd /workspace/project && printf '%s' ${JSON.stringify(
+          JSON.stringify({ name: "p", version: "1.0.0", dependencies }),
+        )} > package.json && pnpm install --lockfile-only >/dev/null`;
+      const sandboxProvider = provider({ image: DIND_IMAGE });
+      // The fill, as Work runs it: the cache writable, main's lockfile.
+      const fill = await created(sandboxProvider, {
+        volumes: [{ key, path: cachePath }],
+      });
+      const filled = await sandboxProvider.executeCommand(
+        fill,
+        `${pnpm} && ${project({ "is-number": "7.0.0" })} && ${fillCommand} && echo '{}' > ${cachePath}/.work-cache.json && echo filled`,
+        { timeout: 600 },
+      );
+      expect(filled.result, filled.result).toContain("filled");
+      await sandboxProvider.destroySandbox(fill);
+      // Every file of the cache and its size, to compare after the review.
+      const listing = `cd ${cachePath} && find . -type f -exec stat -c '%n %s' {} + | sort | md5sum`;
+      const before = await created(sandboxProvider, {
+        volumes: [{ key, path: cachePath, readOnly: true }],
+      });
+      const original = (
+        await sandboxProvider.executeCommand(before, listing)
+      ).result.trim();
+      await sandboxProvider.destroySandbox(before);
+
+      // A review sandbox: its own Docker, the cache read only, and a pull
+      // request that adds a dependency main does not have.
+      const reviewer = await created(sandboxProvider, {
+        containers: true,
+        volumes: [{ key, path: cachePath, readOnly: true }],
+      });
+      const setUp = await sandboxProvider.executeCommand(
+        reviewer,
+        `${pnpm} && ${project({ "is-number": "7.0.0", "left-pad": "1.3.0" })} && ${setupCommand} && grep -q " /root/.local/share/pnpm/store overlay" /proc/mounts && ls node_modules`,
+        { timeout: 600 },
+      );
+      expect(setUp.exitCode, setUp.result).toBe(0);
+      // What main had came from the cache; only the new package was fetched.
+      expect(setUp.result).toMatch(/reused 1, downloaded 1/);
+      expect(setUp.result).toContain("left-pad");
+
+      // The cache is as the fill left it.
+      const reader = await created(sandboxProvider, {
+        volumes: [{ key, path: cachePath, readOnly: true }],
+      });
+      const after = await sandboxProvider.executeCommand(reader, listing);
+      expect(original).toMatch(/^[0-9a-f]{32}/);
+      expect(after.result.trim()).toBe(original);
+    },
+    20 * MINUTES,
+  );
+
+  it.skipIf(process.env.WORK_TEST_CONTAINER_RUNTIME !== "runc")(
+    "refuses a read-only cache in a privileged runc sandbox, whose root could remount it",
+    async () => {
+      const sandboxProvider = provider({ setupCommand: "" });
+      await expect(
+        sandboxProvider.createSandbox({
+          containers: true,
+          volumes: [
+            {
+              key: cacheVolumeKey({
+                projectId: "p",
+                environment: "review",
+                name: "pnpm",
+                generation: 1,
+              }),
+              path: "/cache",
+              readOnly: true,
+            },
+          ],
+        }),
+      ).rejects.toThrow("could remount a read-only cache writable");
+    },
+    5 * MINUTES,
   );
 
   it(

@@ -13,6 +13,10 @@ import {
   webhookSettingsIssues,
 } from "./webhook-settings.js";
 
+/** A call to the documents host, however the context is reached. */
+const DOCUMENTS_CALL =
+  /(?:^|\.)documents\.(?:list|read|write|delete|history|search)$|host\[\s*["'`]catamorphic\.documents["'`]\s*\]\.\w+$/;
+
 /**
  * Host-independent project validation, the engine behind each project's
  * seeded `scripts/check.ts`. Everything here needs only the project's own
@@ -25,6 +29,8 @@ import {
  * - trigger bindings validated against the host's kind catalog, when the
  *   caller fetched one (`GET /trigger-kinds` on any Catamorphic host),
  *   including the permissions a kind requires its workflows to declare;
+ * - documents calls in a workflow that declares no store documents
+ *   (ADR 0335), whose runs then reach no store path;
  * - webhook settings checked by the rules the host applies at deploy:
  *   placeholders, replay protection, header or query, handshake filters,
  *   and one set of settings per webhook name;
@@ -190,6 +196,27 @@ export function checkProject(
 
   for (const message of webhookSettingsConflicts(webhookBindings))
     findings.push({ level: "error", message });
+
+  // A run reaches only the store paths its workflow declares (ADR 0335).
+  // Reading program files needs no declaration, so this only warns.
+  for (const workflow of parsed.workflows) {
+    if (workflow.graph.documents.length > 0) continue;
+    const calls = [
+      ...new Set(
+        workflow.graph.nodes.flatMap((node) =>
+          node.functionName && DOCUMENTS_CALL.test(node.functionName)
+            ? [node.functionName]
+            : [],
+        ),
+      ),
+    ];
+    if (calls.length === 0) continue;
+    findings.push({
+      level: "warning",
+      file: workflow.filePath,
+      message: `Workflow '${workflow.functionName}' calls ${calls.join(", ")} but declares no store documents, so its runs reach no store path. Declare each one it reads or writes, such as documents: [{ path: "store/notes/", access: "write" }]; program files need none`,
+    });
+  }
 
   if (parsed.appApi) {
     const content = renderAppApiTypesModule(parsed.appApi.entries);

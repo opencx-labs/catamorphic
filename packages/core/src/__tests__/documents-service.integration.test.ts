@@ -11,7 +11,7 @@ import {
   push,
 } from "@catamorphic/git";
 import { sql } from "kysely";
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { CatamorphicCore } from "../core.js";
 import { type Identity, narrowIdentity } from "../identity.js";
 import { AccessDeniedError } from "../services/artifact-scope.js";
@@ -430,6 +430,96 @@ describeIf("DocumentsService (ADR 0055)", () => {
         () => false,
       ),
     ).toBe(false);
+  });
+
+  it("a row spelled otherwise than its file on disk is left out of lists and deleted without touching the file (ADR 0335)", async () => {
+    const directory = path.join(tmpDir, "local-spelling");
+    await fs.mkdir(directory);
+    await nativeGit(directory, ["init", "-b", "feature"]);
+    const resolver = async () => directory;
+    const manager = new ProjectManager(
+      new FsBackend(path.join(tmpDir, "unused-spelling"), resolver),
+      new CheckoutRemoteBackend(
+        resolver,
+        new FsRemoteBackend(path.join(tmpDir, "unused-spelling-origin")),
+      ),
+      resolver,
+    );
+    const local = new CatamorphicCore({
+      db,
+      projectManager: manager,
+      environmentProvider: testEnvironmentProvider(),
+    });
+    const project = await local.projects.create(root, {
+      name: "Local spelling",
+      rootPath: directory,
+      importExisting: true,
+    });
+    const projectId = project.id;
+    const real = "store/github-polling/acme-web.json";
+    const old = "store/Github-Polling/acme-web.json";
+    await local.documents.write({
+      identity: root,
+      projectId,
+      path: real,
+      content: '{"cursor":1}',
+    });
+    // A row written before paths had to match the disk's spelling: on a
+    // filesystem that ignores case it names the same file.
+    await db
+      .insertInto("store_documents")
+      .values({
+        project_id: projectId,
+        path: old,
+        content_type: "application/json",
+        size: "12",
+        text_content: '{"cursor":1}',
+        bytes: null,
+        blob_key: null,
+        version: 1,
+        written_by: "root",
+      })
+      .execute();
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      // Lists and searches go on, even for root.
+      const listed = await local.documents.list({
+        identity: root,
+        projectId,
+        prefix: "store",
+      });
+      expect(listed.map((entry) => entry.path)).toEqual([real]);
+      expect(
+        (
+          await local.documents.search({
+            identity: root,
+            projectId,
+            query: "cursor",
+            prefix: "store",
+          })
+        ).map((match) => match.path),
+      ).toEqual([real]);
+      // Deleting the old row never removes the file the real path names.
+      await local.documents
+        .delete({ identity: root, projectId, path: old })
+        .catch((error: unknown) => {
+          // Where case matters, the old row's file was never there.
+          if (!(error instanceof DocumentNotFoundError)) throw error;
+        });
+      const row = await db
+        .selectFrom("store_documents")
+        .select("deleted")
+        .where("project_id", "=", projectId)
+        .where("path", "=", old)
+        .executeTakeFirstOrThrow();
+      expect(row.deleted).toBe(true);
+      expect(
+        (await local.documents.read({ identity: root, projectId, path: real }))
+          .text,
+      ).toBe('{"cursor":1}');
+    } finally {
+      warn.mockRestore();
+    }
   });
 
   it("concurrent first writes use the version precondition", async () => {

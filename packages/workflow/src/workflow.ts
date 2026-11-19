@@ -3,6 +3,8 @@ import {
   createBatch,
   type DefineBatch,
 } from "./batch.js";
+import type { WorkflowDocumentAccess } from "./document-access.js";
+import type { EnvironmentHostOperations } from "./environment-operations.js";
 import type { EventHostOperations } from "./event-operations.js";
 import type { OutputTemplateMatches, PayloadTemplateMatches } from "./holes.js";
 import type { TriggerBinding } from "./index.js";
@@ -138,6 +140,7 @@ class WorkflowDefinitionImpl<Input, Output, Steps extends readonly unknown[]> {
   readonly concurrency?: WorkflowConcurrency;
   readonly connections?: readonly (string | WorkflowConnectionRequirement)[];
   readonly permissions?: readonly WorkflowPermission[];
+  readonly documents?: readonly WorkflowDocumentAccess[];
 
   constructor(args: {
     steps: Steps;
@@ -146,6 +149,7 @@ class WorkflowDefinitionImpl<Input, Output, Steps extends readonly unknown[]> {
     concurrency?: WorkflowConcurrency;
     connections?: readonly (string | WorkflowConnectionRequirement)[];
     permissions?: readonly WorkflowPermission[];
+    documents?: readonly WorkflowDocumentAccess[];
   }) {
     this.steps = args.steps;
     this.controls = args.controls;
@@ -153,6 +157,7 @@ class WorkflowDefinitionImpl<Input, Output, Steps extends readonly unknown[]> {
     this.concurrency = args.concurrency;
     this.connections = args.connections;
     this.permissions = args.permissions;
+    this.documents = args.documents;
     Object.defineProperty(this, "kind", { value: "durable-workflow" });
   }
 }
@@ -297,6 +302,11 @@ export interface DocumentEntry {
  * as `callWorkflow`: return the call, receive the result in the next step.
  */
 export interface DocumentsCalls {
+  /**
+   * What is under a folder: `prefix` names a folder (`store/customers`),
+   * never the start of a name, so a document's own path lists nothing; to
+   * find one document, list its folder.
+   */
   list: TransitionCall<
     { prefix?: string; source?: "program" | "store" },
     DocumentEntry[]
@@ -350,6 +360,7 @@ export interface BoundaryContext<Input> {
     readonly "catamorphic.sessions": SessionHostOperations;
     readonly "catamorphic.secrets": SecretHostOperations;
     readonly "catamorphic.events": EventHostOperations;
+    readonly "catamorphic.environments": EnvironmentHostOperations;
     readonly "catamorphic.privateState": {
       read: TransitionCall<
         { key: string },
@@ -618,6 +629,13 @@ export function defineWorkflow<
      * gets only what it declares, and only while its owner may grant it.
      */
     readonly permissions?: readonly WorkflowPermission[];
+    /**
+     * Project store paths this workflow's runs read or write (ADR 0335),
+     * shown beside its permissions when it is turned on: e.g.
+     * `{ path: "store/cursors/", access: "write" }`. A path ending in `/`
+     * is a folder. A run reaches only these, and only what its owner may.
+     */
+    readonly documents?: readonly WorkflowDocumentAccess[];
   } & ValidateSteps<Steps> &
     ValidateTriggers<
       Triggers,
@@ -637,5 +655,6 @@ export function defineWorkflow<
     concurrency: definition.concurrency,
     connections: definition.connections,
     permissions: definition.permissions,
+    documents: definition.documents,
   });
 }

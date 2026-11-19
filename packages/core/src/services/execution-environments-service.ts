@@ -18,6 +18,7 @@ import {
   resolveEgress,
   resolveSetupEgress,
   SANDBOX_CAPABILITIES,
+  SEPARATE_AGENT_DEFAULT_RESOURCES,
   signInCapability,
   volumeKey,
 } from "@catamorphic/sandbox";
@@ -110,6 +111,19 @@ export interface EnvironmentAdmitArgs {
   requirements: EnvironmentRequirements;
   /** The agent runs on the owner's own sign-in on the machine (ADR 0199). */
   signIn?: SignInHarness;
+  /**
+   * The work's harness runs in its sandbox, so a sandbox whose commands run
+   * apart has an agent container for it (ADR 0332). Otherwise (the built-in
+   * agent on the control plane, workflows) its command container is the
+   * whole sandbox and no agent share is reserved.
+   */
+  harnessInSandbox?: boolean;
+  /**
+   * Admit as the program declares it at this published commit, Dockerfile
+   * included, instead of the newest `main` (ADR 0334): a cache fill builds
+   * its sandbox from the revision that went live.
+   */
+  commit?: string;
 }
 
 /** An Environment's setup as admission reads it (ADRs 0208, 0257). */
@@ -253,8 +267,16 @@ export function sandboxCapabilitiesFor(
     // A setup with its own network needs a machine that switches a running
     // sandbox's egress (ADR 0257).
     ...(definition.setup?.network ? [SANDBOX_CAPABILITIES.setupNetwork] : []),
+    // An agent's commands apart from it (ADR 0332).
+    ...(definition.commands?.separate
+      ? [SANDBOX_CAPABILITIES.separateCommands]
+      : []),
     ...(Object.keys(definition.volumes ?? {}).length > 0
       ? [SANDBOX_CAPABILITIES.volumes]
+      : []),
+    // Read-only mounts the sandbox cannot remount, filled apart (ADR 0334).
+    ...(Object.keys(definition.caches ?? {}).length > 0
+      ? [SANDBOX_CAPABILITIES.caches]
       : []),
   ];
 }
@@ -431,6 +453,8 @@ export class ExecutionEnvironmentsService {
     preferred?: readonly string[];
     /** The agent runs on the owner's own sign-in on the machine (ADR 0199). */
     signIn?: SignInHarness;
+    /** See {@link EnvironmentAdmitArgs.harnessInSandbox}. */
+    harnessInSandbox?: boolean;
   }): Promise<EnvironmentDiscovery> {
     return withSpan(
       {
@@ -757,6 +781,20 @@ export class ExecutionEnvironmentsService {
     return definition?.idleReleaseMinutes ?? DEFAULT_IDLE_RELEASE_MINUTES;
   }
 
+  /** Whether an Environment runs its agents' commands apart (ADR 0332). */
+  async separatesCommands(args: {
+    identity: Identity;
+    projectId: string;
+    environment: string;
+  }): Promise<boolean> {
+    const definition = await this.projects.get({
+      identity: args.identity,
+      projectId: args.projectId,
+      name: args.environment,
+    });
+    return Boolean(definition?.commands?.separate);
+  }
+
   private async evaluate(args: {
     identity: Identity;
     projectId: string;
@@ -767,6 +805,8 @@ export class ExecutionEnvironmentsService {
     allocationBindingId?: string;
     requirements: EnvironmentRequirements;
     signIn?: SignInHarness;
+    harnessInSandbox?: boolean;
+    commit?: string;
   }): Promise<
     | { admission: EnvironmentAdmission }
     | { bindingUnavailable: true; reasons: [] }
@@ -873,7 +913,11 @@ export class ExecutionEnvironmentsService {
           environmentName: args.name,
           pool: definition.pool ?? {},
           owner,
-          requirements: waitRequirements(effectiveRequirements),
+          requirements: waitRequirements({
+            requirements: effectiveRequirements,
+            definition,
+            ...(args.harnessInSandbox ? { harnessInSandbox: true } : {}),
+          }),
           waitMinutes: definition.waitMinutes ?? 0,
         },
       },
@@ -891,6 +935,10 @@ export class ExecutionEnvironmentsService {
     projectId: string;
     definition: ProjectEnvironmentDefinition;
     owner: string | null;
+    /** See {@link EnvironmentAdmitArgs.harnessInSandbox}. */
+    harnessInSandbox?: boolean;
+    /** The published commit the definition was read at, if not `main`. */
+    commit?: string;
   }): Promise<EnvironmentSandbox | { reason: string }> {
     const { definition } = args;
     const egress = resolveEgress({
@@ -906,11 +954,30 @@ export class ExecutionEnvironmentsService {
       owner: args.owner,
       volumes: definition.volumes,
     });
+    // The project's caches, whoever owns the work (ADR 0334): which
+    // generation each sandbox mounts is read when it is made.
+    const caches = Object.entries(definition.caches ?? {})
+      .sort(([left], [right]) => (left < right ? -1 : left > right ? 1 : 0))
+      .map(([name, cache]) => ({ name, path: cache.path }));
     const common: EnvironmentSandbox = {
       ...(definition.requirements?.containers ? { containers: true } : {}),
       ...(egress.mode === "open" ? {} : { egress }),
       ...(setupEgress ? { setupEgress } : {}),
       ...(volumes.length > 0 ? { volumes } : {}),
+      ...(caches.length > 0 ? { caches } : {}),
+      ...(definition.commands?.separate
+        ? {
+            separateCommands: {
+              connections: [...(definition.commands.connections ?? [])],
+              // An agent container only for a harness that runs in the
+              // sandbox, its share fixed at admission, so the reservation
+              // and the container agree (ADR 0332).
+              ...(args.harnessInSandbox
+                ? { agentResources: separateAgentResources(definition) }
+                : {}),
+            },
+          }
+        : {}),
     };
     const image = definition.image;
     if (!image) return common;
@@ -920,6 +987,7 @@ export class ExecutionEnvironmentsService {
       identity: args.identity,
       projectId: args.projectId,
       path: image.path,
+      ...(args.commit !== undefined ? { commit: args.commit } : {}),
     });
     if (content === null)
       return { reason: `Image Dockerfile ${image.path} does not exist` };
@@ -969,11 +1037,44 @@ function effectiveRequirementsOf(args: {
   });
 }
 
-/** The part of a workload's needs that sizes a machine. */
-function waitRequirements(
-  requirements: EnvironmentRequirements,
-): PlacementWaitTarget["requirements"] {
-  const { cpuMillis, memoryMb, storageMb, gpu } = requirements.resources ?? {};
+/**
+ * The agent container's limits where an Environment runs commands apart
+ * (ADR 0332): its own, or 1 CPU and 2 GiB.
+ */
+export function separateAgentResources(
+  definition: ProjectEnvironmentDefinition,
+): { cpuMillis: number; memoryMb: number } {
+  return {
+    cpuMillis:
+      definition.commands?.agentResources?.cpuMillis ??
+      SEPARATE_AGENT_DEFAULT_RESOURCES.cpuMillis,
+    memoryMb:
+      definition.commands?.agentResources?.memoryMb ??
+      SEPARATE_AGENT_DEFAULT_RESOURCES.memoryMb,
+  };
+}
+
+/**
+ * The part of a workload's needs that sizes a machine: with commands apart
+ * and a harness in the sandbox, the agent container's share on top (ADR
+ * 0332). A harness outside it (the built-in agent) has no agent container.
+ */
+function waitRequirements(input: {
+  requirements: EnvironmentRequirements;
+  definition: ProjectEnvironmentDefinition;
+  harnessInSandbox?: boolean;
+}): PlacementWaitTarget["requirements"] {
+  const { requirements } = input;
+  const agent =
+    input.definition.commands?.separate && input.harnessInSandbox
+      ? separateAgentResources(input.definition)
+      : undefined;
+  const own = requirements.resources ?? {};
+  const cpuMillis = agent
+    ? (own.cpuMillis ?? 0) + agent.cpuMillis
+    : own.cpuMillis;
+  const memoryMb = agent ? (own.memoryMb ?? 0) + agent.memoryMb : own.memoryMb;
+  const { storageMb, gpu } = own;
   return {
     resources: {
       ...(cpuMillis !== undefined ? { cpuMillis } : {}),
@@ -997,6 +1098,7 @@ function waitTargetOf(args: {
   owner?: PlacementOwner;
   requirements: EnvironmentRequirements;
   signIn?: SignInHarness;
+  harnessInSandbox?: boolean;
   name: string;
   definition: ProjectEnvironmentDefinition;
   reason: PlacementWaitReason;
@@ -1009,9 +1111,11 @@ function waitTargetOf(args: {
       reason: args.reason,
       pool: args.definition.pool ?? {},
       owner,
-      requirements: waitRequirements(
-        effectiveRequirementsOf({ ...args, owner }),
-      ),
+      requirements: waitRequirements({
+        requirements: effectiveRequirementsOf({ ...args, owner }),
+        definition: args.definition,
+        ...(args.harnessInSandbox ? { harnessInSandbox: true } : {}),
+      }),
       waitMinutes: args.definition.waitMinutes ?? 0,
     },
   ];

@@ -25,6 +25,7 @@ import {
   filesHolding,
   filesUnder,
   registryPack,
+  registryPackDependencies,
   testServerOptions,
 } from "./test-support.js";
 
@@ -32,6 +33,9 @@ import { startWorkWorker } from "./workers/worker-runtime.js";
 
 /** What an agent installs from the `pull-request-reviews` pack. */
 const REVIEW_AUTOMATION_FILES = registryPack("pull-request-reviews");
+const REVIEW_PACK_DEPENDENCIES = registryPackDependencies(
+  "pull-request-reviews",
+);
 
 /**
  * Code and security review of pull requests (#118), end to end on a Work
@@ -642,7 +646,9 @@ describe.skipIf(!databaseUrl)("reviewing pull requests (#118)", () => {
     // The company repository attached as a project; the skill's files,
     // committed verbatim. The worker runs local processes, which cannot
     // build the project image or give each sandbox its own Docker daemon,
-    // so the manifest drops just those two lines for this machine.
+    // so the manifest drops just those two lines for this machine, the
+    // read-only cache, which only the container backend mounts (ADR 0334),
+    // and running commands apart, which only it does (ADR 0332).
     const project = await core.projects.create(setup, { name: "Acme web" });
     projectId = project.id;
     await core.db
@@ -655,10 +661,15 @@ describe.skipIf(!databaseUrl)("reviewing pull requests (#118)", () => {
       })
       .where("id", "=", projectId)
       .execute();
-    const manifest = (REVIEW_AUTOMATION_FILES[".work/project.json"] ?? "")
+    const forThisMachine = JSON.parse(
+      REVIEW_AUTOMATION_FILES[".work/project.json"] ?? "{}",
+    );
+    delete forThisMachine.environments.review.caches;
+    delete forThisMachine.environments.review.commands;
+    const manifest = JSON.stringify(forThisMachine, null, 2)
       .replace(/\n\s*"image": "[^"]*",/, "")
       .replace(/\n\s*"containers": true,/, "");
-    expect(manifest).not.toMatch(/"image"|"containers"/);
+    expect(manifest).not.toMatch(/"image"|"containers"|"caches"|"commands"/);
     const deployed = await core.deployment.deploy(
       SERVER_TENANT_ID,
       projectId,
@@ -677,7 +688,16 @@ describe.skipIf(!databaseUrl)("reviewing pull requests (#118)", () => {
             name: "@acme/workflows",
             private: true,
             type: "module",
-            dependencies: { "@catamorphic/workflow": WORKFLOW_PACKAGE_VERSION },
+            dependencies: {
+              "@catamorphic/workflow": WORKFLOW_PACKAGE_VERSION,
+              // The pack's own, as its install steps add them.
+              ...Object.fromEntries(
+                REVIEW_PACK_DEPENDENCIES.map((pinned) => {
+                  const at = pinned.lastIndexOf("@");
+                  return [pinned.slice(0, at), pinned.slice(at + 1)];
+                }),
+              ),
+            },
           }),
         },
       },

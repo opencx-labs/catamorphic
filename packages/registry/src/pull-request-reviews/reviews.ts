@@ -11,8 +11,10 @@ import {
   checkWorkReview,
   diffLines,
   list,
+  publicationText,
   record,
   renderedPath,
+  stampedBody,
   type WorkReview,
 } from "./review-report";
 
@@ -251,7 +253,8 @@ const KEPT = 30;
 type Publication = {
   sessionId: string;
   turnId: string;
-  failed: boolean;
+  /** The turn did not finish: it failed, or was stopped. */
+  unfinished: "failed" | "interrupted" | null;
   /** From the chat's key, never from the report. */
   number: number;
   /** The commit the chat's workspace stands on. */
@@ -276,6 +279,34 @@ type Publication = {
   askedIn: number | null;
 };
 
+/**
+ * @displayname Fill the review package cache
+ *
+ * Every six hours Work fills the `review` Environment's pnpm store from the
+ * revision of main that last went live, with the command that revision's
+ * Environment declares, on every review machine that holds a copy (ADR
+ * 0334). Review setups lay a writable store over it and fetch only what a
+ * pull request adds.
+ */
+export const fillReviewCache = defineWorkflow(({ defineBoundary }) => ({
+  permissions: ["caches:write"],
+  triggers: [trigger("schedule", { cron: "17 */6 * * *", timezone: "UTC" })],
+  steps: [
+    /** @displayname Fill the pnpm store from main */
+    defineBoundary({
+      run: ({
+        input,
+        host,
+      }: BoundaryContext<{ activationId: string; scheduledFor: string }>) =>
+        host["catamorphic.environments"].fillCache({
+          environment: "review",
+          cache: "pnpm",
+          idempotencyKey: `review-cache:${input.activationId}:${input.scheduledFor}`,
+        }),
+    }),
+  ],
+}));
+
 const RETRY = {
   maxAttempts: 4,
   backoff: { initial: "10s", maximum: "2m", multiplier: 3 },
@@ -285,7 +316,9 @@ const RETRY = {
 export const postReviews = defineWorkflow(({ defineBoundary }) => ({
   triggers: [
     trigger("session.turn-changed", {
-      statuses: ["completed", "failed"],
+      // A turn stopped before it finished (by a person, or by
+      // restartStalledReviews past its bound) leaves no review either.
+      statuses: ["completed", "failed", "interrupted"],
       where: { payload: { session: { key: { $prefix: "pr-acme/web-" } } } },
     }),
   ],
@@ -328,7 +361,11 @@ export const postReviews = defineWorkflow(({ defineBoundary }) => ({
         const publication: Publication = {
           sessionId: event.sessionId,
           turnId: String(event.detail.turnId),
-          failed: event.detail.status === "failed",
+          unfinished:
+            event.detail.status === "failed" ||
+            event.detail.status === "interrupted"
+              ? event.detail.status
+              : null,
           number,
           commit: null,
           post:
@@ -410,11 +447,16 @@ export const postReviews = defineWorkflow(({ defineBoundary }) => ({
             result.sessionId === input.state.sessionId,
         );
         const head = input.state.commit ?? "";
-        const checked = input.state.failed
-          ? "The review turn failed."
-          : !submitted
-            ? "The turn submitted no review result."
-            : checkWorkReview(submitted.value);
+        // A stopped turn that already submitted its review for the head
+        // publishes it; one with none says it did not finish.
+        const checked =
+          input.state.unfinished === "failed"
+            ? "The review turn failed."
+            : !submitted
+              ? input.state.unfinished === "interrupted"
+                ? "The review turn was stopped before it finished."
+                : "The turn submitted no review result."
+              : checkWorkReview(submitted.value);
         // Two commits must both be the head being posted for: the one the
         // agent says it reviewed, and the one Work recorded its turn began
         // on. Either one elsewhere refuses the review, and says which.
@@ -521,11 +563,13 @@ export const postReviews = defineWorkflow(({ defineBoundary }) => ({
                     " (score " +
                     review.score +
                     "/5)",
-                  summary: review.checkSummary,
+                  summary: publicationText(review.checkSummary),
                 }
               : {
                   title: "No review",
-                  summary: state.problem ?? "No review was reported.",
+                  summary: publicationText(
+                    state.problem ?? "No review was reported.",
+                  ),
                 },
             stamp: effect(state, "check"),
           },
@@ -633,8 +677,12 @@ export const postReviews = defineWorkflow(({ defineBoundary }) => ({
             number: state.number,
             event: review.verdict,
             commitId: state.commit,
-            body: `${reviewBody(state, review)}\n\n${stamp}`,
-            comments: review.comments,
+            // Defused as GitHub reads it: the whole body at once.
+            body: stampedBody(reviewBody(state, review), stamp),
+            comments: review.comments.map((comment) => ({
+              ...comment,
+              body: publicationText(comment.body),
+            })),
             stamp,
           },
           { state },
@@ -684,7 +732,7 @@ export const postReviews = defineWorkflow(({ defineBoundary }) => ({
           .flatMap((thread) => list(record(thread).comments).map(record))
           .find((comment) => comment.id === reply.inReplyTo);
         const stamp = marker(state, "reply");
-        const body = `${reply.body}\n\n${stamp}`;
+        const body = stampedBody(reply.body, stamp);
         return typeof asked?.id === "number"
           ? connections.github.reply_to_review_comment(
               {
@@ -860,7 +908,5 @@ function reviewBody(state: Publication, review: WorkReview): string {
             state.outside.map((comment) => `- ${comment}`).join("\n"),
         ]
       : []),
-  ]
-    .join("\n\n")
-    .slice(0, 60000);
+  ].join("\n\n");
 }

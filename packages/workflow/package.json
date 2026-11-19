@@ -13,6 +13,10 @@
       "import": "./dist/project-layout.js",
       "types": "./dist/project-layout.d.ts"
     },
+    "./document-access": {
+      "import": "./dist/document-access.js",
+      "types": "./dist/document-access.d.ts"
+    },
     "./package.json": "./package.json",
     "./package-payload": {
       "import": "./dist/package-payload.js",
@@ -39,7 +43,8 @@
   "bundle": {
     "entry": [
       "src/index.ts",
-      "src/project-layout.ts"
+      "src/project-layout.ts",
+      "src/document-access.ts"
     ],
     "splitting": false
   },

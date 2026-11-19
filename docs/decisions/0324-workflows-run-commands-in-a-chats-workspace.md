@@ -1,21 +1,21 @@
 # 0324: Workflows run commands in a chat's workspace, setup can be a workflow, and workspaces report their changes
 
-- **Status:** Accepted (amends 0208, 0257)
+- **Status:** Accepted (amends 0208, 0257; amended by [0332](0332-commands-run-apart-from-the-agent.md): where commands run apart, `exec` in either mode runs in the command container, with the grants only of `commands.connections`; `$WORK_PROGRAM` is copied beside the agent too, out of commands' reach)
 - **Date:** 2026-11-17
 - **Refines:** 0156, 0158, 0173, 0178, 0209, 0260, 0289, 0295
 
 ## Context
 
-A workflow could reach a chat's workspace only by delivering
-`workspace: { ref, update }` (ADR 0178), applied before the next turn. A pull
-request reviewer needs more, and the opencx watcher built it with its own
+A workflow could reach a chat's workspace only by delivering `workspace: {
+ref, update }` (ADR 0178), applied before the next turn. A pull request
+reviewer needs more, and a production reviewer's watcher built it with its own
 driver: review procedure files (skills, prompts, scripts) copied from the
-reviewing program over the pull request's own copies every time the
-workspace is built, so a pull request cannot change how it is reviewed by
-editing them; a push that lands during a review fetched beside the checkout
-rather than resetting it under the agent; and prepared facts written as
-files the agent reads. Work should provide the lifecycle points and one
-command primitive, and leave the procedure to workflow code.
+reviewing program over the pull request's own copies every time the workspace
+is built, so a pull request cannot change how it is reviewed by editing them;
+a push that lands during a review fetched beside the checkout rather than
+resetting it under the agent; and prepared facts written as files the agent
+reads. Work should provide the lifecycle points and one command primitive, and
+leave the procedure to workflow code.
 
 ## Decision
 

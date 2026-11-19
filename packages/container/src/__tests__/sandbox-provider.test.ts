@@ -2,7 +2,7 @@ import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import net from "node:net";
 import path from "node:path";
-import { volumeKey } from "@catamorphic/sandbox";
+import { cacheVolumeKey, volumeKey } from "@catamorphic/sandbox";
 import { afterEach, describe, expect, it } from "vitest";
 import {
   type ContainerProviderConfig,
@@ -405,6 +405,208 @@ describe("ContainerSandboxProvider without Docker", () => {
     ).toEqual([]);
   });
 
+  const generation = (n: number) =>
+    cacheVolumeKey({
+      projectId: "p",
+      environment: "review",
+      name: "pnpm",
+      generation: n,
+    });
+
+  it("never creates a read-only cache generation the machine lacks, and reports it (ADR 0334)", async () => {
+    const { fake, provider } = await setup();
+    const handle = await provider().createSandbox({
+      volumes: [{ key: generation(3), path: "/cache", readOnly: true }],
+    });
+    expect(handle.skippedVolumes).toEqual([generation(3)]);
+    expect(fake.volumes.has(`work-volume-${generation(3)}`)).toBe(false);
+    const body = fake.containers.get(handle.id)?.body;
+    expect(JSON.stringify(body)).not.toContain(generation(3));
+  });
+
+  it("retires only the generations it is told to, never between another sandbox finding one and mounting it (ADR 0334)", async () => {
+    let hold: (() => void) | undefined;
+    const held = new Promise<void>((resolve) => {
+      hold = resolve;
+    });
+    let reached: () => void = () => {};
+    const midway = new Promise<void>((resolve) => {
+      reached = resolve;
+    });
+    const { fake, provider } = await setup(undefined, {
+      // The sandbox mounting generation 5 read only is held just before
+      // its container exists.
+      beforeCreateContainer: async (body) => {
+        const mounts = Reflect.get(hostConfigOf(body), "Mounts");
+        const cache = (Array.isArray(mounts) ? mounts : []).find(
+          (mount: unknown) =>
+            typeof mount === "object" &&
+            mount !== null &&
+            Reflect.get(mount, "Source") === `work-volume-${generation(5)}`,
+        );
+        if (cache && Reflect.get(cache, "ReadOnly") === true) {
+          reached();
+          await held;
+        }
+      },
+    });
+    const machine = provider();
+    for (const n of [5, 6, 7]) {
+      const fill = await machine.createSandbox({
+        volumes: [{ key: generation(n), path: "/cache" }],
+      });
+      await machine.destroySandbox(fill.id);
+    }
+    // A sandbox chose generation 5 before 6 was published.
+    const late = machine.createSandbox({
+      volumes: [{ key: generation(5), path: "/cache", readOnly: true }],
+    });
+    await midway;
+    // Generation 6 is published: its sandbox retires 5 and the failed 7.
+    const current = machine.createSandbox({
+      volumes: [
+        {
+          key: generation(6),
+          path: "/cache",
+          readOnly: true,
+          retire: [
+            generation(5),
+            generation(7),
+            volumeKey({ projectId: "p", owner: "m", name: "x" }),
+          ],
+        },
+      ],
+    });
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    // Its check waits for the held sandbox's container.
+    expect(fake.volumes.has(`work-volume-${generation(5)}`)).toBe(true);
+    hold?.();
+    const [first, second] = await Promise.all([late, current]);
+    expect(first.skippedVolumes).toBeUndefined();
+    expect(second.skippedVolumes).toBeUndefined();
+    // 5 is mounted, so it stays; 7 is gone; 6 is kept.
+    expect(fake.volumes.has(`work-volume-${generation(5)}`)).toBe(true);
+    expect(fake.volumes.has(`work-volume-${generation(6)}`)).toBe(true);
+    expect(fake.volumes.has(`work-volume-${generation(7)}`)).toBe(false);
+    // Once nothing mounts 5, the next sandbox told to retire it does.
+    await machine.destroySandbox(first.id);
+    await machine.createSandbox({
+      volumes: [
+        {
+          key: generation(6),
+          path: "/cache",
+          readOnly: true,
+          retire: [generation(5)],
+        },
+      ],
+    });
+    expect(fake.volumes.has(`work-volume-${generation(5)}`)).toBe(false);
+  });
+
+  it("never removes a cache generation between a sandbox finding it and mounting it when every volume is removed (ADR 0334)", async () => {
+    let hold: (() => void) | undefined;
+    const held = new Promise<void>((resolve) => {
+      hold = resolve;
+    });
+    let reached: () => void = () => {};
+    const midway = new Promise<void>((resolve) => {
+      reached = resolve;
+    });
+    const { fake, provider } = await setup(undefined, {
+      beforeCreateContainer: async (body) => {
+        const mounts = Reflect.get(hostConfigOf(body), "Mounts");
+        const cache = (Array.isArray(mounts) ? mounts : []).find(
+          (mount: unknown) =>
+            typeof mount === "object" &&
+            mount !== null &&
+            Reflect.get(mount, "Source") === `work-volume-${generation(4)}` &&
+            Reflect.get(mount, "ReadOnly") === true,
+        );
+        if (cache) {
+          reached();
+          await held;
+        }
+      },
+    });
+    const machine = provider();
+    const fill = await machine.createSandbox({
+      volumes: [{ key: generation(4), path: "/cache" }],
+    });
+    await machine.destroySandbox(fill.id);
+    const reader = machine.createSandbox({
+      volumes: [{ key: generation(4), path: "/cache", readOnly: true }],
+    });
+    await midway;
+    // Settled into a value at once, so its refusal is never unhandled.
+    const removal = machine.volumes.removeAll().then(
+      () => undefined,
+      (error: unknown) => error,
+    );
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    expect(fake.volumes.has(`work-volume-${generation(4)}`)).toBe(true);
+    hold?.();
+    const handle = await reader;
+    // The reader holds it now, so the removal keeps it and says so.
+    const refused = await removal;
+    expect(refused).toBeInstanceOf(Error);
+    expect(String(refused)).toContain("still mounted by sandboxes");
+    expect(handle.skippedVolumes).toBeUndefined();
+    expect(fake.volumes.has(`work-volume-${generation(4)}`)).toBe(true);
+  });
+
+  it("makes Work's own sandbox with no network at all and no setup (ADR 0334)", async () => {
+    const ran: string[][] = [];
+    const { fake, provider } = await setup(
+      { setupCommand: "apk add --no-cache git" },
+      {
+        onExec: ({ cmd }) => {
+          ran.push(cmd);
+          return undefined;
+        },
+      },
+    );
+    const machine = provider();
+    const internal = await machine.createSandbox({
+      internal: true,
+      volumes: [{ key: generation(8), path: "/cache", readOnly: true }],
+    });
+    const body = fake.containers.get(internal.id)?.body ?? {};
+    expect(hostConfigOf(body).NetworkMode).toBe("none");
+    // No resolver, no proxy socket: nothing to reach anything with.
+    const mounts = Reflect.get(hostConfigOf(body), "Mounts");
+    expect(
+      (Array.isArray(mounts) ? mounts : []).filter(
+        (mount: unknown) =>
+          typeof mount === "object" &&
+          mount !== null &&
+          Reflect.get(mount, "Type") === "bind",
+      ),
+    ).toEqual([]);
+    expect(ran.some((cmd) => cmd.join(" ").includes("apk add"))).toBe(false);
+    // An ordinary sandbox still gets its network and its setup.
+    const ordinary = await machine.createSandbox({});
+    expect(
+      hostConfigOf(fake.containers.get(ordinary.id)?.body ?? {}).NetworkMode,
+    ).toBe(SANDBOX_NETWORK);
+    expect(ran.some((cmd) => cmd.join(" ").includes("apk add"))).toBe(true);
+    // It takes nothing an Environment asks for.
+    await expect(
+      machine.createSandbox({
+        internal: true,
+        egress: { mode: "allowlist", allow: ["example.com"] },
+      }),
+    ).rejects.toThrow("takes no egress, containers, sign-ins");
+    // Nor is it ever a pair whose commands run apart (ADR 0332).
+    const before = fake.containers.size;
+    await expect(
+      machine.createSandbox({
+        internal: true,
+        separateCommands: { shared: ["/workspace/project"] },
+      }),
+    ).rejects.toThrow("separated commands");
+    expect(fake.containers.size).toBe(before);
+  });
+
   it("removes its own sandboxes before volumes only when asked", async () => {
     const { fake, provider } = await setup();
     const key = volumeKey({ projectId: "p", owner: "m", name: "cache" });
@@ -476,5 +678,57 @@ describe("ContainerSandboxProvider without Docker", () => {
         (request) => request === `POST /containers/${sandbox.id}/start`,
       ),
     ).toHaveLength(2);
+  });
+  it("gives the command side the Environment's limits and the agent side its own share (ADR 0332)", async () => {
+    const { fake, provider } = await setup();
+    const sandbox = await provider().createSandbox({
+      resources: { cpuMillis: 4000, memoryMb: 8192 },
+      separateCommands: {
+        shared: ["/workspace/project"],
+        agentResources: { cpuMillis: 500, memoryMb: 1536 },
+      },
+    });
+    const commands = hostConfigOf(fake.containers.get(sandbox.id)?.body ?? {});
+    const agent = hostConfigOf(
+      fake.containers.get(`${sandbox.id}-agent`)?.body ?? {},
+    );
+    expect([commands.NanoCpus, commands.Memory]).toEqual([
+      4000 * 1_000_000,
+      8192 * 1024 * 1024,
+    ]);
+    expect([agent.NanoCpus, agent.Memory, agent.MemorySwap]).toEqual([
+      500 * 1_000_000,
+      1536 * 1024 * 1024,
+      1536 * 1024 * 1024,
+    ]);
+    // Without its own share, the agent side gets 1 CPU and 2 GiB.
+    const plain = await provider().createSandbox({
+      resources: { cpuMillis: 4000, memoryMb: 8192 },
+      separateCommands: { shared: ["/workspace/project"] },
+    });
+    const defaults = hostConfigOf(
+      fake.containers.get(`${plain.id}-agent`)?.body ?? {},
+    );
+    expect([defaults.NanoCpus, defaults.Memory]).toEqual([
+      1000 * 1_000_000,
+      2048 * 1024 * 1024,
+    ]);
+    for (const id of [sandbox.id, plain.id])
+      await provider().destroySandbox(id);
+  });
+  it("stops and destroys a pair named by either side after this process restarted (ADR 0332)", async () => {
+    const { fake, provider } = await setup();
+    const sandbox = await provider().createSandbox({
+      separateCommands: { shared: ["/workspace/project"] },
+    });
+    const agent = `${sandbox.id}-agent`;
+    // Another process, which never saw the pair made.
+    const restarted = provider();
+    await restarted.stopSandbox(agent);
+    const running = (name: string) => fake.containers.get(name)?.running;
+    expect([running(sandbox.id), running(agent)]).toEqual([false, false]);
+    await provider().destroySandbox(agent);
+    expect(fake.containers.has(sandbox.id)).toBe(false);
+    expect(fake.containers.has(agent)).toBe(false);
   });
 });

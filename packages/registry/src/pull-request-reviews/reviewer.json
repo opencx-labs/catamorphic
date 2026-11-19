@@ -8,9 +8,14 @@
     "preferred": ["review"],
     "allowed": ["review"]
   },
+  "stall": { "minutes": 20 },
   "connections": [
     {
       "alias": "github",
+      "principal": "service"
+    },
+    {
+      "alias": "git",
       "principal": "service"
     },
     {

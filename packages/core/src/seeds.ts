@@ -459,7 +459,9 @@ A project has one path namespace with two backings:
   a repository-root \`store/\` directory for these documents. Put audience-specific or fast-changing
   content there, never next to the handbook. Read and write it through the
   documents surface (\`documents_*\` MCP tools, \`context.documents\` in a
-  workflow, or the folder itself in the desktop) — not by committing.
+  workflow, or the folder itself in the desktop) — not by committing. A
+  workflow declares each store path it reads or writes in \`documents\`
+  (see \`writing-workflows\`) and reaches no other.
 
 Access is enforced by the host from **roles you commit** as
 \`.work/roles/<slug>.json\`, next to \`.work/agents/<slug>.json\`:
@@ -481,7 +483,7 @@ Access is enforced by the host from **roles you commit** as
   ]
 }
 // .work/roles/admin.json
-{ "version": 1, "name": "Admin", "description": "Runs the brain: builds workflows, apps and agents. Comfortable with technical detail.", "agents": ["*"], "workflows": ["*"], "apps": ["*"], "environments": ["*"], "permissions": ["*"], "documents": ["store/**"] }
+{ "version": 1, "name": "Admin", "description": "Runs the brain: builds workflows, apps and agents. Comfortable with technical detail.", "agents": ["*"], "workflows": ["*"], "apps": ["*"], "environments": ["*"], "permissions": ["*"], "documents": [{ "path": "store/**", "access": "write" }] }
 // .work/roles/engineer.json
 { "version": 1, "name": "Engineer", "description": "Builds workflows and apps; ships them after review. Technical.", "agents": ["*"], "workflows": ["*"], "apps": ["*"], "environments": ["default"], "permissions": ["program:write", "runs:read", "secrets:read"] }
 // .work/roles/brain-maintainer.json
@@ -573,7 +575,7 @@ provide it take the work:
   runs, in a workspace at a ref of the project's remote: a new sandbox
   holding the base commit, with only the secrets \`"secrets"\` names, narrow
   again before the session's work arrives. Such an Environment declares no
-  volumes; its image holds the caches.
+  volumes; it declares read-only \`caches\` instead.
 - \`volumes\`: directories kept on the machine for each owner and project,
   so later workspaces start warm: \`{ "pnpm": "~/.local/share/pnpm/store",
   "docker": { "path": "/var/lib/docker", "exclusive": true, "sizeMb":
@@ -581,6 +583,32 @@ provide it take the work:
   volume (a Docker data root, a database) is mounted into one sandbox at a
   time; a workspace that finds it held gets an empty one and is told. Only
   machines that keep volumes take such work.
+- \`caches\`: directories every sandbox of the Environment mounts read only,
+  setup's included, that only a trusted fill writes (ADR 0334): \`{ "pnpm":
+  { "path": "~/.cache/work/pnpm-store", "fill": { "command": "pnpm fetch
+  --store-dir ~/.cache/work/pnpm-store" } } }\`. A fill runs that command at
+  the published \`main\` in a sandbox of its own on the setup's network, and
+  the new cache is published only when it succeeds. A workflow declaring
+  \`caches:write\` asks for one with
+  \`host["catamorphic.environments"].fillCache({ environment, cache,
+  idempotencyKey })\`, on a schedule; it never names the command, and fills
+  only from a revision of main that went live. Each machine keeps its own copy; one without a copy
+  mounts none and fills one. Install from it offline and fall back to the
+  network: \`pnpm install --frozen-lockfile --offline --store-dir
+  ~/.cache/work/pnpm-store || pnpm install --frozen-lockfile\`.
+- \`commands\`: \`{ "separate": true, "connections": ["github"] }\` runs the
+  agent's commands (its shell, setup, \`exec\`, terminals, background
+  processes, the change's tests and services) in a container of their own
+  beside the agent's, sharing only the checkout. The agent's grants, model,
+  Work tools and state stay out of their reach; \`connections\` names the
+  bindings commands may use through the gateway (none by default, never a
+  model): list only a read binding. The agent's own container takes
+  \`agentResources\` (1 CPU and 2 GiB by default) on top of the Environment's
+  limits, which the commands' container gets. Use it wherever the agent runs code it
+  does not trust, such as a pull request's. Claude Code then loads no
+  settings files, an ACP agent needs \`"acp": { "shell": true,
+  "projectConfig": false }\` with the \`env\` that makes it so, and OpenCode
+  and Codex cannot run there. Only container machines take such work.
 
 An agent definition's \`sandboxing\` says what may leave its sandbox, and the
 host enforces it: \`contained\` agents may do anything inside their sandbox,
@@ -619,6 +647,11 @@ same turn. Workflows read them with \`results\` or trigger on
 \`session.result-recorded\` (session-workflows), and a parent reads its
 subagents' in their messages and in list and wait outputs. Prefer a result to
 asking an agent to end its reply with a block of JSON.
+
+\`stall\` is how long a running turn may make no progress before Work records a
+stall (ADR 0333): \`{ "minutes": 20 }\`, whole minutes from 1 to 1440; absent,
+none is recorded. Work only emits \`session.turn-stalled\`; a workflow decides
+whether to collect diagnostics and \`restart\` the turn (session-workflows).
 
 A remote project keeps one authority for membership, connections, and history.
 \`device: "member"\` offers an authenticated member's own computer when the
@@ -1329,12 +1362,15 @@ corpora, or ranking across thousands of documents. Then:
    re-embed on model change.
 3. **Index on write**: a workflow triggered when a store document changes
    (or a periodic sweep) that reads the document through
-   \`context.documents.read\` and upserts chunks. Reading through
+   \`context.documents.read\` and upserts chunks. It declares the store
+   folders it indexes in \`documents\` (\`[{ path: "store/customers/",
+   access: "read" }]\`); it reaches no others. Reading through
    \`context.documents\` is what keeps the index honest about scope: the
    indexer only sees what its caller may.
 4. **Serve as a workflow tool** (\`ai.tool-call\` trigger kind) that takes
    \`{ query, prefix?, limit? }\`, embeds the query, ranks, and — before
-   returning — re-reads each hit through \`context.documents.read\` so a
+   returning — re-reads each hit through \`context.documents.read\` (the
+   tool declares the same store folders) so a
    caller who cannot read a document never sees its chunk. That final read
    is not optional: the index is a hint, the documents surface is the law.
 5. Return the same shape as the primitives (\`path\`, \`source\`, \`lines\`)

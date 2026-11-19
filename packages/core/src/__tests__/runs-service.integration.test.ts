@@ -1554,6 +1554,7 @@ describeIf("unified RunsService integration", () => {
           capabilities: child.capabilities,
           execution: child.execution,
           permissions: child.permissions,
+          documents: child.documents,
           input: { child: true },
         },
       });

@@ -1,6 +1,10 @@
 import fs from "node:fs";
 import path from "node:path";
-import { type SandboxVolume, VOLUME_KEY_PATTERN } from "./types.js";
+import {
+  CACHE_VOLUME_KEY_PATTERN,
+  type SandboxVolume,
+  VOLUME_KEY_PATTERN,
+} from "./types.js";
 
 /**
  * Check the volumes a sandbox is handed (ADR 0208): keys from `volumeKey`,
@@ -14,8 +18,13 @@ export function assertSandboxVolumes(
 ): void {
   const seen: string[] = [];
   for (const volume of volumes ?? []) {
-    if (!VOLUME_KEY_PATTERN.test(volume.key))
+    const cache = CACHE_VOLUME_KEY_PATTERN.test(volume.key);
+    if (!cache && !VOLUME_KEY_PATTERN.test(volume.key))
       throw new Error(`'${volume.key}' is not a volume key`);
+    // A cache generation is shared by the project's sandboxes, never one
+    // sandbox's alone, and an empty stand-in would read as a cache.
+    if (cache && (volume.exclusive || volume.temporary))
+      throw new Error(`Cache '${volume.key}' cannot be exclusive or temporary`);
     if (
       volume.path !== "~" &&
       !volume.path.startsWith("~/") &&
@@ -47,6 +56,29 @@ export function assertSandboxVolumes(
       );
     seen.push(normalized);
   }
+}
+
+/**
+ * Refuse the read-only cache generations (and a fill's writable one) of
+ * ADR 0334 on a backend that cannot keep them read only: it would mount
+ * them writable, so code a pull request controls could write a cache.
+ */
+export function refuseCacheVolumes(
+  volumes: readonly SandboxVolume[] | undefined,
+  backend: string,
+  internal?: boolean,
+): void {
+  if (internal)
+    throw new Error(
+      `${backend} sandboxes cannot run cut off from every network, so they cannot check a cache`,
+    );
+  const cache = (volumes ?? []).find(
+    (volume) => volume.readOnly || CACHE_VOLUME_KEY_PATTERN.test(volume.key),
+  );
+  if (cache)
+    throw new Error(
+      `${backend} sandboxes cannot keep a cache read only (${cache.key}); place an Environment with caches on a machine that offers them`,
+    );
 }
 
 /**

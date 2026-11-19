@@ -13,6 +13,7 @@ import {
   type AttemptControl,
   type AttemptHost,
   type AttemptStart,
+  diagnosticStream,
   type HarnessAdapter,
   type HarnessCapabilities,
   type HarnessEvent,
@@ -21,7 +22,16 @@ import {
   type McpServerSpec,
   NO_CAPABILITIES,
 } from "@catamorphic/agent-protocol/runner";
-import { renderUserMessage } from "@catamorphic/sandbox";
+import {
+  homeStartedCommand,
+  type LoopbackModel,
+  loopbackModelEnv,
+  loopbackModelHeaders,
+  type ModelRefusal,
+  renderUserMessage,
+  serveLoopbackModel,
+  writeCommandShell,
+} from "@catamorphic/sandbox";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
 import {
@@ -29,13 +39,6 @@ import {
   type CallToolResult,
   ListToolsRequestSchema,
 } from "@modelcontextprotocol/sdk/types.js";
-import {
-  type LoopbackModel,
-  loopbackModelEnv,
-  loopbackModelHeaders,
-  type ModelRefusal,
-  serveLoopbackModel,
-} from "./model-endpoint.js";
 
 /**
  * What an Agent Client Protocol agent offers through the protocol itself.
@@ -51,6 +54,23 @@ export const ACP_CAPABILITIES: HarnessCapabilities = {
   streamsReasoning: true,
   ids: { thread: "strong", turn: "none", item: "weak" },
 };
+
+/** Why an ACP agent without `acp.shell` does not run where commands run apart (ADR 0332). */
+export const ACP_COMMANDS_APART_REFUSAL =
+  'This Environment runs commands apart from the agent, and an ACP agent runs there only when its definition says both that every way it runs code goes through $SHELL ("shell": true) and that it loads no configuration, plugins, MCP servers, language servers, formatters or instructions from the checkout ("projectConfig": false, with "env" naming the variables that make it so). OpenCode does not: it loads plugins from the checkout whatever its settings say. Use the built-in agent or Claude Code there, or run this Environment\'s commands beside the agent.';
+
+/** The variables an agent's definition sets for its process. */
+function definitionEnv(value: unknown): Record<string, string> {
+  if (typeof value !== "object" || value === null || Array.isArray(value))
+    return {};
+  return Object.fromEntries(
+    Object.entries(value).filter(
+      (entry): entry is [string, string] =>
+        /^[A-Za-z_][A-Za-z0-9_]*$/.test(entry[0]) &&
+        typeof entry[1] === "string",
+    ),
+  );
+}
 
 /** How long an agent gets to exit after its turn before it is killed. */
 const EXIT_GRACE_MS = 3_000;
@@ -97,6 +117,11 @@ function startAttempt(
   /** Permission requests still waiting on their person. */
   const asks = new Set<AbortController>();
   const stderr: string[] = [];
+  // The agent's own log reaches Work while it is written (ADR 0333).
+  const log = diagnosticStream({
+    emit: (event) => host.emit(event),
+    prefix: `${path.basename(command[0] ?? "agent")}: `,
+  });
   const items = new ItemStream(host);
   /** A model call the endpoint saw refused, until new output (ADR 0298). */
   let retrying = false;
@@ -140,6 +165,34 @@ function startAttempt(
       throw new Error(
         "ACP agents run on their own sign-in or a model connection, not a Work sign-in.",
       );
+    // Its commands apart from it (ADR 0332): only an agent whose
+    // definition says it runs them with `$SHELL` can be pointed at the
+    // command container; any other is refused, never run beside the agent.
+    let shell: { shell: string; path: string } | undefined;
+    if (attempt.commands) {
+      // The contract (ADR 0332): every way it runs code goes through
+      // $SHELL, and it loads nothing from the checkout, which the pull
+      // request controls. Work cannot check either; the definition says so.
+      if (
+        attempt.options.shell !== true ||
+        attempt.options.projectConfig !== false
+      )
+        throw new Error(ACP_COMMANDS_APART_REFUSAL);
+      // With a harness user of its own, the provider's shim, which that
+      // user cannot rewrite; otherwise one beside the runner's state.
+      const harness = attempt.commands.harness;
+      shell = harness
+        ? {
+            shell: path.join(harness.shim, "bin", "bash"),
+            path: path.join(harness.shim, "path"),
+          }
+        : await writeCommandShell({
+            directory: path.join(attempt.stateDirectory, "commands"),
+            socket: attempt.commands.socket,
+            runtime: process.execPath,
+          });
+    }
+    const harness = attempt.commands?.harness;
     if (access.kind === "gateway")
       model = await serveLoopbackModel({
         access,
@@ -147,27 +200,61 @@ function startAttempt(
         onAnswered: providerAnswered,
       });
     const spawned = spawn(executable, args, {
-      cwd: attempt.workingDirectory,
+      // A harness of its own user starts in its home: its launcher (bunx,
+      // npx, a Bun binary) would read bunfig.toml, .npmrc or .env files
+      // from the checkout. Its session still works in the checkout.
+      cwd: attempt.commands?.harness?.home ?? attempt.workingDirectory,
       env: {
         ...process.env,
         ...attempt.env,
+        // What the definition sets for the agent (keeping project
+        // configuration off, ADR 0332).
+        ...definitionEnv(attempt.options.env),
         ...(model
           ? loopbackModelEnv({
               model,
               ...(attempt.model ? { modelId: attempt.model } : {}),
             })
           : {}),
+        // Its shell, and Git first on its PATH, run where commands run.
+        ...(shell
+          ? {
+              SHELL: shell.shell,
+              PATH: [shell.path, attempt.env.PATH ?? process.env.PATH]
+                .filter(Boolean)
+                .join(":"),
+            }
+          : {}),
+        // Its own user (ADR 0332): a home it writes as a cache, and a
+        // configuration home it cannot write, so nothing it is led to
+        // write loads into it as configuration or a plugin.
+        ...(harness
+          ? {
+              HOME: harness.home,
+              XDG_CONFIG_HOME: harness.config,
+              XDG_DATA_HOME: path.join(harness.home, ".local", "share"),
+              XDG_STATE_HOME: path.join(harness.home, ".local", "state"),
+              XDG_CACHE_HOME: path.join(harness.home, ".cache"),
+              TMPDIR: harness.temporary,
+            }
+          : {}),
       },
+      ...(harness ? { uid: harness.uid, gid: harness.gid } : {}),
       stdio: ["pipe", "pipe", "pipe"],
       // Its own process group, so stopping it stops what it started too
       // (the agent behind an `npx` or `sh -c` command, its MCP servers).
       detached: process.platform !== "win32",
     });
     child = spawned;
+    // Its own group outlives a runner killed for a restart unless Work
+    // knows it (ADR 0333).
+    if (process.platform !== "win32" && spawned.pid)
+      host.emit({ type: "process.group", pgid: spawned.pid });
     spawned.stderr.setEncoding("utf8");
     spawned.stderr.on("data", (chunk: string) => {
       stderr.push(...chunk.split("\n").filter((line) => line.trim()));
       stderr.splice(0, Math.max(0, stderr.length - 20));
+      log.write(chunk);
     });
     // Ends the attempt when the agent goes away mid-request.
     const exited = new Promise<never>((_, reject) => {
@@ -198,7 +285,7 @@ function startAttempt(
     tools = hostServers?.server;
     const mcpServers = [
       ...Object.entries(attempt.mcpServers).map(([name, spec]) =>
-        acpMcpServer({ name, spec }),
+        acpMcpServer({ name, spec, home: harness?.home }),
       ),
       ...(hostServers?.servers ?? []),
     ];
@@ -533,6 +620,7 @@ function startAttempt(
       await stop(child);
       // After the agent, so a call it made on the way out still lands.
       model?.close();
+      log.flush();
       host.emit({
         type: "turn.completed",
         status:
@@ -823,15 +911,19 @@ function promptBlocks({
 function acpMcpServer({
   name,
   spec,
+  home,
 }: {
   name: string;
   spec: McpServerSpec;
+  /** A harness of its own user starts its servers in its home (ADR 0332). */
+  home?: string | undefined;
 }): acp.McpServer {
   if (spec.transport === "stdio")
     return {
       name,
-      command: spec.command,
-      args: spec.args ?? [],
+      ...(home
+        ? homeStartedCommand({ ...spec, home })
+        : { command: spec.command, args: spec.args ?? [] }),
       env: Object.entries(spec.env ?? {}).map(([key, value]) => ({
         name: key,
         value,

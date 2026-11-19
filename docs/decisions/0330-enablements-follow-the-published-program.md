@@ -1,6 +1,6 @@
 # 0330 — Enablements follow the published program
 
-- **Status:** Accepted (amends 0068, 0158, 0170; builds on 0040, 0193)
+- **Status:** Accepted (amends 0068, 0158, 0170; builds on 0040, 0193; amended by 0335: declared store documents compare by coverage, so a narrower declaration follows)
 - **Date:** 2026-11-17
 
 ## Context
@@ -78,9 +78,10 @@ there and the authority the owner consented to is unchanged.**
   the sequence it last followed and never moves to an earlier one. Two
   replicas can therefore neither move one enablement twice nor out of order.
 
-Alternatives: an external watcher that previews and updates (what the opencx
-watcher does) leaves every team rewriting the same loop; following without a
-consent check would let a merge widen a workflow's authority silently.
+Alternatives: an external watcher that previews and updates (what a production
+pull request reviewer's watcher does) leaves every team rewriting the same
+loop; following without a consent check would let a merge widen a workflow's
+authority silently.
 
 ## Consequences
 

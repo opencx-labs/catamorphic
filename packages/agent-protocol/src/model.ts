@@ -448,7 +448,13 @@ export interface Turn {
   updatedAt: string;
 }
 
-export type AttemptReason = "initial" | "retry" | "steer_restart" | "recovery";
+export type AttemptReason =
+  | "initial"
+  | "retry"
+  | "steer_restart"
+  | "recovery"
+  /** Someone restarted the attempt before it (ADR 0333). */
+  | "restart";
 
 export type AttemptStatus =
   | "preparing"
@@ -459,7 +465,9 @@ export type AttemptStatus =
   /** The runner went away mid-attempt (ADR 0198). */
   | "lost"
   /** Replaced by a later attempt of the same turn (steer restart). */
-  | "superseded";
+  | "superseded"
+  /** Ended by a restart, without asking its harness (ADR 0333). */
+  | "restarted";
 
 export interface Attempt {
   id: string;

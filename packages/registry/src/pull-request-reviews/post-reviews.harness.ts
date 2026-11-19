@@ -13,6 +13,8 @@ type Call = { __call: () => Promise<Json>; state?: Json };
 export interface FakeReview {
   verdict: "COMMENT" | "REQUEST_CHANGES";
   reviewedCommit: string;
+  summary?: string;
+  checkSummary?: string;
   reply?: { inReplyTo?: number; body: string } | null;
   comments?: Array<{ path: string; line: number; side?: string; body: string }>;
   /** The attempt that submitted it; the turn may have later attempts. */
@@ -32,6 +34,7 @@ export function fakeWorld(input: { head: string }) {
       conclusion: string;
       externalId: string | null;
       headSha: string;
+      summary?: string;
     }>,
     reviews: [] as Array<{
       id: number;
@@ -39,6 +42,7 @@ export function fakeWorld(input: { head: string }) {
       state: string;
       commitId: string;
       body: string;
+      comments?: Array<{ body: string }>;
     }>,
     comments: [] as Array<{ id: number; own: boolean; body: string }>,
     replies: [] as Array<{ id: number; commentId: number; body: string }>,
@@ -73,6 +77,7 @@ export function fakeWorld(input: { head: string }) {
         headSha: string;
         conclusion: string;
         stamp: string;
+        output?: { summary?: string };
       }) => {
         const existing = github.checks.find(
           (run) => run.own && run.externalId === args.stamp,
@@ -84,6 +89,7 @@ export function fakeWorld(input: { head: string }) {
           conclusion: args.conclusion,
           externalId: args.stamp,
           headSha: args.headSha,
+          ...(args.output?.summary ? { summary: args.output.summary } : {}),
         };
         github.checks.push(run);
         github.writes.push(`check:${args.conclusion}`);
@@ -98,6 +104,7 @@ export function fakeWorld(input: { head: string }) {
         commitId: string;
         body: string;
         stamp: string;
+        comments?: Array<{ body: string }>;
       }) => {
         const existing = github.reviews.find(
           (review) => review.own && review.body.includes(args.stamp),
@@ -112,6 +119,7 @@ export function fakeWorld(input: { head: string }) {
               : "COMMENTED",
           commitId: args.commitId,
           body: args.body,
+          comments: args.comments ?? [],
         };
         github.reviews.push(review);
         github.writes.push(`review:${args.event}`);
@@ -223,8 +231,8 @@ export function fakeWorld(input: { head: string }) {
           reviewedCommit: review.reviewedCommit,
           verdict: review.verdict,
           score: review.verdict === "REQUEST_CHANGES" ? 2 : 4,
-          summary: `Review of ${turnId}`,
-          checkSummary: `Check of ${turnId}`,
+          summary: review.summary ?? `Review of ${turnId}`,
+          checkSummary: review.checkSummary ?? `Check of ${turnId}`,
           comments: review.comments ?? [],
           reply: review.reply ?? null,
         },

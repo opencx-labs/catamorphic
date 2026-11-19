@@ -1,6 +1,11 @@
 # The review Environment's image, with OpenCode run by Work as an ACP agent.
 # The sandbox reaches only the gateway, so OpenCode's configuration is baked
-# in here and the pull request's own is ignored.
+# in here and the pull request's own settings are ignored. Its plugins are
+# not: OpenCode loads them from the checkout whatever these settings say, so
+# the change's code runs beside it and Work does not run it apart (ADR
+# 0332). It starts no language server or formatter (some resolve from the
+# change's own dependencies), keeps no Git snapshots of the checkout, and
+# reads none of the change's Claude Code files or external skills.
 FROM docker:29.9.3-dind@sha256:08a98015fce594af7c382883bea080ea206de74402a95da9dc52b6428c8cd121
 RUN apk add --no-cache bash curl git jq nodejs npm postgresql-client python3 ripgrep \
   && npm install --global bun@1.4.4 pnpm@12.18.0 opencode-ai@1.19.5
@@ -17,11 +22,17 @@ RUN mkdir -p /etc/opencode && printf '%s\n' \
   '  "model": "work/deepseek/deepseek-v4.1-flash",' \
   '  "small_model": "work/deepseek/deepseek-v4.1-flash",' \
   '  "permission": { "edit": "allow", "bash": "allow", "webfetch": "deny" },' \
+  '  "lsp": false,' \
+  '  "formatter": false,' \
+  '  "snapshot": false,' \
   '  "autoupdate": false,' \
   '  "share": "disabled"' \
   '}' > /etc/opencode/work.json
 ENV OPENCODE_CONFIG=/etc/opencode/work.json \
   OPENCODE_DISABLE_PROJECT_CONFIG=1 \
+  OPENCODE_DISABLE_LSP_DOWNLOAD=1 \
+  OPENCODE_DISABLE_CLAUDE_CODE=1 \
+  OPENCODE_DISABLE_EXTERNAL_SKILLS=1 \
   OPENCODE_DISABLE_AUTOUPDATE=1 \
   OPENCODE_DISABLE_MODELS_FETCH=1
 WORKDIR /workspace

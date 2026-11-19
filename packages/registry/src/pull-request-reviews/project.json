@@ -19,8 +19,12 @@
       "network": {
         "egress": "gateway"
       },
+      "commands": {
+        "separate": true,
+        "connections": ["git"]
+      },
       "setup": {
-        "command": "if [ -f pnpm-lock.yaml ]; then pnpm install --frozen-lockfile; elif [ -f bun.lock ] || [ -f bun.lockb ]; then bun install --frozen-lockfile; elif [ -f package-lock.json ]; then npm ci --no-audit --no-fund; fi; for f in compose.yaml compose.yml docker-compose.yaml docker-compose.yml; do if [ -f \"$f\" ]; then docker compose -f \"$f\" pull --ignore-buildable --ignore-pull-failures --quiet; break; fi; done",
+        "command": "if [ -f pnpm-lock.yaml ]; then c=~/.cache/work/pnpm-store; s=~/.local/share/pnpm/store; o=\"$PWD/../.work-pnpm\"; if [ -f \"$c/.work-cache.json\" ] && mkdir -p \"$s\" \"$o/up\" \"$o/work\" && { grep -qs \" $s \" /proc/mounts || mount -t overlay overlay -o \"lowerdir=$c,upperdir=$o/up,workdir=$o/work\" \"$s\" 2>/dev/null; }; then pnpm install --frozen-lockfile --prefer-offline --store-dir \"$s\"; else pnpm install --frozen-lockfile --offline --store-dir \"$c\" || pnpm install --frozen-lockfile; fi; elif [ -f bun.lock ] || [ -f bun.lockb ]; then bun install --frozen-lockfile; elif [ -f package-lock.json ]; then npm ci --no-audit --no-fund; fi; for f in compose.yaml compose.yml docker-compose.yaml docker-compose.yml; do if [ -f \"$f\" ]; then docker compose -f \"$f\" pull --ignore-buildable --ignore-pull-failures --quiet; break; fi; done",
         "timeoutMinutes": 20,
         "network": {
           "allow": [
@@ -33,6 +37,16 @@
           ]
         }
       },
+      "caches": {
+        "pnpm": {
+          "path": "~/.cache/work/pnpm-store",
+          "sizeMb": 16384,
+          "fill": {
+            "command": "if [ -f pnpm-lock.yaml ]; then pnpm fetch --store-dir ~/.cache/work/pnpm-store; fi",
+            "timeoutMinutes": 30
+          }
+        }
+      },
       "waitMinutes": 30,
       "idleReleaseMinutes": 20,
       "approvals": {
@@ -43,12 +57,13 @@
           "provider": "github",
           "principal": "service",
           "service": "github",
-          "capabilities": [
-            "get",
-            "pull_request_files",
-            "review_threads",
-            "git:read"
-          ]
+          "capabilities": ["get", "pull_request_files", "review_threads"]
+        },
+        "git": {
+          "provider": "github",
+          "principal": "service",
+          "service": "github",
+          "capabilities": ["git:read"]
         },
         "prod": {
           "provider": "prod-replica",

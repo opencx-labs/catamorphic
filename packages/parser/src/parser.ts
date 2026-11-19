@@ -1,3 +1,4 @@
+import { normalizeWorkflowDocuments } from "@catamorphic/workflow/document-access";
 import {
   isProjectPathWithin,
   PROJECT_APPS_DIR,
@@ -206,6 +207,8 @@ const SESSION_OPERATION_LABELS: Record<string, string> = {
   archive: "Archive a chat",
   unarchive: "Restore a chat",
   interrupt: "Interrupt a chat",
+  restart: "Restart a chat's turn",
+  attempts: "Read a turn's attempts",
   complete: "Mark a chat's work done",
   reopen: "Reopen a chat's work",
   stopWatcher: "Stop a watcher",
@@ -2751,6 +2754,7 @@ function buildDefinedWorkflowGraph(
     ...concurrencyOf(definition.config),
     connections: parseWorkflowConnections(definition.config),
     permissions: parseWorkflowPermissions(definition.config),
+    documents: parseWorkflowDocuments(definition.config),
     canSuspend,
     nodes: ctx.nodes,
     edges: ctx.edges,
@@ -2908,6 +2912,75 @@ function parseWorkflowPermissions(config: ObjectLiteralExpression): string[] {
     return permission;
   });
   return [...new Set(permissions)].sort();
+}
+
+const DOCUMENT_ENTRY =
+  '{ path: "store/…", access: "read" } or { path: "store/…", access: "write" }';
+
+/**
+ * `documents` as written (ADR 0335): an array literal of object literals
+ * whose path and access are string literals, so the paths a person
+ * consents to are the paths in the source, never computed.
+ */
+function parseWorkflowDocuments(
+  config: ObjectLiteralExpression,
+): import("./types.js").WorkflowDocumentAccess[] {
+  const property = config.getProperty("documents");
+  if (!property) return [];
+  const initializer = Node.isPropertyAssignment(property)
+    ? property.getInitializer()
+    : undefined;
+  const list = initializer ? unwrapExpression(initializer) : undefined;
+  if (!list || !Node.isArrayLiteralExpression(list)) {
+    throw new Error(
+      `Workflow 'documents' must be an array written in place, each entry ${DOCUMENT_ENTRY}`,
+    );
+  }
+  const entries = list.getElements().map((element) => {
+    const entry = unwrapExpression(element);
+    if (!Node.isObjectLiteralExpression(entry)) {
+      throw new Error(
+        `Workflow 'documents' entries must be written in place as ${DOCUMENT_ENTRY}, not ${element.getText()}`,
+      );
+    }
+    const fields: { path?: string; access?: string } = {};
+    for (const field of entry.getProperties()) {
+      const name = Node.isPropertyAssignment(field)
+        ? field.getName().replace(/^["']|["']$/g, "")
+        : field.getText();
+      if (name !== "path" && name !== "access") {
+        throw new Error(
+          `Workflow document entries take only path and access, not ${name}`,
+        );
+      }
+      const value = Node.isPropertyAssignment(field)
+        ? field.getInitializer()
+        : undefined;
+      const literal = value ? unwrapExpression(value) : undefined;
+      if (
+        !literal ||
+        !(
+          Node.isStringLiteral(literal) ||
+          Node.isNoSubstitutionTemplateLiteral(literal)
+        )
+      ) {
+        throw new Error(
+          `Workflow document ${name} must be a string written in place, not ${value?.getText() ?? field.getText()}: the paths turned on are the paths in the source`,
+        );
+      }
+      fields[name] = literal.getLiteralValue();
+    }
+    if (fields.path === undefined)
+      throw new Error(
+        `Workflow document entries need a path: ${DOCUMENT_ENTRY}`,
+      );
+    if (fields.access === undefined)
+      throw new Error(
+        `Workflow document '${fields.path}' needs access: "read" or "write"`,
+      );
+    return { path: fields.path, access: fields.access };
+  });
+  return normalizeWorkflowDocuments(entries);
 }
 
 function assertWorkflowConnectionAlias(alias: string): void {

@@ -177,6 +177,9 @@ export interface AgentSessions {
   placement: Json | null;
   project_id: string;
   read_only: Generated<boolean>;
+  reshape_look_at: Timestamp | null;
+  reshape_save_failures: Generated<number>;
+  reshape_waiting_since: Timestamp | null;
   rewind_until: Timestamp | null;
   sandbox_id: string | null;
   secrets_delivered_ref: string | null;
@@ -212,15 +215,19 @@ export interface AgentSessionViews {
 export interface AgentTurnAttempts {
   completed_at: Timestamp | null;
   created_at: Generated<Timestamp>;
+  diagnostics: Json | null;
   error: Json | null;
   id: Generated<string>;
   native_turn_ref: Json | null;
   ordinal: number;
+  progress_at: Timestamp | null;
   provider_started_at: Timestamp | null;
   provider_thread_id: string | null;
   reason: string;
   runner: Json | null;
   session_id: string;
+  stall_after_seconds: number | null;
+  stalled_at: Timestamp | null;
   started_at: Timestamp | null;
   status: string;
   turn_id: string;
@@ -561,6 +568,42 @@ export interface DeploymentRuntimes {
   replica_index: Generated<number>;
   sandbox_id: string;
   status: Generated<string>;
+}
+
+export interface EnvironmentCacheFills {
+  abandoned_generations: Generated<Json>;
+  allocation_id: string | null;
+  attempts: Generated<number>;
+  cache_name: string;
+  check_sandbox_id: string | null;
+  claimed_until: Timestamp | null;
+  commit_sha: string | null;
+  created_at: Generated<Timestamp>;
+  environment_name: string;
+  error: string | null;
+  finished_at: Timestamp | null;
+  generation: Int8 | null;
+  id: Generated<string>;
+  last_used_at: Timestamp | null;
+  project_id: string;
+  queued_at: Generated<Timestamp>;
+  reason: string;
+  retry_at: Timestamp | null;
+  size_bytes: Int8 | null;
+  started_at: Timestamp | null;
+  status: Generated<string>;
+  tenant_id: string;
+  worker_node_id: string | null;
+}
+
+export interface EnvironmentCacheRequests {
+  cache_name: string;
+  commit_sha: string | null;
+  created_at: Generated<Timestamp>;
+  environment_name: string;
+  fill_ids: Json;
+  idempotency_key: string;
+  project_id: string;
 }
 
 export interface ExecutionAllocations {
@@ -1273,6 +1316,7 @@ export interface WorkflowEnablements {
   created_at: Generated<Timestamp>;
   created_by_external_user_id: string;
   deployment_artifact_id: string;
+  documents: Generated<Json>;
   environment_name: string;
   expires_at: Timestamp | null;
   follow: Generated<boolean>;
@@ -1611,6 +1655,8 @@ export interface DB {
   connections: Connections;
   deployment_artifacts: DeploymentArtifacts;
   deployment_runtimes: DeploymentRuntimes;
+  environment_cache_fills: EnvironmentCacheFills;
+  environment_cache_requests: EnvironmentCacheRequests;
   execution_allocations: ExecutionAllocations;
   execution_jobs: ExecutionJobs;
   executor_keys: ExecutorKeys;

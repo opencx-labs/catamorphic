@@ -1,3 +1,4 @@
+import { spawn } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -9,13 +10,18 @@ import type {
   Options,
   PermissionMode,
   SessionStore,
+  SpawnOptions,
 } from "@anthropic-ai/claude-agent-sdk";
 import type { JsonObject, JsonValue } from "@catamorphic/agent-protocol";
 import type {
   AttemptStart,
   McpServerSpec,
 } from "@catamorphic/agent-protocol/runner";
-import { MODEL_GRANT_READER } from "@catamorphic/sandbox";
+import {
+  homeStartedCommand,
+  type LoopbackModel,
+  MODEL_GRANT_READER,
+} from "@catamorphic/sandbox";
 import { hostToolServer } from "./host-tools.js";
 
 /**
@@ -153,6 +159,38 @@ export const ALLOWED_TOOLS = [
 ];
 
 const SHELL_TOOLS = ["Bash", "PowerShell"];
+
+/**
+ * Where an attempt whose commands run apart (ADR 0332) keeps its shell
+ * shim, beside its state: the `bash` Claude Code uses as its shell, and its
+ * temporary folder, from which the working-directory file each command
+ * writes comes back.
+ */
+export function commandShellPaths(
+  attempt: AttemptStart,
+):
+  | { directory: string; shell: string; path: string; returnFolder: string }
+  | undefined {
+  if (!attempt.commands) return undefined;
+  // Its own user (ADR 0332): the provider's shim, its own temporary folder.
+  const harness = attempt.commands.harness;
+  if (harness)
+    return {
+      directory: harness.shim,
+      shell: path.join(harness.shim, "bin", "bash"),
+      path: path.join(harness.shim, "path"),
+      returnFolder: harness.temporary,
+    };
+  const directory = path.join(attempt.stateDirectory, "commands");
+  return {
+    directory,
+    shell: path.join(directory, "bin", "bash"),
+    // Its `git`, first on the CLI's PATH: the CLI runs Git on the
+    // repository itself, whose configuration names programs Git runs.
+    path: path.join(directory, "path"),
+    returnFolder: path.join(directory, "tmp"),
+  };
+}
 
 /** Tools that change files: surfaced as `file_change` items. */
 export const FILE_EDIT_TOOLS = new Set([
@@ -407,14 +445,21 @@ function routesToAnthropic(baseUrl: string | undefined): boolean {
   }
 }
 
-function mapMcpServer(spec: McpServerSpec): McpServerConfig {
+function mapMcpServer(spec: McpServerSpec, home?: string): McpServerConfig {
   if (spec.transport === "stdio")
-    return {
-      type: "stdio",
-      command: spec.command,
-      ...(spec.args ? { args: spec.args } : {}),
-      ...(spec.env ? { env: spec.env } : {}),
-    };
+    return home
+      ? {
+          // Started in the harness's home, not the checkout (ADR 0332).
+          type: "stdio",
+          ...homeStartedCommand({ ...spec, home }),
+          ...(spec.env ? { env: spec.env } : {}),
+        }
+      : {
+          type: "stdio",
+          command: spec.command,
+          ...(spec.args ? { args: spec.args } : {}),
+          ...(spec.env ? { env: spec.env } : {}),
+        };
   return {
     type: spec.transport,
     url: spec.url,
@@ -490,6 +535,12 @@ export interface QueryOptionInputs {
   sessionStore: SessionStore;
   abortController: AbortController;
   stderr: (data: string) => void;
+  /**
+   * The attempt's model on the runner's loopback (ADR 0332): with a
+   * harness of its own user, the CLI holds this endpoint's key, never the
+   * session's grant, which only the runner reads.
+   */
+  loopback?: LoopbackModel;
 }
 
 /** Which native thread the query runs on (ADR 0198). */
@@ -549,9 +600,20 @@ export function buildQueryOptions(input: QueryOptionInputs): Options {
   ];
   const external: Record<string, McpServerConfig> = {};
   for (const [name, spec] of Object.entries(attempt.mcpServers))
-    external[name] = mapMcpServer(spec);
+    external[name] = mapMcpServer(spec, attempt.commands?.harness?.home);
 
   const host = access.kind === "host";
+  const separate = commandShellPaths(attempt);
+  const harness = attempt.commands?.harness;
+  const loopback = harness ? input.loopback : undefined;
+  if (harness && access.kind === "gateway" && !loopback)
+    throw new ClaudeStartError(
+      "Claude Code beside commands run apart reaches its model through Work's loopback endpoint, which did not start.",
+    );
+  if (separate && host)
+    throw new ClaudeStartError(
+      "Claude Code on its host runs its commands where it runs; only a sandboxed one runs them apart.",
+    );
   const env: Record<string, string> = {
     // On the host the CLI inherits the host's environment (its own
     // sign-in and settings) but not a stray API key; beside a sandbox's
@@ -581,13 +643,20 @@ export function buildQueryOptions(input: QueryOptionInputs): Options {
             ? { IS_SANDBOX: "1" }
             : {}),
         }),
-    ...(access.kind === "gateway"
+    ...(access.kind === "gateway" && loopback
       ? {
-          ANTHROPIC_BASE_URL: access.baseUrl,
-          WORK_MODEL_GRANT_DIRECTORY: access.grantDirectory,
-          CLAUDE_CODE_API_KEY_HELPER_TTL_MS: String(API_KEY_HELPER_TTL_MS),
+          // The runner's endpoint and its attempt-scoped key: the grant
+          // stays where the CLI's user cannot read it (ADR 0332).
+          ANTHROPIC_BASE_URL: loopback.baseUrl,
+          ANTHROPIC_API_KEY: loopback.apiKey,
         }
-      : {}),
+      : access.kind === "gateway"
+        ? {
+            ANTHROPIC_BASE_URL: access.baseUrl,
+            WORK_MODEL_GRANT_DIRECTORY: access.grantDirectory,
+            CLAUDE_CODE_API_KEY_HELPER_TTL_MS: String(API_KEY_HELPER_TTL_MS),
+          }
+        : {}),
     // The member's own sign-in, in the harness's own home (ADR 0199), and
     // its store, whatever the attempt names (ADR 0275).
     ...(access.kind === "sign_in"
@@ -596,7 +665,28 @@ export function buildQueryOptions(input: QueryOptionInputs): Options {
           CLAUDE_SECURESTORAGE_CONFIG_DIR: access.home,
         }
       : {}),
+    // Its Bash, Monitor and background commands run apart from it (ADR
+    // 0332): the shim is its shell, and each command's working-directory
+    // file comes back to its temporary folder.
+    ...(separate
+      ? {
+          CLAUDE_CODE_SHELL: separate.shell,
+          CLAUDE_CODE_TMPDIR: separate.returnFolder,
+        }
+      : {}),
   };
+  // The CLI's own Git (its repository context) goes where commands run.
+  if (separate)
+    env.PATH = env.PATH ? `${separate.path}:${env.PATH}` : separate.path;
+  // Its own user's home: a cache, from which nothing loads (no settings
+  // sources, no MCP servers but Work's).
+  if (harness) {
+    env.HOME = harness.home;
+    env.XDG_CONFIG_HOME = harness.config;
+    // The same for the SDK and the CLI, or the SDK drops the CLI's
+    // transcript as it mirrors it to Work.
+    env.CLAUDE_CONFIG_DIR = harnessConfigHome(attempt) ?? "";
+  }
   const command = options.command ?? (host ? undefined : "claude");
   const systemPrompt = attempt.systemPrompt.trim();
 
@@ -615,11 +705,27 @@ export function buildQueryOptions(input: QueryOptionInputs): Options {
     ...(options.executableArgs
       ? { executableArgs: options.executableArgs }
       : {}),
-    ...(access.kind === "gateway"
+    ...(access.kind === "gateway" && !loopback
       ? {
           // The session's grant, read from its file at each use, so a
           // renewal applies without a restart (ADR 0180).
           settings: { apiKeyHelper: MODEL_GRANT_READER },
+        }
+      : {}),
+    // As its own user (ADR 0332), so it can read no grant, write no shim.
+    ...(harness
+      ? {
+          spawnClaudeCodeProcess: (spawned: SpawnOptions) =>
+            spawn(spawned.command, spawned.args, {
+              ...(spawned.cwd ? { cwd: spawned.cwd } : {}),
+              env: harnessSpawnEnv({ env: spawned.env, harness }),
+              uid: harness.uid,
+              gid: harness.gid,
+              stdio: ["pipe", "pipe", "pipe"],
+              signal: spawned.signal,
+            }),
+          // Only the MCP servers Work names.
+          strictMcpConfig: true,
         }
       : {}),
     ...(attempt.model ? { model: attempt.model } : {}),
@@ -662,8 +768,17 @@ export function buildQueryOptions(input: QueryOptionInputs): Options {
     onElicitation: input.onElicitation,
     hooks: input.hooks,
     // Everything real Claude Code recognizes: the repository's CLAUDE.md
-    // and .claude, and the harness home's own settings.
-    settingSources: ["user", "project", "local"],
+    // and .claude, and the harness home's own settings. With its commands
+    // apart (ADR 0332) the checkout is the pull request's: its hooks, MCP
+    // servers and status line would run beside the agent, and its
+    // instructions would steer it, so only the home's settings load.
+    // With a harness user of its own, not even its home's: that home is
+    // its to write, so nothing that runs or steers it loads from there.
+    settingSources: harness
+      ? []
+      : separate
+        ? ["user"]
+        : ["user", "project", "local"],
     includePartialMessages: true,
     sessionStore: input.sessionStore,
     // Every transcript line reaches Work as it is written, so a lost
@@ -674,4 +789,75 @@ export function buildQueryOptions(input: QueryOptionInputs): Options {
     ...(options.debugFile ? { debugFile: options.debugFile } : {}),
     ...threadOptions(attempt),
   };
+}
+
+/**
+ * The CLI's config home as the harness's own user (ADR 0332): its member's
+ * sign-in, or one in its home. Undefined without such a user.
+ */
+export function harnessConfigHome(attempt: AttemptStart): string | undefined {
+  const harness = attempt.commands?.harness;
+  if (!harness) return undefined;
+  return attempt.modelAccess.kind === "sign_in"
+    ? attempt.modelAccess.home
+    : path.join(harness.home, ".claude");
+}
+
+/**
+ * Before the SDK, as root, reads the CLI's config home (resuming a thread
+ * it copies its settings and credentials files into the thread's home, and
+ * it reads its transcripts under `projects/`), drop every link in it, at
+ * any depth: that home is the harness's to write, and a link there would
+ * have root read what it names, into a home the harness is then given.
+ * Folders are entered only as themselves, never through a link.
+ */
+export async function dropConfigLinks(home: string): Promise<void> {
+  const entries = await fs.promises
+    .readdir(home, { withFileTypes: true })
+    .catch(() => []);
+  for (const entry of entries) {
+    const target = path.join(home, entry.name);
+    if (entry.isSymbolicLink()) await fs.promises.unlink(target);
+    else if (entry.isDirectory()) await dropConfigLinks(target);
+  }
+}
+
+/**
+ * The environment the CLI starts with as the harness's own user (ADR
+ * 0332). Its config home is its own, unless the SDK named a resumed
+ * thread's home: a folder the SDK, as root, made just now in its own
+ * temporary folder, which the harness is given so the CLI reads and
+ * continues the thread there. Links in it stay links, never followed.
+ */
+export function harnessSpawnEnv(input: {
+  env: Record<string, string | undefined>;
+  harness: { uid: number; gid: number; home: string };
+}): Record<string, string | undefined> {
+  const named = input.env.CLAUDE_CONFIG_DIR;
+  if (!named || !path.basename(named).startsWith("claude-resume-"))
+    return input.env;
+  const resumed = path.resolve(named);
+  const temporary = [path.resolve(os.tmpdir()), fs.realpathSync(os.tmpdir())];
+  if (!temporary.includes(path.dirname(resumed)))
+    throw new ClaudeStartError(
+      `Claude Code was to start in ${resumed}, which is not a resumed thread's home.`,
+    );
+  giveTree(resumed, input.harness);
+  return input.env;
+}
+
+/**
+ * Hand a folder root just made to a user, never through a link: what is
+ * in it first and the folder last, so the user can change nothing in it
+ * while root still walks it.
+ */
+function giveTree(folder: string, owner: { uid: number; gid: number }): void {
+  const stat = fs.lstatSync(folder);
+  if (!stat.isDirectory()) return;
+  for (const entry of fs.readdirSync(folder, { withFileTypes: true })) {
+    const target = path.join(folder, entry.name);
+    if (entry.isDirectory()) giveTree(target, owner);
+    else fs.lchownSync(target, owner.uid, owner.gid);
+  }
+  fs.lchownSync(folder, owner.uid, owner.gid);
 }

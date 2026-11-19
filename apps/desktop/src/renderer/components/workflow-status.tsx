@@ -1,5 +1,9 @@
 import type { WorkflowGraph } from "@catamorphic/react/types";
-import { describeProjectPermission, friendlyParamName } from "@catamorphic/ui";
+import {
+  describeProjectPermission,
+  describeWorkflowDocument,
+  friendlyParamName,
+} from "@catamorphic/ui";
 import {
   ChevronRight,
   CircleDot,
@@ -214,6 +218,14 @@ export function WorkflowStatus({
                   label="Permissions"
                   value={graph.permissions
                     .map(describeProjectPermission)
+                    .join("; ")}
+                />
+              ) : null}
+              {graph?.documents.length ? (
+                <Row
+                  label="Documents"
+                  value={graph.documents
+                    .map(describeWorkflowDocument)
                     .join("; ")}
                 />
               ) : null}

@@ -1431,6 +1431,98 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/projects/{projectId}/environment-caches": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    projectId: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description Default Response */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            items: {
+                                environment: string;
+                                cache: string;
+                                path: string;
+                                sizeMb: number;
+                                copies: {
+                                    machine: string;
+                                    generation: number;
+                                    commit: string | null;
+                                    filledAt: string | null;
+                                    sizeBytes: number | null;
+                                    lastUsedAt: string | null;
+                                }[];
+                                fills: {
+                                    id: string;
+                                    environment: string;
+                                    cache: string;
+                                    machine: string | null;
+                                    /** @enum {string} */
+                                    status: "queued" | "running" | "succeeded" | "failed" | "evicted";
+                                    /** @enum {string} */
+                                    reason: "requested" | "first-use";
+                                    commit: string | null;
+                                    generation: number | null;
+                                    attempts: number;
+                                    sizeBytes: number | null;
+                                    error: string | null;
+                                    createdAt: string;
+                                    finishedAt: string | null;
+                                    lastUsedAt: string | null;
+                                }[];
+                            }[];
+                        };
+                    };
+                };
+                /** @description Default Response */
+                403: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                503: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                        };
+                    };
+                };
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/projects/{projectId}/personal-environment": {
         parameters: {
             query?: never;
@@ -2955,6 +3047,11 @@ export interface paths {
                                 optional?: boolean;
                             }[];
                             permissions: string[];
+                            documents: {
+                                path: string;
+                                /** @enum {string} */
+                                access: "read" | "write";
+                            }[];
                             canSuspend: boolean;
                             nodes: {
                                 id: string;
@@ -3933,6 +4030,11 @@ export interface paths {
                                 }[];
                                 capabilities: string[];
                                 permissions: string[];
+                                documents: {
+                                    path: string;
+                                    /** @enum {string} */
+                                    access: "read" | "write";
+                                }[];
                                 consentDigest: string;
                                 /** Format: uuid */
                                 id: string;
@@ -4044,6 +4146,11 @@ export interface paths {
                             }[];
                             capabilities: string[];
                             permissions: string[];
+                            documents: {
+                                path: string;
+                                /** @enum {string} */
+                                access: "read" | "write";
+                            }[];
                             consentDigest: string;
                             /** Format: uuid */
                             id: string;
@@ -4210,6 +4317,11 @@ export interface paths {
                             }[];
                             capabilities: string[];
                             permissions: string[];
+                            documents: {
+                                path: string;
+                                /** @enum {string} */
+                                access: "read" | "write";
+                            }[];
                             consentDigest: string;
                             deploymentArtifactDigest: string;
                             triggerCount: number;
@@ -4341,6 +4453,11 @@ export interface paths {
                             }[];
                             capabilities: string[];
                             permissions: string[];
+                            documents: {
+                                path: string;
+                                /** @enum {string} */
+                                access: "read" | "write";
+                            }[];
                             consentDigest: string;
                             /** Format: uuid */
                             id: string;
@@ -4458,6 +4575,11 @@ export interface paths {
                             }[];
                             capabilities: string[];
                             permissions: string[];
+                            documents: {
+                                path: string;
+                                /** @enum {string} */
+                                access: "read" | "write";
+                            }[];
                             consentDigest: string;
                             /** Format: uuid */
                             id: string;
@@ -4588,6 +4710,11 @@ export interface paths {
                             }[];
                             capabilities: string[];
                             permissions: string[];
+                            documents: {
+                                path: string;
+                                /** @enum {string} */
+                                access: "read" | "write";
+                            }[];
                             consentDigest: string;
                             /** Format: uuid */
                             id: string;
@@ -4724,6 +4851,11 @@ export interface paths {
                             }[];
                             capabilities: string[];
                             permissions: string[];
+                            documents: {
+                                path: string;
+                                /** @enum {string} */
+                                access: "read" | "write";
+                            }[];
                             consentDigest: string;
                             /** Format: uuid */
                             id: string;
@@ -4879,6 +5011,11 @@ export interface paths {
                             }[];
                             capabilities: string[];
                             permissions: string[];
+                            documents: {
+                                path: string;
+                                /** @enum {string} */
+                                access: "read" | "write";
+                            }[];
                             consentDigest: string;
                             /** Format: uuid */
                             id: string;
@@ -6997,6 +7134,35 @@ export interface paths {
                             /** Format: date-time */
                             updatedAt: string;
                             snapshot: components["schemas"]["SessionSnapshot"];
+                            turn: {
+                                id: string;
+                                ordinal: number;
+                                /** @enum {string} */
+                                status: "preparing" | "running" | "waiting" | "finalizing";
+                                attempt: {
+                                    id: string;
+                                    ordinal: number;
+                                    reason: string;
+                                    startedAt: string | null;
+                                } | null;
+                                attempts: number;
+                                restarts: number;
+                                progressAt: string | null;
+                                stalledAt: string | null;
+                                stallMinutes: number | null;
+                                activity: {
+                                    tools: {
+                                        name: string;
+                                        description: string | null;
+                                        since: string;
+                                    }[];
+                                    commands: {
+                                        command: string;
+                                        description: string | null;
+                                        since: string;
+                                    }[];
+                                };
+                            } | null;
                         };
                     };
                 };
@@ -7525,6 +7691,189 @@ export interface paths {
         };
         put?: never;
         post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/projects/{projectId}/agent/sessions/{sessionId}/turns/{turnId}/attempts": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    projectId: string;
+                    sessionId: string;
+                    turnId: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description Default Response */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            attempts: {
+                                id: string;
+                                ordinal: number;
+                                reason: string;
+                                status: string;
+                                error: {
+                                    message: string;
+                                } | null;
+                                startedAt: string | null;
+                                completedAt: string | null;
+                                progressAt: string | null;
+                                stalledAt: string | null;
+                                diagnostics: {
+                                    runner: string;
+                                    harness: string;
+                                } | null;
+                            }[];
+                        };
+                    };
+                };
+                /** @description Default Response */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                503: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                        };
+                    };
+                };
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/projects/{projectId}/agent/sessions/{sessionId}/turns/{turnId}/restart": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    projectId: string;
+                    sessionId: string;
+                    turnId: string;
+                };
+                cookie?: never;
+            };
+            requestBody: {
+                content: {
+                    "application/json": {
+                        /** Format: uuid */
+                        attemptId: string;
+                        reason: string;
+                        onlyIfStalled?: boolean;
+                        idempotencyKey: string;
+                    };
+                };
+            };
+            responses: {
+                /** @description Default Response */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            /** @enum {boolean} */
+                            restarted: true;
+                            turnId: string;
+                            attemptId: string;
+                            attempt: number;
+                            attempts: number;
+                            restarts: number;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                202: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            /** @enum {string} */
+                            delivery: "queued";
+                        } & {
+                            [key: string]: unknown;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                409: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                503: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                        };
+                    };
+                };
+            };
+        };
         delete?: never;
         options?: never;
         head?: never;
@@ -10747,6 +11096,11 @@ export interface paths {
                                 acp?: {
                                     endpoint?: string;
                                     command?: string[];
+                                    shell?: boolean;
+                                    projectConfig?: boolean;
+                                    env?: {
+                                        [key: string]: string;
+                                    };
                                 };
                             };
                             promptFile?: string;
@@ -10818,7 +11172,7 @@ export interface paths {
                         /** @enum {string} */
                         isolation?: "none" | "process" | "sandbox";
                         processes?: boolean;
-                        capabilities?: ("images" | "images.build" | "containers" | "network.policy" | "network.setup" | "volumes")[];
+                        capabilities?: ("images" | "images.build" | "containers" | "network.policy" | "network.setup" | "volumes" | "caches" | "commands.separate")[];
                         publicKey?: string;
                     };
                 };
@@ -11094,6 +11448,7 @@ export interface paths {
                             sandboxType: "dev" | "execution";
                             /** @enum {string} */
                             status: "creating" | "started" | "stopped" | "archived" | "error";
+                            skippedVolumes?: string[];
                         } | {
                             exitCode: number;
                             result: string;
@@ -17742,6 +18097,11 @@ export interface paths {
                                 optional?: boolean;
                             }[];
                             permissions: string[];
+                            documents: {
+                                path: string;
+                                /** @enum {string} */
+                                access: "read" | "write";
+                            }[];
                             canSuspend: boolean;
                             nodes: {
                                 id: string;
@@ -18956,6 +19316,11 @@ export interface paths {
                             }[];
                             capabilities: string[];
                             permissions: string[];
+                            documents: {
+                                path: string;
+                                /** @enum {string} */
+                                access: "read" | "write";
+                            }[];
                             consentDigest: string;
                             deploymentArtifactDigest: string;
                             triggerCount: number;
@@ -19138,6 +19503,11 @@ export interface paths {
                             }[];
                             capabilities: string[];
                             permissions: string[];
+                            documents: {
+                                path: string;
+                                /** @enum {string} */
+                                access: "read" | "write";
+                            }[];
                             consentDigest: string;
                             /** Format: uuid */
                             id: string;
@@ -19894,9 +20264,9 @@ export interface components {
             sessionId: string;
             ordinal: number;
             /** @enum {string} */
-            reason: "initial" | "retry" | "steer_restart" | "recovery";
+            reason: "initial" | "retry" | "steer_restart" | "recovery" | "restart";
             /** @enum {string} */
-            status: "preparing" | "running" | "completed" | "failed" | "interrupted" | "lost" | "superseded";
+            status: "preparing" | "running" | "completed" | "failed" | "interrupted" | "lost" | "superseded" | "restarted";
             providerThreadId: string | null;
             nativeTurnRef: {
                 id: string;
@@ -20825,9 +21195,9 @@ export interface components {
             sessionId: string;
             ordinal: number;
             /** @enum {string} */
-            reason: "initial" | "retry" | "steer_restart" | "recovery";
+            reason: "initial" | "retry" | "steer_restart" | "recovery" | "restart";
             /** @enum {string} */
-            status: "preparing" | "running" | "completed" | "failed" | "interrupted" | "lost" | "superseded";
+            status: "preparing" | "running" | "completed" | "failed" | "interrupted" | "lost" | "superseded" | "restarted";
             providerThreadId: string | null;
             nativeTurnRef: {
                 id: string;

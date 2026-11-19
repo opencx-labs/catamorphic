@@ -3,7 +3,14 @@
   "name": "Reviewer",
   "kind": "acp",
   "acp": {
-    "command": ["opencode", "acp"]
+    "command": ["opencode", "acp"],
+    "env": {
+      "OPENCODE_CONFIG": "/etc/opencode/work.json",
+      "OPENCODE_DISABLE_PROJECT_CONFIG": "1",
+      "OPENCODE_DISABLE_LSP_DOWNLOAD": "1",
+      "OPENCODE_DISABLE_CLAUDE_CODE": "1",
+      "OPENCODE_DISABLE_EXTERNAL_SKILLS": "1"
+    }
   },
   "model": "deepseek/deepseek-v4.1-flash",
   "credentials": {
@@ -16,9 +23,14 @@
     "preferred": ["review"],
     "allowed": ["review"]
   },
+  "stall": { "minutes": 20 },
   "connections": [
     {
       "alias": "github",
+      "principal": "service"
+    },
+    {
+      "alias": "git",
       "principal": "service"
     },
     {

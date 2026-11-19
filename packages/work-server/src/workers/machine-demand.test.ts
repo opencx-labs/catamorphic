@@ -334,6 +334,14 @@ beforeAll(async () => {
               workloads: ["agent"],
               waitMinutes: 30,
             },
+            // Commands apart (ADR 0332), for the built-in assistant.
+            apart: {
+              pool: { pool: "apart" },
+              workloads: ["agent"],
+              waitMinutes: 30,
+              commands: { separate: true },
+              requirements: { resources: { cpuMillis: 2000, memoryMb: 4096 } },
+            },
           },
           defaultEnvironment: "review",
         }),
@@ -828,6 +836,60 @@ describe("machines on demand (ADR 0258)", () => {
     expect(createdFor(second)).toBeDefined();
     await deleteRule("dflt");
   });
+
+  it("sizes a machine for a waiting built-in chat in an Environment that runs commands apart without an agent container (ADR 0332)", async () => {
+    const sessions = server.catamorphic.core.agentSessions;
+    if (!sessions) throw new Error("Agent sessions are unavailable");
+    await putRule("apart", {
+      projects: [projectId],
+      machines: { demand: { max: 1 } },
+      class: "review-16",
+      labels: { pool: "apart" },
+    });
+    const project = projectChatIdentity({
+      tenantId: SERVER_TENANT_ID,
+      projectId,
+    });
+    // The project's default agent, the built-in assistant, on the control
+    // plane: its workspace would be the command container alone.
+    const chat = await sessions.chatForKey(project, projectId, {
+      key: "pr-apart",
+      environment: "apart",
+    });
+    await sessions.command(project, projectId, chat.sessionId, {
+      type: "send",
+      commandId: randomUUID(),
+      text: "hello",
+    });
+    const needs = {
+      cpuMillis: 2000,
+      memoryMb: 4096,
+    };
+    await waitFor(async () => {
+      const row = await db()
+        .selectFrom("placement_waits")
+        .select("requirements")
+        .where("root_workload_id", "=", chat.sessionId)
+        .executeTakeFirst();
+      return Boolean(row);
+    }, "the chat's wait");
+    const recorded = await db()
+      .selectFrom("placement_waits")
+      .select("requirements")
+      .where("root_workload_id", "=", chat.sessionId)
+      .executeTakeFirstOrThrow();
+    expect(
+      (recorded.requirements as { resources?: unknown }).resources,
+    ).toEqual(needs);
+    const name = nameOf("apart", "review-16", 1);
+    await waitFor(async () => {
+      await reconcile();
+      return Boolean(createdFor(name));
+    }, "the machine to be created");
+    expect(createdFor(name)?.waiting).toMatchObject({ resources: needs });
+    await sessions.close(project, projectId, chat.sessionId);
+    await deleteRule("apart");
+  }, 120_000);
 
   it("counts the machines a rule served before against its maximum", async () => {
     await putRule("scope", {

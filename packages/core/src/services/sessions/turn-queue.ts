@@ -24,7 +24,9 @@ export type TurnCommandKind =
   | "interrupt"
   | "respond"
   | "release"
-  | "stop";
+  | "stop"
+  /** End the attempt without asking its harness and run the turn again (ADR 0333). */
+  | "restart";
 
 export interface TurnCommand {
   id: string;
@@ -493,7 +495,8 @@ function commandKind(value: string): TurnCommandKind {
     value === "interrupt" ||
     value === "respond" ||
     value === "release" ||
-    value === "stop"
+    value === "stop" ||
+    value === "restart"
   )
     return value;
   throw new Error(`Invalid persisted turn command kind '${value}'`);

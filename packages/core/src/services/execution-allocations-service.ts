@@ -6,7 +6,12 @@ import type {
   SandboxImage,
   WorkloadKind,
 } from "@catamorphic/sandbox";
-import { VOLUME_KEY_PATTERN, VOLUME_NAME_PATTERN } from "@catamorphic/sandbox";
+import {
+  CACHE_VOLUME_KEY_PATTERN,
+  SEPARATE_COMMANDS_DEFAULT_RESOURCES,
+  VOLUME_KEY_PATTERN,
+  VOLUME_NAME_PATTERN,
+} from "@catamorphic/sandbox";
 import { type Kysely, type Selectable, sql, type Transaction } from "kysely";
 import { z } from "zod";
 import type { Identity } from "../identity.js";
@@ -102,6 +107,17 @@ const AllocationPolicySchema = z.object({
       containers: z.boolean().optional(),
       egress: EgressSchema.optional(),
       setupEgress: EgressSchema.optional(),
+      separateCommands: z
+        .object({
+          connections: z.array(z.string()).readonly(),
+          agentResources: z
+            .object({
+              cpuMillis: z.number().int().positive(),
+              memoryMb: z.number().int().positive(),
+            })
+            .optional(),
+        })
+        .optional(),
       volumes: z
         .array(
           z.object({
@@ -112,6 +128,21 @@ const AllocationPolicySchema = z.object({
             sizeMb: z.number().int().positive().optional(),
           }),
         )
+        .optional(),
+      caches: z
+        .array(
+          z.object({
+            name: z.string().regex(VOLUME_NAME_PATTERN),
+            path: z.string(),
+          }),
+        )
+        .optional(),
+      fill: z
+        .object({
+          name: z.string().regex(VOLUME_NAME_PATTERN),
+          path: z.string(),
+          key: z.string().regex(CACHE_VOLUME_KEY_PATTERN),
+        })
         .optional(),
     })
     .optional(),
@@ -129,8 +160,38 @@ export interface EnvironmentSandbox {
    * Environment whose setup names a network.
    */
   setupEgress?: SandboxEgress;
+  /**
+   * The agent's commands run apart from the agent (ADR 0332), reaching
+   * through the gateway only these bindings.
+   */
+  separateCommands?: {
+    connections: readonly string[];
+    /**
+     * The agent container's limits, reserved on top of the command
+     * container's (`requirements.resources`). Absent when the work's harness
+     * runs outside the sandbox: then there is no agent container, and the
+     * command container is the sandbox.
+     */
+    agentResources?: { cpuMillis: number; memoryMb: number };
+  };
   /** The Environment's volumes, keyed for the work's owner (ADR 0208). */
   volumes?: readonly EnvironmentSandboxVolume[];
+  /**
+   * The Environment's caches (ADR 0334), each mounted read only at the
+   * generation its machine holds when the sandbox is made.
+   */
+  caches?: readonly EnvironmentSandboxCache[];
+  /**
+   * A cache fill's own Allocation (ADR 0334): the one cache generation its
+   * sandbox mounts writable, and no other cache.
+   */
+  fill?: EnvironmentSandboxCache & { key: string };
+}
+
+/** One cache an Allocation's sandboxes mount (ADR 0334). */
+export interface EnvironmentSandboxCache {
+  name: string;
+  path: string;
 }
 
 /**
@@ -187,13 +248,41 @@ export type AllocationReleaseReason =
   | "connection_ended"
   | "retired"
   /** A rollback gave the workspace back, to be rebuilt at an earlier commit (ADR 0197). */
-  | "rollback";
+  | "rollback"
+  /**
+   * The chat's agent now needs another shape of sandbox (ADR 0332): its
+   * harness runs in the sandbox, which was made with no container for it.
+   */
+  | "replaced";
 
 export class ExecutionAllocationConflictError extends Error {
   constructor(readonly rootWorkloadId: string) {
     super(`Workload '${rootWorkloadId}' already has an active Allocation`);
     this.name = "ExecutionAllocationConflictError";
   }
+}
+
+/**
+ * What an Allocation reserves on its machine (ADR 0100): its sandbox's
+ * limits, and where its commands run apart (ADR 0332) the agent
+ * container's on top, so admission counts both containers.
+ */
+export function reservedOf(policy: EnvironmentAllocationPolicy): {
+  cpuMillis?: number;
+  memoryMb?: number;
+} {
+  const own = policy.requirements.resources;
+  const agent = policy.sandbox?.separateCommands?.agentResources;
+  const sum = (left?: number, right?: number) =>
+    left === undefined && right === undefined
+      ? undefined
+      : (left ?? 0) + (right ?? 0);
+  const cpuMillis = sum(own?.cpuMillis, agent?.cpuMillis);
+  const memoryMb = sum(own?.memoryMb, agent?.memoryMb);
+  return {
+    ...(cpuMillis !== undefined ? { cpuMillis } : {}),
+    ...(memoryMb !== undefined ? { memoryMb } : {}),
+  };
 }
 
 export class ExecutionAllocationsService {
@@ -228,10 +317,24 @@ export class ExecutionAllocationsService {
         .forUpdate()
         .executeTakeFirst();
       if (!node) throw new EnvironmentCapacityError(args.workerNodeId);
-      const defaults =
+      const machine =
         args.policy.binding.trust === "managed"
           ? WorkerResourceDefaultsSchema.parse(node.default_resources)
           : {};
+      // A pair's command side with no limits named anywhere gets the
+      // backend's default explicitly, so it is reserved too (ADR 0332).
+      const defaults =
+        args.policy.binding.trust === "managed" &&
+        args.policy.sandbox?.separateCommands
+          ? {
+              cpuMillis:
+                machine.cpuMillis ??
+                SEPARATE_COMMANDS_DEFAULT_RESOURCES.cpuMillis,
+              memoryMb:
+                machine.memoryMb ??
+                SEPARATE_COMMANDS_DEFAULT_RESOURCES.memoryMb,
+            }
+          : machine;
       policy = {
         ...args.policy,
         requirements: {
@@ -252,13 +355,13 @@ export class ExecutionAllocationsService {
           capacity: WorkerCapacitySchema.parse(node.capacity),
           usage: await workerUsage({ db: executor, nodeId: node.id }),
           resources:
-            args.policy.binding.trust === "managed"
-              ? (policy.requirements.resources ?? {})
-              : {},
+            args.policy.binding.trust === "managed" ? reservedOf(policy) : {},
         })
       )
         throw new EnvironmentCapacityError(node.id);
     }
+    const reserved =
+      args.policy.binding.trust === "managed" ? reservedOf(policy) : {};
     await requireTenantProject(
       executor,
       args.identity.tenantId,
@@ -276,14 +379,8 @@ export class ExecutionAllocationsService {
           root_workload_id: args.rootWorkloadId,
           worker_node_id: args.workerNodeId ?? null,
           policy_snapshot: toJson(policy),
-          reserved_cpu_millis:
-            args.policy.binding.trust === "managed"
-              ? (policy.requirements.resources?.cpuMillis ?? 0)
-              : 0,
-          reserved_memory_mb:
-            args.policy.binding.trust === "managed"
-              ? (policy.requirements.resources?.memoryMb ?? 0)
-              : 0,
+          reserved_cpu_millis: reserved.cpuMillis ?? 0,
+          reserved_memory_mb: reserved.memoryMb ?? 0,
         })
         .returningAll()
         .executeTakeFirstOrThrow();
@@ -343,7 +440,8 @@ function releaseReason(value: string | null): AllocationReleaseReason | null {
   return value === "idle" ||
     value === "node_lost" ||
     value === "connection_ended" ||
-    value === "retired"
+    value === "retired" ||
+    value === "replaced"
     ? value
     : null;
 }

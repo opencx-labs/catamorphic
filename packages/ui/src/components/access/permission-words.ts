@@ -8,6 +8,7 @@ const PERMISSION_WORDS: Record<string, string> = {
   "automations:read": "See the project's automations",
   "automations:write": "Turn project automations on and off",
   "events:write": "Record events that start the project's automations",
+  "caches:write": "Fill the project's caches from main",
   "webhooks:read": "See webhook addresses",
   "webhooks:write": "Replace webhook addresses",
   "runs:read": "See everyone's runs",
@@ -24,6 +25,20 @@ const PERMISSION_WORDS: Record<string, string> = {
 
 export function describeProjectPermission(permission: string): string {
   return PERMISSION_WORDS[permission] ?? permission;
+}
+
+/**
+ * A store path a workflow declares (ADR 0335) in plain words: "Write
+ * store/polling/ and everything in it", "Read store/config.json".
+ */
+export function describeWorkflowDocument(document: {
+  path: string;
+  access: "read" | "write";
+}): string {
+  const verb = document.access === "write" ? "Write" : "Read";
+  return document.path.endsWith("/")
+    ? `${verb} ${document.path} and everything in it`
+    : `${verb} ${document.path}`;
 }
 
 const SUSPENSION_WORDS: Record<string, string> = {

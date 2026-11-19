@@ -1,3 +1,4 @@
+import path from "node:path";
 import {
   type CanUseTool,
   type ElicitationResult,
@@ -20,21 +21,29 @@ import {
   type AttemptControl,
   type AttemptHost,
   type AttemptStart,
+  diagnosticStream,
   type HarnessAdapter,
   type HarnessCapabilities,
   RequestClosedError,
 } from "@catamorphic/agent-protocol/runner";
 import {
+  type LoopbackModel,
+  serveLoopbackModel,
   type WarmSession,
   WarmSessions,
   type WarmSessionsOptions,
+  writeCommandShell,
 } from "@catamorphic/sandbox";
+import { checkoutPathHooks } from "./checkout-paths.js";
 import { classifyClaudeError } from "./errors.js";
 import { hostToolServer, hostToolServers } from "./host-tools.js";
 import { inputUuid, renderPrompt } from "./input.js";
 import {
   buildQueryOptions,
   ClaudeStartError,
+  commandShellPaths,
+  dropConfigLinks,
+  harnessConfigHome,
   launchSignature,
   readAttemptOptions,
 } from "./options.js";
@@ -243,7 +252,32 @@ class ClaudeSession implements WarmSession {
   nativeId?: string;
   /** The native turn its last attempt ended on (an assistant uuid). */
   lastTurn?: string;
-  stderr = "";
+  /**
+   * The serving attempt's log: the CLI's stderr reaches Work as written
+   * (ADR 0333). What it writes while no attempt serves (starting up, between
+   * turns) waits here, whole lines only, for the next.
+   */
+  private log?: (data: string) => void;
+  private unheard = "";
+  logTo(log: ((data: string) => void) | undefined): void {
+    this.log = log;
+    if (log && this.unheard) {
+      log(this.unheard);
+      this.unheard = "";
+    }
+  }
+  stderr(data: string): void {
+    if (this.log) {
+      this.log(data);
+      return;
+    }
+    this.unheard += data;
+    // Too much waiting: its oldest lines go whole, never part of one.
+    if (this.unheard.length > 16_000) {
+      const cut = this.unheard.indexOf("\n", this.unheard.length - 16_000);
+      this.unheard = cut < 0 ? "" : this.unheard.slice(cut + 1);
+    }
+  }
   private handle?: ClaudeQueryHandle;
   private serving?: ClaudeAttempt;
   private ended = false;
@@ -340,6 +374,8 @@ class ClaudeSession implements WarmSession {
 class ClaudeAttempt {
   private readonly attempt: AttemptStart;
   private readonly host: AttemptHost;
+  /** The CLI's own log while this attempt is its own (ADR 0333). */
+  private readonly log: ReturnType<typeof diagnosticStream>;
   private readonly query: ClaudeQuery;
   private readonly interruptGraceMs: number;
   private readonly exitGraceMs: number;
@@ -348,8 +384,8 @@ class ClaudeAttempt {
   private readonly servers: readonly string[];
   readonly transcript: ClaudeTranscript;
   private session?: ClaudeSession;
-  /** Where the session's stderr stood when this attempt began. */
-  private stderrFrom = 0;
+  /** The attempt's model endpoint, for a harness of its own user (ADR 0332). */
+  private loopback?: LoopbackModel;
   /** Steered inputs not yet taken into the turn, by SDK uuid. */
   private readonly pendingSteers = new Map<string, string>();
   /** The SDK uuid of this attempt's own input, once sent. */
@@ -390,6 +426,10 @@ class ClaudeAttempt {
   }) {
     this.attempt = input.attempt;
     this.host = input.host;
+    this.log = diagnosticStream({
+      emit: (event) => input.host.emit(event),
+      prefix: "claude: ",
+    });
     this.query = input.query;
     this.interruptGraceMs = input.interruptGraceMs;
     this.exitGraceMs = input.exitGraceMs;
@@ -438,14 +478,29 @@ class ClaudeAttempt {
     let signature: string;
     let debugging: boolean;
     try {
-      const prompt = await renderPrompt({
-        ...input,
-        stateDirectory: this.attempt.stateDirectory,
-      });
+      // Its own user beside the runner (ADR 0332): its model through the
+      // runner's loopback, so the grant stays the runner's alone.
+      const harness = this.attempt.commands?.harness;
+      if (harness && this.attempt.modelAccess.kind === "gateway")
+        this.loopback = await serveLoopbackModel({
+          access: this.attempt.modelAccess,
+        });
+      const configHome = harnessConfigHome(this.attempt);
+      if (configHome) await dropConfigLinks(configHome);
+      const prompt = await renderPrompt({ ...input, ...this.mediaFolder() });
       message = this.userMessage({ itemId: input.itemId, text: prompt });
       const options = readAttemptOptions(this.attempt.options);
       signature = launchSignature({ attempt: this.attempt, options });
       debugging = options.debugFile !== undefined;
+      // Its shell, when its commands run apart (ADR 0332).
+      const shell = commandShellPaths(this.attempt);
+      if (shell && this.attempt.commands && !this.attempt.commands.harness)
+        await writeCommandShell({
+          directory: shell.directory,
+          socket: this.attempt.commands.socket,
+          runtime: process.execPath,
+          returnFolder: shell.returnFolder,
+        });
     } catch (error) {
       this.settle({
         status: "failed",
@@ -475,7 +530,7 @@ class ClaudeAttempt {
     const session = warm ?? this.coldSession(signature);
     if (!session) return;
     this.session = session;
-    this.stderrFrom = session.stderr.length;
+    session.logTo((data) => this.log.write(data));
     this.ownInputUuid = message.uuid;
     session.inputs.push(message);
     this.resolveInputSent();
@@ -699,16 +754,10 @@ class ClaudeAttempt {
       this.settle({ status: "interrupted" });
       return;
     }
-    const stderr = (this.session?.stderr ?? "").slice(this.stderrFrom).trim();
+    // Its stderr already reached Work as it was written (ADR 0333).
     const message = error
       ? errorMessage(error)
       : "Claude Code stopped before finishing its turn.";
-    if (stderr)
-      this.host.emit({
-        type: "diagnostic",
-        level: "error",
-        message: `Claude Code: ${stderr.slice(-2_000)}`,
-      });
     this.settle({
       status: "failed",
       error: this.turnError({ message, providerRejected: false }),
@@ -736,12 +785,28 @@ class ClaudeAttempt {
     };
   }
 
+  /**
+   * Where pasted media go: the attempt's state, or, for a harness of its
+   * own user, the runner's folder that user reads and cannot write.
+   */
+  private mediaFolder(): { stateDirectory: string; readerGroup?: number } {
+    const harness = this.attempt.commands?.harness;
+    return harness
+      ? { stateDirectory: harness.media, readerGroup: harness.gid }
+      : { stateDirectory: this.attempt.stateDirectory };
+  }
+
   private settle(input: {
     status: "completed" | "failed" | "interrupted";
     error?: TurnError;
   }): void {
     if (this.settled) return;
     this.settled = true;
+    this.log.flush();
+    this.session?.logTo(undefined);
+    // The attempt's model endpoint ends with it.
+    this.loopback?.close();
+    this.loopback = undefined;
     this.resolveInputSent();
     this.failed = input.status === "failed";
     clearTimeout(this.interruptTimer);
@@ -778,10 +843,7 @@ class ClaudeAttempt {
     // Steered while the CLI starts: it follows the attempt's own input,
     // never stops the attempt for want of a CLI.
     await Promise.race([this.inputSent, this.settledTurn]);
-    const prompt = await renderPrompt({
-      ...input,
-      stateDirectory: this.attempt.stateDirectory,
-    });
+    const prompt = await renderPrompt({ ...input, ...this.mediaFolder() });
     const session = this.session;
     if (this.settled || this.interruptRequested || !session?.alive)
       return false;
@@ -824,6 +886,7 @@ class ClaudeAttempt {
    */
   private options(session: ClaudeSession): Options {
     const attempt = this.attempt;
+    const separate = commandShellPaths(attempt);
     const own =
       attempt.thread.mode === "fresh"
         ? attempt.thread.providerThreadId
@@ -865,6 +928,7 @@ class ClaudeAttempt {
     };
     return buildQueryOptions({
       attempt,
+      ...(this.loopback ? { loopback: this.loopback } : {}),
       options: readAttemptOptions(attempt.options),
       hostServers: hostToolServers({
         tools: attempt.hostTools,
@@ -887,6 +951,26 @@ class ClaudeAttempt {
       hooks: {
         PostToolUse: [{ matcher: "^mcp__", hooks: [onMcpResult] }],
         ...turnContextHooks(session.live),
+        // Its commands apart (ADR 0332): file tools stay in the checkout,
+        // whatever links the pull request put there.
+        ...(separate
+          ? {
+              PreToolUse: checkoutPathHooks({
+                workingDirectory: attempt.workingDirectory,
+                temporaryFolder: separate.returnFolder,
+                readOnly: [
+                  path.join(
+                    path.dirname(attempt.workingDirectory),
+                    ".work-program",
+                  ),
+                  // The media the person pasted, which it reads.
+                  attempt.commands?.harness
+                    ? attempt.commands.harness.media
+                    : path.join(attempt.stateDirectory, "attachments"),
+                ],
+              }),
+            }
+          : {}),
       },
       sessionStore: hostSessionStore({
         nativeState,
@@ -899,7 +983,7 @@ class ClaudeAttempt {
       }),
       abortController: session.abort,
       stderr: (data) => {
-        session.stderr = (session.stderr + data).slice(-8_000);
+        session.stderr(data);
       },
     });
   }

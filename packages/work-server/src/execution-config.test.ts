@@ -269,8 +269,11 @@ it("configures images, containers and unenforced egress per backend (ADR 0176)",
     "images.build",
     "network.policy",
     "network.setup",
+    // An agent's commands apart from it (ADR 0332).
+    "commands.separate",
     "containers",
     "volumes",
+    "caches",
   ]);
   expect(gvisor.isolation).toBe("sandbox");
   expect(gvisor.backend).toMatchObject({ kind: "container", runtime: "runsc" });
@@ -287,7 +290,9 @@ it("configures images, containers and unenforced egress per backend (ADR 0176)",
     "images.build",
     "network.policy",
     "network.setup",
+    "commands.separate",
     "volumes",
+    "caches",
   ]);
   expect(runc.isolation).toBe("process");
   const localSettings = await resolveExecutionSettings({

@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import type {
   WorkflowEnablementConnection,
+  WorkflowEnablementDocument,
   WorkflowEnablementOwner,
 } from "./workflow-enablement-types.js";
 
@@ -23,7 +24,14 @@ export function workflowEnablementConsentDigest(input: {
   connections: readonly WorkflowEnablementConnection[];
   capabilities: readonly string[];
   permissions: readonly string[];
+  /** The store paths the owner agrees to (ADR 0335). */
+  documents?: readonly WorkflowEnablementDocument[];
 }): string {
+  const documents = [...(input.documents ?? [])]
+    .sort((left, right) =>
+      left.path < right.path ? -1 : left.path > right.path ? 1 : 0,
+    )
+    .map((document) => ({ path: document.path, access: document.access }));
   const value = {
     projectId: input.projectId,
     workflowName: input.workflowName,
@@ -41,6 +49,8 @@ export function workflowEnablementConsentDigest(input: {
       })),
     capabilities: [...input.capabilities].sort(),
     permissions: [...input.permissions].sort(),
+    // Only when declared, so digests of workflows that declare none stay.
+    ...(documents.length > 0 ? { documents } : {}),
   };
   return createHash("sha256").update(canonical(value)).digest("hex");
 }
@@ -53,6 +63,8 @@ export function workflowEnablementConsentDigest(input: {
  * names its runs receive. A following enablement moves to a new revision
  * only while this stays the same, so a merge cannot add a public webhook, a
  * broader filter, a frequent schedule or a new secret without consent.
+ * Store documents are left out: following compares them by what they cover
+ * (ADR 0335), so a narrower declaration still follows.
  */
 export function workflowEnablementAuthorityDigest(input: {
   projectId: string;
@@ -62,6 +74,8 @@ export function workflowEnablementAuthorityDigest(input: {
   connections: readonly WorkflowEnablementConnection[];
   capabilities: readonly string[];
   permissions: readonly string[];
+  /** Not part of this digest: following checks what they cover. */
+  documents?: readonly WorkflowEnablementDocument[];
   triggers: ReadonlyArray<{
     kind: string;
     config: unknown;
@@ -75,6 +89,7 @@ export function workflowEnablementAuthorityDigest(input: {
   const base = workflowEnablementConsentDigest({
     ...input,
     deploymentArtifactDigest: "",
+    documents: [],
   });
   return createHash("sha256")
     .update(

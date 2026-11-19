@@ -23,6 +23,7 @@ import {
   sandboxSecretsFile,
 } from "../services/sandbox-secrets.js";
 import {
+  endRunner,
   type RunnerChannel,
   sandboxChannel,
   startSandboxRunner,
@@ -135,6 +136,68 @@ describe("sandbox runner", () => {
     await ownedSandboxes.cleanup();
     fs.rmSync(root, { recursive: true, force: true });
   });
+
+  it("ends a runner that ignores SIGTERM, and the agent group of its own it reported, before a restart goes on (ADR 0333)", async () => {
+    const sandbox = await provider.createSandbox({});
+    const processes = provider.processes;
+    if (!processes) throw new Error("No processes");
+    // A stuck runner: it ignores SIGTERM, and its agent runs in a process
+    // group of its own, as an ACP agent does.
+    const script = path.join(root, "stuck-runner.js");
+    fs.writeFileSync(
+      script,
+      [
+        'const { spawn } = require("node:child_process");',
+        'process.on("SIGTERM", () => {});',
+        'const agent = spawn("sleep", ["300"], { detached: true, stdio: "ignore" });',
+        "agent.unref();",
+        'console.log("agent " + agent.pid);',
+        "setInterval(() => {}, 1000);",
+      ].join("\n"),
+    );
+    const started = await processes.startProcess({
+      sandboxId: sandbox.id,
+      command: `bun ${JSON.stringify(script)}`,
+      name: "Stuck runner",
+    });
+    let pgid = 0;
+    const deadline = Date.now() + 20_000;
+    while (!pgid && Date.now() < deadline) {
+      const output = await processes.readProcessOutput({
+        sandboxId: sandbox.id,
+        processId: started.processId,
+        waitMs: 500,
+      });
+      pgid = Number(/agent (\d+)/.exec(output.chunk)?.[1] ?? 0);
+    }
+    const alive = (id: number) => {
+      try {
+        process.kill(-id, 0);
+        return true;
+      } catch {
+        return false;
+      }
+    };
+    expect(alive(pgid)).toBe(true);
+    const channel = sandboxChannel({
+      provider,
+      location: {
+        kind: "sandbox_process",
+        allocationId: "allocation",
+        sandboxId: sandbox.id,
+        processId: started.processId,
+      },
+    });
+    const ended = await endRunner({
+      channel,
+      cursor: 0,
+      graceMs: 500,
+      groups: [pgid],
+    });
+    expect(ended).toBe("killed");
+    await new Promise((resolve) => setTimeout(resolve, 200));
+    expect(alive(pgid)).toBe(false);
+  }, 60_000);
 
   it("runs an attempt from the bundle and answers over standard input", async () => {
     const sandbox = await provider.createSandbox({});

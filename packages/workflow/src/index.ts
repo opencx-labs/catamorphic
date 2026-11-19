@@ -38,6 +38,13 @@ export {
   skipBatchItem,
   validateKeyedBatchOutcomes,
 } from "./batch.js";
+export {
+  isWorkflowDocumentFolder,
+  normalizeWorkflowDocuments,
+  type WorkflowDocumentAccess,
+  workflowDocumentCovers,
+  workflowDocumentPathError,
+} from "./document-access.js";
 export type { Hole } from "./holes.js";
 export {
   PROJECT_PERMISSIONS,
@@ -280,6 +287,10 @@ export function defineTrigger(
 export const WORKFLOW_PACKAGE_VERSION = packageJson.version;
 
 export type {
+  CacheFill,
+  EnvironmentHostOperations,
+} from "./environment-operations.js";
+export type {
   EventHostOperations,
   RecordableTriggerKind,
   RecordedEvent,
@@ -296,5 +307,7 @@ export type {
   SessionHostOperations,
   SessionResult,
   SessionSnapshot,
+  SessionTurnAttempt,
+  SessionTurnProgress,
   SessionUsage,
 } from "./session-operations.js";

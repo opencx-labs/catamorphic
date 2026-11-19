@@ -273,6 +273,12 @@ export const AgentDelegationGrantSchema = z.object({
 
 export type AgentDelegationGrant = z.infer<typeof AgentDelegationGrantSchema>;
 
+/** A stall threshold (ADR 0333): whole minutes, one to a day. */
+export const AgentStallSchema = z.strictObject({
+  minutes: z.number().int().min(1).max(1440),
+});
+export type AgentStall = z.infer<typeof AgentStallSchema>;
+
 export const AgentDelegationPolicySchema = z.object({
   enabled: z.boolean().default(true),
   maxConcurrentChildren: z.number().int().min(1).max(100).default(10),
@@ -385,11 +391,37 @@ export function agentDefinitionSchema(opts?: { allowE2eFake?: boolean }) {
        * authority: outside the consent hash.
        */
       results: ResultSchemasSchema.optional(),
+      /**
+       * How long a running turn may make no progress before Work records a
+       * stall and emits `session.turn-stalled` (ADR 0333). Absent, never.
+       * Work only reports it; a workflow decides what to do. Outside the
+       * consent hash: it grants nothing.
+       */
+      stall: AgentStallSchema.optional(),
       /** For kind "acp": the command that starts the agent, or its endpoint. */
       acp: z
         .object({
           endpoint: z.string().min(1).optional(),
           command: z.array(z.string().min(1)).optional(),
+          /**
+           * The agent runs its commands with `$SHELL`, so Work can run them
+           * apart from it (ADR 0332).
+           */
+          shell: z.boolean().optional(),
+          /**
+           * `false`: the agent loads no configuration, plugins, MCP
+           * servers, language servers, formatters or instructions from the
+           * checkout (with `env` set). Required, with `shell`, for its
+           * commands to run apart (ADR 0332).
+           */
+          projectConfig: z.boolean().optional(),
+          /** Variables Work sets on the agent's process. */
+          env: z
+            .record(
+              z.string().regex(/^[A-Za-z_][A-Za-z0-9_]*$/),
+              z.string().max(4096),
+            )
+            .optional(),
         })
         .optional(),
     })
@@ -433,7 +465,18 @@ export interface AgentDefinition {
   >;
   delegation?: AgentDelegationPolicy;
   results?: ResultSchemas;
-  acp?: { endpoint?: string; command?: string[] };
+  stall?: AgentStall;
+  /**
+   * `shell`: the agent runs its commands with `$SHELL`, so Work can run
+   * them apart from it (ADR 0332).
+   */
+  acp?: {
+    endpoint?: string;
+    command?: string[];
+    shell?: boolean;
+    projectConfig?: boolean;
+    env?: Record<string, string>;
+  };
 }
 
 export interface ProjectAgentEntry {
@@ -519,6 +562,12 @@ export function definitionHash(
       ? {
           endpoint: definition.acp.endpoint ?? null,
           command: definition.acp.command ?? null,
+          // Only when named, so existing consent hashes stay valid.
+          ...(definition.acp.shell ? { shell: true } : {}),
+          ...(definition.acp.projectConfig !== undefined
+            ? { projectConfig: definition.acp.projectConfig }
+            : {}),
+          ...(definition.acp.env ? { env: definition.acp.env } : {}),
         }
       : null,
     prompt:

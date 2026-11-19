@@ -13,15 +13,19 @@ import {
   type RunnerFrame,
 } from "@catamorphic/agent-protocol/runner";
 import { InProcessRunner } from "@catamorphic/agent-runner";
-import { agentQuestionJsonSchema } from "@catamorphic/sandbox";
+import {
+  agentQuestionJsonSchema,
+  loopbackModelEnv,
+  serveLoopbackModel,
+} from "@catamorphic/sandbox";
 import { afterEach, describe, expect, it } from "vitest";
 import {
+  ACP_COMMANDS_APART_REFUSAL,
   createAcpAdapter,
   effortChoice,
   modelChoice,
   turnUsage,
 } from "../adapter.js";
-import { loopbackModelEnv, serveLoopbackModel } from "../model-endpoint.js";
 
 /*
  * The ACP adapter end to end (ADR 0241): the real runner drives the real
@@ -169,6 +173,173 @@ function run(start: AttemptStart) {
   };
 }
 
+describe("ACP agents whose commands run apart (ADR 0332)", () => {
+  const commands = { socket: "/run/work-commands/commands.sock" };
+
+  it("points an agent that runs its commands with $SHELL at the shim", async () => {
+    const space = workspace();
+    const turn = run(
+      attempt(space, "[[shell]]", {
+        commands,
+        options: {
+          command: [process.execPath, AGENT],
+          shell: true,
+          projectConfig: false,
+          env: { TEST_AGENT_MARK: "set by its definition" },
+        },
+      }),
+    );
+    await turn.finished();
+    const shim = path.join(space.dir, "commands", "bin", "bash");
+    expect(turn.completed()).toMatchObject({ status: "completed" });
+    expect(turn.text("assistant_message")).toBe(
+      `SHELL=${shim} PATH=${path.join(space.dir, "commands", "path")} MARK=set by its definition`,
+    );
+    expect(fs.readFileSync(shim, "utf8")).toContain(commands.socket);
+  });
+
+  it("runs an agent as the harness's own user, on the provider's shim, with a configuration home it cannot write", async () => {
+    const space = workspace();
+    // Its launcher starts in its home, which exists before it starts.
+    fs.mkdirSync(path.join(space.dir, "harness-home"));
+    const harness = {
+      uid: process.getuid?.() ?? 0,
+      gid: process.getgid?.() ?? 0,
+      home: path.join(space.dir, "harness-home"),
+      temporary: path.join(space.dir, "harness-tmp"),
+      shim: "/workspace/.work-shim",
+      media: path.join(space.dir, "harness-media"),
+      config: path.join(space.dir, "harness-config"),
+    };
+    const turn = run(
+      attempt(space, "[[harness]]", {
+        commands: { ...commands, harness },
+        options: {
+          command: [process.execPath, AGENT],
+          shell: true,
+          projectConfig: false,
+        },
+      }),
+    );
+    await turn.finished();
+    expect(turn.completed()).toMatchObject({ status: "completed" });
+    expect(turn.text("assistant_message")).toBe(
+      `SHELL=/workspace/.work-shim/bin/bash PATH=/workspace/.work-shim/path HOME=${harness.home} CONFIG=${harness.config} UID=${harness.uid} STARTED=${fs.realpathSync(harness.home)} SESSION=${space.dir}`,
+    );
+    // The provider's shim, which that user cannot rewrite: none is
+    // written beside the runner's state.
+    expect(fs.existsSync(path.join(space.dir, "commands"))).toBe(false);
+  });
+
+  it("starts a harness's stdio MCP servers in its home, not the checkout", async () => {
+    const space = workspace();
+    const home = path.join(space.dir, "harness-home");
+    fs.mkdirSync(home);
+    // What the pull request plants for a launcher such as npx.
+    fs.mkdirSync(path.join(space.dir, "node_modules", ".bin"), {
+      recursive: true,
+    });
+    fs.writeFileSync(
+      path.join(space.dir, "node_modules", ".bin", "planted"),
+      "",
+    );
+    fs.writeFileSync(path.join(space.dir, ".npmrc"), "planted=1\n");
+    const harness = {
+      uid: process.getuid?.() ?? 0,
+      gid: process.getgid?.() ?? 0,
+      home,
+      temporary: path.join(space.dir, "harness-tmp"),
+      shim: "/workspace/.work-shim",
+      media: path.join(space.dir, "harness-media"),
+      config: path.join(space.dir, "harness-config"),
+    };
+    const turn = run(
+      attempt(space, "[[harness]]", {
+        commands: { ...commands, harness },
+        mcpServers: {
+          probe: {
+            transport: "stdio",
+            command: "sh",
+            args: [
+              "-c",
+              'pwd; [ -e node_modules/.bin/planted ] && echo planted-bin; [ -e .npmrc ] && echo npmrc; echo "[$NODE_OPTIONS]"',
+            ],
+          },
+          remote: { transport: "http", url: "http://127.0.0.1:9/mcp" },
+        },
+        options: {
+          command: [process.execPath, AGENT],
+          shell: true,
+          projectConfig: false,
+        },
+      }),
+    );
+    await turn.finished();
+    expect(turn.completed()).toMatchObject({ status: "completed" });
+    const [session] = Object.values(space.state().sessions);
+    const probe = session?.mcpServers.find((server) => server.name === "probe");
+    const spec = probe as { command?: string; args?: string[] } | undefined;
+    if (!spec?.command) throw new Error("The agent got no stdio server");
+    // Started as the agent would, from its session's folder, the checkout.
+    const started = spawnSync(spec.command, spec.args ?? [], {
+      cwd: space.dir,
+      env: { ...process.env, NODE_OPTIONS: "--no-warnings" },
+      encoding: "utf8",
+    });
+    expect(started.stdout).toBe(`${home}\n[]\n`);
+    // An HTTP server is the agent's to reach, as it was.
+    expect(
+      session?.mcpServers.find((server) => server.name === "remote"),
+    ).toMatchObject({ url: "http://127.0.0.1:9/mcp" });
+  });
+
+  it("refuses the review pack's OpenCode, which loads plugins from the checkout", async () => {
+    const space = workspace();
+    const definition = JSON.parse(
+      fs.readFileSync(
+        path.resolve(
+          path.dirname(fileURLToPath(import.meta.url)),
+          "../../../registry/src/pull-request-reviews-opencode/reviewer.json",
+        ),
+        "utf8",
+      ),
+    );
+    const turn = run(
+      attempt(space, "[[shell]]", {
+        commands,
+        options: { ...definition.acp, command: [process.execPath, AGENT] },
+      }),
+    );
+    await turn.finished();
+    expect(turn.completed()).toMatchObject({
+      status: "failed",
+      error: { message: ACP_COMMANDS_APART_REFUSAL },
+    });
+    expect(ACP_COMMANDS_APART_REFUSAL).toContain("OpenCode does not");
+    expect(fs.existsSync(space.stateFile)).toBe(false);
+  });
+
+  it.each([
+    ["does not say it uses $SHELL", { projectConfig: false }],
+    ["does not say it loads nothing from the checkout", { shell: true }],
+  ])("refuses an agent whose definition %s", async (_name, options) => {
+    const space = workspace();
+    const turn = run(
+      attempt(space, "[[shell]]", {
+        commands,
+        options: { command: [process.execPath, AGENT], ...options },
+      }),
+    );
+    await turn.finished();
+    expect(turn.completed()).toMatchObject({
+      status: "failed",
+      error: { message: ACP_COMMANDS_APART_REFUSAL },
+    });
+    // The agent never started.
+    expect(fs.existsSync(space.stateFile)).toBe(false);
+  });
+});
+
 describe("ACP adapter", () => {
   it("runs a turn: a session in the workspace, thoughts and a streamed reply, Work's words apart from the person's", async () => {
     const space = workspace();
@@ -186,6 +357,12 @@ describe("ACP adapter", () => {
     });
     expect(turn.text("reasoning")).toBe("Thinking it over.");
     expect(turn.text("assistant_message")).toBe("Echo: hello");
+    // Its own process group, reported so a restart can end it (ADR 0333).
+    if (process.platform !== "win32")
+      expect(turn.events()).toContainEqual({
+        type: "process.group",
+        pgid: expect.any(Number),
+      });
     const session = space.state().sessions["session-1"];
     expect(session?.cwd).toBe(space.dir);
     expect(session?.prompts[0]).toEqual([

@@ -249,6 +249,15 @@ export const TriggerBindingInfoSchema = z.object({
   outputSchema: JsonOutSchema,
 });
 
+/**
+ * A project store path a workflow reads or writes (ADR 0335): one
+ * document, or a folder (ending in `/`) and everything under it.
+ */
+export const WorkflowDocumentAccessSchema = z.object({
+  path: z.string(),
+  access: z.enum(["read", "write"]),
+});
+
 export const WorkflowEnablementOwnerSchema = z.discriminatedUnion("type", [
   z.object({ type: z.literal("member"), externalUserId: z.string().min(1) }),
   z.object({ type: z.literal("project") }),
@@ -283,6 +292,11 @@ const WorkflowEnablementTargetSchema = z.object({
   capabilities: z.array(z.string()),
   /** Project permissions the workflow declares (ADR 0158). */
   permissions: z.array(z.string()),
+  /**
+   * Project store paths the workflow reads or writes (ADR 0335); a path
+   * ending in `/` is a folder.
+   */
+  documents: z.array(WorkflowDocumentAccessSchema),
   consentDigest: z.string().length(64),
 });
 
@@ -512,6 +526,8 @@ export const WorkflowGraphSchema = z.object({
     }),
   ),
   permissions: z.array(z.string()),
+  /** Project store paths its runs read or write (ADR 0335). */
+  documents: z.array(WorkflowDocumentAccessSchema),
   canSuspend: z.boolean(),
   nodes: z.array(WorkflowNodeSchema),
   edges: z.array(WorkflowEdgeSchema),
@@ -686,6 +702,47 @@ export const TriggerRunSchema = z.object({
 export const EnvironmentListQuerySchema = z.object({
   workload: z.enum(["agent", "workflow"]),
   agentId: z.string().min(1).optional(),
+});
+
+/** One fill of an Environment cache on a machine (ADR 0334). */
+export const CacheFillSchema = z.object({
+  id: z.string(),
+  environment: z.string(),
+  cache: z.string(),
+  machine: z.string().nullable(),
+  status: z.enum(["queued", "running", "succeeded", "failed", "evicted"]),
+  reason: z.enum(["requested", "first-use"]),
+  commit: z.string().nullable(),
+  generation: z.number().nullable(),
+  attempts: z.number(),
+  sizeBytes: z.number().nullable(),
+  error: z.string().nullable(),
+  createdAt: z.string(),
+  finishedAt: z.string().nullable(),
+  lastUsedAt: z.string().nullable(),
+});
+
+/** The project's Environment caches, their copies and recent fills (ADR 0334). */
+export const EnvironmentCacheListSchema = z.object({
+  items: z.array(
+    z.object({
+      environment: z.string(),
+      cache: z.string(),
+      path: z.string(),
+      sizeMb: z.number(),
+      copies: z.array(
+        z.object({
+          machine: z.string(),
+          generation: z.number(),
+          commit: z.string().nullable(),
+          filledAt: z.string().nullable(),
+          sizeBytes: z.number().nullable(),
+          lastUsedAt: z.string().nullable(),
+        }),
+      ),
+      fills: z.array(CacheFillSchema),
+    }),
+  ),
 });
 
 export const EnvironmentListSchema = z.object({
@@ -1637,7 +1694,13 @@ export const AttemptSchema = describes<Attempt>()(
       turnId: z.string(),
       sessionId: z.string(),
       ordinal: z.number().int(),
-      reason: z.enum(["initial", "retry", "steer_restart", "recovery"]),
+      reason: z.enum([
+        "initial",
+        "retry",
+        "steer_restart",
+        "recovery",
+        "restart",
+      ]),
       status: z.enum([
         "preparing",
         "running",
@@ -1646,6 +1709,7 @@ export const AttemptSchema = describes<Attempt>()(
         "interrupted",
         "lost",
         "superseded",
+        "restarted",
       ]),
       providerThreadId: z.string().nullable(),
       nativeTurnRef: NativeRefSchema.nullable(),
@@ -2061,8 +2125,90 @@ export const CommandReceiptSchema = describes<CommandReceipt>()(
 export const SessionCommandSchema =
   describes<SessionCommand>()(sessionCommandSchema);
 
+/** The turn working now and its progress (ADR 0333). */
+export const TurnProgressSchema = z.object({
+  id: z.string(),
+  ordinal: z.number().int(),
+  status: z.enum(["preparing", "running", "waiting", "finalizing"]),
+  attempt: z
+    .object({
+      id: z.string(),
+      ordinal: z.number().int(),
+      reason: z.string(),
+      startedAt: z.string().nullable(),
+    })
+    .nullable(),
+  attempts: z.number().int(),
+  restarts: z.number().int(),
+  progressAt: z.string().nullable(),
+  stalledAt: z.string().nullable(),
+  stallMinutes: z.number().nullable(),
+  activity: z.object({
+    tools: z.array(
+      z.object({
+        name: z.string(),
+        description: z.string().nullable(),
+        since: z.string(),
+      }),
+    ),
+    commands: z.array(
+      z.object({
+        command: z.string(),
+        description: z.string().nullable(),
+        since: z.string(),
+      }),
+    ),
+  }),
+});
+
 export const AgentSessionDetailSchema = AgentSessionSchema.extend({
   snapshot: SessionSnapshotSchema,
+  turn: TurnProgressSchema.nullable(),
+});
+
+/** A turn's attempts with their diagnostics (ADR 0333). */
+export const TurnAttemptsSchema = z.object({
+  attempts: z.array(
+    z.object({
+      id: z.string(),
+      ordinal: z.number().int(),
+      reason: z.string(),
+      status: z.string(),
+      error: z.object({ message: z.string() }).nullable(),
+      startedAt: z.string().nullable(),
+      completedAt: z.string().nullable(),
+      progressAt: z.string().nullable(),
+      stalledAt: z.string().nullable(),
+      diagnostics: z
+        .object({ runner: z.string(), harness: z.string() })
+        .nullable(),
+    }),
+  ),
+});
+
+export const TurnIdParamsSchema = z.object({
+  projectId: z.string().uuid(),
+  sessionId: z.string().uuid(),
+  turnId: z.string().uuid(),
+});
+
+/** Restart a running turn's attempt (ADR 0333). */
+export const RestartTurnSchema = z.object({
+  /** The attempt to end: refused unless it is the turn's running attempt. */
+  attemptId: z.string().uuid(),
+  reason: z.string().min(1).max(500),
+  /** Only while it is stalled. */
+  onlyIfStalled: z.boolean().optional(),
+  idempotencyKey: z.string().min(1).max(300),
+});
+
+export const RestartTurnResultSchema = z.object({
+  restarted: z.literal(true),
+  turnId: z.string(),
+  attemptId: z.string(),
+  attempt: z.number().int(),
+  attempts: z.number().int(),
+  restarts: z.number().int(),
 });
 
 export const SessionItemsQuerySchema = z.object({
@@ -2420,6 +2566,12 @@ export const ProjectAgentDefinitionSchema = z.object({
     .object({
       endpoint: z.string().optional(),
       command: z.array(z.string()).optional(),
+      /** The agent runs its commands with `$SHELL` (ADR 0332). */
+      shell: z.boolean().optional(),
+      /** `false`: the agent loads nothing from the checkout (ADR 0332). */
+      projectConfig: z.boolean().optional(),
+      /** Variables Work sets on the agent's process. */
+      env: z.record(z.string(), z.string()).optional(),
     })
     .optional(),
 });

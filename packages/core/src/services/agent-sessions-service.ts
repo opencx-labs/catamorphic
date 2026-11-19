@@ -72,6 +72,7 @@ import {
   buildPluginsPreamble,
   closeQuestionsDescription,
   closeQuestionsInputSchema,
+  commandSideProcesses,
   type ExtraTool,
   extraToolResult,
   type HarnessPermissions,
@@ -88,6 +89,8 @@ import {
   type Sandboxing,
   type SandboxModelGateway,
   type SandboxProvider,
+  SEPARATE_COMMANDS_SOCKET,
+  SEPARATE_HARNESS,
   type SignInHarness,
   STOPPED_WAITING_NOTE,
   serverKeyOf,
@@ -104,7 +107,13 @@ import {
   AGENT_COMMIT_AUTHOR,
   PROJECT_MANIFEST_PATH,
 } from "@catamorphic/workflow/project-layout";
-import { type Insertable, type Kysely, sql, type Transaction } from "kysely";
+import {
+  type ExpressionBuilder,
+  type Insertable,
+  type Kysely,
+  sql,
+  type Transaction,
+} from "kysely";
 import { z } from "zod";
 import {
   type AgentRef,
@@ -139,12 +148,15 @@ import {
   AllocationMaintenanceLostError,
   allocationSandboxProvider,
   claimAllocationMaintenance,
+  holdsReshape,
+  pendingForReshape,
   replaceAllocationSandbox,
   withAllocationMaintenance,
   withAllocationSandboxPolicy,
 } from "./allocation-sandbox-provider.js";
 import type { AppPoliciesService } from "./app-policies-service.js";
 import { AccessDeniedError, resolveScope } from "./artifact-scope.js";
+import { cacheNote } from "./cache-mounts.js";
 import { projectChatIdentity } from "./chat-delivery.js";
 import {
   type AgentModelChoice,
@@ -229,6 +241,7 @@ import {
   removeSessionCredentials,
   SESSION_DIRECTORY,
   sandboxGrantDirectory,
+  sandboxProjectDirectory,
   seedSandboxBase,
   seedSandboxRepository,
 } from "./sandbox-git.js";
@@ -259,6 +272,7 @@ import {
   type SessionWorkspaceHandle,
   SessionWorkspaceUnavailableError,
   WORKSPACE_NOT_RUNNING_MESSAGE,
+  WORKSPACE_USE_INTERVAL_SECONDS,
 } from "./session-workspace.js";
 import {
   basePin,
@@ -345,6 +359,13 @@ import {
   type TurnEngineHost,
 } from "./sessions/turn-engine.js";
 import { TurnQueue } from "./sessions/turn-queue.js";
+import {
+  attemptRecords,
+  nextStallAt,
+  recordStalls,
+  type TurnProgress,
+  turnProgress,
+} from "./sessions/turn-stalls.js";
 import {
   documentsClientFor,
   shipRemoteProject,
@@ -681,6 +702,13 @@ export interface AgentTodoInput {
  */
 export interface AgentSessionDetail extends AgentSession {
   snapshot: SessionSnapshot;
+  /**
+   * The turn working now and its progress (ADR 0333): its attempt, how
+   * many it made and restarted, when it last made progress, a stall, and
+   * the tool calls and commands it reported still running. Null when no
+   * turn works.
+   */
+  turn: TurnProgress | null;
 }
 
 export interface AgentSessionPeer {
@@ -736,6 +764,27 @@ export class AgentSessionNotFoundError extends Error {
     this.name = "AgentSessionNotFoundError";
   }
 }
+
+/**
+ * What `restartTurn` answers (ADR 0333): the attempt it will end, with the
+ * turn's counts so far, or why it ends nothing.
+ */
+export type RestartAnswer =
+  | {
+      restarted: true;
+      turnId: string;
+      attemptId: string;
+      attempt: number;
+      attempts: number;
+      restarts: number;
+    }
+  | {
+      restarted: false;
+      turnId: string;
+      attemptId: string;
+      refused: "not_running" | "not_current" | "not_stalled";
+      message: string;
+    };
 
 export class AgentSessionClosedError extends Error {
   constructor(readonly sessionId: string) {
@@ -1170,6 +1219,12 @@ interface AgentSessionsDeps {
    */
   workspaceClaimSeconds?: number;
   /**
+   * How long a chat's turn waits for its workspace to be given back and
+   * made again in the shape its agents need (ADR 0332) before it fails
+   * saying what kept it. Default 10 minutes.
+   */
+  reshapeWaitMinutes?: number;
+  /**
    * This process's hints that turns or session events may be waiting, and
    * how often its pollers look when none came (ADR 0229).
    */
@@ -1305,6 +1360,118 @@ const ASK_USER_HOST_TOOL: ExtraTool = {
   },
 };
 
+/** A person used a workspace this recently: they are using it now. */
+const IN_USE_SECONDS = 2 * WORKSPACE_USE_INTERVAL_SECONDS;
+/**
+ * How long a turn first waits before it looks again for a reshaped
+ * workspace; the wait grows to a minute (ADR 0332).
+ */
+const RESHAPE_RETRY_SECONDS = 5;
+const RESHAPE_RETRY_MAX_SECONDS = 60;
+/** Saves in a row that fail before a waiting turn fails with the error. */
+const RESHAPE_SYNC_TRIES = 3;
+
+/** How a waiting turn's activity begins, so the wait can clear it. */
+const RESHAPE_ACTIVITY = "Waiting to make this chat's workspace again";
+
+/**
+ * What keeps a workspace from being given back (ADR 0332): a turn at work
+ * or a question waiting for an answer (in any chat working in it), a
+ * person using it, a machine this server cannot reach, other work on the
+ * workspace, or a save that failed.
+ */
+type WorkspaceHold =
+  | { kind: "turn" | "question" | "person" | "machine" | "saving" }
+  | { kind: "sync"; error: string };
+
+/** What holds a workspace, as a waiting turn and its failure name it. */
+function workspaceHoldText(hold: WorkspaceHold): string {
+  switch (hold.kind) {
+    case "turn":
+      return "a turn still running in a chat working in it";
+    case "question":
+      return "an unanswered question in a chat working in it";
+    case "person":
+      return "someone using it (an open terminal or preview)";
+    case "machine":
+      return "its machine (out of this server's reach)";
+    case "saving":
+      return "other work on it (saving or setting it up)";
+    case "sync":
+      return "a save that failed";
+  }
+}
+
+/** How to free a workspace that a hold keeps. */
+function workspaceHoldRemedy(hold: WorkspaceHold): string {
+  switch (hold.kind) {
+    case "turn":
+      return "Let that turn finish or stop it, then send this message again.";
+    case "question":
+      return "Answer the question, then send this message again.";
+    case "person":
+      return "Close the workspace's terminals and previews, then send this message again.";
+    case "machine":
+      return "Bring the machine back online, then send this message again.";
+    case "saving":
+    case "sync":
+      return "Try again in a few minutes, or move the chat to a new workspace.";
+  }
+}
+
+/**
+ * The turns that keep a workspace from being reshaped (ADR 0332), in any
+ * chat working in it: one at work or waiting for an answer. A message
+ * held for editing, and a turn whose holder went away before its harness
+ * started, wait for the reshaped workspace like a queued one.
+ */
+async function reshapeTurnHold(
+  db: Kysely<DB> | Transaction<DB>,
+  allocationId: string,
+): Promise<WorkspaceHold | undefined> {
+  const turns = await db
+    .selectFrom("agent_turns")
+    .innerJoin(
+      "agent_sessions as sharer",
+      "sharer.id",
+      "agent_turns.session_id",
+    )
+    .select("agent_turns.status")
+    .where("sharer.allocation_id", "=", allocationId)
+    .where(holdsReshape())
+    .execute();
+  if (turns.some((turn) => turn.status === "waiting"))
+    return { kind: "question" };
+  if (turns.length > 0) return { kind: "turn" };
+  return undefined;
+}
+
+/** What a contained agent is told when its workspace was reshaped. */
+const RESHAPED_CONTAINED_NOTE =
+  "[Workspace] This workspace was made again to fit the agents working in it. This agent's sandboxing is contained, so what it changed here before is gone with the old workspace.";
+
+/**
+ * Why a harness that runs in its sandbox cannot start in a separated
+ * sandbox made without an agent container (ADR 0332).
+ */
+export const SEPARATED_WITHOUT_AGENT_SIDE =
+  'This workspace was made for an agent that runs outside its sandbox (such as the built-in one), so its commands run apart with no container beside them for an agent that runs in the sandbox. Such an agent works in a workspace of its own: a subagent starts with workspace: "own", and a chat whose agent changed gets a new workspace at its next turn.';
+
+/**
+ * Why a harness cannot start in a sandbox, if it cannot (ADR 0332): one
+ * that runs in the sandbox needs the agent container a separated sandbox
+ * has only when it was admitted for such a harness.
+ */
+export function separatedHarnessRefusal(input: {
+  placement: "sandbox" | "host";
+  separateCommands: { agentResources?: unknown } | undefined;
+}): string | undefined {
+  return input.placement === "sandbox" &&
+    input.separateCommands &&
+    !input.separateCommands.agentResources
+    ? SEPARATED_WITHOUT_AGENT_SIDE
+    : undefined;
+}
 /** How long a change waits for a finalizing turn before it is refused. */
 const FINALIZING_WAIT_MS = 20_000;
 
@@ -1321,6 +1488,7 @@ export class AgentSessionsService {
   private readonly workerNode?: { id: string; token: string };
   readonly authorityLeaseMs: number;
   private readonly workspaceClaimSeconds: number;
+  private readonly reshapeWaitMs: number;
   private readonly wakeups?: WorkWakeups;
   private readonly idlePollMs?: number;
   private readonly projectManager: ProjectManager;
@@ -1540,13 +1708,24 @@ export class AgentSessionsService {
                     eb("agent_turns.status", "=", "queued"),
                     eb("agent_turns.available_at", "<=", sql<Date>`now()`),
                   ]),
-                  // A turn whose holder's lease lapsed is recovered (ADR 0198).
+                  // A turn whose holder's lease lapsed is recovered (ADR 0198),
+                  // unless it waits for its chat's reshaped workspace: then
+                  // at the chat's next look (ADR 0332).
                   and([
                     eb("agent_turns.status", "in", [...ACTIVE_TURN_STATUSES]),
                     or([
                       eb("agent_turns.lease_expires_at", "is", null),
                       eb(
                         "agent_turns.lease_expires_at",
+                        "<=",
+                        sql<Date>`now()`,
+                      ),
+                    ]),
+                    or([
+                      eb("agent_turns.status", "!=", "preparing"),
+                      eb("agent_sessions.reshape_look_at", "is", null),
+                      eb(
+                        "agent_sessions.reshape_look_at",
                         "<=",
                         sql<Date>`now()`,
                       ),
@@ -1569,6 +1748,9 @@ export class AgentSessionsService {
       );
       await this.expireRequests().catch((error) =>
         console.warn("[catamorphic] Request expiry failed", error),
+      );
+      await this.recordStalls().catch((error) =>
+        console.warn("[catamorphic] Recording stalled turns failed", error),
       );
       if (Date.now() >= nextIdleSweep) {
         nextIdleSweep = Date.now() + (input.idleReleaseIntervalMs ?? 60_000);
@@ -1681,7 +1863,22 @@ export class AgentSessionsService {
           .select(({ fn }) => fn.min("agent_turns.lease_expires_at").as("at"))
           .where("agent_sessions.authority_host_id", "=", this.hostId)
           .where("agent_turns.status", "in", [...ACTIVE_TURN_STATUSES])
+          // One waiting for its reshaped workspace falls due at its chat's
+          // next look (ADR 0332), below.
+          .where((eb) =>
+            eb.or([
+              eb("agent_turns.status", "!=", "preparing"),
+              eb("agent_sessions.reshape_look_at", "is", null),
+              eb("agent_sessions.reshape_look_at", "<=", sql<Date>`now()`),
+            ]),
+          )
           .as("lapses"),
+        eb
+          .selectFrom("agent_sessions")
+          .select(({ fn }) => fn.min("agent_sessions.reshape_look_at").as("at"))
+          .where("agent_sessions.authority_host_id", "=", this.hostId)
+          .where("agent_sessions.reshape_look_at", ">", sql<Date>`now()`)
+          .as("reshapes"),
         eb
           .selectFrom("agent_runtime_requests")
           .innerJoin(
@@ -1700,10 +1897,32 @@ export class AgentSessionsService {
           .as("expires"),
       ])
       .executeTakeFirst();
-    const times = [row?.queued, row?.waits, row?.lapses, row?.expires]
+    // A running turn's silence falls due as a stall (ADR 0333).
+    const stall = await nextStallAt({ db: this.db, hostIds: [this.hostId] });
+    const times = [
+      row?.queued,
+      row?.waits,
+      row?.lapses,
+      row?.reshapes,
+      row?.expires,
+      stall,
+    ]
       .filter((at) => at !== null && at !== undefined)
       .map((at) => new Date(at).getTime());
     return times.length > 0 ? new Date(Math.min(...times)) : null;
+  }
+
+  /**
+   * Record the stalls that fell due by `at` (default now) on chats this
+   * host holds (ADR 0333): each once per silence, with its
+   * `session.turn-stalled` event. Returns how many.
+   */
+  async recordStalls(input: { at?: Date } = {}): Promise<number> {
+    return recordStalls({
+      db: this.db,
+      hostIds: [this.hostId],
+      ...(input.at ? { at: input.at } : {}),
+    });
   }
 
   /**
@@ -1786,6 +2005,7 @@ export class AgentSessionsService {
     this.workerNode = deps.workerNode;
     this.authorityLeaseMs = deps.authorityLeaseMs ?? 90_000;
     this.workspaceClaimSeconds = deps.workspaceClaimSeconds ?? 120;
+    this.reshapeWaitMs = (deps.reshapeWaitMinutes ?? 10) * 60_000;
     this.mailboxes = new SessionMailboxesService(db, deps.hostId);
     this.wakeups = deps.wakeups;
     this.idlePollMs = deps.idlePollMs;
@@ -2649,7 +2869,23 @@ export class AgentSessionsService {
       ),
       attentionMessage: await this.attentionItem(sessionId),
       snapshot,
+      turn: await turnProgress(this.db, sessionId),
     };
+  }
+
+  /**
+   * A turn's attempts with their outcome and the masked tails of their
+   * runner's and harness's own output (ADR 0333), for anyone who may read
+   * the chat.
+   */
+  async attempts(
+    identity: Identity,
+    projectId: string,
+    sessionId: string,
+    input: { turnId: string },
+  ) {
+    await this.requireSession(identity, projectId, sessionId, "read");
+    return attemptRecords(this.db, { sessionId, turnId: input.turnId });
   }
 
   /** Older items of a session, before a position (paging back through history). */
@@ -3735,6 +3971,112 @@ export class AgentSessionsService {
     if (options.notifyParent !== false)
       await this.interruptDelegation(identity, projectId, sessionId);
     this.kick(sessionId);
+  }
+
+  /**
+   * Restart a running turn's attempt (ADR 0333): the lease holder ends it
+   * without asking its harness and runs the turn again on a new attempt.
+   * Only `attemptId` is restarted, and only while it is the turn's running
+   * attempt (with `onlyIfStalled`, only while it is stalled, checked again
+   * when the holder acts): an attempt that moved on, or a newer one after
+   * another restart, is never ended by a request about an older one. A
+   * refusal is an answer, not an error, so a workflow can treat it as
+   * nothing to do. Asked again before the holder acted, it names the same
+   * attempt.
+   */
+  async restartTurn(
+    identity: Identity,
+    projectId: string,
+    sessionId: string,
+    input: {
+      turnId: string;
+      attemptId: string;
+      reason: string;
+      onlyIfStalled?: boolean;
+      signal?: AbortSignal;
+    },
+  ): Promise<RestartAnswer> {
+    await this.requireSession(identity, projectId, sessionId);
+    const reason = input.reason.trim().slice(0, 500);
+    const answer = await this.db
+      .transaction()
+      .execute(async (trx): Promise<RestartAnswer> => {
+        await this.log.lock(trx, sessionId);
+        const turn = await trx
+          .selectFrom("agent_turns")
+          .select(["id", "status", "active_attempt_id"])
+          .where("id", "=", input.turnId)
+          .where("session_id", "=", sessionId)
+          .executeTakeFirst();
+        const refused = (
+          why: "not_running" | "not_current" | "not_stalled",
+          message: string,
+        ): RestartAnswer => ({
+          restarted: false,
+          turnId: input.turnId,
+          attemptId: input.attemptId,
+          refused: why,
+          message,
+        });
+        if (!turn || (turn.status !== "running" && turn.status !== "waiting"))
+          return refused(
+            "not_running",
+            turn
+              ? `Turn ${input.turnId} is ${turn.status}, not running: only a running turn can be restarted`
+              : `This chat has no turn ${input.turnId}`,
+          );
+        const attempt = await trx
+          .selectFrom("agent_turn_attempts")
+          .select(["id", "ordinal", "stalled_at"])
+          .where("id", "=", input.attemptId)
+          .where("turn_id", "=", turn.id)
+          .where("status", "=", "running")
+          .executeTakeFirst();
+        if (!attempt || turn.active_attempt_id !== attempt.id)
+          return refused(
+            "not_current",
+            `Attempt ${input.attemptId} is not the turn's running attempt`,
+          );
+        if (input.onlyIfStalled === true && attempt.stalled_at === null)
+          return refused(
+            "not_stalled",
+            `Attempt ${input.attemptId} made progress since it stalled`,
+          );
+        input.signal?.throwIfAborted();
+        const open = await trx
+          .selectFrom("agent_turn_commands")
+          .select("id")
+          .where("turn_id", "=", turn.id)
+          .where("attempt_id", "=", attempt.id)
+          .where("kind", "=", "restart")
+          .where("status", "in", ["pending", "sent"])
+          .executeTakeFirst();
+        if (!open)
+          await this.queue.enqueueCommand(trx, {
+            turnId: turn.id,
+            attemptId: attempt.id,
+            kind: "restart",
+            payload: {
+              reason,
+              ...(input.onlyIfStalled === true ? { onlyIfStalled: true } : {}),
+            },
+          });
+        const reasons = await trx
+          .selectFrom("agent_turn_attempts")
+          .select("reason")
+          .where("turn_id", "=", turn.id)
+          .execute();
+        return {
+          restarted: true,
+          turnId: turn.id,
+          attemptId: attempt.id,
+          attempt: attempt.ordinal,
+          attempts: reasons.length,
+          restarts: reasons.filter((row) => row.reason === "restart").length,
+        };
+      });
+    if (answer.restarted) this.kick(sessionId);
+    return answer;
   }
 
   /**
@@ -5100,13 +5442,25 @@ export class AgentSessionsService {
         .where("status", "=", "queued")
         .where("available_at", "<=", sql<Date>`now()`)
         .executeTakeFirst();
+      // A turn whose holder went away before its harness started waits
+      // for a reshaped workspace as a queued one does (ADR 0332).
+      const recovering = await this.db
+        .selectFrom("agent_turns")
+        .select("id")
+        .where("session_id", "=", sessionId)
+        .where("status", "=", "preparing")
+        .where(pendingForReshape())
+        .executeTakeFirst();
       // No workspace: given back while the chat waited, or a chat that is
       // waiting for a machine (ADR 0258).
       const placing =
         session.allocation_id === null || allocation?.status === "released";
-      if (placing && !due)
+      const waits =
+        Boolean(due) ||
+        (Boolean(recovering) && allocation?.releaseReason === "replaced");
+      if (placing && !waits)
         await this.placementWaits.clear({ rootWorkloadIds: [sessionId] });
-      if (placing && due) {
+      if (placing && waits) {
         const placed = await this.placeWaiting(identity, session);
         if (placed.kind === "admitted") continue;
         if (placed.kind === "waiting") return;
@@ -5125,6 +5479,14 @@ export class AgentSessionsService {
         (await this.releaseEndedConnection({ identity, session, allocation }))
       )
         continue;
+      // A workspace whose shape no longer fits the agents working in it
+      // (ADR 0332) is given back the way an idle one is, as soon as nothing
+      // uses it; the chat's turn waits for that, then is admitted again.
+      if (allocation?.status === "active" && (due || recovering)) {
+        const shape = await this.giveBackForShape({ session, allocation });
+        if (shape === "released" || shape === "failed") continue;
+        if (shape === "waiting") return;
+      }
       const ran = await this.engine.runNext({
         sessionId,
         ...(this.workerNode ? { localNode: this.workerNode } : {}),
@@ -5277,6 +5639,7 @@ export class AgentSessionsService {
           harness: harnessIdOf(agent),
           agentId: session.agent_id,
           recovery: agent.recovery ?? "continue",
+          ...(agent.stall ? { stallMinutes: agent.stall.minutes } : {}),
           ...(agent.unavailable
             ? { unavailable: { message: agent.unavailable } }
             : {}),
@@ -5729,7 +6092,26 @@ export class AgentSessionsService {
       session,
       agent,
     );
+    // A harness in the sandbox never starts on a workspace with no agent
+    // container (ADR 0332). Checked here, at attempt start, and nowhere
+    // else, so finishing a turn, opening the workspace or delivering its
+    // secrets never stops on it; the chat's turn waits for the workspace to
+    // be given back and admitted again before it gets here.
+    const separated = runtime.allocation?.policy.sandbox?.separateCommands;
+    const refused = separatedHarnessRefusal({
+      placement: agent.harness.placement,
+      separateCommands: separated,
+    });
+    if (refused) throw new Error(refused);
     const notes: string[] = [];
+    // Given back for its new shape (ADR 0332): a contained agent's work
+    // never left the old one, as when it is made again for its setup.
+    if (
+      session.workspace_released_reason === "replaced" &&
+      !session.sandbox_id &&
+      agent.sandboxing === "contained"
+    )
+      notes.push(RESHAPED_CONTAINED_NOTE);
     const ownerAuthored = await this.ownerAuthoredTurn({
       projectId,
       owner: session.external_user_id,
@@ -6054,6 +6436,12 @@ export class AgentSessionsService {
             projectChat: isProjectPrincipal(session.external_user_id),
           });
           if (volumes) notes.push(volumes);
+          // What its caches hold, or that this machine has none yet (ADR 0334).
+          const caches = await cacheNote({
+            db: this.db,
+            allocation: runtime.allocation,
+          });
+          if (caches) notes.push(caches);
         }
         // The rest of setup, once the sandbox is narrow and holds the
         // session's work: the owner's own, or all of it without a network of
@@ -6361,6 +6749,17 @@ export class AgentSessionsService {
             }),
           }
         : {}),
+      // Its shell runs where the pull request's code runs, not beside it
+      // (ADR 0332); an adapter that cannot redirect it refuses.
+      ...(agent.harness.placement === "sandbox" && separated
+        ? {
+            commands: {
+              socket: SEPARATE_COMMANDS_SOCKET,
+              // Its own user beside the runner, which keeps the grants.
+              harness: { ...SEPARATE_HARNESS },
+            },
+          }
+        : {}),
       options: protocolJson(agent.options ?? {}),
     };
     const harness = agent.harness;
@@ -6384,7 +6783,8 @@ export class AgentSessionsService {
               ...(provider && sandboxProviderId
                 ? {
                     sandbox: {
-                      provider,
+                      // Its tools reach the command side alone (ADR 0332).
+                      provider: withCommandSideProcesses(provider),
                       sandboxId: sandboxProviderId,
                       workingDirectory,
                       // Its commands load the gateway's variables and the
@@ -6993,6 +7393,7 @@ export class AgentSessionsService {
         topology: agent.topology,
       },
       ...(agent.signIn ? { signIn: agent.signIn } : {}),
+      harnessInSandbox: agent.harness.placement === "sandbox",
     });
     const admitted = "admission" in placed ? placed.admission : undefined;
     const environmentName = admitted
@@ -7506,6 +7907,10 @@ export class AgentSessionsService {
       allocationId: input.allocationId,
     });
     if (allocation?.status !== "active") return [];
+    // Where commands run apart (ADR 0332) a grant exists only where it is
+    // used: the agent's model beside it, the listed bindings with its
+    // commands, and nothing for the rest.
+    const separate = allocation.policy.sandbox?.separateCommands;
     const bindings = (allocation.policy.connections ?? []).flatMap(
       (binding) => {
         const remoteBaseUrls = gateway.remoteBaseUrls(binding.providerKind);
@@ -7522,6 +7927,11 @@ export class AgentSessionsService {
         const http =
           binding.capabilities.some(isHttpMethodCapability) &&
           gateway.servesHttp(binding.providerKind);
+        if (separate && !api && !separate.connections.includes(binding.alias))
+          return [];
+        // No agent container, no model grant: nothing in the sandbox
+        // would read it (ADR 0332).
+        if (separate && api && !separate.agentResources) return [];
         return git || api || http
           ? [{ alias: binding.alias, git, api, http }]
           : [];
@@ -7597,10 +8007,27 @@ export class AgentSessionsService {
         });
       }
     }
+    // Commands apart from the agent reach only the bindings their
+    // Environment lists for them, and never a model (ADR 0332).
     await configureSandboxGateway({
       provider: input.provider,
       sandboxId: input.sandboxProviderId,
       gatewayGitUrl: `${url}/git`,
+      ...(separate
+        ? {
+            commands: {
+              aliases: bindings
+                .filter(
+                  (binding) =>
+                    !binding.api &&
+                    separate.connections.includes(binding.alias),
+                )
+                .map((binding) => binding.alias),
+              // No agent container for a harness outside the sandbox.
+              agentSide: separate.agentResources !== undefined,
+            },
+          }
+        : {}),
       grants: issued,
       gitAliases: bindings.flatMap((binding) =>
         binding.git
@@ -8922,14 +9349,11 @@ export class AgentSessionsService {
           : {}),
         owner: placementOwner(row.external_user_id),
       });
-      const selected = runtime?.sandboxProvider;
-      if (!selected) return;
-      const provider = allocationSandboxProvider({
-        db: this.db,
+      const provider = this.workspaceProvider(
         allocation,
-        provider: selected,
-        ...this.localFence(allocation),
-      });
+        runtime?.sandboxProvider,
+      );
+      if (!provider) return;
       await this.withdrawPersonalEnvironment({
         projectId: input.projectId,
         session: {
@@ -9238,6 +9662,7 @@ export class AgentSessionsService {
                 topology: mirrorAgent.topology,
               },
               ...(mirrorAgent.signIn ? { signIn: mirrorAgent.signIn } : {}),
+              harnessInSandbox: mirrorAgent.harness.placement === "sandbox",
             })
           : undefined;
         const requirements = mirrorAgent?.connectionRequirements ?? [];
@@ -9542,6 +9967,10 @@ export class AgentSessionsService {
           topology: nextAgent.topology,
         },
         ...(nextAgent.signIn ? { signIn: nextAgent.signIn } : {}),
+        // Shaped for its shared subsessions' agents too (ADR 0322).
+        harnessInSandbox:
+          nextAgent.harness.placement === "sandbox" ||
+          (await this.sharerHarnessInSandbox({ projectId, sessionId })),
       });
       const requirements = nextAgent.connectionRequirements ?? [];
       if (requirements.length > 0 && !this.connectionAdmission) {
@@ -10714,13 +11143,36 @@ export class AgentSessionsService {
       throw refuse(
         `${targetAgentId} copies what it changes out of its sandbox, and this chat's workspace is contained, so it cannot work there.`,
       );
-    if (hostAgentId === targetAgentId || !host.allocation_id) return host;
-    // Another agent runs on the machine as the workspace was admitted there.
-    const allocation = await this.executionAllocations.get({
-      identity,
-      allocationId: host.allocation_id,
-    });
-    if (allocation?.status !== "active") return host;
+    // The workspace as it is now, when it is up: another agent runs on the
+    // machine as it was admitted there.
+    const live = host.allocation_id
+      ? await this.executionAllocations.get({
+          identity,
+          allocationId: host.allocation_id,
+        })
+      : undefined;
+    const allocation = live?.status === "active" ? live : undefined;
+    // Where commands run apart, a workspace made for an agent outside its
+    // sandbox has no container for one that runs in it (ADR 0332). A live
+    // workspace answers from its own shape below; one given back, from
+    // the agents it will be made for again.
+    if (
+      !allocation &&
+      hostAgent.harness.placement !== "sandbox" &&
+      targetAgent.harness.placement === "sandbox" &&
+      host.environment_name &&
+      (await this.executionEnvironments
+        .separatesCommands({
+          identity,
+          projectId,
+          environment: host.environment_name,
+        })
+        .catch(() => false))
+    )
+      throw refuse(
+        `${targetAgentId} runs in its sandbox, and this chat's workspace is made for an agent that runs outside it, with no container beside its commands for one that runs in it (ADR 0332).`,
+      );
+    if (hostAgentId === targetAgentId || !allocation) return host;
     const fit = await this.admitOnAllocation({
       identity,
       projectId,
@@ -10733,6 +11185,10 @@ export class AgentSessionsService {
     if ("refused" in fit)
       throw refuse(
         `${targetAgentId} cannot run in this chat's workspace: ${fit.refused}`,
+      );
+    if (fit.mismatch === "sandbox")
+      throw refuse(
+        `${targetAgentId} runs in its sandbox, and this chat's workspace was made for an agent that runs outside it, with no container beside its commands for one that runs in it (ADR 0332).`,
       );
     if (fit.mismatch)
       throw refuse(
@@ -11363,6 +11819,13 @@ export class AgentSessionsService {
         topology: agent.topology,
       },
       ...(agent.signIn ? { signIn: agent.signIn } : {}),
+      // Shaped for every agent working in it: the chat's own and those of
+      // its shared subsessions (ADRs 0322, 0332).
+      harnessInSandbox: await this.harnessInSandboxFor({
+        projectId,
+        sessionId: session.id,
+        agentId: session.agent_id,
+      }),
     };
     const placed = options.wait
       ? await this.executionEnvironments.admitOrWait({
@@ -12021,45 +12484,433 @@ export class AgentSessionsService {
         lastUsedAt,
       );
       if (now.getTime() - idleSince < minutes * 60_000) continue;
-      // Locks the chat and is refused while it has work; turns then wait
-      // until the workspace is saved and released (ADR 0192).
-      const claim = await claimAllocationMaintenance({
-        db: this.db,
-        allocationId: row.allocation_id,
-        status: "active",
-        sessionId: row.id,
-      });
-      if (!claim) continue;
-      try {
-        if (
-          await withAllocationMaintenance({
-            db: this.db,
-            claim,
-            work: (held) =>
-              this.releaseIdleWorkspace({
-                claim,
-                held,
-                identity,
-                projectId: row.project_id,
-                sessionId: row.id,
-                agentId: row.agent_id,
-                allocationId: row.allocation_id,
-                sandboxProviderId: row.sandbox_provider_id,
-                owner: placementOwner(row.external_user_id),
-                idleSince: new Date(now.getTime() - minutes * 60_000),
-              }),
-          })
-        )
-          released.push(row.id);
-      } catch (error) {
-        // Nothing is released when the workspace could not be saved first.
-        console.warn(
-          `[catamorphic] Idle workspace of session ${row.id} kept`,
-          error,
-        );
-      }
+      if (
+        (await this.giveBackWorkspace({
+          identity,
+          row,
+          idleSince: new Date(now.getTime() - minutes * 60_000),
+        })) === true
+      )
+        released.push(row.id);
     }
     return released.length;
+  }
+
+  /**
+   * Give one chat's workspace back under this host's maintenance claim
+   * (ADR 0192), saving it first: idle, or with `reshape` because its shape
+   * no longer fits the agents working in it (ADR 0332). Refused while
+   * anything uses it.
+   */
+  private async giveBackWorkspace(input: {
+    identity: Identity;
+    row: {
+      id: string;
+      project_id: string;
+      agent_id: string | null;
+      allocation_id: string;
+      sandbox_provider_id: string | null;
+      external_user_id: string;
+    };
+    idleSince: Date;
+    reshape?: boolean;
+  }): Promise<true | WorkspaceHold> {
+    const { row } = input;
+    // Locks the chat and is refused while it has work; turns then wait
+    // until the workspace is saved and released (ADR 0192).
+    const claim = await claimAllocationMaintenance({
+      db: this.db,
+      allocationId: row.allocation_id,
+      status: "active",
+      sessionId: row.id,
+      ...(input.reshape ? { waitingTurns: true } : {}),
+    });
+    if (!claim) return this.workspaceHold(row.allocation_id);
+    try {
+      return await withAllocationMaintenance({
+        db: this.db,
+        claim,
+        work: (held) =>
+          this.releaseIdleWorkspace({
+            claim,
+            held,
+            identity: input.identity,
+            projectId: row.project_id,
+            sessionId: row.id,
+            agentId: row.agent_id,
+            allocationId: row.allocation_id,
+            sandboxProviderId: row.sandbox_provider_id,
+            owner: placementOwner(row.external_user_id),
+            idleSince: input.idleSince,
+            ...(input.reshape ? { reshape: true } : {}),
+          }),
+      });
+    } catch (error) {
+      // Nothing is released when the workspace could not be saved first.
+      console.warn(`[catamorphic] Workspace of session ${row.id} kept`, error);
+      return { kind: "saving" };
+    }
+  }
+
+  /** What holds a workspace whose claim was refused (ADR 0332). */
+  private async workspaceHold(allocationId: string): Promise<WorkspaceHold> {
+    return (await reshapeTurnHold(this.db, allocationId)) ?? { kind: "saving" };
+  }
+
+  /**
+   * Whether a chat's workspace has no agent container though an agent
+   * working in it (the chat's own, or a shared subsession's) runs its
+   * harness in the sandbox (ADR 0332).
+   */
+  private async workspaceMisshapen(input: {
+    projectId: string;
+    sessionId: string;
+    agentId: string | null;
+    separateCommands: { agentResources?: unknown } | undefined;
+  }): Promise<boolean> {
+    if (!input.separateCommands || input.separateCommands.agentResources)
+      return false;
+    return this.harnessInSandboxFor(input);
+  }
+
+  /**
+   * Whether any agent working in a chat's workspace, its own or a shared
+   * subsession's, runs its harness in the sandbox (ADR 0332).
+   */
+  private async harnessInSandboxFor(input: {
+    projectId: string;
+    sessionId: string;
+    agentId: string | null;
+  }): Promise<boolean> {
+    const own = await this.resolveAgent(input.agentId, input.projectId).catch(
+      () => undefined,
+    );
+    return (
+      own?.harness.placement === "sandbox" ||
+      (await this.sharerHarnessInSandbox(input))
+    );
+  }
+
+  /** Whether a shared subsession of the chat runs its harness in the sandbox. */
+  private async sharerHarnessInSandbox(input: {
+    projectId: string;
+    sessionId: string;
+  }): Promise<boolean> {
+    const sharers = await this.db
+      .selectFrom("agent_sessions")
+      .select("agent_id")
+      .where("workspace_session_id", "=", input.sessionId)
+      .where("status", "=", "active")
+      .execute();
+    for (const sharer of sharers) {
+      const agent = await this.resolveAgent(
+        sharer.agent_id,
+        input.projectId,
+      ).catch(() => undefined);
+      if (agent?.harness.placement === "sandbox") return true;
+    }
+    return false;
+  }
+
+  /**
+   * A chat with a turn due whose workspace no longer fits the agents
+   * working in it (ADR 0332): given back now through the same release an
+   * idle workspace takes. While something holds it, the chat's waiting
+   * turns show what, wait (5 seconds, growing to a minute) and look again;
+   * after the reshape deadline, or saves that keep failing, the turn fails
+   * saying what kept the workspace and how to free it.
+   */
+  private async giveBackForShape(input: {
+    session: SessionRow;
+    allocation: ExecutionAllocation;
+  }): Promise<"fits" | "released" | "waiting" | "failed"> {
+    const { allocation } = input;
+    const sessionId = input.session.id;
+    // A shared subsession's workspace is its workspace session's, shaped
+    // for every agent working in it (ADR 0322).
+    const owner = input.session.workspace_session_id
+      ? await this.db
+          .selectFrom("agent_sessions")
+          .selectAll()
+          .where("id", "=", input.session.workspace_session_id)
+          .executeTakeFirst()
+      : input.session;
+    const fits = async () => {
+      // As the row is now, not as this drain first read it.
+      const row = await this.db
+        .selectFrom("agent_sessions")
+        .select(["reshape_waiting_since", "reshape_look_at"])
+        .where("id", "=", sessionId)
+        .executeTakeFirst();
+      if (row?.reshape_waiting_since || row?.reshape_look_at)
+        await this.endReshapeWait(sessionId);
+      return "fits" as const;
+    };
+    if (!owner || owner.allocation_id !== allocation.id) return fits();
+    if (
+      !(await this.workspaceMisshapen({
+        projectId: owner.project_id,
+        sessionId: owner.id,
+        agentId: owner.agent_id,
+        separateCommands: allocation.policy.sandbox?.separateCommands,
+      }))
+    )
+      return fits();
+    // The chat's wait as the database keeps it, the same for every replica
+    // and restart: a message sent meanwhile waits with it, never ahead of
+    // it or from its own start. It is current while a turn that already
+    // waited at its last look still waits; one whose turns all left (they
+    // were stopped) is over, and the next turn waits from its own start.
+    const current = (eb: ExpressionBuilder<DB, "agent_sessions">) =>
+      eb.and([
+        eb("agent_sessions.reshape_waiting_since", "is not", null),
+        eb.exists(
+          eb
+            .selectFrom("agent_turns")
+            .select("agent_turns.id")
+            .whereRef("agent_turns.session_id", "=", "agent_sessions.id")
+            .where("agent_turns.status", "in", ["queued", "preparing"])
+            .whereRef(
+              "agent_turns.created_at",
+              "<=",
+              "agent_sessions.reshape_look_at",
+            ),
+        ),
+      ]);
+    const wait = await this.db
+      .selectFrom("agent_sessions")
+      .select((eb) => [
+        current(eb).as("current"),
+        sql<boolean>`coalesce(reshape_look_at > now(), false)`.as("resting"),
+      ])
+      .where("id", "=", sessionId)
+      .executeTakeFirstOrThrow();
+    if (wait.current && wait.resting) {
+      await this.holdForReshape({ sessionId });
+      return "waiting";
+    }
+    // The look starts, recorded before the save it waits on: however long
+    // that takes, the deadline and the saves that failed count from here.
+    await this.db
+      .updateTable("agent_sessions")
+      .set((eb) => ({
+        reshape_waiting_since: sql<Date>`case when ${current(eb)} then reshape_waiting_since else now() end`,
+        reshape_save_failures: sql<number>`case when ${current(eb)} then reshape_save_failures else 0 end`,
+        reshape_look_at: sql<Date>`now()`,
+      }))
+      .where("id", "=", sessionId)
+      .execute();
+    const placed = await this.db
+      .selectFrom("execution_allocations")
+      .innerJoin("projects", "projects.id", "execution_allocations.project_id")
+      .select([
+        "projects.tenant_id",
+        "execution_allocations.sandbox_provider_id",
+      ])
+      .where("execution_allocations.id", "=", allocation.id)
+      .executeTakeFirstOrThrow();
+    // Saved from the sandbox the chat works in: an Allocation records its
+    // sandbox only on a machine's node.
+    const sandbox = owner.sandbox_id
+      ? await this.db
+          .selectFrom("project_sandboxes")
+          .select("provider_id")
+          .where("id", "=", owner.sandbox_id)
+          .executeTakeFirst()
+      : undefined;
+    const outcome = await this.giveBackWorkspace({
+      identity: {
+        tenantId: placed.tenant_id,
+        externalUserId: PROJECT_PRINCIPAL_ID,
+        scope: [],
+      },
+      row: {
+        id: owner.id,
+        project_id: owner.project_id,
+        agent_id: owner.agent_id,
+        allocation_id: allocation.id,
+        sandbox_provider_id:
+          placed.sandbox_provider_id ?? sandbox?.provider_id ?? null,
+        external_user_id: owner.external_user_id,
+      },
+      idleSince: new Date(),
+      reshape: true,
+    });
+    if (outcome === true) {
+      await this.endReshapeWait(sessionId);
+      return "released";
+    }
+    // The look ends, in one statement: saves in a row that failed, and
+    // when to look again: half the time waited, 5 seconds at first, at
+    // most a minute.
+    const failedSave = outcome.kind === "sync";
+    const recorded = await this.db
+      .updateTable("agent_sessions")
+      .set({
+        reshape_save_failures: failedSave
+          ? sql<number>`reshape_save_failures + 1`
+          : 0,
+        reshape_look_at: sql<Date>`now() + make_interval(secs => least(${sql.lit(RESHAPE_RETRY_MAX_SECONDS)}, greatest(${sql.lit(RESHAPE_RETRY_SECONDS)}, round(extract(epoch from now() - reshape_waiting_since) / 2)))::float8)`,
+      })
+      .where("id", "=", sessionId)
+      .returning([
+        "reshape_save_failures",
+        sql<boolean>`now() - reshape_waiting_since >= make_interval(secs => ${this.reshapeWaitMs / 1000})`.as(
+          "expired",
+        ),
+      ])
+      .executeTakeFirstOrThrow();
+    const agent = await this.resolveAgent(owner.agent_id, owner.project_id)
+      .then((resolved) => resolved.name ?? resolved.id)
+      .catch(() => "its agents");
+    const failure =
+      failedSave && recorded.reshape_save_failures >= RESHAPE_SYNC_TRIES
+        ? `This chat's workspace could not be saved before it was made again for ${agent}: ${outcome.error}`
+        : recorded.expired
+          ? `This chat's workspace could not be made again for ${agent} within ${formatWaitMinutes(this.reshapeWaitMs)}: ${workspaceHoldText(outcome)} kept it. ${workspaceHoldRemedy(outcome)}`
+          : undefined;
+    if (failure) {
+      // Every message waiting with it fails at the same deadline.
+      while (
+        await this.engine.runNext({
+          sessionId,
+          ...(this.workerNode ? { localNode: this.workerNode } : {}),
+          refusal: failure,
+        })
+      );
+      await this.endReshapeWait(sessionId);
+      return "failed";
+    }
+    await this.holdForReshape({
+      sessionId,
+      activity: `${RESHAPE_ACTIVITY} for ${agent}: ${workspaceHoldText(outcome)} keeps it`,
+    });
+    return "waiting";
+  }
+
+  /**
+   * Move a chat's turns already due to when it looks again for its
+   * reshaped workspace (ADR 0332), and show its waiting turns what holds
+   * it: `activity`, or what its other waiting turns show. A turn waiting
+   * on a provider's backoff keeps its own time.
+   */
+  private async holdForReshape(input: {
+    sessionId: string;
+    activity?: string;
+  }): Promise<void> {
+    await this.db.transaction().execute(async (trx) => {
+      await this.log.lock(trx, input.sessionId);
+      const rows = await trx
+        .selectFrom("agent_turns")
+        .selectAll()
+        .where("session_id", "=", input.sessionId)
+        .where(pendingForReshape())
+        .forUpdate()
+        .execute();
+      const due = rows.filter((row) => row.status === "queued");
+      if (due.length > 0)
+        await trx
+          .updateTable("agent_turns")
+          .set({
+            available_at: (eb) =>
+              eb
+                .selectFrom("agent_sessions")
+                .select(sql<Date>`coalesce(reshape_look_at, now())`.as("at"))
+                .where("id", "=", input.sessionId),
+          })
+          .where(
+            "id",
+            "in",
+            due.map((row) => row.id),
+          )
+          .execute();
+      const activity =
+        input.activity ??
+        (
+          await trx
+            .selectFrom("agent_turns")
+            .select("activity")
+            .where("session_id", "=", input.sessionId)
+            .where("status", "=", "queued")
+            .where("activity", "like", `${RESHAPE_ACTIVITY}%`)
+            .executeTakeFirst()
+        )?.activity ??
+        undefined;
+      if (!activity) return;
+      const now = new Date().toISOString();
+      const events: SessionEvent[] = rows
+        .filter((row) => row.activity !== activity)
+        .map((row) => ({
+          type: "turn.changed",
+          turn: {
+            ...turnFromRow(row),
+            activity,
+            activityAt: now,
+            updatedAt: now,
+          },
+        }));
+      if (events.length > 0)
+        await this.log.append(trx, { sessionId: input.sessionId, events });
+    });
+  }
+
+  /**
+   * The chat's reshape wait is over (ADR 0332): its workspace was given
+   * back, fits again, or the wait failed. Turns it moved are due again
+   * (so they run in order), what they showed of it is cleared (a chat that
+   * now waits for a machine says so instead), and the wait is forgotten.
+   */
+  private async endReshapeWait(sessionId: string): Promise<void> {
+    await this.db.transaction().execute(async (trx) => {
+      await this.log.lock(trx, sessionId);
+      await trx
+        .updateTable("agent_turns")
+        .set({ available_at: sql<Date>`now()` })
+        .where("session_id", "=", sessionId)
+        .where("status", "=", "queued")
+        .where("available_at", ">", sql<Date>`now()`)
+        .where((eb) =>
+          eb(
+            "available_at",
+            "=",
+            eb
+              .selectFrom("agent_sessions")
+              .select(sql<Date>`reshape_look_at`.as("at"))
+              .where("id", "=", sessionId),
+          ),
+        )
+        .execute();
+      const rows = await trx
+        .selectFrom("agent_turns")
+        .selectAll()
+        .where("session_id", "=", sessionId)
+        .where("status", "in", ["queued", "preparing"])
+        .where("activity", "like", `${RESHAPE_ACTIVITY}%`)
+        .execute();
+      const now = new Date().toISOString();
+      if (rows.length > 0)
+        await this.log.append(trx, {
+          sessionId,
+          events: rows.map((row) => ({
+            type: "turn.changed",
+            turn: {
+              ...turnFromRow(row),
+              activity: null,
+              activityAt: null,
+              updatedAt: now,
+            },
+          })),
+        });
+      await trx
+        .updateTable("agent_sessions")
+        .set({
+          reshape_waiting_since: null,
+          reshape_look_at: null,
+          reshape_save_failures: 0,
+        })
+        .where("id", "=", sessionId)
+        .execute();
+    });
   }
 
   private async releaseIdleWorkspace(input: {
@@ -12077,13 +12928,24 @@ export class AgentSessionsService {
     owner?: string | null;
     /** Use since this keeps the workspace. */
     idleSince: Date;
-  }): Promise<boolean> {
+    /**
+     * Its shape no longer fits the agents working in it (ADR 0332): given
+     * back with the chat's queued turns waiting for it, not after the idle
+     * timer, but never while a turn runs or a person uses it now.
+     */
+    reshape?: boolean;
+  }): Promise<true | WorkspaceHold> {
     const { identity, projectId, sessionId } = input;
     const allocation = await this.executionAllocations.get({
       identity,
       allocationId: input.allocationId,
     });
-    if (allocation?.status !== "active") return false;
+    // Already given back: there is nothing left to hold.
+    if (allocation?.status !== "active")
+      return input.reshape ? true : { kind: "saving" };
+    const usedSince = input.reshape
+      ? new Date(Date.now() - IN_USE_SECONDS * 1000)
+      : input.idleSince;
     // A person who opened a terminal or a preview after the sweep looked
     // keeps it (ADR 0209); they mark their use before they start anything.
     const used = await this.db
@@ -12100,9 +12962,9 @@ export class AgentSessionsService {
           eb("user.workspace_session_id", "=", sessionId),
         ]),
       )
-      .where("session_workspace_use.used_at", ">", input.idleSince)
+      .where("session_workspace_use.used_at", ">", usedSince)
       .executeTakeFirst();
-    if (used) return false;
+    if (used) return { kind: "person" };
     const agent = await this.resolveAgent(input.agentId, projectId).catch(
       () => undefined,
     );
@@ -12117,39 +12979,142 @@ export class AgentSessionsService {
           : {}),
         ...(input.owner !== undefined ? { owner: input.owner } : {}),
       });
-      const selected = runtime?.sandboxProvider;
-      // Only the instance that reaches the machine can save its workspace.
-      if (!selected) return false;
-      const provider = allocationSandboxProvider({
-        db: this.db,
+      // Only the instance that reaches the machine can save its workspace,
+      // reached as the chat's turns reach it (a machine with no node keeps
+      // no record of its sandbox on the Allocation).
+      const provider = this.workspaceProvider(
         allocation,
-        provider: selected,
-        ...this.localFence(allocation),
-      });
+        runtime?.sandboxProvider,
+      );
+      if (!provider) return { kind: "machine" };
       await input.held();
       const status = await provider.getSandboxStatus(input.sandboxProviderId);
       if (status === "stopped" || status === "archived")
         await provider.startSandbox(input.sandboxProviderId);
-      // Throws when the changes cannot be read: the workspace is kept.
-      await input.held();
-      await syncSandboxChanges({
-        provider,
-        projectManager: this.projectManager,
-        identity,
-        projectId,
-        sessionId,
-        sandboxProviderId: input.sandboxProviderId,
-        projectDir: this.projectDir(provider),
-      });
-      await input.held();
-      await this.projectManager.checkpointSession({
-        tenantId: identity.tenantId,
-        projectId,
-        sessionId,
-        message: "Save the workspace before releasing it while idle",
-        author: CHECKPOINT_AUTHOR,
-      });
+      // Saved where the chat's turns save: its own copy, or its owner's
+      // draft, committed as a turn commits it.
+      const chat = await this.db
+        .selectFrom("agent_sessions")
+        .select(["workspace", "external_user_id"])
+        .where("id", "=", sessionId)
+        .executeTakeFirst();
+      const sessionCopy = chat ? this.usesSessionCopy(chat) : true;
+      const message = input.reshape
+        ? "Save the workspace before giving it back for its new shape"
+        : "Save the workspace before releasing it while idle";
+      try {
+        await input.held();
+        await syncSandboxChanges({
+          provider,
+          projectManager: this.projectManager,
+          identity:
+            sessionCopy || !chat
+              ? identity
+              : { ...identity, externalUserId: chat.external_user_id },
+          projectId,
+          ...(sessionCopy ? { sessionId } : {}),
+          sandboxProviderId: input.sandboxProviderId,
+          projectDir: this.projectDir(provider),
+        });
+        await input.held();
+        if (sessionCopy)
+          await this.projectManager.checkpointSession({
+            tenantId: identity.tenantId,
+            projectId,
+            sessionId,
+            message,
+            author: CHECKPOINT_AUTHOR,
+          });
+        else if (chat) {
+          const repo = await this.projectManager.openDraft({
+            tenantId: identity.tenantId,
+            projectId,
+            externalUserId: chat.external_user_id,
+          });
+          try {
+            await checkpointDraft({ repo, message, author: CHECKPOINT_AUTHOR });
+          } finally {
+            await repo.dispose();
+          }
+        }
+      } catch (error) {
+        if (error instanceof AllocationMaintenanceLostError) throw error;
+        // The changes could not be read: the workspace is kept.
+        console.warn(
+          `[catamorphic] Workspace of session ${sessionId} not saved`,
+          error,
+        );
+        return {
+          kind: "sync",
+          error: error instanceof Error ? error.message : String(error),
+        };
+      }
     }
+    // What keeps it now, under this host's claim and the chat's lock: the
+    // chat or its workspace moved, a turn runs or waits for an answer in a
+    // session sharing it, or a person uses it. Asked again before anything
+    // is withdrawn and again as it is released.
+    const recheck = async (
+      trx: Transaction<DB>,
+    ): Promise<true | WorkspaceHold> => {
+      const current = await trx
+        .selectFrom("agent_sessions")
+        .select(["status", "allocation_id"])
+        .where("id", "=", sessionId)
+        .forUpdate()
+        .executeTakeFirst();
+      if (
+        current?.status !== "active" ||
+        current.allocation_id !== allocation.id
+      )
+        return { kind: "saving" };
+      // Released only while this host still holds the claim, so no turn
+      // was claimed since it began.
+      const claimed = await trx
+        .selectFrom("execution_allocations")
+        .select("id")
+        .where("id", "=", allocation.id)
+        .where("maintenance_claim", "=", input.claim.token)
+        .where("maintenance_claimed_until", ">", sql<Date>`now()`)
+        .forUpdate()
+        .executeTakeFirst();
+      if (!claimed) throw new AllocationMaintenanceLostError();
+      // A queued turn of the chat waits for a reshaped workspace; a turn
+      // at work in any session sharing it keeps it (ADR 0322).
+      if (input.reshape) {
+        const hold = await reshapeTurnHold(trx, allocation.id);
+        if (hold) return hold;
+      } else {
+        const busy = await trx
+          .selectFrom("agent_turns")
+          .select("id")
+          .where("session_id", "=", sessionId)
+          .where("status", "in", ["queued", "held", ...ACTIVE_TURN_STATUSES])
+          .executeTakeFirst();
+        if (busy) return { kind: "turn" };
+      }
+      const using = await trx
+        .selectFrom("session_workspace_use")
+        .innerJoin(
+          "agent_sessions as user",
+          "user.id",
+          "session_workspace_use.session_id",
+        )
+        .select("session_workspace_use.used_at")
+        .where((eb) =>
+          eb.or([
+            eb("user.id", "=", sessionId),
+            eb("user.workspace_session_id", "=", sessionId),
+          ]),
+        )
+        .where("session_workspace_use.used_at", ">", usedSince)
+        .executeTakeFirst();
+      if (using) return { kind: "person" };
+      return true;
+    };
+    await input.held();
+    const free = await this.db.transaction().execute((trx) => recheck(trx));
+    if (free !== true) return free;
     // Personal logins and files leave with the workspace (ADR 0184); the
     // next turn delivers them again into its new one.
     await input.held();
@@ -12162,39 +13127,12 @@ export class AgentSessionsService {
         sandboxProviderId: input.sandboxProviderId,
       });
     const released = await this.db.transaction().execute(async (trx) => {
-      const current = await trx
-        .selectFrom("agent_sessions")
-        .select(["status", "allocation_id"])
-        .where("id", "=", sessionId)
-        .forUpdate()
-        .executeTakeFirst();
-      if (
-        current?.status !== "active" ||
-        current.allocation_id !== allocation.id
-      )
-        return false;
-      // Released only while this host still holds the claim, so no turn
-      // was claimed since it began.
-      const claimed = await trx
-        .selectFrom("execution_allocations")
-        .select("id")
-        .where("id", "=", allocation.id)
-        .where("maintenance_claim", "=", input.claim.token)
-        .where("maintenance_claimed_until", ">", sql<Date>`now()`)
-        .forUpdate()
-        .executeTakeFirst();
-      if (!claimed) throw new AllocationMaintenanceLostError();
-      const busy = await trx
-        .selectFrom("agent_turns")
-        .select("id")
-        .where("session_id", "=", sessionId)
-        .where("status", "in", ["queued", "held", ...ACTIVE_TURN_STATUSES])
-        .executeTakeFirst();
-      if (busy) return false;
+      const still = await recheck(trx);
+      if (still !== true) return still;
       await this.executionAllocations.release({
         identity,
         allocationId: allocation.id,
-        reason: "idle",
+        reason: input.reshape ? "replaced" : "idle",
         transaction: trx,
       });
       await trx
@@ -12206,11 +13144,11 @@ export class AgentSessionsService {
         db: trx,
         sessionId,
         change: "released",
-        reason: "idle",
+        reason: input.reshape ? "replaced" : "idle",
       });
-      return true;
+      return true as const;
     });
-    if (!released) return false;
+    if (released !== true) return released;
     await this.connectionGrants
       ?.revokeAllocation({ allocationId: allocation.id })
       .catch(() => {});
@@ -13243,6 +14181,7 @@ export class AgentSessionsService {
             topology: agent.topology,
           },
           ...(agent.signIn ? { signIn: agent.signIn } : {}),
+          harnessInSandbox: agent.harness.placement === "sandbox",
           allowed: agent.environment?.allowed,
           preferred: agent.environment?.preferred,
         });
@@ -13710,7 +14649,7 @@ export class AgentSessionsService {
     agent: RegisteredCodingAgent;
   }): Promise<{
     admitted: EnvironmentAdmission;
-    mismatch?: "resources" | "binding";
+    mismatch?: "resources" | "binding" | "sandbox";
   }> {
     const { allocation, agent } = input;
     const admitted = await this.executionEnvironments.admit({
@@ -13727,6 +14666,7 @@ export class AgentSessionsService {
         topology: agent.topology,
       },
       ...(agent.signIn ? { signIn: agent.signIn } : {}),
+      harnessInSandbox: agent.harness.placement === "sandbox",
     });
     for (const key of ["cpuMillis", "memoryMb", "storageMb", "gpu"] as const) {
       const required = admitted.effectiveRequirements.resources?.[key];
@@ -13736,6 +14676,15 @@ export class AgentSessionsService {
     }
     if (admitted.binding.id !== allocation.bindingId)
       return { admitted, mismatch: "binding" };
+    // A harness in the sandbox needs the agent container a workspace made
+    // for one outside it lacks (ADR 0332).
+    if (
+      separatedHarnessRefusal({
+        placement: agent.harness.placement,
+        separateCommands: allocation.policy.sandbox?.separateCommands,
+      })
+    )
+      return { admitted, mismatch: "sandbox" };
     return { admitted };
   }
 
@@ -14186,7 +15135,7 @@ export class AgentSessionsService {
   // --- Dev sandbox lifecycle ---
 
   private projectDir(provider: SandboxProvider): string {
-    return `${provider.workspaceRoot}/project`;
+    return sandboxProjectDirectory({ workspaceRoot: provider.workspaceRoot });
   }
 
   /**
@@ -15210,6 +16159,15 @@ function waitFresh() {
 }
 
 /** Why a chat's turn did not run: it waited for a machine as long as allowed. */
+/** A wait's length as a sentence names it: "10 minutes", "30 seconds". */
+function formatWaitMinutes(ms: number): string {
+  const minutes = ms / 60_000;
+  if (Number.isInteger(minutes))
+    return `${minutes} minute${minutes === 1 ? "" : "s"}`;
+  const seconds = Math.round(ms / 1000);
+  return `${seconds} second${seconds === 1 ? "" : "s"}`;
+}
+
 function placementWaitExpired(wait: PlacementWait): string {
   const minutes = wait.limitMinutes ?? 0;
   const span = `${minutes} minute${minutes === 1 ? "" : "s"}`;
@@ -15375,6 +16333,8 @@ function withDefinitionPolicy(
       : {}),
     // The committed definition names its results (ADR 0323).
     ...(definition.results ? { results: definition.results } : {}),
+    // And how long its turns may be silent (ADR 0333).
+    ...(definition.stall ? { stall: definition.stall } : {}),
   };
 }
 
@@ -15642,4 +16602,21 @@ function answerMedia(
       .join("\n"),
     attachments: groups.flatMap(({ media }) => media),
   };
+}
+
+/**
+ * A provider whose processes are the command side's alone (ADR 0332), for
+ * a harness on the host whose tools start and follow background commands.
+ */
+function withCommandSideProcesses(provider: SandboxProvider): SandboxProvider {
+  const processes = provider.processes;
+  if (!processes) return provider;
+  const filtered = commandSideProcesses(processes);
+  return new Proxy(provider, {
+    get(target, property) {
+      if (property === "processes") return filtered;
+      const value: unknown = Reflect.get(target, property, target);
+      return typeof value === "function" ? value.bind(target) : value;
+    },
+  });
 }

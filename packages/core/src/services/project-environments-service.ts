@@ -192,6 +192,43 @@ const VolumeSchema = z.union([
   }),
 ]);
 
+/** The largest cache an Environment may declare, in MiB (1 TiB). */
+const MAX_CACHE_MB = 1024 * 1024;
+
+/** A cache's size limit unless it names one, in MiB (ADR 0334). */
+export const DEFAULT_CACHE_SIZE_MB = 10 * 1024;
+
+/** Minutes a cache's fill may run unless it says otherwise (ADR 0334). */
+export const DEFAULT_CACHE_FILL_TIMEOUT_MINUTES = 30;
+
+/**
+ * A directory every sandbox of the Environment mounts read only, which only
+ * a fill at a published revision writes (ADR 0334).
+ */
+const CacheSchema = z.strictObject({
+  path: VolumePathSchema,
+  sizeMb: z.number().int().positive().max(MAX_CACHE_MB).optional(),
+  fill: z.strictObject({
+    /** Run in the project folder of the published revision's checkout. */
+    command: z.string().min(1).max(16_384),
+    timeoutMinutes: z.number().int().positive().max(240).optional(),
+  }),
+});
+
+/** One spelling of a volume or cache path, to compare them. */
+function pathSegments(path: string): string[] {
+  return path.split("/").filter((part, index) => index === 0 || part !== "");
+}
+
+/** Whether two declared paths are the same directory or one holds the other. */
+function nested(left: string, right: string): boolean {
+  const a = pathSegments(left);
+  const b = pathSegments(right);
+  const shorter = a.length <= b.length ? a : b;
+  const longer = shorter === a ? b : a;
+  return shorter.every((part, index) => longer[index] === part);
+}
+
 /** `project.json`'s own secret declarations (ADR 0206). */
 const ProjectSecretDeclarationsSchema = z.record(
   SecretNameSchema,
@@ -282,12 +319,56 @@ const ProjectEnvironmentDefinitionSchema = z
         VolumeSchema,
       )
       .optional(),
+    /**
+     * Directories mounted read only into every sandbox, filled only from
+     * a published revision (ADR 0334).
+     */
+    caches: z
+      .record(
+        z
+          .string()
+          .regex(
+            VOLUME_NAME_PATTERN,
+            "Cache names are lowercase letters, digits and dashes",
+          ),
+        CacheSchema,
+      )
+      .optional(),
     /** Connection aliases, keyed by alias (ADR 0172). */
     connections: z
       .record(
         z.string().regex(CONNECTION_ALIAS_PATTERN),
         EnvironmentConnectionBindingSchema,
       )
+      .optional(),
+    /**
+     * Run the agent's commands apart from the agent (ADR 0332), reaching
+     * through the gateway only the bindings `connections` lists.
+     */
+    commands: z
+      .strictObject({
+        separate: z.boolean(),
+        connections: z
+          .array(z.string().regex(CONNECTION_ALIAS_PATTERN))
+          .max(64)
+          .optional(),
+        /**
+         * The agent container's own limits (ADR 0332); the Environment's
+         * `requirements.resources` are the command container's. 1 CPU and
+         * 2 GiB by default; the Allocation reserves both.
+         */
+        agentResources: z
+          .strictObject({
+            cpuMillis: z.number().int().positive().max(1_024_000).optional(),
+            memoryMb: z
+              .number()
+              .int()
+              .positive()
+              .max(4 * 1024 * 1024)
+              .optional(),
+          })
+          .optional(),
+      })
       .optional(),
   })
   .refine((definition) => !(definition.device && definition.pool), {
@@ -310,8 +391,59 @@ const ProjectEnvironmentDefinitionSchema = z
       Object.keys(definition.volumes ?? {}).length === 0,
     {
       message:
-        "A volume would carry what agents wrote into the next setup's wider network: an Environment whose setup has its own network keeps no volumes, so bake caches into its image instead",
+        "A volume would carry what agents wrote into the next setup's wider network: an Environment whose setup has its own network keeps no volumes; declare read-only caches, which only a trusted fill writes, instead",
       path: ["volumes"],
+    },
+  )
+  .superRefine((definition, ctx) => {
+    const commands = definition.commands;
+    if (!commands) return;
+    if (!commands.separate && commands.agentResources)
+      ctx.addIssue({
+        code: "custom",
+        path: ["commands", "agentResources"],
+        message:
+          "commands.agentResources limits the agent's own container, which exists only when commands run apart: set commands.separate",
+      });
+    if (!commands.separate && commands.connections?.length)
+      ctx.addIssue({
+        code: "custom",
+        path: ["commands", "connections"],
+        message:
+          "commands.connections names what commands reach when they run apart: set commands.separate",
+      });
+    for (const [index, alias] of (commands.connections ?? []).entries()) {
+      const binding = definition.connections?.[alias];
+      if (!binding)
+        ctx.addIssue({
+          code: "custom",
+          path: ["commands", "connections", index],
+          message: `'${alias}' is not one of this Environment's connections`,
+        });
+      else if (binding.model || binding.capabilities?.includes("model"))
+        ctx.addIssue({
+          code: "custom",
+          path: ["commands", "connections", index],
+          message: `'${alias}' is a model connection: the agent's model stays beside the agent, never with its commands`,
+        });
+    }
+  })
+  .refine(
+    (definition) => {
+      const paths = [
+        ...Object.values(definition.volumes ?? {}).map((volume) =>
+          typeof volume === "string" ? volume : volume.path,
+        ),
+        ...Object.values(definition.caches ?? {}).map((cache) => cache.path),
+      ];
+      return paths.every((path, index) =>
+        paths.slice(index + 1).every((other) => !nested(path, other)),
+      );
+    },
+    {
+      message:
+        "Volume and cache paths must not be the same directory or hold one another",
+      path: ["caches"],
     },
   )
   .refine(
@@ -366,6 +498,30 @@ export interface ProjectEnvironmentDefinition {
   setup?: EnvironmentSetup;
   /** Directories kept on the machine for each owner (ADR 0208). */
   volumes?: Readonly<Record<string, EnvironmentVolume>>;
+  /** Read-only directories only a trusted fill writes (ADR 0334). */
+  caches?: Readonly<Record<string, EnvironmentCache>>;
+  /**
+   * The agent's commands run apart from the agent (ADR 0332), reaching
+   * through the gateway only the bindings `connections` lists.
+   */
+  commands?: EnvironmentCommands;
+}
+
+/** One cache an Environment declares (ADR 0334). */
+export interface EnvironmentCache {
+  path: string;
+  /** The largest a fill may leave it; {@link DEFAULT_CACHE_SIZE_MB} by default. */
+  sizeMb?: number;
+  fill: { command: string; timeoutMinutes?: number };
+}
+
+/** How an Environment runs an agent's commands (ADR 0332). */
+export interface EnvironmentCommands {
+  separate: boolean;
+  /** Bindings of the Environment commands may reach; none by default. */
+  connections?: readonly string[];
+  /** The agent container's own limits; 1 CPU and 2 GiB by default. */
+  agentResources?: { cpuMillis?: number; memoryMb?: number };
 }
 
 /**
@@ -543,6 +699,27 @@ export function parseProjectEnvironmentPolicy(
   };
 }
 
+/** The Environment policy a manifest declares, or why it is invalid. */
+function parsePolicyContent(content: string | null): ProjectEnvironmentPolicy {
+  if (!content) {
+    return defaultEnvironmentPolicy();
+  }
+  try {
+    return parseProjectEnvironmentPolicy(JSON.parse(content));
+  } catch (cause) {
+    return {
+      environments: {},
+      entries: [],
+      secrets: {},
+      invalid: {
+        error: `Project manifest is not valid JSON: ${
+          cause instanceof Error ? cause.message : String(cause)
+        }`,
+      },
+    };
+  }
+}
+
 export class ProjectEnvironmentsService {
   constructor(
     private readonly db: Kysely<DB>,
@@ -552,8 +729,22 @@ export class ProjectEnvironmentsService {
   async list(args: {
     identity: Identity;
     projectId: string;
+    /**
+     * Read the program at this published commit instead of the newest
+     * `main`: a cache fill builds its sandbox from the revision that went
+     * live (ADR 0334).
+     */
+    commit?: string;
   }): Promise<ProjectEnvironmentPolicy> {
     await requireTenantProject(this.db, args.identity.tenantId, args.projectId);
+    if (args.commit !== undefined)
+      return parsePolicyContent(
+        await this.readAtCommit({
+          ...args,
+          commit: args.commit,
+          path: PROJECT_MANIFEST_PATH,
+        }),
+      );
     const publishedOnly =
       args.identity.scope !== undefined &&
       Boolean(
@@ -575,22 +766,24 @@ export class ProjectEnvironmentsService {
         publishedOnly,
       },
     );
-    if (!content) {
-      return defaultEnvironmentPolicy();
-    }
+    return parsePolicyContent(content);
+  }
+
+  /** A program file at one commit of the published program. */
+  private async readAtCommit(args: {
+    identity: Identity;
+    projectId: string;
+    commit: string;
+    path: string;
+  }): Promise<string | null> {
+    const repo = await this.projectManager.openPublished({
+      tenantId: args.identity.tenantId,
+      projectId: args.projectId,
+    });
     try {
-      return parseProjectEnvironmentPolicy(JSON.parse(content));
-    } catch (cause) {
-      return {
-        environments: {},
-        entries: [],
-        secrets: {},
-        invalid: {
-          error: `Project manifest is not valid JSON: ${
-            cause instanceof Error ? cause.message : String(cause)
-          }`,
-        },
-      };
+      return await readProgramFile(repo, args.commit, args.path);
+    } finally {
+      await repo.dispose();
     }
   }
 
@@ -598,6 +791,8 @@ export class ProjectEnvironmentsService {
     identity: Identity;
     projectId: string;
     name: string;
+    /** As for {@link list}. */
+    commit?: string;
   }): Promise<ProjectEnvironmentDefinition | undefined> {
     return (await this.list(args)).environments[args.name];
   }
@@ -610,8 +805,12 @@ export class ProjectEnvironmentsService {
     identity: Identity;
     projectId: string;
     path: string;
+    /** As for {@link list}: the Dockerfile of that same commit. */
+    commit?: string;
   }): Promise<string | null> {
     await requireTenantProject(this.db, args.identity.tenantId, args.projectId);
+    if (args.commit !== undefined)
+      return this.readAtCommit({ ...args, commit: args.commit });
     const publishedOnly =
       args.identity.scope !== undefined &&
       Boolean(

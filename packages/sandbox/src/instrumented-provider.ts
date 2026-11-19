@@ -13,6 +13,7 @@ import type {
   RuntimeHealth,
   RuntimeInvocation,
   RuntimeInvocationReceipt,
+  SandboxFileOpts,
   SandboxHandle,
   SandboxProvider,
   SandboxStatus,
@@ -142,6 +143,7 @@ export function instrumentSandboxProvider(
       sandboxId: string,
       files: Record<string, string>,
       basePath: string,
+      opts?: SandboxFileOpts,
     ): Promise<void> =>
       withSpan(
         {
@@ -153,17 +155,21 @@ export function instrumentSandboxProvider(
             "catamorphic.sandbox.file_count": Object.keys(files).length,
           },
         },
-        () => provider.uploadFiles(sandboxId, files, basePath),
+        () => provider.uploadFiles(sandboxId, files, basePath, opts),
       ),
 
-    downloadFile: (sandboxId: string, filePath: string): Promise<string> =>
+    downloadFile: (
+      sandboxId: string,
+      filePath: string,
+      opts?: SandboxFileOpts,
+    ): Promise<string> =>
       withSpan(
         {
           tracer,
           name: "sandbox.download_file",
           attributes: { ...base, "catamorphic.sandbox.id": sandboxId },
         },
-        () => provider.downloadFile(sandboxId, filePath),
+        () => provider.downloadFile(sandboxId, filePath, opts),
       ),
 
     gitClone: (

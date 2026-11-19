@@ -38,6 +38,7 @@ const targets = new Map<
   string,
   {
     permissions: string[];
+    documents: Array<{ path: string; access: "read" | "write" }>;
     secrets: string[];
     fails?: string;
     artifactId: string;
@@ -76,6 +77,8 @@ async function addCommit(
   commitSha: string,
   options: {
     permissions?: string[];
+    /** watchInbox's declared store paths at this commit (ADR 0335). */
+    documents?: Array<{ path: string; access: "read" | "write" }>;
     fails?: string;
     /** The secret names the project declares at this commit. */
     secrets?: string[];
@@ -138,6 +141,7 @@ async function addCommit(
       .execute();
   targets.set(commitSha, {
     permissions: options.permissions ?? [],
+    documents: options.documents ?? [],
     secrets: options.secrets ?? [],
     ...(options.fails ? { fails: options.fails } : {}),
     artifactId,
@@ -322,6 +326,7 @@ beforeAll(async () => {
         requirements: [],
         secrets: target.secrets,
         permissions: target.permissions,
+        documents: target.documents,
       };
     },
     ensureTriggerDefinitions: async () => undefined,

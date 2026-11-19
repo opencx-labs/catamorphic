@@ -57,8 +57,87 @@ export interface RunnerChannel {
   send(frames: readonly RunnerCommandFrame[]): Promise<void>;
   /** Frames after `cursor`, waiting up to `waitMs` for the first. */
   read(input: { cursor: number; waitMs: number }): Promise<RunnerRead>;
-  /** End the runner process (it should have exited already). */
-  kill(): Promise<void>;
+  /**
+   * End the runner process (it should have exited already): SIGTERM to
+   * its process group, which lets it stop its harness first; `force`
+   * sends SIGKILL to the group instead (ADR 0333).
+   */
+  kill(input?: { force?: boolean }): Promise<void>;
+  /**
+   * SIGKILL process groups its harness started on their own (ADR 0333),
+   * where the runner runs: none survives the attempt a restart ended.
+   */
+  killGroups(groups: readonly number[]): Promise<void>;
+}
+
+/** Only group ids a harness could have reported: whole numbers above 1. */
+function validGroups(groups: readonly number[]): number[] {
+  return groups.filter((group) => Number.isSafeInteger(group) && group > 1);
+}
+
+/** SIGKILL process groups on this machine (an in-process runner's harness). */
+export function killProcessGroups(groups: readonly number[]): void {
+  for (const group of validGroups(groups))
+    try {
+      process.kill(-group, "SIGKILL");
+    } catch {
+      // Gone already.
+    }
+}
+
+/**
+ * End a runner that will not end itself (a restart, ADR 0333): ask it to
+ * stop, wait up to `graceMs` for its process to exit, then kill its process
+ * group. An in-process runner has no process: it is told to stop and let go.
+ * Says whether it was seen gone.
+ */
+export async function endRunner(input: {
+  channel: RunnerChannel;
+  cursor: number;
+  graceMs: number;
+  /** Groups of its own its harness reported: killed however it ends. */
+  groups?: readonly number[];
+}): Promise<"exited" | "killed" | "unknown"> {
+  const { channel } = input;
+  const groups = input.groups ?? [];
+  // Whatever happens to the runner, nothing it started in a group of its
+  // own outlives it into the next attempt.
+  const killGroups = () => channel.killGroups(groups).catch(() => {});
+  // An in-process harness has no process to kill: its own groups go first,
+  // which may be what it waits on, then it is told to stop and let go.
+  if (channel.location.kind === "in_process") {
+    await killGroups();
+    await channel.kill().catch(() => {});
+    return "unknown";
+  }
+  await channel.kill().catch(() => {});
+  let cursor = input.cursor;
+  const gone = async (deadline: number) => {
+    while (Date.now() < deadline) {
+      const read = await channel
+        .read({
+          cursor,
+          waitMs: Math.min(1_000, Math.max(1, deadline - Date.now())),
+        })
+        .catch(() => undefined);
+      if (!read) return false;
+      cursor = read.cursor;
+      if (read.exited) return true;
+    }
+    return false;
+  };
+  if (await gone(Date.now() + input.graceMs)) {
+    await killGroups();
+    return "exited";
+  }
+  await channel.kill({ force: true }).catch(() => {});
+  await killGroups();
+  if (await gone(Date.now() + 5_000)) return "killed";
+  // Never seen to exit: its process group and every one it reported get
+  // SIGKILL once more before the next attempt starts.
+  await channel.kill({ force: true }).catch(() => {});
+  await killGroups();
+  return "unknown";
 }
 
 /**
@@ -111,6 +190,7 @@ function inProcessChannel(
       await runner.kill();
       inProcessRunners.delete(runnerId);
     },
+    killGroups: async (groups) => killProcessGroups(groups),
   };
 }
 
@@ -121,7 +201,10 @@ export async function reattachInProcessRunner(
   if (location.process !== PROCESS_INSTANCE) return undefined;
   const runner = inProcessRunners.get(location.runnerId);
   if (runner?.stopping) {
-    await runner.kill();
+    // Stopped by its last holder: gone, whether or not a stuck harness let
+    // go in time, so a takeover loses or restarts it instead of failing.
+    await runner.kill().catch(() => {});
+    inProcessRunners.delete(location.runnerId);
     return undefined;
   }
   return runner ? inProcessChannel(location.runnerId, runner) : undefined;
@@ -225,11 +308,12 @@ export async function startSandboxRunner(input: {
   // Its contents are checked, not its name: anything in the sandbox could
   // have replaced the file since it was uploaded.
   const relative = `runner/${hash}.mjs`;
+  // Beside the agent, never where its commands run (ADR 0332).
   const present = await input.provider
     .executeCommand(
       input.sandboxId,
       `(sha256sum ${shellQuote(relative)} 2>/dev/null || shasum -a 256 ${shellQuote(relative)}) | cut -d ' ' -f 1`,
-      { cwd: input.stateDirectory },
+      { cwd: input.stateDirectory, side: "agent" },
     )
     .then(
       (result) => result.exitCode === 0 && result.result.trim() === digest,
@@ -240,9 +324,11 @@ export async function startSandboxRunner(input: {
       input.sandboxId,
       { [`${hash}.mjs`]: source },
       directory,
+      { side: "agent" },
     );
   const started = await processes.startProcess({
     sandboxId: input.sandboxId,
+    side: "agent",
     // Relative to its working directory: a provider maps only the cwd onto
     // its own filesystem, never paths inside a command.
     command: `runtime="$(command -v bun || command -v node)"; if [ -z "$runtime" ]; then echo "This sandbox has neither Bun nor Node to run the agent runner." >&2; exit 127; fi; exec "$runtime" ${shellQuote(`runner/${hash}.mjs`)}`,
@@ -364,10 +450,13 @@ export function sandboxChannel(input: {
           partialBytes = 0;
         }
         if (output.status === "exited" && !output.more) {
-          // The last line has no newline, and never will.
+          // The last line has no newline, and never will. A runner stopped
+          // mid-line (a restart kills it) may have stopped inside a secret
+          // no mask then matches: the line is left out whole (ADR 0333). A
+          // frame always ends with its newline, so none is lost.
           if (skipped !== undefined) diagnostics.push(skippedLine(skipped));
           skipped = undefined;
-          if (partialBytes > 0) take(partial.join(""));
+          if (partialBytes > 0) diagnostics.push(unfinishedLine(partialBytes));
           partial = [];
           partialBytes = 0;
           break;
@@ -399,13 +488,29 @@ export function sandboxChannel(input: {
         next >= output.outputBytes;
       return { frames, diagnostics, cursor: next, exited };
     },
-    kill: async () => {
+    kill: async (options) => {
       await processes
         .signalProcess({
           sandboxId: location.sandboxId,
           processId: location.processId,
-          signal: "SIGTERM",
+          signal: options?.force ? "SIGKILL" : "SIGTERM",
         })
+        .catch(() => {});
+    },
+    killGroups: async (groups) => {
+      const valid = validGroups(groups);
+      if (valid.length === 0) return;
+      // Where the runner and its harness run: in a sandbox whose commands
+      // run apart, the command container is another process namespace,
+      // where the same number names an unrelated group (ADR 0332).
+      await provider
+        .executeCommand(
+          location.sandboxId,
+          // POSIX's form, one `--`, then every group: dash refuses
+          // `-KILL --`, and stops at a second `--`.
+          `kill -s KILL -- ${valid.map((group) => `-${group}`).join(" ")} 2>/dev/null; true`,
+          { side: "agent" },
+        )
         .catch(() => {});
     },
   };
@@ -415,13 +520,22 @@ export function sandboxChannel(input: {
 const WRITE_PIECE_BYTES = Math.floor(PROCESS_WRITE_MAX_BYTES / 2);
 /** Pages one read passes over inside a skipped line before answering. */
 const SKIP_PAGES = 8;
-/** Characters of one diagnostic line kept for the log. */
+/** The longest diagnostic line kept; a longer one is left out whole. */
 const DIAGNOSTIC_CHARS = 4_000;
 
-function diagnostic(line: string): string {
+/**
+ * A runner's line as kept, whole or not at all: masking happens after this,
+ * and a cut inside a line could keep part of a secret no mask matches
+ * (ADR 0333).
+ */
+export function diagnostic(line: string): string {
   return line.length > DIAGNOSTIC_CHARS
-    ? `${line.slice(0, DIAGNOSTIC_CHARS)} [${line.length - DIAGNOSTIC_CHARS} more characters]`
+    ? `[A ${line.length}-character line of output was left out]`
     : line;
+}
+
+function unfinishedLine(bytes: number): string {
+  return `[An unfinished ${bytes}-byte line of output was left out]`;
 }
 
 function skippedLine(bytes: number): string {

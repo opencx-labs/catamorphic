@@ -126,6 +126,10 @@ export interface CatamorphicHostConfig {
   workerNode?: CatamorphicCoreConfig["workerNode"];
   /** How often idle pollers look for work (ADR 0229); see the core option. */
   idlePollMs?: CatamorphicCoreConfig["idlePollMs"];
+  /** How long a turn waits for a reshaped workspace (ADR 0332); see the core option. */
+  reshapeWaitMinutes?: CatamorphicCoreConfig["reshapeWaitMinutes"];
+  /** Environment caches (ADR 0334); see the core option. */
+  caches?: CatamorphicCoreConfig["caches"];
   database: DatabaseConfig;
   storage: StorageConfig;
   /**
@@ -371,6 +375,10 @@ export class Catamorphic {
       agentCapabilities: config.agentCapabilities,
       workerNode: config.workerNode,
       idlePollMs: config.idlePollMs,
+      ...(config.reshapeWaitMinutes !== undefined
+        ? { reshapeWaitMinutes: config.reshapeWaitMinutes }
+        : {}),
+      ...(config.caches ? { caches: config.caches } : {}),
       db,
       projectManager: resolveStorage(config.storage),
       sandboxProvider: config.sandboxProvider,

@@ -4,12 +4,17 @@ import type { DB } from "@catamorphic/db";
 import { getTracer, withSpan } from "@catamorphic/otel";
 import {
   type CreateSandboxOpts,
+  SANDBOX_CAPABILITIES,
   type SandboxProvider,
   type SandboxResources,
+  type SandboxVolume,
   sameEgress,
 } from "@catamorphic/sandbox";
-import { type Kysely, sql } from "kysely";
+import { type Kysely, type RawBuilder, type SqlBool, sql } from "kysely";
+import { cacheMounts } from "./cache-mounts.js";
 import type { ExecutionAllocation } from "./execution-allocations-service.js";
+import { sandboxProjectDirectory } from "./sandbox-git.js";
+import { sandboxEnvFiles } from "./sandbox-secrets.js";
 import {
   holdVolumes,
   sweepVolumeHolds,
@@ -57,6 +62,47 @@ function allocationNarrowing(
 }
 
 /**
+ * Mount a cache only where the machine keeps it read only (ADR 0334): a
+ * provider without the `caches` capability would mount it writable, so code
+ * a pull request controls could write what every review reads.
+ */
+function requireCacheCapability(args: {
+  provider: SandboxProvider;
+  volumes: readonly SandboxVolume[];
+}): void {
+  if (
+    args.volumes.length > 0 &&
+    !args.provider.capabilities?.includes(SANDBOX_CAPABILITIES.caches)
+  )
+    throw new Error(
+      "This machine cannot keep a cache read only, so it cannot host an Environment with caches",
+    );
+}
+
+/**
+ * What a provider is asked for when the Allocation's commands run apart
+ * from its agent (ADR 0332): the checkout is all both sides share, and the
+ * agent's commands load the command side's own session files.
+ */
+function separateCommandsOf(args: {
+  allocation: ExecutionAllocation;
+  provider: SandboxProvider;
+}): Pick<CreateSandboxOpts, "separateCommands"> {
+  const separate = args.allocation.policy.sandbox?.separateCommands;
+  // No agent container for a harness outside the sandbox: the command
+  // container is the whole sandbox.
+  if (!separate?.agentResources) return {};
+  const workspaceRoot = args.provider.workspaceRoot;
+  return {
+    separateCommands: {
+      shared: [sandboxProjectDirectory({ workspaceRoot })],
+      envFiles: sandboxEnvFiles({ workspaceRoot }),
+      agentResources: separate.agentResources,
+    },
+  };
+}
+
+/**
  * The Allocation's image, containers and egress (ADR 0176) and volumes (ADR
  * 0208) on a provider that keeps its own sandbox lifecycle, such as a
  * member's computer: the Environment decides what its sandboxes boot,
@@ -75,21 +121,34 @@ export function withAllocationSandboxPolicy(args: {
     !sandbox?.containers &&
     !sandbox?.egress &&
     !sandbox?.volumes?.length &&
+    !sandbox?.caches?.length &&
+    !sandbox?.fill &&
+    !sandbox?.separateCommands &&
     !provider.widenEgress
   )
     return provider;
   const createSandbox = async (opts: CreateSandboxOpts) => {
-    const volumes = await holdVolumes({
+    // The Environment's caches, read only at the machine's generation
+    // (ADR 0334), or a fill's one writable generation.
+    const caches = await cacheMounts({
       db: args.db,
       allocation: args.allocation,
     });
-    return provider.createSandbox({
+    requireCacheCapability({ provider, volumes: caches.volumes });
+    const volumes = [
+      ...(await holdVolumes({ db: args.db, allocation: args.allocation })),
+      ...caches.volumes,
+    ];
+    const handle = await provider.createSandbox({
       ...opts,
       ...(sandbox?.image ? { image: sandbox.image } : {}),
       ...(sandbox?.containers ? { containers: true } : {}),
       ...(sandbox?.egress ? { egress: sandbox.egress } : {}),
       ...(volumes.length > 0 ? { volumes } : {}),
+      ...separateCommandsOf({ allocation: args.allocation, provider }),
     });
+    await caches.settle(handle);
+    return handle;
   };
   const widenEgress = provider.widenEgress?.bind(provider);
   const widening = widenEgress
@@ -167,13 +226,21 @@ export function allocationSandboxProvider(args: {
     // readmitted right after it idled).
     const sandbox = allocation.policy.sandbox;
     await retireVolumeHolders({ db, allocation, provider });
-    const volumes = await holdVolumes({ db, allocation });
+    // Its caches are read when it is made (ADR 0334): the generation its
+    // machine holds now, read only, or a fill's own writable one.
+    const caches = await cacheMounts({ db, allocation });
+    requireCacheCapability({ provider, volumes: caches.volumes });
+    const volumes = [
+      ...(await holdVolumes({ db, allocation })),
+      ...caches.volumes,
+    ];
     const handle = await provider.createSandbox({
       ...opts,
       ...(sandbox?.image ? { image: sandbox.image } : {}),
       ...(sandbox?.containers ? { containers: true } : {}),
       ...(sandbox?.egress ? { egress: sandbox.egress } : {}),
       ...(volumes.length > 0 ? { volumes } : {}),
+      ...separateCommandsOf({ allocation, provider }),
       resources,
       labels: {
         ...opts.labels,
@@ -186,6 +253,7 @@ export function allocationSandboxProvider(args: {
       .set({ sandbox_provider_id: handle.providerId })
       .where("id", "=", allocation.id)
       .execute();
+    await caches.settle(handle);
     await requireActive(handle.providerId);
     return handle;
   };
@@ -225,10 +293,10 @@ export function allocationSandboxProvider(args: {
             : {}),
         }),
       ),
-    uploadFiles: (id, files, base) =>
-      guard(id, () => provider.uploadFiles(id, files, base)),
-    downloadFile: (id, file) =>
-      guard(id, () => provider.downloadFile(id, file)),
+    uploadFiles: (id, files, base, opts) =>
+      guard(id, () => provider.uploadFiles(id, files, base, opts)),
+    downloadFile: (id, file, opts) =>
+      guard(id, () => provider.downloadFile(id, file, opts)),
     gitClone: (id, url, path, opts) =>
       guard(id, () => provider.gitClone(id, url, path, opts)),
     gitCheckout: (id, path, ref) =>
@@ -374,6 +442,13 @@ export async function claimAllocationMaintenance(args: {
   allocationId: string;
   status: "active" | "released";
   sessionId?: string;
+  /**
+   * Turns that have not started do not refuse the claim: queued ones,
+   * messages held for editing, and one whose holder went away before its
+   * harness started. They wait for the workspace to be given back and
+   * admitted again, reshaped (ADR 0332). Those at work still do.
+   */
+  waitingTurns?: boolean;
 }): Promise<AllocationMaintenanceClaim | undefined> {
   const token = randomUUID();
   return args.db.transaction().execute(async (trx) => {
@@ -400,11 +475,15 @@ export async function claimAllocationMaintenance(args: {
         )
         .select("agent_turns.id")
         .where("agent_sessions.allocation_id", "=", args.allocationId)
-        .where("agent_turns.status", "in", [
-          "queued",
-          "held",
-          ...ACTIVE_TURN_STATUSES,
-        ])
+        .where((eb) =>
+          args.waitingTurns
+            ? holdsReshape()
+            : eb("agent_turns.status", "in", [
+                "queued",
+                "held",
+                ...ACTIVE_TURN_STATUSES,
+              ]),
+        )
         .executeTakeFirst();
       if (busy) return undefined;
     }
@@ -427,6 +506,27 @@ export async function claimAllocationMaintenance(args: {
       .executeTakeFirst();
     return claimed ? { allocationId: args.allocationId, token } : undefined;
   });
+}
+
+/**
+ * A turn that keeps a workspace from being reshaped (ADR 0332): one at
+ * work, except one still preparing whose holder's lease lapsed (its
+ * harness never started; it waits for the new workspace). A message held
+ * for editing has not started and puts nothing in the workspace.
+ */
+export function holdsReshape(): RawBuilder<SqlBool> {
+  const status = sql.ref("agent_turns.status");
+  return sql<SqlBool>`(${status} in ('running', 'waiting', 'finalizing') or (${status} = 'preparing' and ${sql.ref("agent_turns.lease_expires_at")} > now()))`;
+}
+
+/**
+ * A chat's turn that waits for its workspace to be reshaped (ADR 0332):
+ * one queued and due, or one still preparing whose holder's lease lapsed.
+ */
+export function pendingForReshape(): RawBuilder<SqlBool> {
+  const status = sql.ref("agent_turns.status");
+  const lease = sql.ref("agent_turns.lease_expires_at");
+  return sql<SqlBool>`((${status} = 'queued' and ${sql.ref("agent_turns.available_at")} <= now()) or (${status} = 'preparing' and (${lease} is null or ${lease} <= now())))`;
 }
 
 /** Extend a claim this host still holds; false once it lapsed or moved. */
