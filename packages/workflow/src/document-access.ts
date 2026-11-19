@@ -25,6 +25,8 @@ export function workflowDocumentPathError(path: string): string | undefined {
   // biome-ignore lint/suspicious/noControlCharactersInRegex: rejecting control characters in paths is the point
   if (/[\u0000-\u001f\u007f]/.test(path)) return "contains control characters";
   if (path.includes("\\")) return "must use / between folders";
+  if (path.normalize("NFC") !== path)
+    return "must be written in Unicode NFC form, as the store names it";
   if (/[*?[\]{}]/.test(path))
     return "must name a document or a folder, not a pattern: end a folder with /";
   const segments = (path.endsWith("/") ? path.slice(0, -1) : path).split("/");

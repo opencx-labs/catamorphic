@@ -604,6 +604,11 @@ export const plain = defineWorkflow(({ defineBoundary }) => ({
     refused(" store/a.json", "has spaces at its start or end");
     refused("store", "names the store itself: write store/ for all of it");
     refused("", "is empty");
+    // The store names a path in one Unicode form (NFC), never two.
+    refused(
+      "store/cafe\u0301/",
+      "must be written in Unicode NFC form, as the store names it",
+    );
   });
 
   it("refuses an access other than read or write", () => {

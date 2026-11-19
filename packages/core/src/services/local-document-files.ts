@@ -33,6 +33,18 @@ export async function localDocumentPath(
     });
     if (stat?.isSymbolicLink())
       throw new Error("Document paths cannot follow symbolic links");
+    // A filesystem that ignores case or Unicode form (APFS) finds an entry
+    // by another spelling, so two paths, each checked against its own
+    // grant, would name one file. Only the name on disk names it.
+    if (
+      stat &&
+      !(await fs.readdir(path.dirname(current))).includes(
+        path.basename(current),
+      )
+    )
+      throw new Error(
+        "Document paths must match the names on disk exactly, in case and Unicode form",
+      );
   }
   return target;
 }
