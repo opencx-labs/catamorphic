@@ -886,6 +886,20 @@ the historical log explains how it arrived here.
 
 ## Design log
 
+### 2026-11-19: A long question scrolls inside its panel
+
+A question too long for the chat's room scrolled as a whole inside the
+area above the composer: its header, with the dismiss button and what the
+agent is waiting for, scrolled away, Submit sat out of view until the end,
+and the scrollbar ran outside the panel's border. The header and footer
+stay in place now. Only the question and its options scroll, between them,
+with the thin scrollbar inside the panel, and fade where they continue as
+the palette's results and the conversation do. A question stops growing at
+about half the window, header and footer included. Other opening at the
+foot of a question that scrolls brings its box into view as it opens.
+`e2e/tool-permissions.e2e.ts` scrolls a long question with the wheel and
+checks that the header and footer did not move.
+
 ### 2026-11-17: The composer shrinks as it grows; actions give it the keys
 
 Backspace shrank the composer smoothly only while the draft fit inside it.

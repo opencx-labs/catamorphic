@@ -398,6 +398,7 @@ interface FakeTurn {
  *
  * - "ask me ... questions" → a preamble, then a question the next
  *   message answers ("Got it, noted").
+ * - "long question" → a blocking question too long for the chat's room.
  * - "blocking question" → a blocking question; a chat message sent while
  *   it waits is answered in the same turn and the question stays open
  *   (ADR 0195).
@@ -1146,6 +1147,57 @@ async function* fakeScript(turn: FakeTurn): AsyncGenerator<FakeStep> {
   }
   if (prompt.includes("agent activity failed child"))
     throw new Error("The fixture needs a decision before publishing.");
+
+  // A question too long for the chat's room: it scrolls between the
+  // question panel's header and footer, which stay in place.
+  if (prompt.includes("long question")) {
+    const response = await turn.request({
+      kind: "question",
+      blocking: true,
+      title: "Question",
+      origin: { kind: "tool", id: "ask_user", displayName: "Ask User" },
+      questions: [
+        {
+          question:
+            "No benchmark harness survives on main: past held-out runs used one-off hosts and routes that were later removed. Making the routing change and running the tests doesn't depend on this; I'm doing that now. Which benchmark should I run to prove no quality or speed loss and lower cost?",
+          header: "Benchmark",
+          multiSelect: false,
+          options: [
+            {
+              label: "Micro-bench, then canary (Recommended)",
+              description:
+                "Now: same model weights, real long-context review prompts built from known-defect pull requests, several draws per provider. Measures defect detection, tool-call validity, latency and throughput, cache hits and exact cost per request. About 1 to 2 hours. Then: a one-day production canary splitting pull requests between providers to confirm end to end.",
+            },
+            {
+              label: "Micro-benchmark only",
+              description:
+                "Just the provider-level benchmark above. It doesn't exercise a full multi-agent review.",
+            },
+            {
+              label: "Production canary only",
+              description:
+                "Ship routing behind a per-pull-request split and compare a day of real reviews: cost per review, duration, failures, findings. Needs a production deploy.",
+            },
+            {
+              label: "Rebuild full held-out e2e",
+              description:
+                "Faithfully replicate the held-out run: 8 cases, 2 draws, 2 arms on dedicated machines. Most faithful, but days of harness work.",
+            },
+            {
+              label: "Skip the benchmark",
+              description:
+                "Rely on the provider's published numbers and watch the first week of reviews instead.",
+            },
+          ],
+        },
+      ],
+    });
+    yield {
+      type: "text",
+      content: `Running: ${response.kind === "question" ? response.answers.join(", ") : "nothing"}.`,
+    };
+    return;
+  }
 
   // A message the person sends while the question waits releases it (core
   // keeps it open beside the chat) and steers this turn (ADR 0195).
