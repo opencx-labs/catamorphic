@@ -275,13 +275,23 @@ COMMENT or REQUEST_CHANGES verdict, a score from 1 to 5, summaries up to
 4,000 characters, at most 30 bounded inline comments, and an optional reply.
 Unknown fields, including the old `resolve`, are rejected, and so is a
 report holding text shaped like the stamp anywhere, so it cannot forge one.
-Each body is defused whole as it is posted, read as GitHub reads it
+A report with characters that reorder or hide text (direction controls, tag
+characters) is refused too, so a suggestion cannot read one way and apply
+another. Each body is defused whole as it is posted, read as GitHub reads it
 (CommonMark with GitHub's extensions, through `mdast-util-from-markdown`):
 code blocks, suggestions included, and code spans are posted exactly as
-written; everywhere else mentions stop notifying, and HTML comments,
-declarations, processing instructions and link reference definitions show
-as text, so a report cannot ping people or hide words. They need the
-manifest's three dependencies in `.work/workflows/package.json`.
+written. Everywhere else every `&` and `<` is escaped, so no HTML or entity
+is interpreted; every `@` stops notifying, except in a link's destination
+and in an autolink such as `<name@example.com>`; links drop their titles,
+images become links, link reference and footnote definitions show as text,
+and invisible characters are written out as `\u{…}`. A body is cut to fit
+GitHub after this, and one over 16 KB, or nested deeper than any review
+needs, is escaped whole, its formatting shown as text.
+
+Updating an installed pack: this file reads Markdown with three packages,
+`mdast-util-from-markdown`, `mdast-util-gfm` and `micromark-extension-gfm`,
+at the versions the manifest pins. Add them to `.work/workflows/package.json`
+when you update this file, or the workflows do not deploy.
 
 ## .work/workflows/src/stalled-reviews.ts
 

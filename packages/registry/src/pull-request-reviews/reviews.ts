@@ -908,7 +908,5 @@ function reviewBody(state: Publication, review: WorkReview): string {
             state.outside.map((comment) => `- ${comment}`).join("\n"),
         ]
       : []),
-  ]
-    .join("\n\n")
-    .slice(0, 60000);
+  ].join("\n\n");
 }

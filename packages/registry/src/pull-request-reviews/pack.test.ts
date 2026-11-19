@@ -12,9 +12,16 @@ import {
   parseProjectEnvironmentPolicy,
 } from "@catamorphic/core";
 import { matchesAllWhere, parseProject } from "@catamorphic/parser";
+import { fromMarkdown } from "mdast-util-from-markdown";
+import { gfmFromMarkdown } from "mdast-util-gfm";
+import { gfm } from "micromark-extension-gfm";
 import { describe, expect, it } from "vitest";
 import { packFiles } from "../pack-files.js";
-import { checkWorkReview, publicationText } from "./review-report.js";
+import {
+  checkWorkReview,
+  publicationText,
+  stampedBody,
+} from "./review-report.js";
 
 const PACK = packFiles("pull-request-reviews");
 const OPENCODE = packFiles("pull-request-reviews-opencode");
@@ -1244,11 +1251,29 @@ describe("postReviews", () => {
       ).not.toMatch(/<[!?]/);
     }
     // Joined, the comment's fence closes the summary's: its line is prose.
-    expect(reviews[0]?.body).toContain("@\u200borg/team <\u200b!-- hidden -->");
+    expect(reviews[0]?.body).toContain("@\u200borg/team &lt;!-- hidden -->");
     // A body that ends inside a code block has it closed before the stamp.
     expect(comments[0]?.body).toBe(
       "Answer:\n```\n```\n\n<!-- work-review:t1:reply -->",
     );
+  });
+
+  it("cuts the review body to fit GitHub after defusing it, the stamp kept", async () => {
+    const result = await publish(`
+      const many = "@a ".repeat(500);
+      world.submit("t1", {
+        verdict: "COMMENT",
+        reviewedCommit: ${JSON.stringify(HEAD)},
+        summary: "@a ".repeat(1333),
+        comments: Array.from({ length: 30 }, (_, i) => ({ path: "src/other-" + i + ".ts", line: 9, body: many })),
+      });
+      await runWorkflow(postReviews, event("t1"), world.context);
+      return world.github.reviews.map((review) => review.body);
+    `);
+    const [body] = result.outcomes as string[];
+    expect(body?.length).toBeLessThanOrEqual(65_536);
+    expect(body).toMatch(/\n\n<!-- work-review:t1:review -->$/);
+    expect(body).not.toMatch(/@[A-Za-z0-9]/);
   });
 
   it("answers an inline question in its own thread", async () => {
@@ -1273,6 +1298,54 @@ describe("postReviews", () => {
   });
 });
 
+/**
+ * What GitHub would act on in `posted`, read as it reads it (HTML and all):
+ * HTML, a definition, an image, a link title, a mention or a hidden
+ * character outside code. Empty when nothing is.
+ */
+function liveIn(posted: string): string[] {
+  type Node = {
+    type: string;
+    value?: string;
+    title?: string | null;
+    children?: Node[];
+  };
+  const found: string[] = [];
+  const visit = (node: Node, inLink: boolean) => {
+    if (node.type === "code" || node.type === "inlineCode") return;
+    if (
+      [
+        "html",
+        "definition",
+        "footnoteDefinition",
+        "image",
+        "imageReference",
+      ].includes(node.type)
+    )
+      found.push(`${node.type}: ${node.value ?? ""}`);
+    if (node.type === "link" && node.title) found.push(`title: ${node.title}`);
+    const value = node.type === "text" ? (node.value ?? "") : "";
+    // GitHub mentions no one inside a link.
+    if (!inLink && /@[A-Za-z0-9]/.test(value)) found.push(`mention: ${value}`);
+    if (
+      /[\u202A-\u202E\u2066-\u2069\u200C\u200E\u200F\u2060\uFEFF\u{E0000}-\u{E007F}]|(?<!@)\u200B/u.test(
+        value,
+      )
+    )
+      found.push(`hidden: ${JSON.stringify(value)}`);
+    for (const child of node.children ?? [])
+      visit(child, inLink || node.type === "link");
+  };
+  visit(
+    fromMarkdown(posted, {
+      extensions: [gfm()],
+      mdastExtensions: [gfmFromMarkdown()],
+    }) as Node,
+    false,
+  );
+  return found;
+}
+
 describe("report text", () => {
   const head = "a".repeat(40);
   // Each pass of a single replace leaves what the one inside it formed.
@@ -1293,18 +1366,23 @@ describe("report text", () => {
     ];
     for (const text of hiding) {
       const shown = publicationText(text);
-      // Nothing GitHub drops can open: no "<!" or "<?" is left.
-      expect(shown, text).not.toMatch(/<[!?]/);
-      // Nothing is removed: without the zero-width spaces it is the text.
-      expect(shown.replaceAll("\u200b", ""), text).toBe(text);
+      // No raw "<" is left, so nothing GitHub drops can open.
+      expect(shown, text).not.toMatch(/</);
+      expect(liveIn(shown), text).toEqual([]);
+      // Nothing is removed: unescaped, it is the text.
+      expect(shown.replaceAll("&lt;", "<").replaceAll("\u200b", ""), text).toBe(
+        text,
+      );
     }
     // Code spans are left exactly as written.
     const code = "Use `<!-- keep -->` and `<?= $x ?>` in templates.";
     expect(publicationText(code)).toBe(code);
     expect(publicationText("@<!---->team, ask @grace")).toBe(
-      "@<\u200b!---->team, ask @\u200bgrace",
+      "@\u200b&lt;!---->team, ask @\u200bgrace",
     );
-    expect(publicationText("a < b && c --> d")).toBe("a < b && c --> d");
+    expect(publicationText("a < b && c --> d")).toBe(
+      "a &lt; b &amp;&amp; c --> d",
+    );
   });
 
   it("posts suggestions and code exactly as written, and only the prose around them defused", () => {
@@ -1328,7 +1406,7 @@ describe("report text", () => {
     const lines = posted.split("\n");
     // The suggestion block, fences included, is committed verbatim.
     expect(lines.slice(2, 12)).toEqual(suggestion.split("\n").slice(2, 12));
-    expect(lines[0]).toBe("Apply this, @\u200bgrace: <\u200b!-- hidden -->");
+    expect(lines[0]).toBe("Apply this, @\u200bgrace: &lt;!-- hidden -->");
     expect(lines[13]).toBe("Then `@scope/pkg` and `Map<?, ?>` agree.");
     // A tilde fence, and one longer than its contents' backticks.
     const tilde = "~~~\n<?php x(); ?>\n~~~";
@@ -1337,16 +1415,14 @@ describe("report text", () => {
     expect(publicationText(long)).toBe(long);
   });
 
-  it("takes nothing for code that GitHub would render as HTML", () => {
-    // A fence inside an HTML block is raw HTML there, so is defused.
-    expect(
-      publicationText("<div>\n```\n<!-- hidden -->\n```\n</div>"),
-    ).not.toMatch(/<!--/);
-    // A pre block carries a fence past a blank line as raw HTML: all of
-    // it is defused, and once it opens none, the fence shows it.
+  it("reads code where GitHub will once the HTML around it is escaped", () => {
+    // Escaped, an HTML block holds no fence: the fence is code, shown.
+    expect(publicationText("<div>\n```\n<!-- shown -->\n```\n</div>")).toBe(
+      "&lt;div>\n```\n<!-- shown -->\n```\n&lt;/div>",
+    );
     const pre = publicationText("<pre>\n\n```\n<!-- shown -->\n```\n</pre>");
-    expect(pre).not.toMatch(/<pre|<!--/);
-    expect(pre).toContain("```\n<\u200b!-- shown -->\n```");
+    expect(pre).toBe("&lt;pre>\n\n```\n<!-- shown -->\n```\n&lt;/pre>");
+    for (const posted of [pre]) expect(liveIn(posted)).toEqual([]);
     // An escaped backtick opens no span.
     expect(publicationText("\\`<!-- hidden -->`")).not.toMatch(/<!--/);
     // A span does not run past its paragraph.
@@ -1368,21 +1444,140 @@ describe("report text", () => {
     ).toMatch(/review stamp/);
     expect(review("```\n<!--\nWORK-REVIEW:x -->\n```")).toMatch(/review stamp/);
     expect(typeof review("```\n<!-- a note -->\n```")).toBe("object");
+    // A suggestion that reads one way and applies another, and tag
+    // characters, are refused wherever they are.
+    const trojan =
+      "```suggestion\nif (isAdmin) { \u202E } \u2066// check later\u2069\n```";
+    expect(review(trojan)).toMatch(/reorder or hide text/);
+    expect(review("Fine \u{E0041}\u{E0042}")).toMatch(/reorder or hide text/);
+    // Ordinary code in a suggestion is posted as written.
+    const ordinary = "```suggestion\nconst a = b && c < d; // @todo <T>\n```";
+    expect(typeof review(ordinary)).toBe("object");
+    expect(publicationText(ordinary)).toBe(ordinary);
   });
+
+  it("escapes every HTML tag and entity, mentions no one, and shows what people cannot see", () => {
+    const cases: Array<[string, string]> = [
+      // An entity spelling out a mention.
+      ["@&#97;dmin, look", "@\u200b&amp;#97;dmin, look"],
+      // Raw HTML keeps no hidden attribute or collapsed text.
+      [
+        'See <b title="hidden words">this</b>',
+        'See &lt;b title="hidden words">this&lt;/b>',
+      ],
+      [
+        "<details><summary>x</summary>hidden</details>",
+        "&lt;details>&lt;summary>x&lt;/summary>hidden&lt;/details>",
+      ],
+      ['<img alt="hidden" src="x">', '&lt;img alt="hidden" src="x">'],
+      // A footnote nothing refers to shows nothing on GitHub.
+      [
+        "Note[^n].\n\n[^n]: hidden footnote",
+        "Note[^n].\n\n\\[^n]: hidden footnote",
+      ],
+      // A link keeps its destination, drops its title; an image is a link.
+      [
+        '[@scope/pkg](https://www.npmjs.com/package/@scope/pkg "hidden title")',
+        "[@\u200bscope/pkg](<https://www.npmjs.com/package/@scope/pkg>)",
+      ],
+      [
+        '![a diagram](https://img.example/x.png "hidden")',
+        "[a diagram](<https://img.example/x.png>)",
+      ],
+      // Autolinks keep working.
+      [
+        "Write to <grace@example.com> or see <https://example.com/@grace>",
+        "Write to <grace@example.com> or see <https://example.com/@grace>",
+      ],
+      // What people cannot see is written out; an emoji keeps its joiner.
+      [
+        "zero\u200bwidth, \u202Eflipped\u202C, \u{E0041}tagged",
+        "zero\\u{200B}width, \\u{202E}flipped\\u{202C}, \\u{E0041}tagged",
+      ],
+      [
+        "\u{1F468}\u200D\u{1F469} \u26A0\uFE0F",
+        "\u{1F468}\u200D\u{1F469} \u26A0\uFE0F",
+      ],
+    ];
+    for (const [text, posted] of cases) {
+      expect(publicationText(text), text).toBe(posted);
+      expect(liveIn(posted), text).toEqual([]);
+    }
+    // The links still work: GitHub reads their destinations as written.
+    const links = fromMarkdown(
+      publicationText(
+        "[npm](https://www.npmjs.com/package/@scope/pkg) <grace@example.com>",
+      ),
+    );
+    const urls: string[] = [];
+    const walk = (node: {
+      type: string;
+      url?: string;
+      children?: unknown[];
+    }) => {
+      if (node.type === "link" && node.url) urls.push(node.url);
+      for (const child of node.children ?? [])
+        walk(child as { type: string; url?: string; children?: unknown[] });
+    };
+    walk(links);
+    expect(urls).toEqual([
+      "https://www.npmjs.com/package/@scope/pkg",
+      "mailto:grace@example.com",
+    ]);
+  });
+
+  it("cleans 60 KB of adversarial Markdown within a small bound", () => {
+    const fill = (unit: string, size: number) =>
+      unit.repeat(Math.ceil(size / unit.length)).slice(0, size);
+    for (const size of [16_000, 60_000]) {
+      const inputs = [
+        fill("[", size),
+        fill("[@a ", size),
+        fill("*a ", size),
+        fill(">", size),
+        fill("> ", size),
+        fill("- 1. ", size),
+        Array.from({ length: 4000 }, (_, i) => `${"- ".repeat(i % 31)}x`)
+          .join("\n")
+          .slice(0, size),
+        Array.from({ length: 4000 }, (_, i) => `${">".repeat(i % 31)} x`)
+          .join("\n")
+          .slice(0, size),
+        fill("|a|b|\n|-|-|\n", size),
+        fill("\\[a]: b\n", size),
+        fill("[*_`<!-- @a &lt; ", size),
+      ];
+      for (const input of inputs) {
+        const started = performance.now();
+        const posted = stampedBody(input, "<!-- work-review:t1:review -->");
+        expect(performance.now() - started, input.slice(0, 20)).toBeLessThan(
+          3_000,
+        );
+        expect(posted.length).toBeLessThanOrEqual(65_536);
+        expect(posted.endsWith("\n\n<!-- work-review:t1:review -->")).toBe(
+          true,
+        );
+        // No raw "<" but the stamp's, and no "@" that mentions anyone.
+        const body = posted.replace(/\n\n<!-- work-review:t1:review -->$/, "");
+        expect(body, input.slice(0, 20)).not.toMatch(/<|@[A-Za-z0-9]/);
+      }
+    }
+  }, 120_000);
 
   it("reads lists, block quotes, headings and HTML blocks as GitHub does", () => {
     const fires = "@org/team <!-- hidden -->";
-    const defused = "@\u200borg/team <\u200b!-- hidden -->";
+    const defused = "@\u200borg/team &lt;!-- hidden -->";
     // A fence in a list item ends with the item.
     expect(publicationText(`- item\n  \`\`\`\n  code\n- next ${fires}`)).toBe(
       `- item\n  \`\`\`\n  code\n- next ${defused}`,
     );
     // An HTML block in a list or a block quote is raw HTML, fence and all.
+    // Escaped, it holds no fence: the fence is code, shown as written.
     for (const text of [
       `- <div>\n  \`\`\`\n  ${fires}\n  \`\`\`\n  </div>`,
       `> <div>\n> \`\`\`\n> ${fires}\n> \`\`\``,
     ])
-      expect(publicationText(text), text).toContain(defused);
+      expect(liveIn(publicationText(text)), text).toEqual([]);
     // A code span never pairs across blocks.
     expect(publicationText(`# Note \`\n${fires}\n- see \``)).toBe(
       `# Note \`\n${defused}\n- see \``,
@@ -1393,7 +1588,7 @@ describe("report text", () => {
       "\\[//]: # (hidden @\u200bteam words)\n\nShown.",
     );
     expect(publicationText("Thanks &#64;org/team and &commat;grace")).toBe(
-      "Thanks @\u200borg/team and @\u200bgrace",
+      "Thanks &amp;#64;org/team and &amp;commat;grace",
     );
   });
 
@@ -1402,7 +1597,9 @@ describe("report text", () => {
       "```suggestion\n@Override\npublic String toString() {\n```";
     // Inline HTML opens no HTML block, so the fence after it is code.
     const inline = `<b>Note</b> keep this\n${suggestion}`;
-    expect(publicationText(inline)).toBe(inline);
+    expect(publicationText(inline)).toBe(
+      `&lt;b>Note&lt;/b> keep this\n${suggestion}`,
+    );
     const quoted = "> ```suggestion\n> @Override\n> ```\n\nAsk @grace.";
     expect(publicationText(quoted)).toBe(
       "> ```suggestion\n> @Override\n> ```\n\nAsk @\u200bgrace.",
@@ -1414,7 +1611,7 @@ describe("report text", () => {
     const crlf =
       "Ask @grace <!-- x -->\r\n\r\n```suggestion\r\n@Override\r\n```\r\n";
     expect(publicationText(crlf)).toBe(
-      "Ask @\u200bgrace <\u200b!-- x -->\r\n\r\n```suggestion\r\n@Override\r\n```\r\n",
+      "Ask @\u200bgrace &lt;!-- x -->\r\n\r\n```suggestion\r\n@Override\r\n```\r\n",
     );
   });
 });
