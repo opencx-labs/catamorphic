@@ -854,23 +854,24 @@ describe.skipIf(!enabled)(
           identity: setup,
           projectId: project.id,
           workflowName,
-          // The poller writes its cursor in the project store, which a
-          // project automation cannot: its principal holds no documents
-          // (ADR 0158), and a workflow declares no documents to consent
-          // to. Until it can, it runs as the member who turned it on.
-          owner:
-            workflowName === "pollGithub"
-              ? {
-                  type: "member" as const,
-                  externalUserId: setup.externalUserId,
-                }
-              : { type: "project" as const },
+          owner: { type: "project" as const },
           ...(environment ? { environment } : {}),
         };
         const preview = await core.workflowEnablements.preview(request);
-        await core.workflowEnablements.create({
+        // Only the poller keeps state in the project store: its cursor, in
+        // the folder it declares and its consent lists (ADR 0335).
+        const documents =
+          workflowName === "pollGithub"
+            ? [{ path: "store/github-polling/", access: "write" }]
+            : [];
+        expect(preview.documents).toEqual(documents);
+        const created = await core.workflowEnablements.create({
           ...request,
           consentDigest: preview.consentDigest,
+        });
+        expect(created).toMatchObject({
+          owner: { type: "project" },
+          documents,
         });
       }
 
@@ -878,6 +879,16 @@ describe.skipIf(!enabled)(
       // repository as it is and records nothing), and a fill of the review
       // cache from main, on the review machine.
       await fire(project.id, ["fillReviewCache", "pollGithub"]);
+      // The baseline ran as the project, which holds the poller's folder
+      // and nothing else of the store, and kept its cursor there.
+      const cursor = await core.documents.read({
+        identity: setup,
+        projectId: project.id,
+        path: `store/github-polling/${input.repository.replace("/", "-")}.json`,
+      });
+      expect(JSON.parse(cursor.text ?? "{}")).toMatchObject({
+        repository: input.repository,
+      });
       const fill = await waitFor(
         `${input.repository}'s review cache fill on the review machine`,
         async () => {
