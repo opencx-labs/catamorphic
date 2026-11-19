@@ -850,6 +850,16 @@ export function DockHost({
     >
       {detachedWindow && <DockDialogs onOpenChange={setDialogOpen} />}
       {snapshot.chats.map((chat) => {
+        // A chat another window owns, in a project this dock does not
+        // show, can never appear here. Its owner keeps it for its signals
+        // and sends; mounting it here too loaded its whole conversation
+        // and followed its turn in every window of the profile.
+        if (
+          !chat.local &&
+          !snapshot.multiProject &&
+          chat.projectId !== currentProjectId
+        )
+          return null;
         const isTab =
           !detachedWindow &&
           chat.projectId === currentProjectId &&
