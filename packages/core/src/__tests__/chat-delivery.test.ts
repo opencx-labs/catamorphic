@@ -230,6 +230,7 @@ describe("chatOwner", () => {
       projectId,
       path: "store/github-polling/**",
       access: "write",
+      under: true,
     });
     const chat = await owner({ caller, audience: "project", enablement });
     expect(chat.scope).toEqual([

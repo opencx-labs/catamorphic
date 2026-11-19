@@ -365,6 +365,12 @@ export interface DocumentRef {
   projectId: string;
   path: string;
   access?: "read" | "write";
+  /**
+   * A `/**` subtree that covers only paths under it, never a document named
+   * like the folder itself: what a workflow's declared folder grants
+   * (ADR 0335). A role's subtree also covers that name.
+   */
+  under?: true;
 }
 
 /** True when the identity is scoped rather than root. */
@@ -489,17 +495,23 @@ export function documentRefCovers(
 ): boolean {
   if (entry.projectId !== ref.projectId) return false;
   if (ref.access === "write" && entry.access !== "write") return false;
-  return documentPathCovers(entry.path, ref.path);
+  return documentPathCovers(entry, ref.path);
 }
 
 /**
- * Whether a document ref's path reaches another's, access aside: the same
- * path, or under a `/**` subtree. `store/a/**` never reaches `store/ab`.
+ * Whether a document ref's path reaches a path, access aside: the same
+ * path, or under a `/**` subtree (and the subtree's own name, unless the
+ * ref is `under`). `store/a/**` never reaches `store/ab`.
  */
-function documentPathCovers(outer: string, inner: string): boolean {
-  if (!outer.endsWith("/**")) return outer === inner;
-  const prefix = outer.slice(0, -2); // keep the trailing slash
-  return inner === prefix.slice(0, -1) || inner.startsWith(prefix);
+function documentPathCovers(
+  outer: Pick<DocumentRef, "path" | "under">,
+  inner: string,
+): boolean {
+  if (!outer.path.endsWith("/**")) return outer.path === inner;
+  const prefix = outer.path.slice(0, -2); // keep the trailing slash
+  return (
+    (!outer.under && inner === prefix.slice(0, -1)) || inner.startsWith(prefix)
+  );
 }
 
 /** A store path a workflow declares (ADR 0335); `/` ends a folder. */
@@ -516,12 +528,23 @@ export function workflowDocumentRefs(input: {
   projectId: string;
   documents: readonly WorkflowDocumentDeclaration[];
 }): DocumentRef[] {
-  return input.documents.map((document) => ({
-    kind: "document",
-    projectId: input.projectId,
-    path: document.path.endsWith("/") ? `${document.path}**` : document.path,
-    access: document.access,
-  }));
+  return input.documents.map(
+    (document): DocumentRef =>
+      document.path.endsWith("/")
+        ? {
+            kind: "document",
+            projectId: input.projectId,
+            path: `${document.path}**`,
+            access: document.access,
+            under: true,
+          }
+        : {
+            kind: "document",
+            projectId: input.projectId,
+            path: document.path,
+            access: document.access,
+          },
+  );
 }
 
 function isStoreRef(ref: ArtifactRef): ref is DocumentRef {
@@ -548,12 +571,15 @@ export function narrowStoreDocuments(input: {
   for (const declared of workflowDocumentRefs(input))
     for (const entry of held) {
       if (entry.projectId !== declared.projectId) continue;
-      const path = documentPathCovers(entry.path, declared.path)
-        ? declared.path
-        : documentPathCovers(declared.path, entry.path)
-          ? entry.path
+      // The narrower of the two, reaching what that one reaches: a
+      // declared folder never reaches a document named like it.
+      const narrower = documentPathCovers(entry, declared.path)
+        ? declared
+        : documentPathCovers(declared, entry.path)
+          ? entry
           : undefined;
-      if (!path) continue;
+      if (!narrower) continue;
+      const path = narrower.path;
       const access =
         declared.access === "write" && entry.access === "write"
           ? "write"
@@ -567,6 +593,7 @@ export function narrowStoreDocuments(input: {
           projectId: declared.projectId,
           path,
           access,
+          ...(narrower.under ? { under: true as const } : {}),
         });
     }
   return [...input.scope.filter((ref) => !isStoreRef(ref)), ...kept];

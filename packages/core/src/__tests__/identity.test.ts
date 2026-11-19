@@ -249,6 +249,11 @@ describe("store paths a workflow declares (ADR 0335)", () => {
     access: "read" | "write" = "read",
     project = projectId,
   ): ArtifactRef => ({ kind: "document", projectId: project, path, access });
+  /** A declared folder's subtree: only what is under it. */
+  const folder = (
+    path: string,
+    access: "read" | "write" = "read",
+  ): ArtifactRef => ({ ...ref(path, access), under: true }) as ArtifactRef;
   const narrow = (
     scope: ArtifactRef[],
     documents: Array<{ path: string; access: "read" | "write" }>,
@@ -263,7 +268,52 @@ describe("store paths a workflow declares (ADR 0335)", () => {
           { path: "store/config.json", access: "read" },
         ],
       }),
-    ).toEqual([ref("store/polling/**", "write"), ref("store/config.json")]);
+    ).toEqual([folder("store/polling/**", "write"), ref("store/config.json")]);
+  });
+
+  it("a declared folder covers what is under it, never a document named like it", () => {
+    const scope = narrow(
+      [ref("store/**", "write"), ref("store/polling", "write")],
+      [{ path: "store/polling/", access: "write" }],
+    );
+    const reaches = (path: string) =>
+      scopeCovers(scope, { kind: "document", projectId, path, access: "read" });
+    expect(reaches("store/polling/web.json")).toBe(true);
+    expect(reaches("store/polling/a/b.json")).toBe(true);
+    expect(reaches("store/polling")).toBe(false);
+    expect(reaches("store/pollingx")).toBe(false);
+    // So does the project principal turned on with it.
+    const principal = projectPrincipalIdentity({
+      tenantId: "t",
+      projectId,
+      environment: "default",
+      workflowName: "pollGithub",
+      documents: [{ path: "store/polling/", access: "write" }],
+    });
+    expect(
+      scopeCovers(principal.scope ?? [], {
+        kind: "document",
+        projectId,
+        path: "store/polling",
+      }),
+    ).toBe(false);
+    // A child narrowed from it, declaring the same folder, stays under it.
+    const child = narrow(scope, [{ path: "store/polling/", access: "read" }]);
+    expect(
+      scopeCovers(child, {
+        kind: "document",
+        projectId,
+        path: "store/polling",
+      }),
+    ).toBe(false);
+    // A role's own subtree still covers its folder's name (folder shares).
+    expect(
+      scopeCovers([ref("store/polling/**")], {
+        kind: "document",
+        projectId,
+        path: "store/polling",
+      }),
+    ).toBe(true);
   });
 
   it("keeps each declared path the scope reaches, with write only where both give it", () => {
@@ -277,7 +327,7 @@ describe("store paths a workflow declares (ADR 0335)", () => {
       ),
     ).toEqual([
       // The declared folder, as far as the scope reads it.
-      ref("store/polling/**"),
+      folder("store/polling/**"),
       // The part of the folder the scope writes.
       ref("store/polling/mira/**", "write"),
       ref("store/config.json"),
