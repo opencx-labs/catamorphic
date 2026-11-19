@@ -38,6 +38,13 @@ export {
   skipBatchItem,
   validateKeyedBatchOutcomes,
 } from "./batch.js";
+export {
+  isWorkflowDocumentFolder,
+  normalizeWorkflowDocuments,
+  type WorkflowDocumentAccess,
+  workflowDocumentCovers,
+  workflowDocumentPathError,
+} from "./document-access.js";
 export type { Hole } from "./holes.js";
 export {
   PROJECT_PERMISSIONS,

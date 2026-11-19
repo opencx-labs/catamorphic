@@ -539,6 +539,128 @@ export const plain = defineWorkflow(({ defineBoundary }) => ({
   });
 });
 
+describe("declared documents (ADR 0335)", () => {
+  const withDocuments = (value: string, before = "") => `
+${before}
+export const poll = defineWorkflow(({ defineBoundary }) => ({
+  documents: ${value},
+  steps: [defineBoundary({ run: () => ({}) })],
+}));
+`;
+  const documentsOf = (value: string, before?: string) =>
+    parseWorkflow(withDocuments(value, before)).documents;
+
+  it("reads folders and documents written in place, sorted, write winning", () => {
+    expect(
+      documentsOf(`[
+    { path: "store/polling/", access: "write" },
+    { path: "store/config.json", access: "read" },
+    { path: "store/polling/", access: "read" },
+    { "path": 'store/b.json', "access": \`read\` },
+  ]`),
+    ).toEqual([
+      { path: "store/b.json", access: "read" },
+      { path: "store/config.json", access: "read" },
+      { path: "store/polling/", access: "write" },
+    ]);
+    expect(documentsOf("[]")).toEqual([]);
+    expect(documentsOf('[{ path: "store/", access: "read" }]')).toEqual([
+      { path: "store/", access: "read" },
+    ]);
+  });
+
+  it("declares nothing when the property is absent", () => {
+    expect(
+      parseWorkflow(`
+export const plain = defineWorkflow(({ defineBoundary }) => ({
+  steps: [defineBoundary({ run: () => ({}) })],
+}));
+`).documents,
+    ).toEqual([]);
+  });
+
+  it("refuses paths outside the store and paths that are not plain", () => {
+    const refused = (path: string, message: string) =>
+      expect(() =>
+        documentsOf(`[{ path: ${JSON.stringify(path)}, access: "read" }]`),
+      ).toThrow(`Workflow document '${path}' ${message}`);
+    refused(
+      "docs/handbook.md",
+      "must be in the project store: start it with store/",
+    );
+    refused(".work/project.json", "must be in the project store");
+    refused("storefront/a.json", "must be in the project store");
+    refused("/store/a.json", "must be relative");
+    refused("store/../secrets.json", "may not contain '..'");
+    refused("store/a/./b.json", "may not contain '.'");
+    refused("store//a.json", "has an empty folder name (//)");
+    refused("store/a//", "has an empty folder name (//)");
+    refused("store/a\\b.json", "must use / between folders");
+    refused(
+      "store/a/**",
+      "must name a document or a folder, not a pattern: end a folder with /",
+    );
+    refused("store/*.json", "must name a document or a folder, not a pattern");
+    refused(" store/a.json", "has spaces at its start or end");
+    refused("store", "names the store itself: write store/ for all of it");
+    refused("", "is empty");
+  });
+
+  it("refuses an access other than read or write", () => {
+    expect(() =>
+      documentsOf('[{ path: "store/a.json", access: "delete" }]'),
+    ).toThrow(
+      `Workflow document 'store/a.json' needs access: "read" or "write"`,
+    );
+    expect(() => documentsOf('[{ path: "store/a.json" }]')).toThrow(
+      `Workflow document 'store/a.json' needs access: "read" or "write"`,
+    );
+    expect(() => documentsOf('[{ access: "read" }]')).toThrow(
+      "Workflow document entries need a path",
+    );
+    expect(() =>
+      documentsOf('[{ path: "store/a.json", access: "read", why: "x" }]'),
+    ).toThrow("Workflow document entries take only path and access, not why");
+  });
+
+  it("refuses computed lists, entries and paths: the source is what is consented to", () => {
+    const computed = "the paths turned on are the paths in the source";
+    expect(() =>
+      documentsOf(
+        "DOCUMENTS",
+        'const DOCUMENTS = [{ path: "store/a/", access: "read" }];',
+      ),
+    ).toThrow("Workflow 'documents' must be an array written in place");
+    expect(() =>
+      documentsOf(
+        "[ENTRY]",
+        'const ENTRY = { path: "store/a/", access: "read" };',
+      ),
+    ).toThrow("Workflow 'documents' entries must be written in place");
+    expect(() =>
+      documentsOf(
+        '[{ path: FOLDER, access: "read" }]',
+        'const FOLDER = "store/a/";',
+      ),
+    ).toThrow(computed);
+    expect(() =>
+      documentsOf(
+        `[{ path: \`store/\${REPO}/\`, access: "read" }]`,
+        'const REPO = "web";',
+      ),
+    ).toThrow(computed);
+    expect(() =>
+      documentsOf('[{ path: "store/" + "a/", access: "read" }]'),
+    ).toThrow(computed);
+    expect(() =>
+      documentsOf('[{ path, access: "read" }]', 'const path = "store/a/";'),
+    ).toThrow(computed);
+    expect(() =>
+      documentsOf('[...[{ path: "store/a/", access: "read" }]]'),
+    ).toThrow("entries must be written in place");
+  });
+});
+
 describe("declared concurrency (ADR 0325)", () => {
   const withConcurrency = (value: string) => `
 export const publish = defineWorkflow(({ defineBoundary }) => ({
