@@ -301,11 +301,13 @@ summaries up to 4,000 characters, and an optional reply. A `finding` has an
 id of letters, digits, `.`, `_` and `-`, a path, a line (or a range ending
 there), a side, a `blocking`, `important` or `minor` severity, a title up to
 200 characters and a body up to 1,500. Unknown fields, including the old
-`comments` and `resolve`, are rejected, and so is a review or finding
-holding text shaped like the stamp anywhere, so it cannot forge one. One
-with characters that reorder or hide text (direction controls, tag
-characters) is refused too, so a suggestion cannot read one way and apply
-another. `turnFindings` picks a turn's first 30 distinct valid findings,
+`comments` and `resolve`, are rejected. Text shaped like the stamp, so it
+cannot forge one, and characters that reorder or hide text (direction
+controls, tag characters), so a suggestion cannot read one way and apply
+another, are refused when the reviewer submits them: both schemas refuse
+them in every text field, saying what to leave out, so the reviewer
+corrects the field and submits again, and the poster refuses them again
+anywhere in a value. `turnFindings` picks a turn's first 30 distinct valid findings,
 each as first submitted, and counts the distinct ones after them.
 
 Each body is defused whole as it is posted (a finding's inline comment, the

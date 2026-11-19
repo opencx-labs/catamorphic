@@ -537,6 +537,37 @@ describe("the pull-request-reviews pack", () => {
     expect(checkResultValue({ schema: finding, value: verified })).toEqual({
       value: verified,
     });
+    // Text shaped like Work's marker (a quoted comment's, say), or that
+    // reorders or hides text, is refused when it is submitted, saying what
+    // to leave out, so the reviewer corrects it and submits again.
+    for (const [schema, value, path] of [
+      [
+        review,
+        {
+          ...report,
+          reply: { body: "As posted:\n<!-- work-review:abc:finding:f1 -->" },
+        },
+        "/reply/body",
+      ],
+      [review, { ...report, summary: "<!--WORK-REVIEW: x" }, "/summary"],
+      [finding, { ...verified, body: "Fine \u202E reversed" }, "/body"],
+      [finding, { ...verified, title: "Tagged \u{E0041}" }, "/title"],
+      [
+        finding,
+        { ...verified, path: "src/<!-- work-review:x -->.ts" },
+        "/path",
+      ],
+    ] as const) {
+      const checked = checkResultValue({ schema, value });
+      expect("errors" in checked && checked.errors).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            path,
+            message: expect.stringMatching(/leave (it|them) out/),
+          }),
+        ]),
+      );
+    }
     // Blank as JavaScript reads it (a no-break space, say) is blank to
     // the schema too, so the poster never drops what Work accepted.
     for (const blank of ["\u00a0", "\ufeff\u2028", " \t"])

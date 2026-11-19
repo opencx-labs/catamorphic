@@ -75,7 +75,10 @@ the rest are counted, not posted: report what matters most first.
   after a restart is safe; a new problem needs a new id. After a restart or
   a hand-off, read the pull request's `review_threads` before you submit
   more: each posted finding's comment ends with
-  `<!-- work-review:<commit>:finding:<id> -->`, its id.
+  `<!-- work-review:<commit>:finding:<id> -->`, its id. Never write such a
+  marker yourself, in a finding, your review or a reply, quoting a comment
+  included: Work writes them, and a value holding one (or characters that
+  reorder or hide text) is refused when you submit it, saying which field.
 - `path`, `line`: a line the diff shows (`line` in the new file;
   `"side": "LEFT"` for a removed line). `startLine` makes it a range ending
   at `line`. A finding on lines outside the diff is not posted on its own;
