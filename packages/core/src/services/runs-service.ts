@@ -3057,11 +3057,16 @@ export class RunsService {
             transaction: trx,
           });
           if (args.start) {
-            // The run keeps who enrolled it; it now runs where it was admitted.
+            // The run keeps who enrolled it; it now runs where it was
+            // admitted, holding what that owner holds now of the starting
+            // commit's declarations (ADRs 0158, 0335), not what it held
+            // when it queued.
+            const { external_user_id: _enrolled, ...holds } = caller;
             await trx
               .updateTable("workflow_runs")
               .set({
                 ...row,
+                ...holds,
                 allocation_id: allocation.id,
                 environment_name: admission.environmentName,
                 status: "pending",

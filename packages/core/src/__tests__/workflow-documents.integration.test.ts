@@ -68,7 +68,40 @@ export const readConfig = defineWorkflow(({ defineBoundary }) => ({
 }));
 `;
 
-type Op = { op: string; path?: string; prefix?: string; child?: Op };
+type Op = {
+  op: string;
+  path?: string;
+  prefix?: string;
+  child?: Op;
+  key?: string;
+};
+
+/**
+ * A second project's workflows: runs of queuedCursor about one key take
+ * turns, and noteKeeper keeps notes.
+ */
+const queueWorkflows = (input: { queued: string; notes: string }) => `
+import { type BoundaryContext, defineWorkflow } from "@catamorphic/workflow";
+
+type Op = { op: string; path?: string; key?: string };
+
+export const queuedCursor = defineWorkflow(({ defineBoundary }) => ({
+  concurrency: { key: "key", onConflict: "queue" },
+  documents: ${input.queued},
+  steps: [
+    defineBoundary({ run: ({ input }: BoundaryContext<Op>) => input }),
+    defineBoundary({ run: ({ input }: BoundaryContext<unknown>) => ({ result: input }) }),
+  ],
+}));
+
+export const noteKeeper = defineWorkflow(({ defineBoundary }) => ({
+  documents: ${input.notes},
+  steps: [
+    defineBoundary({ run: ({ input }: BoundaryContext<Op>) => input }),
+    defineBoundary({ run: ({ input }: BoundaryContext<unknown>) => ({ result: input }) }),
+  ],
+}));
+`;
 
 function terminalFor(
   value: Op,
@@ -603,6 +636,189 @@ describeIf("workflows declare the store documents they use (ADR 0335)", () => {
     expect(await enablement(projectEnablement)).toMatchObject({
       commitSha: narrowed.commitSha,
       updateAvailable: true,
+    });
+  });
+
+  describe("queued runs and consent given again", () => {
+    let queueProject: string;
+    let queueAutomation: string;
+    const WRITE = '[{ path: "store/queue/", access: "write" }]';
+    const READ = '[{ path: "store/queue/", access: "read" }]';
+    const NOTES_WRITE = '[{ path: "store/notes/", access: "write" }]';
+    const NOTES_READ = '[{ path: "store/notes/", access: "read" }]';
+    let sources = { queued: WRITE, notes: NOTES_WRITE };
+
+    const admin = (externalUserId: string): Identity => ({
+      tenantId: root.tenantId,
+      externalUserId,
+      executionScope: [{ projectId: queueProject, name: "default" }],
+      scope: [
+        { kind: "workflow", projectId: queueProject, name: "*" },
+        {
+          kind: "document",
+          projectId: queueProject,
+          path: "store/**",
+          access: "write",
+        },
+      ],
+      projectPermissions: [
+        { projectId: queueProject, permission: "automations:write" },
+      ],
+    });
+
+    async function deployQueue(change: Partial<typeof sources>) {
+      sources = { ...sources, ...change };
+      await core.projects.writeFile(
+        root,
+        queueProject,
+        ".work/workflows/src/queue.ts",
+        { content: queueWorkflows(sources), commitMessage: "Queue" },
+      );
+      const deployed = await core.deployment.deploy(
+        root.tenantId,
+        queueProject,
+        root.externalUserId,
+        { message: "Queue" },
+      );
+      expect(deployed.status).toBe("deployed");
+      await core.publishedRevisions.advance();
+    }
+
+    async function enableQueue(input: {
+      workflowName: string;
+      identity: Identity;
+      owner?: { type: "project" };
+    }) {
+      const preview = await core.workflowEnablements.preview({
+        ...input,
+        projectId: queueProject,
+      });
+      return core.workflowEnablements.create({
+        ...input,
+        projectId: queueProject,
+        consentDigest: preview.consentDigest,
+      });
+    }
+
+    /** A run of `key` that stays live, and one queued behind it. */
+    async function queueBehind(input: {
+      enablementId: string;
+      identity: Identity;
+      key: string;
+      op: Op;
+    }) {
+      const trigger = (op: Op) =>
+        core.runs.triggerWithEnablement({
+          identity: input.identity,
+          projectId: queueProject,
+          workflowName: "queuedCursor",
+          enablementId: input.enablementId,
+          input: { ...op, key: input.key },
+        });
+      const ahead = await trigger({ op: "read", path: "store/queue/none" });
+      const behind = await trigger(input.op);
+      expect(behind.status).toBe("queued");
+      return { ahead: ahead.id, behind: behind.id };
+    }
+
+    /** The live run ends; the queued one starts as it is now, and runs. */
+    async function startBehind(queued: { ahead: string; behind: string }) {
+      await core.runs.cancel({ identity: root, runId: queued.ahead });
+      await core.runs.startQueuedRuns({ runId: queued.ahead });
+      return core.runs.driveInline({
+        tenantId: root.tenantId,
+        runId: queued.behind,
+        deadline: Date.now() + 30_000,
+      });
+    }
+
+    beforeAll(async () => {
+      queueProject = (await core.projects.create(root, { name: "queue" })).id;
+      await deployQueue({});
+      queueAutomation = (
+        await enableQueue({
+          workflowName: "queuedCursor",
+          identity: root,
+          owner: { type: "project" },
+        })
+      ).id;
+    }, 120_000);
+
+    it("a queued run starts with what a following revision narrowed its documents to", async () => {
+      const queued = await queueBehind({
+        enablementId: queueAutomation,
+        identity: root,
+        key: "narrowed",
+        op: { op: "write", path: "store/queue/narrowed.json" },
+      });
+      const before = (await enablement(queueAutomation)).commitSha;
+      await deployQueue({ queued: READ });
+      expect((await enablement(queueAutomation)).commitSha).not.toBe(before);
+      const started = await startBehind(queued);
+      expect(started.status).toBe("failed");
+      if (started.status === "failed")
+        expect(started.error).toMatch(
+          /Host call catamorphic\.documents\.write failed/,
+        );
+    });
+
+    it("a queued run starts with the documents consented to since it queued", async () => {
+      const queued = await queueBehind({
+        enablementId: queueAutomation,
+        identity: root,
+        key: "widened",
+        op: { op: "write", path: "store/queue/widened.json" },
+      });
+      // Widening waits for consent, then a person gives it.
+      await deployQueue({ queued: WRITE });
+      const waiting = await enablement(queueAutomation);
+      expect(waiting.documents).toEqual([
+        { path: "store/queue/", access: "read" },
+      ]);
+      const preview = await core.workflowEnablements.preview({
+        identity: root,
+        projectId: queueProject,
+        workflowName: "queuedCursor",
+        owner: { type: "project" },
+      });
+      await core.workflowEnablements.updateDeployment({
+        identity: root,
+        enablementId: queueAutomation,
+        consentDigest: preview.consentDigest,
+      });
+      expect((await enablement(queueAutomation)).documents).toEqual([
+        { path: "store/queue/", access: "write" },
+      ]);
+      expect(await startBehind(queued)).toMatchObject({ status: "completed" });
+    });
+
+    it("a member's queued run starts with what the member reaches when it starts", async () => {
+      const nour = admin("nour");
+      members.set("nour", nour);
+      const own = await enableQueue({
+        workflowName: "queuedCursor",
+        identity: nour,
+      });
+      const queued = await queueBehind({
+        enablementId: own.id,
+        identity: nour,
+        key: "member",
+        op: { op: "write", path: "store/queue/nour.json" },
+      });
+      // Nour now only reads the store.
+      members.set("nour", {
+        ...nour,
+        scope: [
+          { kind: "workflow", projectId: queueProject, name: "*" },
+          {
+            kind: "document",
+            projectId: queueProject,
+            path: "store/**",
+            access: "read",
+          },
+        ],
+      });
+      expect(await startBehind(queued)).toMatchObject({ status: "failed" });
     });
   });
 });
