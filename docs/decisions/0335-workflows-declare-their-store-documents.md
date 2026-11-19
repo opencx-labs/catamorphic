@@ -29,7 +29,11 @@ nothing else of the store, whoever starts them.**
   segments, leading `/`, backslashes, patterns or control characters, and
   only in Unicode NFC. A local store names a file only as it is spelled on
   disk, so a filesystem that ignores case or Unicode form never lets one
-  path reach the file another names. Each
+  path reach the file another names. Whoever first creates a store folder
+  on such a filesystem fixes its spelling there: a path spelled otherwise
+  is refused, an older row spelled otherwise is left out of lists and can
+  still be deleted, and a folder removed while a path is checked is not
+  found. Each
   entry is written in place with string literals, as `permissions` is, so
   the paths a person approves are the paths in the source. The parser, and
   so the capability check, refuses anything else and says why.
