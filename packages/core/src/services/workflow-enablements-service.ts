@@ -4,6 +4,7 @@ import {
   type WorkflowGraph,
   WorkflowSourceInvalidError,
 } from "@catamorphic/parser";
+import { workflowDocumentCovers } from "@catamorphic/workflow/document-access";
 import type { Kysely, Selectable, Transaction } from "kysely";
 import type { Identity } from "../identity.js";
 import {
@@ -11,6 +12,8 @@ import {
   identityCovers,
   mayUseProject,
   projectPrincipalIdentity,
+  type WorkflowDocumentDeclaration,
+  workflowDocumentRefs,
 } from "../identity.js";
 import { AccessDeniedError } from "./artifact-scope.js";
 import type { ConnectionAdmissionService } from "./connection-admission.js";
@@ -62,6 +65,8 @@ interface WorkflowTarget {
   artifact: DeploymentArtifact;
   requirements: WorkflowGraph["connections"];
   permissions: WorkflowGraph["permissions"];
+  /** The store paths the workflow declares at the commit (ADR 0335). */
+  documents: WorkflowGraph["documents"];
   /** The run secrets the project declares at the commit. */
   secrets?: readonly string[];
 }
@@ -191,6 +196,23 @@ export class WorkflowEnablementsService {
         `This workflow needs permissions you do not have: ${missing.join(", ")}`,
       );
     }
+    // The project's runs reach every declared store path (ADR 0335), so
+    // only someone who reaches them all may hand them on; a member's own
+    // runs reach only what the member does, so they may enable more.
+    if (owner.type === "project") {
+      const unreachable = target.documents.filter(
+        (document) =>
+          !workflowDocumentRefs({
+            projectId: input.projectId,
+            documents: [document],
+          }).every((ref) => identityCovers(input.identity, ref)),
+      );
+      if (unreachable.length > 0) {
+        throw new AccessDeniedError(
+          `This workflow uses store documents you cannot reach: ${unreachable.map(describeDocument).join(", ")}`,
+        );
+      }
+    }
     const admission = await this.deps.executionEnvironments.admit({
       identity: input.identity,
       projectId: input.projectId,
@@ -235,6 +257,7 @@ export class WorkflowEnablementsService {
       connections,
       capabilities,
       permissions: [...target.permissions],
+      documents: target.documents.map((document) => ({ ...document })),
       consentDigest: "",
       triggerCount: 0,
     };
@@ -393,6 +416,7 @@ export class WorkflowEnablementsService {
                 owner_identity: toJson(input.identity),
                 capabilities: toJson(preview.capabilities),
                 permissions: toJson(preview.permissions),
+                documents: toJson(preview.documents),
                 consent_digest: preview.consentDigest,
                 authority_digest: preview.authorityDigest,
                 temporary: input.temporary ?? false,
@@ -796,6 +820,17 @@ export class WorkflowEnablementsService {
         reason:
           "This revision changes what the workflow may use or what starts it (connections, permissions, Environment, triggers or secrets)",
       };
+    // Documents are compared by what they cover (ADR 0335): a narrower
+    // declaration follows; a new path, or read to write, asks again.
+    const widened = documentsBeyond({
+      declared: preview.documents,
+      consented: current.documents,
+    });
+    if (widened.length > 0)
+      return {
+        kind: "needs_consent",
+        reason: `This revision uses store documents not consented to: ${widened.map(describeDocument).join(", ")}`,
+      };
     return { kind: "ready", preview, actor, enablement: current };
   }
 
@@ -956,6 +991,7 @@ export class WorkflowEnablementsService {
         authority_digest: preview.authorityDigest,
         capabilities: toJson(preview.capabilities),
         permissions: toJson(preview.permissions),
+        documents: toJson(preview.documents),
         update_available: false,
         ...(input.keepStatus
           ? {}
@@ -1131,6 +1167,7 @@ export class WorkflowEnablementsService {
             workflowName: row.workflow_name,
             connections,
             permissions,
+            documents: documentArray(row.documents),
           })
         : storedIdentity.scope !== undefined && this.deps.resolveMemberIdentity
           ? await this.deps.resolveMemberIdentity({
@@ -1530,6 +1567,7 @@ export class WorkflowEnablementsService {
       connections: connections.map(mapResolvedConnection),
       capabilities: stringArray(row.capabilities),
       permissions: stringArray(row.permissions),
+      documents: documentArray(row.documents),
       consentDigest: row.consent_digest,
       status: row.status as WorkflowEnablementStatus,
       suspensionReason: row.suspension_reason,
@@ -1661,6 +1699,37 @@ function mapResolvedConnection(
   connection: ResolvedConnectionBinding,
 ): WorkflowEnablementConnection {
   return { ...connection, capabilities: [...connection.capabilities] };
+}
+
+/** Stored document declarations (ADR 0335), as written by this service. */
+function documentArray(value: Json): WorkflowDocumentDeclaration[] {
+  return (Array.isArray(value) ? value : []).flatMap((item) =>
+    item &&
+    typeof item === "object" &&
+    !Array.isArray(item) &&
+    typeof item.path === "string" &&
+    (item.access === "read" || item.access === "write")
+      ? [{ path: item.path, access: item.access }]
+      : [],
+  );
+}
+
+/** The declared documents no consented one covers (ADR 0335). */
+function documentsBeyond(input: {
+  declared: readonly WorkflowDocumentDeclaration[];
+  consented: readonly WorkflowDocumentDeclaration[];
+}): WorkflowDocumentDeclaration[] {
+  return input.declared.filter(
+    (document) =>
+      !input.consented.some((consented) =>
+        workflowDocumentCovers(consented, document),
+      ),
+  );
+}
+
+/** `store/polling/ (write)`: a declared path as consent shows it. */
+function describeDocument(document: WorkflowDocumentDeclaration): string {
+  return `${document.path} (${document.access})`;
 }
 
 function stringArray(value: Json): string[] {

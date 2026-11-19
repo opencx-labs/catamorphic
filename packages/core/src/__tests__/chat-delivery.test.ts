@@ -216,6 +216,28 @@ describe("chatOwner", () => {
     ).rejects.toThrow("mallory is not a member");
   });
 
+  it("the project chat never holds the store paths an automation's run holds (ADR 0335)", async () => {
+    const enablement = { owner_kind: "project", owner_external_user_id: null };
+    const caller = projectPrincipalIdentity({
+      tenantId,
+      projectId,
+      environment: "production",
+      workflowName: "pollGithub",
+      documents: [{ path: "store/github-polling/", access: "write" }],
+    });
+    expect(caller.scope).toContainEqual({
+      kind: "document",
+      projectId,
+      path: "store/github-polling/**",
+      access: "write",
+    });
+    const chat = await owner({ caller, audience: "project", enablement });
+    expect(chat.scope).toEqual([
+      { kind: "workflow", projectId, name: "pollGithub" },
+      { kind: "agent", projectId, name: "*" },
+    ]);
+  });
+
   it("a hand-started run reaches its caller; the project chat takes automations:write", async () => {
     await expect(
       owner({ caller: alice, audience: undefined, enablement: undefined }),

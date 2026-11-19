@@ -36,6 +36,7 @@ export {
   isScoped,
   mayUseProject,
   narrowIdentity,
+  narrowStoreDocuments,
   PROJECT_PERMISSION_GRANT_PATTERN,
   PROJECT_PERMISSION_PATTERN,
   PROJECT_PERMISSIONS,
@@ -49,7 +50,9 @@ export {
   sameArtifact,
   scopeCovers,
   type TenantId,
+  type WorkflowDocumentDeclaration,
   type WorkflowRef,
+  workflowDocumentRefs,
 } from "./identity.js";
 export {
   appScaffold,

@@ -8,9 +8,11 @@ import {
   intersectProjectPermissions,
   intersectScope,
   narrowIdentity,
+  narrowStoreDocuments,
   permissionCovers,
   projectPrincipalIdentity,
   scopeCovers,
+  workflowDocumentRefs,
 } from "../identity.js";
 import { projectAdmin } from "./project-admin.js";
 
@@ -238,5 +240,71 @@ describe("identity scope (ADR 0053 / 0055)", () => {
     expect(
       scopeCovers(inApp.scope ?? [], { kind: "agent", projectId, name: "csm" }),
     ).toBe(false);
+  });
+});
+
+describe("store paths a workflow declares (ADR 0335)", () => {
+  const ref = (
+    path: string,
+    access: "read" | "write" = "read",
+    project = projectId,
+  ): ArtifactRef => ({ kind: "document", projectId: project, path, access });
+  const narrow = (
+    scope: ArtifactRef[],
+    documents: Array<{ path: string; access: "read" | "write" }>,
+  ) => narrowStoreDocuments({ scope, projectId, documents });
+
+  it("a folder is its subtree, any other path one document", () => {
+    expect(
+      workflowDocumentRefs({
+        projectId,
+        documents: [
+          { path: "store/polling/", access: "write" },
+          { path: "store/config.json", access: "read" },
+        ],
+      }),
+    ).toEqual([ref("store/polling/**", "write"), ref("store/config.json")]);
+  });
+
+  it("keeps each declared path the scope reaches, with write only where both give it", () => {
+    expect(
+      narrow(
+        [ref("store/**"), ref("store/polling/mira/**", "write")],
+        [
+          { path: "store/polling/", access: "write" },
+          { path: "store/config.json", access: "read" },
+        ],
+      ),
+    ).toEqual([
+      // The declared folder, as far as the scope reads it.
+      ref("store/polling/**"),
+      // The part of the folder the scope writes.
+      ref("store/polling/mira/**", "write"),
+      ref("store/config.json"),
+    ]);
+  });
+
+  it("drops every store ref the workflow does not declare, never a longer sibling", () => {
+    expect(
+      narrow(
+        [
+          ref("store/pollingx.json", "write"),
+          ref("store/polling-old/**", "write"),
+          ref("store/secrets.json"),
+          ref("store/polling/a.json", "write", "other-project"),
+        ],
+        [{ path: "store/polling/", access: "write" }],
+      ),
+    ).toEqual([]);
+    expect(narrow([ref("store/**", "write")], [])).toEqual([]);
+  });
+
+  it("leaves artifact and program refs as they are", () => {
+    const kept: ArtifactRef[] = [
+      { kind: "workflow", projectId, name: "pollGithub" },
+      { kind: "agent", projectId, name: "*" },
+      ref("docs/**"),
+    ];
+    expect(narrow([...kept, ref("store/**", "write")], [])).toEqual(kept);
   });
 });

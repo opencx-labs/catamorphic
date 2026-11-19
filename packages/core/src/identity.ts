@@ -400,6 +400,8 @@ export function projectPrincipalIdentity(input: {
     capabilities?: readonly string[];
   }>;
   permissions?: readonly ProjectPermission[];
+  /** The store paths consented to when it was turned on (ADR 0335). */
+  documents?: readonly WorkflowDocumentDeclaration[];
 }): Identity {
   return {
     tenantId: input.tenantId,
@@ -415,6 +417,10 @@ export function projectPrincipalIdentity(input: {
           ]
         : []),
       { kind: "agent", projectId: input.projectId, name: EVERY_ARTIFACT },
+      ...workflowDocumentRefs({
+        projectId: input.projectId,
+        documents: input.documents ?? [],
+      }),
     ],
     executionScope: [{ projectId: input.projectId, name: input.environment }],
     projectPermissions: (input.permissions ?? []).map((permission) => ({
@@ -483,11 +489,87 @@ export function documentRefCovers(
 ): boolean {
   if (entry.projectId !== ref.projectId) return false;
   if (ref.access === "write" && entry.access !== "write") return false;
-  if (entry.path.endsWith("/**")) {
-    const prefix = entry.path.slice(0, -2); // keep the trailing slash
-    return ref.path === prefix.slice(0, -1) || ref.path.startsWith(prefix);
-  }
-  return entry.path === ref.path;
+  return documentPathCovers(entry.path, ref.path);
+}
+
+/**
+ * Whether a document ref's path reaches another's, access aside: the same
+ * path, or under a `/**` subtree. `store/a/**` never reaches `store/ab`.
+ */
+function documentPathCovers(outer: string, inner: string): boolean {
+  if (!outer.endsWith("/**")) return outer === inner;
+  const prefix = outer.slice(0, -2); // keep the trailing slash
+  return inner === prefix.slice(0, -1) || inner.startsWith(prefix);
+}
+
+/** A store path a workflow declares (ADR 0335); `/` ends a folder. */
+export interface WorkflowDocumentDeclaration {
+  path: string;
+  access: "read" | "write";
+}
+
+/**
+ * A workflow's declared store paths as document refs (ADR 0335): a folder
+ * (`store/a/`) is its subtree (`store/a/**`), any other path one document.
+ */
+export function workflowDocumentRefs(input: {
+  projectId: string;
+  documents: readonly WorkflowDocumentDeclaration[];
+}): DocumentRef[] {
+  return input.documents.map((document) => ({
+    kind: "document",
+    projectId: input.projectId,
+    path: document.path.endsWith("/") ? `${document.path}**` : document.path,
+    access: document.access,
+  }));
+}
+
+function isStoreRef(ref: ArtifactRef): ref is DocumentRef {
+  return (
+    ref.kind === "document" &&
+    (ref.path === "store" || ref.path.startsWith("store/"))
+  );
+}
+
+/**
+ * A run's scope with its project store refs narrowed to what its workflow
+ * declares (ADR 0335): each declared path the scope reaches, or the part
+ * of it the scope reaches, with `write` only where both give it. Nothing
+ * else of the store survives; artifact and program refs stay as they are.
+ * It can only narrow.
+ */
+export function narrowStoreDocuments(input: {
+  scope: readonly ArtifactRef[];
+  projectId: string;
+  documents: readonly WorkflowDocumentDeclaration[];
+}): ArtifactRef[] {
+  const held = input.scope.filter(isStoreRef);
+  const kept: DocumentRef[] = [];
+  for (const declared of workflowDocumentRefs(input))
+    for (const entry of held) {
+      if (entry.projectId !== declared.projectId) continue;
+      const path = documentPathCovers(entry.path, declared.path)
+        ? declared.path
+        : documentPathCovers(declared.path, entry.path)
+          ? entry.path
+          : undefined;
+      if (!path) continue;
+      const access =
+        declared.access === "write" && entry.access === "write"
+          ? "write"
+          : "read";
+      if (
+        !kept.some((ref) => ref.path === path && ref.access === access) &&
+        !(access === "read" && kept.some((ref) => ref.path === path))
+      )
+        kept.push({
+          kind: "document",
+          projectId: declared.projectId,
+          path,
+          access,
+        });
+    }
+  return [...input.scope.filter((ref) => !isStoreRef(ref)), ...kept];
 }
 
 /**

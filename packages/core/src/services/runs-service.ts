@@ -35,6 +35,7 @@ import {
   intersectProjectPermissions,
   intersectScope,
   isProjectPrincipal,
+  narrowStoreDocuments,
 } from "../identity.js";
 import { assertAgentSessionAccess } from "./agent-session-access.js";
 import { allocationSandboxProvider } from "./allocation-sandbox-provider.js";
@@ -2157,6 +2158,7 @@ export class RunsService {
     artifact: DeploymentArtifact;
     requirements: WorkflowGraph["connections"];
     permissions: WorkflowGraph["permissions"];
+    documents: WorkflowGraph["documents"];
     secrets: string[];
     remoteBranch?: string;
   }> {
@@ -2196,6 +2198,7 @@ export class RunsService {
       remoteBranch: retained?.remote_branch ?? args.remoteBranch,
       requirements: source.graph.connections,
       permissions: source.graph.permissions,
+      documents: source.graph.documents,
       secrets: source.secretNames,
     };
   }
@@ -2283,6 +2286,7 @@ export class RunsService {
     capabilities: WorkflowCapabilities;
     execution: WorkflowExecutionDescriptor;
     permissions: readonly string[];
+    documents: WorkflowGraph["documents"];
     displayName?: string;
   }> {
     const graph = (
@@ -2292,6 +2296,7 @@ export class RunsService {
       capabilities: graph.capabilities,
       execution: graph.execution,
       permissions: graph.permissions,
+      documents: graph.documents,
       ...(graph.displayName ? { displayName: graph.displayName } : {}),
     };
   }
@@ -2928,11 +2933,23 @@ export class RunsService {
           const caller = {
             external_user_id: args.identity.externalUserId,
             // Who triggered the run, as verified by the host (ADR 0055):
-            // the caller's scope, or null for the root identity.
+            // the caller's scope, or null for the root identity. An
+            // automation's run reaches only the store paths its workflow
+            // declares, of what its owner reaches (ADR 0335).
             caller_scope:
               args.identity.scope === undefined
                 ? null
-                : jsonColumn(toJson(args.identity.scope)),
+                : jsonColumn(
+                    toJson(
+                      args.workflowEnablementId === undefined
+                        ? args.identity.scope
+                        : narrowStoreDocuments({
+                            scope: args.identity.scope,
+                            projectId: args.projectId,
+                            documents: source.graph.documents,
+                          }),
+                    ),
+                  ),
             caller_execution_scope:
               args.identity.executionScope === undefined
                 ? null

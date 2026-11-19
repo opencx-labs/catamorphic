@@ -12,6 +12,15 @@ export type WorkflowEnablementOwner =
   | { type: "member"; externalUserId: string }
   | { type: "project" };
 
+/**
+ * A project store path a workflow reads or writes (ADR 0335): one
+ * document, or a folder (ending in `/`) and everything under it.
+ */
+export interface WorkflowEnablementDocument {
+  path: string;
+  access: "read" | "write";
+}
+
 export interface WorkflowEnablementConnection {
   alias: string;
   connectionId: string;
@@ -44,6 +53,11 @@ export interface WorkflowEnablement {
   capabilities: string[];
   /** The project permissions the workflow declares, as consented to. */
   permissions: string[];
+  /**
+   * The store paths the workflow declares, as consented to (ADR 0335): a
+   * project automation's runs reach exactly these.
+   */
+  documents: WorkflowEnablementDocument[];
   consentDigest: string;
   status: WorkflowEnablementStatus;
   suspensionReason: string | null;
@@ -74,6 +88,8 @@ export interface WorkflowEnablementPreview {
   capabilities: string[];
   /** The project permissions the workflow declares (ADR 0158). */
   permissions: string[];
+  /** The store paths the workflow declares (ADR 0335). */
+  documents: WorkflowEnablementDocument[];
   consentDigest: string;
   /**
    * The consent digest without the code, with triggers and secret names

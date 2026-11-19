@@ -1316,6 +1316,7 @@ export interface WorkflowEnablements {
   created_at: Generated<Timestamp>;
   created_by_external_user_id: string;
   deployment_artifact_id: string;
+  documents: Generated<Json>;
   environment_name: string;
   expires_at: Timestamp | null;
   follow: Generated<boolean>;
