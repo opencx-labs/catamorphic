@@ -1384,7 +1384,8 @@ const RESHAPE_ACTIVITY = "Waiting to make this chat's workspace again";
  */
 type WorkspaceHold =
   | { kind: "turn" | "question" | "person" | "machine" | "saving" }
-  | { kind: "sync"; error: string };
+  | { kind: "sync"; error: string }
+  | { kind: "room"; reason: string };
 
 /** What holds a workspace, as a waiting turn and its failure name it. */
 function workspaceHoldText(hold: WorkspaceHold): string {
@@ -1401,6 +1402,8 @@ function workspaceHoldText(hold: WorkspaceHold): string {
       return "other work on it (saving or setting it up)";
     case "sync":
       return "a save that failed";
+    case "room":
+      return "too little room for it on its machines";
   }
 }
 
@@ -1418,6 +1421,8 @@ function workspaceHoldRemedy(hold: WorkspaceHold): string {
     case "saving":
     case "sync":
       return "Try again in a few minutes, or move the chat to a new workspace.";
+    case "room":
+      return hold.reason;
   }
 }
 
@@ -5490,7 +5495,11 @@ export class AgentSessionsService {
       // (ADR 0332) is given back the way an idle one is, as soon as nothing
       // uses it; the chat's turn waits for that, then is admitted again.
       if (allocation?.status === "active" && (due || recovering)) {
-        const shape = await this.giveBackForShape({ session, allocation });
+        const shape = await this.giveBackForShape({
+          identity,
+          session,
+          allocation,
+        });
         if (shape === "released" || shape === "failed") continue;
         if (shape === "waiting") return;
       }
@@ -11800,6 +11809,95 @@ export class AgentSessionsService {
       : { kind: "waiting" };
   }
 
+  /** What admits a chat's workspace, shaped for every agent working in it. */
+  private async workspaceAdmitArgs(input: {
+    identity: Identity;
+    projectId: string;
+    session: SessionRow;
+    agent: Awaited<ReturnType<AgentSessionsService["resolveAgent"]>>;
+  }) {
+    const { session, agent } = input;
+    return {
+      identity: input.identity,
+      projectId: input.projectId,
+      owner: placementOwner(session.external_user_id),
+      ...(session.environment_name
+        ? { environment: session.environment_name }
+        : {}),
+      allowed: agent.environment?.allowed,
+      preferred: agent.environment?.preferred,
+      requirements: {
+        ...agent.environment?.requirements,
+        workload: "agent" as const,
+        topology: agent.topology,
+      },
+      ...(agent.signIn ? { signIn: agent.signIn } : {}),
+      // Shaped for every agent working in it: the chat's own and those of
+      // its shared subsessions (ADRs 0322, 0332).
+      harnessInSandbox: await this.harnessInSandboxFor({
+        projectId: input.projectId,
+        sessionId: session.id,
+        agentId: session.agent_id,
+      }),
+    };
+  }
+
+  /**
+   * Whether a workspace made again in its new shape (ADR 0332) would be
+   * admitted (disk and memory, ADRs 0100, 0335): on its own machine with
+   * its own reservation given back, or on another with room now. The hold
+   * when no machine would take it, so the live workspace is kept.
+   */
+  private async reshapedRoom(input: {
+    identity: Identity;
+    owner: SessionRow;
+    allocation: ExecutionAllocation;
+  }): Promise<WorkspaceHold | undefined> {
+    const { owner, allocation } = input;
+    if (!allocation.workerNodeId) return undefined;
+    const agent = await this.resolveAgent(
+      owner.agent_id,
+      owner.project_id,
+    ).catch(() => undefined);
+    // Admission says why, when it admits the chat again.
+    if (!agent) return undefined;
+    const admitArgs = await this.workspaceAdmitArgs({
+      identity: input.identity,
+      projectId: owner.project_id,
+      session: owner,
+      agent,
+    });
+    let refusal: EnvironmentCapacityError;
+    try {
+      const here = await this.executionEnvironments.admit({
+        ...admitArgs,
+        allocationBindingId: allocation.bindingId,
+        workerNodeId: allocation.workerNodeId,
+      });
+      const fit = await this.executionAllocations.fits({
+        identity: input.identity,
+        workerNodeId: allocation.workerNodeId,
+        workloadKind: "agent",
+        policy: admissionPolicy({ admission: here, connections: [] }),
+        replacing: allocation.id,
+      });
+      if (fit === true) return undefined;
+      refusal = fit;
+    } catch (error) {
+      if (!(error instanceof EnvironmentCapacityError)) return undefined;
+      refusal = error;
+    }
+    // Another machine with room now takes it once it is given back.
+    try {
+      await this.executionEnvironments.admit(admitArgs);
+      return undefined;
+    } catch (error) {
+      if (error instanceof EnvironmentCapacityError)
+        return { kind: "room", reason: refusal.message };
+      return undefined;
+    }
+  }
+
   /**
    * Admit a chat whose workspace was given back, or that never had one, on
    * its Environment again. With `wait`, a chat no machine can take yet
@@ -11821,32 +11919,15 @@ export class AgentSessionsService {
         })
       : undefined;
     const [kind, runnerId] = released?.bindingId.split(":") ?? [];
-    const admitArgs = {
+    const admitArgs = await this.workspaceAdmitArgs({
       identity:
         kind === "client" && runnerId
           ? { ...identity, clientRunnerId: runnerId }
           : identity,
       projectId,
-      owner: placementOwner(session.external_user_id),
-      ...(session.environment_name
-        ? { environment: session.environment_name }
-        : {}),
-      allowed: agent.environment?.allowed,
-      preferred: agent.environment?.preferred,
-      requirements: {
-        ...agent.environment?.requirements,
-        workload: "agent" as const,
-        topology: agent.topology,
-      },
-      ...(agent.signIn ? { signIn: agent.signIn } : {}),
-      // Shaped for every agent working in it: the chat's own and those of
-      // its shared subsessions (ADRs 0322, 0332).
-      harnessInSandbox: await this.harnessInSandboxFor({
-        projectId,
-        sessionId: session.id,
-        agentId: session.agent_id,
-      }),
-    };
+      session,
+      agent,
+    });
     const placed = options.wait
       ? await this.executionEnvironments.admitOrWait({
           ...admitArgs,
@@ -12641,6 +12722,7 @@ export class AgentSessionsService {
    * saying what kept the workspace and how to free it.
    */
   private async giveBackForShape(input: {
+    identity: Identity;
     session: SessionRow;
     allocation: ExecutionAllocation;
   }): Promise<"fits" | "released" | "waiting" | "failed"> {
@@ -12738,24 +12820,33 @@ export class AgentSessionsService {
           .where("id", "=", owner.sandbox_id)
           .executeTakeFirst()
       : undefined;
-    const outcome = await this.giveBackWorkspace({
-      identity: {
-        tenantId: placed.tenant_id,
-        externalUserId: PROJECT_PRINCIPAL_ID,
-        scope: [],
-      },
-      row: {
-        id: owner.id,
-        project_id: owner.project_id,
-        agent_id: owner.agent_id,
-        allocation_id: allocation.id,
-        sandbox_provider_id:
-          placed.sandbox_provider_id ?? sandbox?.provider_id ?? null,
-        external_user_id: owner.external_user_id,
-      },
-      idleSince: new Date(),
-      reshape: true,
+    // Kept while no machine would take it made again: given back, the
+    // chat would lose the workspace it has and wait with none.
+    const room = await this.reshapedRoom({
+      identity: input.identity,
+      owner,
+      allocation,
     });
+    const outcome =
+      room ??
+      (await this.giveBackWorkspace({
+        identity: {
+          tenantId: placed.tenant_id,
+          externalUserId: PROJECT_PRINCIPAL_ID,
+          scope: [],
+        },
+        row: {
+          id: owner.id,
+          project_id: owner.project_id,
+          agent_id: owner.agent_id,
+          allocation_id: allocation.id,
+          sandbox_provider_id:
+            placed.sandbox_provider_id ?? sandbox?.provider_id ?? null,
+          external_user_id: owner.external_user_id,
+        },
+        idleSince: new Date(),
+        reshape: true,
+      }));
     if (outcome === true) {
       await this.endReshapeWait(sessionId);
       return "released";

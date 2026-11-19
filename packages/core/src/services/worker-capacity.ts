@@ -119,11 +119,16 @@ export interface WorkerUsage {
 export async function workerUsage(args: {
   db: Kysely<DB> | Transaction<DB>;
   nodeId: string;
+  /** An Allocation not to count: one about to be given back. */
+  excluding?: string;
 }): Promise<WorkerUsage> {
   const usage = await args.db
     .selectFrom("execution_allocations")
     .where("worker_node_id", "=", args.nodeId)
     .where("capacity_released_at", "is", null)
+    .$if(args.excluding !== undefined, (query) =>
+      query.where("id", "!=", args.excluding ?? ""),
+    )
     .select([
       sql<string>`count(*)`.as("workspaces"),
       sql<string>`coalesce(sum(reserved_cpu_millis), 0)`.as("cpu"),

@@ -299,6 +299,138 @@ export function reservedOf(policy: EnvironmentAllocationPolicy): {
 export class ExecutionAllocationsService {
   constructor(private readonly db: Kysely<DB>) {}
 
+  /**
+   * Whether work of this policy would be admitted on a machine now, as
+   * {@link create} admits it, with `replacing`'s reservation given back
+   * first: a workspace made again in a new shape (ADR 0332) takes the
+   * place of the one it replaces. The refusal, if it would not.
+   */
+  async fits(args: {
+    identity: Identity;
+    workerNodeId: string;
+    workloadKind: WorkloadKind;
+    policy: EnvironmentAllocationPolicy;
+    replacing?: string;
+  }): Promise<true | EnvironmentCapacityError> {
+    try {
+      await this.admitOnNode({ ...args, db: this.db, lock: false });
+      return true;
+    } catch (error) {
+      if (error instanceof EnvironmentCapacityError) return error;
+      throw error;
+    }
+  }
+
+  /**
+   * Admission on one machine (ADRs 0100, 0335): its Environment's defaults
+   * filled in, and refused with {@link EnvironmentCapacityError} where the
+   * machine has no room. The policy as it will be reserved.
+   */
+  private async admitOnNode(args: {
+    db: Kysely<DB> | Transaction<DB>;
+    identity: Identity;
+    workerNodeId: string;
+    workloadKind: WorkloadKind;
+    policy: EnvironmentAllocationPolicy;
+    lock: boolean;
+    replacing?: string;
+  }): Promise<EnvironmentAllocationPolicy> {
+    // The node's row lock orders this with a machine being drained before
+    // it is removed (ADR 0258): one that is disabled takes nothing new.
+    const query = args.db
+      .selectFrom("worker_nodes")
+      .selectAll()
+      .select(diskFreshSql.as("disk_fresh"))
+      .where("id", "=", args.workerNodeId)
+      .where("tenant_id", "=", args.identity.tenantId)
+      .where("enabled", "=", true)
+      .where("lease_expires_at", ">", sql<Date>`now()`);
+    const node = await (args.lock
+      ? query.forUpdate()
+      : query
+    ).executeTakeFirst();
+    if (!node) throw new EnvironmentCapacityError(args.workerNodeId);
+    const machine =
+      args.policy.binding.trust === "managed"
+        ? WorkerResourceDefaultsSchema.parse(node.default_resources)
+        : {};
+    // A pair's command side with no limits named anywhere gets the
+    // backend's default explicitly, so it is reserved too (ADR 0332).
+    const defaults =
+      args.policy.binding.trust === "managed" &&
+      args.policy.sandbox?.separateCommands
+        ? {
+            cpuMillis:
+              machine.cpuMillis ??
+              SEPARATE_COMMANDS_DEFAULT_RESOURCES.cpuMillis,
+            memoryMb:
+              machine.memoryMb ?? SEPARATE_COMMANDS_DEFAULT_RESOURCES.memoryMb,
+          }
+        : machine;
+    const policy: EnvironmentAllocationPolicy = {
+      ...args.policy,
+      requirements: {
+        ...args.policy.requirements,
+        resources: {
+          ...args.policy.requirements.resources,
+          cpuMillis:
+            args.policy.requirements.resources?.cpuMillis ?? defaults.cpuMillis,
+          memoryMb:
+            args.policy.requirements.resources?.memoryMb ?? defaults.memoryMb,
+        },
+      },
+    };
+    const disk = node.disk_fresh ? machineDiskOf(node.disk) : undefined;
+    if (node.capacity || disk) {
+      const usage = await workerUsage({
+        db: args.db,
+        nodeId: node.id,
+        ...(args.replacing ? { excluding: args.replacing } : {}),
+      });
+      const resources =
+        args.policy.binding.trust === "managed" ? reservedOf(policy) : {};
+      // A machine short of disk takes no new workspace; the work waits
+      // (ADR 0335). A workflow run starts down to the lower critical
+      // floor, so the workflows that free or replace a machine still run,
+      // and every reservation (a cache fill's size too) needs its room. A
+      // cache fill is held to the full floor whatever its Environment's
+      // workload: it fills the disk for the work that comes after it.
+      const workload = args.policy.sandbox?.fill
+        ? {}
+        : { workload: args.workloadKind };
+      if (
+        !diskFits({
+          usage,
+          resources,
+          ...workload,
+          ...(disk ? { disk } : {}),
+        })
+      )
+        throw new EnvironmentCapacityError(
+          node.id,
+          disk
+            ? {
+                disk,
+                floorBytes: floorFor({ disk, ...workload }),
+                ...(resources.storageMb
+                  ? { storageMb: resources.storageMb }
+                  : {}),
+              }
+            : undefined,
+        );
+      if (
+        node.capacity &&
+        !capacityFits({
+          capacity: WorkerCapacitySchema.parse(node.capacity),
+          usage,
+          resources,
+        })
+      )
+        throw new EnvironmentCapacityError(node.id);
+    }
+    return policy;
+  }
+
   async create(args: {
     identity: Identity;
     projectId: string;
@@ -314,98 +446,16 @@ export class ExecutionAllocationsService {
         .transaction()
         .execute((transaction) => this.create({ ...args, transaction }));
     const executor = args.transaction;
-    let policy = args.policy;
-    if (args.workerNodeId) {
-      // The node's row lock orders this with a machine being drained before
-      // it is removed (ADR 0258): one that is disabled takes nothing new.
-      const node = await executor
-        .selectFrom("worker_nodes")
-        .selectAll()
-        .select(diskFreshSql.as("disk_fresh"))
-        .where("id", "=", args.workerNodeId)
-        .where("tenant_id", "=", args.identity.tenantId)
-        .where("enabled", "=", true)
-        .where("lease_expires_at", ">", sql<Date>`now()`)
-        .forUpdate()
-        .executeTakeFirst();
-      if (!node) throw new EnvironmentCapacityError(args.workerNodeId);
-      const machine =
-        args.policy.binding.trust === "managed"
-          ? WorkerResourceDefaultsSchema.parse(node.default_resources)
-          : {};
-      // A pair's command side with no limits named anywhere gets the
-      // backend's default explicitly, so it is reserved too (ADR 0332).
-      const defaults =
-        args.policy.binding.trust === "managed" &&
-        args.policy.sandbox?.separateCommands
-          ? {
-              cpuMillis:
-                machine.cpuMillis ??
-                SEPARATE_COMMANDS_DEFAULT_RESOURCES.cpuMillis,
-              memoryMb:
-                machine.memoryMb ??
-                SEPARATE_COMMANDS_DEFAULT_RESOURCES.memoryMb,
-            }
-          : machine;
-      policy = {
-        ...args.policy,
-        requirements: {
-          ...args.policy.requirements,
-          resources: {
-            ...args.policy.requirements.resources,
-            cpuMillis:
-              args.policy.requirements.resources?.cpuMillis ??
-              defaults.cpuMillis,
-            memoryMb:
-              args.policy.requirements.resources?.memoryMb ?? defaults.memoryMb,
-          },
-        },
-      };
-      const disk = node.disk_fresh ? machineDiskOf(node.disk) : undefined;
-      if (node.capacity || disk) {
-        const usage = await workerUsage({ db: executor, nodeId: node.id });
-        const resources =
-          args.policy.binding.trust === "managed" ? reservedOf(policy) : {};
-        // A machine short of disk takes no new workspace; the work waits
-        // (ADR 0335). A workflow run starts down to the lower critical
-        // floor, so the workflows that free or replace a machine still run,
-        // and every reservation (a cache fill's size too) needs its room. A
-        // cache fill is held to the full floor whatever its Environment's
-        // workload: it fills the disk for the work that comes after it.
-        const workload = args.policy.sandbox?.fill
-          ? {}
-          : { workload: args.workloadKind };
-        if (
-          !diskFits({
-            usage,
-            resources,
-            ...workload,
-            ...(disk ? { disk } : {}),
-          })
-        )
-          throw new EnvironmentCapacityError(
-            node.id,
-            disk
-              ? {
-                  disk,
-                  floorBytes: floorFor({ disk, ...workload }),
-                  ...(resources.storageMb
-                    ? { storageMb: resources.storageMb }
-                    : {}),
-                }
-              : undefined,
-          );
-        if (
-          node.capacity &&
-          !capacityFits({
-            capacity: WorkerCapacitySchema.parse(node.capacity),
-            usage,
-            resources,
-          })
-        )
-          throw new EnvironmentCapacityError(node.id);
-      }
-    }
+    const policy = args.workerNodeId
+      ? await this.admitOnNode({
+          db: executor,
+          identity: args.identity,
+          workerNodeId: args.workerNodeId,
+          workloadKind: args.workloadKind,
+          policy: args.policy,
+          lock: true,
+        })
+      : args.policy;
     const reserved =
       args.policy.binding.trust === "managed" ? reservedOf(policy) : {};
     await requireTenantProject(
