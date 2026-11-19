@@ -21,6 +21,7 @@ import {
   createTestDatabase,
   enrollMachine,
   registryPack,
+  registryPackDependencies,
   testServerOptions,
 } from "./test-support.js";
 import {
@@ -794,6 +795,15 @@ describe.skipIf(!enabled)(
               type: "module",
               dependencies: {
                 "@catamorphic/workflow": WORKFLOW_PACKAGE_VERSION,
+                // The packs' own, as their install steps add them.
+                ...Object.fromEntries(
+                  ["pull-request-reviews", "github-polling"]
+                    .flatMap(registryPackDependencies)
+                    .map((pinned) => {
+                      const at = pinned.lastIndexOf("@");
+                      return [pinned.slice(0, at), pinned.slice(at + 1)];
+                    }),
+                ),
               },
             }),
           },
