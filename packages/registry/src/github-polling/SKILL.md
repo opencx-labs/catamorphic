@@ -52,7 +52,10 @@ only what it can state.
 The cursor is the project store document `CURSOR_PATH`
 (`store/github-polling/<repository>.json`), written with `ifVersion` after
 every poll, so two overlapping polls never move it backwards: the later
-write fails and the next poll picks up anything it missed. It holds:
+write fails and the next poll picks up anything it missed. The workflow
+declares its folder in `documents` (`store/github-polling/`, write, ADR
+0335): turned on for the project, its runs reach that folder and nothing
+else of the store, so keep `CURSOR_PATH` under it. It holds:
 
 - `baselineAt`: when polling began. Nothing created before it becomes an
   event. **The first poll records nothing**: it remembers the most recently
@@ -107,8 +110,11 @@ late and arrive in the order the poll finds them, not GitHub's.
 
 1. Check the project (the project MCP `program_check` tool) and deploy.
 2. Turn `pollGithub` on for the project in the `github-poller` Environment
-   with its `github` connection. It declares `events:write`, which recording
-   needs: whoever turns it on needs that permission and `automations:write`.
+   with its `github` connection. Its consent lists what it declares:
+   `events:write`, which recording needs, and the cursor folder
+   `store/github-polling/` (write). Whoever turns it on needs
+   `automations:write`, `events:write`, and a role whose `documents` write
+   that folder (an admin's `store/**` does).
 3. After the first run, the cursor document exists and no event was
    recorded. Open a pull request: within two polls an event
    `pull_request:<number>:opened:<sha>` exists and the workflows bound to

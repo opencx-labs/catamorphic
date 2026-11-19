@@ -17,6 +17,7 @@ import { gfmFromMarkdown } from "mdast-util-gfm";
 import { gfm } from "micromark-extension-gfm";
 import { describe, expect, it } from "vitest";
 import { packFiles } from "../pack-files.js";
+import { projectStoreCheck } from "../store-scope.js";
 import {
   checkWorkReview,
   publicationText,
@@ -206,7 +207,11 @@ const stallEvent = (input: {
   },
 });
 
-/** Runs `restartStalledReviews` under bun against a fake chat whose turn hangs. */
+/**
+ * Runs `restartStalledReviews` under bun against a fake chat whose turn
+ * hangs. It is turned on for the project, so the store refuses what Work
+ * refuses a project automation (ADR 0335).
+ */
 async function runStalled(script: string): Promise<unknown> {
   const directory = await fs.mkdtemp(path.join(os.tmpdir(), "stalled-recipe-"));
   try {
@@ -235,6 +240,7 @@ async function runStalled(script: string): Promise<unknown> {
       `
       import { restartStalledReviews } from "./stalled.ts";
       import { runWorkflow } from "./harness.ts";
+      ${projectStoreCheck({ files: PACK.files, workflowName: "restartStalledReviews" })}
       const log = [];
       // The chat's turn: each restart starts its next attempt, which hangs too.
       const turn = { id: "t1", attempt: { id: "attempt-1", ordinal: 1 }, restarts: 0, stalledAt: "2026-10-18T00:20:00Z" };
@@ -261,7 +267,7 @@ async function runStalled(script: string): Promise<unknown> {
         interrupt: (args) => { log.push(["interrupt", args.turnId, args.idempotencyKey]); return { interrupted: args.turnId === turn.id }; },
       });
       const written = {};
-      const documents = wrap({ write: (args) => { log.push(["write", args.path]); written[args.path] = JSON.parse(args.text); return { version: 1 }; } });
+      const documents = wrap({ write: (args) => { authorize(args.path, "write"); log.push(["write", args.path]); written[args.path] = JSON.parse(args.text); return { version: 1 }; } });
       const context = { host: { "catamorphic.sessions": sessions }, documents };
       ${script}
     `,
@@ -722,6 +728,10 @@ describe("the pull-request-reviews pack", () => {
     const [workflow, ...others] = parsed.workflows;
     expect(others).toEqual([]);
     expect(workflow?.functionName).toBe("restartStalledReviews");
+    // The evidence folder, consented to when it is turned on (ADR 0335).
+    expect(workflow?.graph.documents).toEqual([
+      { path: "store/reviews/stalls/", access: "write" },
+    ]);
     expect(workflow?.graph.triggers.map((binding) => binding.kind)).toEqual([
       "session.turn-stalled",
     ]);

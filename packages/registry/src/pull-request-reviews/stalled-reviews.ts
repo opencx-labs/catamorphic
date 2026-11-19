@@ -25,7 +25,10 @@ const MAX_RESTARTS = 2;
 /** The repository this project reviews, as `owner/name` (as in reviews.ts). */
 const REVIEWED_REPOSITORY = "acme/web";
 
-/** Where each stall's evidence is kept, per pull request number. */
+/**
+ * Where each stall's evidence is kept, per pull request number: the
+ * folder the workflow declares in `documents` below.
+ */
 const STALLS_PATH = "store/reviews/stalls";
 
 /** One stall, carried from call to call. */
@@ -119,6 +122,8 @@ export const restartStalledReviews = defineWorkflow(({ defineBoundary }) => ({
   concurrency: { key: "payload.session.key", onConflict: "queue" },
   // `restart` and `interrupt` act on the project's review chat.
   permissions: ["sessions:write"],
+  // The evidence folder: the only store paths its runs reach (ADR 0335).
+  documents: [{ path: "store/reviews/stalls/", access: "write" }],
   steps: [
     /** @displayname Read the review chat */
     defineBoundary({

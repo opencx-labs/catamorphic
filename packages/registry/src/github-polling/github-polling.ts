@@ -14,7 +14,10 @@ import {
 // `where` filters match.
 const REPOSITORY = "acme/web";
 
-/** The project store document that keeps the cursor between polls. */
+/**
+ * The project store document that keeps the cursor between polls. It must
+ * stay under the folder the workflow declares in `documents` below.
+ */
 const CURSOR_PATH = "store/github-polling/acme-web.json";
 
 /** Its folder: a list's prefix is a folder, never part of a name. */
@@ -379,6 +382,8 @@ interface Poll {
 /** @displayname Poll GitHub */
 export const pollGithub = defineWorkflow(({ defineBoundary }) => ({
   permissions: ["events:write"],
+  // The cursor's folder: the only store paths its runs reach (ADR 0335).
+  documents: [{ path: "store/github-polling/", access: "write" }],
   // Every minute. Each poll is a run: shorter intervals cost runs and
   // GitHub requests; longer ones delay reviews by up to the interval.
   triggers: [trigger("schedule", { cron: "* * * * *", timezone: "UTC" })],
