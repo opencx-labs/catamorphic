@@ -3,6 +3,10 @@
  * so every boundary that calls them replays alike.
  */
 
+import { fromMarkdown } from "mdast-util-from-markdown";
+import { gfmFromMarkdown } from "mdast-util-gfm";
+import { gfm } from "micromark-extension-gfm";
+
 /**
  * What the reviewer reports, once checked: its `review` result (ADR 0323),
  * which Work accepted against the schema in `.work/agents/reviewer.json`.
@@ -131,23 +135,297 @@ export function diffLines(result: unknown): Set<string> {
 
 /**
  * Report text is posted as the App: it mentions no one and hides nothing.
- * Every `<` that would open a comment (a fake stamp, a summary marker), a
- * declaration such as `<!DOCTYPE …>` or `<![CDATA[`, or a processing
- * instruction (`<?…?>`), all of which GitHub drops from a body, gets a
- * zero-width space after it, so none opens, however the text nests them,
- * and nothing is removed: the words, code spans included, read as written.
- * "@name" and "@org/team" stop notifying the same way.
+ * GitHub reads it as CommonMark with GitHub's extensions, and so does this,
+ * with a maintained parser. Its code blocks (suggestions included) and code
+ * spans are posted exactly as written: GitHub renders neither HTML nor
+ * mentions there. Everything else follows one strict rule:
+ *
+ * - every `&` and `<` is escaped (`&amp;`, `&lt;`), so no HTML, entity or
+ *   comment is ever interpreted;
+ * - every `@` is followed by a zero-width space, so it mentions no one,
+ *   except in a link's destination and in an autolink (`<https://…>`,
+ *   `<name@example.com>`), which keep working;
+ * - a link keeps its text and destination and drops its title, which only
+ *   shows on hover; an image becomes a link to it, its description shown;
+ * - a link reference or footnote definition, which shows nothing, has its
+ *   `[` escaped and shows as text;
+ * - characters people cannot see (zero-width, direction controls, tag
+ *   characters) are written out as `\u{…}`.
+ *
+ * The result is read again until nothing changes, since escaping can
+ * change how the rest reads; text that keeps changing, or that the parser
+ * cannot read, is escaped whole, code included. Run it once on the whole
+ * body GitHub gets, never on its parts one by one.
  */
 export function publicationText(text: string): string {
-  return text
-    .replace(/<(?=[!?])/g, "<\u200b")
-    .replace(/@(?=[A-Za-z0-9])/g, "@\u200b");
+  let current = text;
+  try {
+    for (let pass = 0; pass < 8; pass += 1) {
+      // Longer than a review needs, or nested deeper, which only slows
+      // the parser down (it is not linear in tables, long paragraphs of
+      // brackets, or nested lists).
+      if (current.length > PARSED_LIMIT || tooDeep(current)) break;
+      const next = rewritten(current);
+      if (next === current) return current;
+      current = next;
+    }
+  } catch {
+    // Too deep or too odd to read: escaped whole below.
+  }
+  return escapedWhole(current);
+}
+
+/**
+ * Text escaped whole, code included: nothing in it is HTML, an entity, a
+ * mention, a link, a definition or code, so GitHub shows it as written.
+ */
+function escapedWhole(text: string): string {
+  return prose(text).replace(/[[`~]/g, (char) => `&#${char.charCodeAt(0)};`);
+}
+
+/** The longest text read as Markdown: anything longer is escaped whole. */
+const PARSED_LIMIT = 16_384;
+
+/** The longest body this recipe posts before its stamp (GitHub takes 65,536). */
+const BODY_LIMIT = 65_536 - 256;
+
+/**
+ * A body to post with this recipe's `stamp` after it: the body defused,
+ * cut to fit GitHub's limit after defusing, and a code block it leaves
+ * open closed first, so the stamp is the HTML comment GitHub hides and not
+ * text in the block.
+ */
+export function stampedBody(body: string, stamp: string): string {
+  let text = publicationText(body);
+  if (text.length > BODY_LIMIT)
+    text = publicationText(text.slice(0, BODY_LIMIT));
+  // Escaped whole, it fits: no character grows past ten.
+  if (text.length > BODY_LIMIT)
+    text = escapedWhole(body.slice(0, BODY_LIMIT / 10));
+  // Escaped whole, nothing in it is code that could take the stamp.
+  if (text.length > PARSED_LIMIT || tooDeep(text))
+    return `${escapedWhole(text)}\n\n${stamp}`;
+  for (let pass = 0; pass < 2; pass += 1) {
+    const stamped = `${text}\n\n${stamp}`;
+    const at = text.length + 2;
+    let ranges: Array<[number, number]>;
+    try {
+      ranges = codeRanges(parsed(stamped));
+    } catch {
+      // Unreadable: with no code left in it, nothing can take the stamp.
+      return `${escapedWhole(text)}\n\n${stamp}`;
+    }
+    const open = ranges.find(([start, end]) => start < at && end > at);
+    if (!open) return stamped;
+    const fence = /^[ \t>]*(`{3,}|~{3,})/.exec(stamped.slice(open[0]))?.[1];
+    text = `${text}\n${fence ?? "```"}`;
+  }
+  return `${text}\n\n${stamp}`;
+}
+
+/**
+ * Characters that reorder or hide text even in code: direction overrides,
+ * embeddings and isolates, and tag characters. A report holding one is
+ * refused rather than posted, so a suggestion cannot read one way and
+ * apply another.
+ */
+const REORDERING = /[‪-‮⁦-⁩\u{E0000}-\u{E007F}]/u;
+
+/** Characters people cannot see, written out where prose has them. */
+const INVISIBLE =
+  /[\u00AD\u061C\u115F\u1160\u180E\u200B-\u200F\u202A-\u202E\u2060-\u206F\u3164\uFEFF\uFFA0\u{E0000}-\u{E007F}]|\u034F|\u17B4|\u17B5|[\uFE00-\uFE0E]|[\u{E0100}-\u{E01EF}]/gu;
+
+/** `text` with what people cannot see written out as `\u{…}`. */
+function visible(text: string): string {
+  return text.replace(INVISIBLE, (char: string, offset: number) => {
+    // The zero-width space this recipe puts after an `@`, and the joiner
+    // inside an emoji, stay.
+    if (char === "​" && text[offset - 1] === "@") return char;
+    if (
+      char === "‍" &&
+      /\p{Extended_Pictographic}️?$/u.test(
+        text.slice(Math.max(0, offset - 3), offset),
+      ) &&
+      /^\p{Extended_Pictographic}/u.test(text.slice(offset + 1, offset + 3))
+    )
+      return char;
+    return `\\u{${(char.codePointAt(0) ?? 0).toString(16).toUpperCase()}}`;
+  });
+}
+
+/** Prose as this recipe posts it: no HTML, entity, mention or hidden character. */
+function prose(text: string): string {
+  return visible(text)
+    .replace(/&(?!amp;|lt;|#91;|#96;|#126;)/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/@(?!​)/g, "@​");
+}
+
+/** A link destination as written inside `<…>`, its characters kept literal. */
+function destination(url: string): string {
+  return url
+    .replace(INVISIBLE, (char: string) => encodeURIComponent(char))
+    .replace(/[\r\n]/g, (char) => encodeURIComponent(char))
+    .replace(/[\\<>&]/g, "\\$&");
+}
+
+/** Text that reads as itself inside a link's brackets. */
+function label(text: string): string {
+  return prose(text).replace(/[\\`*_[\]()!~|#]/g, "\\$&");
+}
+
+type MarkdownRoot = ReturnType<typeof fromMarkdown>;
+type MarkdownNode = MarkdownRoot | MarkdownRoot["children"][number];
+
+/**
+ * `text` parsed as GitHub reads what this recipe posts. Prose never keeps a
+ * raw `<` (it is escaped), so only autolinks and code keep theirs: every
+ * other `<` is read as a plain character of the same length, and no HTML
+ * hides or shifts the code GitHub will see.
+ */
+function parsed(text: string): MarkdownRoot {
+  const autolinks = new Set(
+    [...text.matchAll(AUTOLINK)].map((match) => match.index),
+  );
+  const readable = text.replace(/</g, (char: string, offset: number) =>
+    autolinks.has(offset) ? char : "\uE000",
+  );
+  return fromMarkdown(readable, {
+    extensions: [gfm()],
+    mdastExtensions: [gfmFromMarkdown()],
+  });
+}
+
+/** A CommonMark autolink: `<scheme:…>` or `<name@example.com>`. */
+const AUTOLINK =
+  /<(?:[A-Za-z][A-Za-z0-9+.-]{1,31}:[^\s<>\p{Cc}]*|[A-Za-z0-9.!#$%&'*+/=?^_`{|}~-]+@[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?(?:\.[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?)*)>/gu;
+
+/** Whether a line opens more than 32 block quotes or lists. */
+function tooDeep(text: string): boolean {
+  return text.split("\n").some((line) => {
+    const prefix =
+      /^(?:[ \t]*(?:>|[-+*](?=[ \t])|\d{1,9}[.)](?=[ \t])))*/.exec(line)?.[0] ??
+      "";
+    return (prefix.match(/>|[-+*]|\d{1,9}[.)]/g)?.length ?? 0) > 32;
+  });
+}
+
+function span(node: MarkdownNode): [number, number] | undefined {
+  const start = node.position?.start.offset;
+  const end = node.position?.end.offset;
+  return start === undefined || end === undefined ? undefined : [start, end];
+}
+
+function childrenOf(node: MarkdownNode): MarkdownNode[] {
+  return "children" in node ? node.children : [];
+}
+
+/** Where `text` is code (blocks and spans), as GitHub reads it. */
+function codeRanges(root: MarkdownRoot): Array<[number, number]> {
+  const ranges: Array<[number, number]> = [];
+  const visit = (node: MarkdownNode) => {
+    const range = span(node);
+    if ((node.type === "code" || node.type === "inlineCode") && range)
+      ranges.push(range);
+    else for (const child of childrenOf(node)) visit(child);
+  };
+  visit(root);
+  return ranges;
+}
+
+/** `text` posted by the rule above, read once. */
+function rewritten(text: string): string {
+  return within(text, childrenOf(parsed(text)), 0, text.length);
+}
+
+/** `text[start, end)` posted by the rule: its nodes rewritten, the rest prose. */
+function within(
+  text: string,
+  nodes: readonly MarkdownNode[],
+  start: number,
+  end: number,
+): string {
+  let out = "";
+  let at = start;
+  for (const node of nodes) {
+    const range = span(node);
+    if (!range || range[0] < at) continue;
+    out += prose(text.slice(at, range[0]));
+    out += rewrite(text, node, range);
+    at = range[1];
+  }
+  return out + prose(text.slice(at, end));
+}
+
+function rewrite(
+  text: string,
+  node: MarkdownNode,
+  [start, end]: [number, number],
+): string {
+  switch (node.type) {
+    case "code":
+    case "inlineCode":
+      return text.slice(start, end);
+    case "link": {
+      // An autolink keeps working as written; a bare URL GitHub links by
+      // itself is prose.
+      if (text[start] === "<") return text.slice(start, end);
+      if (text[start] !== "[") return prose(text.slice(start, end));
+      const children = childrenOf(node);
+      const last = children.at(-1);
+      const labelEnd = (last && span(last)?.[1]) ?? start + 1;
+      return `[${within(text, children, start + 1, labelEnd)}](<${destination(node.url)}>)`;
+    }
+    case "image":
+      return `[${label(node.alt ?? node.url)}](<${destination(node.url)}>)`;
+    case "definition":
+    case "footnoteDefinition": {
+      const bracket = text.indexOf("[", start);
+      const opening = bracket >= start && bracket < end ? bracket : start;
+      return (
+        prose(text.slice(start, opening)) +
+        "\\" +
+        within(text, childrenOf(node), opening, end)
+      );
+    }
+    default:
+      return within(text, childrenOf(node), start, end);
+  }
+}
+
+/**
+ * Text shaped like this recipe's stamp (see `marker` in reviews.ts), which
+ * a retry finds by a raw search of GitHub bodies, code included.
+ */
+const STAMP_SHAPED = /<!--\s*work-review:/i;
+
+/**
+ * Why a report's text cannot be posted, or undefined. Code is posted as
+ * written, so text shaped like the stamp a retry looks for is refused
+ * wherever it is, and so are characters that reorder or hide text in it.
+ */
+function refusedText(value: unknown): string | undefined {
+  if (stringsOf(value).some((field) => STAMP_SHAPED.test(field)))
+    return "it holds text shaped like Work's review stamp (<!-- work-review:)";
+  if (stringsOf(value).some((field) => REORDERING.test(field)))
+    return "it holds characters that reorder or hide text (direction controls or tag characters)";
+  return undefined;
+}
+
+/** Every string a value holds, at any depth. */
+function stringsOf(value: unknown): string[] {
+  if (typeof value === "string") return [value];
+  if (Array.isArray(value)) return value.flatMap(stringsOf);
+  if (typeof value === "object" && value !== null)
+    return Object.values(value).flatMap(stringsOf);
+  return [];
 }
 
 /**
  * The turn's `review` result, checked field by field again: the sandbox
  * that submitted it is untrusted, and its schema is project code. A string
- * says why it cannot be used.
+ * says why it cannot be used. Its text is kept as written: each body is
+ * defused whole as it is posted (`publicationText`, `stampedBody`).
  */
 export function checkWorkReview(value: unknown): WorkReview | string {
   if (typeof value !== "object" || value === null || Array.isArray(value))
@@ -183,12 +461,14 @@ export function checkWorkReview(value: unknown): WorkReview | string {
     return "summary is missing or over 4,000 characters";
   if (!text(checkSummary, 4000))
     return "checkSummary is missing or over 4,000 characters";
+  const refused = refusedText(value);
+  if (refused) return refused;
   const checked: WorkReview = {
     reviewedCommit,
     verdict,
     score,
-    summary: publicationText(summary),
-    checkSummary: publicationText(checkSummary),
+    summary,
+    checkSummary,
     reply: null,
   };
   if (report.reply != null) {
@@ -205,7 +485,7 @@ export function checkWorkReview(value: unknown): WorkReview | string {
       return "reply is not { inReplyTo?, body } within its limits";
     checked.reply = {
       ...(typeof inReplyTo === "number" ? { inReplyTo } : {}),
-      body: publicationText(body),
+      body,
     };
   }
   return checked;
@@ -214,6 +494,8 @@ export function checkWorkReview(value: unknown): WorkReview | string {
 /**
  * A `finding` result, checked field by field again, as a review is: the
  * sandbox that submitted it is untrusted. A string says why it cannot be used.
+ * Its text is kept as written and defused whole where it is posted
+ * (`findingComment`, a review's body).
  */
 export function checkFinding(value: unknown): WorkFinding | string {
   if (typeof value !== "object" || value === null || Array.isArray(value))
@@ -231,6 +513,8 @@ export function checkFinding(value: unknown): WorkFinding | string {
   ];
   if (Object.keys(entry).some((key) => !fields.includes(key)))
     return "it has an unknown field";
+  const refused = refusedText(value);
+  if (refused) return refused;
   const { id, path, line, title, body } = entry;
   const startLine = entry.startLine ?? null;
   const side = entry.side ?? "RIGHT";
@@ -265,8 +549,8 @@ export function checkFinding(value: unknown): WorkFinding | string {
     startLine: typeof startLine === "number" ? startLine : null,
     side,
     severity,
-    title: publicationText(title),
-    body: publicationText(body),
+    title,
+    body,
   };
 }
 
@@ -306,8 +590,9 @@ const SEVERITY_LABELS: Record<WorkFinding["severity"], string> = {
 };
 
 /**
- * A finding as an inline comment of a review. Its marker rides along, so
- * the review's threads show a resumed reviewer which ids are posted.
+ * A finding as an inline comment of a review, defused whole as GitHub reads
+ * it. Its marker rides along after it, so the review's threads show a
+ * resumed reviewer which ids are posted.
  */
 export function findingComment(finding: WorkFinding, commit: string) {
   return {
@@ -317,7 +602,10 @@ export function findingComment(finding: WorkFinding, commit: string) {
     ...(finding.startLine === null
       ? {}
       : { startLine: finding.startLine, startSide: finding.side }),
-    body: `**${SEVERITY_LABELS[finding.severity]}:** ${finding.title}\n\n${finding.body}\n\n${findingMarker(commit, finding.id)}`,
+    body: stampedBody(
+      `**${SEVERITY_LABELS[finding.severity]}:** ${finding.title}\n\n${finding.body}`,
+      findingMarker(commit, finding.id),
+    ),
   };
 }
 

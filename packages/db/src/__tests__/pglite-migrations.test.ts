@@ -163,6 +163,7 @@ describe("PGlite migrations", () => {
       "086_shared_subsession_workspaces.sql",
       "088_stalled_turns.sql",
       "089_environment_caches.sql",
+      "090_reshape_waits.sql",
       "091_machine_disk.sql",
       "092_coalesced_runs_and_result_submissions.sql",
     ]);

@@ -297,14 +297,34 @@ fill takes it.
 Pure helpers `postReviews` checks a review and its findings with, with no
 IO, so a retried boundary computes the same thing. The `review` result has
 one full commit, a COMMENT or REQUEST_CHANGES verdict, a score from 1 to 5,
-summaries up to 4,000 characters, and an optional reply. A `finding` has an id of letters, digits, `.`, `_` and `-`,
-a path, a line (or a range ending there), a side, a `blocking`,
-`important` or `minor` severity, a title up to 200 characters and a body
-up to 1,500. Unknown fields, including the old `comments` and `resolve`,
-are rejected. Mentions and HTML comment delimiters are removed before
-publication, nested ones too, so a report cannot ping people or forge a
-stamp. `turnFindings` picks a turn's first 30 distinct valid findings, each
-as first submitted, and counts the distinct ones after them.
+summaries up to 4,000 characters, and an optional reply. A `finding` has an
+id of letters, digits, `.`, `_` and `-`, a path, a line (or a range ending
+there), a side, a `blocking`, `important` or `minor` severity, a title up to
+200 characters and a body up to 1,500. Unknown fields, including the old
+`comments` and `resolve`, are rejected, and so is a review or finding
+holding text shaped like the stamp anywhere, so it cannot forge one. One
+with characters that reorder or hide text (direction controls, tag
+characters) is refused too, so a suggestion cannot read one way and apply
+another. `turnFindings` picks a turn's first 30 distinct valid findings,
+each as first submitted, and counts the distinct ones after them.
+
+Each body is defused whole as it is posted (a finding's inline comment, the
+review, a check's summary, a reply), read as GitHub reads it (CommonMark
+with GitHub's extensions, through `mdast-util-from-markdown`): code blocks,
+suggestions included, and code spans are posted exactly as written.
+Everywhere else every `&` and `<` is escaped, so no HTML or entity is
+interpreted; every `@` stops notifying, except in a link's destination and
+in an autolink such as `<name@example.com>`; links drop their titles,
+images become links, link reference and footnote definitions show as text,
+and invisible characters are written out as `\u{…}`. A body is cut to fit
+GitHub after this, and one over 16 KB, or nested deeper than any review
+needs, is escaped whole, its formatting shown as text. The markers and
+stamp a body carries follow it as written.
+
+Updating an installed pack: this file reads Markdown with three packages,
+`mdast-util-from-markdown`, `mdast-util-gfm` and `micromark-extension-gfm`,
+at the versions the manifest pins. Add them to `.work/workflows/package.json`
+when you update this file, or the workflows do not deploy.
 
 ## .work/workflows/src/stalled-reviews.ts
 

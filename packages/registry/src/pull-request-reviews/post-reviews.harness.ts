@@ -13,6 +13,8 @@ type Call = { __call: () => Promise<Json>; state?: Json };
 export interface FakeReview {
   verdict: "COMMENT" | "REQUEST_CHANGES";
   reviewedCommit: string;
+  summary?: string;
+  checkSummary?: string;
   reply?: { inReplyTo?: number; body: string } | null;
   /** The attempt that submitted it; the turn may have later attempts. */
   attemptId?: string;
@@ -398,8 +400,8 @@ export function fakeWorld(input: { head: string }) {
           reviewedCommit: review.reviewedCommit,
           verdict: review.verdict,
           score: review.verdict === "REQUEST_CHANGES" ? 2 : 4,
-          summary: `Review of ${turnId}`,
-          checkSummary: `Check of ${turnId}`,
+          summary: review.summary ?? `Review of ${turnId}`,
+          checkSummary: review.checkSummary ?? `Check of ${turnId}`,
           reply: review.reply ?? null,
         },
       });

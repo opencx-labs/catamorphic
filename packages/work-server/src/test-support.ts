@@ -396,6 +396,18 @@ function isMissing(error: unknown): boolean {
  * an agent's `registry.read` returns (ADR 0262).
  */
 export function registryPack(name: string): Record<string, string> {
+  const item = registryItem(name);
+  return Object.fromEntries(
+    item.files.map((file) => [file.target ?? file.path, file.content]),
+  );
+}
+
+/** A registry pack's npm dependencies, pinned as `name@version`. */
+export function registryPackDependencies(name: string): string[] {
+  return registryItem(name).dependencies ?? [];
+}
+
+function registryItem(name: string) {
   const catalog = parseRegistryCatalog(
     fs.readFileSync(
       createRequire(import.meta.url).resolve(
@@ -406,9 +418,7 @@ export function registryPack(name: string): Record<string, string> {
   );
   const item = catalog.find((entry) => entry.name === name);
   if (!item) throw new Error(`No pack named ${name}`);
-  return Object.fromEntries(
-    item.files.map((file) => [file.target ?? file.path, file.content]),
-  );
+  return item;
 }
 
 /**

@@ -20,7 +20,9 @@ import {
   isFindingReview,
   list,
   MAX_FINDINGS,
+  publicationText,
   record,
+  stampedBody,
   turnFindings,
   type WorkFinding,
   type WorkReview,
@@ -1069,6 +1071,20 @@ export const postReviews = defineWorkflow(({ defineBoundary }) => ({
         )
           return { result: null, state };
         const stamp = marker(state, "review");
+        // Defused as GitHub reads it, the whole body at once; the findings'
+        // markers and the stamp follow it as written.
+        const prose = [
+          reviewBody({ review, outside: state.outside, summary: !failed }),
+          withheldNote(state),
+        ]
+          .filter((part) => part.length > 0)
+          .join("\n\n");
+        const stamps = [
+          ...[...state.findings, ...state.outside].map((finding) =>
+            findingMarker(commit, finding.id),
+          ),
+          stamp,
+        ].join("\n\n");
         // Never APPROVE: the verdict is COMMENT or REQUEST_CHANGES.
         return connections.github.create_review(
           {
@@ -1076,16 +1092,7 @@ export const postReviews = defineWorkflow(({ defineBoundary }) => ({
             number: state.number,
             event: review.verdict,
             commitId: commit,
-            body: [
-              reviewBody({ review, outside: state.outside, summary: !failed }),
-              withheldNote(state),
-              ...[...state.findings, ...state.outside].map((finding) =>
-                findingMarker(commit, finding.id),
-              ),
-              stamp,
-            ]
-              .filter((part) => part.length > 0)
-              .join("\n\n"),
+            body: prose ? stampedBody(prose, stamps) : stamps,
             comments: state.findings.map((finding) =>
               findingComment(finding, commit),
             ),
@@ -1148,7 +1155,7 @@ export const postReviews = defineWorkflow(({ defineBoundary }) => ({
           .flatMap((thread) => list(record(thread).comments).map(record))
           .find((comment) => comment.id === reply.inReplyTo);
         const stamp = marker(state, "reply");
-        const body = `${reply.body}\n\n${stamp}`;
+        const body = stampedBody(reply.body, stamp);
         return typeof asked?.id === "number"
           ? connections.github.reply_to_review_comment(
               {
@@ -1418,8 +1425,9 @@ function verdictOutput(state: Publication) {
   const said = review
     ? review.checkSummary
     : (state.problem ?? "No review was reported.");
+  // Defused as GitHub reads it, the whole summary at once.
   const summary = (parts: string[]) =>
-    parts.filter((part) => part.length > 0).join("\n\n");
+    publicationText(parts.filter((part) => part.length > 0).join("\n\n"));
   if (!state.tightens)
     return {
       title: VERDICT_TITLES[verdict],
@@ -1434,7 +1442,7 @@ function verdictOutput(state: Publication) {
         title: `${review.verdict === "REQUEST_CHANGES" ? "Changes requested" : "Nothing blocks"} (score ${review.score}/5)`,
         summary: summary([said, withheldNote(state)]),
       }
-    : { title: "No review", summary: said };
+    : { title: "No review", summary: summary([said]) };
 }
 
 /**
@@ -1625,7 +1633,5 @@ function reviewBody(input: {
               .join("\n"),
         ]
       : []),
-  ]
-    .join("\n\n")
-    .slice(0, 60000);
+  ].join("\n\n");
 }
