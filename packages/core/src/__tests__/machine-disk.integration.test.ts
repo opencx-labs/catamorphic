@@ -1,6 +1,10 @@
 import { randomUUID } from "node:crypto";
 import { createDatabase, migrateToLatest } from "@catamorphic/db";
-import type { EnvironmentBinding, MachineDisk } from "@catamorphic/sandbox";
+import {
+  cacheVolumeKey,
+  type EnvironmentBinding,
+  type MachineDisk,
+} from "@catamorphic/sandbox";
 import { sql } from "kysely";
 import pg from "pg";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
@@ -211,6 +215,37 @@ describe.skipIf(!db)("machine disk (ADR 0335)", () => {
       EnvironmentCapacityError,
     );
     await expect(workflow(1024)).resolves.toMatchObject({ status: "active" });
+    // A cache fill is held to the full floor whatever its Environment's
+    // workload: it fills a machine's disk for the work that comes after.
+    const fill = (sizeMb: number) =>
+      allocations.create({
+        identity,
+        projectId,
+        environmentName: "automations",
+        workloadKind: "workflow",
+        rootWorkloadId: randomUUID(),
+        workerNodeId: lease.id,
+        policy: {
+          binding,
+          requirements: { workload: "workflow" },
+          sandbox: {
+            fill: {
+              name: "pnpm",
+              path: "~/.cache/work/pnpm-store",
+              key: cacheVolumeKey({
+                projectId,
+                environment: "automations",
+                name: "pnpm",
+                generation: 1,
+              }),
+              sizeMb,
+            },
+          },
+        },
+      });
+    await expect(fill(64)).rejects.toThrow(/short of disk/);
+    await nodes.reportDisk({ lease, disk: report({ free: 20 * GIB }) });
+    await expect(fill(64)).resolves.toMatchObject({ status: "active" });
     // Under the critical floor nothing more starts.
     await nodes.reportDisk({ lease, disk: report({ free: 0.5 * GIB }) });
     await expect(workflow()).rejects.toBeInstanceOf(EnvironmentCapacityError);

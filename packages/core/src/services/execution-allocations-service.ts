@@ -368,12 +368,16 @@ export class ExecutionAllocationsService {
         // A machine short of disk takes no new workspace; the work waits
         // (ADR 0335). A workflow run starts down to the lower critical
         // floor, so the workflows that free or replace a machine still run,
-        // and every reservation (a cache fill's size too) needs its room.
+        // and every reservation (a cache fill's size too) needs its room. A
+        // cache fill is held to the full floor whatever its Environment's
+        // workload: it fills the disk for the work that comes after it.
         if (
           !diskFits({
             usage,
             resources,
-            workload: args.workloadKind,
+            ...(args.policy.sandbox?.fill
+              ? {}
+              : { workload: args.workloadKind }),
             ...(disk ? { disk } : {}),
           })
         )
