@@ -27,6 +27,20 @@ export function describeProjectPermission(permission: string): string {
   return PERMISSION_WORDS[permission] ?? permission;
 }
 
+/**
+ * A store path a workflow declares (ADR 0335) in plain words: "Write
+ * store/polling/ and everything in it", "Read store/config.json".
+ */
+export function describeWorkflowDocument(document: {
+  path: string;
+  access: "read" | "write";
+}): string {
+  const verb = document.access === "write" ? "Write" : "Read";
+  return document.path.endsWith("/")
+    ? `${verb} ${document.path} and everything in it`
+    : `${verb} ${document.path}`;
+}
+
 const SUSPENSION_WORDS: Record<string, string> = {
   member_removed: "Paused: its owner is no longer in the project.",
   workflow_denied: "Paused: its owner can no longer run this workflow.",

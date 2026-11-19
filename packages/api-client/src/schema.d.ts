@@ -3047,6 +3047,11 @@ export interface paths {
                                 optional?: boolean;
                             }[];
                             permissions: string[];
+                            documents: {
+                                path: string;
+                                /** @enum {string} */
+                                access: "read" | "write";
+                            }[];
                             canSuspend: boolean;
                             nodes: {
                                 id: string;
@@ -4025,6 +4030,11 @@ export interface paths {
                                 }[];
                                 capabilities: string[];
                                 permissions: string[];
+                                documents: {
+                                    path: string;
+                                    /** @enum {string} */
+                                    access: "read" | "write";
+                                }[];
                                 consentDigest: string;
                                 /** Format: uuid */
                                 id: string;
@@ -4136,6 +4146,11 @@ export interface paths {
                             }[];
                             capabilities: string[];
                             permissions: string[];
+                            documents: {
+                                path: string;
+                                /** @enum {string} */
+                                access: "read" | "write";
+                            }[];
                             consentDigest: string;
                             /** Format: uuid */
                             id: string;
@@ -4302,6 +4317,11 @@ export interface paths {
                             }[];
                             capabilities: string[];
                             permissions: string[];
+                            documents: {
+                                path: string;
+                                /** @enum {string} */
+                                access: "read" | "write";
+                            }[];
                             consentDigest: string;
                             deploymentArtifactDigest: string;
                             triggerCount: number;
@@ -4433,6 +4453,11 @@ export interface paths {
                             }[];
                             capabilities: string[];
                             permissions: string[];
+                            documents: {
+                                path: string;
+                                /** @enum {string} */
+                                access: "read" | "write";
+                            }[];
                             consentDigest: string;
                             /** Format: uuid */
                             id: string;
@@ -4550,6 +4575,11 @@ export interface paths {
                             }[];
                             capabilities: string[];
                             permissions: string[];
+                            documents: {
+                                path: string;
+                                /** @enum {string} */
+                                access: "read" | "write";
+                            }[];
                             consentDigest: string;
                             /** Format: uuid */
                             id: string;
@@ -4680,6 +4710,11 @@ export interface paths {
                             }[];
                             capabilities: string[];
                             permissions: string[];
+                            documents: {
+                                path: string;
+                                /** @enum {string} */
+                                access: "read" | "write";
+                            }[];
                             consentDigest: string;
                             /** Format: uuid */
                             id: string;
@@ -4816,6 +4851,11 @@ export interface paths {
                             }[];
                             capabilities: string[];
                             permissions: string[];
+                            documents: {
+                                path: string;
+                                /** @enum {string} */
+                                access: "read" | "write";
+                            }[];
                             consentDigest: string;
                             /** Format: uuid */
                             id: string;
@@ -4971,6 +5011,11 @@ export interface paths {
                             }[];
                             capabilities: string[];
                             permissions: string[];
+                            documents: {
+                                path: string;
+                                /** @enum {string} */
+                                access: "read" | "write";
+                            }[];
                             consentDigest: string;
                             /** Format: uuid */
                             id: string;
@@ -18052,6 +18097,11 @@ export interface paths {
                                 optional?: boolean;
                             }[];
                             permissions: string[];
+                            documents: {
+                                path: string;
+                                /** @enum {string} */
+                                access: "read" | "write";
+                            }[];
                             canSuspend: boolean;
                             nodes: {
                                 id: string;
@@ -19266,6 +19316,11 @@ export interface paths {
                             }[];
                             capabilities: string[];
                             permissions: string[];
+                            documents: {
+                                path: string;
+                                /** @enum {string} */
+                                access: "read" | "write";
+                            }[];
                             consentDigest: string;
                             deploymentArtifactDigest: string;
                             triggerCount: number;
@@ -19448,6 +19503,11 @@ export interface paths {
                             }[];
                             capabilities: string[];
                             permissions: string[];
+                            documents: {
+                                path: string;
+                                /** @enum {string} */
+                                access: "read" | "write";
+                            }[];
                             consentDigest: string;
                             /** Format: uuid */
                             id: string;

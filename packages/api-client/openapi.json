@@ -12454,6 +12454,23 @@
                         "type": "string"
                       }
                     },
+                    "documents": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "path": {
+                            "type": "string"
+                          },
+                          "access": {
+                            "type": "string",
+                            "enum": ["read", "write"]
+                          }
+                        },
+                        "required": ["path", "access"],
+                        "additionalProperties": false
+                      }
+                    },
                     "canSuspend": {
                       "type": "boolean"
                     },
@@ -12724,6 +12741,7 @@
                     "triggers",
                     "connections",
                     "permissions",
+                    "documents",
                     "canSuspend",
                     "nodes",
                     "edges",
@@ -14936,6 +14954,23 @@
                               "type": "string"
                             }
                           },
+                          "documents": {
+                            "type": "array",
+                            "items": {
+                              "type": "object",
+                              "properties": {
+                                "path": {
+                                  "type": "string"
+                                },
+                                "access": {
+                                  "type": "string",
+                                  "enum": ["read", "write"]
+                                }
+                              },
+                              "required": ["path", "access"],
+                              "additionalProperties": false
+                            }
+                          },
                           "consentDigest": {
                             "type": "string",
                             "minLength": 64,
@@ -15034,6 +15069,7 @@
                           "connections",
                           "capabilities",
                           "permissions",
+                          "documents",
                           "consentDigest",
                           "id",
                           "status",
@@ -15270,6 +15306,23 @@
                         "type": "string"
                       }
                     },
+                    "documents": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "path": {
+                            "type": "string"
+                          },
+                          "access": {
+                            "type": "string",
+                            "enum": ["read", "write"]
+                          }
+                        },
+                        "required": ["path", "access"],
+                        "additionalProperties": false
+                      }
+                    },
                     "consentDigest": {
                       "type": "string",
                       "minLength": 64,
@@ -15368,6 +15421,7 @@
                     "connections",
                     "capabilities",
                     "permissions",
+                    "documents",
                     "consentDigest",
                     "id",
                     "status",
@@ -15693,6 +15747,23 @@
                         "type": "string"
                       }
                     },
+                    "documents": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "path": {
+                            "type": "string"
+                          },
+                          "access": {
+                            "type": "string",
+                            "enum": ["read", "write"]
+                          }
+                        },
+                        "required": ["path", "access"],
+                        "additionalProperties": false
+                      }
+                    },
                     "consentDigest": {
                       "type": "string",
                       "minLength": 64,
@@ -15741,6 +15812,7 @@
                     "connections",
                     "capabilities",
                     "permissions",
+                    "documents",
                     "consentDigest",
                     "deploymentArtifactDigest",
                     "triggerCount",
@@ -16012,6 +16084,23 @@
                         "type": "string"
                       }
                     },
+                    "documents": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "path": {
+                            "type": "string"
+                          },
+                          "access": {
+                            "type": "string",
+                            "enum": ["read", "write"]
+                          }
+                        },
+                        "required": ["path", "access"],
+                        "additionalProperties": false
+                      }
+                    },
                     "consentDigest": {
                       "type": "string",
                       "minLength": 64,
@@ -16110,6 +16199,7 @@
                     "connections",
                     "capabilities",
                     "permissions",
+                    "documents",
                     "consentDigest",
                     "id",
                     "status",
@@ -16302,6 +16392,23 @@
                         "type": "string"
                       }
                     },
+                    "documents": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "path": {
+                            "type": "string"
+                          },
+                          "access": {
+                            "type": "string",
+                            "enum": ["read", "write"]
+                          }
+                        },
+                        "required": ["path", "access"],
+                        "additionalProperties": false
+                      }
+                    },
                     "consentDigest": {
                       "type": "string",
                       "minLength": 64,
@@ -16400,6 +16507,7 @@
                     "connections",
                     "capabilities",
                     "permissions",
+                    "documents",
                     "consentDigest",
                     "id",
                     "status",
@@ -16627,6 +16735,23 @@
                         "type": "string"
                       }
                     },
+                    "documents": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "path": {
+                            "type": "string"
+                          },
+                          "access": {
+                            "type": "string",
+                            "enum": ["read", "write"]
+                          }
+                        },
+                        "required": ["path", "access"],
+                        "additionalProperties": false
+                      }
+                    },
                     "consentDigest": {
                       "type": "string",
                       "minLength": 64,
@@ -16725,6 +16850,7 @@
                     "connections",
                     "capabilities",
                     "permissions",
+                    "documents",
                     "consentDigest",
                     "id",
                     "status",
@@ -16970,6 +17096,23 @@
                         "type": "string"
                       }
                     },
+                    "documents": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "path": {
+                            "type": "string"
+                          },
+                          "access": {
+                            "type": "string",
+                            "enum": ["read", "write"]
+                          }
+                        },
+                        "required": ["path", "access"],
+                        "additionalProperties": false
+                      }
+                    },
                     "consentDigest": {
                       "type": "string",
                       "minLength": 64,
@@ -17068,6 +17211,7 @@
                     "connections",
                     "capabilities",
                     "permissions",
+                    "documents",
                     "consentDigest",
                     "id",
                     "status",
@@ -17362,6 +17506,23 @@
                         "type": "string"
                       }
                     },
+                    "documents": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "path": {
+                            "type": "string"
+                          },
+                          "access": {
+                            "type": "string",
+                            "enum": ["read", "write"]
+                          }
+                        },
+                        "required": ["path", "access"],
+                        "additionalProperties": false
+                      }
+                    },
                     "consentDigest": {
                       "type": "string",
                       "minLength": 64,
@@ -17460,6 +17621,7 @@
                     "connections",
                     "capabilities",
                     "permissions",
+                    "documents",
                     "consentDigest",
                     "id",
                     "status",
@@ -45852,6 +46014,23 @@
                         "type": "string"
                       }
                     },
+                    "documents": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "path": {
+                            "type": "string"
+                          },
+                          "access": {
+                            "type": "string",
+                            "enum": ["read", "write"]
+                          }
+                        },
+                        "required": ["path", "access"],
+                        "additionalProperties": false
+                      }
+                    },
                     "canSuspend": {
                       "type": "boolean"
                     },
@@ -46110,6 +46289,7 @@
                     "triggers",
                     "connections",
                     "permissions",
+                    "documents",
                     "canSuspend",
                     "nodes",
                     "edges",
@@ -48141,6 +48321,23 @@
                         "type": "string"
                       }
                     },
+                    "documents": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "path": {
+                            "type": "string"
+                          },
+                          "access": {
+                            "type": "string",
+                            "enum": ["read", "write"]
+                          }
+                        },
+                        "required": ["path", "access"],
+                        "additionalProperties": false
+                      }
+                    },
                     "consentDigest": {
                       "type": "string",
                       "minLength": 64,
@@ -48189,6 +48386,7 @@
                     "connections",
                     "capabilities",
                     "permissions",
+                    "documents",
                     "consentDigest",
                     "deploymentArtifactDigest",
                     "triggerCount",
@@ -48538,6 +48736,23 @@
                         "type": "string"
                       }
                     },
+                    "documents": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "path": {
+                            "type": "string"
+                          },
+                          "access": {
+                            "type": "string",
+                            "enum": ["read", "write"]
+                          }
+                        },
+                        "required": ["path", "access"],
+                        "additionalProperties": false
+                      }
+                    },
                     "consentDigest": {
                       "type": "string",
                       "minLength": 64,
@@ -48636,6 +48851,7 @@
                     "connections",
                     "capabilities",
                     "permissions",
+                    "documents",
                     "consentDigest",
                     "id",
                     "status",
