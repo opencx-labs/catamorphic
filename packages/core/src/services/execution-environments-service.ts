@@ -19,6 +19,7 @@ import {
   resolveSetupEgress,
   SANDBOX_CAPABILITIES,
   SEPARATE_AGENT_DEFAULT_RESOURCES,
+  SIGN_IN_SPECS,
   signInCapability,
   volumeKey,
 } from "@catamorphic/sandbox";
@@ -201,10 +202,6 @@ export function personalCredentialsDecision(input: {
   };
 }
 
-const HARNESS_NAMES: Record<SignInHarness, string> = {
-  codex: "Codex",
-};
-
 /**
  * Whether a member's own sign-in may run on one placement (ADR 0213): only
  * where the host says the machine may hold it, a machine of that member's
@@ -220,7 +217,7 @@ export function signInPlacementDecision(input: {
   if (input.runtime.ownSignIns) return { allowed: true };
   return {
     allowed: false,
-    reason: `Your ${HARNESS_NAMES[input.harness]} sign-in runs only on a machine of your own, so the provider never sees several people's accounts from one machine. Ask an administrator for a machine of your own, or run the chat on This machine`,
+    reason: `Your ${SIGN_IN_SPECS[input.harness].name} sign-in runs only on a machine of your own, so the provider never sees several people's accounts from one machine. Ask an administrator for a machine of your own, or run the chat on This machine`,
   };
 }
 
@@ -879,7 +876,7 @@ export class ExecutionEnvironmentsService {
         return {
           bindingUnavailable: false,
           reasons: [
-            `${HARNESS_NAMES[args.signIn]} is not installed on this Environment's machine. Name an image that has it, or install it on the machine's PATH`,
+            `${SIGN_IN_SPECS[args.signIn].name} is not installed on this Environment's machine. Name an image that has it, or install it on the machine's PATH`,
           ],
         };
     }

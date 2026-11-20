@@ -1329,7 +1329,9 @@ Placement takes only machines that report `sign-in:<harness>:<member>`
 (`signInCapability`), turns must be authored by the owner, and the sandbox
 mounts that member's harness home (`CreateSandboxOpts.signIns`) so the
 harness runs with `CLAUDE_CONFIG_DIR` or `CODEX_HOME` instead of the
-gateway. Listed files are delivered to any of the
+gateway (`SIGN_IN_SPECS` names each harness's login, home variable and the
+file a completed login leaves; on a sign-in the runner adds none of the
+session's variables that name another credential or endpoint, ADR 0340). Listed files are delivered to any of the
 owner's chats in such an Environment, excluded from Git through
 `.git/info/exclude`, and removed on close and idle release. Discovery items
 carry `personalCredentials` when an Environment allows them.

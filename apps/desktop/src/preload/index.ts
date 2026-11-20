@@ -732,14 +732,16 @@ const api = {
     invoke("catamorphic:remote-secret-delete", input),
   remoteMachines: (projectId: string): Promise<unknown> =>
     invoke("catamorphic:remote-machines", projectId),
-  remoteCodexSignIn: (input: unknown): Promise<unknown> =>
-    invoke("catamorphic:remote-codex-sign-in", input),
-  remoteCodexSignInStatus: (input: unknown): Promise<unknown> =>
-    invoke("catamorphic:remote-codex-sign-in-status", input),
-  remoteCodexSignInCancel: (input: unknown): Promise<void> =>
-    invoke("catamorphic:remote-codex-sign-in-cancel", input),
-  remoteCodexSignOut: (input: unknown): Promise<unknown> =>
-    invoke("catamorphic:remote-codex-sign-out", input),
+  remoteHarnessSignIn: (input: unknown): Promise<unknown> =>
+    invoke("catamorphic:remote-harness-sign-in", input),
+  remoteHarnessSignInStatus: (input: unknown): Promise<unknown> =>
+    invoke("catamorphic:remote-harness-sign-in-status", input),
+  remoteHarnessSignInCode: (input: unknown): Promise<unknown> =>
+    invoke("catamorphic:remote-harness-sign-in-code", input),
+  remoteHarnessSignInCancel: (input: unknown): Promise<void> =>
+    invoke("catamorphic:remote-harness-sign-in-cancel", input),
+  remoteHarnessSignOut: (input: unknown): Promise<unknown> =>
+    invoke("catamorphic:remote-harness-sign-out", input),
   openSignInLink: (url: string): Promise<void> =>
     invoke("catamorphic:open-sign-in-link", url),
   remoteServiceConnections: (projectId: string): Promise<unknown> =>

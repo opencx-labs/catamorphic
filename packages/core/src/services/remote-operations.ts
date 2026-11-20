@@ -14,6 +14,7 @@ import {
   type SandboxProvider,
   SealedOperationOpenError,
   SealedOperationSchema,
+  type SignInHarness,
   sealOperation,
 } from "@catamorphic/sandbox";
 import type { Span } from "@opentelemetry/api";
@@ -32,6 +33,11 @@ const tracer = getTracer("@catamorphic/core");
 const stringMap = z.record(z.string(), z.string());
 /** Where in a sandbox that runs commands apart an operation happens (ADR 0332). */
 const sideSchema = z.enum(["agent", "commands"]);
+/** A harness a member signs in to on a machine (ADR 0340). */
+const signInHarnessSchema = z.enum([
+  "claude-code",
+  "codex",
+]) satisfies z.ZodType<SignInHarness>;
 const egressSchema = z.discriminatedUnion("mode", [
   z.object({ mode: z.literal("open") }),
   z.object({
@@ -73,7 +79,7 @@ export const RemoteOperationSchema = z.discriminatedUnion("kind", [
       signIns: z
         .array(
           z.object({
-            harness: z.literal("codex"),
+            harness: signInHarnessSchema,
             member: z.string().min(1),
           }),
         )
@@ -229,24 +235,44 @@ export const RemoteOperationSchema = z.discriminatedUnion("kind", [
   // A pooled machine returns to its pool (ADR 0205): the executor destroys
   // every sandbox it holds and deletes members' volumes and sign-ins.
   z.object({ kind: z.literal("machine.reset") }),
-  // A member signs in to Codex on their machine from the app (ADR 0213):
-  // the executor runs Codex's own device-code login and answers with its
-  // link and one-time code, then with how it ended.
+  // A member signs in to Claude Code or Codex on their machine from the
+  // app (ADRs 0213, 0340): the executor runs the harness's own login and
+  // answers with its link (and Codex's one-time code), takes the code a
+  // login waits for, then answers with how it ended.
   z.object({
-    kind: z.literal("machine.codexSignIn"),
+    kind: z.literal("machine.harnessSignIn"),
     request: z.discriminatedUnion("action", [
-      z.object({ action: z.literal("begin"), member: z.string().min(1) }),
+      z.object({
+        action: z.literal("begin"),
+        harness: signInHarnessSchema,
+        member: z.string().min(1),
+      }),
       z.object({
         action: z.literal("status"),
+        harness: signInHarnessSchema,
         member: z.string().min(1),
         attempt: z.string().uuid(),
       }),
       z.object({
         action: z.literal("cancel"),
+        harness: signInHarnessSchema,
         member: z.string().min(1),
         attempt: z.string().uuid(),
       }),
-      z.object({ action: z.literal("signOut"), member: z.string().min(1) }),
+      // The code a member copied from their browser, sealed like every
+      // operation (ADR 0207); its receipt never repeats it.
+      z.object({
+        action: z.literal("input"),
+        harness: signInHarnessSchema,
+        member: z.string().min(1),
+        attempt: z.string().uuid(),
+        text: z.string().min(1).max(4096),
+      }),
+      z.object({
+        action: z.literal("signOut"),
+        harness: signInHarnessSchema,
+        member: z.string().min(1),
+      }),
     ]),
   }),
 ]);
@@ -736,8 +762,8 @@ function operationTimeoutMs(operation: RemoteOperation): number {
     return IMAGE_BUILD_TIMEOUT_MS;
   // Destroying every sandbox and deleting large volumes.
   if (operation.kind === "machine.reset") return 15 * 60_000;
-  // Codex prints its sign-in code within seconds, or not at all.
-  if (operation.kind === "machine.codexSignIn") return 60_000;
+  // A login prints its sign-in link within seconds, or not at all.
+  if (operation.kind === "machine.harnessSignIn") return 60_000;
   // A switch only swaps the policy and closes connections. A widening
   // abandoned here is ended by the narrowing that follows it; narrowing
   // that does not answer in time fails closed: the sandbox is stopped.
@@ -898,29 +924,32 @@ export class RemoteOperationQueue {
   }
 
   /**
-   * A member's Codex sign-in on an executor's machine (ADR 0213): begin
-   * Codex's device-code login, read how it went, cancel it, or sign out.
-   * Fails at once while the executor is not connected.
+   * A member's harness sign-in on an executor's machine (ADRs 0213, 0340):
+   * begin the harness's own login, hand it the code it waits for, read how
+   * it went, cancel it, or sign out. Fails at once while the executor is
+   * not connected. The span names the action and harness, never what a
+   * member pasted.
    */
-  machineCodexSignIn(args: {
+  machineHarnessSignIn(args: {
     executor: string;
     leaseToken: () => Promise<string | undefined>;
     leaseHeld: (leaseToken: string) => Promise<boolean>;
     label: string;
     request: Extract<
       RemoteOperation,
-      { kind: "machine.codexSignIn" }
+      { kind: "machine.harnessSignIn" }
     >["request"];
     attributes?: SpanAttributes;
   }): Promise<unknown> {
     return withSpan(
       {
         tracer,
-        name: "remote.machine_codex_sign_in",
+        name: "remote.machine_harness_sign_in",
         attributes: {
           ...args.attributes,
           "catamorphic.executor": args.executor,
           "catamorphic.sign_in.action": args.request.action,
+          "catamorphic.sign_in.harness": args.request.harness,
         },
       },
       async (span) => {
@@ -929,7 +958,7 @@ export class RemoteOperationQueue {
         return this.dispatch({
           executor: args.executor,
           leaseToken,
-          operation: { kind: "machine.codexSignIn", request: args.request },
+          operation: { kind: "machine.harnessSignIn", request: args.request },
           leaseHeld: args.leaseHeld,
           label: args.label,
           span,

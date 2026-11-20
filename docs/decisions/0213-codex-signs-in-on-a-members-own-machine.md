@@ -1,6 +1,6 @@
 # 0213 — Codex signs in on a member's own machine; Claude subscriptions stay on their computer
 
-- **Status:** Accepted
+- **Status:** Accepted (the Claude half superseded by [0340](0340-claude-code-signs-in-on-a-members-own-machine.md): Claude Code signs in on a member's own machine too, through one harness sign-in; one person per machine stands)
 - **Date:** 2026-10-06
 - **Amends:** [0199](0199-subscription-sign-ins-stay-on-the-machine.md)
 

@@ -253,10 +253,10 @@ never pushes to a repository it did not create: sync only pulls there, and local
 commits are shared as a work/ branch with create_pull_request. Do not substitute
 raw push/pull for managed sync. Unrelated repository tasks may use ordinary git.
 
-The person's own Codex sign-in (made on a machine of their own) and private
-files (such as .env) reach their sessions on a linked Work server through
-their remote environment; Claude Code subscriptions stay on this computer.
-Read remote-environment before adding or checking one.
+The person's own Claude Code and Codex sign-ins (each made on a machine of
+their own) and private files (such as .env) reach their sessions on a linked
+Work server through their remote environment. Read remote-environment before
+adding or checking one.
 
 Connected services are MCP servers named after the service when your harness
 searches its own tools: find their tools with that search. Otherwise discover the

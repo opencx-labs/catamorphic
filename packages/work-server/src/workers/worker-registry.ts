@@ -28,7 +28,7 @@ import {
 } from "@catamorphic/sandbox";
 import { type Kysely, sql } from "kysely";
 import { z } from "zod";
-import type { CodexSignInRequest } from "./codex-sign-ins.js";
+import type { HarnessSignInRequest } from "./harness-sign-ins.js";
 import {
   accessGroupsOf,
   NodeLabelsSchema,
@@ -1627,16 +1627,16 @@ export class WorkWorkerRegistry {
   }
 
   /**
-   * A member's Codex sign-in on a worker (ADR 0213), through the operation
-   * queue: the worker runs Codex's own device-code login and answers.
+   * A member's harness sign-in on a worker (ADRs 0213, 0340), through the
+   * operation queue: the worker runs the harness's own login and answers.
    * Fails at once while the worker is not connected.
    */
-  async codexSignIn(args: {
+  async harnessSignIn(args: {
     nodeId: string;
-    request: CodexSignInRequest;
+    request: HarnessSignInRequest;
   }): Promise<unknown> {
     const { nodeId } = args;
-    return this.queue.machineCodexSignIn({
+    return this.queue.machineHarnessSignIn({
       executor: nodeExecutor(nodeId),
       leaseToken: () => this.deps.nodes.liveToken({ nodeId }),
       leaseHeld: async (token) =>

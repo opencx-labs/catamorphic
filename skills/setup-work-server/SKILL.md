@@ -132,9 +132,13 @@ disagree with the installed source, the source wins.
   their sandbox and reach their model through the gateway with the chat's
   grant (ADR 0180); the server's own model variables never reach them.
 - **Sign-ins stay on the machine.** A member's Claude Code or Codex
-  subscription runs only where they signed in with the CLI's own login
-  (`work worker sign-in`), in an Environment with `"personalCredentials":
-  true`; Work never copies, stores, or forwards a sign-in (ADR 0199).
+  subscription runs only where they signed in with the CLI's own login,
+  from the Work app or `work worker sign-in`, on a machine of their own
+  that persists (one person's sign-ins per machine), in an Environment with
+  `"personalCredentials": true`. Work never copies, stores, or forwards a
+  sign-in, and its model traffic never passes through the gateway (ADRs
+  0199, 0213, 0340). Whether that use is allowed under the provider's
+  terms is the operator's to decide.
 - **GitHub is a connection.** The organization's GitHub App installation is
   the `github` service connection; sync, proposals, and agents' GitHub
   actions all go through it (ADR 0177). There is no GitHub token variable

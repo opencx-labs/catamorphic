@@ -15,6 +15,12 @@ export {
   type ModelRequestRewrite,
 } from "@catamorphic/core";
 export {
+  SIGN_IN_HARNESSES,
+  SIGN_IN_SPECS,
+  type SignInHarness,
+  signInHarness,
+} from "@catamorphic/sandbox";
+export {
   defineCapability,
   defineGitConnectionProvider,
   defineHttpApiConnectionProvider,

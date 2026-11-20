@@ -249,6 +249,39 @@ describe("model access", () => {
     expect(built.settings).toBeUndefined();
   });
 
+  it("adds no gateway, grant or key helper to a member's own sign-in (ADR 0340)", () => {
+    const built = options(
+      attempt({
+        modelAccess: { kind: "sign_in", home: "/members/ada/claude" },
+        envFiles: ["/workspace/.work-session/env/secrets.sh"],
+        // What the runner adds from the session's files on a sign-in: it
+        // leaves out every name that would hand the CLI another credential.
+        env: {
+          CLICKHOUSE_API_KEY: "ch-key",
+          BASH_ENV: "/workspace/.work-session/env/secrets.sh",
+        },
+      }),
+    );
+    // The CLI talks to Anthropic itself, on the sign-in in its own home.
+    for (const name of [
+      "ANTHROPIC_API_KEY",
+      "ANTHROPIC_AUTH_TOKEN",
+      "ANTHROPIC_BASE_URL",
+      "CLAUDE_CODE_OAUTH_TOKEN",
+      "WORK_MODEL_GRANT_DIRECTORY",
+      "CLAUDE_CODE_API_KEY_HELPER_TTL_MS",
+    ])
+      expect(built.env, name).not.toHaveProperty(name);
+    expect(built.settings).toBeUndefined();
+    expect(built.env?.CLAUDE_CONFIG_DIR).toBe("/members/ada/claude");
+    expect(built.env?.CLAUDE_SECURESTORAGE_CONFIG_DIR).toBe(
+      "/members/ada/claude",
+    );
+    // The project's other secrets still reach the programs the agent runs.
+    expect(built.env?.CLICKHOUSE_API_KEY).toBe("ch-key");
+    expect(built.env?.BASH_ENV).toBe("/workspace/.work-session/env/secrets.sh");
+  });
+
   it("keeps the host's own environment and bundled CLI on the host", () => {
     process.env.WORK_TEST_HOST_VALUE = "kept";
     try {

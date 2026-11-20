@@ -141,13 +141,13 @@ export function startClientRunner(args: {
    */
   resetMachine?: () => Promise<void>;
   /**
-   * A member's Codex sign-in on this machine (ADR 0213). Only a worker
-   * supplies it; a runner without it refuses the operation.
+   * A member's harness sign-in on this machine (ADRs 0213, 0340). Only a
+   * worker supplies it; a runner without it refuses the operation.
    */
-  codexSignIn?: (
+  harnessSignIn?: (
     request: Extract<
       RemoteOperation,
-      { kind: "machine.codexSignIn" }
+      { kind: "machine.harnessSignIn" }
     >["request"],
   ) => Promise<unknown>;
 }) {
@@ -279,7 +279,9 @@ export function startClientRunner(args: {
               provider: args.provider,
               operation,
               ...(args.resetMachine ? { resetMachine: args.resetMachine } : {}),
-              ...(args.codexSignIn ? { codexSignIn: args.codexSignIn } : {}),
+              ...(args.harnessSignIn
+                ? { harnessSignIn: args.harnessSignIn }
+                : {}),
             })
           : null;
       if (operation.kind === "create") {
@@ -376,15 +378,15 @@ async function executeClientOperation({
   provider,
   operation,
   resetMachine,
-  codexSignIn,
+  harnessSignIn,
 }: {
   provider: SandboxProvider;
   operation: RemoteOperation;
   resetMachine?: () => Promise<void>;
-  codexSignIn?: (
+  harnessSignIn?: (
     request: Extract<
       RemoteOperation,
-      { kind: "machine.codexSignIn" }
+      { kind: "machine.harnessSignIn" }
     >["request"],
   ) => Promise<unknown>;
 }): Promise<unknown> {
@@ -478,10 +480,10 @@ async function executeClientOperation({
       if (!resetMachine) throw new Error("This runner does not reset machines");
       await resetMachine();
       return null;
-    case "machine.codexSignIn":
-      if (!codexSignIn)
-        throw new Error("This runner does not sign members in to Codex");
-      return codexSignIn(operation.request);
+    case "machine.harnessSignIn":
+      if (!harnessSignIn)
+        throw new Error("This runner does not sign members in to a harness");
+      return harnessSignIn(operation.request);
   }
 }
 

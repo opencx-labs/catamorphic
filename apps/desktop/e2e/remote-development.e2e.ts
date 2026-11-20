@@ -760,12 +760,12 @@ describe("remote development on a Work server", () => {
       { label: "sign in to Codex" },
     );
     await runWait(
-      `return $('[data-testid="codex-sign-in-code"]')?.textContent.includes('TEST-12345');`,
+      `return $('[data-testid="harness-sign-in-code"]')?.textContent.includes('TEST-12345');`,
       { timeoutMs: 35_000, label: "one-time code" },
     );
     await settled();
     const dialog = await run<string>(
-      `return $('[data-testid="codex-sign-in"]').textContent;`,
+      `return $('[data-testid="harness-sign-in"]').textContent;`,
     );
     expect(dialog).toContain("auth.openai.com/codex/device");
     expect(dialog).toContain("Expires in 15 minutes");
@@ -775,17 +775,17 @@ describe("remote development on a Work server", () => {
     const approve = path.join(dataDir, "sign-ins", "approve");
     fs.writeFileSync(approve, CODEX_TOKEN);
     await runWait(
-      `return $('[data-testid="codex-sign-in"]')?.textContent.includes('Codex is signed in');`,
+      `return $('[data-testid="harness-sign-in"]')?.textContent.includes('Codex is signed in');`,
       { timeoutMs: 35_000, label: "signed in" },
     );
     fs.rmSync(approve);
     await settled();
     await shot("codex-signed-in");
     await run(
-      `byText('[data-testid="codex-sign-in"] button', 'Done').click(); return true;`,
+      `byText('[data-testid="harness-sign-in"] button', 'Done').click(); return true;`,
     );
     await runWait(
-      `return !$('[data-testid="codex-sign-in"]') && $('[data-testid="remote-machine"]')?.textContent.includes('Codex signed in');`,
+      `return !$('[data-testid="harness-sign-in"]') && $('[data-testid="remote-machine"]')?.textContent.includes('Codex signed in');`,
       { label: "machine signed in" },
     );
     await settled();

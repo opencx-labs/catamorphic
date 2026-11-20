@@ -91,7 +91,7 @@ import {
   type SandboxProvider,
   SEPARATE_COMMANDS_SOCKET,
   SEPARATE_HARNESS,
-  type SignInHarness,
+  SIGN_IN_SPECS,
   STOPPED_WAITING_NOTE,
   serverKeyOf,
   signInCapability,
@@ -6369,11 +6369,11 @@ export class AgentSessionsService {
           // The owner's own sign-in, mounted from the machine's disk (ADR 0199).
           if (!ownerAuthored)
             throw new Error(
-              `This chat runs on its owner's own ${SIGN_IN_HARNESS_NAMES[agent.signIn]} sign-in, so only they can send it messages.`,
+              `This chat runs on its owner's own ${SIGN_IN_SPECS[agent.signIn].name} sign-in, so only they can send it messages.`,
             );
           if (!runtime.signInHome)
             throw new Error(
-              `This machine has no ${SIGN_IN_HARNESS_NAMES[agent.signIn]} sign-in for this chat's owner. Sign in on the machine (work worker sign-in ${agent.signIn}) or move the chat.`,
+              `This machine has no ${SIGN_IN_SPECS[agent.signIn].name} sign-in for this chat's owner. Sign in on the machine (work worker sign-in ${agent.signIn}) or move the chat.`,
             );
           modelAccess = { kind: "sign_in", home: runtime.signInHome };
           ownerOnly = true;
@@ -16646,10 +16646,6 @@ function protocolMcpServers(
     ]),
   );
 }
-
-const SIGN_IN_HARNESS_NAMES: Record<SignInHarness, string> = {
-  codex: "Codex",
-};
 
 /** A deterministic id for a notice Work writes at most once per session. */
 function derivedNoticeId(sessionId: string, code: string): string {

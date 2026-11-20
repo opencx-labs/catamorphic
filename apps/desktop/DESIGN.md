@@ -886,6 +886,22 @@ the historical log explains how it arrived here.
 
 ## Design log
 
+### 2026-11-20: Claude Code signs in on your own machines too
+
+Remote environment's Sign-ins section no longer says Claude Code runs on
+a person's subscription only on this computer (ADR 0340, replacing that
+half of the 2026-10-06 entry below). Each of Your machines is a card with
+its name and whether it is online, and under it a row for each harness,
+Claude Code then Codex, signed in or not, with its own Sign in and Sign
+out. One dialog serves both: the sign-in page (a Work browser tab, with
+the link shown too), then what that harness asks next. Codex shows its
+one-time code, large and copyable. Claude Code's page gives the person a
+code instead, so the dialog has a field to paste it and a Submit button;
+the field empties as it sends, the code is never kept or shown again, and
+the dialog says it is finishing the sign-in. A code the machine would not
+take says why and leaves the field ready. Signing out of one harness
+leaves the other.
+
 ### 2026-11-19: A long question scrolls inside its panel
 
 A question too long for the chat's room scrolled as a whole inside the

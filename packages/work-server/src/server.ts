@@ -119,8 +119,8 @@ import {
 import { registerShareRoutes } from "./shares/share-routes.js";
 import { shareTools } from "./shares/share-tools.js";
 import { WorkSharesService } from "./shares/shares-service.js";
-import { CodexSignIns } from "./workers/codex-sign-ins.js";
 import { startDiskCare } from "./workers/disk-care.js";
+import { HarnessSignIns } from "./workers/harness-sign-ins.js";
 import {
   installTarget,
   registerInstallScriptRoute,
@@ -1289,12 +1289,12 @@ async function createWorkServerInner(
     ...administratorAccess,
     ...machineManagement,
   });
-  // Members sign in to Codex on machines of their own from the app (ADR
-  // 0213). A single server whose operator accepted personal credentials
-  // is one of them for the first member to sign in there; a replica's own
-  // machine never is.
+  // Members sign in to Claude Code and Codex on machines of their own from
+  // the app (ADRs 0213, 0340). A single server whose operator accepted
+  // personal credentials is one of them for the first member to sign in
+  // there; a replica's own machine never is.
   const ownSignIns = singleServerSignIns
-    ? new CodexSignIns({
+    ? new HarnessSignIns({
         signInRoot: execution.signInRoot,
         dataDir: data,
         env: { ...process.env, PATH: config.execution.path },
@@ -1313,7 +1313,7 @@ async function createWorkServerInner(
       ...(ownSignIns
         ? { ownMachine: { nodeId: machine.lease.id, signIns: ownSignIns } }
         : {}),
-      worker: (args) => workers.codexSignIn(args),
+      worker: (args) => workers.harnessSignIn(args),
     }),
   });
   registerWorkAdmissionRoutes(app, {

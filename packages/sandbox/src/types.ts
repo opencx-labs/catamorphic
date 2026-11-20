@@ -325,13 +325,99 @@ export interface SandboxVolumeProvider {
 }
 
 /**
- * A harness a member signs in to on a machine with its own flow (ADR 0199).
- * Only Codex: Claude Code subscriptions run only on the member's own
- * computer (ADR 0213).
+ * A harness a member signs in to on a machine with its own flow (ADRs 0199,
+ * 0340): the harness's unmodified CLI runs its own login on the machine,
+ * into a home there for that member.
  */
-export type SignInHarness = "codex";
+export type SignInHarness = "claude-code" | "codex";
 
-export const SIGN_IN_HARNESSES: readonly SignInHarness[] = ["codex"];
+export const SIGN_IN_HARNESSES: readonly SignInHarness[] = [
+  "claude-code",
+  "codex",
+];
+
+/**
+ * How one harness signs a member in on a machine (ADR 0340). Everything
+ * that runs, reports or shows a sign-in reads this, so a harness differs
+ * from another only here.
+ */
+export interface SignInSpec {
+  /** The harness as members read it. */
+  name: string;
+  /** The account the sign-in is of, as members know it. */
+  account: string;
+  /** The harness's own CLI, found on the machine's path. */
+  command: string;
+  /** The CLI's own login. */
+  login: readonly string[];
+  /**
+   * What the login is given unless whoever runs it says otherwise: the
+   * flow a machine without a browser can finish.
+   */
+  defaultArgs: readonly string[];
+  /** The variable that points the CLI at one home. */
+  homeVariable: string;
+  /** The file a completed login leaves in its home. */
+  completionFile: string;
+  /** Files a fresh home starts with, by name. */
+  homeFiles?: Readonly<Record<string, string>>;
+  /**
+   * What the member does after opening the login's link. Absent: the
+   * login printed a one-time code they enter there. `code`: the page
+   * gives them a code the login waits for, one line on its input.
+   */
+  expects?: "code";
+  /**
+   * The hosts the login's link may be on, each with its subdomains. Absent:
+   * the first link the login prints.
+   */
+  linkHosts?: readonly string[];
+  /**
+   * Variables that would hand the CLI another credential or endpoint. A
+   * sign-in's login and every launch on it run without them, so the
+   * member's own sign-in is the only one in use.
+   */
+  otherCredentials?: readonly string[];
+}
+
+export const SIGN_IN_SPECS: Readonly<Record<SignInHarness, SignInSpec>> = {
+  "claude-code": {
+    name: "Claude Code",
+    account: "Claude",
+    command: "claude",
+    login: ["auth", "login"],
+    defaultArgs: ["--claudeai"],
+    homeVariable: "CLAUDE_CONFIG_DIR",
+    completionFile: ".credentials.json",
+    expects: "code",
+    linkHosts: ["claude.com", "claude.ai", "anthropic.com"],
+    otherCredentials: [
+      "ANTHROPIC_API_KEY",
+      "ANTHROPIC_AUTH_TOKEN",
+      "ANTHROPIC_BASE_URL",
+      "CLAUDE_CODE_OAUTH_TOKEN",
+      "CLAUDE_CODE_USE_BEDROCK",
+      "CLAUDE_CODE_USE_FOUNDRY",
+      "CLAUDE_CODE_USE_VERTEX",
+    ],
+  },
+  codex: {
+    name: "Codex",
+    account: "ChatGPT",
+    command: "codex",
+    login: ["login"],
+    defaultArgs: ["--device-auth"],
+    homeVariable: "CODEX_HOME",
+    completionFile: "auth.json",
+    // Codex keeps its sign-in in the home's own file, so a sandbox sees it.
+    homeFiles: { "config.toml": 'cli_auth_credentials_store = "file"\n' },
+  },
+};
+
+/** The harness of this name a member can sign in to, if it is one. */
+export function signInHarness(value: unknown): SignInHarness | undefined {
+  return SIGN_IN_HARNESSES.find((harness) => harness === value);
+}
 
 /** Where a sandbox sees its owner's sign-in for a harness (ADR 0199). */
 export function signInHomePath(input: {

@@ -190,7 +190,7 @@ Settled design decisions live here as short Architecture Decision Records. They 
 | [0175](0175-grants-reach-sandboxes.md) | Grants reach sandboxes; credentials never do | Accepted (Git implementation notes; workspaces at a ref in 0178; models and harnesses in 0180; amended by 0184, 0206; HTTP APIs for code in 0212) |
 | [0176](0176-environment-images-containers-egress-and-modes.md) | Environments choose images, containers, egress, and what agents may change | Accepted (`mode` renamed sandboxing by 0182; container sandboxes by 0204; setup and volumes by 0208; amended by 0277) |
 | [0177](0177-github-is-a-connection.md) | GitHub is a connection | Accepted |
-| [0178](0178-session-workspaces-at-a-ref.md) | Session workspaces at a ref of the project's remote | Accepted (member drafts are origin refs per 0191) |
+| [0178](0178-session-workspaces-at-a-ref.md) | Session workspaces at a ref of the project's remote | Accepted (member drafts are origin refs per 0191; saved as a pack per 0341) |
 | [0179](0179-integrations-from-project-code-slack.md) | Integrations from project code: named HTTP operations and declared delivery ids | Accepted (session event keys in 0181; the `slack-threads` pack by 0262) |
 | [0180](0180-harnesses-run-in-the-sandbox-models-through-the-gateway.md) | Harnesses run in the sandbox; models through the gateway | Accepted (control loop superseded by 0198; amended by 0184, 0199, 0256, 0329) |
 | [0181](0181-project-chats-use-their-environments-bindings.md) | Project chats use their Environment's bindings; session events carry keys | Accepted (the `pull-request-reviews` pack by 0262) |
@@ -203,7 +203,7 @@ Settled design decisions live here as short Architecture Decision Records. They 
 | [0188](0188-back-and-forward-between-surfaces.md) | Back and forward move between surfaces, and tabs keep their way back | Accepted |
 | [0189](0189-sign-in-limits-shared-and-keyed-by-the-proxied-client.md) | Sign-in limits are shared in Postgres and keyed by the proxied client | Accepted |
 | [0190](0190-disposable-control-plane-replicas.md) | Disposable control-plane replicas: a node per process, recovery from lost nodes | Accepted (amended by 0198) |
-| [0191](0191-member-drafts-are-refs-in-the-project-origin.md) | Member drafts are refs in the project origin | Accepted |
+| [0191](0191-member-drafts-are-refs-in-the-project-origin.md) | Member drafts are refs in the project origin | Accepted (amended by 0341: file modes and links) |
 | [0192](0192-workers-own-their-lease.md) | Workers own their lease: any replica runs any worker's turns | Accepted (turn status and guards from Postgres by 0193; sealed operations by 0207) |
 | [0193](0193-no-cross-replica-state-in-replica-memory.md) | No cross-replica state in replica memory: turn status, singleton work, caches | Accepted (amended by 0197, 0198; machine classes and pools by 0205; sealed operations by 0207) |
 | [0194](0194-browser-tabs-load-like-chrome-and-sleep-when-unused.md) | Browser tabs load like Chrome's and sleep when unused | Accepted (amended by 0203; a sleeping tab mounts nothing by 0338) |
@@ -211,7 +211,7 @@ Settled design decisions live here as short Architecture Decision Records. They 
 | [0196](0196-installed-claude-code-first.md) | The person's own Claude Code runs first; Claude Code and Codex pins move by scheduled pull request | Accepted |
 | [0197](0197-agent-sessions-are-an-event-log-of-turns.md) | Agent sessions are an event log of turns | Accepted (amends 0195: replies to a waiting question steer the turn; input item kinds by 0217; result items by 0323; a reader without a stream reads what it missed by 0338) |
 | [0198](0198-agent-runners-run-harnesses-beside-their-workspace.md) | Agent runners run harnesses beside their workspace | Accepted (amended by 0276: a chat can switch harnesses; by 0222: desktop harnesses stay warm; by 0225: a mounted connector's endpoint decides its calls; by 0245: a lost thread is replaced, handed the conversation; by 0275: a resumed Claude Code keeps its sign-in; by 0333: progress, stalls and restarts) |
-| [0199](0199-subscription-sign-ins-stay-on-the-machine.md) | Subscription sign-ins stay on the machine they were made on | Accepted (amended by 0213: Codex only, on a member's own machine; who delivered an input is a typed field by 0219) |
+| [0199](0199-subscription-sign-ins-stay-on-the-machine.md) | Subscription sign-ins stay on the machine they were made on | Accepted (amended by 0213: on a member's own machine, one person per machine; Claude Code signs in there again by 0340; who delivered an input is a typed field by 0219) |
 | [0200](0200-sidebars-move-first-content-settles-after.md) | Sidebars move first; the content settles after them | Accepted |
 | [0201](0201-work-keeps-passkeys-in-the-profile-vault.md) | Work keeps passkeys in the profile's vault: the sheet saves and signs in, autofill offers them, Bitwarden and KeePassXC files import | Accepted (amends 0185, 0151; browsing windows by 0220) |
 | [0202](0202-agents-see-the-browser-subagents-and-their-path.md) | Agents see the browser, their subagents and their PATH | Accepted (amends 0133, 0090, 0112, 0093; server delegation amended by 0322) |
@@ -225,7 +225,7 @@ Settled design decisions live here as short Architecture Decision Records. They 
 | [0210](0210-directory-events-start-workflows.md) | Directory events start workflows; workflows set members' secrets | Accepted |
 | [0211](0211-the-desktop-api-refuses-web-pages.md) | The desktop's loopback API refuses web pages | Accepted |
 | [0212](0212-http-apis-reach-code-in-sandboxes-through-the-gateway.md) | HTTP APIs reach code in sandboxes through the gateway | Accepted (refines 0162, 0175, 0206; renewal overlap by 0255) |
-| [0213](0213-codex-signs-in-on-a-members-own-machine.md) | Codex signs in on a member's own machine; Claude subscriptions stay on their computer | Accepted (amends 0199) |
+| [0213](0213-codex-signs-in-on-a-members-own-machine.md) | Codex signs in on a member's own machine; Claude subscriptions stay on their computer | Accepted (amends 0199; the Claude half superseded by 0340) |
 | [0214](0214-a-chat-runs-on-one-harness.md) | A chat runs on one harness | Superseded by 0276 |
 | [0215](0215-a-chats-own-worktree.md) | A chat's own worktree: chosen by the person, set up, put away, brought back | Accepted (refines 0045, 0063, 0208) |
 | [0216](0216-voice-local-speech-in-any-chat-and-the-assistant.md) | Voice: local speech, in any chat, and the assistant | Proposed (experimental; session notes are task notifications by 0217; amended by 0236, 0265, 0267, 0268, 0271) |
@@ -344,4 +344,5 @@ Settled design decisions live here as short Architecture Decision Records. They 
 | [0337](0337-reviews-show-progress-and-post-findings-as-verified.md) | Reviews show progress at once and post findings as they are verified | Accepted (amends 0259, 0323, 0325) |
 | [0338](0338-what-is-out-of-sight-is-data.md) | What is out of sight is data: sleeping tabs mount nothing, and a chat without a stream reads what it missed | Accepted (amends 0194, 0197; refines 0229, 0249) |
 | [0339](0339-the-desktops-backend-leaves-the-main-process.md) | The desktop's backend leaves the main process: its database first, then the server | Accepted |
+| [0340](0340-claude-code-signs-in-on-a-members-own-machine.md) | Claude Code signs in on a member's own machine; one harness sign-in for both | Accepted (amends 0199, 0213) |
 | [0341](0341-a-workspace-is-saved-as-a-git-pack.md) | A workspace is saved as a Git pack, as it is restored | Accepted (amends 0178, 0191) |

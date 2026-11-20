@@ -5,10 +5,11 @@ import { createRoot, type Root } from "react-dom/client";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { PersonalEnvironmentView } from "../../shared/personal-environment.js";
 import type {
-  CodexSignIn,
+  HarnessSignIn,
   RemoteMachine,
+  RemoteSignInState,
 } from "../../shared/remote-machines.js";
-import { CODEX_SIGN_IN_POLL_MS } from "./codex-sign-in-dialog.js";
+import { HARNESS_SIGN_IN_POLL_MS } from "./harness-sign-in-dialog.js";
 import { RemoteEnvironmentModal } from "./remote-environment-modal.js";
 
 const desktop = vi.hoisted(() => ({
@@ -19,10 +20,11 @@ const desktop = vi.hoisted(() => ({
   personalEnvironmentConfigFile: vi.fn(),
   onPersonalEnvironmentChanged: vi.fn(() => () => {}),
   remoteMachines: vi.fn(),
-  remoteCodexSignIn: vi.fn(),
-  remoteCodexSignInStatus: vi.fn(),
-  remoteCodexSignInCancel: vi.fn(),
-  remoteCodexSignOut: vi.fn(),
+  remoteHarnessSignIn: vi.fn(),
+  remoteHarnessSignInStatus: vi.fn(),
+  remoteHarnessSignInCode: vi.fn(),
+  remoteHarnessSignInCancel: vi.fn(),
+  remoteHarnessSignOut: vi.fn(),
   openSignInLink: vi.fn(),
 }));
 
@@ -129,7 +131,7 @@ describe("RemoteEnvironmentModal", () => {
       document.body.querySelector('[data-testid="remote-environment-sign-ins"]')
         ?.textContent,
     ).toContain(
-      "Claude Code runs on your own subscription only on this computer. On the project's server, it runs through your organization's model connection.",
+      "Claude Code and Codex can run on your own subscriptions on a machine of your own. Each signs in on the machine itself, so your sign-in stays there.",
     );
     expect(text).toContain("apps/api/.env.local");
     expect(text).toContain("2 KB");
@@ -293,17 +295,57 @@ describe("RemoteEnvironmentModal", () => {
   });
 });
 
-function machine(overrides: Partial<RemoteMachine> = {}): RemoteMachine {
+function machine(
+  overrides: Partial<Omit<RemoteMachine, "signIns">> & {
+    codex?: RemoteSignInState;
+    claude?: RemoteSignInState;
+  } = {},
+): RemoteMachine {
+  const { codex, claude, ...rest } = overrides;
   return {
     id: "m-1",
     name: "ada-devbox",
     available: true,
-    codex: "signed-out",
-    ...overrides,
+    signIns: {
+      "claude-code": claude ?? "signed-out",
+      codex: codex ?? "signed-out",
+    },
+    ...rest,
   };
 }
 
-function codeFor(attempt: string, userCode = "ABCD-1E2F3"): CodexSignIn {
+/** A Claude Code sign-in: a link, and a code the page gives back. */
+const CLAUDE_LINK =
+  "https://claude.com/cai/oauth/authorize?code=true&client_id=abc&response_type=code";
+function linkFor(attempt: string): HarnessSignIn {
+  return {
+    attempt,
+    verificationUrl: CLAUDE_LINK,
+    expects: "code",
+    expiresAt: new Date(Date.now() + 15 * 60_000).toISOString(),
+  };
+}
+
+function typeInto(element: HTMLInputElement, value: string) {
+  const setter = Object.getOwnPropertyDescriptor(
+    HTMLInputElement.prototype,
+    "value",
+  )?.set;
+  setter?.call(element, value);
+  element.dispatchEvent(new Event("input", { bubbles: true }));
+}
+
+/** One harness's row on the first machine. */
+const signInRow = (harness: "claude-code" | "codex") =>
+  document.body.querySelector(
+    `[data-testid="remote-machine-sign-in"][data-harness="${harness}"]`,
+  );
+/** Where a person pastes the code a sign-in page gave them. */
+const codeField = () =>
+  signInDialog()?.querySelector<HTMLInputElement>('input[type="password"]') ??
+  null;
+
+function codeFor(attempt: string, userCode = "ABCD-1E2F3"): HarnessSignIn {
   return {
     attempt,
     verificationUrl: "https://auth.openai.com/codex/device",
@@ -332,7 +374,7 @@ const labelled = (label: string) =>
 /** The sign-in dialog's panel, open or leaving. */
 const signInDialog = () =>
   document.body
-    .querySelector('[data-testid="codex-sign-in"]')
+    .querySelector('[data-testid="harness-sign-in"]')
     ?.closest<HTMLElement>('[role="dialog"]') ?? null;
 const signInOpen = () => {
   const dialog = signInDialog();
@@ -343,7 +385,7 @@ const inDialog = (text: string) =>
     (candidate) => candidate.textContent?.trim() === text,
   );
 const code = () =>
-  signInDialog()?.querySelector('[data-testid="codex-sign-in-code"]') ?? null;
+  signInDialog()?.querySelector('[data-testid="harness-sign-in-code"]') ?? null;
 const advance = (ms: number) =>
   act(async () => {
     await vi.advanceTimersByTimeAsync(ms);
@@ -366,32 +408,69 @@ describe("RemoteEnvironmentModal: your machines", () => {
     const text = machinesSection()?.textContent ?? "";
     expect(text).toContain("Your machines");
     expect(text).toContain(
-      "Codex sign-ins need a machine of your own: ask an administrator for one. Codex on this computer uses this computer's sign-in.",
+      "Sign-ins need a machine of your own: ask an administrator for one. Claude Code and Codex on this computer use this computer's sign-ins.",
     );
     expect(machineRow()).toBeNull();
   });
 
-  it("shows each machine online or offline, and signed in to Codex or not", async () => {
+  it("shows each machine online or offline, and signed in to each harness or not", async () => {
     desktop.personalEnvironment.mockResolvedValue(view());
     desktop.remoteMachines.mockResolvedValue([
       machine(),
       machine({ id: "m-2", name: "ada-gpu", codex: "signed-in" }),
       machine({ id: "m-3", name: "ada-old", available: false }),
+      machine({
+        id: "m-4",
+        name: "ada-both",
+        codex: "signed-in",
+        claude: "signed-in",
+      }),
     ]);
     await render();
     const rows = Array.from(
       document.body.querySelectorAll('[data-testid="remote-machine"]'),
-      (row) => row.textContent,
+      (row) => row.textContent ?? "",
     );
-    expect(rows[0]).toContain("Online · Codex not signed in");
-    expect(rows[1]).toContain("Online · Codex signed in");
-    expect(rows[2]).toContain("Offline · Codex not signed in");
+    expect(rows[0]).toContain("ada-devboxOnline");
+    expect(rows[0]).toContain("Claude Code not signed in");
+    expect(rows[0]).toContain("Codex not signed in");
+    expect(rows[1]).toContain("Online");
+    expect(rows[1]).toContain("Claude Code not signed in");
+    expect(rows[1]).toContain("Codex signed in");
+    expect(rows[2]).toContain("ada-oldOffline");
+    expect(rows[2]).toContain("Codex not signed in");
+    expect(rows[3]).toContain("Claude Code signed in");
+    expect(rows[3]).toContain("Codex signed in");
+    // A row for each harness on each machine, Claude Code first.
+    expect(
+      Array.from(
+        document.body.querySelectorAll<HTMLElement>(
+          '[data-testid="remote-machine-sign-in"]',
+        ),
+        (row) => row.dataset.harness,
+      ).slice(0, 2),
+    ).toEqual(["claude-code", "codex"]);
     expect(labelled("Sign in to Codex on ada-devbox")?.disabled).toBe(false);
+    expect(labelled("Sign in to Claude Code on ada-devbox")?.disabled).toBe(
+      false,
+    );
     expect(labelled("Sign out of Codex on ada-gpu")).not.toBeNull();
-    const offline = labelled("Sign in to Codex on ada-old");
-    expect(offline?.disabled).toBe(true);
-    expect(offline?.dataset.disabledReason).toBe("This machine is offline");
-    expect(machinesSection()?.textContent).not.toMatch(/[–—]/);
+    expect(labelled("Sign in to Claude Code on ada-gpu")).not.toBeNull();
+    expect(labelled("Sign out of Claude Code on ada-both")).not.toBeNull();
+    for (const name of ["Codex", "Claude Code"]) {
+      const offline = labelled(`Sign in to ${name} on ada-old`);
+      expect(offline?.disabled).toBe(true);
+      expect(offline?.dataset.disabledReason).toBe("This machine is offline");
+    }
+    const section = document.body.querySelector(
+      '[data-testid="remote-environment-sign-ins"]',
+    );
+    expect(section?.textContent).toContain(
+      "Claude Code and Codex can run on your own subscriptions on a machine of your own.",
+    );
+    // Nothing says Claude subscriptions stay on this computer any more.
+    expect(section?.textContent).not.toContain("only on this computer");
+    expect(section?.textContent).not.toMatch(/[–—]/);
   });
 
   it("says when the list fails, and lists again on request", async () => {
@@ -412,17 +491,18 @@ describe("RemoteEnvironmentModal: your machines", () => {
     vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
     desktop.personalEnvironment.mockResolvedValue(view());
     desktop.remoteMachines.mockResolvedValue([machine()]);
-    desktop.remoteCodexSignIn.mockResolvedValue(codeFor("att-1"));
-    desktop.remoteCodexSignInStatus
+    desktop.remoteHarnessSignIn.mockResolvedValue(codeFor("att-1"));
+    desktop.remoteHarnessSignInStatus
       .mockResolvedValueOnce({ state: "waiting" })
       .mockResolvedValueOnce({ state: "signed-in" });
     desktop.openSignInLink.mockResolvedValue(undefined);
     await render();
 
     await act(async () => labelled("Sign in to Codex on ada-devbox")?.click());
-    expect(desktop.remoteCodexSignIn).toHaveBeenCalledWith({
+    expect(desktop.remoteHarnessSignIn).toHaveBeenCalledWith({
       projectId: "project-1",
       machineId: "m-1",
+      harness: "codex",
     });
     expect(signInOpen()).toBe(true);
     const dialog = signInDialog();
@@ -456,19 +536,20 @@ describe("RemoteEnvironmentModal: your machines", () => {
       "https://auth.openai.com/codex/device",
     );
 
-    await advance(CODEX_SIGN_IN_POLL_MS - 1);
-    expect(desktop.remoteCodexSignInStatus).not.toHaveBeenCalled();
+    await advance(HARNESS_SIGN_IN_POLL_MS - 1);
+    expect(desktop.remoteHarnessSignInStatus).not.toHaveBeenCalled();
     await advance(1);
-    expect(desktop.remoteCodexSignInStatus).toHaveBeenCalledWith({
+    expect(desktop.remoteHarnessSignInStatus).toHaveBeenCalledWith({
       projectId: "project-1",
       machineId: "m-1",
+      harness: "codex",
       attempt: "att-1",
     });
     expect(signInDialog()?.textContent).toContain(
       "Waiting for you to enter the code",
     );
-    await advance(CODEX_SIGN_IN_POLL_MS);
-    expect(desktop.remoteCodexSignInStatus).toHaveBeenCalledTimes(2);
+    await advance(HARNESS_SIGN_IN_POLL_MS);
+    expect(desktop.remoteHarnessSignInStatus).toHaveBeenCalledTimes(2);
     expect(signInDialog()?.textContent).toContain(
       "Codex is signed in on ada-devbox.",
     );
@@ -478,28 +559,28 @@ describe("RemoteEnvironmentModal: your machines", () => {
     // Done: nothing left to cancel, and nothing more to ask.
     await act(async () => inDialog("Done")?.click());
     expect(signInOpen()).toBe(false);
-    await advance(CODEX_SIGN_IN_POLL_MS * 5);
-    expect(desktop.remoteCodexSignInStatus).toHaveBeenCalledTimes(2);
-    expect(desktop.remoteCodexSignInCancel).not.toHaveBeenCalled();
+    await advance(HARNESS_SIGN_IN_POLL_MS * 5);
+    expect(desktop.remoteHarnessSignInStatus).toHaveBeenCalledTimes(2);
+    expect(desktop.remoteHarnessSignInCancel).not.toHaveBeenCalled();
   });
 
   it("keeps checking through a failed check", async () => {
     vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
     desktop.personalEnvironment.mockResolvedValue(view());
     desktop.remoteMachines.mockResolvedValue([machine()]);
-    desktop.remoteCodexSignIn.mockResolvedValue(codeFor("att-1"));
-    desktop.remoteCodexSignInStatus
+    desktop.remoteHarnessSignIn.mockResolvedValue(codeFor("att-1"));
+    desktop.remoteHarnessSignInStatus
       .mockRejectedValueOnce(
         new Error("The project's server could not be reached."),
       )
       .mockResolvedValueOnce({ state: "signed-in" });
     await render();
     await act(async () => labelled("Sign in to Codex on ada-devbox")?.click());
-    await advance(CODEX_SIGN_IN_POLL_MS);
+    await advance(HARNESS_SIGN_IN_POLL_MS);
     expect(signInDialog()?.textContent).toContain(
       "Could not check the sign-in: The project's server could not be reached.",
     );
-    await advance(CODEX_SIGN_IN_POLL_MS);
+    await advance(HARNESS_SIGN_IN_POLL_MS);
     expect(signInDialog()?.textContent).toContain(
       "Codex is signed in on ada-devbox.",
     );
@@ -512,12 +593,12 @@ describe("RemoteEnvironmentModal: your machines", () => {
     // The machine refused the login (409 sign_in_refused): its words, as
     // written, with a way to try again.
     const refused =
-      "Another person's Codex sign-in is on this machine, and a machine holds one person's only. Ask an administrator for a machine of your own";
-    desktop.remoteCodexSignIn
+      "Another person's sign-in is on this machine, and a machine holds one person's only. Ask an administrator for a machine of your own";
+    desktop.remoteHarnessSignIn
       .mockRejectedValueOnce(new Error(refused))
       .mockResolvedValueOnce(codeFor("att-2"))
       .mockResolvedValueOnce(codeFor("att-3", "WXYZ-9K8L7"));
-    desktop.remoteCodexSignInStatus
+    desktop.remoteHarnessSignInStatus
       .mockResolvedValueOnce({
         state: "failed",
         message: "Codex exited before the code was entered.",
@@ -534,7 +615,7 @@ describe("RemoteEnvironmentModal: your machines", () => {
 
     await act(async () => inDialog("Try again")?.click());
     expect(code()?.textContent).toContain("ABCD-1E2F3");
-    await advance(CODEX_SIGN_IN_POLL_MS);
+    await advance(HARNESS_SIGN_IN_POLL_MS);
     expect(signInDialog()?.querySelector('[role="alert"]')?.textContent).toBe(
       "Codex exited before the code was entered.",
     );
@@ -542,15 +623,15 @@ describe("RemoteEnvironmentModal: your machines", () => {
 
     await act(async () => inDialog("Try again")?.click());
     expect(code()?.textContent).toContain("WXYZ-9K8L7");
-    await advance(CODEX_SIGN_IN_POLL_MS);
+    await advance(HARNESS_SIGN_IN_POLL_MS);
     expect(signInDialog()?.querySelector('[role="alert"]')?.textContent).toBe(
       "The code expired before it was entered.",
     );
-    expect(desktop.remoteCodexSignIn).toHaveBeenCalledTimes(3);
+    expect(desktop.remoteHarnessSignIn).toHaveBeenCalledTimes(3);
     // An attempt that ended needs no cancel when the dialog closes.
     await act(async () => inDialog("Close")?.click());
     expect(signInOpen()).toBe(false);
-    expect(desktop.remoteCodexSignInCancel).not.toHaveBeenCalled();
+    expect(desktop.remoteHarnessSignInCancel).not.toHaveBeenCalled();
     expect(machineRow()?.textContent).toContain("Codex not signed in");
   });
 
@@ -558,26 +639,27 @@ describe("RemoteEnvironmentModal: your machines", () => {
     vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
     desktop.personalEnvironment.mockResolvedValue(view());
     desktop.remoteMachines.mockResolvedValue([machine()]);
-    desktop.remoteCodexSignIn.mockResolvedValue(codeFor("att-1"));
-    desktop.remoteCodexSignInStatus.mockResolvedValue({ state: "waiting" });
-    desktop.remoteCodexSignInCancel.mockResolvedValue(undefined);
+    desktop.remoteHarnessSignIn.mockResolvedValue(codeFor("att-1"));
+    desktop.remoteHarnessSignInStatus.mockResolvedValue({ state: "waiting" });
+    desktop.remoteHarnessSignInCancel.mockResolvedValue(undefined);
     await render();
 
     await act(async () => labelled("Sign in to Codex on ada-devbox")?.click());
-    await advance(CODEX_SIGN_IN_POLL_MS);
-    expect(desktop.remoteCodexSignInStatus).toHaveBeenCalledTimes(1);
+    await advance(HARNESS_SIGN_IN_POLL_MS);
+    expect(desktop.remoteHarnessSignInStatus).toHaveBeenCalledTimes(1);
     await act(async () => inDialog("Cancel")?.click());
     expect(signInOpen()).toBe(false);
-    expect(desktop.remoteCodexSignInCancel).toHaveBeenCalledWith({
+    expect(desktop.remoteHarnessSignInCancel).toHaveBeenCalledWith({
       projectId: "project-1",
       machineId: "m-1",
+      harness: "codex",
       attempt: "att-1",
     });
-    await advance(CODEX_SIGN_IN_POLL_MS * 5);
-    expect(desktop.remoteCodexSignInStatus).toHaveBeenCalledTimes(1);
+    await advance(HARNESS_SIGN_IN_POLL_MS * 5);
+    expect(desktop.remoteHarnessSignInStatus).toHaveBeenCalledTimes(1);
 
     // Escape closes the sign-in, not the environment under it.
-    desktop.remoteCodexSignIn.mockResolvedValue(codeFor("att-2"));
+    desktop.remoteHarnessSignIn.mockResolvedValue(codeFor("att-2"));
     await act(async () => labelled("Sign in to Codex on ada-devbox")?.click());
     await act(async () => {
       window.dispatchEvent(
@@ -585,9 +667,10 @@ describe("RemoteEnvironmentModal: your machines", () => {
       );
     });
     expect(signInOpen()).toBe(false);
-    expect(desktop.remoteCodexSignInCancel).toHaveBeenLastCalledWith({
+    expect(desktop.remoteHarnessSignInCancel).toHaveBeenLastCalledWith({
       projectId: "project-1",
       machineId: "m-1",
+      harness: "codex",
       attempt: "att-2",
     });
     expect(document.body.textContent).toContain("Remote environment");
@@ -597,56 +680,58 @@ describe("RemoteEnvironmentModal: your machines", () => {
     vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
     desktop.personalEnvironment.mockResolvedValue(view());
     desktop.remoteMachines.mockResolvedValue([machine()]);
-    desktop.remoteCodexSignInCancel.mockResolvedValue(undefined);
-    const first = deferred<CodexSignIn>();
-    desktop.remoteCodexSignIn
+    desktop.remoteHarnessSignInCancel.mockResolvedValue(undefined);
+    const first = deferred<HarnessSignIn>();
+    desktop.remoteHarnessSignIn
       .mockReturnValueOnce(first.promise)
       .mockResolvedValueOnce(codeFor("att-2", "WXYZ-9K8L7"));
     const check = deferred<{ state: "signed-in" }>();
-    desktop.remoteCodexSignInStatus.mockReturnValueOnce(check.promise);
+    desktop.remoteHarnessSignInStatus.mockReturnValueOnce(check.promise);
     await render();
 
     // Closed while the machine was still starting, then started again.
     await act(async () => labelled("Sign in to Codex on ada-devbox")?.click());
     expect(signInDialog()?.textContent).toContain(
-      "Asking ada-devbox for a code",
+      "Asking ada-devbox for a sign-in link",
     );
     await act(async () => inDialog("Cancel")?.click());
-    expect(desktop.remoteCodexSignInCancel).not.toHaveBeenCalled();
+    expect(desktop.remoteHarnessSignInCancel).not.toHaveBeenCalled();
     await act(async () => labelled("Sign in to Codex on ada-devbox")?.click());
     expect(code()?.textContent).toContain("WXYZ-9K8L7");
 
     // The first answer arrives late: its code is cancelled, never shown.
     await act(async () => first.resolve(codeFor("att-1")));
-    expect(desktop.remoteCodexSignInCancel).toHaveBeenCalledWith({
+    expect(desktop.remoteHarnessSignInCancel).toHaveBeenCalledWith({
       projectId: "project-1",
       machineId: "m-1",
+      harness: "codex",
       attempt: "att-1",
     });
     expect(code()?.textContent).toContain("WXYZ-9K8L7");
 
     // A check still travelling when the dialog closes changes nothing.
-    await advance(CODEX_SIGN_IN_POLL_MS);
-    expect(desktop.remoteCodexSignInStatus).toHaveBeenCalledTimes(1);
+    await advance(HARNESS_SIGN_IN_POLL_MS);
+    expect(desktop.remoteHarnessSignInStatus).toHaveBeenCalledTimes(1);
     await act(async () => inDialog("Cancel")?.click());
     await act(async () => check.resolve({ state: "signed-in" }));
     expect(signInDialog()?.textContent).not.toContain("Codex is signed in");
     expect(machineRow()?.textContent).toContain("Codex not signed in");
-    await advance(CODEX_SIGN_IN_POLL_MS * 3);
-    expect(desktop.remoteCodexSignInStatus).toHaveBeenCalledTimes(1);
+    await advance(HARNESS_SIGN_IN_POLL_MS * 3);
+    expect(desktop.remoteHarnessSignInStatus).toHaveBeenCalledTimes(1);
   });
 
   it("cancels a waiting sign-in when the environment closes", async () => {
     desktop.personalEnvironment.mockResolvedValue(view());
     desktop.remoteMachines.mockResolvedValue([machine()]);
-    desktop.remoteCodexSignIn.mockResolvedValue(codeFor("att-1"));
-    desktop.remoteCodexSignInCancel.mockResolvedValue(undefined);
+    desktop.remoteHarnessSignIn.mockResolvedValue(codeFor("att-1"));
+    desktop.remoteHarnessSignInCancel.mockResolvedValue(undefined);
     const { rerender } = await render();
     await act(async () => labelled("Sign in to Codex on ada-devbox")?.click());
     await rerender(false);
-    expect(desktop.remoteCodexSignInCancel).toHaveBeenCalledWith({
+    expect(desktop.remoteHarnessSignInCancel).toHaveBeenCalledWith({
       projectId: "project-1",
       machineId: "m-1",
+      harness: "codex",
       attempt: "att-1",
     });
     expect(signInOpen()).toBe(false);
@@ -655,7 +740,7 @@ describe("RemoteEnvironmentModal: your machines", () => {
   it("signs out of Codex after asking in place", async () => {
     desktop.personalEnvironment.mockResolvedValue(view());
     desktop.remoteMachines.mockResolvedValue([machine({ codex: "signed-in" })]);
-    desktop.remoteCodexSignOut
+    desktop.remoteHarnessSignOut
       .mockRejectedValueOnce(new Error("ada-devbox is not connected."))
       .mockResolvedValueOnce({ signedOut: true });
     await render();
@@ -665,7 +750,7 @@ describe("RemoteEnvironmentModal: your machines", () => {
       "Sign out of Codex on ada-devbox? Codex chats there need you to sign in again.",
     );
     expect(document.activeElement?.textContent?.trim()).toBe("Cancel");
-    expect(desktop.remoteCodexSignOut).not.toHaveBeenCalled();
+    expect(desktop.remoteHarnessSignOut).not.toHaveBeenCalled();
     await act(async () => button("Cancel")?.click());
     expect(document.activeElement).toBe(
       labelled("Sign out of Codex on ada-devbox"),
@@ -673,9 +758,10 @@ describe("RemoteEnvironmentModal: your machines", () => {
 
     await act(async () => labelled("Sign out of Codex on ada-devbox")?.click());
     await act(async () => button("Sign out")?.click());
-    expect(desktop.remoteCodexSignOut).toHaveBeenCalledWith({
+    expect(desktop.remoteHarnessSignOut).toHaveBeenCalledWith({
       projectId: "project-1",
       machineId: "m-1",
+      harness: "codex",
     });
     expect(
       document.body.querySelector('[data-testid="remote-environment-status"]')
@@ -686,6 +772,223 @@ describe("RemoteEnvironmentModal: your machines", () => {
     expect(machineRow()?.textContent).toContain("Codex not signed in");
     expect(document.activeElement).toBe(
       labelled("Sign in to Codex on ada-devbox"),
+    );
+  });
+  it("signs in to Claude Code: the link, a field for the code the page gives, and a check until it is done", async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    desktop.personalEnvironment.mockResolvedValue(view());
+    desktop.remoteMachines.mockResolvedValue([machine({ codex: "signed-in" })]);
+    desktop.remoteHarnessSignIn.mockResolvedValue(linkFor("att-1"));
+    const sent = deferred<{ state: "waiting" }>();
+    desktop.remoteHarnessSignInCode.mockReturnValueOnce(sent.promise);
+    desktop.remoteHarnessSignInStatus
+      .mockResolvedValueOnce({ state: "waiting" })
+      .mockResolvedValueOnce({ state: "signed-in" });
+    desktop.openSignInLink.mockResolvedValue(undefined);
+    await render();
+
+    await act(async () =>
+      labelled("Sign in to Claude Code on ada-devbox")?.click(),
+    );
+    expect(desktop.remoteHarnessSignIn).toHaveBeenCalledWith({
+      projectId: "project-1",
+      machineId: "m-1",
+      harness: "claude-code",
+    });
+    const dialog = signInDialog();
+    expect(
+      document.getElementById(dialog?.getAttribute("aria-labelledby") ?? "")
+        ?.textContent,
+    ).toBe("Sign in to Claude Code on ada-devbox");
+    const text = dialog?.textContent ?? "";
+    expect(text).toContain(
+      "Claude Code signs in on the machine itself, so your Claude sign-in stays there.",
+    );
+    expect(text).toContain("claude.com/cai/oauth/authorize");
+    expect(text).toContain("2. Paste the code the page gives you");
+    expect(text).toContain("Expires in 15 minutes");
+    expect(text).toContain(
+      "Sign in with your own Claude account. Anthropic's terms for your plan apply to how you use it here.",
+    );
+    // Codex's device code hint is Codex's alone.
+    expect(text).not.toContain("device code");
+    expect(text).not.toMatch(/[–—]/);
+    // Claude Code prints no code to show: the person brings one back.
+    expect(code()).toBeNull();
+    expect(labelled("Copy the code")).toBeNull();
+    const field = codeField();
+    expect(field?.getAttribute("aria-label")).toBe(
+      "Code from the Claude Code sign-in page",
+    );
+    const submit = () => inDialog("Submit");
+    expect(submit()?.disabled).toBe(true);
+    expect(submit()?.dataset.disabledReason).toBe("Paste the code first");
+    expect(signInDialog()?.textContent).toContain(
+      "Waiting for the code from the sign-in page",
+    );
+
+    await act(async () => inDialog("Open sign-in page")?.click());
+    expect(desktop.openSignInLink).toHaveBeenCalledWith(CLAUDE_LINK);
+
+    // Spaces alone are no code.
+    await act(async () => {
+      if (field) typeInto(field, "   ");
+    });
+    expect(submit()?.disabled).toBe(true);
+    const pasted = "pasted-code-7f3a#state";
+    await act(async () => {
+      if (field) typeInto(field, `  ${pasted} `);
+    });
+    expect(submit()?.disabled).toBe(false);
+    await act(async () => submit()?.click());
+    expect(desktop.remoteHarnessSignInCode).toHaveBeenCalledTimes(1);
+    expect(desktop.remoteHarnessSignInCode).toHaveBeenCalledWith({
+      projectId: "project-1",
+      machineId: "m-1",
+      harness: "claude-code",
+      attempt: "att-1",
+      text: pasted,
+    });
+    // Sent once and gone from the page: the field is empty and takes no more.
+    expect(codeField()?.value).toBe("");
+    expect(codeField()?.disabled).toBe(true);
+    expect(document.body.innerHTML).not.toContain(pasted);
+    expect(signInDialog()?.textContent).toContain("Sending the code");
+    await act(async () => sent.resolve({ state: "waiting" }));
+    expect(signInDialog()?.textContent).toContain("Finishing the sign-in");
+    expect(submit()?.dataset.disabledReason).toBe("The code was sent");
+
+    await advance(HARNESS_SIGN_IN_POLL_MS);
+    expect(desktop.remoteHarnessSignInStatus).toHaveBeenCalledWith({
+      projectId: "project-1",
+      machineId: "m-1",
+      harness: "claude-code",
+      attempt: "att-1",
+    });
+    await advance(HARNESS_SIGN_IN_POLL_MS);
+    expect(signInDialog()?.textContent).toContain(
+      "Claude Code is signed in on ada-devbox.",
+    );
+    expect(signInDialog()?.textContent).toContain(
+      "Your Claude Code chats there run on your Claude plan now.",
+    );
+    expect(signInRow("claude-code")?.textContent).toContain(
+      "Claude Code signed in",
+    );
+    // Her Codex sign-in there is as it was.
+    expect(signInRow("codex")?.textContent).toContain("Codex signed in");
+    await act(async () => inDialog("Done")?.click());
+    expect(signInOpen()).toBe(false);
+    expect(desktop.remoteHarnessSignInCancel).not.toHaveBeenCalled();
+    expect(document.body.innerHTML).not.toContain(pasted);
+  });
+
+  it("says why a pasted code was not taken, and lets the person paste again", async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    desktop.personalEnvironment.mockResolvedValue(view());
+    desktop.remoteMachines.mockResolvedValue([machine()]);
+    desktop.remoteHarnessSignIn
+      .mockResolvedValueOnce(linkFor("att-1"))
+      .mockResolvedValueOnce(linkFor("att-2"));
+    desktop.remoteHarnessSignInStatus.mockResolvedValue({ state: "waiting" });
+    desktop.remoteHarnessSignInCancel.mockResolvedValue(undefined);
+    desktop.remoteHarnessSignInCode
+      .mockRejectedValueOnce(
+        new Error("This machine is not connected right now."),
+      )
+      .mockResolvedValueOnce({
+        state: "failed",
+        message: "Error: invalid code the code",
+      });
+    await render();
+    await act(async () =>
+      labelled("Sign in to Claude Code on ada-devbox")?.click(),
+    );
+
+    const paste = async (value: string) => {
+      const field = codeField();
+      await act(async () => {
+        if (field) typeInto(field, value);
+      });
+      await act(async () => inDialog("Submit")?.click());
+    };
+    // The machine could not be reached: its words, and the field again.
+    await paste("first-code-1a2b");
+    expect(
+      signInDialog()?.querySelector('[data-testid="harness-sign-in-status"]')
+        ?.textContent,
+    ).toBe("This machine is not connected right now.");
+    expect(codeField()?.disabled).toBe(false);
+    expect(codeField()?.value).toBe("");
+
+    // Claude Code refused the code: the sign-in ended, in its words.
+    await paste("second-code-3c4d");
+    expect(signInDialog()?.querySelector('[role="alert"]')?.textContent).toBe(
+      "Error: invalid code the code",
+    );
+    expect(codeField()).toBeNull();
+    expect(document.body.innerHTML).not.toContain("first-code-1a2b");
+    expect(document.body.innerHTML).not.toContain("second-code-3c4d");
+    // It ended on the machine: nothing is left to cancel.
+    expect(desktop.remoteHarnessSignInCancel).not.toHaveBeenCalled();
+
+    // Trying again starts a new sign-in with an empty field; a login nobody
+    // finished says it ran out of time, not that a code expired.
+    await act(async () => inDialog("Try again")?.click());
+    expect(codeField()?.value).toBe("");
+    expect(codeField()?.disabled).toBe(false);
+    desktop.remoteHarnessSignInStatus.mockResolvedValueOnce({
+      state: "expired",
+    });
+    await advance(HARNESS_SIGN_IN_POLL_MS);
+    expect(signInDialog()?.querySelector('[role="alert"]')?.textContent).toBe(
+      "The sign-in ran out of time.",
+    );
+
+    // Closing a waiting one cancels it, by harness.
+    await act(async () => inDialog("Close")?.click());
+    desktop.remoteHarnessSignIn.mockResolvedValueOnce(linkFor("att-3"));
+    await act(async () =>
+      labelled("Sign in to Claude Code on ada-devbox")?.click(),
+    );
+    await act(async () => inDialog("Cancel")?.click());
+    expect(desktop.remoteHarnessSignInCancel).toHaveBeenCalledWith({
+      projectId: "project-1",
+      machineId: "m-1",
+      harness: "claude-code",
+      attempt: "att-3",
+    });
+  });
+
+  it("signs out of Claude Code alone, after asking in place", async () => {
+    desktop.personalEnvironment.mockResolvedValue(view());
+    desktop.remoteMachines.mockResolvedValue([
+      machine({ codex: "signed-in", claude: "signed-in" }),
+    ]);
+    desktop.remoteHarnessSignOut.mockResolvedValueOnce({ signedOut: true });
+    await render();
+
+    await act(async () =>
+      labelled("Sign out of Claude Code on ada-devbox")?.click(),
+    );
+    expect(signInRow("claude-code")?.textContent).toContain(
+      "Sign out of Claude Code on ada-devbox? Claude Code chats there need you to sign in again.",
+    );
+    // The other harness's row is not asking anything.
+    expect(signInRow("codex")?.textContent).toBe("Codex signed inSign out");
+    await act(async () => button("Sign out")?.click());
+    expect(desktop.remoteHarnessSignOut).toHaveBeenCalledTimes(1);
+    expect(desktop.remoteHarnessSignOut).toHaveBeenCalledWith({
+      projectId: "project-1",
+      machineId: "m-1",
+      harness: "claude-code",
+    });
+    expect(signInRow("claude-code")?.textContent).toContain(
+      "Claude Code not signed in",
+    );
+    expect(signInRow("codex")?.textContent).toContain("Codex signed in");
+    expect(document.activeElement).toBe(
+      labelled("Sign in to Claude Code on ada-devbox"),
     );
   });
 });

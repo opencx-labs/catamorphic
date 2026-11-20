@@ -906,7 +906,7 @@ with `"access": { "people": ["dana@example.com"] }`, change an enrolled
 worker's access with `PATCH /_work/operator/workers/:name`, or let a machine
 rule give every member of a group one ([above](#a-machine-for-every-person-or-team)).
 Their chats prefer it to shared machines, nobody else's work lands on it, and
-it may run their own Codex sign-in and files (ADRs 0184, 0213). Access decides placement,
+it may run their own Claude Code and Codex sign-ins and files (ADRs 0184, 0213, 0340). Access decides placement,
 not OS accounts or network access on the machine.
 
 Choose the trust boundary before provisioning. Control-plane replicas carry
@@ -1167,25 +1167,32 @@ caches (ADR 0208):
 ## Members' own sign-ins and files
 
 An Environment with `"personalCredentials": true` lets a member's chats run
-Codex on the member's own ChatGPT sign-in, made from the Work app on a
-machine of their own (ADRs 0199, 0213,
+Claude Code and Codex on the member's own Claude and ChatGPT sign-ins, made
+from the Work app on a machine of their own (ADRs 0199, 0213, 0340,
 [harnesses](harnesses.md#members-own-sign-ins)), and lets their listed files
 reach their own chats. The sign-in never leaves that machine: the worker
-reports only `sign-in:codex:<member>` in its offer, and placement takes only
-a machine reporting the chat owner's. A sign-in runs only on the member's
-own machine: a worker whose access names only that person, or a single
-server's own machine whose operator set `WORK_PERSONAL_CREDENTIALS=accept`.
-A machine holds one person's Codex sign-in at most, so a shared machine runs
-Codex on keys whatever its isolation. Claude Code subscriptions never run on
-servers or workers (ADR 0213). Personal files follow the isolation rule:
+reports only `sign-in:claude-code:<member>` and `sign-in:codex:<member>` in
+its offer, and placement takes only a machine reporting the chat owner's. A
+sign-in runs only on the member's own machine: a worker whose access names
+only that person, or a single server's own machine whose operator set
+`WORK_PERSONAL_CREDENTIALS=accept`. A machine holds one person's sign-ins at
+most (that person may hold both), so a shared machine runs Claude Code and
+Codex on keys whatever its isolation. The sign-in lives on that machine's
+disk, so the machine has to persist: a machine rule's each-member machine,
+or a hand-enrolled worker whose access names only that person, not a
+machine created on demand and destroyed when idle. Whether a member's use of
+their plan this way is allowed under the provider's terms remains the
+operator's responsibility. Personal files follow the isolation rule:
 microsandbox, gVisor containers, a worker whose access names only that
 person, or the member's device. A process-isolated machine (local
 processes, or containers under runc) that serves several people (a
 `trusted` worker, or the control plane itself) refuses them unless its
 operator sets `WORK_PERSONAL_CREDENTIALS=accept` on that machine (the
 worker's own environment, like `WORK_UNENFORCED_EGRESS`), which advertises
-`credentials.personal`. Give such Environments egress to `chatgpt.com`,
-`auth.openai.com` and `api.openai.com` when they restrict it. A company
+`credentials.personal`. Give such Environments egress to `api.anthropic.com`,
+`claude.ai`, `claude.com`, `platform.claude.com` and `console.anthropic.com`
+for Claude Code, and to `chatgpt.com`, `auth.openai.com` and `api.openai.com`
+for Codex, when they restrict it. A company
 that wants Codex or Claude Code for everyone binds a model connection
 instead ([harnesses](harnesses.md)).
 
