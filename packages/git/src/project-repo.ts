@@ -234,8 +234,18 @@ export class ProjectRepoImpl implements ProjectRepo {
     return readFileSnapshot({
       paths,
       options,
-      read: async (file, maxBytes) =>
-        new TextDecoder().decode(await this.readSnapshotBytes(file, maxBytes)),
+      read: async (file, maxBytes) => {
+        // A link is never opened here: a workspace's save keeps links as
+        // links (ADR 0341), and one may point outside the working copy.
+        if (
+          !this.followsSymlinks &&
+          (await fs.lstat(path.join(this.repoPath, file))).isSymbolicLink()
+        )
+          return null;
+        return new TextDecoder().decode(
+          await this.readSnapshotBytes(file, maxBytes),
+        );
+      },
     });
   }
 
@@ -244,7 +254,12 @@ export class ProjectRepoImpl implements ProjectRepo {
     maxBytes: number,
   ): Promise<Uint8Array> {
     assertSafePath(file);
-    const handle = await fs.open(path.join(this.repoPath, file), "r");
+    const handle = await fs.open(
+      path.join(this.repoPath, file),
+      this.followsSymlinks
+        ? nodeFs.constants.O_RDONLY
+        : nodeFs.constants.O_RDONLY | (nodeFs.constants.O_NOFOLLOW ?? 0),
+    );
     try {
       const size = (await handle.stat()).size;
       if (size > maxBytes)

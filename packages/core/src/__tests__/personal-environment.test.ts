@@ -24,7 +24,7 @@ import {
   validatePersonalEnvironment,
 } from "../services/personal-environment-service.js";
 import { ensureSandboxBaseline } from "../services/sandbox-git.js";
-import { parseSnapshot } from "../services/sandbox-sync.js";
+import { readSandboxSave } from "../services/sandbox-sync.js";
 
 const execute = promisify(execFile);
 
@@ -255,24 +255,15 @@ describe("personal files in a sandbox (ADR 0184)", () => {
   let root: string;
   let provider: SandboxProvider;
   const project = () => path.join(root, "workspace", "project");
-  const snapshot = async () =>
-    parseSnapshot(
-      (
-        await provider.executeCommand(
-          "s",
-          [
-            "git_dir=$(git rev-parse --git-dir)",
-            'export GIT_INDEX_FILE="$git_dir/work-sync-index"',
-            'base=$(git rev-parse -q --verify "refs/work/synced^{tree}")',
-            "git add -A",
-            "tree=$(git write-tree)",
-            'printf "%s\\n" "$tree"',
-            'git -c core.quotePath=false diff-tree -r --no-renames --name-status "$base" "$tree"',
-          ].join(" && "),
-          { cwd: "/workspace/project" },
-        )
-      ).result,
-    );
+  const snapshot = async () => {
+    const save = await readSandboxSave({
+      provider,
+      sandboxProviderId: "s",
+      projectDir: "/workspace/project",
+    });
+    await save.pack?.dispose();
+    return save.changes.map(({ path, kind }) => ({ path, kind }));
+  };
 
   beforeEach(async () => {
     root = await fs.mkdtemp(path.join(os.tmpdir(), "work personal #"));
@@ -323,9 +314,7 @@ describe("personal files in a sandbox (ADR 0184)", () => {
     // Nothing personal reaches the sync-back snapshot, and an agent's
     // commit of everything leaves them out.
     await fs.writeFile(path.join(project(), "app.ts"), "two\n");
-    expect((await snapshot())?.changes).toEqual([
-      { path: "app.ts", kind: "modified" },
-    ]);
+    expect(await snapshot()).toEqual([{ path: "app.ts", kind: "file" }]);
     await nativeGit(project(), ["add", "-A"]);
     const staged = await nativeGit(project(), [
       "diff",

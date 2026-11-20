@@ -742,7 +742,6 @@ export {
   sandboxSecretsFile,
   sandboxSecretsPrelude,
 } from "./services/sandbox-secrets.js";
-export { parseSnapshot } from "./services/sandbox-sync.js";
 export { SchedulesService } from "./services/schedules-service.js";
 export { SECRETS_CAPABILITY } from "./services/secrets-capability.js";
 export {

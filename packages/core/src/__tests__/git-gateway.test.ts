@@ -29,7 +29,7 @@ import {
   removeSandboxGateway,
 } from "../services/sandbox-git.js";
 import { sandboxSecretsPrelude } from "../services/sandbox-secrets.js";
-import { parseSnapshot, unquoteCPath } from "../services/sandbox-sync.js";
+import { readSandboxSave } from "../services/sandbox-sync.js";
 import { workspaceMoveNote } from "../services/session-workspaces.js";
 
 const execute = promisify(execFile);
@@ -257,25 +257,6 @@ describe("Git gateway protocol (ADR 0175)", () => {
   });
 });
 
-describe("sandbox sync snapshots", () => {
-  it("reads name-status lines and unquotes unusual paths", () => {
-    expect(
-      parseSnapshot(
-        `${A}\nM\tapp.ts\nD\t"tab\\there.ts"\nA\t"caf\\303\\251.md"\n`,
-      ),
-    ).toEqual({
-      tree: A,
-      changes: [
-        { path: "app.ts", kind: "modified" },
-        { path: "tab\there.ts", kind: "deleted" },
-        { path: "café.md", kind: "modified" },
-      ],
-    });
-    expect(unquoteCPath("plain.ts")).toBe("plain.ts");
-    expect(parseSnapshot("not a tree")).toBeNull();
-  });
-});
-
 describe("workspace move notes (ADR 0178)", () => {
   it("tells the agent the old and new heads and what changed", () => {
     const note = workspaceMoveNote({
@@ -394,23 +375,15 @@ describe("sandbox Git (ADRs 0175, 0178)", () => {
       "agent commit",
     ]);
     await fs.writeFile(path.join(project(), "new.ts"), "x\n");
-    const snapshot = await provider.executeCommand(
-      "s",
-      [
-        "git_dir=$(git rev-parse --git-dir)",
-        'export GIT_INDEX_FILE="$git_dir/work-sync-index"',
-        'base=$(git rev-parse -q --verify "refs/work/synced^{tree}")',
-        "git add -A",
-        "tree=$(git write-tree)",
-        'printf "%s\\n" "$tree"',
-        'git -c core.quotePath=false diff-tree -r --no-renames --name-status "$base" "$tree"',
-      ].join(" && "),
-      { cwd: "/workspace/project" },
-    );
-    const parsed = parseSnapshot(snapshot.result);
-    expect(parsed?.changes).toEqual([
-      { path: "app.ts", kind: "modified" },
-      { path: "new.ts", kind: "modified" },
+    const save = await readSandboxSave({
+      provider,
+      sandboxProviderId: "s",
+      projectDir: "/workspace/project",
+    });
+    await save.pack?.dispose();
+    expect(save.changes.map(({ path, kind }) => ({ path, kind }))).toEqual([
+      { path: "app.ts", kind: "file" },
+      { path: "new.ts", kind: "file" },
     ]);
     // The agent's own index and branch are untouched by the snapshot.
     expect((await nativeGit(project(), ["status", "--porcelain"])).trim()).toBe(

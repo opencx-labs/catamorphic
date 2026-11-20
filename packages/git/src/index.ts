@@ -108,3 +108,12 @@ export {
   unpinMirrorRef,
   type WorkspaceBase,
 } from "./workspace-mirror.js";
+export {
+  assertSavedPath,
+  parseSavedChanges,
+  ReceivedPack,
+  type SavedChange,
+  savedDraftChanges,
+  WorkspaceSaveError,
+  writeSavedChanges,
+} from "./workspace-save.js";

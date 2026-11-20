@@ -1,6 +1,6 @@
 # 0191: Member drafts are refs in the project origin
 
-- **Status:** Accepted
+- **Status:** Accepted (draft writes carry file modes and links per [0341](0341-a-workspace-is-saved-as-a-git-pack.md))
 - **Date:** 2026-09-30
 - **Refines:** 0044, 0055, 0099, 0166, 0178
 

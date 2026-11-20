@@ -1,6 +1,6 @@
 # 0178: Session workspaces at a ref of the project's remote
 
-- **Status:** Accepted
+- **Status:** Accepted (a workspace is saved as a Git pack per [0341](0341-a-workspace-is-saved-as-a-git-pack.md))
 - **Date:** 2026-09-27
 - **Refines:** 0044, 0100, 0173, 0175
 

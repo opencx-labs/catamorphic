@@ -344,3 +344,4 @@ Settled design decisions live here as short Architecture Decision Records. They 
 | [0337](0337-reviews-show-progress-and-post-findings-as-verified.md) | Reviews show progress at once and post findings as they are verified | Accepted (amends 0259, 0323, 0325) |
 | [0338](0338-what-is-out-of-sight-is-data.md) | What is out of sight is data: sleeping tabs mount nothing, and a chat without a stream reads what it missed | Accepted (amends 0194, 0197; refines 0229, 0249) |
 | [0339](0339-the-desktops-backend-leaves-the-main-process.md) | The desktop's backend leaves the main process: its database first, then the server | Accepted |
+| [0341](0341-a-workspace-is-saved-as-a-git-pack.md) | A workspace is saved as a Git pack, as it is restored | Accepted (amends 0178, 0191) |
