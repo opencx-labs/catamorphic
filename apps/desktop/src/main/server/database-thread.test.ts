@@ -311,7 +311,10 @@ describe("the database on its own thread", () => {
         await transaction.query("SELECT 1");
       }),
     ).rejects.toThrow("The database is closed");
+    const waitingSince = Date.now();
     await stuck.database.quiet();
+    // It waited as long as it may, not only until nothing was new.
+    expect(Date.now() - waitingSince).toBeGreaterThanOrEqual(90);
     expect(stuck.asked.map((request) => request.type)).toEqual([
       "begin",
       "query",
@@ -339,34 +342,49 @@ describe("the database on its own thread", () => {
     expect(lostWith).toEqual([]);
   });
 
-  it("fails a Kysely transaction that cannot begin, and leaves Kysely's connection free", async () => {
-    const db = new Kysely<{ notes: { id: number; body: string } }>({
-      dialect: new PGliteDialect({ pglite: database }),
-    });
-    await db.selectFrom("notes").selectAll().execute();
-    lose(new Error("The database thread stopped"));
-    // Kysely's driver waits for the transaction's callback and for nothing
-    // else: refused before it, the caller would wait for good.
-    await expect(
-      db.transaction().execute(async (trx) => {
-        await trx.insertInto("notes").values({ id: 1, body: "x" }).execute();
-      }),
-    ).rejects.toThrow("The database thread stopped");
-    await expect(db.transaction().execute(async () => {})).rejects.toThrow(
-      "The database thread stopped",
-    );
-    // The next caller is not held behind either of them.
-    await expect(db.selectFrom("notes").selectAll().execute()).rejects.toThrow(
-      "The database thread stopped",
-    );
-  });
+  it.each([
+    {
+      refusedBy: "a lost thread",
+      refuse: () => lose(new Error("The database thread stopped")),
+      message: "The database thread stopped",
+    },
+    {
+      refusedBy: "a database that is closing",
+      refuse: () => void database.close(),
+      message: "The database is closed",
+    },
+  ])(
+    "fails a Kysely transaction that cannot begin for $refusedBy, and leaves Kysely's connection free",
+    async ({ refuse, message }) => {
+      const db = new Kysely<{ notes: { id: number; body: string } }>({
+        dialect: new PGliteDialect({ pglite: database }),
+      });
+      await db.selectFrom("notes").selectAll().execute();
+      refuse();
+      // Kysely's driver waits for the transaction's callback and for nothing
+      // else: refused before it, the caller would wait for good.
+      await expect(
+        db.transaction().execute(async (trx) => {
+          await trx.insertInto("notes").values({ id: 1, body: "x" }).execute();
+        }),
+      ).rejects.toThrow(message);
+      await expect(db.transaction().execute(async () => {})).rejects.toThrow(
+        message,
+      );
+      // The next caller is not held behind either of them.
+      await expect(
+        db.selectFrom("notes").selectAll().execute(),
+      ).rejects.toThrow(message);
+    },
+  );
 
-  it("closes without complaint when the thread is lost as it closes", async () => {
+  it("fails the close when the thread is lost before it answers", async () => {
     const closing = database.close();
     lose(new Error("The database thread stopped"));
-    await closing;
+    await expect(closing).rejects.toThrow("The database thread stopped");
     expect(database.closed).toBe(true);
     expect(lostWith).toHaveLength(1);
+    expect(stops()).toBeGreaterThanOrEqual(1);
   });
 
   it("answers a commit for a transaction that is not open with an error, and a rollback with nothing", async () => {

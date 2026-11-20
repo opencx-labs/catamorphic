@@ -118,9 +118,8 @@ export function connectDatabaseThread({
   let nextRequest = 1;
   let nextTransaction = 1;
   let closed = false;
+  // Set as the close is sent: nothing new begins behind it.
   let closing: Promise<void> | undefined;
-  // The close has been sent: nothing new begins behind it.
-  let refusing = false;
   const transactions = new Set<number>();
   let ready = false;
   let gone: Error | undefined;
@@ -169,8 +168,14 @@ export function connectDatabaseThread({
       // begins behind the close.
       const begins =
         !("transaction" in statement) || statement.type === "begin";
-      if (closed || (refusing && begins)) {
-        reject(gone ?? new Error("The database is closed"));
+      if (closed || (closing && begins)) {
+        // A new error each time: Kysely adds its caller's stack to the one
+        // it is handed.
+        reject(
+          gone
+            ? new Error(gone.message, { cause: gone })
+            : new Error("The database is closed"),
+        );
         return;
       }
       const id = nextRequest++;
@@ -280,13 +285,11 @@ export function connectDatabaseThread({
       if (closing) return closing;
       if (closed) return Promise.resolve();
       const asked = ask({ type: "close" }, nothing);
-      refusing = true;
       closing = (async () => {
         try {
+          // A thread lost before it answers fails the close: what it had
+          // not yet written may be gone, and whoever closes must say so.
           await asked;
-        } catch (error) {
-          // A thread lost as it closed: its owner has heard, and it is gone.
-          if (error !== gone) throw error;
         } finally {
           closed = true;
           await stop();
