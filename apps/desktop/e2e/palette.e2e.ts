@@ -32,7 +32,12 @@ const open = async () => {
   // Wait for the previous overlay's exit before opening another one.
   await wait(`return !input()`);
   await shortcut("p");
-  await wait(`return document.activeElement === input()`);
+  // Open without its input focused, not opened at all, and focus taken by
+  // the page beneath fail differently: the state says which.
+  await waitTelling(
+    `return document.activeElement === input()`,
+    "the palette open with its input focused",
+  );
 };
 const close = async () => {
   await run(
@@ -93,12 +98,13 @@ const selectStripTab = async (key: string) => {
   `);
   await app.clickPointer(point);
 };
-/** Where the chats are and what has focus, for a wait that timed out. */
+/** Where the chats are, what has focus and whether the overlay is open, for a wait that timed out. */
 const chatState = `JSON.stringify({
   floating: [...document.querySelectorAll('section[data-floating-chat]')].map((el) => el.dataset.chatLocalId),
   inTabs: [...document.querySelectorAll('section[data-chat-tab]')].map((el) => el.dataset.chatLocalId),
   strip: [...document.querySelectorAll('[data-workspace-visible="true"] [data-tab-orientation] [data-point-key]:not([data-sidebar-item-id])')].map((el) => el.dataset.pointKey),
   focused: (() => { const el = document.activeElement; return el && [el.tagName, el.getAttribute('aria-label'), el.closest('section')?.dataset.chatLocalId ?? null, el.closest('[data-palette]')?.dataset.palette ?? null]; })(),
+  overlayOpen: !!document.querySelector('[data-palette="overlay"]:not([inert], [inert] *)'),
   appDocumentHasFocus: document.hasFocus(),
 })`;
 /** A wait that, timed out, says where the chats are and what has focus. */
@@ -498,6 +504,31 @@ it("switches to open tabs from search and the Tabs mode, above bookmarks and his
   } finally {
     server.close();
   }
+});
+
+it("keeps the keys when the page beneath takes focus after it opened", async () => {
+  // A page focused a moment before Cmd+P finishes that focus later, in
+  // another process: after the overlay focused its input. The palette then
+  // stood open while typing went to the page (macOS CI, in the test above:
+  // the second page's palette never had its input focused). The page left
+  // in front by that test takes focus here while the overlay is open, as
+  // that late focus does.
+  await open();
+  expect(
+    await run<string>(`
+      [...document.querySelectorAll('[data-workspace-visible="true"] webview')]
+        .find(view => view.checkVisibility({visibilityProperty:true})).focus();
+      return document.activeElement.tagName`),
+    "the page took focus from the open palette",
+  ).toBe("WEBVIEW");
+  await waitTelling(
+    `return document.activeElement === input()`,
+    "the palette took focus back from the page",
+  );
+  // The page's focus has finished moving: nothing takes the keys again.
+  await new Promise((resolve) => setTimeout(resolve, 300));
+  expect(await run(`return document.activeElement === input()`)).toBe(true);
+  await close();
 });
 
 it("leaves the list where it is when the pointer highlights a clipped row", async () => {
