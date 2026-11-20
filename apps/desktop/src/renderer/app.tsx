@@ -27,6 +27,7 @@ import {
   Wand2,
 } from "lucide-react";
 import {
+  type ComponentProps,
   lazy,
   type MouseEvent as ReactMouseEvent,
   Suspense,
@@ -153,7 +154,10 @@ import {
   ShortcutHint,
 } from "./components/shortcut-hint.js";
 import type { SidebarContentState } from "./components/sidebar-contribution.js";
-import { SidebarHostProvider } from "./components/sidebar-host.js";
+import {
+  type SidebarHost,
+  SidebarHostProvider,
+} from "./components/sidebar-host.js";
 import { ConfiguredSection } from "./components/sidebar-navigation.js";
 import type { SessionCommand } from "./components/sidebar-session-inspector.js";
 import { SiteSettingsHost } from "./components/site-settings-modal.js";
@@ -215,6 +219,7 @@ import {
 import { prefersReducedMotion } from "./lib/motion.js";
 import { notifyDesktop, playChime } from "./lib/notify.js";
 import { isMoving, useUnsavedFilesForMove } from "./lib/project-move.js";
+import { quiet } from "./lib/quiet.js";
 import {
   ipcErrorText,
   lastPreviewPort,
@@ -224,6 +229,7 @@ import { LOCAL_CHATS_POLL_MS } from "./lib/session-change-hints.js";
 import { sessionLabel, sessionPresentations } from "./lib/session-label.js";
 import type { SidebarMotion } from "./lib/sidebar-motion.js";
 import {
+  shallowEqual,
   useLatestHandlers,
   useStableEntries,
   useStableValue,
@@ -687,6 +693,59 @@ interface AgentArrival {
   from: string;
   to: string;
 }
+
+/**
+ * The window's dialogs and hosts, each rendering for what it is given
+ * rather than with every render of the window (lib/quiet.tsx): closed,
+ * they are given the same thing. Their function props are all handlers.
+ */
+const Dialogs = {
+  ActionInputDialog: quiet(ActionInputDialog),
+  AgentWizard: quiet(AgentWizard),
+  ArchiveSessionDialog: quiet(ArchiveSessionDialog),
+  ConfigureAgentModal: quiet(ConfigureAgentModal),
+  ConnectorsModal: quiet(ConnectorsModal),
+  CreateSubsessionDialog: quiet(CreateSubsessionDialog),
+  DeleteProjectModal: quiet(DeleteProjectModal),
+  DisabledControlHints: quiet(DisabledControlHints),
+  ExtensionPromptHost: quiet(ExtensionPromptHost),
+  MobilePairingModal: quiet(MobilePairingModal),
+  PasskeyHost: quiet(PasskeyHost),
+  PreviewPortDialog: quiet(PreviewPortDialog),
+  ProjectAgentConsentDialog: quiet(ProjectAgentConsentDialog),
+  ProjectModal: quiet(ProjectModal),
+  RemoteConnectModal: quiet(RemoteConnectModal),
+  RemoteEnvironmentModal: quiet(RemoteEnvironmentModal),
+  RemoteHistoryModal: quiet(RemoteHistoryModal),
+  RemoteMembersModal: quiet(RemoteMembersModal),
+  RemoteProposeModal: quiet(RemoteProposeModal),
+  RemotePublishModal: quiet(RemotePublishModal),
+  RemoteSecretsModal: quiet(RemoteSecretsModal),
+  RemoteServiceConnectionsModal: quiet(RemoteServiceConnectionsModal),
+  RenameChatDialog: quiet(RenameChatDialog),
+  SiteSettingsHost: quiet(SiteSettingsHost),
+  ThemePicker: quiet(ThemePicker),
+  UpdateBanner: quiet(UpdateBanner),
+};
+/**
+ * The screens a workspace keeps mounted while hidden (pages, files,
+ * shells): each renders for what it is given, so one behind another tab
+ * does no work for a render of the window. Their function props are
+ * handlers, read through refs or called for an event.
+ */
+const Screens = {
+  BrowserScreen: quiet(BrowserScreen),
+  EditorPane: quiet(EditorPane),
+  TerminalScreen: quiet(function TerminalPane(
+    props: ComponentProps<typeof TerminalScreen>,
+  ) {
+    return <TerminalScreen {...props} />;
+  }),
+};
+const NO_WATCHERS: NonNullable<
+  Parameters<typeof ArchiveSessionDialog>[0]["watchers"]
+> = [];
+const NO_FILES: string[] = [];
 
 export function App({
   runtimeProjectId,
@@ -4193,6 +4252,19 @@ export function App({
       ),
     [projectAgentInfos],
   );
+  const subsessionAgents = useMemo(
+    () => [
+      ...(agentsData?.agents.map((agent) => ({
+        id: agent.id,
+        name: agent.name,
+      })) ?? []),
+      ...Object.entries(projectAgentNames).map(([id, name]) => ({
+        id,
+        name,
+      })),
+    ],
+    [agentsData, projectAgentNames],
+  );
   const sessionAgentIdentities = JSON.stringify(
     [...sessionsById.values()]
       .map((session) => [session.id, session.agentId, session.harness])
@@ -4380,20 +4452,28 @@ export function App({
   // (closures over fresh state), read through a ref by the listeners.
   // Keyboard tab cycling, and an agent's open or close, nudge the content
   // pane in from the direction of travel (see styles.css pane-in-*).
-  // Cleared on animationend; the null-then-rAF dance restarts the keyframe
+  // The class goes on the pane itself, cleared on animationend: held in
+  // state, each cycle rendered the window three times for a keyframe.
+  // Taking it off and putting it back a frame later restarts the keyframe
   // on rapid consecutive cycles.
-  const [paneMotion, setPaneMotion] = useState<{
-    direction: "left" | "right";
-    nonce: number;
-  } | null>(null);
+  const paneRef = useRef<HTMLDivElement | null>(null);
   const paneMotionNonce = useRef(0);
+  const clearPaneMotion = () =>
+    paneRef.current?.classList.remove(
+      "animate-pane-in-left",
+      "animate-pane-in-right",
+    );
   const playPaneMotion = (direction: "left" | "right") => {
     paneMotionNonce.current += 1;
     const nonce = paneMotionNonce.current;
-    setPaneMotion(null);
+    clearPaneMotion();
     requestAnimationFrame(() => {
       if (paneMotionNonce.current === nonce) {
-        setPaneMotion({ direction, nonce });
+        paneRef.current?.classList.add(
+          direction === "left"
+            ? "animate-pane-in-left"
+            : "animate-pane-in-right",
+        );
       }
     });
   };
@@ -7579,21 +7659,26 @@ export function App({
   const sidebarBrowser = workspace.browsers.find(
     (browser) => browserTabKey(browser.localId) === sidebarSurfaceKey,
   );
-  const sidebarSurface: SidebarSurface = {
-    tabPlacement: prefs?.tabPlacement === "sidebar" ? "sidebar" : "top",
-    kind: sidebarChat
-      ? "chat"
-      : sidebarEditor
-        ? "editor"
-        : (presentedTabs.find((tab) => tabKey(tab) === sidebarSurfaceKey)
-            ?.kind ?? "none"),
-    key: sidebarChat ? chatTabKey(sidebarChat.localId) : sidebarSurfaceKey,
-    projectId,
-    sessionId: sidebarSessionChat?.sessionId ?? undefined,
-    path: sidebarEditor?.filePath ?? undefined,
-    url: sidebarBrowser?.url || sidebarBrowser?.initialUrl || undefined,
-    selection: Boolean(sidebarEditor && sidebarHasSelection),
-  };
+  // The same surface while nothing about it changed: the sections compare
+  // it by identity, and render for a new one.
+  const sidebarSurface = useStableValue<SidebarSurface>(
+    {
+      tabPlacement: prefs?.tabPlacement === "sidebar" ? "sidebar" : "top",
+      kind: sidebarChat
+        ? "chat"
+        : sidebarEditor
+          ? "editor"
+          : (presentedTabs.find((tab) => tabKey(tab) === sidebarSurfaceKey)
+              ?.kind ?? "none"),
+      key: sidebarChat ? chatTabKey(sidebarChat.localId) : sidebarSurfaceKey,
+      projectId,
+      sessionId: sidebarSessionChat?.sessionId ?? undefined,
+      path: sidebarEditor?.filePath ?? undefined,
+      url: sidebarBrowser?.url || sidebarBrowser?.initialUrl || undefined,
+      selection: Boolean(sidebarEditor && sidebarHasSelection),
+    },
+    shallowEqual,
+  );
   const openProjectFile = (filePath: string, mode?: CommitMode) => {
     void openLinkedSurface(`file:${filePath}`, { mode }).catch(
       (cause: unknown) =>
@@ -7653,11 +7738,9 @@ export function App({
     open: (url, mode) => openTarget(url, mode),
   });
   useAnswerSourceWork({ sources: workSources, projectId });
-  const sidebarHost = {
-    projectId: projectId ?? "",
-    agentsData,
-    defaultAgentId: effectiveDefaultAgentId,
-    projectAgentNames,
+  // What the sidebar's rows read while they render changes only when it
+  // does; their handlers stay the same and run the latest.
+  const sidebarHandlers = useLatestHandlers({
     onSessionCommand: (session: AgentSession, command: SessionCommand) => {
       const entry = workspace.chats.find(
         (chat) => chat.sessionId === session.id,
@@ -7676,68 +7759,125 @@ export function App({
       openPalettePicker(command);
     },
     onSessionAction: applySessionAction,
-    commandAvailable: (id: string) =>
-      !BUILTIN_ACTIONS.some(
-        (action) =>
-          action.id === id && paletteActionAvailability[action.id] === false,
-      ),
     // Dragged from a list, a tab tiles to either side as from the strip.
     onTabDrag: (key: string | null) => {
       setTabDragKey(key);
       if (!key) setDropSideHover(null);
     },
-    openTab: (url: string) => {
-      const tab = allTabs.find((entry) => tabKey(entry) === url);
-      return tab
-        ? {
-            key: url,
-            kind: tab.kind,
-            title: tab.label ?? tab.name,
-            detail: tab.detail,
-            bookmarkUrl: tab.bookmarkUrl,
-          }
-        : undefined;
+    customizeLeft: () => customizeSidebar("left"),
+    customizeRight: () => customizeSidebar("right"),
+    onSearch: (
+      request: Omit<Extract<PaletteModeRequest, { mode: "section" }>, "nonce">,
+    ) => {
+      setModeRequest({ ...request, nonce: crypto.randomUUID() });
+      setPaletteOpen(true);
     },
-  };
-  const renderSidebarSection =
-    (side: SidebarSide) =>
-    (
-      section: SidebarSectionConfig,
-      visible: boolean,
-      report: (state: SidebarContentState) => void,
-      relevant: boolean,
-      observeEmpty: boolean,
-    ) =>
-      projectId ? (
-        <ConfiguredSection
-          key={section.id}
-          surface={sidebarSurface}
-          relevant={relevant}
-          report={report}
-          visible={runtime.visible && visible}
-          observeEmpty={runtime.visible && observeEmpty}
-          onCustomize={() => customizeSidebar(side)}
-          onSearch={(request) => {
-            setModeRequest({ ...request, nonce: crypto.randomUUID() });
-            setPaletteOpen(true);
-          }}
-          section={section}
-          experienceContext={projectExperienceContext}
-          memberShell={memberShell}
-          projectId={projectId}
-          profileId={activeProfile?.id}
-          onOpenUrl={openSidebarTarget}
-          onOpenSessionLink={(url, mode) => {
-            // As a link in the chat opens: a tab the chat owns, so the
-            // session's sections stay beside it (ADR 0226).
-            if (sidebarSessionChat && /^https?:/i.test(url))
-              openMessageLink(url, sidebarSessionChat, mode);
-            else openSidebarTarget(url, mode);
-          }}
-          onOpenFile={openProjectFile}
-          onError={setLinkError}
-        />
-      ) : null;
+    onOpenUrl: openSidebarTarget,
+    onOpenSessionLink: (url: string, mode: CommitMode) => {
+      // As a link in the chat opens: a tab the chat owns, so the
+      // session's sections stay beside it (ADR 0226).
+      if (sidebarSessionChat && /^https?:/i.test(url))
+        openMessageLink(url, sidebarSessionChat, mode);
+      else openSidebarTarget(url, mode);
+    },
+    onOpenFile: openProjectFile,
+    onError: setLinkError,
+  });
+  const unavailableCommands = useStableValue(
+    BUILTIN_ACTIONS.flatMap((action) =>
+      paletteActionAvailability[action.id] === false ? [action.id] : [],
+    ),
+    (a, b) => a.join() === b.join(),
+  );
+  // A row asks whether its address is an open tab while it renders: the
+  // answer changes with which tabs are open, not with their titles.
+  const openTabsRef = useRef(allTabs);
+  openTabsRef.current = allTabs;
+  const openTabKeys = allTabs.map(tabKey).join("\n");
+  // biome-ignore lint/correctness/useExhaustiveDependencies: openTabKeys says when the answers of openTab change; it reads the tabs as they are when asked
+  const sidebarHost = useMemo<SidebarHost>(
+    () => ({
+      projectId: projectId ?? "",
+      agentsData,
+      defaultAgentId: effectiveDefaultAgentId,
+      projectAgentNames,
+      onSessionCommand: sidebarHandlers.onSessionCommand,
+      onSessionAction: sidebarHandlers.onSessionAction,
+      commandAvailable: (id: string) =>
+        !unavailableCommands.some((unavailable) => unavailable === id),
+      onTabDrag: sidebarHandlers.onTabDrag,
+      openTab: (url: string) => {
+        const tab = openTabsRef.current.find((entry) => tabKey(entry) === url);
+        return tab
+          ? {
+              key: url,
+              kind: tab.kind,
+              title: tab.label ?? tab.name,
+              detail: tab.detail,
+              bookmarkUrl: tab.bookmarkUrl,
+            }
+          : undefined;
+      },
+    }),
+    [
+      projectId,
+      agentsData,
+      effectiveDefaultAgentId,
+      projectAgentNames,
+      sidebarHandlers,
+      unavailableCommands,
+      openTabKeys,
+    ],
+  );
+  // One function per side while what a section is given stays the same: a
+  // slot draws its section again for a new one.
+  const sectionsVisible = runtime.visible;
+  const activeProfileIdForSections = activeProfile?.id;
+  const renderSidebarSection = useMemo(() => {
+    const forSide =
+      (side: SidebarSide) =>
+      (
+        section: SidebarSectionConfig,
+        visible: boolean,
+        report: (state: SidebarContentState) => void,
+        relevant: boolean,
+        observeEmpty: boolean,
+      ) =>
+        projectId ? (
+          <ConfiguredSection
+            key={section.id}
+            surface={sidebarSurface}
+            relevant={relevant}
+            report={report}
+            visible={sectionsVisible && visible}
+            observeEmpty={sectionsVisible && observeEmpty}
+            onCustomize={
+              side === "left"
+                ? sidebarHandlers.customizeLeft
+                : sidebarHandlers.customizeRight
+            }
+            onSearch={sidebarHandlers.onSearch}
+            section={section}
+            experienceContext={projectExperienceContext}
+            memberShell={memberShell}
+            projectId={projectId}
+            profileId={activeProfileIdForSections}
+            onOpenUrl={sidebarHandlers.onOpenUrl}
+            onOpenSessionLink={sidebarHandlers.onOpenSessionLink}
+            onOpenFile={sidebarHandlers.onOpenFile}
+            onError={sidebarHandlers.onError}
+          />
+        ) : null;
+    return { left: forSide("left"), right: forSide("right") };
+  }, [
+    projectId,
+    sidebarSurface,
+    sectionsVisible,
+    projectExperienceContext,
+    memberShell,
+    activeProfileIdForSections,
+    sidebarHandlers,
+  ]);
 
   const hasActiveWork =
     Object.values(signalsByChat).some((signals) => signals.working) ||
@@ -7867,6 +8007,10 @@ export function App({
         }
       : undefined;
   };
+  const terminalMacroShortcuts = useStableValue(
+    prefs?.terminalMacros.map((macro) => macro.shortcut),
+    (a, b) => a?.join("\n") === b?.join("\n"),
+  );
   // The strip keeps these for its life and runs the latest: a render of
   // the window that changes no tab does not draw the strip again.
   const tabStrip = useLatestHandlers({
@@ -7998,7 +8142,7 @@ export function App({
               pending={elicitations[0] ?? null}
               onOpenUrl={(url) => openBrowserTab(url)}
             />
-            <SiteSettingsHost
+            <Dialogs.SiteSettingsHost
               origin={siteSettingsOrigin}
               onClose={() => setSiteSettingsOrigin(null)}
             />
@@ -8014,9 +8158,9 @@ export function App({
               guestIds={browserGuestIdsRef}
               prepareTab={prepareShareTab}
             />
-            <ExtensionPromptHost />
-            <PasskeyHost onOpenPasswords={() => openPasswords()} />
-            <UpdateBanner
+            <Dialogs.ExtensionPromptHost />
+            <Dialogs.PasskeyHost onOpenPasswords={() => openPasswords()} />
+            <Dialogs.UpdateBanner
               hasActiveWork={hasActiveWork}
               onOpenRelease={(url) => openBrowserTab(url)}
             />
@@ -8035,13 +8179,13 @@ export function App({
                 </button>
               </div>
             )}
-            <DisabledControlHints />
-            <MobilePairingModal
+            <Dialogs.DisabledControlHints />
+            <Dialogs.MobilePairingModal
               open={mobilePairing.open}
               context={mobilePairing.context}
               onClose={() => setMobilePairing({ open: false, context: null })}
             />
-            <PreviewPortDialog
+            <Dialogs.PreviewPortDialog
               request={previewRequest}
               pending={previewPending}
               error={previewError}
@@ -8052,7 +8196,7 @@ export function App({
               }}
             />
             {projectId && (
-              <RemoteEnvironmentModal
+              <Dialogs.RemoteEnvironmentModal
                 open={remoteEnvironmentOpen && remoteSurfaceStatus !== null}
                 projectId={projectId}
                 onClose={() => setRemoteEnvironmentOpen(false)}
@@ -8070,7 +8214,7 @@ export function App({
             )}
             {/* Project-agent consent (ADR 0050): approve, then complete the
           original pick and refresh the roster's consent state. */}
-            <ProjectAgentConsentDialog
+            <Dialogs.ProjectAgentConsentDialog
               request={consentRequest}
               onClose={() => setConsentRequest(null)}
               onApproved={(agent) => {
@@ -8079,7 +8223,7 @@ export function App({
                 onApproved?.(agent.id);
               }}
             />
-            <ActionInputDialog
+            <Dialogs.ActionInputDialog
               selectInitialValue
               requestKey={browserTabRename ?? undefined}
               request={
@@ -8114,7 +8258,7 @@ export function App({
               }
               onClose={() => setBrowserTabRename(null)}
             />
-            <ActionInputDialog
+            <Dialogs.ActionInputDialog
               selectInitialValue
               requestKey={browserFileRename ?? undefined}
               request={
@@ -8169,7 +8313,7 @@ export function App({
               }
               onClose={() => setBrowserFileRename(null)}
             />
-            <RenameChatDialog
+            <Dialogs.RenameChatDialog
               chat={renameRequest}
               onClose={() => {
                 renameAttemptRef.current += 1;
@@ -8177,18 +8321,9 @@ export function App({
               }}
               onRename={(input) => renameSession.mutateAsync(input)}
             />
-            <CreateSubsessionDialog
+            <Dialogs.CreateSubsessionDialog
               parent={subsessionParent}
-              agents={[
-                ...(agentsData?.agents.map((agent) => ({
-                  id: agent.id,
-                  name: agent.name,
-                })) ?? []),
-                ...Object.entries(projectAgentNames).map(([id, name]) => ({
-                  id,
-                  name,
-                })),
-              ]}
+              agents={subsessionAgents}
               defaultAgentId={effectiveDefaultAgentId}
               pending={createSubsession.isPending}
               error={subsessionError}
@@ -8212,12 +8347,12 @@ export function App({
                   });
               }}
             />
-            <ArchiveSessionDialog
+            <Dialogs.ArchiveSessionDialog
               session={archiveRequest?.session ?? null}
               sessionCount={archiveRequest?.sessionIds.length ?? 0}
               runningCount={archiveRequest?.runningCount ?? 0}
               watcherCount={archiveRequest?.watcherCount ?? 0}
-              watchers={archiveRequest?.watchers ?? []}
+              watchers={archiveRequest?.watchers ?? NO_WATCHERS}
               processCount={archiveRequest?.processCount ?? 0}
               pending={archiveSession.isPending}
               error={archiveError}
@@ -8333,7 +8468,7 @@ export function App({
                   </ShortcutHint>
                 </footer>
               }
-              renderSection={renderSidebarSection("left")}
+              renderSection={renderSidebarSection.left}
             />
 
             {/* min-h-0/overflow-hidden: the content column must clip its panes
@@ -8427,17 +8562,13 @@ export function App({
                   travel; chat docks and bubbles stay outside (they own
                   their own motion). */}
                   <div
-                    className={`relative flex min-h-0 flex-1 flex-col ${
-                      paneMotion
-                        ? paneMotion.direction === "left"
-                          ? "animate-pane-in-left"
-                          : "animate-pane-in-right"
-                        : ""
-                    }`}
+                    ref={paneRef}
+                    // Its motion class is put on the element (playPaneMotion):
+                    // this one never changes, so React leaves that be.
+                    className="relative flex min-h-0 flex-1 flex-col"
                     onAnimationEnd={(event) => {
-                      if (event.animationName.startsWith("pane-in")) {
-                        setPaneMotion(null);
-                      }
+                      if (event.animationName.startsWith("pane-in"))
+                        clearPaneMotion();
                     }}
                   >
                     {workspace.floatingKey && (
@@ -8673,7 +8804,7 @@ export function App({
                           {...paneFocusProps(browserTabKey(browser.localId))}
                         >
                           {floatingBar(browserTabKey(browser.localId))}
-                          <BrowserScreen
+                          <Screens.BrowserScreen
                             profileId={browser.profileId}
                             projectId={projectId}
                             projectName={
@@ -8850,7 +8981,7 @@ export function App({
                         <Suspense fallback={<div className="flex-1 bg-bg" />}>
                           {/* A restored user shell is a new terminal life,
                               with a fresh fixed chat context. */}
-                          <TerminalScreen
+                          <Screens.TerminalScreen
                             key={terminal.attachSessionId ?? "owned"}
                             projectId={projectId}
                             active={
@@ -8858,9 +8989,7 @@ export function App({
                               terminal.localId === activeTerminalTabId
                             }
                             initialCommand={terminal.initialCommand}
-                            macroShortcuts={prefs?.terminalMacros.map(
-                              (macro) => macro.shortcut,
-                            )}
+                            macroShortcuts={terminalMacroShortcuts}
                             floating={
                               workspace.floatingKey ===
                               terminalTabKey(terminal.localId)
@@ -8940,7 +9069,7 @@ export function App({
                             }
                           />
                         )}
-                        <EditorPane
+                        <Screens.EditorPane
                           active={
                             runtime.visible &&
                             Boolean(viewSlots[editorTabKey(editor.localId)])
@@ -9357,7 +9486,7 @@ export function App({
                             style={paneStyle(browserTabKey(browser.localId))}
                             {...paneFocusProps(browserTabKey(browser.localId))}
                           >
-                            <BrowserScreen
+                            <Screens.BrowserScreen
                               profileId={browser.profileId}
                               projectId={null}
                               floatingDismissShortcut={
@@ -9483,7 +9612,7 @@ export function App({
               error={workspaceError}
               onCustomize={() => customizeSidebar("right")}
               onMotionChange={setRightSidebarMotion}
-              renderSection={renderSidebarSection("right")}
+              renderSection={renderSidebarSection.right}
             />
 
             {/* Stays mounted so the close transition can play out. */}
@@ -9497,7 +9626,7 @@ export function App({
 
             {/* The wizard modal: same experience as the setup tab, reachable from
           chat gating, Settings, and the palette command. */}
-            <ThemePicker
+            <Dialogs.ThemePicker
               open={themePicker.open}
               destination={themePicker.destination}
               projectId={projectId}
@@ -9505,7 +9634,7 @@ export function App({
               onCustomize={customizeTheme}
             />
 
-            <AgentWizard
+            <Dialogs.AgentWizard
               variant="modal"
               open={wizardModalOpen}
               onClose={() => {
@@ -9524,7 +9653,7 @@ export function App({
 
             {/* Configure-agent modal (ADR 0056): palette picker + Settings both
           land here; project agents get the read-only definition view. */}
-            <ConfigureAgentModal
+            <Dialogs.ConfigureAgentModal
               open={configureAgentOpen}
               agentId={configureAgentId}
               projectId={projectId}
@@ -9532,7 +9661,7 @@ export function App({
             />
 
             {/* Connectors manager: reachable from the palette and Settings. */}
-            <ConnectorsModal
+            <Dialogs.ConnectorsModal
               open={connectorsModalOpen}
               onClose={() => {
                 setConnectorsModalOpen(false);
@@ -9636,7 +9765,7 @@ export function App({
                 </div>
               </div>
             </Modal>
-            <ProjectModal
+            <Dialogs.ProjectModal
               open={projectModalOpen}
               onClose={() => setProjectModalOpen(false)}
               onCreated={(project) => {
@@ -9644,12 +9773,12 @@ export function App({
                 selectProject(project.id);
               }}
             />
-            <DeleteProjectModal
+            <Dialogs.DeleteProjectModal
               project={deletingProject}
               onClose={() => setDeletingProject(null)}
               onDeleted={onProjectDeleted}
             />
-            <RemoteConnectModal
+            <Dialogs.RemoteConnectModal
               open={remoteConnect.open}
               link={remoteConnect.link}
               onClose={() => setRemoteConnect({ open: false, link: null })}
@@ -9666,22 +9795,22 @@ export function App({
             />
             {projectId && (
               <>
-                <RemoteHistoryModal
+                <Dialogs.RemoteHistoryModal
                   projectId={projectId}
                   path={remoteHistoryPath}
                   onClose={() => setRemoteHistoryPath(null)}
                 />
-                <RemoteMembersModal
+                <Dialogs.RemoteMembersModal
                   open={serverDialog === "members"}
                   projectId={projectId}
                   onClose={() => setServerDialog(null)}
                 />
-                <RemoteServiceConnectionsModal
+                <Dialogs.RemoteServiceConnectionsModal
                   open={serverDialog === "connections"}
                   projectId={projectId}
                   onClose={() => setServerDialog(null)}
                 />
-                <RemoteSecretsModal
+                <Dialogs.RemoteSecretsModal
                   open={serverDialog === "secrets"}
                   projectId={projectId}
                   canManage={
@@ -9696,16 +9825,16 @@ export function App({
                   }
                   onClose={() => setServerDialog(null)}
                 />
-                <RemotePublishModal
+                <Dialogs.RemotePublishModal
                   projectId={projectId}
                   path={remotePublish?.path ?? null}
                   features={remotePublish?.features}
                   onClose={() => setRemotePublish(null)}
                 />
-                <RemoteProposeModal
+                <Dialogs.RemoteProposeModal
                   projectId={projectId}
                   open={remotePropose !== null}
-                  files={remotePropose?.files ?? []}
+                  files={remotePropose?.files ?? NO_FILES}
                   onClose={() => setRemotePropose(null)}
                   onOpenProposal={({ number, title }) =>
                     openTab({
