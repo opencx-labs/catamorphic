@@ -374,18 +374,19 @@ export function DockHost({
       const shown = shownSnapshot.current;
       const next = {
         ...broadcast,
-        chats: broadcast.chats
-          .filter((chat) => !chat.local)
-          .map((chat) => {
-            const before = shown.chats.find(
-              (candidate) =>
-                candidate.projectId === chat.projectId &&
-                candidate.entry.localId === chat.entry.localId,
-            );
-            return before && JSON.stringify(before) === JSON.stringify(chat)
+        chats: broadcast.chats.flatMap((chat) => {
+          if (chat.local) return [];
+          const before = shown.chats.find(
+            (candidate) =>
+              candidate.projectId === chat.projectId &&
+              candidate.entry.localId === chat.entry.localId,
+          );
+          return [
+            before && JSON.stringify(before) === JSON.stringify(chat)
               ? before
-              : chat;
-          }),
+              : chat,
+          ];
+        }),
       };
       if (same(shown, next)) return;
       setSnapshot((current) => (same(current, next) ? current : next));
