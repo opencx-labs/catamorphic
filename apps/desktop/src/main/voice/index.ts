@@ -518,7 +518,7 @@ export function registerVoiceSupport(deps: {
               voice.ending ||
               voice.awaitingWords !== null ||
               voice.catchingUp !== null ||
-              voice.early.length > 0
+              saidEarly(voice)
             ? "thinking"
             : "off";
     voice.live = {
@@ -538,6 +538,13 @@ export function registerVoiceSupport(deps: {
   /** Voice talks with its chat, or dictates: it is ready. */
   const connected = (voice: ActiveVoice) =>
     voice.conversation !== null || voice.dictating !== null;
+
+  /**
+   * Something said while voice reached its chat still has to go to it. The
+   * words seen so far are only a preview of a hold: nothing waits for them.
+   */
+  const saidEarly = (voice: ActiveVoice) =>
+    voice.early.some((event) => event.type !== "transcript");
 
   const broadcastTranscript = (voice: ActiveVoice, words: VoiceTranscript) => {
     for (const window of BrowserWindow.getAllWindows())
@@ -1616,7 +1623,8 @@ export function registerVoiceSupport(deps: {
         !voice.ending &&
         voice.speaking.size === 0 &&
         voice.awaitingWords === null &&
-        voice.early.length === 0
+        // The click's own first words may already wait as a preview.
+        !saidEarly(voice)
       )
         void stop();
       else update(voice);

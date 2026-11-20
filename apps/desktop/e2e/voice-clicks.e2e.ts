@@ -135,12 +135,9 @@ async function click() {
     );
   }
   expect(tooltip).toContain(shortcut);
-  expect(await app.eval<string[]>("window.__clickPhases")).not.toContain(
-    "thinking",
-  );
-  expect(await app.eval<string[]>("window.__clickPhases")).not.toContain(
-    "speaking",
-  );
+  const phases = await app.eval<string[]>("window.__clickPhases");
+  expect(phases, JSON.stringify(phases)).not.toContain("thinking");
+  expect(phases, JSON.stringify(phases)).not.toContain("speaking");
   expect(await app.eval(`${mic}.hasAttribute('data-lit')`)).toBe(false);
 }
 
