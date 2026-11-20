@@ -1,3 +1,4 @@
+import { execFileSync } from "node:child_process";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterAll, expect, it } from "vitest";
@@ -22,6 +23,59 @@ const readWindows = async (userDataDir: string): Promise<WindowSession> =>
   JSON.parse(
     await fs.readFile(path.join(userDataDir, "window-state.json"), "utf8"),
   );
+
+/**
+ * Which window has the keys, if either, as the OS and as each page sees it,
+ * and the order the app's windows were shown, focused and blurred in and
+ * Work became active or inactive (the main process prints each under
+ * test): a workspace left hidden, one shown
+ * without the keys and keys taken back by the empty window fail differently.
+ */
+async function windowsNow({
+  personal,
+  empty,
+  emptyId,
+}: {
+  personal: AppHandle;
+  empty: Pick<FrameHandle, "eval">;
+  emptyId: string;
+}): Promise<string> {
+  const state = (frame: Pick<FrameHandle, "eval">) =>
+    frame
+      .eval(
+        "window.catamorphicDesktop.devWindow('get').then(({ visible, focused }) => ({ visible, focused, page: document.hasFocus() }))",
+      )
+      .catch(() => null);
+  const events = personal
+    .getOutput()
+    .split("\n")
+    .flatMap((line) => {
+      if (line.startsWith("[desktop] App "))
+        return [`Work ${line.slice("[desktop] App ".length)}`];
+      if (!line.startsWith("[desktop] Window ")) return [];
+      const [id, event] = line.slice("[desktop] Window ".length).split(" ");
+      return [`${id === emptyId ? "empty" : "personal"} ${event}`];
+    })
+    .slice(-24);
+  return `personal: ${JSON.stringify(await state(personal))}; empty: ${JSON.stringify(await state(empty))}; in front on this desktop: ${frontmostApplication()}; windows: ${events.join(", ")}`;
+}
+
+/** The application macOS has in front: Work, or whatever took its place. */
+function frontmostApplication(): string {
+  if (process.platform !== "darwin") return "not asked";
+  try {
+    const front = execFileSync("lsappinfo", ["front"], {
+      encoding: "utf8",
+      timeout: 5_000,
+    }).trim();
+    return execFileSync("lsappinfo", ["info", "-only", "name", front], {
+      encoding: "utf8",
+      timeout: 5_000,
+    }).trim();
+  } catch (error) {
+    return `unknown (${error instanceof Error ? error.message : String(error)})`;
+  }
+}
 
 it("reopens the hidden workspace when an empty window selects its profile", async () => {
   app = await launchApp();
@@ -84,6 +138,21 @@ it("reopens the hidden workspace when an empty window selects its profile", asyn
   await source.waitFor(
     "!!document.querySelector('[aria-label=\"Switch profile: Empty source\"]')",
   );
+  // A new window shows itself once its first frame is painted, and showing
+  // it gives it the keys. Its page answers before that, so the steps below
+  // could pick a profile in a window no person could click in yet, and its
+  // showing would then take the keys from whichever window held them. A
+  // person picks in the window they see, in front.
+  await source
+    .waitFor(
+      "window.catamorphicDesktop.devWindow('get').then(state => state.visible && state.focused)",
+      { label: "the empty window is shown, in front" },
+    )
+    .catch(async (error: unknown) => {
+      throw new Error(
+        `${error instanceof Error ? error.message : String(error)}; ${await windowsNow({ personal: handle, empty: source, emptyId: sourceState.id })}`,
+      );
+    });
 
   // The reported path: the palette's native close action hides occupied work.
   await handle.eval(`window.dispatchEvent(new KeyboardEvent('keydown', {
@@ -121,17 +190,8 @@ it("reopens the hidden workspace when an empty window selects its profile", asyn
       { label: "the hidden Personal workspace comes forward" },
     )
     .catch(async (error: unknown) => {
-      // Which window has the keys, if either, as the OS and as each page
-      // sees it: a workspace left hidden, one shown without the keys and
-      // keys taken back by the empty window fail differently.
-      const state = (frame: Pick<FrameHandle, "eval">) =>
-        frame
-          .eval(
-            "window.catamorphicDesktop.devWindow('get').then(({ visible, focused }) => ({ visible, focused, page: document.hasFocus() }))",
-          )
-          .catch(() => null);
       throw new Error(
-        `${error instanceof Error ? error.message : String(error)}; personal: ${JSON.stringify(await state(handle))}; empty: ${JSON.stringify(await state(source))}`,
+        `${error instanceof Error ? error.message : String(error)}; ${await windowsNow({ personal: handle, empty: source, emptyId: sourceState.id })}`,
       );
     });
   await source.waitFor(
