@@ -1,12 +1,18 @@
 import {
+  memo,
   type PointerEvent,
   useEffect,
   useLayoutEffect,
+  useMemo,
   useRef,
   useState,
   useSyncExternalStore,
 } from "react";
-import type { ChatSignals } from "../../shared/chat.js";
+import type {
+  ChatDockProps,
+  ChatLiveSignals,
+  ChatSignals,
+} from "../../shared/chat.js";
 import type {
   ChatEvent,
   DockData,
@@ -21,6 +27,7 @@ import { useAnswerChipsWork } from "../lib/chips-work.js";
 import { desktopApi } from "../lib/desktop-api.js";
 import { drawnDockRects } from "../lib/dock-shape.js";
 import { matchesBinding, useKeybindings } from "../lib/keybindings.js";
+import { useLatestHandlers } from "../lib/stable.js";
 import {
   applyTheme,
   ThemeScope,
@@ -48,6 +55,198 @@ const EMPTY: DockSnapshot = {
   placement: "center",
   collapsed: false,
 };
+
+/** What the dock keeps for a chat to ask of it while it is shown. */
+interface DockChatActions {
+  close?: () => void;
+  minimize?: () => void;
+  send?: (message: string) => void;
+  skill?: (message: string) => void;
+  focusComposer?: () => void;
+  focusChips?: () => boolean;
+  previousMessage?: (repeat?: boolean) => void;
+  nextMessage?: (repeat?: boolean) => void;
+}
+
+/** The handlers the dock gives each chat: the same for the chat's life. */
+type DockChatHandlers = Required<
+  Pick<
+    ChatDockProps,
+    | "onEntryChange"
+    | "onClose"
+    | "onCloseStarted"
+    | "onLeaveStarted"
+    | "onSessionCreated"
+    | "onSessionAgent"
+    | "onSignalsChange"
+    | "onOpenSurface"
+    | "onRemoveSurface"
+    | "onOpenMcpApp"
+    | "onLinkClick"
+    | "onFileClick"
+    | "onFork"
+    | "onForkCurrent"
+    | "onArchive"
+    | "onEditAgent"
+    | "onEditModel"
+    | "onEditEffort"
+    | "onEditPermissionMode"
+    | "onOpenParent"
+    | "onFocusRequest"
+    | "onUnsplit"
+    | "onEscapeToFloating"
+    | "registerClose"
+    | "registerMinimize"
+    | "registerSend"
+    | "registerSkill"
+    | "registerComposerFocus"
+    | "registerFocusChips"
+    | "registerMessageNavigation"
+    | "onCustomizeChips"
+  >
+>;
+
+/** What a chat asks of its dock. */
+interface DockChatHost {
+  invoke(chat: DockData, event: ChatEvent): void;
+  /** A floating chat started to leave: the strip folds with it. */
+  leaving(localId: string): void;
+  signals(chat: DockData, signals: ChatLiveSignals): void;
+  register(localId: string, patch: DockChatActions): void;
+}
+
+/**
+ * One chat of the dock. It renders when its own presentation, or how the
+ * dock shows it, changes: every chat used to render for each one's news.
+ * Its handlers are the same for its life and read the latest presentation.
+ */
+const DockChat = memo(function DockChat({
+  chat,
+  isTab,
+  visible,
+  collapsed,
+  detachedWindow,
+  host,
+}: {
+  chat: DockData;
+  isTab: boolean;
+  visible: boolean;
+  collapsed: boolean;
+  detachedWindow: boolean;
+  host: DockChatHost;
+}) {
+  const latest = useRef(chat);
+  latest.current = chat;
+  const localId = chat.entry.localId;
+  // The owning workspace keeps a headless/minimized surface mounted for
+  // signals and queued sends; other projects are ordinary session
+  // subscribers. A tab chat behind another tab stays a tab: showing
+  // it again is a tab switch, not a chat opening.
+  const entry = useMemo(
+    () => ({
+      ...chat.entry,
+      mode: isTab
+        ? ("tab" as const)
+        : visible
+          ? ("partial" as const)
+          : ("min" as const),
+      pendingMessage:
+        detachedWindow || !chat.local ? undefined : chat.entry.pendingMessage,
+      draftMessage:
+        detachedWindow || !chat.local ? undefined : chat.entry.draftMessage,
+    }),
+    [chat.entry, chat.local, isTab, visible, detachedWindow],
+  );
+  const style = useMemo(() => themeStyle(chat.theme), [chat.theme]);
+  const handlers = useMemo((): DockChatHandlers => {
+    const invoke = (event: ChatEvent) => host.invoke(latest.current, event);
+    const register = (patch: DockChatActions) => host.register(localId, patch);
+    return {
+      onEntryChange(next) {
+        const current = latest.current;
+        invoke({
+          kind: "entry",
+          entry: {
+            ...next,
+            pendingMessage:
+              current.local && !detachedWindow
+                ? next.pendingMessage
+                : current.entry.pendingMessage,
+            draftMessage:
+              current.local && !detachedWindow
+                ? next.draftMessage
+                : current.entry.draftMessage,
+          },
+        });
+      },
+      onClose: () => invoke({ kind: "close" }),
+      onCloseStarted: () => invoke({ kind: "closing" }),
+      onLeaveStarted: () => host.leaving(localId),
+      onSessionCreated: (_id, sessionId) =>
+        invoke({ kind: "session", sessionId }),
+      onSessionAgent: (_id, session) =>
+        invoke({ kind: "sessionAgent", ...session }),
+      onSignalsChange: (_id, next) => host.signals(latest.current, next),
+      onOpenSurface: (key, mode) => invoke({ kind: "surface", key, mode }),
+      onRemoveSurface: (key) => invoke({ kind: "removeSurface", key }),
+      onOpenMcpApp: (view, mode) => invoke({ kind: "mcpApp", view, mode }),
+      onLinkClick: (url, modifiers) => invoke({ kind: "link", url, modifiers }),
+      onFileClick: (path, modifiers) =>
+        invoke({ kind: "file", path, modifiers }),
+      onFork: (messageId) => invoke({ kind: "fork", messageId }),
+      onForkCurrent: () => invoke({ kind: "forkCurrent" }),
+      onArchive: () => invoke({ kind: "archive" }),
+      onEditAgent: () => invoke({ kind: "editAgent" }),
+      onEditModel: () => invoke({ kind: "editModel" }),
+      onEditEffort: () => invoke({ kind: "editEffort" }),
+      onEditPermissionMode: () => invoke({ kind: "editPermissionMode" }),
+      onOpenParent: () => invoke({ kind: "parent" }),
+      onFocusRequest: () => invoke({ kind: "focus" }),
+      onUnsplit: () => invoke({ kind: "unsplit" }),
+      onEscapeToFloating: () => invoke({ kind: "escape" }),
+      registerClose: (close) => register({ close }),
+      registerMinimize: (minimize) => register({ minimize }),
+      registerSend: (send) => register({ send }),
+      registerSkill: (skill) => register({ skill }),
+      registerComposerFocus: (focusComposer) => register({ focusComposer }),
+      registerFocusChips: (focusChips) => register({ focusChips }),
+      registerMessageNavigation: (navigation) =>
+        register({
+          previousMessage: navigation?.previous,
+          nextMessage: navigation?.next,
+        }),
+      onCustomizeChips: () => invoke({ kind: "customizeChips" }),
+    };
+  }, [host, localId, detachedWindow]);
+  return (
+    <ThemeScope theme={chat.theme}>
+      <div
+        className="absolute inset-0 pointer-events-none"
+        data-theme={chat.theme?.appearance}
+        style={style}
+      >
+        <ChatDock
+          {...chat}
+          entry={entry}
+          refreshWhileIdle={visible}
+          tabActive={isTab && chat.tabActive}
+          bubbleClearance={collapsed ? "corner" : "strip"}
+          backdropTab={!detachedWindow && chat.backdropTab}
+          nativeWindow={detachedWindow}
+          {...handlers}
+          onLeaveStarted={
+            entry.mode === "partial" ? handlers.onLeaveStarted : undefined
+          }
+          onOpenParent={chat.fork ? handlers.onOpenParent : undefined}
+          onFocusRequest={isTab ? handlers.onFocusRequest : undefined}
+          onUnsplit={
+            isTab && chat.slot !== "full" ? handlers.onUnsplit : undefined
+          }
+        />
+      </div>
+    </ThemeScope>
+  );
+});
 
 /** One presentation vocabulary, mounted in a workspace or in the native dock. */
 export function DockHost({
@@ -166,8 +365,29 @@ export function DockHost({
     // dock for an unchanged state before it skips the chats.
     const same = (current: DockSnapshot, next: DockSnapshot) =>
       current !== EMPTY && JSON.stringify(current) === JSON.stringify(next);
-    const receive = (next: DockSnapshot) => {
-      if (same(shownSnapshot.current, next)) return;
+    const receive = (broadcast: DockSnapshot) => {
+      // This window's own chats are drawn from what it published itself
+      // (localPresentations): the broadcast's copy of them is the echo of
+      // that, and arrives once per chat a tab switch changed. A chat of
+      // another window that did not change stays the object it was, so its
+      // dock does not render for another's news.
+      const shown = shownSnapshot.current;
+      const next = {
+        ...broadcast,
+        chats: broadcast.chats
+          .filter((chat) => !chat.local)
+          .map((chat) => {
+            const before = shown.chats.find(
+              (candidate) =>
+                candidate.projectId === chat.projectId &&
+                candidate.entry.localId === chat.entry.localId,
+            );
+            return before && JSON.stringify(before) === JSON.stringify(chat)
+              ? before
+              : chat;
+          }),
+      };
+      if (same(shown, next)) return;
       setSnapshot((current) => (same(current, next) ? current : next));
     };
     void desktopApi.dockSnapshot().then(receive);
@@ -836,6 +1056,28 @@ export function DockHost({
       if (next && next !== snapshot.placement) savePlacement(next);
     },
   });
+  // The same for the dock's life, running the latest: a chat renders when
+  // its own presentation changes, not when another chat's does.
+  const chatHost = useLatestHandlers<DockChatHost>({
+    invoke,
+    leaving: setLeavingId,
+    signals(chat, next) {
+      const localId = chat.entry.localId;
+      setSignals((old) =>
+        JSON.stringify(old[localId]) === JSON.stringify(next)
+          ? old
+          : { ...old, [localId]: next },
+      );
+      if (chat.local && !detachedWindow)
+        invoke(chat, { kind: "signals", signals: next });
+    },
+    register(localId, patch) {
+      actions.current.set(localId, {
+        ...actions.current.get(localId),
+        ...patch,
+      });
+    },
+  });
   showing.current = new Set();
   // Where the strip rests: a corner while collapsed, its placement open.
   const railSpot = collapsed ? snapshot.side : snapshot.placement;
@@ -867,152 +1109,17 @@ export function DockHost({
         const visible =
           (isTab && chat.tabActive) ||
           (isPresentation && chat === active && chat.entry.mode === "partial");
-        // The owning workspace keeps a headless/minimized surface mounted for
-        // signals and queued sends; other projects are ordinary session
-        // subscribers. A tab chat behind another tab stays a tab: showing
-        // it again is a tab switch, not a chat opening.
-        const entry = {
-          ...chat.entry,
-          mode: isTab
-            ? ("tab" as const)
-            : visible
-              ? ("partial" as const)
-              : ("min" as const),
-          pendingMessage:
-            detachedWindow || !chat.local
-              ? undefined
-              : chat.entry.pendingMessage,
-          draftMessage:
-            detachedWindow || !chat.local ? undefined : chat.entry.draftMessage,
-        };
-        if (visible) showing.current.add(entry.localId);
-        const register = (patch: {
-          close?: () => void;
-          minimize?: () => void;
-          send?: (message: string) => void;
-          skill?: (message: string) => void;
-          focusComposer?: () => void;
-          focusChips?: () => boolean;
-          previousMessage?: (repeat?: boolean) => void;
-          nextMessage?: (repeat?: boolean) => void;
-        }) =>
-          actions.current.set(entry.localId, {
-            ...actions.current.get(entry.localId),
-            ...patch,
-          });
+        if (visible) showing.current.add(chat.entry.localId);
         return (
-          <ThemeScope key={entry.localId} theme={chat.theme}>
-            <div
-              className="absolute inset-0 pointer-events-none"
-              data-theme={chat.theme?.appearance}
-              style={{
-                ...themeStyle(chat.theme),
-              }}
-            >
-              <ChatDock
-                {...chat}
-                entry={entry}
-                refreshWhileIdle={visible}
-                tabActive={isTab && chat.tabActive}
-                bubbleClearance={collapsed ? "corner" : "strip"}
-                backdropTab={!detachedWindow && chat.backdropTab}
-                nativeWindow={detachedWindow}
-                onEntryChange={(next) => {
-                  invoke(chat, {
-                    kind: "entry",
-                    entry: {
-                      ...next,
-                      pendingMessage:
-                        chat.local && !detachedWindow
-                          ? next.pendingMessage
-                          : chat.entry.pendingMessage,
-                      draftMessage:
-                        chat.local && !detachedWindow
-                          ? next.draftMessage
-                          : chat.entry.draftMessage,
-                    },
-                  });
-                }}
-                onClose={() => invoke(chat, { kind: "close" })}
-                onCloseStarted={() => invoke(chat, { kind: "closing" })}
-                onLeaveStarted={
-                  entry.mode === "partial"
-                    ? () => setLeavingId(entry.localId)
-                    : undefined
-                }
-                onSessionCreated={(_id, sessionId) =>
-                  invoke(chat, { kind: "session", sessionId })
-                }
-                onSessionAgent={(_id, session) =>
-                  invoke(chat, { kind: "sessionAgent", ...session })
-                }
-                onSignalsChange={(_id, next) => {
-                  setSignals((old) =>
-                    JSON.stringify(old[entry.localId]) === JSON.stringify(next)
-                      ? old
-                      : { ...old, [entry.localId]: next },
-                  );
-                  if (chat.local && !detachedWindow)
-                    invoke(chat, { kind: "signals", signals: next });
-                }}
-                onOpenSurface={(key, mode) =>
-                  invoke(chat, { kind: "surface", key, mode })
-                }
-                onRemoveSurface={(key) =>
-                  invoke(chat, { kind: "removeSurface", key })
-                }
-                onOpenMcpApp={(view, mode) =>
-                  invoke(chat, { kind: "mcpApp", view, mode })
-                }
-                onLinkClick={(url, modifiers) =>
-                  invoke(chat, { kind: "link", url, modifiers })
-                }
-                onFileClick={(path, modifiers) =>
-                  invoke(chat, { kind: "file", path, modifiers })
-                }
-                onFork={(messageId) =>
-                  invoke(chat, { kind: "fork", messageId })
-                }
-                onForkCurrent={() => invoke(chat, { kind: "forkCurrent" })}
-                onArchive={() => invoke(chat, { kind: "archive" })}
-                onEditAgent={() => invoke(chat, { kind: "editAgent" })}
-                onEditModel={() => invoke(chat, { kind: "editModel" })}
-                onEditEffort={() => invoke(chat, { kind: "editEffort" })}
-                onEditPermissionMode={() =>
-                  invoke(chat, { kind: "editPermissionMode" })
-                }
-                onOpenParent={
-                  chat.fork ? () => invoke(chat, { kind: "parent" }) : undefined
-                }
-                onFocusRequest={
-                  isTab ? () => invoke(chat, { kind: "focus" }) : undefined
-                }
-                onUnsplit={
-                  isTab && chat.slot !== "full"
-                    ? () => invoke(chat, { kind: "unsplit" })
-                    : undefined
-                }
-                onEscapeToFloating={() => invoke(chat, { kind: "escape" })}
-                registerClose={(close) => register({ close })}
-                registerMinimize={(minimize) => register({ minimize })}
-                registerSend={(send) => register({ send })}
-                registerSkill={(skill) => register({ skill })}
-                registerComposerFocus={(focusComposer) =>
-                  register({ focusComposer })
-                }
-                registerFocusChips={(focusChips) => register({ focusChips })}
-                registerMessageNavigation={(navigation) =>
-                  register({
-                    previousMessage: navigation?.previous,
-                    nextMessage: navigation?.next,
-                  })
-                }
-                onCustomizeChips={() =>
-                  invoke(chat, { kind: "customizeChips" })
-                }
-              />
-            </div>
-          </ThemeScope>
+          <DockChat
+            key={chat.entry.localId}
+            chat={chat}
+            isTab={isTab}
+            visible={Boolean(visible)}
+            collapsed={collapsed}
+            detachedWindow={detachedWindow}
+            host={chatHost}
+          />
         );
       })}
       {isPresentation &&
