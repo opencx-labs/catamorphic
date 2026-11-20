@@ -1139,6 +1139,12 @@ export function registerVoiceSupport(deps: {
           }
           return;
         }
+        // Words kept while voice reached its chat are older than these.
+        // Said once the chat has caught the person up, they would replace
+        // what was heard since: the preview would end on its first words.
+        voice.early = voice.early.filter(
+          (prior) => prior.type !== "transcript",
+        );
         if (event.final) {
           if (voice.preview?.workerSegment === event.segment)
             clearTranscript(voice);
