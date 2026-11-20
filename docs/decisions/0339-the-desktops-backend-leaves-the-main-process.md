@@ -95,6 +95,19 @@ Considered:
 - A database thread that ends while Work runs is not replaced under its
   callers: every statement after it fails, so Work says its database
   stopped and closes. One that never opens fails the boot, as before.
+- Work in flight at quit now spans turns of the event loop, where it used
+  to finish before shutdown reached the database. The last shutdown step
+  waits, for up to a second, until nothing has been asked of the database
+  for 20 ms and no transaction is open, and only then destroys Kysely,
+  which refuses new work from that moment: a delivery the quit caught
+  between two statements sends the second. What still comes after is
+  refused.
+- Kysely's PGlite driver waits for a transaction's callback to be entered
+  and listens for nothing else. A transaction refused before it (the
+  database closing, or lost) was a rejection nobody heard and a caller
+  waiting for good, holding Kysely's one connection. The client always
+  enters the callback: a transaction that could not begin fails its
+  statements and its end.
 - A statement's result is copied between threads. Copy included, opening
   a 1,000-item chat costs the main thread about 21 ms where it cost 41.
 - The stock server opens PGlite the same way and serves several people
