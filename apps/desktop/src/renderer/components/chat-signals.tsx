@@ -6,7 +6,7 @@ import {
   Pencil,
   SquareTerminal,
 } from "lucide-react";
-import { type ReactNode, useRef } from "react";
+import { type ReactNode, useEffect, useRef, useState } from "react";
 import type { ChatWaiting } from "../../shared/chat.js";
 import type { SidebarActivity } from "../../shared/sidebar.js";
 
@@ -123,10 +123,19 @@ function useMarks(showing: boolean): { drawn: boolean; arrives: string } {
     showing ? "with-icon" : null,
   );
   if (showing && !drawn.current) drawn.current = "later";
+  // The starting pose is for the frame the marks are added in. Kept on, it
+  // would replay each time something hidden around the icon (a sidebar's
+  // panel) is shown again.
+  const [arrived, setArrived] = useState(false);
+  const arriving = drawn.current === "later" && !arrived;
+  useEffect(() => {
+    if (!arriving) return;
+    const frame = requestAnimationFrame(() => setArrived(true));
+    return () => cancelAnimationFrame(frame);
+  }, [arriving]);
   return {
     drawn: drawn.current !== null,
-    arrives:
-      drawn.current === "later" ? "starting:scale-0 starting:opacity-0" : "",
+    arrives: arriving ? "starting:scale-0 starting:opacity-0" : "",
   };
 }
 

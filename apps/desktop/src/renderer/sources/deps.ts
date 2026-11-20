@@ -29,6 +29,12 @@ export interface WorkSourceHost {
   activeTabKey?: string;
   unreadSessionIds: ReadonlySet<string>;
   agentName: (agentId: string | null | undefined) => string | undefined;
+  /**
+   * What `agentName` and `agentDeleted` answer from, as text: it changes
+   * when an agent arrives, is renamed or leaves, and the lists naming
+   * agents read again.
+   */
+  agentsKey: string;
   /** The profile agent a chat names was deleted (ADR 0314). */
   agentDeleted: (agentId: string) => boolean;
   closeTab: (key: string, scope?: TabCloseScope) => void;
@@ -70,9 +76,12 @@ export interface WorkSourceDeps {
   /** The project lives on a Work server (ADR 0055). */
   remote: boolean;
   host: () => WorkSourceHost;
-  /** The window's own state changed: its tabs, or which chats were read. */
+  /**
+   * The window's own state changed: its tabs, which chats were read, or
+   * its agents.
+   */
   onWindowChange: (
-    topic: "tabs" | "unread",
+    topic: "tabs" | "unread" | "agents",
     listener: () => void,
   ) => () => void;
 }

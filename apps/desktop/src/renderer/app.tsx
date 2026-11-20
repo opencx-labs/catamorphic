@@ -7700,6 +7700,11 @@ export function App({
       tabGroups,
       activeTabKey: focusedTabKey,
       unreadSessionIds,
+      agentsKey: JSON.stringify([
+        agentsData?.agents.map((agent) => [agent.id, agent.name]) ?? null,
+        effectiveDefaultAgentId ?? null,
+        projectAgentNames,
+      ]),
       agentName: (agentId) => {
         const id = agentId ?? effectiveDefaultAgentId;
         return (

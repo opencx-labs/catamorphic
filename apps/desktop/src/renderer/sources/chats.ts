@@ -203,11 +203,18 @@ export function chatsSource(
       };
     },
     subscribe: (publish, { branches, branchSize }) => {
-      const stopWindow = deps.onWindowChange("unread", () => {
-        // What was read changes the rows' signals, not the list.
+      // What was read, or an agent's name, changes what the rows say, not
+      // the list.
+      const reread = () => {
         for (const parentId of branches())
           publish({ type: "invalidate", parentId, quiet: true });
-      });
+      };
+      const stopUnread = deps.onWindowChange("unread", reread);
+      const stopAgents = deps.onWindowChange("agents", reread);
+      const stopWindow = () => {
+        stopUnread();
+        stopAgents();
+      };
       const stopSessions = subscribeSidebarSessions({
         client: deps.queryClient,
         projectId: deps.projectId,
