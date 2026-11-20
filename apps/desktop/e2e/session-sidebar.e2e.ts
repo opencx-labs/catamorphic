@@ -76,10 +76,26 @@ const send = async (text: string) => {
   });
   expect(response.status).toBe(200);
 };
-const openChat = () =>
-  app.eval(
-    `document.querySelector('${visible} [data-sidebar="left"] [data-sidebar-item-id="${sessionId}"] [data-tree-primary]').click()`,
+const chatRow = () =>
+  `document.querySelector('${visible} [data-sidebar="left"] [data-sidebar-item-id="${sessionId}"] [data-tree-primary]')`;
+const newTabButton = `document.querySelector('${visible} [aria-label="New tab"]')`;
+/** The tab in front, by its key's kind: "chat", "browser", "palette". */
+const frontTab = () =>
+  app.eval<string | null>(
+    `document.querySelector('${visible} [data-tab-active]')?.dataset.pointKey?.split(':')[0] ?? null`,
   );
+const frontIs = (kind: string) =>
+  `!!document.querySelector('${visible} [data-tab-active][data-point-key^="${kind}:"]')`;
+/**
+ * Clicks the chat's row and waits for the chat itself to be in front. This
+ * session beside it is no sign of that: it also stays beside a page the
+ * chat opened, so a wait on it alone returns while the chat is still on
+ * its way and the next click races it.
+ */
+const openChat = async () => {
+  await app.eval(`${chatRow()}.click()`);
+  await app.waitFor(frontIs("chat"), { label: "the chat in front" });
+};
 
 beforeAll(async () => {
   app = await launchApp();
@@ -275,12 +291,16 @@ it("stays while the person looks at a pull request the chat opened", async () =>
 });
 
 it("leaves with the chat, and comes back to the person's choice", async () => {
-  await app.eval(
-    `document.querySelector('${visible} [aria-label="New tab"]').click()`,
-  );
-  await app.waitFor(`!document.querySelector('${thisSessionTab}')`, {
-    label: "This session leaves when the chat is not in front",
-  });
+  await app.eval(`${newTabButton}.click()`);
+  await app
+    .waitFor(`!document.querySelector('${thisSessionTab}')`, {
+      label: "This session leaves when the chat is not in front",
+    })
+    .catch(async (error: unknown) => {
+      throw new Error(
+        `${error instanceof Error ? error.message : String(error)}; in front: ${await frontTab()}`,
+      );
+    });
   // The panel falls back to a tab that stays.
   await app.waitFor(
     `!!document.querySelector('${right} [role="tab"][aria-selected="true"]')`,
@@ -297,6 +317,39 @@ it("leaves with the chat, and comes back to the person's choice", async () => {
   );
   await app.waitFor(
     `!!document.querySelector('${details} [data-sidebar-item-id="${pullRequest}"]')`,
+  );
+});
+
+it("keeps a New Tab opened right after the chat's row was clicked", async () => {
+  // The person's latest action wins. The chat is in a workspace this
+  // window holds, so its row's click brings it forward within the click,
+  // without a read of the saved workspace from the main process first.
+  // When it waited for that read, the chat arrived after the New Tab
+  // opened next and closed it as an untouched one. The two clicks are
+  // separate tasks, as a person's are, with nothing in between.
+  await app.eval(`(async () => {
+    ${chatRow()}.click();
+    await new Promise((resolve) => setTimeout(resolve));
+    ${newTabButton}.click();
+  })()`);
+  // Replies from the main process arrive in order: once this read is
+  // answered, one the row's click had asked for was answered before it.
+  await app.eval(`(async () => {
+    await window.catamorphicDesktop.workspaceStateGet(${JSON.stringify(projectId)});
+    await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+  })()`);
+  expect(await frontTab()).toBe("palette");
+  await app.waitFor(`!document.querySelector('${thisSessionTab}')`, {
+    label: "This session leaves with the chat behind the New Tab",
+  });
+  await app.waitFor(
+    `!document.querySelector('${right} [data-sidebar-tab-leaving]')`,
+    { label: "the leaving tab is gone" },
+  );
+  await openChat();
+  await app.waitFor(
+    `document.querySelector('${thisSessionTab}')?.getAttribute('aria-selected') === 'true' && !document.querySelector('${right} .sidebar-tab-slot-leaving, ${right} .sidebar-strip-folding, ${right} .sidebar-tab-slot-arriving')`,
+    { label: "This session back, settled" },
   );
 });
 
