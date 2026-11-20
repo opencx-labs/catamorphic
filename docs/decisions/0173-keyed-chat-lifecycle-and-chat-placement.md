@@ -1,6 +1,6 @@
 # 0173 — Keyed chats: project keys, close, idle release, and their own placement
 
-- **Status:** Accepted; idle release runs on any replica under a claim (0192)
+- **Status:** Accepted; idle release runs on any replica under a claim (0192); a chat whose machine is lost is admitted again by itself ([0346](0346-every-lost-machine-recovers.md))
 - **Date:** 2026-09-27
 - **Refines:** 0100, 0156, 0167
 

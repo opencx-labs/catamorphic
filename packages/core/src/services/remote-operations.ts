@@ -740,6 +740,31 @@ export const RETIRED_KEY_RETENTION_MS = IMAGE_BUILD_TIMEOUT_MS;
 export const OPERATION_NOT_OPENED_ERROR =
   "This operation was not sealed to this machine's key; it did not run";
 
+/**
+ * The receipt error of an operation addressed to a sandbox its executor
+ * does not hold (ADR 0346): the machine was replaced, or its disk was, so
+ * the sandbox the control plane remembers is not there. Deployed workers
+ * send these words; controllers read them as
+ * {@link RemoteSandboxUnknownError} and no person ever does.
+ */
+export const SANDBOX_UNKNOWN_ERROR =
+  "Sandbox does not belong to this runner connection";
+
+/**
+ * The executor does not hold the sandbox an operation named (ADR 0346):
+ * nothing ran. The workspace is gone with the machine or disk that held
+ * it; its Allocation is retired and its chat admitted again, rebuilt from
+ * its last save.
+ */
+export class RemoteSandboxUnknownError extends Error {
+  constructor(label: string) {
+    super(
+      `${label} no longer holds this workspace: the machine or its disk was replaced. The workspace is rebuilt from its last save.`,
+    );
+    this.name = "RemoteSandboxUnknownError";
+  }
+}
+
 /** How many times a controller seals an operation its executor could not open. */
 const RESEAL_ATTEMPTS = 3;
 
@@ -1055,10 +1080,13 @@ export class RemoteOperationQueue {
               operationId: id,
               executor: args.executor,
             });
-          if (job.status === "failed")
-            throw job.error === OPERATION_NOT_OPENED_ERROR
-              ? new OperationNotOpenedError()
-              : new Error(job.error ?? "Remote execution failed");
+          if (job.status === "failed") {
+            if (job.error === OPERATION_NOT_OPENED_ERROR)
+              throw new OperationNotOpenedError();
+            if (job.error === SANDBOX_UNKNOWN_ERROR)
+              throw new RemoteSandboxUnknownError(args.label);
+            throw new Error(job.error ?? "Remote execution failed");
+          }
           if (Date.now() - leaseCheckedAt >= LEASE_CHECK_MS) {
             leaseCheckedAt = Date.now();
             if (!(await args.leaseHeld(args.leaseToken))) {

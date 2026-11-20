@@ -200,6 +200,7 @@ import {
   admissionPolicy,
   EnvironmentAccessDeniedError,
   type EnvironmentAdmission,
+  EnvironmentBindingUnavailableError,
   EnvironmentIncompatibleError,
   EnvironmentNotFoundError,
   EnvironmentPolicyInvalidError,
@@ -1451,6 +1452,17 @@ async function reshapeTurnHold(
     return { kind: "question" };
   if (turns.length > 0) return { kind: "turn" };
   return undefined;
+}
+
+/** What an agent is told when its chat's machine was lost (ADR 0346). */
+const MACHINE_LOST_NOTE =
+  "[Workspace] The machine this chat ran on was lost. This workspace was rebuilt from the chat's last save: files changed and commands run after that save are gone, and so are processes that were running. Check the workspace before continuing.";
+
+/** A lost machine as a sentence's subject, by name when it is known. */
+function lostMachine(label: string | null): string {
+  return label
+    ? `The machine this chat ran on (${label})`
+    : "The machine this chat ran on";
 }
 
 /** What a contained agent is told when its workspace was reshaped. */
@@ -5478,13 +5490,48 @@ export class AgentSessionsService {
         .where("status", "=", "preparing")
         .where(pendingForReshape())
         .executeTakeFirst();
+      // A turn at work when its machine was lost (ADR 0346) ends before
+      // the chat is placed again: its runner went with the machine, so it
+      // settles as lost here rather than showing as running until the next
+      // message finds a machine.
+      if (
+        allocation?.status === "released" &&
+        allocation.releaseReason === "node_lost"
+      ) {
+        const stranded = await this.db
+          .selectFrom("agent_turns")
+          .select("id")
+          .where("session_id", "=", sessionId)
+          .where("status", "in", ["running", "waiting", "finalizing"])
+          .where((eb) =>
+            eb.or([
+              eb("lease_expires_at", "is", null),
+              eb("lease_expires_at", "<=", sql<Date>`now()`),
+            ]),
+          )
+          .executeTakeFirst();
+        // Only such a turn can be claimed there: one that has not started
+        // stays blocked until the chat is admitted again.
+        if (
+          stranded &&
+          (await this.engine.runNext({
+            sessionId,
+            ...(this.workerNode ? { localNode: this.workerNode } : {}),
+          }))
+        )
+          continue;
+      }
       // No workspace: given back while the chat waited, or a chat that is
       // waiting for a machine (ADR 0258).
       const placing =
         session.allocation_id === null || allocation?.status === "released";
+      // So does one whose machine was lost before its harness started
+      // (ADR 0346): it ran nothing, and is admitted again like a queued one.
       const waits =
         Boolean(due) ||
-        (Boolean(recovering) && allocation?.releaseReason === "replaced");
+        (Boolean(recovering) &&
+          (allocation?.releaseReason === "replaced" ||
+            allocation?.releaseReason === "node_lost"));
       if (placing && !waits)
         await this.placementWaits.clear({ rootWorkloadIds: [sessionId] });
       if (placing && waits) {
@@ -5685,6 +5732,7 @@ export class AgentSessionsService {
           deliveredBy: item.deliveredBy,
         }),
       reattach: (input) => this.reattachRunner(input),
+      runnerLost: (input) => this.runnerLostReason(input),
       hostTool: (input) => this.runHostTool(input),
       finalize: (input) => this.finalizeTurn(input),
       settled: (input) => this.afterTurn(input),
@@ -6030,6 +6078,96 @@ export class AgentSessionsService {
       : answer;
   }
 
+  /**
+   * Why a turn's runner is gone, when its machine was lost (ADR 0346): the
+   * machine by name, and what happens to the chat next.
+   */
+  private async runnerLostReason(input: {
+    session: SessionRow;
+    location: RunnerLocation;
+  }): Promise<string | undefined> {
+    if (input.location.kind !== "sandbox_process") return undefined;
+    const lost = await this.db
+      .selectFrom("execution_allocations")
+      .select(
+        sql<string | null>`policy_snapshot->'binding'->>'label'`.as("label"),
+      )
+      .where("id", "=", input.location.allocationId)
+      .where("status", "=", "released")
+      .where("release_reason", "=", "node_lost")
+      .executeTakeFirst();
+    if (!lost) return undefined;
+    return `${lostMachine(lost.label)} was lost while this turn ran, so the turn stopped. The chat continues from its last save on the next message.`;
+  }
+
+  /**
+   * The machine a chat's workspace is on, by name, when it is an enrolled
+   * or replica machine that is not answering now. Undefined otherwise.
+   */
+  private async unreachableMachineOf(
+    session: SessionRow,
+  ): Promise<string | undefined> {
+    if (!session.allocation_id) return undefined;
+    const row = await this.db
+      .selectFrom("execution_allocations as allocation")
+      .leftJoin("worker_nodes as node", "node.id", "allocation.worker_node_id")
+      .select([
+        sql<string | null>`allocation.policy_snapshot->'binding'->>'label'`.as(
+          "label",
+        ),
+        sql<boolean>`coalesce(node.enabled AND node.lease_expires_at > now(), false)`.as(
+          "live",
+        ),
+      ])
+      .where("allocation.id", "=", session.allocation_id)
+      .where("allocation.worker_node_id", "is not", null)
+      .executeTakeFirst();
+    return row && !row.live ? (row.label ?? undefined) : undefined;
+  }
+
+  /**
+   * Say in the chat that its machine was lost and its workspace rebuilt
+   * (ADR 0346), once per lost workspace, as the new one is recorded. Read
+   * under the caller's transaction, before the reason is cleared.
+   */
+  private async noteRebuiltAfterLoss(
+    trx: Transaction<DB>,
+    input: { workspaceSessionId: string; sessionIds: readonly string[] },
+  ): Promise<void> {
+    const owner = await trx
+      .selectFrom("agent_sessions")
+      .select("workspace_released_reason")
+      .where("id", "=", input.workspaceSessionId)
+      .executeTakeFirst();
+    if (owner?.workspace_released_reason !== "machine-lost") return;
+    const lost = await trx
+      .selectFrom("execution_allocations")
+      .select([
+        "id",
+        sql<string | null>`policy_snapshot->'binding'->>'label'`.as("label"),
+      ])
+      .where("workload_kind", "=", "agent")
+      .where("root_workload_id", "=", input.workspaceSessionId)
+      .where("release_reason", "=", "node_lost")
+      .orderBy("released_at", "desc")
+      .executeTakeFirst();
+    for (const sessionId of input.sessionIds)
+      await this.appendNotice(trx, {
+        sessionId,
+        id: derivedNoticeId(
+          sessionId,
+          `workspace_rebuilt:${lost?.id ?? "unknown"}`,
+        ),
+        code: "workspace_rebuilt",
+        text: `${lostMachine(lost?.label ?? null)} was lost. This chat's workspace was rebuilt from its last save. Work done after that save is gone.`,
+        data: {
+          reason: "machine-lost",
+          machine: lost?.label ?? null,
+          allocationId: lost?.id ?? null,
+        },
+      });
+  }
+
   private async reattachRunner(input: {
     identity: Identity;
     session: SessionRow;
@@ -6156,6 +6294,12 @@ export class AgentSessionsService {
       agent.sandboxing === "contained"
     )
       notes.push(RESHAPED_CONTAINED_NOTE);
+    // Its machine was lost (ADR 0346): the agent starts from the last save.
+    if (
+      session.workspace_released_reason === "machine-lost" &&
+      !session.sandbox_id
+    )
+      notes.push(MACHINE_LOST_NOTE);
     const ownerAuthored = await this.ownerAuthoredTurn({
       projectId,
       owner: session.external_user_id,
@@ -6924,7 +7068,19 @@ export class AgentSessionsService {
       projectId,
       session,
       agent,
-    );
+    ).catch(async (error: unknown) => {
+      // Its machine stopped answering before the turn could be saved (ADR
+      // 0346): the turn ends saying which machine, and what happens next.
+      const machine =
+        error instanceof EnvironmentBindingUnavailableError
+          ? await this.unreachableMachineOf(session)
+          : undefined;
+      throw machine
+        ? new Error(
+            `${lostMachine(machine)} stopped answering while this turn ran, so the turn stopped before its work was saved. If the machine comes back the chat continues there; if it is lost, the chat continues from its last save.`,
+          )
+        : error;
+    });
     const sandboxProviderId =
       session.sandbox_id && runtime.provider
         ? await this.resolveSandboxProviderId(session, runtime.provider).catch(
@@ -14676,6 +14832,11 @@ export class AgentSessionsService {
       allocationId: session.allocation_id,
     });
     if (allocation?.status !== "active") {
+      // Its machine was lost under a turn (ADR 0346): said in plain words.
+      if (allocation?.releaseReason === "node_lost")
+        throw new Error(
+          `${lostMachine(allocation.policy.binding.label)} was lost while this turn ran, so the turn stopped. The chat continues from its last save on the next message.`,
+        );
       throw new Error("The session's execution Allocation is no longer active");
     }
     const { admitted, mismatch } = await this.admitOnAllocation({
@@ -15117,6 +15278,11 @@ export class AgentSessionsService {
         .set({ sandbox_id: handle.id, base_commit_sha: baseCommitSha })
         .where("id", "in", holders)
         .execute();
+      // Made again after its machine was lost: the chat says so (ADR 0346).
+      await this.noteRebuiltAfterLoss(trx, {
+        workspaceSessionId: owner.id,
+        sessionIds: holders,
+      });
       // A new workspace, its first or made again (ADR 0324): the workspace
       // session's, whichever session's turn made it (ADR 0322).
       await recordWorkspaceMade({ db: trx, sessionId: owner.id });

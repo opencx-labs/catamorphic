@@ -44,7 +44,10 @@ import {
   startTurnLeaseRenewal,
 } from "../agent-turn-leases.js";
 import { outOfDiskFor, withOutOfDisk } from "../out-of-disk.js";
-import { ExecutorNotConnectedError } from "../remote-operations.js";
+import {
+  ExecutorNotConnectedError,
+  RemoteSandboxUnknownError,
+} from "../remote-operations.js";
 import { buildContextHandoff } from "./context-handoff.js";
 import { NativeStateStore } from "./native-state.js";
 import {
@@ -245,6 +248,15 @@ export interface TurnEngineHost {
   }): Promise<void>;
   /** This holder stopped working the turn, however it ended: let go of what it kept. */
   released?(input: { sessionId: string; turnId: string }): void;
+  /**
+   * Why a runner that started cannot be reattached, in words for the chat
+   * (ADR 0346): the host knows when its machine was lost and which one.
+   * Undefined when it knows no more than that the runner is gone.
+   */
+  runnerLost?(input: {
+    session: SessionRow;
+    location: RunnerLocation;
+  }): Promise<string | undefined>;
   /**
    * Every secret value a session's sandbox could hold (ADR 0206), for a
    * holder that took a running turn over and so never prepared it.
@@ -586,6 +598,21 @@ export class TurnEngine {
           leaseToken: claim.leaseToken,
         });
       }
+      // Its machine holds no such sandbox (ADR 0346): the workspace's
+      // Allocation was retired where the machine said so. A turn still
+      // preparing ran nothing; it waits for the chat to be admitted again
+      // and is prepared from the start. One that had started ends failed,
+      // saying so in plain words.
+      if (
+        error instanceof RemoteSandboxUnknownError &&
+        (await this.stillPreparing(claim.turn.id))
+      ) {
+        local.abort.abort();
+        await this.deps.queue.handBack({
+          turnId: claim.turn.id,
+          leaseToken: claim.leaseToken,
+        });
+      }
       if (!local.abort.signal.aborted)
         console.warn("[catamorphic] A turn failed unexpectedly", error);
       if (!local.abort.signal.aborted)
@@ -610,6 +637,17 @@ export class TurnEngine {
         turnId: claim.turn.id,
       });
     }
+  }
+
+  /** The turn has not started its harness: preparing it again is safe. */
+  private async stillPreparing(turnId: string): Promise<boolean> {
+    const row = await this.deps.db
+      .selectFrom("agent_turns")
+      .select("status")
+      .where("id", "=", turnId)
+      .executeTakeFirst()
+      .catch(() => undefined);
+    return row?.status === "preparing";
   }
 
   // -------------------------------------------------------------------------
@@ -1727,7 +1765,11 @@ export class TurnEngine {
           kind: "lost",
           turn,
           attempt,
-          reason: "The machine running this turn stopped before it finished.",
+          reason:
+            (await this.deps.host
+              .runnerLost?.({ session: ctx.session, location: runner.location })
+              .catch(() => undefined)) ??
+            "The machine running this turn stopped before it finished.",
         };
       }
       local.channel = channel;

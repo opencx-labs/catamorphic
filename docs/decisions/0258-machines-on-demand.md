@@ -1,6 +1,6 @@
 # 0258 — Machines on demand
 
-- **Status:** Accepted; refined by [0327](0327-machine-provisioners-are-workflows.md): machine provisioners as project workflows
+- **Status:** Accepted; refined by [0327](0327-machine-provisioners-are-workflows.md): machine provisioners as project workflows; amended by [0346](0346-every-lost-machine-recovers.md): a machine that served is lost by its rule's `lostMinutes`, and a drained machine's work is retired
 - **Date:** 2026-10-18
 - **Refines:** 0173, 0193, 0205
 

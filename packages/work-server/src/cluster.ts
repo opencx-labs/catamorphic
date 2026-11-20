@@ -302,7 +302,8 @@ export async function registerWorkMachine(args: {
                 sandboxProvider: nodes.remoteProvider({
                   nodeId: selected.id,
                   offer: selected.remote,
-                  label: "The worker",
+                  // Named, so a turn it cuts short says which machine.
+                  label: `Worker ${selected.descriptor.label}`,
                   capabilities: selected.descriptor.capabilities,
                 }),
               }

@@ -3,6 +3,7 @@ import {
   OPERATION_NOT_OPENED_ERROR,
   openRemoteOperation,
   type RemoteOperation,
+  SANDBOX_UNKNOWN_ERROR,
 } from "@catamorphic/core";
 import {
   redactUrlCredentials,
@@ -262,8 +263,10 @@ export function startClientRunner(args: {
       // always safe, and a widening must end after its connection did.
       const unguarded =
         operation.kind === "destroy" || operation.kind === "egress.narrow";
-      if (!owned && !unguarded)
-        throw new Error("Sandbox does not belong to this runner connection");
+      // Said in the words its controller reads as a sandbox this machine
+      // does not hold (ADR 0346): it retires that workspace and admits its
+      // chat again, rather than failing every message.
+      if (!owned && !unguarded) throw new Error(SANDBOX_UNKNOWN_ERROR);
       if (operation.kind === "create") {
         if (
           args.maxSandboxes !== undefined &&

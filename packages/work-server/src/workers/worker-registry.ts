@@ -4,6 +4,7 @@ import {
   diskFits,
   forgetExecutorKey,
   MachineDiskSchema,
+  type NodeRetireReason,
   nodeExecutor,
   PlacementWaitsService,
   REMOTE_EPOCH_PATTERN,
@@ -11,6 +12,7 @@ import {
   RemoteExecutorLeaseLostError,
   RemoteOperationQueue,
   registerExecutorKey,
+  retireNodeWork,
   type WorkerCapacity,
   WorkerNodeLeaseHeldError,
   type WorkerNodesService,
@@ -26,7 +28,7 @@ import {
   type MachineDisk,
   SANDBOX_CAPABILITIES,
 } from "@catamorphic/sandbox";
-import { type Kysely, sql } from "kysely";
+import { type Kysely, sql, type Transaction } from "kysely";
 import { z } from "zod";
 import type { HarnessSignInRequest } from "./harness-sign-ins.js";
 import {
@@ -142,18 +144,48 @@ export class WorkerIsolationError extends Error {
 const NOBODY = { nobody: true } as const;
 
 /**
- * What a worker is doing for machine rules (ADR 0205): serving its access,
- * released (serving nobody, its disk kept for its retention), free in its
- * pool, being reset before it returns to its pool, revoked and still being
- * destroyed on its platform, or revoked.
+ * Minutes a machine that was serving may go unseen before it is lost (ADR
+ * 0346), unless its rule says otherwise: its work is retired, and a rule
+ * that provisioned it replaces it.
+ */
+export const DEFAULT_LOST_MINUTES = 5;
+
+/**
+ * What a worker is doing (ADRs 0205, 0346): serving its access, by its
+ * lease; connecting (enrolled, and not connected yet); unreachable (it
+ * was serving and its lease lapsed); lost (unreachable past its loss
+ * limit: its work is retired); released (serving nobody, its disk kept for
+ * its retention); free in its pool; being reset before it returns to its
+ * pool; revoked and still being destroyed on its platform; or revoked.
  */
 export type WorkerState =
   | "serving"
+  | "connecting"
+  | "unreachable"
+  | "lost"
   | "released"
   | "free"
   | "resetting"
   | "destroying"
   | "revoked";
+
+/**
+ * Whether a worker's machine answers (ADR 0346), by its node lease and the
+ * database's clock: `live` while it renews, `connecting` before its first
+ * call, `unreachable` once its lease lapsed, `lost` once it has been
+ * unseen for its loss limit.
+ */
+export type WorkerReach = "live" | "connecting" | "unreachable" | "lost";
+
+/** One enrolled worker's reach, for listings and the reconciler. */
+export interface WorkerLiveness {
+  nodeId: string;
+  reach: WorkerReach;
+  /** Since its last call, or since it enrolled when it never called. */
+  unseenForMs: number;
+  /** How long unseen makes it lost: its rule's `lostMinutes`, or the default. */
+  lostAfterMs: number;
+}
 
 /** A machine of a pool (`"pool": true` at enrollment), for the reconciler. */
 export interface PooledMachine {
@@ -338,6 +370,16 @@ export class WorkWorkerRegistry {
         /** When the episode began: one event per episode. */
         since: Date;
       }) => Promise<void>;
+      /**
+       * Work was retired from a machine (ADR 0346): hint this process's
+       * agent sweep, which admits its chats again at once.
+       */
+      retired?: () => void;
+      /**
+       * Minutes unseen that make a worker no rule sets a limit for lost
+       * (default {@link DEFAULT_LOST_MINUTES}).
+       */
+      lostMinutes?: number;
       log?: (line: string) => void;
     },
   ) {
@@ -679,6 +721,16 @@ export class WorkWorkerRegistry {
       }
       const nodeId = `${WORKER_NODE_PREFIX}${enrollment.name}`;
       const secret = randomBytes(32).toString("base64url");
+      // A name enrolling again is a new machine under the old node id (ADR
+      // 0346): whatever the old one still held is retired in this
+      // transaction, before the node is enabled, so the new machine never
+      // inherits an Allocation, a reservation or a cache copy.
+      await this.retire({
+        nodeId,
+        name: enrollment.name,
+        reason: "replaced",
+        transaction: trx,
+      });
       await trx
         .deleteFrom("work_workers")
         .where("node_id", "=", nodeId)
@@ -1074,12 +1126,155 @@ export class WorkWorkerRegistry {
    */
   async maintain(): Promise<void> {
     await this.queue.sweep().catch(() => {});
+    await this.retireGone().catch((error: unknown) =>
+      this.deps.log?.(
+        `Retiring lost machines' work failed (tried again on the next pass): ${
+          error instanceof Error ? error.message : String(error)
+        }`,
+      ),
+    );
     this.cleaning ??= this.cleanup().finally(() => {
       this.cleaning = undefined;
     });
   }
 
   private cleaning: Promise<void> | undefined;
+
+  /**
+   * Retire the work of machines that are gone (ADR 0346), on any replica:
+   * a revoked worker's, when the process that revoked it stopped before
+   * retiring it, and a lost worker's, whoever enrolled it. Its chats are
+   * admitted again on a machine open to their owner, or wait for one; a
+   * rule that provisioned the machine replaces it on its next pass, and a
+   * machine that comes back removes the sandboxes whose Allocations are
+   * gone. Only machines that still hold something are looked at.
+   */
+  private async retireGone(): Promise<void> {
+    const revoked = await this.deps.db
+      .selectFrom("work_workers")
+      .select(["node_id", "name"])
+      .where("tenant_id", "=", this.deps.tenantId)
+      .where("revoked_at", "is not", null)
+      .where(({ exists, selectFrom }) =>
+        exists(
+          selectFrom("execution_allocations")
+            .select("execution_allocations.id")
+            .whereRef(
+              "execution_allocations.worker_node_id",
+              "=",
+              "work_workers.node_id",
+            )
+            .where("execution_allocations.capacity_released_at", "is", null),
+        ),
+      )
+      .execute();
+    for (const worker of revoked)
+      await this.retire({
+        nodeId: worker.node_id,
+        name: worker.name,
+        reason: "revoked",
+      });
+    const lost = [...(await this.liveness())].filter(
+      ([, worker]) => worker.reach === "lost",
+    );
+    if (lost.length === 0) return;
+    const holding = await this.deps.db
+      .selectFrom("execution_allocations")
+      .select("worker_node_id")
+      .distinct()
+      .where(
+        "worker_node_id",
+        "in",
+        lost.map(([, worker]) => worker.nodeId),
+      )
+      .where("capacity_released_at", "is", null)
+      .execute();
+    const held = new Set(holding.map((row) => row.worker_node_id));
+    for (const [name, worker] of lost)
+      if (held.has(worker.nodeId))
+        await this.retire({ nodeId: worker.nodeId, name, reason: "lost" });
+  }
+
+  /**
+   * Retire what a machine held, through core's one retirement (ADR 0346).
+   * Safe to call again, from any replica.
+   */
+  private async retire(args: {
+    nodeId: string;
+    name: string;
+    reason: NodeRetireReason;
+    transaction?: Transaction<DB>;
+  }): Promise<void> {
+    const retired = await retireNodeWork({
+      db: this.deps.db,
+      nodeId: args.nodeId,
+      reason: args.reason,
+      ...(args.transaction ? { transaction: args.transaction } : {}),
+    });
+    if (retired.released + retired.freed === 0) return;
+    this.deps.log?.(
+      `Machine ${args.name} is ${args.reason === "lost" ? "lost" : "gone"}: ${retired.released} workspace(s) retired, ${retired.freed} released workspace(s) freed; their chats continue from their last save`,
+    );
+    this.deps.retired?.();
+  }
+
+  /**
+   * Every enrolled worker's reach (ADR 0346), by name: read from its node
+   * lease and last call by the database's clock, against its rule's loss
+   * limit, so every replica and every listing agree.
+   */
+  async liveness(): Promise<Map<string, WorkerLiveness>> {
+    const fallback = this.deps.lostMinutes ?? DEFAULT_LOST_MINUTES;
+    const rows = await this.deps.db
+      .selectFrom("work_workers")
+      .leftJoin("worker_nodes", "worker_nodes.id", "work_workers.node_id")
+      .leftJoin("work_machine_rules", (join) =>
+        join
+          .onRef("work_machine_rules.tenant_id", "=", "work_workers.tenant_id")
+          .onRef("work_machine_rules.name", "=", "work_workers.machine_rule"),
+      )
+      .select([
+        "work_workers.name",
+        "work_workers.node_id",
+        sql<boolean>`work_workers.last_seen_at IS NULL`.as("never_connected"),
+        sql<boolean>`coalesce(worker_nodes.enabled AND worker_nodes.lease_expires_at > now(), false)`.as(
+          "live",
+        ),
+        sql<number>`(extract(epoch from (now() - coalesce(work_workers.last_seen_at, work_workers.enrolled_at))) * 1000)::float8`.as(
+          "unseen_for_ms",
+        ),
+        sql<
+          number | null
+        >`(work_machine_rules.definition->>'lostMinutes')::float8`.as(
+          "lost_minutes",
+        ),
+      ])
+      .where("work_workers.tenant_id", "=", this.deps.tenantId)
+      .where("work_workers.revoked_at", "is", null)
+      .execute();
+    return new Map(
+      rows.map((row) => {
+        const unseenForMs = Number(row.unseen_for_ms);
+        const lostAfterMs =
+          (row.lost_minutes === null ? fallback : Number(row.lost_minutes)) *
+          60_000;
+        return [
+          row.name,
+          {
+            nodeId: row.node_id,
+            reach: reachOf({
+              live: row.live,
+              neverConnected: row.never_connected,
+              unseenForMs,
+              lostAfterMs,
+            }),
+            unseenForMs,
+            lostAfterMs,
+          },
+        ];
+      }),
+    );
+  }
 
   private async cleanup(): Promise<void> {
     const nodes = await this.deps.nodes.list({
@@ -1141,6 +1336,14 @@ export class WorkWorkerRegistry {
       nodeId: row.node_id,
       enabled: false,
     });
+    // Disabled, it takes nothing new: what it held is retired (ADR 0346),
+    // so its chats continue elsewhere and its name can be enrolled again.
+    // A process that stops here leaves it to any replica's maintenance.
+    await this.retire({
+      nodeId: row.node_id,
+      name: args.name,
+      reason: "revoked",
+    });
     return true;
   }
 
@@ -1150,11 +1353,60 @@ export class WorkWorkerRegistry {
    * too, it is revoked and disabled only while no Allocation holds its
    * capacity, so nothing is placed on a machine about to be destroyed. A
    * machine that holds workspaces it cannot give back, because it is not
-   * connected and has not called for `unseenForMs`, is revoked anyway. False
-   * when it was kept, or was not enrolled.
+   * connected and has not called for `unseenForMs`, is revoked anyway, and
+   * what it held is retired (ADR 0346). False when it was kept, or was not
+   * enrolled.
    */
   async drain(args: { name: string; unseenForMs: number }): Promise<boolean> {
     const nodeId = `${WORKER_NODE_PREFIX}${args.name}`;
+    const drained = await this.takeOutOfService({
+      ...args,
+      nodeId,
+      onlyIfLost: false,
+    });
+    if (drained)
+      await this.retire({
+        nodeId,
+        name: args.name,
+        reason: drained === "lost" ? "lost" : "revoked",
+      });
+    return Boolean(drained);
+  }
+
+  /**
+   * A machine that was serving has been unseen for `unseenForMs` (ADR
+   * 0346): take it out of service for good and retire what it held, so its
+   * chats continue from their last save and its rule may replace it. Under
+   * its node's row lock, and only while it is still unseen: a machine that
+   * called again meanwhile is kept. False when it was kept, or was not
+   * enrolled.
+   */
+  async declareLost(args: {
+    name: string;
+    unseenForMs: number;
+  }): Promise<boolean> {
+    const nodeId = `${WORKER_NODE_PREFIX}${args.name}`;
+    const lost = await this.takeOutOfService({
+      ...args,
+      nodeId,
+      onlyIfLost: true,
+    });
+    if (lost) await this.retire({ nodeId, name: args.name, reason: "lost" });
+    return Boolean(lost);
+  }
+
+  /**
+   * Revoke and disable a machine under its node's row lock. Retiring what
+   * it held follows once this commits: disabled, it takes nothing new.
+   */
+  private async takeOutOfService(args: {
+    name: string;
+    nodeId: string;
+    unseenForMs: number;
+    /** Only a machine unseen for `unseenForMs`, whatever it holds. */
+    onlyIfLost: boolean;
+  }): Promise<"idle" | "lost" | false> {
+    const { nodeId } = args;
     return this.deps.db.transaction().execute(async (trx) => {
       const node = await trx
         .selectFrom("worker_nodes")
@@ -1169,7 +1421,8 @@ export class WorkWorkerRegistry {
         .where("worker_node_id", "=", nodeId)
         .where("capacity_released_at", "is", null)
         .executeTakeFirst();
-      if (Number(held?.count ?? 0) > 0) {
+      const holds = Number(held?.count ?? 0) > 0;
+      if (holds || args.onlyIfLost) {
         // Connected, it gives them back as its chats idle (ADR 0173).
         if (node?.live) return false;
         const lost = await trx
@@ -1206,7 +1459,7 @@ export class WorkWorkerRegistry {
         .where("tenant_id", "=", this.deps.tenantId)
         .where("authority_id", "=", this.deps.authorityId)
         .execute();
-      return true;
+      return holds || args.onlyIfLost ? "lost" : "idle";
     });
   }
 
@@ -1747,6 +2000,8 @@ export class WorkWorkerRegistry {
       /** Enrolled into a pool rules draw on (ADR 0205). */
       pool: boolean;
       state: WorkerState;
+      /** Its lease is live: an operation sent to it now runs (ADR 0346). */
+      connected: boolean;
       /** Since when it serves nobody, and for how many days it is kept. */
       released: { at: string; retainDays: number | null } | null;
       /** When its current credential was issued (ADR 0207). */
@@ -1762,12 +2017,15 @@ export class WorkWorkerRegistry {
       } | null;
     }>
   > {
-    const rows = await this.deps.db
-      .selectFrom("work_workers")
-      .selectAll()
-      .where("tenant_id", "=", this.deps.tenantId)
-      .orderBy("name")
-      .execute();
+    const [rows, liveness] = await Promise.all([
+      this.deps.db
+        .selectFrom("work_workers")
+        .selectAll()
+        .where("tenant_id", "=", this.deps.tenantId)
+        .orderBy("name")
+        .execute(),
+      this.liveness(),
+    ]);
     return rows.map((row) => ({
       name: row.name,
       nodeId: row.node_id,
@@ -1775,7 +2033,8 @@ export class WorkWorkerRegistry {
       lastSeenAt: row.last_seen_at?.toISOString() ?? null,
       revoked: row.revoked_at !== null,
       pool: row.pool,
-      state: workerState(row),
+      state: workerState(row, liveness.get(row.name)?.reach),
+      connected: liveness.get(row.name)?.reach === "live",
       released: row.released_at
         ? { at: row.released_at.toISOString(), retainDays: row.retain_days }
         : null,
@@ -1798,20 +2057,39 @@ function hash(value: string): string {
   return createHash("sha256").update(value).digest("hex");
 }
 
-function workerState(row: {
-  revoked_at: Date | null;
-  released_at: Date | null;
-  pool: boolean;
-  machine_rule: string | null;
-  machine_destroyed_at: Date | null;
-}): WorkerState {
+function workerState(
+  row: {
+    revoked_at: Date | null;
+    released_at: Date | null;
+    pool: boolean;
+    machine_rule: string | null;
+    machine_destroyed_at: Date | null;
+  },
+  reach: WorkerReach | undefined,
+): WorkerState {
   if (row.revoked_at)
     return row.machine_rule && !row.pool && !row.machine_destroyed_at
       ? "destroying"
       : "revoked";
   if (row.released_at) return row.machine_rule ? "released" : "resetting";
   if (row.pool && !row.machine_rule) return "free";
+  // It serves only while its lease says so (ADR 0346).
+  if (reach === "connecting") return "connecting";
+  if (reach === "unreachable") return "unreachable";
+  if (reach === "lost") return "lost";
   return "serving";
+}
+
+/** A worker's reach from its lease and how long it has been unseen. */
+function reachOf(args: {
+  live: boolean;
+  neverConnected: boolean;
+  unseenForMs: number;
+  lostAfterMs: number;
+}): WorkerReach {
+  if (args.live) return "live";
+  if (args.neverConnected) return "connecting";
+  return args.unseenForMs >= args.lostAfterMs ? "lost" : "unreachable";
 }
 
 /** A duration the database measured, as a number. */

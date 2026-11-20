@@ -479,6 +479,10 @@ export {
   LOST_NODE_GRACE_MS,
   type NodeRecoveryResult,
   NodeRecoveryService,
+  type NodeRetirement,
+  type NodeRetireReason,
+  retireAllocationWork,
+  retireNodeWork,
 } from "./services/node-recovery-service.js";
 export {
   gitignoreLiteral,
@@ -631,7 +635,9 @@ export {
   RemoteOperationResultSchema,
   RemoteOperationSchema,
   RemoteReceiptRefusedError,
+  RemoteSandboxUnknownError,
   registerExecutorKey,
+  SANDBOX_UNKNOWN_ERROR,
   type SealedRemoteOperation,
   SealedRemoteOperationSchema,
   sealRemoteOperation,

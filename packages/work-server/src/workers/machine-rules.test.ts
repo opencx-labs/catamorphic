@@ -1,3 +1,4 @@
+import { randomBytes, randomUUID } from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -22,7 +23,7 @@ import {
   MachineProvisioningRefusedError,
   sharedName,
 } from "./machine-rules.js";
-import { WorkWorkerRegistry } from "./worker-registry.js";
+import { WorkerOfferSchema, WorkWorkerRegistry } from "./worker-registry.js";
 
 /**
  * Machine rules (ADRs 0167, 0205): the directory decides who gets a
@@ -95,6 +96,16 @@ async function reconcile() {
 
 async function status() {
   return (await operator("GET", "/_work/operator/machine-rules")).json().status;
+}
+
+/** A worker process's epoch: a UUIDv7 (ADR 0192). */
+function epoch(): string {
+  const bytes = randomBytes(16);
+  bytes.writeUIntBE(Date.now(), 0, 6);
+  bytes.writeUInt8(((bytes.readUInt8(6) & 0x0f) | 0x70) >>> 0, 6);
+  bytes.writeUInt8(((bytes.readUInt8(8) & 0x3f) | 0x80) >>> 0, 8);
+  const hex = bytes.toString("hex");
+  return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`;
 }
 
 async function workers() {
@@ -446,6 +457,141 @@ describe("machine rules", () => {
     `.execute(db);
     const taken = await reconcile();
     expect(taken.created).toEqual([dedicatedName("desk", carol, "standard-4")]);
+  });
+
+  it("refuses a loss limit under two minutes", async () => {
+    const bad = await operator("PUT", "/_work/operator/machine-rules/x", {
+      group: "eng@example.com",
+      machines: "each-member",
+      class: "small",
+      lostMinutes: 1,
+    });
+    expect(bad.statusCode).toBe(400);
+    expect(bad.json().error).toContain("lostMinutes");
+  });
+
+  it("replaces a kept machine once it is unseen for its rule's lostMinutes, and keeps one that is only unreachable (ADR 0346)", async () => {
+    const db = server.catamorphic.core.db;
+    const registry = new WorkWorkerRegistry({
+      db,
+      nodes: new WorkerNodesService(db),
+      tenantId: SERVER_TENANT_ID,
+      authorityId: fs.readFileSync(path.join(root, "host-id"), "utf8").trim(),
+    });
+    const dana = await member("dana", ["loss@example.com"]);
+    const put = await operator("PUT", "/_work/operator/machine-rules/loss", {
+      group: "loss@example.com",
+      machines: "each-member",
+      class: "standard-4",
+      lostMinutes: 30,
+    });
+    expect(put.statusCode, put.body).toBe(200);
+    await reconcile();
+    const name = dedicatedName("loss", dana, "standard-4");
+    const made = platform.created.filter((machine) => machine.name === name);
+    expect(made).toHaveLength(1);
+    const first = made[0];
+    if (!first) throw new Error("No machine was made");
+
+    // Enrolled and not connected yet: starting, not ready.
+    const { publicKey } = generateExecutorKeyPair();
+    const { nodeId } = await registry.enroll({ code: first.code, publicKey });
+    expect((await status()).loss).toMatchObject({ ready: 0, starting: 1 });
+    await registry.connect({
+      nodeId,
+      name,
+      session: epoch(),
+      offer: WorkerOfferSchema.parse({
+        isolation: "sandbox",
+        workspaceRoot: "/workspaces",
+        capacity: { workspaces: 2 },
+      }),
+      publicKey,
+    });
+    expect((await status()).loss).toMatchObject({
+      desired: 1,
+      ready: 1,
+      starting: 0,
+      unreachable: 0,
+      lost: 0,
+    });
+    // A workspace on it.
+    const project = await server.catamorphic.core.projects.create(
+      { tenantId: SERVER_TENANT_ID, externalUserId: dana },
+      { name: "Loss" },
+    );
+    const allocation = await db
+      .insertInto("execution_allocations")
+      .values({
+        tenant_id: SERVER_TENANT_ID,
+        project_id: project.id,
+        environment_name: "desk",
+        binding_id: nodeId,
+        workload_kind: "agent",
+        root_workload_id: randomUUID(),
+        worker_node_id: nodeId,
+        policy_snapshot: JSON.stringify({}),
+      })
+      .returning("id")
+      .executeTakeFirstOrThrow();
+    const unseen = async (minutes: number) => {
+      await sql`
+        UPDATE worker_nodes SET lease_expires_at = now() - interval '1 second'
+        WHERE id = ${nodeId}
+      `.execute(db);
+      await sql`
+        UPDATE work_workers
+        SET last_seen_at = now() - make_interval(mins => ${minutes})
+        WHERE name = ${name}
+      `.execute(db);
+    };
+
+    // Unseen for less than the rule's thirty minutes: unreachable, kept.
+    await unseen(10);
+    expect((await status()).loss).toMatchObject({
+      ready: 0,
+      unreachable: 1,
+      lost: 0,
+    });
+    expect(await reconcile()).toMatchObject({ lost: [], removed: [] });
+    expect(await workers()).toContainEqual(
+      expect.objectContaining({ name, state: "unreachable", connected: false }),
+    );
+
+    // Past them: lost. Its work is retired and it is made again.
+    await unseen(31);
+    expect((await status()).loss).toMatchObject({
+      ready: 0,
+      unreachable: 0,
+      lost: 1,
+    });
+    const pass = await reconcile();
+    expect(pass).toMatchObject({
+      lost: [name],
+      removed: [name],
+      created: [name],
+      failed: [],
+    });
+    expect(platform.destroyed).toContain(`${name}:vm-${name}`);
+    const remade = platform.created.filter((machine) => machine.name === name);
+    expect(remade).toHaveLength(2);
+    expect(remade[1]?.code).not.toBe(first.code);
+    expect(
+      await db
+        .selectFrom("execution_allocations")
+        .select(["status", "release_reason"])
+        .select(sql<boolean>`capacity_released_at IS NOT NULL`.as("freed"))
+        .where("id", "=", allocation.id)
+        .executeTakeFirstOrThrow(),
+    ).toEqual({ status: "released", release_reason: "node_lost", freed: true });
+    expect((await status()).loss).toMatchObject({
+      desired: 1,
+      ready: 0,
+      starting: 1,
+      lost: 0,
+    });
+    await operator("DELETE", "/_work/operator/machine-rules/loss");
+    await reconcile();
   });
 
   it("refuses rules with a bad group", async () => {

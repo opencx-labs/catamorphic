@@ -16,6 +16,7 @@ import {
   renewAllocationMaintenance,
   withAllocationMaintenance,
 } from "../services/allocation-sandbox-provider.js";
+import { retireNodeWork } from "../services/node-recovery-service.js";
 import {
   EXECUTOR_RESTARTED_ERROR,
   ExecutorKeyMissingError,
@@ -320,6 +321,47 @@ describe("remote nodes own their lease (ADR 0192)", () => {
       .where("id", "=", released.allocationId)
       .execute();
     expect(await claim(released.sessionId)).toBeNull();
+  });
+
+  it("claims a turn stranded at work on a lost machine, and nothing that has not started there (ADR 0346)", async () => {
+    const turns = sessionLogFixture(db);
+    const remote = `worker.${crypto.randomUUID().slice(0, 8)}`;
+    await connect(remote, epochAt(Date.now()));
+    const claim = (sessionId: string) =>
+      turns.queue.claim({ workerId: "any-host", sessionId });
+    const atWork = await chatOn(remote);
+    const preparing = await chatOn(remote);
+    const queued = await chatOn(remote);
+    const working = await claim(atWork.sessionId);
+    const prepared = await claim(preparing.sessionId);
+    if (!working || !prepared) throw new Error("The turns were not claimed");
+    // One is running its harness when the machine goes; one was still
+    // preparing and is handed back; one never started.
+    await db
+      .updateTable("agent_turns")
+      .set({ status: "running", lease_expires_at: sql`now()` })
+      .where("id", "=", working.turn.id)
+      .execute();
+    await turns.queue.handBack({
+      turnId: prepared.turn.id,
+      leaseToken: prepared.leaseToken,
+    });
+    await lapse(remote);
+    // Away, and not lost yet: every turn waits for it.
+    for (const chat of [atWork, preparing, queued])
+      expect(await claim(chat.sessionId)).toBeNull();
+
+    expect(
+      await retireNodeWork({ db, nodeId: remote, reason: "lost" }),
+    ).toMatchObject({ released: 3 });
+    // The turn that was at work is claimed, to be settled as lost.
+    expect(await claim(atWork.sessionId)).toMatchObject({
+      recovered: true,
+      turn: { id: working.turn.id },
+    });
+    // The others wait for their chats to be admitted again.
+    expect(await claim(preparing.sessionId)).toBeNull();
+    expect(await claim(queued.sessionId)).toBeNull();
   });
 
   it("refuses a remote executor that registered no key (ADR 0207)", async () => {

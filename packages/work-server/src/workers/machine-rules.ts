@@ -42,11 +42,13 @@ import {
   type WorkerPlacement,
   WorkerPlacementSchema,
 } from "./placement.js";
-import type {
-  MachineLoad,
-  PooledMachine,
-  ProvisionedMachine,
-  WorkWorkerRegistry,
+import {
+  DEFAULT_LOST_MINUTES,
+  type MachineLoad,
+  type PooledMachine,
+  type ProvisionedMachine,
+  type WorkerLiveness,
+  type WorkWorkerRegistry,
 } from "./worker-registry.js";
 
 const tracer = getTracer("@catamorphic/work-server");
@@ -65,8 +67,9 @@ const DAY_MS = 24 * 60 * 60_000;
 /**
  * Machines that come and go with the work waiting for them (ADR 0258): up
  * to `max`, keeping `min` warm, each destroyed once idle for
- * `idleMinutes`, and replaced when it does not enroll within
- * `enrollMinutes`.
+ * `idleMinutes`, and replaced when it does not enroll and connect within
+ * `enrollMinutes`. One that connected and then went unseen is lost after
+ * its rule's `lostMinutes`, like any rule's machine (ADR 0346).
  */
 const DemandSchema = z
   .strictObject({
@@ -127,6 +130,19 @@ export const MachineRuleSchema = z
     trusted: z.boolean().default(false),
     /** Days a released machine keeps its disk; 0 destroys or resets it at once. */
     retainDays: z.number().int().min(0).max(365).optional(),
+    /**
+     * Minutes a machine that was serving may go unseen before it is lost
+     * (ADR 0346), 5 unless set: its work is retired so its chats continue
+     * from their last save, and a machine this rule provisioned is
+     * destroyed and made again. At least 2, so a restart or a short
+     * network fault never costs a machine.
+     */
+    lostMinutes: z
+      .number()
+      .int()
+      .min(2)
+      .max(24 * 60)
+      .optional(),
   })
   .superRefine((rule, context) => {
     const demand = demandOf(rule) !== undefined;
@@ -345,6 +361,11 @@ export interface ReconcileSummary {
   removed: string[];
   /** Machines whose destruction is under way (a snapshot being written). */
   destroying: string[];
+  /**
+   * Machines declared lost (ADR 0346): their work is retired, and those a
+   * rule still wants are destroyed and made again.
+   */
+  lost: string[];
   /** Pooled machines reset and free again. */
   reset: string[];
   /** What went wrong, by machine (or rule) and the rule it belongs to. */
@@ -358,10 +379,17 @@ export interface MachineRuleStatus {
   platform: MachinePlatform | null;
   /** Machines the rule calls for now. */
   desired: number;
-  /** Enrolled and serving their people. */
+  /** Connected and serving their people, by their lease (ADR 0346). */
   ready: number;
-  /** Created and not yet enrolled. */
+  /** Created and not yet connected. */
   starting: number;
+  /** Were serving, and have not called since their lease lapsed. */
+  unreachable: number;
+  /**
+   * Unreachable for the rule's `lostMinutes`: their work is retired, and
+   * provisioned ones are being replaced.
+   */
+  lost: number;
   /** Without a machine: a pool with none free, or not created yet. */
   waiting: number;
   /** Released and kept for their retention. */
@@ -447,8 +475,14 @@ interface Desired {
   queued: Map<string, number>;
   /** What keeps rules on demand from serving all their work, by rule. */
   notices: Map<string, string[]>;
-  /** Machines on demand not seen for their rule's `enrollMinutes`. */
+  /**
+   * Machines that are lost (ADR 0346): unseen for their rule's
+   * `lostMinutes` after serving, or, on demand, not connected within its
+   * `enrollMinutes`.
+   */
   lost: Set<string>;
+  /** Every enrolled worker's reach, as this pass read it. */
+  liveness: Map<string, WorkerLiveness>;
 }
 
 /** Marks a ref as a Hetzner Cloud server id. */
@@ -644,19 +678,25 @@ export class MachineReconciler {
             }
           : {}),
       };
+      const reach = (machineName: string) =>
+        desired.liveness.get(machineName)?.reach;
       if (platform === "pool") {
         const slots = desired.slots.filter((slot) => slot.rule === name);
         const held = pooled.filter((machine) => machine.rule === name);
-        const ready = held.filter(
+        const serving = held.filter(
           (machine) => machine.releasedForMs === null,
-        ).length;
+        );
+        const count = (state: WorkerLiveness["reach"]) =>
+          serving.filter((machine) => reach(machine.name) === state).length;
         status[name] = {
           platform,
           desired: slots.length,
-          ready,
-          starting: 0,
-          waiting: Math.max(0, slots.length - ready),
-          released: held.length - ready,
+          ready: count("live"),
+          starting: count("connecting"),
+          unreachable: count("unreachable"),
+          lost: count("lost"),
+          waiting: Math.max(0, slots.length - serving.length),
+          released: held.length - serving.length,
           ...extra,
         };
         continue;
@@ -667,21 +707,41 @@ export class MachineReconciler {
       const own = machines.filter((machine) => machine.rule === name);
       const isWanted = (machineName: string) =>
         wanted.some((machine) => machine.name === machineName);
-      const ready = own.filter(
+      // Enrolled for the people the rule serves now; whether each serves
+      // is its lease's to say (ADR 0346).
+      const enrolled = own.filter(
         (machine) =>
           machine.state === "enrolled" &&
           machine.releasedForMs === null &&
-          isWanted(machine.name),
+          (isWanted(machine.name) || desired.lost.has(machine.name)),
+      );
+      const count = (state: WorkerLiveness["reach"]) =>
+        enrolled.filter(
+          (machine) =>
+            !desired.lost.has(machine.name) && reach(machine.name) === state,
+        ).length;
+      const ready = count("live");
+      const lost = enrolled.filter((machine) =>
+        desired.lost.has(machine.name),
       ).length;
-      const starting = own.filter(
+      const unreachable = count("unreachable");
+      const pending = own.filter(
         (machine) => machine.state === "pending" && isWanted(machine.name),
       ).length;
       status[name] = {
         platform,
         desired: wanted.length,
         ready,
-        starting,
-        waiting: Math.max(0, wanted.length - ready - starting),
+        starting: pending + count("connecting"),
+        unreachable,
+        lost,
+        // Wanted, with no machine made for it yet.
+        waiting: Math.max(
+          0,
+          wanted.length -
+            pending -
+            enrolled.filter((machine) => isWanted(machine.name)).length,
+        ),
         released: own.filter(
           (machine) =>
             machine.state === "enrolled" && machine.releasedForMs !== null,
@@ -745,6 +805,7 @@ export class MachineReconciler {
       released: [],
       removed: [],
       destroying: [],
+      lost: [],
       reset: [],
       failed: [],
     };
@@ -792,10 +853,11 @@ export class MachineReconciler {
       summary.updated.length +
       summary.released.length +
       summary.removed.length +
+      summary.lost.length +
       summary.reset.length;
     if (changed > 0 || summary.failed.length > 0) {
       this.deps.log?.(
-        `Machines: ${summary.created.length} created, ${summary.assigned.length} assigned, ${summary.updated.length} updated, ${summary.released.length} released, ${summary.removed.length} removed, ${summary.reset.length} reset, ${summary.failed.length} failed`,
+        `Machines: ${summary.created.length} created, ${summary.assigned.length} assigned, ${summary.updated.length} updated, ${summary.released.length} released, ${summary.removed.length} removed, ${summary.lost.length} lost, ${summary.reset.length} reset, ${summary.failed.length} failed`,
       );
     }
     return summary;
@@ -894,17 +956,48 @@ export class MachineReconciler {
     // kept for its retention. A machine stays listed until its platform
     // confirmed it is gone, so a failed destruction is tried again.
     const pendingDestroy = new Set<string>();
+    /** Machines gone in this pass: their names are free to make again. */
+    const gone = new Set<string>();
     for (const machine of machines) {
       if (desired.problems.has(machine.rule)) continue;
       const wanted = desired.provisioned.has(machine.name);
-      if (wanted && machine.state !== "expired" && machine.state !== "revoked")
+      // A machine its rule still wants that is lost (ADR 0346) goes like
+      // one nobody wants, without the release and its retention: there is
+      // nothing on it left to keep. It is made again once it is gone.
+      const lost =
+        wanted &&
+        machine.state === "enrolled" &&
+        desired.lost.has(machine.name);
+      if (
+        wanted &&
+        !lost &&
+        machine.state !== "expired" &&
+        machine.state !== "revoked"
+      )
         continue;
       const settled = await this.step({
         summary,
         name: machine.name,
         rule: machine.rule,
         run: async () => {
-          if (machine.state === "enrolled") {
+          if (lost) {
+            await fence();
+            // Revoked under its node's lock only while still unseen; what
+            // it held is retired, so its chats continue from their last
+            // save on the replacement or any machine open to their owner.
+            if (
+              !(await this.deps.workers.declareLost({
+                name: machine.name,
+                unseenForMs: this.lostAfterMs(machine.rule, desired),
+              }))
+            ) {
+              // It called again meanwhile: it is kept as it is.
+              pendingDestroy.add(machine.name);
+              return;
+            }
+            summary.lost.push(machine.name);
+            await this.recordEvent({ kind: "machine.lost", machine });
+          } else if (machine.state === "enrolled") {
             const retainDays = this.retainDaysOf({ machine, desired });
             if (machine.releasedForMs === null) {
               await fence();
@@ -913,8 +1006,10 @@ export class MachineReconciler {
                 retainDays,
               });
               summary.released.push(machine.name);
-              if (desired.lost.has(machine.name))
+              if (desired.lost.has(machine.name)) {
+                summary.lost.push(machine.name);
                 await this.recordEvent({ kind: "machine.lost", machine });
+              }
               await this.recordEvent({ kind: "machine.released", machine });
             }
             if (
@@ -949,6 +1044,7 @@ export class MachineReconciler {
             return;
           }
           await this.deps.workers.forgetMachine(machine);
+          gone.add(machine.name);
           summary.removed.push(machine.name);
           await this.recordEvent({ kind: "machine.destroyed", machine });
         },
@@ -958,11 +1054,13 @@ export class MachineReconciler {
 
     for (const machine of desired.provisioned.values()) {
       if (pendingDestroy.has(machine.name)) continue;
-      const current = machines.find(
-        (candidate) =>
-          candidate.name === machine.name &&
-          (candidate.state === "enrolled" || candidate.state === "pending"),
-      );
+      const current = gone.has(machine.name)
+        ? undefined
+        : machines.find(
+            (candidate) =>
+              candidate.name === machine.name &&
+              (candidate.state === "enrolled" || candidate.state === "pending"),
+          );
       const creating = current && creatingKey(current.ref) !== undefined;
       if (current?.state === "pending" && !creating) continue;
       await this.step({
@@ -1789,13 +1887,12 @@ export class MachineReconciler {
   }
 
   /**
-   * How long a machine holding workspaces may go unseen before it is lost
-   * and revoked anyway: its rule's `enrollMinutes` for machines on demand.
+   * How long a machine that was serving may go unseen before it is lost
+   * (ADR 0346): its rule's `lostMinutes`, or the default once the rule is
+   * gone.
    */
   private lostAfterMs(rule: string, desired: Desired): number {
-    const definition = desired.rules[rule];
-    const demand = definition ? demandOf(definition) : undefined;
-    return (demand?.enrollMinutes ?? DEFAULT_ENROLL_MINUTES) * 60_000;
+    return (desired.rules[rule]?.lostMinutes ?? DEFAULT_LOST_MINUTES) * 60_000;
   }
 
   /** Whether machines of this class are known to run plain processes. */
@@ -1842,6 +1939,7 @@ export class MachineReconciler {
       queued: new Map(),
       notices: new Map(),
       lost: new Set(),
+      liveness: await this.deps.workers.liveness(),
     };
     const demand = Object.values(rules).some((rule) => demandOf(rule))
       ? await this.demandState()
@@ -1927,6 +2025,7 @@ export class MachineReconciler {
           loads: demand.loads,
           waits,
           stalled: Boolean(stalled) || Boolean(brake),
+          liveness: desired.liveness,
         });
         for (const machine of planned.machines)
           desired.provisioned.set(machine.name, machine);
@@ -1971,7 +2070,7 @@ export class MachineReconciler {
         continue;
       }
       const labels = { ...definition.labels, class: definition.class };
-      const add = (name: string, placement: unknown) =>
+      const add = (name: string, placement: unknown) => {
         desired.provisioned.set(name, {
           name,
           rule,
@@ -1979,6 +2078,11 @@ export class MachineReconciler {
           placement: WorkerPlacementSchema.parse(placement),
           retainDays: definition.retainDays,
         });
+        // Wanted, and unseen for the rule's loss limit after serving (ADR
+        // 0346): the pass retires its work and makes it again.
+        if (desired.liveness.get(name)?.reach === "lost")
+          desired.lost.add(name);
+      };
       if (definition.machines === "each-member") {
         for (const member of members)
           add(dedicatedName(rule, member.userId, definition.class), {
@@ -2172,9 +2276,11 @@ export class MachineReconciler {
    * the work waiting for machines, or the work on rules' machines, changed
    * since the latest pass started. A change that came during a pass, or
    * while another replica held the claim, starts one on the next look. Idle
-   * machines go on the regular pass. What it remembers is this replica's
-   * own shortcut (ADR 0193): another replica looks for itself, and the pass
-   * runs under the tenant's claim either way.
+   * machines go on the regular pass. A rule's machine newly lost starts
+   * one too (ADR 0346), so it is replaced within seconds of its loss limit
+   * rather than at the next regular pass. What it remembers is this
+   * replica's own shortcut (ADR 0193): another replica looks for itself,
+   * and the pass runs under the tenant's claim either way.
    */
   async checkDemand(): Promise<void> {
     const seen = await this.demandSignature();
@@ -2185,8 +2291,38 @@ export class MachineReconciler {
   /** What the latest pass of this replica saw; see {@link checkDemand}. */
   private demandSeen: string | undefined;
 
-  /** Demand, in one statement; undefined while no rule is on demand. */
+  /**
+   * Demand, in one statement, and the rules' machines that are lost;
+   * undefined while no rule is on demand and none of them is.
+   */
   private async demandSignature(): Promise<string | undefined> {
+    const lost = (await this.lostMachines()).join(",");
+    const demand = await this.demandOnly();
+    if (demand === undefined) return lost ? `|lost:${lost}` : undefined;
+    return `${demand}|lost:${lost}`;
+  }
+
+  /** Machines rules provisioned that are lost now, by name. */
+  private async lostMachines(): Promise<string[]> {
+    const lost = [...(await this.deps.workers.liveness())]
+      .filter(([, worker]) => worker.reach === "lost")
+      .map(([name]) => name);
+    if (lost.length === 0) return [];
+    const rows = await this.deps.db
+      .selectFrom("work_workers")
+      .select("name")
+      .where("tenant_id", "=", this.deps.tenantId)
+      .where("name", "in", lost)
+      .where("machine_rule", "is not", null)
+      .where("pool", "=", false)
+      .where("revoked_at", "is", null)
+      .orderBy("name")
+      .execute();
+    return rows.map((row) => row.name);
+  }
+
+  /** Demand, in one statement; undefined while no rule is on demand. */
+  private async demandOnly(): Promise<string | undefined> {
     const row = await this.deps.db
       .selectNoFrom((eb) => [
         eb
@@ -2464,9 +2600,10 @@ function roomFor(
  * The machines a rule on demand calls for now (ADR 0258). It keeps every
  * machine still enrolling, every machine that enrolled and is still
  * connecting, every machine holding work, every machine idle for less than
- * `idleMinutes`, then the most recently idle up to `min`. A machine not
- * seen for `enrollMinutes` (since it enrolled, when it never connected) is
- * lost and kept for nothing. Work no connected machine has room for (each
+ * `idleMinutes`, then the most recently idle up to `min`. A machine that
+ * did not connect within `enrollMinutes` of enrolling, or that served and
+ * went unseen for the rule's `lostMinutes` (ADR 0346), is lost and kept
+ * for nothing. Work no connected machine has room for (each
  * piece charged its resources, or the machine's defaults), beyond one
  * piece per machine still enrolling or connecting, gets new machines up to
  * `max`, counting the rule's machines for whom it served before. A rule
@@ -2480,6 +2617,7 @@ function demandMachines(args: {
   loads: ReadonlyMap<string, MachineLoad>;
   waits: readonly DemandWait[];
   stalled: boolean;
+  liveness: ReadonlyMap<string, WorkerLiveness>;
 }): { machines: DesiredMachine[]; lost: string[] } {
   const { rule, definition, demand } = args;
   const scope: { group: string } | { projects: readonly string[] } =
@@ -2518,7 +2656,9 @@ function demandMachines(args: {
       !machine.name.startsWith(prefix) &&
       (machine.state === "pending" || machine.state === "enrolled"),
   ).length;
-  const lostAfter = demand.enrollMinutes * 60_000;
+  // One that never connected has its `enrollMinutes`; one that served is
+  // lost by its rule's `lostMinutes`, as its liveness says (ADR 0346).
+  const enrollWithin = demand.enrollMinutes * 60_000;
   const kept: ProvisionedMachine[] = [];
   /** Kept machines that will take a piece of work once they connect. */
   let coming = 0;
@@ -2533,7 +2673,12 @@ function demandMachines(args: {
     if (machine.state !== "enrolled") continue;
     const load = args.loads.get(machine.name);
     if (!load) continue;
-    if (!load.live && load.unseenForMs >= lostAfter) {
+    if (
+      !load.live &&
+      (load.neverConnected
+        ? load.unseenForMs >= enrollWithin
+        : args.liveness.get(machine.name)?.reach === "lost")
+    ) {
       lost.push(machine.name);
       continue;
     }

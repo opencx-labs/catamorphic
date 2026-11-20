@@ -533,6 +533,9 @@ async function createWorkServerInner(
   // A worker that connects may take chats waiting for a machine (ADR
   // 0258): this process's agent sweep hears it once the core is up.
   let workerConnected = () => {};
+  // Work retired from a machine that is gone (ADR 0346) is admitted again
+  // by the same sweep.
+  let workRetired = () => {};
   /** A provisioned machine's first call, for workflow classes (ADR 0327). */
   let machineFirstContact: (machine: {
     name: string;
@@ -552,6 +555,7 @@ async function createWorkServerInner(
     tenantId: SERVER_TENANT_ID,
     authorityId: hostId,
     connected: () => workerConnected(),
+    retired: () => workRetired(),
     firstContact: (machine) => machineFirstContact(machine),
     diskLow: (machine) => machineDiskLow(machine),
     log,
@@ -795,6 +799,7 @@ async function createWorkServerInner(
   disposers.push(() => worker.stop());
   const core = catamorphic.core;
   workerConnected = () => core.wakeups.notify("agent");
+  workRetired = () => core.wakeups.notify("agent");
   // Any replica recovers the work of replicas that are gone for good: runs
   // move to a live machine, chats are admitted again on their next turn.
   {

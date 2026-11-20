@@ -153,7 +153,11 @@ brain become replicas. Never add a replica just for capacity.
    and an agent command runs on the worker.
 
 Revoke a worker with `DELETE /_work/operator/workers/:name`; its credential and
-node stop working at once. Re-enroll the same name with a new code.
+node stop working at once, and what it held is retired: its chats' workspaces
+are released and their next messages run on another machine open to their
+owner, from their last save ([Lost machines](#lost-machines)). Re-enroll the
+same name with a new code: it starts as a new machine, with nothing of the
+old one's.
 
 ### Sealed operations and credential rotation
 
@@ -408,8 +412,10 @@ A pooled machine nobody holds takes no work. A group's shared machine
 belongs to that group: change a rule's group and its machines are released
 (and later reset), never handed to the new group. When no machine is free,
 a member waits: `GET /_work/operator/machine-rules` reports, for each rule,
-`desired`, `ready`, `starting` (created, not yet enrolled), `waiting` (no
-machine yet) and `released`; a `problem` when a rule names a class that is
+`desired`, `ready` (connected, by its lease), `starting` (created, not yet
+connected), `unreachable` and `lost` ([Lost machines](#lost-machines)),
+`waiting` (no machine yet) and `released`; a `problem` when a rule names a
+class that is
 no longer configured, whose machines are then left as they are; and a
 `failure` (`{ error, at }`) when something failed for the rule's machines
 in the latest pass.
@@ -447,10 +453,11 @@ work such as [pull request reviews](review-pull-requests.md):
   beyond one piece for each machine still enrolling or connecting, gets new
   machines, up to `max` (at most 100, counting machines the rule served
   under an earlier group or projects until they go). A machine that does
-  not enroll within `enrollMinutes` (default 15), or is not seen for that
-  long (since it enrolled, when it never connected), is destroyed and
-  replaced. A machine no longer wanted is destroyed at once: `retainDays`
-  does not apply.
+  not enroll and connect within `enrollMinutes` (default 15) is destroyed
+  and replaced; one that served and is then unseen for the rule's
+  `lostMinutes` (default 5) is lost, its work retired, and it is destroyed
+  ([Lost machines](#lost-machines)). A machine no longer wanted is
+  destroyed at once: `retainDays` does not apply.
 - A machine that enrolled but never connected within `enrollMinutes` stops
   the rule: it makes no more machines until you write the rule again (after
   fixing the cause), and its status says why. A machine serving a group, or
@@ -461,7 +468,8 @@ work such as [pull request reviews](review-pull-requests.md):
 - A machine is revoked only while nothing holds it: the drain and a new
   Allocation take the same lock, so work never lands on a machine being
   destroyed. One holding workspaces goes anyway only once it has been
-  disconnected and unseen for `enrollMinutes`.
+  disconnected and unseen for the rule's `lostMinutes`, and what it held is
+  retired then.
 - With a rule on demand, each replica looks at waiting work every 10 seconds
   and starts a pass when it changed since its latest pass looked. The rule's
   status adds `queued`: work waiting for one of its machines.
@@ -522,8 +530,43 @@ machine is destroyed or reset only after that, so a chat that keeps its
 workspace (`idleReleaseMinutes: 0`) holds it until the chat is closed or
 moved. `retainDays: 0` acts in the same pass otherwise. A machine that never
 enrolled holds nothing and goes at once. `GET /_work/operator/workers` shows
-each worker's `state` (`serving`, `released`, `resetting`, `free`,
-`destroying`, or `revoked`) and `released: { at, retainDays }`.
+each worker's `state` (`serving`, `connecting`, `unreachable`, `lost`,
+`released`, `resetting`, `free`, `destroying`, or `revoked`), `connected`
+(its lease is live) and `released: { at, retainDays }`.
+
+### Lost machines
+
+A machine that was serving and stops renewing its lease is `unreachable`.
+Unseen for its loss limit it is `lost` (ADR 0346): the rule's `lostMinutes`
+(default 5, at least 2), or 5 minutes for a worker no rule manages. Nobody
+has to act:
+
+- Its work is retired by any replica: every Allocation on it is released
+  (`node_lost`) with its capacity, and its cache copies are forgotten. A
+  message queued or sent afterwards is admitted on the replacement, or on
+  any machine open to its owner, and the workspace is rebuilt from the
+  chat's last save (its `sessions/<id>` branch); with none available it
+  waits as any work does. The chat's transcript says its machine was lost,
+  its workspace was rebuilt from its last save, and work done after that
+  save is gone. A turn that was running ends failed or interrupted, naming
+  the machine.
+- A machine a rule provisioned and still wants is revoked, destroyed on its
+  platform until that is done, and created again under the same name with a
+  new enrollment code and idempotency key. A pass starts within about ten
+  seconds of the loss. A workflow class's project hears `machine.lost`,
+  `machine.destroyed`, then `machine.created` for the replacement.
+- A worker you enrolled by hand is not replaced: there is no platform to ask.
+  It stays enrolled, shown as `lost`. When it comes back with its disk it
+  removes the sandboxes whose Allocations are gone and takes work again;
+  revoke it if it will not return. A held pooled machine is treated the
+  same way and keeps its place.
+
+Work done since a chat's last save is lost with the machine, even when the
+machine returns after its limit. Raise `lostMinutes` on a rule whose
+machines may be away for longer and whose unsaved work is costly; lower
+values replace a dead machine sooner. A worker that reports a sandbox it
+does not hold (its disk was replaced under it) costs only that chat's
+workspace: its Allocation is retired and the message runs on a rebuilt one.
 
 ### Passes
 
@@ -683,7 +726,8 @@ replica checks for lost replicas every ten seconds and recovers their work:
 - each chat's workspace on that replica is released; its next turn is
   admitted on a live machine and restores the workspace from its
   `sessions/<id>` branch. Chats on workers and on members' machines keep
-  their workspaces: any replica runs their turns;
+  their workspaces: any replica runs their turns. A worker that is itself
+  lost is handled the same way ([Lost machines](#lost-machines));
 - the lost machine disappears from `GET /_work/operator/machines`.
 
 Server agent sessions checkpoint to isolated `sessions/<id>` branches in the

@@ -372,11 +372,15 @@ describe("machine classes, pools and retention (ADR 0205)", () => {
       released: [],
       removed: [],
     });
+    // Enrolled, and not connected yet: status reads the lease (ADR 0346),
+    // so it is still starting, as the machine with a code waiting is.
     expect((await reconciler.status()).desk).toMatchObject({
       platform: "hetzner-cloud",
       desired: 2,
-      ready: 1,
-      starting: 1,
+      ready: 0,
+      starting: 2,
+      unreachable: 0,
+      lost: 0,
       waiting: 0,
     });
 
