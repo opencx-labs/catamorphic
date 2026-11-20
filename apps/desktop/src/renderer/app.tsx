@@ -722,6 +722,9 @@ export function App({
     runtimeProjectId,
   );
   const [workspaces, setWorkspaces] = useState<Record<string, Workspace>>({});
+  // Latest workspaces for opens that must not wait on a read.
+  const workspacesRef = useRef(workspaces);
+  workspacesRef.current = workspaces;
   const [projectModalOpen, setProjectModalOpen] = useState(false);
   // Remote projects (ADR 0055): connect from an invitation link; per-file
   // store history for the current project.
@@ -3031,7 +3034,13 @@ export function App({
         });
         return;
       }
-      const saved = await desktopApi.workspaceStateGet(target.projectId);
+      // A workspace this window already holds is the one the chat joins:
+      // it comes forward within the click, so what the person does next (a
+      // New Tab, another row) is never undone by this open landing after
+      // it. Only a project not restored here yet waits for its saved one.
+      const saved = workspacesRef.current[target.projectId]
+        ? null
+        : await desktopApi.workspaceStateGet(target.projectId);
       setWorkspaces((current) => {
         const targetWorkspace =
           current[target.projectId] ??
