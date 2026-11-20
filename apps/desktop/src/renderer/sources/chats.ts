@@ -169,6 +169,9 @@ export function chatsSource(
   const source: SectionSource = {
     title: kind === "chats" ? "Chats" : "Subsessions",
     empty: kind === "chats" ? "No chats yet." : "No subsessions yet.",
+    ...(kind === "subsessions"
+      ? { listsFrom: ({ session }) => session?.id }
+      : {}),
     capabilities: () => capabilitiesOf(source),
     load: async ({ parentId, cursor, session, signal, size }) => {
       const parent =
