@@ -62,7 +62,7 @@ import { registerDockIcon } from "./dock-icon.js";
 import { shouldUseE2ePlainTextEncryption } from "./e2e-safe-storage.js";
 import { isNamedError } from "./engine/channel.js";
 import { type Engine, engineInfo } from "./engine/client.js";
-import { startEngine } from "./engine/host.js";
+import { startEngine } from "./engine/start.js";
 import { GuestDocuments } from "./guest-documents.js";
 import { IncognitoSessionsStore } from "./incognito-sessions.js";
 import { registerIpcHandlers, type ServerState } from "./ipc.js";
