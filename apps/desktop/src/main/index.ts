@@ -397,6 +397,23 @@ const state: ServerState = {
   },
 };
 
+/**
+ * The database's thread ended while Work ran. Nothing can be read or saved
+ * from here on, so Work says so and closes rather than failing each request
+ * while it looks alive.
+ */
+function databaseLost(error: Error): void {
+  if (shuttingDown) return;
+  // Running without windows, there is nobody to tell: the next launch
+  // opens the database again.
+  if (!backgroundMode)
+    dialog.showErrorBox(
+      "Work has to close",
+      `Its database stopped unexpectedly. Open Work again to continue.\n\n${error.message}`,
+    );
+  app.quit();
+}
+
 async function openDesktopNotification(input: DesktopNotificationDestination) {
   const destination = desktopNotificationDestination(input);
   if (backgroundMode || shuttingDown) {
@@ -897,7 +914,11 @@ app.whenReady().then(async () => {
             ),
             [desktopProfileMcpProvider],
             undefined,
-            { openNotification: openDesktopNotification, launchNotificationId },
+            {
+              openNotification: openDesktopNotification,
+              launchNotificationId,
+              databaseLost,
+            },
           ),
       );
       server = await serverStarting;
@@ -1381,7 +1402,11 @@ app.whenReady().then(async () => {
               ? windows.profileFor(contents)
               : undefined;
           },
-          { openNotification: openDesktopNotification, launchNotificationId },
+          {
+            openNotification: openDesktopNotification,
+            launchNotificationId,
+            databaseLost,
+          },
         ),
     );
     server = await serverStarting;
