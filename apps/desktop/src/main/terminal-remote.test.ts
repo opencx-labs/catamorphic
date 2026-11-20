@@ -29,10 +29,16 @@ import { registerTerminalSupport as registerTerminalSupportWithPolicy } from "./
 const registerTerminalSupport = (
   ...args: Parameters<typeof registerTerminalSupportWithPolicy>
 ) =>
-  registerTerminalSupportWithPolicy(args[0], args[1], args[2], {
-    canAccessProject: () => true,
-    profileFor: () => "profile",
-  });
+  registerTerminalSupportWithPolicy(
+    args[0],
+    args[1],
+    args[2],
+    {
+      canAccessProject: () => true,
+      profileFor: () => "profile",
+    },
+    args[4],
+  );
 
 type Call = Parameters<RemoteTerminalRequest>[0];
 
@@ -75,19 +81,17 @@ describe("terminal tabs on a remote chat's workspace (ADR 0209)", () => {
       return { status: 200, body: { ok: true } };
     };
     const requested: Array<{ projectId: string; sessionId: string }> = [];
-    const state = {
-      current: {
-        remoteTerminalRequest: (input: {
-          projectId: string;
-          sessionId: string;
-        }) => {
-          requested.push(input);
-          return request;
-        },
+    const state: ServerState = { current: null, broadcast: () => {} };
+    const terminals = registerTerminalSupport(
+      state,
+      undefined,
+      undefined,
+      undefined,
+      (input) => {
+        requested.push(input);
+        return request;
       },
-      broadcast: () => {},
-    } as unknown as ServerState;
-    const terminals = registerTerminalSupport(state);
+    );
     const sent: Array<[string, unknown]> = [];
     const sender = Object.assign(new EventEmitter(), {
       isDestroyed: () => false,
@@ -156,11 +160,14 @@ describe("terminal tabs on a remote chat's workspace (ADR 0209)", () => {
           "This chat's workspace is not running; send it a message to start it.",
       },
     });
-    const state = {
-      current: { remoteTerminalRequest: () => request },
-      broadcast: () => {},
-    } as unknown as ServerState;
-    const terminals = registerTerminalSupport(state);
+    const state: ServerState = { current: null, broadcast: () => {} };
+    const terminals = registerTerminalSupport(
+      state,
+      undefined,
+      undefined,
+      undefined,
+      () => request,
+    );
     const sender = Object.assign(new EventEmitter(), {
       isDestroyed: () => false,
       send: () => {},
@@ -199,11 +206,14 @@ describe("terminal tabs on a remote chat's workspace (ADR 0209)", () => {
         );
       return { status: 200, body: { ok: true } };
     };
-    const state = {
-      current: { remoteTerminalRequest: () => request },
-      broadcast: () => {},
-    } as unknown as ServerState;
-    const terminals = registerTerminalSupport(state);
+    const state: ServerState = { current: null, broadcast: () => {} };
+    const terminals = registerTerminalSupport(
+      state,
+      undefined,
+      undefined,
+      undefined,
+      () => request,
+    );
     const sender = Object.assign(new EventEmitter(), {
       isDestroyed: () => false,
       send: () => {},

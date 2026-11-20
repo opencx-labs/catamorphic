@@ -26,7 +26,7 @@ export class GuestDocuments {
   constructor(
     private readonly deps: {
       api: () => { url: string; apiToken: string } | undefined;
-      views: () => McpAppViews | undefined;
+      views: () => Pick<McpAppViews, "document"> | undefined;
       permits: (ownerId: number, projectId: string) => boolean;
       projectRoot?: (projectId: string) => string | undefined;
     },
