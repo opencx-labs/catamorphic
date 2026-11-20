@@ -442,7 +442,8 @@ export const hydrateWorkspace = (
     ws.editors.length > 0;
   if (!anything) return null;
   if (!ws.activeTabKey && ws.tabs[0]) ws.activeTabKey = tabKey(ws.tabs[0]);
-  return ws;
+  // A snapshot saved before chips went with their chat may still hold some.
+  return dropOrphanedChips(ws);
 };
 
 /**
@@ -866,13 +867,45 @@ export function openChatInNewTab(
   };
 }
 
+/**
+ * A chip-only surface is reached through its chat's chips alone. Once the
+ * chat is gone nothing shows it, so it goes with the chat: a page no longer
+ * runs out of sight (or offers itself to a screen share), a shell ends. A
+ * note with unsaved edits comes back as a tab instead of losing them.
+ */
+function dropOrphanedChips(ws: Workspace): Workspace {
+  const chats = new Set(ws.chats.map((chat) => chat.localId));
+  const orphaned = (entry: { background?: boolean; chatLocalId?: string }) =>
+    entry.background === true &&
+    !(entry.chatLocalId && chats.has(entry.chatLocalId));
+  if (
+    !ws.browsers.some(orphaned) &&
+    !ws.terminals.some(orphaned) &&
+    !ws.editors.some(orphaned)
+  )
+    return ws;
+  return {
+    ...ws,
+    browsers: ws.browsers.filter((entry) => !orphaned(entry)),
+    terminals: ws.terminals.filter((entry) => !orphaned(entry)),
+    editors: ws.editors.flatMap((entry) => {
+      if (!orphaned(entry)) return [entry];
+      if (!entry.dirty) return [];
+      const { background: _background, chatLocalId: _chat, ...tab } = entry;
+      return [tab];
+    }),
+  };
+}
+
 /** All workspace mutations pass this boundary, including resource creation/close. */
 export function reconcileWorkspace(
   previous: Workspace,
   changed: Workspace,
 ): Workspace {
   if (previous === changed) return previous;
-  const updated = unpinClosed(closeLeftNewTabs(previous, changed));
+  const updated = dropOrphanedChips(
+    unpinClosed(closeLeftNewTabs(previous, changed)),
+  );
   const keys = orderedTabKeys(updated, { includeCollapsed: true });
   const floatingKey =
     updated.floatingKey &&

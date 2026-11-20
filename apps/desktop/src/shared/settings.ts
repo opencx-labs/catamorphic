@@ -126,6 +126,14 @@ export const SETTINGS = {
     valid: oneOf("start", "center"),
     options: { start: "Left", center: "Centered" },
   },
+  tabOverflow: {
+    label: "When tabs fill the bar",
+    description:
+      "Shrink every tab to fit, as Chrome does, or keep their size and scroll the bar.",
+    scopes: projectScopes,
+    valid: oneOf("scroll", "shrink"),
+    options: { scroll: "Scroll", shrink: "Shrink to fit" },
+  },
   tabPlacement: {
     label: "Open tabs",
     description:

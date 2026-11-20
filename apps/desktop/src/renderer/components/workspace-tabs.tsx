@@ -319,8 +319,15 @@ export function WorkspaceTabBar(props: Parameters<typeof TabStrip>[0]) {
   return <TabStrip {...props} tabs={tabs} />;
 }
 
+/**
+ * A shrunk tab whose title is cut below this width shows only its icon, as
+ * Chrome's narrowest tabs do, and its hover card names it.
+ */
+const NARROW_TITLE_PX = 20;
+
 function TabStrip({
   alignment = "start",
+  overflow = "scroll",
   tabs,
   activeKey,
   secondaryKey,
@@ -338,6 +345,11 @@ function TabStrip({
   tabActions,
 }: {
   alignment?: "start" | "center";
+  /**
+   * A full strip scrolls, or every tab but the pinned ones shrinks to fit
+   * (Chrome), down to its icon, before the strip scrolls.
+   */
+  overflow?: "scroll" | "shrink";
   tabs: WorkspaceTab[];
   activeKey?: string;
   /** The unfocused pane of a split view — styled active but muted. */
@@ -385,6 +397,52 @@ function TabStrip({
   const [entered, setEntered] = useState<ReadonlySet<string>>(() => new Set());
   // The tabs as last drawn: a departing tab collapses from its real width.
   const tabElementsRef = useRef(new Map<string, HTMLElement>());
+  // Shrinking, a tab too narrow for its title is marked so on the element
+  // itself: widths change on every resize and need no render.
+  const shrink = overflow === "shrink";
+  const narrowObserverRef = useRef<ResizeObserver | null>(null);
+  if (
+    shrink &&
+    !narrowObserverRef.current &&
+    typeof ResizeObserver !== "undefined"
+  )
+    narrowObserverRef.current = new ResizeObserver((entries) => {
+      for (const entry of entries) {
+        // Judged by the title, which keeps its layout while hidden: a
+        // tab with a short title is not narrow for being small.
+        const tab = entry.target;
+        if (!(tab instanceof HTMLElement)) continue;
+        const title = tab.querySelector(".workspace-tab-title");
+        const narrow =
+          title !== null &&
+          title.clientWidth < NARROW_TITLE_PX &&
+          title.scrollWidth > title.clientWidth;
+        tab.toggleAttribute("data-tab-narrow", narrow);
+        // Its icon moves to the middle of what is left of it (an icon's
+        // tab is 36px wide).
+        const width = entry.borderBoxSize[0]?.inlineSize ?? tab.offsetWidth;
+        if (narrow)
+          tab.style.setProperty(
+            "--tab-narrow-shift",
+            `${Math.max(0, (width - 36) / 2)}px`,
+          );
+        else tab.style.removeProperty("--tab-narrow-shift");
+      }
+    });
+  useEffect(() => {
+    const observer = narrowObserverRef.current;
+    if (!shrink || !observer) return;
+    for (const element of tabElementsRef.current.values())
+      observer.observe(element);
+    return () => {
+      observer.disconnect();
+      narrowObserverRef.current = null;
+      for (const element of tabElementsRef.current.values()) {
+        element.removeAttribute("data-tab-narrow");
+        element.style.removeProperty("--tab-narrow-shift");
+      }
+    };
+  }, [shrink]);
   const prevTabsRef = useRef(tabs);
   if (prevTabsRef.current !== tabs) {
     const pinned = new Map(
@@ -550,6 +608,7 @@ function TabStrip({
       className="app-no-drag flex min-w-0 flex-1 items-center gap-1 self-stretch overflow-x-auto overflow-y-hidden"
       data-tab-orientation="horizontal"
       data-tab-alignment={alignment}
+      data-tab-overflow={overflow}
       // A dragged tab hides every close button until it lands.
       data-tab-dragging={dragKey ? "" : undefined}
       onDragOver={(event) => {
@@ -642,10 +701,13 @@ function TabStrip({
             <div
               ref={(element) => {
                 if (!element) {
+                  const gone = tabElementsRef.current.get(id);
+                  if (gone) narrowObserverRef.current?.unobserve(gone);
                   tabElementsRef.current.delete(id);
                   return;
                 }
                 tabElementsRef.current.set(id, element);
+                narrowObserverRef.current?.observe(element);
                 // tab-out collapses from here (styles.css).
                 if (exiting && width !== undefined)
                   element.style.setProperty("--tab-width", `${width}px`);
@@ -748,7 +810,16 @@ function TabStrip({
               data-tab-drop={
                 dropAt?.key === key && dropAt.inside ? "inside" : undefined
               }
-              className={`workspace-tab group relative flex h-8 shrink-0 items-center border text-xs transition-[margin,border-radius,color,background-color,border-color] duration-150 rounded-lg ${
+              className={`workspace-tab group relative flex h-8 ${
+                // Shrinking, the tabs share a full strip equally (Chrome),
+                // each at most its own width and at least its icon (36px:
+                // border, padding and icon); the strip's spare room takes
+                // what is left. A pinned tab is already its icon, and a
+                // leaving one collapses from where it was.
+                shrink && !tab.pinned && !exiting
+                  ? "min-w-9 max-w-max shrink grow-[1000] basis-0"
+                  : "shrink-0"
+              } items-center border text-xs transition-[margin,border-radius,color,background-color,border-color] duration-150 rounded-lg ${
                 mergeRight ? "rounded-r-none border-r-0 " : ""
               }${mergeLeft ? "-ml-1 rounded-l-none border-l-0 " : ""}${
                 dragKey === key ? "opacity-50 " : ""
@@ -901,7 +972,7 @@ function TabStrip({
                   {!tab.pinned && (
                     <AnimatedTitle
                       text={tab.label ?? tab.name}
-                      className="workspace-tab-title min-w-3 max-w-40"
+                      className={`workspace-tab-title max-w-40 ${shrink ? "min-w-0" : "min-w-3"}`}
                     />
                   )}
                 </OpenResourceButton>
