@@ -1380,10 +1380,22 @@ async function* fakeScript(turn: FakeTurn): AsyncGenerator<FakeStep> {
       message: "Docs pages: Which pages should I keep?",
       delivery_mode: "steer",
     });
-    // Long enough for the question to start the assistant's turn before
-    // this session's end reaches it: they are two turns there. Ending at
-    // once, both can be read into one, which answers the later.
-    await turn.pause(2_000);
+    // The question is a turn of its own in the assistant's chat, and this
+    // session's end another. Ending before the first is answered, both can
+    // be read into one turn, which answers the later: wait for the answer.
+    for (let tries = 0; tries < 300 && !turn.interrupted(); tries++) {
+      const transcript = await turn.tool("read_project_session", {
+        session_id: assistantChat,
+      });
+      if (
+        JSON.stringify(transcript).includes(
+          "The docs session wants to know which pages to keep.",
+        )
+      )
+        break;
+      await turn.pause(100);
+    }
+    if (turn.interrupted()) return;
     yield { type: "text", content: "I asked which pages to keep." };
     return;
   }

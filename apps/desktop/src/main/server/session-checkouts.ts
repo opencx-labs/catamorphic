@@ -9,7 +9,7 @@ import {
   MANAGED_BRANCH_PREFIX,
   PROJECT_PERSONAL_DIR,
 } from "@catamorphic/workflow/project-layout";
-import type { PGlite } from "@electric-sql/pglite";
+import type { DatabaseStatements } from "./database-thread.js";
 import { runNativeWorkspaceSetup } from "./native-workspace-setup.js";
 
 const execFileAsync = promisify(execFile);
@@ -74,7 +74,7 @@ export interface ClassifiedRepositoryWorktree extends RepositoryWorktree {
 }
 
 interface SessionCheckoutsOptions {
-  pglite: Pick<PGlite, "query" | "exec">;
+  pglite: DatabaseStatements;
   worktreesDirectory: string;
   projectRoot: (projectId: string) => string | undefined;
   /**
@@ -301,7 +301,7 @@ export function parseWorktreePorcelain(output: string): RepositoryWorktree[] {
  * while the chat needs it (ADR 0215).
  */
 export class SessionCheckouts {
-  private readonly pglite: Pick<PGlite, "query" | "exec">;
+  private readonly pglite: DatabaseStatements;
   private readonly worktreesDirectory: string;
   private readonly projectRoot: SessionCheckoutsOptions["projectRoot"];
   private readonly sessionRunning: NonNullable<
@@ -1106,10 +1106,14 @@ export class SessionCheckouts {
       );
       await git(description.path, ["switch", "-c", branch]);
     }
-    const binding = await this.binding(input);
-    if (binding && binding.branch !== branch) {
-      await this.save({ ...binding, branch });
-    }
+    // One statement: a binding the chat gave up meanwhile (returned to the
+    // project folder in the same step) is not written back.
+    await this.pglite.query(
+      `UPDATE desktop.session_checkouts SET branch = $1
+       WHERE session_id = $2 AND project_id = $3
+         AND branch IS DISTINCT FROM $1`,
+      [branch, input.sessionId, input.projectId],
+    );
     return { path: description.path, branch };
   }
 

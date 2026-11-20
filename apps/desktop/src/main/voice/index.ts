@@ -540,11 +540,16 @@ export function registerVoiceSupport(deps: {
     voice.conversation !== null || voice.dictating !== null;
 
   /**
-   * Something said while voice reached its chat still has to go to it. The
-   * words seen so far are only a preview of a hold: nothing waits for them.
+   * Something said while voice reached its chat still has to go to it: a
+   * message, or dictated words that are final. The words seen so far are
+   * only a preview of a hold, and a hold let go at once ends in none.
    */
   const saidEarly = (voice: ActiveVoice) =>
-    voice.early.some((event) => event.type !== "transcript");
+    voice.early.some(
+      (event) =>
+        event.type === "utterance" ||
+        (event.type === "dictation" && event.final && event.text !== ""),
+    );
 
   const broadcastTranscript = (voice: ActiveVoice, words: VoiceTranscript) => {
     for (const window of BrowserWindow.getAllWindows())
@@ -1211,6 +1216,8 @@ export function registerVoiceSupport(deps: {
           !voice.busy &&
           !voice.ending &&
           voice.speaking.size === 0 &&
+          // What was said before this hold still waits for its chat.
+          !saidEarly(voice) &&
           press?.profileId !== voice.profileId
         ) {
           void stop();

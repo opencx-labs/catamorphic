@@ -1,4 +1,4 @@
-import type { PGlite } from "@electric-sql/pglite";
+import type { DatabaseStatements } from "./database-thread.js";
 
 /**
  * Tables whose rows are rewritten in place many times over their life: a
@@ -44,7 +44,7 @@ export class TableCompactor {
   private timer: ReturnType<typeof setInterval> | null = null;
 
   constructor(
-    private readonly pglite: Pick<PGlite, "query" | "exec">,
+    private readonly pglite: DatabaseStatements,
     private readonly options: {
       tables?: readonly string[];
       /** Smallest size worth a rewrite (tests lower it). */

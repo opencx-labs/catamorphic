@@ -242,6 +242,8 @@ export async function startEmbeddedServer(
       destination: DesktopNotificationDestination,
     ) => Promise<void>;
     launchNotificationId?: string;
+    /** The database's thread ended while the server ran: nothing works. */
+    databaseLost?: (error: Error) => void;
   } = {},
 ): Promise<EmbeddedServer> {
   validateDatabaseFiles(paths.db);
@@ -250,7 +252,12 @@ export async function startEmbeddedServer(
 
   // The database runs on a thread of its own: a statement never holds up
   // the thread that routes every window's input.
-  const pglite = openDatabaseThread(paths.db);
+  const pglite = openDatabaseThread(paths.db, {
+    onLost: (error) => {
+      console.error("[desktop] the database thread stopped:", error);
+      host.databaseLost?.(error);
+    },
+  });
   const db = new Kysely<DB>({
     dialect: new PGliteDialect({ pglite }),
     plugins: [new WithSchemaPlugin(DEFAULT_SCHEMA)],

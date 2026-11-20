@@ -1,7 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { discoverLocalFolder } from "@catamorphic/git";
-import type { PGlite } from "@electric-sql/pglite";
+import type { DatabaseStatements } from "./database-thread.js";
 
 /**
  * Desktop-owned mapping of projectId → user-visible folder. Lives in its own
@@ -20,7 +20,7 @@ export class ProjectRootsStore {
   private readonly automaticCheckpoints = new Set<string>();
   private registration = Promise.resolve();
 
-  constructor(private readonly pglite: Pick<PGlite, "query" | "exec">) {}
+  constructor(private readonly pglite: DatabaseStatements) {}
 
   async init(relocation?: { from: string; to: string }): Promise<void> {
     await this.pglite.exec(`

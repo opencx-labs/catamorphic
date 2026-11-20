@@ -14,12 +14,24 @@ export interface DatabaseServerPort {
 function failure(error: unknown): DatabaseFailure {
   if (!(error instanceof Error))
     return { name: "Error", message: String(error), fields: {} };
+  // A Postgres error's code, constraint and detail are own properties, and
+  // plain values. PGlite also hangs the statement's parameters on it: they
+  // can be megabytes, or something no channel can carry, and stay here.
+  const fields: Record<string, unknown> = {};
+  for (const [key, value] of Object.entries(error))
+    if (
+      value === null ||
+      typeof value === "string" ||
+      typeof value === "number" ||
+      typeof value === "boolean" ||
+      typeof value === "bigint"
+    )
+      fields[key] = value;
   return {
     name: error.name,
     message: error.message,
     ...(error.stack ? { stack: error.stack } : {}),
-    // A Postgres error's code, constraint and detail are own properties.
-    fields: { ...error },
+    fields,
   };
 }
 
@@ -67,7 +79,11 @@ export function serveDatabase({
     if (request.type === "begin") return begin(request.transaction);
     if (request.type === "commit" || request.type === "rollback") {
       const held = open.get(request.transaction);
-      if (!held) return undefined;
+      if (!held) {
+        // Nothing is left to roll back; nothing was committed either.
+        if (request.type === "rollback") return undefined;
+        throw new Error("The transaction has already ended");
+      }
       held.end(request.type);
       return held.closed;
     }
@@ -82,15 +98,21 @@ export function serveDatabase({
     });
   };
 
+  // Every request is answered: one left waiting holds its caller, and
+  // behind a Kysely caller every statement after it.
+  const refuse = (id: number, error: unknown) =>
+    port.postMessage({ id, type: "error", error: failure(error) });
   port.on("message", (request) => {
     handle(request).then(
-      (value) => port.postMessage({ id: request.id, type: "result", value }),
-      (error: unknown) =>
-        port.postMessage({
-          id: request.id,
-          type: "error",
-          error: failure(error),
-        }),
+      (value) => {
+        try {
+          port.postMessage({ id: request.id, type: "result", value });
+        } catch (error) {
+          // A value the channel cannot carry.
+          refuse(request.id, error);
+        }
+      },
+      (error: unknown) => refuse(request.id, error),
     );
   });
   pglite.waitReady.then(

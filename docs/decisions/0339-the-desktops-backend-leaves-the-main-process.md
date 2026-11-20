@@ -1,6 +1,6 @@
 # 0339 — The desktop's backend leaves the main process: its database first, then the server
 
-- **Status:** Proposed
+- **Status:** Accepted
 - **Date:** 2026-11-19
 
 ## Context
@@ -76,8 +76,8 @@ Considered:
 - Step 1 is in this change. Its unit tests run the protocol over a
   channel in one thread against a real PGlite (statements, value types,
   commit and rollback, Postgres errors, ordering, Kysely with savepoints,
-  loss of the thread), and the desktop's end-to-end suite runs on the
-  thread itself. On Linux with Electron 45.3, a worker whose script sits
+  loss of the thread, closing, what the channel cannot carry), and the
+  desktop's end-to-end suite runs on the thread itself. On Linux with Electron 45.3, a worker whose script sits
   in the app archive starts and opens PGlite from the unpacked folder
   beside it. A signed macOS build has not been run with it: the packaged
   startup smoke covers that before a release carries this.
@@ -86,8 +86,15 @@ Considered:
   event loop. Now requests interleave between statements, as they always
   have on a Postgres server. Core holds its transactions and locks for
   that case; the desktop's own stores issue single statements or hold
-  their own locks. One scripted test agent relied on the old order and
-  now states it.
+  their own locks. Four places relied on the old order and now state it:
+  a quick click on the microphone, which a preview of its own first words
+  kept on; the pull request tool, which read a chat's checkout and then
+  wrote its branch (one statement now); and two end-to-end tests, one
+  attaching to the chat it opened and one scripted agent ending before its
+  question was answered.
+- A database thread that ends while Work runs is not replaced under its
+  callers: every statement after it fails, so Work says its database
+  stopped and closes. One that never opens fails the boot, as before.
 - A statement's result is copied between threads. Copy included, opening
   a 1,000-item chat costs the main thread about 21 ms where it cost 41.
 - The stock server opens PGlite the same way and serves several people

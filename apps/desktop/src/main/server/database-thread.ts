@@ -1,6 +1,6 @@
 import path from "node:path";
 import { Worker } from "node:worker_threads";
-import type { PGlite, Results } from "@electric-sql/pglite";
+import type { Results } from "@electric-sql/pglite";
 import type {
   DatabaseFailure,
   DatabaseReply,
@@ -14,14 +14,22 @@ type Statement = DatabaseRequest extends infer Request
     : never
   : never;
 
-/** A transaction on the database's thread. */
-export interface DatabaseThreadTransaction {
+/**
+ * Statements as the database's thread answers them. Only what crosses the
+ * channel is offered: PGlite's parsers, serializers and notices are
+ * functions, and stay on the thread that runs the statement.
+ */
+export interface DatabaseStatements {
   query<T>(
     sql: string,
     params?: unknown[],
     options?: { rowMode?: "array" | "object" },
   ): Promise<Results<T>>;
   exec(sql: string): Promise<Array<Results>>;
+}
+
+/** A transaction on the database's thread. */
+export interface DatabaseThreadTransaction extends DatabaseStatements {
   rollback(): Promise<void>;
 }
 
@@ -30,7 +38,7 @@ export interface DatabaseThreadTransaction {
  * (`query`, `exec`, a transaction, `close`), answered by the database's own
  * thread (`database-thread-worker.ts`).
  */
-export interface DatabaseThread extends Pick<PGlite, "query" | "exec"> {
+export interface DatabaseThread extends DatabaseStatements {
   readonly closed: boolean;
   readonly ready: boolean;
   readonly waitReady: Promise<void>;
@@ -75,16 +83,21 @@ export interface DatabaseClientPort {
 /**
  * The database behind a channel (`serveDatabase` answers the other end).
  * `lost` reports the other end going away without being asked to; `stop`
- * ends it once the database has closed.
+ * ends it once the database has closed, or once it is lost. `onLost` hears
+ * of a database that was open and is gone: nothing can be read or written
+ * from then on, so its owner must say so. One that never opened fails
+ * `waitReady` and its first statement instead.
  */
 export function connectDatabaseThread({
   port,
   lost,
   stop,
+  onLost,
 }: {
   port: DatabaseClientPort;
   lost: (listener: (error: Error) => void) => void;
   stop: () => Promise<unknown>;
+  onLost?: (error: Error) => void;
 }): DatabaseThread {
   const waiting = new Map<
     number,
@@ -93,6 +106,7 @@ export function connectDatabaseThread({
   let nextRequest = 1;
   let nextTransaction = 1;
   let closed = false;
+  let closing: Promise<void> | undefined;
   let ready = false;
   let gone: Error | undefined;
   let becameReady: () => void = () => {};
@@ -103,13 +117,19 @@ export function connectDatabaseThread({
   });
   // Nobody may be waiting yet when the database fails to open.
   waitReady.catch(() => {});
+  const failWaiting = (error: Error) => {
+    for (const request of waiting.values()) request.reject(error);
+    waiting.clear();
+  };
   const lose = (error: Error) => {
     if (closed) return;
     gone = error;
     closed = true;
     failedToOpen(error);
-    for (const request of waiting.values()) request.reject(error);
-    waiting.clear();
+    failWaiting(error);
+    // A thread that failed to open its database is still running.
+    void stop().catch(() => {});
+    if (ready) onLost?.(error);
   };
   lost(lose);
   port.on("message", (reply) => {
@@ -130,13 +150,23 @@ export function connectDatabaseThread({
 
   function ask<T>(statement: Statement, read: (value: unknown) => T) {
     return new Promise<T>((resolve, reject) => {
-      if (closed) {
+      // A transaction open as the database closes still ends; nothing new
+      // begins behind the close.
+      const begins =
+        !("transaction" in statement) || statement.type === "begin";
+      if (closed || (closing && begins)) {
         reject(gone ?? new Error("The database is closed"));
         return;
       }
       const id = nextRequest++;
       waiting.set(id, { resolve: (value) => resolve(read(value)), reject });
-      port.postMessage({ ...statement, id });
+      try {
+        port.postMessage({ ...statement, id });
+      } catch (error) {
+        // A parameter that cannot cross the channel: nothing was sent.
+        waiting.delete(id);
+        reject(error instanceof Error ? error : new Error(String(error)));
+      }
     });
   }
   const nothing = () => undefined;
@@ -196,17 +226,33 @@ export function connectDatabaseThread({
         throw error;
       }
     },
-    async close() {
-      if (closed) return;
-      await ask({ type: "close" }, nothing);
-      closed = true;
-      await stop();
+    close() {
+      if (closing) return closing;
+      if (closed) return Promise.resolve();
+      const asked = ask({ type: "close" }, nothing);
+      closing = (async () => {
+        try {
+          await asked;
+        } finally {
+          closed = true;
+          await stop();
+          // What was sent behind the close has no thread left to answer it.
+          failWaiting(new Error("The database is closed"));
+        }
+      })();
+      return closing;
     },
   };
 }
 
-/** Open the database at `dataDir` on a thread of its own. */
-export function openDatabaseThread(dataDir: string): DatabaseThread {
+/**
+ * Open the database at `dataDir` on a thread of its own. `onLost` hears of
+ * the thread ending after it opened the database, which nothing asked for.
+ */
+export function openDatabaseThread(
+  dataDir: string,
+  { onLost }: { onLost?: (error: Error) => void } = {},
+): DatabaseThread {
   // The worker is an entry of the main build, beside `index.js`; this
   // module may be bundled into a chunk one folder below it.
   const here = import.meta.dirname;
@@ -226,5 +272,6 @@ export function openDatabaseThread(dataDir: string): DatabaseThread {
       );
     },
     stop: () => worker.terminate(),
+    ...(onLost ? { onLost } : {}),
   });
 }

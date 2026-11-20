@@ -5,6 +5,7 @@ import path from "node:path";
 // Fail the build here, before packaging or waiting for Electron's CDP handshake.
 for (const entry of [
   "main/index.js",
+  "main/database-thread-worker.js",
   "main/sidebar-source-worker.js",
   "main/translation-worker.js",
   "main/customization-tool.mjs",
