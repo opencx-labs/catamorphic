@@ -224,6 +224,11 @@ import { LOCAL_CHATS_POLL_MS } from "./lib/session-change-hints.js";
 import { sessionLabel, sessionPresentations } from "./lib/session-label.js";
 import type { SidebarMotion } from "./lib/sidebar-motion.js";
 import {
+  useLatestHandlers,
+  useStableEntries,
+  useStableValue,
+} from "./lib/stable.js";
+import {
   EMPTY_SURFACE_HISTORY,
   restoreSurface,
   type SurfaceHistory,
@@ -298,6 +303,11 @@ import {
   type Workspace,
   workspaceLayout,
 } from "./lib/workspace-state.js";
+import {
+  allWorkspaces,
+  createWorkspaceStore,
+  useWorkspaces,
+} from "./lib/workspace-store.js";
 import { type PaletteHost, PaletteHostProvider } from "./palette/host.js";
 import { loadSourceRows } from "./palette/sources.js";
 import type { PaletteChoiceMode, PaletteModeRequest } from "./palette/types.js";
@@ -721,7 +731,12 @@ export function App({
   const [activeProjectId, setActiveProjectId] = useState<string | undefined>(
     runtimeProjectId,
   );
-  const [workspaces, setWorkspaces] = useState<Record<string, Workspace>>({});
+  // The workspaces live in a store (ADR 0340). This component follows all
+  // of them while it still draws the window; what changes them reads the
+  // store, never a render's copy.
+  const [workspaceStore] = useState(createWorkspaceStore);
+  const workspaces = useWorkspaces(workspaceStore, allWorkspaces);
+  const setWorkspaces = workspaceStore.update;
   const [projectModalOpen, setProjectModalOpen] = useState(false);
   // Remote projects (ADR 0055): connect from an invitation link; per-file
   // store history for the current project.
@@ -964,7 +979,7 @@ export function App({
         ]),
       ),
     );
-  }, [profilesData]);
+  }, [profilesData, setWorkspaces]);
 
   // The active profile's AI agents (per-profile agents.json).
   const [agentsData, setAgentsData] = useState<AgentsData | null>(null);
@@ -1829,7 +1844,7 @@ export function App({
           : { ...current, [workspaceKey]: next };
       });
     },
-    [projectId, workspaceKey, defaultWorkspaceFor],
+    [projectId, workspaceKey, defaultWorkspaceFor, setWorkspaces],
   );
 
   /**
@@ -1846,7 +1861,7 @@ export function App({
           ? current
           : Object.fromEntries(next);
       }),
-    [],
+    [setWorkspaces],
   );
 
   const floatingMotion = useFloatingMotion(
@@ -1921,7 +1936,7 @@ export function App({
           (current) => new Set([...current, projectId]),
         );
       });
-  }, [projectId]);
+  }, [projectId, setWorkspaces]);
   // Agent calls held while the project moved here go on from now.
   useEffect(() => {
     if (projectId && workspaceReady) void desktopApi.workspaceReady(projectId);
@@ -5444,6 +5459,7 @@ export function App({
     projects.length,
     queryClient,
     initialProjectError,
+    setWorkspaces,
   ]);
 
   const onProjectDeleted = (deletedId: string) => {
@@ -6541,7 +6557,7 @@ export function App({
     ].map((tab) => [tabKey(tab), tab]),
   );
   const groupOfKey = new Map<string, string>();
-  const tabGroups = workspace.chats
+  const currentTabGroups = workspace.chats
     .filter((chat) => chat.mode === "tab")
     .map((chat) => {
       const memberKeys = attachedTabKeys(workspace, chat.localId);
@@ -6557,7 +6573,14 @@ export function App({
       };
     })
     .filter((group) => group.memberKeys.length > 0);
-  const allTabs = orderedTabKeys(workspace)
+  // The strip, the tabs list and the palette compare these by identity: a
+  // tab's entry, and the list, are the ones last built while nothing about
+  // them changed, so a render that changes no tab draws none again.
+  const tabGroups = useStableValue(
+    currentTabGroups,
+    (a, b) => JSON.stringify(a) === JSON.stringify(b),
+  );
+  const currentTabs = orderedTabKeys(workspace)
     .map((key) => {
       const tab = tabByKey.get(key);
       if (!tab) return null;
@@ -6572,6 +6595,7 @@ export function App({
         : tab;
     })
     .filter((tab): tab is WorkspaceTab => tab !== null);
+  const allTabs = useStableEntries(currentTabs, tabKey);
   const _activeChatTabId = focusedTabKey?.startsWith("chat:")
     ? focusedTabKey.slice("chat:".length)
     : undefined;
@@ -7843,6 +7867,56 @@ export function App({
         }
       : undefined;
   };
+  // The strip keeps these for its life and runs the latest: a render of
+  // the window that changes no tab does not draw the strip again.
+  const tabStrip = useLatestHandlers({
+    onSelect: (key: string, mode?: CommitMode) =>
+      mode === "side" || mode === "floating"
+        ? openSurface(key, mode)
+        : selectTab(key),
+    onClose: (key: string) => closeTab(key),
+    onNew: openPaletteTab,
+    onToggleGroup: toggleChatGroup,
+    onReorder: reorderTab,
+    onAttach: attachTab,
+    attachable: (key: string, chatKey: string | null) =>
+      !attachBlocker(
+        workspaceRef.current,
+        key,
+        chatKey?.startsWith("chat:") ? chatKey.slice("chat:".length) : null,
+      ),
+    // An editor's tab acts on its file too (copy its path, show it, copy it).
+    tabFile: (key: string) => {
+      const filePath = filePathForKey(key);
+      return filePath && projectId ? { projectId, filePath } : undefined;
+    },
+    // Built as a tab's menu opens, from the window as it is then.
+    tabActions: (key: string): ResourceActions => {
+      const verbs = tabVerbs(key);
+      return {
+        entries: menuGroups<ContextMenuEntry>(
+          verbs?.entries ?? [],
+          tabPinEntries({
+            key,
+            pinned: workspace.pinnedTabKeys.includes(key),
+            blocker: pinBlocker(workspace, key),
+          }),
+          tabCloseEntries({ key, tabs: allTabs, groups: tabGroups }),
+        ),
+        onAction: (action) => {
+          const pin = tabPinRequest(action);
+          const close = tabCloseRequest({ action, key, groups: tabGroups });
+          if (pin !== undefined) pinTab(key, pin);
+          else if (close) closeTab(close.key, { scope: close.scope });
+          else verbs?.onAction(action);
+        },
+      };
+    },
+    onDragStateChange: (key: string | null) => {
+      setTabDragKey(key);
+      if (!key) setDropSideHover(null);
+    },
+  });
   const workspaceTabBar = (
     <WorkspaceTabBar
       alignment={prefs?.tabAlignment ?? "start"}
@@ -7851,53 +7925,16 @@ export function App({
       secondaryKey={splitCompanionKey}
       highlightKey={targetedTabKey}
       groups={tabGroups}
-      onSelect={(key, mode) =>
-        mode === "side" || mode === "floating"
-          ? openSurface(key, mode)
-          : selectTab(key)
-      }
-      onClose={closeTab}
-      onNew={openPaletteTab}
-      onToggleGroup={toggleChatGroup}
-      onReorder={reorderTab}
-      onAttach={attachTab}
-      attachable={(key, chatKey) =>
-        !attachBlocker(
-          workspaceRef.current,
-          key,
-          chatKey?.startsWith("chat:") ? chatKey.slice("chat:".length) : null,
-        )
-      }
-      // An editor's tab acts on its file too (copy its path, show it, copy it).
-      tabFile={(key) => {
-        const filePath = filePathForKey(key);
-        return filePath && projectId ? { projectId, filePath } : undefined;
-      }}
-      tabActions={(key) => {
-        const verbs = tabVerbs(key);
-        return {
-          entries: menuGroups<ContextMenuEntry>(
-            verbs?.entries ?? [],
-            tabPinEntries({
-              key,
-              pinned: workspace.pinnedTabKeys.includes(key),
-              blocker: pinBlocker(workspace, key),
-            }),
-            tabCloseEntries({ key, tabs: allTabs, groups: tabGroups }),
-          ),
-          onAction: (action) => {
-            const pin = tabPinRequest(action);
-            const close = tabCloseRequest({ action, key, groups: tabGroups });
-            if (pin !== undefined) pinTab(key, pin);
-            else if (close) closeTab(close.key, { scope: close.scope });
-            else verbs?.onAction(action);
-          },
-        };
-      }}
-      onDragStateChange={(key) => {
-        setTabDragKey(key);
-        if (!key) setDropSideHover(null);
-      }}
+      onSelect={tabStrip.onSelect}
+      onClose={tabStrip.onClose}
+      onNew={tabStrip.onNew}
+      onToggleGroup={tabStrip.onToggleGroup}
+      onReorder={tabStrip.onReorder}
+      onAttach={tabStrip.onAttach}
+      attachable={tabStrip.attachable}
+      tabFile={tabStrip.tabFile}
+      tabActions={tabStrip.tabActions}
+      onDragStateChange={tabStrip.onDragStateChange}
     />
   );
   const projectControls = (
