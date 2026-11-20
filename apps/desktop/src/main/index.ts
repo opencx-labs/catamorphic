@@ -210,6 +210,9 @@ const e2eDataDir = process.env.CATAMORPHIC_E2E_DATA_DIR;
 // alert, which holds the main thread: the app could not quit, and the run
 // ended killed with the error unknown (workspaces on macOS CI).
 if (e2eDataDir) {
+  // Whoever started the work is more than ten frames up from where a
+  // statement fails, and the default cuts the report off below it.
+  Error.stackTraceLimit = 50;
   const report = (kind: string, error: unknown) =>
     console.error(
       `[desktop] Main process ${kind}:`,

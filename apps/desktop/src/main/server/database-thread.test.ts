@@ -49,8 +49,10 @@ function connect() {
 function connectByHand(answers: ReadonlyArray<DatabaseRequest["type"]>) {
   const { port1, port2 } = new MessageChannel();
   const lostWith: Error[] = [];
+  const asked: DatabaseRequest[] = [];
   let stops = 0;
   port2.on("message", (request: DatabaseRequest) => {
+    asked.push(request);
     if (answers.includes(request.type))
       port2.postMessage({ id: request.id, type: "result", value: undefined });
   });
@@ -63,10 +65,13 @@ function connectByHand(answers: ReadonlyArray<DatabaseRequest["type"]>) {
       port2.close();
     },
     onLost: (error) => lostWith.push(error),
+    // Long enough to be quiet in, short enough to wait out.
+    quietWaitsMs: 100,
   });
   return {
     database,
     say: (reply: DatabaseReply) => port2.postMessage(reply),
+    asked,
     lostWith,
     stops: () => stops,
   };
@@ -86,8 +91,8 @@ beforeEach(async () => {
 });
 afterEach(async () => {
   await database.close().catch(() => {});
-  // A thread a test lost left its database open.
-  if (!pglite.closed) await pglite.close();
+  // A thread a test lost left its database open, or closing.
+  if (!pglite.closed) await pglite.close().catch(() => {});
 });
 
 const bodies = async () =>
@@ -255,6 +260,67 @@ describe("the database on its own thread", () => {
     expect(unopened.lostWith).toEqual([]);
   });
 
+  it("goes quiet before Kysely is destroyed, so work the quit caught between two transactions begins the second", async () => {
+    const db = new Kysely<{ notes: { id: number; body: string } }>({
+      dialect: new PGliteDialect({ pglite: database }),
+    });
+    // As core delivers work to a chat while the app quits: one transaction,
+    // then another, begun as the first is answered.
+    const work = (async () => {
+      await db.transaction().execute(async (trx) => {
+        await trx
+          .insertInto("notes")
+          .values({ id: 1, body: "first" })
+          .execute();
+      });
+      await db.transaction().execute(async (trx) => {
+        await trx
+          .insertInto("notes")
+          .values({ id: 2, body: "second" })
+          .execute();
+      });
+      const rows = await db
+        .selectFrom("notes")
+        .select("body")
+        .orderBy("id")
+        .execute();
+      return rows.map((row) => row.body);
+    })();
+    // The app's last shutdown step (`boot.ts`).
+    const shutdown = (async () => {
+      await database.quiet();
+      await db.destroy();
+    })();
+    expect(await work).toEqual(["first", "second"]);
+    await shutdown;
+    expect(database.closed).toBe(true);
+    expect(pglite.closed).toBe(true);
+    await expect(db.selectFrom("notes").selectAll().execute()).rejects.toThrow(
+      "driver has already been destroyed",
+    );
+    expect(lostWith).toEqual([]);
+  });
+
+  it("stops waiting for work that never goes quiet, and fails what the thread never answered", async () => {
+    const stuck = connectByHand(["begin", "close"]);
+    stuck.say({ type: "ready" });
+    await stuck.database.waitReady;
+    const failed = expect(
+      stuck.database.transaction(async (transaction) => {
+        // Never answered.
+        await transaction.query("SELECT 1");
+      }),
+    ).rejects.toThrow("The database is closed");
+    await stuck.database.quiet();
+    expect(stuck.asked.map((request) => request.type)).toEqual([
+      "begin",
+      "query",
+    ]);
+    await stuck.database.close();
+    await failed;
+    expect(stuck.stops()).toBe(1);
+  });
+
   it("refuses statements once closing, and closes once however often it is asked", async () => {
     const closing = database.close();
     await expect(database.query("SELECT 1")).rejects.toThrow(
@@ -273,20 +339,34 @@ describe("the database on its own thread", () => {
     expect(lostWith).toEqual([]);
   });
 
-  it("fails a statement sent behind the close that the thread never answered", async () => {
-    const quiet = connectByHand(["begin", "close"]);
-    quiet.say({ type: "ready" });
-    await quiet.database.waitReady;
-    let closing: Promise<void> | undefined;
+  it("fails a Kysely transaction that cannot begin, and leaves Kysely's connection free", async () => {
+    const db = new Kysely<{ notes: { id: number; body: string } }>({
+      dialect: new PGliteDialect({ pglite: database }),
+    });
+    await db.selectFrom("notes").selectAll().execute();
+    lose(new Error("The database thread stopped"));
+    // Kysely's driver waits for the transaction's callback and for nothing
+    // else: refused before it, the caller would wait for good.
     await expect(
-      quiet.database.transaction(async (transaction) => {
-        closing = quiet.database.close();
-        // Its transaction is open, so it is sent; the thread ends first.
-        await transaction.query("SELECT 1");
+      db.transaction().execute(async (trx) => {
+        await trx.insertInto("notes").values({ id: 1, body: "x" }).execute();
       }),
-    ).rejects.toThrow("The database is closed");
+    ).rejects.toThrow("The database thread stopped");
+    await expect(db.transaction().execute(async () => {})).rejects.toThrow(
+      "The database thread stopped",
+    );
+    // The next caller is not held behind either of them.
+    await expect(db.selectFrom("notes").selectAll().execute()).rejects.toThrow(
+      "The database thread stopped",
+    );
+  });
+
+  it("closes without complaint when the thread is lost as it closes", async () => {
+    const closing = database.close();
+    lose(new Error("The database thread stopped"));
     await closing;
-    expect(quiet.stops()).toBe(1);
+    expect(database.closed).toBe(true);
+    expect(lostWith).toHaveLength(1);
   });
 
   it("answers a commit for a transaction that is not open with an error, and a rollback with nothing", async () => {

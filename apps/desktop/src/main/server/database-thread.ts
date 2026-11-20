@@ -45,6 +45,12 @@ export interface DatabaseThread extends DatabaseStatements {
   transaction<T>(
     callback: (transaction: DatabaseThreadTransaction) => Promise<T>,
   ): Promise<T>;
+  /**
+   * Resolves once the work in flight has gone quiet, or has been waited for
+   * long enough. For whoever closes the database: before it stops what
+   * sits above this (Kysely refuses new work the moment it is destroyed).
+   */
+  quiet(): Promise<void>;
   close(): Promise<void>;
 }
 
@@ -80,24 +86,30 @@ export interface DatabaseClientPort {
   on(event: "message", listener: (reply: DatabaseReply) => void): unknown;
 }
 
+/** How long nothing must be asked of the database before it closes. */
+const QUIET_MS = 20;
+
 /**
  * The database behind a channel (`serveDatabase` answers the other end).
  * `lost` reports the other end going away without being asked to; `stop`
  * ends it once the database has closed, or once it is lost. `onLost` hears
  * of a database that was open and is gone: nothing can be read or written
  * from then on, so its owner must say so. One that never opened fails
- * `waitReady` and its first statement instead.
+ * `waitReady` and its first statement instead. `quiet` waits up to
+ * `quietWaitsMs` for the work in flight.
  */
 export function connectDatabaseThread({
   port,
   lost,
   stop,
   onLost,
+  quietWaitsMs = 1_000,
 }: {
   port: DatabaseClientPort;
   lost: (listener: (error: Error) => void) => void;
   stop: () => Promise<unknown>;
   onLost?: (error: Error) => void;
+  quietWaitsMs?: number;
 }): DatabaseThread {
   const waiting = new Map<
     number,
@@ -107,6 +119,9 @@ export function connectDatabaseThread({
   let nextTransaction = 1;
   let closed = false;
   let closing: Promise<void> | undefined;
+  // The close has been sent: nothing new begins behind it.
+  let refusing = false;
+  const transactions = new Set<number>();
   let ready = false;
   let gone: Error | undefined;
   let becameReady: () => void = () => {};
@@ -154,7 +169,7 @@ export function connectDatabaseThread({
       // begins behind the close.
       const begins =
         !("transaction" in statement) || statement.type === "begin";
-      if (closed || (closing && begins)) {
+      if (closed || (refusing && begins)) {
         reject(gone ?? new Error("The database is closed"));
         return;
       }
@@ -170,6 +185,22 @@ export function connectDatabaseThread({
     });
   }
   const nothing = () => undefined;
+  /**
+   * Work in flight when the app quits finishes what it started: a write and
+   * the statements that follow it are sent one after another, each within
+   * the turn its predecessor was answered in. The database is quiet once
+   * nothing waits, no transaction is open and nothing new was asked for
+   * `QUIET_MS`.
+   */
+  const quiet = async () => {
+    const deadline = Date.now() + quietWaitsMs;
+    for (let asked = -1; !closed && Date.now() < deadline; ) {
+      const idle = waiting.size === 0 && transactions.size === 0;
+      if (idle && asked === nextRequest) return;
+      asked = nextRequest;
+      await new Promise((resolve) => setTimeout(resolve, QUIET_MS));
+    }
+  };
   const statements = (transaction?: number) => ({
     query: <T>(
       sql: string,
@@ -208,7 +239,23 @@ export function connectDatabaseThread({
     waitReady,
     async transaction(callback) {
       const transaction = nextTransaction++;
-      await ask({ type: "begin", transaction }, nothing);
+      try {
+        await ask({ type: "begin", transaction }, nothing);
+      } catch (error) {
+        // The callback runs all the same. Kysely's PGlite driver waits for
+        // it to be entered and listens for nothing else: a transaction
+        // refused before it would be a rejection nobody hears and a caller
+        // that waits for good, holding Kysely's one connection. One that
+        // could not begin fails each of its statements, and its end.
+        const refused = () => Promise.reject(error);
+        await callback({
+          query: refused,
+          exec: refused,
+          rollback: async () => {},
+        });
+        throw error;
+      }
+      transactions.add(transaction);
       let rolledBack = false;
       try {
         const result = await callback({
@@ -224,15 +271,22 @@ export function connectDatabaseThread({
         if (!rolledBack)
           await ask({ type: "rollback", transaction }, nothing).catch(nothing);
         throw error;
+      } finally {
+        transactions.delete(transaction);
       }
     },
+    quiet,
     close() {
       if (closing) return closing;
       if (closed) return Promise.resolve();
       const asked = ask({ type: "close" }, nothing);
+      refusing = true;
       closing = (async () => {
         try {
           await asked;
+        } catch (error) {
+          // A thread lost as it closed: its owner has heard, and it is gone.
+          if (error !== gone) throw error;
         } finally {
           closed = true;
           await stop();
