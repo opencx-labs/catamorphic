@@ -103,15 +103,17 @@ export class SimulatedWork {
   planError: string | null = null;
   people: PersonFacts[];
   private clock: number;
+  // Replica memory (single process): test fixtures are never shared by a server.
   private readonly machines = new Map<string, SimulatedMachine>();
   private waitingWork: WaitingWork[] = [];
+  // Replica memory (single process): placement decisions in this simulation.
   private readonly waitingFor = new Map<
     string,
     { name: string; state: "starting" | "resuming" }
   >();
   private workCount = 0;
   private generations = 0;
-  /** Machines that never connect once created, by name. */
+  // Replica memory (single process): machines that a test keeps disconnected.
   private readonly neverConnect = new Set<string>();
   /** A create whose answer is lost on its way back, once. */
   private answerLost = false;

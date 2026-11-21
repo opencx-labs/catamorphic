@@ -400,6 +400,7 @@ describe.skipIf(!databaseUrl)("reviewing pull requests (#118)", () => {
   const workers: Array<Awaited<ReturnType<typeof startWorkWorker>>> = [];
   let root: string;
   let workerDir: string;
+  let reviewEnrollment: string | undefined;
   let server: WorkServer;
   let upstream: http.Server;
   let gitBase: string;
@@ -637,6 +638,24 @@ describe.skipIf(!databaseUrl)("reviewing pull requests (#118)", () => {
         },
       }),
       hooks: {
+        machines: {
+          plan: async () =>
+            projectId
+              ? [
+                  {
+                    name: "review-1",
+                    labels: { pool: "review" },
+                    for: [{ project: projectId }],
+                    trusted: true,
+                  },
+                ]
+              : [],
+          create: async ({ name, enrollment }) => {
+            reviewEnrollment = enrollment.code;
+            return { ref: `local-${name}` };
+          },
+          destroy: async () => ({ done: true }),
+        },
         github: {
           apiBaseUrl: "https://api.github.test",
           webBaseUrl: gitBase,
@@ -771,33 +790,28 @@ describe.skipIf(!databaseUrl)("reviewing pull requests (#118)", () => {
     expect(endpoint).toMatchObject({ name: "github", listening: true });
     hookUrl = `/api${endpoint?.path ?? ""}`;
 
-    // A review machine: the pool label, opened to this project only.
+    // The host plans one worker for the project's review pool.
     const operatorSecret = fs
       .readFileSync(path.join(root, "control-plane", "operator-secret"), "utf8")
       .trim();
-    const operator = (method: "GET" | "POST", url: string, body?: unknown) =>
+    const operator = (method: "GET" | "POST", url: string) =>
       server.operatorApp.inject({
         method,
         url,
-        headers: {
-          authorization: `Bearer ${operatorSecret}`,
-          ...(body ? { "content-type": "application/json" } : {}),
-        },
-        ...(body ? { payload: JSON.stringify(body) } : {}),
+        headers: { authorization: `Bearer ${operatorSecret}` },
       });
-    const enrollment = await operator("POST", "/_work/operator/workers", {
-      name: "review-1",
-      labels: { pool: "review" },
-      for: [{ project: projectId }],
-      trusted: true,
-    });
-    expect(enrollment.statusCode, enrollment.body).toBe(201);
+    const pass = await operator("POST", "/_work/operator/machines/plan");
+    expect(pass.statusCode, pass.body).toBe(200);
+    const enrollment = await waitFor(
+      "the review worker's enrollment",
+      async () => reviewEnrollment,
+    );
     workerDir = path.join(root, "review-1");
     workers.push(
       await startWorkWorker({
         controlPlaneUrl: base,
         dataDir: workerDir,
-        enrollmentCode: enrollment.json().code,
+        enrollmentCode: enrollment,
         execution: executionSettingsFromEnv({
           WORK_SANDBOX: "local-process",
           PATH: process.env.PATH,

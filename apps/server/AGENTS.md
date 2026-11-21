@@ -58,15 +58,14 @@ otherwise companies use model connections through the gateway or a member's
 own API key. A Postgres control plane refuses plain-subprocess agents unless
 microsandbox or `WORK_TRUST_CONTROL_PLANE_AGENTS=1`. Follow the
 [machines reference](../../skills/setup-work-server/references/cluster-deployment.md)
-
-Create cloud capacity in a custom host with `hooks.machines`. The stock
-server supplies hand enrollment and the worker protocol. The registry
-supplies optional installation, cloud and policy recipes.
-
 and keep its enrollment and recovery instructions accurate. Preserve the
 local-process single-tenant boundary. Follow ADR 0100 for workspace budgets:
 an Allocation reserves a workspace until physical teardown; expired leases
 alone never free capacity.
+
+Create cloud capacity in a custom host with `hooks.machines`. The stock
+server supplies hand enrollment and the worker protocol. The registry
+supplies optional installation, cloud and policy recipes.
 
 ## Run
 
