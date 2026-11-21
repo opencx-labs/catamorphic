@@ -1083,6 +1083,18 @@ export interface SessionTerminals {
   terminal_key: string;
 }
 
+export interface SessionWaits {
+  created_at: Generated<Timestamp>;
+  expires_at: Timestamp;
+  external_user_id: string;
+  id: Generated<string>;
+  outcome: Json | null;
+  sessions: Json;
+  status: Generated<string>;
+  tenant_id: string;
+  updated_at: Generated<Timestamp>;
+}
+
 export interface SessionWorkspaceUse {
   session_id: string;
   used_at: Generated<Timestamp>;
@@ -1705,6 +1717,7 @@ export interface DB {
   session_mailbox_items: SessionMailboxItems;
   session_sync_intents: SessionSyncIntents;
   session_terminals: SessionTerminals;
+  session_waits: SessionWaits;
   session_workspace_use: SessionWorkspaceUse;
   store_document_versions: StoreDocumentVersions;
   store_documents: StoreDocuments;

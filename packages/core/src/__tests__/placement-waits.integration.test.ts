@@ -280,6 +280,21 @@ describe("chats waiting for a machine (ADR 0258)", () => {
       state: "waiting",
     });
     expect(Date.now() - started).toBeLessThan(4_000);
+    // The chat says why it is not running yet, to every surface (ADR 0344).
+    const [state] = await sessions.states(alice, {
+      sessions: [{ projectId, sessionId: chat.sessionId }],
+      detail: true,
+    });
+    expect(state).toMatchObject({
+      state: "working",
+      turn: null,
+      waiting: {
+        reason: "capacity",
+        message: "Waiting for a machine with room",
+        environment: "review",
+      },
+    });
+    expect(Date.parse(state?.waiting?.since ?? "")).toBeGreaterThan(0);
     // Archived, its queued work is withdrawn and nothing of it waits.
     await sessions.archive(alice, projectId, chat.sessionId, {
       confirmStop: true,

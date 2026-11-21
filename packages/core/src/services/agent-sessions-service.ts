@@ -125,8 +125,10 @@ import {
 import { z } from "zod";
 import {
   type AgentRef,
+  assertTokenScope,
   EVERY_ARTIFACT,
   hasProjectPermission,
+  hasTokenScope,
   type Identity,
   isProjectPrincipal,
   PROJECT_PRINCIPAL_ID,
@@ -280,6 +282,11 @@ import {
   type SessionMirrorInput,
   writeSessionMirror,
 } from "./session-mirror.js";
+import {
+  readSessionPhases,
+  readSessionStates,
+  type SessionState,
+} from "./session-state.js";
 import {
   type SessionWorkspaceHandle,
   SessionWorkspaceUnavailableError,
@@ -1320,6 +1327,14 @@ interface AgentSessionsDeps {
   ) => Promise<ReadonlyMap<string, string>>;
   /** Tenant app policy, for scope resolution (app refs). */
   appPolicies?: AppPoliciesService;
+  /**
+   * Where a person opens a chat, when the host has a public address: the
+   * `url` every session state carries (ADR 0344).
+   */
+  sessionUrl?: (chat: {
+    projectId: string;
+    sessionId: string;
+  }) => string | undefined;
 }
 
 export interface ArchiveSessionResourcesHandler {
@@ -1546,6 +1561,7 @@ export class AgentSessionsService {
   private readonly standingAgentPrompt?: string | false;
   private readonly mcpToolNames?: AgentSessionsDeps["mcpToolNames"];
   private readonly appPolicies?: AppPoliciesService;
+  private readonly sessionUrl?: AgentSessionsDeps["sessionUrl"];
   /**
    * Replica memory (a): this process's drain loop per session; the turn
    * claim in Postgres decides which process runs a turn.
@@ -2052,6 +2068,7 @@ export class AgentSessionsService {
     this.plugins = deps.plugins;
     this.pluginResolver = deps.pluginResolver;
     this.onTurnSettled = deps.onTurnSettled;
+    this.sessionUrl = deps.sessionUrl;
     this.onToolAlwaysAllowed = deps.onToolAlwaysAllowed;
     this.standingAgentPrompt = deps.standingAgentPrompt;
     this.agentCapabilities = deps.agentCapabilities;
@@ -2159,9 +2176,7 @@ export class AgentSessionsService {
   }
 
   private sessionActionHandler?: (
-    input: Parameters<
-      import("./session-actions-service.js").SessionActionsService["execute"]
-    >[0],
+    input: import("./session-operations.js").SessionOperationCall,
   ) => Promise<import("@catamorphic/db").Json>;
   setSessionActionHandler(
     handler: NonNullable<AgentSessionsService["sessionActionHandler"]>,
@@ -2172,6 +2187,7 @@ export class AgentSessionsService {
   /** Unread attention across authorized projects, including old closed tabs. */
   async attention(input: { identity: Identity }): Promise<AgentSession[]> {
     const { identity } = input;
+    assertTokenScope(identity, "work:read");
     const candidates = await this.db
       .selectFrom("agent_sessions")
       .innerJoin("projects", "projects.id", "agent_sessions.project_id")
@@ -3795,20 +3811,17 @@ export class AgentSessionsService {
     if (item.kind === "action") {
       const handle = this.sessionActionHandler;
       if (!handle) throw new Error("Session actions are not configured here");
-      const { SESSION_ACTION_SCHEMAS } = await import(
-        "./session-actions-service.js"
+      const { isSessionOperationName } = await import(
+        "./session-operations.js"
       );
-      const named = {
-        operation: item.action.operation,
-        schemas: SESSION_ACTION_SCHEMAS,
-      };
-      if (!isSessionActionOperation(named))
+      const operation = item.action.operation;
+      if (!isSessionOperationName(operation))
         throw new Error("Unknown session action");
       await handle({
         identity,
         projectId,
         author: item.action.actor,
-        operation: named.operation,
+        operation,
         args: item.action.args,
         causation: item.causation,
       });
@@ -3846,12 +3859,15 @@ export class AgentSessionsService {
   }
 
   /**
-   * Send a message and wait for its turn to settle: the one-shot shape
-   * the project MCP's `ask_agent` uses. Returns the turn's final reply.
-   * `from` names who asks when it is not the caller themself (an agent,
-   * or the person's own assistant): it arrives as an inbound message.
-   * Throws {@link AgentTurnUnsettledError} when the turn cannot settle now
-   * (no machine takes it, it was held or cancelled, its machine stopped).
+   * Send a message and hold until its turn settles, for a host that runs
+   * one turn and reads its reply in process. Callers over a network start
+   * a chat and wait on it instead ({@link waitFor}, ADR 0345): this holds
+   * through a turn that waits on its person. Returns the turn's final
+   * reply. `from` names who asks when it is not the caller themself (an
+   * agent, or the person's own assistant): it arrives as an inbound
+   * message. Throws {@link AgentTurnUnsettledError} when the turn cannot
+   * settle now (no machine takes it, it was held or cancelled, its machine
+   * stopped).
    */
   async sendMessage(
     identity: Identity,
@@ -3937,7 +3953,187 @@ export class AgentSessionsService {
         if (!row.lease_live && Date.now() - Date.parse(turn.updatedAt) > 90_000)
           throw new AgentTurnUnsettledError(sessionId, turnId, "interrupted");
       }
-      await delay(250);
+      await this.nextEvent({ sessionId, timeoutMs: 1_000 });
+    }
+  }
+
+  /**
+   * Resolve when the session's log gains an event, or after `timeoutMs`:
+   * what a waiter sleeps on instead of polling its rows.
+   */
+  private async nextEvent(input: {
+    sessionId: string;
+    timeoutMs: number;
+    signal?: AbortSignal;
+  }): Promise<void> {
+    const after = await this.log.latestSequence(this.db, input.sessionId);
+    await new Promise<void>((resolve) => {
+      let unsubscribe = () => {};
+      let done = false;
+      const finish = () => {
+        if (done) return;
+        done = true;
+        clearTimeout(timer);
+        input.signal?.removeEventListener("abort", finish);
+        unsubscribe();
+        resolve();
+      };
+      const timer = setTimeout(finish, input.timeoutMs);
+      input.signal?.addEventListener("abort", finish, { once: true });
+      void this.feed
+        .subscribe({
+          sessionId: input.sessionId,
+          after,
+          send: () => {
+            finish();
+            return true;
+          },
+          onClose: finish,
+        })
+        .then((stop) => {
+          unsubscribe = stop;
+          if (done) stop();
+        })
+        .catch(finish);
+    });
+  }
+
+  /** The project a session of the caller's tenant belongs to. */
+  async projectOfSession(input: {
+    identity: Identity;
+    sessionId: string;
+  }): Promise<string> {
+    const row = await this.db
+      .selectFrom("agent_sessions")
+      .innerJoin("projects", "projects.id", "agent_sessions.project_id")
+      .select("agent_sessions.project_id")
+      .where("agent_sessions.id", "=", input.sessionId)
+      .where("projects.tenant_id", "=", input.identity.tenantId)
+      .executeTakeFirst();
+    if (!row) throw new AgentSessionNotFoundError(input.sessionId);
+    return row.project_id;
+  }
+
+  /**
+   * The id of the agent a caller names by slug or by id (ADR 0344): a
+   * project agent's slug is its id in this project; anything else is an
+   * id as given.
+   */
+  async agentIdFor(input: {
+    projectId: string;
+    agent: string;
+  }): Promise<string> {
+    if (parseProjectAgentId(input.agent) || this.codingAgents.get(input.agent))
+      return input.agent;
+    return formatProjectAgentId(input.projectId, input.agent);
+  }
+
+  /**
+   * Chats as every surface reads them (ADR 0344), in the order named.
+   * `listed` skips the access check for chats a list already filtered.
+   */
+  async states(
+    identity: Identity,
+    input: {
+      sessions: ReadonlyArray<{ projectId: string; sessionId: string }>;
+      detail: boolean;
+      listed?: boolean;
+    },
+  ): Promise<SessionState[]> {
+    if (input.sessions.length === 0) return [];
+    if (!input.listed)
+      for (const chat of input.sessions)
+        await this.requireSession(
+          identity,
+          chat.projectId,
+          chat.sessionId,
+          "read",
+        );
+    const rows = await this.db
+      .selectFrom("agent_sessions")
+      .selectAll()
+      .where(
+        "id",
+        "in",
+        input.sessions.map((chat) => chat.sessionId),
+      )
+      .execute();
+    const states = await readSessionStates(this.db, {
+      rows,
+      detail: input.detail,
+      ...(this.sessionUrl ? { sessionUrl: this.sessionUrl } : {}),
+    });
+    const byId = new Map(states.map((state) => [state.sessionId, state]));
+    return input.sessions.flatMap((chat) => {
+      const state = byId.get(chat.sessionId);
+      return state && state.projectId === chat.projectId ? [state] : [];
+    });
+  }
+
+  /**
+   * Hold until one of the chats needs its caller, or `timeoutMs` (ADR
+   * 0345): its state is no longer `working`, and, for a chat with `after`,
+   * its log moved past that position. Answers with that chat's id, or null
+   * when the time ran out. It reads Postgres and sleeps on the session
+   * feed, so the same call resumes on any replica after a restart.
+   */
+  async waitFor(
+    identity: Identity,
+    input: {
+      sessions: ReadonlyArray<{
+        projectId: string;
+        sessionId: string;
+        /** The log position the caller already saw. */
+        after?: number;
+      }>;
+      timeoutMs: number;
+      signal?: AbortSignal;
+    },
+  ): Promise<string | null> {
+    for (const chat of input.sessions)
+      await this.requireSession(
+        identity,
+        chat.projectId,
+        chat.sessionId,
+        "read",
+      );
+    const ids = input.sessions.map((chat) => chat.sessionId);
+    const ready = async (): Promise<string | null> => {
+      const phases = await readSessionPhases(this.db, ids);
+      const hit = input.sessions.find((chat) => {
+        const phase = phases.get(chat.sessionId);
+        return (
+          phase !== undefined &&
+          phase.state !== "working" &&
+          (chat.after === undefined || phase.sequence > chat.after)
+        );
+      });
+      return hit?.sessionId ?? null;
+    };
+    const deadline = Date.now() + Math.max(input.timeoutMs, 0);
+    for (;;) {
+      const hit = await ready();
+      const left = deadline - Date.now();
+      if (hit || left <= 0 || input.signal?.aborted) return hit;
+      // Whichever chat logs first wakes the wait; a quiet second is
+      // looked at again, for what no event says (a wait that expired).
+      const woken = new AbortController();
+      const stop = () => woken.abort();
+      input.signal?.addEventListener("abort", stop, { once: true });
+      try {
+        await Promise.race(
+          ids.map((sessionId) =>
+            this.nextEvent({
+              sessionId,
+              timeoutMs: Math.min(left, 1_000),
+              signal: woken.signal,
+            }),
+          ),
+        );
+      } finally {
+        woken.abort();
+        input.signal?.removeEventListener("abort", stop);
+      }
     }
   }
 
@@ -3964,6 +4160,7 @@ export class AgentSessionsService {
       ifLatestTurnId?: string;
     } = {},
   ): Promise<CommandReceipt> {
+    assertTokenScope(identity, "sessions:run");
     // An answer checks its own audience (an unattended chat's approvers,
     // who may hold no other access to it); every other command changes the
     // chat.
@@ -3971,6 +4168,16 @@ export class AgentSessionsService {
       command.type === "respond"
         ? await this.sessionInTenant(identity, projectId, sessionId)
         : await this.requireSession(identity, projectId, sessionId);
+    // An approval is the person's to give: a client whose grant does not
+    // carry it cannot approve on their behalf (ADR 0345).
+    if (
+      command.type === "respond" &&
+      command.response.kind === "approval" &&
+      !hasTokenScope(identity, "sessions:approve")
+    )
+      throw new AccessDeniedError(
+        "Answering an approval needs the sessions:approve scope. Your person decides it in Work.",
+      );
     // Who may answer is settled before anything moves, authority included.
     if (command.type === "respond")
       await this.assertMayRespond({
@@ -4821,6 +5028,42 @@ export class AgentSessionsService {
    * message. A request whose agent stopped can no longer be answered.
    */
   /** Each approver hears about an approval and finds the chat waiting for them. */
+  /**
+   * An agent started waiting on its person (ADR 0344): the chat's owner
+   * hears it as a settled turn's people do, and an unattended chat's
+   * approvers are told. The chat's attention was raised with the request.
+   */
+  private async afterRequestsOpened(input: {
+    session: SessionRow;
+    turn: Turn;
+    requests: RuntimeRequest[];
+  }): Promise<void> {
+    this.chatsChanged();
+    await this.notifyApprovers(input);
+    const owner = this.onTurnSettled ? await this.ownerOf(input.session) : null;
+    if (!owner) return;
+    const [request] = input.requests;
+    await Promise.resolve()
+      .then(() =>
+        this.onTurnSettled?.({
+          identity: owner,
+          projectId: input.session.project_id,
+          sessionId: input.session.id,
+          turnId: input.turn.id,
+          messageId: request?.itemId ?? input.turn.inputItemId ?? input.turn.id,
+          status: "awaiting_input",
+          agentId: input.session.agent_id,
+          changedFiles: [],
+          workingDirectory: this.workingDirectories.get(input.turn.id) ?? "",
+        }),
+      )
+      .catch((error) =>
+        console.warn(
+          `[catamorphic] onTurnSettled hook failed: ${error instanceof Error ? error.message : String(error)}`,
+        ),
+      );
+  }
+
   private async notifyApprovers(input: {
     session: SessionRow;
     requests: RuntimeRequest[];
@@ -4964,27 +5207,30 @@ export class AgentSessionsService {
           },
         });
       await this.log.append(trx, { sessionId: input.sessionId, events });
-      return request;
+      return { request, turn };
     });
     if (!opened) return "deny";
-    if (opened.approvers.length > 0) {
-      const session = await this.db
+    await this.afterRequestsOpened({
+      session: await this.db
         .selectFrom("agent_sessions")
         .selectAll()
         .where("id", "=", input.sessionId)
-        .executeTakeFirstOrThrow();
-      await this.notifyApprovers({ session, requests: [opened] }).catch(
-        (error) =>
-          console.warn("[catamorphic] Could not tell approvers", error),
-      );
-    }
+        .executeTakeFirstOrThrow(),
+      turn: opened.turn,
+      requests: [opened.request],
+    }).catch((error) =>
+      console.warn(
+        "[catamorphic] Could not tell a chat's people it waits on them",
+        error,
+      ),
+    );
     const deadline = Date.now() + timeoutMs;
     while (Date.now() < deadline && !input.signal?.aborted) {
       const row = await this.db
         .selectFrom("agent_runtime_requests")
         .selectAll()
-        .where("session_id", "=", opened.sessionId)
-        .where("request_id", "=", opened.id)
+        .where("session_id", "=", opened.request.sessionId)
+        .where("request_id", "=", opened.request.id)
         .executeTakeFirst();
       const request = row ? requestFromRow(row) : null;
       if (request?.status !== "pending")
@@ -4996,12 +5242,12 @@ export class AgentSessionsService {
     }
     // Nobody answered: the request closes and the turn works on.
     await this.db.transaction().execute(async (trx) => {
-      await this.log.lock(trx, opened.sessionId);
+      await this.log.lock(trx, opened.request.sessionId);
       const row = await trx
         .selectFrom("agent_runtime_requests")
         .selectAll()
-        .where("session_id", "=", opened.sessionId)
-        .where("request_id", "=", opened.id)
+        .where("session_id", "=", opened.request.sessionId)
+        .where("request_id", "=", opened.request.id)
         .forUpdate()
         .executeTakeFirst();
       if (!row) return;
@@ -5904,7 +6150,7 @@ export class AgentSessionsService {
       hostTool: (input) => this.runHostTool(input),
       finalize: (input) => this.finalizeTurn(input),
       settled: (input) => this.afterTurn(input),
-      approvalsOpened: (input) => this.notifyApprovers(input),
+      requestsOpened: (input) => this.afterRequestsOpened(input),
       // Whether a failure is passing is the agent's host's to say (ADR 0228).
       retryFailure: async ({ session, turn, error }) => {
         const agent = await this.resolveAgent(
@@ -7511,6 +7757,18 @@ export class AgentSessionsService {
             ? input.reply.text
             : (turn.error?.message ?? ""),
       });
+    // A failure nobody has seen waits on the chat's person like a
+    // question does (ADR 0344).
+    if (!input.retrying && turn.status === "failed") {
+      await this.db
+        .updateTable("agent_sessions")
+        .set(({ ref }) => ({
+          attention_revision: sql`${ref("attention_revision")} + 1`,
+        }))
+        .where("id", "=", input.session.id)
+        .execute();
+      this.chatsChanged();
+    }
     if (!this.onTurnSettled) return;
     const event: AgentTurnSettledEvent = {
       identity: input.identity,
@@ -7608,6 +7866,7 @@ export class AgentSessionsService {
       workspace?: SessionWorkspaceRequest;
     },
   ): Promise<AgentSession> {
+    assertTokenScope(identity, "sessions:run");
     if (input.sourceActionId && !input.transaction) {
       const existing = await this.db
         .selectFrom("agent_sessions")
@@ -9934,6 +10193,8 @@ export class AgentSessionsService {
       workflowName?: string;
       origin?: SessionOperationOrigin;
       agentSlug?: string;
+      /** The agent by id, when the caller resolved one. */
+      agentId?: string;
       environment?: string;
       title?: string;
       /** Where the chat's workspace starts, or moves to (ADR 0178). */
@@ -9941,9 +10202,11 @@ export class AgentSessionsService {
     },
   ): Promise<{ sessionId: string; sessionCreated: boolean }> {
     await this.requireProject(identity, projectId);
-    const agentId = input.agentSlug
-      ? formatProjectAgentId(projectId, input.agentSlug)
-      : null;
+    const agentId =
+      input.agentId ??
+      (input.agentSlug
+        ? formatProjectAgentId(projectId, input.agentSlug)
+        : null);
     const findExisting = () =>
       this.db
         .selectFrom("agent_sessions")
@@ -15911,6 +16174,8 @@ export class AgentSessionsService {
     identity: Identity,
     projectId: string,
   ): Promise<void> {
+    // A client reads only what its person let it read (ADR 0345).
+    assertTokenScope(identity, "work:read");
     if (
       !this.readsAllSessions(identity, projectId) &&
       !this.coversEveryAgent(identity, projectId) &&
@@ -16038,7 +16303,7 @@ export class AgentSessionsService {
     const layers: Record<string, McpToolPolicyLayers> = {};
 
     // The project tools server serves the workflow tools AND the documents /
-    // skills / publications / proposals / ask_agent surface, each of which
+    // skills / publications / proposals / chats surface, each of which
     // authorizes itself against the caller's scope. This layer therefore
     // denies only the WORKFLOW tools the scope does not resolve to and lets
     // everything else through to the endpoint's own checks.
@@ -16488,6 +16753,8 @@ export class AgentSessionsService {
     sessionId: string,
     intent: "read" | "change" = "change",
   ): Promise<SessionRow> {
+    // On every surface: changing a chat needs the grant to run chats.
+    if (intent === "change") assertTokenScope(identity, "sessions:run");
     await this.requireProject(identity, projectId);
     const row = await this.db
       .selectFrom("agent_sessions")
@@ -16503,7 +16770,12 @@ export class AgentSessionsService {
       agentId: row.agent_id,
       intent,
     });
-    if (identity.externalUserId === row.external_user_id) {
+    // Only the person themself is remembered as the owner: a client's
+    // narrowed grant never becomes what the chat's agent runs with.
+    if (
+      identity.externalUserId === row.external_user_id &&
+      identity.tokenScopes === undefined
+    ) {
       const key = `${identity.tenantId}:${projectId}:${identity.externalUserId}`;
       this.knownOwners.delete(key);
       this.knownOwners.set(key, identity);
@@ -16902,13 +17174,6 @@ function sandboxingRank(sandboxing: Sandboxing | undefined): number {
 }
 
 /** Whether a forwarded action names one this host runs. */
-function isSessionActionOperation<T extends object>(input: {
-  operation: string;
-  schemas: T;
-}): input is { operation: Extract<keyof T, string>; schemas: T } {
-  return Object.hasOwn(input.schemas, input.operation);
-}
-
 function parseSessionSource(value: string): AgentSessionSource {
   switch (value) {
     case "desktop":

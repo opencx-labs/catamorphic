@@ -348,4 +348,6 @@ Settled design decisions live here as short Architecture Decision Records. They 
 | [0341](0341-a-workspace-is-saved-as-a-git-pack.md) | A workspace is saved as a Git pack, as it is restored | Accepted (amends 0178, 0191; amended by 0342) |
 | [0342](0342-every-server-chat-stands-on-a-branch.md) | Every server chat stands on a branch | Accepted (amends 0173, 0178, 0191, 0257, 0341) |
 | [0343](0343-one-pull-request-tool.md) | One pull request tool | Accepted (amends 0170, 0177, 0322; narrows proposals) |
+| [0344](0344-one-set-of-session-operations-for-every-surface.md) | One set of session operations for every surface | Accepted (amends 0090, 0166, 0226) |
+| [0345](0345-the-mcp-surface-speaks-the-current-protocol.md) | The MCP surface speaks the current protocol; long turns are waited on, not held | Accepted (amends 0042, 0055, 0161, 0166, 0225) |
 | [0346](0346-every-lost-machine-recovers.md) | Every lost machine recovers: one loss rule, one retirement, replacement, and chats that continue | Accepted (amends 0173, 0190, 0192, 0205, 0258) |

@@ -962,7 +962,7 @@ for.
 
 \`\`\`typescript
 import { defineWorkflow, type BoundaryContext } from "@catamorphic/workflow";
-import type { SessionSnapshot } from "@catamorphic/workflow";
+import type { SessionState } from "@catamorphic/workflow";
 
 /** @displayname Recent sessions */
 export const recentSessions = defineWorkflow(({ defineBoundary }) => ({
@@ -974,13 +974,13 @@ export const recentSessions = defineWorkflow(({ defineBoundary }) => ({
     }),
     /** @displayname Count per day */
     defineBoundary({
-      run: (context: BoundaryContext<{ items: SessionSnapshot[] }>) => {
+      run: (context: BoundaryContext<{ sessions: SessionState[] }>) => {
         const perDay = new Map<string, number>();
-        for (const session of context.input.items) {
+        for (const session of context.input.sessions) {
           const day = session.createdAt.slice(0, 10);
           perDay.set(day, (perDay.get(day) ?? 0) + 1);
         }
-        return { total: context.input.items.length, perDay: [...perDay] };
+        return { total: context.input.sessions.length, perDay: [...perDay] };
       },
     }),
   ],

@@ -265,9 +265,13 @@ export interface TurnEngineHost {
     identity: Identity;
     session: SessionRow;
   }): Promise<Readonly<Record<string, readonly string[]>>>;
-  /** Approvals that opened and wait on approvers, after they committed. */
-  approvalsOpened?(input: {
+  /**
+   * Requests that opened and that their agent waits on, after they
+   * committed (ADR 0344): what tells the chat's people an agent needs them.
+   */
+  requestsOpened?(input: {
     session: SessionRow;
+    turn: Turn;
     requests: RuntimeRequest[];
   }): Promise<void>;
   /**
@@ -2582,6 +2586,8 @@ export class TurnEngine {
     let policy: ApprovalPolicy | undefined;
     let refused = false;
     const opened: RuntimeRequest[] = [];
+    // Approvals refused at once: nobody is asked.
+    const refusedIds = new Set<string>();
     // What a mask holds back changes only once this batch is recorded.
     const masking =
       local.mask && !local.mask.empty ? local.mask.begin() : undefined;
@@ -2742,6 +2748,7 @@ export class TurnEngine {
         governed.push({ type: "request.changed", request: outcome.request });
         if (outcome.refusal && event.request.runnerKey) {
           refused = true;
+          refusedIds.add(outcome.request.id);
           await queue.enqueueCommand(trx, {
             turnId: input.turn.id,
             attemptId: input.attempt.id,
@@ -2755,9 +2762,17 @@ export class TurnEngine {
               },
             },
           });
-        } else if (outcome.request.approvers.length > 0)
-          opened.push(outcome.request);
+        }
       }
+      for (const event of governed)
+        if (
+          event.type === "request.changed" &&
+          event.request.status === "pending" &&
+          event.request.answerable &&
+          event.request.blocking &&
+          !refusedIds.has(event.request.id)
+        )
+          opened.push(event.request);
       // A refusal at once may leave nothing to wait on: the turn works on.
       if (refused && turn.status === "waiting") {
         const batch = governed.flatMap((event) =>
@@ -2887,9 +2902,16 @@ export class TurnEngine {
     if (refused) local.wake();
     if (opened.length > 0)
       await this.deps.host
-        .approvalsOpened?.({ session: input.session, requests: opened })
+        .requestsOpened?.({
+          session: input.session,
+          turn: applied.turn,
+          requests: opened,
+        })
         .catch((error) =>
-          console.warn("[catamorphic] Could not tell approvers", error),
+          console.warn(
+            "[catamorphic] Could not tell a chat's people it waits on them",
+            error,
+          ),
         );
     return applied;
   }

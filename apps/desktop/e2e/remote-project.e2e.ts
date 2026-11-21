@@ -116,7 +116,7 @@ function startFakeServer(): Promise<void> {
         access_token: TOKEN,
         refresh_token: "desktop-refresh-token",
         expires_in: 3600,
-        scope: "openid profile email offline_access",
+        scope: "openid profile email offline_access work:full",
         token_type: "Bearer",
       });
     }

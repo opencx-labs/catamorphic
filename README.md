@@ -256,8 +256,10 @@ per-profile agent rosters work across harnesses. A chat can change agents across
 harnesses while keeping its history, with a bounded handoff of missing context.
 MCP goes both directions:
 agents consume MCP connectors (registry search, plugin marketplaces,
-elicitation via `@catamorphic/mcp`), and a project's workflows are served
-*as* MCP tools to any MCP client. In the desktop, agents also drive the
+elicitation via `@catamorphic/mcp`), and a server is an MCP endpoint itself:
+a person's own agent (Claude Code, Codex, any MCP client) starts a coding
+agent on it, keeps working, waits for it, answers its questions and reads
+its result, and a project's workflows are served *as* MCP tools. In the desktop, agents also drive the
 workspace itself: browser tabs (real input, uploads, downloads, and a page's
 console and network for web development), terminals, `open_surface`,
 `point_at`. Local harnesses get the person's login-shell PATH, so they reach
@@ -683,7 +685,8 @@ Workflows subscribe to trigger kinds in code (`triggers:
 `defineTriggerKind` (typed payloads and configs via zod, generated
 `work-triggers.d.ts` per project) and fire them sync or async; a kind
 whose payload varies per workflow uses typed holes, and kinds declared via
-`mcpToolKinds` are served as MCP tools from `POST /projects/:id/mcp`.
+`mcpToolKinds` are served as MCP tools from `POST /projects/:id/mcp`, beside
+the chat tools `POST /mcp` serves for every project.
 Projects define their own kinds on top of the host's in `.work/triggers/`
 (`defineTrigger({ name, from: trigger("webhook", { ... }), where })`), and
 every binding may add a `where` filter the host checks before a run starts,

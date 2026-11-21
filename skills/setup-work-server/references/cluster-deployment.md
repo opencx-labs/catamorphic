@@ -265,8 +265,8 @@ Environment, in admission order, that lets work wait), its turns wait
 fail after 30 minutes saying why; the next message waits again. A chat whose
 workspace was given back always waits for a machine, and with `waitMinutes`
 gives up after that long too. A waiting chat whose Environment was removed
-or can no longer take it fails its turns with that error, and `ask_agent`
-answers at once that the chat waits for a machine. Waiting work is recorded
+or can no longer take it fails its turns with that error, and the chat's
+state says it waits for a machine (`waiting`, on every surface). Waiting work is recorded
 in Postgres (`placement_waits`, ADR 0258) until it is placed or its chat is
 closed or archived; with a turn queued, it is what
 [machines on demand](#machines-on-demand) read.

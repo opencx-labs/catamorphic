@@ -140,19 +140,21 @@ import { RuntimeEventsService } from "./services/runtime-events-service.js";
 import { SchedulesService } from "./services/schedules-service.js";
 import { secretsCapability } from "./services/secrets-capability.js";
 import { SecretsService } from "./services/secrets-service.js";
-import {
-  SESSION_ACTION_SCHEMAS,
-  SessionActionsService,
-} from "./services/session-actions-service.js";
 import { SessionArtifactsService } from "./services/session-artifacts-service.js";
 import {
   SESSION_EXEC_WAIT_PREFIX,
   SessionExecService,
 } from "./services/session-exec.js";
 import type { SessionMailboxesService } from "./services/session-mailboxes-service.js";
+import {
+  SESSION_OPERATION_NAMES,
+  SessionOperationsService,
+  sessionOperationHostName,
+} from "./services/session-operations.js";
 import { SessionPreviewsService } from "./services/session-previews-service.js";
 import { SessionSyncService } from "./services/session-sync-service.js";
 import { SessionTerminalsService } from "./services/session-terminals-service.js";
+import { SessionWaitsService } from "./services/session-waits-service.js";
 import { SessionWorkspaces } from "./services/session-workspaces.js";
 import { runSetupWorkflow } from "./services/setup-workflow-runner.js";
 import { SkillsService } from "./services/skills-service.js";
@@ -376,6 +378,14 @@ export interface CatamorphicCoreConfig {
    * kind. Exceptions are swallowed and never delay the turn.
    */
   onAgentTurnSettled?: (event: AgentTurnSettledEvent) => void | Promise<void>;
+  /**
+   * Where a person opens a chat, when the host has a public address: the
+   * `url` session states carry (ADR 0344).
+   */
+  sessionUrl?: (chat: {
+    projectId: string;
+    sessionId: string;
+  }) => string | undefined;
   /** A person chose "Always allow" for an agent's tool; the host keeps it (ADR 0054). */
   onToolAlwaysAllowed?: (event: ToolAlwaysAllowedEvent) => void | Promise<void>;
   /** Optional host-owned Web Push transport. Events remain durable without it. */
@@ -526,7 +536,10 @@ export class CatamorphicCore {
   /** Durable transcript replication outbox, drained by the embedding host. */
   readonly sessionSync?: SessionSyncService;
   readonly watchers?: WatchersService;
-  readonly sessionActions?: SessionActionsService;
+  /** The session operations every surface projects (ADR 0344). */
+  readonly sessionOperations?: SessionOperationsService;
+  /** Waits their callers left running (ADR 0345). */
+  readonly sessionWaits: SessionWaitsService;
   /** Terminals people open in a chat's workspace (ADR 0209). */
   readonly sessionTerminals?: SessionTerminalsService;
   /** Workflows' commands in chats' workspaces (ADR 0324). */
@@ -617,23 +630,22 @@ export class CatamorphicCore {
       description:
         "Read and act on chats; deliver messages to a chat by id or by a workflow key",
       calls: {
+        // Every session operation, by its workflow name (ADR 0344).
         ...Object.fromEntries(
-          Object.keys(SESSION_ACTION_SCHEMAS).map((operation) => [
-            operation,
+          SESSION_OPERATION_NAMES.map((operation) => [
+            sessionOperationHostName(operation),
             async (
               context: import("./services/capability-providers.js").HostCallContext,
               args: unknown,
             ) => {
-              if (!this.sessionActions)
+              if (!this.sessionOperations)
                 throw new Error("Coding agents are not configured");
-              if (!(operation in SESSION_ACTION_SCHEMAS))
-                throw new Error("Unknown session action");
               const origin = await this.workflowSessionOrigin(context);
               requireAttemptTime(context);
-              return this.sessionActions.execute({
+              return this.sessionOperations.execute({
                 identity: context.caller,
                 projectId: context.projectId,
-                operation: operation as keyof typeof SESSION_ACTION_SCHEMAS,
+                operation,
                 signal: context.signal,
                 args,
                 ...origin,
@@ -648,14 +660,14 @@ export class CatamorphicCore {
             origin.author.kind === "workflow"
               ? origin.author.watcher
               : undefined;
-          if (!watcher || !this.sessionActions)
+          if (!watcher || !this.sessionOperations)
             throw new Error(
               "Only a temporary workflow can stop its own activation",
             );
-          return this.sessionActions.execute({
+          return this.sessionOperations.execute({
             identity: context.caller,
             projectId: context.projectId,
-            operation: "stopWatcher",
+            operation: "session_stop_watcher",
             signal: context.signal,
             ...origin,
             args: {
@@ -882,6 +894,7 @@ export class CatamorphicCore {
     );
     this.executionAllocations = new ExecutionAllocationsService(this.db);
     this.placementWaits = new PlacementWaitsService(this.db);
+    this.sessionWaits = new SessionWaitsService(this.db);
     this.clientRunners = config.clientExecution
       ? new ClientRunnersService(this.db, this.projectEnvironments)
       : undefined;
@@ -1528,9 +1541,14 @@ export class CatamorphicCore {
                 // never suppress the host's existing settled-turn hook.
               });
           }
-          await config.onAgentTurnSettled?.(event);
+          // A turn that waits on its person has not settled: the host's
+          // settled-turn hook (sync, releasing what the turn held) is not
+          // told, only the chat's people (ADR 0344).
+          if (event.status !== "awaiting_input")
+            await config.onAgentTurnSettled?.(event);
         },
         standingAgentPrompt: config.standingAgentPrompt,
+        ...(config.sessionUrl ? { sessionUrl: config.sessionUrl } : {}),
         mcpToolNames: (identity, projectId) =>
           this.triggers.mcpToolNames({ identity, projectId }),
         appPolicies: this.appPolicies,
@@ -1553,10 +1571,18 @@ export class CatamorphicCore {
         eventSources: this.projectEventSources,
         wakeups: this.wakeups,
       });
-      this.sessionActions = new SessionActionsService(
+      this.sessionOperations = new SessionOperationsService(
         this.db,
         this.agentSessions,
-        () => this.watchers,
+        {
+          watchers: () => this.watchers,
+          chatOwner: (input) =>
+            chatOwner({
+              ...input,
+              enablement: undefined,
+              resolveMember: this.resolveMember,
+            }),
+        },
       );
       this.sessionTerminals = new SessionTerminalsService({
         db: this.db,
@@ -1584,10 +1610,8 @@ export class CatamorphicCore {
         sessions: this.agentSessions,
       });
       this.agentSessions.setSessionActionHandler(async (input) => {
-        const action = SESSION_ACTION_SCHEMAS[input.operation];
-        if (!action || !this.sessionActions)
-          throw new Error("Unknown session action");
-        return this.sessionActions.execute(input);
+        if (!this.sessionOperations) throw new Error("Unknown session action");
+        return this.sessionOperations.execute(input);
       });
       this.agentSessions.setArchiveResourcesHandler({
         impact: async () => ({ activeProcessCount: 0 }),

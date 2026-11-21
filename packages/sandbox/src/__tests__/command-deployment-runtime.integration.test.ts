@@ -156,7 +156,7 @@ const checkpoint = {
       return connections.github.get({ path: "/repos/acme/web/pulls/1" }, { state: { turn: input.id } });
     }
     if (input.action === "host-carry") {
-      return host["catamorphic.sessions"].history({ key: "pr-1" }, { state: [input.id] });
+      return host["catamorphic.sessions"].read({ key: "pr-1" }, { state: [input.id] });
     }
     if (input.action === "child-carry") {
       return callWorkflow(analyze, { input: { records: input.records }, state: { turn: input.id } }, {
@@ -652,7 +652,7 @@ export const analyze = { steps: [checkpoint, batch] };`,
           type: "host_call",
           transition: {
             capability: "catamorphic.sessions",
-            fn: "history",
+            fn: "read",
             statePresent: true,
             state: ["t2"],
           },

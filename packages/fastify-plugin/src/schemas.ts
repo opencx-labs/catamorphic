@@ -46,6 +46,8 @@ import { APP_ICON_NAMES } from "@catamorphic/app";
 import {
   RoleDefinitionSchema as CoreRoleDefinitionSchema,
   PROJECT_PERMISSION_PATTERN,
+  SESSION_OPERATION_ERROR_CODES,
+  SESSION_OPERATIONS,
   type SessionMailboxItem,
 } from "@catamorphic/core";
 import {
@@ -1468,9 +1470,20 @@ export const AgentSubsessionSchema = z.object({
   ),
 });
 
-export const WaitForAgentSubsessionsSchema = z.object({
-  sessionIds: z.array(z.string().uuid()).max(100).optional(),
-  timeoutMs: z.number().int().min(0).max(60_000).optional(),
+/**
+ * `POST .../agent/sessions/start` (ADR 0344): the `session_start`
+ * operation, with the project named by the route.
+ */
+export const StartSessionSchema = SESSION_OPERATIONS.session_start.input.omit({
+  project: true,
+});
+
+/** How a session operation's route refuses: a code a client can act on. */
+export const SessionOperationErrorSchema = z.object({
+  error: z.string(),
+  code: z.enum(SESSION_OPERATION_ERROR_CODES),
+  retryable: z.boolean(),
+  sessionId: z.string().optional(),
 });
 
 export const ArchiveAgentSessionSchema = z.object({

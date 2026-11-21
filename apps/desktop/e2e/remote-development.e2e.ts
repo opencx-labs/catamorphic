@@ -248,7 +248,7 @@ async function accessToken(username: string): Promise<string> {
     client_id: client.client_id,
     redirect_uri: redirectUri,
     response_type: "code",
-    scope: "openid profile email offline_access",
+    scope: "openid profile email offline_access work:full",
     resource: `${publicUrl}/api`,
     state: "e2e",
     code_challenge: createHash("sha256").update(verifier).digest("base64url"),
@@ -278,10 +278,14 @@ async function accessToken(username: string): Promise<string> {
   const accepted = await fetch(`${publicUrl}/oauth/consent`, {
     method: "POST",
     headers: { cookie, "content-type": "application/x-www-form-urlencoded" },
-    body: new URLSearchParams({
-      accept: "true",
-      oauth_query: consent.search.slice(1),
-    }),
+    body: new URLSearchParams([
+      ["accept", "true"],
+      ["oauth_query", consent.search.slice(1)],
+      ...Array.from(
+        (consent.searchParams.get("scope") ?? "").split(/\s+/).filter(Boolean),
+        (scope): [string, string] => ["scope", scope],
+      ),
+    ]),
     redirect: "manual",
   });
   const code = new URL(accepted.headers.get("location") ?? "").searchParams.get(

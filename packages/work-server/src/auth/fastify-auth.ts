@@ -1,4 +1,10 @@
 import { randomBytes } from "node:crypto";
+import {
+  DEFAULT_TOKEN_SCOPES,
+  FULL_TOKEN_SCOPE,
+  TOKEN_SCOPES,
+  tokenScopesOf,
+} from "@catamorphic/core";
 import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 import { workMark } from "../brand.js";
 import type {
@@ -120,6 +126,41 @@ export function registerWorkAuthRoutes(
           return reply.redirect("/login?error=account");
         }
         return sendResponse(response, reply);
+      }
+      // Every grant names what its client may do (ADR 0345). A client that
+      // asks for none of Work's scopes is offered the default set, which
+      // its person can untick at consent.
+      if (
+        request.method === "GET" &&
+        rawPath === "/api/auth/oauth2/authorize"
+      ) {
+        const query = new URL(request.url, options.baseURL).searchParams;
+        // A query Better Auth signed is its own continuation, as it stands.
+        if (!query.has("sig")) {
+          query.set("scope", withWorkScopes(query.get("scope") ?? ""));
+          return sendResponse(
+            await callBetterAuth(routed, request, {
+              search: query.toString(),
+            }),
+            reply,
+          );
+        }
+      }
+      // A client that registers the scopes it will ask for may still be
+      // granted Work's: which ones is its person's choice at consent.
+      if (
+        request.method === "POST" &&
+        rawPath === "/api/auth/oauth2/register"
+      ) {
+        const registration = registrationWithWorkScopes(request.body);
+        if (registration)
+          return sendResponse(
+            await callBetterAuth(routed, request, {
+              body: registration,
+              contentType: "application/json",
+            }),
+            reply,
+          );
       }
       return forward(request, reply);
     },
@@ -294,11 +335,24 @@ export function registerWorkAuthRoutes(
   });
   app.post("/oauth/consent", async (request, reply) => {
     const form = formBody(request.body);
+    const signedQuery = form.get("oauth_query") ?? "";
+    const requested = (new URLSearchParams(signedQuery).get("scope") ?? "")
+      .split(/\s+/)
+      .filter(Boolean);
+    // Grant only what the submitted form selected from the signed request.
+    const ticked = new Set(form.getAll("scope"));
+    const granted = requested.filter((scope) => ticked.has(scope));
+    // A grant with none of Work's scopes could do nothing: unticking them
+    // all is declining.
+    const usable = tokenScopesOf(granted).length > 0;
     const response = await callBetterAuth(routed, request, {
       pathname: "/api/auth/oauth2/consent",
       body: JSON.stringify({
-        accept: form.get("accept") === "true",
-        oauth_query: form.get("oauth_query") ?? "",
+        accept: form.get("accept") === "true" && usable,
+        oauth_query: signedQuery,
+        ...(granted.length > 0 && granted.length < requested.length
+          ? { scope: granted.join(" ") }
+          : {}),
       }),
       contentType: "application/json",
     });
@@ -399,6 +453,8 @@ async function callBetterAuth(
   request: FastifyRequest,
   overrides: {
     pathname?: string;
+    /** The query to send instead of the request's own. */
+    search?: string;
     body?: string;
     contentType?: string;
   },
@@ -408,6 +464,7 @@ async function callBetterAuth(
     incoming.pathname = overrides.pathname;
     incoming.search = "";
   }
+  if (overrides.search !== undefined) incoming.search = overrides.search;
   const headers = new Headers();
   for (const [name, value] of Object.entries(request.headers)) {
     for (const entry of Array.isArray(value) ? value : [value]) {
@@ -533,11 +590,30 @@ function loginPage(
 function consentPage(signedQuery: string, nonce: string): string {
   const query = new URLSearchParams(signedQuery);
   const client = escapeHtml(query.get("client_id") ?? "this client");
-  const scopes = (query.get("scope") ?? "basic identity")
-    .split(/\s+/)
-    .filter(Boolean)
-    .map((scope) => `<li>${escapeHtml(scope.replaceAll("_", " "))}</li>`)
-    .join("");
+  // Work's own scopes are the person's to grant one by one (ADR 0345).
+  // Approving for them is never ticked for them. Full access is one plain
+  // line to allow or deny: it is everything, so nothing else is listed.
+  const requested = (query.get("scope") ?? "").split(/\s+/).filter(Boolean);
+  const full = requested.includes(FULL_TOKEN_SCOPE);
+  const scopes =
+    requested.length === 0
+      ? "<li>basic identity</li>"
+      : requested
+          .map((scope) => {
+            const value = escapeHtml(scope);
+            const description = workScopeDescription(scope);
+            const kept = `<input type="hidden" name="scope" value="${value}">`;
+            if (!description)
+              return `<li>${kept}${escapeHtml(scope.replaceAll("_", " "))}</li>`;
+            if (scope === FULL_TOKEN_SCOPE)
+              return `<li class="scope-full">${kept}${escapeHtml(description)}</li>`;
+            // Covered by full access: granted with it, not listed again.
+            if (full) return "";
+            return `<li><label class="scope-choice"><input type="checkbox" name="scope" value="${value}"${
+              scope === "sessions:approve" ? "" : " checked"
+            }> ${escapeHtml(description)}</label></li>`;
+          })
+          .join("");
   return authPage({
     title: "Review access | Work",
     nonce,
@@ -547,20 +623,70 @@ function consentPage(signedQuery: string, nonce: string): string {
         <h1 id="page-title">Allow this connection?</h1>
         <p>Review what the connecting app is asking to use.</p>
       </header>
-      <div class="access-summary">
-        <p class="summary-label">Connecting client</p>
-        <code>${client}</code>
-        <p class="summary-label">Requested access</p>
-        <ul class="scope-list">${scopes}</ul>
-      </div>
-      <form class="consent-actions" action="/oauth/consent" method="post">
-        <input type="hidden" name="oauth_query" value="${escapeHtml(signedQuery)}">
-        <button class="button button-secondary" name="accept" value="false">Deny</button>
-        <button class="button button-primary" name="accept" value="true">Allow access</button>
+      <form action="/oauth/consent" method="post">
+        <div class="access-summary">
+          <p class="summary-label">Connecting client</p>
+          <code>${client}</code>
+          <p class="summary-label">Requested access</p>
+          <ul class="scope-list">${scopes}</ul>
+        </div>
+        <div class="consent-actions">
+          <input type="hidden" name="oauth_query" value="${escapeHtml(signedQuery)}">
+          <button class="button button-secondary" name="accept" value="false">Deny</button>
+          <button class="button button-primary" name="accept" value="true">Allow access</button>
+        </div>
       </form>
       <p class="privacy-note">You can remove access later from your server.</p>
     </section>`,
   });
+}
+
+/**
+ * The scopes of an authorization request, with the default set added when
+ * it names none of Work's (ADR 0345).
+ */
+function withWorkScopes(scope: string): string {
+  const requested = scope.split(/\s+/).filter(Boolean);
+  return [
+    ...requested,
+    ...(tokenScopesOf(requested).length === 0 ? DEFAULT_TOKEN_SCOPES : []),
+  ].join(" ");
+}
+
+/**
+ * A dynamic registration that lists its scopes, with Work's added so the
+ * client may be granted them; nothing for one that lists none (it may ask
+ * for any) or is not a JSON object.
+ */
+function registrationWithWorkScopes(body: unknown): string | undefined {
+  const parsed: unknown =
+    typeof body === "string"
+      ? (() => {
+          try {
+            return JSON.parse(body);
+          } catch {
+            return undefined;
+          }
+        })()
+      : body;
+  if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed))
+    return undefined;
+  const scope = "scope" in parsed ? parsed.scope : undefined;
+  if (typeof scope !== "string") return undefined;
+  return JSON.stringify({
+    ...parsed,
+    scope: [
+      ...new Set([
+        ...scope.split(/\s+/).filter(Boolean),
+        ...Object.keys(TOKEN_SCOPES),
+      ]),
+    ].join(" "),
+  });
+}
+
+/** What one of Work's scopes lets a client do, for the consent page. */
+function workScopeDescription(scope: string): string | undefined {
+  return Object.entries(TOKEN_SCOPES).find(([name]) => name === scope)?.[1];
 }
 
 function messagePage(title: string, message: string, nonce: string): string {
@@ -802,6 +928,12 @@ function authPage(options: {
       margin: 0;
       padding: 0;
       list-style: none;
+    }
+    .scope-choice {
+      display: flex;
+      gap: 0.5rem;
+      align-items: baseline;
+      cursor: pointer;
     }
     .scope-list li {
       padding: 3px 7px;

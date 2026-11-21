@@ -5,12 +5,8 @@ import {
 import type { Json } from "@catamorphic/db";
 import type { FastifyInstance } from "fastify";
 import type { RouteContext } from "../app.js";
-import {
-  McpRequestError,
-  serveForwardedTools,
-  toolError,
-  toolValue,
-} from "../mcp-shared.js";
+import { McpError, serveForwardedTools } from "../mcp-server.js";
+import { toolError, toolValue } from "../mcp-shared.js";
 
 /**
  * One brokered connection as an agent's MCP server (`connection_<alias>`).
@@ -65,8 +61,8 @@ export function registerConnectionMcpRoutes(
       }
       const mcp = broker.servesMcp(binding.providerKind);
       return serveForwardedTools({
+        request,
         reply,
-        body: request.body,
         serverName: "catamorphic-connection-broker",
         listTools: async () => {
           try {
@@ -86,15 +82,12 @@ export function registerConnectionMcpRoutes(
                   outputSchema: undefined,
                 }));
           } catch {
-            throw new McpRequestError(-32_000, "Connection action failed");
+            throw new McpError(-32_000, "Connection action failed");
           }
         },
         callTool: async (call) => {
           if (!binding.capabilities.includes(call.name)) {
-            throw new McpRequestError(
-              -32602,
-              "Tool is outside the connection grant",
-            );
+            throw new McpError(-32602, "Tool is outside the connection grant");
           }
           try {
             const output = await broker.invoke({
@@ -118,7 +111,7 @@ export function registerConnectionMcpRoutes(
             ) {
               return toolError(error.message);
             }
-            throw new McpRequestError(-32_000, "Connection action failed");
+            throw new McpError(-32_000, "Connection action failed");
           }
         },
       });

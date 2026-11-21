@@ -49,6 +49,7 @@ export function registerSessionMailboxRoutes(
   typed.route({
     method: "POST",
     url: "/projects/:projectId/session-mailboxes/:mailboxId/acknowledge",
+    config: { tokenScope: "sessions:run" },
     schema: {
       params: SessionMailboxIdParamsSchema,
       body: AcknowledgeSessionMailboxSchema,

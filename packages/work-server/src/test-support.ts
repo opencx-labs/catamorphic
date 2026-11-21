@@ -128,6 +128,7 @@ interface InjectableApp {
   }): Promise<{
     statusCode: number;
     headers: Record<string, string | string[] | number | undefined>;
+    body: string;
     json(): Record<string, unknown>;
   }>;
 }
@@ -137,6 +138,10 @@ export async function acceptOAuthConsent(args: {
   app: InjectableApp;
   location: string;
   cookie: string;
+  /** The scopes the person leaves ticked; none: the form's defaults. */
+  grant?: string[];
+  /** Sees the consent page as the person does. */
+  onPage?: (html: string) => void;
 }): Promise<string> {
   const consent = new URL(args.location);
   if (consent.pathname !== "/oauth/consent") return args.location;
@@ -148,6 +153,14 @@ export async function acceptOAuthConsent(args: {
   if (page.statusCode !== 200) {
     throw new Error(`consent page answered ${page.statusCode}, expected 200`);
   }
+  args.onPage?.(page.body);
+  const defaults = Array.from(
+    page.body.matchAll(
+      /<input type="(hidden|checkbox)" name="scope" value="([^"]+)"( checked)?>/g,
+    ),
+  ).flatMap(([, type, scope, checked]) =>
+    scope && (type === "hidden" || checked) ? [scope] : [],
+  );
   const accepted = await args.app.inject({
     method: "POST",
     url: "/oauth/consent",
@@ -155,10 +168,15 @@ export async function acceptOAuthConsent(args: {
       cookie: args.cookie,
       "content-type": "application/x-www-form-urlencoded",
     },
-    payload: new URLSearchParams({
-      accept: "true",
-      oauth_query: consent.search.slice(1),
-    }).toString(),
+    payload: new URLSearchParams([
+      ["accept", "true"],
+      ["oauth_query", consent.search.slice(1)],
+      // The scopes the person leaves ticked; none: the form's defaults.
+      ...(args.grant ?? defaults).map((scope): [string, string] => [
+        "scope",
+        scope,
+      ]),
+    ]).toString(),
   });
   if (accepted.statusCode !== 302) {
     throw new Error(`consent answered ${accepted.statusCode}, expected 302`);
@@ -174,6 +192,12 @@ export async function oauthAccessToken(args: {
   app: InjectableApp;
   username: string;
   password: string;
+  /** The scopes the client asks for; defaults to the Work app's grant. */
+  scope?: string;
+  /** The scopes the person leaves ticked at consent. */
+  grant?: string[];
+  /** Sees the consent page as the person does. */
+  onConsentPage?: (html: string) => void;
 }): Promise<string> {
   const { app } = args;
   const resourceMetadata = await app.inject({
@@ -217,7 +241,7 @@ export async function oauthAccessToken(args: {
     redirect_uri: redirectUri,
     response_type: "code",
     resource,
-    scope: "openid profile email offline_access",
+    scope: args.scope ?? "openid profile email offline_access work:full",
     state: "work-server-state",
     code_challenge: challenge,
     code_challenge_method: "S256",
@@ -232,6 +256,8 @@ export async function oauthAccessToken(args: {
     app,
     location: String(authorized.headers.location ?? ""),
     cookie,
+    ...(args.grant ? { grant: args.grant } : {}),
+    ...(args.onConsentPage ? { onPage: args.onConsentPage } : {}),
   });
   const code = new URL(callback).searchParams.get("code") ?? "";
 

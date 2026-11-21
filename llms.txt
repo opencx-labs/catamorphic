@@ -18,7 +18,7 @@ Work is the product; Catamorphic is the open-source framework it is built on. Bo
 - AI: your own Claude Code or Codex account, your own Hermes Agent, or API keys (Anthropic, OpenAI, OpenRouter); providers bill you directly
 - Data: stays on your Mac by default; optionally on a server you run
 - Work server: install a pinned `@catamorphic/work-server` release, compose a small TypeScript entry point and hooks, and build your own image; Work publishes libraries rather than a stock server image. PGlite needs no external service; network Postgres supports disposable replicas.
-- Connect other tools: MCP (a project on your server is an MCP endpoint)
+- Connect other tools: MCP (your server is an MCP endpoint: your own agent, such as Claude Code or Codex, starts a coding agent on it, keeps working, waits for it, answers its questions and reads its result and pull requests; each project is an endpoint too, with its documents and workflows)
 - Website: https://work.software
 - This guide, with the linked documents inlined: https://work.software/llms-full.txt
 - Source of truth for capabilities: the repository's README and decision records (links below)
@@ -84,7 +84,7 @@ We built Work because we believe one well-built piece of software can replace mo
 - Setting one up with an agent, end to end: skills/setup-work-server/SKILL.md (start with references/first-brain.md; company identity, secrets and the gateway, machines, and sharing each have a reference beside it)
 - Extending the Work server with your own code: packages/work-server/README.md
 - Composing services, external runners and Postgres state, with current guarantees and recovery tests: skills/setup-work-server/references/workflow-composition.md
-- Working on a Work server project from Claude Code or any MCP client: skills/setup-work-server/references/members-over-mcp.md
+- Running the server's coding agents from Claude Code, Codex or any MCP client (start, wait, answer, read): skills/setup-work-server/references/members-over-mcp.md
 - Connecting a project to Slack: skills/setup-work-server/references/connect-slack.md
 - Reviewing pull requests with Work: skills/setup-work-server/references/review-pull-requests.md
 - Ready-made packs an agent installs into a project (pull request reviews, Slack threads, UI components): packages/registry/README.md

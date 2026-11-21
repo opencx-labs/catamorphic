@@ -137,7 +137,6 @@ export function desktopCapabilitySource(deps: {
             ![
               "list_skills",
               "read_skill",
-              "send_agent_message",
               "set_session_metadata",
               "propose_change",
             ].includes(name) &&

@@ -28,6 +28,7 @@ import {
 } from "@catamorphic/workflow/project-layout";
 import { type Kysely, type Selectable, sql, type Transaction } from "kysely";
 import {
+  assertTokenScope,
   hasProjectPermission,
   type Identity,
   identityCovers,
@@ -1373,6 +1374,7 @@ export class RunsService {
     workflowName: string;
     commitSha?: string;
   }): Promise<void> {
+    assertTokenScope(args.identity, "sessions:run");
     await this.requireProject(args.identity, args.projectId);
     await assertScopeAllowsWorkflow({
       ...args,
@@ -2664,6 +2666,7 @@ export class RunsService {
         },
       },
       async (span) => {
+        assertTokenScope(args.identity, "sessions:run");
         if (args.identity.scope) {
           // Viewers reach exactly what their scope resolves to.
           await assertScopeAllowsWorkflow({
@@ -3663,6 +3666,10 @@ export class RunsService {
     runId: string,
     permission: "runs:read" | "runs:write",
   ): Promise<void> {
+    assertTokenScope(
+      identity,
+      permission === "runs:write" ? "sessions:run" : "work:read",
+    );
     const row = await this.db
       .selectFrom("workflow_runs")
       .innerJoin("projects", "projects.id", "workflow_runs.project_id")

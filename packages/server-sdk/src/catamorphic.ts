@@ -232,6 +232,14 @@ export interface CatamorphicHostConfig {
    * a chat trigger kind. Exceptions are swallowed and never delay the turn.
    */
   onAgentTurnSettled?: (event: AgentTurnSettledEvent) => void | Promise<void>;
+  /**
+   * Where a person opens a chat, when the host has a public address: the
+   * `url` every session state carries (ADR 0344).
+   */
+  sessionUrl?: (chat: {
+    projectId: string;
+    sessionId: string;
+  }) => string | undefined;
   /** A person chose "Always allow" for an agent's tool; the host keeps it (ADR 0054). */
   onToolAlwaysAllowed?: CatamorphicCoreConfig["onToolAlwaysAllowed"];
   /** Optional host-owned delivery transport for durable user notifications. */
@@ -416,6 +424,7 @@ export class Catamorphic {
       mcpToolKinds: contributions.mcpToolKinds,
       ...(config.webhooks ? { webhooks: config.webhooks } : {}),
       onAgentTurnSettled: config.onAgentTurnSettled,
+      ...(config.sessionUrl ? { sessionUrl: config.sessionUrl } : {}),
       ...(config.onToolAlwaysAllowed
         ? { onToolAlwaysAllowed: config.onToolAlwaysAllowed }
         : {}),

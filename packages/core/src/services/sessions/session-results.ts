@@ -449,6 +449,9 @@ export interface LatestResult {
   truncated: boolean;
   current: boolean;
   turnId: string | null;
+  attemptId: string | null;
+  input: ResultInput | null;
+  commit: string | null;
   recordedAt: string;
 }
 
@@ -505,6 +508,9 @@ export async function latestResults(
       truncated,
       current: isCurrent(item.input, input),
       turnId: item.turnId,
+      attemptId: item.attemptId,
+      input: item.input,
+      commit: item.commit ?? null,
       recordedAt: item.createdAt,
     };
     latest.set(item.sessionId, [...(latest.get(item.sessionId) ?? []), entry]);
@@ -519,7 +525,7 @@ export function resultLines(results: readonly LatestResult[]): string {
     "Its results (the latest of each name):",
     ...results.map((result) =>
       result.truncated
-        ? `- ${result.name}: too large to show here; read it with session_results (result ${result.id}).`
+        ? `- ${result.name}: too large to show here; read it with session_read (result ${result.id}).`
         : `- ${result.name}: ${JSON.stringify(result.value)}`,
     ),
   ].join("\n");

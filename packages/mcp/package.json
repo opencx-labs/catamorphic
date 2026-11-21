@@ -24,10 +24,10 @@
   },
   "dependencies": {
     "@catamorphic/sandbox": "workspace:*",
-    "@modelcontextprotocol/client": "^2.4.0",
-    "@modelcontextprotocol/sdk": "^1.32.2"
+    "@modelcontextprotocol/client": "^2.4.0"
   },
   "devDependencies": {
+    "@modelcontextprotocol/sdk": "^1.32.2",
     "@types/node": "^26.6.6"
   },
   "license": "Apache-2.0",

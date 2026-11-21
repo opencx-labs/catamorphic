@@ -6,10 +6,14 @@ import type { AgentCapabilityOptions } from "@catamorphic/core";
 import {
   type ConnectionActionGuard,
   type ConnectionProvider,
+  FULL_TOKEN_SCOPE,
+  hasTokenScope,
   type Identity,
   type ModelRequestRewrite,
   startEventDispatcher,
+  tokenScopesOf,
   WorkerNodesService,
+  withTokenScopes,
 } from "@catamorphic/core";
 import {
   createDatabase,
@@ -626,6 +630,13 @@ async function createWorkServerInner(
   );
   const catamorphic = createCatamorphic({
     hostId,
+    // The chat as the web client opens it, for whoever is handed its state.
+    ...(isLoopbackBase(publicBase)
+      ? {}
+      : {
+          sessionUrl: (chat: { projectId: string; sessionId: string }) =>
+            `${publicBase}/?project=${encodeURIComponent(chat.projectId)}&session=${encodeURIComponent(chat.sessionId)}`,
+        }),
     ...(hooks.capabilityProviders
       ? { capabilityProviders: hooks.capabilityProviders }
       : {}),
@@ -1162,17 +1173,34 @@ async function createWorkServerInner(
     if (!authenticated) return null;
     if (!(await accountLifecycle.isActive(authenticated.userId))) return null;
     if (await shares.isGuest(authenticated.userId)) return null;
-    return administrators.withPermissions(
-      await core.memberships.identityForUser({
-        tenantId: SERVER_TENANT_ID,
-        externalUserId: authenticated.userId,
-      }),
+    // A grant that names none of Work's scopes holds nothing here: its
+    // client signs in again and is asked what it may do.
+    if (tokenScopesOf(authenticated.scopes).length === 0) return null;
+    // A client holds what its person consented to: the member's roles,
+    // narrowed by the grant's scopes (ADR 0345). Only `work:full`, which
+    // Work's own apps ask for, is the person themself.
+    return withTokenScopes(
+      await administrators.withPermissions(
+        await core.memberships.identityForUser({
+          tenantId: SERVER_TENANT_ID,
+          externalUserId: authenticated.userId,
+        }),
+      ),
+      authenticated.scopes,
     );
   };
   const app = createApp({
     core,
     identity: identityFromBearer((token) => memberIdentity(`Bearer ${token}`)),
     features: { publications: "members" },
+    mcp: {
+      // Every replica signs with the deployment's secret, under a label of
+      // its own: a state one replica handed out, another accepts.
+      stateSecret: createHash("sha256")
+        .update(`mcp-request-state:${authSecret}`)
+        .digest("hex"),
+      resourceMetadataUrl: `${publicBase}/.well-known/oauth-protected-resource`,
+    },
     projectMcp: {
       serverInfo: { name: "work", title: "Work" },
       instructions:
@@ -1224,9 +1252,11 @@ async function createWorkServerInner(
         : (authorization ?? ""),
     );
     const resourceMetadata = `${publicBase}/.well-known/oauth-protected-resource`;
+    // The scopes a client should ask for (RFC 6750): reading, and
+    // running chats. Approving is never asked for on its behalf.
     reply.header(
       "www-authenticate",
-      `Bearer resource_metadata="${resourceMetadata}"${
+      `Bearer resource_metadata="${resourceMetadata}", scope="${MCP_CHALLENGE_SCOPES.join(" ")}"${
         hasBearer ? ', error="invalid_token"' : ""
       }`,
     );
@@ -1255,37 +1285,26 @@ async function createWorkServerInner(
     trustedProxies: config.trustedProxies ?? [],
     log,
   });
+  const memberCaller = async (request: FastifyRequest) => {
+    const header = request.headers.authorization;
+    const authorization = Array.isArray(header) ? header[0] : header;
+    return authorization ? memberIdentity(authorization) : null;
+  };
   registerShareRoutes(app, {
     core,
     auth: workAuth,
     shares,
     publicBase,
     isActive: (userId) => accountLifecycle.isActive(userId),
-    caller: async (request) => {
-      const header = request.headers.authorization;
-      const authorization = Array.isArray(header) ? header[0] : header;
-      if (!authorization) return null;
-      const authenticated = await workAuth.resolveAccessToken({
-        authorization,
-      });
-      if (
-        !authenticated ||
-        !(await accountLifecycle.isActive(authenticated.userId)) ||
-        (await shares.isGuest(authenticated.userId))
-      )
-        return null;
-      return core.memberships.identityForUser({
-        tenantId: SERVER_TENANT_ID,
-        externalUserId: authenticated.userId,
-      });
-    },
+    caller: memberCaller,
   });
   const administratorAccess = {
     administrators,
     caller: async (request: FastifyRequest) => {
-      const header = request.headers.authorization;
-      const authorization = Array.isArray(header) ? header[0] : header;
-      return authorization ? memberIdentity(authorization) : null;
+      const identity = await memberCaller(request);
+      return identity && hasTokenScope(identity, FULL_TOKEN_SCOPE)
+        ? identity
+        : null;
     },
   };
   registerAdministratorRoutes(app, administratorAccess);
@@ -1582,6 +1601,12 @@ ${workMark({ size: 72 })}
 <p style="color:#9a9aa3;font-size:.9rem;margin:0">Running. Sign in here or connect from the Work app or an MCP client.</p>
 </div>
 `;
+
+/**
+ * The scopes an MCP client is told to ask for when it has no token (ADR
+ * 0345): the least that runs a chat. More is granted by stepping up.
+ */
+const MCP_CHALLENGE_SCOPES = ["work:read", "sessions:run"] as const;
 
 function isLoopbackBase(base: string): boolean {
   const { hostname } = new URL(base);
