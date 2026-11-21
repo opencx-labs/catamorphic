@@ -1,6 +1,6 @@
 # 0341 — The engine's boundary: one interface each way, a key, then the fork
 
-- **Status:** Proposed (amends 0339)
+- **Status:** Accepted (amends 0339)
 - **Date:** 2026-11-20
 
 ## Context
@@ -58,7 +58,7 @@ data (`main/engine/channel.ts`, the database thread's pattern).
   is quiet), then closes: what never settled fails its caller and what
   is asked after is refused.
 
-**Two departures from ADR 0339, which merging this accepts.**
+**Two changes to ADR 0339.**
 
 1. *The main process reaches the engine over the channel, never over the
    loopback API or desktop-only routes.* The API forwards a linked

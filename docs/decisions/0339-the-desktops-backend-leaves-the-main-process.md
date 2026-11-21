@@ -1,6 +1,6 @@
 # 0339 — The desktop's backend leaves the main process: its database first, then the server
 
-- **Status:** Accepted (proposed amendment in [0341](0341-the-engines-boundary-one-interface-then-the-fork.md))
+- **Status:** Accepted (amended by [0341](0341-the-engines-boundary-one-interface-then-the-fork.md))
 - **Date:** 2026-11-19
 
 ## Context

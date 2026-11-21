@@ -151,10 +151,13 @@ export function OpenResourceButton({
   defaultOpenMode?: OpenMode;
   isResource?: boolean;
   openOnMouseDown?: boolean;
-  /** The resource is this file: its menu adds what can be done with it. */
-  file?: FileTarget;
-  /** The resource's own verbs, after the ways to open it. */
-  actions?: ResourceActions;
+  /**
+   * The resource is this file: its menu adds what can be done with it. A
+   * function is asked as the menu opens, so a long list builds no menus.
+   */
+  file?: FileTarget | (() => FileTarget | undefined);
+  /** The resource's own verbs, after the ways to open it; or, as `file`. */
+  actions?: ResourceActions | (() => ResourceActions | undefined);
   /** A web address this resource opens, copied as the address rather than its label. */
   url?: string;
 }) {
@@ -194,8 +197,8 @@ export function OpenResourceButton({
               y: event.clientY || rect.bottom,
             },
             onOpen,
-            file,
-            actions,
+            file: typeof file === "function" ? file() : file,
+            actions: typeof actions === "function" ? actions() : actions,
             url,
           });
         }}

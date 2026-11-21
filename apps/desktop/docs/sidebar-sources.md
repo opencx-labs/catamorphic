@@ -14,7 +14,11 @@ and `satisfies WorkspaceConfig`; generic collections and workflow run handles
 come from `@catamorphic/app`.
 
 Source handlers receive optional current `surface` and `session` independently
-from visibility predicates. Opening an addressless row reaches its action as
+from visibility predicates. A section reads its rows again when what its
+source lists from changes: a module is sent both with every call, so its
+section reads again as either changes; each of Work's lists says what it
+lists from (`listsFrom` in `src/renderer/sources/contract.ts`), and a list
+that names neither is not read again for every tab that comes forward. Opening an addressless row reaches its action as
 `action: "open"` with a separate `mode`. Ordinary successful actions return
 nothing. An optional `{ open, mode?, message? }` effect requests navigation or
 explicit feedback.

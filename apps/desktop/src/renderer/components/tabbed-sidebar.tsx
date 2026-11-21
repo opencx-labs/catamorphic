@@ -1,6 +1,7 @@
 import { focusTreeRow, onTreeLeave } from "@catamorphic/app/ui";
 import { Circle, Plus } from "lucide-react";
 import {
+  memo,
   type FocusEvent as ReactFocusEvent,
   type ReactNode,
   type Ref,
@@ -860,7 +861,11 @@ export function TabbedSidebar({
   );
 }
 
-function SidebarSlot({
+/**
+ * Memoised: the sidebar's shell renders with the window (its header shows
+ * the tab in front), and a slot only when what its section is given changes.
+ */
+const SidebarSlot = memo(function SidebarSlot({
   section,
   mounted,
   relevant,
@@ -934,4 +939,4 @@ function SidebarSlot({
       </Collapsible>
     </div>
   );
-}
+});

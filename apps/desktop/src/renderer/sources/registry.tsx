@@ -176,6 +176,7 @@ export function useWorkSources({
   const listeners = useRef({
     tabs: new Set<() => void>(),
     unread: new Set<() => void>(),
+    agents: new Set<() => void>(),
   });
   // Only what a tab row shows (or which tab is in front) changing, or which
   // chats were read, reads those lists again.
@@ -202,10 +203,11 @@ export function useWorkSources({
       ),
     ].join("\n"),
     unread: [...host.unreadSessionIds].sort().join("\n"),
+    agents: host.agentsKey,
   };
   const previous = useRef(signatures);
   useEffect(() => {
-    for (const topic of ["tabs", "unread"] as const) {
+    for (const topic of ["tabs", "unread", "agents"] as const) {
       if (previous.current[topic] === signatures[topic]) continue;
       for (const listener of listeners.current[topic]) listener();
     }
