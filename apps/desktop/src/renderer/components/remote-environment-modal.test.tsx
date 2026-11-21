@@ -473,6 +473,25 @@ describe("RemoteEnvironmentModal: your machines", () => {
     expect(section?.textContent).not.toMatch(/[–—]/);
   });
 
+  it("shows when a member's worker is stopped or resuming", async () => {
+    desktop.personalEnvironment.mockResolvedValue(view());
+    desktop.remoteMachines.mockResolvedValue([
+      machine({ name: "ada-parked", available: false, state: "stopped" }),
+      machine({
+        id: "m-2",
+        name: "ada-starting",
+        available: false,
+        state: "resuming",
+      }),
+    ]);
+    await render();
+    expect(document.body.textContent).toContain("ada-parkedStopped");
+    expect(document.body.textContent).toContain("ada-startingResuming");
+    expect(
+      labelled("Sign in to Codex on ada-parked")?.dataset.disabledReason,
+    ).toBe("This machine is stopped");
+  });
+
   it("says when the list fails, and lists again on request", async () => {
     desktop.personalEnvironment.mockResolvedValue(view());
     desktop.remoteMachines

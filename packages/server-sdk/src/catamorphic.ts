@@ -304,6 +304,11 @@ export interface CatamorphicHostConfig {
    * at; restricted egress always allows them (ADR 0176).
    */
   gatewayHosts?: CatamorphicCoreConfig["gatewayHosts"];
+  /**
+   * Minutes work waits for a machine in an Environment that names no
+   * `waitMinutes`: set by a host that makes machines for waiting work.
+   */
+  placementWaitMinutes?: CatamorphicCoreConfig["placementWaitMinutes"];
 }
 
 function resolveDatabase(config: DatabaseConfig): {
@@ -438,6 +443,7 @@ export class Catamorphic {
       standingAgentPrompt: config.standingAgentPrompt,
       documentBlobStore: config.documentBlobStore,
       gatewayHosts: config.gatewayHosts,
+      placementWaitMinutes: config.placementWaitMinutes,
     });
   }
 

@@ -6,11 +6,17 @@ import Fastify from "fastify";
 import { afterAll, describe, expect, it } from "vitest";
 import {
   CLOUD_INIT_SCRIPT_PATH,
-  installTarget,
+  installTargetProblem,
   registerInstallScriptRoute,
   workerCloudInit,
   workerInstallScript,
-} from "./install-script.js";
+  workerUserData,
+} from "../../registry/src/machines-install/machines-install.js";
+
+/*
+ * The `machines-install` recipe (ADR 0348): the install script and user
+ * data a host's own code builds, which the server no longer generates.
+ */
 
 const root = fs.mkdtempSync(path.join(os.tmpdir(), "work-install-script-"));
 afterAll(() => fs.rmSync(root, { recursive: true, force: true }));
@@ -102,6 +108,12 @@ describe("the worker install script", () => {
     withoutDocker?: boolean;
     /** apt's lock is held for this many checks. */
     aptBusy?: number;
+    /** The worker image is not on the machine. */
+    withoutImage?: boolean;
+    /** Another script than the default target's. */
+    script?: string;
+    /** Root's Docker configuration directory, for `--registry ecr`. */
+    dockerConfig?: string;
   }): {
     status: number | null;
     stdout: string;
@@ -127,6 +139,7 @@ describe("the worker install script", () => {
         '  container) [ -f "$STUB_STATE/container" ] || exit 1 ;;',
         '  rm) rm -f "$STUB_STATE/container" ;;',
         '  run) : > "$STUB_STATE/container" ;;',
+        '  image) [ ! -f "$STUB_STATE/no-image" ] || exit 1 ;;',
         "esac",
       ].join("\n"),
     );
@@ -153,6 +166,8 @@ describe("the worker install script", () => {
       path.join(args.state, "apt-busy"),
       String(args.aptBusy ?? 0),
     );
+    if (args.withoutImage)
+      fs.writeFileSync(path.join(args.state, "no-image"), "");
     stub(
       "fuser",
       [
@@ -173,7 +188,7 @@ describe("the worker install script", () => {
       "sleep",
     ])
       stub(name);
-    const file = write("run.sh", workerInstallScript(target));
+    const file = args.script ?? write("run.sh", workerInstallScript(target));
     const result = spawnSync(shell, [file, ...args.argv], {
       encoding: "utf8",
       env: {
@@ -181,6 +196,7 @@ describe("the worker install script", () => {
         STUB_LOG: log,
         STUB_STATE: args.state,
         FAKE_UID: String(args.uid ?? 0),
+        ...(args.dockerConfig ? { DOCKER_CONFIG: args.dockerConfig } : {}),
       },
     });
     return {
@@ -313,6 +329,102 @@ describe("the worker install script", () => {
     }
   });
 
+  it("pulls a private ECR image with the machine's own identity, through the credential helper", () => {
+    const state = fs.mkdtempSync(path.join(root, "ecr-"));
+    const dockerConfig = path.join(state, "root-docker");
+    const dataDir = path.join(state, "data");
+    const ecrTarget = {
+      ...target,
+      image: "111122223333.dkr.ecr.eu-west-1.amazonaws.com/work-worker:1.2.3",
+    };
+    const file = write("ecr.sh", workerInstallScript(ecrTarget));
+    const first = run({
+      argv: ["--code", "wke_x", "--data-dir", dataDir, "--registry", "ecr"],
+      state,
+      dockerConfig,
+      script: file,
+    });
+    expect(first.status, first.stderr).toBe(0);
+    // Without its recommended packages, which would bring a second Docker.
+    expect(first.log).toContain(
+      "apt-get -o DPkg::Lock::Timeout=300 install -y -qq --no-install-recommends amazon-ecr-credential-helper",
+    );
+    // Root's Docker configuration names the helper for the image's registry
+    // alone, before the pull.
+    expect(
+      JSON.parse(
+        fs.readFileSync(path.join(dockerConfig, "config.json"), "utf8"),
+      ),
+    ).toEqual({
+      credHelpers: {
+        "111122223333.dkr.ecr.eu-west-1.amazonaws.com": "ecr-login",
+      },
+    });
+    const pull = first.log.findIndex((line) => line.startsWith("docker pull"));
+    const helper = first.log.findIndex((line) =>
+      line.includes("amazon-ecr-credential-helper"),
+    );
+    expect(helper).toBeGreaterThanOrEqual(0);
+    expect(pull).toBeGreaterThan(helper);
+    // A configuration someone else wrote is never overwritten.
+    fs.writeFileSync(path.join(dockerConfig, "config.json"), "{}");
+    const kept = run({
+      argv: [
+        "--code",
+        "wke_x",
+        "--data-dir",
+        path.join(state, "data-2"),
+        "--registry",
+        "ecr",
+      ],
+      state,
+      dockerConfig,
+      script: file,
+    });
+    expect(kept.status).toBe(1);
+    expect(kept.stderr).toContain("names no ecr-login helper");
+    expect(
+      run({
+        argv: [
+          "--code",
+          "wke_x",
+          "--data-dir",
+          path.join(state, "data-3"),
+          "--registry",
+          "gcr",
+        ],
+        state,
+      }).stderr,
+    ).toContain("--registry is ecr");
+  });
+
+  it("runs a baked image's worker without pulling, and says when the image is not there", () => {
+    const state = fs.mkdtempSync(path.join(root, "baked-"));
+    const dataDir = path.join(state, "data");
+    const baked = run({
+      argv: ["--code", "wke_x", "--data-dir", dataDir, "--no-pull"],
+      state,
+    });
+    expect(baked.status, baked.stderr).toBe(0);
+    expect(baked.log.some((line) => line.startsWith("docker pull"))).toBe(
+      false,
+    );
+    expect(baked.log.some((line) => line.startsWith("docker run"))).toBe(true);
+    const missing = run({
+      argv: [
+        "--code",
+        "wke_x",
+        "--data-dir",
+        path.join(state, "data-2"),
+        "--no-pull",
+      ],
+      state: fs.mkdtempSync(path.join(root, "baked-missing-")),
+      withoutImage: true,
+    });
+    expect(missing.status).toBe(1);
+    expect(missing.stderr).toContain("is not on this machine");
+  });
+
   it("never takes a system directory, or someone else's, for its data", () => {
     const state = fs.mkdtempSync(path.join(root, "data-dir-"));
     const taken = path.join(state, "taken");
@@ -419,42 +531,83 @@ describe("cloud-init for cloud machines", () => {
     expect(
       workerCloudInit({ script, code: "wke_x", sandbox: "auto" }),
     ).toContain(`  - ["sh", "${CLOUD_INIT_SCRIPT_PATH}", "--code", "wke_x"]`);
-    // Hetzner accepts user data up to 32 KiB; nothing is fetched to start.
+    // Clouds bound user data (EC2 16 KiB before base64, Hetzner 32 KiB);
+    // nothing is fetched to start.
     expect(Buffer.byteLength(userData)).toBeLessThan(32 * 1024);
     expect(userData).not.toContain("install.sh |");
   });
+
+  it("builds a create's user data for a stock image, a private registry and a baked image", () => {
+    const enrollment = {
+      controlPlaneUrl: target.controlPlaneUrl,
+      code: "wke_from-create",
+    };
+    const stock = workerUserData({ enrollment, image: target.image });
+    const script = Buffer.from(
+      stock
+        .split("\n")
+        .find((line) => line.startsWith("    content: "))
+        ?.slice("    content: ".length) ?? "",
+      "base64",
+    ).toString();
+    expect(script).toBe(workerInstallScript(target));
+    expect(stock).toContain(
+      `  - ["sh", "${CLOUD_INIT_SCRIPT_PATH}", "--code", "wke_from-create"]`,
+    );
+    // A private ECR image: the machine's instance profile reads it.
+    expect(
+      workerUserData({
+        enrollment,
+        image: target.image,
+        registry: "ecr",
+        sandbox: "container",
+      }),
+    ).toContain(
+      `"--code", "wke_from-create", "--sandbox", "container", "--registry", "ecr"]`,
+    );
+    // A baked image holds the script and the worker image: the user data
+    // only starts the worker, and stays small.
+    const baked = workerUserData({
+      enrollment,
+      image: target.image,
+      baked: true,
+    });
+    expect(baked).toBe(
+      [
+        "#cloud-config",
+        "runcmd:",
+        `  - ["sh", "${CLOUD_INIT_SCRIPT_PATH}", "--code", "wke_from-create", "--no-pull"]`,
+        "",
+      ].join("\n"),
+    );
+  });
 });
 
-describe("GET /api/workers/install.sh", () => {
-  it("serves the script, or says what the server is missing", async () => {
+describe("GET /api/workers/install.sh, mounted by a host", () => {
+  it("serves the script, or says what the target is missing", async () => {
     const served = Fastify();
-    registerInstallScriptRoute(
-      served,
-      installTarget({
-        publicBase: target.controlPlaneUrl,
-        workerImage: target.image,
-      }),
-    );
+    registerInstallScriptRoute({ app: served, target });
     const ok = await served.inject({ url: "/api/workers/install.sh" });
     expect(ok.statusCode).toBe(200);
     expect(ok.headers["content-type"]).toContain("text/x-shellscript");
     expect(ok.body).toBe(workerInstallScript(target));
 
     const noImage = Fastify();
-    registerInstallScriptRoute(
-      noImage,
-      installTarget({ publicBase: target.controlPlaneUrl }),
-    );
+    registerInstallScriptRoute({
+      app: noImage,
+      target: { ...target, image: "" },
+    });
     const missing = await noImage.inject({ url: "/api/workers/install.sh" });
     expect(missing.statusCode).toBe(503);
-    expect(missing.body).toContain("WORK_WORKER_IMAGE");
+    expect(missing.body).toContain("worker image");
 
     expect(
-      installTarget({
-        publicBase: "http://127.0.0.1:4700",
-        workerImage: target.image,
+      installTargetProblem({
+        controlPlaneUrl: "http://127.0.0.1:4700",
+        image: target.image,
       }),
-    ).toEqual({ unavailable: expect.stringContaining("WORK_PUBLIC_URL") });
+    ).toContain("loopback");
+    expect(installTargetProblem(target)).toBeUndefined();
     await Promise.all([served.close(), noImage.close()]);
   });
 });

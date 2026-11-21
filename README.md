@@ -120,9 +120,9 @@ those sandboxes on the organization's model keys, held by the gateway. New model
 calls require the turn's exact attempt and live lease; Git and HTTP
 background access keep their normal grant lifetime. The gateway
 can pin the providers an aggregator routes to; work that needs a machine can
-wait for one, and machine rules can create machines on demand and remove
-them when idle, on Hetzner Cloud or on any cloud through two workflows of a
-project (an EC2 recipe ships as a pack). Machines manage their disk too:
+wait for one. The host's machine plan can create, stop, resume, and
+destroy machines on its own infrastructure. Copyable recipes cover EC2,
+Hetzner Cloud, project workflows and worker installation. Machines manage their disk too:
 each keeps a floor of free space below which it takes no new workspace,
 reserves what an Environment's `storageMb` asks, removes the images and
 leftovers Work no longer uses, names a full disk in the failures it causes,
@@ -505,7 +505,6 @@ Supporting packages (consumed through the surface above, importable directly for
 | `@catamorphic/local-process` | Sandboxless execution as plain subprocesses with an explicit env. Trusted single-tenant hosts only (ADR 0047). |
 | `@catamorphic/cloudflare` | Cloudflare backend plugin: `CloudflareSandboxProvider` (execution via Bridge Worker) + `ArtifactsRemoteBackend` (Cloudflare-native code storage when available). |
 | `@catamorphic/s3` | S3-compatible git origin backend for Cloudflare R2, AWS S3, MinIO, and similar stores. |
-| `@catamorphic/hetzner` | Hetzner Cloud client and machine provisioner behind the Work server's `hetzner-cloud` machine classes (ADR 0205). |
 | `@catamorphic/ai-sdk` | Built-in harness adapter: Vercel AI SDK tool loop on any API model, running in the host and driving the session's sandbox through its tools. |
 | `@catamorphic/claude-code` | Harness adapter backed by the Claude Code (Claude Agent SDK) CLI, with per-turn MCP servers, portable native state and full settings-source fidelity. |
 | `@catamorphic/codex` | Harness adapter backed by the pinned OpenAI Codex app-server protocol. |

@@ -788,7 +788,7 @@ describe.skipIf(!databaseUrl)("reviewing pull requests (#118)", () => {
     const enrollment = await operator("POST", "/_work/operator/workers", {
       name: "review-1",
       labels: { pool: "review" },
-      access: { projects: [projectId] },
+      for: [{ project: projectId }],
       trusted: true,
     });
     expect(enrollment.statusCode, enrollment.body).toBe(201);
@@ -1313,12 +1313,14 @@ describe.skipIf(!databaseUrl)("reviewing pull requests (#118)", () => {
       (await reviewChat())?.status === "closed" ? true : undefined,
     );
     const db = server.catamorphic.core.db;
-    const allocation = await db
-      .selectFrom("execution_allocations")
-      .select(["status"])
-      .where("id", "=", before?.allocation_id ?? "")
-      .executeTakeFirstOrThrow();
-    expect(allocation.status).toBe("released");
+    await waitFor("the chat's allocation to be released", async () => {
+      const allocation = await db
+        .selectFrom("execution_allocations")
+        .select(["status"])
+        .where("id", "=", before?.allocation_id ?? "")
+        .executeTakeFirstOrThrow();
+      return allocation.status === "released" ? true : undefined;
+    });
     // Closing releases the Allocation with the chat (which already ends
     // every grant bound to it) and then revokes the rows themselves.
     await waitFor("the chat's grants to be revoked", async () => {

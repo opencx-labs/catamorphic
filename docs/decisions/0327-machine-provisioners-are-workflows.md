@@ -1,6 +1,6 @@
 # 0327 — Machine provisioners are workflows
 
-- **Status:** Accepted (refines 0205, 0258; amended by [0336](0336-disk-is-a-resource-work-manages-on-machines.md): `machine.disk-low`, once per episode under a machine's disk floor, with its report and the class's options)
+- **Status:** Accepted (refines 0205, 0258; amended by [0336](0336-disk-is-a-resource-work-manages-on-machines.md): `machine.disk-low`, once per episode under a machine's disk floor, with its report and the class's options); machine policy superseded by 0347.
 - **Date:** 2026-11-17
 
 ## Context

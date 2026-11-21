@@ -12,6 +12,7 @@ import type {
   PersonalEnvironmentView,
 } from "../../shared/personal-environment.js";
 import {
+  REMOTE_MACHINE_STATE_LABELS,
   type RemoteMachine,
   type RemoteSignInState,
   SIGN_IN_HARNESS_NAMES,
@@ -471,7 +472,11 @@ function MachineCard({
           {machine.name}
         </p>
         <p className="shrink-0 text-xs text-fg-faint">
-          {machine.available ? "Online" : "Offline"}
+          {machine.state
+            ? REMOTE_MACHINE_STATE_LABELS[machine.state]
+            : machine.available
+              ? "Online"
+              : "Offline"}
         </p>
       </header>
       {SIGN_IN_HARNESSES.map((harness) => (
@@ -599,7 +604,9 @@ function SignInRow({
               type="button"
               disabled={disabled || !machine.available}
               data-disabled-reason={
-                machine.available ? waitReason : "This machine is offline"
+                machine.available
+                  ? waitReason
+                  : `This machine is ${machine.state ?? "offline"}`
               }
               data-row-action=""
               onClick={onSignIn}

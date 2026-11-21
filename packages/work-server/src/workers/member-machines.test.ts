@@ -53,6 +53,8 @@ const MachinesSchema = z.object({
       id: z.string(),
       name: z.string(),
       available: z.boolean(),
+      state: z.string(),
+      reason: z.string().nullable(),
       signIns: z.strictObject({
         "claude-code": z.enum(["signed-in", "signed-out"]),
         codex: z.enum(["signed-in", "signed-out"]),

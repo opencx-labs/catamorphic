@@ -8032,6 +8032,8 @@ export class AgentSessionsService {
         topology: agent.topology,
       },
       ...(agent.signIn ? { signIn: agent.signIn } : {}),
+      // A machine may be for this one chat key (ADR 0347).
+      ...(input.chatKey ? { chatKey: input.chatKey } : {}),
       harnessInSandbox: agent.harness.placement === "sandbox",
     });
     const admitted = "admission" in placed ? placed.admission : undefined;
@@ -12563,6 +12565,8 @@ export class AgentSessionsService {
       identity: input.identity,
       projectId: input.projectId,
       owner: placementOwner(session.external_user_id),
+      // A machine may be for this one chat key (ADR 0347).
+      ...(session.chat_key ? { chatKey: session.chat_key } : {}),
       ...(session.environment_name
         ? { environment: session.environment_name }
         : {}),

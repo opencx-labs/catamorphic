@@ -1095,9 +1095,11 @@ is queued. Core records each piece of waiting work in `placement_waits`
 transaction that creates the Allocation and when the chat's queued work is
 withdrawn (close, archive), and exposes
 `core.placementWaits.wake({ tenantId })` for a host to call when a machine
-comes online. A host that scales machines reads the table as demand: rows
-whose chat has a queued turn, tried within `PLACEMENT_WAIT_FRESH_SECONDS`
-([ADR 0258](docs/decisions/0258-machines-on-demand.md)). `sendMessage` on a
+comes online. Work server hosts can provide `hooks.machines`: the
+plan reads waiting work, people and machine facts and declares the desired
+set; Work sequences the host's infrastructure verbs under a fenced claim.
+See [the machine plan](skills/setup-work-server/references/cluster-deployment.md#a-machine-plan).
+`sendMessage` on a
 waiting chat throws `AgentTurnUnsettledError` with state `waiting` at once.
 
 The managed multi-machine target is multiple Catamorphic server instances of

@@ -71,67 +71,26 @@ it("reads trusted proxies and the sign-in limit switch", () => {
   ).toThrow("WORK_AUTH_RATE_LIMIT");
 });
 
-it("reads machine classes, the Hetzner token and the worker image (ADR 0205)", () => {
+it("reads how long waiting work waits for its machine, and no machine classes, cloud token or worker image (ADR 0347)", () => {
   const env = { WORK_DATA_DIR: dir };
-  const file = path.join(dir, "machines.json");
-  const classes = {
-    desk: {
-      platform: "hetzner-cloud",
-      serverType: "cpx41",
-      location: "fsn1",
-      image: "ubuntu-24.04",
-      sshKeys: ["ops", 42],
-      firewalls: [7],
-      labels: { team: "eng" },
-      snapshot: true,
-    },
-    office: { platform: "pool" },
-  };
-  fs.writeFileSync(file, JSON.stringify({ classes }));
+  expect(workServerConfigFromEnv(env).machineWaitMinutes).toBeUndefined();
+  expect(
+    workServerConfigFromEnv({ ...env, WORK_MACHINE_WAIT_MINUTES: " 45 " })
+      .machineWaitMinutes,
+  ).toBe(45);
+  for (const invalid of ["0", "soon", "1.5", "2000"])
+    expect(() =>
+      workServerConfigFromEnv({ ...env, WORK_MACHINE_WAIT_MINUTES: invalid }),
+    ).toThrow("WORK_MACHINE_WAIT_MINUTES");
+  // Machines are the host's code: the variables that configured them are
+  // read no more, so a file that is not there is never opened.
   const configured = workServerConfigFromEnv({
     ...env,
-    WORK_MACHINES_CONFIG: file,
-    WORK_HETZNER_TOKEN: " hcloud-token ",
+    WORK_MACHINES_CONFIG: path.join(dir, "missing.json"),
+    WORK_HETZNER_TOKEN: "hcloud-token",
+    WORK_WORKER_IMAGE: "registry.example.com/work:pinned",
   });
-  expect(configured.machines?.classes).toEqual(classes);
-  expect(configured.hetznerToken).toBe("hcloud-token");
-  // A Hetzner class needs the token, which never lives in the file.
-  expect(() =>
-    workServerConfigFromEnv({ ...env, WORK_MACHINES_CONFIG: file }),
-  ).toThrow("WORK_HETZNER_TOKEN");
-  for (const invalid of [
-    { classes: { Desk: { platform: "pool" } } },
-    { classes: { desk: { platform: "pool", serverType: "cpx41" } } },
-    { classes: { desk: { platform: "aws" } } },
-    { classes: { desk: { ...classes.desk, labels: { "work-machine": "x" } } } },
-  ]) {
-    fs.writeFileSync(file, JSON.stringify(invalid));
-    expect(() =>
-      workServerConfigFromEnv({
-        ...env,
-        WORK_MACHINES_CONFIG: file,
-        WORK_HETZNER_TOKEN: "t",
-      }),
-    ).toThrow(file);
-  }
-  fs.writeFileSync(file, "{ not json");
-  expect(() =>
-    workServerConfigFromEnv({ ...env, WORK_MACHINES_CONFIG: file }),
-  ).toThrow("not readable JSON");
-
-  // Worker images are deployment-owned and explicit, never inferred.
-  expect(workServerConfigFromEnv(env).workerImage).toBeUndefined();
-  expect(
-    workServerConfigFromEnv({
-      ...env,
-      WORK_IMAGE_REPOSITORY: "ghcr.io/acme/work-server",
-      WORK_VERSION: "0.1.0-alpha.18",
-    }).workerImage,
-  ).toBeUndefined();
-  expect(
-    workServerConfigFromEnv({
-      ...env,
-      WORK_WORKER_IMAGE: "registry.example.com/work:pinned",
-    }).workerImage,
-  ).toBe("registry.example.com/work:pinned");
+  expect(Object.keys(configured)).not.toEqual(
+    expect.arrayContaining(["machines", "hetznerToken", "workerImage"]),
+  );
 });

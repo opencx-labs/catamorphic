@@ -196,7 +196,8 @@ async function reported(worker: string): Promise<string[]> {
 async function enroll(input: {
   name: string;
   labels: Record<string, string>;
-  access: unknown;
+  /** Whom it is for; left out, anyone. */
+  for?: readonly unknown[];
   trusted?: boolean;
   /** The operator accepted personal credentials on its processes. */
   accept?: boolean;
@@ -205,7 +206,7 @@ async function enroll(input: {
   const enrollment = await operator("/_work/operator/workers", {
     name: input.name,
     labels: input.labels,
-    access: input.access,
+    ...(input.for ? { for: input.for } : {}),
     ...(input.trusted ? { trusted: true } : {}),
   });
   expect(enrollment.statusCode).toBe(201);
@@ -350,10 +351,11 @@ beforeAll(async () => {
   // Alice's own machines, and a shared one whose people trust each other
   // and whose operator accepted personal credentials there. On her first
   // machine Alice signed in, and Bob's sign-in from before was left on it.
-  for (const [name, labels, access, trusted] of [
-    ["alice-box", { pool: "alice" }, { people: ["alice@example.test"] }],
-    ["alice-box-2", { pool: "alice2" }, { people: ["alice@example.test"] }],
-    ["shared-box", { pool: "shared" }, { everyone: true }, true],
+  for (const [name, labels, principals, trusted] of [
+    // An operator names a person by the email they sign in with.
+    ["alice-box", { pool: "alice" }, [{ email: "alice@example.test" }]],
+    ["alice-box-2", { pool: "alice2" }, [{ user: users.alice }]],
+    ["shared-box", { pool: "shared" }, undefined, true],
   ] as const) {
     workerDirs[name] = path.join(root, name);
     if (name !== "alice-box-2")
@@ -363,7 +365,7 @@ beforeAll(async () => {
     await enroll({
       name,
       labels,
-      access,
+      ...(principals ? { for: principals } : {}),
       bin,
       ...(trusted ? { trusted, accept: true } : {}),
     });

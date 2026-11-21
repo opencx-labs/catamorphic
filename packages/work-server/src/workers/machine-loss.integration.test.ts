@@ -8,6 +8,11 @@ import {
 } from "@catamorphic/core";
 import { sql } from "kysely";
 import { expect, it } from "vitest";
+import type {
+  DesiredMachine,
+  MachinePlanFacts,
+  MachinesHook,
+} from "../machines/contract.js";
 import {
   createWorkServer,
   SERVER_TENANT_ID,
@@ -19,16 +24,16 @@ import {
   testExecutionSettings,
   testServerOptions,
 } from "../test-support.js";
-import type { MachineProvisioner } from "./machine-rules.js";
 import { startWorkWorker } from "./worker-runtime.js";
 
 /*
- * Every lost machine recovers (ADR 0346), end to end on network Postgres
- * with real workers running local processes and a fake platform. Nothing
- * here asks the server to act: its own timers detect the loss, retire the
- * machine's work, replace it and continue its chats. The operator API is
- * used to set up, to read status, and where a test is about an operator's
- * own action (a revoke).
+ * Every lost machine recovers (ADRs 0346, 0347), and machines stop and
+ * resume (ADR 0348), end to end on network Postgres with real workers
+ * running local processes, a machines hook whose plan a test writes, and a
+ * fake platform. Nothing here asks the server to act: its own timers plan,
+ * detect a loss, retire the machine's work, replace it and continue its
+ * chats. The operator API is used to set up, to read status, and where a
+ * test is about an operator's own action (a revoke, a disable).
  */
 
 /** The runner's internal words, which no chat may ever show. */
@@ -36,13 +41,13 @@ const SANDBOX_UNKNOWN_ERROR =
   "Sandbox does not belong to this runner connection";
 
 const OPERATOR_SECRET = "loss-test-operator-secret-with-32-characters";
-const ENG = "eng@example.com";
 
 type Fetch = (input: string, init?: RequestInit) => Promise<Response>;
+type Plan = (facts: MachinePlanFacts) => readonly DesiredMachine[];
 type Worker = Awaited<ReturnType<typeof startWorkWorker>>;
 
 interface PlatformEvent {
-  kind: "create" | "destroy";
+  kind: "create" | "destroy" | "stop" | "start";
   name: string;
   /** A create's enrollment code and idempotency key. */
   code?: string;
@@ -55,18 +60,35 @@ async function fleet(run: (fleet: Fleet) => Promise<void>): Promise<void> {
   const database = await createTestDatabase("work_loss");
   const workers: Worker[] = [];
   const platform: PlatformEvent[] = [];
-  const provisioner: MachineProvisioner = {
+  // The host's policy is code: each test writes the plan it is about.
+  const policy: { plan: Plan } = { plan: () => [] };
+  const refs = new Map<string, string>();
+  const hook: MachinesHook = {
+    plan: async (facts) => policy.plan(facts),
     create: async ({ name, enrollment }) => {
+      // Idempotent by key, as a platform's idempotency token makes it.
+      const known = refs.get(enrollment.idempotencyKey);
+      if (known) return { ref: known };
       platform.push({
         kind: "create",
         name,
         code: enrollment.code,
         key: enrollment.idempotencyKey,
       });
-      return { ref: `vm-${name}-${platform.length}` };
+      const ref = `vm-${name}-${platform.length}`;
+      refs.set(enrollment.idempotencyKey, ref);
+      return { ref };
     },
     destroy: async ({ name }) => {
       platform.push({ kind: "destroy", name });
+      return { done: true };
+    },
+    stop: async ({ name }) => {
+      platform.push({ kind: "stop", name });
+      return { done: true };
+    },
+    start: async ({ name }) => {
+      platform.push({ kind: "start", name });
       return { done: true };
     },
   };
@@ -86,7 +108,7 @@ async function fleet(run: (fleet: Fleet) => Promise<void>): Promise<void> {
           PATH: process.env.PATH,
         },
       }),
-      hooks: { machineProvisioner: provisioner },
+      hooks: { machines: hook },
     });
     const live = server;
     await live.app.listen({ port: 0, host: "127.0.0.1" });
@@ -104,10 +126,6 @@ async function fleet(run: (fleet: Fleet) => Promise<void>): Promise<void> {
       password: "correct horse battery staple",
       email: "ada@example.com",
     });
-    await sql`
-      INSERT INTO work_accounts (user_id, directory_groups, directory_checked_at)
-      VALUES (${account.id}, ${JSON.stringify([ENG])}::jsonb, now())
-    `.execute(db);
     const owner: Identity = {
       tenantId: SERVER_TENANT_ID,
       externalUserId: account.id,
@@ -116,7 +134,6 @@ async function fleet(run: (fleet: Fleet) => Promise<void>): Promise<void> {
     const environment = (pool: Record<string, string>) => ({
       pool,
       workloads: ["agent"],
-      waitMinutes: 30,
     });
     const deployed = await core.deployment.deploy(
       SERVER_TENANT_ID,
@@ -156,7 +173,7 @@ async function fleet(run: (fleet: Fleet) => Promise<void>): Promise<void> {
     if (!member) throw new Error("Membership missing");
 
     const operator = async (
-      method: "GET" | "POST" | "PUT" | "DELETE",
+      method: "GET" | "POST" | "PUT" | "PATCH" | "DELETE",
       url: string,
       payload?: unknown,
     ) => {
@@ -180,6 +197,11 @@ async function fleet(run: (fleet: Fleet) => Promise<void>): Promise<void> {
       db,
       platform,
       projectId: project.id,
+      userId: account.id,
+      plan: async (next) => {
+        policy.plan = next;
+        await operator("POST", "/machines/plan");
+      },
       operator,
       worker: async ({ name, code, dir }) => {
         const state = { down: false };
@@ -290,6 +312,10 @@ async function fleet(run: (fleet: Fleet) => Promise<void>): Promise<void> {
           content: reply?.text ?? turn.error ?? "",
         };
       },
+      releaseIdle: () =>
+        sessions.releaseIdleWorkspaces({
+          now: new Date(Date.now() + 60 * 60_000),
+        }),
       allocations: (sessionId) =>
         db
           .selectFrom("execution_allocations")
@@ -343,8 +369,12 @@ interface Fleet {
   /** Every call the platform received, in order. */
   platform: PlatformEvent[];
   projectId: string;
+  /** The member's account id: what `{ user }` names. */
+  userId: string;
+  /** Deploy the host's plan, and plan now. */
+  plan(next: Plan): Promise<void>;
   operator(
-    method: "GET" | "POST" | "PUT" | "DELETE",
+    method: "GET" | "POST" | "PUT" | "PATCH" | "DELETE",
     url: string,
     payload?: unknown,
   ): Promise<Record<string, unknown>>;
@@ -365,6 +395,7 @@ interface Fleet {
     turnId: string,
     timeout?: number,
   ): Promise<{ status: string; content: string }>;
+  releaseIdle(): Promise<number>;
   allocations(sessionId: string): Promise<
     Array<{
       id: string;
@@ -390,29 +421,111 @@ async function workerRow(fleet: Fleet, name: string) {
   const listing = await fleet.operator("GET", "/workers");
   const rows = Array.isArray(listing.workers) ? listing.workers : [];
   return rows.find(
-    (row): row is { name: string; state: string; connected: boolean } =>
-      typeof row === "object" && row !== null && row.name === name,
+    (
+      row,
+    ): row is {
+      name: string;
+      state: string;
+      connected: boolean;
+      managed: boolean;
+      reason: string | null;
+      notice: string | null;
+    } => typeof row === "object" && row !== null && row.name === name,
   );
 }
 
-async function ruleStatus(fleet: Fleet, rule: string) {
-  const listing = await fleet.operator("GET", "/machine-rules");
-  const status = listing.status;
-  return typeof status === "object" && status !== null && !Array.isArray(status)
-    ? (status as Record<string, unknown>)[rule]
-    : undefined;
-}
+it.skipIf(!process.env.DATABASE_URL)(
+  "stops only after saving a live chat, then resumes the same worker for the waiting turn",
+  () =>
+    fleet(async (fleet) => {
+      const name = "desk-ada";
+      const desk = {
+        name,
+        for: [{ user: fleet.userId }],
+        labels: { class: "desk" },
+      };
+      await fleet.plan(() => [desk]);
+      const [create] = creates(fleet.platform);
+      if (!create?.code) throw new Error("No worker enrollment");
+      const worker = await fleet.worker({ name, code: create.code });
+      const original = await fleet.db
+        .selectFrom("worker_nodes")
+        .select("lease_token")
+        .where("id", "=", `worker.${name}`)
+        .executeTakeFirstOrThrow();
+      const credential = await fs.readFile(
+        path.join(worker.dataDir, "worker-credential"),
+      );
+      const chat = await fleet.chat("desk");
+      const saved = await fleet.settled(
+        await fleet.send(chat, "write-file note.txt saved-before-stop"),
+      );
+      expect(saved.status, saved.content).toBe("completed");
+
+      await fleet.plan(({ work }) => [
+        {
+          ...desk,
+          state: work.some((entry) => entry.user === fleet.userId)
+            ? "running"
+            : "stopped",
+        },
+      ]);
+      expect(fleet.platform.some((event) => event.kind === "stop")).toBe(false);
+      expect(await fleet.releaseIdle()).toBe(1);
+      await expect
+        .poll(async () => (await workerRow(fleet, name))?.state, {
+          timeout: 30_000,
+        })
+        .toBe("stopped");
+      await worker.stop();
+
+      const waiting = await fleet.send(chat, "run cat note.txt");
+      await expect
+        .poll(
+          async () =>
+            (
+              await fleet.db
+                .selectFrom("placement_waits")
+                .select("machine")
+                .where("root_workload_id", "=", chat)
+                .executeTakeFirst()
+            )?.machine,
+          { timeout: 30_000 },
+        )
+        .toEqual({ name, state: "resuming" });
+
+      const resumed = await fleet.worker({ name, dir: worker.dataDir });
+      expect(
+        await fs.readFile(path.join(resumed.dataDir, "worker-credential")),
+      ).toEqual(credential);
+      const next = await fleet.db
+        .selectFrom("worker_nodes")
+        .select("lease_token")
+        .where("id", "=", `worker.${name}`)
+        .executeTakeFirstOrThrow();
+      expect(next.lease_token).not.toBe(original.lease_token);
+      expect(await fleet.settled(waiting)).toEqual({
+        status: "completed",
+        content: expect.stringContaining("saved-before-stop"),
+      });
+      expect(creates(fleet.platform)).toHaveLength(1);
+    }),
+  150_000,
+);
 
 it.skipIf(!process.env.DATABASE_URL)(
   "a member's kept machine that is lost is retired, replaced under its name, and its chats continue from their last save",
   () =>
     fleet(async (fleet) => {
       const { platform } = fleet;
-      await fleet.operator("PUT", "/machine-rules/desk", {
-        group: ENG,
-        machines: "each-member",
-        class: "desk",
-      });
+      // The host's whole policy: the member has a machine of their own.
+      await fleet.plan(() => [
+        {
+          name: "desk-ada",
+          for: [{ user: fleet.userId }],
+          labels: { class: "desk" },
+        },
+      ]);
       await expect
         .poll(() => creates(platform).length, { timeout: 30_000 })
         .toBe(1);
@@ -420,15 +533,10 @@ it.skipIf(!process.env.DATABASE_URL)(
       if (!made?.code) throw new Error("No machine was created");
       const { name } = made;
       const first = await fleet.worker({ name, code: made.code });
-      expect(await ruleStatus(fleet, "desk")).toMatchObject({
-        desired: 1,
-        ready: 1,
-        unreachable: 0,
-        lost: 0,
-      });
       expect(await workerRow(fleet, name)).toMatchObject({
         state: "serving",
         connected: true,
+        managed: true,
       });
 
       // Two chats with saved work on the machine: one idle, one in the
@@ -470,7 +578,7 @@ it.skipIf(!process.env.DATABASE_URL)(
           worker_node_id: `worker.${name}`,
         });
 
-      // The reconciler is held off, so each state can be read before the
+      // The sequencer is held off, so each state can be read before the
       // server acts on it: what any replica does without a pass is seen
       // first, then the pass.
       const claim = {
@@ -487,25 +595,13 @@ it.skipIf(!process.env.DATABASE_URL)(
       // The instance is terminated: no call, no disk.
       await first.terminate();
       await fleet.unseen({ name, minutes: 1 });
-      expect(await ruleStatus(fleet, "desk")).toMatchObject({
-        desired: 1,
-        ready: 0,
-        unreachable: 1,
-        lost: 0,
-      });
       expect(await workerRow(fleet, name)).toMatchObject({
         state: "unreachable",
         connected: false,
       });
 
-      // Past the rule's loss limit (five minutes unless it says otherwise).
+      // Past its loss limit (five minutes unless the plan says otherwise).
       await fleet.unseen({ name, minutes: 6 });
-      expect(await ruleStatus(fleet, "desk")).toMatchObject({
-        desired: 1,
-        ready: 0,
-        unreachable: 0,
-        lost: 1,
-      });
       expect(await workerRow(fleet, name)).toMatchObject({
         state: "lost",
         connected: false,
@@ -558,9 +654,6 @@ it.skipIf(!process.env.DATABASE_URL)(
       // The replacement enrolls under the same name and node, with nothing
       // of the old machine's on it.
       await fleet.worker({ name, code: remade.code });
-      await expect
-        .poll(() => ruleStatus(fleet, "desk"), { timeout: 30_000 })
-        .toMatchObject({ desired: 1, ready: 1, unreachable: 0, lost: 0 });
       expect(await workerRow(fleet, name)).toMatchObject({
         state: "serving",
         connected: true,
@@ -602,11 +695,23 @@ it.skipIf(!process.env.DATABASE_URL)(
   () =>
     fleet(async (fleet) => {
       const { platform } = fleet;
-      await fleet.operator("PUT", "/machine-rules/burst", {
-        group: ENG,
-        machines: { demand: { max: 1 } },
-        class: "burst",
-        trusted: true,
+      // A machine while work waits for one, kept while it serves work.
+      await fleet.plan(({ work, machines }) => {
+        const machine = machines.find((entry) => entry.name === "burst-1");
+        const busy =
+          machine !== undefined &&
+          (machine.state === "starting" ||
+            (machine.state === "serving" && machine.holding.workspaces > 0));
+        const waiting = work.some((entry) => entry.pool.class === "burst");
+        return busy || waiting
+          ? [
+              {
+                name: "burst-1",
+                for: [{ user: fleet.userId }],
+                labels: { class: "burst" },
+              },
+            ]
+          : [];
       });
       // Work waits, so a machine is made for it.
       const chat = await fleet.chat("burst");
@@ -826,11 +931,11 @@ it.skipIf(!process.env.DATABASE_URL)(
           release_reason: "node_lost",
           freed: true,
         });
-      // Nobody replaces a machine no rule made: it stays enrolled, lost.
+      // Nobody replaces a machine the hook did not make: it stays enrolled, lost.
       expect(await workerRow(fleet, "bench")).toMatchObject({
         state: "lost",
         connected: false,
-        revoked: false,
+        managed: false,
       });
       expect(fleet.platform).toEqual([]);
 

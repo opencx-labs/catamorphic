@@ -26,12 +26,39 @@ export const SIGN_IN_HARNESS_NAMES: Record<
 
 export type RemoteSignInState = "signed-in" | "signed-out";
 
+export const REMOTE_MACHINE_STATE_LABELS = {
+  starting: "Starting",
+  stopping: "Stopping",
+  stopped: "Stopped",
+  resuming: "Resuming",
+  disabled: "Disabled",
+  lost: "Lost",
+} as const;
+
+export type RemoteMachineState = keyof typeof REMOTE_MACHINE_STATE_LABELS;
+
+export function remoteMachineState(
+  value: unknown,
+): RemoteMachineState | undefined {
+  if (
+    value === "starting" ||
+    value === "stopping" ||
+    value === "stopped" ||
+    value === "resuming" ||
+    value === "disabled" ||
+    value === "lost"
+  )
+    return value;
+  return undefined;
+}
+
 /** A machine that runs only this member's work. */
 export interface RemoteMachine {
   id: string;
   name: string;
   /** Connected to the server now. */
   available: boolean;
+  state?: RemoteMachineState;
   /** Whether the member is signed in to each harness there. */
   signIns: Record<SignInHarness, RemoteSignInState>;
 }

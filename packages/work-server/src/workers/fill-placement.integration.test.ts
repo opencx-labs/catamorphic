@@ -56,9 +56,10 @@ beforeAll(async () => {
   root = fs.mkdtempSync(path.join(os.tmpdir(), "work-fill-placement-"));
   const policy: ScheduledPlacement = {
     labels: { pool: "review" },
-    access: { everyone: true },
+    for: null,
     trusted: true,
-    released: false,
+    accepting: true,
+    admissionRevision: null,
   };
   machine = await registerWorkMachine({
     db,
@@ -78,7 +79,6 @@ beforeAll(async () => {
           ["worker.a", policy],
           ["worker.b", policy],
         ]),
-      owner: async () => undefined,
     },
   });
   const nodes = new WorkerNodesService(db);

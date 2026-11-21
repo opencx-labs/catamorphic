@@ -8,7 +8,10 @@ import type { DB, Json } from "@catamorphic/db";
 import { type Kysely, sql, type Transaction } from "kysely";
 import { z } from "zod";
 import { isProjectPrincipal } from "../identity.js";
-import { PLACEMENT_WAIT_FRESH_SECONDS } from "./placement-waits.js";
+import {
+  PLACEMENT_WAIT_FRESH_SECONDS,
+  PlacementWaitMachineSchema,
+} from "./placement-waits.js";
 import { parseWorkspaceBase } from "./session-workspaces.js";
 import { latestResults } from "./sessions/session-results.js";
 import {
@@ -198,6 +201,7 @@ export const SessionStateSchema = z.object({
       reason: z.enum(["capacity", "unavailable"]),
       message: z.string(),
       environment: z.string(),
+      machine: PlacementWaitMachineSchema.optional(),
       since: z.string(),
       /** When the wait gives up and the turn fails; null to wait on. */
       expiresAt: z.string().nullable(),
@@ -439,6 +443,7 @@ export async function readSessionStates(
       "reason",
       "waiting_since",
       "expires_at",
+      "machine",
     ])
     .where("root_workload_id", "in", ids)
     .where(
@@ -485,6 +490,7 @@ export async function readSessionStates(
       active && input.detail ? (await turnState(db, row.id)).turn : null;
     const wait = waits.find((entry) => entry.root_workload_id === row.id);
     const reason = wait?.reason === "unavailable" ? "unavailable" : "capacity";
+    const machine = PlacementWaitMachineSchema.safeParse(wait?.machine).data;
     const reply =
       last && turns.length === 0 ? (replyOf.get(last.id) ?? null) : null;
     const metadata = sessionMetadataFromRow(row.metadata);
@@ -566,7 +572,10 @@ export async function readSessionStates(
         wait && state === "working" && !active
           ? {
               reason,
-              message: WAITING_MESSAGES[reason],
+              message: machine
+                ? `${machine.state === "starting" ? "Starting" : "Resuming"} machine ${machine.name}`
+                : WAITING_MESSAGES[reason],
+              ...(machine ? { machine } : {}),
               environment: wait.environment_name,
               since: wait.waiting_since.toISOString(),
               expiresAt: wait.expires_at?.toISOString() ?? null,

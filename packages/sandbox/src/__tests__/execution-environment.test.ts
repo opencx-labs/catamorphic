@@ -6,6 +6,7 @@ import {
   type NodeAccess,
   placementOrder,
   poolMatches,
+  servesOnlyThisOwner,
 } from "../execution-environment.js";
 
 const binding: EnvironmentBinding = {
@@ -118,8 +119,17 @@ describe("environmentSatisfies", () => {
   });
 });
 
-describe("placement (ADR 0167)", () => {
-  const alice = { userId: "alice@example.com", groups: ["eng@example.com"] };
+describe("placement (ADRs 0167, 0347)", () => {
+  const alice = { userId: "alice" };
+  const only = (access: {
+    users?: string[];
+    projects?: string[];
+    keys?: { project: string; key: string }[];
+  }): NodeAccess => ({
+    users: access.users ?? [],
+    projects: access.projects ?? [],
+    keys: access.keys ?? [],
+  });
 
   it("matches every pool label", () => {
     expect(poolMatches({ class: "gpu", plane: "worker" }, {})).toBe(true);
@@ -130,65 +140,104 @@ describe("placement (ADR 0167)", () => {
     expect(poolMatches(undefined, { class: "gpu" })).toBe(false);
   });
 
-  it("ranks a person's own node before a group's before everyone's", () => {
+  it("ranks a person's own node before a shared one before anyone's", () => {
     const tier = (access: NodeAccess, owner = alice) =>
       accessTier({ access, owner });
-    expect(tier({ users: ["alice@example.com"], groups: [] })).toBe(0);
-    expect(
-      tier({ users: ["alice@example.com", "bob@example.com"], groups: [] }),
-    ).toBe(1);
-    expect(tier({ users: [], groups: ["eng@example.com"] })).toBe(1);
-    expect(tier({ everyone: true })).toBe(2);
-    expect(tier({ users: ["bob@example.com"], groups: [] })).toBeUndefined();
-    // Project-owned work lands on nodes open to everyone or to its project.
-    expect(
-      accessTier({
-        access: { users: [], groups: ["eng@example.com"] },
-        owner: undefined,
-        projectId: "p1",
-      }),
-    ).toBeUndefined();
+    expect(tier(only({ users: ["alice"] }))).toBe(1);
+    expect(tier(only({ users: ["alice", "bob"] }))).toBe(2);
+    expect(tier(only({ users: ["alice"], projects: ["p1"] }))).toBe(2);
+    expect(tier({ everyone: true })).toBe(3);
+    expect(tier(only({ users: ["bob"] }))).toBeUndefined();
+    // A node for nobody takes nothing.
+    expect(tier(only({}))).toBeUndefined();
     expect(accessTier({ access: { everyone: true }, owner: undefined })).toBe(
-      2,
+      3,
     );
   });
 
   it("opens a node to one project's own work without opening it to its members", () => {
-    const reviewPool: NodeAccess = { users: [], groups: [], projects: ["p1"] };
+    const reviewPool = only({ projects: ["p1"] });
     expect(
       accessTier({ access: reviewPool, owner: undefined, projectId: "p1" }),
-    ).toBe(0);
+    ).toBe(1);
     expect(
       accessTier({ access: reviewPool, owner: undefined, projectId: "p2" }),
     ).toBeUndefined();
     expect(
       accessTier({
-        access: { users: [], groups: [], projects: ["p1", "p2"] },
+        access: only({ projects: ["p1", "p2"] }),
         owner: undefined,
         projectId: "p1",
       }),
-    ).toBe(1);
+    ).toBe(2);
     // A member's own chat in that project does not reach the pool.
     expect(
       accessTier({ access: reviewPool, owner: alice, projectId: "p1" }),
     ).toBeUndefined();
   });
 
+  it("gives one chat key a node of its own, narrower than its project's", () => {
+    const keyed = only({ keys: [{ project: "p1", key: "pr-7" }] });
+    const work = { owner: undefined, projectId: "p1" };
+    expect(accessTier({ access: keyed, ...work, chatKey: "pr-7" })).toBe(0);
+    // Another key, a chat with no key, another project and a member's own
+    // chat never land there.
+    expect(
+      accessTier({ access: keyed, ...work, chatKey: "pr-8" }),
+    ).toBeUndefined();
+    expect(accessTier({ access: keyed, ...work })).toBeUndefined();
+    expect(
+      accessTier({
+        access: keyed,
+        owner: undefined,
+        projectId: "p2",
+        chatKey: "pr-7",
+      }),
+    ).toBeUndefined();
+    expect(
+      accessTier({
+        access: keyed,
+        owner: alice,
+        projectId: "p1",
+        chatKey: "pr-7",
+      }),
+    ).toBeUndefined();
+    // A node for two keys is shared between them.
+    expect(
+      accessTier({
+        access: only({
+          keys: [
+            { project: "p1", key: "pr-7" },
+            { project: "p1", key: "pr-8" },
+          ],
+        }),
+        ...work,
+        chatKey: "pr-7",
+      }),
+    ).toBe(2);
+    expect(servesOnlyThisOwner(0)).toBe(true);
+    expect(servesOnlyThisOwner(1)).toBe(true);
+    expect(servesOnlyThisOwner(2)).toBe(false);
+    expect(servesOnlyThisOwner(undefined)).toBe(false);
+  });
+
   it("orders narrowest first and stays there when strict", () => {
-    const tiers: Record<string, 0 | 1 | 2 | undefined> = {
-      shared: 2,
-      team: 1,
-      desk: 0,
+    const tiers: Record<string, 0 | 1 | 2 | 3 | undefined> = {
+      shared: 3,
+      team: 2,
+      desk: 1,
+      keyed: 0,
       bobs: undefined,
     };
-    const nodes = ["shared", "bobs", "team", "desk"];
+    const nodes = ["shared", "bobs", "team", "desk", "keyed"];
     expect(placementOrder(nodes, (node) => tiers[node])).toEqual([
+      "keyed",
       "desk",
       "team",
       "shared",
     ]);
     expect(
       placementOrder(nodes, (node) => tiers[node], { strict: true }),
-    ).toEqual(["desk"]);
+    ).toEqual(["keyed"]);
   });
 });

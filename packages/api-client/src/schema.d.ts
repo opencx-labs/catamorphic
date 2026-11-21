@@ -7715,6 +7715,11 @@ export interface paths {
                                 reason: "capacity" | "unavailable";
                                 message: string;
                                 environment: string;
+                                machine?: {
+                                    name: string;
+                                    /** @enum {string} */
+                                    state: "starting" | "resuming";
+                                };
                                 since: string;
                                 expiresAt: string | null;
                             } | null;
@@ -8034,6 +8039,11 @@ export interface paths {
                                 reason: "capacity" | "unavailable";
                                 message: string;
                                 environment: string;
+                                machine?: {
+                                    name: string;
+                                    /** @enum {string} */
+                                    state: "starting" | "resuming";
+                                };
                                 since: string;
                                 expiresAt: string | null;
                             } | null;

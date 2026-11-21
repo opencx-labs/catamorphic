@@ -754,9 +754,11 @@ export interface PersonalEnvironmentSetups {
 }
 
 export interface PlacementWaits {
+  chat_key: string | null;
   environment_name: string;
   expires_at: Timestamp | null;
   last_tried_at: Generated<Timestamp>;
+  machine: Json | null;
   owner: string | null;
   pool: Generated<Json>;
   project_id: string;
@@ -1287,6 +1289,7 @@ export interface WorkDirectoryGrants {
 }
 
 export interface WorkerNodes {
+  admission_revision: string | null;
   authority_id: string;
   capacity: Json | null;
   default_resources: Generated<Json>;
@@ -1519,15 +1522,43 @@ export interface WorkGithubAppRegistrations {
   tenant_id: string;
 }
 
-export interface WorkMachineRules {
-  created_at: Generated<Timestamp>;
-  definition: Json;
-  disk_short_at: Timestamp | null;
-  last_failure: string | null;
-  last_failure_at: Timestamp | null;
-  name: string;
+export interface WorkMachinePlans {
+  error: string | null;
+  error_at: Timestamp | null;
+  planned_at: Timestamp | null;
   tenant_id: string;
+}
+
+export interface WorkMachines {
+  created_at: Generated<Timestamp>;
+  destroy_requested_at: Timestamp | null;
+  disabled_at: Timestamp | null;
+  dropped_at: Timestamp | null;
+  enrollment_nonce: string | null;
+  idempotency_key: string | null;
+  labels: Generated<Json>;
+  last_error: string | null;
+  last_error_at: Timestamp | null;
+  last_error_verb: string | null;
+  lost_after_minutes: number | null;
+  lost_at: Timestamp | null;
+  managed: Generated<boolean>;
+  name: string;
+  notice: string | null;
+  options: Generated<Json>;
+  phase: Generated<string>;
+  phase_since: Generated<Timestamp>;
+  reason: string | null;
+  ref: string | null;
+  refused_at: Timestamp | null;
+  refused_count: Generated<number>;
+  reset_pending: Generated<boolean>;
+  reset_serves: Json | null;
+  serves: Json | null;
+  tenant_id: string;
+  trusted: Generated<boolean>;
   updated_at: Generated<Timestamp>;
+  verb_done_at: Timestamp | null;
 }
 
 export interface WorkProjectAccessRequests {
@@ -1609,45 +1640,28 @@ export interface WorkTokenFamilies {
 }
 
 export interface WorkWorkerEnrollments {
-  access: Generated<Json>;
   code_hash: string;
   created_at: Generated<Timestamp>;
   expires_at: Timestamp;
-  labels: Generated<Json>;
-  machine_ref: string | null;
-  machine_rule: string | null;
   name: string;
-  pool: Generated<boolean>;
   tenant_id: string;
-  trusted: Generated<boolean>;
   used_at: Timestamp | null;
 }
 
 export interface WorkWorkers {
-  access: Generated<Json>;
   credential_hash: string;
   credential_issued_at: Generated<Timestamp>;
   enrolled_at: Generated<Timestamp>;
-  labels: Generated<Json>;
   last_seen_at: Timestamp | null;
-  machine_destroyed_at: Timestamp | null;
-  machine_member: string | null;
-  machine_ref: string | null;
-  machine_rule: string | null;
-  machine_slot: number | null;
   name: string;
   node_id: string;
   pending_credential_hash: string | null;
   pending_issued_at: Timestamp | null;
   pending_public_key: string | null;
   pending_rotation: string | null;
-  pool: Generated<boolean>;
-  released_at: Timestamp | null;
-  retain_days: number | null;
   revoked_at: Timestamp | null;
   rotation_requested_at: Timestamp | null;
   tenant_id: string;
-  trusted: Generated<boolean>;
 }
 
 export interface DB {
@@ -1736,7 +1750,8 @@ export interface DB {
   work_directory_announcements: WorkDirectoryAnnouncements;
   work_directory_grants: WorkDirectoryGrants;
   work_github_app_registrations: WorkGithubAppRegistrations;
-  work_machine_rules: WorkMachineRules;
+  work_machine_plans: WorkMachinePlans;
+  work_machines: WorkMachines;
   work_project_access_requests: WorkProjectAccessRequests;
   work_project_admission_policies: WorkProjectAdmissionPolicies;
   work_project_invitations: WorkProjectInvitations;

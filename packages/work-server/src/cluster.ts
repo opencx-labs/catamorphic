@@ -25,6 +25,7 @@ import {
   MACHINE_CAPABILITIES,
   placementOrder,
   poolMatches,
+  servesOnlyThisOwner,
 } from "@catamorphic/sandbox";
 import { type Kysely, sql } from "kysely";
 import {
@@ -79,14 +80,11 @@ export async function registerWorkMachine(args: {
    */
   disk?: () => MachineDisk | undefined;
   /**
-   * Whose work each worker takes, and who owns a piece of work: an email
-   * and directory groups matched against worker access (ADR 0167).
+   * Whom each worker's machine is for (ADRs 0167, 0347): users, projects'
+   * own work, single chat keys, or anyone.
    */
   placement?: {
     workers(): Promise<Map<string, ScheduledPlacement>>;
-    owner(
-      userId: string,
-    ): Promise<{ userId: string; groups: readonly string[] } | undefined>;
   };
 }) {
   const nodes = new WorkerNodesService(args.db);
@@ -148,6 +146,7 @@ export async function registerWorkMachine(args: {
       tenantId,
       projectId,
       ownerUserId,
+      chatKey,
       pool,
       strict,
       workerNodeId,
@@ -162,12 +161,7 @@ export async function registerWorkMachine(args: {
       const workerPlacements =
         (await args.placement?.workers()) ??
         new Map<string, ScheduledPlacement>();
-      const owner = ownerUserId
-        ? ((await args.placement?.owner(ownerUserId)) ?? {
-            userId: ownerUserId,
-            groups: [],
-          })
-        : undefined;
+      const owner = ownerUserId ? { userId: ownerUserId } : undefined;
       // Labels are live: the server's own plus the operator's current ones.
       const described = candidates.map((node) => {
         const worker = isWorkerNode(node.id);
@@ -185,16 +179,17 @@ export async function registerWorkMachine(args: {
           },
         };
       });
-      // A released machine takes no new work, and keeps serving an
-      // Allocation it already holds (ADR 0205): a lookup naming it as both
-      // the Allocation's binding and its machine.
+      // A machine that is not accepting (dropped by the plan, stopping,
+      // being reset) takes no new work, and keeps serving an Allocation it
+      // already holds (ADRs 0205, 0347): a lookup naming it as both the
+      // Allocation's binding and its machine.
       const holdsAllocation = (nodeId: string) =>
         allocationBindingId === nodeId && workerNodeId === nodeId;
       const eligible = described.filter(
         ({ node, policy, worker, labels }) =>
           node.available &&
           (!worker ||
-            (policy && (!policy.released || holdsAllocation(node.id)))) &&
+            (policy && (policy.accepting || holdsAllocation(node.id)))) &&
           (!allocationBindingId || allocationBindingId === node.id) &&
           (!workerNodeId || workerNodeId === node.id) &&
           poolMatches(labels, pool) &&
@@ -204,17 +199,22 @@ export async function registerWorkMachine(args: {
           // the operator marked those people as trusting each other.
           (!policy ||
             policy.trusted ||
-            servesOneOwner(policy.access) ||
+            servesOneOwner(policy.for) ||
             node.descriptor.isolation !== "process"),
       );
+      const tierOf = (policy: ScheduledPlacement | undefined) =>
+        accessTier({
+          access: policy ? nodeAccess(policy.for) : { everyone: true },
+          owner,
+          ...(projectId ? { projectId } : {}),
+          ...(chatKey ? { chatKey } : {}),
+        });
       const ordered = placementOrder(
         eligible,
-        ({ policy }) =>
-          accessTier({
-            access: policy ? nodeAccess(policy.access) : { everyone: true },
-            owner,
-            ...(projectId ? { projectId } : {}),
-          }),
+        // Admission decided whom an Allocation's machine is for: it
+        // resolves for that Allocation whatever the machine is for now.
+        ({ node, policy }) =>
+          tierOf(policy) ?? (holdsAllocation(node.id) ? 2 : undefined),
         { strict },
       );
       // The rule admission applies (ADR 0336): a workflow run down to the
@@ -266,19 +266,20 @@ export async function registerWorkMachine(args: {
       }
       const selected = {
         ...chosen.node,
-        descriptor: { ...chosen.node.descriptor, labels: chosen.labels },
+        descriptor: {
+          ...chosen.node.descriptor,
+          labels: chosen.labels,
+          ...(chosen.policy?.admissionRevision
+            ? { admissionRevision: chosen.policy.admissionRevision }
+            : {}),
+        },
       };
-      // A worker whose access names only this owner (a member, or for a
-      // project's own work that project) takes no one else's work, so it
-      // may hold their personal credentials (ADR 0184) and secrets (ADR
-      // 0206).
+      // A worker that is for this owner alone (a member, or for a
+      // project's own work that project or that one chat key) takes no one
+      // else's work, so it may hold their personal credentials (ADR 0184)
+      // and secrets (ADR 0206).
       const servesOnlyOwner = Boolean(
-        chosen.policy &&
-          accessTier({
-            access: nodeAccess(chosen.policy.access),
-            owner,
-            ...(projectId ? { projectId } : {}),
-          }) === 0,
+        chosen.policy && servesOnlyThisOwner(tierOf(chosen.policy)),
       );
       // A member's sign-in only on a machine that holds no one else's
       // (ADR 0213), or a single person's server that accepted them.

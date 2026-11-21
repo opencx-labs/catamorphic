@@ -141,6 +141,7 @@ export {
   saysOutOfDisk,
 } from "./disk.js";
 export {
+  type AccessTier,
   type AgentExecutionTopology,
   accessTier,
   type EnvironmentBinding,
@@ -158,6 +159,7 @@ export {
   type NodeAccess,
   placementOrder,
   poolMatches,
+  servesOnlyThisOwner,
   type WorkloadKind,
 } from "./execution-environment.js";
 export { instrumentSandboxProvider } from "./instrumented-provider.js";

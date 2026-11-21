@@ -89,7 +89,7 @@ disagree with the installed source, the source wins.
 - **No super-admin.** The operator credential is machine access, not a user.
   A setup agent provisions the first ordinary user and membership through the
   server's own operations. Organization administrators manage the named
-  service connections (ADR 0172) and the workers and machine rules
+  service connections (ADR 0172) and the worker inventory and machine plan
   (ADR 0205); they gain nothing inside projects.
 - **Glue code is normal.** Compose ordinary TypeScript workflows, SDKs and
   application storage; put privileged calls and callbacks in the host's hooks.

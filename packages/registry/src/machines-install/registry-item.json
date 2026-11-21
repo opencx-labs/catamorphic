@@ -1,0 +1,21 @@
+{
+  "$schema": "https://ui.shadcn.com/schema/registry-item.json",
+  "name": "machines-install",
+  "type": "registry:item",
+  "title": "Install Work on a worker",
+  "description": "Build worker installation scripts and cloud-init for a stock or baked Linux image.",
+  "files": [
+    {
+      "path": "machines-install.ts",
+      "type": "registry:file",
+      "target": "machines/machines-install.ts"
+    },
+    {
+      "path": "SKILL.md",
+      "type": "registry:file",
+      "target": "machines/machines-install.md"
+    }
+  ],
+  "dependencies": ["@catamorphic/work-server", "fastify@^5.12.8"],
+  "docs": "Copy the files into your Work server host. Add the dependencies to its package manifest and follow the included guide."
+}

@@ -104,6 +104,11 @@ export interface EnvironmentAdmitArgs {
   identity: Identity;
   projectId: string;
   owner?: PlacementOwner;
+  /**
+   * The chat key of a project's own chat (ADR 0173): a machine that is for
+   * one key takes only that chat (ADR 0347).
+   */
+  chatKey?: string;
   environment?: string;
   workerNodeId?: string;
   allocationBindingId?: string;
@@ -421,6 +426,13 @@ export class ExecutionEnvironmentsService {
        * host). Restricted egress always allows them (ADR 0176).
        */
       gatewayHosts?: readonly string[];
+      /**
+       * Minutes work waits for a machine in an Environment that names no
+       * `waitMinutes` of its own (ADR 0347): set by a host that makes
+       * machines for waiting work, so a new chat waits for its machine
+       * instead of failing at once. Unset, such work does not wait.
+       */
+      defaultWaitMinutes?: number;
     } = {},
   ) {}
 
@@ -668,6 +680,7 @@ export class ExecutionEnvironmentsService {
               name: args.environment ?? "",
               definition,
               reason,
+              defaultWaitMinutes: this.options.defaultWaitMinutes,
             });
           const evaluated = await this.evaluate({
             ...args,
@@ -734,6 +747,7 @@ export class ExecutionEnvironmentsService {
                   name,
                   definition,
                   reason: "capacity",
+                  defaultWaitMinutes: this.options.defaultWaitMinutes,
                 }),
               );
               return {
@@ -751,6 +765,7 @@ export class ExecutionEnvironmentsService {
                 name,
                 definition,
                 reason: "unavailable",
+                defaultWaitMinutes: this.options.defaultWaitMinutes,
               }),
             );
           reasons[name] = evaluated.bindingUnavailable
@@ -803,6 +818,7 @@ export class ExecutionEnvironmentsService {
     identity: Identity;
     projectId: string;
     owner?: PlacementOwner;
+    chatKey?: string;
     name: string;
     reason?: PlacementReason;
     workerNodeId?: string;
@@ -841,6 +857,7 @@ export class ExecutionEnvironmentsService {
       requirements: effectiveRequirements,
       projectId: args.projectId,
       ...(owner ? { ownerUserId: owner } : {}),
+      ...(args.chatKey ? { chatKey: args.chatKey } : {}),
       clientRunnerId: args.identity.clientRunnerId,
       allocationBindingId: args.allocationBindingId,
       workerNodeId: args.workerNodeId,
@@ -919,12 +936,14 @@ export class ExecutionEnvironmentsService {
           environmentName: args.name,
           pool: definition.pool ?? {},
           owner,
+          key: args.chatKey ?? null,
           requirements: waitRequirements({
             requirements: effectiveRequirements,
             definition,
             ...(args.harnessInSandbox ? { harnessInSandbox: true } : {}),
           }),
-          waitMinutes: definition.waitMinutes ?? 0,
+          waitMinutes:
+            definition.waitMinutes ?? this.options.defaultWaitMinutes ?? 0,
         },
       },
     };
@@ -1097,11 +1116,14 @@ function waitRequirements(input: {
 
 /**
  * Where work waits for a machine of one Environment (ADR 0258); none for
- * a member's own computer, which no machine rule creates.
+ * a member's own computer, which no host makes.
  */
 function waitTargetOf(args: {
   identity: Identity;
   owner?: PlacementOwner;
+  chatKey?: string;
+  /** See {@link ExecutionEnvironmentsService}'s `defaultWaitMinutes`. */
+  defaultWaitMinutes: number | undefined;
   requirements: EnvironmentRequirements;
   signIn?: SignInHarness;
   harnessInSandbox?: boolean;
@@ -1117,12 +1139,13 @@ function waitTargetOf(args: {
       reason: args.reason,
       pool: args.definition.pool ?? {},
       owner,
+      key: args.chatKey ?? null,
       requirements: waitRequirements({
         requirements: effectiveRequirementsOf({ ...args, owner }),
         definition: args.definition,
         ...(args.harnessInSandbox ? { harnessInSandbox: true } : {}),
       }),
-      waitMinutes: args.definition.waitMinutes ?? 0,
+      waitMinutes: args.definition.waitMinutes ?? args.defaultWaitMinutes ?? 0,
     },
   ];
 }

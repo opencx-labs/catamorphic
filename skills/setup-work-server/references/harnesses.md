@@ -377,8 +377,8 @@ across every surface, and one address signed in to several people's
 accounts looks like a shared or resold account however well the sandboxes
 are isolated. So a member signs in only on a machine of their own:
 
-- a worker whose access names only them (`{ "people": ["ada@example.com"] }`),
-  such as one a machine rule creates for every member of a group
+- a worker whose principals name only them (`{ "for": [{ "email": "ada@example.com" }] }` at enrollment),
+  such as one the host plan keeps for every active member
   ([cluster deployment](cluster-deployment.md)); or
 - a single server's own machine whose operator set
   `WORK_PERSONAL_CREDENTIALS=accept` (a single person's server): the first
@@ -391,10 +391,10 @@ shared machines uses keys: a model connection through the gateway, or a
 member's own API key as their personal connection.
 
 **The machine has to persist.** A sign-in lives on one machine's disk, so
-it needs a machine that stays: a machine rule's each-member machine, or a
-hand-enrolled worker whose access names only that person. A machine created
-on demand and destroyed when idle loses the sign-in with its disk, and a
-pooled machine's reset deletes it.
+it needs a machine that stays: a desk the host plan keeps for the member, or a
+hand-enrolled worker whose principals name only that person. A machine created
+on demand and destroyed when idle loses the sign-in with its disk. A stop
+keeps it and a reset deletes it.
 
 To allow sign-ins, an administrator needs both of these:
 

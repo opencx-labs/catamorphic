@@ -3,6 +3,7 @@ import {
   type HarnessSignInState,
   type HarnessSignInStatus,
   type RemoteMachine,
+  remoteMachineState,
   SIGN_IN_HARNESS_NAMES,
   type SignInHarness,
 } from "../shared/remote-machines.js";
@@ -58,10 +59,12 @@ export async function listRemoteMachines(input: {
     const id = field(machine, "id");
     const name = field(machine, "name");
     if (typeof id !== "string" || typeof name !== "string") return [];
+    const state = remoteMachineState(field(machine, "state"));
     return [
       {
         id,
         name,
+        ...(state ? { state } : {}),
         available: field(machine, "available") === true,
         signIns: {
           "claude-code": signInState(machine, "claude-code"),

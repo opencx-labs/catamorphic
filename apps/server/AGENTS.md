@@ -36,7 +36,7 @@ control plane cannot drive them (ADR 0198).
 
 Members' subscription sign-ins stay on the machine they were made on (ADRs
 0199, 0213, 0340), Claude Code's and Codex's alike. A member signs in from
-the Work app on a machine of their own (a worker whose access names only
+the Work app on a machine of their own (a worker whose principals name only
 them, or a single server with `WORK_PERSONAL_CREDENTIALS=accept`): the
 machine runs the harness's own unmodified login (`claude auth login`, or
 `codex login --device-auth`) into
@@ -58,6 +58,11 @@ otherwise companies use model connections through the gateway or a member's
 own API key. A Postgres control plane refuses plain-subprocess agents unless
 microsandbox or `WORK_TRUST_CONTROL_PLANE_AGENTS=1`. Follow the
 [machines reference](../../skills/setup-work-server/references/cluster-deployment.md)
+
+Create cloud capacity in a custom host with `hooks.machines`. The stock
+server supplies hand enrollment and the worker protocol. The registry
+supplies optional installation, cloud and policy recipes.
+
 and keep its enrollment and recovery instructions accurate. Preserve the
 local-process single-tenant boundary. Follow ADR 0100 for workspace budgets:
 an Allocation reserves a workspace until physical teardown; expired leases

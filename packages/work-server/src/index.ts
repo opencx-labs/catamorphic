@@ -64,6 +64,26 @@ export {
   GoogleWorkspaceDirectory,
 } from "./identity/google-directory.js";
 export {
+  DEFAULT_LOST_AFTER_MINUTES,
+  type DesiredMachine,
+  DesiredMachineSchema,
+  MACHINE_EVENT_KINDS,
+  type MachineCreateRequest,
+  type MachineCreateResult,
+  type MachineEvent,
+  type MachineEventKind,
+  type MachineFacts,
+  type MachinePlanFacts,
+  type MachinePrincipal,
+  type MachineState,
+  type MachinesHook,
+  type MachineTarget,
+  type MachineVerb,
+  type PersonFacts,
+  type WaitingWork,
+} from "./machines/contract.js";
+export type { MachinePassSummary } from "./machines/sequencer.js";
+export {
   lanAddresses,
   type MdnsResponder,
   startMdnsResponder,
@@ -75,18 +95,6 @@ export {
   type WorkServerHooks,
   type WorkServerOptions,
 } from "./server.js";
-export {
-  type MachineClass,
-  MachineClassSchema,
-  type MachinesConfig,
-  MachinesConfigSchema,
-} from "./workers/machine-classes.js";
-export {
-  type MachineProvisioner,
-  MachineProvisioningRefusedError,
-  type MachineRule,
-  type ReconcileSummary,
-} from "./workers/machine-rules.js";
 export {
   listMachineSignIns,
   MachineHeldError,

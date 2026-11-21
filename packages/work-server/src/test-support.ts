@@ -463,7 +463,8 @@ export async function enrollMachine(input: {
   controlPlaneUrl: string;
   name: string;
   labels: Record<string, string>;
-  access: { projects: string[] } | { everyone: true };
+  /** Whom the machine is for; left out, anyone. */
+  for?: ReadonlyArray<{ project: string } | { user: string }>;
   dataDir: string;
   execution: WorkExecutionSettings;
   timeoutMs?: number;
@@ -490,7 +491,7 @@ export async function enrollMachine(input: {
   const enrollment = await operator("POST", "/_work/operator/workers", {
     name: input.name,
     labels: input.labels,
-    access: input.access,
+    ...(input.for ? { for: input.for } : {}),
     trusted: true,
   });
   if (enrollment.statusCode !== 201)

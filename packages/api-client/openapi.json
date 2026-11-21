@@ -24650,6 +24650,20 @@
                         "environment": {
                           "type": "string"
                         },
+                        "machine": {
+                          "type": "object",
+                          "properties": {
+                            "name": {
+                              "type": "string"
+                            },
+                            "state": {
+                              "type": "string",
+                              "enum": ["starting", "resuming"]
+                            }
+                          },
+                          "required": ["name", "state"],
+                          "additionalProperties": false
+                        },
                         "since": {
                           "type": "string"
                         },
@@ -25623,6 +25637,20 @@
                         },
                         "environment": {
                           "type": "string"
+                        },
+                        "machine": {
+                          "type": "object",
+                          "properties": {
+                            "name": {
+                              "type": "string"
+                            },
+                            "state": {
+                              "type": "string",
+                              "enum": ["starting", "resuming"]
+                            }
+                          },
+                          "required": ["name", "state"],
+                          "additionalProperties": false
                         },
                         "since": {
                           "type": "string"

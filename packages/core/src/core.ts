@@ -276,6 +276,12 @@ export interface CatamorphicCoreConfig {
    * `egress: "gateway"` reaches nothing else (ADR 0176).
    */
   gatewayHosts?: readonly string[];
+  /**
+   * Minutes work waits for a machine in an Environment that names no
+   * `waitMinutes` (ADR 0347): for a host that makes machines for waiting
+   * work, so a new chat waits for its machine instead of failing at once.
+   */
+  placementWaitMinutes?: number;
   /** Reachable control-plane endpoint for allocation-bound agent MCP grants. */
   connectionMcpUrl?: (args: {
     projectId: string;
@@ -909,7 +915,12 @@ export class CatamorphicCore {
             get: (args) => clientRunners.binding(args),
           }
         : undefined,
-      { gatewayHosts: config.gatewayHosts ?? [] },
+      {
+        gatewayHosts: config.gatewayHosts ?? [],
+        ...(config.placementWaitMinutes !== undefined
+          ? { defaultWaitMinutes: config.placementWaitMinutes }
+          : {}),
+      },
     );
     this.cacheFills = new CacheFillsService({
       db: this.db,

@@ -192,6 +192,14 @@ export function createWorkAuth(options: {
       );
       return found ? workAuthUser(found.user) : null;
     },
+    listUsers: async () => {
+      const context = await auth.$context;
+      const rows = await context.adapter.findMany({ model: "user" });
+      return rows.flatMap((row) => {
+        const user = ListedUser.safeParse(row);
+        return user.success ? [workAuthUser(user.data)] : [];
+      });
+    },
     resolveAccessToken: async ({ authorization }) => {
       const bearerToken = /^Bearer ([^\s]+)$/i.exec(authorization)?.[1];
       if (!bearerToken) return null;
@@ -462,6 +470,15 @@ export function loadWorkAuthSecret(options: {
     return existing;
   }
 }
+
+/** A user row as the adapter lists it. */
+const ListedUser = z.object({
+  id: z.string(),
+  email: z.string(),
+  emailVerified: z.boolean(),
+  name: z.string(),
+  username: z.string().nullish(),
+});
 
 function workAuthUser(user: {
   id: string;

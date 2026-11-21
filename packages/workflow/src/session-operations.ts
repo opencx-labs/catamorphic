@@ -94,6 +94,7 @@ export interface SessionState {
     reason: "capacity" | "unavailable";
     message: string;
     environment: string;
+    machine?: { name: string; state: "starting" | "resuming" };
     since: string;
     expiresAt: string | null;
   } | null;

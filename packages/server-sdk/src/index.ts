@@ -251,17 +251,8 @@ export {
 export {
   MACHINE_EVENT_KINDS,
   MACHINE_EVENT_SOURCE,
-  MACHINE_EVENT_TRIGGER_KINDS,
   MACHINE_TRIGGER_KINDS,
-  type MachineCreateRequest,
-  type MachineCreateResult,
-  type MachineDestroyRequest,
-  type MachineDestroyResult,
   type MachineEventKind,
-  machineCreate,
-  machineCreateResult,
-  machineDestroy,
-  machineDestroyResult,
   machineProjectEvent,
 } from "./machine-trigger-kinds.js";
 export {

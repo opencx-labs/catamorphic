@@ -7,6 +7,7 @@ import {
   signInCapability,
 } from "@catamorphic/sandbox";
 import { z } from "zod";
+import type { MachineFacts, MachineState } from "../machines/contract.js";
 import {
   HarnessSignedOutSchema,
   HarnessSignInRefusedError,
@@ -18,8 +19,8 @@ import {
   HarnessSignInStatusSchema,
   type HarnessSignIns,
 } from "./harness-sign-ins.js";
-import { nodeAccess, type ScheduledPlacement } from "./placement.js";
-import { isWorkerNode, WORKER_NODE_PREFIX } from "./worker-registry.js";
+import { WORKER_NODE_PREFIX } from "./machine-store.js";
+import { nodeAccess } from "./placement.js";
 
 /*
  * A member's own machines, as the app shows them for Claude Code and Codex
@@ -36,7 +37,16 @@ export type MemberSignInState = "signed-in" | "signed-out";
 export interface MemberMachine {
   id: string;
   name: string;
+  /** Connected and taking work now. */
   available: boolean;
+  /**
+   * Where the machine stands (ADRs 0347, 0348), so its owner sees that it
+   * is starting, stopped or coming back rather than only "unavailable".
+   * `serving` for a single server's own machine.
+   */
+  state: MachineState;
+  /** Why it exists or was stopped, when its host says. */
+  reason: string | null;
   /** Whether the member is signed in to each harness on this machine. */
   signIns: Record<SignInHarness, MemberSignInState>;
 }
@@ -60,11 +70,8 @@ export class MemberMachines {
   constructor(
     private readonly deps: {
       nodes: () => Promise<readonly WorkerNode[]>;
-      placements: () => Promise<ReadonlyMap<string, ScheduledPlacement>>;
-      /** The member's placement identity: their email and groups. */
-      owner: (
-        userId: string,
-      ) => Promise<{ userId: string; groups: string[] } | undefined>;
+      /** Every machine Work knows, with whom it is for and where it stands. */
+      machines: () => Promise<readonly MachineFacts[]>;
       /**
        * The server's own machine, when it may hold a member's sign-in: a
        * single server whose operator accepted personal credentials.
@@ -80,24 +87,29 @@ export class MemberMachines {
 
   async list(identity: Identity): Promise<MemberMachine[]> {
     const own = await this.own(identity);
-    const nodes = await this.deps.nodes();
+    const nodes = new Map(
+      (await this.deps.nodes()).map((node) => [node.id, node]),
+    );
     const member = identity.externalUserId;
-    return nodes
-      .filter((node) => own.has(node.id))
-      .map((node) => ({
-        id: node.id,
-        name: node.id.startsWith(WORKER_NODE_PREFIX)
-          ? node.id.slice(WORKER_NODE_PREFIX.length)
-          : node.descriptor.label,
-        available: node.available,
+    return [...own].map(([id, machine]) => {
+      const node = nodes.get(id);
+      return {
+        id,
+        name: machine?.name ?? node?.descriptor.label ?? id,
+        available: machine
+          ? machine.state === "serving"
+          : Boolean(node?.available),
+        state: machine?.state ?? "serving",
+        reason: machine?.reason ?? null,
         signIns: signInStates((harness) =>
-          node.descriptor.capabilities.includes(
+          node?.descriptor.capabilities.includes(
             signInCapability({ harness, member }),
           )
             ? "signed-in"
             : "signed-out",
         ),
-      }));
+      };
+    });
   }
 
   /** Throws {@link HarnessSignInRefusedError} with the machine's reason. */
@@ -210,19 +222,22 @@ export class MemberMachines {
     return this.deps.worker({ nodeId: args.machineId, request });
   }
 
-  /** The ids of the machines that are the member's own. */
-  private async own(identity: Identity): Promise<Set<string>> {
-    const [placements, owner] = await Promise.all([
-      this.deps.placements(),
-      this.deps.owner(identity.externalUserId),
-    ]);
-    const ids = new Set<string>();
-    if (owner)
-      for (const [nodeId, placement] of placements) {
-        if (!isWorkerNode(nodeId) || placement.released) continue;
-        if (accessTier({ access: nodeAccess(placement.access), owner }) === 0)
-          ids.add(nodeId);
-      }
+  /**
+   * The machines that are the member's own, by node id: workers for that
+   * member alone (with their facts), and a single server's own machine.
+   */
+  private async own(
+    identity: Identity,
+  ): Promise<Map<string, MachineFacts | undefined>> {
+    const owner = { userId: identity.externalUserId };
+    const own = new Map<string, MachineFacts | undefined>();
+    for (const machine of await this.deps.machines()) {
+      // One being destroyed, or dropped by the plan, is theirs no more.
+      if (machine.state === "destroying" || machine.state === "draining")
+        continue;
+      if (accessTier({ access: nodeAccess(machine.for), owner }) === 1)
+        own.set(`${WORKER_NODE_PREFIX}${machine.name}`, machine);
+    }
     const ownMachine = this.deps.ownMachine;
     if (ownMachine) {
       const node = (await this.deps.nodes()).find(
@@ -238,9 +253,9 @@ export class MemberMachines {
         capabilities.includes(MACHINE_CAPABILITIES.personalCredentials) &&
         !heldByOther
       )
-        ids.add(ownMachine.nodeId);
+        own.set(ownMachine.nodeId, undefined);
     }
-    return ids;
+    return own;
   }
 }
 
