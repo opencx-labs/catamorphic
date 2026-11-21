@@ -5396,8 +5396,6 @@ export function App({
     setInitialProjectErrors(
       ({ [profileId]: _error, ...remaining }) => remaining,
     );
-  const projectSelectionRef = useRef(selectProject);
-  projectSelectionRef.current = selectProject;
   useEffect(() => {
     const profileId = activeProfile?.id;
     if (
@@ -5435,9 +5433,10 @@ export function App({
           const { [utilityKey]: _utility, ...retained } = current;
           return { ...retained, [project.id]: workspace };
         });
+        // The profile's new default becomes this window's fallback after
+        // the catalog refresh. The workspace claim opens it in place
+        // without bringing a window forward while the person is elsewhere.
         await queryClient.invalidateQueries({ queryKey: ["cat", "projects"] });
-        if (onboardingProfileRef.current === profileId)
-          projectSelectionRef.current(project.id);
       })
       .catch((cause: unknown) => {
         initialProjects.current.delete(profileId);

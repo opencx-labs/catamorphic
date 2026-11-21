@@ -183,7 +183,11 @@ it("reopens the hidden workspace when an empty window selects its profile", asyn
   // Let the picker close and the source's profile transition finish before
   // asserting focus, so a window that took the keys back still fails here.
   await source.waitFor(
-    "!!document.querySelector('[aria-label=\"Switch profile: Empty source\"]') && !document.querySelector('.animate-profile-veil-in, .animate-profile-veil-out')",
+    "!!document.querySelector('[aria-label=\"Switch profile: Empty source\"]') && !document.querySelector('.animate-profile-veil-in, .animate-profile-veil-out') && !!document.querySelector('[data-workspace-visible=\"true\"] [data-workspace-ready]')",
+    {
+      label:
+        "the empty window finishes switching and opens its default project",
+    },
   );
   await handle
     .waitFor(
