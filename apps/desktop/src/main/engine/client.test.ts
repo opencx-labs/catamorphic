@@ -15,7 +15,16 @@ afterEach(() => {
   unheard.length = 0;
 });
 
-const turn = (ms = 10) => new Promise((resolve) => setTimeout(resolve, ms));
+const handleRejections = () =>
+  new Promise<void>((resolve) => setImmediate(resolve));
+
+function deferred<T>() {
+  let resolve!: (value: T | PromiseLike<T>) => void;
+  const promise = new Promise<T>((resolvePromise) => {
+    resolve = resolvePromise;
+  });
+  return { promise, resolve };
+}
 
 /**
  * An engine a test answers for: the channel, the copy of project folders
@@ -200,7 +209,7 @@ describe("the main process's engine", () => {
         rootPath: "/work/synced",
         automaticCheckpoints: false,
       });
-      await turn();
+      await engine.hasCodingAgent();
       expect(engine.projectRoots.getSync("synced")).toBe("/work/synced");
     });
   });
@@ -231,7 +240,7 @@ describe("the main process's engine", () => {
         });
       };
       say();
-      await turn();
+      await engine.hasCodingAgent();
       expect(heard).toEqual([
         "sessions",
         "git:p",
@@ -240,7 +249,7 @@ describe("the main process's engine", () => {
       ]);
       for (const stop of stops) stop();
       say();
-      await turn();
+      await engine.hasCodingAgent();
       expect(heard).toHaveLength(4);
     });
 
@@ -250,7 +259,7 @@ describe("the main process's engine", () => {
       engine.onDatabaseLost((error) => early.push(error.message));
       emit("databaseLost", { message: "The database thread stopped" });
       emit("databaseLost", { message: "Again" });
-      await turn();
+      await engine.hasCodingAgent();
       expect(early).toEqual(["The database thread stopped"]);
       // Lost while Work was still starting: the window layer hears it too.
       const late: string[] = [];
@@ -273,7 +282,7 @@ describe("the main process's engine", () => {
       engine.personalEnvironment.nudge();
       engine.mcpAppViews.closeOwner(7);
       engine.mcpAppViews.close({ ownerId: 7, mountId: "m" });
-      await turn();
+      await engine.hasCodingAgent();
       // In the order they were told: a close never overtakes what it follows.
       expect(asked).toEqual([
         "suspendExecution",
@@ -287,6 +296,7 @@ describe("the main process's engine", () => {
         "personalEnvironment.nudge",
         "mcpAppViews.closeOwner",
         "mcpAppViews.close",
+        "hasCodingAgent",
       ]);
     });
 
@@ -298,7 +308,7 @@ describe("the main process's engine", () => {
         },
       });
       engine.suspendExecution();
-      await turn();
+      await engine.hasCodingAgent();
       // Said, since nobody else will hear it.
       expect(complaint).toHaveBeenCalledTimes(1);
       expect(String(complaint.mock.calls[0]?.[0])).toContain(
@@ -309,7 +319,7 @@ describe("the main process's engine", () => {
       engine.suspendExecution();
       engine.signInRecovery.left();
       engine.mcpAppViews.closeOwner(1);
-      await turn();
+      await handleRejections();
       expect(unheard).toEqual([]);
       // Nothing is left to tell an engine that is gone.
       expect(complaint).toHaveBeenCalledTimes(1);
@@ -319,7 +329,7 @@ describe("the main process's engine", () => {
       closed.engine.resumeExecution();
       closed.engine.syncSessionMailboxes();
       closed.engine.personalEnvironment.nudge();
-      await turn();
+      await handleRejections();
       expect(unheard).toEqual([]);
       expect(complaint).toHaveBeenCalledTimes(1);
     });
@@ -360,7 +370,7 @@ describe("the main process's engine", () => {
       expect(received[0]).not.toHaveProperty("viewClosed");
 
       view.abort();
-      await turn();
+      await engine.hasCodingAgent();
       expect(
         asked.filter((name) => name === "customizationProcesses.viewClosed"),
       ).toEqual(["customizationProcesses.viewClosed"]);
@@ -375,21 +385,19 @@ describe("the main process's engine", () => {
 
   describe("shutting down", () => {
     it("lets what was asked before it finish, then refuses what is asked after", async () => {
-      let finish: (value: string) => void = () => {};
+      const checkout = deferred<string>();
+      const answered = deferred<void>();
       const order: string[] = [];
       const { engine, stops } = await connect({
         sessionCheckouts: {
-          resolve: () =>
-            new Promise<string>((resolve) => {
-              finish = resolve;
-            }),
+          resolve: () => checkout.promise,
         },
         shutdown: async () => {
           order.push("shutdown began");
           // The server stops HTTP, core and harnesses, then the database
           // once its work is quiet: what is in flight is answered first.
-          finish("/work/a");
-          await turn();
+          checkout.resolve("/work/a");
+          await answered.promise;
           order.push("shutdown ended");
         },
       });
@@ -397,9 +405,9 @@ describe("the main process's engine", () => {
         .resolve({ projectId: "a", sessionId: "s" })
         .then((path) => {
           order.push(`answered ${path}`);
+          answered.resolve();
           return path;
         });
-      await turn();
       const shutdown = engine.shutdown();
       // Asked twice (Quit, then a signal): one request, one answer.
       expect(engine.shutdown()).toBe(shutdown);
@@ -428,9 +436,9 @@ describe("the main process's engine", () => {
         projectId: "a",
         sessionId: "s",
       });
-      await turn();
+      const rejected = expect(held).rejects.toThrow("The engine is closed");
       await engine.shutdown();
-      await expect(held).rejects.toThrow("The engine is closed");
+      await rejected;
     });
 
     it("closes the channel and says so when the engine did not shut down cleanly", async () => {
