@@ -1977,7 +1977,15 @@ export async function startEmbeddedServer(
           { name: "warm harnesses", dispose: () => agentRegistry.dispose() },
           // The host owns Kysely. Always attempt its WAL flush last and report
           // a failure instead of silently treating an unsafe shutdown as clean.
-          { name: "database", dispose: () => db.destroy() },
+          // Work the quit caught between two statements sends the next one
+          // first: Kysely refuses it from the moment it is destroyed.
+          {
+            name: "database",
+            dispose: async () => {
+              await pglite.quiet();
+              await db.destroy();
+            },
+          },
         ],
       });
     })();

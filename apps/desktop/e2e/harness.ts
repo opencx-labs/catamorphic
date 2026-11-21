@@ -842,7 +842,7 @@ export function mainProcessErrors(output: string): string[] {
     at !== -1;
     at = output.indexOf(marker, at + marker.length)
   )
-    failures.push(output.slice(at, at + 3000).split("\n[")[0] ?? "");
+    failures.push(output.slice(at, at + 8000).split("\n[")[0] ?? "");
   return failures;
 }
 
