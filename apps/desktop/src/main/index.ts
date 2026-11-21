@@ -224,6 +224,10 @@ if (e2eDataDir) {
   process.on("unhandledRejection", (reason) =>
     report("unhandled rejection", reason),
   );
+  // Whether Work is the active application decides which of its windows
+  // can hold the keys on macOS; printed among each window's own events.
+  app.on("did-become-active", () => console.info("[desktop] App active"));
+  app.on("did-resign-active", () => console.info("[desktop] App inactive"));
 }
 if (isolatedDataDir) {
   app.setPath("userData", isolatedDataDir);
@@ -701,6 +705,18 @@ function createWindow(
         state: saved,
       });
   desktopWorkspaces?.track(window, dock, workspaceState);
+  // Under test, the order windows are shown and take the keys in is
+  // printed for the harness (with the app's own activation, above): a
+  // wait for one window to come forward that times out can then say
+  // which window showed or took the keys after it.
+  if (e2eDataDir && !dock) {
+    const say = (event: string) => () =>
+      console.info(`[desktop] Window ${workspaceState.id} ${event}`);
+    window.on("show", say("show"));
+    window.on("hide", say("hide"));
+    window.on("focus", say("focus"));
+    window.on("blur", say("blur"));
+  }
   const query: Record<string, string> = dock
     ? { surface: "dock", clicks: dockClicks() }
     : {
