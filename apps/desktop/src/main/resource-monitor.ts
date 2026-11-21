@@ -15,6 +15,7 @@ import {
   type ResourceSnapshot,
   resourceGroupId,
 } from "../shared/resources.js";
+import { liveFrames } from "./live-frames.js";
 import { registeredProcessOwners } from "./process-owners.js";
 import { shellIpcMain as ipcMain } from "./shell-ipc.js";
 
@@ -627,7 +628,7 @@ function pagesOf(all: WebContents[]): PageProcesses[] {
     const pids = new Set<number>();
     try {
       pids.add(contents.getOSProcessId());
-      for (const frame of contents.mainFrame?.framesInSubtree ?? [])
+      for (const frame of liveFrames(contents.mainFrame?.framesInSubtree))
         if (frame.osProcessId) pids.add(frame.osProcessId);
     } catch {
       // A page mid-navigation may have no frame to ask.

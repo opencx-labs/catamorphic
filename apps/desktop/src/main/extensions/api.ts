@@ -5,6 +5,7 @@ import {
   nativeImage,
   shell,
 } from "electron";
+import { liveFrames } from "../live-frames.js";
 import { parseColor } from "./actions.js";
 import type { ExtensionContext } from "./events.js";
 import { type ExtensionsHost, groupObject } from "./host.js";
@@ -946,7 +947,7 @@ export function createApi(host: ExtensionsHost): Record<string, ApiHandler> {
     },
     getAllFrames: (caller, [details]) => {
       const record = host.tabOf(caller, bag(details).tabId);
-      return record.guest.mainFrame.framesInSubtree.map((frame) =>
+      return liveFrames(record.guest.mainFrame.framesInSubtree).map((frame) =>
         frameDetails(record, frame),
       );
     },

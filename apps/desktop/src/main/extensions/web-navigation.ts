@@ -1,4 +1,5 @@
 import { type WebContents, webFrameMain } from "electron";
+import { liveFrames } from "../live-frames.js";
 
 /**
  * `chrome.webNavigation` events from a tab's navigations (ADR 0203). Frame
@@ -32,7 +33,7 @@ export function frameById(
 ): Electron.WebFrameMain | null {
   if (frameId === 0) return contents.mainFrame;
   return (
-    contents.mainFrame.framesInSubtree.find(
+    liveFrames(contents.mainFrame.framesInSubtree).find(
       (frame) => frame.frameTreeNodeId === frameId,
     ) ?? null
   );
