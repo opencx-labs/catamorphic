@@ -112,11 +112,12 @@ do not, which would leave the boundary untested in daily use.
   imports from `server/` are constants and helpers that run where they
   are called. A new need of the main process is a named operation.
 - A call that was one synchronous hop is a message each way, copied twice
-  on the main thread until the fork. In three paired isolated Linux runs, posting the channel's messages
-  took 2.25 to 2.93 ms total across ten reopenings of a 1,000-item chat.
-  Those runs finished in 4.5 to 4.8 s versus 4.2 s on the baseline.
+  on the main thread until the fork. In three paired isolated Linux runs,
+  posting the channel's messages took 2.25 to 2.93 ms total across ten
+  reopenings of a 1,000-item chat. End-to-end timings varied across the
+  two series of paired runs.
   [Performance measurements](../../apps/desktop/docs/performance.md#the-server-message-boundary-2026-11-21)
-  include whole-main-thread CPU and the limits of attributing the difference.
+  record both series and whole-main-thread CPU.
 - Two orders changed and are now stated. The `server-changed` broadcast
   after an agent changes needs an answer from the engine, so the handler
   waits for it before it returns: a window still hears it before its own

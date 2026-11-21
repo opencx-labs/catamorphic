@@ -1054,7 +1054,6 @@ suite with `urls: ["--inspect=127.0.0.1:9229"]`, read
 `Profiler.start` and `Profiler.stop` around the fake agent's
 `retained history fixture` and `perf turn` scenarios.
 
-
 ## The server message boundary (2026-11-21)
 
 [ADR 0341](../../../docs/decisions/0341-the-engines-boundary-one-interface-then-the-fork.md)
@@ -1074,8 +1073,13 @@ The chat reopenings took 4.2 s in all three baseline runs and 4.5 to
 synchronous posting measurement covers the sender and copying during
 `postMessage`. Receive-side processing and time waiting for delivery are
 outside that measurement, and the whole-thread samples also include HTTP,
-query building, and native Electron work. The measurements show higher
-CPU and elapsed time in that scenario, with the observed posting time
-accounting for only a small part of the difference. These runs use a
-fixture profile and software compositing. Repeat them when the server
-moves to its own process.
+query building, and native Electron work. Synchronous posting accounts for
+only a small part of the first timing difference.
+
+The timing direction reversed in two pairs on the final code with the
+posting instrumentation removed and the run order swapped for the second
+pair. The baseline finished in 4.5 and 4.7 s with 299 and 333 ms/s of
+main-thread CPU. The boundary finished in 4.1 and 4.4 s with 218 and
+229 ms/s. The results vary across runs on a fixture profile with
+software compositing. Repeat the comparison when the server moves to its
+own process.
