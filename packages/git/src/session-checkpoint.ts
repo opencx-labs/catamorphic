@@ -194,10 +194,12 @@ export async function currentSessionWork(input: {
       "refs/heads/main^{commit}",
     ])
   ).trim();
-  const recorded = await readSessionWork({
-    repoPath: input.repoPath,
-    commit: checkpoint,
-  });
+  // Older workspaces and rollbacks can point directly at a repository base.
+  // Its commit message belongs to the repository, not to this session.
+  const recorded =
+    checkpoint === input.base
+      ? null
+      : await readSessionWork({ repoPath: input.repoPath, commit: checkpoint });
   return {
     checkpoint,
     ...(recorded ?? {

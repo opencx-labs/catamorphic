@@ -94,7 +94,12 @@ describe("workspace refs (ADR 0178)", () => {
     const args = { tenantId: TENANT, projectId: PROJECT, sessionId: "s1" };
     await manager.setSessionBase({ ...args, pin, commit: head });
     const copy = await manager.openSession(args);
-    expect(await copy.resolveRef("HEAD")).toBe(head);
+    const checkpoint = await copy.resolveRef("HEAD");
+    expect(checkpoint).not.toBe(head);
+    expect(await manager.sessionWork({ ...args, base: head })).toMatchObject({
+      checkpoint,
+      head,
+    });
     expect(await copy.readFile("app.ts")).toBe("two\n");
     // Nothing of the project's own main survives in a copy at another base.
     expect((await copy.status()).dirty).toBe(false);
@@ -107,7 +112,7 @@ describe("workspace refs (ADR 0178)", () => {
       remote,
     );
     const moved = await other.openSession(args);
-    expect(await moved.resolveRef("HEAD")).toBe(head);
+    expect(await moved.resolveRef("HEAD")).toBe(checkpoint);
     await moved.dispose();
 
     // A force-pushed head moves the base, and the change is summarized.

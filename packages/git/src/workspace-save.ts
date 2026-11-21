@@ -24,8 +24,8 @@ import { isPersonalFile } from "./personal-files.js";
 
 /** A save that was refused, or whose pack or manifest could not be read. */
 export class WorkspaceSaveError extends Error {
-  constructor(message: string) {
-    super(message);
+  constructor(message: string, options?: ErrorOptions) {
+    super(message, options);
     this.name = "WorkspaceSaveError";
   }
 }
@@ -409,6 +409,96 @@ export class ReceivedPack {
     for (const oid of [input.head, ...input.known])
       if (!OBJECT_ID.test(oid))
         throw new WorkspaceSaveError("the workspace names an invalid commit");
+    await this.unpack({
+      repoPath: input.repoPath,
+      revisions: `${input.head}\n${input.known.map((oid) => `^${oid}\n`).join("")}`,
+    });
+  }
+
+  /**
+   * Build the checkpoint tree from its previous tree and checked file
+   * changes. Git's private index keeps paths, modes and bytes without
+   * re-reading a host working tree or applying a second set of filters.
+   */
+  async snapshotTree(input: {
+    repoPath: string;
+    previous: string;
+    changes: readonly SavedChange[];
+    containLinks: boolean;
+  }): Promise<string> {
+    const changes = withoutPersonalFiles(input.changes);
+    for (const change of changes) {
+      assertSavedPath(change.path);
+      if (change.kind === "link") {
+        const target = await readLinkTarget(this, change);
+        if (input.containLinks) assertLinkStaysInside(change.path, target);
+      }
+    }
+
+    const previousTree = (
+      await nativeGit(this.directory, ["rev-parse", `${input.previous}^{tree}`])
+    ).trim();
+    await nativeGit(this.directory, ["read-tree", previousTree]);
+    const zeros = "0".repeat(this.idBytes * 2);
+    const deleted: string[] = [];
+    const written: string[] = [];
+    for (const change of changes) {
+      if (change.kind === "deleted") {
+        deleted.push(`0 ${zeros}\t${change.path}\0`);
+      } else {
+        const mode = change.kind === "link" ? "120000" : change.mode;
+        written.push(`${mode} ${change.oid}\t${change.path}\0`);
+      }
+    }
+    if (deleted.length || written.length) {
+      try {
+        await nativeGitBytes(
+          this.directory,
+          ["update-index", "-z", "--index-info"],
+          Buffer.from(deleted.join("") + written.join("")),
+        );
+      } catch (error) {
+        throw new WorkspaceSaveError(
+          "the saved paths conflict with the checkpoint's files",
+          { cause: error },
+        );
+      }
+    }
+    const tree = (await nativeGit(this.directory, ["write-tree"])).trim();
+    if (tree !== previousTree) {
+      // Git can resolve a file/directory conflict by removing an existing
+      // index entry. Such a removal has to be explicit in the manifest
+      // (for example when a former symlink is replaced by a directory).
+      const claimed = new Set(changes.map((change) => change.path));
+      const changed = await nativeGitBytes(this.directory, [
+        "diff-tree",
+        "-r",
+        "-z",
+        "--no-renames",
+        "--name-only",
+        previousTree,
+        tree,
+      ]);
+      const decoder = new TextDecoder("utf-8", { fatal: true });
+      for (const name of splitOnNul(changed)) {
+        const filePath = decodePath(decoder, name);
+        if (!claimed.has(filePath))
+          throw new WorkspaceSaveError(
+            `the workspace tried to replace ${JSON.stringify(filePath)} without naming it in the save`,
+          );
+      }
+      await this.unpack({
+        repoPath: input.repoPath,
+        revisions: `${tree}\n^${previousTree}\n`,
+      });
+    }
+    return tree;
+  }
+
+  private async unpack(input: {
+    repoPath: string;
+    revisions: string;
+  }): Promise<void> {
     const packer = spawn(
       "git",
       ["-C", this.directory, "pack-objects", "--revs", "--stdout", "--quiet"],
@@ -433,9 +523,7 @@ export class ReceivedPack {
     const packed = exit(packer);
     const unpacked = exit(unpacker);
     packer.stdout.pipe(unpacker.stdin);
-    packer.stdin.end(
-      `${input.head}\n${input.known.map((oid) => `^${oid}\n`).join("")}`,
-    );
+    packer.stdin.end(input.revisions);
     const [packCode, unpackCode] = await Promise.all([packed, unpacked]);
     if (packCode !== 0 || unpackCode !== 0) {
       const detail = Buffer.concat(stderr)
@@ -443,7 +531,7 @@ export class ReceivedPack {
         .trim()
         .split("\n")[0];
       throw new WorkspaceSaveError(
-        `the branch's commits could not be kept${detail ? ` (${detail.slice(0, 200)})` : ""}`,
+        `the workspace's objects could not be kept${detail ? ` (${detail.slice(0, 200)})` : ""}`,
       );
     }
   }

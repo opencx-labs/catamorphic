@@ -2,7 +2,8 @@ import nodeFs from "node:fs";
 import { MANAGED_BRANCH_PREFIX } from "@catamorphic/workflow/project-layout";
 import git from "isomorphic-git";
 import http from "isomorphic-git/http/node";
-import { nativeGit } from "./native-git.js";
+import { type NativeGitAuth, nativeGit } from "./native-git.js";
+import { isValidRefName } from "./ref-names.js";
 import type { GitCredentials } from "./types.js";
 
 export interface CloneFromRemoteOptions {
@@ -219,16 +220,16 @@ export async function pushToRemote(opts: {
         remoteBranch,
         "a push with a lease names the commit it replaces.",
       );
-    await nativeGit(
-      opts.repoPath,
-      [
-        "push",
-        `--force-with-lease=refs/heads/${remoteBranch}:${expected}`,
-        opts.url,
-        `${ref}:refs/heads/${remoteBranch}`,
-      ],
-      opts.credentials ? { ...opts.credentials, url: opts.url } : undefined,
-    );
+    await pushWithLease({
+      repoPath: opts.repoPath,
+      url: opts.url,
+      ref,
+      target: `refs/heads/${remoteBranch}`,
+      expected,
+      auth: opts.credentials
+        ? { ...opts.credentials, url: opts.url }
+        : undefined,
+    });
     return;
   }
   if (opts.native) {
@@ -256,6 +257,27 @@ export async function pushToRemote(opts: {
   });
 }
 
+function pushWithLease(input: {
+  repoPath: string;
+  url: string;
+  ref: string;
+  target: string;
+  expected: string;
+  auth: NativeGitAuth | undefined;
+}): Promise<string> {
+  return nativeGit(
+    input.repoPath,
+    [
+      "push",
+      "--porcelain",
+      `--force-with-lease=${input.target}:${input.expected}`,
+      input.url,
+      `${input.ref}:${input.target}`,
+    ],
+    input.auth,
+  );
+}
+
 /** The branch a chat last pushed to the project's repository (ADR 0343). */
 export interface PushedBranch {
   branch: string;
@@ -279,52 +301,88 @@ export async function pushOwnBranch(opts: {
   remoteBranch: string;
   /** What this chat last pushed, when it pushed before. */
   pushed?: PushedBranch;
-}): Promise<{ outcome: "created" | "updated" | "replaced" | "unchanged" }> {
+}): Promise<{
+  outcome: "created" | "updated" | "replaced" | "unchanged";
+  /** This chat created the branch or updated the exact tip it owned. */
+  recordOwnership: boolean;
+}> {
   const { remoteBranch, commit } = opts;
-  if (!isManagedBranch(remoteBranch) || /[:\s+]|^-/.test(remoteBranch))
+  if (!isManagedBranch(remoteBranch) || !isValidRefName(remoteBranch))
     throw new RemotePushRefusedError(
       remoteBranch,
       `a chat pushes only its own branch under '${MANAGED_BRANCH_PREFIX}'.`,
     );
-  if (!/^[0-9a-f]{40,64}$/.test(commit))
+  if (!/^[0-9a-f]{40}$|^[0-9a-f]{64}$/.test(commit))
     throw new RemotePushRefusedError(remoteBranch, "not a commit to push.");
+  assertPushAllowed({
+    ownership: opts.ownership,
+    remoteBranch,
+    force: true,
+    lease: true,
+  });
   const auth = opts.credentials
     ? { ...opts.credentials, url: opts.url }
     : undefined;
+  const target = `refs/heads/${remoteBranch}`;
   const listed = await nativeGit(
     opts.repoPath,
-    ["ls-remote", opts.url, `refs/heads/${remoteBranch}`],
+    ["ls-remote", "--symref", opts.url, "HEAD", target],
     auth,
   );
-  const remote = listed.trim().split(/\s+/)[0] || null;
-  const push = (lease: { expected: string | null } | undefined) =>
-    pushToRemote({
-      repoPath: opts.repoPath,
-      native: true,
-      url: opts.url,
-      ...(opts.credentials ? { credentials: opts.credentials } : {}),
-      ownership: opts.ownership,
-      ref: commit,
-      remoteBranch,
-      ...(lease ? { lease } : {}),
-    });
-  const stale = (error: unknown): never => {
-    throw isStaleLease(error)
-      ? new RemotePushRefusedError(
-          remoteBranch,
-          "the branch changed in the repository while it was being pushed. Try again.",
-        )
-      : error;
-  };
-  if (!remote) {
-    // Created only where nothing stands: a branch that appeared meanwhile
-    // is someone else's.
-    await push({ expected: null }).catch(stale);
-    return { outcome: "created" };
+  const refs = new Map<string, string>();
+  for (const line of listed.split("\n")) {
+    const [value, name] = line.split("\t");
+    if (name && value && /^[0-9a-f]{40}$|^[0-9a-f]{64}$/.test(value))
+      refs.set(name, value);
   }
-  // What is already there, or only moves forward, overwrites nothing:
-  // the agent may have pushed its branch itself through the gateway.
-  if (remote === commit) return { outcome: "unchanged" };
+  const defaultRef = listed.match(/^ref: (refs\/heads\/[^\t\n]+)\tHEAD$/m)?.[1];
+  if (!defaultRef || !refs.get("HEAD"))
+    throw new RemotePushRefusedError(
+      remoteBranch,
+      "the remote names no default branch, so Work cannot check this push.",
+    );
+  if (target === defaultRef)
+    throw new RemotePushRefusedError(
+      remoteBranch,
+      "Work cannot push a chat to the repository's default branch.",
+    );
+
+  const remote = refs.get(target);
+  const push = async (expected: string) => {
+    const output = await pushWithLease({
+      repoPath: opts.repoPath,
+      url: opts.url,
+      ref: commit,
+      target,
+      expected,
+      auth,
+    }).catch((error: unknown) => {
+      throw isStaleLease(error)
+        ? new RemotePushRefusedError(
+            remoteBranch,
+            "the branch changed in the repository while it was being pushed. Try again.",
+          )
+        : error;
+    });
+    // If another caller pushed this exact commit in the meantime, Git can
+    // report success without updating the ref, even with a lease.
+    const status = output
+      .split("\n")
+      .find((line) => line.split("\t")[1]?.endsWith(`:${target}`))?.[0];
+    return status === "*" || status === "+" || status === " ";
+  };
+  const unchanged: Awaited<ReturnType<typeof pushOwnBranch>> = {
+    outcome: "unchanged",
+    recordOwnership: false,
+  };
+  if (!remote)
+    return (await push(""))
+      ? { outcome: "created", recordOwnership: true }
+      : unchanged;
+  if (remote === commit) return unchanged;
+
+  const ownsTip =
+    opts.pushed?.branch === remoteBranch && opts.pushed.commit === remote;
   const forward = await nativeGit(opts.repoPath, [
     "merge-base",
     "--is-ancestor",
@@ -334,23 +392,24 @@ export async function pushOwnBranch(opts: {
     () => true,
     () => false,
   );
-  if (forward) {
-    await push(undefined);
-    return { outcome: "updated" };
-  }
-  // Replacing is for the chat's own branch alone, as it last left it.
+  if (forward)
+    return (await push(remote))
+      ? { outcome: "updated", recordOwnership: ownsTip }
+      : unchanged;
+
   if (opts.pushed?.branch !== remoteBranch)
     throw new RemotePushRefusedError(
       remoteBranch,
       "a branch of that name is already in the repository with other commits, and this chat did not create it. Switch to another branch name and try again.",
     );
-  if (remote !== opts.pushed.commit)
+  if (!ownsTip)
     throw new RemotePushRefusedError(
       remoteBranch,
       "someone else pushed to this branch since this chat last did, so it was not overwritten. Fetch the branch, rebase or merge onto it, and try again.",
     );
-  await push({ expected: opts.pushed.commit }).catch(stale);
-  return { outcome: "replaced" };
+  return (await push(remote))
+    ? { outcome: "replaced", recordOwnership: true }
+    : unchanged;
 }
 
 function isStaleLease(error: unknown): boolean {

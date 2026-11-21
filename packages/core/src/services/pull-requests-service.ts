@@ -76,6 +76,8 @@ export interface OpenPullRequestInput {
   base?: string;
   /** Whose connection acts: the caller's own or the service's. */
   principal: CodeHostPrincipal;
+  /** Keep this chat's lease as soon as Git has accepted the push. */
+  remember?: (pushed: PushedBranch) => Promise<void>;
 }
 
 export interface OpenedPullRequest {
@@ -168,8 +170,8 @@ export class PullRequestsService {
       ...(input.pushed ? { pushed: input.pushed } : {}),
       ...(input.base ? { base: input.base } : {}),
       principal: input.principal,
+      remember: input.remember,
     });
-    await input.remember({ branch: opened.branch, commit: opened.commit });
     await this.chats?.record({
       identity: input.identity,
       projectId: input.projectId,
@@ -315,7 +317,7 @@ export class PullRequestsService {
             .catch((error: unknown) =>
               console.warn("[catamorphic] Could not audit a push", error),
             );
-        const { outcome } = await pushOwnBranch({
+        const { outcome, recordOwnership } = await pushOwnBranch({
           repoPath: checkout.repoPath,
           url: remoteUrl,
           credentials,
@@ -331,6 +333,8 @@ export class PullRequestsService {
           throw error;
         });
         await audit("allowed", { push: outcome });
+        if (recordOwnership)
+          await input.remember?.({ branch, commit: checkout.commit });
         const call = { credential, remoteUrl };
         // The branch's open pull request is this chat's: a second call
         // moved the branch, and returns the same pull request.

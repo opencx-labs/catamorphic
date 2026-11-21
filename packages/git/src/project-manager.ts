@@ -22,6 +22,7 @@ import { ProjectRepoImpl } from "./project-repo.js";
 import {
   currentSessionWork,
   type SessionWork,
+  sessionBranchName,
   writeCheckpoint,
 } from "./session-checkpoint.js";
 import type {
@@ -65,6 +66,24 @@ const SYSTEM_AUTHOR = {
   name: "Work",
   email: "system@work.software",
 };
+
+/**
+ * Materialize the checkpoint as Git objects describe it. Managed copies
+ * may have been initialized with symlinks or executable bits disabled.
+ */
+async function resetSessionCheckout(repoPath: string, commit: string) {
+  await nativeGit(repoPath, [
+    "-c",
+    "core.symlinks=true",
+    "-c",
+    "core.filemode=true",
+    "-c",
+    "core.autocrlf=false",
+    "reset",
+    "--hard",
+    commit,
+  ]);
+}
 
 export class ProjectManager {
   /** Origin objects this process has read; safe to lose. */
@@ -342,8 +361,7 @@ export class ProjectManager {
             throw new Error(
               "Session has uncheckpointed work on this machine. Recover it before moving the session.",
             );
-          await repo.moveBranch("main", fetched.sha);
-          await repo.checkout("main");
+          await resetSessionCheckout(repo.repoPath, fetched.sha);
         }
       }
       return repo;
@@ -372,19 +390,31 @@ export class ProjectManager {
     work?: { head: string; branch: string };
     /** The branch this chat just pushed for a pull request (ADR 0343). */
     pushed?: { branch: string; commit: string };
+    /** Build the sandbox's validated tree while its copy is open. */
+    snapshot?: (input: {
+      repoPath: string;
+      recorded: SessionWork & { checkpoint: string };
+      containLinks: boolean;
+    }) => Promise<{ tree?: string; work: { head: string; branch: string } }>;
+    /** Check the workspace claim just before publishing. */
+    held?: () => void | Promise<void>;
   }): Promise<string> {
-    const repo = await this.openSession(args);
+    const repo = await this.openSession({ ...args, refresh: true });
     try {
-      const sha = await this.checkpointCopy({ ...args, repo });
-      if (this.remote)
-        await push({
-          dev: repo,
-          remote: this.remote,
-          tenantId: args.tenantId,
-          projectId: args.projectId,
-          remoteBranch: `sessions/${args.sessionId}`,
-          localSha: sha,
-        });
+      const sha = await this.checkpointCopy({
+        ...args,
+        repo,
+        publish: async (head, previous) => {
+          await args.held?.();
+          await this.publishSession({
+            ...args,
+            repo,
+            head,
+            force: false,
+            ...(args.snapshot ? { expected: previous } : {}),
+          });
+        },
+      });
       return sha;
     } finally {
       await repo.dispose();
@@ -399,6 +429,8 @@ export class ProjectManager {
     base: string;
     work?: { head: string; branch: string };
     pushed?: { branch: string; commit: string };
+    snapshot?: Parameters<ProjectManager["checkpointSession"]>[0]["snapshot"];
+    publish?: (head: string, previous: string) => Promise<void>;
   }): Promise<string> {
     const { repo } = args;
     const recorded = await currentSessionWork({
@@ -406,32 +438,56 @@ export class ProjectManager {
       sessionId: args.sessionId,
       base: args.base,
     });
+    const snapshot = await args.snapshot?.({
+      repoPath: repo.repoPath,
+      recorded,
+      containLinks: repo instanceof NativeProjectRepo,
+    });
+    const saved = snapshot?.work ?? args.work;
     const pushed = args.pushed ?? recorded.pushed;
     const work: SessionWork = {
-      head: args.work?.head ?? recorded.head,
-      branch: args.work?.branch ?? recorded.branch,
+      head: saved?.head ?? recorded.head,
+      branch: saved?.branch ?? recorded.branch,
       ...(pushed ? { pushed } : {}),
     };
-    const dirty = (await repo.status()).dirty;
+    const previousTree = (
+      await nativeGit(repo.repoPath, [
+        "rev-parse",
+        `${recorded.checkpoint}^{tree}`,
+      ])
+    ).trim();
+    const dirty = !snapshot && (await repo.status()).dirty;
     const moved =
       work.head !== recorded.head ||
       work.branch !== recorded.branch ||
       work.pushed?.branch !== recorded.pushed?.branch ||
       work.pushed?.commit !== recorded.pushed?.commit;
-    if (!dirty && !moved) return recorded.checkpoint;
-    // The working tree as a tree; the checkpoint then takes its place.
-    const snapshot = dirty
-      ? await repo.commit(args.message, args.author)
-      : recorded.checkpoint;
+
+    if (
+      !dirty &&
+      !moved &&
+      (!snapshot?.tree || snapshot.tree === previousTree)
+    ) {
+      await args.publish?.(recorded.checkpoint, recorded.checkpoint);
+      return recorded.checkpoint;
+    }
+
+    const tree =
+      snapshot?.tree ??
+      (dirty ? await repo.commit(args.message, args.author) : previousTree);
     const sha = await writeCheckpoint({
       repoPath: repo.repoPath,
-      tree: snapshot,
+      tree,
       previous: recorded.checkpoint,
       message: args.message,
       author: args.author,
       work,
     });
-    await repo.moveBranch("main", sha);
+    // Until the origin has accepted the checkpoint, leave the working copy
+    // at its previous state so another replica can repeat the same save.
+    await args.publish?.(sha, recorded.checkpoint);
+    if (snapshot) await resetSessionCheckout(repo.repoPath, sha);
+    else await repo.moveBranch("main", sha);
     return sha;
   }
 
@@ -571,10 +627,17 @@ export class ProjectManager {
     });
     try {
       await this.bringBase({ ...args, repo });
-      await repo.moveBranch("main", args.commit);
-      await repo.checkout("main");
+      const checkpoint = await writeCheckpoint({
+        repoPath: repo.repoPath,
+        tree: args.commit,
+        previous: args.commit,
+        message: "Start the workspace",
+        author: SYSTEM_AUTHOR,
+        work: { head: args.commit, branch: sessionBranchName(args.sessionId) },
+      });
+      await this.publishSession({ ...args, repo, head: checkpoint });
+      await resetSessionCheckout(repo.repoPath, checkpoint);
       await repo.resetWorkingTree();
-      await this.publishSession({ ...args, repo, head: args.commit });
     } finally {
       await repo.dispose();
     }
@@ -614,13 +677,7 @@ export class ProjectManager {
         author: args.author,
         work: {
           head: args.commit,
-          branch: (
-            await currentSessionWork({
-              repoPath: repo.repoPath,
-              sessionId: args.sessionId,
-              base: args.commit,
-            })
-          ).branch,
+          branch: sessionBranchName(args.sessionId),
         },
       });
       await repo.moveBranch("main", sha);
@@ -761,6 +818,7 @@ export class ProjectManager {
     head: string;
     /** False for a checkpoint on top of the last; default true. */
     force?: boolean;
+    expected?: string;
   }): Promise<void> {
     if (!this.remote) return;
     await push({
@@ -771,6 +829,7 @@ export class ProjectManager {
       remoteBranch: `sessions/${args.sessionId}`,
       localSha: args.head,
       force: args.force ?? true,
+      ...(args.expected ? { expected: args.expected } : {}),
     });
   }
 
@@ -792,10 +851,9 @@ export class ProjectManager {
       refresh: true,
     });
     try {
-      await repo.moveBranch("main", args.commit);
-      await repo.checkout("main");
-      await repo.resetWorkingTree();
       await this.publishSession({ ...args, repo, head: args.commit });
+      await resetSessionCheckout(repo.repoPath, args.commit);
+      await repo.resetWorkingTree();
     } finally {
       await repo.dispose();
     }

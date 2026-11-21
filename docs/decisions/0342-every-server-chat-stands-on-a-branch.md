@@ -26,8 +26,11 @@ The branch is `work/<first 8 hex of the session id>`, as on the desktop;
 the agent may rename it or switch.
 
 **Work's checkpoint is a separate ref, never the agent's branch.**
-`sessions/<id>` gains one commit per save: its tree is the working tree as
-snapshotted, its parents the checkpoint before it and then the agent's
+`sessions/<id>` starts at a checkpoint Work writes over the base. The
+base's commit message is not a source of checkout or push state. Each save
+builds a tree from the checked changes in a private Git index and publishes
+its checkpoint before advancing the sandbox's saved marker. The checkpoint's
+parents are the checkpoint before it and then the agent's
 HEAD, its trailers `Work-Branch`, `Work-Head` and (ADR 0343)
 `Work-Pushed`. One ref and one compare-and-swap keep a rollback, the
 agent's commits and its branch name together; the database holds nothing

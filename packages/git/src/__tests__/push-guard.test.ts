@@ -191,16 +191,23 @@ describe("push guard for attached remotes", () => {
         }),
       ).rejects.toThrow(RemotePushRefusedError);
 
-    expect(await own(first)).toEqual({ outcome: "created" });
+    expect(await own(first)).toEqual({
+      outcome: "created",
+      recordOwnership: true,
+    });
     expect(await tip("work/chat")).toBe(first);
     expect(await own(first, { branch: "work/chat", commit: first })).toEqual({
       outcome: "unchanged",
+      recordOwnership: false,
     });
 
     // Moving forward overwrites nothing, whoever pushed the branch: the
     // agent may have pushed it itself through the gateway.
     const second = await commit(root, "two.md", "two");
-    expect(await own(second)).toEqual({ outcome: "updated" });
+    expect(await own(second)).toEqual({
+      outcome: "updated",
+      recordOwnership: false,
+    });
     expect(await tip("work/chat")).toBe(second);
 
     // Replacing a branch is for the chat that pushed it, and no other.
@@ -216,7 +223,7 @@ describe("push guard for attached remotes", () => {
     await nativeGit(root, ["reset", "-q", "--hard", first]);
     const rebased = await commit(root, "two.md", "two, rebased");
     expect(await own(rebased, { branch: "work/chat", commit: second })).toEqual(
-      { outcome: "replaced" },
+      { outcome: "replaced", recordOwnership: true },
     );
     expect(await tip("work/chat")).toBe(rebased);
 
@@ -238,8 +245,34 @@ describe("push guard for attached remotes", () => {
     const onTop = await commit(root, "three.md", "three");
     expect(await own(onTop, { branch: "work/chat", commit: rebased })).toEqual({
       outcome: "updated",
+      recordOwnership: false,
     });
     expect(await tip("work/chat")).toBe(onTop);
+  });
+
+  it("refuses to push the advertised default even if it is a work/ branch", async () => {
+    const previous = (await nativeGit(seed, ["rev-parse", "HEAD"])).trim();
+    await nativeGit(seed, ["push", origin, "HEAD:refs/heads/work/default"]);
+    await nativeGit(origin, [
+      "symbolic-ref",
+      "HEAD",
+      "refs/heads/work/default",
+    ]);
+    const next = await commit(root, "one.md", "one");
+
+    await expect(
+      pushOwnBranch({
+        repoPath: root,
+        url: origin,
+        ownership: "attached",
+        commit: next,
+        remoteBranch: "work/default",
+        pushed: { branch: "work/default", commit: previous },
+      }),
+    ).rejects.toThrow(/default branch/);
+    expect((await nativeGit(origin, ["rev-parse", "HEAD"])).trim()).toBe(
+      previous,
+    );
   });
 
   it("never pushes from sync in any state of an attached checkout", async () => {

@@ -14,7 +14,7 @@ import {
 import { LocalProcessSandboxProvider } from "@catamorphic/local-process";
 import type { SandboxProvider } from "@catamorphic/sandbox";
 import { TestSandboxes } from "@catamorphic/sandbox/testing";
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { seedSandboxRepository } from "../services/sandbox-git.js";
 import {
   SandboxSyncError,
@@ -297,6 +297,13 @@ describe("saving a workspace and restoring it (ADR 0341)", () => {
       ...args,
     ]);
   const author = { name: "Work", email: "system@work.software" };
+  const saveWorkspace = (
+    input: Omit<
+      Parameters<typeof saveSessionWorkspace>[0],
+      "message" | "author"
+    >,
+  ) =>
+    saveSessionWorkspace({ ...input, message: "Save the workspace", author });
 
   it("round-trips a branch, its commits and uncommitted work through a session's copy", async () => {
     const projectId = "f1e2d3c4-b5a6-7890-dcba-fedcba987654";
@@ -328,11 +335,20 @@ describe("saving a workspace and restoring it (ADR 0341)", () => {
     await agentGit(root, ["commit", "-q", "-m", "Agent commit"]);
     const agentHead = (await nativeGit(root, ["rev-parse", "HEAD"])).trim();
     changeWorkspace(root);
+    // Personal environment delivery does this before the turn starts.
+    fs.appendFileSync(path.join(root, ".git", "info", "exclude"), "/.env\n");
+    fs.writeFileSync(path.join(root, ".env"), "FIXTURE=local\n");
+    fs.writeFileSync(path.join(root, ".editorconfig"), "root = true\n");
+    fs.mkdirSync(path.join(root, ".github"));
+    fs.writeFileSync(
+      path.join(root, ".github", "CODEOWNERS"),
+      "* @maintainers\n",
+    );
     fs.writeFileSync(path.join(root, "staged.txt"), "staged, not committed\n");
     await agentGit(root, ["add", "staged.txt"]);
 
     operations.length = 0;
-    const saved = await saveSessionWorkspace({
+    const saved = await saveWorkspace({
       provider: counted,
       projectManager: manager,
       tenantId: TENANT,
@@ -346,6 +362,8 @@ describe("saving a workspace and restoring it (ADR 0341)", () => {
     expect(saved.changes.map((change) => change.path).sort()).toEqual(
       [
         ...Object.keys(FILES),
+        ".editorconfig",
+        ".github/CODEOWNERS",
         "committed.txt",
         "link-to-readme",
         "old.txt",
@@ -367,6 +385,7 @@ describe("saving a workspace and restoring it (ADR 0341)", () => {
     expectSavedIn(copyPath);
     expect(fs.existsSync(path.join(copyPath, "cache-dir"))).toBe(false);
     expect(fs.existsSync(path.join(copyPath, "node_modules"))).toBe(false);
+    expect(fs.existsSync(path.join(copyPath, ".env"))).toBe(false);
     // The agent's commit is in the copy as an object, never as a pack.
     expect(
       (
@@ -375,13 +394,7 @@ describe("saving a workspace and restoring it (ADR 0341)", () => {
     ).toBe("Agent commit");
 
     // The checkpoint the next sandbox is seeded from.
-    const checkpoint = await manager.checkpointSession({
-      ...session,
-      base,
-      message: "Save the workspace",
-      author,
-      work: saved.work,
-    });
+    const { checkpoint } = saved;
     expect(checkpoint).not.toBe(base);
     // The session's ref is its own: never the agent's branch.
     expect(checkpoint).not.toBe(agentHead);
@@ -404,10 +417,17 @@ describe("saving a workspace and restoring it (ADR 0341)", () => {
       nativeGit(restored, ["cat-file", "-e", checkpoint]),
     ).rejects.toThrow();
     expectSavedIn(restored);
+    expect(fs.readFileSync(path.join(restored, ".editorconfig"), "utf8")).toBe(
+      "root = true\n",
+    );
+    expect(
+      fs.readFileSync(path.join(restored, ".github", "CODEOWNERS"), "utf8"),
+    ).toBe("* @maintainers\n");
     expect(fs.readFileSync(path.join(restored, "committed.txt"), "utf8")).toBe(
       "in a commit\n",
     );
     expect(fs.existsSync(path.join(restored, "cache-dir"))).toBe(false);
+    expect(fs.existsSync(path.join(restored, ".env"))).toBe(false);
     // What was not committed is uncommitted again; what was staged comes
     // back unstaged.
     const status = (
@@ -429,7 +449,7 @@ describe("saving a workspace and restoring it (ADR 0341)", () => {
     expect(status.every((line) => /^( D|\?\?) /.test(line))).toBe(true);
 
     // What was restored is what was saved: nothing is left to save.
-    const again = await saveSessionWorkspace({
+    const again = await saveWorkspace({
       provider,
       projectManager: manager,
       tenantId: TENANT,
@@ -442,16 +462,8 @@ describe("saving a workspace and restoring it (ADR 0341)", () => {
     expect(again).toEqual({
       changes: [],
       work: { head: agentHead, branch: "feature/x" },
+      checkpoint,
     });
-    expect(
-      await manager.checkpointSession({
-        ...session,
-        base,
-        message: "Nothing new",
-        author,
-        work: again.work,
-      }),
-    ).toBe(checkpoint);
 
     // A commit alone, and a renamed branch, are saved without any file
     // having changed since the last save.
@@ -461,7 +473,7 @@ describe("saving a workspace and restoring it (ADR 0341)", () => {
     const secondHead = (
       await nativeGit(restored, ["rev-parse", "HEAD"])
     ).trim();
-    const committed = await saveSessionWorkspace({
+    const committed = await saveWorkspace({
       provider,
       projectManager: manager,
       tenantId: TENANT,
@@ -471,18 +483,11 @@ describe("saving a workspace and restoring it (ADR 0341)", () => {
       sandboxProviderId: second.id,
       projectDir,
     });
-    expect(committed).toEqual({
+    expect(committed).toMatchObject({
       changes: [],
       work: { head: secondHead, branch: "feature/y" },
     });
-    const next = await manager.checkpointSession({
-      ...session,
-      base,
-      message: "Commit",
-      author,
-      work: committed.work,
-    });
-    expect(next).not.toBe(checkpoint);
+    expect(committed.checkpoint).not.toBe(checkpoint);
     await provider.destroySandbox(second.id);
 
     const third = await provider.createSandbox({});
@@ -502,6 +507,71 @@ describe("saving a workspace and restoring it (ADR 0341)", () => {
     expectSavedIn(final);
   }, 120_000);
 
+  it("repeats the full save from another replica when the origin refuses publication", async () => {
+    const projectId = "a2d7a492-7905-4d12-8815-ec4800081704";
+    const sessionId = "5e551011-0000-4000-8000-00000000000c";
+    const session = { tenantId: TENANT, projectId, sessionId };
+    await createProject(projectId);
+    const base = await manager.mainCommit(session);
+    await manager.setSessionBase({ ...session, commit: base });
+    const sandbox = await provider.createSandbox({});
+    const initial = await seed({ session, sandboxId: sandbox.id, base });
+    const root = await checkout(sandbox.id);
+    const marker = () => agentGit(root, ["rev-parse", "refs/work/synced"]);
+    const previousMarker = await marker();
+    fs.writeFileSync(path.join(root, ".editorconfig"), "root = true\n");
+
+    const origin = manager.remoteBackend;
+    if (!origin) throw new Error("The fixture needs a shared origin");
+    const withOrigin = origin.withOrigin.bind(origin);
+    const publish = vi.spyOn(origin, "withOrigin");
+    publish.mockImplementation((tenantId, project, use) =>
+      withOrigin(tenantId, project, async (repo) => {
+        const update = vi
+          .spyOn(repo, "updateRef")
+          .mockRejectedValue(new Error("origin is unavailable"));
+        try {
+          return await use(repo);
+        } finally {
+          update.mockRestore();
+        }
+      }),
+    );
+    const input = {
+      ...session,
+      base,
+      provider,
+      sandboxProviderId: sandbox.id,
+      projectDir,
+    };
+    try {
+      await expect(
+        saveWorkspace({ ...input, projectManager: manager }),
+      ).rejects.toThrow("origin is unavailable");
+    } finally {
+      publish.mockRestore();
+    }
+    expect(await marker()).toBe(previousMarker);
+    expect(await manager.sessionWork({ ...session, base })).toEqual(initial);
+
+    const replica = new ProjectManager(
+      new FsBackend(path.join(dir, "replica")),
+      origin,
+    );
+    const saved = await saveWorkspace({ ...input, projectManager: replica });
+    expect(saved.changes).toEqual([
+      { path: ".editorconfig", kind: "modified" },
+    ]);
+    expect(await marker()).not.toBe(previousMarker);
+    const restored = await manager.openSession({ ...session, refresh: true });
+    try {
+      expect(await restored.readFile(".editorconfig")).toBe("root = true\n");
+      expect(await restored.resolveRef()).toBe(saved.checkpoint);
+    } finally {
+      await restored.dispose();
+    }
+  });
+
   it("saves the files of a sandbox that was not seeded from the session's copy, and none of its history", async () => {
     const projectId = "7c6b5a49-3827-4615-9e0d-1c2b3a4f5e6d";
     const sessionId = "5e551011-0000-4000-8000-00000000000b";
@@ -520,7 +590,7 @@ describe("saving a workspace and restoring it (ADR 0341)", () => {
     await agentGit(root, ["update-ref", "refs/work/synced", "HEAD"]);
     fs.writeFileSync(path.join(root, "notes.md"), "kept\n");
 
-    const saved = await saveSessionWorkspace({
+    const saved = await saveWorkspace({
       provider,
       projectManager: manager,
       tenantId: TENANT,
@@ -530,7 +600,7 @@ describe("saving a workspace and restoring it (ADR 0341)", () => {
       sandboxProviderId: sandbox.id,
       projectDir,
     });
-    expect(saved).toEqual({
+    expect(saved).toMatchObject({
       changes: [{ path: "notes.md", kind: "modified" }],
       work: { head: base, branch: "work/5e551011" },
     });
@@ -542,7 +612,7 @@ describe("saving a workspace and restoring it (ADR 0341)", () => {
     const empty = await provider.createSandbox({});
     await checkout(empty.id);
     expect(
-      await saveSessionWorkspace({
+      await saveWorkspace({
         provider,
         projectManager: manager,
         tenantId: TENANT,
@@ -552,7 +622,10 @@ describe("saving a workspace and restoring it (ADR 0341)", () => {
         sandboxProviderId: empty.id,
         projectDir,
       }),
-    ).toEqual({ changes: [], work: { head: base, branch: "work/5e551011" } });
+    ).toMatchObject({
+      changes: [],
+      work: { head: base, branch: "work/5e551011" },
+    });
   }, 60_000);
 
   it("saves the same bytes, modes and links into a member's draft in the origin", async () => {
@@ -676,7 +749,7 @@ describe("saving a workspace and restoring it (ADR 0341)", () => {
       return {
         commands: sandbox.commands,
         head: sandbox.head,
-        done: saveSessionWorkspace({
+        done: saveWorkspace({
           provider: sandbox.provider,
           projectManager: manager,
           tenantId: TENANT,

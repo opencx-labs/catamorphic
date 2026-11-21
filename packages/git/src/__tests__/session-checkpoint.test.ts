@@ -5,6 +5,7 @@ import path from "node:path";
 import { promisify } from "node:util";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { FsBackend } from "../fs-backend.js";
+import { push } from "../git-sync.js";
 import { InMemoryObjectStore } from "../in-memory-object-store.js";
 import { nativeGit, nativeGitBytes } from "../native-git.js";
 import { ObjectRemoteBackend } from "../object-remote-backend.js";
@@ -594,12 +595,10 @@ describe("a session's checkpoints (ADR 0342)", () => {
   });
 
   it("starts at the base, on the session's own branch", async () => {
-    expect(await manager.sessionWork({ ...args, base })).toEqual({
-      checkpoint: base,
-      head: base,
-      branch: "work/0a1b2c3d",
-    });
-    // Nothing changed: no checkpoint is written.
+    const work = await manager.sessionWork({ ...args, base });
+    expect(work).toMatchObject({ head: base, branch: "work/0a1b2c3d" });
+    expect(work.checkpoint).not.toBe(base);
+    // Nothing changed: no additional checkpoint is written.
     expect(
       await manager.checkpointSession({
         ...args,
@@ -607,7 +606,58 @@ describe("a session's checkpoints (ADR 0342)", () => {
         message: "Turn",
         author: AUTHOR,
       }),
-    ).toBe(base);
+    ).toBe(work.checkpoint);
+  });
+
+  it("does not read checkpoint fields from the repository's base message", async () => {
+    const origin = manager.remoteBackend;
+    if (!origin) throw new Error("The fixture needs an origin");
+    const main = await manager.open(TENANT, PROJECT);
+    try {
+      const message = checkpointMessage({
+        message: "Document checkpoint fields",
+        work: {
+          head: base,
+          branch: "work/example",
+          pushed: { branch: "work/example", commit: base },
+        },
+      });
+      await git(main.repoPath, [
+        ...agent,
+        "commit",
+        "--allow-empty",
+        "-m",
+        message,
+      ]);
+      const documented = await main.resolveRef("HEAD");
+      await push({
+        dev: main,
+        remote: origin,
+        tenantId: TENANT,
+        projectId: PROJECT,
+      });
+      await manager.setSessionBase({ ...args, commit: documented });
+
+      const initialized = await manager.sessionWork({
+        ...args,
+        base: documented,
+      });
+      expect(initialized.checkpoint).not.toBe(documented);
+      expect(initialized).toEqual({
+        checkpoint: initialized.checkpoint,
+        head: documented,
+        branch: "work/0a1b2c3d",
+      });
+
+      await manager.resetSession({ ...args, commit: documented });
+      expect(await manager.sessionWork({ ...args, base: documented })).toEqual({
+        checkpoint: documented,
+        head: documented,
+        branch: "work/0a1b2c3d",
+      });
+    } finally {
+      await main.dispose();
+    }
   });
 
   it("keeps the agent's commits and branch beside the saved files", async () => {
@@ -732,6 +782,7 @@ describe("a session's checkpoints (ADR 0342)", () => {
   });
 
   it("refuses a checkpoint whose agent commit is not in the copy", async () => {
+    const initial = await manager.sessionWork({ ...args, base });
     await expect(
       manager.checkpointSession({
         ...args,
@@ -741,9 +792,7 @@ describe("a session's checkpoints (ADR 0342)", () => {
         work: { head: "c".repeat(40), branch: "feature/x" },
       }),
     ).rejects.toThrow();
-    expect(await manager.sessionWork({ ...args, base })).toMatchObject({
-      checkpoint: base,
-    });
+    expect(await manager.sessionWork({ ...args, base })).toEqual(initial);
   });
 
   it("gives a session that only has saved files a base, with them uncommitted on top", async () => {

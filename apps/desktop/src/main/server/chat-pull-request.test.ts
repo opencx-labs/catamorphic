@@ -69,11 +69,15 @@ describe("a desktop chat's pull request (ADR 0343)", () => {
       };
     },
   };
-  const open = (kind: SessionCheckoutDescription["kind"]) =>
+  const open = (
+    kind: SessionCheckoutDescription["kind"],
+    sessionId = SESSION,
+    checkout = root,
+  ) =>
     openChatPullRequest({
       pullRequests,
       checkouts: {
-        describe: async () => describeAs(kind),
+        describe: async () => ({ ...describeAs(kind), path: checkout }),
         preparePullRequest: async (input) => {
           prepared.push(input.message);
           // The chat's own worktree is checkpointed: its changes become
@@ -85,7 +89,7 @@ describe("a desktop chat's pull request (ADR 0343)", () => {
       },
       identity,
       projectId: "project",
-      sessionId: SESSION,
+      sessionId,
       title: "Add notes",
       body: "Why.",
     });
@@ -141,7 +145,11 @@ describe("a desktop chat's pull request (ADR 0343)", () => {
     expect(asked[0]?.pushed).toBeUndefined();
     // Kept where the commits are, for the lease of a later replacement.
     expect(
-      await git(root, ["rev-parse", "refs/work/pushed/work/0a1b2c3d"]),
+      await git(root, [
+        "for-each-ref",
+        "--format=%(objectname)",
+        "refs/work/pushed",
+      ]),
     ).toBe(first);
 
     await writeFile(path.join(root, "notes.md"), "two\n");
@@ -152,8 +160,34 @@ describe("a desktop chat's pull request (ADR 0343)", () => {
       pushed: { branch: "work/0a1b2c3d", commit: first },
     });
     expect(
-      await git(root, ["rev-parse", "refs/work/pushed/work/0a1b2c3d"]),
+      await git(root, [
+        "for-each-ref",
+        "--format=%(objectname)",
+        "refs/work/pushed",
+      ]),
     ).toBe(second);
+  });
+
+  it("does not share rewrite authority across chats or checkouts in one repository", async () => {
+    await git(root, ["checkout", "-q", "-b", "work/topic"]);
+    await open("primary");
+    const otherSession = "1a1b2c3d-4e5f-4789-abcd-ef0123456789";
+    await open("primary", otherSession);
+    expect(asked[1]?.pushed).toBeUndefined();
+
+    const otherCheckout = path.join(root, "other-checkout");
+    await git(root, [
+      "worktree",
+      "add",
+      "--force",
+      otherCheckout,
+      "work/topic",
+    ]);
+    await open("external", SESSION, otherCheckout);
+    expect(asked[2]?.pushed).toBeUndefined();
+
+    await open("primary");
+    expect(asked[3]?.pushed).toMatchObject({ branch: "work/topic" });
   });
 
   it("refuses a worktree that is gone, before anything is pushed", async () => {

@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import type {
   ChatPullRequest,
   Identity,
@@ -29,8 +30,7 @@ export interface PullRequestCheckouts {
  * function on it. A worktree of the chat's own is checkpointed first; the
  * project folder and a worktree the person assigned push what they
  * committed, and the result names the rest. What the chat last pushed is
- * kept where its commits are: `refs/work/pushed/<branch>` in the
- * repository.
+ * kept in the repository under a key for the chat, checkout, and branch.
  */
 export async function openChatPullRequest(input: {
   pullRequests: Pick<PullRequestsService, "openForChat" | "remoteBranch">;
@@ -72,11 +72,18 @@ export async function openChatPullRequest(input: {
     .filter(Boolean)
     .map((entry) => entry.slice(3));
   const remoteBranch = input.pullRequests.remoteBranch({ branch, sessionId });
+  const gitDirectory = await read(["rev-parse", "--absolute-git-dir"]);
+  const pushRef = (branch: string) => {
+    const key = createHash("sha256")
+      .update(JSON.stringify([projectId, sessionId, gitDirectory, branch]))
+      .digest("hex");
+    return `refs/work/pushed/${key}`;
+  };
   const lastPushed = await read([
     "rev-parse",
     "-q",
     "--verify",
-    `refs/work/pushed/${remoteBranch}^{commit}`,
+    `${pushRef(remoteBranch)}^{commit}`,
   ]).catch(() => "");
   return input.pullRequests.openForChat({
     identity: input.identity,
@@ -93,7 +100,7 @@ export async function openChatPullRequest(input: {
     remember: async (pushed) => {
       await nativeGit(repoPath, [
         "update-ref",
-        `refs/work/pushed/${pushed.branch}`,
+        pushRef(pushed.branch),
         pushed.commit,
       ]);
     },

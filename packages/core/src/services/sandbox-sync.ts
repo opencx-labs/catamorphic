@@ -1,5 +1,4 @@
 import {
-  currentSessionWork,
   isSessionBranchName,
   NativeProjectRepo,
   nativeGit,
@@ -8,12 +7,16 @@ import {
   ReceivedPack,
   type SavedChange,
   savedDraftChanges,
+  sessionBranchName,
   shellQuote,
   WorkspaceSaveError,
   writeSavedChanges,
 } from "@catamorphic/git";
 import type { SandboxProvider } from "@catamorphic/sandbox";
-import { PROJECT_NODE_MODULES_DIR } from "@catamorphic/workflow/project-layout";
+import {
+  PROJECT_APP_DATA_DIR,
+  PROJECT_NODE_MODULES_DIR,
+} from "@catamorphic/workflow/project-layout";
 import type { Identity } from "../identity.js";
 import { SEEDED_FILE, SESSION_DIRECTORY } from "./sandbox-git.js";
 
@@ -41,6 +44,7 @@ const SYNC_IGNORED_PREFIXES = [
   "node_modules/",
   ".git/",
   `${PROJECT_NODE_MODULES_DIR}/`,
+  `${PROJECT_APP_DATA_DIR}/`,
 ];
 
 /**
@@ -146,105 +150,94 @@ export async function syncSandboxChanges(opts: {
 }
 
 /**
- * Save a chat's workspace into its session's copy (ADRs 0341, 0342): every
- * file that changed since the last save, exactly, and the commits its
- * branch gained, with the branch's name. The agent's commits are checked
- * and kept as Git objects; its working tree is written as files. Nothing
- * is checkpointed here: the caller records what this returns with
- * `ProjectManager.checkpointSession`. Throws {@link SandboxSyncError} when
- * the sandbox's changes cannot be read or are refused; nothing is then
- * marked as saved.
+ * Save a chat's workspace (ADRs 0341, 0342): publish the checked files,
+ * commits and branch in one checkpoint, then advance the sandbox's marker.
  */
 export async function saveSessionWorkspace(opts: {
   provider: SandboxProvider;
   projectManager: ProjectManager;
   tenantId: string;
   projectId: string;
-  /** The session whose copy keeps the workspace. */
   sessionId: string;
-  /** The commit the workspace stands on. */
   base: string;
+  message: string;
+  author: { name: string; email: string };
+  held?: () => void | Promise<void>;
   sandboxProviderId: string;
-  /** The sandbox path holding the project checkout. */
   projectDir: string;
 }): Promise<{
   changes: SyncedFileChange[];
-  /** The agent's branch and HEAD, for the session's next checkpoint. */
   work: { head: string; branch: string };
+  checkpoint: string;
 }> {
-  const repo = await opts.projectManager.openSession({
-    tenantId: opts.tenantId,
-    projectId: opts.projectId,
-    sessionId: opts.sessionId,
-  });
-  try {
-    const recorded = await currentSessionWork({
-      repoPath: repo.repoPath,
-      sessionId: opts.sessionId,
-      base: opts.base,
-    });
-    // What this copy holds of the agent's branch: the sandbox packs only
-    // what its HEAD reaches beyond these.
-    const known = [...new Set([opts.base, recorded.head])];
-    const save = await readSandboxSave({
-      ...opts,
-      history: { known, borrow: repo.repoPath },
-    });
-    const changes = savedFiles(save.changes);
-    const head = save.head ?? recorded.head;
-    const branch = save.branch ?? recorded.branch;
-    try {
-      if (!isSessionBranchName(branch))
-        throw new WorkspaceSaveError(
-          `the workspace is on a branch whose name cannot be saved: ${JSON.stringify(branch.slice(0, 200))}`,
-        );
-      if (save.pack) {
-        // Everything is checked before anything is written.
-        if (head !== recorded.head)
-          await save.pack.assertHistory({
-            head,
-            known,
-            maxCommits: MAX_SAVED_COMMITS,
-            maxBytes: MAX_HISTORY_BYTES,
-          });
-        await save.pack.assertBlobs({
-          oids: blobsOf(changes),
-          maxBytes: MAX_CHECKOUT_BYTES,
-        });
-        if (head !== recorded.head)
-          await save.pack.unpackHistory({
-            repoPath: repo.repoPath,
-            head,
-            known,
-          });
-        await writeSavedChanges({
-          repoPath: repo.repoPath,
-          changes,
-          pack: save.pack,
-          containLinks: repo instanceof NativeProjectRepo,
-        });
-      }
-      if (head !== recorded.head)
-        // A HEAD that moved to a commit already kept brings no pack.
-        await nativeGit(repo.repoPath, [
-          "cat-file",
-          "-e",
-          `${head}^{commit}`,
-        ]).catch(() => {
+  let mark: string | null = null;
+  let changes: SavedChange[] = [];
+  let work = { head: opts.base, branch: sessionBranchName(opts.sessionId) };
+  const checkpoint = await opts.projectManager.checkpointSession({
+    ...opts,
+    snapshot: async ({ repoPath, recorded, containLinks }) => {
+      // Pack only what the sandbox's HEAD reaches beyond the commits
+      // that the current, durable checkpoint already holds.
+      const known = [...new Set([opts.base, recorded.head])];
+      const save = await readSandboxSave({
+        ...opts,
+        history: { known, borrow: repoPath },
+      });
+      changes = savedFiles(save.changes);
+      mark = save.tree;
+      const head = save.head ?? recorded.head;
+      const branch = save.branch ?? recorded.branch;
+      work = { head, branch };
+      try {
+        if (!isSessionBranchName(branch))
           throw new WorkspaceSaveError(
-            "the branch stands on a commit that did not arrive with the save",
+            `the workspace is on a branch whose name cannot be saved: ${JSON.stringify(branch.slice(0, 200))}`,
           );
-        });
-    } catch (error) {
-      throw asSyncError(error);
-    } finally {
-      await save.pack?.dispose();
-    }
-    if (save.tree) await markSaved({ ...opts, tree: save.tree });
-    return { changes: reported(changes), work: { head, branch } };
-  } finally {
-    await repo.dispose();
-  }
+        if (save.pack) {
+          if (head !== recorded.head)
+            await save.pack.assertHistory({
+              head,
+              known,
+              maxCommits: MAX_SAVED_COMMITS,
+              maxBytes: MAX_HISTORY_BYTES,
+            });
+          await save.pack.assertBlobs({
+            oids: blobsOf(changes),
+            maxBytes: MAX_CHECKOUT_BYTES,
+          });
+        }
+        const tree = save.pack
+          ? await save.pack.snapshotTree({
+              repoPath,
+              previous: recorded.checkpoint,
+              changes,
+              containLinks,
+            })
+          : undefined;
+        if (head !== recorded.head) {
+          await save.pack?.unpackHistory({ repoPath, head, known });
+          // A HEAD that moved to a commit already kept brings no pack.
+          await nativeGit(repoPath, [
+            "cat-file",
+            "-e",
+            `${head}^{commit}`,
+          ]).catch(() => {
+            throw new WorkspaceSaveError(
+              "the branch stands on a commit that did not arrive with the save",
+            );
+          });
+        }
+        return { work, ...(tree ? { tree } : {}) };
+      } catch (error) {
+        throw asSyncError(error);
+      } finally {
+        await save.pack?.dispose();
+      }
+    },
+  });
+  await opts.held?.();
+  if (mark) await markSaved({ ...opts, tree: mark });
+  return { changes: reported(changes), work, checkpoint };
 }
 
 /** A save's changes without what an agent stages for its own use. */
@@ -280,7 +273,7 @@ async function markSaved(opts: {
 }): Promise<void> {
   await opts.provider.executeCommand(
     opts.sandboxProviderId,
-    `commit=$(git -c 'user.name=Work Agent' -c user.email=agent@work.software commit-tree ${opts.tree} -m synced) && git update-ref refs/work/synced "$commit"; rm -rf "$(git rev-parse --git-dir)/work-sync"`,
+    `commit=$(git -c 'user.name=Work Agent' -c user.email=agent@work.software commit-tree ${opts.tree} -m synced) && git update-ref refs/work/synced "$commit" && rm -rf "$(git rev-parse --git-dir)/work-sync"`,
     { cwd: opts.projectDir },
   );
 }

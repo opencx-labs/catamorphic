@@ -2864,7 +2864,7 @@ export class AgentSessionsService {
           agent,
         );
         if (runtime.provider) {
-          const saved = await this.saveSandbox({
+          await this.saveSandbox({
             identity,
             projectId,
             session,
@@ -2873,16 +2873,8 @@ export class AgentSessionsService {
               session,
               runtime.provider,
             ),
-          });
-          held();
-          await this.projectManager.checkpointSession({
-            tenantId: identity.tenantId,
-            projectId,
-            sessionId: copyId,
             message: "Save the workspace before opening a pull request",
-            author: CHECKPOINT_AUTHOR,
-            base: saved.base,
-            work: saved.work,
+            held,
           });
         }
       }
@@ -7567,71 +7559,63 @@ export class AgentSessionsService {
     const keepsChangesInSandbox = Boolean(
       sandboxProviderId && agent.sandboxing === "contained",
     );
-    // A shared subsession's changes are its workspace session's (ADR 0322).
-    const copyId = workspaceCopyId(session);
     const saved = await this.oneSyncPerWorkspace(session, async (held) => {
-      let workspaceSyncError: string | undefined;
-      // What a sandbox's save found: its checkpoint records the agent's
-      // branch and commits with the files (ADR 0342).
-      let sandboxSave: SavedSandbox | undefined;
-      const changedFiles: SyncedFileChange[] = keepsChangesInSandbox
-        ? []
-        : sandboxProviderId && runtime.provider
-          ? await this.saveSandbox({
-              identity,
-              projectId,
-              session,
-              provider: runtime.provider,
-              sandboxProviderId,
-            }).then(
-              (save) => {
-                sandboxSave = save;
-                return save.changes;
-              },
-              (error: unknown) => {
-                if (!(error instanceof SandboxSyncError)) throw error;
-                console.warn(
-                  `[catamorphic] Session ${sessionId}: ${error.message}`,
-                );
-                workspaceSyncError = error.message;
-                return [];
-              },
-            )
-          : await this.changedFilesOfTurn(turn.id, workingDirectory);
-      let failure: TurnError | undefined;
-      let checkpointAfter: string | null = null;
-      held();
-      if (
-        !keepsChangesInSandbox &&
-        (agent.topology === "native" || sandboxSave)
-      ) {
+      if (keepsChangesInSandbox)
+        return { changedFiles: [], checkpointAfter: null };
+      if (sandboxProviderId && runtime.provider) {
         try {
-          checkpointAfter = await this.checkpointTurn(
+          const save = await this.saveSandbox({
             identity,
             projectId,
-            input.inputText,
-            {
-              sessionId: copyId,
-              workingDirectory,
-              nativeExecution: agent.topology === "native",
-              ...(sandboxSave ? { sandboxSave } : {}),
-            },
-          );
-          // A sandbox's checkpoint that did not move records no change.
-          if (sandboxSave && checkpointAfter === turn.checkpoint.before)
-            checkpointAfter = null;
+            session,
+            provider: runtime.provider,
+            sandboxProviderId,
+            message: checkpointMessage(input.inputText),
+            held,
+          });
+          return {
+            changedFiles: save.changes,
+            checkpointAfter:
+              save.checkpoint === turn.checkpoint.before
+                ? null
+                : save.checkpoint,
+          };
         } catch (error) {
-          failure = {
-            message: error instanceof Error ? error.message : String(error),
+          if (error instanceof SandboxSyncError) {
+            console.warn(
+              `[catamorphic] Session ${sessionId}: ${error.message}`,
+            );
+            return {
+              changedFiles: [],
+              workspaceSyncError: error.message,
+              checkpointAfter: null,
+            };
+          }
+          console.warn("[catamorphic] Turn checkpoint failed", error);
+          return {
+            changedFiles: [],
+            failure: {
+              message:
+                "Session checkpoint could not be saved. Recover the workspace before retrying.",
+            } satisfies TurnError,
+            checkpointAfter: null,
           };
         }
       }
-      return {
-        changedFiles,
-        workspaceSyncError,
-        failure,
-        checkpointAfter,
-      };
+
+      const changedFiles = await this.changedFilesOfTurn(
+        turn.id,
+        workingDirectory,
+      );
+      held();
+      const checkpointAfter =
+        agent.topology === "native"
+          ? await this.checkpointTurn(identity, projectId, input.inputText, {
+              sessionId: workspaceCopyId(session),
+              workingDirectory,
+            })
+          : null;
+      return { changedFiles, checkpointAfter };
     });
     const { changedFiles, workspaceSyncError, failure, checkpointAfter } =
       saved;
@@ -8429,20 +8413,18 @@ export class AgentSessionsService {
     return base;
   }
 
-  /**
-   * Save a chat's sandbox into its session's copy (ADRs 0341, 0342): its
-   * files, and the commits and name of its agent's branch. The checkpoint
-   * that records them is the caller's to write, with what this returns.
-   */
+  /** Checkpoint a chat's sandbox and mark it saved only after publication. */
   private async saveSandbox(input: {
     identity: Identity;
     projectId: string;
     session: Pick<SessionRow, "id" | "workspace" | "workspace_session_id">;
     provider: SandboxProvider;
     sandboxProviderId: string;
-  }): Promise<SavedSandbox> {
+    message: string;
+    held: () => void | Promise<void>;
+  }): ReturnType<typeof saveSessionWorkspace> {
     const base = await this.workspaceBaseOf(input.session);
-    const saved = await saveSessionWorkspace({
+    return saveSessionWorkspace({
       provider: input.provider,
       projectManager: this.projectManager,
       tenantId: input.identity.tenantId,
@@ -8451,8 +8433,10 @@ export class AgentSessionsService {
       base: base.commit,
       sandboxProviderId: input.sandboxProviderId,
       projectDir: this.projectDir(input.provider),
+      message: input.message,
+      author: CHECKPOINT_AUTHOR,
+      held: input.held,
     });
-    return { ...saved, base: base.commit };
   }
 
   /**
@@ -9835,23 +9819,17 @@ export class AgentSessionsService {
     sandboxProviderId: string;
     held: () => void;
   }): Promise<string | undefined> {
-    const { identity, projectId, session } = input;
-    const saved = await this.saveSandbox(input).catch((error: unknown) => {
+    try {
+      await this.saveSandbox({
+        ...input,
+        message: "Save the workspace before setting it up again",
+      });
+      return undefined;
+    } catch (error) {
+      input.held();
       if (!(error instanceof SandboxSyncError)) throw error;
       return `[Workspace] This workspace was made again to run its setup, and what changed in it since the last turn could not be saved first: ${error.message}`;
-    });
-    input.held();
-    if (typeof saved === "string") return saved;
-    await this.projectManager.checkpointSession({
-      tenantId: identity.tenantId,
-      projectId,
-      sessionId: workspaceCopyId(session),
-      message: "Save the workspace before setting it up again",
-      author: CHECKPOINT_AUTHOR,
-      base: saved.base,
-      work: saved.work,
-    });
-    return undefined;
+    }
   }
 
   /** What a preparing turn shows its chat, while it is still preparing. */
@@ -13871,22 +13849,14 @@ export class AgentSessionsService {
                 session: chat,
               });
           await input.held();
-          const saved = await this.saveSandbox({
+          await this.saveSandbox({
             identity,
             projectId,
             session: based,
             provider,
             sandboxProviderId: input.sandboxProviderId,
-          });
-          await input.held();
-          await this.projectManager.checkpointSession({
-            tenantId: identity.tenantId,
-            projectId,
-            sessionId: workspaceCopyId(based),
             message,
-            author: CHECKPOINT_AUTHOR,
-            base: saved.base,
-            work: saved.work,
+            held: input.held,
           });
         }
       } catch (error) {
@@ -16064,9 +16034,6 @@ export class AgentSessionsService {
     execution: {
       sessionId: string;
       workingDirectory: string;
-      nativeExecution: boolean;
-      /** What the sandbox's save found, for a sandbox chat. */
-      sandboxSave?: SavedSandbox;
     },
   ): Promise<string | null> {
     return withSpan(
@@ -16081,10 +16048,7 @@ export class AgentSessionsService {
       },
       async (span) => {
         try {
-          if (
-            execution.nativeExecution &&
-            this.nativeAgentCheckout?.checkpoint
-          ) {
+          if (this.nativeAgentCheckout?.checkpoint) {
             return await this.nativeAgentCheckout.checkpoint({
               projectId,
               sessionId: execution.sessionId,
@@ -16092,16 +16056,6 @@ export class AgentSessionsService {
               message: checkpointMessage(userMessage),
             });
           }
-          if (execution.sandboxSave)
-            return await this.projectManager.checkpointSession({
-              tenantId: identity.tenantId,
-              projectId,
-              sessionId: execution.sessionId,
-              message: checkpointMessage(userMessage),
-              author: CHECKPOINT_AUTHOR,
-              base: execution.sandboxSave.base,
-              work: execution.sandboxSave.work,
-            });
           // An agent on this host in the project's own folder.
           const repo = await this.projectManager.openDraft({
             tenantId: identity.tenantId,
@@ -16127,11 +16081,6 @@ export class AgentSessionsService {
               error instanceof Error ? error.message : String(error)
             }`,
           );
-          if (execution.sandboxSave)
-            throw new Error(
-              "Session checkpoint could not be saved. Recover the workspace before retrying.",
-              { cause: error },
-            );
           return null;
         }
       },
@@ -17157,15 +17106,6 @@ function workspaceCopyId(
   session: Pick<SessionRow, "id" | "workspace_session_id">,
 ): string {
   return session.workspace_session_id ?? session.id;
-}
-
-/** What saving a chat's sandbox found, for the checkpoint that records it. */
-interface SavedSandbox {
-  changes: SyncedFileChange[];
-  /** The agent's branch and HEAD. */
-  work: { head: string; branch: string };
-  /** The commit the workspace stands on. */
-  base: string;
 }
 
 /** Where an agent of a topology works, as a refusal says it. */

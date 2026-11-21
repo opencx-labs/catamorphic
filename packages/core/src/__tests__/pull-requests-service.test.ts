@@ -269,6 +269,30 @@ it("pushes the branch as the chat's own, opens one pull request, updates it, rep
   expect(await tip("release")).toBe(base);
 }, 60_000);
 
+it("does not remember an existing branch as owned when it matches or moves forward", async () => {
+  await forge.connectPersonal(identity, "member-token");
+  const branch = "work/existing";
+  const first = await commit(checkout, "one.md", "one\n");
+  await git(checkout, ["push", "-q", remote, `HEAD:refs/heads/${branch}`]);
+  const remember = vi.fn(async () => {});
+  const open = (commit: string) =>
+    service.openForChat({
+      identity,
+      projectId,
+      sessionId: SESSION,
+      title: "One",
+      checkout: { repoPath: checkout, commit, branch },
+      uncommitted: [],
+      principal: "either",
+      remember,
+    });
+  await open(first);
+  const second = await commit(checkout, "two.md", "two\n");
+  await open(second);
+  expect(await tip(branch)).toBe(second);
+  expect(remember).not.toHaveBeenCalled();
+});
+
 it("targets the branch the work started from when the repository has it, else the default branch", async () => {
   await forge.connectPersonal(identity, "member-token");
   await git(checkout, ["checkout", "-q", "-B", "work/11111111", "trunk"]);

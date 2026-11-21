@@ -43,10 +43,14 @@ decides what reaches the repository.
 with a lease on the commit this chat last pushed there
 (`--force-with-lease=<ref>:<commit>`), so anything a person or another
 chat pushed since refuses it with a reason instead of being overwritten.
-Creating uses a lease on absence; moving forward needs no force. The last
-push is kept where the agent cannot write it: a server chat's checkpoint
-trailer (`Work-Pushed`), a desktop chat's `refs/work/pushed/<branch>`.
-Never a branch outside `work/`, never a deletion.
+Creating uses a lease on absence. A fast-forward uses the advertised tip
+and never establishes ownership by itself. An already matching branch does
+not establish ownership. Work records an accepted creation or update to a
+tip the chat already owned in the server chat's checkpoint trailer
+(`Work-Pushed`) or in a desktop ref keyed to the project, session, checkout
+and branch. The remote's advertised default branch is protected even if its
+name starts with `work/`. A push never deletes a branch or targets a branch
+outside `work/`.
 
 With no repository it refuses: "This project is not connected to a
 repository, so there is nowhere to open a pull request. The branch is

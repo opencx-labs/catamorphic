@@ -169,6 +169,8 @@ describe.skipIf(!enabled)(
             base,
             sandboxProviderId,
             projectDir,
+            message: "Save the workspace",
+            author: { name: "Work", email: "system@work.software" },
           });
 
         const first = (await provider.createSandbox({})).id;
@@ -215,13 +217,6 @@ describe.skipIf(!enabled)(
         expect(fs.existsSync(path.join(copyPath, "cache-dir"))).toBe(false);
         expect(fs.existsSync(path.join(copyPath, "node_modules"))).toBe(false);
 
-        await manager.checkpointSession({
-          ...session,
-          base,
-          message: "Save the workspace",
-          author: { name: "Work", email: "system@work.software" },
-          work: saved.work,
-        });
         await provider.destroySandbox(first);
 
         // A fresh sandbox, seeded from the copy, repeats every fact: the
@@ -242,7 +237,10 @@ describe.skipIf(!enabled)(
         expect(status).toContain("?? staged.txt");
         expect(status).toContain("?? run.sh");
         expect(status).not.toContain("committed.txt");
-        expect(await save(second)).toEqual({ changes: [], work: saved.work });
+        expect(await save(second)).toMatchObject({
+          changes: [],
+          work: saved.work,
+        });
       },
       20 * MINUTES,
     );

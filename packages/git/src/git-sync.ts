@@ -37,6 +37,8 @@ export interface PushOpts {
   remoteBranch?: string;
   /** SHA on the dev side to push. Defaults to the tip of the current branch. */
   localSha?: string;
+  /** The published ref from which this update was prepared, when known. */
+  expected?: string;
   /**
    * Move the branch even when it is not a fast-forward. Only for branches
    * Work owns outright, such as a session's `sessions/<id>` whose base moved.
@@ -75,6 +77,11 @@ export async function push(opts: PushOpts): Promise<{ sha: string }> {
       if (currentRemote === localSha) {
         return { sha: localSha };
       }
+
+      if (opts.expected !== undefined && currentRemote !== opts.expected)
+        throw new Error(
+          "The workspace checkpoint changed before it could be published.",
+        );
 
       if (currentRemote && !opts.force) {
         const fastForward = await isAncestor({
