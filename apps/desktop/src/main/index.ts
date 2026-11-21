@@ -221,17 +221,13 @@ if (e2eDataDir) {
   process.on("uncaughtException", (error) =>
     report("uncaught exception", error),
   );
-  // Whether Work is the active application decides which of its windows
-  // can hold the keys on macOS; printed with each window's own events.
-  app.on("did-become-active", () =>
-    console.info("[desktop] Window app active"),
-  );
-  app.on("did-resign-active", () =>
-    console.info("[desktop] Window app inactive"),
-  );
   process.on("unhandledRejection", (reason) =>
     report("unhandled rejection", reason),
   );
+  // Whether Work is the active application decides which of its windows
+  // can hold the keys on macOS; printed among each window's own events.
+  app.on("did-become-active", () => console.info("[desktop] App active"));
+  app.on("did-resign-active", () => console.info("[desktop] App inactive"));
 }
 if (isolatedDataDir) {
   app.setPath("userData", isolatedDataDir);

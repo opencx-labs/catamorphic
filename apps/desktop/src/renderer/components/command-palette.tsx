@@ -562,7 +562,7 @@ function CommandPaletteContent({
   // focused its input: the palette then stood open while typing went to
   // the page. It takes focus back, as a dialog does (lib/frame-focus.ts).
   useEffect(() => {
-    if (variant !== "overlay" || !open || !active || pickingAgent) return;
+    if (variant !== "overlay" || !open || !active) return;
     return keepFocusFromFrames({
       surface: () =>
         (agentInputRef.current?.element() ?? inputRef.current)?.closest(
@@ -571,7 +571,7 @@ function CommandPaletteContent({
       holdsKeys: () => !hasOpenModal(),
       take: focusInput,
     });
-  }, [variant, open, active, pickingAgent, focusInput]);
+  }, [variant, open, active, focusInput]);
 
   // Commands run from anywhere open the overlay already inside their mode.
   useEffect(() => {

@@ -60,7 +60,7 @@ it("takes focus back from a page beneath that focuses after the surface did", as
 });
 
 it("leaves focus in a frame of the surface's own, and with the person's own field", async () => {
-  const { surface, field } = surfaceOverPage();
+  const { surface } = surfaceOverPage();
   const own = mount("iframe", surface);
   pageTakesFocus(own);
   await focusMoved();
@@ -69,7 +69,6 @@ it("leaves focus in a frame of the surface's own, and with the person's own fiel
   elsewhere.focus();
   await focusMoved();
   expect(document.activeElement).toBe(elsewhere);
-  expect(document.activeElement).not.toBe(field);
 });
 
 it("yields while the keys are another surface's, and once it stops", async () => {

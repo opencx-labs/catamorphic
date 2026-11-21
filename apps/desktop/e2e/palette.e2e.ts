@@ -510,14 +510,16 @@ it("keeps the keys when the page beneath takes focus after it opened", async () 
   // A page focused a moment before Cmd+P finishes that focus later, in
   // another process: after the overlay focused its input. The palette then
   // stood open while typing went to the page (macOS CI, in the test above:
-  // the second page's palette never had its input focused). The page left
-  // in front by that test takes focus here while the overlay is open, as
-  // that late focus does.
+  // the second page's palette never had its input focused). Here the page
+  // that test left in front takes focus while the overlay is open, which
+  // ends where that late focus did: the overlay open, the page focused.
   await open();
   expect(
     await run<string>(`
-      [...document.querySelectorAll('[data-workspace-visible="true"] webview')]
-        .find(view => view.checkVisibility({visibilityProperty:true})).focus();
+      const page = [...document.querySelectorAll('[data-workspace-visible="true"] webview')]
+        .find(view => view.checkVisibility({visibilityProperty:true}));
+      if (!page) throw new Error('No page is in front beneath the palette');
+      page.focus();
       return document.activeElement.tagName`),
     "the page took focus from the open palette",
   ).toBe("WEBVIEW");
@@ -525,9 +527,18 @@ it("keeps the keys when the page beneath takes focus after it opened", async () 
     `return document.activeElement === input()`,
     "the palette took focus back from the page",
   );
-  // The page's focus has finished moving: nothing takes the keys again.
-  await new Promise((resolve) => setTimeout(resolve, 300));
-  expect(await run(`return document.activeElement === input()`)).toBe(true);
+  // And the keys with it: what is typed reaches the palette. A key sent
+  // while the page's focus is still moving goes with it, so typing goes on
+  // until one lands.
+  await expect
+    .poll(
+      async () => {
+        await app.insertText("h");
+        return run<string>(`return input().value`);
+      },
+      { timeout: 15_000, interval: 250 },
+    )
+    .toMatch(/^h+$/);
   await close();
 });
 

@@ -324,16 +324,16 @@ it("keeps a New Tab opened right after the chat's row was clicked", async () => 
   // The person's latest action wins. The chat is in a workspace this
   // window holds, so its row's click brings it forward within the click,
   // without a read of the saved workspace from the main process first.
-  // When it waited for that read, the chat arrived after the New Tab
-  // opened next and closed it as an untouched one. The two clicks are
-  // separate tasks, as a person's are, with nothing in between.
-  await app.eval(`(async () => {
+  // When it waited for that read, the chat arrived after whatever came
+  // next: a New Tab opened then was closed as an untouched one, with the
+  // chat in front. The two clicks here leave no time between them, so a
+  // row that waits for anything is always overtaken.
+  await app.eval(`(() => {
     ${chatRow()}.click();
-    await new Promise((resolve) => setTimeout(resolve));
     ${newTabButton}.click();
   })()`);
-  // Replies from the main process arrive in order: once this read is
-  // answered, one the row's click had asked for was answered before it.
+  // Time for a row that still waited on the main process to land: a read
+  // asked for after its own, answered, and two frames drawn.
   await app.eval(`(async () => {
     await window.catamorphicDesktop.workspaceStateGet(${JSON.stringify(projectId)});
     await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
@@ -356,13 +356,16 @@ it("keeps a New Tab opened right after the chat's row was clicked", async () => 
 it("turns back from a quick change on the same tab", async () => {
   // Away and straight back, inside one motion: the tab that was leaving
   // returns as the same element, and nothing is left leaving. The way back
-  // is clicked in the page the moment the tab starts leaving. Its chat can
-  // still take longer than the 200 ms leave to come forward on a slow
-  // runner (macOS CI did, twice): the tab then finishes leaving and
-  // arrives again as a new one, which is right too, but not this test's
-  // case. That round is noted and the change is made again, up to three
-  // times; the reversal itself is also covered on the component
-  // ("reverses a quick change back on the same elements").
+  // is clicked in the page the moment the tab starts leaving. Its chat
+  // took longer than the 200 ms leave to come forward on a slow runner
+  // (macOS CI, twice): the tab then finishes leaving and arrives again as
+  // a new one, which is right too, but not this test's case. The row's
+  // click waited on a read from the main process then; it no longer does
+  // (the test above), but a slow runner has not been shown to draw the
+  // chat within the leave every time. So such a round is still noted and
+  // the change made again, up to three times; the reversal itself is also
+  // covered on the component ("reverses a quick change back on the same
+  // elements").
   let reversed = false;
   for (let round = 0; round < 3 && !reversed; round += 1) {
     await app.eval(`(async () => {

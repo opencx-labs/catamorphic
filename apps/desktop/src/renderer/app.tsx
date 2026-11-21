@@ -722,9 +722,6 @@ export function App({
     runtimeProjectId,
   );
   const [workspaces, setWorkspaces] = useState<Record<string, Workspace>>({});
-  // Latest workspaces for opens that must not wait on a read.
-  const workspacesRef = useRef(workspaces);
-  workspacesRef.current = workspaces;
   const [projectModalOpen, setProjectModalOpen] = useState(false);
   // Remote projects (ADR 0055): connect from an invitation link; per-file
   // store history for the current project.
@@ -3002,6 +2999,10 @@ export function App({
   const wakeTab = tabSleep.wake;
   const tabAsleepRef = useRef(tabSleep.asleep);
   tabAsleepRef.current = tabSleep.asleep;
+
+  // Latest workspaces for opens that must not wait on a read.
+  const workspacesRef = useRef(workspaces);
+  workspacesRef.current = workspaces;
 
   /**
    * Bookmark/link click behavior: "replace" goes to the page's open tab
