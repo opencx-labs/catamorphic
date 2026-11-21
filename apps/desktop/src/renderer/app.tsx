@@ -5437,6 +5437,8 @@ export function App({
         // the catalog refresh. The workspace claim opens it in place
         // without bringing a window forward while the person is elsewhere.
         await queryClient.invalidateQueries({ queryKey: ["cat", "projects"] });
+        if (onboardingProfileRef.current === profileId)
+          await updateProfilePrefs({ lastProjectId: project.id });
       })
       .catch((cause: unknown) => {
         initialProjects.current.delete(profileId);
@@ -5447,6 +5449,7 @@ export function App({
       });
   }, [
     activeProfile?.id,
+    updateProfilePrefs,
     runtimeProjectId,
     projectsLoading,
     projectsLoadError,

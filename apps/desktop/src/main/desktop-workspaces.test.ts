@@ -28,10 +28,7 @@ vi.mock("electron", async () => {
   const { EventEmitter } = await import("node:events");
   const area = { x: 0, y: 0, width: 1200, height: 800 };
   return {
-    app: Object.assign(new EventEmitter(), {
-      focus: vi.fn(),
-      isActive: vi.fn(),
-    }),
+    app: new EventEmitter(),
     autoUpdater: new EventEmitter(),
     dialog: {},
     BrowserWindow: {
@@ -178,35 +175,29 @@ describe("workspace focus ownership", () => {
 });
 
 describe("activating a profile", () => {
-  it.each([
-    { active: true, key: true, activateApp: false, focusWindow: false },
-    { active: true, key: false, activateApp: false, focusWindow: true },
-    { active: false, key: false, activateApp: true, focusWindow: true },
-  ])(
-    "brings the chosen workspace forward on macOS when active=$active and key=$key after showing",
-    ({ active, key, activateApp, focusWindow }) => {
-      const { window, workspaces } = fixture();
-      const workspace = Object.assign(window("profile"), {
-        show: vi.fn(),
-        focus: vi.fn(),
-        isFocused: () => key,
-      });
-      workspaces.track(workspace);
-      const focus = vi.mocked(app.focus);
-      focus.mockClear();
-      vi.mocked(app.isActive).mockReturnValue(active);
-      const platform = Object.getOwnPropertyDescriptor(process, "platform");
-      Object.defineProperty(process, "platform", { value: "darwin" });
-      try {
-        expect(workspaces.activateProfile("profile")).toBe(true);
-      } finally {
-        if (platform) Object.defineProperty(process, "platform", platform);
-      }
-      expect(workspace.show).toHaveBeenCalledOnce();
-      expect(focus).toHaveBeenCalledTimes(activateApp ? 1 : 0);
-      if (activateApp) expect(focus).toHaveBeenCalledWith({ steal: true });
-      expect(workspace.focus).toHaveBeenCalledTimes(focusWindow ? 1 : 0);
-      expect(workspaces.activateProfile("missing")).toBe(false);
-    },
-  );
+  it("brings its hidden workspace forward as the key window of an active Work on macOS", () => {
+    const { window, workspaces } = fixture();
+    const workspace = Object.assign(window("profile"), {
+      show: vi.fn(),
+      focus: vi.fn(),
+    });
+    workspaces.track(workspace);
+    const focus = vi.fn();
+    const appFocus = Object.getOwnPropertyDescriptor(app, "focus");
+    Object.assign(app, { focus });
+    const platform = Object.getOwnPropertyDescriptor(process, "platform");
+    Object.defineProperty(process, "platform", { value: "darwin" });
+    try {
+      expect(workspaces.activateProfile("profile")).toBe(true);
+    } finally {
+      if (platform) Object.defineProperty(process, "platform", platform);
+      // The mocked app is shared by the file's later tests.
+      if (appFocus) Object.defineProperty(app, "focus", appFocus);
+      else Reflect.deleteProperty(app, "focus");
+    }
+    expect(workspace.show).toHaveBeenCalledOnce();
+    expect(focus).toHaveBeenCalledWith({ steal: true });
+    expect(workspace.focus).toHaveBeenCalledOnce();
+    expect(workspaces.activateProfile("missing")).toBe(false);
+  });
 });

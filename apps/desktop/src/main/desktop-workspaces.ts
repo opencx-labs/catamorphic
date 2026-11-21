@@ -878,15 +878,10 @@ export class DesktopWorkspaces {
     if (!window) return false;
     if (window.isMinimized()) window.restore();
     window.show();
-    if (process.platform === "darwin") {
-      // Showing a window can already make it key. Avoid another native
-      // activation when Work and the chosen window already have focus.
-      if (app.isActive()) {
-        if (window.isFocused()) return true;
-      } else {
-        app.focus({ steal: true });
-      }
-    }
+    // The person chose this profile in Work. On macOS a key window alone
+    // leaves Work inactive when hiding its key window deactivated it, and
+    // the workspace would then show behind without the keyboard.
+    if (process.platform === "darwin") app.focus({ steal: true });
     window.focus();
     return true;
   }
