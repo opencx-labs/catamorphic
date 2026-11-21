@@ -1,7 +1,9 @@
 import type { Identity } from "../identity.js";
 import {
   type AgentRef,
+  assertTokenScope,
   EVERY_ARTIFACT,
+  FULL_TOKEN_SCOPE,
   hasProjectPermission,
   isProjectPrincipal,
   scopeCovers,
@@ -76,6 +78,8 @@ export function assertSessionWorkspaceAccess(args: {
   externalUserId: string;
   agentId: string | null;
 }): void {
+  // Terminals, previews and direct commands act inside the workspace.
+  assertTokenScope(args.identity, FULL_TOKEN_SCOPE);
   if (isProjectPrincipal(args.externalUserId)) {
     if (hasProjectPermission(args.identity, args.projectId, "sessions:write"))
       return;

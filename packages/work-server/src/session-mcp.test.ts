@@ -1145,6 +1145,13 @@ describe("a token holds what its person granted", () => {
         scope: "work:full",
         refused: await rest(reader, "/api/service-connections", {}),
       },
+      {
+        scope: "work:full",
+        refused: await rest(
+          reader,
+          `${sessions}/${chat.sessionId}/previews/3000/`,
+        ),
+      },
     ]) {
       expect(refused.statusCode).toBe(403);
       expect(String(refused.headers["www-authenticate"])).toContain(
