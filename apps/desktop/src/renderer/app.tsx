@@ -3074,6 +3074,10 @@ export function App({
   const tabAsleepRef = useRef(tabSleep.asleep);
   tabAsleepRef.current = tabSleep.asleep;
 
+  // Latest workspaces for opens that must not wait on a read.
+  const workspacesRef = useRef(workspaces);
+  workspacesRef.current = workspaces;
+
   /**
    * Bookmark/link click behavior: "replace" goes to the page's open tab
    * (`switchToOpenTab`) or reuses the focused browser tab; anything else
@@ -3105,7 +3109,13 @@ export function App({
         });
         return;
       }
-      const saved = await desktopApi.workspaceStateGet(target.projectId);
+      // A workspace this window already holds is the one the chat joins:
+      // it comes forward within the click, so what the person does next (a
+      // New Tab, another row) is never undone by this open landing after
+      // it. Only a project not restored here yet waits for its saved one.
+      const saved = workspacesRef.current[target.projectId]
+        ? null
+        : await desktopApi.workspaceStateGet(target.projectId);
       setWorkspaces((current) => {
         const targetWorkspace =
           current[target.projectId] ??
@@ -5481,8 +5491,6 @@ export function App({
     setInitialProjectErrors(
       ({ [profileId]: _error, ...remaining }) => remaining,
     );
-  const projectSelectionRef = useRef(selectProject);
-  projectSelectionRef.current = selectProject;
   useEffect(() => {
     const profileId = activeProfile?.id;
     if (
@@ -5520,9 +5528,12 @@ export function App({
           const { [utilityKey]: _utility, ...retained } = current;
           return { ...retained, [project.id]: workspace };
         });
+        // The profile's new default becomes this window's fallback after
+        // the catalog refresh. The workspace claim opens it in place
+        // without bringing a window forward while the person is elsewhere.
         await queryClient.invalidateQueries({ queryKey: ["cat", "projects"] });
         if (onboardingProfileRef.current === profileId)
-          projectSelectionRef.current(project.id);
+          await updateProfilePrefs({ lastProjectId: project.id });
       })
       .catch((cause: unknown) => {
         initialProjects.current.delete(profileId);
@@ -5533,6 +5544,7 @@ export function App({
       });
   }, [
     activeProfile?.id,
+    updateProfilePrefs,
     runtimeProjectId,
     projectsLoading,
     projectsLoadError,

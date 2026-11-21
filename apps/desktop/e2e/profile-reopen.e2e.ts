@@ -1,3 +1,4 @@
+import { execFileSync } from "node:child_process";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterAll, expect, it } from "vitest";
@@ -22,6 +23,59 @@ const readWindows = async (userDataDir: string): Promise<WindowSession> =>
   JSON.parse(
     await fs.readFile(path.join(userDataDir, "window-state.json"), "utf8"),
   );
+
+/**
+ * Which window has the keys, if either, as the OS and as each page sees it,
+ * and the order the app's windows were shown, focused and blurred in and
+ * Work became active or inactive (the main process prints each under
+ * test): a workspace left hidden, one shown
+ * without the keys and keys taken back by the empty window fail differently.
+ */
+async function windowsNow({
+  personal,
+  empty,
+  emptyId,
+}: {
+  personal: AppHandle;
+  empty: Pick<FrameHandle, "eval">;
+  emptyId: string;
+}): Promise<string> {
+  const state = (frame: Pick<FrameHandle, "eval">) =>
+    frame
+      .eval(
+        "window.catamorphicDesktop.devWindow('get').then(({ visible, focused }) => ({ visible, focused, page: document.hasFocus() }))",
+      )
+      .catch(() => null);
+  const events = personal
+    .getOutput()
+    .split("\n")
+    .flatMap((line) => {
+      if (line.startsWith("[desktop] App "))
+        return [`Work ${line.slice("[desktop] App ".length)}`];
+      if (!line.startsWith("[desktop] Window ")) return [];
+      const [id, event] = line.slice("[desktop] Window ".length).split(" ");
+      return [`${id === emptyId ? "empty" : "personal"} ${event}`];
+    })
+    .slice(-24);
+  return `personal: ${JSON.stringify(await state(personal))}; empty: ${JSON.stringify(await state(empty))}; in front on this desktop: ${frontmostApplication()}; windows: ${events.join(", ")}`;
+}
+
+/** The application macOS has in front: Work, or whatever took its place. */
+function frontmostApplication(): string {
+  if (process.platform !== "darwin") return "not asked";
+  try {
+    const front = execFileSync("lsappinfo", ["front"], {
+      encoding: "utf8",
+      timeout: 5_000,
+    }).trim();
+    return execFileSync("lsappinfo", ["info", "-only", "name", front], {
+      encoding: "utf8",
+      timeout: 5_000,
+    }).trim();
+  } catch (error) {
+    return `unknown (${error instanceof Error ? error.message : String(error)})`;
+  }
+}
 
 it("reopens the hidden workspace when an empty window selects its profile", async () => {
   app = await launchApp();
@@ -84,7 +138,6 @@ it("reopens the hidden workspace when an empty window selects its profile", asyn
   await source.waitFor(
     "!!document.querySelector('[aria-label=\"Switch profile: Empty source\"]')",
   );
-
   // The reported path: the palette's native close action hides occupied work.
   await handle.eval(`window.dispatchEvent(new KeyboardEvent('keydown', {
     key:'p', metaKey:/Mac/.test(navigator.platform), ctrlKey:!/Mac/.test(navigator.platform), bubbles:true
@@ -106,6 +159,18 @@ it("reopens the hidden workspace when an empty window selects its profile", asyn
     "window.catamorphicDesktop.devWindow('get').then(state => !state.visible)",
   );
 
+  // The source renderer answers before its native window can take clicks.
+  // Wait until the person could actually open the profile picker there.
+  await source
+    .waitFor(
+      "window.catamorphicDesktop.devWindow('get').then(state => state.visible && state.focused)",
+      { label: "the empty window is shown and in front before the pick" },
+    )
+    .catch(async (error: unknown) => {
+      throw new Error(
+        `${error instanceof Error ? error.message : String(error)}; ${await windowsNow({ personal: handle, empty: source, emptyId: sourceState.id })}`,
+      );
+    });
   await source.eval(
     "document.querySelector('[aria-label=\"Switch profile: Empty source\"]').click()",
   );
@@ -115,28 +180,25 @@ it("reopens the hidden workspace when an empty window selects its profile", asyn
   await source.eval(
     "Array.from(document.querySelectorAll('[role=\"dialog\"][aria-label=\"Profiles\"] button')).find(button => button.textContent.includes('Default Profile')).click()",
   );
+  // Let the picker close and the source's profile transition finish before
+  // asserting focus, so a window that took the keys back still fails here.
+  await source.waitFor(
+    "!!document.querySelector('[aria-label=\"Switch profile: Empty source\"]') && !document.querySelector('.animate-profile-veil-in, .animate-profile-veil-out') && !!document.querySelector('[data-workspace-visible=\"true\"] [data-workspace-ready]')",
+    {
+      label:
+        "the empty window finishes switching and opens its default project",
+    },
+  );
   await handle
     .waitFor(
       "window.catamorphicDesktop.devWindow('get').then(state => state.visible && state.focused)",
       { label: "the hidden Personal workspace comes forward" },
     )
     .catch(async (error: unknown) => {
-      // Which window has the keys, if either, as the OS and as each page
-      // sees it: a workspace left hidden, one shown without the keys and
-      // keys taken back by the empty window fail differently.
-      const state = (frame: Pick<FrameHandle, "eval">) =>
-        frame
-          .eval(
-            "window.catamorphicDesktop.devWindow('get').then(({ visible, focused }) => ({ visible, focused, page: document.hasFocus() }))",
-          )
-          .catch(() => null);
       throw new Error(
-        `${error instanceof Error ? error.message : String(error)}; personal: ${JSON.stringify(await state(handle))}; empty: ${JSON.stringify(await state(source))}`,
+        `${error instanceof Error ? error.message : String(error)}; ${await windowsNow({ personal: handle, empty: source, emptyId: sourceState.id })}`,
       );
     });
-  await source.waitFor(
-    "!!document.querySelector('[aria-label=\"Switch profile: Empty source\"]') && !document.querySelector('.animate-profile-veil-in, .animate-profile-veil-out')",
-  );
   expect(await source.eval("window.catamorphicDesktop.windowProfile()")).toBe(
     otherProfile.id,
   );
