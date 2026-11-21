@@ -232,6 +232,14 @@ export interface CatamorphicHostConfig {
    * a chat trigger kind. Exceptions are swallowed and never delay the turn.
    */
   onAgentTurnSettled?: (event: AgentTurnSettledEvent) => void | Promise<void>;
+  /**
+   * Where a person opens a chat, when the host has a public address: the
+   * `url` every session state carries (ADR 0344).
+   */
+  sessionUrl?: (chat: {
+    projectId: string;
+    sessionId: string;
+  }) => string | undefined;
   /** A person chose "Always allow" for an agent's tool; the host keeps it (ADR 0054). */
   onToolAlwaysAllowed?: CatamorphicCoreConfig["onToolAlwaysAllowed"];
   /** Optional host-owned delivery transport for durable user notifications. */
@@ -289,18 +297,18 @@ export interface CatamorphicHostConfig {
    * or `false` for none (ADR 0049).
    */
   standingAgentPrompt?: string | false;
-  /**
-   * ADR 0055 knobs, passed through to core: where store bytes live, and
-   * whether agents' `store/` writes ship around turns
-   * (default on; a host whose folders are the truth sets false).
-   */
+  /** Where store bytes live (ADR 0055), passed through to core. */
   documentBlobStore?: CatamorphicCoreConfig["documentBlobStore"];
-  storeSyncAroundTurns?: boolean;
   /**
    * Hosts and ports (`work.acme.com:443`) sandboxes reach this control plane
    * at; restricted egress always allows them (ADR 0176).
    */
   gatewayHosts?: CatamorphicCoreConfig["gatewayHosts"];
+  /**
+   * Minutes work waits for a machine in an Environment that names no
+   * `waitMinutes`: set by a host that makes machines for waiting work.
+   */
+  placementWaitMinutes?: CatamorphicCoreConfig["placementWaitMinutes"];
 }
 
 function resolveDatabase(config: DatabaseConfig): {
@@ -421,6 +429,7 @@ export class Catamorphic {
       mcpToolKinds: contributions.mcpToolKinds,
       ...(config.webhooks ? { webhooks: config.webhooks } : {}),
       onAgentTurnSettled: config.onAgentTurnSettled,
+      ...(config.sessionUrl ? { sessionUrl: config.sessionUrl } : {}),
       ...(config.onToolAlwaysAllowed
         ? { onToolAlwaysAllowed: config.onToolAlwaysAllowed }
         : {}),
@@ -433,8 +442,8 @@ export class Catamorphic {
       userSkills: config.userSkills,
       standingAgentPrompt: config.standingAgentPrompt,
       documentBlobStore: config.documentBlobStore,
-      storeSyncAroundTurns: config.storeSyncAroundTurns,
       gatewayHosts: config.gatewayHosts,
+      placementWaitMinutes: config.placementWaitMinutes,
     });
   }
 

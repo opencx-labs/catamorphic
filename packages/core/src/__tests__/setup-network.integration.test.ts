@@ -433,19 +433,31 @@ describe("a setup on its own network, end to end (ADR 0257)", () => {
     expect(found.at(-1)).toBe("prod-rows logs");
   }, 60_000);
 
-  it("never widens a fork, whose workspace does not start from the remote", async () => {
+  it("sets up a fork on its own network too: every chat stands on a base (ADR 0342)", async () => {
     await fs.rm(runs, { force: true });
     await writeManifest(probe("v3"));
     const chat = await sessions.create(identity, projectId, {
       workspace: { ref: "main" },
     });
     await send(chat.id, "gather");
+    // A fork names no ref: it stands on the repository's default branch.
     const fork = await sessions.fork(identity, projectId, chat.id);
     const told = await send(fork.id, "in the fork");
-    expect(told).toContain(
-      "does not start from a commit of the project's remote",
-    );
-    expect((await ranLines()).slice(3)).toEqual([]);
+    expect(told).not.toContain("did not run");
+    expect(
+      (
+        await db
+          .selectFrom("agent_sessions")
+          .select("workspace")
+          .where("id", "=", fork.id)
+          .executeTakeFirstOrThrow()
+      ).workspace,
+    ).toMatchObject({ ref: "main" });
+    expect((await ranLines()).slice(3)).toEqual([
+      "widen registry.npmjs.org",
+      "setup v3: rows=no grants=0 env=0 http=0 token=setup-token-value other=none base=main",
+      "narrow",
+    ]);
   }, 60_000);
 
   it("finishes replacing a sandbox when a preparation stopped between destroying it and forgetting it", async () => {

@@ -1,3 +1,4 @@
+import { FULL_TOKEN_SCOPE } from "@catamorphic/core";
 import Fastify from "fastify";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { registerWorkAdmissionRoutes } from "./routes.js";
@@ -39,12 +40,17 @@ function setup() {
         username: "ada",
       }),
       resolveAccessToken: async ({ authorization }) =>
-        authorization === "Bearer good"
+        authorization === "Bearer good" || authorization === "Bearer reader"
           ? {
               userId: "user-1",
               email: "person@acme.dev",
               emailVerified: true,
-              scopes: ["openid"],
+              scopes: [
+                "openid",
+                authorization === "Bearer good"
+                  ? FULL_TOKEN_SCOPE
+                  : "work:read",
+              ],
             }
           : null,
     },
@@ -174,7 +180,7 @@ describe("Work server admission routes", () => {
     });
   });
 
-  it("rejects missing or invalid OAuth access tokens", async () => {
+  it("rejects missing, invalid or narrowed OAuth access tokens", async () => {
     const { app, join } = setup();
 
     expect(
@@ -185,15 +191,17 @@ describe("Work server admission routes", () => {
         })
       ).statusCode,
     ).toBe(401);
-    expect(
-      (
-        await app.inject({
-          method: "POST",
-          url: "/api/projects/project-1/admission/join",
-          headers: { authorization: "Bearer bad" },
-        })
-      ).statusCode,
-    ).toBe(401);
+    for (const authorization of ["Bearer bad", "Bearer reader"]) {
+      expect(
+        (
+          await app.inject({
+            method: "POST",
+            url: "/api/projects/project-1/admission/join",
+            headers: { authorization },
+          })
+        ).statusCode,
+      ).toBe(401);
+    }
     expect(join).not.toHaveBeenCalled();
   });
 });

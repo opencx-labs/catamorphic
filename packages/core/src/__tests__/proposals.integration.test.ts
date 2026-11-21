@@ -172,6 +172,20 @@ describeIf("ProposalsService (ADR 0055)", () => {
     const bare = path.join(repositories, "hosted.git");
     await fs.mkdir(bare, { recursive: true });
     await nativeGit(bare, ["init", "--bare", "-b", "main"]);
+    const published = await projectManager.openEphemeral({
+      tenantId: root.tenantId,
+      projectId,
+    });
+    try {
+      await nativeGit(published.repoPath, [
+        "push",
+        "--",
+        bare,
+        "HEAD:refs/heads/main",
+      ]);
+    } finally {
+      await published.dispose();
+    }
     const server = await gitHttpServer(repositories);
     const remoteUrl = `${server.url}/hosted.git`;
     const forge = fakeForge({ remoteBase: `${server.url}/` });

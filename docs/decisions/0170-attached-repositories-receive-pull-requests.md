@@ -2,7 +2,9 @@
 
 - **Status:** Accepted; refined by 0177 (`GithubService` is gone: publishing
   is `CodeHostsService.publishProject`, through the caller's or the
-  organization's GitHub connection)
+  organization's GitHub connection); amended by
+  [0343](0343-one-pull-request-tool.md) (a chat may replace its own `work/`
+  branch, with a lease on the commit it last pushed)
 - **Date:** 2026-09-27
 - **Refines:** 0044, 0104, 0159
 

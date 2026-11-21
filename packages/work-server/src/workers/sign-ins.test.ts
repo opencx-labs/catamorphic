@@ -4,9 +4,12 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
-  codexCommand,
+  harnessCommand,
   listMachineSignIns,
+  MachineHeldError,
   signInCapabilities,
+  signInCommand,
+  signInEnvironment,
   signInOnMachine,
   signInRoot,
   signOutOnMachine,
@@ -24,18 +27,32 @@ describe("sign-ins on a machine", () => {
   });
   afterEach(() => fs.rmSync(dataDir, { recursive: true, force: true }));
 
-  /** A stand-in for Codex's login: records what it was run with. */
-  const login = (input: { status: number; writes?: string }) => {
-    const runs: Array<{ args: string[]; home?: string }> = [];
+  /** A stand-in for a harness's login: records what it was run with. */
+  const login = (input: {
+    status: number;
+    writes?: string;
+    homeVariable?: string;
+  }) => {
+    const runs: Array<{
+      command: string;
+      args: string[];
+      home?: string;
+      env: NodeJS.ProcessEnv;
+    }> = [];
     return {
       runs,
       spawn: (
-        _command: string,
+        command: string,
         args: string[],
         options: { env: NodeJS.ProcessEnv },
       ) => {
-        const home = options.env.CODEX_HOME;
-        runs.push({ args, ...(home ? { home } : {}) });
+        const home = options.env[input.homeVariable ?? "CODEX_HOME"];
+        runs.push({
+          command,
+          args,
+          ...(home ? { home } : {}),
+          env: options.env,
+        });
         if (home && input.writes)
           fs.writeFileSync(path.join(home, input.writes), "{}");
         return { status: input.status, error: undefined };
@@ -126,9 +143,14 @@ describe("sign-ins on a machine", () => {
     const own = path.join(dataDir, "own-bin");
     fs.mkdirSync(own);
     fs.writeFileSync(path.join(own, "codex"), "#!/bin/sh\n", { mode: 0o755 });
-    expect(codexCommand({ PATH: own })).toEqual({ command: "codex", args: [] });
+    expect(harnessCommand("codex", { PATH: own })).toEqual({
+      command: "codex",
+      args: [],
+    });
     // The image has none on its PATH: the pinned one the harness speaks runs.
-    const carried = codexCommand({ PATH: path.join(dataDir, "nothing") });
+    const carried = harnessCommand("codex", {
+      PATH: path.join(dataDir, "nothing"),
+    });
     expect(carried.command).toBe(process.execPath);
     const version = spawnSync(carried.command, [...carried.args, "--version"], {
       encoding: "utf8",
@@ -137,6 +159,169 @@ describe("sign-ins on a machine", () => {
       fs.readFileSync(new URL("../../package.json", import.meta.url), "utf8"),
     );
     expect(version.stdout).toContain(manifest.dependencies["@openai/codex"]);
+  });
+
+  it("runs Claude Code's own login into the member's home (ADR 0340)", () => {
+    const saved = process.env.ANTHROPIC_API_KEY;
+    process.env.ANTHROPIC_API_KEY = "sk-ant-organization";
+    try {
+      const claude = login({
+        status: 0,
+        writes: ".credentials.json",
+        homeVariable: "CLAUDE_CONFIG_DIR",
+      });
+      const { home, exitCode } = signInOnMachine({
+        dataDir,
+        harness: "claude-code",
+        member: "user|alice",
+        spawn: claude.spawn,
+      });
+      expect(exitCode).toBe(0);
+      // The machine's own unmodified CLI and its own login, nothing else.
+      expect(claude.runs).toEqual([
+        expect.objectContaining({
+          command: "claude",
+          args: ["auth", "login", "--claudeai"],
+        }),
+      ]);
+      // Run beside the home, which it becomes once it completed.
+      expect(claude.runs[0]?.home).not.toBe(home);
+      // An organization's key is not handed to a member's login.
+      expect(claude.runs[0]?.env).not.toHaveProperty("ANTHROPIC_API_KEY");
+      expect(home).toBe(
+        path.join(signInRoot(dataDir), "claude-code", "user%7Calice"),
+      );
+      expect(fs.statSync(home).mode & 0o777).toBe(0o700);
+      // Claude Code's home starts empty: no file of Work's is in it.
+      expect(fs.readdirSync(home)).toEqual([".credentials.json"]);
+      expect(signInCapabilities(signInRoot(dataDir))).toEqual([
+        "sign-ins",
+        "sign-in:claude-code:user|alice",
+      ]);
+    } finally {
+      if (saved === undefined) delete process.env.ANTHROPIC_API_KEY;
+      else process.env.ANTHROPIC_API_KEY = saved;
+    }
+
+    // Other login arguments replace the default ones, as for Codex.
+    const console = login({
+      status: 0,
+      writes: ".credentials.json",
+      homeVariable: "CLAUDE_CONFIG_DIR",
+    });
+    signInOnMachine({
+      dataDir,
+      harness: "claude-code",
+      member: "user|alice",
+      args: ["--sso"],
+      spawn: console.spawn,
+    });
+    expect(console.runs[0]?.args).toEqual(["auth", "login", "--sso"]);
+
+    // A login that left no credentials file is not a sign-in.
+    const empty = signInOnMachine({
+      dataDir,
+      harness: "claude-code",
+      member: "user|alice",
+      spawn: login({ status: 0, homeVariable: "CLAUDE_CONFIG_DIR" }).spawn,
+    });
+    expect(empty.exitCode).toBe(1);
+    expect(empty.reason).toMatch(/^Claude Code /);
+    // Codex's file in a Claude Code home is not one either.
+    fs.mkdirSync(path.join(signInRoot(dataDir), "claude-code", "carol"), {
+      recursive: true,
+    });
+    fs.writeFileSync(
+      path.join(signInRoot(dataDir), "claude-code", "carol", "auth.json"),
+      "{}",
+    );
+    expect(
+      listMachineSignIns(signInRoot(dataDir)).map((signIn) => signIn.member),
+    ).toEqual(["user|alice"]);
+    expect(
+      signOutOnMachine({
+        dataDir,
+        harness: "claude-code",
+        member: "user|alice",
+      }),
+    ).toBe(true);
+    expect(listMachineSignIns(signInRoot(dataDir))).toEqual([]);
+  });
+
+  it("holds one person's sign-ins, of either harness (ADRs 0213, 0340)", () => {
+    const codex = () => login({ status: 0, writes: "auth.json" }).spawn;
+    const claude = () =>
+      login({
+        status: 0,
+        writes: ".credentials.json",
+        homeVariable: "CLAUDE_CONFIG_DIR",
+      }).spawn;
+    signInOnMachine({
+      dataDir,
+      harness: "codex",
+      member: "alice",
+      spawn: codex(),
+    });
+    // Someone else's login of the other harness is refused too.
+    expect(() =>
+      signInOnMachine({
+        dataDir,
+        harness: "claude-code",
+        member: "bob",
+        spawn: claude(),
+      }),
+    ).toThrow(MachineHeldError);
+    // The same person holds both.
+    signInOnMachine({
+      dataDir,
+      harness: "claude-code",
+      member: "alice",
+      spawn: claude(),
+    });
+    expect(signInCapabilities(signInRoot(dataDir))).toEqual([
+      "sign-ins",
+      "sign-in:claude-code:alice",
+      "sign-in:codex:alice",
+    ]);
+    expect(() =>
+      signInOnMachine({
+        dataDir,
+        harness: "codex",
+        member: "bob",
+        spawn: codex(),
+      }),
+    ).toThrow(
+      "Another person's sign-in is on this machine, and a machine holds one person's only",
+    );
+  });
+
+  it("points each harness's own login at one home", () => {
+    const env = { PATH: path.join(dataDir, "nothing") };
+    expect(signInCommand({ harness: "claude-code", home: "/h", env })).toEqual({
+      command: "claude",
+      args: ["auth", "login", "--claudeai"],
+      env: { CLAUDE_CONFIG_DIR: "/h" },
+    });
+    const codex = signInCommand({ harness: "codex", home: "/h", env });
+    expect(codex.args.slice(-2)).toEqual(["login", "--device-auth"]);
+    expect(codex.env).toEqual({ CODEX_HOME: "/h" });
+    // Only Claude Code's login runs without the variables that would hand
+    // it another credential.
+    const base = { ANTHROPIC_API_KEY: "sk", OPENAI_API_KEY: "sk", KEEP: "1" };
+    expect(
+      signInEnvironment({
+        harness: "claude-code",
+        base,
+        login: { CLAUDE_CONFIG_DIR: "/h" },
+      }),
+    ).toEqual({ OPENAI_API_KEY: "sk", KEEP: "1", CLAUDE_CONFIG_DIR: "/h" });
+    expect(
+      signInEnvironment({
+        harness: "codex",
+        base,
+        login: { CODEX_HOME: "/h" },
+      }),
+    ).toEqual({ ...base, CODEX_HOME: "/h" });
   });
 
   it("refuses member ids that are not one path segment", () => {

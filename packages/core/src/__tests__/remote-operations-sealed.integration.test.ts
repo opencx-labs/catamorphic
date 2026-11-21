@@ -4,6 +4,12 @@ import {
   generateExecutorKeyPair,
   SealedOperationOpenError,
 } from "@catamorphic/sandbox";
+import { trace } from "@opentelemetry/api";
+import {
+  InMemorySpanExporter,
+  SimpleSpanProcessor,
+  TracerProvider,
+} from "@opentelemetry/sdk-trace";
 import { sql } from "kysely";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import {
@@ -18,6 +24,8 @@ const connectionString = process.env.DATABASE_URL ?? "";
 const describeIf = connectionString ? describe : describe.skip;
 const schema = `catamorphic_sealed_${randomUUID().replaceAll("-", "")}`;
 const db = createDatabase({ connectionString, schema, poolSize: 8 });
+/** Every span this file's operations record. */
+const spans = new InMemorySpanExporter();
 
 /** A remote executor with its own key, and a controller's provider for it. */
 async function executor(
@@ -44,6 +52,7 @@ async function executor(
     lease,
     keys,
     queue,
+    controller,
     provider: controller.provider({
       ...lease,
       leaseHeld: async () => true,
@@ -93,6 +102,11 @@ function median(values: number[]): number {
 
 describeIf("operations sealed to their executor (ADR 0207)", () => {
   beforeAll(async () => {
+    trace.setGlobalTracerProvider(
+      new TracerProvider({
+        spanProcessors: [new SimpleSpanProcessor({ exporter: spans })],
+      }),
+    );
     await migrateToLatest({ db, schema });
   }, 120_000);
 
@@ -242,6 +256,87 @@ describeIf("operations sealed to their executor (ADR 0207)", () => {
       response: { exitCode: 0, result: "bound" },
     });
     await result;
+  });
+
+  it("carries a pasted sign-in code only to its executor: sealed at rest, in no span or receipt (ADR 0340)", async () => {
+    const remote = await executor();
+    // What a member copies from their browser for a login that waits for it.
+    const code = `pasted-${randomUUID()}#state`;
+    const attempt = randomUUID();
+    spans.reset();
+    const answered = remote.controller.machineHarnessSignIn({
+      ...remote.lease,
+      leaseToken: async () => remote.lease.leaseToken,
+      leaseHeld: async () => true,
+      label: "The machine",
+      request: {
+        action: "input",
+        harness: "claude-code",
+        member: "user-1",
+        attempt,
+        text: code,
+      },
+      attributes: { "catamorphic.worker.id": "worker.one" },
+    });
+    await expect
+      .poll(async () => (await stored(remote.lease.executor)).length)
+      .toBe(1);
+    const [row] = await stored(remote.lease.executor);
+    expect(row?.kind).toBe("machine.harnessSignIn");
+    expect(row?.text).not.toContain(code);
+    expect(row?.text).not.toContain("user-1");
+
+    const [job] = await remote.take();
+    if (!job) throw new Error("No operation");
+    // Only the executor's key opens it, whole.
+    expect(remote.open(job)).toEqual({
+      kind: "machine.harnessSignIn",
+      request: {
+        action: "input",
+        harness: "claude-code",
+        member: "user-1",
+        attempt,
+        text: code,
+      },
+    });
+    // The machine answers where the sign-in stands, never the code.
+    await remote.queue.complete({
+      ...remote.lease,
+      operationId: job.id,
+      response: { state: "waiting" },
+    });
+    await expect(answered).resolves.toEqual({ state: "waiting" });
+
+    const rows = await db
+      .selectFrom("remote_operations")
+      .select([
+        sql<string>`operation::text`.as("operation"),
+        sql<string | null>`response::text`.as("response"),
+        "error",
+      ])
+      .where("executor", "=", remote.lease.executor)
+      .execute();
+    expect(JSON.stringify(rows)).not.toContain(code);
+
+    const recorded = spans.getFinishedSpans();
+    const signIn = recorded.find(
+      (span) => span.name === "remote.machine_harness_sign_in",
+    );
+    expect(signIn?.attributes).toMatchObject({
+      "catamorphic.sign_in.action": "input",
+      "catamorphic.sign_in.harness": "claude-code",
+      "catamorphic.worker.id": "worker.one",
+    });
+    expect(
+      JSON.stringify(
+        recorded.map((span) => ({
+          name: span.name,
+          attributes: span.attributes,
+          events: span.events,
+          status: span.status,
+        })),
+      ),
+    ).not.toContain(code);
   });
 
   it("queues nothing for an executor with no key", async () => {

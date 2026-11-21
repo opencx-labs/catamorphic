@@ -373,7 +373,8 @@ export class OriginObjects {
     if (segments.slice(0, -1).some((segment) => ALWAYS_IGNORED.has(segment)))
       return true;
     if (!treeOid) return false;
-    if (await this.entry(treeOid, filePath)) return false;
+    // A path through a link is tracked by nothing; the write itself says so.
+    if (await this.entry(treeOid, filePath).catch(() => null)) return false;
     let ignored = false;
     for (let depth = 0; depth < segments.length; depth++) {
       const directory = segments.slice(0, depth).join("/");
@@ -401,14 +402,18 @@ export class OriginObjects {
    * `treeOid` with `changes` applied (path to an existing blob, or `null`
    * to delete), written to the origin. Returns the new tree id. With
    * `skipMissingDeletes`, deleting a path the tree lacks is not an error.
+   * With `replaceLinks`, a change to a path that is a link replaces or
+   * deletes the link's own entry; a path through a link is always refused.
+   * A file may take the place of a folder whose every file the same
+   * changes delete.
    */
   async writeTree(
     treeOid: string | null,
     changes: ReadonlyMap<string, TreeChange>,
-    options?: { skipMissingDeletes?: boolean },
+    options?: { skipMissingDeletes?: boolean; replaceLinks?: boolean },
   ): Promise<string> {
     return (
-      (await this.rewrite(treeOid, changes, "", options?.skipMissingDeletes)) ??
+      (await this.rewrite(treeOid, changes, "", options ?? {})) ??
       this.write({ type: "tree", data: new Uint8Array() })
     );
   }
@@ -417,8 +422,9 @@ export class OriginObjects {
     treeOid: string | null,
     changes: ReadonlyMap<string, TreeChange>,
     base: string,
-    skipMissingDeletes = false,
+    options: { skipMissingDeletes?: boolean; replaceLinks?: boolean },
   ): Promise<string | null> {
+    const skipMissingDeletes = options.skipMissingDeletes ?? false;
     // Keyed by the stored bytes, so names that are not UTF-8 (and would
     // decode alike) stay distinct entries.
     const entries = new Map(
@@ -428,21 +434,41 @@ export class OriginObjects {
       ]),
     );
     const keyed = (name: string) => nameKey(new TextEncoder().encode(name));
+    const leaves = new Map<string, TreeChange>();
     const nested = new Map<string, Map<string, TreeChange>>();
     for (const [filePath, change] of changes) {
       const slash = filePath.indexOf("/");
-      if (slash >= 0) {
-        const directory = filePath.slice(0, slash);
-        const inner = nested.get(directory) ?? new Map<string, TreeChange>();
-        inner.set(filePath.slice(slash + 1), change);
-        nested.set(directory, inner);
+      if (slash < 0) {
+        leaves.set(filePath, change);
         continue;
       }
-      const existing = entries.get(keyed(filePath));
+      const directory = filePath.slice(0, slash);
+      const inner = nested.get(directory) ?? new Map<string, TreeChange>();
+      inner.set(filePath.slice(slash + 1), change);
+      nested.set(directory, inner);
+    }
+    for (const [filePath, change] of leaves) {
       const fullPath = `${base}${filePath}`;
+      const inside = nested.get(filePath);
+      const found = entries.get(keyed(filePath));
+      // A file where a folder was: the folder goes when the same changes
+      // delete everything in it.
+      if (
+        found &&
+        isTreeMode(found.mode) &&
+        change !== null &&
+        inside &&
+        [...inside.values()].every((entry) => entry === null) &&
+        (await this.rewrite(found.oid, inside, `${fullPath}/`, options)) ===
+          null
+      ) {
+        entries.delete(keyed(filePath));
+        nested.delete(filePath);
+      }
+      const existing = entries.get(keyed(filePath));
       if (existing && isTreeMode(existing.mode))
         throw new DraftPathError({ code: "EISDIR", path: fullPath });
-      if (existing?.mode === SYMLINK_MODE)
+      if (existing?.mode === SYMLINK_MODE && !options.replaceLinks)
         throw new DraftPathError({ code: "ELOOP", path: fullPath });
       if (change === null) {
         if (!existing) {
@@ -480,7 +506,7 @@ export class OriginObjects {
           existing?.oid ?? null,
           inner,
           `${fullPath}/`,
-          skipMissingDeletes,
+          options,
         );
         return { directory, oid, keep: false };
       }),

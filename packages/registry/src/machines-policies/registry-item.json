@@ -1,0 +1,21 @@
+{
+  "$schema": "https://ui.shadcn.com/schema/registry-item.json",
+  "name": "machines-policies",
+  "type": "registry:item",
+  "title": "Work machine plans",
+  "description": "Compose a machine plan for people, projects, waiting work and chat keys.",
+  "files": [
+    {
+      "path": "machines-policies.ts",
+      "type": "registry:file",
+      "target": "machines/machines-policies.ts"
+    },
+    {
+      "path": "SKILL.md",
+      "type": "registry:file",
+      "target": "machines/machines-policies.md"
+    }
+  ],
+  "dependencies": ["@catamorphic/work-server"],
+  "docs": "Copy the files into your Work server host. Add the dependencies to its package manifest and follow the included guide."
+}

@@ -1451,7 +1451,7 @@ describe.skipIf(!enabled)(
         controlPlaneUrl: `http://127.0.0.1:${port}`,
         name: "review-1",
         labels: { pool: "review" },
-        access: { projects: [...projectIds.values()] },
+        for: [...projectIds.values()].map((project) => ({ project })),
         dataDir: path.join(root, "review-1"),
         execution: executionSettingsFromEnv({
           WORK_SANDBOX: "container",

@@ -1,6 +1,10 @@
 import { randomBytes } from "node:crypto";
 import { appGuestCsp, buildAppGuestDocument } from "@catamorphic/app";
-import type { CatamorphicCore, Identity } from "@catamorphic/core";
+import {
+  type CatamorphicCore,
+  hasTokenScope,
+  type Identity,
+} from "@catamorphic/core";
 import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 import { micromark } from "micromark";
 import { z } from "zod";
@@ -49,6 +53,18 @@ export function registerShareRoutes(
   ) => {
     const identity = await options.caller(request);
     if (!identity) return reply.status(401).send({ error: "Unauthorized" });
+    const scope =
+      request.method === "GET" || !hasTokenScope(identity, "work:read")
+        ? "work:read"
+        : "program:publish";
+    if (!hasTokenScope(identity, scope))
+      return reply
+        .status(403)
+        .header(
+          "www-authenticate",
+          `Bearer error="insufficient_scope", scope="${scope}"`,
+        )
+        .send({ error: `This needs the ${scope} scope.` });
     const { projectId } = request.params as { projectId: string };
     try {
       return await run(identity, projectId);

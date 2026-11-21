@@ -249,15 +249,14 @@ async function runStalled(script: string): Promise<unknown> {
       // The chat's turn: each restart starts its next attempt, which hangs too.
       const turn = { id: "t1", attempt: { id: "attempt-1", ordinal: 1 }, restarts: 0, stalledAt: "2026-10-18T00:20:00Z" };
       // The chat as reviewPullRequests started it; a test may change it.
-      const chat = { id: "session-1", projectId: "project-1", owner: "project", agentId: "project:project-1:reviewer", placement: { environment: "review" }, keyWorkflows: ["reviewPullRequests"] };
+      const chat = { id: "session-1", projectId: "project-1", owner: "project", agent: "project:project-1:reviewer", placement: { environment: "review" }, keyWorkflows: ["reviewPullRequests"] };
       /** Runs between the diagnosis and the action, as time passes. */
       let meanwhile = () => {};
       const wrap = (fns) => Object.fromEntries(Object.entries(fns).map(([name, fn]) => [name,
         (args, options) => ({ __call: async () => structuredClone(await fn(args)), ...(options && "state" in options ? { state: options.state } : {}) })]));
       const sessions = wrap({
-        inspect: () => { log.push(["inspect"]); return { ...structuredClone(chat), turn: structuredClone(turn) }; },
+        read: (args) => { if (args.include?.includes("attempts")) { log.push(["attempts", args.turnId]); const answer = { attempts: [{ id: turn.attempt.id, status: "running", diagnostics: { runner: "", harness: "[warn] opencode: waiting on a tool" } }] }; meanwhile(); return answer; } log.push(["inspect"]); return { ...structuredClone(chat), turn: structuredClone(turn) }; },
         // No exec: the evidence is Work's own record, never the workspace's.
-        attempts: (args) => { log.push(["attempts", args.turnId]); const answer = { attempts: [{ id: turn.attempt.id, status: "running", diagnostics: { runner: "", harness: "[warn] opencode: waiting on a tool" } }] }; meanwhile(); return answer; },
         restart: (args) => {
           log.push(["restart", args.attemptId, args.onlyIfStalled, args.idempotencyKey, args.reason]);
           // As Work answers: only the running attempt, while it is stalled.
@@ -952,9 +951,9 @@ describe("the pull-request-reviews pack", () => {
       // Work refuses the restart (it moved on after the second look): nothing.
       meanwhile = () => {};
       turn.stalledAt = "2026-10-18T00:20:00Z";
-      const realInspect = context.host["catamorphic.sessions"].inspect;
+      const realInspect = context.host["catamorphic.sessions"].read;
       let looks = 0;
-      context.host["catamorphic.sessions"].inspect = (args, options) => { const call = realInspect(args, options); return { ...call, __call: async () => { const seen = await call.__call(); looks += 1; if (looks === 2) turn.stalledAt = null; return seen; } }; };
+      context.host["catamorphic.sessions"].read = (args, options) => { const call = realInspect(args, options); return { ...call, __call: async () => { const seen = await call.__call(); if (!args.include?.includes("attempts")) looks += 1; if (looks === 2) turn.stalledAt = null; return seen; } }; };
       results.refused = await runWorkflow(restartStalledReviews, EVENT, context);
       console.log(JSON.stringify({ results, log }));
     `);

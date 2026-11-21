@@ -84,7 +84,7 @@ function authorityApiClient({
 
 /**
  * Fetch a remote project's agent catalog again wherever it is shown, as
- * after a Codex sign-in changed which agents it offers (ADR 0213).
+ * after a sign-in changed which agents it offers (ADRs 0213, 0340).
  */
 export function refreshRemoteAgentCatalog(projectId: string): void {
   for (const queries of authorityCaches.values())

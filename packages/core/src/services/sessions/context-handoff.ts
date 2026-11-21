@@ -392,7 +392,7 @@ async function keptSections(input: {
         : "answering no request"
     }${standing}\n  `;
     const json = JSON.stringify(item.value);
-    const pointer = ` (cut here; read the whole value with session_results, result ${item.id})`;
+    const pointer = ` (cut here; read the whole value with session_read, result ${item.id})`;
     const whole =
       Buffer.byteLength(json, "utf8") <= LATEST_RESULT_VALUE_BYTES &&
       head.length + json.length <= room;
@@ -411,7 +411,7 @@ async function keptSections(input: {
     (row) =>
       `- ${row.name}: ${
         row.short === null
-          ? `(read it with session_results, result ${row.id})`
+          ? `(read it with session_read, result ${row.id})`
           : truncate(JSON.stringify(row.short), SHORT_LINE)
       }`,
   );
@@ -456,7 +456,7 @@ async function keptSections(input: {
   const resultsCut = (cut: number) =>
     cut > 0
       ? [
-          `(${cut} more result${cut === 1 ? " is" : "s are"} not shown; read ${cut === 1 ? "it" : "them"} with session_results.)`,
+          `(${cut} more result${cut === 1 ? " is" : "s are"} not shown; read ${cut === 1 ? "it" : "them"} with session_read.)`,
         ]
       : [];
   const sections: string[] = [];
@@ -493,7 +493,7 @@ const EARLIER_RESULTS = 100;
 const SHORT_FIELD = 200;
 const SHORT_LINE = 300;
 const EARLIER_HEADING =
-  "Submitted by an earlier attempt of this turn, which did not finish (this turn's request is still open; submit again if they are still right). Each in short, newest first, with its short fields; read whole values with session_results:";
+  "Submitted by an earlier attempt of this turn, which did not finish (this turn's request is still open; submit again if they are still right). Each in short, newest first, with its short fields; read whole values with session_read:";
 const RESULTS_HEADING =
   "Your accepted results in this chat, as recorded (submitted with submit_result; the latest of each name, newest first). Each says whether a newer request arrived since; a request below may need a new one:";
 const UNANSWERED_HEADING =

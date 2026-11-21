@@ -1,9 +1,14 @@
-import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
+import {
+  createHash,
+  randomBytes,
+  randomUUID,
+  timingSafeEqual,
+} from "node:crypto";
 import {
   cleanupWorkerAllocations,
-  diskFits,
   forgetExecutorKey,
   MachineDiskSchema,
+  type NodeRetireReason,
   nodeExecutor,
   PlacementWaitsService,
   REMOTE_EPOCH_PATTERN,
@@ -11,6 +16,9 @@ import {
   RemoteExecutorLeaseLostError,
   RemoteOperationQueue,
   registerExecutorKey,
+  releaseReplicaClaim,
+  retireNodeWork,
+  takeReplicaClaim,
   type WorkerCapacity,
   WorkerNodeLeaseHeldError,
   type WorkerNodesService,
@@ -21,26 +29,30 @@ import {
   diskBudgetMb,
   type EnvironmentBinding,
   ExecutorPublicKeySchema,
-  headroom,
   MACHINE_CAPABILITIES,
   type MachineDisk,
   SANDBOX_CAPABILITIES,
 } from "@catamorphic/sandbox";
-import { type Kysely, sql } from "kysely";
+import { type Kysely, sql, type Transaction } from "kysely";
 import { z } from "zod";
-import type { CodexSignInRequest } from "./codex-sign-ins.js";
 import {
-  accessGroupsOf,
-  NodeLabelsSchema,
+  type MachineEvent,
+  type MachineEventKind,
+  type MachineFacts,
+  principalsChangeNeedsReset,
+} from "../machines/contract.js";
+import type { HarnessSignInRequest } from "./harness-sign-ins.js";
+import { MachineStore, WORKER_NODE_PREFIX } from "./machine-store.js";
+import {
   type ScheduledPlacement,
   servesNobody,
   servesOneOwner,
-  storedPlacement,
   type WorkerPlacement,
-  WorkerPlacementSchema,
+  type WorkerPlacementSchema,
+  workerPlacement,
 } from "./placement.js";
 
-export const WORKER_NODE_PREFIX = "worker.";
+export { WORKER_NODE_PREFIX };
 
 const WorkerName = z
   .string()
@@ -138,111 +150,15 @@ export class WorkerIsolationError extends Error {
   }
 }
 
-/** Nobody may hold a pooled machine's access but its rule (ADR 0205). */
-const NOBODY = { nobody: true } as const;
-
 /**
- * What a worker is doing for machine rules (ADR 0205): serving its access,
- * released (serving nobody, its disk kept for its retention), free in its
- * pool, being reset before it returns to its pool, revoked and still being
- * destroyed on its platform, or revoked.
+ * This worker's node is disabled: an operator disabled it, or Work stopped
+ * its machine (ADR 0348). It may connect once enabled or resumed.
  */
-export type WorkerState =
-  | "serving"
-  | "released"
-  | "free"
-  | "resetting"
-  | "destroying"
-  | "revoked";
-
-/** A machine of a pool (`"pool": true` at enrollment), for the reconciler. */
-export interface PooledMachine {
-  name: string;
-  nodeId: string;
-  /** The rule that holds it; absent while it is free or being reset. */
-  rule: string | null;
-  /** The user id it serves under an `each-member` rule. */
-  member: string | null;
-  /** Its place among a group's shared machines. */
-  slot: number | null;
-  /** How long ago it was released, by the database's clock. */
-  releasedForMs: number | null;
-  retainDays: number | null;
-  placement: WorkerPlacement;
-}
-
-/** A machine a rule provisioned on a platform, for the reconciler. */
-export interface ProvisionedMachine {
-  name: string;
-  ref: string | null;
-  rule: string;
-  /**
-   * Enrolled, still pending enrollment, expired before enrolling (or its
-   * code withdrawn for destruction), or revoked and not yet destroyed.
-   */
-  state: "enrolled" | "pending" | "expired" | "revoked";
-  /** How long ago it was released, by the database's clock. */
-  releasedForMs: number | null;
-  retainDays: number | null;
-  placement: WorkerPlacement;
-  /**
-   * The enrollment it was made with (ADR 0327): its code's hash, the
-   * platform's idempotency token, and when it was issued, by the
-   * database's clock. Null when none is kept.
-   */
-  enrollment: {
-    idempotencyKey: string;
-    issuedAt: Date;
-    issuedForMs: number;
-  } | null;
-}
-
-/**
- * How busy a machine a rule provisioned is (ADR 0258), by the database's
- * clock: Allocations holding its capacity, how long since it last held
- * one (or enrolled), how long since it last called (or enrolled, when it
- * never did), and while it is connected what it offers and has free.
- */
-export interface MachineLoad {
-  holding: number;
-  idleForMs: number;
-  unseenForMs: number;
-  /** It enrolled and has not connected yet. */
-  neverConnected: boolean;
-  /**
-   * Its recent disk report is under its floor (ADR 0336): it takes no new
-   * work, so it is no machine to keep warm or to count against a maximum.
-   */
-  shortOfDisk: boolean;
-  /**
-   * While its lease is live: what it offers, what it has free, and what a
-   * workspace naming no resources is charged there.
-   */
-  live: {
-    descriptor: EnvironmentBinding;
-    free: {
-      workspaces: number;
-      cpuMillis?: number;
-      memoryMb?: number;
-      /**
-       * Storage it can still reserve above its disk floor (ADR 0336): none
-       * once it is short of disk. Absent without a recent report.
-       */
-      storageMb?: number;
-    };
-    defaults: { cpuMillis?: number; memoryMb?: number };
-  } | null;
-}
-
-/** Milliseconds since `released_at`, measured by the database. */
-const releasedFor = sql<
-  number | null
->`(extract(epoch from (now() - released_at)) * 1000)::float8`;
-
-/** The operator disabled this worker's node; it may connect once enabled. */
 export class WorkerDisabledError extends Error {
   constructor() {
-    super("The operator disabled this worker; it connects once enabled again");
+    super(
+      "This worker is disabled or its machine is stopped; it connects once it is enabled or resumed",
+    );
     this.name = "WorkerDisabledError";
   }
 }
@@ -303,6 +219,9 @@ export class WorkWorkerRegistry {
 
   private readonly waits: PlacementWaitsService;
 
+  /** The machines Work knows: whom each is for and where it stands. */
+  readonly machines: MachineStore;
+
   constructor(
     private readonly deps: {
       db: Kysely<DB>;
@@ -310,39 +229,49 @@ export class WorkWorkerRegistry {
       tenantId: string;
       authorityId: string;
       /**
+       * Derives the enrollment codes of machines the machines hook makes
+       * (ADR 0347); every replica of a deployment shares it.
+       */
+      enrollmentSecret?: string;
+      /**
        * A worker connected: hint this process's agent sweep, which tries
        * chats waiting for a machine (ADR 0258) again at once.
        */
       connected?: () => void;
       /**
-       * A machine a rule provisioned called for the first time: its
-       * class's project hears `machine.connected` (ADR 0327).
+       * Something happened to a machine (ADR 0347): it connected, started
+       * again, was lost, or fell short of disk. Delivery is the host's;
+       * nothing here waits on it.
        */
-      firstContact?: (machine: {
-        name: string;
-        rule: string;
-        ref: string | null;
-        class: string | null;
-      }) => Promise<void>;
+      event?: (event: MachineEvent) => Promise<void>;
       /**
-       * A machine's report began an episode under its disk floor (ADR
-       * 0336), once per episode: a rule's machine of a workflow class
-       * records `machine.disk-low` for its class's project.
+       * Work was retired from a machine (ADR 0346): hint this process's
+       * agent sweep, which admits its chats again at once.
        */
-      diskLow?: (machine: {
-        name: string;
-        rule: string | null;
-        ref: string | null;
-        class: string | null;
-        disk: MachineDisk;
-        /** When the episode began: one event per episode. */
-        since: Date;
-      }) => Promise<void>;
+      retired?: () => void;
+      /**
+       * Minutes unseen that make a machine whose plan sets no limit lost
+       * (default 5).
+       */
+      lostMinutes?: number;
       log?: (line: string) => void;
     },
   ) {
     this.queue = new RemoteOperationQueue(deps.db);
     this.waits = new PlacementWaitsService(deps.db);
+    this.machines = new MachineStore({
+      db: deps.db,
+      nodes: deps.nodes,
+      tenantId: deps.tenantId,
+      authorityId: deps.authorityId,
+      // A registry that makes no machines (a test, a worker-only tool)
+      // still needs a secret no one else knows.
+      enrollmentSecret:
+        deps.enrollmentSecret ?? randomBytes(32).toString("base64url"),
+      ...(deps.lostMinutes !== undefined
+        ? { lostMinutes: deps.lostMinutes }
+        : {}),
+    });
   }
 
   /**
@@ -417,8 +346,8 @@ export class WorkWorkerRegistry {
 
   /**
    * Store a worker's disk report under its epoch (ADR 0336). One that
-   * begins an episode under the floor is logged and handed to `diskLow`
-   * once, whichever replica heard it.
+   * begins an episode under the floor is logged and told as
+   * `machine.disk-low` once, whichever replica heard it.
    */
   private async reportDisk(args: {
     nodeId: string;
@@ -436,25 +365,18 @@ export class WorkWorkerRegistry {
       !episode.unrecorded
     )
       return;
-    const worker = await this.deps.db
-      .selectFrom("work_workers")
-      .select(["name", "machine_rule", "machine_ref", "labels"])
-      .where("node_id", "=", args.nodeId)
-      .executeTakeFirst();
-    if (!worker) return;
+    const name = workerNameOf(args.nodeId);
     if (episode.state === "started")
       this.deps.log?.(
-        `Worker ${worker.name} is short of disk: ${describeDisk(args.disk)}`,
+        `Worker ${name} is short of disk: ${describeDisk(args.disk)}`,
       );
-    const labels = NodeLabelsSchema.safeParse(worker.labels);
     try {
-      await this.deps.diskLow?.({
-        name: worker.name,
-        rule: worker.machine_rule,
-        ref: worker.machine_ref,
-        class: labels.success ? (labels.data.class ?? null) : null,
+      await this.emit({
+        kind: "machine.disk-low",
+        name,
+        at: episode.since,
         disk: args.disk,
-        since: episode.since,
+        rethrow: true,
       });
       await this.deps.nodes.diskLowRecorded({
         nodeId: args.nodeId,
@@ -462,7 +384,57 @@ export class WorkWorkerRegistry {
       });
     } catch (error) {
       this.deps.log?.(
-        `Machine ${worker.name} is short of disk, and recording it failed (tried again on its next report): ${
+        `Machine ${name} is short of disk, and recording it failed (tried again on its next report): ${
+          error instanceof Error ? error.message : String(error)
+        }`,
+      );
+    }
+  }
+
+  /**
+   * Tell the host something happened to a machine. A failure is logged;
+   * with `rethrow` the caller hears it and tries again.
+   */
+  private async emit(args: {
+    kind: MachineEventKind;
+    name: string;
+    at?: Date;
+    disk?: MachineDisk;
+    rethrow?: boolean;
+  }): Promise<void> {
+    if (!this.deps.event) return;
+    try {
+      const row = await this.machines.row({ name: args.name });
+      if (!row) return;
+      const placement = await this.machines.placementOf({ name: args.name });
+      await this.deps.event({
+        kind: args.kind,
+        at: (args.at ?? new Date()).toISOString(),
+        machine: {
+          name: row.name,
+          ref: row.ref,
+          managed: row.managed,
+          labels: placement.labels,
+          for: placement.for,
+          options: z.record(z.string(), z.unknown()).parse(row.options),
+          reason: row.reason,
+        },
+        ...(args.disk
+          ? {
+              disk: {
+                path: args.disk.path,
+                totalBytes: args.disk.totalBytes,
+                freeBytes: args.disk.freeBytes,
+                floorBytes: args.disk.floorBytes,
+                measuredAt: args.disk.measuredAt,
+              },
+            }
+          : {}),
+      });
+    } catch (error) {
+      if (args.rethrow) throw error;
+      this.deps.log?.(
+        `Recording ${args.kind} for machine ${args.name} failed: ${
           error instanceof Error ? error.message : String(error)
         }`,
       );
@@ -504,34 +476,46 @@ export class WorkWorkerRegistry {
   }
 
   /**
-   * The first call a machine ever made: marks it seen, and tells the
-   * reconciler's listener when a rule provisioned it.
+   * A worker connected: a machine that was starting or resuming serves
+   * from now on (ADRs 0347, 0348), and one that was lost and came back
+   * with its disk is lost no more.
    */
-  private async firstContact(nodeId: string): Promise<void> {
-    if (!this.deps.firstContact) return;
-    const first = await this.deps.db
+  private async serving(args: { nodeId: string; name: string }): Promise<void> {
+    await this.deps.db
       .updateTable("work_workers")
       .set({ last_seen_at: sql`now()` })
-      .where("node_id", "=", nodeId)
+      .where("node_id", "=", args.nodeId)
       .where("last_seen_at", "is", null)
-      .returning(["name", "machine_rule", "machine_ref", "labels", "pool"])
-      .executeTakeFirst();
-    if (!first?.machine_rule || first.pool) return;
-    const labels = NodeLabelsSchema.safeParse(first.labels);
-    await this.deps
-      .firstContact({
-        name: first.name,
-        rule: first.machine_rule,
-        ref: first.machine_ref,
-        class: labels.success ? (labels.data.class ?? null) : null,
+      .execute();
+    const { name } = args;
+    if (
+      await this.machines.setPhase({
+        name,
+        phase: "running",
+        from: ["starting"],
       })
-      .catch((error: unknown) =>
-        this.deps.log?.(
-          `Machine ${first.name} connected, and recording it failed: ${
-            error instanceof Error ? error.message : String(error)
-          }`,
-        ),
-      );
+    ) {
+      await this.emit({ kind: "machine.connected", name });
+      return;
+    }
+    if (
+      await this.machines.setPhase({
+        name,
+        phase: "running",
+        from: ["resuming"],
+      })
+    ) {
+      await this.emit({ kind: "machine.started", name });
+      return;
+    }
+    await this.deps.db
+      .updateTable("work_machines")
+      .set({ lost_at: null })
+      .where("tenant_id", "=", this.deps.tenantId)
+      .where("name", "=", name)
+      .where("phase", "=", "running")
+      .where("lost_at", "is not", null)
+      .execute();
   }
 
   /** Why this epoch's session ended: superseded, or disabled and lapsed. */
@@ -550,61 +534,21 @@ export class WorkWorkerRegistry {
   }
 
   /**
-   * Operator: a one-time code a new worker exchanges for its credential. A
-   * pooled machine (ADR 0205) enrolls serving nobody, with only its labels;
-   * a machine rule assigns it.
+   * Operator: a one-time code a new worker exchanges for its credential,
+   * for a machine enrolled by hand (ADR 0347): Work places work on it by
+   * its labels and whom it is for, and never creates, stops or destroys
+   * it. The machines hook's own machines are enrolled by the sequencer.
    */
   async createEnrollment(args: {
     name: string;
     ttlMinutes?: number;
     placement?: z.input<typeof WorkerPlacementSchema>;
-    pool?: boolean;
   }): Promise<{ code: string; nodeId: string; expiresAt: Date }> {
-    const enrollment = await this.issueEnrollment(
-      args.pool
-        ? {
-            ...args,
-            placement: { labels: args.placement?.labels ?? {}, access: NOBODY },
-          }
-        : args,
-    );
-    if (!enrollment) {
-      throw new Error(
-        `A worker named '${args.name}' is already enrolled; revoke it first`,
-      );
-    }
-    return enrollment;
-  }
-
-  /**
-   * Machine reconciler: the code for a machine it is about to provision
-   * under a rule, or null when that machine already enrolled or has a code
-   * waiting. Replicas asking at once get one code, so a person never gets
-   * two machines.
-   */
-  createMachineEnrollment(args: {
-    name: string;
-    rule: string;
-    ttlMinutes: number;
-    placement: z.input<typeof WorkerPlacementSchema>;
-  }): Promise<{ code: string; nodeId: string; expiresAt: Date } | null> {
-    return this.issueEnrollment({ ...args, machineRule: args.rule });
-  }
-
-  private async issueEnrollment(args: {
-    name: string;
-    ttlMinutes?: number;
-    placement?: z.input<typeof WorkerPlacementSchema>;
-    machineRule?: string;
-    pool?: boolean;
-  }): Promise<{ code: string; nodeId: string; expiresAt: Date } | null> {
     const name = WorkerName.parse(args.name);
-    const placement = WorkerPlacementSchema.parse(args.placement ?? {});
+    const placement = workerPlacement(args.placement ?? {});
     return this.deps.db.transaction().execute(async (trx) => {
       // One issuer per name at a time, across replicas, until commit.
-      await sql`SELECT pg_advisory_xact_lock(hashtext(${`work-worker-name:${this.deps.tenantId}:${name}`}))`.execute(
-        trx,
-      );
+      await this.machines.lockName({ name, transaction: trx });
       const enrolled = await trx
         .selectFrom("work_workers")
         .select("node_id")
@@ -612,20 +556,29 @@ export class WorkWorkerRegistry {
         .where("name", "=", name)
         .where("revoked_at", "is", null)
         .executeTakeFirst();
-      if (enrolled) return null;
-      if (args.machineRule) {
-        // A code nobody used yet: its machine is being created, or the
-        // reconciler destroys it before issuing another.
-        const waiting = await trx
-          .selectFrom("work_worker_enrollments")
-          .select("code_hash")
-          .where("tenant_id", "=", this.deps.tenantId)
-          .where("name", "=", name)
-          .where("machine_rule", "is not", null)
-          .where("used_at", "is", null)
-          .executeTakeFirst();
-        if (waiting) return null;
-      }
+      if (enrolled)
+        throw new Error(
+          `A worker named '${name}' is already enrolled; revoke it first`,
+        );
+      const known = await this.machines.row({ name, transaction: trx });
+      if (known?.managed)
+        throw new Error(
+          `The machines hook's plan already names a machine '${name}'; enroll this one under another name`,
+        );
+      // A code nobody used: this enrollment replaces it.
+      await this.machines.forget({ name, transaction: trx });
+      await trx
+        .insertInto("work_machines")
+        .values({
+          tenant_id: this.deps.tenantId,
+          name,
+          managed: false,
+          labels: JSON.stringify(placement.labels),
+          serves: placement.for === null ? null : JSON.stringify(placement.for),
+          trusted: placement.trusted,
+          phase: "starting",
+        })
+        .execute();
       const code = `wke_${randomBytes(24).toString("base64url")}`;
       const expiresAt = new Date(Date.now() + (args.ttlMinutes ?? 30) * 60_000);
       await trx
@@ -634,12 +587,6 @@ export class WorkWorkerRegistry {
           code_hash: hash(code),
           tenant_id: this.deps.tenantId,
           name,
-          labels: JSON.stringify(placement.labels),
-          access: JSON.stringify(placement.access),
-          trusted: placement.trusted,
-          machine_rule: args.machineRule ?? null,
-          machine_ref: null,
-          pool: args.pool ?? false,
           expires_at: expiresAt,
         })
         .execute();
@@ -657,28 +604,50 @@ export class WorkWorkerRegistry {
   }): Promise<{ nodeId: string; name: string; credential: string }> {
     const publicKey = ExecutorPublicKeySchema.parse(args.publicKey);
     return this.deps.db.transaction().execute(async (trx) => {
+      const codeHash = hash(args.code);
       const enrollment = await trx
+        .selectFrom("work_worker_enrollments")
+        .select("name")
+        .where("code_hash", "=", codeHash)
+        .where("tenant_id", "=", this.deps.tenantId)
+        .executeTakeFirst();
+      const invalid = () =>
+        new Error("The enrollment code is invalid, used, or expired");
+      if (!enrollment) throw invalid();
+
+      // The same name lock orders this with issuance, refusal, replacement,
+      // and revocation. Recheck the code after acquiring the lock.
+      await this.machines.lockName({ name: enrollment.name, transaction: trx });
+      const machine = await trx
+        .selectFrom("work_machines")
+        .select(["phase", "disabled_at", "dropped_at"])
+        .where("tenant_id", "=", this.deps.tenantId)
+        .where("name", "=", enrollment.name)
+        .forUpdate()
+        .executeTakeFirst();
+      if (machine?.phase !== "starting" || machine.dropped_at) throw invalid();
+      const consumed = await trx
         .updateTable("work_worker_enrollments")
         .set({ used_at: sql`now()` })
-        .where("code_hash", "=", hash(args.code))
+        .where("code_hash", "=", codeHash)
         .where("tenant_id", "=", this.deps.tenantId)
         .where("used_at", "is", null)
         .where("expires_at", ">", sql<Date>`now()`)
-        .returning([
-          "name",
-          "labels",
-          "access",
-          "trusted",
-          "machine_rule",
-          "machine_ref",
-          "pool",
-        ])
+        .returning("code_hash")
         .executeTakeFirst();
-      if (!enrollment) {
-        throw new Error("The enrollment code is invalid, used, or expired");
-      }
+      if (!consumed) throw invalid();
       const nodeId = `${WORKER_NODE_PREFIX}${enrollment.name}`;
       const secret = randomBytes(32).toString("base64url");
+      // A name enrolling again is a new machine under the old node id (ADR
+      // 0346): whatever the old one still held is retired in this
+      // transaction, before the node is enabled, so the new machine never
+      // inherits an Allocation, a reservation or a cache copy.
+      await this.retire({
+        nodeId,
+        name: enrollment.name,
+        reason: "replaced",
+        transaction: trx,
+      });
       await trx
         .deleteFrom("work_workers")
         .where("node_id", "=", nodeId)
@@ -689,7 +658,9 @@ export class WorkWorkerRegistry {
       await trx
         .updateTable("worker_nodes")
         .set({
-          enabled: true,
+          enabled: machine.disabled_at === null,
+          admission_revision: null,
+          lease_expires_at: sql`now()`,
           disk: null,
           disk_low_at: null,
           disk_low_recorded_at: null,
@@ -704,12 +675,6 @@ export class WorkWorkerRegistry {
           tenant_id: this.deps.tenantId,
           name: enrollment.name,
           credential_hash: hash(secret),
-          labels: JSON.stringify(enrollment.labels),
-          access: JSON.stringify(enrollment.access),
-          trusted: enrollment.trusted,
-          machine_rule: enrollment.machine_rule,
-          machine_ref: enrollment.machine_ref,
-          pool: enrollment.pool,
         })
         .execute();
       await registerExecutorKey({
@@ -904,8 +869,8 @@ export class WorkWorkerRegistry {
     const policy = await this.placement(args.nodeId);
     if (
       args.offer.isolation === "process" &&
-      !servesOneOwner(policy.access) &&
-      !servesNobody(policy.access) &&
+      !servesOneOwner(policy.for) &&
+      !servesNobody(policy.for) &&
       !policy.trusted
     ) {
       throw new WorkerIsolationError(args.name);
@@ -963,7 +928,8 @@ export class WorkWorkerRegistry {
           processes: args.offer.processes,
         },
       });
-      await this.firstContact(args.nodeId);
+      await this.serving({ nodeId: args.nodeId, name: args.name });
+      await this.machines.openPlacement({ name: args.name });
       await this.seen(args.nodeId);
       if (args.offer.disk)
         await this.reportDisk({
@@ -987,82 +953,92 @@ export class WorkWorkerRegistry {
     }
   }
 
-  /**
-   * One enrolled worker's placement policy, as its connection is checked
-   * against: a released machine takes no new work (ADR 0205), so it serves
-   * nobody whatever access it keeps.
-   */
+  /** One enrolled worker's placement, as its connection is checked against. */
   async placement(nodeId: string): Promise<WorkerPlacement> {
-    const row = await this.deps.db
-      .selectFrom("work_workers")
-      .select(["labels", "access", "trusted", "released_at"])
-      .where("node_id", "=", nodeId)
-      .where("tenant_id", "=", this.deps.tenantId)
-      .executeTakeFirstOrThrow();
-    const stored = storedPlacement(row);
-    return row.released_at ? { ...stored, access: NOBODY } : stored;
+    return this.machines.placementOf({ name: workerNameOf(nodeId) });
+  }
+
+  /** Placement of every machine, by node, for the scheduler. */
+  placements(): Promise<Map<string, ScheduledPlacement>> {
+    return this.machines.placements();
   }
 
   /**
-   * Placement policy of every enrolled worker, for the scheduler. A
-   * released machine (ADR 0205) is flagged with the access it keeps: it
-   * takes no new work from the moment it is released, and the Allocations
-   * it already holds keep reaching it until their chats give their
-   * workspaces back.
+   * Operator: change whom a machine enrolled by hand is for, its labels and
+   * whether those it serves trust each other. A machine the machines hook
+   * made follows its plan instead. Work on it is not moved: change whom it
+   * is for while it holds none, or leave that to the plan, which resets a
+   * machine before someone new may use it.
    */
-  async placements(): Promise<Map<string, ScheduledPlacement>> {
-    const rows = await this.deps.db
-      .selectFrom("work_workers")
-      .select(["node_id", "labels", "access", "trusted", "released_at"])
-      .where("tenant_id", "=", this.deps.tenantId)
-      .where("revoked_at", "is", null)
-      .execute();
-    return new Map(
-      rows.map((row) => [
-        row.node_id,
-        { ...storedPlacement(row), released: row.released_at !== null },
-      ]),
-    );
-  }
-
-  /** Operator: change whose work a worker takes and how it is labeled. */
   async setPlacement(args: {
     name: string;
     placement: Partial<z.input<typeof WorkerPlacementSchema>>;
   }): Promise<WorkerPlacement> {
-    const nodeId = `${WORKER_NODE_PREFIX}${WorkerName.parse(args.name)}`;
-    const row = await this.deps.db
-      .selectFrom("work_workers")
-      .select(["labels", "access", "trusted"])
-      .where("node_id", "=", nodeId)
-      .where("tenant_id", "=", this.deps.tenantId)
-      .executeTakeFirstOrThrow();
-    const current = storedPlacement(row);
-    const next = WorkerPlacementSchema.parse({ ...current, ...args.placement });
-    await this.deps.db
-      .updateTable("work_workers")
-      .set({
-        labels: JSON.stringify(next.labels),
-        access: JSON.stringify(next.access),
-        trusted: next.trusted,
-      })
-      .where("node_id", "=", nodeId)
-      .where("tenant_id", "=", this.deps.tenantId)
-      .execute();
+    const name = WorkerName.parse(args.name);
+    const row = await this.machines.row({ name });
+    if (!row) throw new Error(`Work knows no machine named '${name}'`);
+    if (row.managed)
+      throw new Error(
+        `Machine '${name}' follows the machines hook's plan: change its plan entry instead`,
+      );
+    const current = await this.machines.placementOf({ name });
+    const next = workerPlacement({
+      labels: current.labels,
+      ...(current.for === null ? {} : { for: [...current.for] }),
+      trusted: current.trusted,
+      ...args.placement,
+    });
+    await this.machines.configure({
+      name,
+      labels: next.labels,
+      trusted: next.trusted,
+      reason: row.reason,
+      lostAfterMinutes: row.lost_after_minutes,
+    });
+    if (
+      row.reset_pending ||
+      (row.phase !== "starting" &&
+        principalsChangeNeedsReset({ from: current.for, to: next.for }))
+    ) {
+      await this.machines.beginReset({ name, for: next.for });
+      await this.resetPlacement({ name });
+      return this.machines.placementOf({ name });
+    }
+    await this.machines.setFor({ name, for: next.for });
     return next;
   }
 
   /**
-   * Directory groups worker access names, for the directory mirror. A
-   * released machine takes no one's new work, so its groups are not asked.
+   * Operator: disable a machine, or enable it again (ADR 0190). Disabled,
+   * it takes no work and its work waits for it; it is never called lost.
    */
-  async accessGroups(): Promise<string[]> {
-    const groups = new Set<string>();
-    for (const placement of (await this.placements()).values()) {
-      if (placement.released) continue;
-      for (const group of accessGroupsOf(placement.access)) groups.add(group);
-    }
-    return [...groups];
+  async setDisabled(args: {
+    name: string;
+    disabled: boolean;
+  }): Promise<boolean> {
+    const name = WorkerName.parse(args.name);
+    const row = await this.deps.db
+      .updateTable("work_machines")
+      .set({
+        disabled_at: args.disabled
+          ? sql<Date>`coalesce(disabled_at, now())`
+          : null,
+        updated_at: sql`now()`,
+      })
+      .where("tenant_id", "=", this.deps.tenantId)
+      .where("name", "=", name)
+      .returning("phase")
+      .executeTakeFirst();
+    if (!row) return false;
+    // A machine Work stopped stays off until it is resumed.
+    const serves = ["starting", "running", "resuming"].includes(row.phase);
+    await this.deps.nodes.setEnabled({
+      tenantId: this.deps.tenantId,
+      authorityId: this.deps.authorityId,
+      nodeId: `${WORKER_NODE_PREFIX}${name}`,
+      enabled: !args.disabled && serves,
+    });
+    return true;
   }
 
   /**
@@ -1074,6 +1050,14 @@ export class WorkWorkerRegistry {
    */
   async maintain(): Promise<void> {
     await this.queue.sweep().catch(() => {});
+    await this.retireGone().catch((error: unknown) =>
+      this.deps.log?.(
+        `Retiring lost machines' work failed (tried again on the next pass): ${
+          error instanceof Error ? error.message : String(error)
+        }`,
+      ),
+    );
+    await this.forgetNeverEnrolled().catch(() => {});
     this.cleaning ??= this.cleanup().finally(() => {
       this.cleaning = undefined;
     });
@@ -1081,7 +1065,171 @@ export class WorkWorkerRegistry {
 
   private cleaning: Promise<void> | undefined;
 
+  /** A machine enrolled by hand whose code expired unused is known no more. */
+  private async forgetNeverEnrolled(): Promise<void> {
+    await this.deps.db
+      .deleteFrom("work_machines")
+      .where("tenant_id", "=", this.deps.tenantId)
+      .where("managed", "=", false)
+      .where("phase", "=", "starting")
+      .where(({ not, exists, selectFrom }) =>
+        not(
+          exists(
+            selectFrom("work_workers")
+              .select("work_workers.node_id")
+              .whereRef(
+                "work_workers.tenant_id",
+                "=",
+                "work_machines.tenant_id",
+              )
+              .whereRef("work_workers.name", "=", "work_machines.name")
+              .where("work_workers.revoked_at", "is", null),
+          ),
+        ),
+      )
+      .where(({ not, exists, selectFrom }) =>
+        not(
+          exists(
+            selectFrom("work_worker_enrollments")
+              .select("work_worker_enrollments.code_hash")
+              .whereRef(
+                "work_worker_enrollments.tenant_id",
+                "=",
+                "work_machines.tenant_id",
+              )
+              .whereRef(
+                "work_worker_enrollments.name",
+                "=",
+                "work_machines.name",
+              )
+              .where("work_worker_enrollments.used_at", "is", null)
+              .where(
+                "work_worker_enrollments.expires_at",
+                ">",
+                sql<Date>`now()`,
+              ),
+          ),
+        ),
+      )
+      .execute();
+  }
+
+  /**
+   * Retire the work of machines that are gone (ADR 0346), on any replica:
+   * a revoked worker's, when the process that revoked it stopped before
+   * retiring it, and a lost machine's, whoever enrolled it. Its chats are
+   * admitted again on a machine open to their owner, or wait for one; the
+   * plan replaces a machine it still names, and a machine enrolled by hand
+   * that comes back removes the sandboxes whose Allocations are gone. A
+   * machine an operator disabled, or one Work stopped, is never lost.
+   */
+  private async retireGone(): Promise<void> {
+    const revoked = await this.deps.db
+      .selectFrom("work_workers")
+      .select(["node_id", "name"])
+      .where("tenant_id", "=", this.deps.tenantId)
+      .where("revoked_at", "is not", null)
+      .where(({ exists, selectFrom }) =>
+        exists(
+          selectFrom("execution_allocations")
+            .select("execution_allocations.id")
+            .whereRef(
+              "execution_allocations.worker_node_id",
+              "=",
+              "work_workers.node_id",
+            )
+            .where("execution_allocations.capacity_released_at", "is", null),
+        ),
+      )
+      .execute();
+    for (const worker of revoked)
+      await this.retireRevoked({ name: worker.name, nodeId: worker.node_id });
+    const lost = [...(await this.machines.reach())].filter(
+      ([, machine]) => machine.state === "lost",
+    );
+    if (lost.length === 0) return;
+    const holding = await this.deps.db
+      .selectFrom("execution_allocations")
+      .select("worker_node_id")
+      .distinct()
+      .where(
+        "worker_node_id",
+        "in",
+        lost.map(([, machine]) => machine.nodeId),
+      )
+      .where("capacity_released_at", "is", null)
+      .execute();
+    const held = new Set(holding.map((row) => row.worker_node_id));
+    for (const [name, machine] of lost) {
+      if (held.has(machine.nodeId))
+        await this.retire({ nodeId: machine.nodeId, name, reason: "lost" });
+      // The sequencer says so for the machines it makes, as it replaces them.
+      if (machine.managed || machine.lostNoted) continue;
+      const noted = await this.deps.db
+        .updateTable("work_machines")
+        .set({ lost_at: sql`now()` })
+        .where("tenant_id", "=", this.deps.tenantId)
+        .where("name", "=", name)
+        .where("lost_at", "is", null)
+        .returning("name")
+        .executeTakeFirst();
+      if (noted) await this.emit({ kind: "machine.lost", name });
+    }
+  }
+
+  private async retireRevoked(args: {
+    name: string;
+    nodeId: string;
+  }): Promise<void> {
+    await this.deps.db.transaction().execute(async (trx) => {
+      await this.machines.lockName({ name: args.name, transaction: trx });
+      const revoked = await trx
+        .selectFrom("work_workers")
+        .select("name")
+        .where("tenant_id", "=", this.deps.tenantId)
+        .where("node_id", "=", args.nodeId)
+        .where("revoked_at", "is not", null)
+        .executeTakeFirst();
+      if (revoked)
+        await this.retire({ ...args, reason: "revoked", transaction: trx });
+    });
+  }
+
+  /**
+   * Retire what a machine held, through core's one retirement (ADR 0346).
+   * Safe to call again, from any replica.
+   */
+  private async retire(args: {
+    nodeId: string;
+    name: string;
+    reason: NodeRetireReason;
+    transaction?: Transaction<DB>;
+  }): Promise<void> {
+    const retired = await retireNodeWork({
+      db: this.deps.db,
+      nodeId: args.nodeId,
+      reason: args.reason,
+      ...(args.transaction ? { transaction: args.transaction } : {}),
+    });
+    if (retired.released + retired.freed === 0) return;
+    this.deps.log?.(
+      `Machine ${args.name} is ${args.reason === "lost" ? "lost" : "gone"}: ${retired.released} workspace(s) retired, ${retired.freed} released workspace(s) freed; their chats continue from their last save`,
+    );
+    this.deps.retired?.();
+  }
+
   private async cleanup(): Promise<void> {
+    const pending = await this.deps.db
+      .selectFrom("work_machines")
+      .select("name")
+      .where("tenant_id", "=", this.deps.tenantId)
+      .where("managed", "=", false)
+      .where("reset_pending", "=", true)
+      .execute();
+    for (const { name } of pending)
+      await this.resetPlacement({ name }).catch((error: unknown) =>
+        this.deps.log?.(`Machine reset deferred for ${name}: ${String(error)}`),
+      );
     const nodes = await this.deps.nodes.list({
       tenantId: this.deps.tenantId,
       authorityId: this.deps.authorityId,
@@ -1113,49 +1261,112 @@ export class WorkWorkerRegistry {
 
   /**
    * Operator: end a worker's authority now. Its credential, any rotated one
-   * still pending, and its key stop working.
+   * still pending, and its key stop working. A machine enrolled by hand is
+   * known no more; one the machines hook made is destroyed by the next
+   * pass, and made again if the plan still names it.
    */
   async revoke(args: { name: string }): Promise<boolean> {
-    const row = await this.deps.db
-      .updateTable("work_workers")
-      .set({
-        revoked_at: sql`now()`,
-        pending_credential_hash: null,
-        pending_public_key: null,
-        pending_issued_at: null,
-        pending_rotation: null,
-      })
-      .where("tenant_id", "=", this.deps.tenantId)
-      .where("name", "=", args.name)
-      .where("revoked_at", "is", null)
-      .returning("node_id")
-      .executeTakeFirst();
+    const row = await this.deps.db.transaction().execute(async (trx) => {
+      const { name } = args;
+      await this.machines.lockName({ name, transaction: trx });
+      const nodeId = `${WORKER_NODE_PREFIX}${name}`;
+      await trx
+        .selectFrom("worker_nodes")
+        .select("id")
+        .where("id", "=", nodeId)
+        .forUpdate()
+        .executeTakeFirst();
+      const worker = await trx
+        .updateTable("work_workers")
+        .set({
+          revoked_at: sql`now()`,
+          pending_credential_hash: null,
+          pending_public_key: null,
+          pending_issued_at: null,
+          pending_rotation: null,
+        })
+        .where("tenant_id", "=", this.deps.tenantId)
+        .where("name", "=", name)
+        .where("revoked_at", "is", null)
+        .returning("node_id")
+        .executeTakeFirst();
+      if (!worker) return undefined;
+      await forgetExecutorKey({
+        db: trx,
+        executor: nodeExecutor(worker.node_id),
+      });
+      await trx
+        .updateTable("worker_nodes")
+        .set({ enabled: false })
+        .where("id", "=", worker.node_id)
+        .where("tenant_id", "=", this.deps.tenantId)
+        .execute();
+      const machine = await this.machines.row({ name, transaction: trx });
+      if (machine && !machine.managed)
+        await this.machines.forget({ name, transaction: trx });
+      return worker;
+    });
     if (!row) return false;
-    await forgetExecutorKey({
-      db: this.deps.db,
-      executor: nodeExecutor(row.node_id),
-    });
-    await this.deps.nodes.setEnabled({
-      tenantId: this.deps.tenantId,
-      authorityId: this.deps.authorityId,
-      nodeId: row.node_id,
-      enabled: false,
-    });
+    await this.retireRevoked({ name: args.name, nodeId: row.node_id });
     return true;
   }
 
   /**
-   * Take a machine out of service for good, unless work landed on it (ADR
-   * 0258): under its node's row lock, which creating an Allocation takes
-   * too, it is revoked and disabled only while no Allocation holds its
-   * capacity, so nothing is placed on a machine about to be destroyed. A
-   * machine that holds workspaces it cannot give back, because it is not
-   * connected and has not called for `unseenForMs`, is revoked anyway. False
-   * when it was kept, or was not enrolled.
+   * Take a machine out of service for good, unless work landed on it (ADRs
+   * 0258, 0347): under its node's row lock, which creating an Allocation
+   * takes too, it is revoked and disabled and becomes `destroying` only
+   * while no Allocation holds its capacity, so nothing is placed on a
+   * machine about to be destroyed. One whose worker an operator revoked,
+   * and one that never enrolled, hold nothing. False when it was kept.
    */
-  async drain(args: { name: string; unseenForMs: number }): Promise<boolean> {
+  async retireMachine(args: { name: string }): Promise<boolean> {
+    const taken = await this.takeOutOfService({ ...args, lost: null });
+    if (taken)
+      await this.retire({
+        nodeId: `${WORKER_NODE_PREFIX}${args.name}`,
+        name: args.name,
+        reason: "revoked",
+      });
+    return taken;
+  }
+
+  /**
+   * A machine has been unseen for `unseenForMs` (ADR 0346): take it out of
+   * service for good and retire what it held, so its chats continue from
+   * their last save and its plan may replace it. Under its node's row
+   * lock, and only while it is still unseen: a machine that called again
+   * meanwhile is kept. False when it was kept.
+   */
+  async declareLost(args: {
+    name: string;
+    unseenForMs: number;
+  }): Promise<boolean> {
+    const lost = await this.takeOutOfService({
+      name: args.name,
+      lost: { unseenForMs: args.unseenForMs },
+    });
+    if (lost)
+      await this.retire({
+        nodeId: `${WORKER_NODE_PREFIX}${args.name}`,
+        name: args.name,
+        reason: "lost",
+      });
+    return lost;
+  }
+
+  /**
+   * Revoke and disable a machine under its node's row lock and make it
+   * `destroying`. Retiring what it held follows once this commits:
+   * disabled, it takes nothing new.
+   */
+  private async takeOutOfService(args: {
+    name: string;
+    /** Only a machine still unseen this long, whatever it holds. */
+    lost: { unseenForMs: number } | null;
+  }): Promise<boolean> {
     const nodeId = `${WORKER_NODE_PREFIX}${args.name}`;
     return this.deps.db.transaction().execute(async (trx) => {
+      await this.machines.lockName({ name: args.name, transaction: trx });
       const node = await trx
         .selectFrom("worker_nodes")
         .select(sql<boolean>`enabled AND lease_expires_at > now()`.as("live"))
@@ -1163,27 +1374,50 @@ export class WorkWorkerRegistry {
         .where("tenant_id", "=", this.deps.tenantId)
         .forUpdate()
         .executeTakeFirst();
-      const held = await trx
-        .selectFrom("execution_allocations")
-        .select((eb) => eb.fn.countAll<string>().as("count"))
-        .where("worker_node_id", "=", nodeId)
-        .where("capacity_released_at", "is", null)
+      const worker = await trx
+        .selectFrom("work_workers")
+        .select([
+          "revoked_at",
+          sql<number>`(extract(epoch from (now() - coalesce(last_seen_at, enrolled_at))) * 1000)::float8`.as(
+            "unseen_for_ms",
+          ),
+        ])
+        .where("tenant_id", "=", this.deps.tenantId)
+        .where("name", "=", args.name)
         .executeTakeFirst();
-      if (Number(held?.count ?? 0) > 0) {
-        // Connected, it gives them back as its chats idle (ADR 0173).
-        if (node?.live) return false;
-        const lost = await trx
-          .selectFrom("work_workers")
-          .select("node_id")
-          .where("tenant_id", "=", this.deps.tenantId)
-          .where("name", "=", args.name)
-          .where(
-            sql<boolean>`coalesce(last_seen_at, enrolled_at) <= now() - make_interval(secs => ${args.unseenForMs / 1000})`,
-          )
+      const serving = worker !== undefined && worker.revoked_at === null;
+      if (args.lost) {
+        // It called again meanwhile: it is kept as it is.
+        if (serving && node?.live) return false;
+        if (serving && Number(worker.unseen_for_ms) < args.lost.unseenForMs)
+          return false;
+      } else if (serving) {
+        const held = await trx
+          .selectFrom("execution_allocations")
+          .select((eb) => eb.fn.countAll<string>().as("count"))
+          .where("worker_node_id", "=", nodeId)
+          .where("capacity_released_at", "is", null)
           .executeTakeFirst();
-        if (!lost) return false;
+        // Connected, it gives them back as its chats idle (ADR 0173).
+        if (Number(held?.count ?? 0) > 0) return false;
       }
-      const revoked = await trx
+      const moved = await this.machines.setPhase({
+        name: args.name,
+        phase: "destroying",
+        ...(args.lost ? { lost: true } : {}),
+        transaction: trx,
+      });
+      if (!moved) return false;
+      // Its code stops working: nothing enrolls under this name until its
+      // platform confirmed it gone.
+      await trx
+        .deleteFrom("work_worker_enrollments")
+        .where("tenant_id", "=", this.deps.tenantId)
+        .where("name", "=", args.name)
+        .where("used_at", "is", null)
+        .execute();
+      if (!serving) return true;
+      await trx
         .updateTable("work_workers")
         .set({
           revoked_at: sql`now()`,
@@ -1195,9 +1429,7 @@ export class WorkWorkerRegistry {
         .where("tenant_id", "=", this.deps.tenantId)
         .where("name", "=", args.name)
         .where("revoked_at", "is", null)
-        .returning("node_id")
-        .executeTakeFirst();
-      if (!revoked) return false;
+        .execute();
       await forgetExecutorKey({ db: trx, executor: nodeExecutor(nodeId) });
       await trx
         .updateTable("worker_nodes")
@@ -1211,396 +1443,100 @@ export class WorkWorkerRegistry {
   }
 
   /**
-   * How busy each enrolled machine of a rule is (ADR 0258), by name, for
-   * machines that scale with demand.
+   * Begin stopping a machine (ADR 0348): under its node's row lock, only
+   * while no Allocation holds its capacity, it takes no new work and
+   * becomes `stopping`. It keeps its worker, its credential and its disk.
+   * False when it holds something, or is not serving.
    */
-  async machineLoad(): Promise<Map<string, MachineLoad>> {
-    const machines = this.deps.db
-      .selectFrom("work_workers")
-      .select("node_id")
-      .where("tenant_id", "=", this.deps.tenantId)
-      .where("machine_rule", "is not", null)
-      .where("revoked_at", "is", null);
-    const load = this.deps.db
-      .selectFrom("execution_allocations")
-      .select([
-        "worker_node_id",
-        sql<string>`count(*) FILTER (WHERE capacity_released_at IS NULL)`.as(
-          "holding",
-        ),
-        sql<Date | null>`max(capacity_released_at)`.as("last_released"),
-      ])
-      .where("worker_node_id", "in", machines)
-      .groupBy("worker_node_id")
-      .as("load");
-    const [rows, nodes] = await Promise.all([
-      this.deps.db
-        .selectFrom("work_workers")
-        .leftJoin(load, "load.worker_node_id", "work_workers.node_id")
-        .select([
-          "work_workers.name",
-          "work_workers.node_id",
-          "load.holding",
-          sql<boolean>`work_workers.last_seen_at IS NULL`.as("never_connected"),
-          sql<number>`(extract(epoch from (now() - greatest(work_workers.enrolled_at, load.last_released))) * 1000)::float8`.as(
-            "idle_for_ms",
-          ),
-          sql<number>`(extract(epoch from (now() - coalesce(work_workers.last_seen_at, work_workers.enrolled_at))) * 1000)::float8`.as(
-            "unseen_for_ms",
-          ),
-        ])
-        .where("work_workers.tenant_id", "=", this.deps.tenantId)
-        .where("work_workers.machine_rule", "is not", null)
-        .where("work_workers.revoked_at", "is", null)
-        .execute(),
-      this.deps.nodes.list({
-        tenantId: this.deps.tenantId,
-        authorityId: this.deps.authorityId,
-      }),
-    ]);
-    const byId = new Map(nodes.map((node) => [node.id, node]));
-    return new Map(
-      rows.map((row) => {
-        const node = byId.get(row.node_id);
-        const capacity = node?.capacity;
-        // Short of disk, it takes nothing at all (ADR 0336).
-        const roomy =
-          !node ||
-          diskFits({
-            usage: node.usage,
-            resources: {},
-            ...(node.disk && node.diskFresh ? { disk: node.disk } : {}),
-          });
-        const live =
-          node?.available && capacity
-            ? {
-                descriptor: node.descriptor,
-                defaults: node.defaults,
-                free: {
-                  workspaces: roomy
-                    ? Math.max(0, capacity.workspaces - node.usage.workspaces)
-                    : 0,
-                  ...(capacity.cpuMillis !== undefined
-                    ? {
-                        cpuMillis: Math.max(
-                          0,
-                          capacity.cpuMillis - node.usage.cpuMillis,
-                        ),
-                      }
-                    : {}),
-                  ...(capacity.memoryMb !== undefined
-                    ? {
-                        memoryMb: Math.max(
-                          0,
-                          capacity.memoryMb - node.usage.memoryMb,
-                        ),
-                      }
-                    : {}),
-                  ...(node.disk && node.diskFresh
-                    ? {
-                        storageMb: Math.max(
-                          0,
-                          Math.min(
-                            diskBudgetMb(node.disk) - node.usage.storageMb,
-                            Math.floor(headroom(node.disk) / (1024 * 1024)),
-                          ),
-                        ),
-                      }
-                    : {}),
-                },
-              }
-            : null;
-        return [
-          row.name,
-          {
-            holding: Number(row.holding ?? 0),
-            idleForMs: Number(row.idle_for_ms),
-            unseenForMs: Number(row.unseen_for_ms),
-            neverConnected: row.never_connected,
-            shortOfDisk: Boolean(node?.available) && !roomy,
-            live,
-          },
-        ];
-      }),
-    );
-  }
-
-  /** The platform's id for the machine created with this enrollment code. */
-  async recordMachineRef(args: { code: string; ref: string }): Promise<void> {
-    const enrollment = await this.deps.db
-      .updateTable("work_worker_enrollments")
-      .set({ machine_ref: args.ref })
-      .where("tenant_id", "=", this.deps.tenantId)
-      .where("code_hash", "=", hash(args.code))
-      .returning(["name", "used_at"])
-      .executeTakeFirst();
-    // The machine may have enrolled before the platform answered.
-    if (enrollment?.used_at)
-      await this.deps.db
-        .updateTable("work_workers")
-        .set({ machine_ref: args.ref })
+  async beginStop(args: { name: string; at?: string }): Promise<boolean> {
+    const nodeId = `${WORKER_NODE_PREFIX}${args.name}`;
+    return this.deps.db.transaction().execute(async (trx) => {
+      await trx
+        .selectFrom("worker_nodes")
+        .select("id")
+        .where("id", "=", nodeId)
         .where("tenant_id", "=", this.deps.tenantId)
-        .where("name", "=", enrollment.name)
-        .where("revoked_at", "is", null)
-        .where("machine_ref", "is", null)
+        .forUpdate()
+        .executeTakeFirst();
+      const held = await trx
+        .selectFrom("execution_allocations")
+        .select((eb) => eb.fn.countAll<string>().as("count"))
+        .where("worker_node_id", "=", nodeId)
+        .where("capacity_released_at", "is", null)
+        .executeTakeFirst();
+      if (Number(held?.count ?? 0) > 0) return false;
+      const moved = await this.machines.setPhase({
+        name: args.name,
+        phase: "stopping",
+        from: ["running"],
+        ...(args.at ? { at: args.at } : {}),
+        transaction: trx,
+      });
+      if (!moved) return false;
+      await trx
+        .updateTable("worker_nodes")
+        .set({ enabled: false })
+        .where("id", "=", nodeId)
+        .where("tenant_id", "=", this.deps.tenantId)
+        .where("authority_id", "=", this.deps.authorityId)
         .execute();
+      return true;
+    });
   }
 
   /**
-   * Replace a machine's ref while it is still `from` (ADR 0327): a create
-   * workflow answered, on the enrollment and on the worker if it enrolled
-   * first.
+   * Begin resuming a stopped machine (ADR 0348): it becomes `resuming`,
+   * and its worker, which kept its credential and data directory, may
+   * connect again under a new epoch.
    */
-  async replaceMachineRef(args: {
-    name: string;
-    from: string;
-    to: string;
-  }): Promise<void> {
-    await this.deps.db
-      .updateTable("work_worker_enrollments")
-      .set({ machine_ref: args.to })
-      .where("tenant_id", "=", this.deps.tenantId)
-      .where("name", "=", args.name)
-      .where("machine_ref", "=", args.from)
-      .execute();
-    await this.deps.db
-      .updateTable("work_workers")
-      .set({ machine_ref: args.to })
-      .where("tenant_id", "=", this.deps.tenantId)
-      .where("name", "=", args.name)
-      .where("machine_ref", "=", args.from)
-      .where("machine_destroyed_at", "is", null)
-      .execute();
+  async beginResume(args: { name: string; at: string }): Promise<boolean> {
+    const nodeId = `${WORKER_NODE_PREFIX}${args.name}`;
+    return this.deps.db.transaction().execute(async (trx) => {
+      await trx
+        .selectFrom("worker_nodes")
+        .select("id")
+        .where("id", "=", nodeId)
+        .forUpdate()
+        .executeTakeFirst();
+      const moved = await this.machines.setPhase({
+        name: args.name,
+        phase: "resuming",
+        from: ["stopped"],
+        at: args.at,
+        transaction: trx,
+      });
+      if (!moved) return false;
+      const machine = await this.machines.row({
+        name: args.name,
+        transaction: trx,
+      });
+      await trx
+        .updateTable("worker_nodes")
+        .set({
+          enabled: machine?.disabled_at === null,
+          admission_revision: null,
+          lease_expires_at: sql`now()`,
+        })
+        .where("id", "=", nodeId)
+        .where("tenant_id", "=", this.deps.tenantId)
+        .where("authority_id", "=", this.deps.authorityId)
+        .execute();
+      return true;
+    });
   }
 
   /**
-   * Machines a reconciler provisioned, by state: enrolled, still pending
-   * enrollment, expired before enrolling, or revoked but not yet destroyed.
-   * A machine stays listed until its platform confirmed it gone
-   * ({@link forgetMachine}), whether or not its reference was recorded.
+   * Allocations still holding a machine's capacity: live workspaces, and
+   * ones given back whose sandboxes are not destroyed yet.
    */
-  async machines(): Promise<ProvisionedMachine[]> {
-    const [workers, enrollments, issued] = await Promise.all([
-      this.deps.db
-        .selectFrom("work_workers")
-        .select([
-          "name",
-          "machine_ref",
-          "machine_rule",
-          "revoked_at",
-          "retain_days",
-          "labels",
-          "access",
-          "trusted",
-          releasedFor.as("released_for_ms"),
-        ])
-        .where("tenant_id", "=", this.deps.tenantId)
-        .where("machine_rule", "is not", null)
-        .where("pool", "=", false)
-        .where("machine_destroyed_at", "is", null)
-        .execute(),
-      this.deps.db
-        .selectFrom("work_worker_enrollments")
-        .select([
-          "name",
-          "machine_ref",
-          "machine_rule",
-          "labels",
-          "access",
-          "trusted",
-          sql<boolean>`expires_at <= now()`.as("expired"),
-        ])
-        .where("tenant_id", "=", this.deps.tenantId)
-        .where("machine_rule", "is not", null)
-        .where("used_at", "is", null)
-        .execute(),
-      // Each name's latest code: a name is reused only once its machine is gone.
-      this.deps.db
-        .selectFrom("work_worker_enrollments")
-        .select([
-          "name",
-          "code_hash",
-          "created_at",
-          sql<number>`(extract(epoch from (now() - created_at)) * 1000)::float8`.as(
-            "issued_for_ms",
-          ),
-        ])
-        .where("tenant_id", "=", this.deps.tenantId)
-        .where("machine_rule", "is not", null)
-        .orderBy("created_at")
-        .execute(),
-    ]);
-    const enrollmentOf = new Map(
-      issued.map((row) => [
-        row.name,
-        {
-          idempotencyKey: row.code_hash,
-          issuedAt: row.created_at,
-          issuedForMs: Number(row.issued_for_ms),
-        },
-      ]),
-    );
-    return [
-      ...workers.map((row) => ({
-        name: row.name,
-        ref: row.machine_ref,
-        rule: row.machine_rule ?? "",
-        state: row.revoked_at ? ("revoked" as const) : ("enrolled" as const),
-        releasedForMs: msOrNull(row.released_for_ms),
-        retainDays: row.retain_days,
-        placement: storedPlacement(row),
-        enrollment: enrollmentOf.get(row.name) ?? null,
-      })),
-      ...enrollments.map((row) => ({
-        name: row.name,
-        ref: row.machine_ref,
-        rule: row.machine_rule ?? "",
-        state: row.expired ? ("expired" as const) : ("pending" as const),
-        releasedForMs: null,
-        retainDays: null,
-        placement: storedPlacement(row),
-        enrollment: enrollmentOf.get(row.name) ?? null,
-      })),
-    ];
-  }
-
-  /** Every pooled machine still enrolled, free or held (ADR 0205). */
-  async pooledMachines(): Promise<PooledMachine[]> {
-    const rows = await this.deps.db
-      .selectFrom("work_workers")
-      .select([
-        "name",
-        "node_id",
-        "machine_rule",
-        "machine_member",
-        "machine_slot",
-        "retain_days",
-        "labels",
-        "access",
-        "trusted",
-        releasedFor.as("released_for_ms"),
-      ])
-      .where("tenant_id", "=", this.deps.tenantId)
-      .where("pool", "=", true)
-      .where("revoked_at", "is", null)
-      .orderBy("name")
-      .execute();
-    return rows.map((row) => ({
-      name: row.name,
-      nodeId: row.node_id,
-      rule: row.machine_rule,
-      member: row.machine_member,
-      slot: row.machine_slot,
-      releasedForMs: msOrNull(row.released_for_ms),
-      retainDays: row.retain_days,
-      placement: storedPlacement(row),
-    }));
-  }
-
-  /**
-   * Hand a free pooled machine to a rule: one member's machine, or one of a
-   * group's shared ones. False when it is no longer free.
-   */
-  async assignPooled(args: {
-    name: string;
-    rule: string;
-    holder: { member: string } | { slot: number };
-    placement: WorkerPlacement;
-    retainDays: number;
-  }): Promise<boolean> {
-    const assigned = await this.deps.db
-      .updateTable("work_workers")
-      .set({
-        machine_rule: args.rule,
-        machine_member: "member" in args.holder ? args.holder.member : null,
-        machine_slot: "slot" in args.holder ? args.holder.slot : null,
-        retain_days: args.retainDays,
-        access: JSON.stringify(args.placement.access),
-        trusted: args.placement.trusted,
-      })
-      .where("tenant_id", "=", this.deps.tenantId)
-      .where("name", "=", args.name)
-      .where("pool", "=", true)
-      .where("machine_rule", "is", null)
-      .where("released_at", "is", null)
-      .where("revoked_at", "is", null)
-      .returning("node_id")
+  async holding(args: { name: string }): Promise<number> {
+    const row = await this.deps.db
+      .selectFrom("execution_allocations")
+      .select((eb) => eb.fn.countAll<number>().as("count"))
+      .where("worker_node_id", "=", `${WORKER_NODE_PREFIX}${args.name}`)
+      .where("capacity_released_at", "is", null)
       .executeTakeFirst();
-    return Boolean(assigned);
-  }
-
-  /**
-   * Release a machine nobody should have any more (ADR 0205): it serves
-   * nobody from now on and keeps its disk for `retainDays`, counted from
-   * the database's clock.
-   */
-  async release(args: { name: string; retainDays: number }): Promise<void> {
-    await this.deps.db
-      .updateTable("work_workers")
-      .set({ released_at: sql`now()`, retain_days: args.retainDays })
-      .where("tenant_id", "=", this.deps.tenantId)
-      .where("name", "=", args.name)
-      .where("revoked_at", "is", null)
-      .where("released_at", "is", null)
-      .execute();
-  }
-
-  /**
-   * A released machine's person or group is back within its retention: it
-   * is theirs again, with the placement its rule gives it now.
-   */
-  async reassign(args: {
-    name: string;
-    placement: WorkerPlacement;
-    retainDays: number;
-  }): Promise<void> {
-    await this.deps.db
-      .updateTable("work_workers")
-      .set({
-        released_at: null,
-        retain_days: args.retainDays,
-        labels: JSON.stringify(args.placement.labels),
-        access: JSON.stringify(args.placement.access),
-        trusted: args.placement.trusted,
-      })
-      .where("tenant_id", "=", this.deps.tenantId)
-      .where("name", "=", args.name)
-      .where("revoked_at", "is", null)
-      .where("released_at", "is not", null)
-      .execute();
-  }
-
-  /** Keep the retention a machine's rule gives it, for after the rule. */
-  async setRetainDays(args: { name: string; retainDays: number }) {
-    await this.deps.db
-      .updateTable("work_workers")
-      .set({ retain_days: args.retainDays })
-      .where("tenant_id", "=", this.deps.tenantId)
-      .where("name", "=", args.name)
-      .where("revoked_at", "is", null)
-      .execute();
-  }
-
-  /**
-   * A released pooled machine's retention ended: it leaves its rule, and
-   * stays released (taking no new work) until its reset is done. It keeps
-   * its access until then, so the chats still on it reach their workspaces
-   * and give them back when they idle.
-   */
-  async beginReset(args: { name: string }): Promise<void> {
-    await this.deps.db
-      .updateTable("work_workers")
-      .set({
-        machine_rule: null,
-        machine_member: null,
-        machine_slot: null,
-      })
-      .where("tenant_id", "=", this.deps.tenantId)
-      .where("name", "=", args.name)
-      .where("pool", "=", true)
-      .where("released_at", "is not", null)
-      .where("revoked_at", "is", null)
-      .execute();
+    return Number(row?.count ?? 0);
   }
 
   /**
@@ -1627,16 +1563,16 @@ export class WorkWorkerRegistry {
   }
 
   /**
-   * A member's Codex sign-in on a worker (ADR 0213), through the operation
-   * queue: the worker runs Codex's own device-code login and answers.
+   * A member's harness sign-in on a worker (ADRs 0213, 0340), through the
+   * operation queue: the worker runs the harness's own login and answers.
    * Fails at once while the worker is not connected.
    */
-  async codexSignIn(args: {
+  async harnessSignIn(args: {
     nodeId: string;
-    request: CodexSignInRequest;
+    request: HarnessSignInRequest;
   }): Promise<unknown> {
     const { nodeId } = args;
-    return this.queue.machineCodexSignIn({
+    return this.queue.machineHarnessSignIn({
       executor: nodeExecutor(nodeId),
       leaseToken: () => this.deps.nodes.liveToken({ nodeId }),
       leaseHeld: async (token) =>
@@ -1647,13 +1583,48 @@ export class WorkWorkerRegistry {
     });
   }
 
+  /** A drained worker can be wiped without handing its disk to two owners. */
+  async resetPlacement(args: {
+    name: string;
+    timeoutMs?: number;
+  }): Promise<"busy" | "offline" | "done"> {
+    const { name } = args;
+    if (!(await this.connected({ name }))) return "offline";
+    const timeoutMs = args.timeoutMs ?? 180_000;
+    const claim = {
+      db: this.deps.db,
+      name: `machine-reset:${this.deps.tenantId}:${name}`,
+      holder: randomUUID(),
+    };
+    if (
+      !(await takeReplicaClaim({
+        ...claim,
+        ttlSeconds: Math.ceil(timeoutMs / 1000) + 60,
+      }))
+    )
+      return "busy";
+    try {
+      const machine = await this.machines.row({ name });
+      if (!machine?.reset_pending) return "done";
+      if ((await this.holding({ name })) > 0) return "busy";
+      await this.resetMachine({ name, timeoutMs });
+      await this.machines.finishReset({ name });
+      return "done";
+    } finally {
+      await releaseReplicaClaim(claim);
+    }
+  }
+
   /**
-   * Reset a pooled machine through the operation queue: the worker destroys
-   * every sandbox it holds and deletes members' volumes and sign-ins.
-   * Resolves once its receipt arrived; fails while it is not connected,
-   * and once `timeoutMs` passed without a receipt.
+   * Reset a machine through the operation queue (ADRs 0205, 0347): the
+   * worker destroys every sandbox it holds and deletes members' volumes
+   * and sign-ins. Resolves once its receipt arrived; fails while it is not
+   * connected, and once `timeoutMs` passed without a receipt.
    */
-  async resetPooled(args: { name: string; timeoutMs?: number }): Promise<void> {
+  async resetMachine(args: {
+    name: string;
+    timeoutMs?: number;
+  }): Promise<void> {
     const nodeId = `${WORKER_NODE_PREFIX}${args.name}`;
     await this.queue.resetMachine({
       executor: nodeExecutor(nodeId),
@@ -1674,149 +1645,65 @@ export class WorkWorkerRegistry {
       .execute();
   }
 
-  /** A reset pooled machine is free in its pool again, serving nobody. */
-  async freePooled(args: { name: string }): Promise<void> {
-    await this.deps.db
-      .updateTable("work_workers")
-      .set({
-        released_at: null,
-        retain_days: null,
-        access: JSON.stringify(NOBODY),
-        trusted: false,
-      })
-      .where("tenant_id", "=", this.deps.tenantId)
-      .where("name", "=", args.name)
-      .where("pool", "=", true)
-      .where("machine_rule", "is", null)
-      .execute();
-  }
-
   /**
-   * Its platform confirmed a provisioned machine is gone: stop tracking it.
-   * Until then it stays listed, revoked, and is destroyed again each pass.
+   * Every machine Work knows, for the operator and administrators: its
+   * facts as the plan reads them, and its worker's credential standing.
    */
-  async forgetMachine(args: {
-    name: string;
-    ref: string | null;
-  }): Promise<void> {
-    await this.deps.db
-      .updateTable("work_workers")
-      .set({ machine_destroyed_at: sql`now()` })
-      .where("tenant_id", "=", this.deps.tenantId)
-      .where("name", "=", args.name)
-      .where("machine_rule", "is not", null)
-      .where("revoked_at", "is not", null)
-      .where("machine_destroyed_at", "is", null)
-      .execute();
-    await this.cancelEnrollments({ name: args.name });
-  }
-
-  /**
-   * Withdraw a machine's waiting enrollment code before it is destroyed:
-   * the code stops working, and the machine stays listed (as expired) until
-   * its destruction succeeds.
-   */
-  async expireEnrollments(args: { name: string }): Promise<void> {
-    await this.deps.db
-      .updateTable("work_worker_enrollments")
-      .set({ expires_at: sql`now()` })
-      .where("tenant_id", "=", this.deps.tenantId)
-      .where("name", "=", args.name)
-      .where("used_at", "is", null)
-      .where("expires_at", ">", sql<Date>`now()`)
-      .execute();
-  }
-
-  /** Invalidate every unused enrollment code for a name. */
-  async cancelEnrollments(args: { name: string }): Promise<void> {
-    await this.deps.db
-      .deleteFrom("work_worker_enrollments")
-      .where("tenant_id", "=", this.deps.tenantId)
-      .where("name", "=", args.name)
-      .where("used_at", "is", null)
-      .execute();
-  }
-
-  async list(): Promise<
-    Array<{
-      name: string;
-      nodeId: string;
-      enrolledAt: string;
-      lastSeenAt: string | null;
-      revoked: boolean;
-      /** Enrolled into a pool rules draw on (ADR 0205). */
-      pool: boolean;
-      state: WorkerState;
-      /** Since when it serves nobody, and for how many days it is kept. */
-      released: { at: string; retainDays: number | null } | null;
-      /** When its current credential was issued (ADR 0207). */
-      credentialIssuedAt: string;
-      /** The operator asked for a rotation the worker has not made yet. */
-      rotationRequested: boolean;
-      placement: WorkerPlacement;
-      machine: {
-        rule: string;
-        ref: string | null;
-        member?: string;
-        slot?: number;
-      } | null;
-    }>
-  > {
-    const rows = await this.deps.db
-      .selectFrom("work_workers")
-      .selectAll()
-      .where("tenant_id", "=", this.deps.tenantId)
-      .orderBy("name")
-      .execute();
-    return rows.map((row) => ({
-      name: row.name,
-      nodeId: row.node_id,
-      enrolledAt: row.enrolled_at.toISOString(),
-      lastSeenAt: row.last_seen_at?.toISOString() ?? null,
-      revoked: row.revoked_at !== null,
-      pool: row.pool,
-      state: workerState(row),
-      released: row.released_at
-        ? { at: row.released_at.toISOString(), retainDays: row.retain_days }
-        : null,
-      credentialIssuedAt: row.credential_issued_at.toISOString(),
-      rotationRequested: row.rotation_requested_at !== null,
-      placement: storedPlacement(row),
-      machine: row.machine_rule
-        ? {
-            rule: row.machine_rule,
-            ref: row.machine_ref,
-            ...(row.machine_member ? { member: row.machine_member } : {}),
-            ...(row.machine_slot !== null ? { slot: row.machine_slot } : {}),
-          }
-        : null,
-    }));
+  async list(): Promise<WorkerListing[]> {
+    const [records, workers] = await Promise.all([
+      this.machines.records(),
+      this.deps.db
+        .selectFrom("work_workers")
+        .select([
+          "name",
+          "enrolled_at",
+          "revoked_at",
+          "credential_issued_at",
+          "rotation_requested_at",
+        ])
+        .where("tenant_id", "=", this.deps.tenantId)
+        .execute(),
+    ]);
+    const workerOf = new Map(workers.map((worker) => [worker.name, worker]));
+    return records.map(({ facts }) => {
+      const worker = workerOf.get(facts.name);
+      const enrolled =
+        worker && worker.revoked_at === null ? worker : undefined;
+      return {
+        ...facts,
+        nodeId: `${WORKER_NODE_PREFIX}${facts.name}`,
+        // Its lease is live: an operation sent to it now runs (ADR 0346).
+        connected: facts.state === "serving" || facts.state === "draining",
+        enrolledAt: enrolled?.enrolled_at.toISOString() ?? null,
+        credentialIssuedAt:
+          enrolled?.credential_issued_at.toISOString() ?? null,
+        rotationRequested: Boolean(enrolled?.rotation_requested_at),
+      };
+    });
   }
 }
+
+/** A machine in the operator's and administrators' listing. */
+export type WorkerListing = MachineFacts & {
+  nodeId: string;
+  connected: boolean;
+  /** When its worker enrolled; null before it did. */
+  enrolledAt: string | null;
+  /** When its current credential was issued (ADR 0207). */
+  credentialIssuedAt: string | null;
+  /** The operator asked for a rotation the worker has not made yet. */
+  rotationRequested: boolean;
+};
 
 function hash(value: string): string {
   return createHash("sha256").update(value).digest("hex");
 }
 
-function workerState(row: {
-  revoked_at: Date | null;
-  released_at: Date | null;
-  pool: boolean;
-  machine_rule: string | null;
-  machine_destroyed_at: Date | null;
-}): WorkerState {
-  if (row.revoked_at)
-    return row.machine_rule && !row.pool && !row.machine_destroyed_at
-      ? "destroying"
-      : "revoked";
-  if (row.released_at) return row.machine_rule ? "released" : "resetting";
-  if (row.pool && !row.machine_rule) return "free";
-  return "serving";
-}
-
-/** A duration the database measured, as a number. */
-function msOrNull(value: number | string | null): number | null {
-  return value === null ? null : Number(value);
+/** The worker name in a worker node's id. */
+function workerNameOf(nodeId: string): string {
+  return nodeId.startsWith(WORKER_NODE_PREFIX)
+    ? nodeId.slice(WORKER_NODE_PREFIX.length)
+    : nodeId;
 }
 
 /** Two hex digests compared in constant time. */

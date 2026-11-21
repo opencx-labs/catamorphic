@@ -1,6 +1,6 @@
 # 0177 — GitHub is a connection
 
-- **Status:** Accepted
+- **Status:** Accepted (amended by [0343](0343-one-pull-request-tool.md): pull requests open through `PullRequestsService` from a checkout, with what proposing needs)
 - **Date:** 2026-09-27
 - **Amended by:** 0326 (`origin: { type: "host" }` replaces `hostVerified`)
 - **Supersedes in part:** 0044 (the GitHub `CodeHost` and its token store), 0073 (`GithubService` as the CLI credential's destination), 0074 (the GitHub monitor and `github.*` kinds)

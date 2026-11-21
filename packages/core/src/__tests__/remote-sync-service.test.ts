@@ -10,7 +10,7 @@ import { afterAll, beforeAll, expect, it, vi } from "vitest";
 import type { Identity } from "../identity.js";
 import { AccessDeniedError } from "../services/artifact-scope.js";
 import { CodeHostNotConnectedError } from "../services/code-hosts-service.js";
-import { RemoteSyncService } from "../services/remote-sync-service.js";
+import { PullRequestsService } from "../services/pull-requests-service.js";
 import { fakeCodeHost } from "./code-host-fixture.js";
 
 const database = new PGlite({ extensions: { pgcrypto } });
@@ -81,12 +81,20 @@ it("pushes the selected worktree branch for review against the default branch wi
   const head = await nativeGit(root, ["rev-parse", "HEAD"]);
   const forge = fakeCodeHost({ db, projectManager: manager, remoteBase: temp });
   await forge.connectPersonal(identity, "member-token");
-  const service = new RemoteSyncService(db, manager, forge.codeHosts);
-  const result = await service.createPullRequestFromRef(identity, projectId, {
+  const result = await new PullRequestsService(forge.codeHosts).open({
+    identity,
+    projectId,
     title: "Worktree review",
-    localRef: "feature",
+    checkout: {
+      repoPath: linked,
+      commit: (await nativeGit(linked, ["rev-parse", "HEAD"])).trim(),
+      branch: "feature",
+    },
+    sessionId: "0a1b2c3d-0000-4000-8000-000000000000",
+    principal: "either",
   });
   // The caller's own connection pushed the branch and opened the PR.
+  expect(result.branch).toBe("work/feature-0a1b2c3d");
   expect(forge.createPullRequest).toHaveBeenCalledWith(
     expect.objectContaining({ base: "trunk", head: result.branch }),
   );
@@ -99,11 +107,9 @@ it("pushes the selected worktree branch for review against the default branch wi
   expect(await nativeGit(remote, ["show", `${result.branch}:notes.txt`])).toBe(
     "feature",
   );
+  // The person's own folder, with its staged work, was never touched.
   expect(await nativeGit(root, ["rev-parse", "HEAD"])).toBe(head);
   expect(await fs.readFile(path.join(root, ".git/index"))).toEqual(index);
-  await expect(
-    service.createPullRequest(identity, projectId, { title: "Private work" }),
-  ).rejects.toThrow("will not stage");
 });
 it("propagates listing failures while unsupported or unconnected hosts remain an empty list", async () => {
   const forge = fakeCodeHost({ db, projectManager: manager, remoteBase: temp });
@@ -128,7 +134,7 @@ it("propagates listing failures while unsupported or unconnected hosts remain an
   ).toEqual([]);
 });
 // Last: it leaves an organization connection behind.
-it("opens pull requests only for writers and lets readers comment only as themselves", async () => {
+it("lets readers comment only as themselves", async () => {
   const forge = fakeCodeHost({ db, projectManager: manager, remoteBase: temp });
   const admin: Identity = {
     ...identity,
@@ -142,14 +148,6 @@ it("opens pull requests only for writers and lets readers comment only as themse
     scope: [],
     projectPermissions: [{ projectId, permission: "program:read" }],
   };
-  const service = new RemoteSyncService(db, manager, forge.codeHosts);
-  // The organization's connection would push and open it: the caller's own
-  // permission decides.
-  await expect(
-    service.createPullRequest(reader, projectId, { title: "Reader work" }),
-  ).rejects.toBeInstanceOf(AccessDeniedError);
-  expect(forge.gitCalls).toEqual([]);
-  expect(forge.createPullRequest).not.toHaveBeenCalled();
   const comment = (who: Identity, principal?: "service") =>
     forge.codeHosts.commentOnPullRequest({
       identity: who,

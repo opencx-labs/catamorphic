@@ -206,10 +206,16 @@ describe("Work server Fastify OAuth bridge", () => {
           cookie: sessionCookie,
           "content-type": "application/x-www-form-urlencoded",
         },
-        payload: new URLSearchParams({
-          accept: String(accept),
-          oauth_query: consentURL.search.slice(1),
-        }).toString(),
+        payload: new URLSearchParams([
+          ["accept", String(accept)],
+          ["oauth_query", consentURL.search.slice(1)],
+          ...Array.from(
+            (consentURL.searchParams.get("scope") ?? "")
+              .split(/\s+/)
+              .filter(Boolean),
+            (scope): [string, string] => ["scope", scope],
+          ),
+        ]).toString(),
       });
     const denied = await decision(false);
     expect(denied.statusCode).toBe(302);

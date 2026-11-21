@@ -254,6 +254,13 @@ export async function recordResult(
     attemptId: string;
     name: string;
     value: JsonValue;
+    /**
+     * The commit the agent's checkout stood on when its turn began, where
+     * that is not the turn's checkpoint itself (ADR 0342): a sandbox chat's
+     * checkpoint is Work's own commit, and its agent's HEAD is the commit
+     * a result is about. Used while the turn still began at `checkpoint`.
+     */
+    began?: { checkpoint: string; head: string };
   },
 ): Promise<ResultItem> {
   await log.lock(trx, input.sessionId);
@@ -288,7 +295,10 @@ export async function recordResult(
     name: input.name,
     value: input.value,
     input: await consumedInput(trx, input),
-    commit: turn.checkpoint_before?.trim() || null,
+    commit:
+      (input.began && turn.checkpoint_before?.trim() === input.began.checkpoint
+        ? input.began.head
+        : turn.checkpoint_before?.trim()) || null,
   };
   const [stored] = await log.append(trx, {
     sessionId: input.sessionId,
@@ -439,6 +449,9 @@ export interface LatestResult {
   truncated: boolean;
   current: boolean;
   turnId: string | null;
+  attemptId: string | null;
+  input: ResultInput | null;
+  commit: string | null;
   recordedAt: string;
 }
 
@@ -495,6 +508,9 @@ export async function latestResults(
       truncated,
       current: isCurrent(item.input, input),
       turnId: item.turnId,
+      attemptId: item.attemptId,
+      input: item.input,
+      commit: item.commit ?? null,
       recordedAt: item.createdAt,
     };
     latest.set(item.sessionId, [...(latest.get(item.sessionId) ?? []), entry]);
@@ -509,7 +525,7 @@ export function resultLines(results: readonly LatestResult[]): string {
     "Its results (the latest of each name):",
     ...results.map((result) =>
       result.truncated
-        ? `- ${result.name}: too large to show here; read it with session_results (result ${result.id}).`
+        ? `- ${result.name}: too large to show here; read it with session_read (result ${result.id}).`
         : `- ${result.name}: ${JSON.stringify(result.value)}`,
     ),
   ].join("\n");

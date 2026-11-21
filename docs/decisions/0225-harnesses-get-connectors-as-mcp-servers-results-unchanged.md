@@ -1,6 +1,6 @@
 # 0225 — Harnesses get connectors as MCP servers, results unchanged
 
-- **Status:** Accepted
+- **Status:** Accepted (amended by 0345: the project and server endpoints speak the current revision; the forwarding endpoints stay on the handshake revisions)
 - **Date:** 2026-10-13
 - **Amends:** 0065 (the connection MCP gateway), 0103 and 0133 (connectors behind the capability catalog), 0198 (where a mounted connector's policy is decided)
 

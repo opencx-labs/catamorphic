@@ -70,6 +70,14 @@ specified, Availability Zone. Preserve that scope along with the token and
 parameters; changing zones with the same token can create another instance.
 See [AWS's idempotency contract](https://docs.aws.amazon.com/ec2/latest/devguide/ec2-api-idempotency.html).
 
+When a runner should enroll as Work execution capacity, pass
+`hooks.machines` to the server. The host plan selects names and principals,
+and idempotent verbs act on them. The `machines-workflows` recipe calls an
+administrator project's consented workflows through the public server SDK.
+The enrollment key remains the cloud create key across retries. Work
+sequences the calls and handles draining and lost workspace recovery.
+See [the machine plan](cluster-deployment.md#a-machine-plan).
+
 ## Current guarantees and limits
 
 - Boundary results, retries/backoff, waits, child continuations and execution

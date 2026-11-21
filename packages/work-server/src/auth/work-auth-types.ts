@@ -45,6 +45,8 @@ export interface WorkAuth {
   sessionFromCookies(args: { cookie: string }): Promise<WorkAuthUser | null>;
   findUserById(args: { userId: string }): Promise<WorkAuthUser | null>;
   findUserByEmail(args: { email: string }): Promise<WorkAuthUser | null>;
+  /** Every account that ever signed in or was created here. */
+  listUsers(): Promise<WorkAuthUser[]>;
   resolveAccessToken(args: { authorization: string }): Promise<{
     userId: string;
     email: string;

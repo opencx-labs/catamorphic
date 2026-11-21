@@ -311,7 +311,6 @@ beforeAll(async () => {
     payload: JSON.stringify({
       name: "reviewer",
       labels: { pool: "review" },
-      access: { everyone: true },
       trusted: true,
     }),
   });

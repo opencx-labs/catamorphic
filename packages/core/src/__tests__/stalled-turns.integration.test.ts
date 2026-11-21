@@ -26,10 +26,16 @@ import { dbModelGatewayStore } from "../services/model-gateway.js";
 import { ProjectEnvironmentsService } from "../services/project-environments-service.js";
 import { ProjectsService } from "../services/projects-service.js";
 import type { SecretsService } from "../services/secrets-service.js";
-import { SessionActionsService } from "../services/session-actions-service.js";
+import { SessionOperationsService } from "../services/session-operations.js";
 import { SessionLog } from "../services/sessions/session-log.js";
 import { turnFromRow } from "../services/sessions/session-rows.js";
 import { testEnvironmentProvider } from "./test-environment.js";
+
+/** What the operations need beside the sessions: no watchers, own chats. */
+const OPERATION_DEPS = {
+  watchers: () => undefined,
+  chatOwner: async (input: { caller: Identity }) => input.caller,
+};
 
 /*
  * Turns that stop making progress (ADR 0333): progress is recorded, a
@@ -65,7 +71,7 @@ describe("stalled turns", () => {
   let tmpDir: string;
   let projects: ProjectsService;
   let sessions: AgentSessionsService;
-  let actions: SessionActionsService;
+  let actions: SessionOperationsService;
   let makeService: () => AgentSessionsService;
   /** The latest attempt of a hung harness, by session: the test speaks for it. */
   const hung = new Map<string, AttemptHost>();
@@ -256,7 +262,7 @@ describe("stalled turns", () => {
         },
       });
     sessions = makeService();
-    actions = new SessionActionsService(db, sessions, () => undefined);
+    actions = new SessionOperationsService(db, sessions, OPERATION_DEPS);
   }, 30_000);
 
   afterAll(async () => {
@@ -334,7 +340,7 @@ describe("stalled turns", () => {
     return actions.execute({
       identity,
       projectId,
-      operation: "inspect",
+      operation: "session_read",
       args: { sessionId },
       author: { kind: "user", externalUserId: identity.externalUserId },
     }) as Promise<{
@@ -344,7 +350,7 @@ describe("stalled turns", () => {
         stallMinutes: number | null;
         attempts: number;
         restarts: number;
-        activity: { tools: Array<{ name: string }> };
+        running: { tools: Array<{ name: string }> };
       } | null;
     }>;
   }
@@ -357,7 +363,7 @@ describe("stalled turns", () => {
       stalledAt: null,
       attempts: 1,
       restarts: 0,
-      activity: { tools: [{ name: "mcp__github__get" }] },
+      running: { tools: [{ name: "mcp__github__get" }] },
     });
     const started = Date.parse(first.turn?.progressAt ?? "");
     expect(started).toBeGreaterThan(0);
@@ -728,7 +734,7 @@ describe("stalled turns", () => {
       actions.execute({
         identity,
         projectId: chat.projectId,
-        operation: "restart",
+        operation: "session_restart",
         args: {
           sessionId: chat.sessionId,
           turnId: chat.turnId,
@@ -836,8 +842,8 @@ describe("stalled turns", () => {
       actions.execute({
         identity,
         projectId,
-        operation: "attempts",
-        args: { sessionId, turnId },
+        operation: "session_read",
+        args: { sessionId, turnId, include: ["attempts"] },
         author: { kind: "user", externalUserId: identity.externalUserId },
       }) as Promise<{
         attempts: Array<{

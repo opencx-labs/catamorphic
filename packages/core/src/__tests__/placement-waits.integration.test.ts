@@ -24,6 +24,7 @@ import {
   ExecutionEnvironmentsService,
   NoCompatibleEnvironmentError,
 } from "../services/execution-environments-service.js";
+import { PlacementWaitsService } from "../services/placement-waits.js";
 import { ProjectEnvironmentsService } from "../services/project-environments-service.js";
 import { ProjectsService } from "../services/projects-service.js";
 import { EnvironmentCapacityError } from "../services/worker-capacity.js";
@@ -280,6 +281,40 @@ describe("chats waiting for a machine (ADR 0258)", () => {
       state: "waiting",
     });
     expect(Date.now() - started).toBeLessThan(4_000);
+    // The chat says why it is not running yet, to every surface (ADR 0344).
+    const [state] = await sessions.states(alice, {
+      sessions: [{ projectId, sessionId: chat.sessionId }],
+      detail: true,
+    });
+    expect(state).toMatchObject({
+      state: "working",
+      turn: null,
+      waiting: {
+        reason: "capacity",
+        message: "Waiting for a machine with room",
+        environment: "review",
+      },
+    });
+    expect(Date.parse(state?.waiting?.since ?? "")).toBeGreaterThan(0);
+    await new PlacementWaitsService(db).setMachines({
+      tenantId: alice.tenantId,
+      machines: new Map([
+        [chat.sessionId, { name: "review-1", state: "resuming" }],
+      ]),
+    });
+    expect(
+      await sessions.states(alice, {
+        sessions: [{ projectId, sessionId: chat.sessionId }],
+        detail: true,
+      }),
+    ).toEqual([
+      expect.objectContaining({
+        waiting: expect.objectContaining({
+          machine: { name: "review-1", state: "resuming" },
+          message: "Resuming machine review-1",
+        }),
+      }),
+    ]);
     // Archived, its queued work is withdrawn and nothing of it waits.
     await sessions.archive(alice, projectId, chat.sessionId, {
       confirmStop: true,

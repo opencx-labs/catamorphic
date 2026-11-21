@@ -37,6 +37,8 @@ export interface EnvironmentBinding {
   resourceLimits?: readonly ("cpuMillis" | "memoryMb" | "storageMb" | "gpu")[];
   /** Host-assigned labels an Environment's `pool` selects on (ADR 0167). */
   labels?: Readonly<Record<string, string>>;
+  /** Host placement revision, checked again when capacity is reserved. */
+  admissionRevision?: string;
   /**
    * What runs the machine's sandboxes and why it was chosen (ADR 0204),
    * for operators: `microsandbox`, `container` with its runtime (`runsc`,
@@ -116,10 +118,15 @@ export interface EnvironmentProvider {
     projectId?: string;
     /**
      * Whose work this is: the session owner. Absent for project-owned work,
-     * which only nodes open to everyone or to `projectId` take (ADR 0167,
+     * which only nodes open to anyone or to `projectId` take (ADR 0167,
      * 0173).
      */
     ownerUserId?: string;
+    /**
+     * The chat key of a project's own chat (ADR 0173), so a node that is
+     * for one key of the project takes it (ADR 0347).
+     */
+    chatKey?: string;
     clientRunnerId?: string;
     /** Resolve an existing Allocation's binding again, by its id. */
     allocationBindingId?: string;
@@ -151,50 +158,66 @@ export function poolMatches(
 }
 
 /**
- * Whose work a node takes (ADR 0167): everyone, or named people and
- * groups, and the owner-less work of named projects (ADR 0173). Host state,
- * never declared by the node itself.
+ * Whose work a node takes (ADRs 0167, 0347): anyone's, or named users'
+ * work, named projects' own work (project chats and automations, ADR
+ * 0173), and single chats of a project by their chat key. Host state,
+ * never declared by the node itself. All three lists empty: nobody's.
  */
 export type NodeAccess =
   | { everyone: true }
   | {
       everyone?: false;
       users: readonly string[];
-      groups: readonly string[];
       /** Projects whose own work (project chats, automations) it takes. */
-      projects?: readonly string[];
+      projects: readonly string[];
+      /** Single chats of a project it takes, by their chat key. */
+      keys: readonly { project: string; key: string }[];
     };
 
 /**
- * How narrowly a node serves a piece of work: 0 for a node of the owner's
- * alone (or, for a project's own work, of that project's alone), 1 for one
- * shared with other named people, groups or projects, 2 for a node open to
- * everyone, undefined when the node does not take the work. A member's
- * work never lands on a node opened only to projects.
+ * How narrowly a node serves a piece of work, narrowest first: 0 for a
+ * node of this one chat key alone, 1 for a node of the owner's alone (one
+ * user, or for a project's own work that one project), 2 for one shared
+ * with other named users, projects or keys, 3 for a node open to anyone,
+ * undefined when the node does not take the work. A member's work never
+ * lands on a node opened only to projects or keys.
  */
+export type AccessTier = 0 | 1 | 2 | 3;
+
 export function accessTier(args: {
   access: NodeAccess;
   /** The work's owner; absent for a project's own work. */
-  owner: { userId: string; groups: readonly string[] } | undefined;
+  owner: { userId: string } | undefined;
   projectId?: string;
-}): 0 | 1 | 2 | undefined {
+  /** The chat key of a project's own chat. */
+  chatKey?: string;
+}): AccessTier | undefined {
   const { access, owner } = args;
-  if (access.everyone) return 2;
-  if (!owner) {
-    const projects = access.projects ?? [];
-    if (!args.projectId || !projects.includes(args.projectId)) return undefined;
-    return projects.length === 1 &&
-      access.users.length === 0 &&
-      access.groups.length === 0
-      ? 0
-      : 1;
+  if (access.everyone) return 3;
+  const principals =
+    access.users.length + access.projects.length + access.keys.length;
+  if (owner) {
+    if (!access.users.includes(owner.userId)) return undefined;
+    return principals === 1 ? 1 : 2;
   }
-  const named = access.users.includes(owner.userId);
-  if (named && access.users.length === 1 && access.groups.length === 0)
-    return (access.projects ?? []).length === 0 ? 0 : 1;
-  if (named || access.groups.some((group) => owner.groups.includes(group)))
-    return 1;
-  return undefined;
+  if (!args.projectId) return undefined;
+  const keyed =
+    args.chatKey !== undefined &&
+    access.keys.some(
+      (entry) => entry.project === args.projectId && entry.key === args.chatKey,
+    );
+  const project = access.projects.includes(args.projectId);
+  if (!keyed && !project) return undefined;
+  if (principals > 1) return 2;
+  return keyed ? 0 : 1;
+}
+
+/**
+ * The node takes no one else's work (ADRs 0184, 0206): it is for this
+ * owner alone, or for this one chat key alone.
+ */
+export function servesOnlyThisOwner(tier: AccessTier | undefined): boolean {
+  return tier === 0 || tier === 1;
 }
 
 /**
@@ -204,13 +227,13 @@ export function accessTier(args: {
  */
 export function placementOrder<T>(
   candidates: readonly T[],
-  tier: (candidate: T) => 0 | 1 | 2 | undefined,
+  tier: (candidate: T) => AccessTier | undefined,
   options?: { strict?: boolean },
 ): T[] {
   const ranked = candidates
     .map((candidate) => ({ candidate, tier: tier(candidate) }))
     .filter(
-      (entry): entry is { candidate: T; tier: 0 | 1 | 2 } =>
+      (entry): entry is { candidate: T; tier: AccessTier } =>
         entry.tier !== undefined,
     )
     .sort((left, right) => left.tier - right.tier);

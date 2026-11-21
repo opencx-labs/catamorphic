@@ -21,8 +21,8 @@ import {
   type WorkExecutionSettings,
   workExecution,
 } from "../execution-config.js";
-import { CodexSignIns } from "./codex-sign-ins.js";
 import { startDiskCare } from "./disk-care.js";
+import { HarnessSignIns } from "./harness-sign-ins.js";
 import { removeMachineSignIns, signInCapabilities } from "./sign-ins.js";
 import { startVolumePruning } from "./volume-pruning.js";
 import {
@@ -356,10 +356,11 @@ export async function startWorkWorker(options: WorkWorkerOptions): Promise<{
   const sandboxes = new PersistedSandboxes(
     path.join(options.dataDir, "sandboxes.json"),
   );
-  // Members sign in to Codex on this machine from the app (ADR 0213).
-  // The connected session's own re-offer, run when a sign-in changes here.
+  // Members sign in to Claude Code and Codex on this machine from the app
+  // (ADRs 0213, 0340). The connected session's own re-offer, run when a
+  // sign-in changes here.
   const offerSignIns = { now: () => {} };
-  const codexSignIns = new CodexSignIns({
+  const harnessSignIns = new HarnessSignIns({
     signInRoot: execution.signInRoot,
     dataDir: options.dataDir,
     // The machine's own PATH, where its sandboxes find their tools too.
@@ -374,7 +375,7 @@ export async function startWorkWorker(options: WorkWorkerOptions): Promise<{
       .catch(() => undefined)
       .then(() => {
         // Logins still waiting end before their homes go.
-        codexSignIns.stop();
+        harnessSignIns.stop();
         return resetMachine({
           provider,
           sandboxes,
@@ -549,7 +550,7 @@ export async function startWorkWorker(options: WorkWorkerOptions): Promise<{
       sandboxes,
       // A pooled machine returns to its pool (ADR 0205).
       resetMachine: reset,
-      codexSignIn: (request) => codexSignIns.handle(request),
+      harnessSignIn: (request) => harnessSignIns.handle(request),
       keepSandboxes: true,
       maxSandboxes: execution.capacity.workspaces,
       // One slot per workspace, so one long command never blocks the others.
@@ -654,7 +655,7 @@ export async function startWorkWorker(options: WorkWorkerOptions): Promise<{
       stopping.abort();
       stopPruning();
       diskCare.stop();
-      codexSignIns.stop();
+      harnessSignIns.stop();
       await loop;
       await Promise.allSettled(
         [...sandboxes].map((id) => provider.stopSandbox(id)),

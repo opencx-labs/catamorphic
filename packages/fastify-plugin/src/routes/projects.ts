@@ -263,6 +263,7 @@ export function registerProjectRoutes(app: FastifyInstance, ctx: RouteContext) {
   typed.route({
     method: "PUT",
     url: "/projects/:projectId/files/*",
+    config: { tokenScope: "program:write" },
     schema: {
       params: ProjectFileParamsSchema,
       body: WriteFileSchema,
@@ -444,6 +445,7 @@ export function registerProjectRoutes(app: FastifyInstance, ctx: RouteContext) {
   typed.route({
     method: "POST",
     url: "/projects/:projectId/deploy",
+    config: { tokenScope: "program:publish" },
     schema: {
       params: ProjectIdParamsSchema,
       body: DeployRequestSchema,
@@ -502,6 +504,7 @@ export function registerProjectRoutes(app: FastifyInstance, ctx: RouteContext) {
   typed.route({
     method: "POST",
     url: "/projects/:projectId/pull",
+    config: { tokenScope: "program:write" },
     schema: {
       params: ProjectIdParamsSchema,
       body: PullRequestSchema,
@@ -538,6 +541,7 @@ export function registerProjectRoutes(app: FastifyInstance, ctx: RouteContext) {
   typed.route({
     method: "POST",
     url: "/projects/:projectId/discard",
+    config: { tokenScope: "program:write" },
     schema: {
       params: ProjectIdParamsSchema,
       response: {
@@ -572,6 +576,7 @@ export function registerProjectRoutes(app: FastifyInstance, ctx: RouteContext) {
   typed.route({
     method: "POST",
     url: "/projects/:projectId/resolve-conflicts",
+    config: { tokenScope: "program:write" },
     schema: {
       params: ProjectIdParamsSchema,
       body: ResolveConflictsSchema,
@@ -611,6 +616,7 @@ export function registerProjectRoutes(app: FastifyInstance, ctx: RouteContext) {
   typed.route({
     method: "POST",
     url: "/projects/:projectId/ai-resolve-conflicts",
+    config: { tokenScope: "program:write" },
     schema: {
       params: ProjectIdParamsSchema,
       body: z.object({

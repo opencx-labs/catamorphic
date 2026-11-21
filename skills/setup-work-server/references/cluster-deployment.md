@@ -11,8 +11,8 @@ deployment.
 | --- | --- |
 | A person or a small trusted team | One Work server, PGlite, default execution (`WORK_SANDBOX=auto`). Nothing below applies. |
 | More agent capacity, or agents that must not run beside the server's secrets | One server (the control plane) plus enrolled **workers** |
-| Each person or team gets their own machine | Workers with **access** lists, created by hand or by **machine rules** |
-| Bursty work (pull request reviews) needs big machines only while it runs | **Machines on demand**: a machine rule that creates machines for waiting work and destroys them once idle |
+| Each person or team gets their own machine | Workers with named principals, enrolled by hand or supplied by the host plan |
+| Bursty work (pull request reviews) needs big machines only while it runs | A host plan sizes machines to waiting work and stops or destroys them once idle |
 | Cloud VMs or dedicated servers without hardware virtualization | Workers with the **container backend** under gVisor (see [sandbox backends](#sandbox-backends)) |
 | The brain must survive a machine failure | Control-plane **replicas** on shared Postgres, plus workers |
 
@@ -99,19 +99,13 @@ brain become replicas. Never add a replica just for capacity.
    operator listener (port 4701) with the operator bearer:
    `POST /_work/operator/workers` with `{ "name": "build-1" }`. Names are
    lowercase letters, digits, and dashes. The code expires in 30 minutes.
-   Add placement in the same request (see [placement](#placement-labels-and-access)):
-   `labels` (`{ "class": "gpu" }`), `access` (`{ "everyone": true }`, the
-   default, or `{ "people": ["dana@example.com"], "groups": ["eng@example.com"] }`,
-   or `{ "projects": ["<project id>"] }` for one project's own work),
-   and `trusted`.
-2. On a Linux worker machine, run the control plane's
-   [install script](#the-install-script) as root with the code
-   (`curl -fsSL https://brain.example.com/api/workers/install.sh | sudo sh -s -- --code <code>`;
-   the enrollment response's `install` is that command). It installs Docker,
-   and gVisor on a machine without KVM, and starts the worker. Or run the
-   your pinned worker image with its worker command yourself. With the container
-   backend the worker drives the machine's Docker daemon, so it gets the
-   daemon's socket (and its group, since the image runs as an unprivileged
+   Add `labels`, `for` principals and `trusted` as needed. An administrator
+   may use `{ "email": "dana@example.com" }` to name a verified account.
+2. On the worker, start the pinned worker image with the enrollment code
+   and the control-plane URL. The `machines-install` registry recipe can
+   install Docker and gVisor, generate cloud-init or mount an optional
+   install-script route in your host. With the container backend, give
+   the worker access to the daemon's socket (and its group, since the image runs as an unprivileged
    user) and its data directory from the machine at the same path:
 
    ```bash
@@ -153,7 +147,11 @@ brain become replicas. Never add a replica just for capacity.
    and an agent command runs on the worker.
 
 Revoke a worker with `DELETE /_work/operator/workers/:name`; its credential and
-node stop working at once. Re-enroll the same name with a new code.
+node stop working at once, and what it held is retired: its chats' workspaces
+are released and their next messages run on another machine open to their
+owner, from their last save ([Lost machines](#waiting-stopping-and-recovery)). Re-enroll the
+same name with a new code: it starts as a new machine, with nothing of the
+old one's.
 
 ### Sealed operations and credential rotation
 
@@ -207,355 +205,93 @@ machines offering workflows) and agents on workers, with no project change.
 Label the control plane with `WORK_MACHINE_LABELS=pool=agents,class=large`
 when an Environment should select it.
 
-## Placement: labels and access
+## Placement and machine policy
 
-Every machine carries labels: the server's own `node` and `plane`, plus the
-operator's. An Environment's `pool` selects machines whose labels all match.
-Each worker also has **access**, which only the operator sets: everyone,
-named people and directory groups by email, or named projects. The server
-places a piece of work for its owner (the session's member). Project chats
-and automation runs have no owner: they use machines opened to their project
-(`"projects": ["<project id>"]`) and machines open to everyone, never a
-person's machine. A machine opened only to projects takes no member's chat.
+An Environment's `pool` matches machine labels, including Work's reserved
+`node` and `plane` labels. A machine's `for` lists principals that may run
+work on it. Use `{ user: id }` for a person's work in any eligible project,
+`{ project: id }` for a project's own work, or `{ project: id, key }` for
+one project chat. Omit `for` to allow anyone whose role and Environment
+permit it. An empty list serves nobody. Work prefers a matching chat-key
+machine, then a dedicated owner, then a shared machine and then open
+capacity. The Environment's `strict` setting limits fallback.
 
-1. the owner's own machine (access naming only them), or for a project's own
-   work a machine opened to that project alone,
-2. then a machine shared with named people, their groups, or several projects,
-3. then machines open to everyone.
+Shared workers need sandbox isolation unless their host sets `trusted: true`.
+Only a machine for a single person can hold that person's harness sign-ins.
+When a chat idles past `idleReleaseMinutes`, Work saves its workspace and
+gives back the reservation. The next turn restores it. Closing a chat
+releases its workspace and key for good.
 
-A dedicated review pool for one project is a labelled worker opened to that
-project: `{ "labels": { "pool": "review" }, "access": { "projects": ["<id>"] },
-"trusted": true }`. The project selects it with an Environment
-(`"review": { "pool": { "pool": "review" }, "workloads": ["agent"] }`) and its
-reviewing agent prefers it (`"environment": { "preferred": ["review"],
-"allowed": ["review"] }`). A workflow on the control plane that delivers to
-that agent's chat places the chat on the review pool: each workload is placed by
-its own Environment, so control-plane machines need no `review` label.
+### A machine plan
 
-When the narrowest tier is full, work falls back to the next unless the
-Environment sets `"strict": true`. A worker serving more than one person must
-isolate its sandboxes (microsandbox, or gVisor containers); the control plane
-refuses to connect a process-isolated shared worker (local processes, or
-containers under runc) unless the operator vouches for the people it serves
-with `"trusted": true`. A machine opened to exactly one project counts
-as serving one owner. Change placement with
-`PATCH /_work/operator/workers/:name` (`labels`, `access`, `trusted`); it
-applies to the next placement, and an existing session re-checks it on its
-next turn.
+On a custom Work server, pass one `hooks.machines` object. Its `plan`
+takes `{ now, people, machines, work }` and returns the whole set of desired
+machines. Names are stable. Each entry can include principals, placement
+labels, an opaque cloud shape, a reason, a loss threshold and a desired
+state. The infrastructure verbs `create`, `destroy`, `stop`, `start`
+and `describe` belong to the host. Work records intent and enrollment
+first and retries with stable operation identities under a replica claim.
 
-Chats give their workspace back while they wait. An Environment's
-`idleReleaseMinutes` (default 30, `0` keeps it) says how long a chat may go
-without a turn before its sandbox is saved to its session branch and
-destroyed, freeing the slot and CPU and memory reservation. The next turn
-admits a fresh workspace and restores it. Closing a chat
-(`close({ key })` from a workflow, `session_close` over MCP, or
-`DELETE /api/projects/:id/agent/chats/:key`) releases the workspace for good,
-deletes its session branch, and frees the key. Capacity follows activity,
-not open chats.
+This plan gives a solo operator's signed-in account a machine. The
+deployment supplies `provisioner` using a registry recipe or its own code.
 
-When no machine open to a chat has room, or none is online, a new chat
-fails at once unless an Environment says how long work may wait:
-`"waitMinutes": 30` starts the chat without a workspace (in the first
-Environment, in admission order, that lets work wait), its turns wait
-(tried again every 5 to 30 seconds, and at once when a worker connects), and
-fail after 30 minutes saying why; the next message waits again. A chat whose
-workspace was given back always waits for a machine, and with `waitMinutes`
-gives up after that long too. A waiting chat whose Environment was removed
-or can no longer take it fails its turns with that error, and `ask_agent`
-answers at once that the chat waits for a machine. Waiting work is recorded
-in Postgres (`placement_waits`, ADR 0258) until it is placed or its chat is
-closed or archived; with a turn queued, it is what
-[machines on demand](#machines-on-demand) read.
-
-Groups come from the Google Workspace directory (see [company
-identity](company-identity.md)): the server checks the groups that access
-lists, machine rules, and project role mappings name.
-
-## A machine for every person or team
-
-Machine rules keep workers in step with the directory (ADRs 0167, 0205):
-every active member of a group gets a machine of their own, or the group
-shares a fixed number. A rule names a machine **class**, and classes live in
-the JSON file `WORK_MACHINES_CONFIG` names:
-
-```json
-{
-  "classes": {
-    "desk": {
-      "platform": "hetzner-cloud",
-      "serverType": "cpx41",
-      "location": "fsn1",
-      "image": "ubuntu-24.04",
-      "sshKeys": ["ops"],
-      "firewalls": [1234567],
-      "labels": { "team": "eng" },
-      "snapshot": true
-    },
-    "office": { "platform": "pool" }
-  }
-}
+```ts
+const machines = {
+  ...provisioner,
+  plan: async ({ people }) => people
+    .filter(person => person.active && person.email === operatorEmail)
+    .map(person => ({ name: "operator-desk", for: [{ user: person.id }] })),
+} satisfies MachinesHook;
 ```
 
-- `hetzner-cloud`: one Hetzner Cloud server per machine. `serverType`,
-  `location` and `image` are Hetzner's names; `sshKeys` (names or ids),
-  `firewalls` and `networks` (ids) and extra server `labels` are optional;
-  `snapshot: true` keeps an image of a machine's disk when it is destroyed.
-  The API token is `WORK_HETZNER_TOKEN` (read and write), never the file.
-- `sandbox` (Hetzner, custom and workflow classes): the backend the machines run,
-  passed to the [install script](#the-install-script) as `--sandbox`:
-  `auto` (default), `microsandbox`, or `container`, which runs gVisor even
-  where KVM is usable. Give `container` to classes for Environments whose
-  setup has its own network ([setup and volumes](#setup-and-volumes)),
-  which microVMs cannot host.
-- `pool`: machines you enrolled yourself ([pools](#dedicated-servers-and-other-machines-pools)).
-- `custom`: a custom server's `machineProvisioner` hook creates and destroys
-  them (`create({ name, class, rule, options, waiting, labels, enrollment })`
-  returns a platform reference; `destroy({ name, ref })` removes the machine
-  the reference names and every machine with that name, and answers
-  `{ done }`: Work asks again on later passes until it is done). `options` is the class's own
-  object from the file, passed through unread (an instance type, an image, a
-  subnet: `"review": { "platform": "custom", "options": { ... } }`);
-  `waiting` is what the work a machine on demand is made for needs
-  (`resources`, `capabilities`). `enrollment.cloudInit` is the same
-  cloud-init a Hetzner machine gets. `create` throws
-  `MachineProvisioningRefusedError` when the platform made nothing, so its
-  code is withdrawn and the next pass tries again; after any other error the
-  code waits for the machine to enroll. Work never calls `create` twice with
-  one code, so make it idempotent per code: pass `enrollment.idempotencyKey`
-  (a hash of the code) as the platform's idempotency token,
-  never the name, which a later machine of the rule reuses. A server with
-  the hook and no classes file treats every class as custom.
-- `workflow`: a project's own workflows create and destroy them (ADR 0327),
-  so a cloud Work does not ship needs no server code:
-  `"review": { "platform": "workflow", "project": "<project id>", "create": "createMachine", "destroy": "destroyMachine", "options": { ... } }`.
-  `create` binds the `machine.create` trigger kind and gets what the hook's
-  `create` gets; it returns `{ ref }`, or `{ refused }` when the platform
-  made nothing. `destroy` binds `machine.destroy`, gets
-  `{ name, class, rule, ref, idempotencyKey, requestedAt, options }` (`ref`
-  null when none is known; find a lost launch by the key, and wait a while
-  after `requestedAt` before calling a missing machine gone), and returns
-  `{ done }`. Only the server dispatches these kinds: members cannot fire
-  them. Both must be turned on **for the project**: Work
-  runs only the project's automation, in its Environment with its consented
-  connections and secrets. Work never waits on a run: it records the
-  machine's intent, starts `create` once per enrollment, and reads the
-  answer on later passes; a failed run is an uncertain create, so the code
-  waits for the machine to enroll and a machine that never does is
-  destroyed by name. A start that stored no run tries again with a new
-  code, and repeated refusals wait longer each time. Destroy runs again on
-  later passes until it answers `{ done: true }` (failing runs back off),
-  and a create run stuck for 30 minutes is canceled first. The project also hears `machine.created`,
-  `machine.connected`, `machine.lost`, `machine.released`,
-  `machine.destroyed`, once per episode under its disk floor
-  `machine.disk-low`, and once per brake `machine.disk-too-small`
-  ([Disk](#disk)) as project events. Its create runs carry enrollment
-  codes, so keep it to administrators. The `machines-ec2` pack
-  (`registry.read`) is the EC2 recipe, with a tag-scoped IAM policy.
+A company can read its own directory and join it to Work's accounts.
+Keep the directory lookup in the plan and use stable Work account IDs.
 
-The server refuses to start when a class needs what it lacks (a Hetzner
-class without the token, a custom class without the hook; a workflow class
-needs neither), and refuses a
-rule that names a class it does not know.
-
-### Hetzner Cloud
-
-1. Set `WORK_PUBLIC_URL` (the HTTPS origin machines dial),
-   `WORK_HETZNER_TOKEN`, `WORK_MACHINES_CONFIG`, and `WORK_WORKER_IMAGE`
-   (your pinned worker image). The image must provide the worker entry point
-   described in [Your own image](../../../packages/work-server/README.md#your-own-image).
-   Without an explicit image, no machine is created and the rule says why.
-2. Write a rule: `PUT /_work/operator/machine-rules/desks` with
-   `{ "group": "eng@example.com", "machines": "each-member", "class": "desk" }`.
-   `{ "machines": { "shared": 3 } }` gives the group three shared machines
-   instead (add `"trusted": true` only for process-isolated machines among
-   people who trust each other). The request answers once the rule is
-   stored, and a pass starts at once; `GET /_work/operator/machine-rules`
-   shows how it went.
-3. Each machine is a server named after it and labeled `work-machine`,
-   `work-rule` and `work-class`. Cloud-init writes the
-   [install script](#the-install-script) to it with the machine's one-time
-   enrollment code and runs it; nothing is fetched to start it, but the
-   machine must reach the control plane and the container registry. A
-   machine that does not enroll within an hour is destroyed and replaced.
-
-Creation is idempotent: a server already named for the machine and labeled
-as it is that machine. When Hetzner refuses a server (a wrong server type,
-an exhausted quota), its code is withdrawn, the rule's status shows the
-error, and the next pass tries again. Destruction finds the server by its
-id, or by its label when no id was recorded, and succeeds when it is
-already gone; the machine stays listed (`state: "destroying"`) until then.
-A snapshot is started by one pass and the server destroyed by a later one,
-once the snapshot is written.
-
-### Dedicated servers and other machines: pools
-
-Machines that cannot be created on demand (dedicated servers, machines on
-premises, existing VMs) join a pool:
-
-1. Declare a pool class: `"office": { "platform": "pool" }`.
-2. Create an enrollment code for each machine:
-   `POST /_work/operator/workers` with
-   `{ "name": "office-1", "pool": true, "labels": { "class": "office" } }`.
-   A pooled machine has no access of its own; leave out `access` and
-   `trusted`. The response's `install` is the command for that machine.
-3. On the machine: `curl -fsSL https://brain.example.com/api/workers/install.sh | sudo sh -s -- --code <code>`.
-4. A rule on the pool's class assigns one free machine of that class to each
-   member, or `{ "shared": n }` of them to the group, with the access the
-   rule gives. A rule on a pool takes no `labels`: pooled machines keep the
-   labels they enrolled with.
-
-A pooled machine nobody holds takes no work. A group's shared machine
-belongs to that group: change a rule's group and its machines are released
-(and later reset), never handed to the new group. When no machine is free,
-a member waits: `GET /_work/operator/machine-rules` reports, for each rule,
-`desired`, `ready`, `starting` (created, not yet enrolled), `waiting` (no
-machine yet) and `released`; a `problem` when a rule names a class that is
-no longer configured, whose machines are then left as they are; and a
-`failure` (`{ error, at }`) when something failed for the rule's machines
-in the latest pass.
-
-### Machines on demand
-
-A rule with `{ "machines": { "demand": { "max": 9 } } }` creates machines
-while work waits for one and destroys them once idle (ADR 0258), for bursty
-work such as [pull request reviews](review-pull-requests.md):
-
-```json
-{
-  "projects": ["<project id>"],
-  "machines": { "demand": { "max": 9, "min": 0, "idleMinutes": 10, "enrollMinutes": 15 } },
-  "class": "review",
-  "labels": { "pool": "review" }
-}
+```ts
+const machines = {
+  ...provisioner,
+  plan: async ({ people }) => {
+    const engineers = new Set(await directory.engineerEmails());
+    return people.filter(person => person.active && engineers.has(person.email))
+      .map(person => ({
+        name: nameOf(person.id), for: [{ user: person.id }],
+        labels: { pool: "engineering" },
+      }));
+  },
+} satisfies MachinesHook;
 ```
 
-- Name exactly one of `group` (machines for its members' chats, which must
-  isolate with microsandbox or gVisor unless `"trusted": true`) or
-  `projects` (machines opened to those projects' own work: project chats
-  and automations).
-- Work counts for the rule when it has a turn queued, the rule's `labels`,
-  its class and `plane: worker` satisfy the work's Environment `pool`, and
-  the rule's access takes the work's owner. Each piece of waiting work
-  counts for one rule: the first by name whose connected machines can take
-  it. When they report they cannot (too little memory, no `containers`),
-  the rule's status says so and the work goes to the next rule. Give the
-  Environment a `waitMinutes`, or new chats fail before they wait.
-- A pass keeps machines still enrolling or connecting, holding work, or idle
-  for less than `idleMinutes` (default 10, at least 1), then the most
-  recently idle up to `min` (default 0). Work no connected machine has room
-  for (charged its resources, or the machine's per-workspace defaults),
-  beyond one piece for each machine still enrolling or connecting, gets new
-  machines, up to `max` (at most 100, counting machines the rule served
-  under an earlier group or projects until they go). A machine that does
-  not enroll within `enrollMinutes` (default 15), or is not seen for that
-  long (since it enrolled, when it never connected), is destroyed and
-  replaced. A machine no longer wanted is destroyed at once: `retainDays`
-  does not apply.
-- A machine that enrolled but never connected within `enrollMinutes` stops
-  the rule: it makes no more machines until you write the rule again (after
-  fixing the cause), and its status says why. A machine serving a group, or
-  several projects, must isolate its agents (microsandbox or gVisor) unless
-  the rule says `"trusted": true`; such a rule is refused when it is written
-  if machines of its class are known to run plain processes.
-- Only `hetzner-cloud`, `custom` and `workflow` classes scale; a pool class is refused.
-- A machine is revoked only while nothing holds it: the drain and a new
-  Allocation take the same lock, so work never lands on a machine being
-  destroyed. One holding workspaces goes anyway only once it has been
-  disconnected and unseen for `enrollMinutes`.
-- With a rule on demand, each replica looks at waiting work every 10 seconds
-  and starts a pass when it changed since its latest pass looked. The rule's
-  status adds `queued`: work waiting for one of its machines.
+Copy `machines-policies` for on-demand, per-person and per-chat-key
+policies with idle and retention limits. Choose `machines-ec2` or
+`machines-hetzner` for cloud verbs, `machines-workflows` to call an admin
+project's enabled workflows, and `machines-install` for pinned Linux
+worker images and user data. The `@catamorphic/work-server/testing` contract
+kit runs a plan and verbs against a simulated Work server.
 
-### The install script
+### Waiting, stopping and recovery
 
-`GET /api/workers/install.sh` is public and holds no secret: a POSIX sh
-script with this server's public URL and worker image in it. Run it as root
-with `--code` (required) and optionally `--image`, `--data-dir` (default
-`/var/lib/work`), `--name` (the container's, default `work-worker`) and
-`--sandbox` (`auto`, `microsandbox` or `container`, default `auto`). The
-data directory must be new, or an empty one (or a worker's) under
-`/var/lib`, `/srv`, `/opt`, `/data` or `/home/<user>`; the script refuses
-system directories. It:
-
-- installs Docker with Docker's convenience script when `docker` is missing,
-  downloaded to a file and checked first, waiting up to ten minutes for
-  another package installation (a cloud machine's first boot) to finish;
-- with a usable `/dev/kvm`, unless `--sandbox container`, gives the worker
-  the device and its group, so agents run in microVMs. libkrun needs
-  nothing more: never `--privileged` or added capabilities;
-- otherwise installs gVisor from its apt repository (Debian and Ubuntu;
-  elsewhere install `runsc` first) and registers the `runsc` runtime with
-  `--host-uds=open --net-raw` (ADR 0204), restarting Docker only when that
-  changed;
-- creates the data directory for the image's user (uid 1000, mode 0700),
-  pulls the image, replaces any container of that name, and runs the worker
-  with `--restart unless-stopped`, the Docker socket and its group, the data
-  directory mounted at the same path, and `WORK_SANDBOX` set to
-  `--sandbox`.
-
-Running it again is safe: the worker keeps its enrollment in its data
-directory. The endpoint answers 503 naming what is missing when the server
-does not know its worker image or has no public URL.
-
-### Retention
-
-When a member leaves the group or is disabled, or the rule is removed or
-changes class, their machine is **released**: it takes no new work from
-that moment (a chat already on it keeps reaching its workspace there until
-it idles and gives it back; its next turn after that lands elsewhere), and
-it keeps its disk for the rule's `retainDays` (0 to 365, default 7;
-kept with the machine, so it outlives the rule; counted by the database's
-clock). A member back within that time gets the same machine again.
-Afterwards:
-
-- a cloud machine is destroyed, after a snapshot when its class says
-  `snapshot: true`;
-- a pooled machine is reset: its worker destroys every sandbox on it and
-  deletes every volume and every member's sign-in, and the machine returns
-  to its pool. A machine that is not connected is reset when it reconnects;
-  a pass waits a few minutes for a reset and asks again on the next pass
-  when it takes longer.
-
-Chats on a released machine give their workspaces back, saved to their
-session branch, once they idle (`idleReleaseMinutes`, ADR 0173): a connected
-machine is destroyed or reset only after that, so a chat that keeps its
-workspace (`idleReleaseMinutes: 0`) holds it until the chat is closed or
-moved. `retainDays: 0` acts in the same pass otherwise. A machine that never
-enrolled holds nothing and goes at once. `GET /_work/operator/workers` shows
-each worker's `state` (`serving`, `released`, `resetting`, `free`,
-`destroying`, or `revoked`) and `released: { at, retainDays }`.
-
-### Passes
-
-The server reconciles every minute, when an account is disabled, and, with
-[machines on demand](#machines-on-demand), when waiting work changed. One
-replica at a time runs a pass, under a claim in Postgres (ADR 0193) renewed
-while platform calls run and checked before every change; a replica whose
-claim moved stops changing anything. A machine whose enrollment code is
-still waiting is never provisioned twice, and one machine's failure is
-recorded for its rule while the pass goes on with the others. A person gets
-a machine after their first sign-in, once the directory has placed them in
-the group. `POST /_work/operator/machine-rules/reconcile` runs a pass now
-and answers with what it did; `PUT` and `DELETE
-/_work/operator/machine-rules/:name` answer once the rule is stored or
-removed and start a pass (a removed rule's machines are released).
+With a machines hook, chats wait when eligible capacity is unavailable.
+The Environment's `waitMinutes` overrides `WORK_MACHINE_WAIT_MINUTES`
+(default 30 minutes). The chat shows when its machine is starting or
+resuming. Work stops or destroys a machine only after it has released
+its live work. A stop retains the worker's data directory, volumes and
+sign-ins. A missing worker becomes unreachable and then lost. Work
+retires its work and chats continue from their last save when capacity
+returns. The plan gets the loss facts and can keep the name to replace it.
+A change of principals that would expose the previous owner's state
+waits for safe reset before the new owner can use it.
 
 ### Through the API
 
-Organization administrators (ADR 0172) manage machines with their own
-sign-in, through the same handlers as the operator:
+Use `GET /_work/operator/workers` for inventory and the latest plan result,
+and `POST /_work/operator/machines/plan` to run a pass. Administrators
+can use `GET /api/work/machines/workers` and `POST /api/work/machines/plan`.
+A failing plan is visible in the inventory with its time and error.
 
-| Operator listener | Administrators |
-| --- | --- |
-| `GET /_work/operator/machines` | `GET /api/work/machines` |
-| `GET`, `POST /_work/operator/workers` | `GET`, `POST /api/work/machines/workers` |
-| `PATCH`, `DELETE /_work/operator/workers/:name` | `PATCH`, `DELETE /api/work/machines/workers/:name` |
-| `GET /_work/operator/machine-rules` | `GET /api/work/machines/rules` |
-| `PUT`, `DELETE /_work/operator/machine-rules/:name` | `PUT`, `DELETE /api/work/machines/rules/:name` |
-| `POST /_work/operator/machine-rules/reconcile` | `POST /api/work/machines/rules/reconcile` |
-
-Members are refused (403). Enabling and disabling machines and confirming
-destroyed workspaces stay on the operator listener.
+Hand-enrolled machines are visible to the plan. It can update their
+placement and reason. Use `POST /_work/operator/workers` to issue a code
+and `PATCH /_work/operator/workers/:name` for placement changes. Use
+`DELETE /_work/operator/workers/:name` to revoke the worker immediately.
 
 ## Add a control-plane replica
 
@@ -679,11 +415,12 @@ replica checks for lost replicas every ten seconds and recovers their work:
   Logical tenant run capacity is freed when the run ends. A parked run keeps
   its deployed artifact and journal, not its workspace files or processes.
   A runnable continuation with no available machine records ordinary placement
-  demand, including for on-demand machine rules;
+  demand, including work the host plans machines for;
 - each chat's workspace on that replica is released; its next turn is
   admitted on a live machine and restores the workspace from its
   `sessions/<id>` branch. Chats on workers and on members' machines keep
-  their workspaces: any replica runs their turns;
+  their workspaces: any replica runs their turns. A worker that is itself
+  lost is handled the same way ([Lost machines](#waiting-stopping-and-recovery));
 - the lost machine disappears from `GET /_work/operator/machines`.
 
 Server agent sessions checkpoint to isolated `sessions/<id>` branches in the
@@ -901,12 +638,12 @@ machine's `disk`, `diskLowSince` and `usage.storageMb`.
 ## Assign a development machine to one user
 
 Environments say what work needs; they never name a machine (ADR 0167). A
-machine for one person is a worker whose access names only them: enroll it
+machine for one person is a worker whose principals name only them: enroll it
 with `"access": { "people": ["dana@example.com"] }`, change an enrolled
 worker's access with `PATCH /_work/operator/workers/:name`, or let a machine
 rule give every member of a group one ([above](#a-machine-for-every-person-or-team)).
 Their chats prefer it to shared machines, nobody else's work lands on it, and
-it may run their own Codex sign-in and files (ADRs 0184, 0213). Access decides placement,
+it may run their own Claude Code and Codex sign-ins and files (ADRs 0184, 0213, 0340). Access decides placement,
 not OS accounts or network access on the machine.
 
 Choose the trust boundary before provisioning. Control-plane replicas carry
@@ -1065,9 +802,11 @@ caches (ADR 0208):
   workspace's base commit alone, with no grant, gateway variable or other
   secret, widened to those hosts (not even the gateway), and narrowed again
   before the session's work, grants, secrets and files arrive; a setup that
-  must run again gets a new sandbox in the same Allocation. Only workspaces
-  at a ref of the project's remote (a delivery's `workspace: { ref }`) run
-  it; elsewhere the agent is told it did not run. Such an Environment
+  must run again gets a new sandbox in the same Allocation. Every chat's
+  workspace stands on a commit (the ref a delivery gave it with
+  `workspace: { ref }`, else the repository's default branch), so every
+  chat runs it; a chat whose sandbox holds its owner's sign-in from the
+  start is told it did not run. Such an Environment
   declares no volumes, which would carry what agents wrote into the next
   setup; it declares read-only `caches` instead (below). It needs a machine that advertises
   `network.setup`: the container backend wherever it enforces
@@ -1167,25 +906,32 @@ caches (ADR 0208):
 ## Members' own sign-ins and files
 
 An Environment with `"personalCredentials": true` lets a member's chats run
-Codex on the member's own ChatGPT sign-in, made from the Work app on a
-machine of their own (ADRs 0199, 0213,
+Claude Code and Codex on the member's own Claude and ChatGPT sign-ins, made
+from the Work app on a machine of their own (ADRs 0199, 0213, 0340,
 [harnesses](harnesses.md#members-own-sign-ins)), and lets their listed files
 reach their own chats. The sign-in never leaves that machine: the worker
-reports only `sign-in:codex:<member>` in its offer, and placement takes only
-a machine reporting the chat owner's. A sign-in runs only on the member's
-own machine: a worker whose access names only that person, or a single
-server's own machine whose operator set `WORK_PERSONAL_CREDENTIALS=accept`.
-A machine holds one person's Codex sign-in at most, so a shared machine runs
-Codex on keys whatever its isolation. Claude Code subscriptions never run on
-servers or workers (ADR 0213). Personal files follow the isolation rule:
-microsandbox, gVisor containers, a worker whose access names only that
+reports only `sign-in:claude-code:<member>` and `sign-in:codex:<member>` in
+its offer, and placement takes only a machine reporting the chat owner's. A
+sign-in runs only on the member's own machine: a worker whose principals name
+only that person, or a single server's own machine whose operator set
+`WORK_PERSONAL_CREDENTIALS=accept`. A machine holds one person's sign-ins at
+most (that person may hold both), so a shared machine runs Claude Code and
+Codex on keys whatever its isolation. The sign-in lives on that machine's
+disk, so the machine has to persist: a desk the host plan keeps for the member,
+or a hand-enrolled worker whose principals name only that person, not a
+machine the host plan destroys when idle. Whether a member's use of
+their plan this way is allowed under the provider's terms remains the
+operator's responsibility. Personal files follow the isolation rule:
+microsandbox, gVisor containers, a worker whose principals name only that
 person, or the member's device. A process-isolated machine (local
 processes, or containers under runc) that serves several people (a
 `trusted` worker, or the control plane itself) refuses them unless its
 operator sets `WORK_PERSONAL_CREDENTIALS=accept` on that machine (the
 worker's own environment, like `WORK_UNENFORCED_EGRESS`), which advertises
-`credentials.personal`. Give such Environments egress to `chatgpt.com`,
-`auth.openai.com` and `api.openai.com` when they restrict it. A company
+`credentials.personal`. Give such Environments egress to `api.anthropic.com`,
+`claude.ai`, `claude.com`, `platform.claude.com` and `console.anthropic.com`
+for Claude Code, and to `chatgpt.com`, `auth.openai.com` and `api.openai.com`
+for Codex, when they restrict it. A company
 that wants Codex or Claude Code for everyone binds a model connection
 instead ([harnesses](harnesses.md)).
 
@@ -1193,7 +939,7 @@ The same placements receive the secrets an Environment lists, with each
 member's own value in their own chats (ADR 0206,
 [secrets in Environments](secrets-and-gateway.md#secrets-in-environments)).
 A project chat receives the shared values on a sandboxed machine or on a
-worker whose access names only that project.
+worker whose principals name only that project.
 
 ## Unattended agents
 

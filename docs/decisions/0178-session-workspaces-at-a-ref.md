@@ -1,6 +1,6 @@
 # 0178: Session workspaces at a ref of the project's remote
 
-- **Status:** Accepted
+- **Status:** Accepted (a workspace is saved as a Git pack per [0341](0341-a-workspace-is-saved-as-a-git-pack.md); amended by [0342](0342-every-server-chat-stands-on-a-branch.md): every sandbox chat stands on a base, the agent's branch and commits are kept, and a rebase replays them)
 - **Date:** 2026-09-27
 - **Refines:** 0044, 0100, 0173, 0175
 

@@ -4,7 +4,7 @@ import {
   defineWorkflow,
   type JsonValue,
   type SessionResult,
-  type SessionSnapshot,
+  type SessionState,
   type TriggerPayload,
   trigger,
 } from "@catamorphic/workflow";
@@ -501,8 +501,8 @@ export const postReviews = defineWorkflow(({ defineBoundary }) => ({
         };
         // A settled turn's publication starts out as a missing review.
         if (publication.post === "review") publication.post = "missing";
-        return host["catamorphic.sessions"].inspect(
-          { sessionId: publication.sessionId },
+        return host["catamorphic.sessions"].read(
+          { sessionId: publication.sessionId, include: ["metadata"] },
           { state: publication },
         );
       },
@@ -513,14 +513,14 @@ export const postReviews = defineWorkflow(({ defineBoundary }) => ({
       run: ({
         input,
         host,
-      }: BoundaryContext<Carried<SessionSnapshot, Publication>>) => {
+      }: BoundaryContext<Carried<SessionState, Publication>>) => {
         const chat = input.result;
         // Only the reviewer's project chat in review that reviewPullRequests
         // started; a look-alike key posts nothing. A chat still waiting for
         // its machine has no placement yet, only its Environment.
         const ours =
           chat.owner === "project" &&
-          chat.agentId === `project:${chat.projectId}:reviewer` &&
+          chat.agent === `project:${chat.projectId}:reviewer` &&
           (chat.placement?.environment ?? chat.environment) === "review" &&
           chat.keyWorkflows.includes("reviewPullRequests");
         const commit = chat.workspace?.commit ?? null;
@@ -534,8 +534,8 @@ export const postReviews = defineWorkflow(({ defineBoundary }) => ({
           ours: ours && input.state.post !== "nothing",
           commit: commit && /^[0-9a-f]{40}$/.test(commit) ? commit : null,
           post: ours ? input.state.post : "nothing",
-          verdicts: verdictsOf(chat.metadata[VERDICTS_KEY]),
-          posted: postedOf(chat.metadata[POSTED_KEY]),
+          verdicts: verdictsOf(chat.metadata?.[VERDICTS_KEY]),
+          posted: postedOf(chat.metadata?.[POSTED_KEY]),
           newer:
             Boolean(chat.turn && chat.turn.id !== turnId) ||
             queued.some((id) => id !== turnId),
@@ -567,10 +567,11 @@ export const postReviews = defineWorkflow(({ defineBoundary }) => ({
         // reached the chat after it settled (a comment, a push) are later
         // turns' to answer, and newer turns' results never hide it. A turn
         // submits at most 100 results, so one read holds all its findings.
-        return host["catamorphic.sessions"].results(
+        return host["catamorphic.sessions"].read(
           publication.kind === "finding"
             ? {
                 sessionId: publication.sessionId,
+                include: ["results"],
                 name: "finding",
                 turnId: publication.turnId,
                 order: "oldest",
@@ -578,6 +579,7 @@ export const postReviews = defineWorkflow(({ defineBoundary }) => ({
               }
             : {
                 sessionId: publication.sessionId,
+                include: ["results"],
                 name: "review",
                 turnId: publication.turnId,
               },
@@ -622,9 +624,10 @@ export const postReviews = defineWorkflow(({ defineBoundary }) => ({
           !publication.submitted
         )
           return { result: null, state: publication };
-        return host["catamorphic.sessions"].results(
+        return host["catamorphic.sessions"].read(
           {
             sessionId: publication.sessionId,
+            include: ["results"],
             name: "finding",
             turnId: publication.turnId,
             order: "oldest",

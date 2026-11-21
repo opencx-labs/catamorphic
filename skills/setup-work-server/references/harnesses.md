@@ -7,11 +7,10 @@ on the control plane, and reaches its model through the gateway with the
 chat's grant. The model key stays in the control plane's vault; the sandbox
 holds only the grant, which stops working when the chat closes.
 
-Members can also run Codex on **their own ChatGPT subscriptions**, signed
-in from the Work app on a machine of their own (ADRs 0199, 0213): see
-[Members' own sign-ins](#members-own-sign-ins) below. Claude Code
-subscriptions run only on a member's own computer; on a server, Claude Code
-uses a key.
+Members can also run Claude Code and Codex on **their own Claude and
+ChatGPT subscriptions**, signed in from the Work app on a machine of their
+own (ADRs 0199, 0213, 0340): see
+[Members' own sign-ins](#members-own-sign-ins) below.
 
 ## 1. Connect the model key
 
@@ -144,7 +143,7 @@ ids in the binding.
 - Each call's span carries its project, chat, turn, agent, tokens and
   reported cost under OpenTelemetry's GenAI names (see `OBSERVABILITY.md`).
   Workflows read a chat's totals, with the subsessions they may read, through
-  `host["catamorphic.sessions"].usage({ key, family: true })`; clients use
+  `host["catamorphic.sessions"].read({ key, family: true, include: ["usage"] })`; clients use
   `GET /api/projects/:projectId/agent/sessions/:sessionId/usage?family=true`.
 
 ## 3. Put the CLI in the image
@@ -345,41 +344,57 @@ Environment restricts egress, the gateway's host is always reachable.
 
 ## Members' own sign-ins
 
-A developer can run Codex on **their own ChatGPT subscription** in their own
-chats, and bring files the repository never tracks (`.env`,
-`apps/api/.env.local`). A sign-in stays on the machine it was made on (ADRs
-0199, 0213): Codex's own login runs on a machine of the member's own, into a
-home for them on that machine's disk. Work never reads, copies, uploads,
+A developer can run Claude Code on **their own Claude subscription** and
+Codex on **their own ChatGPT subscription** in their own chats, and bring
+files the repository never tracks (`.env`, `apps/api/.env.local`). A
+sign-in stays on the machine it was made on (ADRs 0199, 0213, 0340): the
+harness's own unmodified login runs on a machine of the member's own, into
+a home for them on that machine's disk. Work never reads, copies, uploads,
 stores or forwards it; the machine reports only that the member is signed
-in (`sign-in:codex:<member id>`).
+in (`sign-in:claude-code:<member id>`, `sign-in:codex:<member id>`).
 
-**Claude Code subscriptions stay on members' own computers.** Anthropic
-suspends accounts it sees used from cloud addresses or shared between
-people, and its terms
-(<https://code.claude.com/docs/en/legal-and-compliance>, "Authentication and
-credential use") frame a subscription as one person on their own machine.
-So no server or worker holds a Claude sign-in: `work worker sign-in
-claude-code` refuses, and Claude Code on a server runs with a key (sections
-1 to 4 above). In the Work app on their own computer, members use their
-Claude subscription as they always could.
+**What Anthropic's terms say, and what they leave to you.** Anthropic's
+Claude Code legal page
+(<https://code.claude.com/docs/en/legal-and-compliance>, read 2026-11-20)
+forbids third parties from offering Claude.ai login in their own
+applications, routing requests through plan credentials on behalf of users,
+and collecting, storing or intermediating Claude.ai credentials or session
+tokens. It says that does not prevent an end user from signing in to the
+unmodified Claude Code binary with their own Claude subscription, including
+where a platform hosts Claude Code, when the binary is unmodified with none
+of its authentication methods removed, disabled or restricted, each person
+authenticates with their own credentials and is billed directly, nobody
+pays for, resells or intermediates usage, and plan limits assume ordinary,
+individual usage. Work is built to those conditions: the machine's own
+`claude` runs its own login, the member finishes Anthropic's own browser
+flow themselves, and Claude Code talks to Anthropic directly. This is our
+reading of that page, not an approval by Anthropic. Enforcement is at
+Anthropic's discretion, and whether a given use is allowed under its terms
+(or OpenAI's, for Codex) remains the operator's responsibility.
 
-**One person's account per machine.** OpenAI meters a ChatGPT plan by
-account across every surface, and one address signed in to several
-people's accounts looks like a shared or resold account however well the
-sandboxes are isolated. So a member signs in to Codex only on a machine of
-their own:
+**One person's account per machine.** A provider meters a plan by account
+across every surface, and one address signed in to several people's
+accounts looks like a shared or resold account however well the sandboxes
+are isolated. So a member signs in only on a machine of their own:
 
-- a worker whose access names only them (`{ "people": ["ada@example.com"] }`),
-  such as one a machine rule creates for every member of a group
+- a worker whose principals name only them (`{ "for": [{ "email": "ada@example.com" }] }` at enrollment),
+  such as one the host plan keeps for every active member
   ([cluster deployment](cluster-deployment.md)); or
 - a single server's own machine whose operator set
   `WORK_PERSONAL_CREDENTIALS=accept` (a single person's server): the first
   member to sign in there holds it.
 
-A machine never takes a second person's Codex login, from the app or a
-terminal. A company that wants Codex for everyone on shared machines uses
-keys: a model connection through the gateway, or a member's own API key as
-their personal connection.
+A machine never takes a second person's login of either harness, from the
+app or a terminal; one person may hold both a Claude Code and a Codex
+sign-in there. A company that wants Claude Code or Codex for everyone on
+shared machines uses keys: a model connection through the gateway, or a
+member's own API key as their personal connection.
+
+**The machine has to persist.** A sign-in lives on one machine's disk, so
+it needs a machine that stays: a desk the host plan keeps for the member, or a
+hand-enrolled worker whose principals name only that person. A machine created
+on demand and destroyed when idle loses the sign-in with its disk. A stop
+keeps it and a reset deletes it.
 
 To allow sign-ins, an administrator needs both of these:
 
@@ -389,34 +404,49 @@ To allow sign-ins, an administrator needs both of these:
 2. A machine of the member's own, as above.
 
 **Members sign in from the app.** In the Work app, a connected project's
-Remote environment lists the member's own machines under Sign-ins. **Sign
-in to Codex** makes the machine run `codex login --device-auth` in a fresh
-home; the app shows Codex's link and one-time code, and the member enters
-the code in their own browser and approves. The token is issued to Codex on
-that machine and never leaves it; the code travels sealed to the machine
-and back (ADR 0207). A pending, denied, cancelled or expired login never
-replaces the member's sign-in, and a machine that restarts forgets pending
-logins. **Sign out** deletes the home from that machine.
+Remote environment lists the member's own machines under Sign-ins, with a
+row for each harness. A pending, denied, cancelled, expired or failed login
+never replaces the member's sign-in, and a machine that restarts forgets
+pending logins. **Sign out** deletes that harness's home from that machine.
 
-Device-code sign-in must be on for the member's ChatGPT account (ChatGPT
-Settings, Security), and allowed by the workspace administrator on a
-business plan; when it is off, Codex refuses and the app shows its words.
+- **Sign in to Claude Code** makes the machine run `claude auth login` in a
+  fresh home. The app shows the link it printed; the member opens it in
+  their own browser, signs in to Claude there, and pastes the code the page
+  gives them into the app, which the machine hands to the login. The code
+  travels sealed to the machine (ADR 0207) and is never logged, stored or
+  shown again. The machine needs `claude` on its `PATH`.
+- **Sign in to Codex** makes the machine run `codex login --device-auth`.
+  The app shows Codex's link and one-time code, and the member enters the
+  code in their own browser and approves. Device-code sign-in must be on
+  for the member's ChatGPT account (ChatGPT Settings, Security), and
+  allowed by the workspace administrator on a business plan; when it is
+  off, Codex refuses and the app shows its words.
+
+Either way the token is issued to the harness on that machine and never
+leaves it.
 
 An operator can do the same in a terminal on the machine (the member
-approves the device code; the operator never sees a token):
+completes the login; the operator never sees a token):
 
 ```bash
+docker exec -it work-worker work worker sign-in claude-code --member <member id>
 docker exec -it work-worker work worker sign-in codex --member <member id>
-work worker sign-ins                               # who is signed in here
-work worker sign-out codex --member <member id>    # remove it from this machine
+work worker sign-ins                                     # who is signed in here
+work worker sign-out claude-code --member <member id>    # remove it from this machine
 ```
 
 Outside the image, `bun apps/server/src/worker.ts sign-in ...` does the
-same. It runs `codex login --device-auth` (other login arguments after `--`)
-with `CODEX_HOME` at `<WORK_DATA_DIR>/sign-ins/codex/<member id>`, using the
+same. It runs `claude auth login` with `CLAUDE_CONFIG_DIR`, or `codex login
+--device-auth` with `CODEX_HOME`, at
+`<WORK_DATA_DIR>/sign-ins/<harness>/<member id>`; login arguments after
+`--` replace the default ones, so every sign-in method the CLI has stays
+available. Claude Code is the machine's own `claude`; Codex is the
 machine's own `codex` or the one the image carries. `<member id>` is the
 member's Work user id (`GET /api/me` as them). A running worker reports a
 new or removed sign-in within seconds; the server's own machine does too.
+Claude Code on macOS keeps its sign-in in the Keychain rather than its
+home, so these sign-ins are for Linux machines: on a Mac the login reports
+that it left no sign-in.
 
 A chat runs on a member's sign-in only when all of this holds, and every
 turn checks it again:
@@ -428,19 +458,26 @@ turn checks it again:
 - the turn is the owner's own message: never a project chat, another
   member's message, an administrator's, or an automation's delivery.
 
-Members then see the agent **Codex** (id `project:<projectId>:codex`; a role
-must name it or `*`). A committed definition can run on the member's
-sign-in too: `"credentials": { "source": "personal" }` with `kind` `codex`.
-Codex runs in the sandbox with its home mounted from the machine
-(microsandbox: a read-write bind mount of that one member's home;
-local-process: a link to it), so its own token refresh keeps working and
-nothing leaves the machine. It talks to OpenAI directly: no gateway, no
-organization key. Cloudflare sandboxes refuse sign-ins.
-The mounted home holds Codex's refresh token, which code the agent runs can
-read, as on the member's own computer: allow sign-ins only in projects
-whose code the member would run on their own machine, and restrict the
-Environment's egress (`network.egress: "allowlist"`). Codex is told to keep
-its sign-in in its home's own file.
+Members then see the agents **Claude Code** and **Codex** (ids
+`project:<projectId>:claude-code` and `project:<projectId>:codex`; a role
+must name them or `*`). A committed definition can run on the member's
+sign-in too: `"credentials": { "source": "personal" }` with `kind`
+`claude-code` or `codex`. The harness runs in the sandbox with its home
+mounted from the machine (microsandbox and containers: a read-write bind
+mount of that one member's home; local-process: a link to it), so its own
+token refresh keeps working and nothing leaves the machine. The harness in
+the sandbox has to run as a user that can write that home: the user the
+worker runs as, or root. It talks to its provider directly: no gateway, no
+organization key. Claude Code on a sign-in is started without
+`ANTHROPIC_API_KEY`, `ANTHROPIC_AUTH_TOKEN`, `ANTHROPIC_BASE_URL` or
+`CLAUDE_CODE_OAUTH_TOKEN`, whatever a project secret or an Environment
+sets, so nothing redirects it to another credential; the last three cannot
+be project secrets at all. Cloudflare sandboxes refuse sign-ins.
+The mounted home holds the harness's refresh token, which code the agent
+runs can read, as on the member's own computer: allow sign-ins only in
+projects whose code the member would run on their own machine, and restrict
+the Environment's egress (`network.egress: "allowlist"`). Codex is told to
+keep its sign-in in its home's own file.
 
 Listed files work as before: the member's desktop sends the files named in
 the project's `.work/personal/environment.json`
@@ -457,10 +494,11 @@ What the machines need:
 - The CLI: on the machine's `PATH` for local-process (the server advertises
   `harness.claude-code` / `harness.codex` when it finds `claude` / `codex`),
   or in the Environment's `image` for microsandbox (see step 3 above).
-- Egress to the providers: `api.anthropic.com` (and `claude.ai`,
-  `console.anthropic.com` for account checks) for Claude Code;
+- Egress to the providers: `api.anthropic.com`, `claude.ai`, `claude.com`,
+  `platform.claude.com` and `console.anthropic.com` for Claude Code;
   `chatgpt.com` and `api.openai.com` (and `auth.openai.com`) for Codex. With
-  `network.egress: "allowlist"`, list them.
+  `network.egress: "allowlist"`, list them. The machine itself needs the
+  same hosts for the login.
 
 ## Limits
 

@@ -141,8 +141,10 @@ wrote. Change it in that file on their computer, not here.
 ## Sign-ins
 
 Claude Code and Codex subscriptions are never sent anywhere. A chat that runs
-on one runs only on a machine where its owner signed in to it themselves,
-such as their own computer connected to the project. If a sign-in expired,
-ask them to sign in again on that machine; never ask for passwords, tokens
-or keys.
+on one runs only on a machine where its owner signed in to it themselves:
+their own computer connected to the project, or a machine of their own on
+the project's server, where they sign in from the Work app (Remote
+environment, Sign-ins) in their own browser. If a sign-in expired, ask them
+to sign in again there; never ask for passwords, tokens, keys or sign-in
+codes.
 `;

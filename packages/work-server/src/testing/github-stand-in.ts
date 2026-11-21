@@ -18,7 +18,9 @@ const execute = promisify(execFile);
  * Routes are a table keyed by method and path pattern: an endpoint a
  * recipe starts calling is one entry. The review recipe's progress (ADR
  * 0337) reads and rewrites a check run by id and lists a pull request's
- * commits; its findings are reviews of their own.
+ * commits; its findings are reviews of their own. A pull request opened
+ * through the API (ADR 0343) is for a branch of the repository, and its
+ * head is that branch's tip whenever it is read.
  */
 export interface GithubStandIn {
   /** The REST API base and the web base (Git remotes): one origin. */
@@ -460,6 +462,8 @@ async function standInRepository(args: {
   fs.mkdirSync(gitDirectory, { recursive: true });
   await execute("git", ["init", "--bare", "-q", "-b", "main", gitDirectory]);
   const pulls = new Map<number, StandInPull>();
+  /** Pull requests opened for a branch: their head follows it. */
+  const ofBranch = new Set<number>();
   const checkRuns: StandInCheckRun[] = [];
   const reviews: StandInReview[] = [];
   const issueComments: StandInComment[] = [];
@@ -481,6 +485,23 @@ async function standInRepository(args: {
     const pull = pulls.get(Number(number));
     if (!pull) throw new NotFound();
     return pull;
+  };
+  /** Move each open branch pull request's head to its branch's tip. */
+  const followBranches = async () => {
+    for (const number of ofBranch) {
+      const pull = pulls.get(number);
+      if (pull?.state !== "open") continue;
+      const sha = await git([
+        "rev-parse",
+        "-q",
+        "--verify",
+        `refs/heads/${pull.head.ref}`,
+      ]).catch(() => "");
+      if (sha && sha !== pull.head.sha) {
+        pull.head = { ...pull.head, sha };
+        pull.updatedAt = githubTime();
+      }
+    }
   };
   const restPull = (pull: StandInPull) => ({
     number: pull.number,
@@ -555,7 +576,8 @@ async function standInRepository(args: {
       method: "GET",
       pattern: new RegExp(`^${repo}/pulls$`),
       credential: "installation",
-      handle: ({ query }) => {
+      handle: async ({ query }) => {
+        await followBranches();
         const state = query.get("state") ?? "open";
         const listed = [...pulls.values()]
           .filter((pull) => state === "all" || pull.state === state)
@@ -568,10 +590,76 @@ async function standInRepository(args: {
       },
     },
     {
+      // Open a pull request for a branch already pushed.
+      method: "POST",
+      pattern: new RegExp(`^${repo}/pulls$`),
+      credential: "installation",
+      handle: async ({ body }) => {
+        const field = (name: string): string | undefined => {
+          const value =
+            body && typeof body === "object" && !Array.isArray(body)
+              ? body[name]
+              : undefined;
+          return typeof value === "string" ? value : undefined;
+        };
+        const asked = {
+          title: field("title"),
+          head: field("head"),
+          base: field("base"),
+          body: field("body"),
+        };
+        const tipOf = (branch: string | undefined) =>
+          git(["rev-parse", "-q", "--verify", `refs/heads/${branch}`]).catch(
+            () => "",
+          );
+        const [head, base] = [await tipOf(asked.head), await tipOf(asked.base)];
+        const open = [...pulls.values()].some(
+          (pull) => pull.state === "open" && pull.head.ref === asked.head,
+        );
+        if (!asked.title || !head || !base || open)
+          return {
+            status: 422,
+            body: {
+              message: "Validation Failed",
+              errors: [
+                {
+                  message: open
+                    ? `A pull request already exists for ${asked.head}.`
+                    : "head and base must be branches of the repository",
+                },
+              ],
+            },
+          };
+        const at = githubTime();
+        const number = Math.max(0, ...pulls.keys()) + 1;
+        const pull: StandInPull = {
+          number,
+          title: asked.title,
+          body: asked.body ?? "",
+          state: "open",
+          draft: false,
+          user: bot,
+          requestedReviewers: [],
+          head: { sha: head, ref: asked.head ?? "" },
+          base: { sha: base, ref: asked.base ?? "" },
+          createdAt: at,
+          updatedAt: at,
+          closedAt: null,
+          mergedAt: null,
+        };
+        pulls.set(number, pull);
+        ofBranch.add(number);
+        return { status: 201, body: restPull(pull) };
+      },
+    },
+    {
       method: "GET",
       pattern: new RegExp(`^${repo}/pulls/(\\d+)$`),
       credential: "installation",
-      handle: ({ match }) => ({ body: restPull(pullOf(match[1])) }),
+      handle: async ({ match }) => {
+        await followBranches();
+        return { body: restPull(pullOf(match[1])) };
+      },
     },
     {
       method: "GET",

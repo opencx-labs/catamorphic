@@ -8,6 +8,7 @@ export {
 } from "./http-identity.js";
 export type {
   CatamorphicPluginOptions,
+  McpHost,
   ProjectMcpHost,
   ProjectMcpHostTool,
   RouteContext,

@@ -216,7 +216,6 @@ beforeAll(async () => {
     payload: JSON.stringify({
       name: "developer",
       labels: { pool: "dev" },
-      access: { everyone: true },
       trusted: true,
     }),
   });

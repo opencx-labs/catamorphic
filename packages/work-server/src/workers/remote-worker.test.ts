@@ -348,8 +348,9 @@ describe("remote workers (ADR 0164)", () => {
     const revoked = await operator("DELETE", "/_work/operator/workers/builder");
     expect(revoked.statusCode).toBe(200);
     await waitFor(async () => !(await workerAvailable()), "revocation");
+    // A machine enrolled by hand is known no more once it is revoked.
     const listed = (await operator("GET", "/_work/operator/workers")).json();
-    expect(listed.workers).toMatchObject([{ name: "builder", revoked: true }]);
+    expect(listed.workers).toEqual([]);
     const sessions = server.catamorphic.core.agentSessions;
     if (!sessions) throw new Error("Agent sessions are unavailable");
     await expect(
@@ -388,12 +389,12 @@ describe("placement by owner (ADR 0167)", () => {
     const bob = await person("bob");
     const aliceDesk = await startWorker({
       name: "alice-desk",
-      placement: { access: { people: ["alice@example.com"] } },
+      placement: { for: [{ user: alice.externalUserId }] },
       workspaces: "1",
     });
     const shared = await startWorker({
       name: "shared",
-      placement: { access: { everyone: true }, trusted: true },
+      placement: { trusted: true },
       workspaces: "4",
     });
     const sessions = server.catamorphic.core.agentSessions;
@@ -421,12 +422,12 @@ describe("placement by owner (ADR 0167)", () => {
     ).rejects.toThrow();
   }, 90_000);
 
-  it("keeps a released machine's chats until their workspaces are given back (ADR 0205)", async () => {
+  it("keeps a dropped machine's chats until their workspaces are given back (ADRs 0205, 0347)", async () => {
     const dana = await person("dana");
     // Room for two: a new chat that lands elsewhere was refused, not full.
     const danaDesk = await startWorker({
       name: "dana-desk",
-      placement: { access: { people: ["dana@example.com"] } },
+      placement: { for: [{ user: dana.externalUserId }] },
       workspaces: "2",
     });
     const core = server.catamorphic.core;
@@ -447,12 +448,12 @@ describe("placement by owner (ADR 0167)", () => {
     expect(await location(chat.id)).toContain(danaDesk);
     const { allocationId } = await sessions.get(dana, projectId, chat.id);
 
-    // Her machine is released: it takes no new work at once, while the
+    // The plan drops her machine: it takes no new work at once, while the
     // chat already there keeps reaching its workspace.
     await core.db
-      .updateTable("work_workers")
-      .set({ released_at: sql`now()` })
-      .where("node_id", "=", "worker.dana-desk")
+      .updateTable("work_machines")
+      .set({ dropped_at: sql`now()` })
+      .where("name", "=", "dana-desk")
       .execute();
     const next = await sessions.create(dana, projectId, {
       environment: "build",
@@ -491,7 +492,7 @@ describe("placement by owner (ADR 0167)", () => {
     const carol = await person("carol");
     const dockerBox = await startWorker({
       name: "docker-box",
-      placement: { access: { everyone: true }, trusted: true },
+      placement: { trusted: true },
       workspaces: "2",
       // The endpoint starts with the sandbox; no daemon is needed to place.
       env: { WORK_DOCKER_SOCKET: path.join(root, "docker.sock") },
@@ -519,7 +520,7 @@ describe("placement by owner (ADR 0167)", () => {
   it("refuses a process-isolated worker shared by several people", async () => {
     const enrollment = await operator("POST", "/_work/operator/workers", {
       name: "team-box",
-      access: { groups: ["eng@example.com"] },
+      for: [{ user: "someone" }, { user: "someone-else" }],
     });
     const keys = generateExecutorKeyPair();
     const enrolled = await server.app.inject({
@@ -620,7 +621,7 @@ describe("keyed chats on workers (ADR 0173)", () => {
       name: "reviewer",
       placement: {
         labels: { pool: "review" },
-        access: { projects: [projectId] },
+        for: [{ project: projectId }],
         trusted: true,
       },
       workspaces: "2",
@@ -630,7 +631,6 @@ describe("keyed chats on workers (ADR 0173)", () => {
       name: "chat-box",
       placement: {
         labels: { pool: "chats" },
-        access: { everyone: true },
         trusted: true,
       },
       workspaces: "1",
@@ -871,6 +871,15 @@ describe("keyed chats on workers (ADR 0173)", () => {
       replyOf(
         await sessions.sendMessage(identity, projectId, session.id, message),
       ).content;
+    const checkpoint = () =>
+      core.projectManager.remoteBackend?.withOrigin(
+        SERVER_TENANT_ID,
+        projectId,
+        (origin) => origin.resolveRef(`refs/heads/sessions/${session.id}`),
+      );
+    expect(await say("read-file scratch.md")).toBe("missing");
+    const initialCheckpoint = await checkpoint();
+    expect(initialCheckpoint).toEqual(expect.any(String));
     await say("write-file scratch.md only-in-the-sandbox");
     expect(await say("read-file scratch.md")).toBe("only-in-the-sandbox");
     const idle = await sessions.get(identity, projectId, session.id);
@@ -880,12 +889,8 @@ describe("keyed chats on workers (ADR 0173)", () => {
       }),
     ).toBe(1);
     await freed(idle.allocationId);
-    const branch = await core.projectManager.remoteBackend?.withOrigin(
-      SERVER_TENANT_ID,
-      projectId,
-      (origin) => origin.resolveRef(`refs/heads/sessions/${session.id}`),
-    );
-    expect(branch ?? null).toBeNull();
+    // The host's initial checkpoint is still the only saved state.
+    expect(await checkpoint()).toBe(initialCheckpoint);
     // The fresh workspace starts from what the chat had saved: nothing.
     expect(await say("read-file scratch.md")).toBe("missing");
     await closeAndFree(session.id);

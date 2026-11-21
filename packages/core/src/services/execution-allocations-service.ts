@@ -58,6 +58,7 @@ const AllocationPolicySchema = z.object({
       .optional(),
     resources: z.record(z.string(), z.union([z.number(), z.boolean()])),
     labels: z.record(z.string(), z.string()).optional(),
+    admissionRevision: z.string().uuid().optional(),
   }),
   requirements: z.object({
     workload: z.enum(["agent", "workflow"]),
@@ -349,7 +350,12 @@ export class ExecutionAllocationsService {
       ? query.forUpdate()
       : query
     ).executeTakeFirst();
-    if (!node) throw new EnvironmentCapacityError(args.workerNodeId);
+    if (
+      !node ||
+      (args.policy.binding.admissionRevision !== undefined &&
+        args.policy.binding.admissionRevision !== node.admission_revision)
+    )
+      throw new EnvironmentCapacityError(args.workerNodeId);
     const machine =
       args.policy.binding.trust === "managed"
         ? WorkerResourceDefaultsSchema.parse(node.default_resources)

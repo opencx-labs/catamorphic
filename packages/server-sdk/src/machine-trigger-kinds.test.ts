@@ -1,59 +1,47 @@
 import { describe, expect, it } from "vitest";
 import {
   MACHINE_TRIGGER_KINDS,
-  machineCreate,
-  machineCreateResult,
-  machineDestroyResult,
   machineProjectEvent,
 } from "./machine-trigger-kinds.js";
 
-describe("machine trigger kinds (ADR 0327)", () => {
-  it("registers create, destroy and the seven lifecycle events", () => {
+const machine = {
+  name: "review-pr-7",
+  ref: "i-0abc",
+  managed: true,
+  labels: { pool: "review" },
+  for: [{ project: "7e0f7c3e-9a55-4d0b-8a35-0c0f4b1f2a10", key: "pr-7" }],
+  options: { instanceType: "r7i.2xlarge" },
+  reason: "Pull request 7 is open",
+};
+
+describe("machine event kinds (ADR 0347)", () => {
+  it("registers lifecycle events only: no kind makes or removes a machine", () => {
     expect(MACHINE_TRIGGER_KINDS.map((kind) => kind.name)).toEqual([
-      "machine.create",
-      "machine.destroy",
       "machine.created",
       "machine.connected",
       "machine.lost",
+      "machine.stopped",
+      "machine.started",
       "machine.released",
       "machine.destroyed",
       "machine.disk-low",
-      "machine.disk-too-small",
     ]);
-    expect(machineCreate.outputJsonSchema).toBeDefined();
+    for (const kind of MACHINE_TRIGGER_KINDS) expect(kind.hostOnly).toBe(true);
   });
 
-  it("reads a create answer as a ref or a refusal, and nothing else", () => {
-    expect(machineCreateResult({ ref: "i-0abc" })).toEqual({ ref: "i-0abc" });
-    expect(machineCreateResult({ refused: "no capacity" })).toEqual({
-      refused: "no capacity",
-    });
-    for (const output of [null, {}, { ref: 7 }, "i-0abc"])
-      expect(machineCreateResult(output)).toBeUndefined();
-    expect(machineDestroyResult({ done: true })).toEqual({ done: true });
-    expect(machineDestroyResult({ done: "yes" })).toBeUndefined();
-  });
-
-  it("records each transition once per machine, and narrows by class", () => {
+  it("records each transition with the machine as the plan described it, and narrows by labels", () => {
     const event = machineProjectEvent({
       kind: "machine.released",
-      name: "review-1",
-      class: "review",
-      rule: "review",
-      ref: "i-0abc",
-      occurredAt: new Date("2026-11-17T10:00:00Z"),
+      at: "2026-11-20T10:00:00.000Z",
+      machine,
     });
     expect(event).toEqual({
       source: "machines",
       kind: "machine.released",
-      externalId: "machine.released:review-1:i-0abc",
-      occurredAt: "2026-11-17T10:00:00.000Z",
-      payload: {
-        name: "review-1",
-        class: "review",
-        rule: "review",
-        ref: "i-0abc",
-      },
+      externalId:
+        "machine.released:review-pr-7:i-0abc:2026-11-20T10:00:00.000Z",
+      occurredAt: "2026-11-20T10:00:00.000Z",
+      payload: machine,
     });
     const released = MACHINE_TRIGGER_KINDS.find(
       (kind) => kind.name === "machine.released",
@@ -68,13 +56,17 @@ describe("machine trigger kinds (ADR 0327)", () => {
     expect(released?.validatePayload(envelope)).toEqual({ ok: true });
     expect(
       released?.matches?.({
-        config: { classes: ["review"] },
+        config: { labels: { pool: "review" } },
         payload: envelope,
       }),
     ).toBe(true);
     expect(
-      released?.matches?.({ config: { classes: ["desk"] }, payload: envelope }),
+      released?.matches?.({
+        config: { labels: { pool: "desk" } },
+        payload: envelope,
+      }),
     ).toBe(false);
+    expect(released?.matches?.({ config: {}, payload: envelope })).toBe(true);
   });
 
   it("records a machine short of disk once per episode, with its report (ADR 0336)", () => {
@@ -88,19 +80,16 @@ describe("machine trigger kinds (ADR 0327)", () => {
     const event = (episode: string) =>
       machineProjectEvent({
         kind: "machine.disk-low",
-        name: "review-1",
-        class: "review",
-        rule: "review",
-        ref: "i-0abc",
-        occurredAt: new Date(episode),
-        disk,
-        episode: new Date(episode),
+        at: episode,
+        machine: { ...machine, disk },
       });
-    const first = event("2026-11-18T10:00:00Z");
+    const first = event("2026-11-18T10:00:00.000Z");
     expect(first.externalId).toBe(
-      "machine.disk-low:review-1:i-0abc:2026-11-18T10:00:00.000Z",
+      "machine.disk-low:review-pr-7:i-0abc:2026-11-18T10:00:00.000Z",
     );
-    expect(event("2026-11-18T12:00:00Z").externalId).not.toBe(first.externalId);
+    expect(event("2026-11-18T12:00:00.000Z").externalId).not.toBe(
+      first.externalId,
+    );
     const kind = MACHINE_TRIGGER_KINDS.find(
       (entry) => entry.name === "machine.disk-low",
     );

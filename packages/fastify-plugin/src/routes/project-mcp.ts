@@ -10,11 +10,10 @@ import type { FastifyInstance } from "fastify";
 import { z } from "zod";
 import type { RouteContext } from "../app.js";
 import { resolveIdentity } from "../http-identity.js";
+import { mayCallTool, mcpStateSecret, withheldTools } from "../mcp-scopes.js";
+import { type McpTool, serveMcp } from "../mcp-server.js";
 import {
   callPollRunTool,
-  handleMcpPost,
-  McpRequestError,
-  negotiateProtocolVersion,
   POLL_RUN_TOOL,
   POLL_RUN_TOOL_DEFINITION,
   toolError,
@@ -24,17 +23,18 @@ import { programTools, projectInstructions } from "../project-mcp-program.js";
 import {
   allowedWorkflowNames,
   mayUseProject,
-  type SurfaceTool,
   surfaceTools,
 } from "../project-mcp-surface.js";
+import { sessionMcp } from "../session-mcp.js";
 
 /**
- * MCP server for a project (ADR 0042, ADR 0055): the single "bring your own
- * agent" door. Serves the project's AI-callable workflows — one tool per
- * trigger binding of every kind the host registered under `mcpToolKinds` —
- * beside the documents surface, skills and `ask_agent`
- * (`project-mcp-surface.ts`), everything narrowed to the caller's scope by
- * the core services themselves. Workflow tools:
+ * MCP server for a project (ADR 0042, ADR 0055): a project's own door for
+ * a member's agent. Serves the project's AI-callable workflows (one tool
+ * per trigger binding of every kind the host registered under
+ * `mcpToolKinds`) beside the documents surface, skills and the session
+ * operations (`project-mcp-surface.ts`), everything narrowed to the
+ * caller's scope by the core services themselves, and to the scopes of the
+ * caller's token (ADR 0345). Workflow tools:
  * the tool's input schema is the binding's frozen per-workflow schema (a
  * hole instantiated by the workflow's own input type), its metadata comes
  * from the binding's constant config, and calling it fires the trigger
@@ -44,8 +44,8 @@ import {
  *
  * Unlike `/apps-mcp` (which serves published apps and their UI resources),
  * this endpoint needs no app: binding a tool kind in workflow code is the
- * whole opt-in. Stateless Streamable-HTTP JSON-RPC, same era and identity
- * model as the rest of the plugin.
+ * whole opt-in. Stateless Streamable HTTP in both protocol eras
+ * (`mcp-server.ts`), with the identity model of the rest of the plugin.
  *
  * The workflow's output schema deliberately rides `_meta`, NOT the tool's
  * `outputSchema`: MCP clients validate `structuredContent` against an
@@ -83,160 +83,182 @@ export function registerProjectMcpRoutes(
     reply: import("fastify").FastifyReply,
   ) => reply.status(405).header("allow", "POST").send();
   app.get("/projects/:projectId/mcp", notAllowed);
-  app.delete("/projects/:projectId/mcp", notAllowed);
+  app.delete(
+    "/projects/:projectId/mcp",
+    { config: { tokenScope: "work:read" } },
+    notAllowed,
+  );
 
-  app.post("/projects/:projectId/mcp", async (request, reply) => {
-    const core = ctx.core;
-    if (!core) {
-      return reply.status(503).send({ error: "Service not configured" });
-    }
-    if (!ctx.features.mcp) {
-      return reply
-        .status(404)
-        .send({ error: "MCP is turned off on this server" });
-    }
-    const { projectId } = request.params as { projectId: string };
-    const { sessionId, allocationId } = request.query as {
-      sessionId?: string;
-      allocationId?: string;
-    };
-    const identity = resolveIdentity(request);
-    // Someone the project grants nothing sees no project here at all.
-    if (!mayUseProject(identity, projectId)) {
-      return reply.status(404).send({ error: "Project not found" });
-    }
-    const abort = new AbortController();
-    reply.raw.once("close", () => abort.abort());
-    const gatewayTools = sessionId
-      ? agentCapabilityTools(
-          core.agentCapabilities.forSession({
-            identity,
-            projectId,
-            sessionId,
-            allocationId,
-          }),
-          abort.signal,
-        )
-      : [];
-    const surface: SurfaceTool[] = [
-      ...surfaceTools(core, identity, projectId, ctx.features, sessionId),
-      ...programTools(core, identity, projectId),
-      ...(ctx.projectMcp?.tools?.({ identity, projectId }) ?? []).map(
-        (tool) => ({
-          definition: tool.definition,
-          call: async (args: Record<string, unknown>) => {
-            try {
-              return toolValue(await tool.call(args));
-            } catch (error) {
-              return toolError(
-                error instanceof Error ? error.message : String(error),
-              );
-            }
-          },
-        }),
-      ),
-    ];
-
-    return handleMcpPost(reply, request.body, async (method, params) => {
-      switch (method) {
-        case "initialize":
-          return {
-            protocolVersion: negotiateProtocolVersion(params.protocolVersion),
-            capabilities: { tools: { listChanged: false } },
-            serverInfo: {
-              version: "1.0.0",
-              ...(ctx.projectMcp?.serverInfo ?? {
-                name: "catamorphic",
-                title: "Catamorphic project",
-              }),
+  app.post(
+    "/projects/:projectId/mcp",
+    { config: { tokenScope: "work:read" } },
+    async (request, reply) => {
+      const core = ctx.core;
+      if (!core) {
+        return reply.status(503).send({ error: "Service not configured" });
+      }
+      if (!ctx.features.mcp) {
+        return reply
+          .status(404)
+          .send({ error: "MCP is turned off on this server" });
+      }
+      const { projectId } = request.params as { projectId: string };
+      const { sessionId, allocationId } = request.query as {
+        sessionId?: string;
+        allocationId?: string;
+      };
+      const identity = resolveIdentity(request);
+      // Someone the project grants nothing sees no project here at all.
+      if (!mayUseProject(identity, projectId)) {
+        return reply.status(404).send({ error: "Project not found" });
+      }
+      const abort = new AbortController();
+      reply.raw.once("close", () => abort.abort());
+      const gatewayTools = sessionId
+        ? agentCapabilityTools(
+            core.agentCapabilities.forSession({
+              identity,
+              projectId,
+              sessionId,
+              allocationId,
+            }),
+            abort.signal,
+          )
+        : [];
+      // What the current protocol adds to the chat tools: tasks, questions
+      // asked of the client's person, and chats as resources (ADR 0345).
+      const chats = sessionMcp({
+        core,
+        identity,
+        projectId,
+        ...(sessionId ? { currentSessionId: sessionId } : {}),
+        stateSecret: mcpStateSecret(ctx),
+      });
+      const surface: McpTool[] = [
+        ...surfaceTools(core, identity, projectId, ctx.features, sessionId).map(
+          (tool) =>
+            chats?.tools.find(
+              (chat) => chat.definition.name === tool.definition.name,
+            ) ?? tool,
+        ),
+        ...programTools(core, identity, projectId),
+        ...(ctx.projectMcp?.tools?.({ identity, projectId }) ?? []).map(
+          (tool): McpTool => ({
+            definition: tool.definition,
+            call: async (args) => {
+              try {
+                return toolValue(await tool.call(args));
+              } catch (error) {
+                return toolError(
+                  error instanceof Error ? error.message : String(error),
+                );
+              }
             },
-            instructions: await projectInstructions({
+          }),
+        ),
+      ];
+      /** Every tool the caller's roles reach, before its token narrows them. */
+      let roster: Promise<McpTool[]> | undefined;
+      const allTools = () => {
+        roster ??= (async () => {
+          const workflows = await loadProjectTools(core, identity, projectId);
+          // A workflow tool that claims a surface name wins the name (the
+          // project chose it); the surface tool steps aside for this project.
+          const taken = new Set(workflows.map((tool) => tool.name));
+          return [
+            ...gatewayTools.map(
+              (tool): McpTool => ({
+                definition: {
+                  name: tool.name,
+                  description: tool.description,
+                  inputSchema: z.toJSONSchema(z.object(tool.parameters)),
+                },
+                call: async (input) => {
+                  try {
+                    return toolValue(
+                      await tool.execute(input, {
+                        projectId,
+                        sessionId,
+                        // An MCP call hears nothing of its turn: it waits
+                        // while asked (ADR 0264).
+                        stopWaiting: abort.signal,
+                      }),
+                    );
+                  } catch (error) {
+                    return toolError(
+                      error instanceof Error
+                        ? error.message
+                        : "Capability failed",
+                    );
+                  }
+                },
+              }),
+            ),
+            ...workflows
+              .filter(
+                (tool) =>
+                  !gatewayTools.some((gateway) => gateway.name === tool.name),
+              )
+              .map(
+                (tool): McpTool => ({
+                  definition: toolDefinition(tool),
+                  scope: "sessions:run",
+                  call: (input) =>
+                    callTool(core, identity, projectId, tool.name, input),
+                }),
+              ),
+            ...(workflows.length > 0 || core.mcpToolKinds.length > 0
+              ? [
+                  {
+                    definition: POLL_RUN_TOOL_DEFINITION,
+                    call: (input: Record<string, unknown>) =>
+                      callPollRunTool(core, identity, input),
+                  },
+                ]
+              : []),
+            ...surface.filter(
+              (tool) => !taken.has(String(tool.definition.name)),
+            ),
+          ];
+        })();
+        return roster;
+      };
+      const tools = async () =>
+        (await allTools()).filter((tool) => mayCallTool(identity, tool));
+
+      return serveMcp({
+        request,
+        reply,
+        ...(ctx.mcp?.resourceMetadataUrl
+          ? { resourceMetadataUrl: ctx.mcp.resourceMetadataUrl }
+          : {}),
+        endpoint: {
+          serverInfo: {
+            version: "1.0.0",
+            ...(ctx.projectMcp?.serverInfo ?? {
+              name: "catamorphic",
+              title: "Catamorphic project",
+            }),
+          },
+          instructions: async () =>
+            projectInstructions({
               core,
               identity,
               projectId,
               toolNames: new Set(
-                surface.map((tool) => String(tool.definition.name)),
+                (await tools()).map((tool) => String(tool.definition.name)),
               ),
               ...(ctx.projectMcp?.instructions
                 ? { host: ctx.projectMcp.instructions }
                 : {}),
             }),
-          };
-        case "ping":
-          return {};
-        case "tools/list": {
-          const tools = await loadProjectTools(core, identity, projectId);
-          // A workflow tool that claims a surface name wins the name (the
-          // project chose it); the surface tool steps aside for this project.
-          const taken = new Set(tools.map((tool) => tool.name));
-          return {
-            tools: [
-              ...gatewayTools.map((tool) => ({
-                name: tool.name,
-                description: tool.description,
-                inputSchema: z.toJSONSchema(z.object(tool.parameters)),
-              })),
-              ...tools
-                .filter(
-                  (tool) =>
-                    !gatewayTools.some((gateway) => gateway.name === tool.name),
-                )
-                .map(toolDefinition),
-              ...(tools.length > 0 || core.mcpToolKinds.length > 0
-                ? [POLL_RUN_TOOL_DEFINITION]
-                : []),
-              ...surface
-                .filter((tool) => !taken.has(String(tool.definition.name)))
-                .map((tool) => tool.definition),
-            ],
-          };
-        }
-        case "resources/list":
-          return { resources: [] };
-        case "resources/templates/list":
-          return { resourceTemplates: [] };
-        case "prompts/list":
-          return { prompts: [] };
-        case "tools/call": {
-          const name = typeof params.name === "string" ? params.name : "";
-          const args =
-            typeof params.arguments === "object" && params.arguments !== null
-              ? (params.arguments as Record<string, unknown>)
-              : {};
-          const gatewayTool = gatewayTools.find((tool) => tool.name === name);
-          if (gatewayTool) {
-            try {
-              return toolValue(
-                await gatewayTool.execute(args, {
-                  projectId,
-                  sessionId,
-                  // An MCP call hears nothing of its turn: it waits while
-                  // asked (ADR 0264).
-                  stopWaiting: abort.signal,
-                }),
-              );
-            } catch (error) {
-              return toolError(
-                error instanceof Error ? error.message : "Capability failed",
-              );
-            }
-          }
-          const workflowTools = await loadProjectTools(
-            core,
-            identity,
-            projectId,
-          );
-          const surfaced = workflowTools.some((tool) => tool.name === name)
-            ? undefined
-            : surface.find((tool) => tool.definition.name === name);
-          if (surfaced) return surfaced.call(args);
-          return callTool(core, identity, projectId, name, args);
-        }
-        default:
-          throw new McpRequestError(-32601, `Method not found: ${method}`);
-      }
-    });
-  });
+          tools,
+          withheld: async () => withheldTools(identity, await allTools()),
+          ...(chats ? { resources: chats.resources, tasks: chats.tasks } : {}),
+        },
+      });
+    },
+  );
 }
 
 /**

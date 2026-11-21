@@ -358,6 +358,7 @@
       },
       "devDependencies": {
         "@catamorphic/cloudflare": "workspace:*",
+        "@catamorphic/container": "workspace:*",
         "@catamorphic/local-process": "workspace:*",
         "@electric-sql/pglite": "^0.5.16",
         "@opentelemetry/api": "^1.10.0",
@@ -435,17 +436,6 @@
         "@types/node": "^26.6.6",
       },
     },
-    "packages/hetzner": {
-      "name": "@catamorphic/hetzner",
-      "version": "0.1.0-alpha.39",
-      "dependencies": {
-        "@catamorphic/otel": "workspace:*",
-        "zod": "4.6.7",
-      },
-      "devDependencies": {
-        "@types/node": "^26.6.6",
-      },
-    },
     "packages/local-process": {
       "name": "@catamorphic/local-process",
       "version": "0.1.0-alpha.39",
@@ -464,9 +454,9 @@
       "dependencies": {
         "@catamorphic/sandbox": "workspace:*",
         "@modelcontextprotocol/client": "^2.4.0",
-        "@modelcontextprotocol/sdk": "^1.32.2",
       },
       "devDependencies": {
+        "@modelcontextprotocol/sdk": "^1.32.2",
         "@types/node": "^26.6.6",
       },
     },
@@ -627,6 +617,7 @@
         "react-markdown": "^10.1.0",
         "remark-gfm": "^4.0.1",
         "vitest": "^5.1.0",
+        "zod": "4.6.7",
       },
       "peerDependencies": {
         "@tanstack/react-query": "^5.107.1",
@@ -770,7 +761,6 @@
         "@catamorphic/core": "workspace:*",
         "@catamorphic/db": "workspace:*",
         "@catamorphic/fastify-plugin": "workspace:*",
-        "@catamorphic/hetzner": "workspace:*",
         "@catamorphic/local-process": "workspace:*",
         "@catamorphic/mcp": "workspace:*",
         "@catamorphic/microsandbox": "workspace:*",
@@ -789,7 +779,9 @@
         "zod": "4.6.7",
       },
       "devDependencies": {
+        "@aws-sdk/client-ec2": "3.1171.0",
         "@catamorphic/claude-code": "workspace:*",
+        "@modelcontextprotocol/client": "^2.4.0",
         "@types/node": "^26.6.6",
         "@types/pg": "8.23.1",
       },
@@ -1034,8 +1026,6 @@
     "@catamorphic/git": ["@catamorphic/git@workspace:packages/git"],
 
     "@catamorphic/github": ["@catamorphic/github@workspace:packages/github"],
-
-    "@catamorphic/hetzner": ["@catamorphic/hetzner@workspace:packages/hetzner"],
 
     "@catamorphic/local-process": ["@catamorphic/local-process@workspace:packages/local-process"],
 

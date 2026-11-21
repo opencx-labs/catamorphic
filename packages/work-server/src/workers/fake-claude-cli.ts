@@ -17,6 +17,15 @@
  * the machine and no `ANTHROPIC_BASE_URL`) it calls no model: it runs the command of a
  * `run: <command>` line itself, and otherwise answers with a report of the
  * credentials it was given, so tests see what reached the CLI.
+ *
+ * `claude auth login` signs a member in as Claude Code 2.1.329 does with
+ * no terminal (ADR 0340): it prints "If the browser didn't open, visit:
+ * <link>" and "Paste code here if prompted > ", reads one line from its
+ * input, and on the expected code (`FAKE_CLAUDE_LOGIN_CODE`, else
+ * {@link LOGIN_CODE}) writes `.credentials.json` into `CLAUDE_CONFIG_DIR`
+ * holding `FAKE_CLAUDE_ACCESS_TOKEN`. A wrong code fails, repeating what it
+ * was given, as a careless CLI might. `claude auth status` prints whether
+ * that file is there; `claude auth logout` removes it.
  */
 import { execFileSync, spawnSync } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
@@ -44,6 +53,92 @@ function flag(name: string): string | undefined {
     if (arg.startsWith(`${name}=`)) return arg.slice(name.length + 1);
   }
   return undefined;
+}
+
+/** The code the stand-in's sign-in page would give a member. */
+const LOGIN_CODE = "TEST-CLAUDE-CODE#state";
+/** The link `claude auth login` prints, shaped like the real one. */
+const LOGIN_LINK =
+  "https://claude.com/cai/oauth/authorize?code=true&client_id=test-client&response_type=code&redirect_uri=https%3A%2F%2Fplatform.claude.com%2Foauth%2Fcode%2Fcallback&scope=user%3Ainference&code_challenge=test-challenge";
+
+/** One line from the input, or undefined when it ended without one. */
+function readLine(): Promise<string | undefined> {
+  return new Promise((resolve) => {
+    const reader = createInterface({ input: process.stdin });
+    reader.once("line", (line) => {
+      resolve(line);
+      reader.close();
+    });
+    reader.once("close", () => resolve(undefined));
+  });
+}
+
+const [command, action] = process.argv.slice(2);
+if (command === "auth") {
+  const home =
+    process.env.CLAUDE_CONFIG_DIR ?? path.join(os.homedir(), ".claude");
+  const credentials = path.join(home, ".credentials.json");
+  if (action === "status") {
+    const loggedIn = fs.existsSync(credentials);
+    console.log(
+      JSON.stringify({
+        loggedIn,
+        authMethod: loggedIn ? "claude.ai" : "none",
+        apiProvider: "firstParty",
+      }),
+    );
+    process.exit(loggedIn ? 0 : 1);
+  }
+  if (action === "logout") {
+    fs.rmSync(credentials, { force: true });
+    console.log("Successfully logged out from your Anthropic account.");
+    process.exit(0);
+  }
+  if (action !== "login") {
+    console.error(`This stand-in does not do auth ${action ?? ""}`);
+    process.exit(2);
+  }
+  // A login handed another credential is not the member's own sign-in.
+  for (const name of [
+    "ANTHROPIC_API_KEY",
+    "ANTHROPIC_AUTH_TOKEN",
+    "ANTHROPIC_BASE_URL",
+    "CLAUDE_CODE_OAUTH_TOKEN",
+  ])
+    if (process.env[name]) {
+      console.error(`Error: ${name} is set, so this is not a sign-in`);
+      process.exit(3);
+    }
+  process.stdout.write(
+    `Opening browser to sign in…\nIf the browser didn't open, visit: ${LOGIN_LINK}\nPaste code here if prompted > `,
+  );
+  const code = await readLine();
+  if (code === undefined) {
+    console.error("Error: no code was entered");
+    process.exit(1);
+  }
+  if (code !== (process.env.FAKE_CLAUDE_LOGIN_CODE ?? LOGIN_CODE)) {
+    console.error(`Error: invalid code ${code}`);
+    process.exit(1);
+  }
+  const accessToken =
+    process.env.FAKE_CLAUDE_ACCESS_TOKEN ?? "claude-access-test";
+  fs.mkdirSync(home, { recursive: true });
+  fs.writeFileSync(
+    credentials,
+    JSON.stringify({
+      claudeAiOauth: {
+        accessToken,
+        refreshToken: `refresh-${accessToken}`,
+        expiresAt: Date.now() + 8 * 60 * 60_000,
+        scopes: ["user:inference"],
+        subscriptionType: "max",
+      },
+    }),
+    { mode: 0o600 },
+  );
+  console.log("Login successful.");
+  process.exit(0);
 }
 
 const sessionId = flag("--session-id") ?? flag("--resume") ?? randomUUID();

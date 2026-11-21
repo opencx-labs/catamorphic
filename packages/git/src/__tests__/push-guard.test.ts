@@ -6,6 +6,7 @@ import { nativeGit } from "../native-git.js";
 import { NativeProjectRepo } from "../native-project-repo.js";
 import {
   assertPushAllowed,
+  pushOwnBranch,
   pushToRemote,
   RemotePushRefusedError,
 } from "../network.js";
@@ -71,6 +72,24 @@ describe("push guard for attached remotes", () => {
         ownership: "attached",
         remoteBranch: "work/fix",
         force: true,
+      }),
+    ).toThrow(RemotePushRefusedError);
+    // A lease on the commit it replaces is the one exception (ADR 0343),
+    // and only under work/.
+    expect(() =>
+      assertPushAllowed({
+        ownership: "attached",
+        remoteBranch: "work/fix",
+        force: true,
+        lease: true,
+      }),
+    ).not.toThrow();
+    expect(() =>
+      assertPushAllowed({
+        ownership: "attached",
+        remoteBranch: "main",
+        force: true,
+        lease: true,
       }),
     ).toThrow(RemotePushRefusedError);
     expect(() =>
@@ -140,6 +159,120 @@ describe("push guard for attached remotes", () => {
     expect(
       (await nativeGit(origin, ["rev-parse", "refs/heads/main"])).trim(),
     ).toBe(local);
+  });
+
+  it("lets a chat create, move forward and replace only its own branch (ADR 0343)", async () => {
+    const tip = async (branch: string) =>
+      (await nativeGit(origin, ["rev-parse", `refs/heads/${branch}`])).trim();
+    const own = (
+      commitId: string,
+      pushed?: { branch: string; commit: string },
+    ) =>
+      pushOwnBranch({
+        repoPath: root,
+        url: origin,
+        ownership: "attached",
+        commit: commitId,
+        remoteBranch: "work/chat",
+        ...(pushed ? { pushed } : {}),
+      });
+
+    // Never the default branch or another person's, whatever the record says.
+    const first = await commit(root, "one.md", "one");
+    for (const remoteBranch of ["main", "feature", "work", "+work/x"])
+      await expect(
+        pushOwnBranch({
+          repoPath: root,
+          url: origin,
+          ownership: "attached",
+          commit: first,
+          remoteBranch,
+          pushed: { branch: remoteBranch, commit: first },
+        }),
+      ).rejects.toThrow(RemotePushRefusedError);
+
+    expect(await own(first)).toEqual({
+      outcome: "created",
+      recordOwnership: true,
+    });
+    expect(await tip("work/chat")).toBe(first);
+    expect(await own(first, { branch: "work/chat", commit: first })).toEqual({
+      outcome: "unchanged",
+      recordOwnership: false,
+    });
+
+    // Moving forward overwrites nothing, whoever pushed the branch: the
+    // agent may have pushed it itself through the gateway.
+    const second = await commit(root, "two.md", "two");
+    expect(await own(second)).toEqual({
+      outcome: "updated",
+      recordOwnership: false,
+    });
+    expect(await tip("work/chat")).toBe(second);
+
+    // Replacing a branch is for the chat that pushed it, and no other.
+    await nativeGit(root, ["reset", "-q", "--hard", first]);
+    const foreign = await commit(root, "two.md", "two, another way");
+    await expect(own(foreign)).rejects.toThrow(/did not create it/);
+    await expect(
+      own(foreign, { branch: "work/other", commit: second }),
+    ).rejects.toThrow(/did not create it/);
+    expect(await tip("work/chat")).toBe(second);
+
+    // After a rebase the chat replaces what it last pushed, and only that.
+    await nativeGit(root, ["reset", "-q", "--hard", first]);
+    const rebased = await commit(root, "two.md", "two, rebased");
+    expect(await own(rebased, { branch: "work/chat", commit: second })).toEqual(
+      { outcome: "replaced", recordOwnership: true },
+    );
+    expect(await tip("work/chat")).toBe(rebased);
+
+    // Someone else pushed there: nothing of theirs is overwritten.
+    await nativeGit(seed, ["fetch", "-q", origin, "work/chat"]);
+    await nativeGit(seed, ["checkout", "-q", "FETCH_HEAD"]);
+    const theirs = await commit(seed, "theirs.md", "theirs");
+    await nativeGit(seed, ["push", "-q", origin, "HEAD:refs/heads/work/chat"]);
+    await nativeGit(root, ["reset", "-q", "--hard", first]);
+    const again = await commit(root, "two.md", "two, rebased again");
+    await expect(
+      own(again, { branch: "work/chat", commit: rebased }),
+    ).rejects.toThrow(/someone else pushed/);
+    expect(await tip("work/chat")).toBe(theirs);
+
+    // Built on top of theirs, it moves forward without any force.
+    await nativeGit(root, ["fetch", "-q", origin, "work/chat"]);
+    await nativeGit(root, ["reset", "-q", "--hard", "FETCH_HEAD"]);
+    const onTop = await commit(root, "three.md", "three");
+    expect(await own(onTop, { branch: "work/chat", commit: rebased })).toEqual({
+      outcome: "updated",
+      recordOwnership: false,
+    });
+    expect(await tip("work/chat")).toBe(onTop);
+  });
+
+  it("refuses to push the advertised default even if it is a work/ branch", async () => {
+    const previous = (await nativeGit(seed, ["rev-parse", "HEAD"])).trim();
+    await nativeGit(seed, ["push", origin, "HEAD:refs/heads/work/default"]);
+    await nativeGit(origin, [
+      "symbolic-ref",
+      "HEAD",
+      "refs/heads/work/default",
+    ]);
+    const next = await commit(root, "one.md", "one");
+
+    await expect(
+      pushOwnBranch({
+        repoPath: root,
+        url: origin,
+        ownership: "attached",
+        commit: next,
+        remoteBranch: "work/default",
+        pushed: { branch: "work/default", commit: previous },
+      }),
+    ).rejects.toThrow(/default branch/);
+    expect((await nativeGit(origin, ["rev-parse", "HEAD"])).trim()).toBe(
+      previous,
+    );
   });
 
   it("never pushes from sync in any state of an attached checkout", async () => {

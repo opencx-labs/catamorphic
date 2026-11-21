@@ -23,6 +23,8 @@ export {
   cloneFromRemote,
   fetchFromRemote,
   isManagedBranch,
+  type PushedBranch,
+  pushOwnBranch,
   pushToRemote,
   type RemoteOwnership,
   RemotePushRefusedError,
@@ -76,6 +78,14 @@ export {
   InvalidRefNameError,
   isValidRefName,
 } from "./ref-names.js";
+export {
+  currentSessionWork,
+  isSessionBranchName,
+  parseCheckpointMessage,
+  readSessionWork,
+  type SessionWork,
+  sessionBranchName,
+} from "./session-checkpoint.js";
 export type {
   BranchInfo,
   CloneSource,
@@ -108,3 +118,13 @@ export {
   unpinMirrorRef,
   type WorkspaceBase,
 } from "./workspace-mirror.js";
+export {
+  assertSavedPath,
+  assertSavedTree,
+  parseSavedChanges,
+  ReceivedPack,
+  type SavedChange,
+  savedDraftChanges,
+  WorkspaceSaveError,
+  writeSavedChanges,
+} from "./workspace-save.js";

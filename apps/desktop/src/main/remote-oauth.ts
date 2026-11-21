@@ -154,7 +154,11 @@ export async function authorizeRemoteServer(options: {
     authorize.searchParams.set("client_id", registered.client_id);
     authorize.searchParams.set("redirect_uri", callback.url);
     authorize.searchParams.set("response_type", "code");
-    authorize.searchParams.set("scope", "openid profile email offline_access");
+    // Work's own app is its person: full access, approving included.
+    authorize.searchParams.set(
+      "scope",
+      "openid profile email offline_access work:full",
+    );
     authorize.searchParams.set("resource", requestedResource);
     authorize.searchParams.set("state", state);
     authorize.searchParams.set("code_challenge", challenge);
