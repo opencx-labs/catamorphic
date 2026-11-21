@@ -1,6 +1,6 @@
 # 0340 — The window renders what changed: workspaces in a store, parts that skip a render that is not theirs
 
-- **Status:** Proposed
+- **Status:** Accepted
 - **Date:** 2026-11-20
 
 ## Context
