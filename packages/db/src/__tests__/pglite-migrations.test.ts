@@ -206,29 +206,53 @@ describe("PGlite migrations", () => {
   ])(
     "applies the disk and coalesced-run migrations again over a profile that ran them as %s and %s",
     async (disk, coalesced) => {
-      await migrateToLatest({ db });
-      await sql`
-      DELETE FROM catamorphic._migrations
-      WHERE name IN ('092_machine_disk.sql', '093_coalesced_runs_and_result_submissions.sql')
-    `.execute(db);
-      await sql`
-      INSERT INTO catamorphic._migrations (name)
-      VALUES (${disk}), (${coalesced})
-      ON CONFLICT (name) DO NOTHING
-    `.execute(db);
+      const schema = `historical_disk_${disk.slice(0, 3)}`;
+      const directory = path.join(import.meta.dirname, "../../migrations");
+      const files = fs
+        .readdirSync(directory)
+        .filter((name) => name.endsWith(".sql") && name.slice(0, 3) <= "093")
+        .sort();
 
-      const result = await migrateToLatest({ db });
+      // Build the historical schema first. Migration 095 removes its rule
+      // table, so rewriting the ledger of a current schema cannot model
+      // an upgrade from a profile that still has that table.
+      await db.transaction().execute(async (trx) => {
+        await sql`CREATE SCHEMA ${sql.id(schema)}`.execute(trx);
+        await sql`SET LOCAL search_path TO ${sql.id(schema)}`.execute(trx);
+        await sql`CREATE TABLE _migrations (
+          id SERIAL PRIMARY KEY,
+          name VARCHAR(255) NOT NULL UNIQUE,
+          applied_at TIMESTAMPTZ NOT NULL DEFAULT now()
+        )`.execute(trx);
+        for (const file of files) {
+          const content = fs.readFileSync(path.join(directory, file), "utf8");
+          for (const statement of splitSqlStatements(content))
+            await sql.raw(statement).execute(trx);
+          const name = file.startsWith("092_")
+            ? disk
+            : file.startsWith("093_")
+              ? coalesced
+              : file;
+          await sql`INSERT INTO _migrations (name) VALUES (${name})`.execute(
+            trx,
+          );
+        }
+      });
+
+      const result = await migrateToLatest({ db, schema });
       expect(result.applied).toEqual([
         "092_machine_disk.sql",
         "093_coalesced_runs_and_result_submissions.sql",
+        "094_session_waits.sql",
+        "095_machines_as_host_code.sql",
       ]);
       const columns = await sql<{ count: number }>`
-      SELECT COUNT(*)::int AS count
-      FROM information_schema.columns
-      WHERE table_schema = ${DEFAULT_SCHEMA}
-        AND table_name = 'execution_allocations'
-        AND column_name = 'reserved_storage_mb'
-    `.execute(db);
+        SELECT COUNT(*)::int AS count
+        FROM information_schema.columns
+        WHERE table_schema = ${schema}
+          AND table_name = 'execution_allocations'
+          AND column_name = 'reserved_storage_mb'
+      `.execute(db);
       expect(columns.rows[0]?.count).toBe(1);
     },
     PGLITE_TIMEOUT,
