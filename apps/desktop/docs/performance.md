@@ -1054,3 +1054,28 @@ suite with `urls: ["--inspect=127.0.0.1:9229"]`, read
 `Profiler.start` and `Profiler.stop` around the fake agent's
 `retained history fixture` and `perf turn` scenarios.
 
+
+## The server message boundary (2026-11-21)
+
+[ADR 0341](../../../docs/decisions/0341-the-engines-boundary-one-interface-then-the-fork.md)
+introduces a `MessageChannel` between the desktop shell and server. Both
+ends still run in the main process. The paired runs alternated the
+post-database-thread baseline (`fdc5d5bb7`) and the boundary branch in
+the isolated Linux desktop, using the inspector method above.
+
+| Scenario | Baseline main thread busy, ms/s | Boundary main thread busy, ms/s | Synchronous posting, total ms |
+| --- | ---: | ---: | ---: |
+| Idle, about 10 s | 18 to 90 | 17 to 18 | 0 |
+| Live scripted turn, about 21 s | 63 to 116 | 91 to 104 | 1.11 to 1.38 |
+| Ten reopenings of a 1,000-item chat, alternating with a short chat | 196 to 221 | 247 to 294 | 2.25 to 2.93 |
+
+The chat reopenings took 4.2 s in all three baseline runs and 4.5 to
+4.8 s with the boundary. The latter posted 124 to 126 messages. The
+synchronous posting measurement covers the sender and copying during
+`postMessage`. Receive-side processing and time waiting for delivery are
+outside that measurement, and the whole-thread samples also include HTTP,
+query building, and native Electron work. The measurements show higher
+CPU and elapsed time in that scenario, with the observed posting time
+accounting for only a small part of the difference. These runs use a
+fixture profile and software compositing. Repeat them when the server
+moves to its own process.
