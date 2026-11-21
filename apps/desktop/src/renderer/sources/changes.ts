@@ -83,6 +83,8 @@ export function gitSource(deps: WorkSourceDeps): SectionSource {
   const source: SectionSource = {
     title: "Changes",
     empty: "No changes.",
+    // The chat's checkout, when the chat in front has one.
+    listsFrom: ({ session }) => session?.id,
     capabilities: () => capabilitiesOf(source),
     load: async ({ parentId, session }) => {
       if (!deps.writesProgram)

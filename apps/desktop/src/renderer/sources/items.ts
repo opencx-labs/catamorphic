@@ -60,6 +60,14 @@ export function itemsSource({
   return {
     title,
     empty: "No links yet.",
+    // What an item's `when` can ask about (matchesSidebarSurface).
+    listsFrom: ({ surface }) => [
+      surface.kind,
+      Boolean(surface.sessionId),
+      surface.path,
+      Boolean(surface.selection),
+      surface.tabPlacement,
+    ],
     capabilities: () => ({ move: false, drop: false, reveal: false }),
     load: async ({ parentId, cursor }) =>
       pageOf(

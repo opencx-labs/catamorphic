@@ -66,22 +66,30 @@ export function useRecedingSurface({
     (chat) => chat.mode === "tab" && chatTabKey(chat.localId) === activeTabKey,
   )?.localId;
   const view: FrontView = { identity, activeTabKey, modes: chatModes(chats) };
-  const [seen, setSeen] = useState(view);
+  // What was in front as this last committed. Kept beside the render, not
+  // in state: as state, every change of tab rendered the window twice to
+  // remember a view that keeps nothing in place. It moves on at the commit,
+  // so a render React throws away loses nothing.
+  const seen = useRef(view);
+  useLayoutEffect(() => {
+    seen.current = view;
+  });
   const [receding, setReceding] = useState<string | null>(null);
   // Adjusted in the render that changes what is in front, so the surface
   // is never unmounted, or left unpainted, for a frame first.
+  const was = seen.current;
   if (
-    seen.identity !== view.identity ||
-    seen.activeTabKey !== view.activeTabKey ||
-    seen.modes !== view.modes
+    was.identity !== view.identity ||
+    was.activeTabKey !== view.activeTabKey ||
+    was.modes !== view.modes
   ) {
-    setSeen(view);
-    const front = grownOver(seen, view);
+    const front = grownOver(was, view);
     if (
-      front ||
-      seen.identity !== view.identity ||
-      seen.activeTabKey !== view.activeTabKey ||
-      !target
+      (front ||
+        was.identity !== view.identity ||
+        was.activeTabKey !== view.activeTabKey ||
+        !target) &&
+      front !== receding
     )
       setReceding(front);
   }

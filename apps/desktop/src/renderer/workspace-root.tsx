@@ -1,6 +1,6 @@
 import { type AgentSession, useAgentAttention } from "@catamorphic/react";
 import { useQueryClient } from "@tanstack/react-query";
-import { useCallback, useEffect, useRef, useState } from "react";
+import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { flushSync } from "react-dom";
 import type { WorkspaceNavigation } from "../shared/desktop-workspace.js";
 import { App } from "./app.js";
@@ -306,30 +306,19 @@ export function WorkspaceRoot() {
           }}
           inert={project.key !== active}
         >
-          <WorkspaceContext.Provider
-            value={{
-              visible: project.key === active,
-              navigation: project.navigation,
-              projectId: project.projectId,
-              attention: project.projectId
+          <ProjectRuntime
+            runtimeKey={project.key}
+            projectId={project.projectId}
+            navigation={project.navigation}
+            visible={project.key === active}
+            attention={
+              project.projectId
                 ? attentionByProject[project.projectId]
-                : undefined,
-            }}
-          >
-            <ProjectTheme projectId={project.projectId}>
-              <App
-                runtimeProjectId={project.projectId}
-                onRequestProject={(id) => resolve(project.key, id)}
-              />
-              {project.key === active && transition > 0 && (
-                <div
-                  key={transition}
-                  className="project-switch-tint"
-                  aria-hidden="true"
-                />
-              )}
-            </ProjectTheme>
-          </WorkspaceContext.Provider>
+                : undefined
+            }
+            tint={project.key === active ? transition : 0}
+            onRequestProject={resolve}
+          />
         </div>
       ))}
       <DockHost activeProjectId={projectId} />
@@ -352,6 +341,51 @@ export function WorkspaceRoot() {
     </div>
   );
 }
+
+const ProjectApp = memo(App);
+
+/**
+ * One project's workspace. It renders when something of its own changes:
+ * every project a window keeps mounted used to render, whole, for any
+ * project's news (another's chat asking for attention, a switch).
+ */
+const ProjectRuntime = memo(function ProjectRuntime({
+  runtimeKey,
+  projectId,
+  navigation,
+  visible,
+  attention,
+  tint,
+  onRequestProject,
+}: {
+  runtimeKey: string;
+  projectId: string | undefined;
+  navigation: WorkspaceNavigation["surface"] | undefined;
+  visible: boolean;
+  attention: AgentSession[] | undefined;
+  /** The switch that brought it forward, tinted once; 0 for none. */
+  tint: number;
+  onRequestProject: (key: string, projectId: string) => Promise<boolean>;
+}) {
+  const context = useMemo(
+    () => ({ visible, navigation, projectId, attention }),
+    [visible, navigation, projectId, attention],
+  );
+  const request = useCallback(
+    (id: string) => onRequestProject(runtimeKey, id),
+    [onRequestProject, runtimeKey],
+  );
+  return (
+    <WorkspaceContext.Provider value={context}>
+      <ProjectTheme projectId={projectId}>
+        <ProjectApp runtimeProjectId={projectId} onRequestProject={request} />
+        {tint > 0 && (
+          <div key={tint} className="project-switch-tint" aria-hidden="true" />
+        )}
+      </ProjectTheme>
+    </WorkspaceContext.Provider>
+  );
+});
 
 /**
  * A project asked to open in a window of its own while files of it hold
