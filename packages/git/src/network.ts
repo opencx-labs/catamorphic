@@ -270,6 +270,7 @@ function pushWithLease(input: {
     [
       "push",
       "--porcelain",
+      "--no-follow-tags",
       `--force-with-lease=${input.target}:${input.expected}`,
       input.url,
       `${input.ref}:${input.target}`,
@@ -369,7 +370,9 @@ export async function pushOwnBranch(opts: {
     const status = output
       .split("\n")
       .find((line) => line.split("\t")[1]?.endsWith(`:${target}`))?.[0];
-    return status === "*" || status === "+" || status === " ";
+    if (status === "=") return false;
+    if (status === "*" || status === "+" || status === " ") return true;
+    throw new Error("Git did not confirm what happened to the pushed branch.");
   };
   const unchanged: Awaited<ReturnType<typeof pushOwnBranch>> = {
     outcome: "unchanged",

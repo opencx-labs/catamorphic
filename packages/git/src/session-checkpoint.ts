@@ -116,7 +116,7 @@ export function parseCheckpointMessage(message: string): SessionWork | null {
   };
 }
 
-/** What the checkpoint `commit` of the repository at `repoPath` records. */
+/** Read a commit already identified by the host as a session checkpoint. */
 export async function readSessionWork(input: {
   repoPath: string;
   commit: string;

@@ -7493,8 +7493,8 @@ export class AgentSessionsService {
   }
 
   /**
-   * After the harness finished (ADR 0198), safe to do again: sync the
-   * sandbox's changes back, ship the store, and commit the checkpoint.
+   * After the harness finished (ADR 0198), publish the workspace checkpoint
+   * and report the turn's changes and usage. Safe to do again.
    */
   private async finalizeTurn(input: {
     identity: Identity;
@@ -8423,20 +8423,34 @@ export class AgentSessionsService {
     message: string;
     held: () => void | Promise<void>;
   }): ReturnType<typeof saveSessionWorkspace> {
-    const base = await this.workspaceBaseOf(input.session);
-    return saveSessionWorkspace({
-      provider: input.provider,
-      projectManager: this.projectManager,
-      tenantId: input.identity.tenantId,
-      projectId: input.projectId,
-      sessionId: workspaceCopyId(input.session),
-      base: base.commit,
-      sandboxProviderId: input.sandboxProviderId,
-      projectDir: this.projectDir(input.provider),
-      message: input.message,
-      author: CHECKPOINT_AUTHOR,
-      held: input.held,
-    });
+    return withSpan(
+      {
+        tracer,
+        name: "agent.session.checkpoint_turn",
+        attributes: {
+          "catamorphic.tenant.id": input.identity.tenantId,
+          "user.id": input.identity.externalUserId,
+          "catamorphic.project.id": input.projectId,
+          "catamorphic.agent.session.id": input.session.id,
+        },
+      },
+      async () => {
+        const base = await this.workspaceBaseOf(input.session);
+        return saveSessionWorkspace({
+          provider: input.provider,
+          projectManager: this.projectManager,
+          tenantId: input.identity.tenantId,
+          projectId: input.projectId,
+          sessionId: workspaceCopyId(input.session),
+          base: base.commit,
+          sandboxProviderId: input.sandboxProviderId,
+          projectDir: this.projectDir(input.provider),
+          message: input.message,
+          author: CHECKPOINT_AUTHOR,
+          held: input.held,
+        });
+      },
+    );
   }
 
   /**
