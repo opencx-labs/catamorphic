@@ -226,8 +226,12 @@ if (e2eDataDir) {
   );
   // Whether Work is the active application decides which of its windows
   // can hold the keys on macOS; printed among each window's own events.
-  app.on("did-become-active", () => console.info("[desktop] App active"));
-  app.on("did-resign-active", () => console.info("[desktop] App inactive"));
+  app.on("did-become-active", () =>
+    console.info(`[desktop] App active @${Math.round(performance.now())}`),
+  );
+  app.on("did-resign-active", () =>
+    console.info(`[desktop] App inactive @${Math.round(performance.now())}`),
+  );
 }
 if (isolatedDataDir) {
   app.setPath("userData", isolatedDataDir);
@@ -710,8 +714,29 @@ function createWindow(
   // wait for one window to come forward that times out can then say
   // which window showed or took the keys after it.
   if (e2eDataDir && !dock) {
+    // FF-TEMP (never merged): times, and which calls ask for the keys.
     const say = (event: string) => () =>
-      console.info(`[desktop] Window ${workspaceState.id} ${event}`);
+      console.info(
+        `[desktop] Window ${workspaceState.id} ${event} @${Math.round(performance.now())}`,
+      );
+    for (const method of ["focus", "show", "showInactive", "hide"]) {
+      const original: unknown = Reflect.get(window, method);
+      if (typeof original !== "function") continue;
+      Reflect.set(window, method, (...args: unknown[]) => {
+        console.info(
+          `[desktop] FF call ${workspaceState.id} ${method} @${Math.round(performance.now())}`,
+        );
+        return Reflect.apply(original, window, args);
+      });
+    }
+    const contentsFocus: unknown = Reflect.get(window.webContents, "focus");
+    if (typeof contentsFocus === "function")
+      Reflect.set(window.webContents, "focus", (...args: unknown[]) => {
+        console.info(
+          `[desktop] FF call ${workspaceState.id} contents.focus @${Math.round(performance.now())}`,
+        );
+        return Reflect.apply(contentsFocus, window.webContents, args);
+      });
     window.on("show", say("show"));
     window.on("hide", say("hide"));
     window.on("focus", say("focus"));

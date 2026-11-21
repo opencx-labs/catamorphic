@@ -13,7 +13,7 @@ import {
 } from "./harness.js";
 
 // TEMPORARY evidence gathering on the macOS runner. Never merged: it only
-// logs (PROFILE-STRESS, PALETTE-STRESS lines) and never fails.
+// logs (PROFILE-LOOP, PALETTE-LOOP lines) and never fails.
 const mac = process.platform === "darwin";
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
@@ -34,49 +34,62 @@ function frontmostApplication(): string {
 
 const windowState = (frame: Pick<FrameHandle, "eval">) =>
   frame
-    .eval(
+    .eval<{ visible: boolean; focused: boolean; page: boolean } | null>(
       "window.catamorphicDesktop.devWindow('get').then(({ visible, focused }) => ({ visible, focused, page: document.hasFocus() }))",
     )
     .catch(() => null);
 
-async function profileRound(round: number, waitShown: boolean) {
-  const app = await launchApp();
+/** One app; a profile picked from the empty window again and again. */
+async function profileLoop(variant: string, rounds: number) {
+  const summary = {
+    variant,
+    rounds: 0,
+    kept: 0,
+    lost: 0,
+    never: 0,
+    emptyNotKey: 0,
+    error: "",
+    details: [] as unknown[],
+  };
+  let app: AppHandle | undefined;
   let source: FrameHandle | undefined;
   try {
-    const project = await app.eval<{ id: string }>(
-      `window.catamorphicDesktop.createProject(${JSON.stringify({ name: "Personal work", rootPath: path.join(app.userDataDir, "personal") })})`,
+    app = await launchApp({ env: { FF_ACTIVATE: variant } });
+    const handle = app;
+    const project = await handle.eval<{ id: string }>(
+      `window.catamorphicDesktop.createProject(${JSON.stringify({ name: "Personal work", rootPath: path.join(handle.userDataDir, "personal") })})`,
     );
-    await app.eval(
+    await handle.eval(
       `window.catamorphicDesktop.workspaceNavigate({projectId:${JSON.stringify(project.id)}})`,
     );
-    await app.waitFor(
+    await handle.waitFor(
       `!!document.querySelector('[data-project-runtime="${project.id}"][data-workspace-visible="true"] [data-workspace-ready]')`,
     );
-    await app.eval(`window.dispatchEvent(new KeyboardEvent('keydown', {
+    await handle.eval(`window.dispatchEvent(new KeyboardEvent('keydown', {
       key:'t', altKey:true, metaKey:true, bubbles:true
     }))`);
-    await app.waitFor(
+    await handle.waitFor(
       '!!document.querySelector(\'[data-workspace-visible="true"] input[aria-label="Address and search bar"]\')',
     );
-    await app.eval(`(() => { ${setReactValueJs};
+    await handle.eval(`(() => { ${setReactValueJs};
       const input = document.querySelector('[data-workspace-visible="true"] input[aria-label="Address and search bar"]');
       setReactValue(input, 'data:text/html,<title>Personal page</title><p>Retained personal work</p>');
       input.dispatchEvent(new KeyboardEvent('keydown', { key:'Enter', bubbles:true, cancelable:true }));
     })()`);
-    await app.waitFor(
+    await handle.waitFor(
       "!!document.querySelector('[data-workspace-visible=\"true\"] webview')",
     );
-    const other = await app.eval<{ id: string }>(
+    const other = await handle.eval<{ id: string }>(
       "window.catamorphicDesktop.profilesCreate('Empty source')",
     );
-    await app.eval(
+    await handle.eval(
       `window.catamorphicDesktop.openProfileWindow(${JSON.stringify(other.id)})`,
     );
     let sourceId: string | undefined;
     for (let attempt = 0; attempt < 75 && !sourceId; attempt += 1) {
       const saved: WindowSession = JSON.parse(
         await fs.readFile(
-          path.join(app.userDataDir, "window-state.json"),
+          path.join(handle.userDataDir, "window-state.json"),
           "utf8",
         ),
       );
@@ -86,97 +99,105 @@ async function profileRound(round: number, waitShown: boolean) {
       if (!sourceId) await sleep(200);
     }
     if (!sourceId) throw new Error("no source window saved");
-    source = await app.connectToFrame(`window=${sourceId}`);
+    const emptyId = sourceId;
+    source = await handle.connectToFrame(`window=${emptyId}`);
     const frame = source;
     await frame.waitFor(
       "!!document.querySelector('[aria-label=\"Switch profile: Empty source\"]')",
     );
-    const atSwitcher = await windowState(frame);
-    if (waitShown)
-      await frame.waitFor(
-        "window.catamorphicDesktop.devWindow('get').then(state => state.visible)",
-        { label: "the empty window is shown" },
-      );
-    await app.eval(`window.dispatchEvent(new KeyboardEvent('keydown', {
-      key:'p', metaKey:true, bubbles:true
-    }))`);
-    await app.waitFor(`(() => {
-      const input = document.querySelector('[data-workspace-visible="true"] [data-palette="overlay"] textarea[aria-label="Search commands, pages, and more"]');
-      return !!input && document.activeElement === input && !input.closest('[inert]');
-    })()`);
-    await app.eval(`(() => { ${setReactValueJs};
-      setReactValue(document.activeElement, '>close current work window');
-    })()`);
-    await app.waitFor(
-      "Array.from(document.activeElement.closest('[role=\"dialog\"]').querySelectorAll('[role=\"option\"]')).some(row => row.textContent.includes('Close current Work window'))",
-    );
-    await app.eval(
-      "Array.from(document.activeElement.closest('[role=\"dialog\"]').querySelectorAll('[role=\"option\"]')).find(row => row.textContent.includes('Close current Work window')).dispatchEvent(new MouseEvent('mousedown', { bubbles:true, cancelable:true }))",
-    );
-    await app.waitFor(
-      "window.catamorphicDesktop.devWindow('get').then(state => !state.visible)",
-    );
-    await frame.eval(
-      "document.querySelector('[aria-label=\"Switch profile: Empty source\"]').click()",
-    );
     await frame.waitFor(
-      '!!document.querySelector(\'[role="dialog"][aria-label="Profiles"]:not([inert])\')',
+      "window.catamorphicDesktop.devWindow('get').then(state => state.visible)",
     );
-    const atPick = {
-      personal: await windowState(app),
-      empty: await windowState(frame),
-      front: frontmostApplication(),
-    };
-    await frame.eval(
-      "Array.from(document.querySelectorAll('[role=\"dialog\"][aria-label=\"Profiles\"] button')).find(button => button.textContent.includes('Default Profile')).click()",
-    );
-    let ok = true;
-    await app
-      .waitFor(
-        "window.catamorphicDesktop.devWindow('get').then(state => state.visible && state.focused)",
-        { timeoutMs: 6_000 },
-      )
-      .catch(() => {
-        ok = false;
-      });
-    const after = {
-      personal: await windowState(app),
-      empty: await windowState(frame),
-      front: frontmostApplication(),
-    };
-    const events = app
-      .getOutput()
-      .split("\n")
-      .filter((line) => line.startsWith("[desktop] Window "))
-      .map((line) => {
-        const [id, event] = line.slice("[desktop] Window ".length).split(" ");
-        return `${id === "app" ? "Work" : id === sourceId ? "empty" : "personal"} ${event}`;
-      });
-    console.log(
-      `PROFILE-STRESS ${JSON.stringify({ round, waitShown, ok, atSwitcher, atPick, after, events })}`,
-    );
+    for (let round = 0; round < rounds; round += 1) {
+      const mark = handle.getOutput().length;
+      await handle.eval("window.close()");
+      await handle.waitFor(
+        "window.catamorphicDesktop.devWindow('get').then(state => !state.visible)",
+        { timeoutMs: 5_000 },
+      );
+      const emptyKey = await frame
+        .waitFor(
+          "window.catamorphicDesktop.devWindow('get').then(state => state.focused)",
+          { timeoutMs: 2_000 },
+        )
+        .then(
+          () => true,
+          () => false,
+        );
+      await frame.eval(
+        "document.querySelector('[aria-label=\"Switch profile: Empty source\"]').click()",
+      );
+      await frame.waitFor(
+        '!!document.querySelector(\'[role="dialog"][aria-label="Profiles"]:not([inert])\')',
+        { timeoutMs: 5_000 },
+      );
+      await frame.eval(
+        "Array.from(document.querySelectorAll('[role=\"dialog\"][aria-label=\"Profiles\"] button')).find(button => button.textContent.includes('Default Profile')).click()",
+      );
+      const came = await handle
+        .waitFor(
+          "window.catamorphicDesktop.devWindow('get').then(state => state.visible && state.focused)",
+          { timeoutMs: 3_000 },
+        )
+        .then(
+          () => true,
+          () => false,
+        );
+      // The keys were seen taken back right after the workspace had them.
+      await sleep(600);
+      const after = {
+        personal: await windowState(handle),
+        empty: await windowState(frame),
+      };
+      const kept = after.personal?.focused === true;
+      summary.rounds += 1;
+      if (!emptyKey) summary.emptyNotKey += 1;
+      if (kept) summary.kept += 1;
+      else if (came) summary.lost += 1;
+      else summary.never += 1;
+      if (!kept || round < 2)
+        summary.details.push({
+          round,
+          emptyKey,
+          came,
+          after,
+          front: kept ? undefined : frontmostApplication(),
+          log: handle
+            .getOutput()
+            .slice(mark)
+            .split("\n")
+            .filter((line) => /^\[desktop\] (Window|App|FF) /.test(line))
+            .map((line) =>
+              line
+                .slice("[desktop] ".length)
+                .replaceAll(emptyId, "empty")
+                .replace(/[0-9a-f]{8}-[0-9a-f-]{27}/g, "personal"),
+            ),
+        });
+      await frame
+        .waitFor(
+          "!document.querySelector('.animate-profile-veil-in, .animate-profile-veil-out') && !document.querySelector('[role=\"dialog\"][aria-label=\"Profiles\"]:not([inert])')",
+          { timeoutMs: 5_000 },
+        )
+        .catch(() => {});
+    }
   } catch (error) {
-    console.log(`PROFILE-STRESS-ERROR ${round} ${String(error).slice(0, 600)}`);
+    summary.error = String(error).slice(0, 500);
   } finally {
     source?.close();
-    await app.stop().catch((error: unknown) => {
-      console.log(
-        `PROFILE-STRESS-STOP ${round} ${String(error).slice(0, 300)}`,
-      );
+    await app?.stop().catch((error: unknown) => {
+      summary.error += ` stop: ${String(error).slice(0, 200)}`;
     });
   }
+  console.log(`PROFILE-LOOP ${JSON.stringify(summary)}`);
 }
 
-it.skipIf(!mac)(
-  "stress: a profile picked from an empty window (logs only)",
-  async () => {
-    // The flow as it was (no wait for the empty window to be shown), then
-    // with that wait: the events say what differs when it fails.
-    for (let round = 0; round < 14; round += 1)
-      await profileRound(round, round >= 10);
-  },
-  900_000,
-);
+for (const variant of ["current", "nosteal", "showonly", "reassert"])
+  it.skipIf(!mac)(
+    `stress: a profile picked from an empty window, ${variant} (logs only)`,
+    () => profileLoop(variant, 36),
+    300_000,
+  );
 
 it.skipIf(!mac)(
   "stress: a page focused just before Cmd+P (logs only)",
@@ -223,39 +244,37 @@ const rows=()=>[...input().closest('[role="dialog"]').querySelectorAll('[role="o
         `return document.activeElement?.tagName === 'WEBVIEW'`,
         "the page took focus",
       );
-      // A page taking focus while the overlay is open is the race itself.
-      await run(`window.__pageTook = 0;
-        document.addEventListener('focusin', (event) => {
-          if (event.target?.tagName === 'WEBVIEW' && document.querySelector('[data-palette="overlay"]:not([inert], [inert] *)')) window.__pageTook += 1;
-        }, true);
-        return true`);
-      const results: unknown[] = [];
-      const delays = [0, 0, 2, 5, 10, 20, 50];
-      for (let round = 0; round < 35; round += 1) {
-        const delay = delays[round % delays.length];
-        await run(
-          `document.activeElement?.blur?.(); window.__pageTook = 0; return true`,
+      for (const guard of [false, true]) {
+        await run(`window.__ffNoPaletteGuard = ${!guard}; return true`);
+        let unfocused = 0;
+        const rounds = 60;
+        for (let round = 0; round < rounds; round += 1) {
+          await run(`document.activeElement?.blur?.(); return true`);
+          await sleep(100);
+          await handle.eval(`new Promise((resolve) => requestAnimationFrame(() => {
+            document.querySelector('[data-workspace-visible="true"] webview').focus();
+            ${cmdP};
+            resolve(true);
+          }))`);
+          await sleep(400);
+          if (
+            !(await run<boolean>(
+              `return !!input() && document.activeElement === input()`,
+            ))
+          )
+            unfocused += 1;
+          await run(
+            `window.dispatchEvent(new KeyboardEvent('keydown',{key:'Escape',bubbles:true})); return true`,
+          );
+          await wait(`return !input()`, "palette closed");
+          await sleep(150);
+        }
+        console.log(
+          `PALETTE-LOOP ${JSON.stringify({ guard, rounds, unfocused })}`,
         );
-        await sleep(150);
-        await handle.eval(`new Promise((resolve) => requestAnimationFrame(() => {
-          document.querySelector('[data-workspace-visible="true"] webview').focus();
-          setTimeout(() => { ${cmdP}; resolve(true); }, ${delay});
-        }))`);
-        await sleep(700);
-        results.push(
-          await run<object>(
-            `const a=document.activeElement; return {delay:${delay}, open: !!input(), focused: a===input(), tag: a?.tagName, pageTook: window.__pageTook}`,
-          ),
-        );
-        await run(
-          `window.dispatchEvent(new KeyboardEvent('keydown',{key:'Escape',bubbles:true})); return true`,
-        );
-        await wait(`return !input()`, "palette closed");
-        await sleep(300);
       }
-      console.log(`PALETTE-STRESS ${JSON.stringify(results)}`);
     } catch (error) {
-      console.log(`PALETTE-STRESS-ERROR ${String(error).slice(0, 800)}`);
+      console.log(`PALETTE-LOOP-ERROR ${String(error).slice(0, 800)}`);
     } finally {
       await app?.stop().catch(() => {});
       server.close();

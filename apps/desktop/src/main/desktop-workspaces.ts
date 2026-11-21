@@ -877,12 +877,42 @@ export class DesktopWorkspaces {
       candidates[0];
     if (!window) return false;
     if (window.isMinimized()) window.restore();
+    // FF-TEMP (never merged): variants of bringing the window forward.
+    const variant = process.env.FF_ACTIVATE ?? "current";
+    const at = () => Math.round(performance.now());
+    console.info(`[desktop] FF activateProfile ${variant} start @${at()}`);
     window.show();
     // The person chose this profile in Work. On macOS a key window alone
     // leaves Work inactive when hiding its key window deactivated it, and
     // the workspace would then show behind without the keyboard.
-    if (process.platform === "darwin") app.focus({ steal: true });
-    window.focus();
+    if (
+      process.platform === "darwin" &&
+      variant !== "nosteal" &&
+      variant !== "showonly"
+    )
+      app.focus({ steal: true });
+    if (variant !== "showonly") window.focus();
+    if (variant === "reassert") {
+      const again = (_event: Electron.Event, focused: BrowserWindow) => {
+        if (
+          focused === window ||
+          !this.isWorkspace(focused) ||
+          window.isDestroyed() ||
+          !window.isVisible()
+        )
+          return;
+        stop();
+        console.info(`[desktop] FF reassert @${at()}`);
+        window.focus();
+      };
+      const stop = () => {
+        clearTimeout(timer);
+        app.removeListener("browser-window-focus", again);
+      };
+      const timer = setTimeout(stop, 1000);
+      app.on("browser-window-focus", again);
+    }
+    console.info(`[desktop] FF activateProfile end @${at()}`);
     return true;
   }
 

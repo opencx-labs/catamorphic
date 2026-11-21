@@ -563,6 +563,8 @@ function CommandPaletteContent({
   // the page. It takes focus back, as a dialog does (lib/frame-focus.ts).
   useEffect(() => {
     if (variant !== "overlay" || !open || !active) return;
+    // FF-TEMP (never merged): measure without the guard.
+    if (Reflect.get(window, "__ffNoPaletteGuard") === true) return;
     return keepFocusFromFrames({
       surface: () =>
         (agentInputRef.current?.element() ?? inputRef.current)?.closest(
