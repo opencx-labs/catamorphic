@@ -871,6 +871,15 @@ describe("keyed chats on workers (ADR 0173)", () => {
       replyOf(
         await sessions.sendMessage(identity, projectId, session.id, message),
       ).content;
+    const checkpoint = () =>
+      core.projectManager.remoteBackend?.withOrigin(
+        SERVER_TENANT_ID,
+        projectId,
+        (origin) => origin.resolveRef(`refs/heads/sessions/${session.id}`),
+      );
+    expect(await say("read-file scratch.md")).toBe("missing");
+    const initialCheckpoint = await checkpoint();
+    expect(initialCheckpoint).toEqual(expect.any(String));
     await say("write-file scratch.md only-in-the-sandbox");
     expect(await say("read-file scratch.md")).toBe("only-in-the-sandbox");
     const idle = await sessions.get(identity, projectId, session.id);
@@ -880,21 +889,8 @@ describe("keyed chats on workers (ADR 0173)", () => {
       }),
     ).toBe(1);
     await freed(idle.allocationId);
-    const branch = await core.projectManager.remoteBackend?.withOrigin(
-      SERVER_TENANT_ID,
-      projectId,
-      (origin) => origin.resolveRef(`refs/heads/sessions/${session.id}`),
-    );
-    // The session's ref holds its base (ADR 0342) and nothing the agent
-    // changed: no checkpoint was written on it.
-    const workspace = (
-      await core.db
-        .selectFrom("agent_sessions")
-        .select("workspace")
-        .where("id", "=", session.id)
-        .executeTakeFirstOrThrow()
-    ).workspace;
-    expect(workspace).toMatchObject({ commit: branch });
+    // The host's initial checkpoint is still the only saved state.
+    expect(await checkpoint()).toBe(initialCheckpoint);
     // The fresh workspace starts from what the chat had saved: nothing.
     expect(await say("read-file scratch.md")).toBe("missing");
     await closeAndFree(session.id);
