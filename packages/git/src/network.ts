@@ -144,15 +144,20 @@ export function isManagedBranch(branch: string): boolean {
 }
 
 /**
- * The one push rule (ADR 0170). On an attached remote Work may only create or
- * fast-forward branches under `work/`; the default branch and every other
- * branch belong to the people who share the repository, and history there is
- * never rewritten. Owned remotes are unrestricted.
+ * The one push rule (ADRs 0170, 0343). On an attached remote Work may only
+ * create or fast-forward branches under `work/`; the default branch and
+ * every other branch belong to the people who share the repository.
+ * History there is rewritten in one case only: a chat force-updates its
+ * own `work/` branch with a lease on the commit it last pushed, so
+ * anything anyone else pushed there refuses the push instead of being
+ * overwritten. Owned remotes are unrestricted.
  */
 export function assertPushAllowed(input: {
   ownership: RemoteOwnership;
   remoteBranch: string;
   force?: boolean;
+  /** The push names the commit it expects to replace. */
+  lease?: boolean;
 }): void {
   if (input.ownership === "owned") return;
   if (!isManagedBranch(input.remoteBranch)) {
@@ -161,7 +166,7 @@ export function assertPushAllowed(input: {
       `this repository is attached, so Work only pushes branches it creates under '${MANAGED_BRANCH_PREFIX}'. Open a pull request instead.`,
     );
   }
-  if (input.force) {
+  if (input.force && !input.lease) {
     throw new RemotePushRefusedError(
       input.remoteBranch,
       "Work never rewrites history in an attached repository.",
@@ -187,6 +192,11 @@ export async function pushToRemote(opts: {
   /** Branch name on the remote (a plain name, not `refs/heads/...`). */
   remoteBranch: string;
   force?: boolean;
+  /**
+   * Replace the branch only while it still holds `expected` (null: only
+   * while it does not exist). Native Git only.
+   */
+  lease?: { expected: string | null };
 }): Promise<void> {
   const { ref, remoteBranch } = opts;
   // Plain names only: a `+`, `:` or leading `-` would smuggle a forced or
@@ -196,7 +206,31 @@ export async function pushToRemote(opts: {
       throw new RemotePushRefusedError(name, "not a plain branch or ref name.");
     }
   }
-  assertPushAllowed(opts);
+  assertPushAllowed({
+    ownership: opts.ownership,
+    remoteBranch,
+    force: opts.force ?? opts.lease !== undefined,
+    lease: opts.lease !== undefined,
+  });
+  if (opts.lease) {
+    const expected = opts.lease.expected ?? "";
+    if (!opts.native || (expected && !/^[0-9a-f]{40,64}$/.test(expected)))
+      throw new RemotePushRefusedError(
+        remoteBranch,
+        "a push with a lease names the commit it replaces.",
+      );
+    await nativeGit(
+      opts.repoPath,
+      [
+        "push",
+        `--force-with-lease=refs/heads/${remoteBranch}:${expected}`,
+        opts.url,
+        `${ref}:refs/heads/${remoteBranch}`,
+      ],
+      opts.credentials ? { ...opts.credentials, url: opts.url } : undefined,
+    );
+    return;
+  }
   if (opts.native) {
     await nativeGit(
       opts.repoPath,
@@ -220,6 +254,113 @@ export async function pushToRemote(opts: {
     force: opts.force ?? false,
     onAuth: onAuthFor(opts.credentials),
   });
+}
+
+/** The branch a chat last pushed to the project's repository (ADR 0343). */
+export interface PushedBranch {
+  branch: string;
+  commit: string;
+}
+
+/**
+ * Push a chat's branch (ADR 0343): a `work/` branch it creates, moves
+ * forward, or, after a rebase, replaces. It replaces only a branch it
+ * pushed before, and only while that branch still holds the commit it last
+ * pushed there; anything a person or another chat pushed since refuses
+ * the push. Never a branch outside `work/`, and never a deletion.
+ */
+export async function pushOwnBranch(opts: {
+  repoPath: string;
+  url: string;
+  credentials?: GitCredentials;
+  ownership: RemoteOwnership;
+  /** The local commit to push. */
+  commit: string;
+  remoteBranch: string;
+  /** What this chat last pushed, when it pushed before. */
+  pushed?: PushedBranch;
+}): Promise<{ outcome: "created" | "updated" | "replaced" | "unchanged" }> {
+  const { remoteBranch, commit } = opts;
+  if (!isManagedBranch(remoteBranch) || /[:\s+]|^-/.test(remoteBranch))
+    throw new RemotePushRefusedError(
+      remoteBranch,
+      `a chat pushes only its own branch under '${MANAGED_BRANCH_PREFIX}'.`,
+    );
+  if (!/^[0-9a-f]{40,64}$/.test(commit))
+    throw new RemotePushRefusedError(remoteBranch, "not a commit to push.");
+  const auth = opts.credentials
+    ? { ...opts.credentials, url: opts.url }
+    : undefined;
+  const listed = await nativeGit(
+    opts.repoPath,
+    ["ls-remote", opts.url, `refs/heads/${remoteBranch}`],
+    auth,
+  );
+  const remote = listed.trim().split(/\s+/)[0] || null;
+  const push = (lease: { expected: string | null } | undefined) =>
+    pushToRemote({
+      repoPath: opts.repoPath,
+      native: true,
+      url: opts.url,
+      ...(opts.credentials ? { credentials: opts.credentials } : {}),
+      ownership: opts.ownership,
+      ref: commit,
+      remoteBranch,
+      ...(lease ? { lease } : {}),
+    });
+  const stale = (error: unknown): never => {
+    throw isStaleLease(error)
+      ? new RemotePushRefusedError(
+          remoteBranch,
+          "the branch changed in the repository while it was being pushed. Try again.",
+        )
+      : error;
+  };
+  if (!remote) {
+    // Created only where nothing stands: a branch that appeared meanwhile
+    // is someone else's.
+    await push({ expected: null }).catch(stale);
+    return { outcome: "created" };
+  }
+  // What is already there, or only moves forward, overwrites nothing:
+  // the agent may have pushed its branch itself through the gateway.
+  if (remote === commit) return { outcome: "unchanged" };
+  const forward = await nativeGit(opts.repoPath, [
+    "merge-base",
+    "--is-ancestor",
+    remote,
+    commit,
+  ]).then(
+    () => true,
+    () => false,
+  );
+  if (forward) {
+    await push(undefined);
+    return { outcome: "updated" };
+  }
+  // Replacing is for the chat's own branch alone, as it last left it.
+  if (opts.pushed?.branch !== remoteBranch)
+    throw new RemotePushRefusedError(
+      remoteBranch,
+      "a branch of that name is already in the repository with other commits, and this chat did not create it. Switch to another branch name and try again.",
+    );
+  if (remote !== opts.pushed.commit)
+    throw new RemotePushRefusedError(
+      remoteBranch,
+      "someone else pushed to this branch since this chat last did, so it was not overwritten. Fetch the branch, rebase or merge onto it, and try again.",
+    );
+  await push({ expected: opts.pushed.commit }).catch(stale);
+  return { outcome: "replaced" };
+}
+
+function isStaleLease(error: unknown): boolean {
+  const text =
+    error && typeof error === "object" && "stderr" in error
+      ? String(error.stderr)
+      : error instanceof Error
+        ? error.message
+        : "";
+  return /stale info|\[rejected\]|already exists/i.test(text);
 }
 
 /**

@@ -1635,7 +1635,6 @@ const TurnOutcomeSchema = describes<TurnOutcome>()(
       z.object({ path: z.string(), kind: z.enum(["modified", "deleted"]) }),
     ),
     usage: AgentTurnUsageSchema.optional(),
-    storeSync: JsonObjectSchema.optional(),
     workspaceSync: z.object({ error: z.string() }).optional(),
     notification: z
       .object({ title: z.string().optional(), body: z.string().optional() })

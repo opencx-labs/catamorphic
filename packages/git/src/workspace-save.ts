@@ -1,4 +1,8 @@
-import { type ChildProcessWithoutNullStreams, spawn } from "node:child_process";
+import {
+  type ChildProcess,
+  type ChildProcessWithoutNullStreams,
+  spawn,
+} from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { constants } from "node:fs";
 import fs from "node:fs/promises";
@@ -9,11 +13,12 @@ import type { DraftChange } from "./origin-draft.js";
 import { isPersonalFile } from "./personal-files.js";
 
 /**
- * Saving a sandbox's workspace (ADR 0341). The sandbox packs the files that
- * changed since the last save, with a manifest naming each path, its Git
- * mode and its blob, into one Git pack. Everything read here came from the
- * sandbox and is treated as hostile: the pack is indexed in a repository
- * of its own that is thrown away, every path is checked before anything is
+ * Saving a sandbox's workspace (ADRs 0341, 0342). The sandbox packs the
+ * files that changed since the last save, with a manifest naming each path,
+ * its Git mode and its blob, and the commits its branch gained, into one
+ * Git pack. Everything read here came from the sandbox and is treated as
+ * hostile: the pack is indexed in a repository of its own that is thrown
+ * away, every path and every tree entry is checked before anything is
  * written, and no write ever follows a link.
  */
 
@@ -37,6 +42,10 @@ const RECORD =
 const GITLINK = "160000";
 /** Code points HFS+ ignores in names, so `.g‌it` opens `.git`. */
 const HFS_IGNORED = /[‌-‏‪-‮⁪-⁯﻿]/g;
+/** What a tree a saved commit holds may name: folders, files, links, nested repositories. */
+const TREE_MODES = new Set(["40000", "100644", "100755", "120000", GITLINK]);
+/** A tree larger than this names more entries than a commit may carry. */
+const MAX_TREE_BYTES = 64 * 1024 * 1024;
 /** The longest link target any supported filesystem takes. */
 const MAX_LINK_BYTES = 4096;
 /** A manifest larger than this names more paths than a save may carry. */
@@ -166,6 +175,40 @@ function assertNoFileIsAFolder(changes: readonly SavedChange[]): void {
   }
 }
 
+/**
+ * Refuse a tree a saved commit may not hold: an entry whose name is not one
+ * path segment a checkout may contain, or whose mode is not a folder, a
+ * file, a link or a nested repository. Git's own trees never hold one.
+ */
+export function assertSavedTree(input: {
+  /** The tree object's raw content: `<mode> <name>NUL<id>` per entry. */
+  tree: Uint8Array;
+  /** Bytes of each entry's id: 20 (SHA-1) or 32 (SHA-256). */
+  idBytes: 20 | 32;
+}): void {
+  const { tree, idBytes } = input;
+  const decoder = new TextDecoder("utf-8", { fatal: true });
+  let offset = 0;
+  while (offset < tree.length) {
+    const space = tree.indexOf(0x20, offset);
+    const nul = space < 0 ? -1 : tree.indexOf(0, space + 1);
+    if (space < 0 || nul < 0 || nul + 1 + idBytes > tree.length)
+      throw new WorkspaceSaveError("the branch holds a folder Git cannot read");
+    const mode = Buffer.from(tree.subarray(offset, space)).toString("latin1");
+    const name = decodePath(decoder, tree.subarray(space + 1, nul));
+    if (!TREE_MODES.has(mode))
+      throw new WorkspaceSaveError(
+        `the branch holds ${JSON.stringify(name.slice(0, 200))} with a mode (${mode.slice(0, 12)}) that cannot be saved`,
+      );
+    if (name.includes("/"))
+      throw new WorkspaceSaveError(
+        `the branch names a path that is not one name: ${JSON.stringify(name.slice(0, 200))}`,
+      );
+    assertSavedPath(name);
+    offset = nul + 1 + idBytes;
+  }
+}
+
 /** Git with nothing inherited that could prompt or lock. */
 function gitEnvironment(): NodeJS.ProcessEnv {
   return { ...process.env, GIT_OPTIONAL_LOCKS: "0", GIT_TERMINAL_PROMPT: "0" };
@@ -180,13 +223,22 @@ function gitEnvironment(): NodeJS.ProcessEnv {
 export class ReceivedPack {
   private reader: BlobReader | undefined;
 
-  private constructor(private readonly directory: string) {}
+  private constructor(
+    private readonly directory: string,
+    /** Bytes of an object id in the sandbox's repository. */
+    private readonly idBytes: 20 | 32,
+  ) {}
 
   /** Index the pack arriving as `chunks`, in order. */
   static async receive(input: {
     /** The sandbox repository's object format, by its ids' length. */
     objectFormat: "sha1" | "sha256";
     chunks: AsyncIterable<Uint8Array>;
+    /**
+     * A repository on this machine whose objects the pack's commits may
+     * build on (the session's copy): read through, never written.
+     */
+    borrow?: string;
   }): Promise<ReceivedPack> {
     const directory = await fs.mkdtemp(path.join(tmpdir(), "work-save-"));
     try {
@@ -196,8 +248,27 @@ export class ReceivedPack {
         "--quiet",
         ...(input.objectFormat === "sha256" ? ["--object-format=sha256"] : []),
       ]);
+      if (input.borrow) {
+        const objects = (
+          await nativeGit(input.borrow, [
+            "rev-parse",
+            "--path-format=absolute",
+            "--git-path",
+            "objects",
+          ])
+        ).trim();
+        if (/[\n"]/.test(objects))
+          throw new Error("The saved copy's path cannot be borrowed from");
+        await fs.writeFile(
+          path.join(directory, "objects", "info", "alternates"),
+          `${objects}\n`,
+        );
+      }
       await indexPack({ directory, chunks: input.chunks });
-      return new ReceivedPack(directory);
+      return new ReceivedPack(
+        directory,
+        input.objectFormat === "sha256" ? 32 : 20,
+      );
     } catch (error) {
       await fs.rm(directory, { recursive: true, force: true });
       throw error;
@@ -242,12 +313,164 @@ export class ReceivedPack {
     }
   }
 
+  /**
+   * Check the commits a save says its branch gained (ADR 0342), before any
+   * of them is kept: `head` and everything it reaches that `known` (the
+   * workspace's base and its last saved head) does not. Every commit must
+   * be here whole, with history that ends at `known`; every tree may name
+   * only what a checkout may hold; and together they are bounded. Returns
+   * the new commits, newest first.
+   */
+  async assertHistory(input: {
+    head: string;
+    known: readonly string[];
+    maxCommits: number;
+    maxBytes: number;
+  }): Promise<{ commits: string[] }> {
+    for (const oid of [input.head, ...input.known])
+      if (!OBJECT_ID.test(oid))
+        throw new WorkspaceSaveError("the workspace names an invalid commit");
+    const range = [input.head, "--not", ...input.known];
+    const walk = async (args: readonly string[]): Promise<string[]> => {
+      try {
+        return (
+          await nativeGit(this.directory, ["rev-list", ...args, ...range])
+        )
+          .split("\n")
+          .filter(Boolean);
+      } catch {
+        throw new WorkspaceSaveError(
+          "the branch's commits build on history that did not arrive with them; fetch that history (git fetch --unshallow) or go back to a branch that starts from this workspace's base",
+        );
+      }
+    };
+    const commits = await walk([
+      "--parents",
+      `--max-count=${input.maxCommits + 1}`,
+    ]);
+    if (commits.length > input.maxCommits)
+      throw new WorkspaceSaveError(
+        `the branch gained more than ${input.maxCommits} commits at once`,
+      );
+    for (const line of commits)
+      if (!line.includes(" "))
+        throw new WorkspaceSaveError(
+          "the branch holds a commit with no parent, so its history does not start from this workspace's base",
+        );
+    const objects = await walk(["--objects", "--no-object-names"]);
+    if (objects.length === 0) return { commits: [] };
+    const listed = Buffer.from(
+      await nativeGitBytes(
+        this.directory,
+        ["cat-file", "--batch-check"],
+        new TextEncoder().encode(`${objects.join("\n")}\n`),
+      ),
+    )
+      .toString("latin1")
+      .split("\n")
+      .filter(Boolean);
+    if (listed.length !== objects.length)
+      throw new WorkspaceSaveError("the branch's commits could not be listed");
+    let total = 0;
+    for (const [index, line] of listed.entries()) {
+      const [oid, type, size] = line.split(" ");
+      if (oid !== objects[index] || !/^\d+$/.test(size ?? ""))
+        throw new WorkspaceSaveError(
+          "the branch's commits name an object that did not arrive",
+        );
+      total += Number(size);
+      if (total > input.maxBytes)
+        throw new WorkspaceSaveError(
+          `the branch gained more than ${Math.floor(input.maxBytes / (1024 * 1024))} MiB of commits at once`,
+        );
+      if (type === "tree")
+        assertSavedTree({
+          tree: await this.readObject({ oid: oid ?? "", type: "tree" }),
+          idBytes: this.idBytes,
+        });
+      else if (type !== "commit" && type !== "blob")
+        throw new WorkspaceSaveError(
+          "the branch's commits hold something that is not a commit, a folder or a file",
+        );
+    }
+    return { commits: commits.map((line) => line.split(" ")[0] ?? "") };
+  }
+
+  /**
+   * Keep checked commits (ADR 0342): `head` and what it reaches beyond
+   * `known`, unpacked loose into the repository at `repoPath`, so no pack
+   * stays there. Git checks each object and its links again as it writes.
+   */
+  async unpackHistory(input: {
+    repoPath: string;
+    head: string;
+    known: readonly string[];
+  }): Promise<void> {
+    for (const oid of [input.head, ...input.known])
+      if (!OBJECT_ID.test(oid))
+        throw new WorkspaceSaveError("the workspace names an invalid commit");
+    const packer = spawn(
+      "git",
+      ["-C", this.directory, "pack-objects", "--revs", "--stdout", "--quiet"],
+      { env: gitEnvironment(), stdio: ["pipe", "pipe", "ignore"] },
+    );
+    const unpacker = spawn(
+      "git",
+      ["-C", input.repoPath, "unpack-objects", "--strict", "-q"],
+      { env: gitEnvironment(), stdio: ["pipe", "ignore", "pipe"] },
+    );
+    const stderr: Buffer[] = [];
+    unpacker.stderr.on("data", (chunk: Buffer) => {
+      if (stderr.length < 16) stderr.push(chunk);
+    });
+    packer.stdin.on("error", () => {});
+    unpacker.stdin.on("error", () => {});
+    const exit = (child: ChildProcess) =>
+      new Promise<number | null>((resolve, reject) => {
+        child.on("error", reject);
+        child.on("close", resolve);
+      });
+    const packed = exit(packer);
+    const unpacked = exit(unpacker);
+    packer.stdout.pipe(unpacker.stdin);
+    packer.stdin.end(
+      `${input.head}\n${input.known.map((oid) => `^${oid}\n`).join("")}`,
+    );
+    const [packCode, unpackCode] = await Promise.all([packed, unpacked]);
+    if (packCode !== 0 || unpackCode !== 0) {
+      const detail = Buffer.concat(stderr)
+        .toString("utf8")
+        .trim()
+        .split("\n")[0];
+      throw new WorkspaceSaveError(
+        `the branch's commits could not be kept${detail ? ` (${detail.slice(0, 200)})` : ""}`,
+      );
+    }
+  }
+
   /** One blob's bytes, refused when larger than `maxBytes`. */
   async read(input: { oid: string; maxBytes: number }): Promise<Uint8Array> {
     const parts: Uint8Array[] = [];
     await this.stream({
       oid: input.oid,
       maxBytes: input.maxBytes,
+      write: async (chunk) => {
+        parts.push(Uint8Array.from(chunk));
+      },
+    });
+    return new Uint8Array(Buffer.concat(parts));
+  }
+
+  /** One object's bytes, refused when it is not of `type`. */
+  private async readObject(input: {
+    oid: string;
+    type: "tree";
+  }): Promise<Uint8Array> {
+    const parts: Uint8Array[] = [];
+    await this.stream({
+      oid: input.oid,
+      type: input.type,
+      maxBytes: MAX_TREE_BYTES,
       write: async (chunk) => {
         parts.push(Uint8Array.from(chunk));
       },
@@ -265,6 +488,7 @@ export class ReceivedPack {
 
   private async stream(input: {
     oid: string;
+    type?: "blob" | "tree";
     maxBytes: number;
     write: (chunk: Uint8Array) => Promise<void>;
   }): Promise<void> {
@@ -299,10 +523,12 @@ async function indexPack(input: {
   directory: string;
   chunks: AsyncIterable<Uint8Array>;
 }): Promise<void> {
-  const child = spawn("git", ["-C", input.directory, "index-pack", "--stdin"], {
-    env: gitEnvironment(),
-    stdio: ["pipe", "ignore", "pipe"],
-  });
+  const child = spawn(
+    "git",
+    // Git checks every object's form as it indexes, not only its checksum.
+    ["-C", input.directory, "index-pack", "--stdin", "--fsck-objects"],
+    { env: gitEnvironment(), stdio: ["pipe", "ignore", "pipe"] },
+  );
   const stderr: Buffer[] = [];
   child.stderr.on("data", (chunk: Buffer) => {
     if (stderr.length < 16) stderr.push(chunk);
@@ -366,6 +592,7 @@ class BlobReader {
 
   copy(input: {
     oid: string;
+    type?: "blob" | "tree";
     maxBytes: number;
     write: (chunk: Uint8Array) => Promise<void>;
   }): Promise<void> {
@@ -376,6 +603,7 @@ class BlobReader {
 
   private async copyNow(input: {
     oid: string;
+    type?: "blob" | "tree";
     maxBytes: number;
     write: (chunk: Uint8Array) => Promise<void>;
   }): Promise<void> {
@@ -383,7 +611,11 @@ class BlobReader {
       throw new WorkspaceSaveError("the workspace names an invalid object");
     this.child.stdin.write(`${input.oid}\n`);
     const [oid, type, size] = (await this.line()).split(" ");
-    if (oid !== input.oid || type !== "blob" || !/^\d+$/.test(size ?? ""))
+    if (
+      oid !== input.oid ||
+      type !== (input.type ?? "blob") ||
+      !/^\d+$/.test(size ?? "")
+    )
       throw new WorkspaceSaveError(
         "the workspace's pack lacks a file it names",
       );

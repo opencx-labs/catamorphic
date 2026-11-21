@@ -885,7 +885,16 @@ describe("keyed chats on workers (ADR 0173)", () => {
       projectId,
       (origin) => origin.resolveRef(`refs/heads/sessions/${session.id}`),
     );
-    expect(branch ?? null).toBeNull();
+    // The session's ref holds its base (ADR 0342) and nothing the agent
+    // changed: no checkpoint was written on it.
+    const workspace = (
+      await core.db
+        .selectFrom("agent_sessions")
+        .select("workspace")
+        .where("id", "=", session.id)
+        .executeTakeFirstOrThrow()
+    ).workspace;
+    expect(workspace).toMatchObject({ commit: branch });
     // The fresh workspace starts from what the chat had saved: nothing.
     expect(await say("read-file scratch.md")).toBe("missing");
     await closeAndFree(session.id);

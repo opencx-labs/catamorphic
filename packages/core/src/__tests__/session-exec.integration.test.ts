@@ -1399,7 +1399,11 @@ describeIf("workflows run commands in a chat's workspace (ADR 0324)", () => {
       sessionId,
       key: null,
       reason: "created",
-      workspace: null,
+      // Every chat stands on a base (ADR 0342): here the project's own main.
+      workspace: {
+        ref: "main",
+        commit: expect.stringMatching(/^[0-9a-f]{40}$/),
+      },
     });
     expect(setupInputs.at(-1)).toHaveProperty("agentId");
     // Nothing is left that would let a later run use the setup's network.

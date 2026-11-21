@@ -2,6 +2,7 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { SET_SESSION_METADATA_DESCRIPTION } from "@catamorphic/agent-protocol";
+import { PULL_REQUEST_TOOL_NAME, pullRequestTool } from "@catamorphic/core";
 import {
   agentCapabilityTools,
   type ExtraToolContext,
@@ -653,16 +654,42 @@ describe("workspace coordination tools", () => {
       },
       createPullRequest: async (projectId, sessionId, input) => {
         calls.push(`pr:${projectId}:${sessionId}:${input.title}`);
-        return { url: "https://example.test/pr/1", number: 1, branch: "pr" };
+        return {
+          url: "https://example.test/pr/1",
+          number: 1,
+          branch: "work/feature-0a1b2c3d",
+          commit: "a".repeat(40),
+          base: "main",
+          created: true,
+          uncommitted: [],
+          note: "Opened, and recorded on this chat.",
+        };
       },
     });
 
     await toolkit.tools
       .find((tool) => tool.name === "sync_project")
       ?.execute({}, context);
-    await toolkit.tools
-      .find((tool) => tool.name === "create_pull_request")
-      ?.execute({ title: "Review this" }, context);
+    // Core's one pull request tool (ADR 0343), over this chat's checkout.
+    const pullRequest = toolkit.tools.find(
+      (tool) => tool.name === PULL_REQUEST_TOOL_NAME,
+    );
+    expect(pullRequest?.description).toBe(
+      pullRequestTool(async () => {
+        throw new Error("unused");
+      }).description,
+    );
+    expect(pullRequest?.description).toContain(
+      "recorded on the chat by itself",
+    );
+    expect(Object.keys(pullRequest?.parameters ?? {})).toEqual([
+      "title",
+      "body",
+    ]);
+    expect(
+      await pullRequest?.execute({ title: "Review this" }, context),
+    ).toMatchObject({ number: 1, created: true });
+    await expect(pullRequest?.execute({}, context)).rejects.toThrow();
 
     expect(calls).toEqual([
       "sync:project:session",

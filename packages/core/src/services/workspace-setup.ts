@@ -746,8 +746,6 @@ export function workspaceSetupFailedNote(input: {
 export type SetupNetworkRefusal =
   /** A chat's folder on a person's computer, which has no network to switch. */
   | "folder"
-  /** A workspace that does not start from a commit of the project's remote. */
-  | "no-base"
   /** A sandbox holding its owner's sign-in from its start. */
   | "sign-in"
   /** A workspace admitted before the Environment named a setup network. */
@@ -756,8 +754,6 @@ export type SetupNetworkRefusal =
 const REFUSALS: Record<SetupNetworkRefusal, string> = {
   folder:
     "this chat works in a folder on this computer, and only a sandbox can switch its network while setup runs",
-  "no-base":
-    "this chat's workspace does not start from a commit of the project's remote (a delivery's `workspace: { ref }`), so there is no checkout free of earlier work to run it in",
   "sign-in":
     "this chat's sandbox holds its owner's sign-in from the start, which the setup's hosts could receive",
   "not-admitted":

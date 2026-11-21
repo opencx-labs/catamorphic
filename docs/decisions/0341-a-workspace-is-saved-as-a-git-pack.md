@@ -1,6 +1,6 @@
 # 0341 — A workspace is saved as a Git pack, as it is restored
 
-- **Status:** Accepted (amends [0178](0178-session-workspaces-at-a-ref.md) and [0191](0191-member-drafts-are-refs-in-the-project-origin.md))
+- **Status:** Accepted (amends [0178](0178-session-workspaces-at-a-ref.md) and [0191](0191-member-drafts-are-refs-in-the-project-origin.md); amended by [0342](0342-every-server-chat-stands-on-a-branch.md): a save also carries the agent's commits and branch, and no workspace is restored from text)
 - **Date:** 2026-11-20
 
 ## Context

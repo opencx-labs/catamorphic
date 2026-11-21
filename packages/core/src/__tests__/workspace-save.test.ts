@@ -4,6 +4,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import {
+  currentSessionWork,
   FsBackend,
   FsRemoteBackend,
   nativeGit,
@@ -14,12 +15,10 @@ import { LocalProcessSandboxProvider } from "@catamorphic/local-process";
 import type { SandboxProvider } from "@catamorphic/sandbox";
 import { TestSandboxes } from "@catamorphic/sandbox/testing";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import {
-  ensureSandboxBaseline,
-  seedSandboxRepository,
-} from "../services/sandbox-git.js";
+import { seedSandboxRepository } from "../services/sandbox-git.js";
 import {
   SandboxSyncError,
+  saveSessionWorkspace,
   syncSandboxChanges,
 } from "../services/sandbox-sync.js";
 
@@ -101,16 +100,44 @@ interface Claim {
   content?: string;
 }
 
+/** A raw Git object a hostile sandbox writes: any type, any bytes. */
+interface Forged {
+  type: "blob" | "tree" | "commit";
+  content: (ids: readonly string[]) => Uint8Array;
+}
+
+/** One raw tree entry: `<mode> <name>NUL<id>`. */
+function treeEntry(mode: string, name: string, id: string): Uint8Array {
+  return new Uint8Array(
+    Buffer.concat([
+      Buffer.from(`${mode} ${name}`),
+      Buffer.from([0]),
+      Buffer.from(id, "hex"),
+    ]),
+  );
+}
+
+/** A raw commit of `tree` on `parents`. */
+function rawCommit(tree: string, parents: readonly string[]): Uint8Array {
+  const who = "Agent <agent@example.test> 1700000000 +0000";
+  return new TextEncoder().encode(
+    `tree ${tree}\n${parents.map((parent) => `parent ${parent}\n`).join("")}author ${who}\ncommitter ${who}\n\nforged\n`,
+  );
+}
+
 /**
  * A sandbox that answers the save's commands with whatever it likes: a
  * well-formed pack whose manifest makes the given claims, unless `answer`
- * says otherwise. Everything it sends is the control plane's to refuse.
+ * says otherwise. With `history` it also says its branch stands on a
+ * commit it forged, the last of the objects named. Everything it sends is
+ * the control plane's to refuse.
  */
 function lyingSandbox(input: {
   forge: string;
   claims: readonly Claim[];
+  history?: { objects: readonly Forged[]; branch?: string };
   answer?: (output: string) => string;
-}): { provider: SandboxProvider; commands: string[] } {
+}): { provider: SandboxProvider; commands: string[]; head: string | null } {
   const git = (args: string[], stdin: string | Uint8Array) =>
     execFileSync("git", ["-C", input.forge, ...args], {
       input: stdin,
@@ -139,9 +166,20 @@ function lyingSandbox(input: {
       ),
     ),
   );
+  const forged: string[] = [];
+  for (const object of input.history?.objects ?? [])
+    forged.push(
+      git(
+        ["hash-object", "-t", object.type, "-w", "--stdin", "--literally"],
+        object.content(forged),
+      )
+        .toString()
+        .trim(),
+    );
+  const head = forged.at(-1) ?? null;
   const pack = git(
     ["pack-objects", "--stdout", "-q"],
-    `${[...written.flatMap((claim) => (claim.mode === "000000" ? [] : [claim.oid])), manifest].join("\n")}\n`,
+    `${[...written.flatMap((claim) => (claim.mode === "000000" ? [] : [claim.oid])), manifest, ...forged].join("\n")}\n`,
   ).toString("base64");
   const commands: string[] = [];
   const unused = () => {
@@ -162,11 +200,11 @@ function lyingSandbox(input: {
       commands.push(command);
       if (!command.includes("git write-tree"))
         return { exitCode: 0, result: "chunk\t\n" };
-      const output = `work-sync\t${EMPTY_TREE}\t${manifest}\t${pack.length}\nchunk\t${pack}\n`;
+      const output = `work-sync\t${EMPTY_TREE}\t${manifest}\t${pack.length}\t${head ?? "-"}\t${input.history?.branch ?? "-"}\nchunk\t${pack}\n`;
       return { exitCode: 0, result: input.answer?.(output) ?? output };
     },
   };
-  return { provider, commands };
+  return { provider, commands, head };
 }
 
 describe("saving a workspace and restoring it (ADR 0341)", () => {
@@ -221,49 +259,105 @@ describe("saving a workspace and restoring it (ADR 0341)", () => {
     fs.rmSync(dir, { recursive: true, force: true });
   });
 
-  it("round-trips bytes, executable bits, links and deletions through a session's copy", async () => {
+  /** Seed a sandbox from the session's copy, as a turn's preparation does. */
+  const seed = async (input: {
+    session: { tenantId: string; projectId: string; sessionId: string };
+    sandboxId: string;
+    base: string;
+  }) => {
+    const copy = await manager.openSession(input.session);
+    try {
+      const work = await currentSessionWork({
+        repoPath: copy.repoPath,
+        sessionId: input.session.sessionId,
+        base: input.base,
+      });
+      await seedSandboxRepository({
+        provider,
+        sandboxId: input.sandboxId,
+        projectDir,
+        sessionCopyPath: copy.repoPath,
+        checkpoint: work.checkpoint,
+        head: work.head,
+        base: input.base,
+        branch: work.branch,
+        originUrl: null,
+      });
+      return work;
+    } finally {
+      await copy.dispose();
+    }
+  };
+  const agentGit = (root: string, args: readonly string[]) =>
+    nativeGit(root, [
+      "-c",
+      "user.name=Agent",
+      "-c",
+      "user.email=agent@example.test",
+      ...args,
+    ]);
+  const author = { name: "Work", email: "system@work.software" };
+
+  it("round-trips a branch, its commits and uncommitted work through a session's copy", async () => {
     const projectId = "f1e2d3c4-b5a6-7890-dcba-fedcba987654";
-    const sessionId = "session-a";
+    const sessionId = "5e551011-0000-4000-8000-00000000000a";
     await createProject(projectId);
     const session = { tenantId: TENANT, projectId, sessionId };
+    const base = await manager.mainCommit({ tenantId: TENANT, projectId });
+    await manager.setSessionBase({ ...session, commit: base });
     const copy = await manager.openSession(session);
-    const base = await copy.resolveRef("HEAD");
     const copyPath = copy.repoPath;
     await copy.dispose();
 
     const first = await provider.createSandbox({});
-    await seedSandboxRepository({
-      provider,
-      sandboxId: first.id,
-      projectDir,
-      sessionCopyPath: copyPath,
+    expect(await seed({ session, sandboxId: first.id, base })).toMatchObject({
       head: base,
-      base,
-      branch: "work/test",
-      originUrl: null,
+      branch: "work/5e551011",
     });
-    changeWorkspace(await checkout(first.id));
+    const root = await checkout(first.id);
+    expect((await nativeGit(root, ["branch", "--show-current"])).trim()).toBe(
+      "work/5e551011",
+    );
+
+    // The agent's turn: a branch of its own with a commit on it, then one
+    // file staged, others untracked, one deleted, a binary, an executable
+    // and a link, none of them committed.
+    await agentGit(root, ["checkout", "-q", "-b", "feature/x"]);
+    fs.writeFileSync(path.join(root, "committed.txt"), "in a commit\n");
+    await agentGit(root, ["add", "committed.txt"]);
+    await agentGit(root, ["commit", "-q", "-m", "Agent commit"]);
+    const agentHead = (await nativeGit(root, ["rev-parse", "HEAD"])).trim();
+    changeWorkspace(root);
+    fs.writeFileSync(path.join(root, "staged.txt"), "staged, not committed\n");
+    await agentGit(root, ["add", "staged.txt"]);
 
     operations.length = 0;
-    const changes = await syncSandboxChanges({
+    const saved = await saveSessionWorkspace({
       provider: counted,
       projectManager: manager,
-      identity,
+      tenantId: TENANT,
       projectId,
       sessionId,
+      base,
       sandboxProviderId: first.id,
       projectDir,
     });
-    expect(changes).toEqual(
+    expect(saved.work).toEqual({ head: agentHead, branch: "feature/x" });
+    expect(saved.changes.map((change) => change.path).sort()).toEqual(
       [
-        ...Object.keys(FILES).map((file) => ({ path: file, kind: "modified" })),
-        { path: "run.sh", kind: "modified" },
-        { path: "link-to-readme", kind: "modified" },
-        { path: "old.txt", kind: "deleted" },
-      ].sort((a, b) => (a.path < b.path ? -1 : 1)),
+        ...Object.keys(FILES),
+        "committed.txt",
+        "link-to-readme",
+        "old.txt",
+        "run.sh",
+        "staged.txt",
+      ].sort(),
     );
+    expect(
+      saved.changes.find((change) => change.path === "old.txt")?.kind,
+    ).toBe("deleted");
     // A snapshot carrying the first chunk, the rest of the pack, the mark:
-    // never one operation per file.
+    // never one operation per file, and none more for the commits.
     expect(operations).toEqual([
       "executeCommand",
       "executeCommand",
@@ -273,50 +367,193 @@ describe("saving a workspace and restoring it (ADR 0341)", () => {
     expectSavedIn(copyPath);
     expect(fs.existsSync(path.join(copyPath, "cache-dir"))).toBe(false);
     expect(fs.existsSync(path.join(copyPath, "node_modules"))).toBe(false);
+    // The agent's commit is in the copy as an object, never as a pack.
+    expect(
+      (
+        await nativeGit(copyPath, ["log", "-1", "--format=%s", agentHead])
+      ).trim(),
+    ).toBe("Agent commit");
 
     // The checkpoint the next sandbox is seeded from.
-    const head = await manager.checkpointSession({
+    const checkpoint = await manager.checkpointSession({
       ...session,
+      base,
       message: "Save the workspace",
-      author: { name: "Work", email: "system@work.software" },
+      author,
+      work: saved.work,
     });
-    expect(head).not.toBe(base);
+    expect(checkpoint).not.toBe(base);
+    // The session's ref is its own: never the agent's branch.
+    expect(checkpoint).not.toBe(agentHead);
     await provider.destroySandbox(first.id);
 
     const second = await provider.createSandbox({});
-    await seedSandboxRepository({
-      provider,
-      sandboxId: second.id,
-      projectDir,
-      sessionCopyPath: copyPath,
-      head,
-      base,
-      branch: "work/test",
-      originUrl: null,
-    });
+    await seed({ session, sandboxId: second.id, base });
     const restored = await checkout(second.id);
-    expectSavedIn(restored);
-    expect(fs.existsSync(path.join(restored, "cache-dir"))).toBe(false);
-    // The saved work stands uncommitted on the base, as a turn left it.
     expect(
-      (
-        await nativeGit(restored, ["status", "--porcelain", "--", "run.sh"])
-      ).trim(),
-    ).toBe("?? run.sh");
+      (await nativeGit(restored, ["branch", "--show-current"])).trim(),
+    ).toBe("feature/x");
+    expect((await nativeGit(restored, ["rev-parse", "HEAD"])).trim()).toBe(
+      agentHead,
+    );
+    expect(
+      (await nativeGit(restored, ["log", "--format=%s"])).trim().split("\n"),
+    ).toEqual(["Agent commit", "Initial commit"]);
+    // Work's checkpoint never reaches the sandbox: only its tree does.
+    await expect(
+      nativeGit(restored, ["cat-file", "-e", checkpoint]),
+    ).rejects.toThrow();
+    expectSavedIn(restored);
+    expect(fs.readFileSync(path.join(restored, "committed.txt"), "utf8")).toBe(
+      "in a commit\n",
+    );
+    expect(fs.existsSync(path.join(restored, "cache-dir"))).toBe(false);
+    // What was not committed is uncommitted again; what was staged comes
+    // back unstaged.
+    const status = (
+      await nativeGit(restored, ["status", "--porcelain", "-uall"])
+    )
+      .split("\n")
+      .filter(Boolean);
+    expect(status).toEqual(
+      expect.arrayContaining([
+        " D old.txt",
+        "?? run.sh",
+        "?? staged.txt",
+        "?? link-to-readme",
+        "?? all-bytes.bin",
+        "?? assets/large.bin",
+      ]),
+    );
+    expect(status.some((line) => line.endsWith("committed.txt"))).toBe(false);
+    expect(status.every((line) => /^( D|\?\?) /.test(line))).toBe(true);
 
     // What was restored is what was saved: nothing is left to save.
+    const again = await saveSessionWorkspace({
+      provider,
+      projectManager: manager,
+      tenantId: TENANT,
+      projectId,
+      sessionId,
+      base,
+      sandboxProviderId: second.id,
+      projectDir,
+    });
+    expect(again).toEqual({
+      changes: [],
+      work: { head: agentHead, branch: "feature/x" },
+    });
     expect(
-      await syncSandboxChanges({
+      await manager.checkpointSession({
+        ...session,
+        base,
+        message: "Nothing new",
+        author,
+        work: again.work,
+      }),
+    ).toBe(checkpoint);
+
+    // A commit alone, and a renamed branch, are saved without any file
+    // having changed since the last save.
+    await agentGit(restored, ["add", "staged.txt"]);
+    await agentGit(restored, ["commit", "-q", "-m", "Second commit"]);
+    await agentGit(restored, ["branch", "-m", "feature/y"]);
+    const secondHead = (
+      await nativeGit(restored, ["rev-parse", "HEAD"])
+    ).trim();
+    const committed = await saveSessionWorkspace({
+      provider,
+      projectManager: manager,
+      tenantId: TENANT,
+      projectId,
+      sessionId,
+      base,
+      sandboxProviderId: second.id,
+      projectDir,
+    });
+    expect(committed).toEqual({
+      changes: [],
+      work: { head: secondHead, branch: "feature/y" },
+    });
+    const next = await manager.checkpointSession({
+      ...session,
+      base,
+      message: "Commit",
+      author,
+      work: committed.work,
+    });
+    expect(next).not.toBe(checkpoint);
+    await provider.destroySandbox(second.id);
+
+    const third = await provider.createSandbox({});
+    await seed({ session, sandboxId: third.id, base });
+    const final = await checkout(third.id);
+    expect((await nativeGit(final, ["branch", "--show-current"])).trim()).toBe(
+      "feature/y",
+    );
+    expect(
+      (await nativeGit(final, ["log", "--format=%s"])).trim().split("\n"),
+    ).toEqual(["Second commit", "Agent commit", "Initial commit"]);
+    expect(
+      (
+        await nativeGit(final, ["status", "--porcelain", "--", "staged.txt"])
+      ).trim(),
+    ).toBe("");
+    expectSavedIn(final);
+  }, 120_000);
+
+  it("saves the files of a sandbox that was not seeded from the session's copy, and none of its history", async () => {
+    const projectId = "7c6b5a49-3827-4615-9e0d-1c2b3a4f5e6d";
+    const sessionId = "5e551011-0000-4000-8000-00000000000b";
+    await createProject(projectId);
+    const session = { tenantId: TENANT, projectId, sessionId };
+    const base = await manager.mainCommit({ tenantId: TENANT, projectId });
+    await manager.setSessionBase({ ...session, commit: base });
+    // A sandbox from before chats stood on a branch: one commit of its own
+    // making, related to nothing the copy holds.
+    const sandbox = await provider.createSandbox({});
+    const root = await checkout(sandbox.id);
+    fs.writeFileSync(path.join(root, "README.md"), "hello\n");
+    await agentGit(root, ["init", "-q", "-b", "main"]);
+    await agentGit(root, ["add", "-A"]);
+    await agentGit(root, ["commit", "-q", "-m", "baseline"]);
+    await agentGit(root, ["update-ref", "refs/work/synced", "HEAD"]);
+    fs.writeFileSync(path.join(root, "notes.md"), "kept\n");
+
+    const saved = await saveSessionWorkspace({
+      provider,
+      projectManager: manager,
+      tenantId: TENANT,
+      projectId,
+      sessionId,
+      base,
+      sandboxProviderId: sandbox.id,
+      projectDir,
+    });
+    expect(saved).toEqual({
+      changes: [{ path: "notes.md", kind: "modified" }],
+      work: { head: base, branch: "work/5e551011" },
+    });
+    const copy = await manager.openSession(session);
+    expect(await copy.readFile("notes.md")).toBe("kept\n");
+    await copy.dispose();
+
+    // A sandbox made and never seeded holds no repository: nothing to save.
+    const empty = await provider.createSandbox({});
+    await checkout(empty.id);
+    expect(
+      await saveSessionWorkspace({
         provider,
         projectManager: manager,
-        identity,
+        tenantId: TENANT,
         projectId,
         sessionId,
-        sandboxProviderId: second.id,
+        base,
+        sandboxProviderId: empty.id,
         projectDir,
       }),
-    ).toEqual([]);
-  }, 120_000);
+    ).toEqual({ changes: [], work: { head: base, branch: "work/5e551011" } });
+  }, 60_000);
 
   it("saves the same bytes, modes and links into a member's draft in the origin", async () => {
     const projectId = "0a1b2c3d-4e5f-4a6b-8c7d-9e0f1a2b3c4d";
@@ -326,12 +563,11 @@ describe("saving a workspace and restoring it (ADR 0341)", () => {
     fs.writeFileSync(path.join(root, "README.md"), "hello\n");
     fs.writeFileSync(path.join(root, "old.txt"), "gone soon\n");
     fs.writeFileSync(path.join(root, ".gitignore"), "cache-dir/\n");
-    await ensureSandboxBaseline({
-      provider,
-      sandboxId: sandbox.id,
-      projectDir,
-      originUrl: null,
-    });
+    // A sandbox that is no chat's holds a repository of its own making.
+    await agentGit(root, ["init", "-q", "-b", "main"]);
+    await agentGit(root, ["add", "-A"]);
+    await agentGit(root, ["commit", "-q", "-m", "baseline"]);
+    await agentGit(root, ["update-ref", "refs/work/synced", "HEAD"]);
     changeWorkspace(root);
 
     await syncSandboxChanges({
@@ -418,40 +654,47 @@ describe("saving a workspace and restoring it (ADR 0341)", () => {
   }, 120_000);
 
   describe("from a sandbox that lies", () => {
+    const sessionId = "5e551011-0000-4000-8000-0000000000ff";
     let projectId: string;
     let copyPath: string;
+    let base: string;
     let outside: string;
     let forges = 0;
 
     const save = (
       claims: readonly Claim[],
       answer?: (output: string) => string,
+      history?: { objects: readonly Forged[]; branch?: string },
     ) => {
       forges += 1;
       const sandbox = lyingSandbox({
         forge: path.join(dir, `forge-${forges}`),
         claims,
         ...(answer ? { answer } : {}),
+        ...(history ? { history } : {}),
       });
       return {
         commands: sandbox.commands,
-        done: syncSandboxChanges({
+        head: sandbox.head,
+        done: saveSessionWorkspace({
           provider: sandbox.provider,
           projectManager: manager,
-          identity,
+          tenantId: TENANT,
           projectId,
-          sessionId: "session-hostile",
+          sessionId,
+          base,
           sandboxProviderId: "s",
           projectDir,
-        }),
+        }).then((saved) => saved.changes),
       };
     };
     /** Refused: nothing is marked as saved, so the workspace is kept. */
     const refused = async (
       claims: readonly Claim[],
       answer?: (output: string) => string,
+      history?: { objects: readonly Forged[]; branch?: string },
     ) => {
-      const attempt = save(claims, answer);
+      const attempt = save(claims, answer, history);
       await expect(attempt.done).rejects.toBeInstanceOf(SandboxSyncError);
       expect(
         attempt.commands.filter((command) => command.includes("update-ref")),
@@ -462,10 +705,17 @@ describe("saving a workspace and restoring it (ADR 0341)", () => {
     beforeAll(async () => {
       projectId = "9f8e7d6c-5b4a-4c3d-8e2f-1a0b9c8d7e6f";
       await createProject(projectId);
+      base = await manager.mainCommit({ tenantId: TENANT, projectId });
+      await manager.setSessionBase({
+        tenantId: TENANT,
+        projectId,
+        sessionId,
+        commit: base,
+      });
       const copy = await manager.openSession({
         tenantId: TENANT,
         projectId,
-        sessionId: "session-hostile",
+        sessionId,
       });
       copyPath = copy.repoPath;
       await copy.dispose();
@@ -542,7 +792,7 @@ describe("saving a workspace and restoring it (ADR 0341)", () => {
       const copy = await manager.openSession({
         tenantId: TENANT,
         projectId,
-        sessionId: "session-hostile",
+        sessionId,
       });
       try {
         const files = await copy.readAllFiles();
@@ -581,16 +831,161 @@ describe("saving a workspace and restoring it (ADR 0341)", () => {
       );
       // A length no save may have: refused before another byte is read.
       const oversized = await refused(claims, (output) =>
-        output.replace(/\t(\d+)\nchunk/, "\t99999999999\nchunk"),
+        output.replace(/\t(\d+)\t-\t-\nchunk/, "\t99999999999\t-\t-\nchunk"),
       );
       expect(oversized).toHaveLength(1);
       // A manifest the pack does not hold, and an unreadable snapshot line.
       await refused(claims, (output) =>
-        output.replace(/\t[0-9a-f]{40}\t(\d+)\n/, `\t${"c".repeat(40)}\t$1\n`),
+        output.replace(/\t[0-9a-f]{40}\t(\d+)\t/, `\t${"c".repeat(40)}\t$1\t`),
       );
-      await refused(claims, () => "work-sync\tnot-a-tree\t-\t0\n");
+      await refused(claims, () => "work-sync\tnot-a-tree\t-\t0\t-\t-\n");
+      await refused(claims, () => `work-sync\t${EMPTY_TREE}\t-\t0\n`);
       await refused(claims, () => "");
       expect(fs.existsSync(path.join(copyPath, "never.txt"))).toBe(false);
+    });
+
+    it("refuses commits whose trees leave the checkout, enter a Git directory or carry a bad mode", async () => {
+      const blob: Forged = {
+        type: "blob",
+        content: () => new TextEncoder().encode("#!/bin/sh\n"),
+      };
+      const hostile: Array<readonly Forged[]> = [
+        // A file named `..`.
+        [
+          blob,
+          {
+            type: "tree",
+            content: ([file = ""]) => treeEntry("100644", "..", file),
+          },
+        ],
+        // `.git/config`, by any spelling.
+        ...[".git", ".GIT", "git~1"].map((name): Forged[] => [
+          blob,
+          {
+            type: "tree",
+            content: ([file = ""]) => treeEntry("100644", "config", file),
+          },
+          {
+            type: "tree",
+            content: ([, folder = ""]) => treeEntry("40000", name, folder),
+          },
+        ]),
+        // A mode no checkout may hold.
+        [
+          blob,
+          {
+            type: "tree",
+            content: ([file = ""]) => treeEntry("100666", "open.sh", file),
+          },
+        ],
+        // A name that is a path.
+        [
+          blob,
+          {
+            type: "tree",
+            content: ([file = ""]) => treeEntry("100644", "a/../../x", file),
+          },
+        ],
+      ];
+      for (const objects of hostile) {
+        const commands = await refused([], undefined, {
+          branch: "feature/x",
+          objects: [
+            ...objects,
+            {
+              type: "commit",
+              content: (ids) => rawCommit(ids.at(-1) ?? "", [base]),
+            },
+          ],
+        });
+        expect(commands).toHaveLength(1);
+      }
+      // Nothing of any of them was kept: the copy holds what it held.
+      expect(
+        (await nativeGit(copyPath, ["count-objects", "-v"])).includes(
+          "in-pack: 0",
+        ),
+      ).toBe(true);
+      expect(fs.existsSync(path.join(copyPath, "open.sh"))).toBe(false);
+      expect(
+        fs
+          .readdirSync(path.join(copyPath, ".git", "objects", "pack"))
+          .filter((file) => file.endsWith(".pack")),
+      ).toEqual([]);
+    });
+
+    it("refuses commits whose history does not reach what the copy holds", async () => {
+      const tree: Forged = { type: "tree", content: () => new Uint8Array() };
+      // A parent that never arrived.
+      const truncated = save([], undefined, {
+        branch: "feature/x",
+        objects: [
+          tree,
+          {
+            type: "commit",
+            content: ([empty = ""]) => rawCommit(empty, ["d".repeat(40)]),
+          },
+        ],
+      });
+      await expect(truncated.done).rejects.toThrow(
+        /history that did not arrive/,
+      );
+      // History that starts nowhere.
+      const orphan = save([], undefined, {
+        branch: "feature/x",
+        objects: [
+          tree,
+          { type: "commit", content: ([empty = ""]) => rawCommit(empty, []) },
+        ],
+      });
+      await expect(orphan.done).rejects.toThrow(/no parent/);
+      // A commit whose tree never arrived.
+      const hollow = save([], undefined, {
+        branch: "feature/x",
+        objects: [
+          {
+            type: "commit",
+            content: () => rawCommit("e".repeat(40), [base]),
+          },
+        ],
+      });
+      await expect(hollow.done).rejects.toBeInstanceOf(SandboxSyncError);
+      for (const attempt of [truncated, orphan, hollow]) {
+        expect(
+          attempt.commands.filter((command) => command.includes("update-ref")),
+        ).toEqual([]);
+        await expect(
+          nativeGit(copyPath, ["cat-file", "-e", attempt.head ?? ""]),
+        ).rejects.toThrow();
+      }
+    });
+
+    it("refuses a branch name Git would not take, and a HEAD that is not a commit id", async () => {
+      const honest: readonly Forged[] = [
+        { type: "tree", content: () => new Uint8Array() },
+        {
+          type: "commit",
+          content: ([empty = ""]) => rawCommit(empty, [base]),
+        },
+      ];
+      for (const branch of ["a..b", "-x", "a b", "x.lock", "feature/@{now}"])
+        await expect(
+          save([], undefined, { branch, objects: honest }).done,
+          branch,
+        ).rejects.toThrow(/branch whose name cannot be saved|unreadable/);
+      await refused(
+        [],
+        (output) =>
+          output.replace(/\t[0-9a-f]{40}\tfeature\/x\n/, "\tHEAD\tfeature/x\n"),
+        { branch: "feature/x", objects: honest },
+      );
+      // The same commit under a name Git takes is kept.
+      const kept = save([], undefined, {
+        branch: "feature/x",
+        objects: honest,
+      });
+      expect(await kept.done).toEqual([]);
+      await nativeGit(copyPath, ["cat-file", "-e", kept.head ?? ""]);
     });
   });
 });

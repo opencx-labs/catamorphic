@@ -124,6 +124,7 @@ import {
 import { ProposalsService } from "./services/proposals-service.js";
 import { PublicationsService } from "./services/publications-service.js";
 import { PublishedRevisionsService } from "./services/published-revisions-service.js";
+import { PullRequestsService } from "./services/pull-requests-service.js";
 import { RateReservationsService } from "./services/rate-reservations-service.js";
 import { RemoteSyncService } from "./services/remote-sync-service.js";
 import {
@@ -212,13 +213,6 @@ export interface CatamorphicCoreConfig {
    * text and the search index always stay in the database.
    */
   documentBlobStore?: DocumentBlobStore;
-  /**
-   * Pull the caller's `store/` view into the agent's folder before each
-   * turn and ship its writes after (ADR 0055). Default on. Hosts whose
-   * working copies ARE the truth — the desktop's local projects, where the
-   * folder is the store — set false and sync explicitly (remote projects).
-   */
-  storeSyncAroundTurns?: boolean;
   db: Kysely<DB>;
   projectManager: ProjectManager;
   sandboxProvider?: SandboxProvider;
@@ -495,6 +489,8 @@ export class CatamorphicCore {
   readonly httpGateway?: HttpGatewayService;
   /** Workspaces at a ref of a project's linked remote (ADR 0178). */
   readonly sessionWorkspaces: SessionWorkspaces;
+  /** Pull requests from a chat's or a proposal's checkout (ADR 0343). */
+  readonly pullRequests: PullRequestsService;
   /** Committed `.work/roles/*.json` and their expansion into identities (ADR 0055). */
   readonly roles: RolesService;
   /** Stock `user → roles + grants` per project (ADR 0055). */
@@ -1105,6 +1101,16 @@ export class CatamorphicCore {
       this.codeHosts,
       (input) => this.published(input),
     );
+    this.pullRequests = new PullRequestsService(this.codeHosts, {
+      ...(this.connections
+        ? {
+            audit: (event) =>
+              this.connections
+                ? this.connections.audit(event)
+                : Promise.resolve(),
+          }
+        : {}),
+    });
     this.sessionWorkspaces = new SessionWorkspaces({
       projectManager: this.projectManager,
       origin: (input) => this.remoteSync.origin(input),
@@ -1423,6 +1429,7 @@ export class CatamorphicCore {
       this.db,
       this.projectManager,
       this.codeHosts,
+      this.pullRequests,
     );
 
     if (config.codingAgent) {
@@ -1450,6 +1457,7 @@ export class CatamorphicCore {
         connectionGrants: this.connectionGrants,
         connectionMcpUrl: config.connectionMcpUrl,
         workspaces: this.sessionWorkspaces,
+        pullRequests: this.pullRequests,
         personalEnvironments: this.personalEnvironments,
         secrets: this.secrets,
         ...(config.gatewayUrl
@@ -1526,9 +1534,10 @@ export class CatamorphicCore {
         mcpToolNames: (identity, projectId) =>
           this.triggers.mcpToolNames({ identity, projectId }),
         appPolicies: this.appPolicies,
-        ...(config.storeSyncAroundTurns === false
-          ? {}
-          : { storeSync: { documents: this.documents } }),
+      });
+      const chats = this.agentSessions;
+      this.pullRequests.bindChats({
+        record: (input) => chats.recordPullRequest(input),
       });
       this.sessionMailboxes = this.agentSessions.mailboxes;
       this.sessionSync = new SessionSyncService(this.db);

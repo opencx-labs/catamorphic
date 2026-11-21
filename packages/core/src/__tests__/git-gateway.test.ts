@@ -25,12 +25,12 @@ import {
 } from "../services/git-gateway.js";
 import {
   configureSandboxGateway,
-  ensureSandboxBaseline,
   removeSandboxGateway,
 } from "../services/sandbox-git.js";
 import { sandboxSecretsPrelude } from "../services/sandbox-secrets.js";
 import { readSandboxSave } from "../services/sandbox-sync.js";
 import { workspaceMoveNote } from "../services/session-workspaces.js";
+import { initSandboxRepository } from "./sandbox-repository.js";
 
 const execute = promisify(execFile);
 const A = "a".repeat(40);
@@ -355,7 +355,7 @@ describe("sandbox Git (ADRs 0175, 0178)", () => {
   });
 
   it("snapshots changes the agent committed as well as uncommitted ones", async () => {
-    await ensureSandboxBaseline({
+    await initSandboxRepository({
       provider,
       sandboxId: "s",
       projectDir: "/workspace/project",
@@ -392,11 +392,10 @@ describe("sandbox Git (ADRs 0175, 0178)", () => {
   });
 
   it("configures the gateway with a credential helper that answers with the grant", async () => {
-    await ensureSandboxBaseline({
+    await initSandboxRepository({
       provider,
       sandboxId: "s",
       projectDir: "/workspace/project",
-      originUrl: null,
     });
     await configureSandboxGateway({
       provider,

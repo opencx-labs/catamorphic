@@ -23,8 +23,8 @@ import {
   type UnsealedPersonalEnvironment,
   validatePersonalEnvironment,
 } from "../services/personal-environment-service.js";
-import { ensureSandboxBaseline } from "../services/sandbox-git.js";
 import { readSandboxSave } from "../services/sandbox-sync.js";
+import { initSandboxRepository } from "./sandbox-repository.js";
 
 const execute = promisify(execFile);
 
@@ -272,11 +272,10 @@ describe("personal files in a sandbox (ADR 0184)", () => {
     await fs.writeFile(path.join(project(), "app.ts"), "one\n");
     await fs.writeFile(path.join(project(), "config", "tracked.env"), "T=1\n");
     provider = directorySandbox(root);
-    await ensureSandboxBaseline({
+    await initSandboxRepository({
       provider,
       sandboxId: "s",
       projectDir: "/workspace/project",
-      originUrl: null,
     });
   });
 

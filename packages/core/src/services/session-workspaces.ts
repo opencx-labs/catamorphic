@@ -33,6 +33,11 @@ export type SessionWorkspaceRequest = z.infer<
 export interface SessionWorkspaceBase {
   ref: string;
   commit: string;
+  /**
+   * `origin`: a commit of the project's own `main`, which the host's
+   * mirror of the linked repository does not pin (ADR 0342).
+   */
+  source?: "origin";
 }
 
 /** A base a later delivery asked for, applied before the next turn. */
@@ -63,10 +68,19 @@ export function parseWorkspaceBase(
   value: Json | null,
 ): SessionWorkspaceBase | null {
   if (!value || typeof value !== "object" || Array.isArray(value)) return null;
-  const { ref, commit } = value;
+  const { ref, commit, source } = value;
   return typeof ref === "string" && typeof commit === "string"
-    ? { ref, commit }
+    ? { ref, commit, ...(source === "origin" ? { source } : {}) }
     : null;
+}
+
+/**
+ * What a new workspace's agent is told once, before its first turn: its
+ * base is not the one its project would have given it (ADR 0342).
+ */
+export function workspaceNotice(value: Json | null): string | null {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+  return typeof value.notice === "string" ? value.notice : null;
 }
 
 export function parseWorkspaceMove(
@@ -79,8 +93,16 @@ export function parseWorkspaceMove(
   return { ...base, update };
 }
 
-export function workspaceJson(base: SessionWorkspaceBase): Json {
-  return { ref: base.ref, commit: base.commit };
+export function workspaceJson(
+  base: SessionWorkspaceBase,
+  notice?: string,
+): Json {
+  return {
+    ref: base.ref,
+    commit: base.commit,
+    ...(base.source ? { source: base.source } : {}),
+    ...(notice ? { notice } : {}),
+  };
 }
 
 export function workspaceMoveJson(move: SessionWorkspaceMove): Json {
@@ -124,7 +146,7 @@ export function workspaceMoveNote(input: {
     );
   } else {
     lines.push(
-      "Your work was rebased onto it and is in your working tree, uncommitted, on top of the new base.",
+      "Your commits were rebased onto it, on the branch you were on, and your uncommitted changes are in your working tree as before.",
     );
   }
   if (input.changed && input.changed.total > 0) {
@@ -148,6 +170,8 @@ export class SessionWorkspaces {
       /** The project's linked remote and the credentials to fetch it with. */
       origin: (input: { identity: Identity; projectId: string }) => Promise<{
         url: string;
+        /** The repository's default branch: where a chat starts. */
+        branch?: string;
         credentials?: GitCredentials;
       } | null>;
       /**
@@ -225,6 +249,49 @@ export class SessionWorkspaces {
         return { ref: input.ref, commit };
       },
     );
+  }
+
+  /**
+   * Where a chat that named no ref starts (ADR 0342): the default branch
+   * of the project's linked repository, fetched now; without one, or when
+   * it cannot be reached, the project's own `main`. `notice` says what the
+   * agent must know about a base that is not the repository's.
+   */
+  async defaultBase(input: {
+    identity: Identity;
+    projectId: string;
+    sessionId: string;
+    bindings?: readonly ResolvedConnectionBinding[];
+  }): Promise<{ base: SessionWorkspaceBase; notice?: string }> {
+    const own = async (): Promise<SessionWorkspaceBase> => ({
+      ref: "main",
+      commit: await this.deps.projectManager.mainCommit({
+        tenantId: input.identity.tenantId,
+        projectId: input.projectId,
+      }),
+      source: "origin",
+    });
+    const origin = await this.deps
+      .origin({ identity: input.identity, projectId: input.projectId })
+      .catch(() => null);
+    if (!origin) return { base: await own() };
+    const branch = origin.branch ?? "main";
+    try {
+      return {
+        base: await this.fetch({
+          ...input,
+          ref: branch,
+          pin: basePin(input.sessionId),
+        }),
+      };
+    } catch (error) {
+      const base = await own();
+      const why = error instanceof Error ? error.message : String(error);
+      return {
+        base,
+        notice: `[Workspace] The project's repository could not be reached when this chat started (${why.slice(0, 300)}), so this workspace stands on Work's own copy of the project (main at ${base.commit.slice(0, 12)}) and not on ${branch} as the repository has it now. Fetch ${branch} from origin and rebase onto it once the repository is reachable.`,
+      };
+    }
   }
 
   async changedFiles(input: {

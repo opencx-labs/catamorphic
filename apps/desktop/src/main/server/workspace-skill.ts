@@ -215,10 +215,11 @@ key's whole value, remove: true removes the key, and a call with neither reads
 the metadata. ${SESSION_PULL_REQUESTS_CONTRACT} A sidebar section showing
 work:session lists them beside the chat; none does by default, so when the
 person wants to see them, offer one on the right sidebar: { id: "session",
-title: "This chat", source: "work:session", when: { session: true } }. A pull request you open, or are asked
-to work on, belongs in that list as soon as you open it, however you opened it:
-read it first and include the ones already there, and write it again when you
-see one merged, closed or retitled. A person's own
+title: "This chat", source: "work:session", when: { session: true } }. create_pull_request
+adds the pull request it opens to that list by itself. One you opened another
+way, or are asked to work on, belongs there too as soon as you know of it:
+read the list first and include the ones already there, and write it again
+when you see one merged, closed or retitled. A person's own
 sidebar modules receive the metadata of the chat they sit beside and can show
 other keys; keep the ones they ask for.
 
@@ -247,10 +248,12 @@ host preview. Publishing requires publish: true and is separate from preview.
 Attached checkouts follow the user's/project's commit instructions. Managed
 projects may checkpoint and sync automatically. Do not commit just to save work.
 Discover sync_project and create_pull_request for managed linked-remote operations;
-they preserve the host's sync, checkout and conflict policies. A pull request
-they open is not recorded on the chat by itself; add it to pull_requests. Work
-never pushes to a repository it did not create: sync only pulls there, and local
-commits are shared as a work/ branch with create_pull_request. Do not substitute
+they preserve the host's sync, checkout and conflict policies. create_pull_request
+pushes this chat's commits as its own work/ branch, opens the pull request (or
+updates the one this chat opened, replacing the branch after a rebase only while
+nobody else pushed there), names what is not committed, and records the pull
+request on the chat. Work never pushes to a repository it did not create: sync
+only pulls there, and local commits are shared with create_pull_request. Do not substitute
 raw push/pull for managed sync. Unrelated repository tasks may use ordinary git.
 
 The person's own Claude Code and Codex sign-ins (each made on a machine of

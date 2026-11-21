@@ -3,6 +3,8 @@ import path from "node:path";
 import { formatEnvFile } from "@catamorphic/agent-protocol/runner";
 import {
   buildSeedPack,
+  isSessionBranchName,
+  nativeGit,
   seedPackInstallScript,
   shellQuote,
 } from "@catamorphic/git";
@@ -13,16 +15,22 @@ import {
 } from "@catamorphic/sandbox";
 
 /**
- * Git inside a session's sandbox (ADRs 0175, 0178). The project checkout
- * is a real repository: at a workspace base it holds that commit and the
- * session's history back to it; otherwise a local baseline. The ref
- * `refs/work/synced` marks what the control plane last copied back, so the
- * agent may commit, branch, and push freely without hiding its work from
- * the per-turn sync.
+ * Git inside a session's sandbox (ADRs 0175, 0178, 0342). The project
+ * checkout is a real repository standing on the workspace's base: it holds
+ * that commit, the agent's branch with its commits back to it, and the
+ * agent's uncommitted changes. The ref `refs/work/synced` marks the tree
+ * the control plane last saved, so the agent may commit, branch, and push
+ * freely without hiding its work from the per-turn save.
  */
 
 /** Work's own files in a sandbox, beside (never inside) the project. */
 export const SESSION_DIRECTORY = ".work-session";
+
+/**
+ * Stands in the session directory once the checkout was seeded: a checkout
+ * with no repository is then one that lost it, not one that never had one.
+ */
+export const SEEDED_FILE = "seeded";
 
 /**
  * The project checkout in a session's sandbox: the one directory both sides
@@ -66,44 +74,24 @@ function originScript(originUrl: string | null): string {
 }
 
 /**
- * A sandbox without a workspace base: a local repository whose baseline
- * commit is whatever the host uploaded. `origin` names the project's linked
- * remote so `git fetch origin` works through the gateway.
- */
-export async function ensureSandboxBaseline(input: {
-  provider: SandboxProvider;
-  sandboxId: string;
-  projectDir: string;
-  originUrl: string | null;
-}): Promise<void> {
-  await run({
-    ...input,
-    cwd: input.projectDir,
-    what: "prepare sandbox git baseline",
-    command: [
-      "(git rev-parse --git-dir >/dev/null 2>&1 || git init -q -b main)",
-      "git add -A",
-      // An empty workspace still gets a baseline, so HEAD always exists.
-      `(git ${AGENT} commit -m baseline --quiet || git rev-parse -q --verify HEAD >/dev/null || git ${AGENT} commit --allow-empty -m baseline --quiet)`,
-      "git update-ref refs/work/synced HEAD",
-      originScript(input.originUrl),
-    ].join(" && "),
-  });
-}
-
-/**
  * Seed (or re-seed after a base move) the sandbox repository from the
- * session's copy on the control plane: its head and history back to the
- * workspace base arrive as one shallow pack, uploaded rather than fetched,
- * so seeding costs no Git traffic and needs no credential. The checkout
- * stands on the base with the session's saved work uncommitted on top.
- * Does nothing when the sandbox already stands on this base.
+ * session's copy on the control plane (ADR 0342): the agent's HEAD and its
+ * history back to the workspace base, and the working tree as last saved,
+ * arrive as one shallow pack, uploaded rather than fetched, so seeding
+ * costs no Git traffic and needs no credential. The checkout comes back
+ * on the agent's branch at its HEAD, with what it had not committed
+ * uncommitted again (what was staged comes back unstaged). Does nothing
+ * when the sandbox already stands on this base, or was seeded and lost
+ * its repository since.
  */
 export async function seedSandboxRepository(input: {
   provider: SandboxProvider;
   sandboxId: string;
   projectDir: string;
   sessionCopyPath: string;
+  /** The session's checkpoint: its tree is the working tree as saved. */
+  checkpoint: string;
+  /** The agent's HEAD as saved. */
   head: string;
   base: string;
   branch: string;
@@ -121,15 +109,30 @@ export async function seedSandboxRepository(input: {
     ? undefined
     : await input.provider.executeCommand(
         input.sandboxId,
-        "git rev-parse -q --verify refs/work/base 2>/dev/null || true",
+        // A checkout that was seeded and has no base now lost its
+        // repository (the agent moved or broke it): it says `lost`.
+        `git rev-parse -q --verify refs/work/base 2>/dev/null || { [ -e ../${SESSION_DIRECTORY}/${SEEDED_FILE} ] && echo lost; } || true`,
         { cwd: input.projectDir },
       );
-  if (current?.exitCode === 0 && current.result.trim() === input.base)
-    return { seeded: false };
+  const stands = current?.exitCode === 0 ? current.result.trim() : "";
+  // Seeding replaces what the checkout holds. One that lost its repository
+  // may hold work no save could read: it is left as it is, and its saves
+  // say why they fail until the agent puts the repository back.
+  if (stands === input.base || stands === "lost") return { seeded: false };
+  if (!isSessionBranchName(input.branch))
+    throw new Error("The session's branch cannot be checked out");
+  const tree = (
+    await nativeGit(input.sessionCopyPath, [
+      "rev-parse",
+      "--verify",
+      `${input.checkpoint}^{tree}`,
+    ])
+  ).trim();
   const { pack, shallow } = await buildSeedPack({
     repoPath: input.sessionCopyPath,
     head: input.head,
     base: input.base,
+    tree,
   });
   const root = input.provider.workspaceRoot;
   await input.provider.uploadFiles(
@@ -137,6 +140,7 @@ export async function seedSandboxRepository(input: {
     { "seed.pack.b64": Buffer.from(pack).toString("base64") },
     `${root}/${SESSION_DIRECTORY}`,
   );
+  const branch = shellQuote(input.branch);
   await run({
     ...input,
     cwd: input.projectDir,
@@ -147,19 +151,22 @@ export async function seedSandboxRepository(input: {
         packFile: `../${SESSION_DIRECTORY}/seed.pack.b64`,
         shallow,
       }),
-      // After a setup, what it changed in tracked files stays (a trusted
-      // procedure copied over the change's own, ADR 0324) unless the
-      // session's saved work changed the same files: then the work wins.
+      // The agent's branch at its HEAD. After a setup, what it changed in
+      // tracked files stays (a trusted procedure copied over the change's
+      // own, ADR 0324) unless the agent's commits changed the same files.
       input.afterSetup
-        ? `(git checkout -q -B ${shellQuote(input.branch)} ${input.head} 2>/dev/null || git checkout -q -f -B ${shellQuote(input.branch)} ${input.head})`
-        : `git checkout -q -f -B ${shellQuote(input.branch)} ${input.head}`,
+        ? `(git checkout -q -B ${branch} ${input.head} 2>/dev/null || git checkout -q -f -B ${branch} ${input.head})`
+        : `git checkout -q -f -B ${branch} ${input.head}`,
       ...(input.afterSetup ? [] : ["git clean -fdq"]),
-      // The branch stands on the base; the session's saved work (its
-      // checkpoints since the base) is in the working tree, uncommitted, so
-      // Work's own checkpoint commits never reach anything the agent pushes.
-      `git reset -q ${input.base}`,
+      // Then what the agent had not committed, in the working tree alone:
+      // every path whose saved content differs from its HEAD's, so the
+      // index still says what is committed and the saved work wins over a
+      // setup's change to the same file.
+      `if [ "$(git rev-parse ${input.head}^{tree})" != ${tree} ]; then git diff-tree -r --no-renames --name-only -z ${input.head} ${tree} | GIT_LITERAL_PATHSPECS=1 git restore -q --source=${tree} --worktree --pathspec-from-file=- --pathspec-file-nul; fi`,
       `git update-ref refs/work/base ${input.base}`,
-      `git update-ref refs/work/synced ${input.head}`,
+      `git update-ref refs/work/synced "$(git ${AGENT} commit-tree ${tree} -m synced)"`,
+      // From here on a checkout without a repository is one that lost it.
+      `: > ../${SESSION_DIRECTORY}/${SEEDED_FILE}`,
       originScript(input.originUrl),
     ].join(" && "),
   });

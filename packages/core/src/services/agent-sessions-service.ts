@@ -27,6 +27,7 @@ import {
   type QuestionAnswer,
   type RuntimeRequest,
   type RuntimeRequestResponse,
+  SESSION_PULL_REQUESTS_KEY,
   type SessionCommand,
   type SessionEvent,
   type SessionInput,
@@ -36,6 +37,7 @@ import {
   type SessionStreamMessage,
   type SettledAlert,
   sessionInputSchema,
+  sessionPullRequests,
   type Turn,
   type TurnError,
   withSessionMetadata,
@@ -55,7 +57,13 @@ import {
   jsonbText,
   storedJson,
 } from "@catamorphic/db";
-import { moveCheckoutBase, type ProjectManager } from "@catamorphic/git";
+import {
+  currentSessionWork,
+  moveCheckoutBase,
+  nativeGit,
+  type ProjectManager,
+  readSessionWork,
+} from "@catamorphic/git";
 import { getTracer, markSpanError, withSpan } from "@catamorphic/otel";
 import type { PluginResolver } from "@catamorphic/plugins";
 import {
@@ -189,8 +197,7 @@ import {
   namesTarget,
 } from "./delegation-grants.js";
 import { DevSandboxService } from "./dev-sandbox-service.js";
-import type { DocumentsService } from "./documents-service.js";
-import { checkpointDraft, draftStoreFolder } from "./draft-workspace.js";
+import { checkpointDraft } from "./draft-workspace.js";
 import type {
   ExecutionAllocation,
   ExecutionAllocationsService,
@@ -229,6 +236,11 @@ import {
 } from "./program-reader.js";
 import { DEFAULT_SETUP_TIMEOUT_MINUTES } from "./project-environments-service.js";
 import { requireTenantProject } from "./projects-service.js";
+import {
+  NothingToProposeError,
+  type PullRequestsService,
+  PullRequestUnavailableError,
+} from "./pull-requests-service.js";
 import { ExecutorNotConnectedError } from "./remote-operations.js";
 import {
   ReplicaClaimBusyError,
@@ -237,7 +249,6 @@ import {
 } from "./replica-claims.js";
 import {
   configureSandboxGateway,
-  ensureSandboxBaseline,
   removeSandboxGateway,
   removeSessionCredentials,
   SESSION_DIRECTORY,
@@ -256,7 +267,7 @@ import {
 import {
   SandboxSyncError,
   type SyncedFileChange,
-  syncSandboxChanges,
+  saveSessionWorkspace,
 } from "./sandbox-sync.js";
 import { nextScheduledTime } from "./schedules-service.js";
 import type { SecretsService } from "./secrets-service.js";
@@ -288,9 +299,11 @@ import {
   workspaceMoveJson,
   workspaceMoveNote,
   workspaceMoveRefusedNote,
+  workspaceNotice,
 } from "./session-workspaces.js";
 import { modelInputText } from "./sessions/input-text.js";
 import { NativeStateStore } from "./sessions/native-state.js";
+import type { ChatPullRequest } from "./sessions/pull-request-tool.js";
 import {
   approvalPolicy,
   expiredApprovalReason,
@@ -367,11 +380,6 @@ import {
   type TurnProgress,
   turnState,
 } from "./sessions/turn-stalls.js";
-import {
-  documentsClientFor,
-  shipRemoteProject,
-  syncRemoteProject,
-} from "./store-sync.js";
 import { UserNotificationsService } from "./user-notifications-service.js";
 import { temporaryVolumes, temporaryVolumesNote } from "./volume-holds.js";
 import { PollPacer, type WorkWakeups } from "./work-wakeups.js";
@@ -1252,6 +1260,8 @@ interface AgentSessionsDeps {
   }) => string | undefined;
   /** Workspaces at a ref of the project's linked remote (ADR 0178). */
   workspaces?: SessionWorkspaces;
+  /** Opens pull requests from a chat's branch (ADR 0343). */
+  pullRequests?: PullRequestsService;
   /**
    * The gateway as sandboxes reach it (ADRs 0175, 0180, 0212): its base
    * URL (`…/gateway`, serving `git/<alias>/…`, `model/<alias>/…` and
@@ -1310,15 +1320,6 @@ interface AgentSessionsDeps {
   ) => Promise<ReadonlyMap<string, string>>;
   /** Tenant app policy, for scope resolution (app refs). */
   appPolicies?: AppPoliciesService;
-  /**
-   * The documents surface. When present, `.work/app-data/store/` in the caller's working
-   * copy is pulled before each turn and shipped after it AS THE CALLER
-   * (ADR 0055): a member's agent writing `.work/app-data/store/customers/acme/notes.md`
-   * lands it in the store with the right author, and never anything the
-   * member may not write. Hosts whose working copies are the truth (the
-   * desktop's local projects) leave it unset.
-   */
-  storeSync?: { documents: DocumentsService };
 }
 
 export interface ArchiveSessionResourcesHandler {
@@ -1521,6 +1522,7 @@ export class AgentSessionsService {
   private readonly connectionGrants?: ConnectionCapabilityGrantsService;
   private readonly connectionMcpUrl?: AgentSessionsDeps["connectionMcpUrl"];
   private readonly workspaces?: SessionWorkspaces;
+  private readonly pullRequests?: PullRequestsService;
   private readonly sandboxGateway?: AgentSessionsDeps["sandboxGateway"];
   private readonly personalEnvironments?: PersonalEnvironmentService;
   private readonly secrets?: SecretsService;
@@ -1544,7 +1546,6 @@ export class AgentSessionsService {
   private readonly standingAgentPrompt?: string | false;
   private readonly mcpToolNames?: AgentSessionsDeps["mcpToolNames"];
   private readonly appPolicies?: AppPoliciesService;
-  private readonly storeSync?: AgentSessionsDeps["storeSync"];
   /**
    * Replica memory (a): this process's drain loop per session; the turn
    * claim in Postgres decides which process runs a turn.
@@ -2044,6 +2045,7 @@ export class AgentSessionsService {
     this.connectionGrants = deps.connectionGrants;
     this.connectionMcpUrl = deps.connectionMcpUrl;
     this.workspaces = deps.workspaces;
+    this.pullRequests = deps.pullRequests;
     this.sandboxGateway = deps.sandboxGateway;
     this.personalEnvironments = deps.personalEnvironments;
     this.secrets = deps.secrets;
@@ -2055,7 +2057,6 @@ export class AgentSessionsService {
     this.agentCapabilities = deps.agentCapabilities;
     this.mcpToolNames = deps.mcpToolNames;
     this.appPolicies = deps.appPolicies;
-    this.storeSync = deps.storeSync;
     this.engine = new TurnEngine({
       db,
       log: this.log,
@@ -2772,6 +2773,175 @@ export class AgentSessionsService {
         });
       },
     );
+  }
+
+  /**
+   * Record a pull request on a chat (ADRs 0226, 0343): one more entry of
+   * its `pull_requests` metadata, unless its address is already there.
+   */
+  async recordPullRequest(args: {
+    identity: Identity;
+    projectId: string;
+    sessionId: string;
+    pullRequest: { url: string; number: number; title: string };
+  }): Promise<void> {
+    const current = await this.metadata(args);
+    const held = current[SESSION_PULL_REQUESTS_KEY];
+    const entries = Array.isArray(held) ? held : [];
+    if (
+      sessionPullRequests(current).some(
+        (entry) => entry.url === args.pullRequest.url,
+      )
+    )
+      return;
+    await this.setMetadata({
+      identity: args.identity,
+      projectId: args.projectId,
+      sessionId: args.sessionId,
+      values: {
+        [SESSION_PULL_REQUESTS_KEY]: [
+          ...entries,
+          { ...args.pullRequest, state: "open" },
+        ],
+      },
+    });
+  }
+
+  /**
+   * Open or update the pull request for a server chat's branch (ADR 0343):
+   * save its sandbox now, so the session's copy holds the agent's latest
+   * commits; push its HEAD as the chat's own `work/` branch; open the pull
+   * request, or return the one already open; and record it on the chat.
+   * What is not committed stays in the workspace and is named in the
+   * result. A chat in a folder on a person's computer is its host's to
+   * serve, from that folder.
+   */
+  async createPullRequest(
+    identity: Identity,
+    projectId: string,
+    sessionId: string,
+    input: { title: string; body?: string },
+  ): Promise<ChatPullRequest> {
+    const session = await this.requireSession(identity, projectId, sessionId);
+    if (session.status !== "active")
+      throw new AgentSessionClosedError(sessionId);
+    const pullRequests = this.pullRequests;
+    if (!pullRequests) throw new PullRequestUnavailableError();
+    const agent = await this.resolveAgent(session.agent_id, projectId);
+    if (agent.topology === "native")
+      throw new Error(
+        "This chat works in a folder on a person's computer, and its pull requests are opened from there.",
+      );
+    if (agent.sandboxing === "contained")
+      throw new Error(
+        "This agent's changes never leave its sandbox, so it cannot open a pull request.",
+      );
+    const base = await this.workspaceBaseOf(session);
+    const copyId = workspaceCopyId(session);
+    return this.oneSyncPerWorkspace(session, async (held) => {
+      // The agent's commits as they are now, not as its last turn left them.
+      if (session.sandbox_id) {
+        const runtime = await this.resolveExecutionRuntime(
+          identity,
+          projectId,
+          session,
+          agent,
+        );
+        if (runtime.provider) {
+          const saved = await this.saveSandbox({
+            identity,
+            projectId,
+            session,
+            provider: runtime.provider,
+            sandboxProviderId: await this.resolveSandboxProviderId(
+              session,
+              runtime.provider,
+            ),
+          });
+          held();
+          await this.projectManager.checkpointSession({
+            tenantId: identity.tenantId,
+            projectId,
+            sessionId: copyId,
+            message: "Save the workspace before opening a pull request",
+            author: CHECKPOINT_AUTHOR,
+            base: saved.base,
+            work: saved.work,
+          });
+        }
+      }
+      const copy = await this.projectManager.openSession({
+        tenantId: identity.tenantId,
+        projectId,
+        sessionId: copyId,
+      });
+      try {
+        const work = await currentSessionWork({
+          repoPath: copy.repoPath,
+          sessionId: copyId,
+          base: base.commit,
+        });
+        const uncommitted = (
+          await nativeGit(copy.repoPath, [
+            "diff",
+            "--name-only",
+            "--no-renames",
+            "-z",
+            work.head,
+            work.checkpoint,
+          ])
+        )
+          .split("\0")
+          .filter(Boolean);
+        // A branch with no commit of its own shows nothing to review.
+        const ahead = await nativeGit(copy.repoPath, [
+          "rev-list",
+          "--count",
+          work.head,
+          "--not",
+          base.commit,
+        ]).then((count) => Number.parseInt(count.trim(), 10));
+        if (ahead === 0)
+          throw new NothingToProposeError(
+            uncommitted.length > 0
+              ? "This chat's branch has no commit of its own yet, and a pull request holds commits. Commit your changes (git add, git commit), then call create_pull_request again."
+              : "This chat's branch has no commit of its own yet, so there is nothing to open a pull request for.",
+          );
+        held();
+        return await pullRequests.openForChat({
+          identity,
+          projectId,
+          sessionId,
+          ...(copyId !== sessionId ? { workspaceSessionId: copyId } : {}),
+          title: input.title,
+          ...(input.body !== undefined ? { body: input.body } : {}),
+          checkout: {
+            repoPath: copy.repoPath,
+            commit: work.head,
+            branch: work.branch,
+          },
+          uncommitted,
+          ...(work.pushed ? { pushed: work.pushed } : {}),
+          base: base.ref,
+          principal: "either",
+          // With the session's checkpoints: a rollback forgets it, and the
+          // sandbox, which is not trusted, never holds it.
+          remember: async (pushed) => {
+            await this.projectManager.checkpointSession({
+              tenantId: identity.tenantId,
+              projectId,
+              sessionId: copyId,
+              message: "Open a pull request",
+              author: CHECKPOINT_AUTHOR,
+              base: base.commit,
+              pushed,
+            });
+          },
+        });
+      } finally {
+        await copy.dispose();
+      }
+    });
   }
 
   /**
@@ -5378,8 +5548,6 @@ export class AgentSessionsService {
         owned: checkout.owned,
       });
     }
-    if (!this.usesSessionCopy(input.session))
-      return "This chat works in your draft, which other chats share, so its files cannot be rewound. Fork the chat instead.";
     await this.projectManager.resetSession({
       tenantId: input.identity.tenantId,
       projectId: input.session.project_id,
@@ -5864,6 +6032,56 @@ export class AgentSessionsService {
   }
 
   /**
+   * The commit a sandbox chat's agent stood on when a turn began (ADR
+   * 0342): the HEAD its checkpoint records, which is what a result of that
+   * turn is about (ADR 0323). Undefined where the turn's checkpoint is that
+   * commit already: a chat in a folder, or a workspace still at its base.
+   */
+  private async turnBeganOn(input: {
+    sessionId: string;
+    turnId: string;
+  }): Promise<{ checkpoint: string; head: string } | undefined> {
+    const row = await this.db
+      .selectFrom("agent_turns as turn")
+      .innerJoin("agent_sessions as session", "session.id", "turn.session_id")
+      .innerJoin("projects", "projects.id", "session.project_id")
+      .select([
+        "turn.checkpoint_before",
+        "session.project_id",
+        "session.workspace",
+        "session.workspace_session_id",
+        "session.id",
+        "projects.tenant_id",
+      ])
+      .where("turn.id", "=", input.turnId)
+      .where("turn.session_id", "=", input.sessionId)
+      .executeTakeFirst();
+    const checkpoint = row?.checkpoint_before?.trim();
+    const base = row ? parseWorkspaceBase(row.workspace) : null;
+    if (!row || !checkpoint || !base || checkpoint === base.commit)
+      return undefined;
+    try {
+      const copy = await this.projectManager.openSession({
+        tenantId: row.tenant_id,
+        projectId: row.project_id,
+        sessionId: workspaceCopyId(row),
+      });
+      try {
+        const work = await readSessionWork({
+          repoPath: copy.repoPath,
+          commit: checkpoint,
+        });
+        return work ? { checkpoint, head: work.head } : undefined;
+      } finally {
+        await copy.dispose();
+      }
+    } catch {
+      // A checkout Work keeps no copy of (a folder on a person's computer).
+      return undefined;
+    }
+  }
+
+  /**
    * The agent submits a result its definition declares (ADR 0323). Only a
    * value its schema accepts is recorded; a rejected one comes back with
    * each failing field, so the agent corrects it within the turn.
@@ -5923,6 +6141,7 @@ export class AgentSessionsService {
             `The value is over ${RESULT_LIMITS.valueBytes / 1024} KiB as JSON.`,
           );
         try {
+          const began = await this.turnBeganOn({ sessionId, turnId });
           const item = await this.db.transaction().execute((trx) =>
             recordResult(trx, this.log, {
               sessionId,
@@ -5930,6 +6149,7 @@ export class AgentSessionsService {
               attemptId,
               name,
               value: checked.value,
+              ...(began ? { began } : {}),
             }),
           );
           return `Recorded the ${name} result (${item.id}).`;
@@ -6320,6 +6540,22 @@ export class AgentSessionsService {
       return masked;
     };
 
+    // A sandbox chat from before every chat stood on a base gets one now
+    // (ADR 0342), with what it saved uncommitted on top.
+    if (agent.topology !== "native" && !parseWorkspaceBase(session.workspace))
+      session = await this.adoptWorkspaceBase({ identity, projectId, session });
+    // What its agent must know about the base it was given, said once.
+    const notice = workspaceNotice(session.workspace);
+    if (notice) {
+      notes.push(notice);
+      const base = parseWorkspaceBase(session.workspace);
+      if (base)
+        await this.db
+          .updateTable("agent_sessions")
+          .set({ workspace: workspaceJson(base) })
+          .where("id", "=", sessionId)
+          .execute();
+    }
     // A base a delivery asked for moves before the agent runs (ADR 0178).
     const workspaceMove = parseWorkspaceMove(session.workspace_move);
     if (workspaceMove && agent.topology !== "native")
@@ -6784,29 +7020,6 @@ export class AgentSessionsService {
     if (agent.harness.placement === "host" && agent.harness.context)
       fragments.push(...(await agent.harness.context(context)));
 
-    // The caller's view of the store, in the folder the agent works in
-    // (ADR 0055): pulled before the turn, shipped after it.
-    const storeDir = parseWorkspaceBase(session.workspace)
-      ? null
-      : await this.storeSyncDir(
-          identity,
-          projectId,
-          workspace,
-          sessionId,
-          this.usesSessionCopy(session),
-        );
-    if (storeDir)
-      await syncRemoteProject(
-        storeDir,
-        documentsClientFor(this.storeSync!.documents, identity, projectId, {
-          source: "store",
-        }),
-      ).catch((error) =>
-        console.warn(
-          `[catamorphic] store pull before turn failed: ${error instanceof Error ? error.message : String(error)}`,
-        ),
-      );
-
     const plugins = await this.loadAttachedPlugins(projectId);
     if (plugins?.length) {
       const files = stagedPluginFiles(plugins);
@@ -7029,7 +7242,6 @@ export class AgentSessionsService {
           workingDirectory: input.workspace.workingDirectory,
         })) ?? null
       );
-    if (!this.usesSessionCopy(input.session)) return null;
     const copy = await this.projectManager.openSession({
       tenantId: input.identity.tenantId,
       projectId: input.session.project_id,
@@ -7113,65 +7325,39 @@ export class AgentSessionsService {
     const copyId = workspaceCopyId(session);
     const saved = await this.oneSyncPerWorkspace(session, async (held) => {
       let workspaceSyncError: string | undefined;
+      // What a sandbox's save found: its checkpoint records the agent's
+      // branch and commits with the files (ADR 0342).
+      let sandboxSave: SavedSandbox | undefined;
       const changedFiles: SyncedFileChange[] = keepsChangesInSandbox
         ? []
         : sandboxProviderId && runtime.provider
-          ? await this.syncBackChanges(
-              runtime.provider,
+          ? await this.saveSandbox({
               identity,
               projectId,
+              session,
+              provider: runtime.provider,
               sandboxProviderId,
-              this.usesSessionCopy(session) ? copyId : undefined,
-            ).catch((error: unknown) => {
-              if (!(error instanceof SandboxSyncError)) throw error;
-              console.warn(
-                `[catamorphic] Session ${sessionId}: ${error.message}`,
-              );
-              workspaceSyncError = error.message;
-              return [];
-            })
-          : await this.changedFilesOfTurn(turn.id, workingDirectory);
-      let storeSync: JsonObject | undefined;
-      const storeDir =
-        sandboxProviderId && !parseWorkspaceBase(session.workspace)
-          ? await this.storeSyncDir(
-              identity,
-              projectId,
-              { sandboxProviderId },
-              copyId,
-              this.usesSessionCopy(session),
+            }).then(
+              (save) => {
+                sandboxSave = save;
+                return save.changes;
+              },
+              (error: unknown) => {
+                if (!(error instanceof SandboxSyncError)) throw error;
+                console.warn(
+                  `[catamorphic] Session ${sessionId}: ${error.message}`,
+                );
+                workspaceSyncError = error.message;
+                return [];
+              },
             )
-          : null;
-      held();
-      if (storeDir && !keepsChangesInSandbox) {
-        try {
-          const report = await shipRemoteProject(
-            storeDir,
-            documentsClientFor(this.storeSync!.documents, identity, projectId, {
-              source: "store",
-            }),
-          );
-          if (
-            report.shipped.length +
-              report.deleted.length +
-              report.conflicts.length +
-              report.notShippable.length +
-              report.failed.length >
-            0
-          )
-            storeSync = protocolJson(report) as JsonObject;
-        } catch (error) {
-          storeSync = {
-            error: error instanceof Error ? error.message : String(error),
-          };
-        }
-      }
+          : await this.changedFilesOfTurn(turn.id, workingDirectory);
       let failure: TurnError | undefined;
       let checkpointAfter: string | null = null;
       held();
       if (
         !keepsChangesInSandbox &&
-        (agent.topology === "native" || changedFiles.length > 0)
+        (agent.topology === "native" || sandboxSave)
       ) {
         try {
           checkpointAfter = await this.checkpointTurn(
@@ -7182,11 +7368,12 @@ export class AgentSessionsService {
               sessionId: copyId,
               workingDirectory,
               nativeExecution: agent.topology === "native",
-              // A native agent's checkout is the host's: no session copy there.
-              sessionCopy:
-                agent.topology !== "native" && this.usesSessionCopy(session),
+              ...(sandboxSave ? { sandboxSave } : {}),
             },
           );
+          // A sandbox's checkpoint that did not move records no change.
+          if (sandboxSave && checkpointAfter === turn.checkpoint.before)
+            checkpointAfter = null;
         } catch (error) {
           failure = {
             message: error instanceof Error ? error.message : String(error),
@@ -7196,18 +7383,12 @@ export class AgentSessionsService {
       return {
         changedFiles,
         workspaceSyncError,
-        storeSync,
         failure,
         checkpointAfter,
       };
     });
-    const {
-      changedFiles,
-      workspaceSyncError,
-      storeSync,
-      failure,
-      checkpointAfter,
-    } = saved;
+    const { changedFiles, workspaceSyncError, failure, checkpointAfter } =
+      saved;
     let usage = turn.outcome?.usage;
     if (!usage && agent.modelConnection)
       usage = await this.sandboxGateway
@@ -7235,7 +7416,6 @@ export class AgentSessionsService {
           kind: change.kind,
         })),
         ...(usage ? { usage } : {}),
-        ...(storeSync ? { storeSync: protocolJson(storeSync) } : {}),
         ...(workspaceSyncError
           ? { workspaceSync: { error: workspaceSyncError } }
           : {}),
@@ -7616,10 +7796,13 @@ export class AgentSessionsService {
             unattended: isProjectPrincipal(identity.externalUserId),
           })
         : [];
-    // A workspace at a ref starts from that commit (ADR 0178): fetched into
-    // the host's mirror and, for sandbox agents, published as the session's
-    // branch before the first turn seeds its sandbox from it.
-    const workspace = input.workspace
+    // Every sandbox chat stands on a commit (ADRs 0178, 0342): the ref it
+    // was given, fetched into the host's mirror; else the default branch
+    // of the project's repository; else the project's own main. It is
+    // published as the session's ref before the first turn seeds its
+    // sandbox from it. A chat in a person's folder stands where they do.
+    let workspaceNote: string | undefined;
+    const workspace: SessionWorkspaceBase | null = input.workspace
       ? await this.requireWorkspaces().fetch({
           identity,
           projectId,
@@ -7629,26 +7812,39 @@ export class AgentSessionsService {
           bindings: connections,
         })
       : input.startAt
-        ? {
-            // The commit is in the mirror already: pinned, never fetched.
-            ...(await this.requireWorkspaces().fetch({
+        ? input.startAt.source === "origin"
+          ? // The project's own commit: nothing to pin in the mirror.
+            input.startAt
+          : {
+              // The commit is in the mirror already: pinned, never fetched.
+              ...(await this.requireWorkspaces().fetch({
+                identity,
+                projectId,
+                sessionId,
+                ref: input.startAt.commit,
+                pin: basePin(sessionId),
+                bindings: connections,
+              })),
+              ref: input.startAt.ref,
+            }
+        : agent.topology !== "native"
+          ? await this.defaultWorkspaceBase({
               identity,
               projectId,
               sessionId,
-              ref: input.startAt.commit,
-              pin: basePin(sessionId),
               bindings: connections,
-            })),
-            ref: input.startAt.ref,
-          }
-        : null;
+            }).then(({ base, notice }) => {
+              workspaceNote = notice;
+              return base;
+            })
+          : null;
     input.signal?.throwIfAborted();
     if (workspace && agent.topology !== "native")
       await this.projectManager.setSessionBase({
         tenantId: identity.tenantId,
         projectId,
         sessionId,
-        pin: basePin(sessionId),
+        ...(workspace.source === "origin" ? {} : { pin: basePin(sessionId) }),
         commit: workspace.commit,
       });
 
@@ -7714,7 +7910,9 @@ export class AgentSessionsService {
                 ? toPlacementJson(placementOf(admitted))
                 : null,
             base_commit_sha: null,
-            workspace: workspace ? workspaceJson(workspace) : null,
+            workspace: workspace
+              ? workspaceJson(workspace, workspaceNote)
+              : null,
             workspace_session_id: null,
           },
         });
@@ -7873,14 +8071,127 @@ export class AgentSessionsService {
   }
 
   /**
-   * Whether this session works in its own copy (`session-<id>`) rather than
-   * its member's draft: every session on a worker host, and a session
-   * whose workspace stands on a ref (ADR 0178).
+   * Where a sandbox chat that named no ref starts (ADR 0342): the default
+   * branch of the project's linked repository, or the project's own main.
    */
-  private usesSessionCopy(session: Pick<SessionRow, "workspace">): boolean {
-    return (
-      Boolean(this.workerNode) || parseWorkspaceBase(session.workspace) !== null
-    );
+  private async defaultWorkspaceBase(input: {
+    identity: Identity;
+    projectId: string;
+    sessionId: string;
+    bindings?: readonly ResolvedConnectionBinding[];
+  }): Promise<{ base: SessionWorkspaceBase; notice?: string }> {
+    if (this.workspaces) return this.workspaces.defaultBase(input);
+    return {
+      base: {
+        ref: "main",
+        commit: await this.projectManager.mainCommit({
+          tenantId: input.identity.tenantId,
+          projectId: input.projectId,
+        }),
+        source: "origin",
+      },
+    };
+  }
+
+  /**
+   * Give a sandbox chat that has no base one (ADR 0342), before its turn:
+   * a chat from before every chat stood on a branch. What its copy saved
+   * comes back uncommitted on the base. A shared subsession takes its
+   * workspace session's.
+   */
+  private async adoptWorkspaceBase(input: {
+    identity: Identity;
+    projectId: string;
+    session: SessionRow;
+  }): Promise<SessionRow> {
+    const { identity, projectId, session } = input;
+    const owner = session.workspace_session_id
+      ? await this.db
+          .selectFrom("agent_sessions")
+          .selectAll()
+          .where("id", "=", session.workspace_session_id)
+          .executeTakeFirstOrThrow()
+      : session;
+    const adopt = async (): Promise<SessionWorkspaceBase> => {
+      const { base } = await this.defaultWorkspaceBase({
+        identity,
+        projectId,
+        sessionId: owner.id,
+        bindings: await this.sessionBindings(identity, owner),
+      });
+      await this.projectManager.adoptSessionBase({
+        tenantId: identity.tenantId,
+        projectId,
+        sessionId: owner.id,
+        ...(base.source === "origin" ? {} : { pin: basePin(owner.id) }),
+        commit: base.commit,
+        message: "Stand the workspace on a base",
+        author: CHECKPOINT_AUTHOR,
+      });
+      return base;
+    };
+    const adopted = parseWorkspaceBase(owner.workspace) ?? (await adopt());
+    await this.db
+      .updateTable("agent_sessions")
+      .set({ workspace: workspaceJson(adopted) })
+      .where("id", "in", [...new Set([owner.id, session.id])])
+      .where("workspace", "is", null)
+      .execute();
+    return this.db
+      .selectFrom("agent_sessions")
+      .selectAll()
+      .where("id", "=", session.id)
+      .executeTakeFirstOrThrow();
+  }
+
+  /**
+   * The base a session's workspace stands on: its workspace session's for
+   * a shared subsession (ADR 0322), whose own row may lag a move.
+   */
+  private async workspaceBaseOf(
+    session: Pick<SessionRow, "id" | "workspace" | "workspace_session_id">,
+  ): Promise<SessionWorkspaceBase> {
+    const row = session.workspace_session_id
+      ? await this.db
+          .selectFrom("agent_sessions")
+          .select("workspace")
+          .where("id", "=", session.workspace_session_id)
+          .executeTakeFirst()
+      : session;
+    const base =
+      parseWorkspaceBase(row?.workspace ?? null) ??
+      parseWorkspaceBase(session.workspace);
+    if (!base)
+      throw new Error(
+        "This chat's workspace has no base yet; it gets one before its next turn.",
+      );
+    return base;
+  }
+
+  /**
+   * Save a chat's sandbox into its session's copy (ADRs 0341, 0342): its
+   * files, and the commits and name of its agent's branch. The checkpoint
+   * that records them is the caller's to write, with what this returns.
+   */
+  private async saveSandbox(input: {
+    identity: Identity;
+    projectId: string;
+    session: Pick<SessionRow, "id" | "workspace" | "workspace_session_id">;
+    provider: SandboxProvider;
+    sandboxProviderId: string;
+  }): Promise<SavedSandbox> {
+    const base = await this.workspaceBaseOf(input.session);
+    const saved = await saveSessionWorkspace({
+      provider: input.provider,
+      projectManager: this.projectManager,
+      tenantId: input.identity.tenantId,
+      projectId: input.projectId,
+      sessionId: workspaceCopyId(input.session),
+      base: base.commit,
+      sandboxProviderId: input.sandboxProviderId,
+      projectDir: this.projectDir(input.provider),
+    });
+    return { ...saved, base: base.commit };
   }
 
   /**
@@ -7963,6 +8274,7 @@ export class AgentSessionsService {
           from: fromCommit ?? to.commit,
           to: to.commit,
           update,
+          author: CHECKPOINT_AUTHOR,
         });
     if (outcome.status === "moved")
       await workspaces.fetch({
@@ -8022,33 +8334,36 @@ export class AgentSessionsService {
       .select(["id", "workspace", "allocation_id", "workspace_session_id"])
       .where("id", "=", input.sessionId)
       .executeTakeFirstOrThrow();
-    const base = parseWorkspaceBase(row.workspace);
+    const base = await this.workspaceBaseOf(row);
     // A shared subsession's checkout is its workspace session's (ADR 0322).
     const copyId = workspaceCopyId(row);
-    if (base) {
-      const copy = await this.projectManager.openSession({
-        tenantId: input.identity.tenantId,
-        projectId: input.projectId,
+    const copy = await this.projectManager.openSession({
+      tenantId: input.identity.tenantId,
+      projectId: input.projectId,
+      sessionId: copyId,
+    });
+    try {
+      // The agent's branch, its commits and its uncommitted changes, as
+      // the session's checkpoint keeps them (ADR 0342).
+      const work = await currentSessionWork({
+        repoPath: copy.repoPath,
         sessionId: copyId,
+        base: base.commit,
       });
-      try {
-        await seedSandboxRepository({
-          provider: input.provider,
-          sandboxId: input.sandboxProviderId,
-          projectDir: this.projectDir(input.provider),
-          sessionCopyPath: copy.repoPath,
-          head: await copy.resolveRef("HEAD"),
-          base: base.commit,
-          branch: `work/${copyId.replaceAll("-", "").slice(0, 8)}`,
-          originUrl: await this.linkedRemoteUrl(
-            input.identity,
-            input.projectId,
-          ),
-          ...(input.afterSetup ? { afterSetup: true } : {}),
-        });
-      } finally {
-        await copy.dispose();
-      }
+      await seedSandboxRepository({
+        provider: input.provider,
+        sandboxId: input.sandboxProviderId,
+        projectDir: this.projectDir(input.provider),
+        sessionCopyPath: copy.repoPath,
+        checkpoint: work.checkpoint,
+        head: work.head,
+        base: base.commit,
+        branch: work.branch,
+        originUrl: await this.linkedRemoteUrl(input.identity, input.projectId),
+        ...(input.afterSetup ? { afterSetup: true } : {}),
+      });
+    } finally {
+      await copy.dispose();
     }
     // Git through the gateway is a convenience of the turn, not a condition
     // of it: the agent still works in its checkout if it cannot be set up.
@@ -8851,8 +9166,9 @@ export class AgentSessionsService {
     if (!runtime.setup?.network || !runtime.provider) return {};
     const egress = runtime.allocation?.policy.sandbox?.setupEgress;
     const base = parseWorkspaceBase(input.session.workspace)?.commit;
-    if (!egress) return { refusal: "not-admitted" };
-    if (!base) return { refusal: "no-base" };
+    // Every sandbox chat stands on a base (ADR 0342); one that has none yet
+    // gets it before this is asked.
+    if (!egress || !base) return { refusal: "not-admitted" };
     if (runtime.signInHome) return { refusal: "sign-in" };
     return { widens: { egress, base } };
   }
@@ -9259,30 +9575,22 @@ export class AgentSessionsService {
     held: () => void;
   }): Promise<string | undefined> {
     const { identity, projectId, session } = input;
-    const sessionCopy = this.usesSessionCopy(session);
-    const unsaved = await this.syncBackChanges(
-      input.provider,
-      identity,
-      projectId,
-      input.sandboxProviderId,
-      sessionCopy ? session.id : undefined,
-    ).then(
-      () => undefined,
-      (error: unknown) => {
-        if (!(error instanceof SandboxSyncError)) throw error;
-        return `[Workspace] This workspace was made again to run its setup, and what changed in it since the last turn could not be saved first: ${error.message}`;
-      },
-    );
+    const saved = await this.saveSandbox(input).catch((error: unknown) => {
+      if (!(error instanceof SandboxSyncError)) throw error;
+      return `[Workspace] This workspace was made again to run its setup, and what changed in it since the last turn could not be saved first: ${error.message}`;
+    });
     input.held();
-    if (sessionCopy)
-      await this.projectManager.checkpointSession({
-        tenantId: identity.tenantId,
-        projectId,
-        sessionId: session.id,
-        message: "Save the workspace before setting it up again",
-        author: CHECKPOINT_AUTHOR,
-      });
-    return unsaved;
+    if (typeof saved === "string") return saved;
+    await this.projectManager.checkpointSession({
+      tenantId: identity.tenantId,
+      projectId,
+      sessionId: workspaceCopyId(session),
+      message: "Save the workspace before setting it up again",
+      author: CHECKPOINT_AUTHOR,
+      base: saved.base,
+      work: saved.work,
+    });
+    return undefined;
   }
 
   /** What a preparing turn shows its chat, while it is still preparing. */
@@ -13273,51 +13581,46 @@ export class AgentSessionsService {
       const status = await provider.getSandboxStatus(input.sandboxProviderId);
       if (status === "stopped" || status === "archived")
         await provider.startSandbox(input.sandboxProviderId);
-      // Saved where the chat's turns save: its own copy, or its owner's
-      // draft, committed as a turn commits it.
+      // Saved where the chat's turns save: its session's copy, with its
+      // agent's branch and commits, checkpointed as a turn checkpoints it.
       const chat = await this.db
         .selectFrom("agent_sessions")
-        .select(["workspace", "external_user_id"])
+        .selectAll()
         .where("id", "=", sessionId)
         .executeTakeFirst();
-      const sessionCopy = chat ? this.usesSessionCopy(chat) : true;
       const message = input.reshape
         ? "Save the workspace before giving it back for its new shape"
         : "Save the workspace before releasing it while idle";
       try {
         await input.held();
-        await syncSandboxChanges({
-          provider,
-          projectManager: this.projectManager,
-          identity:
-            sessionCopy || !chat
-              ? identity
-              : { ...identity, externalUserId: chat.external_user_id },
-          projectId,
-          ...(sessionCopy ? { sessionId } : {}),
-          sandboxProviderId: input.sandboxProviderId,
-          projectDir: this.projectDir(provider),
-        });
-        await input.held();
-        if (sessionCopy)
+        if (chat) {
+          // A chat from before every chat stood on a base gets one first
+          // (ADR 0342), so what its sandbox holds is saved on it.
+          const based = parseWorkspaceBase(chat.workspace)
+            ? chat
+            : await this.adoptWorkspaceBase({
+                identity,
+                projectId,
+                session: chat,
+              });
+          await input.held();
+          const saved = await this.saveSandbox({
+            identity,
+            projectId,
+            session: based,
+            provider,
+            sandboxProviderId: input.sandboxProviderId,
+          });
+          await input.held();
           await this.projectManager.checkpointSession({
             tenantId: identity.tenantId,
             projectId,
-            sessionId,
+            sessionId: workspaceCopyId(based),
             message,
             author: CHECKPOINT_AUTHOR,
+            base: saved.base,
+            work: saved.work,
           });
-        else if (chat) {
-          const repo = await this.projectManager.openDraft({
-            tenantId: identity.tenantId,
-            projectId,
-            externalUserId: chat.external_user_id,
-          });
-          try {
-            await checkpointDraft({ repo, message, author: CHECKPOINT_AUTHOR });
-          } finally {
-            await repo.dispose();
-          }
         }
       } catch (error) {
         if (error instanceof AllocationMaintenanceLostError) throw error;
@@ -13876,7 +14179,11 @@ export class AgentSessionsService {
       projectId: input.projectId,
       sessionId: session.id,
     });
-    if (this.usesSessionCopy(session) && !session.workspace_session_id)
+    // A chat's copy and its ref go with it; what it pushed stays (ADR 0191).
+    if (
+      (this.workerNode || parseWorkspaceBase(session.workspace)) &&
+      !session.workspace_session_id
+    )
       await this.projectManager
         .deleteSession({
           tenantId: input.identity.tenantId,
@@ -14915,9 +15222,7 @@ export class AgentSessionsService {
         provider,
         store: new DbSandboxStore(this.db, allocation.id),
         resources: allocation.policy.requirements.resources,
-        ...(this.usesSessionCopy(session)
-          ? { sessionId: workspaceCopyId(session) }
-          : {}),
+        sessionId: workspaceCopyId(session),
         ...(signIn ? { signIns: [signIn] } : {}),
       }),
     };
@@ -15268,7 +15573,6 @@ export class AgentSessionsService {
       { provider: runtime.provider, devSandboxes: runtime.devSandboxes },
       identity,
       projectId,
-      owner,
       input.populate,
     );
     input.signal?.throwIfAborted();
@@ -15431,17 +15735,15 @@ export class AgentSessionsService {
   }
 
   /**
-   * Ensure the (project, user) dev sandbox exists and reflects the user's
-   * current draft. New sandboxes clone from the project origin
-   * when the draft is clean and in sync with it (the Artifacts-native
-   * path); otherwise the draft's files are uploaded. Reused sandboxes
-   * are refreshed by upload so the agent always sees the user's drafts.
+   * Ensure the session's sandbox exists. It holds no project file yet: its
+   * checkout is seeded from the session's copy before the turn
+   * (prepareSandboxGit), with real history back to the workspace's base
+   * (ADR 0342).
    */
   private async prepareDevSandbox(
     runtime: { provider: SandboxProvider; devSandboxes: DevSandboxService },
     identity: Identity,
     projectId: string,
-    session: SessionRow,
     populate: boolean,
   ): Promise<{
     handle: { id: string; providerId: string };
@@ -15453,15 +15755,6 @@ export class AgentSessionsService {
       refresh: true,
       populate,
     });
-    // A workspace at a ref is seeded with its real history before the turn
-    // (prepareSandboxGit); any other sandbox gets a local baseline.
-    if (!parseWorkspaceBase(session.workspace))
-      await ensureSandboxBaseline({
-        provider: runtime.provider,
-        sandboxId: prepared.providerId,
-        projectDir: this.projectDir(runtime.provider),
-        originUrl: await this.linkedRemoteUrl(identity, projectId),
-      });
     return {
       handle: { id: prepared.id, providerId: prepared.providerId },
       baseCommitSha: prepared.baseCommitSha,
@@ -15489,80 +15782,13 @@ export class AgentSessionsService {
     return row.provider_id;
   }
 
-  // --- Change sync-back ---
-
   /**
-   * Diff the sandbox project dir against its git baseline and mirror every
-   * change into the user's draft. The
-   * sandbox baseline is then advanced so the next turn diffs incrementally.
-   */
-  private async syncBackChanges(
-    provider: SandboxProvider,
-    identity: Identity,
-    projectId: string,
-    sandboxProviderId: string,
-    sessionId?: string,
-  ): Promise<SyncedFileChange[]> {
-    return syncSandboxChanges({
-      provider: provider,
-      projectManager: this.projectManager,
-      identity,
-      projectId,
-      sandboxProviderId,
-      projectDir: this.projectDir(provider),
-      sessionId,
-    });
-  }
-
-  /**
-   * The folder whose `.work/app-data/store/` mirrors the caller's store
-   * view: the session's copy, the caller's local folder, or for a server
-   * draft (which has no folder) a disposable folder the host keeps for the
-   * caller (ADR 0191). Host-execution
-   * agents work in ONE folder per project shared by every caller, so their
-   * store/ is never synced (one member's pulled files would be readable by
-   * the next member's agent, and ships would carry the wrong author) —
-   * they reach the store through the `documents_*` tools instead. Null when
-   * the host did not enable store sync.
-   */
-  private async storeSyncDir(
-    identity: Identity,
-    projectId: string,
-    workspace: { sandboxProviderId?: string },
-    sessionId: string,
-    sessionCopy: boolean,
-  ): Promise<string | null> {
-    if (!this.storeSync) return null;
-    if (!workspace.sandboxProviderId) return null;
-    const repo = sessionCopy
-      ? await this.projectManager.openSession({
-          tenantId: identity.tenantId,
-          projectId,
-          sessionId,
-        })
-      : await this.projectManager.openDraft({
-          tenantId: identity.tenantId,
-          projectId,
-          externalUserId: identity.externalUserId,
-        });
-    try {
-      return await draftStoreFolder({
-        projectManager: this.projectManager,
-        repo,
-        tenantId: identity.tenantId,
-        projectId,
-        externalUserId: identity.externalUserId,
-      });
-    } finally {
-      await repo.dispose();
-    }
-  }
-
-  /**
-   * This turn's checkpoint (ADR 0044): the session copy's commit, a local
-   * folder's commit, or a server draft's tip (ADR 0191). Returns the commit
-   * sha (stamped on the assistant message), null when nothing changed or
-   * the checkpoint failed; a checkpoint must never break a turn.
+   * This turn's checkpoint (ADRs 0044, 0342): a sandbox chat's session
+   * checkpoint, which records its agent's branch and commits beside the
+   * saved files; a native chat's commit in its checkout; else a local
+   * folder's commit. Returns the commit sha (stamped on the assistant
+   * message), null when nothing changed or the checkpoint failed; a
+   * checkpoint must never break a turn.
    */
   private async checkpointTurn(
     identity: Identity,
@@ -15572,7 +15798,8 @@ export class AgentSessionsService {
       sessionId: string;
       workingDirectory: string;
       nativeExecution: boolean;
-      sessionCopy: boolean;
+      /** What the sandbox's save found, for a sandbox chat. */
+      sandboxSave?: SavedSandbox;
     },
   ): Promise<string | null> {
     return withSpan(
@@ -15598,14 +15825,17 @@ export class AgentSessionsService {
               message: checkpointMessage(userMessage),
             });
           }
-          if (execution.sessionCopy)
+          if (execution.sandboxSave)
             return await this.projectManager.checkpointSession({
               tenantId: identity.tenantId,
               projectId,
               sessionId: execution.sessionId,
               message: checkpointMessage(userMessage),
               author: CHECKPOINT_AUTHOR,
+              base: execution.sandboxSave.base,
+              work: execution.sandboxSave.work,
             });
+          // An agent on this host in the project's own folder.
           const repo = await this.projectManager.openDraft({
             tenantId: identity.tenantId,
             projectId,
@@ -15630,7 +15860,7 @@ export class AgentSessionsService {
               error instanceof Error ? error.message : String(error)
             }`,
           );
-          if (execution.sessionCopy)
+          if (execution.sandboxSave)
             throw new Error(
               "Session checkpoint could not be saved. Recover the workspace before retrying.",
               { cause: error },
@@ -16651,6 +16881,15 @@ function workspaceCopyId(
   session: Pick<SessionRow, "id" | "workspace_session_id">,
 ): string {
   return session.workspace_session_id ?? session.id;
+}
+
+/** What saving a chat's sandbox found, for the checkpoint that records it. */
+interface SavedSandbox {
+  changes: SyncedFileChange[];
+  /** The agent's branch and HEAD. */
+  work: { head: string; branch: string };
+  /** The commit the workspace stands on. */
+  base: string;
 }
 
 /** Where an agent of a topology works, as a refusal says it. */

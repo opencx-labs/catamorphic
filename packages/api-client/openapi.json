@@ -850,12 +850,6 @@
                   }
                 }
               },
-              "storeSync": {
-                "type": "object",
-                "additionalProperties": {
-                  "$ref": "#/components/schemas/JsonValueInput"
-                }
-              },
               "workspaceSync": {
                 "type": "object",
                 "properties": {
@@ -4430,12 +4424,6 @@
                   }
                 },
                 "additionalProperties": false
-              },
-              "storeSync": {
-                "type": "object",
-                "additionalProperties": {
-                  "$ref": "#/components/schemas/JsonValue"
-                }
               },
               "workspaceSync": {
                 "type": "object",

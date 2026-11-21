@@ -13,10 +13,7 @@ import { pgcrypto } from "@electric-sql/pglite/contrib/pgcrypto";
 import { Kysely, PGliteDialect, WithSchemaPlugin } from "kysely";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { ProjectsService } from "../services/projects-service.js";
-import {
-  prBranchName,
-  RemoteSyncService,
-} from "../services/remote-sync-service.js";
+import { RemoteSyncService } from "../services/remote-sync-service.js";
 import { fakeCodeHost, gitHttpServer } from "./code-host-fixture.js";
 
 const db = new Kysely<DB>({
@@ -154,19 +151,4 @@ describe("published sync of an attached project (ADR 0170)", () => {
     );
     expect(await divergedAt()).toBeNull();
   }, 60_000);
-});
-
-describe("pull request branches", () => {
-  it("name the day and differ within the same minute", () => {
-    const now = new Date("2026-09-27T14:05:00Z");
-    expect(prBranchName("Add the roles!", now, "a1b2c3")).toBe(
-      "work/add-the-roles-20260927-1405-a1b2c3",
-    );
-    expect(prBranchName("Add the roles!", now)).not.toBe(
-      prBranchName("Add the roles!", now),
-    );
-    expect(
-      prBranchName("Add the roles!", new Date("2026-09-28T14:05:00Z"), "x"),
-    ).not.toBe(prBranchName("Add the roles!", now, "x"));
-  });
 });

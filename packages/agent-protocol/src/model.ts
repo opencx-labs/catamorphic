@@ -409,8 +409,6 @@ export interface TurnFileChange {
 export interface TurnOutcome {
   changedFiles: TurnFileChange[];
   usage?: AgentTurnUsage;
-  /** What the turn's store writes became (ADR 0055). */
-  storeSync?: JsonObject;
   /** The workspace's changes could not be read; they stayed in the sandbox. */
   workspaceSync?: { error: string };
   /** A workflow asked the host to surface this turn. */

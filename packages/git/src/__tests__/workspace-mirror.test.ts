@@ -171,6 +171,7 @@ describe("workspace refs (ADR 0178)", () => {
     await copy.dispose();
     await manager.checkpointSession({
       ...args,
+      base: first,
       message: "Turn",
       author: { name: "Agent", email: "agent@example.test" },
     });
@@ -189,8 +190,10 @@ describe("workspace refs (ADR 0178)", () => {
       from: first,
       to: second,
       update: "rebase",
+      author: { name: "Work", email: "system@work.software" },
     });
-    expect(rebased.status).toBe("moved");
+    // No commit of the agent's: its HEAD is the new base, its file kept.
+    expect(rebased).toEqual({ status: "moved", head: second });
     const moved = await manager.openSession(args);
     expect(await moved.readFile("notes.md")).toBe("review notes\n");
     expect(await moved.readFile("readme.md")).toBe("hello again\n");
@@ -198,6 +201,7 @@ describe("workspace refs (ADR 0178)", () => {
     await moved.dispose();
     await manager.checkpointSession({
       ...args,
+      base: second,
       message: "Edit readme",
       author: { name: "Agent", email: "agent@example.test" },
     });
@@ -219,12 +223,17 @@ describe("workspace refs (ADR 0178)", () => {
       from: second,
       to: third,
       update: "rebase",
+      author: { name: "Work", email: "system@work.software" },
     });
+    // The agent's uncommitted edit conflicts: nothing moved, nothing lost.
     expect(conflict).toEqual({
       status: "conflict",
-      head: headBefore,
+      head: second,
       files: ["readme.md"],
     });
+    const unchanged = await manager.openSession(args);
+    expect(await unchanged.resolveRef("HEAD")).toBe(headBefore);
+    await unchanged.dispose();
     const kept = await manager.openSession(args);
     expect(await kept.readFile("readme.md")).toBe("session edit\n");
     expect((await kept.status()).dirty).toBe(false);

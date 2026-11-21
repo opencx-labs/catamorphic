@@ -228,7 +228,9 @@ changed files ends in a **checkpoint commit**, its sha stamped on the chat
 message, so every reply's diff is addressable forever. Work never updates
 the default branch of a repository it did not create, or any branch there
 it did not make: sync fetches and fast-forwards, and local work reaches a
-shared repository as a `work/` branch plus a **pull request**. A repository
+shared repository as a `work/` branch plus a **pull request**, opened from
+the chat's own commits by one tool on the desktop and on a Work server,
+where every chat works on a branch of its own. A repository
 Work created itself syncs automatically (fetch, fast-forward, merge, push),
 and a conflicting divergence lands on a **rescue branch** instead of a stuck
 state. A code host acts through an ordinary connection: the person's own

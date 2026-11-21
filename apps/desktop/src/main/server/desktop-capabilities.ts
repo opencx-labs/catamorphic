@@ -130,13 +130,16 @@ export function desktopCapabilitySource(deps: {
           revision,
           consent: ({ name, effect }) =>
             consent("catamorphic", name, { readOnlyHint: effect === "read" }),
-          // The workspace's own tools cover these for desktop chats.
+          // The workspace's own tools cover these for desktop chats, whose
+          // changes leave as a pull request from their own checkout (ADR
+          // 0343), not as files handed to propose_change.
           allow: ({ name, effect }) =>
             ![
               "list_skills",
               "read_skill",
               "send_agent_message",
               "set_session_metadata",
+              "propose_change",
             ].includes(name) &&
             (!surface.readOnly || effect === "read") &&
             allowed("catamorphic", name, { readOnlyHint: effect === "read" }),

@@ -20301,9 +20301,6 @@ export interface components {
                     contextTokens?: number;
                     contextWindow?: number;
                 };
-                storeSync?: {
-                    [key: string]: components["schemas"]["JsonValueInput"];
-                };
                 workspaceSync?: {
                     error: string;
                 };
@@ -21231,9 +21228,6 @@ export interface components {
                     costUsd?: number;
                     contextTokens?: number;
                     contextWindow?: number;
-                };
-                storeSync?: {
-                    [key: string]: components["schemas"]["JsonValue"];
                 };
                 workspaceSync?: {
                     error: string;

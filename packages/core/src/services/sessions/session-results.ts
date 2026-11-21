@@ -254,6 +254,13 @@ export async function recordResult(
     attemptId: string;
     name: string;
     value: JsonValue;
+    /**
+     * The commit the agent's checkout stood on when its turn began, where
+     * that is not the turn's checkpoint itself (ADR 0342): a sandbox chat's
+     * checkpoint is Work's own commit, and its agent's HEAD is the commit
+     * a result is about. Used while the turn still began at `checkpoint`.
+     */
+    began?: { checkpoint: string; head: string };
   },
 ): Promise<ResultItem> {
   await log.lock(trx, input.sessionId);
@@ -288,7 +295,10 @@ export async function recordResult(
     name: input.name,
     value: input.value,
     input: await consumedInput(trx, input),
-    commit: turn.checkpoint_before?.trim() || null,
+    commit:
+      (input.began && turn.checkpoint_before?.trim() === input.began.checkpoint
+        ? input.began.head
+        : turn.checkpoint_before?.trim()) || null,
   };
   const [stored] = await log.append(trx, {
     sessionId: input.sessionId,

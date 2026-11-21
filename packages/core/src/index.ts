@@ -603,6 +603,14 @@ export {
   parseProjectDeploy,
 } from "./services/published-revisions-service.js";
 export {
+  NothingToProposeError,
+  type OpenedPullRequest,
+  type OpenPullRequestInput,
+  type PullRequestCheckout,
+  PullRequestsService,
+  PullRequestUnavailableError,
+} from "./services/pull-requests-service.js";
+export {
   type BlockedRateReservation,
   type GrantedRateReservation,
   type RateBucketKey,
@@ -643,6 +651,7 @@ export {
   sealRemoteOperation,
 } from "./services/remote-operations.js";
 export {
+  defaultBranchOf,
   type RemoteSyncOutcome,
   RemoteSyncService,
   ServerDraftError,
@@ -831,6 +840,14 @@ export {
   SessionWorkspaces,
   workspaceMoveNote,
 } from "./services/session-workspaces.js";
+export {
+  type ChatPullRequest,
+  PULL_REQUEST_TOOL_NAME,
+  type PullRequestRequest,
+  pullRequestCapability,
+  pullRequestNote,
+  pullRequestTool,
+} from "./services/sessions/pull-request-tool.js";
 export {
   STREAM_MAX_PENDING_BYTES,
   STREAM_MAX_PENDING_EVENTS,

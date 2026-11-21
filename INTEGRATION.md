@@ -168,7 +168,12 @@ connection from `core.connections.beginPersonalAuthorization`), else the
 service connection named like the provider. An imported repository is attached
 (ADR 0170): every network push passes the guard in `@catamorphic/git`, so
 Work only creates `work/` branches there and shares changes as pull
-requests, whichever host embeds it. Every public
+requests, whichever host embeds it. Pull requests open through
+`core.pullRequests` (ADR 0343): a host hands `openForChat` a chat's
+checkout and gets the pushed branch, the pull request and its record on
+the chat; `pullRequestTool` and `pullRequestCapability` are the one
+`create_pull_request` agents call, which a host builds over how it finds
+that checkout (a server chat's is `agentSessions.createPullRequest`). Every public
 method takes one keyed object parameter, for example
 `scoped.projects.get({ projectId })`,
 `scoped.workflows.get({ projectId, workflowName })`, and
@@ -918,14 +923,13 @@ know who asked. The same surface is served over HTTP at
 base64 with `ifVersion`, `history`, `search?q=&mode=grep|text&prefix=`).
 Store bytes live inline in Postgres unless `documentBlobStore` (a
 filesystem or S3-compatible store) is configured; metadata, versions, text
-and the search index always stay in the database. On a hosting backend,
-agents' `store/` writes in their working folder are **pulled before and
-shipped after every turn as the caller** (`storeSyncAroundTurns`, default
-on; the turn's message metadata carries `storeSync` with what shipped, was
-refused, or conflicted) — a member's agent can only land what the member
-may write. Hosts whose folders are the truth (the desktop's local projects)
-set it `false` and sync explicitly. The framework's
-`searching-documents` host skill carries the recipe agents follow.
+and the search index always stay in the database. A chat's workspace is a
+Git checkout of the program (ADR 0342), so it never holds the store: agents
+read and write `store/` through the documents surface as the caller, and a
+member's agent can only land what the member may write. A desktop's local
+project keeps its store in its own folder and syncs it explicitly. The
+framework's `searching-documents` host skill carries the recipe agents
+follow.
 
 ### Local checkouts and document storage (ADR 0104)
 

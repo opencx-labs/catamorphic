@@ -1,5 +1,8 @@
 import {
+  currentSessionWork,
+  isSessionBranchName,
   NativeProjectRepo,
+  nativeGit,
   OriginDraftRepo,
   type ProjectManager,
   ReceivedPack,
@@ -12,6 +15,7 @@ import {
 import type { SandboxProvider } from "@catamorphic/sandbox";
 import { PROJECT_NODE_MODULES_DIR } from "@catamorphic/workflow/project-layout";
 import type { Identity } from "../identity.js";
+import { SEEDED_FILE, SESSION_DIRECTORY } from "./sandbox-git.js";
 
 /** A file the agent changed in its sandbox, mirrored into the dev tree. */
 export interface SyncedFileChange {
@@ -51,60 +55,57 @@ const MAX_CHUNKS = 512;
 const MAX_CHECKOUT_BYTES = 4 * 1024 * 1024 * 1024;
 /** The most a save writes into a draft, which holds it in memory. */
 const MAX_DRAFT_BYTES = 256 * 1024 * 1024;
+/** The most commits one save brings from a sandbox (ADR 0342). */
+const MAX_SAVED_COMMITS = 10_000;
+/** The most those commits may hold, unpacked. */
+const MAX_HISTORY_BYTES = 1024 * 1024 * 1024;
 /** Seconds a snapshot or a chunk may take in the sandbox. */
 const SAVE_TIMEOUT_SECONDS = 600;
+
+/**
+ * Stands beside a sandbox's checkout, in Work's own folder there, once the
+ * checkout was seeded: a checkout with no repository is then one that lost
+ * it, not one that never had it. Named from the checkout's own folder, as
+ * shell: a save's commands never name a parent folder by `..`.
+ */
+const SEEDED_MARKER = `"$(dirname "$(pwd -P)")/${SESSION_DIRECTORY}/${SEEDED_FILE}"`;
 
 /** Where the sandbox keeps the pack between the operations of one save. */
 const PACK_FILE = '"$(git rev-parse --git-dir)/work-sync/pack.b64"';
 
 /**
  * Diff a sandbox project dir against what was last synced (`refs/work/synced`,
- * else HEAD) and mirror every change into the dev or session copy (as an
- * uncommitted draft), exactly: bytes, executable bits, links and deletions
- * (ADR 0341). Commits the agent made count like any other change: the
- * snapshot compares trees, not the agent's status. Throws
+ * else HEAD) and mirror every change into the caller's draft, exactly:
+ * bytes, executable bits, links and deletions (ADR 0341). Throws
  * {@link SandboxSyncError} when the sandbox's changes cannot be read or
  * name something a save may not write.
  *
- * Shared by the per-turn sync in AgentSessionsService and the pre-build
- * sync in AppsService — anything that needs the dev tree to reflect what
- * the agent has actually done right now.
+ * For a sandbox that is no chat's (an app build's): a chat's workspace is
+ * saved with {@link saveSessionWorkspace}.
  */
 export async function syncSandboxChanges(opts: {
   provider: SandboxProvider;
   projectManager: ProjectManager;
   identity: Identity;
   projectId: string;
-  sessionId?: string;
   sandboxProviderId: string;
   /** The sandbox path holding the project checkout. */
   projectDir: string;
 }): Promise<SyncedFileChange[]> {
   const save = await readSandboxSave(opts);
-  if (!save.pack) return [];
+  if (!save.pack || !save.tree) return [];
   const { pack } = save;
-  const changes = save.changes.filter(
-    (change) =>
-      !SYNC_IGNORED_PREFIXES.some((prefix) => change.path.startsWith(prefix)),
-  );
+  const changes = savedFiles(save.changes);
   try {
     if (changes.length > 0) {
-      const repo = opts.sessionId
-        ? await opts.projectManager.openSession({
-            tenantId: opts.identity.tenantId,
-            projectId: opts.projectId,
-            sessionId: opts.sessionId,
-          })
-        : await opts.projectManager.openDraft({
-            tenantId: opts.identity.tenantId,
-            projectId: opts.projectId,
-            externalUserId: opts.identity.externalUserId,
-          });
+      const repo = await opts.projectManager.openDraft({
+        tenantId: opts.identity.tenantId,
+        projectId: opts.projectId,
+        externalUserId: opts.identity.externalUserId,
+      });
       try {
         await pack.assertBlobs({
-          oids: changes.flatMap((change) =>
-            change.kind === "deleted" ? [] : [change.oid],
-          ),
+          oids: blobsOf(changes),
           maxBytes:
             repo instanceof OriginDraftRepo
               ? MAX_DRAFT_BYTES
@@ -140,19 +141,148 @@ export async function syncSandboxChanges(opts: {
   } finally {
     await pack.dispose();
   }
+  await markSaved({ ...opts, tree: save.tree });
+  return reported(changes);
+}
 
-  // Mark what was copied so the next sync reports only new changes. The
-  // agent's branch, index, and commits are untouched.
-  await opts.provider.executeCommand(
-    opts.sandboxProviderId,
-    `commit=$(git -c 'user.name=Work Agent' -c user.email=agent@work.software commit-tree ${save.tree} -m synced) && git update-ref refs/work/synced "$commit"; rm -rf "$(git rev-parse --git-dir)/work-sync"`,
-    { cwd: opts.projectDir },
+/**
+ * Save a chat's workspace into its session's copy (ADRs 0341, 0342): every
+ * file that changed since the last save, exactly, and the commits its
+ * branch gained, with the branch's name. The agent's commits are checked
+ * and kept as Git objects; its working tree is written as files. Nothing
+ * is checkpointed here: the caller records what this returns with
+ * `ProjectManager.checkpointSession`. Throws {@link SandboxSyncError} when
+ * the sandbox's changes cannot be read or are refused; nothing is then
+ * marked as saved.
+ */
+export async function saveSessionWorkspace(opts: {
+  provider: SandboxProvider;
+  projectManager: ProjectManager;
+  tenantId: string;
+  projectId: string;
+  /** The session whose copy keeps the workspace. */
+  sessionId: string;
+  /** The commit the workspace stands on. */
+  base: string;
+  sandboxProviderId: string;
+  /** The sandbox path holding the project checkout. */
+  projectDir: string;
+}): Promise<{
+  changes: SyncedFileChange[];
+  /** The agent's branch and HEAD, for the session's next checkpoint. */
+  work: { head: string; branch: string };
+}> {
+  const repo = await opts.projectManager.openSession({
+    tenantId: opts.tenantId,
+    projectId: opts.projectId,
+    sessionId: opts.sessionId,
+  });
+  try {
+    const recorded = await currentSessionWork({
+      repoPath: repo.repoPath,
+      sessionId: opts.sessionId,
+      base: opts.base,
+    });
+    // What this copy holds of the agent's branch: the sandbox packs only
+    // what its HEAD reaches beyond these.
+    const known = [...new Set([opts.base, recorded.head])];
+    const save = await readSandboxSave({
+      ...opts,
+      history: { known, borrow: repo.repoPath },
+    });
+    const changes = savedFiles(save.changes);
+    const head = save.head ?? recorded.head;
+    const branch = save.branch ?? recorded.branch;
+    try {
+      if (!isSessionBranchName(branch))
+        throw new WorkspaceSaveError(
+          `the workspace is on a branch whose name cannot be saved: ${JSON.stringify(branch.slice(0, 200))}`,
+        );
+      if (save.pack) {
+        // Everything is checked before anything is written.
+        if (head !== recorded.head)
+          await save.pack.assertHistory({
+            head,
+            known,
+            maxCommits: MAX_SAVED_COMMITS,
+            maxBytes: MAX_HISTORY_BYTES,
+          });
+        await save.pack.assertBlobs({
+          oids: blobsOf(changes),
+          maxBytes: MAX_CHECKOUT_BYTES,
+        });
+        if (head !== recorded.head)
+          await save.pack.unpackHistory({
+            repoPath: repo.repoPath,
+            head,
+            known,
+          });
+        await writeSavedChanges({
+          repoPath: repo.repoPath,
+          changes,
+          pack: save.pack,
+          containLinks: repo instanceof NativeProjectRepo,
+        });
+      }
+      if (head !== recorded.head)
+        // A HEAD that moved to a commit already kept brings no pack.
+        await nativeGit(repo.repoPath, [
+          "cat-file",
+          "-e",
+          `${head}^{commit}`,
+        ]).catch(() => {
+          throw new WorkspaceSaveError(
+            "the branch stands on a commit that did not arrive with the save",
+          );
+        });
+    } catch (error) {
+      throw asSyncError(error);
+    } finally {
+      await save.pack?.dispose();
+    }
+    if (save.tree) await markSaved({ ...opts, tree: save.tree });
+    return { changes: reported(changes), work: { head, branch } };
+  } finally {
+    await repo.dispose();
+  }
+}
+
+/** A save's changes without what an agent stages for its own use. */
+function savedFiles(changes: readonly SavedChange[]): SavedChange[] {
+  return changes.filter(
+    (change) =>
+      !SYNC_IGNORED_PREFIXES.some((prefix) => change.path.startsWith(prefix)),
   );
+}
 
+function blobsOf(changes: readonly SavedChange[]): string[] {
+  return changes.flatMap((change) =>
+    change.kind === "deleted" ? [] : [change.oid],
+  );
+}
+
+function reported(changes: readonly SavedChange[]): SyncedFileChange[] {
   return changes.map((change) => ({
     path: change.path,
     kind: change.kind === "deleted" ? "deleted" : "modified",
   }));
+}
+
+/**
+ * Mark what was copied so the next save reports only new changes. The
+ * agent's branch, index, and commits are untouched.
+ */
+async function markSaved(opts: {
+  provider: SandboxProvider;
+  sandboxProviderId: string;
+  projectDir: string;
+  tree: string;
+}): Promise<void> {
+  await opts.provider.executeCommand(
+    opts.sandboxProviderId,
+    `commit=$(git -c 'user.name=Work Agent' -c user.email=agent@work.software commit-tree ${opts.tree} -m synced) && git update-ref refs/work/synced "$commit"; rm -rf "$(git rev-parse --git-dir)/work-sync"`,
+    { cwd: opts.projectDir },
+  );
 }
 
 function asSyncError(error: unknown): unknown {
@@ -165,51 +295,82 @@ function asSyncError(error: unknown): unknown {
  * Snapshot the working tree (tracked and untracked, honoring ignores) into
  * a private index, then pack what differs from the last synced tree: the
  * blob of every changed file, and a manifest of the changes as a blob of
- * its own. The pack waits in the Git directory as base64, which is all a
- * provider's command output carries safely (remote workers send it as JSON
- * text, and Postgres JSON cannot hold NUL). The output's `work-sync` line
- * names the snapshot's tree, the manifest and the pack's length; its
- * `chunk` line is the pack's first chunk.
+ * its own. With `known` (ADR 0342) the pack also holds what HEAD reaches
+ * that those commits do not: the commits the agent's branch gained. The
+ * pack waits in the Git directory as base64, which is all a provider's
+ * command output carries safely (remote workers send it as JSON text, and
+ * Postgres JSON cannot hold NUL). The output's `work-sync` line names the
+ * snapshot's tree, the manifest, the pack's length, HEAD and its branch
+ * (`-` for none); its `chunk` line is the pack's first chunk.
  */
-const SNAPSHOT_SCRIPT = [
-  "set -e",
-  "git_dir=$(git rev-parse --git-dir)",
-  'export GIT_INDEX_FILE="$git_dir/work-sync-index"',
-  'if [ ! -f "$GIT_INDEX_FILE" ] && [ -f "$git_dir/index" ]; then cp "$git_dir/index" "$GIT_INDEX_FILE"; fi',
-  'base=$(git rev-parse -q --verify "refs/work/synced^{tree}" || git rev-parse -q --verify "HEAD^{tree}" || git hash-object -t tree /dev/null)',
-  "git add -A",
-  "tree=$(git write-tree)",
-  'out="$git_dir/work-sync"',
-  'rm -rf "$out"',
-  'mkdir -p "$out"',
-  // The manifest: NUL-separated, so every path arrives as its own bytes.
-  'git diff-tree -r --no-renames --raw --no-abbrev -z "$base" "$tree" > "$out/changes"',
-  'if [ ! -s "$out/changes" ]; then rm -rf "$out"; printf \'work-sync\\t%s\\t-\\t0\\n\' "$tree"; exit 0; fi',
-  // The blobs to pack: files and links, never a nested repository's commit
-  // and nothing under a folder that is never saved.
-  "tab=$(printf '\\t')",
-  'git -c core.quotePath=false diff-tree -r --no-renames --raw --no-abbrev "$base" "$tree" | while IFS= read -r line; do',
-  `  meta=\${line%%"$tab"*}`,
-  `  name=\${line#*"$tab"}`,
-  `  case "$name" in ${SYNC_IGNORED_PREFIXES.flatMap((prefix) => [
-    `${shellQuote(prefix)}*`,
-    `${shellQuote(`"${prefix}`)}*`,
-  ]).join("|")}) continue;; esac`,
-  "  set -- $meta",
-  '  case "$2" in 100644|100755|120000) printf \'%s\\n\' "$4";; esac',
-  'done > "$out/oids"',
-  'manifest=$(git hash-object -w --no-filters "$out/changes")',
-  'printf \'%s\\n\' "$manifest" >> "$out/oids"',
-  // Self-contained, so the receiver needs no object of its own.
-  'git pack-objects --stdout -q < "$out/oids" > "$out/pack"',
-  'base64 < "$out/pack" | tr -d \'\\n\' > "$out/pack.b64"',
-  'rm -f "$out/pack" "$out/oids" "$out/changes"',
-  "size=$(wc -c < \"$out/pack.b64\" | tr -d ' ')",
-  'printf \'work-sync\\t%s\\t%s\\t%s\\n\' "$tree" "$manifest" "$size"',
-  "printf 'chunk\\t'",
-  `head -c ${CHUNK_CHARACTERS} "$out/pack.b64"`,
-  "printf '\\n'",
-].join("\n");
+function snapshotScript(known: readonly string[] | undefined): string {
+  return [
+    // A sandbox made and never seeded (its turn's preparation stopped
+    // first) holds no repository: nothing of anyone's is there to save.
+    // One that was seeded and lost its repository cannot be saved.
+    `if ! git rev-parse --git-dir >/dev/null 2>&1 && [ ! -e ${SEEDED_MARKER} ]; then printf 'work-sync\\tunseeded\\n'; exit 0; fi`,
+    "set -e",
+    "git_dir=$(git rev-parse --git-dir)",
+    'export GIT_INDEX_FILE="$git_dir/work-sync-index"',
+    'if [ ! -f "$GIT_INDEX_FILE" ] && [ -f "$git_dir/index" ]; then cp "$git_dir/index" "$GIT_INDEX_FILE"; fi',
+    'base=$(git rev-parse -q --verify "refs/work/synced^{tree}" || git rev-parse -q --verify "HEAD^{tree}" || git hash-object -t tree /dev/null)',
+    "git add -A",
+    "tree=$(git write-tree)",
+    'head=$(git rev-parse -q --verify "HEAD^{commit}" || true)',
+    "branch=$(git symbolic-ref -q --short HEAD || true)",
+    'out="$git_dir/work-sync"',
+    'rm -rf "$out"',
+    'mkdir -p "$out"',
+    ': > "$out/oids"',
+    // The commits the branch gained, with their trees and files. A checkout
+    // that holds none of the commits named was not seeded from this
+    // session's copy (one from before chats stood on a branch, or a
+    // repository made anew): its files are saved, its history is not.
+    ...(known
+      ? [
+          'not=""',
+          `for known in ${known.join(" ")}; do if git cat-file -e "$known^{commit}" 2>/dev/null; then not="$not $known"; fi; done`,
+          'if [ -z "$not" ]; then head=""; branch=""; fi',
+          'if [ -n "$head" ]; then',
+          '  git rev-list --objects "$head" --not $not | sed \'s/ .*//\' >> "$out/oids"',
+          "fi",
+        ]
+      : []),
+    // The manifest: NUL-separated, so every path arrives as its own bytes.
+    'git diff-tree -r --no-renames --raw --no-abbrev -z "$base" "$tree" > "$out/changes"',
+    'manifest="-"',
+    'if [ -s "$out/changes" ]; then',
+    // The blobs to pack: files and links, never a nested repository's commit
+    // and nothing under a folder that is never saved.
+    "  tab=$(printf '\\t')",
+    '  git -c core.quotePath=false diff-tree -r --no-renames --raw --no-abbrev "$base" "$tree" | while IFS= read -r line; do',
+    `    meta=\${line%%"$tab"*}`,
+    `    name=\${line#*"$tab"}`,
+    `    case "$name" in ${SYNC_IGNORED_PREFIXES.flatMap((prefix) => [
+      `${shellQuote(prefix)}*`,
+      `${shellQuote(`"${prefix}`)}*`,
+    ]).join("|")}) continue;; esac`,
+    "    set -- $meta",
+    '    case "$2" in 100644|100755|120000) printf \'%s\\n\' "$4";; esac',
+    '  done >> "$out/oids"',
+    '  manifest=$(git hash-object -w --no-filters "$out/changes")',
+    '  printf \'%s\\n\' "$manifest" >> "$out/oids"',
+    "fi",
+    // `-` stands for a HEAD or a branch there is none of.
+    `head=\${head:--}`,
+    `branch=\${branch:--}`,
+    'if [ ! -s "$out/oids" ]; then rm -rf "$out"; printf \'work-sync\\t%s\\t-\\t0\\t%s\\t%s\\n\' "$tree" "$head" "$branch"; exit 0; fi',
+    // Self-contained, so the receiver needs no object of its own.
+    'git pack-objects --stdout -q < "$out/oids" > "$out/pack"',
+    'base64 < "$out/pack" | tr -d \'\\n\' > "$out/pack.b64"',
+    'rm -f "$out/pack" "$out/oids" "$out/changes"',
+    "size=$(wc -c < \"$out/pack.b64\" | tr -d ' ')",
+    'printf \'work-sync\\t%s\\t%s\\t%s\\t%s\\t%s\\n\' "$tree" "$manifest" "$size" "$head" "$branch"',
+    "printf 'chunk\\t'",
+    `head -c ${CHUNK_CHARACTERS} "$out/pack.b64"`,
+    "printf '\\n'",
+  ].join("\n");
+}
 
 /** The rest of the first output line that starts with `tag` and a tab. */
 function taggedLine(output: string, tag: string): string | null {
@@ -234,22 +395,41 @@ function decodeChunk(output: string, length: number): Uint8Array {
   return Buffer.from(text, "base64");
 }
 
+/** A sandbox's save as read and checked, not yet written anywhere. */
+export interface SandboxSave {
+  /**
+   * The snapshot's tree; null for a sandbox that holds no repository yet,
+   * which has nothing to save and nothing to mark.
+   */
+  tree: string | null;
+  changes: SavedChange[];
+  /** What the save carries; null when it carries nothing. Dispose it. */
+  pack: ReceivedPack | null;
+  /** The commit the checkout stands on; null before its first commit. */
+  head: string | null;
+  /** The branch checked out; null when HEAD is detached. */
+  branch: string | null;
+}
+
 /**
  * A sandbox's changes since its last save, read and checked but not yet
  * written anywhere (ADR 0341): the snapshot's tree, every change, and the
- * pack holding their contents. `pack` is null when nothing changed;
- * otherwise the caller disposes it.
+ * pack holding their contents. With `history` (ADR 0342) the pack also
+ * holds the commits HEAD gained beyond `known`, indexed beside the
+ * repository at `borrow` they build on. `pack` is null when the save
+ * carries nothing; otherwise the caller disposes it.
  */
 export async function readSandboxSave(opts: {
   provider: SandboxProvider;
   sandboxProviderId: string;
   /** The sandbox path holding the project checkout. */
   projectDir: string;
-}): Promise<{
-  tree: string;
-  changes: SavedChange[];
-  pack: ReceivedPack | null;
-}> {
+  history?: { known: readonly string[]; borrow: string };
+}): Promise<SandboxSave> {
+  const objectId = /^[0-9a-f]{40}$|^[0-9a-f]{64}$/;
+  for (const commit of opts.history?.known ?? [])
+    if (!objectId.test(commit))
+      throw new Error("A save names the commits it builds on by full id");
   // cwd via ExecOpts, not `cd`: virtual sandbox paths (/workspace/...) are
   // only real inside providers with a mounted root — local-process (ADR
   // 0047) maps them per-argument, so a cd embedded in the command string
@@ -257,7 +437,7 @@ export async function readSandboxSave(opts: {
   const exec = { cwd: opts.projectDir, timeout: SAVE_TIMEOUT_SECONDS };
   const status = await opts.provider.executeCommand(
     opts.sandboxProviderId,
-    SNAPSHOT_SCRIPT,
+    snapshotScript(opts.history?.known),
     exec,
   );
   if (status.exitCode !== 0)
@@ -265,19 +445,29 @@ export async function readSandboxSave(opts: {
       status.result.trim().split("\n").slice(-3).join(" ").slice(-600) ||
         `snapshot exited with ${status.exitCode}`,
     );
-  const [tree = "", manifest = "", length = ""] = (
-    taggedLine(status.result, "work-sync") ?? ""
-  )
-    .trim()
-    .split("\t");
-  const objectId = /^[0-9a-f]{40}$|^[0-9a-f]{64}$/;
-  if (!objectId.test(tree) || !/^\d{1,12}$/.test(length))
-    throw new SandboxSyncError("the snapshot was unreadable");
-  const size = Number(length);
-  if (manifest === "-" && size === 0) return { tree, changes: [], pack: null };
+  const [tree = "", manifest = "", length = "", headId = "", branchName = ""] =
+    (taggedLine(status.result, "work-sync") ?? "")
+      .replace(/\r$/, "")
+      .split("\t");
+  if (tree === "unseeded")
+    return { tree: null, changes: [], pack: null, head: null, branch: null };
   if (
-    !objectId.test(manifest) ||
-    manifest.length !== tree.length ||
+    !objectId.test(tree) ||
+    !/^\d{1,12}$/.test(length) ||
+    (headId !== "-" &&
+      (!objectId.test(headId) || headId.length !== tree.length)) ||
+    branchName.length === 0 ||
+    branchName.length > 1024
+  )
+    throw new SandboxSyncError("the snapshot was unreadable");
+  const head = headId === "-" ? null : headId;
+  const branch = branchName === "-" ? null : branchName;
+  const size = Number(length);
+  if (manifest === "-" && size === 0)
+    return { tree, changes: [], pack: null, head, branch };
+  if (
+    (manifest !== "-" &&
+      (!objectId.test(manifest) || manifest.length !== tree.length)) ||
     size === 0 ||
     size % 4 !== 0
   )
@@ -308,9 +498,16 @@ export async function readSandboxSave(opts: {
     const pack = await ReceivedPack.receive({
       objectFormat: tree.length === 64 ? "sha256" : "sha1",
       chunks: chunks(),
+      ...(opts.history ? { borrow: opts.history.borrow } : {}),
     });
     try {
-      return { tree, changes: await pack.changes({ manifest }), pack };
+      return {
+        tree,
+        changes: manifest === "-" ? [] : await pack.changes({ manifest }),
+        pack,
+        head,
+        branch,
+      };
     } catch (error) {
       await pack.dispose();
       throw error;

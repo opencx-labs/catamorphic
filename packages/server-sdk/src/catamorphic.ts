@@ -289,13 +289,8 @@ export interface CatamorphicHostConfig {
    * or `false` for none (ADR 0049).
    */
   standingAgentPrompt?: string | false;
-  /**
-   * ADR 0055 knobs, passed through to core: where store bytes live, and
-   * whether agents' `store/` writes ship around turns
-   * (default on; a host whose folders are the truth sets false).
-   */
+  /** Where store bytes live (ADR 0055), passed through to core. */
   documentBlobStore?: CatamorphicCoreConfig["documentBlobStore"];
-  storeSyncAroundTurns?: boolean;
   /**
    * Hosts and ports (`work.acme.com:443`) sandboxes reach this control plane
    * at; restricted egress always allows them (ADR 0176).
@@ -433,7 +428,6 @@ export class Catamorphic {
       userSkills: config.userSkills,
       standingAgentPrompt: config.standingAgentPrompt,
       documentBlobStore: config.documentBlobStore,
-      storeSyncAroundTurns: config.storeSyncAroundTurns,
       gatewayHosts: config.gatewayHosts,
     });
   }

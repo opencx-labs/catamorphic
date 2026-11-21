@@ -1109,9 +1109,11 @@ caches (ADR 0208):
   workspace's base commit alone, with no grant, gateway variable or other
   secret, widened to those hosts (not even the gateway), and narrowed again
   before the session's work, grants, secrets and files arrive; a setup that
-  must run again gets a new sandbox in the same Allocation. Only workspaces
-  at a ref of the project's remote (a delivery's `workspace: { ref }`) run
-  it; elsewhere the agent is told it did not run. Such an Environment
+  must run again gets a new sandbox in the same Allocation. Every chat's
+  workspace stands on a commit (the ref a delivery gave it with
+  `workspace: { ref }`, else the repository's default branch), so every
+  chat runs it; a chat whose sandbox holds its owner's sign-in from the
+  start is told it did not run. Such an Environment
   declares no volumes, which would carry what agents wrote into the next
   setup; it declares read-only `caches` instead (below). It needs a machine that advertises
   `network.setup`: the container backend wherever it enforces
