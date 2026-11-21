@@ -1,5 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
+import { projectAgentId } from "@catamorphic/core";
 import { hasLocalGit, nativeGit } from "@catamorphic/git";
 import {
   PROJECT_MANIFEST_PATH,
@@ -11,6 +12,7 @@ import {
   sanitizeProjectExperienceWhen,
 } from "../shared/project-experience.js";
 import { trustedHostEntry } from "../shared/trusted-hosts.js";
+import type { AgentsStore } from "./agents-store.js";
 
 /**
  * The project manifest (`.work/project.json`) is the committed home
@@ -129,6 +131,27 @@ export async function projectTrustedHosts(rootPath: string): Promise<string[]> {
 }
 
 /** The committed default agent's slug, when the manifest declares one. */
+/**
+ * The agent that answers a project's new chats (ADR 0056): the person's own
+ * choice for the project, else the project's committed default, else their
+ * profile's. Whoever asks holds the profile's agents and the folder.
+ */
+export function projectDefaultAgentId({
+  agents,
+  projectId,
+  rootPath,
+}: {
+  agents: Pick<AgentsStore, "projectDefault" | "defaultAgentId">;
+  projectId: string;
+  rootPath: string | undefined;
+}): string | undefined {
+  const override = agents.projectDefault(projectId);
+  if (override) return override;
+  const slug = rootPath ? projectDefaultAgentSlug(rootPath) : undefined;
+  if (slug) return projectAgentId(projectId, slug);
+  return agents.defaultAgentId();
+}
+
 export function projectDefaultAgentSlug(rootPath: string): string | undefined {
   const value = readManifest(rootPath).defaultAgent;
   return typeof value === "string" && value.length > 0 ? value : undefined;

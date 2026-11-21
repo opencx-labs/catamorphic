@@ -23,6 +23,12 @@ UI work. Every interaction matters; this is a polished product, not a demo.
 
 Main-process map (`src/main/`): `server/` embeds core (boot, agent
 registry, project agents ADR 0050, workspace tools, triggers, e2e fakes);
+`engine/` is the only way the rest of the main process reaches it (ADR
+0341): a named operation in `engine/api.ts`, allowed in
+`engine/service.ts`, asked over a channel that carries data only. Never
+hand a module outside `server/` and `engine/` an object of the server's
+(core, the agent registry, a store): add an operation, an event or a
+mirrored value instead, so the server can leave for a process of its own;
 `agent-bridge.ts` connects agent sessions to renderer surfaces;
 `extensions/` hosts Chrome extensions (ADR 0203);
 `terminal.ts` + `shared/terminal-text.ts` + `shell-integration.ts` are the PTY

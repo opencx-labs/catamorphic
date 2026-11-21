@@ -1151,3 +1151,33 @@ permanent checks are counts, not times: `workspace-tabs.test.tsx` (a tab
 coming forward draws two rows), `dock-host.test.tsx` (the dock draws the
 chats a switch changed, none for its echo) and `source-section.test.tsx`
 (a list is read again only for what it lists from).
+
+## The server message boundary (2026-11-21)
+
+[ADR 0341](../../../docs/decisions/0341-the-engines-boundary-one-interface-then-the-fork.md)
+introduces a `MessageChannel` between the desktop shell and server. Both
+ends still run in the main process. The paired runs alternated the
+post-database-thread baseline (`fdc5d5bb7`) and the boundary branch in
+the isolated Linux desktop, using the inspector method above.
+
+| Scenario | Baseline main thread busy, ms/s | Boundary main thread busy, ms/s | Synchronous posting, total ms |
+| --- | ---: | ---: | ---: |
+| Idle, about 10 s | 18 to 90 | 17 to 18 | 0 |
+| Live scripted turn, about 21 s | 63 to 116 | 91 to 104 | 1.11 to 1.38 |
+| Ten reopenings of a 1,000-item chat, alternating with a short chat | 196 to 221 | 247 to 294 | 2.25 to 2.93 |
+
+The chat reopenings took 4.2 s in all three baseline runs and 4.5 to
+4.8 s with the boundary. The latter posted 124 to 126 messages. The
+synchronous posting measurement covers the sender and copying during
+`postMessage`. Receive-side processing and time waiting for delivery are
+outside that measurement, and the whole-thread samples also include HTTP,
+query building, and native Electron work. Synchronous posting accounts for
+only a small part of the first timing difference.
+
+The timing direction reversed in two pairs on the final code with the
+posting instrumentation removed and the run order swapped for the second
+pair. The baseline finished in 4.5 and 4.7 s with 299 and 333 ms/s of
+main-thread CPU. The boundary finished in 4.1 and 4.4 s with 218 and
+229 ms/s. The results vary across runs on a fixture profile with
+software compositing. Repeat the comparison when the server moves to its
+own process.
