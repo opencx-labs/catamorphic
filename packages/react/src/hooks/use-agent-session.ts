@@ -599,6 +599,10 @@ export function useAgentSessionInfos(
     new Map<string, SessionStreamStatus>(),
   );
   const subscriptions = useRef(new Map<string, () => void>());
+  // What each stream last said that this hook reads. A stream also says
+  // how its connection is doing ("connecting", then "live"), which nothing
+  // here shows: the host would render for every chat coming forward.
+  const told = useRef(new Map<string, SessionStreamStatus>());
   const scope = useRef({ apiClient, queryClient, projectId });
   const queries = useQueries({
     queries: ids.map((sessionId) =>
@@ -668,6 +672,7 @@ export function useAgentSessionInfos(
     ) {
       for (const unsubscribe of subscriptions.current.values()) unsubscribe();
       subscriptions.current.clear();
+      told.current.clear();
       setStatuses(new Map());
       scope.current = { apiClient, queryClient, projectId };
     }
@@ -680,6 +685,7 @@ export function useAgentSessionInfos(
       if (desired.has(id)) continue;
       unsubscribe();
       subscriptions.current.delete(id);
+      if (!told.current.delete(id)) continue;
       setStatuses((current) => {
         if (!current.has(id)) return current;
         const next = new Map(current);
@@ -696,10 +702,16 @@ export function useAgentSessionInfos(
         projectId,
         sessionId,
       }).subscribe((status) => {
-        setStatuses((current) => {
-          if (current.get(sessionId) === status) return current;
-          return new Map(current).set(sessionId, status);
-        });
+        const before = told.current.get(sessionId);
+        if (
+          before
+            ? before.streaming === status.streaming &&
+              before.streamError === status.streamError
+            : !status.streaming && !status.streamError
+        )
+          return;
+        told.current.set(sessionId, status);
+        setStatuses((current) => new Map(current).set(sessionId, status));
       }, true);
       subscriptions.current.set(sessionId, unsubscribe);
     }

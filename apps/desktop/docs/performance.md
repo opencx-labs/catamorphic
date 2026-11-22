@@ -1054,3 +1054,130 @@ suite with `urls: ["--inspect=127.0.0.1:9229"]`, read
 `Profiler.start` and `Profiler.stop` around the fake agent's
 `retained history fixture` and `perf turn` scenarios.
 
+
+## The window renders what changed (2026-11-20)
+
+ADR 0340 records the decision. "What is out of sight" left the window
+rendering as one component per change, a switch to a chat taking 23
+commits, and 45 elements per tab.
+
+**Where a switch went.** The same isolated test desktop and workloads, with
+a commit hook in place of React DevTools
+(`window.__REACT_DEVTOOLS_GLOBAL_HOOK__`, added before the page loads): for
+each commit it walks the fibers React worked on and counts the components
+that rendered, and names the ones whose parent did not render (where the
+commit started). On `fdc5d5bb7`, one click:
+
+- between two pages: one commit that started in `App` and rendered 366
+  components, 3,310 with 128 sleeping tabs (130 tab rows of some 23
+  components each);
+- between two chats: `App` three times and the dock three times, each dock
+  render drawing every chat (about 420 components for three chats), plus
+  the chats' own;
+- from a page to a chat: the same, then about fifteen commits of the three
+  chats' chip rails measuring themselves on every frame of a padding
+  transition none of them was visible for.
+
+`App`'s own body took about half a millisecond a render; what it made
+render was the cost. Two of the dock's three renders were the main
+process's broadcast of what the window had just published, and two of
+`App`'s were a chat's stream saying "connecting", then "live".
+
+**What changed.** Workspaces live in a store; the tab strip, the dock's
+chats, the sidebars' sections, the dialogs and the screens kept behind
+other tabs render for what they are given; a tab's menu is built as it
+opens and a signal's marks when one first shows; the dock ignores the echo
+of its own chats; a chat behind another tab takes its padding at once; a
+sidebar section reads its rows again only for what its source lists from.
+
+**Before and after.** Per click, 20 clicks 250 ms apart, garbage collected
+before each reading; `fdc5d5bb7` against this change, two runs of each,
+taken in turn (before, after, before, after) on the same machine while
+other work ran on it. Counts were the same in both runs to within 1%.
+
+| Per switch | Commits | | Components rendered | |
+| --- | ---: | ---: | ---: | ---: |
+| | Before | After | Before | After |
+| Two pages, no other tabs | 3 | 2.5 | 383 | 339 |
+| Two pages, 128 sleeping tabs | 3.5 | 3.1 | 3,828 | 852 |
+| of which the commit `App` starts | | | 3,310 | 324 |
+| Two pages, three long chats behind | 3 | 2.6 | 465 | 358 |
+| Two chats | 10 | 7 | 2,895 | 1,049 |
+| A page to a chat | 21.9 | 6.2 | 2,292 | 1,020 |
+
+| Script per switch, ms (each run) | Before | After |
+| --- | ---: | ---: |
+| Two pages, no other tabs | 10.3, 7.0 | 6.0, 6.2 |
+| Two pages, 128 sleeping tabs | 60.1, 60.5 | 17.8, 16.5 |
+| Two pages, three long chats behind | 15.4, 13.2 | 8.4, 8.0 |
+| Two chats | 65.9, 48.3 | 28.1, 28.4 |
+| A page to a chat | 64.0, 52.2 | 38.8, 23.1 |
+
+| The window with 128 sleeping tabs | Before | After |
+| --- | ---: | ---: |
+| Main-thread task time per switch | 196, 190 ms | 91, 80 ms |
+| Elements in a tab | 45 | 18 |
+| Elements in the window | 9,380 | 5,816 |
+| DOM nodes | 10,838 | 7,142 |
+| JS heap | 36 MB | 32 MB |
+
+The 852 that remain with 128 tabs are mostly the History page under test
+listing its own visits as it comes forward (712 and 300 in its own
+commits), not the window. Times moved between identical runs by up to a
+third (48 and 66 ms for the same build), and by more across the day: an
+earlier run of the same baseline read 243 ms of script for the 128-tab
+switch while other suites ran beside it. The counts and the paired script
+times are the evidence. A chat working behind another tab did not change
+(12 and 10 ms of script a second before, 12 and 14 after) and was not a
+target.
+
+**What this leaves.** A switch between two pages still renders about 325
+components in `App`'s commit, some 250 of them the sidebars: a section is
+given the surface in front as a prop, so each renders once per switch (it
+no longer reads its source again), and a section that renders draws every
+row. `App` still renders for every change, and twice for a chat coming
+forward (its stream status is `App`'s state). A switch between chats still
+takes seven commits: the two above, the dock's, and each chat's own for
+its visibility and stream. The workspace is still saved whole 500 ms after
+a switch, its focus fields with its tab list. Each is the next derivation
+to move behind a selector (ADR 0340); none was safe to add to this change.
+
+The suite was temporary. To repeat it, add the hook above with
+`Page.addScriptToEvaluateOnNewDocument` before `app.reload()` in an e2e
+suite, open pages with the `catamorphic:dock-navigate` event and chats
+with the fake agent's `retained history fixture`, and read
+`Performance.getMetrics` and the hook's counts around the clicks. The
+permanent checks are counts, not times: `workspace-tabs.test.tsx` (a tab
+coming forward draws two rows), `dock-host.test.tsx` (the dock draws the
+chats a switch changed, none for its echo) and `source-section.test.tsx`
+(a list is read again only for what it lists from).
+
+## The server message boundary (2026-11-21)
+
+[ADR 0341](../../../docs/decisions/0341-the-engines-boundary-one-interface-then-the-fork.md)
+introduces a `MessageChannel` between the desktop shell and server. Both
+ends still run in the main process. The paired runs alternated the
+post-database-thread baseline (`fdc5d5bb7`) and the boundary branch in
+the isolated Linux desktop, using the inspector method above.
+
+| Scenario | Baseline main thread busy, ms/s | Boundary main thread busy, ms/s | Synchronous posting, total ms |
+| --- | ---: | ---: | ---: |
+| Idle, about 10 s | 18 to 90 | 17 to 18 | 0 |
+| Live scripted turn, about 21 s | 63 to 116 | 91 to 104 | 1.11 to 1.38 |
+| Ten reopenings of a 1,000-item chat, alternating with a short chat | 196 to 221 | 247 to 294 | 2.25 to 2.93 |
+
+The chat reopenings took 4.2 s in all three baseline runs and 4.5 to
+4.8 s with the boundary. The latter posted 124 to 126 messages. The
+synchronous posting measurement covers the sender and copying during
+`postMessage`. Receive-side processing and time waiting for delivery are
+outside that measurement, and the whole-thread samples also include HTTP,
+query building, and native Electron work. Synchronous posting accounts for
+only a small part of the first timing difference.
+
+The timing direction reversed in two pairs on the final code with the
+posting instrumentation removed and the run order swapped for the second
+pair. The baseline finished in 4.5 and 4.7 s with 299 and 333 ms/s of
+main-thread CPU. The boundary finished in 4.1 and 4.4 s with 218 and
+229 ms/s. The results vary across runs on a fixture profile with
+software compositing. Repeat the comparison when the server moves to its
+own process.

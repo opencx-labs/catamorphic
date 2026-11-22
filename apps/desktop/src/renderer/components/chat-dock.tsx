@@ -3435,7 +3435,10 @@ function ChatDockContent({
           {/* Keep the composer clear of the bubble UI: bottom padding for
             the expanded strip, side padding for the corner bubble. */}
           <div
-            className={`flex w-full flex-col ${arriving ? "" : "transition-[max-width,padding] duration-250 ease-standard"} ${
+            // Only a chat in front eases: one behind another tab is laid
+            // out but not drawn, and easing its padding there resized its
+            // chips on every frame of a motion nobody sees.
+            className={`flex w-full flex-col ${arriving || !frontSurface ? "" : "transition-[max-width,padding] duration-250 ease-standard"} ${
               isTab
                 ? `mx-auto max-w-4xl ${
                     bubbleClearance === "strip"

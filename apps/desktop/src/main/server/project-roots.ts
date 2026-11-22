@@ -3,6 +3,14 @@ import path from "node:path";
 import { discoverLocalFolder } from "@catamorphic/git";
 import type { DatabaseStatements } from "./database-thread.js";
 
+/** One project's folder, and whether its turns checkpoint by themselves. */
+export interface ProjectRoot {
+  projectId: string;
+  /** Null once the project has no folder. */
+  rootPath: string | null;
+  automaticCheckpoints: boolean;
+}
+
 /**
  * Desktop-owned mapping of projectId → user-visible folder. Lives in its own
  * `desktop` schema on the embedded PGlite, deliberately outside the shared
@@ -19,8 +27,38 @@ export class ProjectRootsStore {
   private readonly cache = new Map<string, string>();
   private readonly automaticCheckpoints = new Set<string>();
   private registration = Promise.resolve();
+  private readonly listeners = new Set<(change: ProjectRoot) => void>();
 
   constructor(private readonly pglite: DatabaseStatements) {}
+
+  /** Every project's folder as the table has it now. */
+  entries(): ProjectRoot[] {
+    return [...this.cache.keys()].map((projectId) => this.entry(projectId));
+  }
+
+  /**
+   * Hear every change to a project's folder as it is made: this store is
+   * the table's only writer, so a listener can keep a copy that is whole.
+   */
+  onChanged(listener: (change: ProjectRoot) => void): () => void {
+    this.listeners.add(listener);
+    return () => {
+      this.listeners.delete(listener);
+    };
+  }
+
+  private entry(projectId: string): ProjectRoot {
+    return {
+      projectId,
+      rootPath: this.cache.get(projectId) ?? null,
+      automaticCheckpoints: this.automaticCheckpoints.has(projectId),
+    };
+  }
+
+  private changed(projectId: string): void {
+    const change = this.entry(projectId);
+    for (const listener of this.listeners) listener(change);
+  }
 
   async init(relocation?: { from: string; to: string }): Promise<void> {
     await this.pglite.exec(`
@@ -116,6 +154,7 @@ export class ProjectRootsStore {
           [id],
         );
         this.automaticCheckpoints.add(id);
+        this.changed(id);
       }
       try {
         return await input.create(id, canonical);
@@ -167,6 +206,7 @@ export class ProjectRootsStore {
       [projectId, rootPath],
     );
     this.cache.set(projectId, rootPath);
+    this.changed(projectId);
   }
 
   async delete(projectId: string): Promise<void> {
@@ -176,5 +216,6 @@ export class ProjectRootsStore {
     );
     this.cache.delete(projectId);
     this.automaticCheckpoints.delete(projectId);
+    this.changed(projectId);
   }
 }

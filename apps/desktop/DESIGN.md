@@ -4324,3 +4324,16 @@ answers them itself, shaped as Chrome's, with Firefox's on-device
 translator and Google's CLD3 detector. A pair's model downloads the first
 time a page asks after a click, with the page's own progress, and text
 never leaves the computer (ADR 0320).
+
+### 2026-11-20: The window renders what changed
+
+A tab click, a page's title or a chat's signal used to render the whole
+window: its workspaces lived in the state of one component, which gave
+every part new closures each time. Workspaces now live in a store
+(`lib/workspace-store.ts`), and a part of the window renders when what it
+shows changes (ADR 0340). A new part follows that rule: it takes entries
+that keep their identity (`useStableEntries`), handlers that stay the same
+and run the latest (`useLatestHandlers`, or `quiet` around the component),
+and nothing it must call while it renders; what is built for a moment (a
+menu, a signal's mark) is built then. Nothing looks or moves differently.
+Measurements are in [Performance](docs/performance.md).

@@ -16,6 +16,7 @@ export function chipsSource(): SectionSource {
   const source: SectionSource = {
     title: "Chips",
     empty: "No chips yet.",
+    listsFrom: ({ session }) => session?.id,
     capabilities: () => capabilitiesOf(source),
     load: async ({ parentId, cursor, session }) =>
       pageOf(

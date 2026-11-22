@@ -111,6 +111,59 @@ it("keeps the icon while working, with the spinner on its corner", () => {
   expect(container.querySelector('[data-testid="icon"]')).toBe(icon);
 });
 
+it("draws no marks for an icon that never shows one, and keeps them once shown", () => {
+  const container = document.createElement("div");
+  const root = createRoot(container);
+  cleanup = () => act(() => root.unmount());
+  const render = (working: boolean, unread: boolean) =>
+    act(() =>
+      root.render(
+        <>
+          <SignalGlyph activity={working ? "working" : null}>
+            <span data-testid="icon">Page</span>
+          </SignalGlyph>
+          <span data-testid="corner">
+            <SignalBadge signals={{ unread }} size="sm" />
+          </span>
+        </>,
+      ),
+    );
+  render(false, false);
+  expect(container.querySelector("[data-activity], svg")).toBeNull();
+  expect(
+    container.querySelector('[data-testid="corner"]')?.childElementCount,
+  ).toBe(0);
+  // A mark that arrives later starts from the hidden pose, as the hidden
+  // element it replaces did.
+  render(true, true);
+  const spinner = container.querySelector(".animate-spin");
+  expect(spinner?.getAttribute("class")).toContain("starting:scale-0");
+  const dot = container.querySelector('[aria-hidden="false"]');
+  expect(dot?.className).toContain("starting:opacity-0");
+  // Once drawn they stay, so leaving animates too.
+  render(false, false);
+  expect(container.contains(spinner)).toBe(true);
+  expect(spinner?.getAttribute("class")).toContain("scale-0 opacity-0");
+  expect(container.contains(dot)).toBe(true);
+  expect(dot?.getAttribute("aria-hidden")).toBe("true");
+});
+
+it("shows a mark drawn with its icon as it is, without an entrance", () => {
+  const container = document.createElement("div");
+  const root = createRoot(container);
+  cleanup = () => act(() => root.unmount());
+  act(() =>
+    root.render(
+      <SignalGlyph activity="working">
+        <span>Chat</span>
+      </SignalGlyph>,
+    ),
+  );
+  expect(
+    container.querySelector(".animate-spin")?.getAttribute("class"),
+  ).not.toContain("starting:");
+});
+
 it("keeps a reply's dot while the agent works again", () => {
   const container = document.createElement("div");
   const root = createRoot(container);

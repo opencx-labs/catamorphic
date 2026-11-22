@@ -343,7 +343,9 @@ Settled design decisions live here as short Architecture Decision Records. They 
 | [0336](0336-disk-is-a-resource-work-manages-on-machines.md) | Disk is a resource Work manages on machines | Accepted (amends 0100, 0204, 0208, 0324, 0327, 0333) |
 | [0337](0337-reviews-show-progress-and-post-findings-as-verified.md) | Reviews show progress at once and post findings as they are verified | Accepted (amends 0259, 0323, 0325) |
 | [0338](0338-what-is-out-of-sight-is-data.md) | What is out of sight is data: sleeping tabs mount nothing, and a chat without a stream reads what it missed | Accepted (amends 0194, 0197; refines 0229, 0249) |
-| [0339](0339-the-desktops-backend-leaves-the-main-process.md) | The desktop's backend leaves the main process: its database first, then the server | Accepted |
+| [0339](0339-the-desktops-backend-leaves-the-main-process.md) | The desktop's backend leaves the main process: its database first, then the server | Accepted (amended by 0341) |
+| [0340](0340-the-window-renders-what-changed.md) | The window renders what changed: workspaces in a store, parts that skip a render that is not theirs | Accepted |
+| [0341](0341-the-engines-boundary-one-interface-then-the-fork.md) | The engine's boundary: one interface each way, a key, then the fork | Accepted (amends 0339) |
 | [0342](0342-claude-code-signs-in-on-a-members-own-machine.md) | Claude Code signs in on a member's own machine; one harness sign-in for both | Accepted (amends 0199, 0213) |
 | [0343](0343-a-workspace-is-saved-as-a-git-pack.md) | A workspace is saved as a Git pack, as it is restored | Accepted (amends 0178, 0191; amended by 0344) |
 | [0344](0344-every-server-chat-stands-on-a-branch.md) | Every server chat stands on a branch | Accepted (amends 0173, 0178, 0191, 0257, 0343) |

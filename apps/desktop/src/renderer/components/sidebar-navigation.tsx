@@ -1,6 +1,7 @@
 import { useItemActions } from "@catamorphic/app/ui";
 import { ChevronRight, LoaderCircle } from "lucide-react";
 import {
+  memo,
   type ReactNode,
   useCallback,
   useEffect,
@@ -60,7 +61,7 @@ const commandOf = (url: string | undefined) =>
  * static items, an app, or a note. Every list goes through the same
  * `SourceSection`; header buttons are the layout's `headerActions`.
  */
-export function ConfiguredSection({
+export const ConfiguredSection = memo(function ConfiguredSection({
   section,
   relevant,
   surface,
@@ -333,7 +334,7 @@ export function ConfiguredSection({
       />
     </SidebarContribution>
   );
-}
+});
 
 function SidebarSection({
   title,
