@@ -398,7 +398,7 @@ describe("a chat's connector as an MCP server of its own (ADR 0225)", () => {
         .result,
     ).toEqual({
       protocolVersion: "2025-03-26",
-      capabilities: { tools: {} },
+      capabilities: { tools: { listChanged: false } },
       serverInfo: { name: "probe", version: "1" },
     });
     expect((await rpc("ping")).json().result).toEqual({});

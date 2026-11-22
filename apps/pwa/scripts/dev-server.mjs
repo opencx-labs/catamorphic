@@ -975,7 +975,7 @@ const server = http.createServer(async (req, res) => {
       access_token: "fake-access-token",
       refresh_token: "fake-refresh-token",
       expires_in: 3600,
-      scope: "openid profile email offline_access",
+      scope: "openid profile email offline_access work:full",
     });
   }
   const auth = req.headers.authorization ?? "";

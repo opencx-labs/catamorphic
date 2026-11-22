@@ -168,7 +168,12 @@ connection from `core.connections.beginPersonalAuthorization`), else the
 service connection named like the provider. An imported repository is attached
 (ADR 0170): every network push passes the guard in `@catamorphic/git`, so
 Work only creates `work/` branches there and shares changes as pull
-requests, whichever host embeds it. Every public
+requests, whichever host embeds it. Pull requests open through
+`core.pullRequests` (ADR 0345): a host hands `openForChat` a chat's
+checkout and gets the pushed branch, the pull request and its record on
+the chat; `pullRequestTool` and `pullRequestCapability` are the one
+`create_pull_request` agents call, which a host builds over how it finds
+that checkout (a server chat's is `agentSessions.createPullRequest`). Every public
 method takes one keyed object parameter, for example
 `scoped.projects.get({ projectId })`,
 `scoped.workflows.get({ projectId, workflowName })`, and
@@ -586,7 +591,7 @@ necessary. Unarchive restores navigation. React hosts use `useArchiveAgentSessio
 
 ### The project MCP endpoint: bring your own agent
 
-`POST /api/projects/:id/mcp` serves the caller's whole scope as one MCP server: the project's `mcpToolKinds` workflow tools (roster filtered to the caller's workflow refs), `documents_list/read/search/write/delete/history` (the documents surface, per the caller's document refs; `documents_write` takes `text` or `base64` for binaries), `publish_document/revoke_publication/list_publications`, `propose_change`, `list_skills/read_skill`, `ask_agent` (a synchronous turn with a project agent the caller may open sessions on), and, on a session's own connection (`?sessionId=`), `set_session_metadata` (one key of that session's metadata; `remove: true` removes it, no value reads it). Claude Code, Cursor, or the host's own assistant connect with a host-issued token through `identityFromBearer`; the desktop's harnesses mount the same URL on every turn through their harness's `mcpServers(context)` hook. Being invited *is* receiving this URL.
+`POST /api/projects/:id/mcp` serves the caller's whole scope as one MCP server: the project's `mcpToolKinds` workflow tools (roster filtered to the caller's workflow refs), `documents_list/read/search/write/delete/history` (the documents surface, per the caller's document refs; `documents_write` takes `text` or `base64` for binaries), `publish_document/revoke_publication/list_publications`, `propose_change`, `list_skills/read_skill`, the session operations of core's registry (`session_start`, `session_send`, `session_wait`, `session_read`, `session_answer`, `session_interrupt`, `session_close`, `session_list` and the rest: a chat is started and returns at once, then waited on, never held open; ADRs 0346, 0347), and, on a session's own connection (`?sessionId=`), `set_session_metadata` (one key of that session's metadata; `remove: true` removes it, no value reads it). Claude Code, Cursor, or the host's own assistant connect with a host-issued token through `identityFromBearer`; the desktop's harnesses mount the same URL on every turn through their harness's `mcpServers(context)` hook. Being invited *is* receiving this URL. `POST /api/mcp` is the server-wide endpoint: `project_list` and the same session operations with `project` as an argument, the one address a person gives their own agent. Both endpoints speak the 2026-07-28 revision and the earlier handshake revisions on one URL (`mcp-server.ts`): `server/discover`, result types, caching hints, `subscriptions/listen` over the `work://sessions/{id}` and `work://attention` resources, and the tasks extension for `session_wait`. A host with replicas passes `mcp: { stateSecret }` to the plugin so every replica verifies the state a wait hands out, and `mcp: { resourceMetadataUrl }` for the step-up challenge; `Identity.tokenScopes` (see `withTokenScopes`) narrows what a token may do on every route and which tools it is shown; a host passes every grant's scopes through it, and `work:full` is the person themself. `/apps-mcp`, `/connection-mcp` and `serveForwardedTools` (`@catamorphic/fastify-plugin/mcp`, which now takes the `request`) run on the same dispatcher.
 
 The generated HTTP client lives in `@catamorphic/api-client`; construct it with `createApiClient({ baseUrl, fetch })`.
 
@@ -918,14 +923,13 @@ know who asked. The same surface is served over HTTP at
 base64 with `ifVersion`, `history`, `search?q=&mode=grep|text&prefix=`).
 Store bytes live inline in Postgres unless `documentBlobStore` (a
 filesystem or S3-compatible store) is configured; metadata, versions, text
-and the search index always stay in the database. On a hosting backend,
-agents' `store/` writes in their working folder are **pulled before and
-shipped after every turn as the caller** (`storeSyncAroundTurns`, default
-on; the turn's message metadata carries `storeSync` with what shipped, was
-refused, or conflicted) — a member's agent can only land what the member
-may write. Hosts whose folders are the truth (the desktop's local projects)
-set it `false` and sync explicitly. The framework's
-`searching-documents` host skill carries the recipe agents follow.
+and the search index always stay in the database. A chat's workspace is a
+Git checkout of the program (ADR 0344), so it never holds the store: agents
+read and write `store/` through the documents surface as the caller, and a
+member's agent can only land what the member may write. A desktop's local
+project keeps its store in its own folder and syncs it explicitly. The
+framework's `searching-documents` host skill carries the recipe agents
+follow.
 
 ### Local checkouts and document storage (ADR 0104)
 
@@ -1091,9 +1095,11 @@ is queued. Core records each piece of waiting work in `placement_waits`
 transaction that creates the Allocation and when the chat's queued work is
 withdrawn (close, archive), and exposes
 `core.placementWaits.wake({ tenantId })` for a host to call when a machine
-comes online. A host that scales machines reads the table as demand: rows
-whose chat has a queued turn, tried within `PLACEMENT_WAIT_FRESH_SECONDS`
-([ADR 0258](docs/decisions/0258-machines-on-demand.md)). `sendMessage` on a
+comes online. Work server hosts can provide `hooks.machines`: the
+plan reads waiting work, people and machine facts and declares the desired
+set; Work sequences the host's infrastructure verbs under a fenced claim.
+See [the machine plan](skills/setup-work-server/references/cluster-deployment.md#a-machine-plan).
+`sendMessage` on a
 waiting chat throws `AgentTurnUnsettledError` with state `waiting` at once.
 
 The managed multi-machine target is multiple Catamorphic server instances of
@@ -1329,7 +1335,9 @@ Placement takes only machines that report `sign-in:<harness>:<member>`
 (`signInCapability`), turns must be authored by the owner, and the sandbox
 mounts that member's harness home (`CreateSandboxOpts.signIns`) so the
 harness runs with `CLAUDE_CONFIG_DIR` or `CODEX_HOME` instead of the
-gateway. Listed files are delivered to any of the
+gateway (`SIGN_IN_SPECS` names each harness's login, home variable and the
+file a completed login leaves; on a sign-in the runner adds none of the
+session's variables that name another credential or endpoint, ADR 0342). Listed files are delivered to any of the
 owner's chats in such an Environment, excluded from Git through
 `.git/info/exclude`, and removed on close and idle release. Discovery items
 carry `personalCredentials` when an Environment allows them.

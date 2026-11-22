@@ -30,7 +30,7 @@ import { ExecutionAllocationsService } from "../services/execution-allocations-s
 import { ExecutionEnvironmentsService } from "../services/execution-environments-service.js";
 import { ProjectEnvironmentsService } from "../services/project-environments-service.js";
 import { ProjectsService } from "../services/projects-service.js";
-import { SessionActionsService } from "../services/session-actions-service.js";
+import { SessionOperationsService } from "../services/session-operations.js";
 import { copySettledHistory } from "../services/sessions/session-copy.js";
 import {
   renameCommandId,
@@ -38,6 +38,12 @@ import {
 } from "../services/sessions/session-log.js";
 import { readFullSnapshot } from "../services/sessions/session-reads.js";
 import { testEnvironmentProvider } from "./test-environment.js";
+
+/** What the operations need beside the sessions: no watchers, own chats. */
+const OPERATION_DEPS = {
+  watchers: () => undefined,
+  chatOwner: async (input: { caller: Identity }) => input.caller,
+};
 
 /*
  * Session metadata (ADR 0226): named JSON values on a session, set by
@@ -596,11 +602,11 @@ describe("session metadata", () => {
     };
     const act = (
       projectId: string,
-      operation: "inspect" | "find" | "setMetadata",
+      operation: "session_read" | "session_list" | "session_set_metadata",
       args: unknown,
       caller: Identity = identity,
     ) =>
-      new SessionActionsService(db, sessions, () => undefined).execute({
+      new SessionOperationsService(db, sessions, OPERATION_DEPS).execute({
         identity: caller,
         projectId,
         operation,
@@ -617,7 +623,7 @@ describe("session metadata", () => {
         workflowName: "reviewPullRequests",
       });
       expect(
-        await act(project.id, "setMetadata", {
+        await act(project.id, "session_set_metadata", {
           key: "pr-acme/web-42",
           set: { "review.verdicts": { abc: "failure" }, "review.note": "x" },
         }),
@@ -626,7 +632,7 @@ describe("session metadata", () => {
         metadata: { "review.verdicts": { abc: "failure" }, "review.note": "x" },
       });
       // A merge patch: unnamed keys stay, null removes one.
-      await act(project.id, "setMetadata", {
+      await act(project.id, "session_set_metadata", {
         sessionId,
         set: { "review.note": null, "review.comment": 7 },
       });
@@ -635,15 +641,18 @@ describe("session metadata", () => {
         "review.comment": 7,
       };
       expect(
-        await act(project.id, "inspect", { key: "pr-acme/web-42" }),
-      ).toMatchObject({ id: sessionId, metadata: expected });
+        await act(project.id, "session_read", {
+          key: "pr-acme/web-42",
+          include: ["metadata"],
+        }),
+      ).toMatchObject({ sessionId, metadata: expected });
       expect(
-        await act(project.id, "find", { key: "pr-acme/web-42" }),
-      ).toMatchObject({ id: sessionId, metadata: expected });
+        await act(project.id, "session_list", { key: "pr-acme/web-42" }),
+      ).toMatchObject({ sessions: [{ sessionId, key: "pr-acme/web-42" }] });
       // Repeating a write changes nothing and logs nothing.
       const { sequence } = (await sessions.get(identity, project.id, sessionId))
         .snapshot;
-      await act(project.id, "setMetadata", {
+      await act(project.id, "session_set_metadata", {
         sessionId,
         set: { "review.comment": 7 },
       });
@@ -658,19 +667,19 @@ describe("session metadata", () => {
       });
       const session = await sessions.create(identity, project.id);
       await expect(
-        act(project.id, "setMetadata", {
+        act(project.id, "session_set_metadata", {
           sessionId: session.id,
           set: { "Review.Bad": 1 },
         }),
       ).rejects.toThrow(SessionMetadataError);
       await expect(
-        act(project.id, "setMetadata", {
+        act(project.id, "session_set_metadata", {
           sessionId: session.id,
           set: { "review.big": "x".repeat(17_000) },
         }),
       ).rejects.toThrow(SessionMetadataError);
       await expect(
-        act(project.id, "setMetadata", {
+        act(project.id, "session_set_metadata", {
           sessionId: session.id,
           key: "pr-1",
           set: {},
@@ -684,7 +693,7 @@ describe("session metadata", () => {
       await expect(
         act(
           project.id,
-          "setMetadata",
+          "session_set_metadata",
           { sessionId: session.id, set: { "review.x": 1 } },
           reader,
         ),
@@ -696,7 +705,7 @@ describe("session metadata", () => {
         .where("id", "=", session.id)
         .execute();
       await expect(
-        act(project.id, "setMetadata", {
+        act(project.id, "session_set_metadata", {
           sessionId: session.id,
           set: { "review.done": true },
         }),
@@ -711,7 +720,7 @@ describe("session metadata", () => {
         .where("id", "=", session.id)
         .execute();
       await expect(
-        act(project.id, "setMetadata", {
+        act(project.id, "session_set_metadata", {
           sessionId: session.id,
           set: { "review.done": null },
         }),

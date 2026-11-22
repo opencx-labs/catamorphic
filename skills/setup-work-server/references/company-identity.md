@@ -149,8 +149,7 @@ Each run's input is the event: `input.id`, `input.occurredAt`, and
 null; `domain`, the email's domain), `groups` (their groups, lowercased; for a
 departure, the groups they last held) and, for `groups-changed`, `added` and
 `removed`. Groups are the ones the server asks the directory about: groups
-that map roles, worker access and machine rules, and groups a directory
-trigger names. A group the server starts or stops asking about is not a
+that map project roles and groups a directory trigger names. A group the server starts or stops asking about is not a
 change in anyone's groups.
 
 - `trigger("directory.member-joined", { groups: ["engineering@example.com"] })`

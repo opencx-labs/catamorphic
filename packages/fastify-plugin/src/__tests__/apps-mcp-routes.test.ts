@@ -198,14 +198,92 @@ describe("apps MCP endpoint", () => {
     });
   });
 
-  it("answers unknown tools with an isError result, unknown methods with -32601", async () => {
+  it("speaks the current revision too, on the dispatcher every endpoint shares", async () => {
+    const app = createTestApp({ core: fakeCore() as never });
+    apps.push(app);
+    const modern = (method: string, params: Record<string, unknown> = {}) =>
+      app.inject({
+        method: "POST",
+        url: MCP_URL,
+        headers: {
+          ...HEADERS,
+          "mcp-protocol-version": "2026-07-28",
+          "mcp-method": method,
+          ...(typeof params.uri === "string" ? { "mcp-name": params.uri } : {}),
+        },
+        payload: {
+          jsonrpc: "2.0",
+          id: 1,
+          method,
+          params: {
+            ...params,
+            _meta: {
+              "io.modelcontextprotocol/protocolVersion": "2026-07-28",
+              "io.modelcontextprotocol/clientCapabilities": {},
+            },
+          },
+        },
+      });
+    const discovered = (await modern("server/discover")).json().result;
+    expect(discovered).toMatchObject({
+      resultType: "complete",
+      supportedVersions: expect.arrayContaining(["2026-07-28", "2025-06-18"]),
+      capabilities: { tools: {}, resources: {} },
+    });
+    const listed = (await modern("tools/list")).json().result;
+    expect(listed).toMatchObject({
+      resultType: "complete",
+      ttlMs: expect.any(Number),
+    });
+    const legacy = await rpc(app, "tools/list");
+    expect(listed.tools).toEqual(legacy.result?.tools);
+    const resources = (await modern("resources/list")).json().result
+      .resources as Array<{ uri: string }>;
+    const [first] = resources;
+    if (first)
+      expect(
+        (await modern("resources/read", { uri: first.uri })).json().result,
+      ).toMatchObject({
+        resultType: "complete",
+        contents: [{ uri: first.uri }],
+      });
+    // A mirrored header that disagrees with the body is refused.
+    const mismatched = await app.inject({
+      method: "POST",
+      url: MCP_URL,
+      headers: {
+        ...HEADERS,
+        "mcp-protocol-version": "2026-07-28",
+        "mcp-method": "tools/call",
+      },
+      payload: {
+        jsonrpc: "2.0",
+        id: 1,
+        method: "tools/list",
+        params: {
+          _meta: {
+            "io.modelcontextprotocol/protocolVersion": "2026-07-28",
+            "io.modelcontextprotocol/clientCapabilities": {},
+          },
+        },
+      },
+    });
+    expect(mismatched.statusCode).toBe(400);
+    expect(mismatched.json().error.code).toBe(-32020);
+  });
+
+  it("answers unknown tools with -32602, unknown methods with -32601", async () => {
     const app = createTestApp({ core: fakeCore() as never });
     apps.push(app);
     const call = await rpc(app, "tools/call", {
       name: "not_allowed",
       arguments: {},
     });
-    expect(call.result?.isError).toBe(true);
+    // As the protocol names an unknown tool, on every endpoint (ADR 0347).
+    expect(call.error).toMatchObject({
+      code: -32602,
+      message: "Unknown tool: not_allowed",
+    });
     const unknown = await rpc(app, "no/such/method");
     expect(unknown.error?.code).toBe(-32601);
   });

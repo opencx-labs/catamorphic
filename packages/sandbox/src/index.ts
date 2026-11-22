@@ -141,6 +141,7 @@ export {
   saysOutOfDisk,
 } from "./disk.js";
 export {
+  type AccessTier,
   type AgentExecutionTopology,
   accessTier,
   type EnvironmentBinding,
@@ -158,6 +159,7 @@ export {
   type NodeAccess,
   placementOrder,
   poolMatches,
+  servesOnlyThisOwner,
   type WorkloadKind,
 } from "./execution-environment.js";
 export { instrumentSandboxProvider } from "./instrumented-provider.js";
@@ -323,8 +325,11 @@ export {
   SEPARATE_COMMANDS_SOCKET,
   SEPARATE_HARNESS,
   SIGN_IN_HARNESSES,
+  SIGN_IN_SPECS,
   type SignInHarness,
+  type SignInSpec,
   signInCapability,
+  signInHarness,
   signInHomePath,
   VOLUME_KEY_PATTERN,
   VOLUME_NAME_PATTERN,

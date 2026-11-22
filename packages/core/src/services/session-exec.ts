@@ -45,7 +45,7 @@ import {
   json,
   namesOneChat,
   SessionKeyNotFoundError,
-} from "./session-actions-service.js";
+} from "./session-operations.js";
 import {
   markWorkspaceUsed,
   type SessionWorkspaceHandle,

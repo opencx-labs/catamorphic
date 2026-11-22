@@ -86,8 +86,8 @@ jobs; keep desired business state and command identities in the application.
 Serialize publications by their subject with
 \`concurrency: { key, onConflict: "queue" }\` (see writing-workflows): each run
 then reads what the one before it recorded. Keep that state where the subject
-is. For a chat, that is its session metadata: \`inspect\` returns
-\`metadata\`, and \`host["catamorphic.sessions"].setMetadata({ sessionId, set:
+is. For a chat, that is its session metadata: \`read\` with
+\`include: ["metadata"]\` returns it, and \`host["catamorphic.sessions"].setMetadata({ sessionId, set:
 { "review.verdicts": verdicts } })\` records it (null removes a key; at most 32
 keys, 16 KB a value, 64 KB in all). Prefix the keys a workflow owns with its
 purpose (\`review.\`): agents and people write metadata too. So when an agent

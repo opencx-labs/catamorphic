@@ -1,6 +1,6 @@
 # 0199 — Subscription sign-ins stay on the machine they were made on
 
-- **Status:** Accepted (amended by [0213](0213-codex-signs-in-on-a-members-own-machine.md): Claude subscriptions stay on members' computers; Codex signs in from the app on a member's own machine, one person per machine)
+- **Status:** Accepted (amended by [0213](0213-codex-signs-in-on-a-members-own-machine.md): sign-ins happen from the app on a member's own machine, one person per machine; and by [0342](0342-claude-code-signs-in-on-a-members-own-machine.md): Claude Code signs in there again, as Codex does)
 - **Date:** 2026-10-02
 - **Supersedes:** the login half of [0184](0184-personal-credentials-reach-a-members-own-sessions.md) (personal files stay)
 

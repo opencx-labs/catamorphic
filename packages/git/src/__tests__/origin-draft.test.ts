@@ -354,6 +354,97 @@ for (const [label, makeOrigin] of [
       expect(files[".work/app-data/store/notes.md"]).toBeUndefined();
     });
 
+    it("keeps a saved workspace's modes and links, and never writes through a link (ADR 0343)", async () => {
+      const alice = await draft();
+      const binary = Uint8Array.from({ length: 512 }, (_, i) => i % 256);
+      const tip = await alice.write({
+        changes: [
+          { path: "data.bin", content: binary },
+          { path: "tool.sh", content: "#!/bin/sh\n", mode: "100755" },
+          { path: "link", content: "docs/a.md", mode: "120000" },
+          { path: "out", content: "/etc", mode: "120000" },
+        ],
+        replaceLinks: true,
+      });
+      if (!tip) throw new Error("expected a draft commit");
+      const modes = async (commit: string) =>
+        origin.withOrigin(TENANT, PROJECT, async (repo) => {
+          const objects = new OriginObjects(repo, new GitObjectCache());
+          const files = await objects.files(
+            (await objects.commit(commit)).tree,
+          );
+          return Object.fromEntries(
+            [...files].map(([file, entry]) => [file, entry.mode]),
+          );
+        });
+      expect(await modes(tip)).toMatchObject({
+        "data.bin": "100644",
+        "tool.sh": "100755",
+        link: "120000",
+        out: "120000",
+        "bin/run.sh": "100644",
+      });
+      expect(await alice.readFileBytes("data.bin")).toEqual(binary);
+      expect(
+        new TextDecoder().decode(
+          (await alice.readBlobAtRef("HEAD", "link")) ?? new Uint8Array(),
+        ),
+      ).toBe("docs/a.md");
+      // Content alone keeps the mode a file had.
+      await alice.writeFile("tool.sh", "#!/bin/sh\necho\n");
+      expect((await modes(await alice.resolveRef()))["tool.sh"]).toBe("100755");
+
+      // A path through a link is refused whoever asks, and a link itself is
+      // changed only by a save.
+      for (const replaceLinks of [false, true])
+        await expect(
+          alice.write({
+            changes: [{ path: "out/passwd", content: "x" }],
+            replaceLinks,
+          }),
+        ).rejects.toMatchObject({ code: "ELOOP" });
+      await expect(alice.writeFile("link", "x")).rejects.toMatchObject({
+        code: "ELOOP",
+      });
+      await expect(alice.deleteFile("link")).rejects.toMatchObject({
+        code: "ELOOP",
+      });
+
+      // A save replaces and deletes links as entries, lets a folder take a
+      // link's name, and a file an emptied folder's.
+      const next = await alice.write({
+        changes: [
+          { path: "link", content: "now a file", mode: "100644" },
+          { path: "out", delete: true },
+          { path: "out/inside.md", content: "in" },
+          { path: "docs/a.md", delete: true },
+          { path: "docs/lines.md", delete: true },
+          { path: "docs/nested/b.md", delete: true },
+          { path: "docs", content: "a file now" },
+        ],
+        replaceLinks: true,
+        skipMissingDeletes: true,
+      });
+      if (!next) throw new Error("expected a draft commit");
+      expect(await modes(next)).toMatchObject({
+        link: "100644",
+        "out/inside.md": "100644",
+        docs: "100644",
+      });
+      expect(await alice.readFile("docs")).toBe("a file now");
+      expect(await alice.readFile("out/inside.md")).toBe("in");
+      // A folder that keeps a file is never replaced.
+      await expect(
+        alice.write({
+          changes: [
+            { path: "out/inside.md", delete: true },
+            { path: "bin", content: "x" },
+          ],
+          replaceLinks: true,
+        }),
+      ).rejects.toMatchObject({ code: "EISDIR" });
+    });
+
     it("never resolves another member's draft or a session branch, however spelled", async () => {
       const bob = await draft("bob");
       await bob.writeFile("secret.md", "bob's");

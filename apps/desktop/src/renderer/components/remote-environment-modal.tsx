@@ -11,10 +11,20 @@ import type {
   PersonalEnvironmentServerState,
   PersonalEnvironmentView,
 } from "../../shared/personal-environment.js";
-import type { RemoteMachine } from "../../shared/remote-machines.js";
+import {
+  REMOTE_MACHINE_STATE_LABELS,
+  type RemoteMachine,
+  type RemoteSignInState,
+  SIGN_IN_HARNESS_NAMES,
+  SIGN_IN_HARNESSES,
+  type SignInHarness,
+} from "../../shared/remote-machines.js";
 import { desktopApi } from "../lib/desktop-api.js";
 import { ipcErrorText } from "../lib/remote-workspace.js";
-import { CodexSignInDialog, useCodexSignIn } from "./codex-sign-in-dialog.js";
+import {
+  HarnessSignInDialog,
+  useHarnessSignIn,
+} from "./harness-sign-in-dialog.js";
 import { Modal } from "./modal.js";
 import { PendingButton } from "./pending-button.js";
 import { refreshRemoteAgentCatalog } from "./project-authority-provider.js";
@@ -48,9 +58,9 @@ const SETUP_NOT_SENT: Record<PersonalEnvironmentServerState, string> = {
  * project files reach their sessions on the server, and their own setup
  * command for new workspaces there (ADR 0208), shown as the config says it.
  * Sign-ins never leave the machine they were made on (ADR 0199): Claude
- * Code's run only on this computer, and Codex signs in on each of the
- * member's own machines with its device code login (ADR 0213). Files and
- * setup edit `.work/personal/environment.json`.
+ * Code and Codex sign in on each of the member's own machines with their
+ * own logins (ADRs 0213, 0342). Files and setup edit
+ * `.work/personal/environment.json`.
  */
 export function RemoteEnvironmentModal({
   open,
@@ -84,24 +94,33 @@ export function RemoteEnvironmentModal({
     }
   }, [projectId]);
 
-  const setCodex = (machineId: string, codex: RemoteMachine["codex"]) => {
+  const setSignIn = (input: {
+    machineId: string;
+    harness: SignInHarness;
+    state: RemoteSignInState;
+  }) => {
     setMachines((current) =>
       current?.map((machine) =>
-        machine.id === machineId ? { ...machine, codex } : machine,
+        machine.id === input.machineId
+          ? {
+              ...machine,
+              signIns: { ...machine.signIns, [input.harness]: input.state },
+            }
+          : machine,
       ),
     );
-    // Codex in a new chat's agent list follows at once.
+    // The harness in a new chat's agent list follows at once.
     refreshRemoteAgentCatalog(projectId);
   };
-  const codexSignIn = useCodexSignIn({
+  const harnessSignIn = useHarnessSignIn({
     projectId,
-    onSignedIn: (machineId) => setCodex(machineId, "signed-in"),
+    onSignedIn: (target) => setSignIn({ ...target, state: "signed-in" }),
   });
-  const closeCodexSignIn = codexSignIn.close;
+  const closeHarnessSignIn = harnessSignIn.close;
 
   useEffect(() => {
     if (!open) {
-      closeCodexSignIn();
+      closeHarnessSignIn();
       return;
     }
     setError(null);
@@ -111,17 +130,18 @@ export function RemoteEnvironmentModal({
       if (change.projectId === projectId)
         void load().catch((cause: unknown) => setError(message(cause)));
     });
-  }, [open, projectId, load, loadMachines, closeCodexSignIn]);
+  }, [open, projectId, load, loadMachines, closeHarnessSignIn]);
 
-  const signOut = async (machine: RemoteMachine) => {
-    setBusy(`sign-out:${machine.id}`);
+  const signOut = async (machine: RemoteMachine, harness: SignInHarness) => {
+    setBusy(`sign-out:${machine.id}:${harness}`);
     setError(null);
     try {
-      await desktopApi.remoteCodexSignOut({
+      await desktopApi.remoteHarnessSignOut({
         projectId,
         machineId: machine.id,
+        harness,
       });
-      setCodex(machine.id, "signed-out");
+      setSignIn({ machineId: machine.id, harness, state: "signed-out" });
     } catch (cause) {
       setError(ipcErrorText(cause));
     } finally {
@@ -214,9 +234,9 @@ export function RemoteEnvironmentModal({
               Sign-ins
             </h3>
             <p className="text-xs leading-5 text-fg-muted">
-              Claude Code runs on your own subscription only on this computer.
-              On the project's server, it runs through your organization's model
-              connection.
+              Claude Code and Codex can run on your own subscriptions on a
+              machine of your own. Each signs in on the machine itself, so your
+              sign-in stays there.
             </p>
             {machines !== null &&
               (machines !== undefined || machinesError !== null) && (
@@ -240,24 +260,27 @@ export function RemoteEnvironmentModal({
                     </div>
                   ) : machines?.length === 0 ? (
                     <p className="text-xs leading-5 text-fg-muted">
-                      Codex sign-ins need a machine of your own: ask an
-                      administrator for one. Codex on this computer uses this
-                      computer's sign-in.
+                      Sign-ins need a machine of your own: ask an administrator
+                      for one. Claude Code and Codex on this computer use this
+                      computer's sign-ins.
                     </p>
                   ) : (
                     machines?.map((machine) => (
-                      <MachineRow
+                      <MachineCard
                         key={machine.id}
                         machine={machine}
-                        pending={busy === `sign-out:${machine.id}`}
+                        pending={(harness) =>
+                          busy === `sign-out:${machine.id}:${harness}`
+                        }
                         disabled={busy !== null}
-                        onSignIn={() =>
-                          codexSignIn.start({
+                        onSignIn={(harness) =>
+                          harnessSignIn.start({
                             id: machine.id,
                             name: machine.name,
+                            harness,
                           })
                         }
-                        onSignOut={() => void signOut(machine)}
+                        onSignOut={(harness) => void signOut(machine, harness)}
                       />
                     ))
                   )}
@@ -416,16 +439,16 @@ export function RemoteEnvironmentModal({
           </button>
         </footer>
       </div>
-      <CodexSignInDialog signIn={codexSignIn} />
+      <HarnessSignInDialog signIn={harnessSignIn} />
     </Modal>
   );
 }
 
 /**
- * One of the member's machines: whether it is online and signed in to
- * Codex. Signing out asks first, in place.
+ * One of the member's machines: whether it is online, and a row for each
+ * harness they can sign in to there.
  */
-function MachineRow({
+function MachineCard({
   machine,
   pending,
   disabled,
@@ -433,18 +456,71 @@ function MachineRow({
   onSignOut,
 }: {
   machine: RemoteMachine;
+  pending: (harness: SignInHarness) => boolean;
+  disabled: boolean;
+  onSignIn: (harness: SignInHarness) => void;
+  onSignOut: (harness: SignInHarness) => void;
+}) {
+  return (
+    <article
+      className="flex flex-col rounded-xl border border-border"
+      data-testid="remote-machine"
+    >
+      <header className="flex items-center gap-3 px-3 pt-3 pb-2">
+        <Server className="size-4 shrink-0 text-fg-faint" />
+        <p className="min-w-0 flex-1 truncate text-[13px] text-fg">
+          {machine.name}
+        </p>
+        <p className="shrink-0 text-xs text-fg-faint">
+          {machine.state
+            ? REMOTE_MACHINE_STATE_LABELS[machine.state]
+            : machine.available
+              ? "Online"
+              : "Offline"}
+        </p>
+      </header>
+      {SIGN_IN_HARNESSES.map((harness) => (
+        <SignInRow
+          key={harness}
+          machine={machine}
+          harness={harness}
+          pending={pending(harness)}
+          disabled={disabled}
+          onSignIn={() => onSignIn(harness)}
+          onSignOut={() => onSignOut(harness)}
+        />
+      ))}
+    </article>
+  );
+}
+
+/**
+ * One harness on one of the member's machines: whether they are signed in
+ * to it there. Signing out asks first, in place.
+ */
+function SignInRow({
+  machine,
+  harness,
+  pending,
+  disabled,
+  onSignIn,
+  onSignOut,
+}: {
+  machine: RemoteMachine;
+  harness: SignInHarness;
   pending: boolean;
   disabled: boolean;
   onSignIn: () => void;
   onSignOut: () => void;
 }) {
-  const signedIn = machine.codex === "signed-in";
+  const { name } = SIGN_IN_HARNESS_NAMES[harness];
+  const signedIn = machine.signIns[harness] === "signed-in";
   const [confirming, setConfirming] = useState(false);
   useEffect(() => {
     if (!signedIn) setConfirming(false);
   }, [signedIn]);
   const questionId = useId();
-  const rowRef = useRef<HTMLElement>(null);
+  const rowRef = useRef<HTMLDivElement>(null);
   const keepButton = useRef<HTMLButtonElement>(null);
   const refocusAction = useRef(false);
   useEffect(() => {
@@ -462,10 +538,11 @@ function MachineRow({
   const waitReason = "Wait for the current action to finish";
 
   return (
-    <article
+    <div
       ref={rowRef}
-      className="flex items-center gap-3 rounded-xl border border-border p-3"
-      data-testid="remote-machine"
+      className="flex min-h-12 items-center gap-3 border-t border-border px-3 py-2"
+      data-testid="remote-machine-sign-in"
+      data-harness={harness}
     >
       {confirming ? (
         <>
@@ -473,7 +550,7 @@ function MachineRow({
             id={questionId}
             className="min-w-0 flex-1 text-[13px] leading-5 text-fg"
           >
-            Sign out of Codex on {machine.name}? Codex chats there need you to
+            Sign out of {name} on {machine.name}? {name} chats there need you to
             sign in again.
           </p>
           <button
@@ -507,14 +584,9 @@ function MachineRow({
         </>
       ) : (
         <>
-          <Server className="size-4 shrink-0 text-fg-faint" />
-          <div className="min-w-0 flex-1">
-            <p className="truncate text-[13px] text-fg">{machine.name}</p>
-            <p className="truncate text-xs text-fg-faint">
-              {machine.available ? "Online" : "Offline"} ·{" "}
-              {signedIn ? "Codex signed in" : "Codex not signed in"}
-            </p>
-          </div>
+          <p className="min-w-0 flex-1 truncate text-xs text-fg-muted">
+            {name} {signedIn ? "signed in" : "not signed in"}
+          </p>
           {signedIn ? (
             <button
               type="button"
@@ -522,7 +594,7 @@ function MachineRow({
               data-disabled-reason={waitReason}
               data-row-action=""
               onClick={() => setConfirming(true)}
-              aria-label={`Sign out of Codex on ${machine.name}`}
+              aria-label={`Sign out of ${name} on ${machine.name}`}
               className="button-ghost button-sm"
             >
               Sign out
@@ -532,19 +604,21 @@ function MachineRow({
               type="button"
               disabled={disabled || !machine.available}
               data-disabled-reason={
-                machine.available ? waitReason : "This machine is offline"
+                machine.available
+                  ? waitReason
+                  : `This machine is ${machine.state ?? "offline"}`
               }
               data-row-action=""
               onClick={onSignIn}
-              aria-label={`Sign in to Codex on ${machine.name}`}
+              aria-label={`Sign in to ${name} on ${machine.name}`}
               className="button-secondary button-sm"
             >
-              Sign in to Codex
+              Sign in to {name}
             </button>
           )}
         </>
       )}
-    </article>
+    </div>
   );
 }
 

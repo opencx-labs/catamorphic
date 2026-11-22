@@ -8,7 +8,11 @@ import {
   normalizeConnectionRequirement,
   type RegisteredCodingAgent,
 } from "@catamorphic/core";
-import type { SignInHarness } from "@catamorphic/sandbox";
+import {
+  SIGN_IN_HARNESSES,
+  type SignInHarness,
+  signInHarness,
+} from "@catamorphic/sandbox";
 import type { WorkAgentSettings } from "./config.js";
 import { createFakeAgentAdapter } from "./fake-agent.js";
 
@@ -60,19 +64,19 @@ export function buildAgentRegistry(deps: {
     };
   }
   // Without an organization model the assistant is off, but members can
-  // still chat with Codex on their own sign-ins on a machine of their own
-  // they signed in on (ADRs 0199, 0213).
+  // still chat with Claude Code and Codex on their own sign-ins on a
+  // machine of their own they signed in on (ADRs 0199, 0213, 0342).
   if (!resolveModel || !providerName) {
     return {
       registry: assistantRegistry({ effort }),
       description:
-        "assistant off (set ANTHROPIC_API_KEY, OPENROUTER_API_KEY or OPENAI_API_KEY); Codex on members' own sign-ins",
+        "assistant off (set ANTHROPIC_API_KEY, OPENROUTER_API_KEY or OPENAI_API_KEY); Claude Code and Codex on members' own sign-ins",
     };
   }
   if (!modelId) {
     return {
       registry: assistantRegistry({ effort }),
-      description: `assistant off (${providerName} needs WORK_MODEL set to a model id); Codex on members' own sign-ins`,
+      description: `assistant off (${providerName} needs WORK_MODEL set to a model id); Claude Code and Codex on members' own sign-ins`,
     };
   }
 
@@ -98,15 +102,18 @@ export function buildAgentRegistry(deps: {
 export const ASSISTANT_SLUG = "assistant";
 
 /**
- * Codex on the chat owner's own sign-in, made on the machine that runs the
- * chat (ADR 0199). Offered in projects with an Environment that allows
- * personal credentials; a chat places only on a machine of the owner's
- * that reports their sign-in (ADR 0213). Claude Code subscriptions run
- * only on the member's own computer, so the server offers none.
+ * Claude Code and Codex on the chat owner's own sign-in, made on the
+ * machine that runs the chat (ADR 0199). Offered in projects with an
+ * Environment that allows personal credentials; a chat places only on a
+ * machine of the owner's that reports their sign-in (ADRs 0213, 0342).
  */
 export const SIGN_IN_AGENTS: Readonly<
   Record<SignInHarness, { name: string; description: string }>
 > = {
+  "claude-code": {
+    name: "Claude Code",
+    description: "Claude Code on your own Claude sign-in on the machine",
+  },
   codex: {
     name: "Codex",
     description: "Codex on your own ChatGPT sign-in on the machine",
@@ -119,7 +126,7 @@ export function projectAssistantId(projectId: string): string {
 }
 
 const SYSTEM_PROMPT =
-  "You work through a company server. Unless execution context explicitly identifies an authenticated member device, the working directory and home directory belong to the server or its sandbox, not the user's device. New personal files should stay local to the user's device by default. Do not claim that writing outside the project on the server satisfies device-local or private storage. If no device file tool is available, provide the requested content in chat and clearly explain that it has not been saved to their device. Use only host-supported private storage for private output. Saving, proposing, and publishing are separate actions: never add personal output to shared project source or store/ unless the user explicitly requests sharing. When asked to propose or prepare shared content for review, discover project.propose_change and pass only the intended file paths and desired content. Submit the proposal before writing shared project files: shared checkout writes can be checkpointed and synchronized immediately. If the proposal capability is unavailable, explain that and keep the proposed content in chat; do not silently publish it instead. A chat or ordinary document change alone does not require a new worktree.";
+  "You work through a company server. Unless execution context explicitly identifies an authenticated member device, the working directory and home directory belong to the server or its sandbox, not the user's device. New personal files should stay local to the user's device by default. Do not claim that writing outside the project on the server satisfies device-local or private storage. If no device file tool is available, provide the requested content in chat and clearly explain that it has not been saved to their device. Use only host-supported private storage for private output. Saving, proposing, and publishing are separate actions: never add personal output to shared project source or store/ unless the user explicitly requests sharing. Your project folder is a Git checkout that is this chat's alone: a branch of its own, starting from the default branch of the project's repository (or the ref this chat was given). Nothing you write there reaches the shared project by itself. Work saves the branch you are on with its commits, and your uncommitted changes, and gives them back when the workspace returns; other local branches, ignored files, a rebase in progress and anything outside the project folder are not kept, so commit what matters on your current branch. When asked to propose or prepare shared content for review, commit it and discover project.create_pull_request: it pushes your commits as this chat's own branch and opens a pull request, or updates the one this chat already opened, and records it on the chat. If that capability is unavailable or the project has no repository, explain that and keep the work on your branch; do not silently publish it instead. A chat or ordinary document change alone does not require a new worktree.";
 
 /**
  * Claude Code and Codex on the server (ADRs 0180, 0198): the runner bundle
@@ -165,7 +172,7 @@ function assistantRegistry(config: {
     defaults,
   };
   const projectForm = /^project:[0-9a-f-]+:assistant$/;
-  // Codex on the member's own sign-in (ADRs 0199, 0213).
+  // Claude Code and Codex on the member's own sign-in (ADRs 0199, 0342).
   const signInAgent = (kind: SignInHarness): RegisteredCodingAgent => ({
     id: kind,
     name: SIGN_IN_AGENTS[kind].name,
@@ -176,8 +183,8 @@ function assistantRegistry(config: {
     signIn: kind,
     systemPrompt: SYSTEM_PROMPT,
   });
-  const signInAgents = [signInAgent("codex")];
-  const signInForm = /^project:[0-9a-f-]+:(codex)$/;
+  const signInAgents = SIGN_IN_HARNESSES.map(signInAgent);
+  const signInForm = /^project:[0-9a-f-]+:(claude-code|codex)$/;
   return {
     // Without an org model, a chat starts on the member's own Codex.
     defaultAgentId: (projectId) =>
@@ -239,9 +246,8 @@ function assistantRegistry(config: {
  * A committed agent whose harness runs in its chat's sandbox (ADRs 0180,
  * 0198): `claude-code`, `codex`, or an ACP agent's own command (ADR 0255).
  * Served when its credentials name a model connection of its Environment,
- * or, for Codex, `personal`: the chat owner's own sign-in on a machine of
- * theirs (ADRs 0199, 0213). A personal Claude Code agent is not served
- * here: Claude Code subscriptions run only on the member's own computer.
+ * or, for Claude Code and Codex, `personal`: the chat owner's own sign-in
+ * on a machine of theirs (ADRs 0199, 0213, 0342).
  * An ACP agent runs only on a model connection: on a server it has no
  * sign-in of its own, and its command comes from the Environment's image.
  */
@@ -283,10 +289,12 @@ function sandboxProjectAgent(input: {
       ...(definition.effort ? { effort: definition.effort } : {}),
     },
   };
-  if (definition.credentials?.source === "personal")
-    return definition.kind === "codex"
-      ? { ...common, connectionRequirements: requirements, signIn: "codex" }
+  if (definition.credentials?.source === "personal") {
+    const signIn = signInHarness(definition.kind);
+    return signIn
+      ? { ...common, connectionRequirements: requirements, signIn }
       : undefined;
+  }
   const alias =
     definition.credentials?.source === "connection"
       ? definition.credentials.connection

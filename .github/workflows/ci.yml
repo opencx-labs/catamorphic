@@ -420,6 +420,10 @@ jobs:
         env:
           WORK_TEST_CONTAINER: "1"
         run: bun scripts/tool-runtime.ts vitest --tool-cwd packages/container --config ../../vitest.config.ts src/__tests__/sandbox-provider.container.test.ts src/__tests__/separate-commands.container.test.ts
+      - name: A workspace saved and restored under gVisor
+        env:
+          WORK_TEST_CONTAINER: "1"
+        run: bun scripts/tool-runtime.ts vitest --tool-cwd packages/core --config ../../vitest.config.ts src/__tests__/workspace-save.container.test.ts
       # After Docker's restart above, which would stop a service container.
       # The image `bun run test` pins (scripts/test-postgres.ts).
       - name: Disposable Postgres

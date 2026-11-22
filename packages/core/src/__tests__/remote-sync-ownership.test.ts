@@ -7,6 +7,7 @@ import { PGlite } from "@electric-sql/pglite";
 import { pgcrypto } from "@electric-sql/pglite/contrib/pgcrypto";
 import { Kysely, PGliteDialect, WithSchemaPlugin } from "kysely";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { PullRequestsService } from "../services/pull-requests-service.js";
 import { RemoteSyncService } from "../services/remote-sync-service.js";
 import { fakeCodeHost } from "./code-host-fixture.js";
 
@@ -103,6 +104,7 @@ async function linkedProject(ownership: "owned" | "attached") {
     seed,
     root,
     service,
+    codeHosts: forge.codeHosts,
     createPullRequest,
     commit,
     refs,
@@ -128,12 +130,17 @@ describe("remote sync by ownership (ADR 0170)", () => {
     expect(diverged).not.toHaveProperty("rescueBranch");
     expect(await project.refs()).toEqual(moved);
 
-    const pr = await project.service.createPullRequest(
+    // The commits reach the repository as a pull request from the folder's
+    // own branch (ADR 0345), under work/.
+    const pr = await new PullRequestsService(project.codeHosts).open({
       identity,
-      project.projectId,
-      { title: "Local notes" },
-    );
-    expect(pr.branch).toMatch(/^work\/local-notes-/);
+      projectId: project.projectId,
+      title: "Local notes",
+      checkout: { repoPath: project.root, commit: local, branch: "trunk" },
+      sessionId: "0a1b2c3d-0000-4000-8000-000000000000",
+      principal: "either",
+    });
+    expect(pr.branch).toBe("work/trunk-0a1b2c3d");
     expect(project.createPullRequest).toHaveBeenCalledWith(
       expect.objectContaining({ base: "trunk", head: pr.branch }),
     );

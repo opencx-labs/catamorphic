@@ -149,46 +149,28 @@ volumes](cluster-deployment.md#setup-and-volumes)); nor can a machine
 running privileged runc containers. The container backend mounts the
 `review` Environment's pnpm cache read only into the command container
 (`caches`, ADR 0334), filled from `main` by the pack's `fillReviewCache`:
-each machine keeps its own copy, so keep a few machines warm with `min` and
-their reviews install from it, fetching only what main did not have.
+each machine keeps its own copy. Keep warm machines in the plan when
+you want the cache ready before a review arrives.
 
-Reviews come in bursts, so let a machine rule create machines while reviews
-wait and destroy them once idle ([Machines on
-demand](cluster-deployment.md#machines-on-demand)):
+For dedicated machines, use `onePerChatKey` from `machines-policies` with
+one checkout per open pull request, label the workers `pool=review`, and
+scope them to the project's review chat keys. A shared pool can use
+`onDemand` with a maximum and the project's principal. Choose an idle policy
+that stops the machines to preserve their disk, or destroys them after
+draining. Use `machines-ec2` or `machines-hetzner` for the platform verbs
+and `machines-install` with `sandbox: "container"` for the worker image.
+See [the machine plan](cluster-deployment.md#a-machine-plan).
 
-1. Declare a class in `WORK_MACHINES_CONFIG` with `"sandbox": "container"`:
-   a `hetzner-cloud` server type (`"review": { "platform": "hetzner-cloud",
-   "serverType": "cpx42", "location": "nbg1", "image": "ubuntu-24.04",
-   "sandbox": "container" }`), a `workflow` class whose machines a
-   project's workflows create on your cloud (on AWS, install the
-   `machines-ec2` pack; its skill has the IAM policy and the class), or a
-   `custom` class your server's provisioner creates. Its machines run the
-   [install script](cluster-deployment.md#the-install-script), which
-   installs Docker and gVisor and starts the worker on the container
-   backend, even where KVM would give microVMs.
-2. `PUT /_work/operator/machine-rules/review` with
-   `{ "projects": ["<project id>"], "machines": { "demand": { "max": 9 } }, "class": "review", "labels": { "pool": "review" } }`.
-   `max` caps concurrent machines; each holds `WORK_MAX_WORKSPACES` reviews.
-3. A review that finds no machine waits up to the Environment's
-   `waitMinutes`; the rule's status (`GET /_work/operator/machine-rules`)
-   counts it as `queued` and shows the machine starting.
-4. Give each machine disk for its reviews: every review keeps its checkout,
-   its installed dependencies and its sandbox's Docker data there for as
-   long as its pull request is open, and each fill of the review cache
-   reserves the cache's `sizeMb` (16 GiB in the pack) while it runs. About
-   100 GB per machine for one review per machine (`rootVolumeGb` on EC2; a
-   Hetzner server type's own disk). A machine under its disk floor takes
-   no new review, which waits
-   for another machine, and its failures say the machine ran out of disk
-   ([Disk](cluster-deployment.md#disk)). On demand, Work replaces such a
-   machine once its reviews are done; a `workflow` class's project hears
-   `machine.disk-low` for its own alerts.
+A waiting review inherits the server wait on a server with `hooks.machines`;
+`waitMinutes` sets the project's own bound. Watch worker state and errors in
+the machine listing. Plan enough disk for the installed checkout, Docker
+data, and the pack's 16 GiB cache fill. A worker under its floor offers no
+new workspace and its project can observe `machine.disk-low`.
 
-For a fixed fleet instead, enroll each machine yourself:
-`POST /_work/operator/workers` with
-`{ "name": "review-1", "labels": { "pool": "review" }, "access": { "projects": ["<project id>"] } }`,
-then start the worker with `WORK_SANDBOX=container` on a Docker daemon with
-the `runsc` runtime ([Add a worker](cluster-deployment.md#add-a-worker)).
+For a fixed pool, enroll with
+`{ "name": "review-1", "labels": { "pool": "review" }, "for": [{ "project": "<project id>" }] }`
+and run the worker with `WORK_SANDBOX=container` on a Docker daemon with
+`runsc` ([Add a worker](cluster-deployment.md#add-a-worker)).
 
 Keep `WORK_CONTROL_PLANE_WORKLOADS=workflow` on the control plane so no agent
 runs beside the secrets. The review Environment's agent reaches only the
@@ -304,7 +286,7 @@ If nothing happens: the webhook's deliveries show a `401` when the secret
 differs; a draft pull request starts no run until it is ready for review; a
 chat that never starts a turn usually has no review machine available to the
 project (check the chat's placement, `GET /_work/operator/machines`, and the
-rule's `problem` and `failure` in `GET /_work/operator/machine-rules`). A
+latest plan result in `GET /_work/operator/workers`). A
 review that never reaches GitHub shows in `postReviews`' runs: a turn that
 submitted no `review` result marks the commit `action_required`
 with the reason (when no review marked it yet), and so does a review whose

@@ -7,7 +7,7 @@ import {
 } from "@catamorphic/workflow/project-layout";
 import { FsBackend } from "./fs-backend.js";
 import { push } from "./git-sync.js";
-import { discoverLocalFolder } from "./native-git.js";
+import { discoverLocalFolder, nativeGit } from "./native-git.js";
 import { NativeProjectRepo } from "./native-project-repo.js";
 import { cloneFromRemote } from "./network.js";
 import {
@@ -19,6 +19,12 @@ import {
 } from "./origin-draft.js";
 import { GitObjectCache } from "./origin-objects.js";
 import { ProjectRepoImpl } from "./project-repo.js";
+import {
+  currentSessionWork,
+  type SessionWork,
+  sessionBranchName,
+  writeCheckpoint,
+} from "./session-checkpoint.js";
 import type {
   DraftSupport,
   GitCredentials,
@@ -60,6 +66,24 @@ const SYSTEM_AUTHOR = {
   name: "Work",
   email: "system@work.software",
 };
+
+/**
+ * Materialize the checkpoint as Git objects describe it. Managed copies
+ * may have been initialized with symlinks or executable bits disabled.
+ */
+async function resetSessionCheckout(repoPath: string, commit: string) {
+  await nativeGit(repoPath, [
+    "-c",
+    "core.symlinks=true",
+    "-c",
+    "core.filemode=true",
+    "-c",
+    "core.autocrlf=false",
+    "reset",
+    "--hard",
+    commit,
+  ]);
+}
 
 export class ProjectManager {
   /** Origin objects this process has read; safe to lose. */
@@ -337,8 +361,7 @@ export class ProjectManager {
             throw new Error(
               "Session has uncheckpointed work on this machine. Recover it before moving the session.",
             );
-          await repo.moveBranch("main", fetched.sha);
-          await repo.checkout("main");
+          await resetSessionCheckout(repo.repoPath, fetched.sha);
         }
       }
       return repo;
@@ -348,28 +371,143 @@ export class ProjectManager {
     }
   }
 
+  /**
+   * Checkpoint a session's copy (ADR 0344): one commit on the session's
+   * ref whose tree is the copy's working tree and whose second parent is
+   * the agent's HEAD, written when files changed or the agent's branch,
+   * HEAD or pushed branch moved. The agent's commits must already be in
+   * the copy. Returns the session's checkpoint, new or not.
+   */
   async checkpointSession(args: {
     tenantId: string;
     projectId: string;
     sessionId: string;
     message: string;
     author: { name: string; email: string };
+    /** The workspace's base: the agent's HEAD before its first checkpoint. */
+    base: string;
+    /** The agent's branch and HEAD as just saved; as recorded when left out. */
+    work?: { head: string; branch: string };
+    /** The branch this chat just pushed for a pull request (ADR 0345). */
+    pushed?: { branch: string; commit: string };
+    /** Build the sandbox's validated tree while its copy is open. */
+    snapshot?: (input: {
+      repoPath: string;
+      recorded: SessionWork & { checkpoint: string };
+      containLinks: boolean;
+    }) => Promise<{ tree?: string; work: { head: string; branch: string } }>;
+    /** Check the workspace claim just before publishing. */
+    held?: () => void | Promise<void>;
   }): Promise<string> {
+    const repo = await this.openSession({ ...args, refresh: true });
+    try {
+      const sha = await this.checkpointCopy({
+        ...args,
+        repo,
+        publish: async (head, previous) => {
+          await args.held?.();
+          await this.publishSession({
+            ...args,
+            repo,
+            head,
+            force: false,
+            ...(args.snapshot ? { expected: previous } : {}),
+          });
+        },
+      });
+      return sha;
+    } finally {
+      await repo.dispose();
+    }
+  }
+
+  private async checkpointCopy(args: {
+    repo: ProjectRepo;
+    sessionId: string;
+    message: string;
+    author: { name: string; email: string };
+    base: string;
+    work?: { head: string; branch: string };
+    pushed?: { branch: string; commit: string };
+    snapshot?: Parameters<ProjectManager["checkpointSession"]>[0]["snapshot"];
+    publish?: (head: string, previous: string) => Promise<void>;
+  }): Promise<string> {
+    const { repo } = args;
+    const recorded = await currentSessionWork({
+      repoPath: repo.repoPath,
+      sessionId: args.sessionId,
+      base: args.base,
+    });
+    const snapshot = await args.snapshot?.({
+      repoPath: repo.repoPath,
+      recorded,
+      containLinks: repo instanceof NativeProjectRepo,
+    });
+    const saved = snapshot?.work ?? args.work;
+    const pushed = args.pushed ?? recorded.pushed;
+    const work: SessionWork = {
+      head: saved?.head ?? recorded.head,
+      branch: saved?.branch ?? recorded.branch,
+      ...(pushed ? { pushed } : {}),
+    };
+    const previousTree = (
+      await nativeGit(repo.repoPath, [
+        "rev-parse",
+        `${recorded.checkpoint}^{tree}`,
+      ])
+    ).trim();
+    const dirty = !snapshot && (await repo.status()).dirty;
+    const moved =
+      work.head !== recorded.head ||
+      work.branch !== recorded.branch ||
+      work.pushed?.branch !== recorded.pushed?.branch ||
+      work.pushed?.commit !== recorded.pushed?.commit;
+
+    if (
+      !dirty &&
+      !moved &&
+      (!snapshot?.tree || snapshot.tree === previousTree)
+    ) {
+      await args.publish?.(recorded.checkpoint, recorded.checkpoint);
+      return recorded.checkpoint;
+    }
+
+    const tree =
+      snapshot?.tree ??
+      (dirty ? await repo.commit(args.message, args.author) : previousTree);
+    const sha = await writeCheckpoint({
+      repoPath: repo.repoPath,
+      tree,
+      previous: recorded.checkpoint,
+      message: args.message,
+      author: args.author,
+      work,
+    });
+    // Until the origin has accepted the checkpoint, leave the working copy
+    // at its previous state so another replica can repeat the same save.
+    await args.publish?.(sha, recorded.checkpoint);
+    if (snapshot) await resetSessionCheckout(repo.repoPath, sha);
+    else await repo.moveBranch("main", sha);
+    return sha;
+  }
+
+  /**
+   * Where a session's work stands (ADR 0344): its checkpoint, its agent's
+   * branch and HEAD, and the branch it last pushed.
+   */
+  async sessionWork(args: {
+    tenantId: string;
+    projectId: string;
+    sessionId: string;
+    base: string;
+  }): Promise<SessionWork & { checkpoint: string }> {
     const repo = await this.openSession(args);
     try {
-      const sha = (await repo.status()).dirty
-        ? await repo.commit(args.message, args.author)
-        : await repo.resolveRef("HEAD");
-      if (this.remote)
-        await push({
-          dev: repo,
-          remote: this.remote,
-          tenantId: args.tenantId,
-          projectId: args.projectId,
-          remoteBranch: `sessions/${args.sessionId}`,
-          localSha: sha,
-        });
-      return sha;
+      return await currentSessionWork({
+        repoPath: repo.repoPath,
+        sessionId: args.sessionId,
+        base: args.base,
+      });
     } finally {
       await repo.dispose();
     }
@@ -384,20 +522,103 @@ export class ProjectManager {
   }
 
   /**
-   * Put a session's copy at a commit pinned in the project mirror and
-   * publish it as the session's branch (ADR 0178). Whatever the copy held is
-   * replaced: callers move the base only between turns, after the last
-   * checkpoint, or on purpose (`reset`).
+   * The commit the project's own `main` stands on: its origin's, or on a
+   * host without one this machine's copy's. Where a chat starts when its
+   * project has no linked repository (ADR 0344).
+   */
+  async mainCommit(args: {
+    tenantId: string;
+    projectId: string;
+  }): Promise<string> {
+    if (
+      this.remote &&
+      (await this.remote.exists(args.tenantId, args.projectId))
+    ) {
+      const sha = await this.remote.withOrigin(
+        args.tenantId,
+        args.projectId,
+        (origin) => origin.resolveRef("refs/heads/main"),
+      );
+      if (sha) return sha;
+    }
+    const repo = await this.open(args.tenantId, args.projectId);
+    try {
+      return await repo.resolveRef("HEAD");
+    } finally {
+      await repo.dispose();
+    }
+  }
+
+  /**
+   * Make sure a session's copy holds its base commit: from the project
+   * mirror where `pin` names it there, else from the project's own `main`.
+   */
+  private async bringBase(args: {
+    tenantId: string;
+    projectId: string;
+    repo: ProjectRepo;
+    pin?: string;
+    commit: string;
+  }): Promise<void> {
+    const { repo } = args;
+    if (args.pin) {
+      const mirrorPath = this.mirrorPath(args);
+      if (!mirrorPath) throw new Error("This host keeps no project mirror");
+      await copyFromMirror({
+        mirrorPath,
+        pin: args.pin,
+        repoPath: repo.repoPath,
+        into: "refs/work/base",
+      });
+    } else if (this.remote) {
+      const { fetchRemote } = await import("./git-sync.js");
+      await fetchRemote({
+        dev: repo,
+        remote: this.remote,
+        tenantId: args.tenantId,
+        projectId: args.projectId,
+        remoteBranch: "main",
+      });
+    } else {
+      const main = await this.open(args.tenantId, args.projectId);
+      try {
+        if (path.resolve(main.repoPath) !== path.resolve(repo.repoPath))
+          await nativeGit(repo.repoPath, [
+            "fetch",
+            "--quiet",
+            "--no-tags",
+            "--no-write-fetch-head",
+            main.repoPath,
+            "+HEAD:refs/work/base",
+          ]);
+      } finally {
+        await main.dispose();
+      }
+    }
+    await nativeGit(repo.repoPath, [
+      "cat-file",
+      "-e",
+      `${args.commit}^{commit}`,
+    ]).catch(() => {
+      throw new Error(
+        `The workspace's base ${args.commit.slice(0, 12)} is not in the project's history on this host`,
+      );
+    });
+  }
+
+  /**
+   * Put a session's copy at its base and publish it as the session's ref
+   * (ADRs 0178, 0344): a commit pinned in the project mirror (`pin`), or
+   * one the project's own origin holds. Whatever the copy held is replaced.
    */
   async setSessionBase(args: {
     tenantId: string;
     projectId: string;
     sessionId: string;
-    pin: string;
+    /** The mirror ref that keeps the commit; left out for the origin's own. */
+    pin?: string;
     commit: string;
   }): Promise<void> {
-    const mirrorPath = this.mirrorPath(args);
-    if (!mirrorPath) throw new Error("This host keeps no project mirror");
     const repo = await this.openSession({
       tenantId: args.tenantId,
       projectId: args.projectId,
@@ -405,25 +626,75 @@ export class ProjectManager {
       refresh: true,
     });
     try {
-      await copyFromMirror({
-        mirrorPath,
-        pin: args.pin,
+      await this.bringBase({ ...args, repo });
+      const checkpoint = await writeCheckpoint({
         repoPath: repo.repoPath,
-        into: "refs/work/base",
+        tree: args.commit,
+        previous: args.commit,
+        message: "Start the workspace",
+        author: SYSTEM_AUTHOR,
+        work: { head: args.commit, branch: sessionBranchName(args.sessionId) },
       });
-      await repo.moveBranch("main", args.commit);
-      await repo.checkout("main");
+      await this.publishSession({ ...args, repo, head: checkpoint });
+      await resetSessionCheckout(repo.repoPath, checkpoint);
       await repo.resetWorkingTree();
-      await this.publishSession({ ...args, repo, head: args.commit });
     } finally {
       await repo.dispose();
     }
   }
 
   /**
-   * Move a session's copy to a new base pinned in the mirror (ADR 0178):
-   * `reset` replaces its checkpoints, `rebase` replays them onto the new
-   * base. A conflicting rebase leaves the copy as it was.
+   * Give a session that has saved work but no base one (ADR 0344): its
+   * checkpoint becomes one on top of `commit`, with the same files, so its
+   * sandbox comes back standing on the base with that work uncommitted.
+   */
+  async adoptSessionBase(args: {
+    tenantId: string;
+    projectId: string;
+    sessionId: string;
+    pin?: string;
+    commit: string;
+    message: string;
+    author: { name: string; email: string };
+  }): Promise<void> {
+    const repo = await this.openSession({
+      tenantId: args.tenantId,
+      projectId: args.projectId,
+      sessionId: args.sessionId,
+      refresh: true,
+    });
+    try {
+      await this.bringBase({ ...args, repo });
+      const previous = await repo.resolveRef("HEAD");
+      const snapshot = (await repo.status()).dirty
+        ? await repo.commit(args.message, args.author)
+        : previous;
+      const sha = await writeCheckpoint({
+        repoPath: repo.repoPath,
+        tree: snapshot,
+        previous,
+        message: args.message,
+        author: args.author,
+        work: {
+          head: args.commit,
+          branch: sessionBranchName(args.sessionId),
+        },
+      });
+      await repo.moveBranch("main", sha);
+      await this.publishSession({ ...args, repo, head: sha, force: false });
+    } finally {
+      await repo.dispose();
+    }
+  }
+
+  /**
+   * Move a session's work to a new base pinned in the mirror (ADRs 0178,
+   * 0344). The agent's checkout is rebuilt in the copy, standing on its
+   * HEAD with its saved files as one more commit, and moved as any checkout
+   * is: `reset` discards its commits and changes, `rebase` replays its
+   * commits and then its changes, which come back uncommitted. A rebase
+   * that conflicts leaves the copy as it was. What results is the
+   * session's next checkpoint, on top of the last.
    */
   async moveSessionBase(args: {
     tenantId: string;
@@ -433,6 +704,7 @@ export class ProjectManager {
     from: string;
     to: string;
     update: "reset" | "rebase";
+    author: { name: string; email: string };
   }): Promise<BaseMoveOutcome> {
     const mirrorPath = this.mirrorPath(args);
     if (!mirrorPath) throw new Error("This host keeps no project mirror");
@@ -442,18 +714,97 @@ export class ProjectManager {
       sessionId: args.sessionId,
       refresh: true,
     });
+    const git = (gitArgs: readonly string[]) =>
+      nativeGit(repo.repoPath, gitArgs).then((output) => output.trim());
     try {
-      const outcome = await moveCheckoutBase({
-        repoPath: repo.repoPath,
-        mirrorPath,
-        pin: args.pin,
-        from: args.from,
-        to: args.to,
-        update: args.update,
+      // Whatever the copy holds beyond its last checkpoint is work too.
+      await this.checkpointCopy({
+        repo,
+        sessionId: args.sessionId,
+        message: "Save the workspace before moving its base",
+        author: args.author,
+        base: args.from,
       });
-      if (outcome.status === "moved")
-        await this.publishSession({ ...args, repo, head: outcome.head });
-      return outcome;
+      const work = await currentSessionWork({
+        repoPath: repo.repoPath,
+        sessionId: args.sessionId,
+        base: args.from,
+      });
+      // The agent's uncommitted changes ride along as one commit on its
+      // HEAD, so a rebase replays them and reports their conflicts.
+      const uncommitted =
+        (await git(["rev-parse", `${work.checkpoint}^{tree}`])) !==
+        (await git(["rev-parse", `${work.head}^{tree}`]));
+      const marker = `Work: uncommitted changes ${work.checkpoint}`;
+      const start = uncommitted
+        ? await git([
+            "-c",
+            `user.name=${args.author.name}`,
+            "-c",
+            `user.email=${args.author.email}`,
+            "commit-tree",
+            `${work.checkpoint}^{tree}`,
+            "-p",
+            work.head,
+            "-m",
+            marker,
+          ])
+        : work.head;
+      const stand = async (commit: string) => {
+        await git(["update-ref", "--no-deref", "HEAD", commit]);
+        await git(["reset", "--quiet"]);
+      };
+      await stand(start);
+      let outcome: BaseMoveOutcome;
+      let moved: { tip: string; head: string } | undefined;
+      try {
+        outcome = await moveCheckoutBase({
+          repoPath: repo.repoPath,
+          mirrorPath,
+          pin: args.pin,
+          from: args.from,
+          to: args.to,
+          update: args.update,
+        });
+        if (outcome.status === "moved") {
+          const tip = outcome.head;
+          // The changes' commit is gone when the new base already has them.
+          const carried =
+            uncommitted &&
+            args.update === "rebase" &&
+            (await git(["log", "-1", "--format=%s", tip])) === marker;
+          moved = {
+            tip,
+            head: carried ? await git(["rev-parse", `${tip}^`]) : tip,
+          };
+        }
+      } finally {
+        // Back on the session's checkpoints, whatever happened.
+        await git(["symbolic-ref", "HEAD", "refs/heads/main"]);
+      }
+      if (!moved) {
+        await git(["reset", "--quiet"]);
+        return { ...outcome, head: work.head };
+      }
+      const sha = await writeCheckpoint({
+        repoPath: repo.repoPath,
+        tree: moved.tip,
+        previous: work.checkpoint,
+        message:
+          args.update === "reset"
+            ? "Reset the workspace to a new base"
+            : "Rebase the workspace onto a new base",
+        author: args.author,
+        work: {
+          head: moved.head,
+          branch: work.branch,
+          ...(work.pushed ? { pushed: work.pushed } : {}),
+        },
+      });
+      await repo.moveBranch("main", sha);
+      await git(["reset", "--quiet"]);
+      await this.publishSession({ ...args, repo, head: sha, force: false });
+      return { status: "moved", head: moved.head };
     } finally {
       await repo.dispose();
     }
@@ -465,6 +816,9 @@ export class ProjectManager {
     sessionId: string;
     repo: ProjectRepo;
     head: string;
+    /** False for a checkpoint on top of the last; default true. */
+    force?: boolean;
+    expected?: string;
   }): Promise<void> {
     if (!this.remote) return;
     await push({
@@ -474,7 +828,8 @@ export class ProjectManager {
       projectId: args.projectId,
       remoteBranch: `sessions/${args.sessionId}`,
       localSha: args.head,
-      force: true,
+      force: args.force ?? true,
+      ...(args.expected ? { expected: args.expected } : {}),
     });
   }
 
@@ -496,10 +851,9 @@ export class ProjectManager {
       refresh: true,
     });
     try {
-      await repo.moveBranch("main", args.commit);
-      await repo.checkout("main");
-      await repo.resetWorkingTree();
       await this.publishSession({ ...args, repo, head: args.commit });
+      await resetSessionCheckout(repo.repoPath, args.commit);
+      await repo.resetWorkingTree();
     } finally {
       await repo.dispose();
     }

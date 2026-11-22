@@ -1,114 +1,12 @@
 import type { CatamorphicCore, Identity } from "@catamorphic/core";
 import { MCP_POLL_RUN_TOOL, RunNotFoundError } from "@catamorphic/core";
-import type { FastifyReply } from "fastify";
 import { z } from "zod";
 
 /**
- * The JSON-RPC / MCP plumbing shared by the plugin's MCP endpoints — the
- * apps server (`/projects/:id/apps-mcp`), the workflow-tools server
- * (`/projects/:id/mcp`) and the connection broker (`/connection-mcp`) —
- * and by hosts that forward MCP servers of their own. All are stateless
- * Streamable-HTTP handlers speaking the `initialize`-handshake protocol era
- * (≤2025-11-25): requests are independent, no sessions, notifications
- * answered with a bare 202.
+ * What the plugin's MCP endpoints share beside the dispatcher
+ * (`mcp-server.ts`): how a value becomes a tool result, how another
+ * server's tools and results are forwarded, and the run poll tool.
  */
-
-export interface JsonRpcMessage {
-  jsonrpc?: string;
-  id?: number | string | null;
-  method?: string;
-  params?: Record<string, unknown>;
-}
-
-export const SUPPORTED_PROTOCOL_VERSIONS = new Set([
-  "2024-11-05",
-  "2025-03-26",
-  "2025-06-18",
-  "2025-11-25",
-]);
-export const DEFAULT_PROTOCOL_VERSION = "2025-06-18";
-
-/** The requested revision when supported, our default otherwise. */
-export function negotiateProtocolVersion(requested: unknown): string {
-  return typeof requested === "string" &&
-    SUPPORTED_PROTOCOL_VERSIONS.has(requested)
-    ? requested
-    : DEFAULT_PROTOCOL_VERSION;
-}
-
-/** A dispatch failure that should ride a specific JSON-RPC error code. */
-export class McpRequestError extends Error {
-  constructor(
-    readonly code: number,
-    message: string,
-  ) {
-    super(message);
-    this.name = "McpRequestError";
-  }
-}
-
-/**
- * The stateless request shell the endpoints share: body-shape validation,
- * the notification 202, missing-method rejection, and error mapping.
- * `dispatch` returns the JSON-RPC result for a method; it throws
- * {@link McpRequestError} for coded failures (-32601 method-not-found,
- * -32602 bad params) and anything else becomes -32603.
- */
-export async function handleMcpPost(
-  reply: FastifyReply,
-  body: unknown,
-  dispatch: (
-    method: string,
-    params: Record<string, unknown>,
-  ) => Promise<unknown>,
-): Promise<FastifyReply> {
-  const message = body as JsonRpcMessage | null;
-  if (!message || typeof message !== "object" || Array.isArray(message)) {
-    return rpcError(reply, null, -32600, "Expected a single JSON-RPC message");
-  }
-  // Notifications (initialized, cancelled, …) need no body in return.
-  if (message.id === undefined || message.id === null) {
-    return reply.status(202).send();
-  }
-  if (typeof message.method !== "string") {
-    return rpcError(reply, message.id, -32600, "Missing method");
-  }
-  try {
-    const result = await dispatch(message.method, message.params ?? {});
-    return rpcResult(reply, message.id, result);
-  } catch (error) {
-    if (error instanceof McpRequestError) {
-      return rpcError(reply, message.id, error.code, error.message);
-    }
-    return rpcError(
-      reply,
-      message.id,
-      -32603,
-      error instanceof Error ? error.message : "Internal error",
-    );
-  }
-}
-
-export function rpcResult(
-  reply: FastifyReply,
-  id: number | string,
-  result: unknown,
-): FastifyReply {
-  return reply
-    .header("content-type", "application/json")
-    .send({ jsonrpc: "2.0", id, result });
-}
-
-export function rpcError(
-  reply: FastifyReply,
-  id: number | string | null,
-  code: number,
-  message: string,
-): FastifyReply {
-  return reply
-    .header("content-type", "application/json")
-    .send({ jsonrpc: "2.0", id, error: { code, message } });
-}
 
 /**
  * Tool result: JSON text for model readability plus `structuredContent`
@@ -282,50 +180,4 @@ export interface ForwardedToolDefinition {
   inputSchema: unknown;
   outputSchema?: unknown;
   annotations?: unknown;
-}
-
-const CallParamsSchema = z.object({
-  name: z.string().min(1),
-  arguments: z.record(z.string(), z.unknown()).default({}),
-});
-
-/**
- * A stateless MCP endpoint serving another server's tools: tools listed
- * and results returned as that server declared and sent them (ADR 0225).
- * `callTool` answers with the server's own result (any tool result, such
- * as {@link toolError}, passes through), or throws {@link McpRequestError}
- * for a refusal at the protocol boundary.
- */
-export function serveForwardedTools(args: {
-  reply: FastifyReply;
-  body: unknown;
-  serverName: string;
-  listTools(): Promise<readonly ForwardedToolDefinition[]>;
-  callTool(call: {
-    name: string;
-    arguments: Record<string, unknown>;
-  }): Promise<unknown>;
-}): Promise<FastifyReply> {
-  return handleMcpPost(args.reply, args.body, async (method, params) => {
-    switch (method) {
-      case "initialize":
-        return {
-          protocolVersion: negotiateProtocolVersion(params.protocolVersion),
-          capabilities: { tools: {} },
-          serverInfo: { name: args.serverName, version: "1" },
-        };
-      case "ping":
-        return {};
-      case "tools/list":
-        return { tools: (await args.listTools()).map(forwardedTool) };
-      case "tools/call": {
-        const call = CallParamsSchema.safeParse(params);
-        if (!call.success)
-          throw new McpRequestError(-32602, "Invalid tool call");
-        return forwardedToolResult(await args.callTool(call.data));
-      }
-      default:
-        throw new McpRequestError(-32601, "Method not found");
-    }
-  });
 }

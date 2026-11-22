@@ -96,9 +96,10 @@ import type {
   ProfileSyncPart,
 } from "../../shared/profile-sync.js";
 import type {
-  CodexSignIn,
-  CodexSignInStatus,
+  HarnessSignIn,
+  HarnessSignInStatus,
   RemoteMachine,
+  SignInHarness,
 } from "../../shared/remote-machines.js";
 import type { ResourceSnapshot } from "../../shared/resources.js";
 import type {
@@ -1135,28 +1136,40 @@ export interface CatamorphicDesktopApi {
     member?: string;
   }) => Promise<void>;
   /**
-   * The member's own machines on the project's server (ADR 0213), or null
-   * when the server has no such route.
+   * The member's own machines on the project's server (ADRs 0213, 0342),
+   * or null when the server has no such route.
    */
   remoteMachines: (projectId: string) => Promise<RemoteMachine[] | null>;
-  /** Start Codex's device code sign-in on one of those machines. */
-  remoteCodexSignIn: (input: {
+  /** Start a harness's own sign-in on one of those machines. */
+  remoteHarnessSignIn: (input: {
     projectId: string;
     machineId: string;
-  }) => Promise<CodexSignIn>;
-  remoteCodexSignInStatus: (input: {
+    harness: SignInHarness;
+  }) => Promise<HarnessSignIn>;
+  remoteHarnessSignInStatus: (input: {
     projectId: string;
     machineId: string;
+    harness: SignInHarness;
     attempt: string;
-  }) => Promise<CodexSignInStatus>;
-  remoteCodexSignInCancel: (input: {
+  }) => Promise<HarnessSignInStatus>;
+  /** Hand the machine the code the sign-in page gave the person. */
+  remoteHarnessSignInCode: (input: {
     projectId: string;
     machineId: string;
+    harness: SignInHarness;
+    attempt: string;
+    text: string;
+  }) => Promise<HarnessSignInStatus>;
+  remoteHarnessSignInCancel: (input: {
+    projectId: string;
+    machineId: string;
+    harness: SignInHarness;
     attempt: string;
   }) => Promise<void>;
-  remoteCodexSignOut: (input: {
+  remoteHarnessSignOut: (input: {
     projectId: string;
     machineId: string;
+    harness: SignInHarness;
   }) => Promise<{ signedOut: boolean }>;
   /** Opens an https sign-in page in a browser tab of this window. */
   openSignInLink: (url: string) => Promise<void>;

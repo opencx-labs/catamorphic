@@ -1,0 +1,21 @@
+{
+  "$schema": "https://ui.shadcn.com/schema/registry-item.json",
+  "name": "machines-hetzner",
+  "type": "registry:item",
+  "title": "Machines on Hetzner Cloud",
+  "description": "Create and manage worker machines on Hetzner Cloud from your Work server.",
+  "files": [
+    {
+      "path": "machines-hetzner.ts",
+      "type": "registry:file",
+      "target": "machines/machines-hetzner.ts"
+    },
+    {
+      "path": "SKILL.md",
+      "type": "registry:file",
+      "target": "machines/machines-hetzner.md"
+    }
+  ],
+  "dependencies": ["@catamorphic/work-server"],
+  "docs": "Copy the files into your Work server host. Add the dependencies to its package manifest and follow the included guide."
+}

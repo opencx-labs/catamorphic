@@ -68,10 +68,10 @@ export const SESSION_TRIGGER_KINDS = [
     },
     description:
       name === "session.result-recorded"
-        ? "An agent's accepted typed result, the moment it is recorded (mid-turn). The result is in input.payload.detail (name, value, turnId, input, commit); select names in config, a session or agent, or keyed chats with where on payload.session.key. A newer input to the chat makes it stale: check detail.input against catamorphic.sessions.results."
+        ? 'An agent\'s accepted typed result, the moment it is recorded (mid-turn). The result is in input.payload.detail (name, value, turnId, input, commit); select names in config, a session or agent, or keyed chats with where on payload.session.key. A newer input to the chat makes it stale: check detail.input against catamorphic.sessions.read with include: ["results"].'
         : name === "session.turn-stalled"
-          ? "A running turn made no progress for its agent's stall threshold (the definition's stall.minutes), recorded once per silence. input.payload.detail has turnId, attemptId, attempt, attempts, restarts, progressAt, stalledAt, stallMinutes and activity (tool calls and commands still running). Work does nothing on its own: inspect, collect diagnostics with exec, and restart with catamorphic.sessions.restart, bounding it with restarts."
-          : "A durable session transition. Select a session or agent in config, or keyed chats with where on payload.session.key (a { $prefix } matches a key namespace); inspect event-time state in input.payload and read current state with catamorphic.sessions.inspect. Turn completion does not mean work completion.",
+          ? "A running turn made no progress for its agent's stall threshold (the definition's stall.minutes), recorded once per silence. input.payload.detail has turnId, attemptId, attempt, attempts, restarts, progressAt, stalledAt, stallMinutes and activity (tool calls and commands still running). Work does nothing on its own: read the chat, collect diagnostics with exec, and restart with catamorphic.sessions.restart, bounding it with restarts."
+          : "A durable session transition. Select a session or agent in config, or keyed chats with where on payload.session.key (a { $prefix } matches a key namespace); inspect event-time state in input.payload and read current state with catamorphic.sessions.read. Turn completion does not mean work completion.",
     payload: sessionEventPayload,
     config,
     deliveryKey: (event) => event.id,

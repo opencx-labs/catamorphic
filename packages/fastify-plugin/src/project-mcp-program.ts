@@ -598,9 +598,9 @@ export async function projectInstructions(args: {
   lines.push(
     "- Run deployed workflows with workflow_run and debug them with workflow_runs and run_details.",
   );
-  if (has("ask_agent"))
+  if (has("session_start"))
     lines.push(
-      "- ask_agent runs one of the project's agents on the server, in an Environment you may use. Server agents reach connected systems, such as a production database, through the reviewed gateway; you never receive those credentials.",
+      "- Run one of the project's agents on the server with session_start: it returns a sessionId at once, so keep working and call session_wait with the returned cursor until state is idle, failed or needs_input. Answer its questions with session_answer; approvals go to your person. Server agents reach connected systems, such as a production database, through the reviewed gateway; you never receive those credentials.",
     );
   if (args.host) lines.push(args.host);
   return lines.join("\n");

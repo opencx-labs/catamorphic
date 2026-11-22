@@ -96,6 +96,7 @@ import {
 } from "../workflow-mcp-connections.js";
 import { DesktopAgentRegistry } from "./agent-registry.js";
 import { type AssistantAccess, assistantTools } from "./assistant-tools.js";
+import { openChatPullRequest } from "./chat-pull-request.js";
 import {
   connectorMcpPath,
   connectorMcpTokens,
@@ -792,9 +793,6 @@ export async function startEmbeddedServer(
     documentBlobStore: new FsBundleStore(
       path.join(paths.root, "document-blobs"),
     ),
-    // Local projects: the folder IS the store; remote projects sync their
-    // store/ explicitly (Ship). No per-turn pull/ship into the local store.
-    storeSyncAroundTurns: false,
     triggerKinds: DESKTOP_TRIGGER_KINDS,
     mcpToolKinds: DESKTOP_MCP_TOOL_KINDS,
     agentCapabilities: {
@@ -1501,29 +1499,17 @@ export async function startEmbeddedServer(
         ),
       );
     },
-    createPullRequest: async (projectId, sessionId, input) => {
-      const checkout = await sessionCheckouts.describe({
+    // The chat's checkout, then core's one function (ADR 0345): push its
+    // branch as the chat's own, open the pull request, record it.
+    createPullRequest: (projectId, sessionId, input) =>
+      openChatPullRequest({
+        pullRequests: catamorphic.core.pullRequests,
+        checkouts: sessionCheckouts,
+        identity: desktopIdentity,
         projectId,
         sessionId,
-      });
-      if (checkout.kind === "primary") {
-        return catamorphic.core.remoteSync.createPullRequest(
-          desktopIdentity,
-          projectId,
-          input,
-        );
-      }
-      const prepared = await sessionCheckouts.preparePullRequest({
-        projectId,
-        sessionId,
-        message: input.title,
-      });
-      return catamorphic.core.remoteSync.createPullRequestFromRef(
-        desktopIdentity,
-        projectId,
-        { ...input, localRef: prepared.branch },
-      );
-    },
+        ...input,
+      }),
   });
 
   // Host-tier skills: framework defaults plus desktop configuration guidance,

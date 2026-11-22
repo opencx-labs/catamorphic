@@ -2,11 +2,10 @@ import { buildAppGuestDocument } from "@catamorphic/app";
 import type { FastifyInstance } from "fastify";
 import type { RouteContext } from "../app.js";
 import { resolveIdentity } from "../http-identity.js";
+import { mayCallTool, withheldTools } from "../mcp-scopes.js";
+import { MCP_ERROR, McpError, type McpTool, serveMcp } from "../mcp-server.js";
 import {
   callPollRunTool,
-  handleMcpPost,
-  McpRequestError,
-  negotiateProtocolVersion,
   POLL_RUN_TOOL,
   POLL_RUN_TOOL_DEFINITION,
   toolError,
@@ -30,10 +29,10 @@ import {
  * app, so the frozen-workflow-set authorization applies to MCP callers
  * exactly as it does to the in-product iframe.
  *
- * The endpoint is a stateless Streamable-HTTP JSON-RPC handler speaking
- * the `initialize`-handshake protocol era (≤2025-11-25) — what every
- * shipping client negotiates by default today (the official v2 SDK's
- * client also defaults to it). Requests are independent; no sessions.
+ * The endpoint is stateless Streamable HTTP on the dispatcher every MCP
+ * endpoint shares (`mcp-server.ts`, ADR 0347): the current revision and
+ * the handshake revisions on one URL. Requests are independent; no
+ * sessions.
  */
 
 const RUN_CALL_BUDGET_MS = 120_000;
@@ -52,86 +51,89 @@ interface PublishedApp {
 }
 
 export function registerAppsMcpRoutes(app: FastifyInstance, ctx: RouteContext) {
-  app.post("/projects/:projectId/apps-mcp", async (request, reply) => {
-    const core = ctx.core;
-    if (!core?.apps || !core.runs) {
-      return reply.status(503).send({ error: "Apps not configured" });
-    }
-    const { projectId } = request.params as { projectId: string };
+  app.post(
+    "/projects/:projectId/apps-mcp",
+    { config: { tokenScope: "work:read" } },
+    async (request, reply) => {
+      const core = ctx.core;
+      if (!core?.apps || !core.runs) {
+        return reply.status(503).send({ error: "Apps not configured" });
+      }
+      const { projectId } = request.params as { projectId: string };
 
-    return handleMcpPost(reply, request.body, async (method, params) => {
       const identity = resolveIdentity(request);
-      switch (method) {
-        case "initialize":
-          return {
-            protocolVersion: negotiateProtocolVersion(params.protocolVersion),
-            capabilities: { tools: { listChanged: false }, resources: {} },
-            serverInfo: {
-              name: "catamorphic-apps",
-              title: "Catamorphic apps",
-              version: "1.0.0",
-            },
-          };
-        case "ping":
-          return {};
-        case "tools/list": {
-          const apps = await loadPublishedApps(core, identity, projectId);
-          return { tools: buildTools(apps) };
-        }
-        case "resources/list": {
-          const apps = await loadPublishedApps(core, identity, projectId);
-          return {
-            resources: apps.map((published) => ({
-              uri: appResourceUri(published.name),
-              name: `${published.name} app`,
-              mimeType: MCP_APP_MIME_TYPE,
-            })),
-          };
-        }
-        case "resources/templates/list":
-          return { resourceTemplates: [] };
-        case "prompts/list":
-          return { prompts: [] };
-        case "resources/read": {
-          const uri = typeof params.uri === "string" ? params.uri : "";
-          const apps = await loadPublishedApps(core, identity, projectId);
-          const published = apps.find(
-            (candidate) => appResourceUri(candidate.name) === uri,
-          );
-          if (!published) {
-            throw new McpRequestError(-32602, `Unknown resource ${uri}`);
-          }
-          return {
-            contents: [
-              {
-                uri,
+      let loaded: Promise<PublishedApp[]> | undefined;
+      const apps = () => {
+        loaded ??= loadPublishedApps(core, identity, projectId);
+        return loaded;
+      };
+      const tools = async () =>
+        buildTools(await apps()).map(
+          (definition): McpTool => ({
+            definition,
+            scope:
+              definition.name === POLL_RUN_TOOL ? "work:read" : "sessions:run",
+            call: (args) =>
+              callTool(
+                core,
+                identity,
+                projectId,
+                String(definition.name),
+                args,
+              ),
+          }),
+        );
+      return serveMcp({
+        request,
+        reply,
+        resourceMetadataUrl: ctx.mcp?.resourceMetadataUrl,
+        endpoint: {
+          serverInfo: {
+            name: "catamorphic-apps",
+            title: "Catamorphic apps",
+            version: "1.0.0",
+          },
+          tools: async () =>
+            (await tools()).filter((tool) => mayCallTool(identity, tool)),
+          withheld: async () => withheldTools(identity, await tools()),
+          resources: {
+            list: async () =>
+              (await apps()).map((published) => ({
+                uri: appResourceUri(published.name),
+                name: `${published.name} app`,
                 mimeType: MCP_APP_MIME_TYPE,
-                text: buildAppDocument(published),
-                _meta: {
-                  ui: {
-                    // Catamorphic apps have no network of their own —
-                    // every effect is a workflow call through the host.
-                    csp: { connectDomains: [], resourceDomains: [] },
-                    prefersBorder: true,
+              })),
+            templates: async () => [],
+            read: async (uri) => {
+              const published = (await apps()).find(
+                (candidate) => appResourceUri(candidate.name) === uri,
+              );
+              if (!published)
+                throw new McpError(
+                  MCP_ERROR.invalidParams,
+                  `Unknown resource ${uri}`,
+                );
+              return [
+                {
+                  uri,
+                  mimeType: MCP_APP_MIME_TYPE,
+                  text: buildAppDocument(published),
+                  _meta: {
+                    ui: {
+                      // Catamorphic apps have no network of their own:
+                      // every effect is a workflow call through the host.
+                      csp: { connectDomains: [], resourceDomains: [] },
+                      prefersBorder: true,
+                    },
                   },
                 },
-              },
-            ],
-          };
-        }
-        case "tools/call": {
-          const name = typeof params.name === "string" ? params.name : "";
-          const args =
-            typeof params.arguments === "object" && params.arguments !== null
-              ? (params.arguments as Record<string, unknown>)
-              : {};
-          return callTool(core, identity, projectId, name, args);
-        }
-        default:
-          throw new McpRequestError(-32601, `Method not found: ${method}`);
-      }
-    });
-  });
+              ];
+            },
+          },
+        },
+      });
+    },
+  );
 }
 
 const MCP_APP_MIME_TYPE = "text/html;profile=mcp-app";

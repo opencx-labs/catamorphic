@@ -8,11 +8,14 @@ import { oauthAccessToken, testServerOptions } from "../test-support.js";
 import { listMachineSignIns, signInRoot } from "./sign-ins.js";
 
 /**
- * A single person's server holds their Codex sign-in on its own machine
- * (ADR 0213): with its operator's `WORK_PERSONAL_CREDENTIALS=accept`, the
- * server's machine is a member's own for the first member to sign in
- * there, and for no one else after.
+ * A single person's server holds their Claude Code and Codex sign-ins on
+ * its own machine (ADRs 0213, 0342): with its operator's
+ * `WORK_PERSONAL_CREDENTIALS=accept`, the server's machine is a member's
+ * own for the first member to sign in there, and for no one else after.
  */
+
+/** What a member pastes from the stand-in Claude sign-in page. */
+const CLAUDE_CODE = "TEST-CLAUDE-CODE#state";
 
 const PASSWORD = "correct horse battery staple";
 let root = "";
@@ -32,15 +35,32 @@ const call = (
   method: "GET" | "POST" | "DELETE",
   url: string,
   as: "alice" | "bob",
+  body?: unknown,
 ) =>
   server.app.inject({
     method,
     url: `/api/work/me/machines${url}`,
-    headers: { authorization: `Bearer ${tokens[as]}` },
+    headers: {
+      authorization: `Bearer ${tokens[as]}`,
+      ...(body === undefined ? {} : { "content-type": "application/json" }),
+    },
+    ...(body === undefined ? {} : { payload: JSON.stringify(body) }),
   });
 
 const MachinesSchema = z.object({
-  machines: z.array(z.object({ id: z.string(), codex: z.string() })),
+  machines: z.array(
+    z.strictObject({
+      id: z.string(),
+      name: z.string(),
+      available: z.boolean(),
+      state: z.string(),
+      reason: z.string().nullable(),
+      signIns: z.strictObject({
+        "claude-code": z.enum(["signed-in", "signed-out"]),
+        codex: z.enum(["signed-in", "signed-out"]),
+      }),
+    }),
+  ),
 });
 const machines = async (as: "alice" | "bob") =>
   MachinesSchema.parse((await call("GET", "", as)).json()).machines;
@@ -54,6 +74,11 @@ beforeAll(async () => {
     path.join(bin, "codex"),
   );
   fs.chmodSync(path.join(bin, "codex"), 0o755);
+  fs.copyFileSync(
+    path.join(import.meta.dirname, "fake-claude-cli.ts"),
+    path.join(bin, "claude"),
+  );
+  fs.chmodSync(path.join(bin, "claude"), 0o755);
   server = await createWorkServer(
     testServerOptions({
       dataDir: path.join(root, "data"),
@@ -96,10 +121,13 @@ afterAll(async () => {
   fs.rmSync(root, { recursive: true, force: true });
 });
 
-describe("a single person's server holds their Codex sign-in (ADR 0213)", () => {
+describe("a single person's server holds their sign-ins (ADRs 0213, 0342)", () => {
   it("is anyone's own machine until one member signs in there", async () => {
     const [own] = await machines("alice");
-    expect(own).toMatchObject({ codex: "signed-out" });
+    expect(own?.signIns).toEqual({
+      "claude-code": "signed-out",
+      codex: "signed-out",
+    });
     expect(await machines("bob")).toEqual([own]);
     const id = encodeURIComponent(own?.id ?? "");
 
@@ -116,7 +144,10 @@ describe("a single person's server holds their Codex sign-in (ADR 0213)", () => 
     );
     fs.rmSync(approve);
     // Signed in means placement already sees it.
-    expect((await machines("alice"))[0]?.codex).toBe("signed-in");
+    expect((await machines("alice"))[0]?.signIns).toEqual({
+      "claude-code": "signed-out",
+      codex: "signed-in",
+    });
 
     // Hers now: Bob is offered it no longer, and may not sign in on it.
     expect(await machines("bob")).toEqual([]);
@@ -129,10 +160,102 @@ describe("a single person's server holds their Codex sign-in (ADR 0213)", () => 
       ),
     ).toHaveLength(1);
 
-    // Once she signs out, the machine is free again.
+    // Hers for Claude Code too: Bob may not sign in to that there either.
+    expect(
+      (await call("POST", `/${id}/claude-code/sign-in`, "bob")).statusCode,
+    ).toBe(403);
+
+    // Her Claude Code sign-in goes beside her Codex one. The machine runs
+    // Claude Code's own login and hands back its link; it shows no code.
+    const claude = await call("POST", `/${id}/claude-code/sign-in`, "alice");
+    expect(claude.statusCode).toBe(201);
+    expect(claude.json()).toMatchObject({ expects: "code" });
+    expect(claude.json()).not.toHaveProperty("userCode");
+    expect(new URL(claude.json().verificationUrl).hostname).toBe("claude.com");
+    const claudeAttempt = `/${id}/claude-code/sign-in/${claude.json().attempt}`;
+    expect((await call("GET", claudeAttempt, "alice")).json()).toEqual({
+      state: "waiting",
+    });
+    // The route takes one line as { text }, from her, for that harness.
+    expect(
+      (await call("POST", `${claudeAttempt}/input`, "alice", {})).statusCode,
+    ).toBe(400);
+    expect(
+      (
+        await call("POST", `${claudeAttempt}/input`, "alice", {
+          text: CLAUDE_CODE,
+          more: true,
+        })
+      ).statusCode,
+    ).toBe(400);
+    expect(
+      (
+        await call("POST", `${claudeAttempt}/input`, "bob", {
+          text: CLAUDE_CODE,
+        })
+      ).statusCode,
+    ).toBe(403);
+    const unknown = await call(
+      "POST",
+      `/${id}/emacs/sign-in/${claude.json().attempt}/input`,
+      "alice",
+      { text: CLAUDE_CODE },
+    );
+    expect(unknown.statusCode).toBe(404);
+    expect(unknown.body).not.toContain(CLAUDE_CODE);
+    // Codex's attempt takes no pasted code: it showed its own.
+    const notCodex = await call(
+      "POST",
+      `/${id}/codex/sign-in/${claude.json().attempt}/input`,
+      "alice",
+      { text: CLAUDE_CODE },
+    );
+    expect(notCodex.statusCode).toBe(409);
+    expect(notCodex.json()).toMatchObject({ code: "sign_in_refused" });
+    expect(notCodex.body).not.toContain(CLAUDE_CODE);
+
+    // She pastes the code her browser gave her; the answer never repeats it.
+    const pasted = await call("POST", `${claudeAttempt}/input`, "alice", {
+      text: CLAUDE_CODE,
+    });
+    expect(pasted.statusCode).toBe(200);
+    expect(["waiting", "signed-in"]).toContain(pasted.json().state);
+    expect(pasted.body).not.toContain(CLAUDE_CODE);
+    await waitFor(
+      async () =>
+        (await call("GET", claudeAttempt, "alice")).json().state ===
+        "signed-in",
+      "the Claude Code sign-in to complete",
+    );
+    expect((await machines("alice"))[0]?.signIns).toEqual({
+      "claude-code": "signed-in",
+      codex: "signed-in",
+    });
+    const held = listMachineSignIns(signInRoot(path.join(root, "data")));
+    expect(held.map((signIn) => signIn.harness)).toEqual([
+      "claude-code",
+      "codex",
+    ]);
+    // One person's, both.
+    expect(new Set(held.map((signIn) => signIn.member)).size).toBe(1);
+
+    // Signing out of one leaves the other, and the machine still hers.
     expect((await call("DELETE", `/${id}/codex`, "alice")).json()).toEqual({
       signedOut: true,
     });
+    await waitFor(
+      async () => (await machines("alice"))[0]?.signIns.codex === "signed-out",
+      "the machine to stop reporting Codex",
+    );
+    expect(await machines("bob")).toEqual([]);
+    expect((await call("DELETE", `/${id}/emacs`, "alice")).statusCode).toBe(
+      404,
+    );
+
+    // Once she signs out of both, the machine is free again.
+    expect(
+      (await call("DELETE", `/${id}/claude-code`, "alice")).json(),
+    ).toEqual({ signedOut: true });
     await waitFor(
       async () => (await machines("bob")).length === 1,
       "the machine to be free",

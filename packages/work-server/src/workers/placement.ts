@@ -1,104 +1,93 @@
 import type { NodeAccess } from "@catamorphic/sandbox";
 import { z } from "zod";
+import {
+  MachineLabelsSchema,
+  type MachinePrincipal,
+  MachinePrincipalSchema,
+  normalizePrincipals,
+  RESERVED_LABELS,
+  servesNobody,
+  servesOneOwner,
+} from "../machines/contract.js";
 
-/** Labels the Work server sets on every node itself (ADR 0167). */
-export const RESERVED_LABELS = ["node", "plane"] as const;
+export { RESERVED_LABELS, servesNobody, servesOneOwner };
 
-export const NodeLabelsSchema = z
-  .record(
-    z
-      .string()
-      .regex(
-        /^[a-z0-9][a-z0-9._-]{0,62}$/,
-        "Label names are lowercase letters, digits, dots, dashes",
-      ),
-    z.string().min(1).max(128),
-  )
-  .refine(
-    (labels) => RESERVED_LABELS.every((key) => !(key in labels)),
-    `The server sets ${RESERVED_LABELS.join(" and ")} itself`,
-  );
+export const NodeLabelsSchema = MachineLabelsSchema;
 
 /**
- * Whose work a worker takes: everyone, or named people and directory groups
- * by email, and the owner-less work (project chats and automations) of named
- * projects (ADR 0173), or nobody: a pooled machine no rule holds (ADR 0205).
- * Control-plane state; a worker never declares it.
+ * A machine's placement (ADRs 0167, 0349): the labels an Environment's
+ * `pool` selects on, whom it is for (users, projects' own work, single
+ * chat keys, or anyone when absent), and whether those it serves trust
+ * each other. Control-plane state; a worker never declares it.
  */
-export const WorkerAccessSchema = z.union([
-  z.strictObject({ everyone: z.literal(true) }),
-  z.strictObject({ nobody: z.literal(true) }),
-  z
-    .strictObject({
-      people: z.array(z.email().toLowerCase()).max(500).default([]),
-      groups: z.array(z.email().toLowerCase()).max(100).default([]),
-      projects: z.array(z.uuid()).max(100).default([]),
-    })
-    .refine(
-      (access) =>
-        access.people.length + access.groups.length + access.projects.length >
-        0,
-      "Name at least one person, group or project, or use { everyone: true }",
-    ),
-]);
-export type WorkerAccess = z.output<typeof WorkerAccessSchema>;
-
 export const WorkerPlacementSchema = z.strictObject({
   labels: NodeLabelsSchema.default({}),
-  access: WorkerAccessSchema.default({ everyone: true }),
+  /** Who may place work here; left out, anyone. An empty list: nobody. */
+  for: z.array(MachinePrincipalSchema).max(500).optional(),
   /**
    * The people this worker serves trust each other: process isolation is
    * acceptable although it serves more than one person.
    */
   trusted: z.boolean().default(false),
 });
-export type WorkerPlacement = z.output<typeof WorkerPlacementSchema>;
 
-/**
- * A worker's placement as the scheduler reads it. A released machine (ADR
- * 0205) takes no new work and keeps serving the Allocations it holds.
- */
-export type ScheduledPlacement = WorkerPlacement & { released: boolean };
+export interface WorkerPlacement {
+  labels: Readonly<Record<string, string>>;
+  /** Null: anyone whose role and Environment allow it. */
+  for: readonly MachinePrincipal[] | null;
+  trusted: boolean;
+}
 
-export function nodeAccess(access: WorkerAccess): NodeAccess {
-  if ("everyone" in access) return { everyone: true };
-  if ("nobody" in access) return { users: [], groups: [], projects: [] };
+/** A parsed placement, with "anyone" as null and principals in order. */
+export function workerPlacement(
+  input: z.input<typeof WorkerPlacementSchema>,
+): WorkerPlacement {
+  const parsed = WorkerPlacementSchema.parse(input);
   return {
-    users: access.people,
-    groups: access.groups,
-    projects: access.projects,
+    labels: parsed.labels,
+    for: parsed.for === undefined ? null : normalizePrincipals(parsed.for),
+    trusted: parsed.trusted,
   };
 }
 
 /**
- * One named person, or one project's own work, and nobody else: no one
- * else's work lands here, so process isolation is enough.
+ * A worker's placement as the scheduler reads it. A machine that is not
+ * `accepting` (the plan dropped it, it is stopping, stopped, resuming or
+ * being reset, ADRs 0349, 0350) takes no new work and keeps serving the
+ * Allocations it holds.
  */
-export function servesOneOwner(access: WorkerAccess): boolean {
-  if ("everyone" in access || "nobody" in access) return false;
-  const { people, groups, projects } = access;
-  return groups.length === 0 && people.length + projects.length === 1;
+export type ScheduledPlacement = WorkerPlacement & {
+  accepting: boolean;
+  admissionRevision: string | null;
+};
+
+export function nodeAccess(
+  principals: readonly MachinePrincipal[] | null,
+): NodeAccess {
+  if (principals === null) return { everyone: true };
+  const users: string[] = [];
+  const projects: string[] = [];
+  const keys: { project: string; key: string }[] = [];
+  for (const principal of principals) {
+    if ("user" in principal) users.push(principal.user);
+    else if ("key" in principal)
+      keys.push({ project: principal.project, key: principal.key });
+    else projects.push(principal.project);
+  }
+  return { users, projects, keys };
 }
 
-/** A worker taking no one's work: any isolation is enough. */
-export function servesNobody(access: WorkerAccess): boolean {
-  return "nobody" in access;
-}
-
-/** The directory groups an access list names. */
-export function accessGroupsOf(access: WorkerAccess): readonly string[] {
-  return "groups" in access ? access.groups : [];
-}
+const StoredPrincipals = z.array(MachinePrincipalSchema).nullable();
 
 /** Stored placement, validated on the way out of the database. */
 export function storedPlacement(row: {
   labels: unknown;
-  access: unknown;
+  serves: unknown;
   trusted: boolean;
 }): WorkerPlacement {
-  return WorkerPlacementSchema.parse({
-    labels: row.labels,
-    access: row.access,
+  return {
+    labels: NodeLabelsSchema.parse(row.labels),
+    for: StoredPrincipals.parse(row.serves ?? null),
     trusted: row.trusted,
-  });
+  };
 }

@@ -170,6 +170,10 @@ describe("PWA remote OAuth", () => {
       fetch: fetchImpl,
     });
     const authorization = new URL(started.authorizationUrl);
+    // Work's own app asks to be its person: full access (ADR 0347).
+    expect(authorization.searchParams.get("scope")?.split(" ")).toContain(
+      "work:full",
+    );
     const state = authorization.searchParams.get("state") ?? "";
     const now = Date.parse("2026-08-26T12:00:00.000Z");
 

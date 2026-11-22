@@ -1,11 +1,6 @@
 import { randomUUID } from "node:crypto";
 import type { DB } from "@catamorphic/db";
-import {
-  isPersonalFile,
-  type ProjectManager,
-  push,
-  pushToRemote,
-} from "@catamorphic/git";
+import { isPersonalFile, type ProjectManager, push } from "@catamorphic/git";
 import { getTracer, withSpan } from "@catamorphic/otel";
 import { MANAGED_BRANCH_PREFIX } from "@catamorphic/workflow/project-layout";
 import type { Kysely } from "kysely";
@@ -30,18 +25,23 @@ import {
   normalizeDocumentPath,
 } from "./documents-service.js";
 import { isProjectDataPath } from "./project-workspace.js";
-import { ProjectNotFoundError, remoteOwnership } from "./projects-service.js";
+import { ProjectNotFoundError } from "./projects-service.js";
+import {
+  type PullRequestsService,
+  PullRequestUnavailableError,
+} from "./pull-requests-service.js";
 
 /**
- * Propose a change to the program (ADR 0055): a member who cannot commit
- * — no code-host access, no `program:write` — asks for a doc fix, a new template,
- * a workflow tweak. Their agent (or the HTTP surface) hands us the files;
- * we commit them on a fresh branch from the shared `main`, authored as the
- * member, and open a pull request through the code host with the
- * organization's service connection ("on behalf of <member>", ADR 0177).
- * Admins review as usual. Without a service connection for the origin the
- * branch still lands on the project origin, where program writers see it in
- * the desktop.
+ * Propose a change to the program (ADRs 0055, 0345): a member with no
+ * checkout of their own (the member tools, the HTTP surface) asks for a
+ * doc fix, a new template, a workflow tweak, and hands us the files. We
+ * commit them on a fresh branch from the shared `main`, authored as the
+ * member, and open a pull request from that checkout as a chat opens one
+ * from its own, with the organization's service connection ("on behalf of
+ * <member>", ADR 0177). Admins review as usual. Without a service
+ * connection for the origin the branch still lands on the project origin,
+ * where program writers see it in the desktop. A chat, which has a
+ * checkout, opens its pull request from its own commits instead.
  *
  * Only program paths are proposable: `store/…` changes ship directly.
  */
@@ -82,6 +82,7 @@ export class ProposalsService {
     private readonly db: Kysely<DB>,
     private readonly projectManager: ProjectManager,
     private readonly codeHosts: CodeHostsService,
+    private readonly pullRequests: PullRequestsService,
   ) {}
 
   /** Read proposals through the company identity, narrowed to member documents. */
@@ -258,7 +259,7 @@ export class ProposalsService {
       .selectFrom("projects")
       .where("id", "=", projectId)
       .where("tenant_id", "=", identity.tenantId)
-      .select(["id", "remote_url", "remote_branch", "remote_ownership"])
+      .select("id")
       .executeTakeFirst();
     if (!project) throw new ProjectNotFoundError(projectId);
     const title = input.title.trim();
@@ -292,7 +293,7 @@ export class ProposalsService {
           "catamorphic.tenant.id": identity.tenantId,
         },
       },
-      () => this.build({ ...input, title, changes, project }),
+      () => this.build({ ...input, title, changes }),
     );
   }
 
@@ -302,15 +303,9 @@ export class ProposalsService {
     title: string;
     body?: string;
     changes: ProposedChange[];
-    project: {
-      remote_url: string | null;
-      remote_branch: string | null;
-      remote_ownership: string | null;
-    };
   }): Promise<ProposalResult> {
     const { identity, projectId, title } = args;
     const remote = this.projectManager.remoteBackend;
-    const baseBranch = args.project.remote_branch ?? "main";
     const branch = `${proposalBranch(title, identity.externalUserId, new Date())}-${randomUUID().slice(0, 8)}`;
     if (!remote) throw new ProposalsUnsupportedError();
     // Each proposal is built in its own ephemeral checkout of the program
@@ -339,10 +334,14 @@ export class ProposalsService {
         .join("\n")
         .replace(/\n{3,}/g, "\n\n")
         .trim();
-      await dev.commit(message, authorFor(identity.externalUserId));
+      const commit = await dev.commit(
+        message,
+        authorFor(identity.externalUserId),
+      );
 
       // Land the branch: on the linked code host when the organization's
-      // service connection can, else on the project origin.
+      // service connection can, as a chat's pull request does (ADR 0345),
+      // else on the project origin.
       const body = [
         `Proposed by **${identity.externalUserId}** via Work.`,
         "",
@@ -350,51 +349,37 @@ export class ProposalsService {
       ]
         .join("\n")
         .trim();
-      const landed = args.project.remote_url
-        ? await this.viaService(
-            { identity, projectId },
-            async ({ host, call }) => {
-              await pushToRemote({
-                repoPath: dev.repoPath,
-                url: call.remoteUrl,
-                credentials: await this.codeHosts.gitCredentials({
-                  identity,
-                  projectId,
-                  remoteUrl: call.remoteUrl,
-                  access: "write",
-                  principal: "service",
-                }),
-                ownership:
-                  remoteOwnership(args.project.remote_ownership) ?? "attached",
-                ref: branch,
-                remoteBranch: branch,
-              });
-              return {
-                pullRequest: host.createPullRequest
-                  ? await host.createPullRequest({
-                      ...call,
-                      title,
-                      head: branch,
-                      base: baseBranch,
-                      body,
-                    })
-                  : undefined,
-              };
-            },
-          )
-        : null;
-      const pullRequest = landed?.pullRequest;
-      if (!landed) {
-        await push({
-          dev,
-          remote,
-          tenantId: identity.tenantId,
+      const opened = await this.pullRequests
+        .open({
+          identity,
           projectId,
-          remoteBranch: branch,
-          localSha: await dev.resolveRef(branch),
+          title,
+          body,
+          checkout: { repoPath: dev.repoPath, commit, branch },
+          principal: "service",
+        })
+        .catch((error: unknown) => {
+          if (
+            error instanceof PullRequestUnavailableError ||
+            error instanceof CodeHostNotConnectedError
+          )
+            return null;
+          throw error;
         });
-      }
-      return pullRequest ? { branch, pullRequest } : { branch };
+      if (opened)
+        return {
+          branch,
+          pullRequest: { url: opened.url, number: opened.number },
+        };
+      await push({
+        dev,
+        remote,
+        tenantId: identity.tenantId,
+        projectId,
+        remoteBranch: branch,
+        localSha: commit,
+      });
+      return { branch };
     } finally {
       await dev.dispose();
     }

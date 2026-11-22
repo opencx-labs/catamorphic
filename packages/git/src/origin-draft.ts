@@ -46,9 +46,17 @@ const MAX_ATTEMPTS = 8;
  */
 export type ProjectDraft = ProjectRepo | OriginDraftRepo;
 
-/** One change to a draft: new content, or `delete: true`. */
+/**
+ * One change to a draft: new content, or `delete: true`. `mode` is the
+ * file's Git mode, kept from the file it replaces when left out: `100755`
+ * for an executable, `120000` for a link whose target is the content.
+ */
 export type DraftChange =
-  | { path: string; content: string | Uint8Array }
+  | {
+      path: string;
+      content: string | Uint8Array;
+      mode?: "100644" | "100755" | "120000";
+    }
   | { path: string; delete: true };
 
 export type DraftPublishResult =
@@ -466,7 +474,9 @@ export class OriginDraftRepo {
    * Paths the project's ignore rules keep out of history are refused, or
    * dropped with `skipIgnored`; with `skipMissingDeletes`, deleting a file
    * the draft lacks is not an error (a sandbox sync reporting a file it
-   * made and removed again).
+   * made and removed again). With `replaceLinks`, a change to a path that
+   * is a link replaces or deletes the link itself, as Git would (a saved
+   * workspace, ADR 0343); otherwise it is refused. No write follows one.
    */
   async write(input: {
     changes: readonly DraftChange[];
@@ -478,16 +488,24 @@ export class OriginDraftRepo {
     expected?: Record<string, string>;
     skipIgnored?: boolean;
     skipMissingDeletes?: boolean;
+    replaceLinks?: boolean;
   }): Promise<string | null> {
-    const pending = new Map<string, Uint8Array | null>();
+    const pending = new Map<
+      string,
+      { content: Uint8Array; mode?: string } | null
+    >();
     for (const change of input.changes)
       pending.set(
         normalizePath(change.path),
         "delete" in change
           ? null
-          : typeof change.content === "string"
-            ? new TextEncoder().encode(change.content)
-            : change.content,
+          : {
+              content:
+                typeof change.content === "string"
+                  ? new TextEncoder().encode(change.content)
+                  : change.content,
+              ...(change.mode ? { mode: change.mode } : {}),
+            },
       );
     const draftRefName = this.draftRefOrThrow();
     if (pending.size === 0) return null;
@@ -495,13 +513,18 @@ export class OriginDraftRepo {
       input.message ??
       `Draft: ${[...pending.keys()].slice(0, 3).join(", ")}${pending.size > 3 ? ", ..." : ""}`;
     // Contents are immutable objects: write them once, before any race.
-    const written = [...pending].filter(
-      (entry): entry is [string, Uint8Array] => entry[1] !== null,
+    const written = [...pending].flatMap(([file, change]) =>
+      change ? [{ file, ...change }] : [],
     );
     const oids = await this.withObjects((objects) =>
-      objects.writeBlobs(written.map(([, content]) => content)),
+      objects.writeBlobs(written.map((change) => change.content)),
     );
-    const blobs = new Map(written.map(([file], index) => [file, oids[index]]));
+    const blobs = new Map(
+      written.map((change, index) => [
+        change.file,
+        { oid: oids[index], mode: change.mode },
+      ]),
+    );
     for (let attempt = 0; attempt < MAX_ATTEMPTS; attempt++) {
       const outcome = await this.attempt(async (objects) => {
         const { draft, main } = await this.tips(objects);
@@ -525,14 +548,20 @@ export class OriginDraftRepo {
             ignored.push(file);
             continue;
           }
-          const oid = blobs.get(file);
-          changes.set(file, oid ? { oid } : null);
+          const blob = blobs.get(file);
+          changes.set(
+            file,
+            blob?.oid
+              ? { oid: blob.oid, ...(blob.mode ? { mode: blob.mode } : {}) }
+              : null,
+          );
         }
         if (ignored.length > 0 && !input.skipIgnored)
           throw new DraftIgnoredPathError(ignored);
         if (changes.size === 0) return { sha: parent };
         const tree = await objects.writeTree(baseTree, changes, {
           skipMissingDeletes: input.skipMissingDeletes,
+          replaceLinks: input.replaceLinks,
         });
         if (tree === baseTree) return { sha: parent };
         const sha = await objects.writeCommit({

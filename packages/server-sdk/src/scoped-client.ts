@@ -154,6 +154,12 @@ export interface RunsResource {
   triggerProduction(
     args: Omit<TriggerProductionRunInput, "identity">,
   ): Promise<Run>;
+  /** Enroll a run under the owner and authority already consented to. */
+  triggerWithEnablement(
+    args: Omit<TriggerProductionRunInput, "identity" | "environment"> & {
+      enablementId: string;
+    },
+  ): Promise<Run>;
   /**
    * Triggers a run and drives it inline until it settles or reaches a
    * durable wait — the request-path shape of execution. Same authorization
@@ -394,6 +400,10 @@ function buildRuns(core: CatamorphicCore, identity: Identity): RunsResource {
     triggerProduction: (args) =>
       withIdentity(identity, () =>
         core.runs.triggerProduction({ ...args, identity }),
+      ),
+    triggerWithEnablement: (args) =>
+      withIdentity(identity, () =>
+        core.runs.triggerWithEnablement({ ...args, identity }),
       ),
     call: (args) =>
       withIdentity(identity, () => core.runs.call({ ...args, identity })),

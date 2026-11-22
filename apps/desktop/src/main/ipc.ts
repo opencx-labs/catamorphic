@@ -49,6 +49,10 @@ import {
 } from "../shared/pr-details.js";
 import type { ProfileConnection } from "../shared/profile-connections.js";
 import { writesProgram } from "../shared/project-experience.js";
+import {
+  SIGN_IN_HARNESSES,
+  type SignInHarness,
+} from "../shared/remote-machines.js";
 import type { SettingsPatch, SettingsScope } from "../shared/settings.js";
 import type { UsageSummary, UsageWindowDays } from "../shared/usage.js";
 import { rosterAgentId } from "../shared/voice.js";
@@ -148,11 +152,12 @@ import { createReservedProject } from "./project-path.js";
 import { remoteMachinesRequest } from "./remote-api.js";
 import { probeRemoteConnection } from "./remote-connection-status.js";
 import {
-  beginCodexSignIn,
-  cancelCodexSignIn,
-  codexSignInStatus,
+  beginHarnessSignIn,
+  cancelHarnessSignIn,
+  harnessSignInStatus,
   listRemoteMachines,
-  signOutOfCodex,
+  signOutOfHarness,
+  submitHarnessSignInCode,
 } from "./remote-machines.js";
 import {
   authorizeRemoteServer,
@@ -2726,9 +2731,10 @@ export function registerIpcHandlers(
     },
   );
 
-  // The member's own machines on the project's server and Codex sign-ins
-  // there (ADR 0213). Codex's device code login runs on the machine, so
-  // only the one-time code passes through here.
+  // The member's own machines on the project's server and their Claude
+  // Code and Codex sign-ins there (ADRs 0213, 0342). Each login runs on the
+  // machine: only its link, Codex's one-time code and the code a person
+  // pastes for Claude Code pass through here, and none of it is kept.
   const machinesRequest = (
     event: Electron.IpcMainInvokeEvent,
     projectId: string,
@@ -2737,45 +2743,91 @@ export function registerIpcHandlers(
       profiles: { forProject: () => storesFor(event) },
       projectId,
     });
+  /** The harness a renderer named, when it is one people sign in to. */
+  const signInHarness = (value: unknown): SignInHarness => {
+    const harness = SIGN_IN_HARNESSES.find((known) => known === value);
+    if (!harness) throw new Error("That is not a harness people sign in to.");
+    return harness;
+  };
   ipcMain.handle("catamorphic:remote-machines", (event, projectId: string) =>
     listRemoteMachines({ request: machinesRequest(event, projectId) }),
   );
   ipcMain.handle(
-    "catamorphic:remote-codex-sign-in",
-    (event, input: { projectId: string; machineId: string }) =>
-      beginCodexSignIn({
+    "catamorphic:remote-harness-sign-in",
+    (event, input: { projectId: string; machineId: string; harness: string }) =>
+      beginHarnessSignIn({
         request: machinesRequest(event, input.projectId),
         machineId: input.machineId,
+        harness: signInHarness(input.harness),
       }),
   );
   ipcMain.handle(
-    "catamorphic:remote-codex-sign-in-status",
-    (event, input: { projectId: string; machineId: string; attempt: string }) =>
-      codexSignInStatus({
+    "catamorphic:remote-harness-sign-in-status",
+    (
+      event,
+      input: {
+        projectId: string;
+        machineId: string;
+        harness: string;
+        attempt: string;
+      },
+    ) =>
+      harnessSignInStatus({
         request: machinesRequest(event, input.projectId),
         machineId: input.machineId,
+        harness: signInHarness(input.harness),
         attempt: input.attempt,
       }),
   );
   ipcMain.handle(
-    "catamorphic:remote-codex-sign-in-cancel",
-    (event, input: { projectId: string; machineId: string; attempt: string }) =>
-      cancelCodexSignIn({
+    "catamorphic:remote-harness-sign-in-code",
+    (
+      event,
+      input: {
+        projectId: string;
+        machineId: string;
+        harness: string;
+        attempt: string;
+        text: string;
+      },
+    ) =>
+      submitHarnessSignInCode({
         request: machinesRequest(event, input.projectId),
         machineId: input.machineId,
+        harness: signInHarness(input.harness),
+        attempt: input.attempt,
+        text: String(input.text),
+      }),
+  );
+  ipcMain.handle(
+    "catamorphic:remote-harness-sign-in-cancel",
+    (
+      event,
+      input: {
+        projectId: string;
+        machineId: string;
+        harness: string;
+        attempt: string;
+      },
+    ) =>
+      cancelHarnessSignIn({
+        request: machinesRequest(event, input.projectId),
+        machineId: input.machineId,
+        harness: signInHarness(input.harness),
         attempt: input.attempt,
       }),
   );
   ipcMain.handle(
-    "catamorphic:remote-codex-sign-out",
-    (event, input: { projectId: string; machineId: string }) =>
-      signOutOfCodex({
+    "catamorphic:remote-harness-sign-out",
+    (event, input: { projectId: string; machineId: string; harness: string }) =>
+      signOutOfHarness({
         request: machinesRequest(event, input.projectId),
         machineId: input.machineId,
+        harness: signInHarness(input.harness),
       }),
   );
-  // The device code page opens in a browser tab of the asking window, as
-  // the project's own sign-in page does.
+  // A harness's sign-in page opens in a browser tab of the asking window,
+  // as the project's own sign-in page does.
   ipcMain.handle("catamorphic:open-sign-in-link", (event, url: string) => {
     if (!URL.canParse(url) || new URL(url).protocol !== "https:")
       throw new Error("A sign-in link starts with https://");

@@ -63,12 +63,12 @@ Availability also depends on identity, services, agent sandboxing and topology.
 | `stop_listening` | Eager. Turns voice off in this chat once the turn's replies are read aloud; the microphone closes at once. Says what it does, never when (ADR 0224) |
 | `write_terminal` | Deferred, raw input to a terminal (prompts, REPLs, Ctrl+C, the person's own terminal on request) |
 | `build_app` | Deferred, host preview by default; `publish: true` explicitly publishes |
-| `sync_project`, `create_pull_request` | Deferred, managed checkout and linked-remote semantics |
+| `sync_project`, `create_pull_request` | Deferred, managed checkout and linked-remote semantics. `create_pull_request` is core's one tool (ADR 0345): it pushes the chat's commits as its own `work/` branch, opens or updates the pull request, and records it on the chat |
 | `request_connection`, `read_skill` | Deferred connection consent and one skill fallback for inaccessible files |
 | `documents_storage`, `documents_list`, `documents_read`, `documents_search`, `documents_write`, `documents_delete`, `documents_history` | Deferred shared document/store services; ordinary checkout files use native tools |
-| `publish_document`, `revoke_publication`, `list_publications`, `propose_change` | Deferred sharing and proposal state |
-| `ask_agent` | Deferred project-agent entry, distinct from peer delivery; host routes control delegation |
-| `create_watcher`, `list_watchers`, `stop_watcher` | Deferred durable workflows with session-owned lifetime; `eventSource: "github"` polls the project's repository as github webhook deliveries (ADR 0177) |
+| `publish_document`, `revoke_publication`, `list_publications` | Deferred sharing state. A chat proposes with `create_pull_request`, from its own checkout; `propose_change` is for members without one |
+| `session_start`, `session_send`, `session_wait`, `session_read`, `session_answer`, `session_interrupt`, `session_close`, `session_list` and the other session operations | Deferred. The one registry every surface runs (ADR 0346): start a chat and get its id at once, then wait on it; each answers with the chat's state |
+| `create_watcher`, `list_watchers`, `session_stop_watcher` | Deferred durable workflows with session-owned lifetime; `eventSource: "github"` polls the project's repository as github webhook deliveries (ADR 0177) |
 | `session_artifact`, `set_app_presentation` | Deferred temporary artifacts and app metadata; title/icon can be supplied at creation |
 | Project-defined workflow tools, `catamorphic_poll_run` | Deferred live deployed workflow bindings and continuation; identical execution service to public MCP |
 | `registry.read` | Existing deferred, installable packs (UI components and project recipes, ADR 0262); composition and evidence remain code and skills |
@@ -78,10 +78,9 @@ Availability also depends on identity, services, agent sandboxing and topology.
 Removed duplicate registrations: `list_subsessions` becomes
 `list_project_sessions {children_only:true}`; `use_project_checkout` becomes
 `use_worktree {path:null}`; `clear_pointers` becomes `point_at {target:null}`.
-The internal project projection omits `list_skills`, `read_skill`, and
-`send_agent_message`. Native skills/files and the workspace fallback/peer
-delivery operation cover them. External project MCP consumers retain these
-public contracts.
+The internal project projection omits `list_skills` and `read_skill`: native
+skills/files and the workspace fallback cover them. External project MCP
+consumers retain these public contracts.
 
 Explicit Environment Allocation connection bindings remain harness MCP servers:
 a caller-selected, capability-granted roster (`connection_<alias>`). A harness

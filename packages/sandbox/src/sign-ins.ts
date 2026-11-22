@@ -1,10 +1,10 @@
 import path from "node:path";
-import { SIGN_IN_HARNESSES, type SignInHarness } from "./types.js";
+import { type SignInHarness, signInHarness } from "./types.js";
 
 /**
  * Where a machine keeps one member's sign-in home for a harness (ADR
  * 0199): `<root>/<harness>/<member>`, on the machine's own disk. The
- * harness's own login writes there (`CLAUDE_CONFIG_DIR`, `CODEX_HOME`);
+ * harness's own login writes there (its `SIGN_IN_SPECS` home variable);
  * sandboxes of that member's chats see it at `signInHomePath`. Work never
  * reads what is inside.
  */
@@ -68,7 +68,7 @@ export function parseSignInCapability(
   capability: string,
 ): { harness: SignInHarness; member: string } | undefined {
   const match = /^sign-in:([a-z-]+):(.+)$/.exec(capability);
-  const harness = SIGN_IN_HARNESSES.find((entry) => entry === match?.[1]);
+  const harness = signInHarness(match?.[1]);
   const member = match?.[2];
   return harness && member ? { harness, member } : undefined;
 }

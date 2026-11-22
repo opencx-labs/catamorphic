@@ -1,0 +1,25 @@
+{
+  "$schema": "https://ui.shadcn.com/schema/registry-item.json",
+  "name": "machines-workflows",
+  "type": "registry:item",
+  "title": "Manage machines with workflows",
+  "description": "Run the infrastructure operations for Work machines in consented project workflows.",
+  "files": [
+    {
+      "path": "machines-workflows.ts",
+      "type": "registry:file",
+      "target": "machines/machines-workflows.ts"
+    },
+    {
+      "path": "SKILL.md",
+      "type": "registry:file",
+      "target": "machines/machines-workflows.md"
+    }
+  ],
+  "dependencies": [
+    "@catamorphic/server-sdk",
+    "@catamorphic/work-server",
+    "zod@4.6.7"
+  ],
+  "docs": "Copy the files into your Work server host. Add the dependencies to its package manifest and follow the included guide."
+}

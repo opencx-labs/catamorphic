@@ -6,8 +6,10 @@ import { getTracer, withSpan } from "@catamorphic/otel";
 import { publishedRef } from "@catamorphic/workflow/project-layout";
 import { type Kysely, type Selectable, sql } from "kysely";
 import {
+  assertTokenScope,
   type DocumentRef,
   hasProjectPermission,
+  hasTokenScope,
   type Identity,
   isProjectPrincipal,
   scopeCovers,
@@ -253,6 +255,13 @@ export function documentAccessAllowed(
   access: "read" | "write",
 ): boolean {
   if (isProjectDataPath(path)) return false;
+  if (
+    !hasTokenScope(
+      identity,
+      access === "write" ? "documents:write" : "work:read",
+    )
+  )
+    return false;
   if (identity.scope === undefined) return true;
   const store = isStorePath(path);
   if (!store) {
@@ -1183,6 +1192,10 @@ export class DocumentsService {
     access: "read" | "write",
     audience?: "member",
   ): void {
+    assertTokenScope(
+      identity,
+      access === "write" ? "documents:write" : "work:read",
+    );
     if (audience) {
       if (
         !identity.externalUserId ||
