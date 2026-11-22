@@ -21,7 +21,7 @@ export interface PlacementWaitTarget {
   pool: Readonly<Record<string, string>>;
   /** Whose work it is: a member, or null for the project's own. */
   owner: string | null;
-  /** The chat key of a project's own chat, or null (ADR 0347). */
+  /** The chat key of a project's own chat, or null (ADR 0349). */
   key: string | null;
   /**
    * What a machine must offer it: what sizes a machine (resources and
@@ -47,7 +47,7 @@ export interface PlacementWait {
   /** Minutes it may wait in all, or null to wait as long as it is queued. */
   limitMinutes: number | null;
   /**
-   * The machine its host is starting or resuming for it (ADR 0347), when
+   * The machine its host is starting or resuming for it (ADR 0349), when
    * there is one: a client says "its machine is starting" rather than
    * "waiting for a machine".
    */
@@ -179,7 +179,7 @@ export class PlacementWaitsService {
 
   /**
    * Say which machine is being started or resumed for each piece of
-   * waiting work (ADR 0347), and for the rest that none is: the host that
+   * waiting work (ADR 0349), and for the rest that none is: the host that
    * makes machines calls it after it planned. Only what changed is written.
    */
   async setMachines(args: {

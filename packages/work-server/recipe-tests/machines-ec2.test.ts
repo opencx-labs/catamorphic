@@ -20,7 +20,7 @@ import {
 } from "../src/testing.js";
 
 /*
- * The `machines-ec2` recipe (ADR 0347) against its fake EC2: no AWS call is
+ * The `machines-ec2` recipe (ADR 0349) against its fake EC2: no AWS call is
  * made. The recipe typechecks against the real client.
  */
 vi.mock(

@@ -9,7 +9,7 @@ import { listMachineSignIns, signInRoot } from "./sign-ins.js";
 
 /**
  * A single person's server holds their Claude Code and Codex sign-ins on
- * its own machine (ADRs 0213, 0340): with its operator's
+ * its own machine (ADRs 0213, 0342): with its operator's
  * `WORK_PERSONAL_CREDENTIALS=accept`, the server's machine is a member's
  * own for the first member to sign in there, and for no one else after.
  */
@@ -121,7 +121,7 @@ afterAll(async () => {
   fs.rmSync(root, { recursive: true, force: true });
 });
 
-describe("a single person's server holds their sign-ins (ADRs 0213, 0340)", () => {
+describe("a single person's server holds their sign-ins (ADRs 0213, 0342)", () => {
   it("is anyone's own machine until one member signs in there", async () => {
     const [own] = await machines("alice");
     expect(own?.signIns).toEqual({

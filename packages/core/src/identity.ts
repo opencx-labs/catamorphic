@@ -58,7 +58,7 @@ export interface Identity {
    */
   projectPermissions?: readonly ProjectPermissionRef[];
   /**
-   * The OAuth scopes of the grant this identity came from (ADR 0345): a
+   * The OAuth scopes of the grant this identity came from (ADR 0347): a
    * client holds what its person granted it, never more. The host has
    * already intersected the member's roles with them; what stays here is
    * what callers check by name (`work:read`, `sessions:run`,
@@ -111,7 +111,7 @@ export function tokenScopesOf(granted: readonly string[]): TokenScope[] {
 
 /**
  * A member's identity as a grant with these OAuth scopes may use it (ADR
- * 0345): the member's roles intersected with what their client was
+ * 0347): the member's roles intersected with what their client was
  * granted. Every grant narrows, down to nothing for one that names none of
  * Work's scopes; only `work:full` is the person themself. Roles narrow
  * where a role says it (documents become read-only without

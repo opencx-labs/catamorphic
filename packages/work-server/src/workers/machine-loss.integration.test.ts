@@ -27,8 +27,8 @@ import {
 import { startWorkWorker } from "./worker-runtime.js";
 
 /*
- * Every lost machine recovers (ADRs 0346, 0347), and machines stop and
- * resume (ADR 0348), end to end on network Postgres with real workers
+ * Every lost machine recovers (ADRs 0348, 0349), and machines stop and
+ * resume (ADR 0350), end to end on network Postgres with real workers
  * running local processes, a machines hook whose plan a test writes, and a
  * fake platform. Nothing here asks the server to act: its own timers plan,
  * detect a loss, retire the machine's work, replace it and continue its

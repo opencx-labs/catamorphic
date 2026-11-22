@@ -291,7 +291,7 @@ export class AttemptRunner {
    * which a harness that filters names like `*_KEY` would otherwise
    * drop). The attempt's own variables win.
    *
-   * On a member's own sign-in (ADR 0340) the files add no variable that
+   * On a member's own sign-in (ADR 0342) the files add no variable that
    * names another credential or endpoint to the harness's own process: a
    * project secret or an Environment variable would otherwise send the
    * chat to another account. The harness's shells still load the files,

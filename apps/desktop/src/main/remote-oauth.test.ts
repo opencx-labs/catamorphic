@@ -133,7 +133,7 @@ describe("remote server OAuth", () => {
       tokenEndpoint: "https://team.example/api/auth/oauth2/token",
     });
     expect(authorizeURL?.searchParams.get("scope")).toContain("offline_access");
-    // Work's own app asks to be its person: full access (ADR 0345).
+    // Work's own app asks to be its person: full access (ADR 0347).
     expect(authorizeURL?.searchParams.get("scope")?.split(" ")).toContain(
       "work:full",
     );

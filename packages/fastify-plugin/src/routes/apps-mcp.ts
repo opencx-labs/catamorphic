@@ -30,7 +30,7 @@ import {
  * exactly as it does to the in-product iframe.
  *
  * The endpoint is stateless Streamable HTTP on the dispatcher every MCP
- * endpoint shares (`mcp-server.ts`, ADR 0345): the current revision and
+ * endpoint shares (`mcp-server.ts`, ADR 0347): the current revision and
  * the handshake revisions on one URL. Requests are independent; no
  * sessions.
  */

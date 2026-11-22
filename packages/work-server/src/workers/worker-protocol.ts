@@ -16,7 +16,7 @@ export const WORKER_PROTOCOL_HEADER = "work-protocol";
  * 3: the `egress.widen` and `egress.narrow` operations open a setup's
  * network in a running sandbox and close it again (ADR 0257).
  * 4: `machine.harnessSignIn` replaces `machine.codexSignIn`, names its
- * harness and hands a login the code it waits for (ADR 0340); a worker of
+ * harness and hands a login the code it waits for (ADR 0342); a worker of
  * protocol 3 could parse none of it.
  */
 export const WORKER_PROTOCOL = {

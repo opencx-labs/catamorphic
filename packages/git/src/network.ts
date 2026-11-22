@@ -145,7 +145,7 @@ export function isManagedBranch(branch: string): boolean {
 }
 
 /**
- * The one push rule (ADRs 0170, 0343). On an attached remote Work may only
+ * The one push rule (ADRs 0170, 0345). On an attached remote Work may only
  * create or fast-forward branches under `work/`; the default branch and
  * every other branch belong to the people who share the repository.
  * History there is rewritten in one case only: a chat force-updates its
@@ -279,14 +279,14 @@ function pushWithLease(input: {
   );
 }
 
-/** The branch a chat last pushed to the project's repository (ADR 0343). */
+/** The branch a chat last pushed to the project's repository (ADR 0345). */
 export interface PushedBranch {
   branch: string;
   commit: string;
 }
 
 /**
- * Push a chat's branch (ADR 0343): a `work/` branch it creates, moves
+ * Push a chat's branch (ADR 0345): a `work/` branch it creates, moves
  * forward, or, after a rebase, replaces. It replaces only a branch it
  * pushed before, and only while that branch still holds the commit it last
  * pushed there; anything a person or another chat pushed since refuses

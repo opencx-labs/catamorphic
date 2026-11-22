@@ -37,7 +37,7 @@ async function failure(run: Promise<void>): Promise<string> {
   return error instanceof Error ? error.message : "";
 }
 
-describe("the machines hook contract kit (ADR 0347)", () => {
+describe("the machines hook contract kit (ADR 0349)", () => {
   it("passes a provisioner that honors idempotency keys, stops, starts and destroys", async () => {
     const cloud = new MemoryCloud();
     await checkMachineProvisioner({

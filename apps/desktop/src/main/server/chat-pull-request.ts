@@ -25,7 +25,7 @@ export interface PullRequestCheckouts {
 }
 
 /**
- * A desktop chat's `create_pull_request` (ADR 0343): find the chat's
+ * A desktop chat's `create_pull_request` (ADR 0345): find the chat's
  * checkout, its own worktree or the project folder, and run core's one
  * function on it. A worktree of the chat's own is checkpointed first; the
  * project folder and a worktree the person assigned push what they

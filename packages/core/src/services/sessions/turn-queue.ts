@@ -249,7 +249,7 @@ export class TurnQueue {
                     blocked.and([
                       blocked("allocation.worker_node_id", "is not", null),
                       // A turn that was at work on a machine since lost
-                      // (ADR 0346) is not held back: it is claimed to be
+                      // (ADR 0348) is not held back: it is claimed to be
                       // settled as lost. One that has not started stays
                       // blocked until its chat is admitted again.
                       blocked.not(

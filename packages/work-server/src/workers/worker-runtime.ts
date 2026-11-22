@@ -357,7 +357,7 @@ export async function startWorkWorker(options: WorkWorkerOptions): Promise<{
     path.join(options.dataDir, "sandboxes.json"),
   );
   // Members sign in to Claude Code and Codex on this machine from the app
-  // (ADRs 0213, 0340). The connected session's own re-offer, run when a
+  // (ADRs 0213, 0342). The connected session's own re-offer, run when a
   // sign-in changes here.
   const offerSignIns = { now: () => {} };
   const harnessSignIns = new HarnessSignIns({

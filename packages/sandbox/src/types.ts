@@ -326,7 +326,7 @@ export interface SandboxVolumeProvider {
 
 /**
  * A harness a member signs in to on a machine with its own flow (ADRs 0199,
- * 0340): the harness's unmodified CLI runs its own login on the machine,
+ * 0342): the harness's unmodified CLI runs its own login on the machine,
  * into a home there for that member.
  */
 export type SignInHarness = "claude-code" | "codex";
@@ -337,7 +337,7 @@ export const SIGN_IN_HARNESSES: readonly SignInHarness[] = [
 ];
 
 /**
- * How one harness signs a member in on a machine (ADR 0340). Everything
+ * How one harness signs a member in on a machine (ADR 0342). Everything
  * that runs, reports or shows a sign-in reads this, so a harness differs
  * from another only here.
  */

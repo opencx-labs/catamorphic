@@ -1151,7 +1151,7 @@ async function placeChat(nodeId: string): Promise<string> {
 }
 
 it.skipIf(!db)(
-  "retires everything a machine held, once, however many replicas ask (ADR 0346)",
+  "retires everything a machine held, once, however many replicas ask (ADR 0348)",
   async () => {
     if (!core || !db || !nodes) return;
     await quietOthers();
@@ -1228,7 +1228,7 @@ it.skipIf(!db)(
 );
 
 it.skipIf(!db)(
-  "retires one Allocation whose sandbox is gone, and leaves a live run to node recovery (ADR 0346)",
+  "retires one Allocation whose sandbox is gone, and leaves a live run to node recovery (ADR 0348)",
   async () => {
     if (!core || !db) return;
     await quietOthers();

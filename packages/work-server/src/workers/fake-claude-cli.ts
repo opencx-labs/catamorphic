@@ -19,7 +19,7 @@
  * credentials it was given, so tests see what reached the CLI.
  *
  * `claude auth login` signs a member in as Claude Code 2.1.329 does with
- * no terminal (ADR 0340): it prints "If the browser didn't open, visit:
+ * no terminal (ADR 0342): it prints "If the browser didn't open, visit:
  * <link>" and "Paste code here if prompted > ", reads one line from its
  * input, and on the expected code (`FAKE_CLAUDE_LOGIN_CODE`, else
  * {@link LOGIN_CODE}) writes `.credentials.json` into `CLAUDE_CONFIG_DIR`

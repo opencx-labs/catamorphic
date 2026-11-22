@@ -27,7 +27,7 @@ import {
 } from "./contract.js";
 
 /*
- * What Work does with a plan (ADR 0347). One pass reads the facts, asks the
+ * What Work does with a plan (ADR 0349). One pass reads the facts, asks the
  * host's `plan` for the machines that should exist, and works out the
  * difference: it records its intent before every call into host code,
  * repeats each call until it is done, and never stops or destroys a

@@ -64,7 +64,7 @@ export class DevSandboxService {
   /**
    * Make sure the sandbox exists. A chat's (`sessionId`) gets no project
    * file here: its checkout is seeded as Git from its session's copy before
-   * the turn (ADR 0342). A member's, for an app build, gets their draft's
+   * the turn (ADR 0344). A member's, for an app build, gets their draft's
    * files, cloned from the origin when the draft is in sync with it.
    */
   async ensure(opts: {

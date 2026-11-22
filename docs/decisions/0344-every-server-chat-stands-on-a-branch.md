@@ -1,6 +1,6 @@
-# 0342 — Every server chat stands on a branch
+# 0344 — Every server chat stands on a branch
 
-- **Status:** Accepted (amends [0173](0173-keyed-chat-lifecycle-and-chat-placement.md), [0178](0178-session-workspaces-at-a-ref.md), [0191](0191-member-drafts-are-refs-in-the-project-origin.md), [0257](0257-setup-has-its-own-network.md) and [0341](0341-a-workspace-is-saved-as-a-git-pack.md))
+- **Status:** Accepted (amends [0173](0173-keyed-chat-lifecycle-and-chat-placement.md), [0178](0178-session-workspaces-at-a-ref.md), [0191](0191-member-drafts-are-refs-in-the-project-origin.md), [0257](0257-setup-has-its-own-network.md) and [0343](0343-a-workspace-is-saved-as-a-git-pack.md))
 - **Date:** 2026-11-20
 
 ## Context
@@ -31,13 +31,13 @@ base's commit message is not a source of checkout or push state. Each save
 builds a tree from the checked changes in a private Git index and publishes
 its checkpoint before advancing the sandbox's saved marker. The checkpoint's
 parents are the checkpoint before it and then the agent's
-HEAD, its trailers `Work-Branch`, `Work-Head` and (ADR 0343)
+HEAD, its trailers `Work-Branch`, `Work-Head` and (ADR 0345)
 `Work-Pushed`. One ref and one compare-and-swap keep a rollback, the
 agent's commits and its branch name together; the database holds nothing
 new. A checkpoint is written when HEAD or the branch moved, not only when
 files changed.
 
-**Save** extends ADR 0341's pack with what HEAD reaches beyond the commits
+**Save** extends ADR 0343's pack with what HEAD reaches beyond the commits
 the control plane names (the base and the last saved HEAD), and reports
 HEAD and the branch. The sandbox is untrusted: the pack is indexed in the
 throwaway repository with Git's object checks, beside the session copy's
@@ -77,5 +77,5 @@ holds heals a checkpoint that failed after a save).
 - A sandbox whose checkout lost its repository is never seeded over: its
   saves fail with the reason until the repository is back.
 - ADR 0191's rule stands: `sessions/<id>` is never returned by an API; work
-  leaves only as a pushed `work/` branch (ADR 0343).
+  leaves only as a pushed `work/` branch (ADR 0345).
 - Agents reach `store/` through the documents surface, not their checkout.

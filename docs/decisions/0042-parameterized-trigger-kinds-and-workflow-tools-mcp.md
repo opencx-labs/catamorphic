@@ -2,7 +2,7 @@
 
 ## Status
 
-Accepted. Amended by 0345: the endpoint speaks the 2026-07-28 revision beside the handshake revisions.
+Accepted. Amended by 0347: the endpoint speaks the 2026-07-28 revision beside the handshake revisions.
 
 ## Context
 

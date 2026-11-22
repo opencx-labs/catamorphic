@@ -207,7 +207,7 @@ function lyingSandbox(input: {
   return { provider, commands, head };
 }
 
-describe("saving a workspace and restoring it (ADR 0341)", () => {
+describe("saving a workspace and restoring it (ADR 0343)", () => {
   let dir: string;
   let provider: LocalProcessSandboxProvider;
   let manager: ProjectManager;

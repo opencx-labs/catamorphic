@@ -1,6 +1,6 @@
 # 0322 — Agents on a server start subagents, which share their workspace by default
 
-- **Status:** Accepted (amends 0090, 0202, 0278; amended by [0343](0343-one-pull-request-tool.md): the pull request tool is defined once in core the same way)
+- **Status:** Accepted (amends 0090, 0202, 0278; amended by [0345](0345-one-pull-request-tool.md): the pull request tool is defined once in core the same way)
 - **Date:** 2026-11-17
 
 ## Context

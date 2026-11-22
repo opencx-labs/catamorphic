@@ -35,7 +35,7 @@ export interface SessionWorkspaceBase {
   commit: string;
   /**
    * `origin`: a commit of the project's own `main`, which the host's
-   * mirror of the linked repository does not pin (ADR 0342).
+   * mirror of the linked repository does not pin (ADR 0344).
    */
   source?: "origin";
 }
@@ -76,7 +76,7 @@ export function parseWorkspaceBase(
 
 /**
  * What a new workspace's agent is told once, before its first turn: its
- * base is not the one its project would have given it (ADR 0342).
+ * base is not the one its project would have given it (ADR 0344).
  */
 export function workspaceNotice(value: Json | null): string | null {
   if (!value || typeof value !== "object" || Array.isArray(value)) return null;
@@ -252,7 +252,7 @@ export class SessionWorkspaces {
   }
 
   /**
-   * Where a chat that named no ref starts (ADR 0342): the default branch
+   * Where a chat that named no ref starts (ADR 0344): the default branch
    * of the project's linked repository, fetched now; without one, or when
    * it cannot be reached, the project's own `main`. `notice` says what the
    * agent must know about a base that is not the repository's.

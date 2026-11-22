@@ -26,7 +26,7 @@ const PROVIDER_SIGN_IN_LIMIT = { window: 10, max: 30 };
 
 /** The OpenID scopes a client signs in with. */
 const SIGN_IN_SCOPES = ["openid", "profile", "email", "offline_access"];
-/** Work's scopes: what a client may do as its person (ADR 0345). */
+/** Work's scopes: what a client may do as its person (ADR 0347). */
 const WORK_SCOPES = Object.keys(TOKEN_SCOPES);
 
 export function createWorkAuth(options: {
@@ -110,7 +110,7 @@ export function createWorkAuth(options: {
         resource: `${options.baseURL}/api`,
         // Work checks and revokes opaque grants on every request (ADR 0161).
         disableJwtPlugin: true,
-        // What a client may be granted (ADR 0345): OpenID's own scopes
+        // What a client may be granted (ADR 0347): OpenID's own scopes
         // for signing in, and Work's, which narrow what the client does as
         // its person. The protected-resource metadata lists Work's.
         scopes: [...SIGN_IN_SCOPES, ...WORK_SCOPES],

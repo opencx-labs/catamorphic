@@ -25,7 +25,7 @@ import { turnState } from "./sessions/turn-stalls.js";
 type Executor = Kysely<DB> | Transaction<DB>;
 
 /**
- * Where a chat stands for whoever controls it (ADR 0344): `working` while
+ * Where a chat stands for whoever controls it (ADR 0346): `working` while
  * a turn runs or waits to run, `needs_input` while its agent waits on an
  * answer, `failed` when its latest turn failed, `closed` at the end of its
  * life, `idle` otherwise.
@@ -166,7 +166,7 @@ const TranscriptMessageSchema = z.object({
 });
 
 /**
- * One chat as every surface reads it (ADR 0344): the answer of every
+ * One chat as every surface reads it (ADR 0346): the answer of every
  * session operation, over REST, MCP, in-product tools and workflows.
  */
 export const SessionStateSchema = z.object({
@@ -247,7 +247,7 @@ export type SessionState = z.infer<typeof SessionStateSchema>;
 const nullable = (type: string) => ({ type: [type, "null"] });
 
 /**
- * What a tool declares it answers with (ADR 0345): the fields a caller
+ * What a tool declares it answers with (ADR 0347): the fields a caller
  * acts on, each with a line saying what it is for, and nothing of the
  * shapes below them. Clients hand a tool's output schema to their model,
  * so this stays small; {@link SessionStateSchema} is the whole shape, and
@@ -390,7 +390,7 @@ export function sessionStateName(input: {
 }
 
 /**
- * The state of each chat, in the order given (ADR 0344). `detail` adds
+ * The state of each chat, in the order given (ADR 0346). `detail` adds
  * what one chat's reader wants and a list does not: the working turn's
  * progress, the whole reply and the latest typed results.
  */
@@ -599,7 +599,7 @@ export async function readSessionStates(
 }
 
 /**
- * What a waiter compares (ADR 0345): each chat's log position and where it
+ * What a waiter compares (ADR 0347): each chat's log position and where it
  * stands, in two queries however many chats are watched.
  */
 export async function readSessionPhases(

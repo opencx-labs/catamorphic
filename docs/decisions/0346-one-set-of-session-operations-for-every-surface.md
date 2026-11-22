@@ -1,4 +1,4 @@
-# 0344 — One set of session operations for every surface
+# 0346 — One set of session operations for every surface
 
 - **Status:** Accepted
 - **Date:** 2026-11-20

@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { packFiles } from "../pack-files.js";
 
-describe("machine recipes (ADR 0347)", () => {
+describe("machine recipes (ADR 0349)", () => {
   const recipes = [
     "machines-ec2",
     "machines-hetzner",

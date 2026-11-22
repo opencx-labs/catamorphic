@@ -8,7 +8,7 @@ import type { McpTool } from "./mcp-server.js";
 import type { RouteContext } from "./plugin.js";
 
 /**
- * Which OAuth scope each MCP tool needs (ADR 0345). A member's roles
+ * Which OAuth scope each MCP tool needs (ADR 0347). A member's roles
  * decide what they may do; the scopes of the token their client holds
  * narrow that again, so a client is shown, and may call, only what its
  * person consented to.

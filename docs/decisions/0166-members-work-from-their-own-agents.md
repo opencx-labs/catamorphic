@@ -1,6 +1,6 @@
 # 0166 — Members work from their own agents over the project MCP
 
-- **Status:** Accepted (amended by 0344: `ask_agent` is the session operations; by 0345: the server-wide endpoint, both protocol eras, token scopes)
+- **Status:** Accepted (amended by 0346: `ask_agent` is the session operations; by 0347: the server-wide endpoint, both protocol eras, token scopes)
 - **Date:** 2026-09-25
 - **Refines:** 0042, 0055, 0164, 0165
 

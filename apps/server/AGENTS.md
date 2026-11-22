@@ -35,7 +35,7 @@ capacity. Workers state their protocol on every call and get `426` when the
 control plane cannot drive them (ADR 0198).
 
 Members' subscription sign-ins stay on the machine they were made on (ADRs
-0199, 0213, 0340), Claude Code's and Codex's alike. A member signs in from
+0199, 0213, 0342), Claude Code's and Codex's alike. A member signs in from
 the Work app on a machine of their own (a worker whose principals name only
 them, or a single server with `WORK_PERSONAL_CREDENTIALS=accept`): the
 machine runs the harness's own unmodified login (`claude auth login`, or

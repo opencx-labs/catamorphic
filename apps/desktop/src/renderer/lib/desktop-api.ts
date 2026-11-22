@@ -1136,7 +1136,7 @@ export interface CatamorphicDesktopApi {
     member?: string;
   }) => Promise<void>;
   /**
-   * The member's own machines on the project's server (ADRs 0213, 0340),
+   * The member's own machines on the project's server (ADRs 0213, 0342),
    * or null when the server has no such route.
    */
   remoteMachines: (projectId: string) => Promise<RemoteMachine[] | null>;

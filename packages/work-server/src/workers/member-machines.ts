@@ -24,7 +24,7 @@ import { nodeAccess } from "./placement.js";
 
 /*
  * A member's own machines, as the app shows them for Claude Code and Codex
- * sign-ins (ADRs 0213, 0340): workers whose access names only that member,
+ * sign-ins (ADRs 0213, 0342): workers whose access names only that member,
  * and a single server's own machine when its operator accepted personal
  * credentials there and no one else signed in on it first. A sign-in on
  * any other machine would show the provider several people's accounts
@@ -40,7 +40,7 @@ export interface MemberMachine {
   /** Connected and taking work now. */
   available: boolean;
   /**
-   * Where the machine stands (ADRs 0347, 0348), so its owner sees that it
+   * Where the machine stands (ADRs 0349, 0350), so its owner sees that it
    * is starting, stopped or coming back rather than only "unavailable".
    * `serving` for a single server's own machine.
    */

@@ -1,4 +1,4 @@
-# 0345 — The MCP surface speaks the current protocol; long turns are waited on, not held
+# 0347 — The MCP surface speaks the current protocol; long turns are waited on, not held
 
 - **Status:** Accepted
 - **Date:** 2026-11-20
@@ -12,7 +12,7 @@ The project MCP was a hand-rolled, stateless server of the `initialize` era (thr
 
 **One dispatcher, both eras, on every endpoint** (`fastify-plugin/src/mcp-server.ts`): the server's, a project's, a project's apps (`/apps-mcp`), and the endpoints that forward a connector's tools (`/connection-mcp`, the desktop's), which pass that server's definitions and results through as before (ADR 0225). A request with the per-request `_meta` or a modern `MCP-Protocol-Version` is served by 2026-07-28: mirrored headers checked (`-32020`), unknown versions named (`-32022`), unknown methods answered 404, `resultType` and caching hints on results, `subscriptions/listen` with an acknowledgement first and keep-alive comments, `tasks/get`, `tasks/update`, `tasks/cancel`. Anything else gets the stateless handshake shell with plain tools. No sessions, no GET stream. We extended our own dispatcher instead of adopting the official SDK's `createMcpHandler`: its subscription bus is in process and does not say who listens to what, so a Postgres-backed feed checked per member does not fit it, and it has no server side for the tasks extension. The official client library tests ours.
 
-**Two endpoints.** `POST /mcp` serves `project_list` and the session operations (ADR 0344) with `project` as an argument: the one address a person gives their agent. `POST /projects/:id/mcp` keeps documents, program and workflows with the same operations bound to the project. Tools are definitions (name, schemas, annotations, scope, handler) in one list.
+**Two endpoints.** `POST /mcp` serves `project_list` and the session operations (ADR 0346) with `project` as an argument: the one address a person gives their agent. `POST /projects/:id/mcp` keeps documents, program and workflows with the same operations bound to the project. Tools are definitions (name, schemas, annotations, scope, handler) in one list.
 
 **A long turn is waited on.** Everything works with plain tool calls that end within 50 seconds: `session_start`, then `session_wait` with the returned cursor; `changed: false` is a timeout. The rest is convenience. A client that declares tasks gets one from `session_wait`: a row of `session_waits`, so its id resolves on every replica and its outcome, written once, never changes; `needs_input` is `input_required` with one form elicitation per request; cancelling stops the watching and never the agent; a failed turn is `completed` with `isError`. A client that declares elicitation and passes `onInput: "ask"` is asked in the same call, with a `requestState` that is an HMAC over the member, the chats, the requests and an expiry. `work://sessions/{id}` and `work://attention` are resources a client reads and listens to.
 

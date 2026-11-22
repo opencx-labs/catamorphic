@@ -422,7 +422,7 @@ describe("placement by owner (ADR 0167)", () => {
     ).rejects.toThrow();
   }, 90_000);
 
-  it("keeps a dropped machine's chats until their workspaces are given back (ADRs 0205, 0347)", async () => {
+  it("keeps a dropped machine's chats until their workspaces are given back (ADRs 0205, 0349)", async () => {
     const dana = await person("dana");
     // Room for two: a new chat that lands elsewhere was refused, not full.
     const danaDesk = await startWorker({

@@ -131,7 +131,7 @@ describe("remote sync by ownership (ADR 0170)", () => {
     expect(await project.refs()).toEqual(moved);
 
     // The commits reach the repository as a pull request from the folder's
-    // own branch (ADR 0343), under work/.
+    // own branch (ADR 0345), under work/.
     const pr = await new PullRequestsService(project.codeHosts).open({
       identity,
       projectId: project.projectId,

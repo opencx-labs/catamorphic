@@ -185,7 +185,7 @@ describe("LocalProcessSandboxProvider", () => {
   });
 
   it.each(["codex", "claude-code"] as const)(
-    "links exactly the owner's %s sign-in home from the machine (ADRs 0199, 0340)",
+    "links exactly the owner's %s sign-in home from the machine (ADRs 0199, 0342)",
     async (harness) => {
       const signInRoot = path.join(root, `sign-ins-${harness}`);
       const home = (member: string) =>

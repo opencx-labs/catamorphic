@@ -250,7 +250,7 @@ export interface TurnEngineHost {
   released?(input: { sessionId: string; turnId: string }): void;
   /**
    * Why a runner that started cannot be reattached, in words for the chat
-   * (ADR 0346): the host knows when its machine was lost and which one.
+   * (ADR 0348): the host knows when its machine was lost and which one.
    * Undefined when it knows no more than that the runner is gone.
    */
   runnerLost?(input: {
@@ -267,7 +267,7 @@ export interface TurnEngineHost {
   }): Promise<Readonly<Record<string, readonly string[]>>>;
   /**
    * Requests that opened and that their agent waits on, after they
-   * committed (ADR 0344): what tells the chat's people an agent needs them.
+   * committed (ADR 0346): what tells the chat's people an agent needs them.
    */
   requestsOpened?(input: {
     session: SessionRow;
@@ -602,7 +602,7 @@ export class TurnEngine {
           leaseToken: claim.leaseToken,
         });
       }
-      // Its machine holds no such sandbox (ADR 0346): the workspace's
+      // Its machine holds no such sandbox (ADR 0348): the workspace's
       // Allocation was retired where the machine said so. A turn still
       // preparing ran nothing; it waits for the chat to be admitted again
       // and is prepared from the start. One that had started ends failed,

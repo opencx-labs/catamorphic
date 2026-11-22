@@ -10,7 +10,7 @@ import { type MemberMachines, NotYourMachineError } from "./member-machines.js";
 
 /**
  * A member's own machines and their Claude Code and Codex sign-ins, for
- * the Work app (ADRs 0213, 0340). Every route acts as the caller, on a
+ * the Work app (ADRs 0213, 0342). Every route acts as the caller, on a
  * machine of the caller's own; the sign-in itself happens in the member's
  * browser and on the machine. The code a member pastes for a login that
  * waits for one passes through to the machine: no route logs or repeats it.

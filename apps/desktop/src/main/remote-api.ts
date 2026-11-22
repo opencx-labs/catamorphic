@@ -112,7 +112,7 @@ export function remoteTerminalRequest(args: {
 
 /**
  * JSON requests to the member's own machines on a linked project's server
- * (ADRs 0213, 0340). A project without a server answers 404, as an older server
+ * (ADRs 0213, 0342). A project without a server answers 404, as an older server
  * without the routes does.
  */
 export function remoteMachinesRequest(args: {

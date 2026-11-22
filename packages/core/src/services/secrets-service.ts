@@ -117,7 +117,7 @@ interface DeclaredSecretEntry {
  * the agent runner, the harnesses' model access and the egress proxy (ADR
  * 0204) depend on them, and some would run code or redirect traffic.
  * `ANTHROPIC_API_KEY` is not here: a project's own programs use one, and
- * a harness on a member's sign-in is started without it (ADR 0340).
+ * a harness on a member's sign-in is started without it (ADR 0342).
  * Replica memory (c): a constant, the same on every replica.
  */
 const RESERVED_SANDBOX_VARIABLES: ReadonlySet<string> = new Set([

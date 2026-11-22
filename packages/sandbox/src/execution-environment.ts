@@ -124,7 +124,7 @@ export interface EnvironmentProvider {
     ownerUserId?: string;
     /**
      * The chat key of a project's own chat (ADR 0173), so a node that is
-     * for one key of the project takes it (ADR 0347).
+     * for one key of the project takes it (ADR 0349).
      */
     chatKey?: string;
     clientRunnerId?: string;
@@ -158,7 +158,7 @@ export function poolMatches(
 }
 
 /**
- * Whose work a node takes (ADRs 0167, 0347): anyone's, or named users'
+ * Whose work a node takes (ADRs 0167, 0349): anyone's, or named users'
  * work, named projects' own work (project chats and automations, ADR
  * 0173), and single chats of a project by their chat key. Host state,
  * never declared by the node itself. All three lists empty: nobody's.

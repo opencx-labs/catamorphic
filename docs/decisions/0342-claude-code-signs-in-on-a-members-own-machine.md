@@ -1,4 +1,4 @@
-# 0340 — Claude Code signs in on a member's own machine; one harness sign-in for both
+# 0342 — Claude Code signs in on a member's own machine; one harness sign-in for both
 
 - **Status:** Accepted (amends [0213](0213-codex-signs-in-on-a-members-own-machine.md) and [0199](0199-subscription-sign-ins-stay-on-the-machine.md))
 - **Date:** 2026-11-20

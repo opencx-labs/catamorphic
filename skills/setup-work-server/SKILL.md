@@ -137,7 +137,7 @@ disagree with the installed source, the source wins.
   that persists (one person's sign-ins per machine), in an Environment with
   `"personalCredentials": true`. Work never copies, stores, or forwards a
   sign-in, and its model traffic never passes through the gateway (ADRs
-  0199, 0213, 0340). Whether that use is allowed under the provider's
+  0199, 0213, 0342). Whether that use is allowed under the provider's
   terms is the operator's to decide.
 - **GitHub is a connection.** The organization's GitHub App installation is
   the `github` service connection; sync, proposals, and agents' GitHub

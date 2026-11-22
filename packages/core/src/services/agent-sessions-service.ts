@@ -1267,7 +1267,7 @@ interface AgentSessionsDeps {
   }) => string | undefined;
   /** Workspaces at a ref of the project's linked remote (ADR 0178). */
   workspaces?: SessionWorkspaces;
-  /** Opens pull requests from a chat's branch (ADR 0343). */
+  /** Opens pull requests from a chat's branch (ADR 0345). */
   pullRequests?: PullRequestsService;
   /**
    * The gateway as sandboxes reach it (ADRs 0175, 0180, 0212): its base
@@ -1329,7 +1329,7 @@ interface AgentSessionsDeps {
   appPolicies?: AppPoliciesService;
   /**
    * Where a person opens a chat, when the host has a public address: the
-   * `url` every session state carries (ADR 0344).
+   * `url` every session state carries (ADR 0346).
    */
   sessionUrl?: (chat: {
     projectId: string;
@@ -1470,7 +1470,7 @@ async function reshapeTurnHold(
   return undefined;
 }
 
-/** What an agent is told when its chat's machine was lost (ADR 0346). */
+/** What an agent is told when its chat's machine was lost (ADR 0348). */
 const MACHINE_LOST_NOTE =
   "[Workspace] The machine this chat ran on was lost. This workspace was rebuilt from the chat's last save: files changed and commands run after that save are gone, and so are processes that were running. Check the workspace before continuing.";
 
@@ -2792,7 +2792,7 @@ export class AgentSessionsService {
   }
 
   /**
-   * Record a pull request on a chat (ADRs 0226, 0343): one more entry of
+   * Record a pull request on a chat (ADRs 0226, 0345): one more entry of
    * its `pull_requests` metadata, unless its address is already there.
    */
   async recordPullRequest(args: {
@@ -2824,7 +2824,7 @@ export class AgentSessionsService {
   }
 
   /**
-   * Open or update the pull request for a server chat's branch (ADR 0343):
+   * Open or update the pull request for a server chat's branch (ADR 0345):
    * save its sandbox now, so the session's copy holds the agent's latest
    * commits; push its HEAD as the chat's own `work/` branch; open the pull
    * request, or return the one already open; and record it on the chat.
@@ -3853,7 +3853,7 @@ export class AgentSessionsService {
   /**
    * Send a message and hold until its turn settles, for a host that runs
    * one turn and reads its reply in process. Callers over a network start
-   * a chat and wait on it instead ({@link waitFor}, ADR 0345): this holds
+   * a chat and wait on it instead ({@link waitFor}, ADR 0347): this holds
    * through a turn that waits on its person. Returns the turn's final
    * reply. `from` names who asks when it is not the caller themself (an
    * agent, or the person's own assistant): it arrives as an inbound
@@ -4007,7 +4007,7 @@ export class AgentSessionsService {
   }
 
   /**
-   * The id of the agent a caller names by slug or by id (ADR 0344): a
+   * The id of the agent a caller names by slug or by id (ADR 0346): a
    * project agent's slug is its id in this project; anything else is an
    * id as given.
    */
@@ -4021,7 +4021,7 @@ export class AgentSessionsService {
   }
 
   /**
-   * Chats as every surface reads them (ADR 0344), in the order named.
+   * Chats as every surface reads them (ADR 0346), in the order named.
    * `listed` skips the access check for chats a list already filtered.
    */
   async states(
@@ -4064,7 +4064,7 @@ export class AgentSessionsService {
 
   /**
    * Hold until one of the chats needs its caller, or `timeoutMs` (ADR
-   * 0345): its state is no longer `working`, and, for a chat with `after`,
+   * 0347): its state is no longer `working`, and, for a chat with `after`,
    * its log moved past that position. Answers with that chat's id, or null
    * when the time ran out. It reads Postgres and sleeps on the session
    * feed, so the same call resumes on any replica after a restart.
@@ -4161,7 +4161,7 @@ export class AgentSessionsService {
         ? await this.sessionInTenant(identity, projectId, sessionId)
         : await this.requireSession(identity, projectId, sessionId);
     // An approval is the person's to give: a client whose grant does not
-    // carry it cannot approve on their behalf (ADR 0345).
+    // carry it cannot approve on their behalf (ADR 0347).
     if (
       command.type === "respond" &&
       command.response.kind === "approval" &&
@@ -5021,7 +5021,7 @@ export class AgentSessionsService {
    */
   /** Each approver hears about an approval and finds the chat waiting for them. */
   /**
-   * An agent started waiting on its person (ADR 0344): the chat's owner
+   * An agent started waiting on its person (ADR 0346): the chat's owner
    * hears it as a settled turn's people do, and an unattended chat's
    * approvers are told. The chat's attention was raised with the request.
    */
@@ -5896,7 +5896,7 @@ export class AgentSessionsService {
         .where("status", "=", "preparing")
         .where(pendingForReshape())
         .executeTakeFirst();
-      // A turn at work when its machine was lost (ADR 0346) ends before
+      // A turn at work when its machine was lost (ADR 0348) ends before
       // the chat is placed again: its runner went with the machine, so it
       // settles as lost here rather than showing as running until the next
       // message finds a machine.
@@ -5932,7 +5932,7 @@ export class AgentSessionsService {
       const placing =
         session.allocation_id === null || allocation?.status === "released";
       // So does one whose machine was lost before its harness started
-      // (ADR 0346): it ran nothing, and is admitted again like a queued one.
+      // (ADR 0348): it ran nothing, and is admitted again like a queued one.
       const waits =
         Boolean(due) ||
         (Boolean(recovering) &&
@@ -6271,7 +6271,7 @@ export class AgentSessionsService {
 
   /**
    * The commit a sandbox chat's agent stood on when a turn began (ADR
-   * 0342): the HEAD its checkpoint records, which is what a result of that
+   * 0344): the HEAD its checkpoint records, which is what a result of that
    * turn is about (ADR 0323). Undefined where the turn's checkpoint is that
    * commit already: a chat in a folder, or a workspace still at its base.
    */
@@ -6537,7 +6537,7 @@ export class AgentSessionsService {
   }
 
   /**
-   * Why a turn's runner is gone, when its machine was lost (ADR 0346): the
+   * Why a turn's runner is gone, when its machine was lost (ADR 0348): the
    * machine by name, and what happens to the chat next.
    */
   private async runnerLostReason(input: {
@@ -6585,7 +6585,7 @@ export class AgentSessionsService {
 
   /**
    * Say in the chat that its machine was lost and its workspace rebuilt
-   * (ADR 0346), once per lost workspace, as the new one is recorded. Read
+   * (ADR 0348), once per lost workspace, as the new one is recorded. Read
    * under the caller's transaction, before the reason is cleared.
    */
   private async noteRebuiltAfterLoss(
@@ -6752,7 +6752,7 @@ export class AgentSessionsService {
       agent.sandboxing === "contained"
     )
       notes.push(RESHAPED_CONTAINED_NOTE);
-    // Its machine was lost (ADR 0346): the agent starts from the last save.
+    // Its machine was lost (ADR 0348): the agent starts from the last save.
     if (
       session.workspace_released_reason === "machine-lost" &&
       !session.sandbox_id
@@ -6779,7 +6779,7 @@ export class AgentSessionsService {
     };
 
     // A sandbox chat from before every chat stood on a base gets one now
-    // (ADR 0342), with what it saved uncommitted on top.
+    // (ADR 0344), with what it saved uncommitted on top.
     if (agent.topology !== "native" && !parseWorkspaceBase(session.workspace))
       session = await this.adoptWorkspaceBase({ identity, projectId, session });
     // What its agent must know about the base it was given, said once.
@@ -7520,7 +7520,7 @@ export class AgentSessionsService {
       agent,
     ).catch(async (error: unknown) => {
       // Its machine stopped answering before the turn could be saved (ADR
-      // 0346): the turn ends saying which machine, and what happens next.
+      // 0348): the turn ends saying which machine, and what happens next.
       const machine =
         error instanceof EnvironmentBindingUnavailableError
           ? await this.unreachableMachineOf(session)
@@ -7742,7 +7742,7 @@ export class AgentSessionsService {
             : (turn.error?.message ?? ""),
       });
     // A failure nobody has seen waits on the chat's person like a
-    // question does (ADR 0344).
+    // question does (ADR 0346).
     if (!input.retrying && turn.status === "failed") {
       await this.db
         .updateTable("agent_sessions")
@@ -8016,7 +8016,7 @@ export class AgentSessionsService {
         topology: agent.topology,
       },
       ...(agent.signIn ? { signIn: agent.signIn } : {}),
-      // A machine may be for this one chat key (ADR 0347).
+      // A machine may be for this one chat key (ADR 0349).
       ...(input.chatKey ? { chatKey: input.chatKey } : {}),
       harnessInSandbox: agent.harness.placement === "sandbox",
     });
@@ -8041,7 +8041,7 @@ export class AgentSessionsService {
             unattended: isProjectPrincipal(identity.externalUserId),
           })
         : [];
-    // Every sandbox chat stands on a commit (ADRs 0178, 0342): the ref it
+    // Every sandbox chat stands on a commit (ADRs 0178, 0344): the ref it
     // was given, fetched into the host's mirror; else the default branch
     // of the project's repository; else the project's own main. It is
     // published as the session's ref before the first turn seeds its
@@ -8316,7 +8316,7 @@ export class AgentSessionsService {
   }
 
   /**
-   * Where a sandbox chat that named no ref starts (ADR 0342): the default
+   * Where a sandbox chat that named no ref starts (ADR 0344): the default
    * branch of the project's linked repository, or the project's own main.
    */
   private async defaultWorkspaceBase(input: {
@@ -8339,7 +8339,7 @@ export class AgentSessionsService {
   }
 
   /**
-   * Give a sandbox chat that has no base one (ADR 0342), before its turn:
+   * Give a sandbox chat that has no base one (ADR 0344), before its turn:
    * a chat from before every chat stood on a branch. What its copy saved
    * comes back uncommitted on the base. A shared subsession takes its
    * workspace session's.
@@ -8603,7 +8603,7 @@ export class AgentSessionsService {
     });
     try {
       // The agent's branch, its commits and its uncommitted changes, as
-      // the session's checkpoint keeps them (ADR 0342).
+      // the session's checkpoint keeps them (ADR 0344).
       const work = await currentSessionWork({
         repoPath: copy.repoPath,
         sessionId: copyId,
@@ -9425,7 +9425,7 @@ export class AgentSessionsService {
     if (!runtime.setup?.network || !runtime.provider) return {};
     const egress = runtime.allocation?.policy.sandbox?.setupEgress;
     const base = parseWorkspaceBase(input.session.workspace)?.commit;
-    // Every sandbox chat stands on a base (ADR 0342); one that has none yet
+    // Every sandbox chat stands on a base (ADR 0344); one that has none yet
     // gets it before this is asked.
     if (!egress || !base) return { refusal: "not-admitted" };
     if (runtime.signInHome) return { refusal: "sign-in" };
@@ -12557,7 +12557,7 @@ export class AgentSessionsService {
       identity: input.identity,
       projectId: input.projectId,
       owner: placementOwner(session.external_user_id),
-      // A machine may be for this one chat key (ADR 0347).
+      // A machine may be for this one chat key (ADR 0349).
       ...(session.chat_key ? { chatKey: session.chat_key } : {}),
       ...(session.environment_name
         ? { environment: session.environment_name }
@@ -13854,7 +13854,7 @@ export class AgentSessionsService {
         await input.held();
         if (chat) {
           // A chat from before every chat stood on a base gets one first
-          // (ADR 0342), so what its sandbox holds is saved on it.
+          // (ADR 0344), so what its sandbox holds is saved on it.
           const based = parseWorkspaceBase(chat.workspace)
             ? chat
             : await this.adoptWorkspaceBase({
@@ -15390,7 +15390,7 @@ export class AgentSessionsService {
       allocationId: session.allocation_id,
     });
     if (allocation?.status !== "active") {
-      // Its machine was lost under a turn (ADR 0346): said in plain words.
+      // Its machine was lost under a turn (ADR 0348): said in plain words.
       if (allocation?.releaseReason === "node_lost")
         throw new Error(
           `${lostMachine(allocation.policy.binding.label)} was lost while this turn ran, so the turn stopped. The chat continues from its last save on the next message.`,
@@ -15833,7 +15833,7 @@ export class AgentSessionsService {
         .set({ sandbox_id: handle.id, base_commit_sha: baseCommitSha })
         .where("id", "in", holders)
         .execute();
-      // Made again after its machine was lost: the chat says so (ADR 0346).
+      // Made again after its machine was lost: the chat says so (ADR 0348).
       await this.noteRebuiltAfterLoss(trx, {
         workspaceSessionId: owner.id,
         sessionIds: holders,
@@ -15989,7 +15989,7 @@ export class AgentSessionsService {
    * Ensure the session's sandbox exists. It holds no project file yet: its
    * checkout is seeded from the session's copy before the turn
    * (prepareSandboxGit), with real history back to the workspace's base
-   * (ADR 0342).
+   * (ADR 0344).
    */
   private async prepareDevSandbox(
     runtime: { provider: SandboxProvider; devSandboxes: DevSandboxService },
@@ -16034,7 +16034,7 @@ export class AgentSessionsService {
   }
 
   /**
-   * This turn's checkpoint (ADRs 0044, 0342): a sandbox chat's session
+   * This turn's checkpoint (ADRs 0044, 0344): a sandbox chat's session
    * checkpoint, which records its agent's branch and commits beside the
    * saved files; a native chat's commit in its checkout; else a local
    * folder's commit. Returns the commit sha (stamped on the assistant
@@ -16141,7 +16141,7 @@ export class AgentSessionsService {
     identity: Identity,
     projectId: string,
   ): Promise<void> {
-    // A client reads only what its person let it read (ADR 0345).
+    // A client reads only what its person let it read (ADR 0347).
     assertTokenScope(identity, "work:read");
     if (
       !this.readsAllSessions(identity, projectId) &&

@@ -23,7 +23,7 @@ import {
 import { fakeCodeHost } from "./code-host-fixture.js";
 
 /**
- * ADR 0343: a pull request is opened from a checkout by pushing its branch
+ * ADR 0345: a pull request is opened from a checkout by pushing its branch
  * as the chat's own `work/` branch, against a real bare repository, with a
  * code host that keeps the pull requests it opened.
  */

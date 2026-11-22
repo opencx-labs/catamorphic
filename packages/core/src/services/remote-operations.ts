@@ -33,7 +33,7 @@ const tracer = getTracer("@catamorphic/core");
 const stringMap = z.record(z.string(), z.string());
 /** Where in a sandbox that runs commands apart an operation happens (ADR 0332). */
 const sideSchema = z.enum(["agent", "commands"]);
-/** A harness a member signs in to on a machine (ADR 0340). */
+/** A harness a member signs in to on a machine (ADR 0342). */
 const signInHarnessSchema = z.enum([
   "claude-code",
   "codex",
@@ -236,7 +236,7 @@ export const RemoteOperationSchema = z.discriminatedUnion("kind", [
   // every sandbox it holds and deletes members' volumes and sign-ins.
   z.object({ kind: z.literal("machine.reset") }),
   // A member signs in to Claude Code or Codex on their machine from the
-  // app (ADRs 0213, 0340): the executor runs the harness's own login and
+  // app (ADRs 0213, 0342): the executor runs the harness's own login and
   // answers with its link (and Codex's one-time code), takes the code a
   // login waits for, then answers with how it ended.
   z.object({
@@ -742,7 +742,7 @@ export const OPERATION_NOT_OPENED_ERROR =
 
 /**
  * The receipt error of an operation addressed to a sandbox its executor
- * does not hold (ADR 0346): the machine was replaced, or its disk was, so
+ * does not hold (ADR 0348): the machine was replaced, or its disk was, so
  * the sandbox the control plane remembers is not there. Deployed workers
  * send these words; controllers read them as
  * {@link RemoteSandboxUnknownError} and no person ever does.
@@ -751,7 +751,7 @@ export const SANDBOX_UNKNOWN_ERROR =
   "Sandbox does not belong to this runner connection";
 
 /**
- * The executor does not hold the sandbox an operation named (ADR 0346):
+ * The executor does not hold the sandbox an operation named (ADR 0348):
  * nothing ran. The workspace is gone with the machine or disk that held
  * it; its Allocation is retired and its chat admitted again, rebuilt from
  * its last save.
@@ -949,7 +949,7 @@ export class RemoteOperationQueue {
   }
 
   /**
-   * A member's harness sign-in on an executor's machine (ADRs 0213, 0340):
+   * A member's harness sign-in on an executor's machine (ADRs 0213, 0342):
    * begin the harness's own login, hand it the code it waits for, read how
    * it went, cancel it, or sign out. Fails at once while the executor is
    * not connected. The span names the action and harness, never what a

@@ -258,7 +258,7 @@ describeIf("operations sealed to their executor (ADR 0207)", () => {
     await result;
   });
 
-  it("carries a pasted sign-in code only to its executor: sealed at rest, in no span or receipt (ADR 0340)", async () => {
+  it("carries a pasted sign-in code only to its executor: sealed at rest, in no span or receipt (ADR 0342)", async () => {
     const remote = await executor();
     // What a member copies from their browser for a login that waits for it.
     const code = `pasted-${randomUUID()}#state`;

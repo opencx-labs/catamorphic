@@ -1,5 +1,5 @@
 /**
- * Testing a machines hook (ADR 0347): `@catamorphic/work-server/testing`.
+ * Testing a machines hook (ADR 0349): `@catamorphic/work-server/testing`.
  * The contract kit runs a hook against a simulated Work with a fake clock;
  * `SimulatedWork` is that simulation, for a host's own scenarios.
  */

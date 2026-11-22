@@ -71,7 +71,7 @@ const DESCRIBE = [
 ].join(" && ");
 
 describe.skipIf(!enabled)(
-  "saving a container's workspace (ADRs 0341, 0342)",
+  "saving a container's workspace (ADRs 0343, 0344)",
   () => {
     let root: string;
     let provider: ContainerSandboxProvider;

@@ -44,7 +44,7 @@ function rawTree(entries: Array<{ mode: string; name: string }>): Uint8Array {
   );
 }
 
-describe("a checkpoint's record (ADR 0342)", () => {
+describe("a checkpoint's record (ADR 0344)", () => {
   it("names the agent's branch, HEAD and pushed branch as trailers", () => {
     const message = checkpointMessage({
       message: "Fix the parser\n\nWork-Head: forged",
@@ -105,7 +105,7 @@ describe("a checkpoint's record (ADR 0342)", () => {
   });
 });
 
-describe("the trees a saved commit may hold (ADR 0342)", () => {
+describe("the trees a saved commit may hold (ADR 0344)", () => {
   it("takes folders, files, executables, links and nested repositories", () => {
     expect(() =>
       assertSavedTree({
@@ -159,7 +159,7 @@ describe("the trees a saved commit may hold (ADR 0342)", () => {
   });
 });
 
-describe("the commits a save brings (ADR 0342)", () => {
+describe("the commits a save brings (ADR 0344)", () => {
   let dir: string;
   let sandbox: string;
   let copy: string;
@@ -567,7 +567,7 @@ describe("the commits a save brings (ADR 0342)", () => {
   });
 });
 
-describe("a session's checkpoints (ADR 0342)", () => {
+describe("a session's checkpoints (ADR 0344)", () => {
   let dir: string;
   let manager: ProjectManager;
   let base: string;

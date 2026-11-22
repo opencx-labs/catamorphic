@@ -76,7 +76,7 @@ function liveAttempt(input: {
 
 /**
  * A harness's own sign-in on one of the member's machines (ADRs 0213,
- * 0340): starts it, asks the server every two seconds whether it finished,
+ * 0342): starts it, asks the server every two seconds whether it finished,
  * hands the machine the code a person pastes when the login waits for one,
  * and cancels it when the dialog closes before it finished. An answer to an
  * attempt closed or replaced since never reaches the dialog. The pasted

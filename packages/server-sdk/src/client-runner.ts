@@ -142,7 +142,7 @@ export function startClientRunner(args: {
    */
   resetMachine?: () => Promise<void>;
   /**
-   * A member's harness sign-in on this machine (ADRs 0213, 0340). Only a
+   * A member's harness sign-in on this machine (ADRs 0213, 0342). Only a
    * worker supplies it; a runner without it refuses the operation.
    */
   harnessSignIn?: (
@@ -264,7 +264,7 @@ export function startClientRunner(args: {
       const unguarded =
         operation.kind === "destroy" || operation.kind === "egress.narrow";
       // Said in the words its controller reads as a sandbox this machine
-      // does not hold (ADR 0346): it retires that workspace and admits its
+      // does not hold (ADR 0348): it retires that workspace and admits its
       // chat again, rather than failing every message.
       if (!owned && !unguarded) throw new Error(SANDBOX_UNKNOWN_ERROR);
       if (operation.kind === "create") {

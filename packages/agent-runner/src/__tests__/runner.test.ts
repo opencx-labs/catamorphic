@@ -628,7 +628,7 @@ describe("the session's environment file (ADR 0206)", () => {
     expect(said()).toContain("OWN=the host's");
   });
 
-  it("keeps a member's sign-in the only credential the harness's process holds (ADR 0340)", async () => {
+  it("keeps a member's sign-in the only credential the harness's process holds (ADR 0342)", async () => {
     const gateway = "/workspace/.work-session/env/gateway.sh";
     const file = "/workspace/.work-session/env/secrets.sh";
     const files = {

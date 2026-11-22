@@ -127,7 +127,7 @@ export function registerWorkAuthRoutes(
         }
         return sendResponse(response, reply);
       }
-      // Every grant names what its client may do (ADR 0345). A client that
+      // Every grant names what its client may do (ADR 0347). A client that
       // asks for none of Work's scopes is offered the default set, which
       // its person can untick at consent.
       if (
@@ -590,7 +590,7 @@ function loginPage(
 function consentPage(signedQuery: string, nonce: string): string {
   const query = new URLSearchParams(signedQuery);
   const client = escapeHtml(query.get("client_id") ?? "this client");
-  // Work's own scopes are the person's to grant one by one (ADR 0345).
+  // Work's own scopes are the person's to grant one by one (ADR 0347).
   // Approving for them is never ticked for them. Full access is one plain
   // line to allow or deny: it is everything, so nothing else is listed.
   const requested = (query.get("scope") ?? "").split(/\s+/).filter(Boolean);
@@ -643,7 +643,7 @@ function consentPage(signedQuery: string, nonce: string): string {
 
 /**
  * The scopes of an authorization request, with the default set added when
- * it names none of Work's (ADR 0345).
+ * it names none of Work's (ADR 0347).
  */
 function withWorkScopes(scope: string): string {
   const requested = scope.split(/\s+/).filter(Boolean);

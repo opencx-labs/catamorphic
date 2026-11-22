@@ -26,7 +26,7 @@ const SESSION = "0a1b2c3d-4e5f-4789-abcd-ef0123456789";
 
 type OpenForChat = Parameters<PullRequestsService["openForChat"]>[0];
 
-describe("a desktop chat's pull request (ADR 0343)", () => {
+describe("a desktop chat's pull request (ADR 0345)", () => {
   let root: string;
   let asked: OpenForChat[];
   let prepared: string[];

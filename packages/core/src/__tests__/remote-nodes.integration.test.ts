@@ -323,7 +323,7 @@ describe("remote nodes own their lease (ADR 0192)", () => {
     expect(await claim(released.sessionId)).toBeNull();
   });
 
-  it("claims a turn stranded at work on a lost machine, and nothing that has not started there (ADR 0346)", async () => {
+  it("claims a turn stranded at work on a lost machine, and nothing that has not started there (ADR 0348)", async () => {
     const turns = sessionLogFixture(db);
     const remote = `worker.${crypto.randomUUID().slice(0, 8)}`;
     await connect(remote, epochAt(Date.now()));

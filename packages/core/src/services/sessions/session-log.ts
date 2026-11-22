@@ -768,7 +768,7 @@ async function project(
         .executeTakeFirst()
         .then(async (written) => {
           // An agent that starts waiting on its person raises the chat's
-          // attention with the request, in one transaction (ADR 0344):
+          // attention with the request, in one transaction (ADR 0346):
           // every chat, whoever started it, on every copy of the log.
           if (
             written?.opened &&

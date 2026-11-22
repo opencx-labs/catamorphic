@@ -236,7 +236,7 @@ export class ProjectRepoImpl implements ProjectRepo {
       options,
       read: async (file, maxBytes) => {
         // A link is never opened here: a workspace's save keeps links as
-        // links (ADR 0341), and one may point outside the working copy.
+        // links (ADR 0343), and one may point outside the working copy.
         if (
           !this.followsSymlinks &&
           (await fs.lstat(path.join(this.repoPath, file))).isSymbolicLink()

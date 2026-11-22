@@ -372,7 +372,7 @@ export class ProjectManager {
   }
 
   /**
-   * Checkpoint a session's copy (ADR 0342): one commit on the session's
+   * Checkpoint a session's copy (ADR 0344): one commit on the session's
    * ref whose tree is the copy's working tree and whose second parent is
    * the agent's HEAD, written when files changed or the agent's branch,
    * HEAD or pushed branch moved. The agent's commits must already be in
@@ -388,7 +388,7 @@ export class ProjectManager {
     base: string;
     /** The agent's branch and HEAD as just saved; as recorded when left out. */
     work?: { head: string; branch: string };
-    /** The branch this chat just pushed for a pull request (ADR 0343). */
+    /** The branch this chat just pushed for a pull request (ADR 0345). */
     pushed?: { branch: string; commit: string };
     /** Build the sandbox's validated tree while its copy is open. */
     snapshot?: (input: {
@@ -492,7 +492,7 @@ export class ProjectManager {
   }
 
   /**
-   * Where a session's work stands (ADR 0342): its checkpoint, its agent's
+   * Where a session's work stands (ADR 0344): its checkpoint, its agent's
    * branch and HEAD, and the branch it last pushed.
    */
   async sessionWork(args: {
@@ -524,7 +524,7 @@ export class ProjectManager {
   /**
    * The commit the project's own `main` stands on: its origin's, or on a
    * host without one this machine's copy's. Where a chat starts when its
-   * project has no linked repository (ADR 0342).
+   * project has no linked repository (ADR 0344).
    */
   async mainCommit(args: {
     tenantId: string;
@@ -608,7 +608,7 @@ export class ProjectManager {
 
   /**
    * Put a session's copy at its base and publish it as the session's ref
-   * (ADRs 0178, 0342): a commit pinned in the project mirror (`pin`), or
+   * (ADRs 0178, 0344): a commit pinned in the project mirror (`pin`), or
    * one the project's own origin holds. Whatever the copy held is replaced.
    */
   async setSessionBase(args: {
@@ -644,7 +644,7 @@ export class ProjectManager {
   }
 
   /**
-   * Give a session that has saved work but no base one (ADR 0342): its
+   * Give a session that has saved work but no base one (ADR 0344): its
    * checkpoint becomes one on top of `commit`, with the same files, so its
    * sandbox comes back standing on the base with that work uncommitted.
    */
@@ -689,7 +689,7 @@ export class ProjectManager {
 
   /**
    * Move a session's work to a new base pinned in the mirror (ADRs 0178,
-   * 0342). The agent's checkout is rebuilt in the copy, standing on its
+   * 0344). The agent's checkout is rebuilt in the copy, standing on its
    * HEAD with its saved files as one more commit, and moved as any checkout
    * is: `reset` discards its commits and changes, `rebase` replays its
    * commits and then its changes, which come back uncommitted. A rebase

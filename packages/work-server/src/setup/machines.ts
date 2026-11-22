@@ -28,7 +28,7 @@ export interface MachineManagement {
   publicBase: string;
   tenantId: string;
   authorityId: string;
-  /** The sequencer, when the host passed a machines hook (ADR 0347). */
+  /** The sequencer, when the host passed a machines hook (ADR 0349). */
   machines?: WorkMachines;
   /** The account a verified email names, for `for: [{ email }]`. */
   userIdForEmail(email: string): Promise<string | undefined>;
@@ -138,7 +138,7 @@ function machineRoutes(args: MachineManagement): MachineRoute[] {
     return resolved;
   };
   return [
-    // Machines enrolled by hand (ADRs 0164, 0347): enroll with a one-time
+    // Machines enrolled by hand (ADRs 0164, 0349): enroll with a one-time
     // code, list, revoke. The machines hook's own machines enroll themselves.
     {
       method: "POST",
@@ -200,7 +200,7 @@ function machineRoutes(args: MachineManagement): MachineRoute[] {
         },
       }),
     },
-    // Whom a machine enrolled by hand is for, and its labels (ADR 0347).
+    // Whom a machine enrolled by hand is for, and its labels (ADR 0349).
     {
       method: "PATCH",
       operator: "/_work/operator/workers/:name",
@@ -275,7 +275,7 @@ function machineRoutes(args: MachineManagement): MachineRoute[] {
           : reply.status(404).send({ error: "Worker not found" });
       },
     },
-    // Plan now (ADR 0347): ask the machines hook and act on its answer,
+    // Plan now (ADR 0349): ask the machines hook and act on its answer,
     // answered with what the pass did.
     {
       method: "POST",
@@ -362,7 +362,7 @@ function machineRoutes(args: MachineManagement): MachineRoute[] {
             .status(400)
             .send({ error: "Provide a machine id and enabled state" });
         // A worker's machine remembers that an operator disabled it, so
-        // it is never called lost and stays off when resumed (ADR 0347).
+        // it is never called lost and stays off when resumed (ADR 0349).
         const { nodeId } = params.data;
         const changed = isWorkerNode(nodeId)
           ? await args.workers.setDisabled({

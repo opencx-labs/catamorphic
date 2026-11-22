@@ -281,7 +281,7 @@ describe("chats waiting for a machine (ADR 0258)", () => {
       state: "waiting",
     });
     expect(Date.now() - started).toBeLessThan(4_000);
-    // The chat says why it is not running yet, to every surface (ADR 0344).
+    // The chat says why it is not running yet, to every surface (ADR 0346).
     const [state] = await sessions.states(alice, {
       sessions: [{ projectId, sessionId: chat.sessionId }],
       detail: true,

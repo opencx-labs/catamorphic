@@ -9,7 +9,7 @@ holds only the grant, which stops working when the chat closes.
 
 Members can also run Claude Code and Codex on **their own Claude and
 ChatGPT subscriptions**, signed in from the Work app on a machine of their
-own (ADRs 0199, 0213, 0340): see
+own (ADRs 0199, 0213, 0342): see
 [Members' own sign-ins](#members-own-sign-ins) below.
 
 ## 1. Connect the model key
@@ -347,7 +347,7 @@ Environment restricts egress, the gateway's host is always reachable.
 A developer can run Claude Code on **their own Claude subscription** and
 Codex on **their own ChatGPT subscription** in their own chats, and bring
 files the repository never tracks (`.env`, `apps/api/.env.local`). A
-sign-in stays on the machine it was made on (ADRs 0199, 0213, 0340): the
+sign-in stays on the machine it was made on (ADRs 0199, 0213, 0342): the
 harness's own unmodified login runs on a machine of the member's own, into
 a home for them on that machine's disk. Work never reads, copies, uploads,
 stores or forwards it; the machine reports only that the member is signed

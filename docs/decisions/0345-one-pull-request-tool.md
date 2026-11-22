@@ -1,4 +1,4 @@
-# 0343 — One pull request tool
+# 0345 — One pull request tool
 
 - **Status:** Accepted (amends [0170](0170-attached-repositories-receive-pull-requests.md), [0177](0177-github-is-a-connection.md) and [0322](0322-server-agents-start-subagents-in-their-workspace.md); narrows proposals, ADR 0055)
 - **Date:** 2026-11-20
@@ -11,7 +11,7 @@ branch on every call, needed `program:write`, and left recording the pull
 request to the agent. Server agents had only `propose_change`, which
 commits files the agent hands over on a new branch from `main`, never the
 commits in its sandbox. With every server chat on a branch
-([0342](0342-every-server-chat-stands-on-a-branch.md)), both can be one.
+([0344](0344-every-server-chat-stands-on-a-branch.md)), both can be one.
 
 ## Decision
 

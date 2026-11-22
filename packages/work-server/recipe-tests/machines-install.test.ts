@@ -14,7 +14,7 @@ import {
 } from "../../registry/src/machines-install/machines-install.js";
 
 /*
- * The `machines-install` recipe (ADR 0348): the install script and user
+ * The `machines-install` recipe (ADR 0350): the install script and user
  * data a host's own code builds, which the server no longer generates.
  */
 

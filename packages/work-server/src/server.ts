@@ -203,7 +203,7 @@ export interface WorkServerHooks {
    */
   directories?: readonly DirectoryProvider[];
   /**
-   * The host's machines (ADR 0347): `plan` decides which machines should
+   * The host's machines (ADR 0349): `plan` decides which machines should
    * exist from the facts Work gives it, and `create`, `destroy`, `stop`,
    * `start` and `describe` are the calls that touch the host's cloud.
    * Work sequences them and keeps them safe; it integrates with no cloud
@@ -509,10 +509,10 @@ async function createWorkServerInner(
   // A worker that connects may take chats waiting for a machine (ADR
   // 0258): this process's agent sweep hears it once the core is up.
   let workerConnected = () => {};
-  // Work retired from a machine that is gone (ADR 0346) is admitted again
+  // Work retired from a machine that is gone (ADR 0348) is admitted again
   // by the same sweep.
   let workRetired = () => {};
-  // Something happened to a machine (ADR 0347): delivered once the core
+  // Something happened to a machine (ADR 0349): delivered once the core
   // is up, to the projects it is for and to the host's own listener.
   let machineEvent: (event: MachineEvent) => Promise<void> = async () => {};
   // Enrolled remote workers (ADR 0164). Each worker owns its node lease
@@ -522,7 +522,7 @@ async function createWorkServerInner(
     nodes: new WorkerNodesService(ownDb),
     tenantId: SERVER_TENANT_ID,
     authorityId: hostId,
-    // Every replica derives the same enrollment codes (ADR 0347).
+    // Every replica derives the same enrollment codes (ADR 0349).
     enrollmentSecret: authSecret,
     connected: () => workerConnected(),
     retired: () => workRetired(),
@@ -682,7 +682,7 @@ async function createWorkServerInner(
     // Sandboxes with restricted egress still reach the gateway (ADR 0176).
     gatewayHosts: config.publicBases.map((base) => gatewayHostOf(base)),
     // A host that makes machines for waiting work lets a new chat wait for
-    // its machine instead of failing at once (ADR 0347); a project's own
+    // its machine instead of failing at once (ADR 0349); a project's own
     // `waitMinutes` still bounds its Environment.
     ...(hooks.machines
       ? { placementWaitMinutes: config.machineWaitMinutes ?? 30 }
@@ -701,7 +701,7 @@ async function createWorkServerInner(
       webhook,
       ...SESSION_TRIGGER_KINDS,
       ...DIRECTORY_TRIGGER_KINDS,
-      // What happens to machines, for projects' own workflows (ADR 0347).
+      // What happens to machines, for projects' own workflows (ADR 0349).
       ...MACHINE_TRIGGER_KINDS,
     ],
     // Workflows bound to `ai.tool-call` are tools on the project MCP, for
@@ -893,7 +893,7 @@ async function createWorkServerInner(
   });
   // A machine event reaches the projects the machine is for, as a project
   // event their workflows may trigger on, and the host's own listener.
-  // Work itself depends on neither (ADR 0347).
+  // Work itself depends on neither (ADR 0349).
   machineEvent = async (event) => {
     const projects = new Set(
       (event.machine.for ?? []).flatMap((principal) =>
@@ -1172,7 +1172,7 @@ async function createWorkServerInner(
     // client signs in again and is asked what it may do.
     if (tokenScopesOf(authenticated.scopes).length === 0) return null;
     // A client holds what its person consented to: the member's roles,
-    // narrowed by the grant's scopes (ADR 0345). Only `work:full`, which
+    // narrowed by the grant's scopes (ADR 0347). Only `work:full`, which
     // Work's own apps ask for, is the person themself.
     return withTokenScopes(
       await administrators.withPermissions(
@@ -1308,7 +1308,7 @@ async function createWorkServerInner(
     ...machineManagement,
   });
   // Members sign in to Claude Code and Codex on machines of their own from
-  // the app (ADRs 0213, 0340). A single server whose operator accepted
+  // the app (ADRs 0213, 0342). A single server whose operator accepted
   // personal credentials is one of them for the first member to sign in
   // there; a replica's own machine never is.
   const ownSignIns = singleServerSignIns
@@ -1598,7 +1598,7 @@ ${workMark({ size: 72 })}
 
 /**
  * The scopes an MCP client is told to ask for when it has no token (ADR
- * 0345): the least that runs a chat. More is granted by stepping up.
+ * 0347): the least that runs a chat. More is granted by stepping up.
  */
 const MCP_CHALLENGE_SCOPES = ["work:read", "sessions:run"] as const;
 

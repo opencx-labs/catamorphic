@@ -12,7 +12,7 @@ import { createWorkServer, type WorkServer } from "./server.js";
 import { oauthAccessToken, testServerOptions } from "./test-support.js";
 
 /**
- * A member's own agent controls chats on the server (ADR 0344, 0345), end
+ * A member's own agent controls chats on the server (ADR 0346, 0347), end
  * to end with the official MCP client over real HTTP and the Work server's
  * real OAuth: start, wait, be asked, answer and finish, three ways (plain
  * tools, a task, a question asked of the client's person), by a client of

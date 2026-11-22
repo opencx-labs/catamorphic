@@ -22,7 +22,7 @@ import {
 
 /*
  * A member signs in to Claude Code or Codex on one of their machines from
- * the Work app (ADRs 0213, 0340): this machine runs the harness's own
+ * the Work app (ADRs 0213, 0342): this machine runs the harness's own
  * unmodified login into a home of its own for them, the app shows the link
  * it printed, and the member finishes in their own browser. Codex prints a
  * one-time code the member enters there (`codex login --device-auth`);

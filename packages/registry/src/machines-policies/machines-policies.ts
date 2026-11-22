@@ -10,7 +10,7 @@ import type {
 } from "@catamorphic/work-server";
 
 /*
- * Small policies for a machines hook's `plan` (ADR 0347): host code from
+ * Small policies for a machines hook's `plan` (ADR 0349): host code from
  * the `machines-policies` pack, yours to change. Policy is code: Work asks
  * `plan` for the machines that should exist and works out the difference.
  * Each policy here takes the facts and the machines planned so far and

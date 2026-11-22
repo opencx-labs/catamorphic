@@ -14,7 +14,7 @@ const machine = {
   reason: "Pull request 7 is open",
 };
 
-describe("machine event kinds (ADR 0347)", () => {
+describe("machine event kinds (ADR 0349)", () => {
   it("registers lifecycle events only: no kind makes or removes a machine", () => {
     expect(MACHINE_TRIGGER_KINDS.map((kind) => kind.name)).toEqual([
       "machine.created",

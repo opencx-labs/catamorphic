@@ -1,5 +1,5 @@
--- Machines are decided and made by host code (ADR 0347), and stop and
--- resume (ADR 0348). One row per machine Work knows, from the moment its
+-- Machines are decided and made by host code (ADR 0349), and stop and
+-- resume (ADR 0350). One row per machine Work knows, from the moment its
 -- intent is recorded until its platform confirmed it gone: the name the
 -- host's plan chose (or an operator enrolled by hand), whom it is for, and
 -- where Work stands in making, stopping, resuming or destroying it.

@@ -35,7 +35,7 @@ function epoch(): string {
 
 /**
  * A machine is stopped or taken out of service only while nothing holds it
- * (ADRs 0258, 0347, 0348): those and a new Allocation take the same node
+ * (ADRs 0258, 0349, 0350): those and a new Allocation take the same node
  * row lock, so on real Postgres one waits for the other and neither misses
  * the other.
  */

@@ -6,7 +6,7 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
 /**
  * `work worker sign-in`, `sign-out` and `sign-ins` for both harnesses (ADRs
- * 0199, 0213, 0340), run as the image runs them. `claude` is a stand-in
+ * 0199, 0213, 0342), run as the image runs them. `claude` is a stand-in
  * that speaks `claude auth login`: nothing here reaches Anthropic.
  */
 

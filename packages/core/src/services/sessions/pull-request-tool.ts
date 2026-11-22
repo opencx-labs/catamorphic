@@ -9,7 +9,7 @@ import {
 /** The one name of the pull request tool, the same on every host. */
 export const PULL_REQUEST_TOOL_NAME = "create_pull_request";
 
-/** What a chat's pull request tool returns (ADR 0343). */
+/** What a chat's pull request tool returns (ADR 0345). */
 export interface ChatPullRequest {
   url: string;
   number: number;
@@ -72,7 +72,7 @@ function chatOf(context: ExtraToolContext): {
 }
 
 /**
- * The pull request tool (ADR 0343): one definition, which a host builds
+ * The pull request tool (ADR 0345): one definition, which a host builds
  * over how it reaches a chat's checkout. The desktop serves it beside its
  * workspace tools; a server serves it through capability discovery
  * ({@link pullRequestCapability}).

@@ -24,7 +24,7 @@ const tracer = getTracer("@catamorphic/work-server");
 const RESET_WAIT_MS = 3 * 60_000;
 
 /**
- * The sequencer's world on the Work server (ADR 0347): machines, their
+ * The sequencer's world on the Work server (ADR 0349): machines, their
  * workers and what they hold in Postgres, by the database's clock.
  */
 export function workMachineWorld(deps: {
@@ -80,7 +80,7 @@ export function workMachineWorld(deps: {
 }
 
 /**
- * Keeps machines in step with the host's plan (ADR 0347). A pass runs only
+ * Keeps machines in step with the host's plan (ADR 0349). A pass runs only
  * while this replica holds the tenant's sequencer claim (ADR 0193),
  * renewed as it goes and checked before every change and every call into
  * host code, so replicas take turns and no machine is made twice.

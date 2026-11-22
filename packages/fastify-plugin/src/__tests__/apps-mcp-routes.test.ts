@@ -279,7 +279,7 @@ describe("apps MCP endpoint", () => {
       name: "not_allowed",
       arguments: {},
     });
-    // As the protocol names an unknown tool, on every endpoint (ADR 0345).
+    // As the protocol names an unknown tool, on every endpoint (ADR 0347).
     expect(call.error).toMatchObject({
       code: -32602,
       message: "Unknown tool: not_allowed",

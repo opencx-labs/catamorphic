@@ -106,7 +106,7 @@ export interface EnvironmentAdmitArgs {
   owner?: PlacementOwner;
   /**
    * The chat key of a project's own chat (ADR 0173): a machine that is for
-   * one key takes only that chat (ADR 0347).
+   * one key takes only that chat (ADR 0349).
    */
   chatKey?: string;
   environment?: string;
@@ -428,7 +428,7 @@ export class ExecutionEnvironmentsService {
       gatewayHosts?: readonly string[];
       /**
        * Minutes work waits for a machine in an Environment that names no
-       * `waitMinutes` of its own (ADR 0347): set by a host that makes
+       * `waitMinutes` of its own (ADR 0349): set by a host that makes
        * machines for waiting work, so a new chat waits for its machine
        * instead of failing at once. Unset, such work does not wait.
        */

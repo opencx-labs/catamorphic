@@ -433,7 +433,7 @@ describe("a setup on its own network, end to end (ADR 0257)", () => {
     expect(found.at(-1)).toBe("prod-rows logs");
   }, 60_000);
 
-  it("sets up a fork on its own network too: every chat stands on a base (ADR 0342)", async () => {
+  it("sets up a fork on its own network too: every chat stands on a base (ADR 0344)", async () => {
     await fs.rm(runs, { force: true });
     await writeManifest(probe("v3"));
     const chat = await sessions.create(identity, projectId, {

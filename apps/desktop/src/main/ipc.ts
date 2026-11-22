@@ -2800,7 +2800,7 @@ export function registerIpcHandlers(
   );
 
   // The member's own machines on the project's server and their Claude
-  // Code and Codex sign-ins there (ADRs 0213, 0340). Each login runs on the
+  // Code and Codex sign-ins there (ADRs 0213, 0342). Each login runs on the
   // machine: only its link, Codex's one-time code and the code a person
   // pastes for Claude Code pass through here, and none of it is kept.
   const machinesRequest = (

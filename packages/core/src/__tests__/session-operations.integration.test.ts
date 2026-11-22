@@ -35,7 +35,7 @@ import {
 import { testEnvironmentProvider } from "./test-environment.js";
 
 /*
- * The session operations (ADR 0344, 0345): a chat is started, waited on and
+ * The session operations (ADR 0346, 0347): a chat is started, waited on and
  * answered through one registry. A start answers at once and is found again
  * by its idempotency key; a wait reads Postgres and returns when the chat
  * needs its caller; a question raises the chat's attention and tells its

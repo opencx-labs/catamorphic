@@ -34,7 +34,7 @@ import { sessionMcp } from "../session-mcp.js";
  * `mcpToolKinds`) beside the documents surface, skills and the session
  * operations (`project-mcp-surface.ts`), everything narrowed to the
  * caller's scope by the core services themselves, and to the scopes of the
- * caller's token (ADR 0345). Workflow tools:
+ * caller's token (ADR 0347). Workflow tools:
  * the tool's input schema is the binding's frozen per-workflow schema (a
  * hole instantiated by the workflow's own input type), its metadata comes
  * from the binding's constant config, and calling it fires the trigger
@@ -126,7 +126,7 @@ export function registerProjectMcpRoutes(
           )
         : [];
       // What the current protocol adds to the chat tools: tasks, questions
-      // asked of the client's person, and chats as resources (ADR 0345).
+      // asked of the client's person, and chats as resources (ADR 0347).
       const chats = sessionMcp({
         core,
         identity,

@@ -15,7 +15,7 @@ import {
 } from "@catamorphic/sandbox";
 
 /**
- * Git inside a session's sandbox (ADRs 0175, 0178, 0342). The project
+ * Git inside a session's sandbox (ADRs 0175, 0178, 0344). The project
  * checkout is a real repository standing on the workspace's base: it holds
  * that commit, the agent's branch with its commits back to it, and the
  * agent's uncommitted changes. The ref `refs/work/synced` marks the tree
@@ -75,7 +75,7 @@ function originScript(originUrl: string | null): string {
 
 /**
  * Seed (or re-seed after a base move) the sandbox repository from the
- * session's copy on the control plane (ADR 0342): the agent's HEAD and its
+ * session's copy on the control plane (ADR 0344): the agent's HEAD and its
  * history back to the workspace base, and the working tree as last saved,
  * arrive as one shallow pack, uploaded rather than fetched, so seeding
  * costs no Git traffic and needs no credential. The checkout comes back

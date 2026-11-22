@@ -279,7 +279,7 @@ export async function moveCheckoutBase(opts: {
  * the real commits (so `git log`, `diff`, and pushes of new branches work)
  * without the repository's history before the base. With `tree`, the pack
  * also holds that tree whole: a session's working tree as last saved (ADR
- * 0342), which its sandbox puts back on top of `head`.
+ * 0344), which its sandbox puts back on top of `head`.
  */
 export async function buildSeedPack(opts: {
   repoPath: string;

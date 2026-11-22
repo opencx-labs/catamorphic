@@ -354,7 +354,7 @@ for (const [label, makeOrigin] of [
       expect(files[".work/app-data/store/notes.md"]).toBeUndefined();
     });
 
-    it("keeps a saved workspace's modes and links, and never writes through a link (ADR 0341)", async () => {
+    it("keeps a saved workspace's modes and links, and never writes through a link (ADR 0343)", async () => {
       const alice = await draft();
       const binary = Uint8Array.from({ length: 512 }, (_, i) => i % 256);
       const tip = await alice.write({

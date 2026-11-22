@@ -249,7 +249,7 @@ describe("model access", () => {
     expect(built.settings).toBeUndefined();
   });
 
-  it("adds no gateway, grant or key helper to a member's own sign-in (ADR 0340)", () => {
+  it("adds no gateway, grant or key helper to a member's own sign-in (ADR 0342)", () => {
     const built = options(
       attempt({
         modelAccess: { kind: "sign_in", home: "/members/ada/claude" },

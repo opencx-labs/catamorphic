@@ -256,7 +256,7 @@ export async function recordResult(
     value: JsonValue;
     /**
      * The commit the agent's checkout stood on when its turn began, where
-     * that is not the turn's checkpoint itself (ADR 0342): a sandbox chat's
+     * that is not the turn's checkpoint itself (ADR 0344): a sandbox chat's
      * checkpoint is Work's own commit, and its agent's HEAD is the commit
      * a result is about. Used while the turn still began at `checkpoint`.
      */

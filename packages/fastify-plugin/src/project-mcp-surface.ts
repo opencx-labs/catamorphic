@@ -25,7 +25,7 @@ import { type McpTool, sessionTools } from "./session-tools.js";
  * - skills: list / read, for anyone who may use the project (with
  *   `program:read`, or an agent ref);
  * - chats: the session operations (`session_start`, `session_wait`,
- *   `session_answer` and the rest of core's registry, ADR 0344), each
+ *   `session_answer` and the rest of core's registry, ADR 0346), each
  *   enforced by `AgentSessionsService`.
  *
  * Nothing here checks scope by hand: every call goes through the core
@@ -513,7 +513,7 @@ export function surfaceTools(
 
   if (core.agentSessions) {
     const sessions = core.agentSessions;
-    // Start, send, wait, answer and the rest of the registry (ADR 0344).
+    // Start, send, wait, answer and the rest of the registry (ADR 0346).
     tools.push(
       ...sessionTools({
         core,

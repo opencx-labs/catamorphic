@@ -100,7 +100,7 @@ current schema. See [ADR 0296](../../docs/decisions/0296-one-oauth-token-endpoin
 | `connectionGuards` | Guards that review each gateway action (ADR 0162). Work ships none; a guard is host code (ADR 0183) |
 | `vaultKeys` | Credential vault keys from a key service instead of `WORK_VAULT_KEY` |
 | `directories` | Upstream directories (beyond Google Workspace) that keep accounts active or disable them (ADR 0161) |
-| `machines` | Host policy and infrastructure. `plan` returns desired workers from facts about people, machines and waiting work. Idempotent `create`, `destroy` and optional `stop`, `start`, and `describe` act on that plan. Work handles enrollment, placement, draining and loss recovery (ADRs 0347 and 0348). |
+| `machines` | Host policy and infrastructure. `plan` returns desired workers from facts about people, machines and waiting work. Idempotent `create`, `destroy` and optional `stop`, `start`, and `describe` act on that plan. Work handles enrollment, placement, draining and loss recovery (ADRs 0349 and 0350). |
 | `projectHooks` | Named code run when a project is created and deleted (ADRs 0046, 0331); each needs a unique `name`. `onProjectCreated` may return `{ secrets }`, kept sealed as the project's shared secrets (for example a `DATABASE_URL` for a schema and role it made on the host's Postgres; see `INTEGRATION.md`). `onProjectDeleted` cleans up; one that throws or answers `{ done: false }` is retried with backoff until done, and never blocks the delete |
 | `projectSeeds` | Changes to the files seeded into new projects |
 | `routes` | Extra routes on the public application |

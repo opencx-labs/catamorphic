@@ -1487,7 +1487,7 @@ export async function startEmbeddedServer(
         ),
       );
     },
-    // The chat's checkout, then core's one function (ADR 0343): push its
+    // The chat's checkout, then core's one function (ADR 0345): push its
     // branch as the chat's own, open the pull request, record it.
     createPullRequest: (projectId, sessionId, input) =>
       openChatPullRequest({

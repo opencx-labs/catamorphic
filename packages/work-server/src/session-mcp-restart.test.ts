@@ -12,7 +12,7 @@ import { createWorkServer, type WorkServer } from "./server.js";
 import { oauthAccessToken, testServerOptions } from "./test-support.js";
 
 /**
- * A server restart loses nothing a client was told (ADR 0345): the chat a
+ * A server restart loses nothing a client was told (ADR 0347): the chat a
  * start returned is found again by its idempotency key, a wait cut off by
  * the restart is retried as it was, and a task's id still names its wait.
  * Everything a caller holds (a session id, a cursor, a task id) is a name

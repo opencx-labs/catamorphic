@@ -23,7 +23,7 @@ import {
 } from "./sequencer.js";
 
 /*
- * A simulated Work for testing a machines hook (ADR 0347): the real
+ * A simulated Work for testing a machines hook (ADR 0349): the real
  * sequencer over machines, work and people kept in memory, with a clock a
  * test moves. A machine the hook's `create` answered for boots and
  * connects by itself after `bootSeconds`; a test places work, ends it,

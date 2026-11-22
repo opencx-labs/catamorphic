@@ -1,7 +1,7 @@
 import { z } from "zod";
 
 /*
- * The machines hook (ADR 0347): the one object a host passes as
+ * The machines hook (ADR 0349): the one object a host passes as
  * `hooks.machines`. The host's code decides which machines should exist
  * (`plan`) and makes the calls that touch its cloud (`create`, `destroy`,
  * `stop`, `start`, `describe`). Work sequences those calls (it records its

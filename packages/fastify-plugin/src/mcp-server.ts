@@ -8,7 +8,7 @@ import {
 } from "./mcp-shared.js";
 
 /**
- * One MCP endpoint for both protocol eras (ADR 0345). A request carrying
+ * One MCP endpoint for both protocol eras (ADR 0347). A request carrying
  * the per-request `_meta` envelope, or a modern `MCP-Protocol-Version`
  * header, is served by the current revision: stateless, validated against
  * its mirrored headers, with `server/discover`, result types, caching

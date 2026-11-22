@@ -476,7 +476,7 @@ export class OriginDraftRepo {
    * the draft lacks is not an error (a sandbox sync reporting a file it
    * made and removed again). With `replaceLinks`, a change to a path that
    * is a link replaces or deletes the link itself, as Git would (a saved
-   * workspace, ADR 0341); otherwise it is refused. No write follows one.
+   * workspace, ADR 0343); otherwise it is refused. No write follows one.
    */
   async write(input: {
     changes: readonly DraftChange[];

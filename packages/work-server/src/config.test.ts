@@ -71,7 +71,7 @@ it("reads trusted proxies and the sign-in limit switch", () => {
   ).toThrow("WORK_AUTH_RATE_LIMIT");
 });
 
-it("reads how long waiting work waits for its machine, and no machine classes, cloud token or worker image (ADR 0347)", () => {
+it("reads how long waiting work waits for its machine, and no machine classes, cloud token or worker image (ADR 0349)", () => {
   const env = { WORK_DATA_DIR: dir };
   expect(workServerConfigFromEnv(env).machineWaitMinutes).toBeUndefined();
   expect(

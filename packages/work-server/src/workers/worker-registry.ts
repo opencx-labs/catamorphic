@@ -152,7 +152,7 @@ export class WorkerIsolationError extends Error {
 
 /**
  * This worker's node is disabled: an operator disabled it, or Work stopped
- * its machine (ADR 0348). It may connect once enabled or resumed.
+ * its machine (ADR 0350). It may connect once enabled or resumed.
  */
 export class WorkerDisabledError extends Error {
   constructor() {
@@ -230,7 +230,7 @@ export class WorkWorkerRegistry {
       authorityId: string;
       /**
        * Derives the enrollment codes of machines the machines hook makes
-       * (ADR 0347); every replica of a deployment shares it.
+       * (ADR 0349); every replica of a deployment shares it.
        */
       enrollmentSecret?: string;
       /**
@@ -239,13 +239,13 @@ export class WorkWorkerRegistry {
        */
       connected?: () => void;
       /**
-       * Something happened to a machine (ADR 0347): it connected, started
+       * Something happened to a machine (ADR 0349): it connected, started
        * again, was lost, or fell short of disk. Delivery is the host's;
        * nothing here waits on it.
        */
       event?: (event: MachineEvent) => Promise<void>;
       /**
-       * Work was retired from a machine (ADR 0346): hint this process's
+       * Work was retired from a machine (ADR 0348): hint this process's
        * agent sweep, which admits its chats again at once.
        */
       retired?: () => void;
@@ -477,7 +477,7 @@ export class WorkWorkerRegistry {
 
   /**
    * A worker connected: a machine that was starting or resuming serves
-   * from now on (ADRs 0347, 0348), and one that was lost and came back
+   * from now on (ADRs 0349, 0350), and one that was lost and came back
    * with its disk is lost no more.
    */
   private async serving(args: { nodeId: string; name: string }): Promise<void> {
@@ -535,7 +535,7 @@ export class WorkWorkerRegistry {
 
   /**
    * Operator: a one-time code a new worker exchanges for its credential,
-   * for a machine enrolled by hand (ADR 0347): Work places work on it by
+   * for a machine enrolled by hand (ADR 0349): Work places work on it by
    * its labels and whom it is for, and never creates, stops or destroys
    * it. The machines hook's own machines are enrolled by the sequencer.
    */
@@ -639,7 +639,7 @@ export class WorkWorkerRegistry {
       const nodeId = `${WORKER_NODE_PREFIX}${enrollment.name}`;
       const secret = randomBytes(32).toString("base64url");
       // A name enrolling again is a new machine under the old node id (ADR
-      // 0346): whatever the old one still held is retired in this
+      // 0348): whatever the old one still held is retired in this
       // transaction, before the node is enabled, so the new machine never
       // inherits an Allocation, a reservation or a cache copy.
       await this.retire({
@@ -1115,7 +1115,7 @@ export class WorkWorkerRegistry {
   }
 
   /**
-   * Retire the work of machines that are gone (ADR 0346), on any replica:
+   * Retire the work of machines that are gone (ADR 0348), on any replica:
    * a revoked worker's, when the process that revoked it stopped before
    * retiring it, and a lost machine's, whoever enrolled it. Its chats are
    * admitted again on a machine open to their owner, or wait for one; the
@@ -1196,7 +1196,7 @@ export class WorkWorkerRegistry {
   }
 
   /**
-   * Retire what a machine held, through core's one retirement (ADR 0346).
+   * Retire what a machine held, through core's one retirement (ADR 0348).
    * Safe to call again, from any replica.
    */
   private async retire(args: {
@@ -1313,7 +1313,7 @@ export class WorkWorkerRegistry {
 
   /**
    * Take a machine out of service for good, unless work landed on it (ADRs
-   * 0258, 0347): under its node's row lock, which creating an Allocation
+   * 0258, 0349): under its node's row lock, which creating an Allocation
    * takes too, it is revoked and disabled and becomes `destroying` only
    * while no Allocation holds its capacity, so nothing is placed on a
    * machine about to be destroyed. One whose worker an operator revoked,
@@ -1331,7 +1331,7 @@ export class WorkWorkerRegistry {
   }
 
   /**
-   * A machine has been unseen for `unseenForMs` (ADR 0346): take it out of
+   * A machine has been unseen for `unseenForMs` (ADR 0348): take it out of
    * service for good and retire what it held, so its chats continue from
    * their last save and its plan may replace it. Under its node's row
    * lock, and only while it is still unseen: a machine that called again
@@ -1443,7 +1443,7 @@ export class WorkWorkerRegistry {
   }
 
   /**
-   * Begin stopping a machine (ADR 0348): under its node's row lock, only
+   * Begin stopping a machine (ADR 0350): under its node's row lock, only
    * while no Allocation holds its capacity, it takes no new work and
    * becomes `stopping`. It keeps its worker, its credential and its disk.
    * False when it holds something, or is not serving.
@@ -1485,7 +1485,7 @@ export class WorkWorkerRegistry {
   }
 
   /**
-   * Begin resuming a stopped machine (ADR 0348): it becomes `resuming`,
+   * Begin resuming a stopped machine (ADR 0350): it becomes `resuming`,
    * and its worker, which kept its credential and data directory, may
    * connect again under a new epoch.
    */
@@ -1563,7 +1563,7 @@ export class WorkWorkerRegistry {
   }
 
   /**
-   * A member's harness sign-in on a worker (ADRs 0213, 0340), through the
+   * A member's harness sign-in on a worker (ADRs 0213, 0342), through the
    * operation queue: the worker runs the harness's own login and answers.
    * Fails at once while the worker is not connected.
    */
@@ -1616,7 +1616,7 @@ export class WorkWorkerRegistry {
   }
 
   /**
-   * Reset a machine through the operation queue (ADRs 0205, 0347): the
+   * Reset a machine through the operation queue (ADRs 0205, 0349): the
    * worker destroys every sandbox it holds and deletes members' volumes
    * and sign-ins. Resolves once its receipt arrived; fails while it is not
    * connected, and once `timeoutMs` passed without a receipt.
@@ -1672,7 +1672,7 @@ export class WorkWorkerRegistry {
       return {
         ...facts,
         nodeId: `${WORKER_NODE_PREFIX}${facts.name}`,
-        // Its lease is live: an operation sent to it now runs (ADR 0346).
+        // Its lease is live: an operation sent to it now runs (ADR 0348).
         connected: facts.state === "serving" || facts.state === "draining",
         enrolledAt: enrolled?.enrolled_at.toISOString() ?? null,
         credentialIssuedAt:

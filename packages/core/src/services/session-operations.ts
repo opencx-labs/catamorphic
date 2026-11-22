@@ -48,7 +48,7 @@ import type { WatchersService } from "./watchers-service.js";
 import { EnvironmentCapacityError } from "./worker-capacity.js";
 
 /**
- * The session operations (ADR 0344): one registry every surface projects.
+ * The session operations (ADR 0346): one registry every surface projects.
  * REST routes, the MCP endpoints, in-product agent tools and workflows'
  * `host["catamorphic.sessions"]` all call {@link SessionOperationsService}
  * with a name from here, so a chat is started, sent to, waited on and

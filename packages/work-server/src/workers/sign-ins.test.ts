@@ -161,7 +161,7 @@ describe("sign-ins on a machine", () => {
     expect(version.stdout).toContain(manifest.dependencies["@openai/codex"]);
   });
 
-  it("runs Claude Code's own login into the member's home (ADR 0340)", () => {
+  it("runs Claude Code's own login into the member's home (ADR 0342)", () => {
     const saved = process.env.ANTHROPIC_API_KEY;
     process.env.ANTHROPIC_API_KEY = "sk-ant-organization";
     try {
@@ -248,7 +248,7 @@ describe("sign-ins on a machine", () => {
     expect(listMachineSignIns(signInRoot(dataDir))).toEqual([]);
   });
 
-  it("holds one person's sign-ins, of either harness (ADRs 0213, 0340)", () => {
+  it("holds one person's sign-ins, of either harness (ADRs 0213, 0342)", () => {
     const codex = () => login({ status: 0, writes: "auth.json" }).spawn;
     const claude = () =>
       login({

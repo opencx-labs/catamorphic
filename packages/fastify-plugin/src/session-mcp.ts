@@ -33,7 +33,7 @@ import {
 } from "./session-tools.js";
 
 /**
- * What the current protocol adds to the session tools (ADR 0345): a chat
+ * What the current protocol adds to the session tools (ADR 0347): a chat
  * as a resource a client can read and listen to, a wait as a durable task,
  * and an agent's question asked of the client's person in the same call.
  * All three are conveniences over the plain tools, which every client can

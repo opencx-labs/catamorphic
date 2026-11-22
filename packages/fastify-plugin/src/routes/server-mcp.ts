@@ -9,7 +9,7 @@ import { toolError, toolValue } from "../mcp-shared.js";
 import { sessionMcp } from "../session-mcp.js";
 
 /**
- * The server's own MCP endpoint (ADR 0345): the one address a person
+ * The server's own MCP endpoint (ADR 0347): the one address a person
  * gives their agent. It serves `project_list` and the session operations
  * with the project as an argument, so one connection starts, watches and
  * answers chats in every project its person may use. A project's own

@@ -30,7 +30,7 @@ export interface SessionWait {
 }
 
 /**
- * Waits their callers left running (ADR 0345), in Postgres: a caller that
+ * Waits their callers left running (ADR 0347), in Postgres: a caller that
  * cannot hold a call open starts one, and reads on any replica, after any
  * restart, what it came to. Each belongs to the member who started it;
  * its outcome is written once and never changes. Nothing here watches:

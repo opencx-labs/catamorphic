@@ -1,6 +1,6 @@
 # 0205 — Machine classes: cloud servers, pooled machines, and retention
 
-- **Status:** Accepted; refined by [0258](0258-machines-on-demand.md): machines on demand, work waiting for a machine, and draining under the node lock; [0327](0327-machine-provisioners-are-workflows.md): machine provisioners as project workflows; [0346](0346-every-lost-machine-recovers.md): every rule's lost machine is retired and replaced, and status reads the lease; machine policy superseded by 0347.
+- **Status:** Accepted; refined by [0258](0258-machines-on-demand.md): machines on demand, work waiting for a machine, and draining under the node lock; [0327](0327-machine-provisioners-are-workflows.md): machine provisioners as project workflows; [0348](0348-every-lost-machine-recovers.md): every rule's lost machine is retired and replaced, and status reads the lease; machine policy superseded by 0349.
 - **Date:** 2026-10-06
 - **Refines:** 0164, 0167, 0193
 

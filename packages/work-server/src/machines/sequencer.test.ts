@@ -45,7 +45,7 @@ function setup(
   return { cloud, sim, settle, verbs };
 }
 
-describe("the sequencer (ADR 0347)", () => {
+describe("the sequencer (ADR 0349)", () => {
   it("gives a solo operator a machine of their own from a five-line plan and no directory", async () => {
     const { sim, cloud, settle } = setup(({ people }) =>
       people

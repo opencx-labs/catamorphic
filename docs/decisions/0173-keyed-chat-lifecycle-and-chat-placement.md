@@ -1,6 +1,6 @@
 # 0173 — Keyed chats: project keys, close, idle release, and their own placement
 
-- **Status:** Accepted; idle release runs on any replica under a claim (0192); a chat whose machine is lost is admitted again by itself ([0346](0346-every-lost-machine-recovers.md)); it saves the agent's branch and commits with the files ([0342](0342-every-server-chat-stands-on-a-branch.md))
+- **Status:** Accepted; idle release runs on any replica under a claim (0192); a chat whose machine is lost is admitted again by itself ([0348](0348-every-lost-machine-recovers.md)); it saves the agent's branch and commits with the files ([0344](0344-every-server-chat-stands-on-a-branch.md))
 - **Date:** 2026-09-27
 - **Refines:** 0100, 0156, 0167
 

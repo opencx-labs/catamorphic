@@ -889,7 +889,7 @@ the historical log explains how it arrived here.
 ### 2026-11-20: Claude Code signs in on your own machines too
 
 Remote environment's Sign-ins section no longer says Claude Code runs on
-a person's subscription only on this computer (ADR 0340, replacing that
+a person's subscription only on this computer (ADR 0342, replacing that
 half of the 2026-10-06 entry below). Each of Your machines is a card with
 its name and status, including when it is starting, stopped or resuming.
 Under it is a row for each harness,

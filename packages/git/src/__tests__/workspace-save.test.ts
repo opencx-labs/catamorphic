@@ -51,7 +51,7 @@ function record(input: {
 const manifest = (...records: Uint8Array[]) =>
   new Uint8Array(Buffer.concat(records));
 
-describe("a save's manifest (ADR 0341)", () => {
+describe("a save's manifest (ADR 0343)", () => {
   it("reads files, executables, links and deletions with their exact paths", () => {
     expect(
       parseSavedChanges(
@@ -163,7 +163,7 @@ describe("a save's manifest (ADR 0341)", () => {
   });
 });
 
-describe("writing a save into a checkout (ADR 0341)", () => {
+describe("writing a save into a checkout (ADR 0343)", () => {
   let dir: string;
   let source: string;
   let checkout: string;

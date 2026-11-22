@@ -36,11 +36,11 @@ import { RecordingAdapter } from "./recording-adapter.js";
 const ownedSandboxes = new TestSandboxes();
 
 /**
- * Every server chat stands on a branch (ADR 0342), end to end with real
+ * Every server chat stands on a branch (ADR 0344), end to end with real
  * sandboxes: a chat that names no ref starts on the default branch of the
  * project's repository, or on the project's own main; its agent's branch,
  * commits and uncommitted changes come back after its workspace was given
- * back; its pull request is its own commits (ADR 0343); and base moves
+ * back; its pull request is its own commits (ADR 0345); and base moves
  * keep or discard its commits as asked.
  */
 
@@ -70,7 +70,7 @@ const identity: Identity = {
 };
 const AGENT_GIT = "git -c user.name=Agent -c user.email=agent@example.test";
 
-describe("every server chat stands on a branch (ADRs 0342, 0343)", () => {
+describe("every server chat stands on a branch (ADRs 0344, 0345)", () => {
   let tmpDir: string;
   let seed: string;
   let remote: string;

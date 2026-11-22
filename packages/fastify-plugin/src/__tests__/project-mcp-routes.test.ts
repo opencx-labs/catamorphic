@@ -442,7 +442,7 @@ describe("project MCP surface (ADR 0055): documents, skills, chats", () => {
           content: "# Briefs",
         }),
       },
-      // The session operations are core's registry (ADR 0344): the
+      // The session operations are core's registry (ADR 0346): the
       // surface lists and runs whatever it holds.
       sessionOperations: {
         execute: record("sessionOperations.execute", {

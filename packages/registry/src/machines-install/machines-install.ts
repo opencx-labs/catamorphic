@@ -1,5 +1,5 @@
 /*
- * Installing a Work worker on a machine (ADR 0348): host code from the
+ * Installing a Work worker on a machine (ADR 0350): host code from the
  * `machines-install` pack, yours to change. Work keeps the worker process,
  * its protocol and its start contract (`WORK_CONTROL_PLANE_URL` and
  * `WORK_WORKER_ENROLLMENT`); how a machine gets Docker, a sandbox backend

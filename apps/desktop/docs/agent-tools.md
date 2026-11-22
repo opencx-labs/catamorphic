@@ -63,11 +63,11 @@ Availability also depends on identity, services, agent sandboxing and topology.
 | `stop_listening` | Eager. Turns voice off in this chat once the turn's replies are read aloud; the microphone closes at once. Says what it does, never when (ADR 0224) |
 | `write_terminal` | Deferred, raw input to a terminal (prompts, REPLs, Ctrl+C, the person's own terminal on request) |
 | `build_app` | Deferred, host preview by default; `publish: true` explicitly publishes |
-| `sync_project`, `create_pull_request` | Deferred, managed checkout and linked-remote semantics. `create_pull_request` is core's one tool (ADR 0343): it pushes the chat's commits as its own `work/` branch, opens or updates the pull request, and records it on the chat |
+| `sync_project`, `create_pull_request` | Deferred, managed checkout and linked-remote semantics. `create_pull_request` is core's one tool (ADR 0345): it pushes the chat's commits as its own `work/` branch, opens or updates the pull request, and records it on the chat |
 | `request_connection`, `read_skill` | Deferred connection consent and one skill fallback for inaccessible files |
 | `documents_storage`, `documents_list`, `documents_read`, `documents_search`, `documents_write`, `documents_delete`, `documents_history` | Deferred shared document/store services; ordinary checkout files use native tools |
 | `publish_document`, `revoke_publication`, `list_publications` | Deferred sharing state. A chat proposes with `create_pull_request`, from its own checkout; `propose_change` is for members without one |
-| `session_start`, `session_send`, `session_wait`, `session_read`, `session_answer`, `session_interrupt`, `session_close`, `session_list` and the other session operations | Deferred. The one registry every surface runs (ADR 0344): start a chat and get its id at once, then wait on it; each answers with the chat's state |
+| `session_start`, `session_send`, `session_wait`, `session_read`, `session_answer`, `session_interrupt`, `session_close`, `session_list` and the other session operations | Deferred. The one registry every surface runs (ADR 0346): start a chat and get its id at once, then wait on it; each answers with the chat's state |
 | `create_watcher`, `list_watchers`, `session_stop_watcher` | Deferred durable workflows with session-owned lifetime; `eventSource: "github"` polls the project's repository as github webhook deliveries (ADR 0177) |
 | `session_artifact`, `set_app_presentation` | Deferred temporary artifacts and app metadata; title/icon can be supplied at creation |
 | Project-defined workflow tools, `catamorphic_poll_run` | Deferred live deployed workflow bindings and continuation; identical execution service to public MCP |

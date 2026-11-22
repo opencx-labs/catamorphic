@@ -59,7 +59,7 @@ const SETUP_NOT_SENT: Record<PersonalEnvironmentServerState, string> = {
  * command for new workspaces there (ADR 0208), shown as the config says it.
  * Sign-ins never leave the machine they were made on (ADR 0199): Claude
  * Code and Codex sign in on each of the member's own machines with their
- * own logins (ADRs 0213, 0340). Files and setup edit
+ * own logins (ADRs 0213, 0342). Files and setup edit
  * `.work/personal/environment.json`.
  */
 export function RemoteEnvironmentModal({

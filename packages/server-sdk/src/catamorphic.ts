@@ -234,7 +234,7 @@ export interface CatamorphicHostConfig {
   onAgentTurnSettled?: (event: AgentTurnSettledEvent) => void | Promise<void>;
   /**
    * Where a person opens a chat, when the host has a public address: the
-   * `url` every session state carries (ADR 0344).
+   * `url` every session state carries (ADR 0346).
    */
   sessionUrl?: (chat: {
     projectId: string;

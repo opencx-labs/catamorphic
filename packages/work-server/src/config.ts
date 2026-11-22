@@ -115,7 +115,7 @@ export interface WorkServerConfig {
   webhookMaxBodyBytes?: number;
   /**
    * Minutes work waits for a machine in an Environment that names no
-   * `waitMinutes` of its own, on a server with a machines hook (ADR 0347),
+   * `waitMinutes` of its own, on a server with a machines hook (ADR 0349),
    * from `WORK_MACHINE_WAIT_MINUTES` (default 30): a new chat waits for
    * the machine the plan starts for it instead of failing at once.
    */
@@ -194,7 +194,7 @@ export function workServerConfigFromEnv(
   };
 }
 
-/** How long waiting work waits for its machine by default (ADR 0347). */
+/** How long waiting work waits for its machine by default (ADR 0349). */
 function machineSettingsFromEnv(
   env: Record<string, string | undefined>,
 ): Pick<WorkServerConfig, "machineWaitMinutes"> {

@@ -202,7 +202,7 @@ export function allocationSandboxProvider(args: {
       ...(sandboxId ? { sandboxId } : {}),
     });
   /**
-   * The machine says it holds no such sandbox (ADR 0346): it was replaced,
+   * The machine says it holds no such sandbox (ADR 0348): it was replaced,
    * or its disk was. Nothing ran. The Allocation is retired here, wherever
    * the operation came from, so the chat is admitted again and rebuilt
    * from its last save rather than failing every message from now on.
@@ -686,7 +686,7 @@ export async function cleanupWorkerAllocations(args: {
           failures.push(error);
         }
       }
-      // Workspaces retired while the machine was away (ADR 0346): one that
+      // Workspaces retired while the machine was away (ADR 0348): one that
       // came back with its disk still holds their sandboxes.
       const retired = await args.db
         .selectFrom("execution_allocations")
@@ -817,7 +817,7 @@ async function retireAllocation(args: {
 }
 
 /**
- * Remove the sandbox of an Allocation retired with its machine (ADR 0346),
+ * Remove the sandbox of an Allocation retired with its machine (ADR 0348),
  * from a machine that is back with its disk. Its capacity was freed when it
  * was retired; this only clears what the machine still holds. Claimed like
  * any workspace maintenance, so two hosts never do it at once, and the

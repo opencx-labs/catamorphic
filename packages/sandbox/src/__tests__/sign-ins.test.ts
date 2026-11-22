@@ -45,7 +45,7 @@ describe("sign-ins stay on the machine (ADR 0199)", () => {
     ).toEqual({ harness: "claude-code", member: "user:1" });
   });
 
-  it("describes each harness's own login in one place (ADR 0340)", () => {
+  it("describes each harness's own login in one place (ADR 0342)", () => {
     expect(SIGN_IN_HARNESSES).toEqual(["claude-code", "codex"]);
     expect(SIGN_IN_SPECS["claude-code"]).toMatchObject({
       name: "Claude Code",

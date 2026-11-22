@@ -32,7 +32,7 @@ import {
 } from "./pull-requests-service.js";
 
 /**
- * Propose a change to the program (ADRs 0055, 0343): a member with no
+ * Propose a change to the program (ADRs 0055, 0345): a member with no
  * checkout of their own (the member tools, the HTTP surface) asks for a
  * doc fix, a new template, a workflow tweak, and hands us the files. We
  * commit them on a fresh branch from the shared `main`, authored as the
@@ -340,7 +340,7 @@ export class ProposalsService {
       );
 
       // Land the branch: on the linked code host when the organization's
-      // service connection can, as a chat's pull request does (ADR 0343),
+      // service connection can, as a chat's pull request does (ADR 0345),
       // else on the project origin.
       const body = [
         `Proposed by **${identity.externalUserId}** via Work.`,

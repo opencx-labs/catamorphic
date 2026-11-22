@@ -17,7 +17,7 @@ import {
 } from "./simulation.js";
 
 /*
- * The machines hook contract kit (ADR 0347). It runs a host's hook against
+ * The machines hook contract kit (ADR 0349). It runs a host's hook against
  * a simulated Work with a fake clock and checks what Work relies on: names
  * are stable, the plan converges and does not flap, no machine is made
  * twice under retries or a lost answer, nothing holding live work is

@@ -1,4 +1,4 @@
--- A wait its caller left running (ADR 0345): who waits on which chats,
+-- A wait its caller left running (ADR 0347): who waits on which chats,
 -- from which log positions, and what the wait came to once a chat needed
 -- them. An MCP task is one of these, so its id resolves on every replica
 -- and its outcome, once reached, never changes. sessions: an array of

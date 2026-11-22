@@ -13,7 +13,7 @@ import type { DraftChange } from "./origin-draft.js";
 import { isPersonalFile } from "./personal-files.js";
 
 /**
- * Saving a sandbox's workspace (ADRs 0341, 0342). The sandbox packs the
+ * Saving a sandbox's workspace (ADRs 0343, 0344). The sandbox packs the
  * files that changed since the last save, with a manifest naming each path,
  * its Git mode and its blob, and the commits its branch gained, into one
  * Git pack. Everything read here came from the sandbox and is treated as
@@ -314,7 +314,7 @@ export class ReceivedPack {
   }
 
   /**
-   * Check the commits a save says its branch gained (ADR 0342), before any
+   * Check the commits a save says its branch gained (ADR 0344), before any
    * of them is kept: `head` and everything it reaches that `known` (the
    * workspace's base and its last saved head) does not. Every commit must
    * be here whole, with history that ends at `known`; every tree may name
@@ -397,7 +397,7 @@ export class ReceivedPack {
   }
 
   /**
-   * Keep checked commits (ADR 0342): `head` and what it reaches beyond
+   * Keep checked commits (ADR 0344): `head` and what it reaches beyond
    * `known`, unpacked loose into the repository at `repoPath`, so no pack
    * stays there. Git checks each object and its links again as it writes.
    */

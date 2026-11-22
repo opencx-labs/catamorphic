@@ -13,7 +13,7 @@ import {
 import { checkMachineProvisioner, checkMachinesHook } from "../src/testing.js";
 
 /*
- * The `machines-hetzner` recipe (ADR 0347): what the Work server's own
+ * The `machines-hetzner` recipe (ADR 0349): what the Work server's own
  * Hetzner Cloud code did, as host code, against a Hetzner kept in memory.
  */
 const TOKEN = "hcloud-test-token";

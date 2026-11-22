@@ -19,7 +19,7 @@ const execute = promisify(execFile);
  * recipe starts calling is one entry. The review recipe's progress (ADR
  * 0337) reads and rewrites a check run by id and lists a pull request's
  * commits; its findings are reviews of their own. A pull request opened
- * through the API (ADR 0343) is for a branch of the repository, and its
+ * through the API (ADR 0345) is for a branch of the repository, and its
  * head is that branch's tip whenever it is read.
  */
 export interface GithubStandIn {

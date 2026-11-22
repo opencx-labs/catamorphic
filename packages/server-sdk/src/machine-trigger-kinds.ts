@@ -3,7 +3,7 @@ import { z } from "zod";
 import { defineTriggerKind } from "./define-trigger-kind.js";
 
 /**
- * Machine lifecycle events (ADR 0347): what happened to a Work server's
+ * Machine lifecycle events (ADR 0349): what happened to a Work server's
  * machines, for a project's own workflows (bookkeeping, alerts). Nothing
  * Work needs depends on them: machines are decided and made by the host's
  * `machines` hook, never by a workflow Work starts and reads later.

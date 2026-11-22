@@ -53,7 +53,7 @@ const sandboxCreation = vi
  * owner's own that reports their sign-in, its sandbox sees that one home
  * and no other, only the owner's own messages run on it, and nothing of it
  * ever reaches the control plane. Claude Code signs in the same way with
- * its own login (ADR 0340), which waits for the code the member pastes.
+ * its own login (ADR 0342), which waits for the code the member pastes.
  */
 
 /** What a member pastes from the Claude sign-in page: this run's alone. */
@@ -389,7 +389,7 @@ afterAll(async () => {
   }
 }, 120_000);
 
-describe("members' own sign-ins on the machine (ADRs 0199, 0213, 0340)", () => {
+describe("members' own sign-ins on the machine (ADRs 0199, 0213, 0342)", () => {
   let sessionId = "";
   const agentId = () => `project:${projectId}:codex`;
   // One sign-in to the server each: its rate limit counts them.

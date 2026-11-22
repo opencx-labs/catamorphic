@@ -1,4 +1,4 @@
-# 0346 — Every lost machine recovers
+# 0348 — Every lost machine recovers
 
 - **Status:** Accepted
 - **Date:** 2026-11-20

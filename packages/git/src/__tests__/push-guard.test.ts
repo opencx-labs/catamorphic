@@ -74,7 +74,7 @@ describe("push guard for attached remotes", () => {
         force: true,
       }),
     ).toThrow(RemotePushRefusedError);
-    // A lease on the commit it replaces is the one exception (ADR 0343),
+    // A lease on the commit it replaces is the one exception (ADR 0345),
     // and only under work/.
     expect(() =>
       assertPushAllowed({
@@ -161,7 +161,7 @@ describe("push guard for attached remotes", () => {
     ).toBe(local);
   });
 
-  it("lets a chat create, move forward and replace only its own branch (ADR 0343)", async () => {
+  it("lets a chat create, move forward and replace only its own branch (ADR 0345)", async () => {
     const tip = async (branch: string) =>
       (await nativeGit(origin, ["rev-parse", `refs/heads/${branch}`])).trim();
     const own = (

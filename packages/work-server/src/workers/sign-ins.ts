@@ -16,7 +16,7 @@ import {
 
 /**
  * Members' own Claude Code and Codex sign-ins on this machine (ADRs 0199,
- * 0213, 0340). Each is the harness's own home for one member under the
+ * 0213, 0342). Each is the harness's own home for one member under the
  * machine's data directory, made by the harness's own unmodified login on
  * this machine. Work never reads, copies or sends what is inside: the
  * machine reports only who is signed in, and a sandbox of that member's
@@ -65,7 +65,7 @@ export function listMachineSignIns(root: string): MachineSignIn[] {
   });
 }
 
-/** A machine holds one person's sign-ins at most (ADRs 0213, 0340). */
+/** A machine holds one person's sign-ins at most (ADRs 0213, 0342). */
 export class MachineHeldError extends Error {
   constructor() {
     super(

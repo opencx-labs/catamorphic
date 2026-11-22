@@ -1188,7 +1188,7 @@ export function buildWorkspaceToolkit(
         return gitBridge.sync(ctx.projectId, ctx.sessionId);
       },
     },
-    // Core's one pull request tool (ADR 0343), over this chat's checkout:
+    // Core's one pull request tool (ADR 0345), over this chat's checkout:
     // its worktree, or the project folder.
     pullRequestTool((request) => {
       if (!gitBridge) throw new Error("Pull requests are not available yet.");

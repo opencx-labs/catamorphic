@@ -1471,7 +1471,7 @@ export const AgentSubsessionSchema = z.object({
 });
 
 /**
- * `POST .../agent/sessions/start` (ADR 0344): the `session_start`
+ * `POST .../agent/sessions/start` (ADR 0346): the `session_start`
  * operation, with the project named by the route.
  */
 export const StartSessionSchema = SESSION_OPERATIONS.session_start.input.omit({

@@ -775,7 +775,7 @@ export class NodeRecoveryService {
 }
 
 /**
- * Why a machine's work is retired (ADR 0346): it was `lost` (unseen past
+ * Why a machine's work is retired (ADR 0348): it was `lost` (unseen past
  * its loss limit), `revoked` by an operator or a drain, `replaced` (its
  * name enrolled again as a new machine), or its runner said it holds no
  * such sandbox (`sandbox-unknown`).
@@ -800,7 +800,7 @@ export interface NodeRetirement {
 
 /**
  * Retire everything a machine held, because the machine is gone or its
- * sandboxes are (ADR 0346): the one place a machine's end reaches its
+ * sandboxes are (ADR 0348): the one place a machine's end reaches its
  * work. Every active Allocation on it is released as `node_lost` with its
  * capacity, grants and deployment runtimes, its chats' sandboxes are
  * forgotten and their record says the workspace was lost, so the next turn
@@ -920,7 +920,7 @@ export async function retireNodeWork(args: {
 
 /**
  * Retire one Allocation whose sandbox is gone while its machine is not
- * (ADR 0346): a runner that says it holds no such sandbox. Released as a
+ * (ADR 0348): a runner that says it holds no such sandbox. Released as a
  * lost machine's would be, so its chat is admitted again and rebuilt from
  * its last save. False when it was no longer active.
  */

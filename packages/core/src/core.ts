@@ -278,7 +278,7 @@ export interface CatamorphicCoreConfig {
   gatewayHosts?: readonly string[];
   /**
    * Minutes work waits for a machine in an Environment that names no
-   * `waitMinutes` (ADR 0347): for a host that makes machines for waiting
+   * `waitMinutes` (ADR 0349): for a host that makes machines for waiting
    * work, so a new chat waits for its machine instead of failing at once.
    */
   placementWaitMinutes?: number;
@@ -386,7 +386,7 @@ export interface CatamorphicCoreConfig {
   onAgentTurnSettled?: (event: AgentTurnSettledEvent) => void | Promise<void>;
   /**
    * Where a person opens a chat, when the host has a public address: the
-   * `url` session states carry (ADR 0344).
+   * `url` session states carry (ADR 0346).
    */
   sessionUrl?: (chat: {
     projectId: string;
@@ -505,7 +505,7 @@ export class CatamorphicCore {
   readonly httpGateway?: HttpGatewayService;
   /** Workspaces at a ref of a project's linked remote (ADR 0178). */
   readonly sessionWorkspaces: SessionWorkspaces;
-  /** Pull requests from a chat's or a proposal's checkout (ADR 0343). */
+  /** Pull requests from a chat's or a proposal's checkout (ADR 0345). */
   readonly pullRequests: PullRequestsService;
   /** Committed `.work/roles/*.json` and their expansion into identities (ADR 0055). */
   readonly roles: RolesService;
@@ -542,9 +542,9 @@ export class CatamorphicCore {
   /** Durable transcript replication outbox, drained by the embedding host. */
   readonly sessionSync?: SessionSyncService;
   readonly watchers?: WatchersService;
-  /** The session operations every surface projects (ADR 0344). */
+  /** The session operations every surface projects (ADR 0346). */
   readonly sessionOperations?: SessionOperationsService;
-  /** Waits their callers left running (ADR 0345). */
+  /** Waits their callers left running (ADR 0347). */
   readonly sessionWaits: SessionWaitsService;
   /** Terminals people open in a chat's workspace (ADR 0209). */
   readonly sessionTerminals?: SessionTerminalsService;
@@ -636,7 +636,7 @@ export class CatamorphicCore {
       description:
         "Read and act on chats; deliver messages to a chat by id or by a workflow key",
       calls: {
-        // Every session operation, by its workflow name (ADR 0344).
+        // Every session operation, by its workflow name (ADR 0346).
         ...Object.fromEntries(
           SESSION_OPERATION_NAMES.map((operation) => [
             sessionOperationHostName(operation),
@@ -1554,7 +1554,7 @@ export class CatamorphicCore {
           }
           // A turn that waits on its person has not settled: the host's
           // settled-turn hook (sync, releasing what the turn held) is not
-          // told, only the chat's people (ADR 0344).
+          // told, only the chat's people (ADR 0346).
           if (event.status !== "awaiting_input")
             await config.onAgentTurnSettled?.(event);
         },

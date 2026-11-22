@@ -2,7 +2,7 @@ import type { JsonValue } from "./json.js";
 import type { TransitionCall } from "./workflow.js";
 
 /**
- * Where a chat stands (ADR 0344): `working` while a turn runs or waits to
+ * Where a chat stands (ADR 0346): `working` while a turn runs or waits to
  * run, `needs_input` while its agent waits on an answer, `failed` when its
  * latest turn failed, `closed` at the end of its life, `idle` otherwise.
  */
@@ -43,7 +43,7 @@ export interface SessionRequest {
 }
 
 /**
- * One chat as every surface reads it (ADR 0344): what every session
+ * One chat as every surface reads it (ADR 0346): what every session
  * operation answers with, over REST, MCP, in-product tools and here.
  */
 export interface SessionState {
@@ -346,7 +346,7 @@ interface Sent {
   created: boolean;
 }
 /**
- * The session operations (ADR 0344): the same ones REST, the MCP endpoints
+ * The session operations (ADR 0346): the same ones REST, the MCP endpoints
  * and in-product agents run, under their workflow names (`session_read` is
  * `read`). Host transitions must be returned from a boundary, never
  * awaited as IO.

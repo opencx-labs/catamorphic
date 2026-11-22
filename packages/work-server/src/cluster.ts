@@ -80,7 +80,7 @@ export async function registerWorkMachine(args: {
    */
   disk?: () => MachineDisk | undefined;
   /**
-   * Whom each worker's machine is for (ADRs 0167, 0347): users, projects'
+   * Whom each worker's machine is for (ADRs 0167, 0349): users, projects'
    * own work, single chat keys, or anyone.
    */
   placement?: {
@@ -181,7 +181,7 @@ export async function registerWorkMachine(args: {
       });
       // A machine that is not accepting (dropped by the plan, stopping,
       // being reset) takes no new work, and keeps serving an Allocation it
-      // already holds (ADRs 0205, 0347): a lookup naming it as both the
+      // already holds (ADRs 0205, 0349): a lookup naming it as both the
       // Allocation's binding and its machine.
       const holdsAllocation = (nodeId: string) =>
         allocationBindingId === nodeId && workerNodeId === nodeId;

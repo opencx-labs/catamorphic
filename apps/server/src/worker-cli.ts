@@ -9,7 +9,7 @@ import {
   signOutOnMachine,
 } from "@catamorphic/work-server";
 
-const USAGE = `Members' own sign-ins on this machine (ADRs 0199, 0213, 0340):
+const USAGE = `Members' own sign-ins on this machine (ADRs 0199, 0213, 0342):
 
   work worker sign-in <claude-code|codex> --member <id> [-- <login args>]
       Run the harness's own login here, in this terminal, for one member:

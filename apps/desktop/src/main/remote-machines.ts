@@ -10,7 +10,7 @@ import {
 
 /*
  * The member's own machines on a linked project's server, and Claude Code
- * and Codex sign-ins on them (ADRs 0213, 0340). Every failure is a plain
+ * and Codex sign-ins on them (ADRs 0213, 0342). Every failure is a plain
  * Error in the server's words: one crosses IPC without a class name in
  * front. The code a member pastes for Claude Code goes to the server in a
  * request body and nowhere else: no error here repeats it.

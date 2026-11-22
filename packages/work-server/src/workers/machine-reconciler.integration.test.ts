@@ -19,7 +19,7 @@ import { WorkWorkerRegistry } from "./worker-registry.js";
 const OPERATOR_SECRET = "operator-secret-shared-by-every-test-replica";
 
 /**
- * The machines hook on two control-plane replicas (issue #154, ADR 0347):
+ * The machines hook on two control-plane replicas (issue #154, ADR 0349):
  * however their passes overlap, each person gets one machine.
  */
 it.skipIf(!process.env.DATABASE_URL)(

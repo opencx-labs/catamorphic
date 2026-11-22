@@ -1,6 +1,6 @@
 # 0191: Member drafts are refs in the project origin
 
-- **Status:** Accepted (draft writes carry file modes and links per [0341](0341-a-workspace-is-saved-as-a-git-pack.md); amended by [0342](0342-every-server-chat-stands-on-a-branch.md): no chat works in a member's draft, every sandbox chat has a session copy)
+- **Status:** Accepted (draft writes carry file modes and links per [0343](0343-a-workspace-is-saved-as-a-git-pack.md); amended by [0344](0344-every-server-chat-stands-on-a-branch.md): no chat works in a member's draft, every sandbox chat has a session copy)
 - **Date:** 2026-09-30
 - **Refines:** 0044, 0055, 0099, 0166, 0178
 

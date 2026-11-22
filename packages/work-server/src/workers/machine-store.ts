@@ -82,7 +82,7 @@ const WaitRequirements = z.object({
 });
 
 /**
- * The machines Work knows (ADR 0347), in Postgres: one row per name from
+ * The machines Work knows (ADR 0349), in Postgres: one row per name from
  * the moment its intent is recorded until its platform confirmed it gone.
  * Nothing about a machine lives in a replica's memory.
  */
@@ -135,7 +135,7 @@ export class MachineStore {
   }
 
   /**
-   * Record the intent to make a machine (ADR 0347): its row and a new
+   * Record the intent to make a machine (ADR 0349): its row and a new
    * enrollment, under the name's lock, so replicas asking at once record
    * one. False when the name is known already.
    */
@@ -597,7 +597,7 @@ export class MachineStore {
   }
 
   /**
-   * Every machine with its facts (ADR 0347): what Work stores, its
+   * Every machine with its facts (ADR 0349): what Work stores, its
    * worker's lease and report, and what it holds, read by the database's
    * clock so every replica and listing agree.
    */

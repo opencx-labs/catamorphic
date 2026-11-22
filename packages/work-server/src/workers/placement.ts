@@ -15,7 +15,7 @@ export { RESERVED_LABELS, servesNobody, servesOneOwner };
 export const NodeLabelsSchema = MachineLabelsSchema;
 
 /**
- * A machine's placement (ADRs 0167, 0347): the labels an Environment's
+ * A machine's placement (ADRs 0167, 0349): the labels an Environment's
  * `pool` selects on, whom it is for (users, projects' own work, single
  * chat keys, or anyone when absent), and whether those it serves trust
  * each other. Control-plane state; a worker never declares it.
@@ -53,7 +53,7 @@ export function workerPlacement(
 /**
  * A worker's placement as the scheduler reads it. A machine that is not
  * `accepting` (the plan dropped it, it is stopping, stopped, resuming or
- * being reset, ADRs 0347, 0348) takes no new work and keeps serving the
+ * being reset, ADRs 0349, 0350) takes no new work and keeps serving the
  * Allocations it holds.
  */
 export type ScheduledPlacement = WorkerPlacement & {

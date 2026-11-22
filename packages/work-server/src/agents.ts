@@ -65,7 +65,7 @@ export function buildAgentRegistry(deps: {
   }
   // Without an organization model the assistant is off, but members can
   // still chat with Claude Code and Codex on their own sign-ins on a
-  // machine of their own they signed in on (ADRs 0199, 0213, 0340).
+  // machine of their own they signed in on (ADRs 0199, 0213, 0342).
   if (!resolveModel || !providerName) {
     return {
       registry: assistantRegistry({ effort }),
@@ -105,7 +105,7 @@ export const ASSISTANT_SLUG = "assistant";
  * Claude Code and Codex on the chat owner's own sign-in, made on the
  * machine that runs the chat (ADR 0199). Offered in projects with an
  * Environment that allows personal credentials; a chat places only on a
- * machine of the owner's that reports their sign-in (ADRs 0213, 0340).
+ * machine of the owner's that reports their sign-in (ADRs 0213, 0342).
  */
 export const SIGN_IN_AGENTS: Readonly<
   Record<SignInHarness, { name: string; description: string }>
@@ -172,7 +172,7 @@ function assistantRegistry(config: {
     defaults,
   };
   const projectForm = /^project:[0-9a-f-]+:assistant$/;
-  // Claude Code and Codex on the member's own sign-in (ADRs 0199, 0340).
+  // Claude Code and Codex on the member's own sign-in (ADRs 0199, 0342).
   const signInAgent = (kind: SignInHarness): RegisteredCodingAgent => ({
     id: kind,
     name: SIGN_IN_AGENTS[kind].name,
@@ -247,7 +247,7 @@ function assistantRegistry(config: {
  * 0198): `claude-code`, `codex`, or an ACP agent's own command (ADR 0255).
  * Served when its credentials name a model connection of its Environment,
  * or, for Claude Code and Codex, `personal`: the chat owner's own sign-in
- * on a machine of theirs (ADRs 0199, 0213, 0340).
+ * on a machine of theirs (ADRs 0199, 0213, 0342).
  * An ACP agent runs only on a model connection: on a server it has no
  * sign-in of its own, and its command comes from the Environment's image.
  */

@@ -670,7 +670,7 @@ describe("workspace coordination tools", () => {
     await toolkit.tools
       .find((tool) => tool.name === "sync_project")
       ?.execute({}, context);
-    // Core's one pull request tool (ADR 0343), over this chat's checkout.
+    // Core's one pull request tool (ADR 0345), over this chat's checkout.
     const pullRequest = toolkit.tools.find(
       (tool) => tool.name === PULL_REQUEST_TOOL_NAME,
     );

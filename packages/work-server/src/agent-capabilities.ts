@@ -17,7 +17,7 @@ import type { WorkAuth } from "./auth/work-auth-types.js";
  * Project tools the server's own agents reach through discovery: setting
  * what their chat shows (its metadata, ADR 0226). Their changes leave as a
  * pull request from their own branch (`project.create_pull_request`, ADR
- * 0343), never as files handed to `propose_change`: every server chat has
+ * 0345), never as files handed to `propose_change`: every server chat has
  * a workspace. Replica memory (c): a constant, the same on every replica.
  */
 const SERVER_PROJECT_TOOLS = new Set(["set_session_metadata"]);

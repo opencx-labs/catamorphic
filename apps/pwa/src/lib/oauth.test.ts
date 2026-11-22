@@ -170,7 +170,7 @@ describe("PWA remote OAuth", () => {
       fetch: fetchImpl,
     });
     const authorization = new URL(started.authorizationUrl);
-    // Work's own app asks to be its person: full access (ADR 0345).
+    // Work's own app asks to be its person: full access (ADR 0347).
     expect(authorization.searchParams.get("scope")?.split(" ")).toContain(
       "work:full",
     );

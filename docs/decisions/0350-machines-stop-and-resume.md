@@ -1,4 +1,4 @@
-# 0348 Machines stop and resume; installation is a recipe
+# 0350 Machines stop and resume; installation is a recipe
 
 - **Status:** Accepted
 - **Date:** 2026-11-20

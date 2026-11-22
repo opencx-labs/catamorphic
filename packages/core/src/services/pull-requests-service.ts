@@ -95,7 +95,7 @@ export interface OpenedPullRequest {
 }
 
 /**
- * Pull requests from a checkout (ADR 0343): the one way work leaves a chat
+ * Pull requests from a checkout (ADR 0345): the one way work leaves a chat
  * for the project's repository. The control plane pushes the checkout's
  * branch as the chat's own `work/` branch, with the caller's connection or
  * the organization's, and opens a pull request for it through the code
@@ -137,7 +137,7 @@ export class PullRequestsService {
   }
 
   /**
-   * Open or update a chat's pull request (ADR 0343), from the checkout its
+   * Open or update a chat's pull request (ADR 0345), from the checkout its
    * host found: push its branch, open the pull request, let the host keep
    * what was pushed, and record the pull request on the chat, which the
    * agent no longer does itself. The one function every host's

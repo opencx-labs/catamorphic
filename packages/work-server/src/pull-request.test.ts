@@ -19,9 +19,9 @@ import {
 } from "./testing/github-stand-in.js";
 
 /**
- * One pull request tool (ADR 0343), end to end on a Work server: a chat
+ * One pull request tool (ADR 0345), end to end on a Work server: a chat
  * that names no ref stands on the default branch of the project's GitHub
- * repository (ADR 0342), its agent commits in its sandbox and calls
+ * repository (ADR 0344), its agent commits in its sandbox and calls
  * `project.create_pull_request` through capability discovery, and the
  * control plane pushes those commits with the organization's GitHub App
  * and opens the pull request. GitHub is the stand-in on loopback, so every
@@ -52,7 +52,7 @@ const setup: Identity = {
 };
 const AGENT_GIT = "git -c user.name=Agent -c user.email=agent@example.test";
 
-describe("an agent's pull request on a Work server (ADRs 0342, 0343)", () => {
+describe("an agent's pull request on a Work server (ADRs 0344, 0345)", () => {
   let root: string;
   let github: GithubStandIn;
   let web: StandInRepository;

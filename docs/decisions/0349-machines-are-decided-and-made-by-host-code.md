@@ -1,9 +1,9 @@
-# 0347 Machines are decided and made by host code
+# 0349 Machines are decided and made by host code
 
 - **Status:** Accepted
 - **Date:** 2026-11-20
 - **Supersedes:** machine policy in [0167](0167-machine-pools-access-and-owner-placement.md), [0205](0205-machine-classes-pools-and-retention.md), [0258](0258-machines-on-demand.md), and [0327](0327-machine-provisioners-are-workflows.md).
-- **Amends:** 0164, 0294, and 0346.
+- **Amends:** 0164, 0294, and 0348.
 
 ## Context
 

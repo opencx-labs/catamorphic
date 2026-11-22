@@ -48,7 +48,7 @@ const SYNC_IGNORED_PREFIXES = [
 ];
 
 /**
- * Base64 characters of the pack one remote operation carries (ADR 0341):
+ * Base64 characters of the pack one remote operation carries (ADR 0343):
  * a multiple of four, so each chunk decodes alone, and a quarter of the
  * 16 MiB of output a provider keeps from one command.
  */
@@ -59,7 +59,7 @@ const MAX_CHUNKS = 512;
 const MAX_CHECKOUT_BYTES = 4 * 1024 * 1024 * 1024;
 /** The most a save writes into a draft, which holds it in memory. */
 const MAX_DRAFT_BYTES = 256 * 1024 * 1024;
-/** The most commits one save brings from a sandbox (ADR 0342). */
+/** The most commits one save brings from a sandbox (ADR 0344). */
 const MAX_SAVED_COMMITS = 10_000;
 /** The most those commits may hold, unpacked. */
 const MAX_HISTORY_BYTES = 1024 * 1024 * 1024;
@@ -80,7 +80,7 @@ const PACK_FILE = '"$(git rev-parse --git-dir)/work-sync/pack.b64"';
 /**
  * Diff a sandbox project dir against what was last synced (`refs/work/synced`,
  * else HEAD) and mirror every change into the caller's draft, exactly:
- * bytes, executable bits, links and deletions (ADR 0341). Throws
+ * bytes, executable bits, links and deletions (ADR 0343). Throws
  * {@link SandboxSyncError} when the sandbox's changes cannot be read or
  * name something a save may not write.
  *
@@ -150,7 +150,7 @@ export async function syncSandboxChanges(opts: {
 }
 
 /**
- * Save a chat's workspace (ADRs 0341, 0342): publish the checked files,
+ * Save a chat's workspace (ADRs 0343, 0344): publish the checked files,
  * commits and branch in one checkpoint, then advance the sandbox's marker.
  */
 export async function saveSessionWorkspace(opts: {
@@ -288,7 +288,7 @@ function asSyncError(error: unknown): unknown {
  * Snapshot the working tree (tracked and untracked, honoring ignores) into
  * a private index, then pack what differs from the last synced tree: the
  * blob of every changed file, and a manifest of the changes as a blob of
- * its own. With `known` (ADR 0342) the pack also holds what HEAD reaches
+ * its own. With `known` (ADR 0344) the pack also holds what HEAD reaches
  * that those commits do not: the commits the agent's branch gained. The
  * pack waits in the Git directory as base64, which is all a provider's
  * command output carries safely (remote workers send it as JSON text, and
@@ -406,8 +406,8 @@ export interface SandboxSave {
 
 /**
  * A sandbox's changes since its last save, read and checked but not yet
- * written anywhere (ADR 0341): the snapshot's tree, every change, and the
- * pack holding their contents. With `history` (ADR 0342) the pack also
+ * written anywhere (ADR 0343): the snapshot's tree, every change, and the
+ * pack holding their contents. With `history` (ADR 0344) the pack also
  * holds the commits HEAD gained beyond `known`, indexed beside the
  * repository at `borrow` they build on. `pack` is null when the save
  * carries nothing; otherwise the caller disposes it.

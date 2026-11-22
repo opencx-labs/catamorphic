@@ -126,7 +126,7 @@ export interface CatamorphicPluginOptions {
 }
 
 /**
- * Host settings for the MCP endpoints (ADR 0345). `stateSecret` signs the
+ * Host settings for the MCP endpoints (ADR 0347). `stateSecret` signs the
  * state a wait hands a client with what it asks; replicas must share it,
  * and a host that sets none gets one per process. `resourceMetadataUrl`
  * is the OAuth protected-resource document a step-up challenge names.
@@ -331,7 +331,7 @@ export const catamorphicPlugin: FastifyPluginAsync<
       if (isPublic) return;
       return reply.status(401).send({ error: "Unauthorized" });
     }
-    // A client reads only what its person let it read (ADR 0345): no
+    // A client reads only what its person let it read (ADR 0347): no
     // route is a way around a grant without `work:read`.
     if (!isPublic && !hasTokenScope(identity, "work:read"))
       return insufficientScope(reply, "work:read", opts.mcp);

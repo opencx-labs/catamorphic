@@ -319,7 +319,7 @@ describe("Codex sign-ins started from the app (ADR 0213)", () => {
 /** What a member pastes from the stand-in's sign-in page. */
 const CLAUDE_CODE = "TEST-CLAUDE-CODE#state";
 
-describe("Claude Code sign-ins started from the app (ADR 0340)", () => {
+describe("Claude Code sign-ins started from the app (ADR 0342)", () => {
   let dataDir: string;
   let bin: string;
   const machines: HarnessSignIns[] = [];

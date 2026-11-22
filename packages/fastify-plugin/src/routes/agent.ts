@@ -128,7 +128,7 @@ const SessionOperationErrorResponses = {
   503: SessionOperationErrorSchema,
 };
 
-/** A session operation's failure as its route answers it (ADR 0344). */
+/** A session operation's failure as its route answers it (ADR 0346). */
 function sendSessionOperationError(reply: FastifyReply, error: unknown) {
   // A grant that lacks a scope is answered as on every route: a step-up.
   if (error instanceof TokenScopeRequiredError) throw error;
@@ -366,7 +366,7 @@ export function registerAgentRoutes(app: FastifyInstance, ctx: RouteContext) {
     },
   });
 
-  // Start a chat with its first message (ADR 0344): the same operation
+  // Start a chat with its first message (ADR 0346): the same operation
   // the MCP endpoints, in-product agents and workflows run. It answers at
   // once with the chat's state; the turn runs in the background.
   typed.route({
@@ -410,7 +410,7 @@ export function registerAgentRoutes(app: FastifyInstance, ctx: RouteContext) {
   });
 
   // Hold until one of the chats needs its caller, at most 50 seconds (ADR
-  // 0345): `changed: false` when nothing happened, to be asked again.
+  // 0347): `changed: false` when nothing happened, to be asked again.
   typed.route({
     method: "POST",
     url: "/projects/:projectId/agent/sessions/wait",

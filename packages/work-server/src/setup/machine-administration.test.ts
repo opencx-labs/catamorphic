@@ -14,14 +14,14 @@ import {
 
 /**
  * Organization administrators manage machines through the API as the
- * operator does on the loopback listener (ADRs 0205, 0347), with the same
+ * operator does on the loopback listener (ADRs 0205, 0349), with the same
  * handlers; members and anonymous callers cannot. Which machines exist is
  * the host's plan; no route writes rules.
  */
 const OPERATOR_SECRET = "machine-admin-operator-secret-with-32-characters";
 const PUBLIC = "https://brain.example.test";
 
-describe("machine administration (ADRs 0205, 0347)", () => {
+describe("machine administration (ADRs 0205, 0349)", () => {
   let root: string;
   let server: WorkServer;
   const cloud = new MemoryCloud();
@@ -116,7 +116,7 @@ describe("machine administration (ADRs 0205, 0347)", () => {
     fs.rmSync(root, { recursive: true, force: true });
   }, 60_000);
 
-  it("serves no install script: installing a machine is the host's recipe (ADR 0348)", async () => {
+  it("serves no install script: installing a machine is the host's recipe (ADR 0350)", async () => {
     // The path is no route of the server's: it falls through to the app.
     const response = await api("GET", "/api/workers/install.sh");
     expect(response.headers["content-type"]).not.toContain("shellscript");

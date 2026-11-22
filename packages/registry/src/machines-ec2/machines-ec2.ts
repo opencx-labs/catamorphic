@@ -19,7 +19,7 @@ import type {
 } from "@catamorphic/work-server";
 
 /*
- * A Work server's machines on Amazon EC2 (ADR 0347): the provisioner half
+ * A Work server's machines on Amazon EC2 (ADR 0349): the provisioner half
  * of a machines hook, as host code from the `machines-ec2` pack, yours to
  * change. `ec2Machines(...)` returns `create`, `destroy`, `stop`, `start`
  * and `describe`; your `plan` decides which machines exist:

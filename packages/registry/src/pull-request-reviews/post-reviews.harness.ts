@@ -296,7 +296,7 @@ export function fakeWorld(input: { head: string }) {
       },
     },
   };
-  // As core reads a chat (ADR 0344): its state, with the results the
+  // As core reads a chat (ADR 0346): its state, with the results the
   // read's filters keep when `include` asks for them, newest first (or
   // oldest, by `order`), at most `limit` (100), by name and turn.
   const sessions = {

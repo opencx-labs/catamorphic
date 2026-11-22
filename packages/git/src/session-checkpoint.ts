@@ -3,7 +3,7 @@ import { nativeGit } from "./native-git.js";
 import { isValidRefName } from "./ref-names.js";
 
 /**
- * A session's checkpoint (ADR 0342): one commit per save on the session's
+ * A session's checkpoint (ADR 0344): one commit per save on the session's
  * own ref, never on the agent's branch. Its tree is the working tree as
  * saved; its parents are the checkpoint before it and then the agent's
  * HEAD; its trailers name the agent's branch and HEAD, and the branch this
@@ -15,7 +15,7 @@ export interface SessionWork {
   head: string;
   /** The branch checked out there. */
   branch: string;
-  /** What this chat last pushed to the project's repository (ADR 0343). */
+  /** What this chat last pushed to the project's repository (ADR 0345). */
   pushed?: { branch: string; commit: string };
 }
 

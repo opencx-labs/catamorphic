@@ -643,7 +643,7 @@ with `"access": { "people": ["dana@example.com"] }`, change an enrolled
 worker's access with `PATCH /_work/operator/workers/:name`, or let a machine
 rule give every member of a group one ([above](#a-machine-for-every-person-or-team)).
 Their chats prefer it to shared machines, nobody else's work lands on it, and
-it may run their own Claude Code and Codex sign-ins and files (ADRs 0184, 0213, 0340). Access decides placement,
+it may run their own Claude Code and Codex sign-ins and files (ADRs 0184, 0213, 0342). Access decides placement,
 not OS accounts or network access on the machine.
 
 Choose the trust boundary before provisioning. Control-plane replicas carry
@@ -907,7 +907,7 @@ caches (ADR 0208):
 
 An Environment with `"personalCredentials": true` lets a member's chats run
 Claude Code and Codex on the member's own Claude and ChatGPT sign-ins, made
-from the Work app on a machine of their own (ADRs 0199, 0213, 0340,
+from the Work app on a machine of their own (ADRs 0199, 0213, 0342,
 [harnesses](harnesses.md#members-own-sign-ins)), and lets their listed files
 reach their own chats. The sign-in never leaves that machine: the worker
 reports only `sign-in:claude-code:<member>` and `sign-in:codex:<member>` in

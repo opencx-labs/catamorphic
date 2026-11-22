@@ -1399,7 +1399,7 @@ describeIf("workflows run commands in a chat's workspace (ADR 0324)", () => {
       sessionId,
       key: null,
       reason: "created",
-      // Every chat stands on a base (ADR 0342): here the project's own main.
+      // Every chat stands on a base (ADR 0344): here the project's own main.
       workspace: {
         ref: "main",
         commit: expect.stringMatching(/^[0-9a-f]{40}$/),

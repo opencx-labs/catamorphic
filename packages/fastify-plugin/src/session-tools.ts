@@ -13,7 +13,7 @@ import type { McpTool, McpToolResult } from "./mcp-server.js";
 export type { McpTool, McpToolResult } from "./mcp-server.js";
 
 /**
- * The session operations as MCP tools (ADR 0344): every entry of core's
+ * The session operations as MCP tools (ADR 0346): every entry of core's
  * registry becomes one tool, with the registry's name, title, description,
  * schemas and annotations. Nothing here knows an operation by name, so a
  * tool added to the registry is served by both MCP endpoints and offered
@@ -59,7 +59,7 @@ export function sessionToolResult(value: unknown): McpToolResult {
 }
 
 /**
- * A failed operation as a tool-execution error (ADR 0344): `isError` with
+ * A failed operation as a tool-execution error (ADR 0346): `isError` with
  * `{"error":{"code","message","retryable","sessionId?"}}` as its text.
  */
 export function sessionToolError(error: unknown): McpToolResult {
@@ -128,7 +128,7 @@ export function sessionTools(args: {
         title: definition.title,
         description: definition.description,
         inputSchema: z.toJSONSchema(definition.input, { io: "input" }),
-        // Compact on purpose: clients hand it to their model (ADR 0345).
+        // Compact on purpose: clients hand it to their model (ADR 0347).
         outputSchema: definition.outputSchema,
         annotations: {
           title: definition.title,

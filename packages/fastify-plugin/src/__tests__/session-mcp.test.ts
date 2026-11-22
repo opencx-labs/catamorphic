@@ -8,7 +8,7 @@ import {
 } from "../session-mcp.js";
 
 /*
- * What a wait hands a client with what it asks (ADR 0345): the state is
+ * What a wait hands a client with what it asks (ADR 0347): the state is
  * the client's to echo and nothing else, and an agent's request is a form
  * its person fills in.
  */

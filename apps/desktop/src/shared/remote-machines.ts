@@ -1,6 +1,6 @@
 /**
  * A member's own machines on a project's server and their Claude Code and
- * Codex sign-ins on them (ADRs 0213, 0340). Each harness signs in on the
+ * Codex sign-ins on them (ADRs 0213, 0342). Each harness signs in on the
  * machine with its own login, so the sign-in never leaves it: the desktop
  * shows the login's link, and either the one-time code it printed (Codex)
  * or a field for the code the sign-in page gives back (Claude Code).

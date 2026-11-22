@@ -119,7 +119,7 @@ describe("environmentSatisfies", () => {
   });
 });
 
-describe("placement (ADRs 0167, 0347)", () => {
+describe("placement (ADRs 0167, 0349)", () => {
   const alice = { userId: "alice" };
   const only = (access: {
     users?: string[];
