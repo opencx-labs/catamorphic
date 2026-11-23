@@ -1,7 +1,7 @@
 import {
   type BoundaryContext,
   defineWorkflow,
-  type SessionHistoryMessage,
+  type SessionTranscriptMessage,
   type TriggerPayload,
   trigger,
 } from "@catamorphic/workflow";
@@ -61,7 +61,7 @@ export const answerSlackMentions = defineWorkflow(({ defineBoundary }) => ({
 type SettledReply = {
   sessionId: string;
   key: string | null;
-  messages: SessionHistoryMessage[];
+  transcript?: SessionTranscriptMessage[];
 };
 
 /** @displayname Post replies to Slack threads */
@@ -91,12 +91,13 @@ export const postSlackReplies = defineWorkflow(({ defineBoundary }) => ({
           const quiet: SettledReply = {
             sessionId: input.payload.sessionId,
             key: null,
-            messages: [],
+            transcript: [],
           };
           return quiet;
         }
-        return host["catamorphic.sessions"].history({
+        return host["catamorphic.sessions"].read({
           sessionId: input.payload.sessionId,
+          include: ["transcript"],
           through: reply,
           limit: 1,
         });
@@ -107,7 +108,7 @@ export const postSlackReplies = defineWorkflow(({ defineBoundary }) => ({
       run: ({ input, connections }: BoundaryContext<SettledReply>) => {
         const [, channel, threadTs] =
           /^slack:([^:]+):(.+)$/.exec(input.key ?? "") ?? [];
-        const reply = input.messages.at(-1);
+        const reply = input.transcript?.at(-1);
         if (
           !channel ||
           !threadTs ||

@@ -26,7 +26,7 @@ import { ExecutionAllocationsService } from "../services/execution-allocations-s
 import { ExecutionEnvironmentsService } from "../services/execution-environments-service.js";
 import { ProjectEnvironmentsService } from "../services/project-environments-service.js";
 import { ProjectsService } from "../services/projects-service.js";
-import { SessionActionsService } from "../services/session-actions-service.js";
+import { SessionOperationsService } from "../services/session-operations.js";
 import { buildContextHandoff } from "../services/sessions/context-handoff.js";
 import { copySettledHistory } from "../services/sessions/session-copy.js";
 import { readFullSnapshot } from "../services/sessions/session-reads.js";
@@ -37,6 +37,12 @@ import {
   SessionResultAttemptError,
 } from "../services/sessions/session-results.js";
 import { testEnvironmentProvider } from "./test-environment.js";
+
+/** What the operations need beside the sessions: no watchers, own chats. */
+const OPERATION_DEPS = {
+  watchers: () => undefined,
+  chatOwner: async (input: { caller: Identity }) => input.caller,
+};
 
 /*
  * Typed results (ADR 0323): an agent whose definition declares results
@@ -84,7 +90,7 @@ const tool = (name: string, input: unknown) =>
 describe("typed results", () => {
   let tmpDir: string;
   let sessions: AgentSessionsService;
-  let actions: SessionActionsService;
+  let actions: SessionOperationsService;
   let projects: ProjectsService;
 
   beforeAll(async () => {
@@ -144,7 +150,7 @@ describe("typed results", () => {
         head: () => Promise.resolve("c0ffee".padEnd(40, "0")),
       },
     });
-    actions = new SessionActionsService(db, sessions, () => undefined);
+    actions = new SessionOperationsService(db, sessions, OPERATION_DEPS);
   }, 30_000);
 
   afterAll(async () => {
@@ -333,9 +339,10 @@ describe("typed results", () => {
     const answering = await actions.execute({
       identity,
       projectId: project.id,
-      operation: "results",
+      operation: "session_read",
       args: {
         sessionId: session.id,
+        include: ["results"],
         afterInput: second?.inputItemId ?? "",
       },
       author: { kind: "user", externalUserId: identity.externalUserId },
@@ -500,7 +507,7 @@ describe("typed results", () => {
       expect(earlier).toContain(`\n- notes: "${note}"`);
     // A long value is named, never loaded whole.
     expect(earlier).toMatch(
-      /\n- notes: \(read it with session_results, result [0-9a-f-]{36}\)/,
+      /\n- notes: \(read it with session_read, result [0-9a-f-]{36}\)/,
     );
     expect(earlier).not.toContain("x".repeat(300));
   });
@@ -590,7 +597,7 @@ describe("typed results", () => {
     expect(text).toContain(`- Turn 2, Person: ${ask.trim()}`);
     expect(text).not.toContain("request is not shown");
     expect(text).toMatch(
-      /n{200,}… \(cut here; read the whole value with session_results, result [0-9a-f-]+\)/,
+      /n{200,}… \(cut here; read the whole value with session_read, result [0-9a-f-]+\)/,
     );
   });
 
@@ -887,9 +894,10 @@ describe("typed results", () => {
         (await actions.execute({
           identity,
           projectId: project.id,
-          operation: "results",
+          operation: "session_read",
           args: {
             sessionId: session.id,
+            include: ["results"],
             turnId: settled?.id ?? "",
             limit: 2,
             ...(order ? { order } : {}),
@@ -904,7 +912,7 @@ describe("typed results", () => {
       (await actions.execute({
         identity,
         projectId: project.id,
-        operation: "inspect",
+        operation: "session_read",
         args: { sessionId: session.id },
         author: { kind: "user", externalUserId: identity.externalUserId },
       })) as { queued: string[]; turn: unknown };

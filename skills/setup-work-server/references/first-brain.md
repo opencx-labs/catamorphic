@@ -109,7 +109,7 @@ and pass them without writing them into shell history or a file.
   `project_overview` shows their roles, agents, Environments, workflows, and
   apps. An admin sees the whole builder's loop: `program_write`,
   `program_check`, `program_deploy`, `workflow_run`, and `run_details`, plus
-  documents, skills, `ask_agent`, shares, and one tool per deployed
+  documents, skills, the chat tools, shares, and one tool per deployed
   `ai.tool-call` workflow.
 
 ## 4. Run a first workload
@@ -117,8 +117,9 @@ and pass them without writing them into shell history or a file.
 Prove the brain works before handing it over. From the connected client, as
 the admin:
 
-1. `ask_agent` with `agent: "assistant"` and a short message; the reply
-   proves agents run (on a worker when the server runs agents only there).
+1. `session_start` with `agent: "assistant"` and a short message, then
+   `session_wait` with the returned cursor; the reply proves agents run (on
+   a worker when the server runs agents only there).
 2. Ask the client to add a small workflow with an `ai.tool-call` trigger,
    following the project's `work-projects` and `writing-workflows`
    skills, then `program_check`, `program_deploy`, and `workflow_run` it.

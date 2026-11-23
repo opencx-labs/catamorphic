@@ -1,4 +1,3 @@
-import { randomBytes } from "node:crypto";
 import type { DB } from "@catamorphic/db";
 import {
   fetchFromRemote,
@@ -8,21 +7,13 @@ import {
   type ProjectManager,
   PushNotFastForwardError,
   push,
-  pushToRemote,
   syncWithNetworkRemote,
 } from "@catamorphic/git";
 import { getTracer, withSpan } from "@catamorphic/otel";
-import { MANAGED_BRANCH_PREFIX } from "@catamorphic/workflow/project-layout";
 import type { Kysely } from "kysely";
 import { hasProjectPermission, type Identity } from "../identity.js";
-import {
-  AccessDeniedError,
-  assertProjectPermission,
-} from "./artifact-scope.js";
-import {
-  type CodeHostsService,
-  CodeHostUnsupportedError,
-} from "./code-hosts-service.js";
+import { AccessDeniedError } from "./artifact-scope.js";
+import type { CodeHostsService } from "./code-hosts-service.js";
 import { remoteOwnership } from "./projects-service.js";
 
 const tracer = getTracer("@catamorphic/core");
@@ -30,9 +21,9 @@ const tracer = getTracer("@catamorphic/core");
 const SYNC_AUTHOR = { name: "Work", email: "system@work.software" };
 
 /**
- * A member's server draft (ADR 0191) has no checkout to sync or push: its
+ * A member's server draft (ADR 0191) has no checkout to sync: its
  * published program syncs with the linked repository by itself, and
- * changes reach that repository as proposals.
+ * changes reach that repository as pull requests.
  */
 export class ServerDraftError extends Error {
   constructor() {
@@ -238,127 +229,6 @@ export class RemoteSyncService {
   }
 
   /**
-   * Push HEAD to a fresh branch on the linked remote and open a pull request
-   * through the host's capability. The dev repo's dirty tree is committed
-   * first (the turn's checkpoint has not run yet when an agent calls this
-   * mid-turn) so the PR contains the work being described.
-   */
-  async createPullRequest(
-    identity: Identity,
-    projectId: string,
-    input: { title: string; body?: string },
-  ): Promise<{ url: string; number: number; branch: string }> {
-    return this.createPullRequestInner(identity, projectId, input);
-  }
-
-  /**
-   * Host integration for a linked worktree. The host validates and
-   * checkpoints the checkout first; this method pushes its named ref from
-   * the repository's shared Git directory without touching the primary tree.
-   */
-  async createPullRequestFromRef(
-    identity: Identity,
-    projectId: string,
-    input: { title: string; body?: string; localRef: string },
-  ): Promise<{ url: string; number: number; branch: string }> {
-    if (!validLocalBranch(input.localRef)) {
-      throw new Error(`Invalid local branch ref '${input.localRef}'`);
-    }
-    return this.createPullRequestInner(identity, projectId, input);
-  }
-
-  private async createPullRequestInner(
-    identity: Identity,
-    projectId: string,
-    input: { title: string; body?: string; localRef?: string },
-  ): Promise<{ url: string; number: number; branch: string }> {
-    // Pushing a branch to the origin changes the program; the connection may
-    // be the organization's, so the caller's own permission decides.
-    assertProjectPermission(identity, projectId, "program:write");
-    return withSpan(
-      {
-        tracer,
-        name: "project.remote.create_pull_request",
-        attributes: {
-          "catamorphic.tenant.id": identity.tenantId,
-          "user.id": identity.externalUserId,
-          "catamorphic.project.id": projectId,
-        },
-      },
-      async () => {
-        return this.codeHosts.withOrigin({
-          identity,
-          projectId,
-          principal: "either",
-          capability: "opening pull requests",
-          use: async ({ host, provider, credential, remoteUrl, project }) => {
-            if (!host.createPullRequest || !provider.git) {
-              throw new CodeHostUnsupportedError(
-                remoteUrl,
-                "opening pull requests",
-              );
-            }
-            const minted = await provider.git.credentials({
-              material: credential.material,
-              remoteUrl,
-              access: "write",
-            });
-            const dev = await this.projectManager.openDraft({
-              tenantId: identity.tenantId,
-              projectId,
-              externalUserId: identity.externalUserId,
-            });
-            try {
-              if (dev instanceof OriginDraftRepo) throw new ServerDraftError();
-              const local = Boolean(
-                await this.projectManager.localPath({
-                  tenantId: identity.tenantId,
-                  projectId,
-                }),
-              );
-              if (!input.localRef) {
-                const status = await dev.status();
-                if (status.dirty) {
-                  if (local)
-                    throw new Error(
-                      "Record the changes you want to share first. Opening a pull request will not stage your pending work.",
-                    );
-                  await dev.commit(input.title, SYNC_AUTHOR);
-                }
-              }
-              const branch = prBranchName(input.title, new Date());
-              await pushToRemote({
-                repoPath: dev.repoPath,
-                native: local,
-                url: remoteUrl,
-                credentials: {
-                  username: minted.username,
-                  password: minted.password,
-                },
-                ownership:
-                  remoteOwnership(project.remoteOwnership) ?? "attached",
-                ref: input.localRef ?? "HEAD",
-                remoteBranch: branch,
-              });
-              const pr = await host.createPullRequest({
-                credential,
-                remoteUrl,
-                title: input.title,
-                head: branch,
-                base: project.defaultBranch ?? project.remoteBranch ?? "main",
-                ...(input.body !== undefined ? { body: input.body } : {}),
-              });
-              return { ...pr, branch };
-            } finally {
-              await dev.dispose();
-            }
-          },
-        });
-      },
-    );
-  }
-
-  /**
    * The project's linked remote and the credentials this host fetches it
    * with, for the control plane's own Git traffic (ADR 0178's mirror). The
    * one place origin credentials are looked up; they never leave the
@@ -379,7 +249,10 @@ export class RemoteSyncService {
     });
     return {
       url: row.remote_url,
-      branch: row.remote_branch ?? row.default_branch ?? "main",
+      branch: defaultBranchOf({
+        defaultBranch: row.default_branch,
+        remoteBranch: row.remote_branch,
+      }),
       ...(credentials ? { credentials } : {}),
     };
   }
@@ -434,34 +307,14 @@ export class RemoteSyncService {
   }
 }
 
-function validLocalBranch(ref: string): boolean {
-  return (
-    /^[A-Za-z0-9][A-Za-z0-9._/-]*$/.test(ref) &&
-    !ref.includes("..") &&
-    !ref.includes("//") &&
-    !ref.endsWith("/") &&
-    !ref.endsWith(".") &&
-    !ref.endsWith(".lock")
-  );
-}
-
 /**
- * `work/<title-slug>-YYYYMMDD-HHmm-<suffix>`: readable on the host, and
- * distinct across days and for pull requests opened in the same minute.
+ * The branch of a project's linked repository that work starts from and
+ * pull requests target: the repository's default branch, else the branch
+ * the project tracks.
  */
-export function prBranchName(
-  title: string,
-  now: Date,
-  suffix: string = randomBytes(3).toString("hex"),
-): string {
-  const slug =
-    title
-      .toLowerCase()
-      .replace(/[^a-z0-9]+/g, "-")
-      .replace(/^-+|-+$/g, "")
-      .slice(0, 40) || "change";
-  const pad = (n: number) => String(n).padStart(2, "0");
-  const day = `${now.getUTCFullYear()}${pad(now.getUTCMonth() + 1)}${pad(now.getUTCDate())}`;
-  const time = `${pad(now.getUTCHours())}${pad(now.getUTCMinutes())}`;
-  return `${MANAGED_BRANCH_PREFIX}${slug}-${day}-${time}-${suffix}`;
+export function defaultBranchOf(project: {
+  defaultBranch: string | null;
+  remoteBranch: string | null;
+}): string {
+  return project.defaultBranch ?? project.remoteBranch ?? "main";
 }

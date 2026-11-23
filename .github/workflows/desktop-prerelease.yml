@@ -243,15 +243,14 @@ jobs:
           else
             release_flags=(--verify-tag --generate-notes --title "Work ${VERSION} for macOS")
             if [[ "${RELEASE_KIND}" == "preview" ]]; then
-              release_flags+=(--prerelease --latest=false --notes "Apple silicon Preview release for macOS 12 or newer. Preview builds may contain regressions, so back up important projects before upgrading.")
+              release_flags+=(--prerelease --latest=false --notes "Apple silicon Preview release for macOS 13 or newer. Preview builds may contain regressions, so back up important projects before upgrading.")
             else
-              release_flags+=(--latest=true --notes "Apple silicon Stable release for macOS 12 or newer.")
+              release_flags+=(--latest=true --notes "Apple silicon Stable release for macOS 13 or newer.")
             fi
             gh release create "${TAG}" "${assets[@]}" "${release_flags[@]}"
           fi
 
-      - name: Update Homebrew cask
-        if: github.ref_type == 'tag'
+      - name: Validate and update Homebrew casks
         shell: bash
         env:
           GH_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
@@ -286,8 +285,11 @@ jobs:
           fi
           for cask_file in "${cask_files[@]}"; do
             ruby -c "${tap_path}/Casks/${cask_file}"
-            brew style --cask "${tap_path}/Casks/${cask_file}"
+            brew style --cask "opencx-labs/tap/${cask_file%.rb}"
           done
+          if [[ "${GITHUB_REF_TYPE}" != "tag" ]]; then
+            exit 0
+          fi
           git -C "${tap_path}" config user.name "github-actions[bot]"
           git -C "${tap_path}" config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           for cask_file in "${cask_files[@]}"; do

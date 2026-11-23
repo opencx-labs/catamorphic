@@ -277,48 +277,49 @@ export async function moveCheckoutBase(opts: {
  * A packfile holding `head` and its history back to `base`, and the
  * commits a receiver must record as shallow. A sandbox seeded from it has
  * the real commits (so `git log`, `diff`, and pushes of new branches work)
- * without the repository's whole history.
+ * without the repository's history before the base. With `tree`, the pack
+ * also holds that tree whole: a session's working tree as last saved (ADR
+ * 0344), which its sandbox puts back on top of `head`.
  */
 export async function buildSeedPack(opts: {
   repoPath: string;
   head: string;
   base: string;
+  tree?: string;
 }): Promise<{ pack: Uint8Array; shallow: string[] }> {
-  const depth = await nativeGit(opts.repoPath, [
-    "rev-list",
-    "--count",
-    `${opts.base}..${opts.head}`,
-  ])
-    .then((count) => Number.parseInt(count.trim(), 10) + 1)
-    .catch(() => 1);
+  for (const id of [opts.head, opts.base, ...(opts.tree ? [opts.tree] : [])])
+    if (!COMMIT.test(id)) throw new Error("A seed pack names full object ids");
+  const objects = path.resolve(
+    opts.repoPath,
+    (
+      await nativeGit(opts.repoPath, ["rev-parse", "--git-path", "objects"])
+    ).trim(),
+  );
+  if (/[\n"]/.test(objects))
+    throw new Error("The repository's path cannot be packed from");
   const directory = await fs.mkdtemp(path.join(tmpdir(), "work-seed-"));
   try {
-    await nativeGit(directory, ["init", "--bare", "--quiet"]);
-    // A private ref names the head for the shallow fetch below.
-    const pin = `refs/work/seed/${process.pid}-${Date.now()}`;
-    await nativeGit(opts.repoPath, ["update-ref", pin, opts.head]);
-    try {
-      await nativeGit(directory, [
-        "fetch",
-        "--quiet",
-        "--no-tags",
-        `--depth=${depth}`,
-        `file://${path.resolve(opts.repoPath)}`,
-        `+${pin}:refs/heads/main`,
-      ]);
-    } finally {
-      await nativeGit(opts.repoPath, ["update-ref", "-d", pin]).catch(() => "");
-    }
-    const shallow = await fs
-      .readFile(path.join(directory, "shallow"), "utf8")
-      .then((text) => text.split("\n").filter(Boolean))
-      .catch(() => []);
+    // A repository of its own that borrows the copy's objects and ends
+    // history at the base, so the walk below stops there without a ref or
+    // a shallow file ever being written into the copy itself.
+    await nativeGit(directory, [
+      "init",
+      "--bare",
+      "--quiet",
+      ...(opts.base.length === 64 ? ["--object-format=sha256"] : []),
+    ]);
+    await fs.writeFile(
+      path.join(directory, "objects", "info", "alternates"),
+      `${objects}\n`,
+    );
+    await fs.writeFile(path.join(directory, "shallow"), `${opts.base}\n`);
     const pack = await gitOutput({
       cwd: directory,
       args: ["pack-objects", "--revs", "--stdout", "--quiet"],
-      input: `${opts.head}\n`,
+      // The base itself too: a head that left it still needs it as its ref.
+      input: `${[opts.head, opts.base, ...(opts.tree ? [opts.tree] : [])].join("\n")}\n`,
     });
-    return { pack, shallow };
+    return { pack, shallow: [opts.base] };
   } finally {
     await fs.rm(directory, { recursive: true, force: true });
   }

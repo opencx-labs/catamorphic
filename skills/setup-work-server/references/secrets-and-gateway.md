@@ -436,10 +436,22 @@ sandbox's Git talks to the gateway:
 - Every fetch and push is reviewed by any host guards for the connection's
   kind (action `fetch` or `push`, with the repository and refs) and audited with
   the session's owner, the refs, and the outcome.
-- Workflows start a chat's checkout at a ref of the project's remote with
-  `deliver({ key, workspace: { ref: "refs/pull/42/head" } })`; the server
-  fetches it into its mirror with the binding's (or code host's) credential
-  and seeds the sandbox from there, with no Git traffic from the sandbox.
+- Every chat's checkout is a branch of its own (`work/<id>`) that starts
+  from a commit: the default branch of the project's repository, or the
+  project's own `main` when it has none. Workflows start one at another ref
+  with `deliver({ key, workspace: { ref: "refs/pull/42/head" } })`. The
+  server fetches the ref into its mirror with the binding's (or code
+  host's) credential and seeds the sandbox from there, with no Git traffic
+  from the sandbox. History is shallow at that commit; `git fetch --deepen`
+  brings more through the gateway.
+- Work saves the branch the agent is on, its commits and its uncommitted
+  changes after every turn, and gives them back when the workspace
+  returns. Other local branches, ignored files and a rebase in progress
+  are not kept.
+- An agent opens a pull request with `project.create_pull_request`: the
+  server pushes the chat's commits as its own `work/` branch with the
+  caller's or the organization's connection, so the Environment needs no
+  Git binding for it, and records the pull request on the chat.
 
 Verify: from a chat in that Environment, `git fetch origin` succeeds,
 `git push origin work/<name>` succeeds, `git push --force origin HEAD:main` is

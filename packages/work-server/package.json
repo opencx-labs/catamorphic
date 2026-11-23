@@ -1,6 +1,6 @@
 {
   "name": "@catamorphic/work-server",
-  "version": "0.1.0-alpha.39",
+  "version": "0.1.0-alpha.41",
   "type": "module",
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
@@ -9,17 +9,23 @@
       "bun": "./src/index.ts",
       "import": "./dist/index.js",
       "types": "./dist/index.d.ts"
+    },
+    "./testing": {
+      "bun": "./src/testing.ts",
+      "import": "./dist/testing.js",
+      "types": "./dist/testing.d.ts"
     }
   },
   "scripts": {
     "build": "bun ../../scripts/build-package.ts && tsc --project tsconfig.json --noEmit false --emitDeclarationOnly",
     "dev": "bun ../../scripts/build-package.ts --watch",
-    "typecheck": "bun check --project ./tsconfig.json",
+    "typecheck": "bun check --project ./tsconfig.json && bun check --project ./tsconfig.recipes.json",
     "test": "bun ../../scripts/tool-runtime.ts vitest --tool-cwd packages/work-server --config ../../vitest.config.ts --pool=forks"
   },
   "bundle": {
     "entry": [
-      "src/index.ts"
+      "src/index.ts",
+      "src/testing.ts"
     ]
   },
   "dependencies": {
@@ -35,7 +41,6 @@
     "@catamorphic/core": "workspace:*",
     "@catamorphic/db": "workspace:*",
     "@catamorphic/fastify-plugin": "workspace:*",
-    "@catamorphic/hetzner": "workspace:*",
     "@catamorphic/local-process": "workspace:*",
     "@catamorphic/mcp": "workspace:*",
     "@catamorphic/microsandbox": "workspace:*",
@@ -54,7 +59,9 @@
     "zod": "4.6.7"
   },
   "devDependencies": {
+    "@aws-sdk/client-ec2": "3.1171.0",
     "@catamorphic/claude-code": "workspace:*",
+    "@modelcontextprotocol/client": "^2.4.0",
     "@types/node": "^26.6.6",
     "@types/pg": "8.23.1"
   },

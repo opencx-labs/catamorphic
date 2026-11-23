@@ -248,6 +248,26 @@ export class TurnQueue {
                     ),
                     blocked.and([
                       blocked("allocation.worker_node_id", "is not", null),
+                      // A turn that was at work on a machine since lost
+                      // (ADR 0348) is not held back: it is claimed to be
+                      // settled as lost. One that has not started stays
+                      // blocked until its chat is admitted again.
+                      blocked.not(
+                        blocked.and([
+                          // An active Allocation has no reason: never
+                          // let a null decide the claim.
+                          blocked(
+                            sql<string>`coalesce(${sql.ref("allocation.release_reason")}, '')`,
+                            "=",
+                            "node_lost",
+                          ),
+                          blocked("turn.status", "in", [
+                            "running",
+                            "waiting",
+                            "finalizing",
+                          ]),
+                        ]),
+                      ),
                       blocked.or([
                         blocked("allocation.status", "!=", "active"),
                         blocked.not(

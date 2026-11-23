@@ -7,7 +7,13 @@ import {
   remapPaths,
   signInMemberOf,
 } from "../sign-ins.js";
-import { signInCapability } from "../types.js";
+import {
+  SIGN_IN_HARNESSES,
+  SIGN_IN_SPECS,
+  signInCapability,
+  signInHarness,
+  signInHomePath,
+} from "../types.js";
 
 describe("sign-ins stay on the machine (ADR 0199)", () => {
   it("keeps one home per harness and member, any id one path segment", () => {
@@ -32,14 +38,56 @@ describe("sign-ins stay on the machine (ADR 0199)", () => {
       member: "user:1",
     });
     expect(parseSignInCapability("sign-in:emacs:me")).toBeUndefined();
-    // Claude Code subscriptions never run on a machine (ADR 0213).
-    expect(parseSignInCapability("sign-in:claude-code:me")).toBeUndefined();
+    expect(
+      parseSignInCapability(
+        signInCapability({ harness: "claude-code", member: "user:1" }),
+      ),
+    ).toEqual({ harness: "claude-code", member: "user:1" });
+  });
+
+  it("describes each harness's own login in one place (ADR 0342)", () => {
+    expect(SIGN_IN_HARNESSES).toEqual(["claude-code", "codex"]);
+    expect(SIGN_IN_SPECS["claude-code"]).toMatchObject({
+      name: "Claude Code",
+      command: "claude",
+      login: ["auth", "login"],
+      homeVariable: "CLAUDE_CONFIG_DIR",
+      completionFile: ".credentials.json",
+      expects: "code",
+    });
+    expect(SIGN_IN_SPECS.codex).toMatchObject({
+      name: "Codex",
+      command: "codex",
+      login: ["login"],
+      homeVariable: "CODEX_HOME",
+      completionFile: "auth.json",
+    });
+    // Codex prints a one-time code; it waits for no input.
+    expect(SIGN_IN_SPECS.codex.expects).toBeUndefined();
+    expect(signInHarness("claude-code")).toBe("claude-code");
+    expect(signInHarness("emacs")).toBeUndefined();
+    expect(
+      machineSignInHome({
+        root: "/data/sign-ins",
+        harness: "claude-code",
+        member: "ada",
+      }),
+    ).toBe("/data/sign-ins/claude-code/ada");
+    expect(
+      signInHomePath({ workspaceRoot: "/workspace", harness: "claude-code" }),
+    ).toBe("/workspace/.work-sign-in/claude-code");
   });
 
   it("cloud sandboxes refuse to be handed one", () => {
     expect(() =>
       refuseSignIns({
         signIns: [{ harness: "codex", member: "me" }],
+        provider: "Cloudflare",
+      }),
+    ).toThrow("Cloudflare sandboxes cannot run on a member's own sign-in");
+    expect(() =>
+      refuseSignIns({
+        signIns: [{ harness: "claude-code", member: "me" }],
         provider: "Cloudflare",
       }),
     ).toThrow("Cloudflare sandboxes cannot run on a member's own sign-in");

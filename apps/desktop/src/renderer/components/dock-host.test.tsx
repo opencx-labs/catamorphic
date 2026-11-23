@@ -13,6 +13,8 @@ Reflect.set(globalThis, "IS_REACT_ACT_ENVIRONMENT", true);
 const state = vi.hoisted(() => ({
   snapshot: null as DockSnapshot | null,
   listeners: new Set<(snapshot: DockSnapshot) => void>(),
+  /** How many times each chat was drawn. */
+  drawn: new Map<string, number>(),
 }));
 vi.mock("../lib/desktop-api.js", () => ({
   desktopApi: {
@@ -55,9 +57,10 @@ vi.mock("./chat-bubbles.js", () => ({
   useStripFold: () => ({ collapsed: false, choose: () => {} }),
 }));
 vi.mock("./chat-dock.js", () => ({
-  ChatDock: ({ entry }: { entry: ChatDockEntry }) => (
-    <div data-chat={entry.localId} data-mode={entry.mode} />
-  ),
+  ChatDock: ({ entry }: { entry: ChatDockEntry }) => {
+    state.drawn.set(entry.localId, (state.drawn.get(entry.localId) ?? 0) + 1);
+    return <div data-chat={entry.localId} data-mode={entry.mode} />;
+  },
 }));
 vi.mock("./dock-dialogs.js", () => ({ DockDialogs: () => null }));
 vi.mock("./downloads-bubble.js", () => ({ DownloadsBubble: () => null }));
@@ -87,6 +90,7 @@ function chat(projectId: string, localId: string, fork = false): DockData {
 let root: Root;
 let container: HTMLDivElement;
 beforeEach(() => {
+  state.drawn.clear();
   state.snapshot = {
     chats: [chat("opencx", "own"), chat("catamorphic", "foreign")],
     activeProjectId: "opencx",
@@ -116,6 +120,68 @@ async function publish(snapshot: DockSnapshot) {
     for (const listener of state.listeners) listener(snapshot);
   });
 }
+
+describe("dock chats", () => {
+  it("draws only the chats a tab switch changed, and none for its own echo", async () => {
+    if (!state.snapshot) throw new Error("Missing fixture snapshot");
+    const tab = (localId: string, tabActive: boolean): DockData => ({
+      ...chat("opencx", localId),
+      entry: { localId, mode: "tab" },
+      tabActive,
+    });
+    state.snapshot = { ...state.snapshot, chats: [] };
+    await mount();
+    await act(async () => {
+      localPresentations.publish(tab("one", true));
+      localPresentations.publish(tab("two", false));
+      localPresentations.publish(tab("three", false));
+    });
+    state.drawn.clear();
+    // The second chat comes to the front: its workspace publishes the two
+    // chats that changed.
+    await act(async () => {
+      localPresentations.publish(tab("one", false));
+      localPresentations.publish(tab("two", true));
+    });
+    expect(Object.fromEntries(state.drawn)).toEqual({ one: 1, two: 1 });
+    // Main broadcasts each publish back, first with one chat changed, then
+    // both: this window already shows what it published.
+    state.drawn.clear();
+    await publish({
+      ...state.snapshot,
+      chats: [tab("one", false), tab("two", false), tab("three", false)].map(
+        (item) => ({ ...item, local: true }),
+      ),
+    });
+    await publish({
+      ...state.snapshot,
+      chats: [tab("one", false), tab("two", true), tab("three", false)].map(
+        (item) => ({ ...item, local: true }),
+      ),
+    });
+    expect(Object.fromEntries(state.drawn)).toEqual({});
+    expect(
+      container.querySelector('[data-chat="two"][data-mode="tab"]'),
+    ).not.toBeNull();
+  });
+
+  it("draws another window's chat again only when its own presentation changes", async () => {
+    if (!state.snapshot) throw new Error("Missing fixture snapshot");
+    const shown = { ...state.snapshot, multiProject: true };
+    state.snapshot = shown;
+    await mount();
+    state.drawn.clear();
+    // A broadcast rebuilds every chat: equal ones stay the chats they were.
+    await publish({
+      ...shown,
+      chats: [
+        { ...chat("opencx", "own"), title: "Renamed" },
+        chat("catamorphic", "foreign"),
+      ],
+    });
+    expect(Object.fromEntries(state.drawn)).toEqual({ own: 1 });
+  });
+});
 
 describe("dock project scope", () => {
   it("lets a fork's tab take over when the parent's remote activation arrived before its local presentation", async () => {

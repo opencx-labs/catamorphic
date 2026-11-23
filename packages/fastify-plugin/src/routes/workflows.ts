@@ -111,6 +111,7 @@ export function registerWorkflowRoutes(
   typed.route({
     method: "POST",
     url: "/projects/:projectId/workflows/:name/runs",
+    config: { tokenScope: "sessions:run" },
     schema: {
       params: WorkflowNameParamsSchema,
       body: TriggerRunSchema,
@@ -154,6 +155,7 @@ export function registerWorkflowRoutes(
   typed.route({
     method: "POST",
     url: "/projects/:projectId/workflows/:name/calls",
+    config: { tokenScope: "sessions:run" },
     schema: {
       params: WorkflowNameParamsSchema,
       body: CallRunSchema,
@@ -241,6 +243,7 @@ export function registerWorkflowRoutes(
   typed.route({
     method: "POST",
     url: "/projects/:projectId/workflows/:name/signals",
+    config: { tokenScope: "sessions:run" },
     schema: {
       params: WorkflowNameParamsSchema,
       body: SignalRunSchema,
@@ -294,6 +297,7 @@ export function registerWorkflowRoutes(
   typed.route({
     method: "POST",
     url: "/projects/:projectId/workflows/:name/cancellations",
+    config: { tokenScope: "sessions:run" },
     schema: {
       params: WorkflowNameParamsSchema,
       body: CancelRunByKeySchema,

@@ -1,4 +1,4 @@
-import type { Identity } from "@catamorphic/core";
+import { FULL_TOKEN_SCOPE, type Identity } from "@catamorphic/core";
 import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 import { z } from "zod";
 import type { WorkAuth } from "../auth/work-auth-types.js";
@@ -237,7 +237,10 @@ async function resolveCaller(
   const authenticated = await options.auth.resolveAccessToken({
     authorization,
   });
-  if (!authenticated || !(await options.mayAct(authenticated.userId)))
+  if (
+    !authenticated?.scopes.includes(FULL_TOKEN_SCOPE) ||
+    !(await options.mayAct(authenticated.userId))
+  )
     return null;
   return {
     identity: await options.identityForUser({

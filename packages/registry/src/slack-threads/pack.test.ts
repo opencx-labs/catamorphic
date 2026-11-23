@@ -42,7 +42,7 @@ async function run(input: {
       path.join(directory, "verify.ts"),
       `
       import { answerSlackMentions, postSlackReplies } from "./recipe.ts";
-      const host = { "catamorphic.sessions": Object.fromEntries(["deliver", "history"].map(operation => [operation, args => ({ operation, args })])) };
+      const host = { "catamorphic.sessions": Object.fromEntries(["deliver", "read"].map(operation => [operation, args => ({ operation, args })])) };
       const connection = path => new Proxy(function () {}, {
         get: (_target, name) => connection([...path, name]),
         apply: (_target, _self, [args]) => ({ alias: path[0], action: path.slice(1).join("."), args }),
@@ -241,7 +241,7 @@ it("posts the settled reply to its thread and stays quiet for anything else", as
   const settled = (key: string | null, role = "assistant") => ({
     sessionId: "chat-1",
     key,
-    messages: [
+    transcript: [
       {
         id: "m-2",
         role,
@@ -265,10 +265,15 @@ it("posts the settled reply to its thread and stays quiet for anything else", as
   });
   expect(result).toEqual({
     read: {
-      operation: "history",
-      args: { sessionId: "chat-1", through: "m-2", limit: 1 },
+      operation: "read",
+      args: {
+        sessionId: "chat-1",
+        include: ["transcript"],
+        through: "m-2",
+        limit: 1,
+      },
     },
-    noReply: { sessionId: "chat-1", key: null, messages: [] },
+    noReply: { sessionId: "chat-1", key: null, transcript: [] },
     post: {
       alias: "slack",
       action: "chat.postMessage",

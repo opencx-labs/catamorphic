@@ -764,7 +764,26 @@ async function project(
             revision: sql`${eb.ref("agent_runtime_requests.revision")} + 1`,
           })),
         )
-        .execute();
+        .returning(sql<boolean>`(xmax = 0)`.as("opened"))
+        .executeTakeFirst()
+        .then(async (written) => {
+          // An agent that starts waiting on its person raises the chat's
+          // attention with the request, in one transaction (ADR 0346):
+          // every chat, whoever started it, on every copy of the log.
+          if (
+            written?.opened &&
+            request.status === "pending" &&
+            request.answerable &&
+            request.blocking
+          )
+            await trx
+              .updateTable("agent_sessions")
+              .set(({ ref }) => ({
+                attention_revision: sql`${ref("attention_revision")} + 1`,
+              }))
+              .where("id", "=", stored.sessionId)
+              .execute();
+        });
       return;
     }
     case "provider_thread.changed": {

@@ -3,6 +3,7 @@ import {
   OPERATION_NOT_OPENED_ERROR,
   openRemoteOperation,
   type RemoteOperation,
+  SANDBOX_UNKNOWN_ERROR,
 } from "@catamorphic/core";
 import {
   redactUrlCredentials,
@@ -141,13 +142,13 @@ export function startClientRunner(args: {
    */
   resetMachine?: () => Promise<void>;
   /**
-   * A member's Codex sign-in on this machine (ADR 0213). Only a worker
-   * supplies it; a runner without it refuses the operation.
+   * A member's harness sign-in on this machine (ADRs 0213, 0342). Only a
+   * worker supplies it; a runner without it refuses the operation.
    */
-  codexSignIn?: (
+  harnessSignIn?: (
     request: Extract<
       RemoteOperation,
-      { kind: "machine.codexSignIn" }
+      { kind: "machine.harnessSignIn" }
     >["request"],
   ) => Promise<unknown>;
 }) {
@@ -262,8 +263,10 @@ export function startClientRunner(args: {
       // always safe, and a widening must end after its connection did.
       const unguarded =
         operation.kind === "destroy" || operation.kind === "egress.narrow";
-      if (!owned && !unguarded)
-        throw new Error("Sandbox does not belong to this runner connection");
+      // Said in the words its controller reads as a sandbox this machine
+      // does not hold (ADR 0348): it retires that workspace and admits its
+      // chat again, rather than failing every message.
+      if (!owned && !unguarded) throw new Error(SANDBOX_UNKNOWN_ERROR);
       if (operation.kind === "create") {
         if (
           args.maxSandboxes !== undefined &&
@@ -279,7 +282,9 @@ export function startClientRunner(args: {
               provider: args.provider,
               operation,
               ...(args.resetMachine ? { resetMachine: args.resetMachine } : {}),
-              ...(args.codexSignIn ? { codexSignIn: args.codexSignIn } : {}),
+              ...(args.harnessSignIn
+                ? { harnessSignIn: args.harnessSignIn }
+                : {}),
             })
           : null;
       if (operation.kind === "create") {
@@ -376,15 +381,15 @@ async function executeClientOperation({
   provider,
   operation,
   resetMachine,
-  codexSignIn,
+  harnessSignIn,
 }: {
   provider: SandboxProvider;
   operation: RemoteOperation;
   resetMachine?: () => Promise<void>;
-  codexSignIn?: (
+  harnessSignIn?: (
     request: Extract<
       RemoteOperation,
-      { kind: "machine.codexSignIn" }
+      { kind: "machine.harnessSignIn" }
     >["request"],
   ) => Promise<unknown>;
 }): Promise<unknown> {
@@ -478,10 +483,10 @@ async function executeClientOperation({
       if (!resetMachine) throw new Error("This runner does not reset machines");
       await resetMachine();
       return null;
-    case "machine.codexSignIn":
-      if (!codexSignIn)
-        throw new Error("This runner does not sign members in to Codex");
-      return codexSignIn(operation.request);
+    case "machine.harnessSignIn":
+      if (!harnessSignIn)
+        throw new Error("This runner does not sign members in to a harness");
+      return harnessSignIn(operation.request);
   }
 }
 

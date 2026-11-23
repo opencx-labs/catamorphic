@@ -754,10 +754,13 @@ the details and the expand then contract rule for migrations.
 
 Two more things members do without commit rights:
 
-- **Propose a change** to the program (\`propose_change\` tool /
-  \`POST /projects/:id/proposals\`): the files land on a branch authored as
-  the member and, when the project is on GitHub, as a pull request on their
-  behalf. Use it for handbook fixes and new templates when you cannot commit.
+- **Propose a change** to the program. A chat works on a branch of its
+  own, so its agent commits there and opens a pull request with
+  \`create_pull_request\`, which pushes those commits and records the pull
+  request on the chat. Without a chat (the member tools,
+  \`POST /projects/:id/proposals\`), \`propose_change\` takes the files
+  instead: they land on a branch authored as the member and, when the
+  project is on GitHub, as a pull request on their behalf.
 - **Publish** a store document (\`POST /projects/:id/publications\`, audience
   \`members\` or \`public\`): a stable URL for a deck or a report; revoke by
   slug. Publish only what the requester owns.
@@ -959,7 +962,7 @@ for.
 
 \`\`\`typescript
 import { defineWorkflow, type BoundaryContext } from "@catamorphic/workflow";
-import type { SessionSnapshot } from "@catamorphic/workflow";
+import type { SessionState } from "@catamorphic/workflow";
 
 /** @displayname Recent sessions */
 export const recentSessions = defineWorkflow(({ defineBoundary }) => ({
@@ -971,13 +974,13 @@ export const recentSessions = defineWorkflow(({ defineBoundary }) => ({
     }),
     /** @displayname Count per day */
     defineBoundary({
-      run: (context: BoundaryContext<{ items: SessionSnapshot[] }>) => {
+      run: (context: BoundaryContext<{ sessions: SessionState[] }>) => {
         const perDay = new Map<string, number>();
-        for (const session of context.input.items) {
+        for (const session of context.input.sessions) {
           const day = session.createdAt.slice(0, 10);
           perDay.set(day, (perDay.get(day) ?? 0) + 1);
         }
-        return { total: context.input.items.length, perDay: [...perDay] };
+        return { total: context.input.sessions.length, perDay: [...perDay] };
       },
     }),
   ],
@@ -1412,11 +1415,13 @@ This flow is for projects with NO GitHub remote yet. If \`git remote -v\`
 already shows an origin, or the project was imported from GitHub, the
 repository is shared with other people: Work never pushes to its default
 branch or to branches it did not create. Share changes with
-create_pull_request (a \`work/\` branch plus a pull request), pull with
-sync_project, and never replace an existing remote without asking. A pull
-request you open belongs in the chat's metadata, which Work shows beside it:
-discover set_session_metadata, read the list (no value), and write it back with
-the new one. ${SESSION_PULL_REQUESTS_CONTRACT}
+create_pull_request (your commits as this chat's own \`work/\` branch, plus
+a pull request; call it again to update the same one), pull with
+sync_project, and never replace an existing remote without asking.
+create_pull_request records the pull request in the chat's metadata, which
+Work shows beside it. One you opened another way, or were asked to work on,
+you add yourself: discover set_session_metadata, read the list (no value),
+and write it back with the new one. ${SESSION_PULL_REQUESTS_CONTRACT}
 
 Run everything below with your shell at the project root.
 

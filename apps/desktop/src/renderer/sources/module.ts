@@ -135,6 +135,9 @@ export function moduleSource<Name extends string = WorkSourceName>({
   return {
     title,
     empty,
+    // A module is sent the surface and the chat with every call, and may
+    // list from any of it.
+    listsFrom: (context) => context,
     retry: () =>
       desktopApi.sidebarSourceRetry({ projectId, sectionId: ownerId }),
     capabilities: () => capabilities,

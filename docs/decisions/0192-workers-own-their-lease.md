@@ -1,6 +1,6 @@
 # 0192 — Workers own their lease: any replica runs any worker's turns
 
-- **Status:** Accepted; turn status, guards, and interrupts through the lease by 0193
+- **Status:** Accepted; turn status, guards, and interrupts through the lease by 0193; a worker unseen for its loss limit is lost and its work retired by [0348](0348-every-lost-machine-recovers.md)
 - **Date:** 2026-09-30
 - **Supersedes:** 0164's "the control-plane instance a worker connects to holds that node's lease, runs its agents' controller loops" and its session pinning
 - **Refines:** 0098, 0164, 0173, 0187, 0190

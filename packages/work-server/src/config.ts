@@ -12,11 +12,6 @@ import {
   type GatewayConfig,
   gatewayConfigFromFile,
 } from "./gateway/gateway-config.js";
-import {
-  type MachinesConfig,
-  machineClassesProblem,
-  machinesConfigFromFile,
-} from "./workers/machine-classes.js";
 import { NodeLabelsSchema } from "./workers/placement.js";
 
 export type WorkAgentEffort = "low" | "medium" | "high";
@@ -119,21 +114,12 @@ export interface WorkServerConfig {
    */
   webhookMaxBodyBytes?: number;
   /**
-   * Machine classes machine rules name (ADR 0205): Hetzner Cloud servers,
-   * pools of enrolled machines, or the `machineProvisioner` hook's. The
-   * image reads them from the JSON file `WORK_MACHINES_CONFIG`.
+   * Minutes work waits for a machine in an Environment that names no
+   * `waitMinutes` of its own, on a server with a machines hook (ADR 0349),
+   * from `WORK_MACHINE_WAIT_MINUTES` (default 30): a new chat waits for
+   * the machine the plan starts for it instead of failing at once.
    */
-  machines?: MachinesConfig;
-  /**
-   * Hetzner Cloud API token for `hetzner-cloud` classes, from
-   * `WORK_HETZNER_TOKEN`; never part of the machines file.
-   */
-  hetznerToken?: string;
-  /**
-   * The deployment's own worker image (ADRs 0205, 0294), explicitly
-   * supplied here or through `WORK_WORKER_IMAGE`.
-   */
-  workerImage?: string;
+  machineWaitMinutes?: number;
 }
 
 export function workServerConfigFromEnv(
@@ -208,30 +194,18 @@ export function workServerConfigFromEnv(
   };
 }
 
-/** Machine classes, the Hetzner token, and the worker image (ADR 0205). */
+/** How long waiting work waits for its machine by default (ADR 0349). */
 function machineSettingsFromEnv(
   env: Record<string, string | undefined>,
-): Pick<WorkServerConfig, "machines" | "hetznerToken" | "workerImage"> {
-  const machines = env.WORK_MACHINES_CONFIG
-    ? machinesConfigFromFile(env.WORK_MACHINES_CONFIG)
-    : undefined;
-  const hetznerToken = env.WORK_HETZNER_TOKEN?.trim() || undefined;
-  if (machines) {
-    // Custom classes need the hook, which only a custom server has; the
-    // server checks that when it starts.
-    const problem = machineClassesProblem({
-      classes: machines.classes,
-      hetznerToken: Boolean(hetznerToken),
-      provisioner: true,
-    });
-    if (problem) throw new Error(problem);
-  }
-  const workerImage = env.WORK_WORKER_IMAGE?.trim();
-  return {
-    ...(machines ? { machines } : {}),
-    ...(hetznerToken ? { hetznerToken } : {}),
-    ...(workerImage ? { workerImage } : {}),
-  };
+): Pick<WorkServerConfig, "machineWaitMinutes"> {
+  const raw = env.WORK_MACHINE_WAIT_MINUTES?.trim();
+  if (!raw) return {};
+  const minutes = Number(raw);
+  if (!Number.isSafeInteger(minutes) || minutes < 1 || minutes > 24 * 60)
+    throw new Error(
+      "WORK_MACHINE_WAIT_MINUTES must be a whole number of minutes from 1 to 1440",
+    );
+  return { machineWaitMinutes: minutes };
 }
 
 function proxyEntries(value: string): string[] {

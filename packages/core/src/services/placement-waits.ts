@@ -5,6 +5,7 @@ import type {
   WorkloadKind,
 } from "@catamorphic/sandbox";
 import { type Kysely, sql, type Transaction } from "kysely";
+import { z } from "zod";
 
 /**
  * Why work waits for a machine (ADR 0258): none open to it had room
@@ -20,6 +21,8 @@ export interface PlacementWaitTarget {
   pool: Readonly<Record<string, string>>;
   /** Whose work it is: a member, or null for the project's own. */
   owner: string | null;
+  /** The chat key of a project's own chat, or null (ADR 0349). */
+  key: string | null;
   /**
    * What a machine must offer it: what sizes a machine (resources and
    * capabilities), and the trust, isolation and agent topology it needs.
@@ -43,7 +46,20 @@ export interface PlacementWait {
   expired: boolean;
   /** Minutes it may wait in all, or null to wait as long as it is queued. */
   limitMinutes: number | null;
+  /**
+   * The machine its host is starting or resuming for it (ADR 0349), when
+   * there is one: a client says "its machine is starting" rather than
+   * "waiting for a machine".
+   */
+  machine?: PlacementWaitMachine;
 }
+
+/** A machine being made ready for waiting work, and how far along it is. */
+export const PlacementWaitMachineSchema = z.object({
+  name: z.string(),
+  state: z.enum(["starting", "resuming"]),
+});
+export type PlacementWaitMachine = z.infer<typeof PlacementWaitMachineSchema>;
 
 /**
  * A wait whose caller has not tried admission within this many seconds no
@@ -92,6 +108,7 @@ export class PlacementWaitsService {
         environment_name: target.environmentName,
         pool: JSON.stringify(target.pool),
         owner: target.owner,
+        chat_key: target.key,
         requirements: JSON.stringify(target.requirements),
         reason: target.reason,
         retry_at: sql<Date>`now() + interval '5 seconds'`,
@@ -105,6 +122,7 @@ export class PlacementWaitsService {
           environment_name: (eb) => eb.ref("excluded.environment_name"),
           pool: (eb) => eb.ref("excluded.pool"),
           owner: (eb) => eb.ref("excluded.owner"),
+          chat_key: (eb) => eb.ref("excluded.chat_key"),
           requirements: (eb) => eb.ref("excluded.requirements"),
           reason: (eb) => eb.ref("excluded.reason"),
           waiting_since: sql<Date>`CASE WHEN ${stale} THEN now() ELSE placement_waits.waiting_since END`,
@@ -160,6 +178,34 @@ export class PlacementWaitsService {
   }
 
   /**
+   * Say which machine is being started or resumed for each piece of
+   * waiting work (ADR 0349), and for the rest that none is: the host that
+   * makes machines calls it after it planned. Only what changed is written.
+   */
+  async setMachines(args: {
+    tenantId: string;
+    machines: ReadonlyMap<string, PlacementWaitMachine>;
+  }): Promise<void> {
+    const rows = await this.db
+      .selectFrom("placement_waits")
+      .select(["root_workload_id", "machine"])
+      .where("tenant_id", "=", args.tenantId)
+      .execute();
+    for (const row of rows) {
+      const next = args.machines.get(row.root_workload_id) ?? null;
+      const current =
+        PlacementWaitMachineSchema.safeParse(row.machine).data ?? null;
+      if (current?.name === next?.name && current?.state === next?.state)
+        continue;
+      await this.db
+        .updateTable("placement_waits")
+        .set({ machine: next ? JSON.stringify(next) : null })
+        .where("root_workload_id", "=", row.root_workload_id)
+        .execute();
+    }
+  }
+
+  /**
    * A machine came online: every wait of the tenant is tried again now,
    * on whichever replica's sweep finds it first.
    */
@@ -177,6 +223,7 @@ const waitColumns = [
   "root_workload_id",
   "environment_name",
   "reason",
+  "machine",
   sql<boolean>`retry_at <= now()`.as("due"),
   sql<boolean>`coalesce(expires_at <= now(), false)`.as("expired"),
   sql<
@@ -190,11 +237,14 @@ function waitFromRow(row: {
   root_workload_id: string;
   environment_name: string;
   reason: string;
+  machine: unknown;
   due: boolean;
   expired: boolean;
   limit_minutes: number | null;
 }): PlacementWait {
+  const machine = PlacementWaitMachineSchema.safeParse(row.machine).data;
   return {
+    ...(machine ? { machine } : {}),
     rootWorkloadId: row.root_workload_id,
     environmentName: row.environment_name,
     reason: row.reason === "unavailable" ? "unavailable" : "capacity",

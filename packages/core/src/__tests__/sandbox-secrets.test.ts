@@ -167,13 +167,21 @@ describe("what the agent is told about secrets it did not get", () => {
       "LD_PRELOAD",
       "DYLD_INSERT_LIBRARIES",
       "ANTHROPIC_BASE_URL",
+      "ANTHROPIC_AUTH_TOKEN",
+      "CLAUDE_CODE_OAUTH_TOKEN",
       "OPENAI_BASE_URL",
       "CLAUDE_CONFIG_DIR",
       "CLAUDE_SECURESTORAGE_CONFIG_DIR",
       "CODEX_HOME",
     ])
       expect(reservedSandboxVariable(name), name).toBe(true);
-    for (const name of ["CLICKHOUSE_API_KEY", "GIT_TOKEN", "NODE_ENV"])
+    // A project's own programs may hold a model key of their own.
+    for (const name of [
+      "CLICKHOUSE_API_KEY",
+      "GIT_TOKEN",
+      "NODE_ENV",
+      "ANTHROPIC_API_KEY",
+    ])
       expect(reservedSandboxVariable(name), name).toBe(false);
   });
 });

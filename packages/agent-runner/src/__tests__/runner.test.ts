@@ -561,10 +561,10 @@ function spoken(frames: readonly RunnerFrame[]): string {
 
 describe("the session's environment file (ADR 0206)", () => {
   /** A runner whose environment file reader serves `files`, and its frames. */
-  function withFiles(files: Record<string, string>) {
+  function withFiles(files: Record<string, string>, harness = "echo") {
     const frames: RunnerFrame[] = [];
     const runner = new AttemptRunner({
-      adapters: { echo: new EchoAdapter() },
+      adapters: { [harness]: new EchoAdapter() },
       version: "test",
       write: (frame) => frames.push(frame),
       envFile: (file) =>
@@ -626,6 +626,86 @@ describe("the session's environment file (ADR 0206)", () => {
     expect(said()).toContain(`BASH_ENV=${file}`);
     // The attempt's own variables win over the files'.
     expect(said()).toContain("OWN=the host's");
+  });
+
+  it("keeps a member's sign-in the only credential the harness's process holds (ADR 0342)", async () => {
+    const gateway = "/workspace/.work-session/env/gateway.sh";
+    const file = "/workspace/.work-session/env/secrets.sh";
+    const files = {
+      [gateway]: formatEnvFile({
+        ANTHROPIC_BASE_URL: "https://elsewhere.test",
+        WORK_HTTP_LOGS: "https://work.test/api/gateway/http/logs",
+      }),
+      // What a project's secrets and an Environment's variables may name.
+      [file]: formatEnvFile({
+        ANTHROPIC_API_KEY: "sk-ant-project",
+        ANTHROPIC_AUTH_TOKEN: "token-project",
+        CLAUDE_CODE_OAUTH_TOKEN: "oauth-project",
+        CLAUDE_CODE_USE_BEDROCK: "1",
+        CLICKHOUSE_API_KEY: "ch-key-123",
+      }),
+    };
+    const ask =
+      "[[env ANTHROPIC_API_KEY]] [[env ANTHROPIC_AUTH_TOKEN]] [[env ANTHROPIC_BASE_URL]] [[env CLAUDE_CODE_OAUTH_TOKEN]] [[env CLAUDE_CODE_USE_BEDROCK]] [[env CLICKHOUSE_API_KEY]] [[env WORK_HTTP_LOGS]] [[env BASH_ENV]]";
+    const run = async (overrides: Partial<AttemptStart>) => {
+      const { runner, frames, said, answer } = withFiles(files, "claude-code");
+      runner.handle({
+        id: "start",
+        command: {
+          kind: "start",
+          attempt: attempt(ask, {
+            harness: "claude-code",
+            envFiles: [gateway, file],
+            ...overrides,
+          }),
+        },
+      });
+      const deadline = Date.now() + 5_000;
+      while (!frames.some((frame) => frame.type === "exit")) {
+        if (Date.now() > deadline)
+          throw new Error("The attempt never finished");
+        answer();
+        await new Promise((resolve) => setTimeout(resolve, 10));
+      }
+      return said();
+    };
+
+    const onSignIn = await run({
+      modelAccess: {
+        kind: "sign_in",
+        home: "/workspace/.work-sign-in/claude-code",
+      },
+    });
+    for (const name of [
+      "ANTHROPIC_API_KEY",
+      "ANTHROPIC_AUTH_TOKEN",
+      "ANTHROPIC_BASE_URL",
+      "CLAUDE_CODE_OAUTH_TOKEN",
+      "CLAUDE_CODE_USE_BEDROCK",
+    ])
+      expect(onSignIn, name).toContain(`${name} is not set`);
+    expect(onSignIn).not.toContain("sk-ant-project");
+    expect(onSignIn).not.toContain("elsewhere.test");
+    // Everything else reaches the harness, and its shells load the files,
+    // so the project's own programs keep their key.
+    expect(onSignIn).toContain("CLICKHOUSE_API_KEY=ch-key-123");
+    expect(onSignIn).toContain(
+      "WORK_HTTP_LOGS=https://work.test/api/gateway/http/logs",
+    );
+    expect(onSignIn).toContain(`BASH_ENV=${file}`);
+
+    // Through the gateway, or on the host's own configuration, the files'
+    // variables arrive as they always did.
+    const throughGateway = await run({
+      modelAccess: {
+        kind: "gateway",
+        api: "anthropic",
+        baseUrl: "https://gateway.test/anthropic",
+        grantDirectory: "/state/grant",
+      },
+    });
+    expect(throughGateway).toContain("ANTHROPIC_API_KEY=sk-ant-project");
+    expect(throughGateway).toContain("CLAUDE_CODE_OAUTH_TOKEN=oauth-project");
   });
 
   it("names the attempt's session and project in the harness's environment (ADR 0266)", async () => {

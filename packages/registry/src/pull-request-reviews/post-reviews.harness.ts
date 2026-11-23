@@ -91,7 +91,7 @@ export function fakeWorld(input: { head: string }) {
     metadata: {} as Record<string, Json>,
     results: [] as Array<Record<string, Json>>,
     commit: input.head,
-    /** The turn working now (ADR 0333), as inspect reports it. */
+    /** The turn working now (ADR 0333), as read reports it. */
     turn: null as { id: string; status: string } | null,
     /** The chat's turns waiting to run, oldest first. */
     queued: [] as string[],
@@ -296,28 +296,20 @@ export function fakeWorld(input: { head: string }) {
       },
     },
   };
+  // As core reads a chat (ADR 0346): its state, with the results the
+  // read's filters keep when `include` asks for them, newest first (or
+  // oldest, by `order`), at most `limit` (100), by name and turn.
   const sessions = {
-    inspect: ({ sessionId }: { sessionId: string }) => ({
-      id: sessionId,
-      projectId: "project-1",
-      owner: "project",
-      agentId: "project:project-1:reviewer",
-      environment: "review",
-      placement: structuredClone(chat.placement),
-      keyWorkflows: ["reviewPullRequests"],
-      workspace: { ref: "refs/pull/42/head", commit: chat.commit },
-      metadata: structuredClone(chat.metadata),
-      turn: structuredClone(chat.turn),
-      queued: [...chat.queued],
-    }),
-    // As core reads them: newest first (or oldest, by `order`), at most
-    // `limit` (100), by name and turn.
-    results: ({
+    read: ({
+      sessionId,
+      include,
       name,
       turnId,
       limit,
       order,
     }: {
+      sessionId: string;
+      include?: string[];
       name?: string;
       turnId?: string;
       limit?: number;
@@ -329,12 +321,27 @@ export function fakeWorld(input: { head: string }) {
           (turnId === undefined || result.turnId === turnId),
       );
       return {
-        results: structuredClone(
-          (order === "oldest" ? [...kept].reverse() : kept).slice(
-            0,
-            Math.min(limit ?? 100, 100),
-          ),
-        ),
+        sessionId,
+        projectId: "project-1",
+        owner: "project",
+        agent: "project:project-1:reviewer",
+        environment: "review",
+        placement: structuredClone(chat.placement),
+        keyWorkflows: ["reviewPullRequests"],
+        workspace: { ref: "refs/pull/42/head", commit: chat.commit },
+        ...(include?.includes("metadata")
+          ? { metadata: structuredClone(chat.metadata) }
+          : {}),
+        turn: structuredClone(chat.turn),
+        queued: [...chat.queued],
+        results: include?.includes("results")
+          ? structuredClone(
+              (order === "oldest" ? [...kept].reverse() : kept).slice(
+                0,
+                Math.min(limit ?? 100, 100),
+              ),
+            )
+          : [],
       };
     },
     setMetadata: ({ set }: { set: Record<string, Json> }) => {

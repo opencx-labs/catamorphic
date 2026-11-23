@@ -1,6 +1,6 @@
 # 0257: Setup has its own network
 
-- **Status:** Accepted (amends 0208; amended by [0324](0324-workflows-run-commands-in-a-chats-workspace.md): a setup workflow's `exec in: "setup"` runs on this network; by [0332](0332-commands-run-apart-from-the-agent.md): where commands run apart, only the command container widens; the agent's container, with its grants, is never on the setup network; by [0334](0334-read-only-caches-only-a-trusted-fill-writes.md): such an Environment may declare read-only caches)
+- **Status:** Accepted (amends 0208; amended by [0324](0324-workflows-run-commands-in-a-chats-workspace.md): a setup workflow's `exec in: "setup"` runs on this network; by [0332](0332-commands-run-apart-from-the-agent.md): where commands run apart, only the command container widens; the agent's container, with its grants, is never on the setup network; by [0334](0334-read-only-caches-only-a-trusted-fill-writes.md): such an Environment may declare read-only caches; by [0344](0344-every-server-chat-stands-on-a-branch.md): every chat stands on a base, so every chat's setup may run on it)
 - **Date:** 2026-10-18
 - **Refines:** 0175, 0176, 0178, 0204, 0206, 0207, 0212
 

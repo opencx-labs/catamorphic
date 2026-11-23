@@ -913,6 +913,8 @@ describe("every list draws one way (ADR 0234)", () => {
     };
     const source = memorySource([], {
       subscribe,
+      // It lists from the surface and its chat, as a module may.
+      listsFrom: (context) => context,
       load: async ({ parentId, session, surface }) => {
         seen.push({ parentId, session: session?.id, surface: surface?.kind });
         return {
@@ -1016,11 +1018,54 @@ describe("every list draws one way (ADR 0234)", () => {
     ]);
   });
 
+  it("reads a list again only for what it lists from, not for each tab in front", async () => {
+    const plain = memorySource([{ id: "row", label: "Row" }]);
+    const view = await mount({
+      source: plain,
+      surface: { kind: "browser", key: "browser:a", url: "https://a.test/" },
+    });
+    try {
+      const loads = plain.loads.length;
+      // Another page, then a chat, come to the front.
+      await view.context({
+        kind: "browser",
+        key: "browser:b",
+        url: "https://b.test/",
+      });
+      chat.fields = { id: "s1", title: "Chat", metadata: {} };
+      await view.context({ kind: "chat", key: "chat:1", sessionId: "s1" });
+      expect(plain.loads.length).toBe(loads);
+    } finally {
+      await view.cleanup();
+    }
+    const scoped = memorySource([{ id: "row", label: "Row" }], {
+      listsFrom: ({ session }) => session?.id,
+    });
+    chat.fields = null;
+    const second = await mount({
+      source: scoped,
+      surface: { kind: "browser", key: "browser:a" },
+    });
+    try {
+      const loads = scoped.loads.length;
+      await second.context({ kind: "browser", key: "browser:b" });
+      expect(scoped.loads.length).toBe(loads);
+      // The chat it lists from changes: it reads again, with that chat.
+      chat.fields = { id: "s1", title: "Chat", metadata: {} };
+      await second.context({ kind: "chat", key: "chat:1", sessionId: "s1" });
+      expect(scoped.loads.length).toBeGreaterThan(loads);
+      expect(scoped.loads.at(-1)?.session).toMatchObject({ id: "s1" });
+    } finally {
+      await second.cleanup();
+    }
+  });
+
   it("releases every owner when hiding with a context change and ignores a late load", async () => {
     let active = 0;
     let finish: ((page: { items: SidebarSourceItem[] }) => void) | undefined;
     let holdNext = false;
     const source = memorySource([], {
+      listsFrom: (context) => context,
       subscribe: () => {
         active += 1;
         return () => {

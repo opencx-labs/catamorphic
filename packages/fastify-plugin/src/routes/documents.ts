@@ -210,6 +210,7 @@ export function registerDocumentRoutes(
   typed.route({
     method: "PUT",
     url: "/projects/:projectId/documents/content",
+    config: { tokenScope: "documents:write" },
     // The body must fit the largest allowed document base64-inflated (4/3)
     // plus the JSON envelope; the handler's storeUploadMaxBytes check owns
     // the accurate 413 for decoded content.
@@ -262,6 +263,7 @@ export function registerDocumentRoutes(
   typed.route({
     method: "DELETE",
     url: "/projects/:projectId/documents/content",
+    config: { tokenScope: "documents:write" },
     schema: {
       params: ProjectIdParamsSchema,
       querystring: z.object({
@@ -360,6 +362,7 @@ export function registerDocumentRoutes(
   typed.route({
     method: "POST",
     url: "/projects/:projectId/proposals",
+    config: { tokenScope: "program:write" },
     schema: {
       params: ProjectIdParamsSchema,
       body: ProposeChangeSchema,
@@ -507,6 +510,7 @@ export function registerDocumentRoutes(
   typed.route({
     method: "POST",
     url: "/projects/:projectId/proposals/:number/comments",
+    config: { tokenScope: "program:write" },
     schema: {
       params: ProjectIdParamsSchema.extend({
         number: z.coerce.number().int().positive(),

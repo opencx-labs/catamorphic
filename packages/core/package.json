@@ -1,6 +1,6 @@
 {
   "name": "@catamorphic/core",
-  "version": "0.1.0-alpha.39",
+  "version": "0.1.0-alpha.41",
   "type": "module",
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
@@ -42,6 +42,7 @@
   },
   "devDependencies": {
     "@catamorphic/cloudflare": "workspace:*",
+    "@catamorphic/container": "workspace:*",
     "@catamorphic/local-process": "workspace:*",
     "@electric-sql/pglite": "^0.5.16",
     "@opentelemetry/api": "^1.10.0",

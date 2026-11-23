@@ -75,6 +75,7 @@ export function registerPublicationRoutes(
   typed.route({
     method: "POST",
     url: "/projects/:projectId/publications",
+    config: { tokenScope: "program:publish" },
     schema: {
       params: ProjectIdParamsSchema,
       body: PublishSchema,
@@ -137,6 +138,7 @@ export function registerPublicationRoutes(
   typed.route({
     method: "DELETE",
     url: "/projects/:projectId/publications/:slug",
+    config: { tokenScope: "program:publish" },
     schema: {
       params: PublicationParamsSchema,
       response: { 204: z.null(), 404: ErrorSchema },

@@ -7,20 +7,20 @@ import {
   defineRegistryCapability,
   hasProjectPermission,
   parseRegistryCatalog,
+  pullRequestCapability,
 } from "@catamorphic/core";
 import { projectToolCapabilities } from "@catamorphic/fastify-plugin";
 import { z } from "zod";
 import type { WorkAuth } from "./auth/work-auth-types.js";
 
 /**
- * Project tools the server's own agents reach through discovery: proposing
- * a change, and setting what their chat shows (its metadata, ADR 0226).
- * Replica memory (c): a constant, the same on every replica.
+ * Project tools the server's own agents reach through discovery: setting
+ * what their chat shows (its metadata, ADR 0226). Their changes leave as a
+ * pull request from their own branch (`project.create_pull_request`, ADR
+ * 0345), never as files handed to `propose_change`: every server chat has
+ * a workspace. Replica memory (c): a constant, the same on every replica.
  */
-const SERVER_PROJECT_TOOLS = new Set([
-  "propose_change",
-  "set_session_metadata",
-]);
+const SERVER_PROJECT_TOOLS = new Set(["set_session_metadata"]);
 
 /**
  * The packs the server's agents can install into a project (ADR 0262): the
@@ -90,6 +90,20 @@ export function workAgentCapabilities(args: {
       };
     },
   });
+  // Core's one pull request tool, over the chat's saved branch.
+  const pullRequest = pullRequestCapability(({ identity, ...request }) => {
+    const sessions = args.core().agentSessions;
+    if (!sessions) throw new Error("This server runs no chats.");
+    return sessions.createPullRequest(
+      identity,
+      request.projectId,
+      request.sessionId,
+      {
+        title: request.title,
+        ...(request.body !== undefined ? { body: request.body } : {}),
+      },
+    );
+  });
   return {
     ...args.custom,
     currentUser:
@@ -117,7 +131,7 @@ export function workAgentCapabilities(args: {
     ],
     capabilities: [
       // A host's own capability of the same name replaces the built-in one.
-      ...[directory, registry].filter(
+      ...[directory, registry, pullRequest].filter(
         (builtIn) =>
           !args.custom?.capabilities?.some(
             (item) => item.name === builtIn.name,

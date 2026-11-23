@@ -15,10 +15,13 @@ export const WORKER_PROTOCOL_HEADER = "work-protocol";
  * protocol 1 could open none of them.
  * 3: the `egress.widen` and `egress.narrow` operations open a setup's
  * network in a running sandbox and close it again (ADR 0257).
+ * 4: `machine.harnessSignIn` replaces `machine.codexSignIn`, names its
+ * harness and hands a login the code it waits for (ADR 0342); a worker of
+ * protocol 3 could parse none of it.
  */
 export const WORKER_PROTOCOL = {
-  server: 3,
-  minimum: 3,
+  server: 4,
+  minimum: 4,
 } as const;
 
 /** What a control plane answers a worker it cannot drive, with status 426. */

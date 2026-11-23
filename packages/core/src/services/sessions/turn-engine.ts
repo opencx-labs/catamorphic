@@ -44,7 +44,10 @@ import {
   startTurnLeaseRenewal,
 } from "../agent-turn-leases.js";
 import { outOfDiskFor, withOutOfDisk } from "../out-of-disk.js";
-import { ExecutorNotConnectedError } from "../remote-operations.js";
+import {
+  ExecutorNotConnectedError,
+  RemoteSandboxUnknownError,
+} from "../remote-operations.js";
 import { buildContextHandoff } from "./context-handoff.js";
 import { NativeStateStore } from "./native-state.js";
 import {
@@ -246,6 +249,15 @@ export interface TurnEngineHost {
   /** This holder stopped working the turn, however it ended: let go of what it kept. */
   released?(input: { sessionId: string; turnId: string }): void;
   /**
+   * Why a runner that started cannot be reattached, in words for the chat
+   * (ADR 0348): the host knows when its machine was lost and which one.
+   * Undefined when it knows no more than that the runner is gone.
+   */
+  runnerLost?(input: {
+    session: SessionRow;
+    location: RunnerLocation;
+  }): Promise<string | undefined>;
+  /**
    * Every secret value a session's sandbox could hold (ADR 0206), for a
    * holder that took a running turn over and so never prepared it.
    */
@@ -253,9 +265,13 @@ export interface TurnEngineHost {
     identity: Identity;
     session: SessionRow;
   }): Promise<Readonly<Record<string, readonly string[]>>>;
-  /** Approvals that opened and wait on approvers, after they committed. */
-  approvalsOpened?(input: {
+  /**
+   * Requests that opened and that their agent waits on, after they
+   * committed (ADR 0346): what tells the chat's people an agent needs them.
+   */
+  requestsOpened?(input: {
     session: SessionRow;
+    turn: Turn;
     requests: RuntimeRequest[];
   }): Promise<void>;
   /**
@@ -586,6 +602,21 @@ export class TurnEngine {
           leaseToken: claim.leaseToken,
         });
       }
+      // Its machine holds no such sandbox (ADR 0348): the workspace's
+      // Allocation was retired where the machine said so. A turn still
+      // preparing ran nothing; it waits for the chat to be admitted again
+      // and is prepared from the start. One that had started ends failed,
+      // saying so in plain words.
+      if (
+        error instanceof RemoteSandboxUnknownError &&
+        (await this.stillPreparing(claim.turn.id))
+      ) {
+        local.abort.abort();
+        await this.deps.queue.handBack({
+          turnId: claim.turn.id,
+          leaseToken: claim.leaseToken,
+        });
+      }
       if (!local.abort.signal.aborted)
         console.warn("[catamorphic] A turn failed unexpectedly", error);
       if (!local.abort.signal.aborted)
@@ -610,6 +641,17 @@ export class TurnEngine {
         turnId: claim.turn.id,
       });
     }
+  }
+
+  /** The turn has not started its harness: preparing it again is safe. */
+  private async stillPreparing(turnId: string): Promise<boolean> {
+    const row = await this.deps.db
+      .selectFrom("agent_turns")
+      .select("status")
+      .where("id", "=", turnId)
+      .executeTakeFirst()
+      .catch(() => undefined);
+    return row?.status === "preparing";
   }
 
   // -------------------------------------------------------------------------
@@ -1727,7 +1769,11 @@ export class TurnEngine {
           kind: "lost",
           turn,
           attempt,
-          reason: "The machine running this turn stopped before it finished.",
+          reason:
+            (await this.deps.host
+              .runnerLost?.({ session: ctx.session, location: runner.location })
+              .catch(() => undefined)) ??
+            "The machine running this turn stopped before it finished.",
         };
       }
       local.channel = channel;
@@ -2540,6 +2586,8 @@ export class TurnEngine {
     let policy: ApprovalPolicy | undefined;
     let refused = false;
     const opened: RuntimeRequest[] = [];
+    // Approvals refused at once: nobody is asked.
+    const refusedIds = new Set<string>();
     // What a mask holds back changes only once this batch is recorded.
     const masking =
       local.mask && !local.mask.empty ? local.mask.begin() : undefined;
@@ -2700,6 +2748,7 @@ export class TurnEngine {
         governed.push({ type: "request.changed", request: outcome.request });
         if (outcome.refusal && event.request.runnerKey) {
           refused = true;
+          refusedIds.add(outcome.request.id);
           await queue.enqueueCommand(trx, {
             turnId: input.turn.id,
             attemptId: input.attempt.id,
@@ -2713,9 +2762,17 @@ export class TurnEngine {
               },
             },
           });
-        } else if (outcome.request.approvers.length > 0)
-          opened.push(outcome.request);
+        }
       }
+      for (const event of governed)
+        if (
+          event.type === "request.changed" &&
+          event.request.status === "pending" &&
+          event.request.answerable &&
+          event.request.blocking &&
+          !refusedIds.has(event.request.id)
+        )
+          opened.push(event.request);
       // A refusal at once may leave nothing to wait on: the turn works on.
       if (refused && turn.status === "waiting") {
         const batch = governed.flatMap((event) =>
@@ -2845,9 +2902,16 @@ export class TurnEngine {
     if (refused) local.wake();
     if (opened.length > 0)
       await this.deps.host
-        .approvalsOpened?.({ session: input.session, requests: opened })
+        .requestsOpened?.({
+          session: input.session,
+          turn: applied.turn,
+          requests: opened,
+        })
         .catch((error) =>
-          console.warn("[catamorphic] Could not tell approvers", error),
+          console.warn(
+            "[catamorphic] Could not tell a chat's people it waits on them",
+            error,
+          ),
         );
     return applied;
   }

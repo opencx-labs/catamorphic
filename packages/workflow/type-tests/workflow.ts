@@ -5,7 +5,7 @@ import {
   type Carried,
   defineBatchStep,
   defineWorkflow,
-  type SessionUsage,
+  type SessionState,
   type WorkflowDefinition,
 } from "../src/index.js";
 
@@ -409,7 +409,7 @@ const carriedWorkflow = defineWorkflow(({ defineBoundary }) => ({
     }),
     defineBoundary({
       run: ({ input, host }: BoundaryContext<Carried<unknown, Plan>>) =>
-        host["catamorphic.sessions"].history(
+        host["catamorphic.sessions"].read(
           { key: `pr-${input.state.repository}-${input.state.number}` },
           { state: { ...input.state, pull: input.result === null } },
         ),
@@ -452,7 +452,7 @@ defineWorkflow(({ defineBoundary }) => ({
   steps: [
     defineBoundary({
       run: ({ host }: BoundaryContext<OrderInput>) =>
-        host["catamorphic.sessions"].history({ key: "k" }),
+        host["catamorphic.sessions"].read({ key: "k" }),
     }),
     defineBoundary({
       run: ({ input }: BoundaryContext<{ key: string | null }>) => input.key,
@@ -465,13 +465,19 @@ defineWorkflow(({ defineBoundary }) => ({
   steps: [
     defineBoundary({
       run: ({ host }: BoundaryContext<OrderInput>) =>
-        host["catamorphic.sessions"].usage({ key: "pr-42", family: true }),
+        host["catamorphic.sessions"].read({
+          key: "pr-42",
+          family: true,
+          include: ["usage"],
+        }),
     }),
     defineBoundary({
-      run: ({ input }: BoundaryContext<SessionUsage>) => ({
-        spent: input.costUsd ?? 0,
-        lowerBound: input.unpricedCalls > 0,
-        models: input.models.map((model) => model.model ?? "unknown"),
+      run: ({ input }: BoundaryContext<SessionState>) => ({
+        spent: input.usage?.costUsd ?? 0,
+        lowerBound: (input.usage?.unpricedCalls ?? 0) > 0,
+        models: (input.usage?.models ?? []).map(
+          (model) => model.model ?? "unknown",
+        ),
       }),
     }),
   ],
@@ -482,7 +488,7 @@ defineWorkflow(({ defineBoundary }) => ({
     defineBoundary({
       run: ({ host }: BoundaryContext<OrderInput>) =>
         // @ts-expect-error family is a boolean.
-        host["catamorphic.sessions"].usage({ sessionId: "s", family: "yes" }),
+        host["catamorphic.sessions"].read({ sessionId: "s", family: "yes" }),
     }),
   ],
 }));
@@ -493,7 +499,7 @@ defineWorkflow(({ defineBoundary }) =>
     steps: [
       defineBoundary({
         run: ({ host }: BoundaryContext<OrderInput>) =>
-          host["catamorphic.sessions"].history(
+          host["catamorphic.sessions"].read(
             { key: "k" },
             { state: { number: 1 } },
           ),
@@ -514,7 +520,7 @@ defineWorkflow(({ defineBoundary }) => ({
     // @ts-expect-error The boundary's result must be JSON-compatible too.
     defineBoundary({
       run: ({ host }: BoundaryContext<OrderInput>) =>
-        host["catamorphic.sessions"].history(
+        host["catamorphic.sessions"].read(
           { key: "k" },
           // @ts-expect-error Carried state must be JSON-compatible, at the call.
           { state: { at: new Date() } },
@@ -530,7 +536,7 @@ defineWorkflow(({ defineBoundary }) => ({
   steps: [
     defineBoundary({
       run: ({ host }: BoundaryContext<OrderInput>) =>
-        host["catamorphic.sessions"].history({ key: "k" }, { state: optional }),
+        host["catamorphic.sessions"].read({ key: "k" }, { state: optional }),
     }),
   ],
 }));

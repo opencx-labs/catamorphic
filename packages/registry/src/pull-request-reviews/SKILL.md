@@ -74,9 +74,9 @@ and `where`, `session-workflows` keyed chats and workspaces.
 ## .work/project.json
 
 In `review`, `pool` places the chats on machines
-enrolled with the label `pool=review` (opened to this project), which a
-machine rule can create on demand (on AWS, the `machines-ec2` pack makes
-them through a `workflow` machine class). The image brings Git, Node, Bun, pnpm,
+labeled `pool=review`. A host can plan one machine per review chat with
+`onePerChatKey` from `machines-policies`, or a shared pool for the project.
+The `machines-ec2` and `machines-hetzner` packs supply cloud operations. The image brings Git, Node, Bun, pnpm,
 and Docker; `containers` lets the agent run the change's services with
 Docker Compose inside its own sandbox. The agent's sandbox reaches only the
 control plane's gateway (`egress: gateway`): GitHub and the other

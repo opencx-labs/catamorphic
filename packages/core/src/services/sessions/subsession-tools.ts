@@ -214,7 +214,7 @@ export function subsessionSummary(child: unknown): Record<string, unknown> {
   if (!parsed.success) return { subsession: child };
   const { session } = parsed.data;
   // Its typed results, compactly (ADR 0323): a large value is read whole
-  // with session_results.
+  // with session_read.
   const results = (parsed.data.results ?? []).map((result) => ({
     name: result.name,
     ...(result.truncated ? { truncated: true } : { value: result.value }),

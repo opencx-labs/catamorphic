@@ -9,7 +9,11 @@ import type { TerminalCreateInput } from "../shared/terminal.js";
 import { scanOsc133 } from "../shared/terminal-text.js";
 import type { ServerState } from "./ipc.js";
 import { registerProcessOwner } from "./process-owners.js";
-import { openRemoteTerminal, type TerminalBackend } from "./remote-terminal.js";
+import {
+  openRemoteTerminal,
+  type RemoteTerminalRequest,
+  type TerminalBackend,
+} from "./remote-terminal.js";
 import { shellBinShimDir, shellIntegration } from "./shell-integration.js";
 import { shellIpcMain as ipcMain, shellSurfaceFor } from "./shell-ipc.js";
 import { readGhosttyAppearance } from "./terminal-appearance.js";
@@ -177,6 +181,14 @@ export function registerTerminalSupport(
     canAccessProject: (projectId: string, sender: WebContents) => boolean;
     profileFor: (sender: WebContents) => string;
   },
+  /**
+   * Requests to a remote chat's terminals on its project's server, as the
+   * member (ADR 0209); undefined when the project has no server.
+   */
+  remoteTerminalRequest?: (input: {
+    projectId: string;
+    sessionId: string;
+  }) => RemoteTerminalRequest | undefined,
 ): {
   dispose(): Promise<void>;
   hasActiveWork(): boolean;
@@ -336,7 +348,7 @@ export function registerTerminalSupport(
     rows?: number;
     sender: WebContents;
   }): Promise<TerminalBackend> => {
-    const request = state.current?.remoteTerminalRequest({
+    const request = remoteTerminalRequest?.({
       projectId: input.projectId,
       sessionId: input.chatSessionId,
     });

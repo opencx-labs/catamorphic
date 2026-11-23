@@ -56,6 +56,7 @@ export function registerWatcherRoutes(app: FastifyInstance, ctx: RouteContext) {
   typed.route({
     method: "DELETE",
     url: "/projects/:projectId/agent/sessions/:sessionId/watchers/:watcherId",
+    config: { tokenScope: "sessions:run" },
     schema: {
       params: WatcherIdParamsSchema,
       response: {

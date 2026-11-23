@@ -42,9 +42,9 @@ import { ExecutionEnvironmentsService } from "../services/execution-environments
 import { ProjectEnvironmentsService } from "../services/project-environments-service.js";
 import { ProjectsService } from "../services/projects-service.js";
 import {
-  type SessionActionOperation,
-  SessionActionsService,
-} from "../services/session-actions-service.js";
+  type SessionOperationName,
+  SessionOperationsService,
+} from "../services/session-operations.js";
 import { copySettledHistory } from "../services/sessions/session-copy.js";
 import { SessionLog } from "../services/sessions/session-log.js";
 import {
@@ -54,6 +54,12 @@ import {
 } from "../services/sessions/session-reads.js";
 import { sessionLogFixture } from "./session-fixtures.js";
 import { testEnvironmentProvider } from "./test-environment.js";
+
+/** What the operations need beside the sessions: no watchers, own chats. */
+const OPERATION_DEPS = {
+  watchers: () => undefined,
+  chatOwner: async (input: { caller: Identity }) => input.caller,
+};
 
 /*
  * Coordination around agent sessions (ADRs 0090, 0173, 0176, 0179, 0195,
@@ -2384,13 +2390,13 @@ describe("agent session coordination", () => {
 
   it("finds by key without creating, closes by key to free it, and keeps the transcript", async () => {
     const project = await projects.create(identity, { name: "Close by key" });
-    const actions = new SessionActionsService(db, sessions, () => undefined);
+    const actions = new SessionOperationsService(db, sessions, OPERATION_DEPS);
     const author = {
       kind: "workflow" as const,
       runId: randomUUID(),
       workflowName: "cleanupOnMerge",
     };
-    const act = (operation: SessionActionOperation, args: unknown) =>
+    const act = (operation: SessionOperationName, args: unknown) =>
       actions.execute({
         identity,
         projectId: project.id,
@@ -2398,9 +2404,11 @@ describe("agent session coordination", () => {
         args,
         author,
       });
-    expect(await act("find", { key: "pr-7" })).toBeNull();
+    expect(await act("session_list", { key: "pr-7" })).toMatchObject({
+      sessions: [],
+    });
     expect(
-      await act("close", { key: "pr-7", idempotencyKey: "early" }),
+      await act("session_close", { key: "pr-7", idempotencyKey: "early" }),
     ).toEqual({ sessionId: null, closed: false });
     expect(
       await sessions.keyedChatId({
@@ -2419,40 +2427,45 @@ describe("agent session coordination", () => {
       mode: "message_only",
       idempotencyKey: "review-7",
     });
-    expect(await act("find", { key: "pr-7" })).toMatchObject({
-      id: first.sessionId,
-      key: "pr-7",
-      status: "active",
+    expect(await act("session_list", { key: "pr-7" })).toMatchObject({
+      sessions: [{ sessionId: first.sessionId, key: "pr-7", state: "idle" }],
     });
-    expect(await act("inspect", { key: "pr-7" })).toMatchObject({
-      id: first.sessionId,
+    expect(await act("session_read", { key: "pr-7" })).toMatchObject({
+      sessionId: first.sessionId,
     });
-    await act("complete", {
+    await act("session_complete", {
       key: "pr-7",
       content: "Reviewed",
       idempotencyKey: "done-7",
     });
-    expect(await act("inspect", { key: "pr-7" })).toMatchObject({
+    expect(await act("session_read", { key: "pr-7" })).toMatchObject({
       workStatus: "completed",
     });
-    await act("reopen", { key: "pr-7", idempotencyKey: "again-7" });
-    expect(await act("inspect", { key: "pr-7" })).toMatchObject({
+    await act("session_reopen", { key: "pr-7", idempotencyKey: "again-7" });
+    expect(await act("session_read", { key: "pr-7" })).toMatchObject({
       workStatus: "open",
     });
     await expect(
-      act("inspect", { key: "pr-7", sessionId: first.sessionId }),
+      act("session_read", { key: "pr-7", sessionId: first.sessionId }),
     ).rejects.toThrow("exactly one of sessionId or key");
-    await expect(act("inspect", { key: "pr-8" })).rejects.toThrow(
+    await expect(act("session_read", { key: "pr-8" })).rejects.toThrow(
       "No open chat has the key pr-8",
     );
-    const closed = { sessionId: first.sessionId, closed: true };
+    // A close answers with the chat as it now stands.
+    const closed = {
+      sessionId: first.sessionId,
+      closed: true,
+      state: "closed",
+    };
     expect(
-      await act("close", { key: "pr-7", idempotencyKey: "merged-7" }),
-    ).toEqual(closed);
+      await act("session_close", { key: "pr-7", idempotencyKey: "merged-7" }),
+    ).toMatchObject(closed);
     expect(
-      await act("close", { key: "pr-7", idempotencyKey: "merged-7" }),
-    ).toEqual(closed);
-    expect(await act("find", { key: "pr-7" })).toBeNull();
+      await act("session_close", { key: "pr-7", idempotencyKey: "merged-7" }),
+    ).toMatchObject(closed);
+    expect(await act("session_list", { key: "pr-7" })).toMatchObject({
+      sessions: [],
+    });
     const detail = await sessions.get(identity, project.id, first.sessionId);
     expect(detail.status).toBe("closed");
     expect(
@@ -3166,7 +3179,7 @@ describe("agent session coordination", () => {
         auth_secret: "test",
       })
       .execute();
-    const actions = new SessionActionsService(db, sessions, () => undefined);
+    const actions = new SessionOperationsService(db, sessions, OPERATION_DEPS);
     const author = {
       kind: "workflow" as const,
       runId: randomUUID(),
@@ -3206,7 +3219,7 @@ describe("agent session coordination", () => {
     await expect(
       actions.execute({
         ...base,
-        operation: "complete",
+        operation: "session_complete",
         args: {
           sessionId: session.id,
           content: "Done",
@@ -3217,7 +3230,7 @@ describe("agent session coordination", () => {
     ).rejects.toThrow("Session state changed");
     await actions.execute({
       ...base,
-      operation: "complete",
+      operation: "session_complete",
       args: {
         sessionId: session.id,
         content: "Work finished",
@@ -3234,7 +3247,7 @@ describe("agent session coordination", () => {
     });
     await actions.execute({
       ...base,
-      operation: "archive",
+      operation: "session_archive",
       args: { sessionId: session.id, idempotencyKey: "archive" },
     });
     const detail = await sessions.get(identity, project.id, session.id);
@@ -3250,7 +3263,7 @@ describe("agent session coordination", () => {
     ).toHaveLength(2);
     await actions.execute({
       ...base,
-      operation: "unarchive",
+      operation: "session_unarchive",
       args: { sessionId: session.id, idempotencyKey: "unarchive" },
     });
     expect(
@@ -3263,7 +3276,7 @@ describe("agent session coordination", () => {
       name: "Remote session actions",
     });
     const session = await sessions.create(identity, project.id);
-    const actions = new SessionActionsService(db, sessions, () => undefined);
+    const actions = new SessionOperationsService(db, sessions, OPERATION_DEPS);
     const author = {
       kind: "workflow" as const,
       runId: randomUUID(),
@@ -3291,7 +3304,7 @@ describe("agent session coordination", () => {
         projectId: project.id,
         author,
         causation: ["activation-remote"],
-        operation: "complete",
+        operation: "session_complete",
         args: {
           sessionId: session.id,
           content: "Finished remotely",
@@ -3311,7 +3324,7 @@ describe("agent session coordination", () => {
       expect.objectContaining({
         kind: "action",
         action: expect.objectContaining({
-          operation: "complete",
+          operation: "session_complete",
           actor: author,
         }),
         causation: ["activation-remote"],
@@ -3423,7 +3436,7 @@ describe("agent session coordination", () => {
       name: "Action recovery",
     });
     const session = await sessions.create(identity, project.id);
-    const actions = new SessionActionsService(db, sessions, () => undefined);
+    const actions = new SessionOperationsService(db, sessions, OPERATION_DEPS);
     const base = {
       identity,
       projectId: project.id,
@@ -3435,7 +3448,7 @@ describe("agent session coordination", () => {
     };
     const input = {
       ...base,
-      operation: "interrupt" as const,
+      operation: "session_interrupt" as const,
       args: { sessionId: session.id, idempotencyKey: "interrupt" },
     };
     await actions.execute(input);
@@ -3480,13 +3493,13 @@ describe("agent session coordination", () => {
       );
       ids.push(delivered.messageId);
     }
-    const actions = new SessionActionsService(db, sessions, () => undefined);
+    const actions = new SessionOperationsService(db, sessions, OPERATION_DEPS);
     const history = (args: Record<string, unknown>) =>
       actions.execute({
         identity,
         projectId: project.id,
-        operation: "history",
-        args: { sessionId: session.id, ...args },
+        operation: "session_read",
+        args: { sessionId: session.id, include: ["transcript"], ...args },
         author: { kind: "user", externalUserId: identity.externalUserId },
       });
     const contents = (result: unknown) =>
@@ -3550,32 +3563,37 @@ describe("agent session coordination", () => {
           settled_at: new Date(),
         })
         .execute();
-    const actions = new SessionActionsService(db, sessions, () => undefined);
+    const actions = new SessionOperationsService(db, sessions, OPERATION_DEPS);
     const usage = (args: Record<string, unknown>) =>
       actions.execute({
         identity,
         projectId: project.id,
-        operation: "usage",
-        args,
+        operation: "session_read",
+        args: { include: ["usage"], ...args },
         author: { kind: "user", externalUserId: identity.externalUserId },
       });
     expect(await usage({ sessionId: session.id })).toMatchObject({
       sessionId: session.id,
-      family: false,
-      sessions: 1,
-      calls: 1,
-      outputTokens: 10,
-      costUsd: 0.5,
-      unpricedCalls: 0,
+      usage: {
+        sessionId: session.id,
+        family: false,
+        sessions: 1,
+        calls: 1,
+        outputTokens: 10,
+        costUsd: 0.5,
+        unpricedCalls: 0,
+      },
     });
     expect(await usage({ sessionId: session.id, family: true })).toMatchObject({
-      family: true,
-      sessions: 2,
-      calls: 2,
-      outputTokens: 30,
-      costUsd: 0.5,
-      unpricedCalls: 1,
-      models: [{ model: "opus", calls: 2, unpricedCalls: 1 }],
+      usage: {
+        family: true,
+        sessions: 2,
+        calls: 2,
+        outputTokens: 30,
+        costUsd: 0.5,
+        unpricedCalls: 1,
+        models: [{ model: "opus", calls: 2, unpricedCalls: 1 }],
+      },
     });
     await expect(
       usage({ sessionId: session.id, family: "yes" }),
@@ -3589,7 +3607,7 @@ describe("agent session coordination", () => {
     const session = await sessions.create(identity, project.id, {
       agentId: "orchestrator",
     });
-    const actions = new SessionActionsService(db, sessions, () => undefined);
+    const actions = new SessionOperationsService(db, sessions, OPERATION_DEPS);
     const input = {
       identity,
       projectId: project.id,
@@ -3599,7 +3617,7 @@ describe("agent session coordination", () => {
         workflowName: "delegate",
       },
       causation: ["delegate-activation"],
-      operation: "spawn" as const,
+      operation: "session_spawn" as const,
       args: {
         sessionId: session.id,
         task: "Inspect the result",

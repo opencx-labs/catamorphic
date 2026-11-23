@@ -1,13 +1,16 @@
-import type { CatamorphicCore, Identity } from "@catamorphic/core";
+import type { CatamorphicCore, Identity, TokenScope } from "@catamorphic/core";
 import {
   AccessDeniedError,
   DeploymentBlockedError,
   EnvironmentPolicyInvalidError,
+  FULL_TOKEN_SCOPE,
+  hasTokenScope,
   ProjectNotFoundError,
   ServerDraftError,
   SessionArtifactConflictError,
   SessionArtifactNotFoundError,
   SessionArtifactValidationError,
+  TokenScopeRequiredError,
 } from "@catamorphic/core";
 import {
   DraftBinaryResolutionError,
@@ -22,7 +25,7 @@ import {
   NoDraftError,
   RefMovedError,
 } from "@catamorphic/git";
-import type { FastifyPluginAsync } from "fastify";
+import type { FastifyPluginAsync, FastifyReply } from "fastify";
 import {
   serializerCompiler,
   validatorCompiler,
@@ -57,6 +60,7 @@ import { registerProjectMcpRoutes } from "./routes/project-mcp.js";
 import { registerProjectRoutes } from "./routes/projects.js";
 import { registerPublicationRoutes } from "./routes/publications.js";
 import { registerRunRoutes } from "./routes/runs.js";
+import { registerServerMcpRoutes } from "./routes/server-mcp.js";
 import { registerSessionArtifactRoutes } from "./routes/session-artifacts.js";
 import { registerSessionMailboxRoutes } from "./routes/session-mailboxes.js";
 import { registerSessionPreviewRoutes } from "./routes/session-previews.js";
@@ -66,6 +70,13 @@ import { registerWatcherRoutes } from "./routes/watchers.js";
 import { registerWebhookRoutes } from "./routes/webhooks.js";
 import { registerWorkflowEnablementRoutes } from "./routes/workflow-enablements.js";
 import { registerWorkflowRoutes } from "./routes/workflows.js";
+
+declare module "fastify" {
+  interface FastifyContextConfig {
+    /** OAuth scope required for a member to call this route. */
+    tokenScope?: TokenScope;
+  }
+}
 
 export interface CatamorphicPluginOptions {
   /**
@@ -110,6 +121,19 @@ export interface CatamorphicPluginOptions {
   publicApiBase?: string;
   /** Host additions to the project MCP endpoint (ADR 0166). */
   projectMcp?: ProjectMcpHost;
+  /** What the MCP endpoints need from a host with replicas or OAuth. */
+  mcp?: McpHost;
+}
+
+/**
+ * Host settings for the MCP endpoints (ADR 0347). `stateSecret` signs the
+ * state a wait hands a client with what it asks; replicas must share it,
+ * and a host that sets none gets one per process. `resourceMetadataUrl`
+ * is the OAuth protected-resource document a step-up challenge names.
+ */
+export interface McpHost {
+  stateSecret?: string;
+  resourceMetadataUrl?: string;
 }
 
 /**
@@ -162,6 +186,7 @@ export interface RouteContext {
   features: HostFeatures;
   publicApiBase?: string;
   projectMcp?: ProjectMcpHost;
+  mcp?: McpHost;
 }
 
 /**
@@ -182,6 +207,36 @@ export interface RouteContext {
  * mechanism; there is no header fallback unless the host opts into
  * `identityFromHeaders()` explicitly.
  */
+/**
+ * 403 with the scope to ask for (RFC 6750), for a grant that lacks one:
+ * the same answer over REST and both MCP endpoints.
+ */
+export function insufficientScope(
+  reply: FastifyReply,
+  scope: TokenScope,
+  mcp: McpHost | undefined,
+): FastifyReply {
+  return (
+    reply
+      .status(403)
+      .header(
+        "www-authenticate",
+        `Bearer error="insufficient_scope", scope="${scope}"${
+          mcp?.resourceMetadataUrl
+            ? `, resource_metadata="${mcp.resourceMetadataUrl}"`
+            : ""
+        }`,
+      )
+      // A body every route's declared 403 can carry.
+      .send({
+        error: `This needs the ${scope} scope, which this client was not granted.`,
+        code: "not_authorized",
+        retryable: false,
+        scope,
+      })
+  );
+}
+
 export const catamorphicPlugin: FastifyPluginAsync<
   CatamorphicPluginOptions
 > = async (app, opts) => {
@@ -199,6 +254,9 @@ export const catamorphicPlugin: FastifyPluginAsync<
     ) {
       return reply.status(err.statusCode).send({ error: err.message });
     }
+    // The grant lacks a scope the call needs: a step-up challenge names it.
+    if (err instanceof TokenScopeRequiredError)
+      return insufficientScope(reply, err.scope, opts.mcp);
     if (err instanceof AccessDeniedError) {
       return reply.status(403).send({ error: err.message });
     }
@@ -273,6 +331,17 @@ export const catamorphicPlugin: FastifyPluginAsync<
       if (isPublic) return;
       return reply.status(401).send({ error: "Unauthorized" });
     }
+    // A client reads only what its person let it read (ADR 0347): no
+    // route is a way around a grant without `work:read`.
+    if (!isPublic && !hasTokenScope(identity, "work:read"))
+      return insufficientScope(reply, "work:read", opts.mcp);
+    const tokenScope =
+      request.routeOptions.config.tokenScope ??
+      (request.method === "GET" || request.method === "HEAD"
+        ? "work:read"
+        : FULL_TOKEN_SCOPE);
+    if (!isPublic && !hasTokenScope(identity, tokenScope))
+      return insufficientScope(reply, tokenScope, opts.mcp);
     const runnerId = request.headers["x-catamorphic-runner"];
     attachIdentity(
       request,
@@ -285,6 +354,7 @@ export const catamorphicPlugin: FastifyPluginAsync<
   const ctx: RouteContext = {
     core: opts.core,
     ...(opts.projectMcp ? { projectMcp: opts.projectMcp } : {}),
+    ...(opts.mcp ? { mcp: opts.mcp } : {}),
     ...(opts.publicApiBase
       ? { publicApiBase: opts.publicApiBase.replace(/\/$/, "") }
       : {}),
@@ -327,6 +397,7 @@ export const catamorphicPlugin: FastifyPluginAsync<
   registerPrivateCustomizationRoutes(app, ctx);
   registerAppsMcpRoutes(app, ctx);
   registerProjectMcpRoutes(app, ctx);
+  registerServerMcpRoutes(app, ctx);
   registerAgentCapabilityRoutes(app, ctx);
   registerCodeHostRoutes(app, ctx);
   registerPluginRoutes(app, ctx);

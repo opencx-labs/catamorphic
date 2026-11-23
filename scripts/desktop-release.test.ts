@@ -74,7 +74,7 @@ describe("renderHomebrewCask", () => {
       "releases/download/desktop-v#{version}/Work-#{version}-arm64.dmg",
     );
     expect(cask).toContain("depends_on arch: :arm64");
-    expect(cask).toContain("depends_on macos: :monterey");
+    expect(cask).toContain("depends_on macos: :ventura");
     expect(cask).toContain(
       'homepage "https://work.software/"\n\n  auto_updates true\n  conflicts_with cask: "work"\n  depends_on arch: :arm64',
     );

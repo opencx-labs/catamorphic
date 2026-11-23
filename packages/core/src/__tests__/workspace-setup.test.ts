@@ -360,11 +360,10 @@ describe("planning a workspace's setup", () => {
     ).toBe(
       "[Workspace] Setting up this workspace could not run (The machine did not answer), so what it installs may be missing. It runs again before the next turn.",
     );
-    const refusals = (
-      ["folder", "no-base", "sign-in", "not-admitted"] as const
-    ).map((reason) => workspaceSetupNetworkRefusedNote({ reason }));
+    const refusals = (["folder", "sign-in", "not-admitted"] as const).map(
+      (reason) => workspaceSetupNetworkRefusedNote({ reason }),
+    );
     for (const refusal of refusals) expect(refusal).toContain("setup.network");
-    expect(refusals[1]).toContain("workspace: { ref }");
     for (const text of [note, timedOut, ...refusals])
       expect(text).not.toMatch(/[–—]/);
   });

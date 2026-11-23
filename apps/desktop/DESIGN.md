@@ -886,6 +886,23 @@ the historical log explains how it arrived here.
 
 ## Design log
 
+### 2026-11-20: Claude Code signs in on your own machines too
+
+Remote environment's Sign-ins section no longer says Claude Code runs on
+a person's subscription only on this computer (ADR 0342, replacing that
+half of the 2026-10-06 entry below). Each of Your machines is a card with
+its name and status, including when it is starting, stopped or resuming.
+Under it is a row for each harness,
+Claude Code then Codex, signed in or not, with its own Sign in and Sign
+out. One dialog serves both: the sign-in page (a Work browser tab, with
+the link shown too), then what that harness asks next. Codex shows its
+one-time code, large and copyable. Claude Code's page gives the person a
+code instead, so the dialog has a field to paste it and a Submit button;
+the field empties as it sends, the code is never kept or shown again, and
+the dialog says it is finishing the sign-in. A code the machine would not
+take says why and leaves the field ready. Signing out of one harness
+leaves the other.
+
 ### 2026-11-19: A long question scrolls inside its panel
 
 A question too long for the chat's room scrolled as a whole inside the
@@ -4307,3 +4324,16 @@ answers them itself, shaped as Chrome's, with Firefox's on-device
 translator and Google's CLD3 detector. A pair's model downloads the first
 time a page asks after a click, with the page's own progress, and text
 never leaves the computer (ADR 0320).
+
+### 2026-11-20: The window renders what changed
+
+A tab click, a page's title or a chat's signal used to render the whole
+window: its workspaces lived in the state of one component, which gave
+every part new closures each time. Workspaces now live in a store
+(`lib/workspace-store.ts`), and a part of the window renders when what it
+shows changes (ADR 0340). A new part follows that rule: it takes entries
+that keep their identity (`useStableEntries`), handlers that stay the same
+and run the latest (`useLatestHandlers`, or `quiet` around the component),
+and nothing it must call while it renders; what is built for a moment (a
+menu, a signal's mark) is built then. Nothing looks or moves differently.
+Measurements are in [Performance](docs/performance.md).

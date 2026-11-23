@@ -30,11 +30,13 @@ const OWN_CHAT_TOOLS = new Set([
   "set_session_metadata",
 ]);
 
-const Definition = z.object({
+const Definition = z.looseObject({
   name: z.string(),
   description: z.string().default(""),
   inputSchema: z.record(z.string(), z.unknown()),
-  annotations: z.object({ readOnlyHint: z.boolean().optional() }).optional(),
+  annotations: z
+    .looseObject({ readOnlyHint: z.boolean().optional() })
+    .optional(),
 });
 
 /** Internal projection of the public project tools. Both call the same services. */
@@ -124,7 +126,7 @@ export async function projectToolCapabilities(args: {
               "session_artifact",
               "create_watcher",
               "list_watchers",
-              "stop_watcher",
+              "session_stop_watcher",
             ].includes(definition.name);
           const result = await tool.call(
             owned ? { ...values, sessionId: context.sessionId } : values,

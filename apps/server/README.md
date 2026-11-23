@@ -47,14 +47,11 @@ others, `/readyz` answers 503 while its lease is not renewing, and
 leases (ADR 0192): any replica runs any worker's agents, so stopping a replica
 interrupts only the turns it was running itself.
 `WORK_CONTROL_PLANE_WORKLOADS=workflow` keeps agent code off the control plane.
-Each worker takes work for everyone or for named people and directory groups,
-so a person's agents run on their own machine first; machine rules give every
-member of a group a machine of their own (ADR 0167), on Hetzner Cloud, from a
-pool of machines you enrolled with `GET /api/workers/install.sh`, or through a
-provisioner hook, and keep a released machine for a few days (ADR 0205). A
-rule on demand creates machines while work waits for one, up to a limit, and
-destroys them once idle (ADR 0258), so bursty work such as pull request
-reviews gets a fresh machine without paying for idle ones.
+A worker serves specific users, projects or chat keys, or anyone whose role
+and Environment allow it. A custom Work server supplies a machines hook
+to plan capacity, create workers, and stop or destroy them once their work
+is saved. Hand enrollment is available on the stock server. The registry
+offers optional installation and cloud recipes.
 See [ADR 0164](../../docs/decisions/0164-control-plane-and-enrolled-workers.md)
 and the [machines reference](../../skills/setup-work-server/references/cluster-deployment.md).
 

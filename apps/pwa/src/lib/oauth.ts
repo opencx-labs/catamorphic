@@ -4,7 +4,8 @@ import type { RemoteOAuthCredentials } from "./store.js";
 
 const RETRY_TARGET_KEY = "catamorphic-pwa.oauth.retry-target";
 const PENDING_KEY = "catamorphic-pwa.oauth.pending";
-const OAUTH_SCOPE = "openid profile email offline_access";
+// Work's own app is its person: full access, approving included.
+const OAUTH_SCOPE = "openid profile email offline_access work:full";
 
 interface ProtectedResourceMetadata {
   resource: string;

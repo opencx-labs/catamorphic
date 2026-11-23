@@ -320,7 +320,7 @@ async function crossInstanceToken(
     redirect_uri: redirectUri,
     response_type: "code",
     resource: "https://cluster.example.test/api",
-    scope: "openid profile email offline_access",
+    scope: "openid profile email offline_access work:full",
     state: "cluster-state",
     code_challenge: createHash("sha256").update(verifier).digest("base64url"),
     code_challenge_method: "S256",

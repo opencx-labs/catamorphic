@@ -68,6 +68,7 @@ function deps(host: Partial<WorkSourceHost> = {}, writesProgram = true) {
     activeTabKey: "chat:c1",
     unreadSessionIds: new Set(),
     agentName: () => undefined,
+    agentsKey: "",
     agentDeleted: () => false,
     closeTab: vi.fn(),
     pinTab: vi.fn(),

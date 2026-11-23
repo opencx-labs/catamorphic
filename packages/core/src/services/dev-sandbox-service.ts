@@ -61,17 +61,24 @@ export class DevSandboxService {
     });
   }
 
+  /**
+   * Make sure the sandbox exists. A chat's (`sessionId`) gets no project
+   * file here: its checkout is seeded as Git from its session's copy before
+   * the turn (ADR 0344). A member's, for an app build, gets their draft's
+   * files, cloned from the origin when the draft is in sync with it.
+   */
   async ensure(opts: {
     identity: Identity;
     projectId: string;
     refresh: boolean;
     /**
-     * Put the draft's files in a new sandbox; default true. False leaves a
-     * new sandbox empty for a setup that may see its base alone (ADR 0257).
+     * Put what a new sandbox starts with in it; default true. False leaves
+     * it empty for a setup that may see its base alone (ADR 0257).
      */
     populate?: boolean;
   }): Promise<PreparedDevSandbox> {
     const populate = opts.populate ?? true;
+    const session = this.deps.sessionId !== undefined;
     const repo = this.deps.sessionId
       ? await this.deps.projectManager.openSession({
           tenantId: opts.identity.tenantId,
@@ -92,7 +99,7 @@ export class DevSandboxService {
         userId: opts.identity.externalUserId,
       });
       const cloneSource =
-        existing || !populate
+        existing || session || !populate
           ? undefined
           : await this.cloneSourceIfInSync({
               identity: opts.identity,
@@ -111,7 +118,7 @@ export class DevSandboxService {
           projectDirectory: this.projectDirectory,
           baseCommitSha,
         };
-      if (!cloneSource && (!existing || opts.refresh)) {
+      if (!session && !cloneSource && (!existing || opts.refresh)) {
         await this.deps.provider.uploadFiles(
           handle.providerId,
           await repo.readAllFiles(),

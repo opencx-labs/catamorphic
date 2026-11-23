@@ -35,26 +35,37 @@ capacity. Workers state their protocol on every call and get `426` when the
 control plane cannot drive them (ADR 0198).
 
 Members' subscription sign-ins stay on the machine they were made on (ADRs
-0199, 0213), and only Codex's: Claude Code subscriptions run only on a
-member's own computer, so `work worker sign-in claude-code` refuses. A member
-signs in to Codex from the Work app on a machine of their own (a worker whose
-access names only them, or a single server with
-`WORK_PERSONAL_CREDENTIALS=accept`): the machine runs `codex login
---device-auth` into `<WORK_DATA_DIR>/sign-ins/codex/<member>` through sealed
-`machine.codexSignIn` operations, the app shows the code, and the member
-approves in their browser; `work worker sign-in codex --member <id>` does the
-same in a terminal. A machine holds one person's sign-in at most, reports
-only `sign-in:codex:<member>`, and a sandbox of that member's own chat mounts
-that one home. Never read, copy, upload, store, or forward a sign-in. An
-admin allows sign-ins with an Environment that has `"personalCredentials":
-true` plus members' own machines; otherwise companies use model
-connections through the gateway or a member's own API key. A Postgres control plane refuses plain-subprocess agents unless
+0199, 0213, 0342), Claude Code's and Codex's alike. A member signs in from
+the Work app on a machine of their own (a worker whose principals name only
+them, or a single server with `WORK_PERSONAL_CREDENTIALS=accept`): the
+machine runs the harness's own unmodified login (`claude auth login`, or
+`codex login --device-auth`) into
+`<WORK_DATA_DIR>/sign-ins/<harness>/<member>` through sealed
+`machine.harnessSignIn` operations. The app shows the login's link; Codex
+also prints a one-time code the member enters in their browser, and Claude
+Code's page gives the member a code they paste into the app, which reaches
+the login as one line of input and is never logged, stored or echoed. `work
+worker sign-in <claude-code|codex> --member <id>` does the same in a
+terminal. A machine holds one person's sign-ins at most (one person may
+hold both), reports only `sign-in:<harness>:<member>`, and a sandbox of that
+member's own chat mounts that one home. Never read, copy, upload, store, or
+forward a sign-in, never route a sign-in's model traffic through the
+gateway, and never remove or restrict a sign-in method of the CLI. What
+differs between harnesses lives in `SIGN_IN_SPECS` (`@catamorphic/sandbox`):
+add no second mechanism. An admin allows sign-ins with an Environment that
+has `"personalCredentials": true` plus members' own machines that persist;
+otherwise companies use model connections through the gateway or a member's
+own API key. A Postgres control plane refuses plain-subprocess agents unless
 microsandbox or `WORK_TRUST_CONTROL_PLANE_AGENTS=1`. Follow the
 [machines reference](../../skills/setup-work-server/references/cluster-deployment.md)
 and keep its enrollment and recovery instructions accurate. Preserve the
 local-process single-tenant boundary. Follow ADR 0100 for workspace budgets:
 an Allocation reserves a workspace until physical teardown; expired leases
 alone never free capacity.
+
+Create cloud capacity in a custom host with `hooks.machines`. The stock
+server supplies hand enrollment and the worker protocol. The registry
+supplies optional installation, cloud and policy recipes.
 
 ## Run
 

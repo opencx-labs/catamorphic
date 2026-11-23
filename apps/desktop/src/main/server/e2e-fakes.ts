@@ -1676,7 +1676,7 @@ async function* fakeScript(turn: FakeTurn): AsyncGenerator<FakeStep> {
     ) {
       const result = await turn.capability(
         scenario === "notify"
-          ? "project.send_agent_message"
+          ? "project.session_send"
           : `project.session_${scenario}`,
         {
           sessionId,
@@ -1686,7 +1686,6 @@ async function* fakeScript(turn: FakeTurn): AsyncGenerator<FakeStep> {
             : {}),
           ...(scenario === "notify"
             ? {
-                toSessionId: sessionId,
                 message: "This result needs your attention.",
                 mode: "message_only",
                 attention: "required",
