@@ -270,7 +270,11 @@ function SourceView({
   // order is no change), at once when shown and when it is shown next
   // otherwise. Only an explicitly session-scoped section changes collection
   // with its chat; other lists keep their rows, expansion and subscription.
-  const sessionKey = stableJson({ surface, session });
+  // Read again for what the source lists from, not for every tab that
+  // comes to the front: most lists name neither the surface nor its chat.
+  const sessionKey = stableJson(
+    source.listsFrom?.({ surface, session }) ?? null,
+  );
   const loadedWith = useRef({ collection, sessionKey, active });
   const stale = useRef(false);
   useEffect(() => {

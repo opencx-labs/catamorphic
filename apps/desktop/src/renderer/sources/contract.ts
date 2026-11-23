@@ -44,6 +44,17 @@ export interface SectionSource {
   /** The sentence an empty section shows when its layout gives none. */
   empty: string;
   /**
+   * What of the surface in front and its chat the rows are listed from. A
+   * section reads its rows again when this changes (compared as JSON), and
+   * only then: a list that names neither is not read again for every tab
+   * that comes to the front. Every call still carries the current surface
+   * and chat. Absent: neither.
+   */
+  listsFrom?: (context: {
+    surface: SidebarSurface;
+    session?: SidebarSourceSession;
+  }) => unknown;
+  /**
    * Recover on an explicit Retry or Refresh and invalidate subscribed views.
    * Its invalidation owns their reads; callers do not load again afterward.
    */

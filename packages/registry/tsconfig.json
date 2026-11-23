@@ -16,6 +16,6 @@
     "src/pull-request-reviews/stalled-reviews.ts",
     "src/slack-threads/slack-threads.ts",
     "src/slack-threads/slack.ts",
-    "src/machines-ec2/machines-ec2.ts"
+    "src/machines-*/**"
   ]
 }

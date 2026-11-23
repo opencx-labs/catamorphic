@@ -5,12 +5,17 @@ import {
   type AdministratorAccess,
   administratorCaller,
 } from "../identity/administrator-routes.js";
-import type { InstallTarget } from "../workers/install-script.js";
-import type { MachineClass } from "../workers/machine-classes.js";
-import type { MachineReconciler } from "../workers/machine-rules.js";
+import type { WorkMachines } from "../machines/work-machines.js";
 import { WorkerPlacementSchema } from "../workers/placement.js";
-import type { WorkWorkerRegistry } from "../workers/worker-registry.js";
+import {
+  isWorkerNode,
+  WORKER_NODE_PREFIX,
+  type WorkWorkerRegistry,
+} from "../workers/worker-registry.js";
 import { verifyWorkOperatorSecret } from "./operator-access.js";
+
+/** A placement's fields as written: each is optional in a request. */
+const PlacementInput = WorkerPlacementSchema.partial();
 
 const MachineParams = z.object({ nodeId: z.string().min(1) });
 const MachineUpdate = z.strictObject({ enabled: z.boolean() });
@@ -23,12 +28,10 @@ export interface MachineManagement {
   publicBase: string;
   tenantId: string;
   authorityId: string;
-  /** Machine classes (ADR 0205), to check pooled enrollments. */
-  classes: Readonly<Record<string, MachineClass>>;
-  /** What machines install, for the printed install command. */
-  install: { target: InstallTarget } | { unavailable: string };
-  /** Machine rules, when classes or a provisioner are configured. */
-  machines?: MachineReconciler;
+  /** The sequencer, when the host passed a machines hook (ADR 0349). */
+  machines?: WorkMachines;
+  /** The account a verified email names, for `for: [{ email }]`. */
+  userIdForEmail(email: string): Promise<string | undefined>;
 }
 
 type Handler = (
@@ -74,9 +77,9 @@ export function registerMachineSetup(
 }
 
 /**
- * Organization administrators manage workers and machine rules through the
- * public API as the operator does on the loopback listener (ADR 0205), with
- * the same handlers.
+ * Organization administrators manage machines through the public API as
+ * the operator does on the loopback listener (ADR 0205), with the same
+ * handlers.
  */
 export function registerMachineAdministration(
   args: MachineManagement & AdministratorAccess & { app: FastifyInstance },
@@ -102,27 +105,41 @@ export function registerMachineAdministration(
   });
 }
 
+/**
+ * Whom a machine is for, as an operator writes it: principals, where a
+ * person may be named by the email they sign in with.
+ */
+const PrincipalsInput = z
+  .array(
+    z.union([z.strictObject({ email: z.email().toLowerCase() }), z.unknown()]),
+  )
+  .max(500);
+
 function machineRoutes(args: MachineManagement): MachineRoute[] {
-  // Machine rules: dedicated or shared machines per directory group.
-  const withRules = async (
-    reply: FastifyReply,
-    run: (machines: MachineReconciler) => Promise<unknown>,
-  ) => {
-    if (!args.machines)
-      return reply.status(409).send({
-        error:
-          "Machine rules need machine classes: set WORK_MACHINES_CONFIG, or extend the Work server with the machineProvisioner hook",
-      });
-    try {
-      return await run(args.machines);
-    } catch (error) {
-      return reply
-        .status(400)
-        .send({ error: errorMessage(error, "Machine rules failed") });
+  /** `{ email }` entries become `{ user }`; an unknown email is refused. */
+  const principals = async (value: unknown): Promise<unknown> => {
+    const list = PrincipalsInput.parse(value);
+    const resolved: unknown[] = [];
+    for (const entry of list) {
+      const named = z
+        .strictObject({ email: z.email().toLowerCase() })
+        .safeParse(entry);
+      if (!named.success) {
+        resolved.push(entry);
+        continue;
+      }
+      const user = await args.userIdForEmail(named.data.email);
+      if (!user)
+        throw new Error(
+          `No account with the verified email ${named.data.email} has signed in to this server`,
+        );
+      resolved.push({ user });
     }
+    return resolved;
   };
   return [
-    // Remote workers (ADR 0164): enroll with a one-time code, list, revoke.
+    // Machines enrolled by hand (ADRs 0164, 0349): enroll with a one-time
+    // code, list, revoke. The machines hook's own machines enroll themselves.
     {
       method: "POST",
       operator: "/_work/operator/workers",
@@ -133,44 +150,26 @@ function machineRoutes(args: MachineManagement): MachineRoute[] {
             name: z.string().min(1),
             ttlMinutes: z.number().int().positive().max(1440).optional(),
             labels: z.unknown().optional(),
-            access: z.unknown().optional(),
+            for: z.unknown().optional(),
             trusted: z.boolean().optional(),
-            /** A pooled machine rules assign (ADR 0205). */
-            pool: z.boolean().optional(),
           })
           .safeParse(request.body);
         if (!body.success)
           return reply.status(400).send({ error: firstIssue(body.error) });
-        const { labels, access, trusted, pool, ...rest } = body.data;
-        if (pool && (access !== undefined || trusted !== undefined))
-          return reply.status(400).send({
-            error:
-              "A pooled machine takes no work until a machine rule assigns it; leave out access and trusted",
-          });
-        const placement = WorkerPlacementSchema.safeParse({
-          ...(labels === undefined ? {} : { labels }),
-          ...(access === undefined ? {} : { access }),
-          ...(trusted === undefined ? {} : { trusted }),
-        });
-        if (!placement.success)
-          return reply.status(400).send({ error: firstIssue(placement.error) });
-        if (pool) {
-          const poolClass = placement.data.labels.class;
-          const pools = Object.entries(args.classes)
-            .filter(([, machineClass]) => machineClass.platform === "pool")
-            .map(([name]) => name);
-          if (!poolClass || !pools.includes(poolClass))
-            return reply.status(400).send({
-              error: `A pooled machine needs labels.class naming a pool class (${
-                pools.join(", ") || "none configured in WORK_MACHINES_CONFIG"
-              })`,
-            });
-        }
+        const { labels, trusted, ...rest } = body.data;
         try {
           const enrollment = await args.workers.createEnrollment({
-            ...rest,
-            placement: placement.data,
-            ...(pool ? { pool } : {}),
+            name: rest.name,
+            ...(rest.ttlMinutes === undefined
+              ? {}
+              : { ttlMinutes: rest.ttlMinutes }),
+            placement: placementInput({
+              labels,
+              trusted,
+              ...(rest.for === undefined
+                ? {}
+                : { for: await principals(rest.for) }),
+            }),
           });
           return reply.status(201).send({
             ...enrollment,
@@ -179,11 +178,6 @@ function machineRoutes(args: MachineManagement): MachineRoute[] {
             // configuration, never to a chat or a repository.
             start:
               "WORK_CONTROL_PLANE_URL=<url> WORK_WORKER_ENROLLMENT=<code> bun apps/server/src/worker.ts",
-            ...("target" in args.install
-              ? {
-                  install: `curl -fsSL ${args.install.target.controlPlaneUrl}/api/workers/install.sh | sudo sh -s -- --code ${enrollment.code}`,
-                }
-              : {}),
           });
         } catch (error) {
           return reply
@@ -192,13 +186,21 @@ function machineRoutes(args: MachineManagement): MachineRoute[] {
         }
       },
     },
+    // Every machine Work knows, made by the machines hook or enrolled by
+    // hand, with what the latest plan said.
     {
       method: "GET",
       operator: "/_work/operator/workers",
       admin: "/api/work/machines/workers",
-      handler: async () => ({ workers: await args.workers.list() }),
+      handler: async () => ({
+        workers: await args.workers.list(),
+        plan: {
+          configured: Boolean(args.machines),
+          ...(await args.workers.machines.plan()),
+        },
+      }),
     },
-    // Whose work a worker takes and its labels (ADR 0167).
+    // Whom a machine enrolled by hand is for, and its labels (ADR 0349).
     {
       method: "PATCH",
       operator: "/_work/operator/workers/:name",
@@ -210,21 +212,25 @@ function machineRoutes(args: MachineManagement): MachineRoute[] {
         const body = z
           .strictObject({
             labels: z.unknown().optional(),
-            access: z.unknown().optional(),
+            for: z.unknown().optional(),
             trusted: z.boolean().optional(),
           })
           .safeParse(request.body);
         if (!params.success || !body.success)
           return reply
             .status(400)
-            .send({ error: "Provide labels, access, or trusted" });
+            .send({ error: "Provide labels, for, or trusted" });
         try {
           return {
             placement: await args.workers.setPlacement({
               name: params.data.name,
-              placement: Object.fromEntries(
-                Object.entries(body.data).filter(([, v]) => v !== undefined),
-              ),
+              placement: placementInput({
+                labels: body.data.labels,
+                trusted: body.data.trusted,
+                ...(body.data.for === undefined
+                  ? {}
+                  : { for: await principals(body.data.for) }),
+              }),
             }),
           };
         } catch (error) {
@@ -261,55 +267,34 @@ function machineRoutes(args: MachineManagement): MachineRoute[] {
           .safeParse(request.params);
         if (!params.success)
           return reply.status(400).send({ error: "Provide a worker name" });
-        return (await args.workers.revoke(params.data))
+        const revoked = await args.workers.revoke(params.data);
+        // The plan replaces a machine it still names.
+        if (revoked) args.machines?.passSoon();
+        return revoked
           ? { ok: true }
           : reply.status(404).send({ error: "Worker not found" });
       },
     },
-    {
-      method: "GET",
-      operator: "/_work/operator/machine-rules",
-      admin: "/api/work/machines/rules",
-      handler: (_request, reply) =>
-        withRules(reply, async (machines) => ({
-          rules: await machines.rules(),
-          status: await machines.status(),
-        })),
-    },
-    {
-      method: "PUT",
-      operator: "/_work/operator/machine-rules/:name",
-      admin: "/api/work/machines/rules/:name",
-      // The rule is stored when this answers; a pass starts at once and
-      // reports through the rule's status.
-      handler: (request, reply) =>
-        withRules(reply, async (machines) => {
-          const { name } = z.object({ name: z.string() }).parse(request.params);
-          const rule = await machines.setRule({ name, rule: request.body });
-          machines.reconcileSoon();
-          return { rule };
-        }),
-    },
-    {
-      method: "DELETE",
-      operator: "/_work/operator/machine-rules/:name",
-      admin: "/api/work/machines/rules/:name",
-      handler: (request, reply) =>
-        withRules(reply, async (machines) => {
-          const { name } = z.object({ name: z.string() }).parse(request.params);
-          if (!(await machines.deleteRule(name)))
-            return reply.status(404).send({ error: "Rule not found" });
-          machines.reconcileSoon();
-          return { ok: true };
-        }),
-    },
-    // A pass now, answered with what it did.
+    // Plan now (ADR 0349): ask the machines hook and act on its answer,
+    // answered with what the pass did.
     {
       method: "POST",
-      operator: "/_work/operator/machine-rules/reconcile",
-      admin: "/api/work/machines/rules/reconcile",
-      handler: (_request, reply) =>
-        withRules(reply, (machines) => machines.reconcile()),
+      operator: "/_work/operator/machines/plan",
+      admin: "/api/work/machines/plan",
+      handler: async (_request, reply) => {
+        if (!args.machines)
+          return reply.status(409).send({
+            error:
+              "This server makes no machines: pass a machines hook to createWorkServer (hooks.machines), or enroll machines by hand",
+          });
+        try {
+          return await args.machines.pass();
+        } catch (error) {
+          return reply
+            .status(500)
+            .send({ error: errorMessage(error, "The machine pass failed") });
+        }
+      },
     },
     {
       method: "GET",
@@ -376,17 +361,39 @@ function machineRoutes(args: MachineManagement): MachineRoute[] {
           return reply
             .status(400)
             .send({ error: "Provide a machine id and enabled state" });
-        const changed = await args.nodes.setEnabled({
-          ...args,
-          nodeId: params.data.nodeId,
-          enabled: body.data.enabled,
-        });
+        // A worker's machine remembers that an operator disabled it, so
+        // it is never called lost and stays off when resumed (ADR 0349).
+        const { nodeId } = params.data;
+        const changed = isWorkerNode(nodeId)
+          ? await args.workers.setDisabled({
+              name: nodeId.slice(WORKER_NODE_PREFIX.length),
+              disabled: !body.data.enabled,
+            })
+          : await args.nodes.setEnabled({
+              ...args,
+              nodeId,
+              enabled: body.data.enabled,
+            });
+        if (changed) args.machines?.passSoon();
         if (!changed)
           return reply.status(404).send({ error: "Machine not found" });
         return { ok: true };
       },
     },
   ];
+}
+
+/** A placement as the registry parses it, with only what was given. */
+function placementInput(input: {
+  labels?: unknown;
+  for?: unknown;
+  trusted?: boolean | undefined;
+}): z.input<typeof PlacementInput> {
+  return PlacementInput.parse(
+    Object.fromEntries(
+      Object.entries(input).filter(([, value]) => value !== undefined),
+    ),
+  );
 }
 
 function errorMessage(error: unknown, fallback: string): string {

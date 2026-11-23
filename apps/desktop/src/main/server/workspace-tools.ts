@@ -2,13 +2,17 @@ import { stat } from "node:fs/promises";
 import path from "node:path";
 import {
   type JsonValue,
-  SESSION_PULL_REQUESTS_CONTRACT,
   SET_SESSION_METADATA_DESCRIPTION,
   type SessionMetadata,
   sessionMetadataToolWrite,
   setSessionMetadataInputSchema,
 } from "@catamorphic/agent-protocol";
-import { type SubsessionRequest, subsessionTools } from "@catamorphic/core";
+import {
+  type ChatPullRequest,
+  pullRequestTool,
+  type SubsessionRequest,
+  subsessionTools,
+} from "@catamorphic/core";
 import {
   agentToolResult,
   type ExtraTool,
@@ -96,7 +100,7 @@ export interface GitBridge {
     projectId: string,
     sessionId: string,
     input: { title: string; body?: string },
-  ): Promise<{ url: string; number: number; branch: string }>;
+  ): Promise<ChatPullRequest>;
 }
 
 /** How a message reaches another chat's agent (ADR 0240, ADR 0250). */
@@ -1176,7 +1180,7 @@ export function buildWorkspaceToolkit(
     {
       name: "sync_project",
       description:
-        "Sync this project with its linked remote repository now. On the primary checkout this fetches and fast-forwards over a clean tree. Work pushes only to a repository it created; in a repository that existed before Work, local commits are never pushed, the result reports `ahead` or `diverged`, and you share them with create_pull_request. An isolated worktree is never synced; use create_pull_request to share that branch. Call this when the user asks to sync, pull, or share changes. Never run raw git push or pull in a terminal for a linked project.",
+        "Sync this project with its linked remote repository now. On the primary checkout this fetches and fast-forwards over a clean tree. Work pushes only to a repository it created; in a repository that existed before Work, local commits are never pushed, the result reports `ahead` or `diverged`, and you share them with create_pull_request. An isolated worktree is never synced; use create_pull_request to share that branch. Call this when the user asks to sync or pull. Never run raw git push or pull in a terminal for a linked project.",
       parameters: {},
       execute: async (_input, ctx) => {
         if (!ctx.sessionId) throw new Error("This turn has no chat session.");
@@ -1184,31 +1188,15 @@ export function buildWorkspaceToolkit(
         return gitBridge.sync(ctx.projectId, ctx.sessionId);
       },
     },
-    {
-      name: "create_pull_request",
-      description: `Propose the project's current changes for review: pushes the recorded commits to a new work/ branch on the linked remote (e.g. GitHub) and opens a pull request. This is how local work reaches a repository that existed before Work, and the right choice whenever sync_project reports \`ahead\` or \`diverged\`, the change is risky, collaborators are active, or the user asks for review. Returns the PR URL; share it with the user (open_surface can open it). It is not recorded on the chat until you add it with set_session_metadata: ${SESSION_PULL_REQUESTS_CONTRACT}`,
-      parameters: {
-        title: z
-          .string()
-          .min(1)
-          .max(120)
-          .describe("PR title: a concise, imperative summary of the change"),
-        body: z
-          .string()
-          .optional()
-          .describe("PR description (markdown): what changed and why"),
-      },
-      execute: async (input, ctx) => {
-        if (!ctx.sessionId) throw new Error("This turn has no chat session.");
-        if (!gitBridge) {
-          throw new Error("Pull requests are not available yet.");
-        }
-        return gitBridge.createPullRequest(ctx.projectId, ctx.sessionId, {
-          title: String(input.title),
-          ...(typeof input.body === "string" ? { body: input.body } : {}),
-        });
-      },
-    },
+    // Core's one pull request tool (ADR 0345), over this chat's checkout:
+    // its worktree, or the project folder.
+    pullRequestTool((request) => {
+      if (!gitBridge) throw new Error("Pull requests are not available yet.");
+      return gitBridge.createPullRequest(request.projectId, request.sessionId, {
+        title: request.title,
+        ...(request.body !== undefined ? { body: request.body } : {}),
+      });
+    }),
     {
       name: "request_connection",
       description:

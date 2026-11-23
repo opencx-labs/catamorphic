@@ -57,6 +57,140 @@ export interface Identity {
    * `thing:*`, `*`, or an embedder's own namespaced capability.
    */
   projectPermissions?: readonly ProjectPermissionRef[];
+  /**
+   * The OAuth scopes of the grant this identity came from (ADR 0347): a
+   * client holds what its person granted it, never more. The host has
+   * already intersected the member's roles with them; what stays here is
+   * what callers check by name (`work:read`, `sessions:run`,
+   * `sessions:approve`, and which tools a client is shown). Absent: not a
+   * grant's identity (a host's own, a workflow's), or a grant of
+   * `work:full`, the person themself.
+   */
+  tokenScopes?: readonly string[];
+}
+
+/** The OAuth scopes a grant may carry, and what each lets a client do. */
+export const TOKEN_SCOPES = {
+  "work:full":
+    "Full access as you: everything you can do in Work, including approving what agents ask to do",
+  "work:read": "Read projects, documents, chats and runs",
+  "sessions:run":
+    "Start, message, answer, stop and close chats, and run workflows",
+  "sessions:approve": "Approve or deny what an agent asks to do",
+  "documents:write": "Write and delete documents in the project store",
+  "program:write": "Change a draft of the project's program",
+  "program:publish": "Publish program changes and shared links",
+} as const;
+export type TokenScope = keyof typeof TOKEN_SCOPES;
+
+const TOKEN_SCOPE_NAMES = Object.keys(TOKEN_SCOPES);
+
+function isTokenScope(scope: string): scope is TokenScope {
+  return TOKEN_SCOPE_NAMES.includes(scope);
+}
+
+/** The scope that is the person themself: Work's own apps ask for it. */
+export const FULL_TOKEN_SCOPE = "work:full" satisfies TokenScope;
+
+/**
+ * What a client that asks for none of Work's scopes is offered at consent:
+ * everything but approving for its person, and the full scope.
+ */
+export const DEFAULT_TOKEN_SCOPES = [
+  "work:read",
+  "sessions:run",
+  "documents:write",
+  "program:write",
+  "program:publish",
+] as const satisfies readonly TokenScope[];
+
+/** Work's scopes among a grant's, in the order they were granted. */
+export function tokenScopesOf(granted: readonly string[]): TokenScope[] {
+  return granted.filter(isTokenScope);
+}
+
+/**
+ * A member's identity as a grant with these OAuth scopes may use it (ADR
+ * 0347): the member's roles intersected with what their client was
+ * granted. Every grant narrows, down to nothing for one that names none of
+ * Work's scopes; only `work:full` is the person themself. Roles narrow
+ * where a role says it (documents become read-only without
+ * `documents:write`, the program without `program:write`, publishing
+ * without `program:publish`); the rest is checked by name where it applies
+ * ({@link hasTokenScope}).
+ */
+export function withTokenScopes(
+  identity: Identity,
+  granted: readonly string[],
+): Identity {
+  const scopes = tokenScopesOf(granted);
+  if (scopes.includes(FULL_TOKEN_SCOPE)) return identity;
+  const has = (scope: TokenScope) => scopes.includes(scope);
+  // What a role's permission still gives under these scopes. A wildcard
+  // is spelled out first, so the withheld ones can be left out.
+  const withheld = (permission: string) =>
+    (permission === "program:write" && !has("program:write")) ||
+    (permission === "program:publish" && !has("program:publish"));
+  const narrowed = (ref: ProjectPermissionRef): ProjectPermissionRef[] => {
+    const named = PROJECT_PERMISSIONS.filter((permission) =>
+      ref.permission === "*" || ref.permission.endsWith(":*")
+        ? permissionCovers(ref.permission, permission)
+        : false,
+    );
+    const kept = (named.length > 0 ? named : [ref.permission]).filter(
+      (permission) => !withheld(permission),
+    );
+    // Nothing withheld: the grant stays as its role wrote it.
+    if (named.length > 0 && kept.length === named.length) return [ref];
+    return [
+      ...kept.map((permission) => ({ projectId: ref.projectId, permission })),
+      // Writing or publishing the program also read it.
+      ...(withheld(ref.permission)
+        ? [{ projectId: ref.projectId, permission: "program:read" }]
+        : []),
+    ];
+  };
+  return {
+    ...identity,
+    tokenScopes: scopes,
+    controlPlanePermissions: undefined,
+    ...(identity.scope
+      ? {
+          scope: identity.scope.map((ref) =>
+            ref.kind === "document" &&
+            ref.access === "write" &&
+            !has("documents:write")
+              ? { ...ref, access: "read" as const }
+              : ref,
+          ),
+        }
+      : {}),
+    ...(identity.projectPermissions
+      ? { projectPermissions: identity.projectPermissions.flatMap(narrowed) }
+      : {}),
+  };
+}
+
+/** Whether the identity's grant carries the scope; an unnarrowed one does. */
+export function hasTokenScope(identity: Identity, scope: TokenScope): boolean {
+  return identity.tokenScopes === undefined
+    ? true
+    : identity.tokenScopes.includes(scope);
+}
+
+/** A grant that lacks a scope an operation needs. */
+export class TokenScopeRequiredError extends Error {
+  constructor(readonly scope: TokenScope) {
+    super(
+      `This needs the ${scope} scope, which this client was not granted. Sign in again and allow it.`,
+    );
+    this.name = "TokenScopeRequiredError";
+  }
+}
+
+/** Refuse an identity whose grant lacks the scope. */
+export function assertTokenScope(identity: Identity, scope: TokenScope): void {
+  if (!hasTokenScope(identity, scope)) throw new TokenScopeRequiredError(scope);
 }
 
 /**

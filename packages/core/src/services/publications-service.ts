@@ -2,6 +2,7 @@ import { randomBytes } from "node:crypto";
 import type { DB } from "@catamorphic/db";
 import type { Kysely } from "kysely";
 import {
+  assertTokenScope,
   type DocumentRef,
   hasProjectPermission,
   type Identity,
@@ -75,6 +76,7 @@ export class PublicationsService {
     slug?: string;
   }): Promise<Publication> {
     const { identity, projectId } = input;
+    assertTokenScope(identity, "program:publish");
     await this.requireProject(identity, projectId);
     const path = normalizeDocumentPath(input.path);
     // Program paths go public only for those who may publish the program;
@@ -141,6 +143,7 @@ export class PublicationsService {
     projectId: string;
     slug: string;
   }): Promise<void> {
+    assertTokenScope(input.identity, "program:publish");
     await this.requireProject(input.identity, input.projectId);
     const row = await this.db
       .selectFrom("publications")

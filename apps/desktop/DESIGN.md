@@ -886,6 +886,35 @@ the historical log explains how it arrived here.
 
 ## Design log
 
+### 2026-11-23: Chip-only pages close with their chat, and full tabs can shrink
+
+A tab can close back to its chip. Closing the chat then disposes its hidden
+views, so an old page cannot keep running or turn up in Choose what to share.
+A page that asks to stay gets the usual Leave site? prompt. Unsaved editor
+content remains open in its own tab.
+
+The horizontal strip can shrink tabs to fit. Tabs keep natural widths until
+the strip fills. Pinned tabs keep their width, and tabs too narrow for their
+titles show their icons. The front tab reveals its close button over its icon.
+The strip scrolls when the icons fill it.
+
+### 2026-11-20: Claude Code signs in on your own machines too
+
+Remote environment's Sign-ins section no longer says Claude Code runs on
+a person's subscription only on this computer (ADR 0342, replacing that
+half of the 2026-10-06 entry below). Each of Your machines is a card with
+its name and status, including when it is starting, stopped or resuming.
+Under it is a row for each harness,
+Claude Code then Codex, signed in or not, with its own Sign in and Sign
+out. One dialog serves both: the sign-in page (a Work browser tab, with
+the link shown too), then what that harness asks next. Codex shows its
+one-time code, large and copyable. Claude Code's page gives the person a
+code instead, so the dialog has a field to paste it and a Submit button;
+the field empties as it sends, the code is never kept or shown again, and
+the dialog says it is finishing the sign-in. A code the machine would not
+take says why and leaves the field ready. Signing out of one harness
+leaves the other.
+
 ### 2026-11-19: A long question scrolls inside its panel
 
 A question too long for the chat's room scrolled as a whole inside the
@@ -4308,19 +4337,15 @@ translator and Google's CLD3 detector. A pair's model downloads the first
 time a page asks after a click, with the page's own progress, and text
 never leaves the computer (ADR 0320).
 
-### 2026-11-19: A chat's hidden pages close with it, and full tabs can shrink
+### 2026-11-20: The window renders what changed
 
-Closing a tab a chat holds only tucks it behind that chat's chip. Closing
-the chat itself left those pages behind: still loaded, out of sight,
-restored with the window, and listed in a call's "Choose what to share"
-as tabs the person had closed. A chip-only page, shell or note now goes
-with its chat (a note with unsaved edits comes back as a tab), and a saved
-window drops ones whose chat is already gone. The share picker lists the
-strip's tabs, and a chip's page only when it is the one asking.
-
-"When tabs fill the bar" (Settings, Workspace) can now shrink every tab
-to fit, as Chrome does, instead of scrolling the bar. Tabs keep their size
-until the bar is full, then narrow together; one too narrow for its title
-is its icon, named by its hover card, and only the tab in front keeps its
-close button. Pinned tabs keep their size. Past every tab's icon the bar
-still scrolls.
+A tab click, a page's title or a chat's signal used to render the whole
+window: its workspaces lived in the state of one component, which gave
+every part new closures each time. Workspaces now live in a store
+(`lib/workspace-store.ts`), and a part of the window renders when what it
+shows changes (ADR 0340). A new part follows that rule: it takes entries
+that keep their identity (`useStableEntries`), handlers that stay the same
+and run the latest (`useLatestHandlers`, or `quiet` around the component),
+and nothing it must call while it renders; what is built for a moment (a
+menu, a signal's mark) is built then. Nothing looks or moves differently.
+Measurements are in [Performance](docs/performance.md).

@@ -34,12 +34,13 @@ function epoch(): string {
 }
 
 /**
- * A machine is taken out of service only while nothing holds it (ADR
- * 0258): the drain and a new Allocation take the same node row lock, so on
- * real Postgres one waits for the other and neither misses the other.
+ * A machine is stopped or taken out of service only while nothing holds it
+ * (ADRs 0258, 0349, 0350): those and a new Allocation take the same node
+ * row lock, so on real Postgres one waits for the other and neither misses
+ * the other.
  */
 it.skipIf(!process.env.DATABASE_URL)(
-  "never revokes a machine an Allocation is landing on, and places nothing on a drained one",
+  "never stops or retires a machine an Allocation is landing on, and places nothing on one that went",
   async () => {
     const dir = await fs.mkdtemp(path.join(os.tmpdir(), "work-drain-"));
     const database = await createTestDatabase("work_drain");
@@ -77,7 +78,7 @@ it.skipIf(!process.env.DATABASE_URL)(
       const keys = generateExecutorKeyPair();
       const enrollment = await registry.createEnrollment({
         name: "racer",
-        placement: { access: { projects: [project.id] } },
+        placement: { for: [{ project: project.id }] },
       });
       const { nodeId } = await registry.enroll({
         code: enrollment.code,
@@ -95,6 +96,14 @@ it.skipIf(!process.env.DATABASE_URL)(
         publicKey: keys.publicKey,
       });
       const allocations = new ExecutionAllocationsService(db);
+      const placementRevision = async () => {
+        const revision = (await registry.placements()).get(
+          nodeId,
+        )?.admissionRevision;
+        if (!revision) throw new Error("The worker has no placement revision");
+        return revision;
+      };
+      const previousRevision = await placementRevision();
       const policy: EnvironmentAllocationPolicy = {
         binding: {
           id: nodeId,
@@ -105,6 +114,7 @@ it.skipIf(!process.env.DATABASE_URL)(
           agentTopologies: ["controller"],
           capabilities: [],
           resources: {},
+          admissionRevision: previousRevision,
         },
         requirements: { workload: "agent" },
       };
@@ -112,6 +122,7 @@ it.skipIf(!process.env.DATABASE_URL)(
         transaction?: Parameters<
           ExecutionAllocationsService["create"]
         >[0]["transaction"],
+        admissionRevision = previousRevision,
       ) =>
         allocations.create({
           identity: owner,
@@ -120,13 +131,29 @@ it.skipIf(!process.env.DATABASE_URL)(
           workloadKind: "agent",
           rootWorkloadId: randomUUID(),
           workerNodeId: nodeId,
-          policy,
+          policy: {
+            ...policy,
+            binding: { ...policy.binding, admissionRevision },
+          },
           ...(transaction ? { transaction } : {}),
         });
 
+      // A scheduled choice under the old principals cannot land while the
+      // disk is being reset or after the next principals can place work.
+      await registry.machines.beginReset({
+        name: "racer",
+        for: [{ user: owner.externalUserId }],
+      });
+      expect(await registry.connected({ name: "racer" })).toBe(true);
+      await expect(allocate()).rejects.toBeInstanceOf(EnvironmentCapacityError);
+      await registry.machines.finishReset({ name: "racer" });
+      const revision = await placementRevision();
+      expect(revision).not.toBe(previousRevision);
+      await expect(allocate()).rejects.toBeInstanceOf(EnvironmentCapacityError);
+
       // An Allocation is being made on the machine, its transaction still
-      // open, when the reconciler drains it: the drain waits for it, then
-      // sees it and keeps the machine.
+      // open, when the sequencer retires it: the retirement waits for it,
+      // then sees it and keeps the machine.
       let commit = () => {};
       const committing = new Promise<void>((resolve) => {
         commit = resolve;
@@ -136,24 +163,27 @@ it.skipIf(!process.env.DATABASE_URL)(
         made = resolve;
       });
       const landing = db.transaction().execute(async (trx) => {
-        const allocation = await allocate(trx);
+        const allocation = await allocate(trx, revision);
         made();
         await committing;
         return allocation;
       });
       await madeOne;
       let settled = false;
-      const drain = registry
-        .drain({ name: "racer", unseenForMs: 15 * 60_000 })
-        .finally(() => {
-          settled = true;
-        });
+      const drain = registry.retireMachine({ name: "racer" }).finally(() => {
+        settled = true;
+      });
       await new Promise((resolve) => setTimeout(resolve, 300));
       expect(settled).toBe(false);
       commit();
       const allocation = await landing;
       expect(await drain).toBe(false);
+      // Stopping is refused the same way: it holds a live workspace.
+      expect(await registry.beginStop({ name: "racer" })).toBe(false);
       expect(await registry.connected({ name: "racer" })).toBe(true);
+      expect(
+        (await registry.list()).find((worker) => worker.name === "racer"),
+      ).toMatchObject({ state: "serving", holding: { workspaces: 1 } });
 
       // Its lease lapses (a restart, a network blip) with the workspace
       // still on it: one reading is not enough to give the workspace up.
@@ -161,24 +191,28 @@ it.skipIf(!process.env.DATABASE_URL)(
         UPDATE worker_nodes SET lease_expires_at = now() - interval '1 second'
         WHERE id = ${nodeId}
       `.execute(db);
+      expect(await registry.retireMachine({ name: "racer" })).toBe(false);
       expect(
-        await registry.drain({ name: "racer", unseenForMs: 15 * 60_000 }),
+        await registry.declareLost({
+          name: "racer",
+          unseenForMs: 15 * 60_000,
+        }),
       ).toBe(false);
       expect(
         (await registry.list()).find((worker) => worker.name === "racer"),
-      ).toMatchObject({ revoked: false });
-      // Unseen for longer than the rule allows, it is lost: drained though
-      // it holds the workspace, and nothing lands on it any more.
+      ).toMatchObject({ state: "unreachable" });
+      // Unseen for longer than its limit, it is lost: taken out of service
+      // though it holds the workspace, and nothing lands on it any more.
       await new Promise((resolve) => setTimeout(resolve, 20));
-      expect(await registry.drain({ name: "racer", unseenForMs: 10 })).toBe(
-        true,
-      );
+      expect(
+        await registry.declareLost({ name: "racer", unseenForMs: 10 }),
+      ).toBe(true);
       expect(allocation.workerNodeId).toBe(nodeId);
       await expect(allocate()).rejects.toBeInstanceOf(EnvironmentCapacityError);
       expect(await registry.connected({ name: "racer" })).toBe(false);
       expect(
         (await registry.list()).find((worker) => worker.name === "racer"),
-      ).toMatchObject({ revoked: true });
+      ).toMatchObject({ state: "destroying", holding: { workspaces: 0 } });
     } finally {
       await server?.shutdown();
       await fs.rm(dir, { recursive: true, force: true });

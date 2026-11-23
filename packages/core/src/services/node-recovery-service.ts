@@ -707,35 +707,28 @@ export class NodeRecoveryService {
   }
 
   /** Release a lost node's Allocation for a workload that is not a live run. */
-  private async releaseWorkload(args: {
+  private releaseWorkload(args: {
     allocation: AllocationRow;
     nodeId: string;
   }): Promise<RunOutcome> {
-    return this.deps.db.transaction().execute(async (trx) => {
-      if (!(await lockLostAllocation({ trx, ...args }))) return "skipped";
-      await retireAllocation({ trx, allocationId: args.allocation.id });
-      // The sandbox and any runner in it died with the machine;
-      // the next turn starts both again, as after an idle release.
-      const lost = await trx
-        .updateTable("agent_sessions")
-        .set({ sandbox_id: null })
-        .where("allocation_id", "=", args.allocation.id)
-        .where("sandbox_id", "is not", null)
-        .returning(["id", "workspace_session_id"])
-        .execute();
-      // One workspace lost, its own session's, however many sessions
-      // shared it (ADR 0322).
-      for (const sessionId of new Set(
-        lost.map((session) => session.workspace_session_id ?? session.id),
-      ))
-        await recordWorkspaceGone({
-          db: trx,
-          sessionId,
-          change: "lost",
-          reason: "machine-lost",
-        });
-      return "released";
-    });
+    return releaseWorkload({ db: this.deps.db, ...args });
+  }
+
+  /** {@link retireNodeWork} on this service's database. */
+  retireNodeWork(args: {
+    nodeId: string;
+    reason: NodeRetireReason;
+    transaction?: Transaction<DB>;
+  }): Promise<NodeRetirement> {
+    return retireNodeWork({ db: this.deps.db, ...args });
+  }
+
+  /** {@link retireAllocationWork} on this service's database. */
+  retireAllocationWork(args: {
+    allocationId: string;
+    reason: NodeRetireReason;
+  }): Promise<boolean> {
+    return retireAllocationWork({ db: this.deps.db, ...args });
   }
 
   /**
@@ -782,6 +775,268 @@ export class NodeRecoveryService {
 }
 
 /**
+ * Why a machine's work is retired (ADR 0348): it was `lost` (unseen past
+ * its loss limit), `revoked` by an operator or a drain, `replaced` (its
+ * name enrolled again as a new machine), or its runner said it holds no
+ * such sandbox (`sandbox-unknown`).
+ */
+export type NodeRetireReason =
+  | "lost"
+  | "revoked"
+  | "replaced"
+  | "sandbox-unknown";
+
+/** What retiring a machine's work did. */
+export interface NodeRetirement {
+  /** Allocations released as `node_lost`: their chats are admitted again. */
+  released: number;
+  /** Released Allocations that still held the machine's capacity. */
+  freed: number;
+  /** Cache copies on the machine that are mounted no more. */
+  evictedFills: number;
+  /** Live workflow runs left for {@link NodeRecoveryService.recoverLostNodes}. */
+  remaining: number;
+}
+
+/**
+ * Retire everything a machine held, because the machine is gone or its
+ * sandboxes are (ADR 0348): the one place a machine's end reaches its
+ * work. Every active Allocation on it is released as `node_lost` with its
+ * capacity, grants and deployment runtimes, its chats' sandboxes are
+ * forgotten and their record says the workspace was lost, so the next turn
+ * is admitted again and rebuilt from the session's last save. Released
+ * Allocations that still counted against the machine stop counting, and
+ * its cache copies are mounted no more.
+ *
+ * Any replica may call it, any number of times, at once: each step is a
+ * conditional write under the rows' locks, taken in the order chats and
+ * runs take them (a session, then its Allocation, then the node), so a
+ * second call finds nothing left. Given a transaction it runs in it,
+ * waiting for locks rather than skipping, so a caller that reuses the
+ * node's id (a name enrolled again) commits with nothing of the old
+ * machine left. Enrolled workers hold no workflow runs; one found live is
+ * counted in `remaining` and left to node recovery, which moves it.
+ */
+export async function retireNodeWork(args: {
+  db: Kysely<DB>;
+  nodeId: string;
+  reason: NodeRetireReason;
+  transaction?: Transaction<DB>;
+}): Promise<NodeRetirement> {
+  return withSpan(
+    {
+      tracer,
+      name: "worker.retire_node_work",
+      attributes: {
+        "catamorphic.worker.id": args.nodeId,
+        "catamorphic.retire.reason": args.reason,
+      },
+    },
+    async (span) => {
+      const result: NodeRetirement = {
+        released: 0,
+        freed: 0,
+        evictedFills: 0,
+        remaining: 0,
+      };
+      const reader = args.transaction ?? args.db;
+      const allocations = await reader
+        .selectFrom("execution_allocations")
+        .selectAll()
+        .where("worker_node_id", "=", args.nodeId)
+        .where("status", "=", "active")
+        .orderBy("created_at")
+        .execute();
+      for (const allocation of allocations) {
+        if (
+          allocation.workload_kind === "workflow" &&
+          (await liveRun({ db: reader, allocation }))
+        ) {
+          result.remaining += 1;
+          continue;
+        }
+        const outcome = await releaseWorkload({
+          db: args.db,
+          ...(args.transaction ? { transaction: args.transaction } : {}),
+          allocation,
+          nodeId: args.nodeId,
+          wait: true,
+        });
+        if (outcome === "released") result.released += 1;
+      }
+      await inTransaction(args, async (trx) => {
+        // The node's row lock orders this with an Allocation landing on it
+        // and with its drain (ADR 0258).
+        await trx
+          .selectFrom("worker_nodes")
+          .select("id")
+          .where("id", "=", args.nodeId)
+          .forUpdate()
+          .execute();
+        // Given back before the machine went, their sandboxes not yet
+        // destroyed: those went with it, so they count against it no more.
+        const freed = await trx
+          .updateTable("execution_allocations")
+          .set({
+            capacity_released_at: sql`now()`,
+            release_reason: "node_lost",
+          })
+          .where("worker_node_id", "=", args.nodeId)
+          .where("status", "=", "released")
+          .where("capacity_released_at", "is", null)
+          .returning("id")
+          .execute();
+        result.freed = freed.length;
+        if (freed.length > 0)
+          await trx
+            .deleteFrom("deployment_runtimes")
+            .where(
+              "binding_id",
+              "in",
+              freed.map((row) => row.id),
+            )
+            .execute();
+        // Its volumes went with it, cache copies included (ADR 0334): none
+        // is mounted again, and the next workspace there queues a fill.
+        const evicted = await trx
+          .updateTable("environment_cache_fills")
+          .set({ status: "evicted" })
+          .where("worker_node_id", "=", args.nodeId)
+          .where("status", "=", "succeeded")
+          .returning("id")
+          .execute();
+        result.evictedFills = evicted.length;
+      });
+      span.setAttributes({
+        "catamorphic.retire.released": result.released,
+        "catamorphic.retire.freed": result.freed,
+        "catamorphic.retire.evicted_fills": result.evictedFills,
+        "catamorphic.retire.remaining": result.remaining,
+      });
+      return result;
+    },
+  );
+}
+
+/**
+ * Retire one Allocation whose sandbox is gone while its machine is not
+ * (ADR 0348): a runner that says it holds no such sandbox. Released as a
+ * lost machine's would be, so its chat is admitted again and rebuilt from
+ * its last save. False when it was no longer active.
+ */
+export async function retireAllocationWork(args: {
+  db: Kysely<DB>;
+  allocationId: string;
+  reason: NodeRetireReason;
+  transaction?: Transaction<DB>;
+}): Promise<boolean> {
+  return withSpan(
+    {
+      tracer,
+      name: "worker.retire_allocation_work",
+      attributes: {
+        "catamorphic.allocation.id": args.allocationId,
+        "catamorphic.retire.reason": args.reason,
+      },
+    },
+    async (span) => {
+      const allocation = await (args.transaction ?? args.db)
+        .selectFrom("execution_allocations")
+        .selectAll()
+        .where("id", "=", args.allocationId)
+        .where("status", "=", "active")
+        .executeTakeFirst();
+      if (!allocation) return false;
+      const outcome = await releaseWorkload({
+        db: args.db,
+        ...(args.transaction ? { transaction: args.transaction } : {}),
+        allocation,
+        nodeId: allocation.worker_node_id,
+        wait: true,
+      });
+      span.setAttribute("catamorphic.recovery.outcome", outcome);
+      return outcome === "released";
+    },
+  );
+}
+
+/** Whether a workflow Allocation's root run is still going. */
+async function liveRun(args: {
+  db: Kysely<DB>;
+  allocation: AllocationRow;
+}): Promise<boolean> {
+  const run = await args.db
+    .selectFrom("workflow_runs")
+    .select("status")
+    .where("id", "=", args.allocation.root_workload_id)
+    .executeTakeFirst();
+  return (
+    run !== undefined &&
+    !["completed", "failed", "canceled"].includes(run.status)
+  );
+}
+
+/** Run `work` in the caller's transaction, else in one of its own. */
+function inTransaction<T>(
+  args: { db: Kysely<DB>; transaction?: Transaction<DB> },
+  work: (trx: Transaction<DB>) => Promise<T>,
+): Promise<T> {
+  return args.transaction
+    ? work(args.transaction)
+    : args.db.transaction().execute(work);
+}
+
+/**
+ * Release an Allocation whose machine (or sandbox) is gone, for a workload
+ * that is not a live run: its capacity, grants and runtimes go, and its
+ * chats forget the sandbox and record the workspace as lost. `nodeId` is
+ * the machine it must still be on, or null for one on no node (a member's
+ * runner). With `wait`, a row another transaction holds is waited for
+ * rather than skipped.
+ */
+async function releaseWorkload(args: {
+  db: Kysely<DB>;
+  transaction?: Transaction<DB>;
+  allocation: AllocationRow;
+  nodeId: string | null;
+  wait?: boolean;
+}): Promise<RunOutcome> {
+  return inTransaction(args, async (trx) => {
+    if (
+      !(await lockLostAllocation({
+        trx,
+        allocation: args.allocation,
+        nodeId: args.nodeId,
+        ...(args.wait ? { wait: true } : {}),
+      }))
+    )
+      return "skipped";
+    await retireAllocation({ trx, allocationId: args.allocation.id });
+    // The sandbox and any runner in it died with the machine;
+    // the next turn starts both again, as after an idle release.
+    const lost = await trx
+      .updateTable("agent_sessions")
+      .set({ sandbox_id: null })
+      .where("allocation_id", "=", args.allocation.id)
+      .where("sandbox_id", "is not", null)
+      .returning(["id", "workspace_session_id"])
+      .execute();
+    // One workspace lost, its own session's, however many sessions
+    // shared it (ADR 0322).
+    for (const sessionId of new Set(
+      lost.map((session) => session.workspace_session_id ?? session.id),
+    ))
+      await recordWorkspaceGone({
+        db: trx,
+        sessionId,
+        change: "lost",
+        reason: "machine-lost",
+      });
+    return "released";
+  });
+}
+
+/**
  * A disposable node that will never renew again: it released its lease on
  * stop (which also disabled it), or its lease lapsed more than the grace
  * period ago.
@@ -810,7 +1065,9 @@ function isLost(eb: ExpressionBuilder<DB, "worker_nodes">, graceMs: number) {
 async function lockLostAllocation(args: {
   trx: Transaction<DB>;
   allocation: AllocationRow;
-  nodeId: string;
+  nodeId: string | null;
+  /** Wait for the Allocation's row rather than skip one that is held. */
+  wait?: boolean;
 }): Promise<boolean> {
   const { allocation, trx } = args;
   if (allocation.workload_kind === "workflow") {
@@ -841,10 +1098,14 @@ async function lockLostAllocation(args: {
     .selectFrom("execution_allocations")
     .select("id")
     .where("id", "=", args.allocation.id)
-    .where("worker_node_id", "=", args.nodeId)
+    .where((eb) =>
+      args.nodeId === null
+        ? eb("worker_node_id", "is", null)
+        : eb("worker_node_id", "=", args.nodeId),
+    )
     .where("status", "=", "active")
     .forUpdate()
-    .skipLocked()
+    .$if(!args.wait, (query) => query.skipLocked())
     .executeTakeFirst();
   return Boolean(row);
 }

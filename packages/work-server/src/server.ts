@@ -6,10 +6,14 @@ import type { AgentCapabilityOptions } from "@catamorphic/core";
 import {
   type ConnectionActionGuard,
   type ConnectionProvider,
+  FULL_TOKEN_SCOPE,
+  hasTokenScope,
   type Identity,
   type ModelRequestRewrite,
   startEventDispatcher,
+  tokenScopesOf,
   WorkerNodesService,
+  withTokenScopes,
 } from "@catamorphic/core";
 import {
   createDatabase,
@@ -24,10 +28,6 @@ import {
   instrumentHttpServer,
   serveSpaDist,
 } from "@catamorphic/fastify-plugin";
-import {
-  type HetznerCloudClientOptions,
-  HetznerCloudMachines,
-} from "@catamorphic/hetzner";
 import { gatewayHostOf, MACHINE_CAPABILITIES } from "@catamorphic/sandbox";
 import {
   aiToolCall,
@@ -45,6 +45,7 @@ import {
   type GithubConnectionOptions,
   githubCodeHost,
   MACHINE_TRIGGER_KINDS,
+  machineProjectEvent,
   ObjectRemoteBackend,
   PostgresObjectStore,
   ProjectManager,
@@ -96,6 +97,12 @@ import { registerAdministratorRoutes } from "./identity/administrator-routes.js"
 import { WorkAdministrators } from "./identity/administrators.js";
 import type { DirectoryProvider } from "./identity/directory.js";
 import { GoogleWorkspaceDirectory } from "./identity/google-directory.js";
+import type {
+  MachineEvent,
+  MachinesHook,
+  PersonFacts,
+} from "./machines/contract.js";
+import { WorkMachines, workMachineWorld } from "./machines/work-machines.js";
 import { registerConnectionSetup } from "./setup/connections.js";
 import { registerGithubAppSetup } from "./setup/github-app.js";
 import {
@@ -119,21 +126,8 @@ import {
 import { registerShareRoutes } from "./shares/share-routes.js";
 import { shareTools } from "./shares/share-tools.js";
 import { WorkSharesService } from "./shares/shares-service.js";
-import { CodexSignIns } from "./workers/codex-sign-ins.js";
 import { startDiskCare } from "./workers/disk-care.js";
-import {
-  installTarget,
-  registerInstallScriptRoute,
-} from "./workers/install-script.js";
-import {
-  MachinesConfigSchema,
-  machineClassesProblem,
-} from "./workers/machine-classes.js";
-import {
-  type MachineProvisioner,
-  MachineReconciler,
-} from "./workers/machine-rules.js";
-import { ProjectMachineWorkflows } from "./workers/machine-workflows.js";
+import { HarnessSignIns } from "./workers/harness-sign-ins.js";
 import { registerMemberMachineRoutes } from "./workers/member-machine-routes.js";
 import { MemberMachines } from "./workers/member-machines.js";
 import { signInCapabilities } from "./workers/sign-ins.js";
@@ -209,16 +203,14 @@ export interface WorkServerHooks {
    */
   directories?: readonly DirectoryProvider[];
   /**
-   * Creates and destroys worker machines on a platform Work does not ship,
-   * for `custom` machine classes (ADRs 0167, 0205). With no classes
-   * configured, every class a rule names is custom.
+   * The host's machines (ADR 0349): `plan` decides which machines should
+   * exist from the facts Work gives it, and `create`, `destroy`, `stop`,
+   * `start` and `describe` are the calls that touch the host's cloud.
+   * Work sequences them and keeps them safe; it integrates with no cloud
+   * and no directory itself. Recipes for common clouds and policies are
+   * registry packs. With no hook, machines are enrolled by hand.
    */
-  machineProvisioner?: MachineProvisioner;
-  /**
-   * Hetzner Cloud API options for `hetzner-cloud` classes: another
-   * endpoint, or a `fetch` for tests. The token is `config.hetznerToken`.
-   */
-  hetzner?: Omit<HetznerCloudClientOptions, "token">;
+  machines?: MachinesHook;
   /** Mount additional host routes on the public application. */
   routes?: (args: {
     app: FastifyInstance;
@@ -315,16 +307,6 @@ async function createWorkServerInner(
       "Postgres deployments require the same WORK_SECRET on every instance",
     );
   }
-  // Machine classes (ADR 0205) need what their platforms need.
-  const machineClasses = config.machines
-    ? MachinesConfigSchema.parse(config.machines).classes
-    : {};
-  const machinesProblem = machineClassesProblem({
-    classes: machineClasses,
-    hetznerToken: Boolean(config.hetznerToken),
-    provisioner: Boolean(hooks.machineProvisioner),
-  });
-  if (machinesProblem) throw new Error(machinesProblem);
   // Every replica must answer the same loopback operator credential; one
   // generated into a replica's disposable data directory would not.
   if (config.databaseUrl && !config.operatorSecret) {
@@ -524,26 +506,15 @@ async function createWorkServerInner(
       );
     }
   }
-  // Who owns a piece of work, for worker access (ADR 0167): their email and
-  // directory groups. Sign-in is set up below; placement runs only later.
-  let placementOwner: (
-    userId: string,
-  ) => Promise<{ userId: string; groups: string[] } | undefined> = async () =>
-    undefined;
   // A worker that connects may take chats waiting for a machine (ADR
   // 0258): this process's agent sweep hears it once the core is up.
   let workerConnected = () => {};
-  /** A provisioned machine's first call, for workflow classes (ADR 0327). */
-  let machineFirstContact: (machine: {
-    name: string;
-    rule: string;
-    ref: string | null;
-    class: string | null;
-  }) => Promise<void> = async () => {};
-  /** A machine short of disk, for workflow classes (ADR 0336). */
-  let machineDiskLow: NonNullable<
-    ConstructorParameters<typeof WorkWorkerRegistry>[0]["diskLow"]
-  > = async () => {};
+  // Work retired from a machine that is gone (ADR 0348) is admitted again
+  // by the same sweep.
+  let workRetired = () => {};
+  // Something happened to a machine (ADR 0349): delivered once the core
+  // is up, to the projects it is for and to the host's own listener.
+  let machineEvent: (event: MachineEvent) => Promise<void> = async () => {};
   // Enrolled remote workers (ADR 0164). Each worker owns its node lease
   // (ADR 0192), so any replica serves its calls and runs its agents.
   const workers = new WorkWorkerRegistry({
@@ -551,9 +522,11 @@ async function createWorkServerInner(
     nodes: new WorkerNodesService(ownDb),
     tenantId: SERVER_TENANT_ID,
     authorityId: hostId,
+    // Every replica derives the same enrollment codes (ADR 0349).
+    enrollmentSecret: authSecret,
     connected: () => workerConnected(),
-    firstContact: (machine) => machineFirstContact(machine),
-    diskLow: (machine) => machineDiskLow(machine),
+    retired: () => workRetired(),
+    event: (event) => machineEvent(event),
     log,
   });
   // A single person's server whose operator accepted personal credentials
@@ -581,10 +554,7 @@ async function createWorkServerInner(
     ownSignIns: singleServerSignIns,
     disk: () => diskCare.latest(),
     sandboxProvider,
-    placement: {
-      workers: () => workers.placements(),
-      owner: (userId) => placementOwner(userId),
-    },
+    placement: { workers: () => workers.placements() },
   });
   disposers.push(() => machine.stop());
   let maintaining: Promise<void> | undefined;
@@ -622,6 +592,13 @@ async function createWorkServerInner(
   );
   const catamorphic = createCatamorphic({
     hostId,
+    // The chat as the web client opens it, for whoever is handed its state.
+    ...(isLoopbackBase(publicBase)
+      ? {}
+      : {
+          sessionUrl: (chat: { projectId: string; sessionId: string }) =>
+            `${publicBase}/?project=${encodeURIComponent(chat.projectId)}&session=${encodeURIComponent(chat.sessionId)}`,
+        }),
     ...(hooks.capabilityProviders
       ? { capabilityProviders: hooks.capabilityProviders }
       : {}),
@@ -704,6 +681,12 @@ async function createWorkServerInner(
     connectionMcpUrl: () => `${publicBase}/api/connection-mcp`,
     // Sandboxes with restricted egress still reach the gateway (ADR 0176).
     gatewayHosts: config.publicBases.map((base) => gatewayHostOf(base)),
+    // A host that makes machines for waiting work lets a new chat wait for
+    // its machine instead of failing at once (ADR 0349); a project's own
+    // `waitMinutes` still bounds its Environment.
+    ...(hooks.machines
+      ? { placementWaitMinutes: config.machineWaitMinutes ?? 30 }
+      : {}),
     gatewayUrl: () => `${publicBase}/api/gateway`,
     ...(agents.registry ? { codingAgent: agents.registry } : {}),
     appBundleStore:
@@ -718,7 +701,7 @@ async function createWorkServerInner(
       webhook,
       ...SESSION_TRIGGER_KINDS,
       ...DIRECTORY_TRIGGER_KINDS,
-      // Workflow machine classes (ADR 0327) and their machines' lifecycle.
+      // What happens to machines, for projects' own workflows (ADR 0349).
       ...MACHINE_TRIGGER_KINDS,
     ],
     // Workflows bound to `ai.tool-call` are tools on the project MCP, for
@@ -795,6 +778,7 @@ async function createWorkServerInner(
   disposers.push(() => worker.stop());
   const core = catamorphic.core;
   workerConnected = () => core.wakeups.notify("agent");
+  workRetired = () => core.wakeups.notify("agent");
   // Any replica recovers the work of replicas that are gone for good: runs
   // move to a live machine, chats are admitted again on their next turn.
   {
@@ -907,75 +891,106 @@ async function createWorkServerInner(
     tenantId: SERVER_TENANT_ID,
     publicBase,
   });
-  placementOwner = async (userId) => {
-    const [user, account] = await Promise.all([
-      workAuth.findUserById({ userId }),
+  // A machine event reaches the projects the machine is for, as a project
+  // event their workflows may trigger on, and the host's own listener.
+  // Work itself depends on neither (ADR 0349).
+  machineEvent = async (event) => {
+    const projects = new Set(
+      (event.machine.for ?? []).flatMap((principal) =>
+        "project" in principal ? [principal.project] : [],
+      ),
+    );
+    const record = machineProjectEvent({
+      kind: event.kind,
+      at: event.at,
+      machine: {
+        ...event.machine,
+        for: event.machine.for ? [...event.machine.for] : null,
+        ...(event.disk ? { disk: event.disk } : {}),
+      },
+    });
+    const failures: unknown[] = [];
+    for (const projectId of projects)
+      await core.projectEvents
+        .append({ projectId, ...record })
+        .catch((error: unknown) => failures.push(error));
+    await Promise.resolve(hooks.machines?.onEvent?.(event)).catch(
+      (error: unknown) => failures.push(error),
+    );
+    if (failures.length > 0) throw failures[0];
+  };
+  /** The server's accounts with their project roles, for the plan. */
+  const people = async (): Promise<PersonFacts[]> => {
+    const [users, accounts, memberships] = await Promise.all([
+      workAuth.listUsers(),
       core.db
         .selectFrom("work_accounts")
-        .select("directory_groups")
-        .where("user_id", "=", userId)
-        .executeTakeFirst(),
+        .select(["user_id", "disabled_at", "administrator"])
+        .execute(),
+      core.db
+        .selectFrom("memberships")
+        .select(["external_user_id", "project_id", "roles"])
+        .execute(),
     ]);
-    const groups = Array.isArray(account?.directory_groups)
-      ? account.directory_groups.filter(
-          (group): group is string => typeof group === "string",
-        )
-      : [];
-    return {
-      userId: user?.email?.toLowerCase() ?? userId,
-      groups: groups.map((group) => group.toLowerCase()),
-    };
+    const accountOf = new Map(accounts.map((row) => [row.user_id, row]));
+    const rolesOf = new Map<string, Record<string, string[]>>();
+    for (const row of memberships) {
+      const roles = rolesOf.get(row.external_user_id) ?? {};
+      roles[row.project_id] = Array.isArray(row.roles)
+        ? row.roles.filter((role): role is string => typeof role === "string")
+        : [];
+      rolesOf.set(row.external_user_id, roles);
+    }
+    return users
+      .map((user) => ({
+        id: user.id,
+        email: user.emailVerified ? user.email.toLowerCase() : null,
+        name: user.name || null,
+        active: !accountOf.get(user.id)?.disabled_at,
+        administrator: Boolean(accountOf.get(user.id)?.administrator),
+        roles: rolesOf.get(user.id) ?? {},
+      }))
+      .sort((left, right) => left.id.localeCompare(right.id));
   };
-  // Every machine installs the same way (ADR 0205): the script this
-  // server serves, with its public origin and worker image baked in.
-  const install = installTarget({
-    publicBase,
-    ...(config.workerImage ? { workerImage: config.workerImage } : {}),
-  });
-  const machineReconciler =
-    Object.keys(machineClasses).length > 0 || hooks.machineProvisioner
-      ? new MachineReconciler({
+  const workMachines = hooks.machines
+    ? new WorkMachines({
+        db: core.db,
+        tenantId: SERVER_TENANT_ID,
+        hook: hooks.machines,
+        workers,
+        world: workMachineWorld({
           db: core.db,
           tenantId: SERVER_TENANT_ID,
           workers,
-          classes: machineClasses,
-          ...(hooks.machineProvisioner
-            ? { provisioner: hooks.machineProvisioner }
-            : {}),
-          ...(config.hetznerToken
-            ? {
-                hetzner: new HetznerCloudMachines({
-                  client: { ...hooks.hetzner, token: config.hetznerToken },
-                }),
-              }
-            : {}),
-          workflows: new ProjectMachineWorkflows({
-            core,
-            tenantId: SERVER_TENANT_ID,
-          }),
-          install,
           controlPlaneUrl: publicBase,
-          emailOf: async (userId) =>
-            (await workAuth.findUserById({ userId }))?.email?.toLowerCase(),
-          log,
-        })
-      : undefined;
-  const reconcileMachines = () => machineReconciler?.reconcileSoon();
-  if (machineReconciler) {
-    machineFirstContact = (machine) =>
-      machineReconciler.machineConnected(machine);
-    machineDiskLow = (machine) => machineReconciler.machineDiskLow(machine);
-    const machineTimer = setInterval(reconcileMachines, 60_000);
+          people,
+          event: async (event) => {
+            await machineEvent(event).catch((error: unknown) =>
+              log(
+                `Recording ${event.kind} for machine ${event.machine.name} failed: ${
+                  error instanceof Error ? error.message : String(error)
+                }`,
+              ),
+            );
+          },
+        }),
+        log,
+      })
+    : undefined;
+  const planMachines = () => workMachines?.passSoon();
+  if (workMachines) {
+    // A pass every minute, and at once when what a plan reads changed:
+    // waiting work, what machines hold, a machine connecting or going
+    // unseen, accounts and roles. That is one cheap look every few seconds.
+    const machineTimer = setInterval(planMachines, 60_000);
     machineTimer.unref();
-    // Machines on demand (ADR 0258): demand is looked at every few seconds
-    // with one statement, and a pass runs when it changed.
     let checking: Promise<void> | undefined;
-    const demandTimer = setInterval(() => {
-      checking ??= machineReconciler
-        .checkDemand()
+    const checkTimer = setInterval(() => {
+      checking ??= workMachines
+        .check()
         .catch((error: unknown) =>
           log(
-            `Machine demand check failed: ${
+            `Machine check failed: ${
               error instanceof Error ? error.message : String(error)
             }`,
           ),
@@ -984,12 +999,13 @@ async function createWorkServerInner(
           checking = undefined;
         });
     }, 10_000);
-    demandTimer.unref();
+    checkTimer.unref();
+    planMachines();
     disposers.push(async () => {
       clearInterval(machineTimer);
-      clearInterval(demandTimer);
+      clearInterval(checkTimer);
       await checking;
-      await machineReconciler.settle();
+      await workMachines.settle();
     });
   }
   const accountLifecycle = new AccountLifecycle({
@@ -1000,19 +1016,14 @@ async function createWorkServerInner(
     directory: workAuthConfig.directory,
     tenantId: SERVER_TENANT_ID,
     projectEvents: core.projectEvents,
-    // Groups that decide roles or whose work a worker takes (ADR 0167).
-    mappedGroups: async () => [
-      ...new Set([
-        ...(await admission.mappedDirectoryGroups()),
-        ...(await workers.accessGroups()),
-        ...((await machineReconciler?.groups()) ?? []),
-      ]),
-    ],
+    // Groups that decide roles. Machines know no groups: a host that
+    // wants a group's members to have machines expands it in its plan.
+    mappedGroups: () => admission.mappedDirectoryGroups(),
     reconcileRoles: (args) => admission.reconcileDirectoryRoles(args),
     onDisabled: async ({ userId }) => {
       await stopMemberWork({ core, identity: rootIdentity, userId, log });
-      // A disabled member's dedicated machine goes on the next pass.
-      reconcileMachines();
+      // The plan hears the account is disabled on its next pass.
+      planMachines();
     },
     // Guests view shares in the browser; they never hold API tokens.
     refuseTokens: async (userId) =>
@@ -1157,17 +1168,34 @@ async function createWorkServerInner(
     if (!authenticated) return null;
     if (!(await accountLifecycle.isActive(authenticated.userId))) return null;
     if (await shares.isGuest(authenticated.userId)) return null;
-    return administrators.withPermissions(
-      await core.memberships.identityForUser({
-        tenantId: SERVER_TENANT_ID,
-        externalUserId: authenticated.userId,
-      }),
+    // A grant that names none of Work's scopes holds nothing here: its
+    // client signs in again and is asked what it may do.
+    if (tokenScopesOf(authenticated.scopes).length === 0) return null;
+    // A client holds what its person consented to: the member's roles,
+    // narrowed by the grant's scopes (ADR 0347). Only `work:full`, which
+    // Work's own apps ask for, is the person themself.
+    return withTokenScopes(
+      await administrators.withPermissions(
+        await core.memberships.identityForUser({
+          tenantId: SERVER_TENANT_ID,
+          externalUserId: authenticated.userId,
+        }),
+      ),
+      authenticated.scopes,
     );
   };
   const app = createApp({
     core,
     identity: identityFromBearer((token) => memberIdentity(`Bearer ${token}`)),
     features: { publications: "members" },
+    mcp: {
+      // Every replica signs with the deployment's secret, under a label of
+      // its own: a state one replica handed out, another accepts.
+      stateSecret: createHash("sha256")
+        .update(`mcp-request-state:${authSecret}`)
+        .digest("hex"),
+      resourceMetadataUrl: `${publicBase}/.well-known/oauth-protected-resource`,
+    },
     projectMcp: {
       serverInfo: { name: "work", title: "Work" },
       instructions:
@@ -1219,27 +1247,28 @@ async function createWorkServerInner(
         : (authorization ?? ""),
     );
     const resourceMetadata = `${publicBase}/.well-known/oauth-protected-resource`;
+    // The scopes a client should ask for (RFC 6750): reading, and
+    // running chats. Approving is never asked for on its behalf.
     reply.header(
       "www-authenticate",
-      `Bearer resource_metadata="${resourceMetadata}"${
+      `Bearer resource_metadata="${resourceMetadata}", scope="${MCP_CHALLENGE_SCOPES.join(" ")}"${
         hasBearer ? ', error="invalid_token"' : ""
       }`,
     );
     done(null, payload);
   });
   registerWorkerRoutes(app, workers);
-  registerInstallScriptRoute(app, install);
-  // Workers and machine rules: the operator on the loopback listener, and
-  // organization administrators through the API (ADR 0205).
+  // Machines: the operator on the loopback listener, and organization
+  // administrators through the API (ADR 0205).
   const machineManagement = {
     nodes: machine.nodes,
     workers,
     tenantId: SERVER_TENANT_ID,
     authorityId: hostId,
     publicBase,
-    classes: machineClasses,
-    install,
-    ...(machineReconciler ? { machines: machineReconciler } : {}),
+    userIdForEmail: async (email: string) =>
+      (await verifiedUserIdForEmail({ auth: workAuth, email })) ?? undefined,
+    ...(workMachines ? { machines: workMachines } : {}),
   };
   registerWorkAuthRoutes(app, {
     auth: workAuth,
@@ -1250,37 +1279,26 @@ async function createWorkServerInner(
     trustedProxies: config.trustedProxies ?? [],
     log,
   });
+  const memberCaller = async (request: FastifyRequest) => {
+    const header = request.headers.authorization;
+    const authorization = Array.isArray(header) ? header[0] : header;
+    return authorization ? memberIdentity(authorization) : null;
+  };
   registerShareRoutes(app, {
     core,
     auth: workAuth,
     shares,
     publicBase,
     isActive: (userId) => accountLifecycle.isActive(userId),
-    caller: async (request) => {
-      const header = request.headers.authorization;
-      const authorization = Array.isArray(header) ? header[0] : header;
-      if (!authorization) return null;
-      const authenticated = await workAuth.resolveAccessToken({
-        authorization,
-      });
-      if (
-        !authenticated ||
-        !(await accountLifecycle.isActive(authenticated.userId)) ||
-        (await shares.isGuest(authenticated.userId))
-      )
-        return null;
-      return core.memberships.identityForUser({
-        tenantId: SERVER_TENANT_ID,
-        externalUserId: authenticated.userId,
-      });
-    },
+    caller: memberCaller,
   });
   const administratorAccess = {
     administrators,
     caller: async (request: FastifyRequest) => {
-      const header = request.headers.authorization;
-      const authorization = Array.isArray(header) ? header[0] : header;
-      return authorization ? memberIdentity(authorization) : null;
+      const identity = await memberCaller(request);
+      return identity && hasTokenScope(identity, FULL_TOKEN_SCOPE)
+        ? identity
+        : null;
     },
   };
   registerAdministratorRoutes(app, administratorAccess);
@@ -1289,12 +1307,12 @@ async function createWorkServerInner(
     ...administratorAccess,
     ...machineManagement,
   });
-  // Members sign in to Codex on machines of their own from the app (ADR
-  // 0213). A single server whose operator accepted personal credentials
-  // is one of them for the first member to sign in there; a replica's own
-  // machine never is.
+  // Members sign in to Claude Code and Codex on machines of their own from
+  // the app (ADRs 0213, 0342). A single server whose operator accepted
+  // personal credentials is one of them for the first member to sign in
+  // there; a replica's own machine never is.
   const ownSignIns = singleServerSignIns
-    ? new CodexSignIns({
+    ? new HarnessSignIns({
         signInRoot: execution.signInRoot,
         dataDir: data,
         env: { ...process.env, PATH: config.execution.path },
@@ -1308,12 +1326,12 @@ async function createWorkServerInner(
     machines: new MemberMachines({
       nodes: () =>
         memberNodes.list({ tenantId: SERVER_TENANT_ID, authorityId: hostId }),
-      placements: () => workers.placements(),
-      owner: (userId) => placementOwner(userId),
+      machines: async () =>
+        (await workers.machines.records()).map((record) => record.facts),
       ...(ownSignIns
         ? { ownMachine: { nodeId: machine.lease.id, signIns: ownSignIns } }
         : {}),
-      worker: (args) => workers.codexSignIn(args),
+      worker: (args) => workers.harnessSignIn(args),
     }),
   });
   registerWorkAdmissionRoutes(app, {
@@ -1577,6 +1595,12 @@ ${workMark({ size: 72 })}
 <p style="color:#9a9aa3;font-size:.9rem;margin:0">Running. Sign in here or connect from the Work app or an MCP client.</p>
 </div>
 `;
+
+/**
+ * The scopes an MCP client is told to ask for when it has no token (ADR
+ * 0347): the least that runs a chat. More is granted by stepping up.
+ */
+const MCP_CHALLENGE_SCOPES = ["work:read", "sessions:run"] as const;
 
 function isLoopbackBase(base: string): boolean {
   const { hostname } = new URL(base);

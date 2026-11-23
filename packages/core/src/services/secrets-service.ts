@@ -116,14 +116,18 @@ interface DeclaredSecretEntry {
  * Variables a secret may not set in a sandbox: its shells, Git, Node, TLS,
  * the agent runner, the harnesses' model access and the egress proxy (ADR
  * 0204) depend on them, and some would run code or redirect traffic.
+ * `ANTHROPIC_API_KEY` is not here: a project's own programs use one, and
+ * a harness on a member's sign-in is started without it (ADR 0342).
  * Replica memory (c): a constant, the same on every replica.
  */
 const RESERVED_SANDBOX_VARIABLES: ReadonlySet<string> = new Set([
   "ALL_PROXY",
+  "ANTHROPIC_AUTH_TOKEN",
   "ANTHROPIC_BASE_URL",
   "BASH_ENV",
   "BASHOPTS",
   "BUN_OPTIONS",
+  "CLAUDE_CODE_OAUTH_TOKEN",
   "CLAUDE_CONFIG_DIR",
   "CLAUDE_SECURESTORAGE_CONFIG_DIR",
   "CODEX_HOME",

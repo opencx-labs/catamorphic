@@ -286,7 +286,10 @@ async function oauthAccessToken(options: {
   authorize.searchParams.set("client_id", clientId);
   authorize.searchParams.set("redirect_uri", redirectUri);
   authorize.searchParams.set("response_type", "code");
-  authorize.searchParams.set("scope", "openid profile email offline_access");
+  authorize.searchParams.set(
+    "scope",
+    "openid profile email offline_access work:full",
+  );
   authorize.searchParams.set("resource", `${options.origin}/api`);
   authorize.searchParams.set("state", "setup-state");
   authorize.searchParams.set("code_challenge", challenge);
@@ -315,10 +318,14 @@ async function oauthAccessToken(options: {
   const accepted = await fetch(`${options.origin}/oauth/consent`, {
     method: "POST",
     headers: { cookie, "content-type": "application/x-www-form-urlencoded" },
-    body: new URLSearchParams({
-      accept: "true",
-      oauth_query: consent.search.slice(1),
-    }),
+    body: new URLSearchParams([
+      ["accept", "true"],
+      ["oauth_query", consent.search.slice(1)],
+      ...Array.from(
+        (consent.searchParams.get("scope") ?? "").split(/\s+/).filter(Boolean),
+        (scope): [string, string] => ["scope", scope],
+      ),
+    ]),
     redirect: "manual",
   });
   const code = new URL(accepted.headers.get("location") ?? "").searchParams.get(

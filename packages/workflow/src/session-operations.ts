@@ -1,42 +1,114 @@
 import type { JsonValue } from "./json.js";
 import type { TransitionCall } from "./workflow.js";
 
-/** Current host snapshot; authority fields identify its owner. Mirrors may lag. */
-export interface SessionSnapshot {
-  id: string;
+/**
+ * Where a chat stands (ADR 0346): `working` while a turn runs or waits to
+ * run, `needs_input` while its agent waits on an answer, `failed` when its
+ * latest turn failed, `closed` at the end of its life, `idle` otherwise.
+ */
+export type SessionStateName =
+  | "working"
+  | "needs_input"
+  | "idle"
+  | "failed"
+  | "closed";
+
+/** What an agent asks and still waits on. */
+export interface SessionRequest {
+  requestId: string;
+  kind: "question" | "approval" | "elicitation";
+  title: string;
+  description: string | null;
+  /** Whether the agent waits on the answer. */
+  blocking: boolean;
+  turnId: string | null;
+  questions: Array<{
+    question: string;
+    header: string;
+    multiSelect: boolean;
+    options: Array<{ label: string; description: string }>;
+  }> | null;
+  approval: {
+    action: string;
+    details?: string;
+    tool?: { server: string | null; name: string; input: JsonValue };
+  } | null;
+  elicitation: {
+    server: string;
+    message: string;
+    schema?: Record<string, JsonValue>;
+    url?: string;
+  } | null;
+  expiresAt: string | null;
+}
+
+/**
+ * One chat as every surface reads it (ADR 0346): what every session
+ * operation answers with, over REST, MCP, in-product tools and here.
+ */
+export interface SessionState {
+  sessionId: string;
   projectId: string;
   title: string | null;
-  agentId: string | null;
-  parentSessionId: string | null;
-  status: "active" | "closed";
-  visibility: "latent" | "promoted" | "archived";
-  running: boolean;
-  activity: string | null;
-  workStatus: "open" | "completed";
-  stateRevision: number;
-  authorityHostId: string;
-  authorityRevision: number;
-  /** ISO timestamps: when the conversation started and last changed. */
-  createdAt: string;
-  updatedAt: string;
-  archivedAt: string | null;
-  /** Agent-chosen conversation icon ("<name>:<color>"); null = default. */
-  icon: string | null;
+  /** The agent's id (`project:<projectId>:<slug>` for a project agent). */
+  agent: string | null;
+  /**
+   * The Environment the chat runs in, recorded when it starts: before a
+   * machine is placed (a chat waiting for one has no `placement` yet).
+   */
+  environment: string | null;
+  state: SessionStateName;
+  /** The chat's log position: pass it to `wait` to hear only what follows. */
+  cursor: string;
+  /**
+   * The turn working now and its progress (ADR 0333); null when no turn
+   * works. `progressAt` is when its attempt last made progress (a frame
+   * from its harness other than a log line, or a model request);
+   * `stalledAt` is set while a silence longer than `stallMinutes` lasts.
+   */
+  turn: SessionTurnProgress | null;
+  /**
+   * The chat's turns waiting to run, oldest first (ADR 0337): with `turn`,
+   * what tells a turn still to come from one that settled or was withdrawn.
+   */
+  queued: string[];
+  /** What the agent asks and still waits on. */
+  requests: SessionRequest[];
+  /** The latest turn's last assistant text once it settled, else null. */
+  reply: string | null;
+  /**
+   * The latest accepted result of each name (ADR 0323), or with
+   * `include: ["results"]` every result the read's filters keep.
+   */
+  results: SessionResult[];
+  pullRequests: Array<{
+    url: string;
+    number?: number;
+    title?: string;
+    state?: "open" | "draft" | "merged" | "closed";
+  }>;
+  /** Why the latest turn failed. */
+  error: { kind: string | null; message: string } | null;
+  /** Why its work has not started: it waits for a machine (ADR 0258). */
+  waiting: {
+    reason: "capacity" | "unavailable";
+    message: string;
+    environment: string;
+    machine?: { name: string; state: "starting" | "resuming" };
+    since: string;
+    expiresAt: string | null;
+  } | null;
+  attentionRequired: boolean;
   /** The project's key for this chat (`pr-42`), or null. */
   key: string | null;
   /** A project chat runs as the project; a member's chat as that member. */
   owner: "project" | "member";
   /** Workflows that delivered to this chat by its key. */
   keyWorkflows: string[];
-  /**
-   * The Environment the chat runs in, recorded when it starts: before a
-   * machine is placed (a chat waiting for one has no `placement` yet).
-   */
-  environment: string | null;
-  /** Where the chat runs and why; null for chats from before placement was recorded. */
+  /** Where the chat runs and why; null before a machine is placed. */
   placement: {
     environment: string;
-    reason: "requested" | "agent_preferred" | "project_default" | "available";
+    reason: string;
     machine: { id: string; label: string };
   } | null;
   /**
@@ -45,32 +117,36 @@ export interface SessionSnapshot {
    * then. Null for a chat started from the project itself.
    */
   workspace: { ref: string; commit: string } | null;
+  parentSessionId: string | null;
+  workStatus: "open" | "completed";
+  /** ISO timestamps: when the conversation started and last changed. */
+  createdAt: string;
+  updatedAt: string;
+  /** Where a person opens the chat, when the host has a public address. */
+  url?: string;
   /**
-   * Named values on the chat (ADR 0226): set by agents, people and
-   * workflows. Keys a workflow owns carry its purpose (`review.verdicts`).
+   * Named values on the chat (ADR 0226), with `include: ["metadata"]`: set
+   * by agents, people and workflows. Keys a workflow owns carry its purpose
+   * (`review.verdicts`).
    */
-  metadata: Record<string, JsonValue>;
-  /**
-   * The turn working now and its progress (ADR 0333), from `inspect` and
-   * `find`; null when no turn works. `progressAt` is when its attempt last
-   * made progress (a frame from its harness other than a log line, or a
-   * model request); `stalledAt` is set while a silence longer than
-   * `stallMinutes` lasts.
-   */
-  turn?: SessionTurnProgress | null;
-  /**
-   * The chat's turns waiting to run, oldest first (ADR 0337), from
-   * `inspect` and `find`: with `turn`, what tells a turn still to come from
-   * one that settled or was withdrawn.
-   */
-  queued?: string[];
+  metadata?: Record<string, JsonValue>;
+  /** With `include: ["transcript"]`: the conversation, oldest first. */
+  transcript?: SessionTranscriptMessage[];
+  /** With `include: ["usage"]`: model usage through the gateway. */
+  usage?: SessionUsage;
+  /** With `include: ["attempts"]` and `turnId`: that turn's attempts. */
+  attempts?: SessionTurnAttempt[];
 }
 /** A working turn's progress (ADR 0333). */
 export interface SessionTurnProgress {
   id: string;
-  ordinal: number;
   status: "preparing" | "running" | "waiting" | "finalizing";
-  attempt: {
+  /** The line the chat shows while it works. */
+  activity: string | null;
+  progressAt: string | null;
+  stalledAt: string | null;
+  ordinal?: number;
+  attempt?: {
     id: string;
     ordinal: number;
     /** `initial`, `retry`, `steer_restart`, `recovery` or `restart`. */
@@ -78,15 +154,13 @@ export interface SessionTurnProgress {
     startedAt: string | null;
   } | null;
   /** Attempts so far, this one included. */
-  attempts: number;
+  attempts?: number;
   /** Attempts that ran because someone restarted the one before. */
-  restarts: number;
-  progressAt: string | null;
-  stalledAt: string | null;
+  restarts?: number;
   /** The agent's stall threshold; null when it sets none. */
-  stallMinutes: number | null;
+  stallMinutes?: number | null;
   /** The tool calls and commands the attempt reported still running. */
-  activity: {
+  running?: {
     tools: Array<{ name: string; description: string | null; since: string }>;
     commands: Array<{
       command: string;
@@ -95,7 +169,7 @@ export interface SessionTurnProgress {
     }>;
   };
 }
-/** One attempt of a turn, as `attempts` reads it (ADR 0333). */
+/** One attempt of a turn, as `read` returns it with `include: ["attempts"]` (ADR 0333). */
 export interface SessionTurnAttempt {
   id: string;
   ordinal: number;
@@ -126,13 +200,16 @@ interface WorkspaceRef {
   ref: string;
   update?: "reset" | "rebase";
 }
-/** One transcript message as `history` returns it. */
-export interface SessionHistoryMessage {
+/** One transcript message, as `read` returns it with `include: ["transcript"]`. */
+export interface SessionTranscriptMessage {
   id: string;
-  role: "user" | "assistant" | "system";
+  role: "user" | "inbound" | "notification" | "assistant" | "system";
   content: string;
+  turnId: string | null;
+  status: string;
   /** ISO timestamp of the message. */
   createdAt: string;
+  author: Record<string, JsonValue> | null;
 }
 /**
  * A value an agent submitted with `submit_result` and its schema accepted
@@ -141,13 +218,24 @@ export interface SessionHistoryMessage {
  */
 export interface SessionResult {
   id: string;
-  /** The chat that recorded it: the one named, or one of its subsessions. */
-  sessionId: string;
-  turnId: string | null;
-  attemptId: string | null;
   /** The name its agent's definition declares, e.g. `review`. */
   name: string;
+  /** Null when `truncated`: read it whole with `include: ["results"]`. */
   value: unknown;
+  turnId: string | null;
+  /**
+   * No new request reached the chat after the input it answers: nothing a
+   * person, a workflow or a session outside the chat's own subsessions
+   * sent. Task notifications and its subsessions' messages are its own
+   * work reporting.
+   */
+  current: boolean;
+  truncated?: boolean;
+  /** ISO timestamp. */
+  recordedAt: string;
+  /** The chat that recorded it: the one named, or one of its subsessions. */
+  sessionId: string;
+  attemptId: string | null;
   /**
    * The newest input (a message id) the chat had taken in when it was
    * submitted, and its kind, for a reader applying a stricter rule.
@@ -157,16 +245,8 @@ export interface SessionResult {
     position: number;
     kind: "user_message" | "inbound_message" | "task_notification";
   } | null;
-  /**
-   * No new request reached the chat after that input: nothing a person, a
-   * workflow or a session outside the chat's own subsessions sent. Task
-   * notifications and its subsessions' messages are its own work reporting.
-   */
-  current: boolean;
   /** The workspace commit the submitting turn began on, when there is one. */
   commit: string | null;
-  /** ISO timestamp. */
-  recordedAt: string;
 }
 /** Token totals and the cost providers reported for some model calls. */
 export interface ModelUsageTotals {
@@ -193,7 +273,7 @@ export interface ModelUsageTotals {
    */
   unmeteredCalls: number;
 }
-/** A chat's model calls through the gateway, as `usage` totals them. */
+/** A chat's model calls through the gateway, as `read` totals them with `include: ["usage"]`. */
 export interface SessionUsage extends ModelUsageTotals {
   sessionId: string;
   /** Whether the totals include every subsession below the chat. */
@@ -258,53 +338,140 @@ export interface SessionExecResult {
    */
   outOfDisk?: string;
 }
-/** Host transitions must be returned from a boundary, never awaited as IO. */
+/** A message a start or a send delivered. */
+interface Sent {
+  messageId: string;
+  turnId: string | null;
+  /** False when an earlier call with the same idempotency key delivered it. */
+  created: boolean;
+}
+/**
+ * The session operations (ADR 0346): the same ones REST, the MCP endpoints
+ * and in-product agents run, under their workflow names (`session_read` is
+ * `read`). Host transitions must be returned from a boundary, never
+ * awaited as IO.
+ */
 export interface SessionHostOperations {
-  inspect: Call<Target, SessionSnapshot>;
-  /** The caller's newest sessions in this project, `limit` at most 100. */
-  list: Call<{ limit?: number }, { items: SessionSnapshot[]; total: number }>;
-  /** The open chat for a key, or null. Never starts one. */
-  find: Call<{ key: string; audience?: Audience }, SessionSnapshot | null>;
   /**
-   * The newest `limit` messages (default 30, max 100), oldest first, and the
-   * chat's key. `through` ends at that message instead: the transcript as
-   * of an event, such as a settled turn's `resultMessageId`.
+   * Start a chat with one of the project's agents and give it its first
+   * message. It answers at once with state `working`; a later step reads
+   * or waits on it, or a `session.turn-changed` trigger takes the result.
+   * With `key`, the project's open chat for that key is reused.
    */
-  history: Call<
-    Target & { limit?: number; through?: string },
+  start: Call<
     {
-      sessionId: string;
-      key: string | null;
-      messages: SessionHistoryMessage[];
+      /** The agent's slug or id. Omitted: the project's default agent. */
+      agent?: string;
+      message: string;
+      environment?: string;
+      /** Start the workspace at a ref of the project's remote. */
+      ref?: WorkspaceRef;
+      model?: string;
+      effort?: "low" | "medium" | "high" | "xhigh" | "max";
+      title?: string;
+      key?: string;
+      audience?: Audience;
+      idempotencyKey: string;
+    },
+    SessionState & { sent?: Sent }
+  >;
+  /**
+   * Send a follow-up message to a chat by id or key. `mode`: `queue`
+   * (default) runs after the current turn, `steer` joins it, `interrupt`
+   * stops it and runs this next, `message_only` only records it.
+   * `deliver` also starts keyed chats, names approvers and alerts the
+   * chat's people when the turn settles.
+   */
+  send: Call<
+    Action & {
+      message: string;
+      mode?: "queue" | "steer" | "interrupt" | "message_only";
+      /** Flag this message itself for the person's attention. */
+      attention?: "required" | "none";
+      ref?: WorkspaceRef;
+    },
+    SessionState & { sent?: Sent }
+  >;
+  /**
+   * Hold until one of the chats needs its caller (its state is no longer
+   * `working`) or `timeoutSeconds` pass (default 25, at most 50):
+   * `changed: false` means nothing happened yet. A workflow usually binds a
+   * session trigger instead of waiting in a step.
+   */
+  wait: Call<
+    { sessionIds: string[]; cursor?: string; timeoutSeconds?: number },
+    SessionState & {
+      changed: boolean;
+      others?: Array<{
+        sessionId: string;
+        state: SessionStateName;
+        cursor: string;
+      }>;
     }
   >;
   /**
-   * The chat's accepted results, newest first, at most `limit` (default and
-   * max 100). `name` keeps one result name; `family: true` adds its
-   * subsessions' results at every depth, each naming its chat;
-   * `afterInput` (an input's message id, such as a delivery's `messageId`)
-   * keeps results that answer that input or a later one. `order: "oldest"`
-   * reads the first submitted first, as a turn's first findings.
+   * A chat's state. `include` adds sections: `transcript` (the newest
+   * `limit` messages, default 30 and at most 100, oldest first, ending at
+   * `through` when given: the transcript as of an event, such as a settled
+   * turn's `resultMessageId`), `results` (every accepted result, newest
+   * first, at most `limit`, default and at most 100; `name` keeps one
+   * name, `turnId` one turn's, `family: true` adds its subsessions' at
+   * every depth, `afterInput` keeps results that answer that input or a
+   * later one, `order: "oldest"` reads the first submitted first), `usage`
+   * (tokens per model and the cost providers reported; `family` adds every
+   * subsession), `attempts` (with `turnId`: that turn's attempts and their
+   * diagnostics, oldest first) and `metadata`.
    */
-  results: Call<
+  read: Call<
     Target & {
+      include?: Array<
+        "transcript" | "results" | "usage" | "attempts" | "metadata"
+      >;
+      limit?: number;
+      through?: string;
+      turnId?: string;
       name?: string;
       family?: boolean;
-      /** Only what one turn's attempts submitted, e.g. the turn being published. */
-      turnId?: string;
       afterInput?: string;
-      limit?: number;
-      /** `oldest`: the first submitted first (ADR 0337). */
       order?: "newest" | "oldest";
     },
-    { sessionId: string; key: string | null; results: SessionResult[] }
+    SessionState
+  >;
+  /** Answer what an agent asked: a question's answers, or an approval. */
+  answer: Call<
+    Action & {
+      requestId: string;
+      response:
+        | { kind: "question"; answers: string[] }
+        | {
+            kind: "approval";
+            decision: "approved" | "denied";
+            remember?: "always";
+            reason?: string;
+          }
+        | {
+            kind: "elicitation";
+            action: "accept" | "decline" | "cancel";
+            content?: JsonValue;
+          };
+    },
+    SessionState
   >;
   /**
-   * The chat's model usage through the gateway: tokens per model and the
-   * cost providers reported. `family` adds every subsession below it. A
-   * project builds its own limits and reports on this; Work has none.
+   * The caller's newest chats in this project, `limit` at most 100, each
+   * with its state; `state` keeps one state of the page. With `key`: the
+   * open chat for that key, or none. Never starts one.
    */
-  usage: Call<Target & { family?: boolean }, SessionUsage>;
+  list: Call<
+    {
+      state?: SessionStateName;
+      key?: string;
+      audience?: Audience;
+      limit?: number;
+      cursor?: string;
+    },
+    { sessions: SessionState[]; total: number; nextCursor: string | null }
+  >;
   /**
    * Send a message to a chat. Name it by `sessionId`, or by `key`: the
    * project's chat for that key, started on first use and reused by every
@@ -348,13 +515,9 @@ export interface SessionHostOperations {
       created: boolean;
     }
   >;
-  create: Call<
-    Action & { agentId?: string; title?: string; workspace?: WorkspaceRef },
-    SessionSnapshot | QueuedSessionAction
-  >;
   fork: Call<
     Action & { messageId?: string },
-    SessionSnapshot | QueuedSessionAction
+    { id: string; projectId: string } | QueuedSessionAction
   >;
   /**
    * Start a subsession of the chat through its agent's grants (ADR 0271): a
@@ -375,7 +538,7 @@ export interface SessionHostOperations {
       title?: string;
       contextMode?: "fresh" | "inherit";
     },
-    { session: SessionSnapshot } | QueuedSessionAction
+    { session: { id: string; projectId: string } } | QueuedSessionAction
   >;
   /** Hide the chat for the caller and stop its work; deliveries bring it back. */
   archive: Call<Action & { confirmStop?: boolean }>;
@@ -383,11 +546,18 @@ export interface SessionHostOperations {
   /**
    * End the chat's life: stop its work, release its workspace, delete its
    * session branch, and free its key. The transcript stays readable. A chat
-   * that is not open answers `{ closed: false }`.
+   * that is not open answers `{ sessionId: null, closed: false }`; one it
+   * closed answers with the chat's state as well.
    */
-  close: Call<Action, { sessionId: string | null; closed: boolean }>;
+  close: Call<
+    Action,
+    Partial<SessionState> & { sessionId: string | null; closed: boolean }
+  >;
   /** `turnId`: only that turn, and nothing when it no longer works. */
-  interrupt: Call<Action & { turnId?: string }, { interrupted: boolean }>;
+  interrupt: Call<
+    Action & { turnId?: string },
+    SessionState & { interrupted: boolean }
+  >;
   /**
    * End a running turn's attempt without asking its harness (it is killed,
    * its model grants revoked) and run the same turn again on a new attempt,
@@ -420,11 +590,6 @@ export interface SessionHostOperations {
         refused: "not_running" | "not_current" | "not_stalled";
         message: string;
       }
-  >;
-  /** A turn's attempts with their diagnostics (ADR 0333), oldest first. */
-  attempts: Call<
-    Target & { turnId: string },
-    { sessionId: string; key: string | null; attempts: SessionTurnAttempt[] }
   >;
   complete: Call<Action & { content: string }>;
   reopen: Call<Action>;

@@ -86,15 +86,19 @@ belongs to the machine it was made on, and an agent that uses the person's
 own subscription runs only on a machine where they are signed in:
 
 - **This machine** (below) uses the sign-in they already have here, Claude
-  Code's or Codex's. Claude Code subscriptions run only here: servers never
-  hold a Claude sign-in, and Claude Code there uses the project's model
-  connection.
+  Code's or Codex's.
 - On a machine of their own on the server (a worker that serves only them,
-  or a single person's server), they sign in to Codex from the Remote
-  environment window: **Sign in to Codex** shows a link and a one-time code
-  to approve in their browser, and the sign-in stays on that machine. A
-  machine holds one person's sign-in only. If ChatGPT says device code
-  sign-in is off, they turn it on in ChatGPT under Settings, Security.
+  or a single person's server), they sign in from the Remote environment
+  window, where each of their machines has a row for Claude Code and one
+  for Codex. The sign-in stays on that machine, and a machine holds one
+  person's sign-ins only.
+  - **Sign in to Claude Code** shows a link to open in their own browser.
+    After they sign in to Claude there, the page gives them a code, which
+    they paste into the window and submit. Never ask them for that code
+    yourself: it goes in that field only.
+  - **Sign in to Codex** shows a link and a one-time code to approve in
+    their browser. If ChatGPT says device code sign-in is off, they turn it
+    on in ChatGPT under Settings, Security.
 
 Anywhere else, agents use the project's model connections or the person's
 own API key, stored as their personal connection. If a remote chat says

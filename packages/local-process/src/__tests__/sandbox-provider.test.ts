@@ -184,77 +184,81 @@ describe("LocalProcessSandboxProvider", () => {
     ).toEqual([]);
   });
 
-  it("links exactly the owner's sign-in home from the machine (ADR 0199)", async () => {
-    const signInRoot = path.join(root, "sign-ins");
-    const home = (member: string) =>
-      machineSignInHome({ root: signInRoot, harness: "codex", member });
-    for (const member of ["alice", "bob"]) {
-      fs.mkdirSync(home(member), { recursive: true });
-      fs.writeFileSync(path.join(home(member), "owner"), member);
-    }
-    const machine = ownedSandboxes.track(
-      new LocalProcessSandboxProvider({
-        root: path.join(root, "sign-in-sandboxes"),
-        signInRoot,
-      }),
-    );
-    const sandbox = await machine.createSandbox({
-      signIns: [{ harness: "codex", member: "alice" }],
-    });
-    const inside = signInHomePath({
-      workspaceRoot: machine.workspaceRoot,
-      harness: "codex",
-    });
-    const seen = await machine.executeCommand(
-      sandbox.id,
-      'cat .work-sign-in/codex/owner && echo && ls -A .work-sign-in && printf "%s" "$CATAMORPHIC_SANDBOX_PATHS"',
-    );
-    expect(seen.exitCode).toBe(0);
-    const [owner, listed, paths] = seen.result.split("\n");
-    expect(owner).toBe("alice");
-    expect(listed).toBe("codex");
-    // Processes learn where their virtual paths really are.
-    const mapping = parseSandboxPaths(paths);
-    expect(mapping?.virtual).toBe(machine.workspaceRoot);
-    expect(
-      fs.realpathSync(
-        path.join(
-          mapping?.real ?? "",
-          path.posix.relative(machine.workspaceRoot, inside),
-        ),
-      ),
-    ).toBe(fs.realpathSync(home("alice")));
-    // The CLI refreshing its token writes to the machine's home.
-    await machine.executeCommand(
-      sandbox.id,
-      "printf refreshed > .work-sign-in/codex/token",
-    );
-    expect(fs.readFileSync(path.join(home("alice"), "token"), "utf8")).toBe(
-      "refreshed",
-    );
-    // Destroying the sandbox leaves the sign-in where it was made.
-    await machine.destroySandbox(sandbox.id);
-    expect(fs.readFileSync(path.join(home("alice"), "owner"), "utf8")).toBe(
-      "alice",
-    );
-
-    await expect(
-      machine.createSandbox({
-        signIns: [{ harness: "codex", member: "carol" }],
-      }),
-    ).rejects.toThrow("work worker sign-in codex --member carol");
-    await expect(
-      ownedSandboxes
-        .track(
-          new LocalProcessSandboxProvider({
-            root: path.join(root, "no-sign-ins"),
-          }),
-        )
-        .createSandbox({
-          signIns: [{ harness: "codex", member: "alice" }],
+  it.each(["codex", "claude-code"] as const)(
+    "links exactly the owner's %s sign-in home from the machine (ADRs 0199, 0342)",
+    async (harness) => {
+      const signInRoot = path.join(root, `sign-ins-${harness}`);
+      const home = (member: string) =>
+        machineSignInHome({ root: signInRoot, harness, member });
+      for (const member of ["alice", "bob"]) {
+        fs.mkdirSync(home(member), { recursive: true });
+        fs.writeFileSync(path.join(home(member), "owner"), member);
+      }
+      const machine = ownedSandboxes.track(
+        new LocalProcessSandboxProvider({
+          root: path.join(root, `sign-in-sandboxes-${harness}`),
+          signInRoot,
         }),
-    ).rejects.toThrow("keeps no members' sign-ins");
-  });
+      );
+      const sandbox = await machine.createSandbox({
+        signIns: [{ harness, member: "alice" }],
+      });
+      const inside = signInHomePath({
+        workspaceRoot: machine.workspaceRoot,
+        harness,
+      });
+      const seen = await machine.executeCommand(
+        sandbox.id,
+        `cat .work-sign-in/${harness}/owner && echo && ls -A .work-sign-in && printf "%s" "$CATAMORPHIC_SANDBOX_PATHS"`,
+      );
+      expect(seen.exitCode).toBe(0);
+      const [owner, listed, paths] = seen.result.split("\n");
+      expect(owner).toBe("alice");
+      // Only the harness asked for, of only its owner.
+      expect(listed).toBe(harness);
+      // Processes learn where their virtual paths really are.
+      const mapping = parseSandboxPaths(paths);
+      expect(mapping?.virtual).toBe(machine.workspaceRoot);
+      expect(
+        fs.realpathSync(
+          path.join(
+            mapping?.real ?? "",
+            path.posix.relative(machine.workspaceRoot, inside),
+          ),
+        ),
+      ).toBe(fs.realpathSync(home("alice")));
+      // The CLI refreshing its token writes to the machine's home.
+      await machine.executeCommand(
+        sandbox.id,
+        `printf refreshed > .work-sign-in/${harness}/token`,
+      );
+      expect(fs.readFileSync(path.join(home("alice"), "token"), "utf8")).toBe(
+        "refreshed",
+      );
+      // Destroying the sandbox leaves the sign-in where it was made.
+      await machine.destroySandbox(sandbox.id);
+      expect(fs.readFileSync(path.join(home("alice"), "owner"), "utf8")).toBe(
+        "alice",
+      );
+
+      await expect(
+        machine.createSandbox({
+          signIns: [{ harness, member: "carol" }],
+        }),
+      ).rejects.toThrow(`work worker sign-in ${harness} --member carol`);
+      await expect(
+        ownedSandboxes
+          .track(
+            new LocalProcessSandboxProvider({
+              root: path.join(root, `no-sign-ins-${harness}`),
+            }),
+          )
+          .createSandbox({
+            signIns: [{ harness, member: "alice" }],
+          }),
+      ).rejects.toThrow("keeps no members' sign-ins");
+    },
+  );
 
   it("keeps project data across runtime replacement without exposing it to build sandboxes", async () => {
     const data = path.join(root, "project-data");

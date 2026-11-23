@@ -57,6 +57,7 @@ export function registerRunRoutes(app: FastifyInstance, ctx: RouteContext) {
   typed.route({
     method: "POST",
     url: "/runs/:runId/cancel",
+    config: { tokenScope: "sessions:run" },
     schema: {
       params: RunIdParamsSchema,
       body: CancelRunSchema,
@@ -87,6 +88,7 @@ export function registerRunRoutes(app: FastifyInstance, ctx: RouteContext) {
   typed.route({
     method: "POST",
     url: "/runs/:runId/pause",
+    config: { tokenScope: "sessions:run" },
     schema: {
       params: RunIdParamsSchema,
       response: {
@@ -115,6 +117,7 @@ export function registerRunRoutes(app: FastifyInstance, ctx: RouteContext) {
   typed.route({
     method: "POST",
     url: "/runs/:runId/resume",
+    config: { tokenScope: "sessions:run" },
     schema: {
       params: RunIdParamsSchema,
       response: {
@@ -143,6 +146,7 @@ export function registerRunRoutes(app: FastifyInstance, ctx: RouteContext) {
   typed.route({
     method: "POST",
     url: "/runs/:runId/pauses/:pauseId/resume",
+    config: { tokenScope: "sessions:run" },
     schema: {
       params: RunPauseParamsSchema,
       body: ResumeRunPauseSchema,

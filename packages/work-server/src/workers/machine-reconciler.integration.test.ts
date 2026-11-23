@@ -6,23 +6,24 @@ import { WorkerNodesService } from "@catamorphic/core";
 import { sql } from "kysely";
 import pg from "pg";
 import { expect, it } from "vitest";
+import type { MachinesHook } from "../machines/contract.js";
+import { plannedMachine } from "../machines/sequencer.js";
 import {
   createWorkServer,
   SERVER_TENANT_ID,
   type WorkServer,
 } from "../server.js";
 import { dropTestDatabase, testServerOptions } from "../test-support.js";
-import type { MachineProvisioner } from "./machine-rules.js";
 import { WorkWorkerRegistry } from "./worker-registry.js";
 
 const OPERATOR_SECRET = "operator-secret-shared-by-every-test-replica";
 
 /**
- * Machine rules on two control-plane replicas (issue #154): however their
- * passes overlap, each person gets one machine.
+ * The machines hook on two control-plane replicas (issue #154, ADR 0349):
+ * however their passes overlap, each person gets one machine.
  */
 it.skipIf(!process.env.DATABASE_URL)(
-  "two replicas reconciling at once provision one machine per person",
+  "two replicas planning at once make one machine per person",
   async () => {
     const dir = await fs.mkdtemp(path.join(os.tmpdir(), "work-reconciler-"));
     const servers: WorkServer[] = [];
@@ -35,12 +36,32 @@ it.skipIf(!process.env.DATABASE_URL)(
     const databaseUrl = new URL(process.env.DATABASE_URL ?? "");
     databaseUrl.pathname = `/${database}`;
 
-    const created: Array<{ replica: string; name: string }> = [];
+    // The platform: one machine per idempotency key, whoever asks and
+    // however often. Work repeats a create with its key until it hears a
+    // ref, so two replicas may ask for one machine; they get the same one.
+    const created: Array<{ replica: string; name: string; key: string }> = [];
+    const calls: Array<{ replica: string; name: string; key: string }> = [];
     // A platform call that waits until the test lets it finish.
     let hold: { entered: () => void; release: Promise<void> } | undefined;
-    const provisioner = (replica: string): MachineProvisioner => ({
-      create: async ({ name }) => {
-        created.push({ replica, name });
+    // The host's plan, the same code on every replica: one machine for
+    // every active person.
+    const hook = (replica: string): MachinesHook => ({
+      plan: async ({ people }) =>
+        people
+          .filter((person) => person.active)
+          .map((person) => ({
+            name: `desk-${person.id
+              .toLowerCase()
+              .replace(/[^a-z0-9]/g, "")
+              .slice(0, 40)}`,
+            for: [{ user: person.id }],
+          })),
+      create: async ({ name, enrollment }) => {
+        const key = enrollment.idempotencyKey;
+        calls.push({ replica, name, key });
+        if (created.some((machine) => machine.key === key))
+          return { ref: `vm-${name}` };
+        created.push({ replica, name, key });
         const held = hold;
         if (held) {
           hold = undefined;
@@ -73,7 +94,7 @@ it.skipIf(!process.env.DATABASE_URL)(
                 PATH: process.env.PATH,
               },
             }),
-            hooks: { machineProvisioner: provisioner(replica) },
+            hooks: { machines: hook(replica) },
           }),
         );
       }
@@ -90,35 +111,22 @@ it.skipIf(!process.env.DATABASE_URL)(
       const onB = operatorOf(b);
       const addMembers = async (names: string[]) => {
         for (const username of names) {
-          const user = await a.workAuth.createLocalUser({
+          await a.workAuth.createLocalUser({
             username,
             name: username,
             password: "correct horse battery staple",
             email: `${username}@example.com`,
           });
-          await sql`
-            INSERT INTO work_accounts (user_id, directory_groups, directory_checked_at)
-            VALUES (${user.id}, ${JSON.stringify(["eng@example.com"])}::jsonb, now())
-          `.execute(db);
         }
       };
 
-      // The rule goes straight into the table, so no pass runs until both
-      // replicas start theirs together.
+      // The replicas' own first passes found nobody; both now plan together.
       await addMembers(["ada", "grace", "edsger"]);
-      await sql`
-        INSERT INTO work_machine_rules (name, tenant_id, definition)
-        VALUES ('desk', ${SERVER_TENANT_ID}, ${JSON.stringify({
-          group: "eng@example.com",
-          machines: "each-member",
-          class: "standard-4",
-        })}::jsonb)
-      `.execute(db);
       const together = await Promise.all([
-        onA("/_work/operator/machine-rules/reconcile"),
-        onB("/_work/operator/machine-rules/reconcile"),
-        onA("/_work/operator/machine-rules/reconcile"),
-        onB("/_work/operator/machine-rules/reconcile"),
+        onA("/_work/operator/machines/plan"),
+        onB("/_work/operator/machines/plan"),
+        onA("/_work/operator/machines/plan"),
+        onB("/_work/operator/machines/plan"),
       ]);
       for (const response of together) expect(response.statusCode).toBe(200);
       const first = created.map((entry) => entry.name);
@@ -126,8 +134,9 @@ it.skipIf(!process.env.DATABASE_URL)(
       expect(new Set(first).size).toBe(3);
 
       // A replica stalls in a platform call past its lease and another
-      // takes over. The newcomer skips the stalled replica's machine, and
-      // the stalled one changes nothing more once it wakes.
+      // takes over. The newcomer finishes what the stalled one began, with
+      // the keys it recorded, and the stalled one changes nothing more once
+      // it wakes: still one machine per person.
       await addMembers(["barbara", "donald", "frances"]);
       let released: () => void = () => {};
       const entered = new Promise<void>((resolve) => {
@@ -138,40 +147,48 @@ it.skipIf(!process.env.DATABASE_URL)(
           }),
         };
       });
-      const stalled = onA("/_work/operator/machine-rules/reconcile");
+      const stalled = onA("/_work/operator/machines/plan");
       await entered;
       await sql`
         UPDATE replica_claims SET expires_at = now() - interval '1 second'
         WHERE name = ${`machine-reconciler:${SERVER_TENANT_ID}`}
       `.execute(db);
-      const takeover = (
-        await onB("/_work/operator/machine-rules/reconcile")
-      ).json();
+      const takeover = await onB("/_work/operator/machines/plan");
+      expect(takeover.statusCode, takeover.body).toBe(200);
       released();
-      const woke = (await stalled).json();
-      const second = created.slice(3);
-      expect(second).toHaveLength(3);
-      expect(new Set(second.map((entry) => entry.name)).size).toBe(3);
-      // The stalled replica finishes the machine it was creating and stops.
-      const [stalledMachine] = second;
-      expect(stalledMachine?.replica).toBe("a");
-      expect(woke.created).toEqual([stalledMachine?.name]);
-      expect(takeover.created).toHaveLength(2);
-      expect(takeover.created).not.toContain(stalledMachine?.name);
-      expect(second.map((entry) => entry.replica).sort()).toEqual([
-        "a",
-        "b",
-        "b",
-      ]);
+      expect((await stalled).statusCode).toBe(200);
       // A later pass anywhere has nothing left to do.
-      const settled = (
-        await onA("/_work/operator/machine-rules/reconcile")
-      ).json();
+      const settled = (await onA("/_work/operator/machines/plan")).json();
       expect(settled).toMatchObject({ created: [], failed: [] });
       expect(created).toHaveLength(6);
+      expect(new Set(created.map((machine) => machine.name)).size).toBe(6);
+      // Every call for a name carried that name's one key.
+      for (const machine of created)
+        expect(
+          new Set(
+            calls
+              .filter((call) => call.name === machine.name)
+              .map((call) => call.key),
+          ).size,
+        ).toBe(1);
+      const listed = (
+        await a.operatorApp.inject({
+          method: "GET",
+          url: "/_work/operator/workers",
+          headers: { authorization: `Bearer ${OPERATOR_SECRET}` },
+        })
+      ).json();
+      expect(listed.plan).toMatchObject({ configured: true, error: null });
+      expect(listed.workers).toHaveLength(6);
+      for (const worker of listed.workers)
+        expect(worker).toMatchObject({
+          managed: true,
+          state: "starting",
+          ref: `vm-${worker.name}`,
+        });
 
-      // Enrollment codes for one machine: however many replicas ask at
-      // once, one gets a code.
+      // Intent for one machine: however many replicas record it at once,
+      // one does, and all of them then ask create with its one key.
       const registries = [a, b].map(
         (server) =>
           new WorkWorkerRegistry({
@@ -179,19 +196,25 @@ it.skipIf(!process.env.DATABASE_URL)(
             nodes: new WorkerNodesService(server.catamorphic.core.db),
             tenantId: SERVER_TENANT_ID,
             authorityId: "test",
+            // Every replica of a deployment shares its secret.
+            enrollmentSecret: "one-secret-shared-by-every-replica",
           }),
       );
-      const codes = await Promise.all(
+      const recorded = await Promise.all(
         Array.from({ length: 8 }, (_, index) =>
-          registries[index % 2]?.createMachineEnrollment({
-            name: "desk-race",
-            rule: "desk",
-            ttlMinutes: 60,
-            placement: {},
+          registries[index % 2]?.machines.intend({
+            machine: plannedMachine({ name: "desk-race" }),
           }),
         ),
       );
-      expect(codes.filter(Boolean)).toHaveLength(1);
+      expect(recorded.filter(Boolean)).toHaveLength(1);
+      const enrollments = await Promise.all(
+        registries.map((registry) =>
+          registry.machines.enrollment({ name: "desk-race" }),
+        ),
+      );
+      expect(enrollments[0]?.code).toMatch(/^wke_/);
+      expect(enrollments[1]).toEqual(enrollments[0]);
     } finally {
       for (const server of servers) await server.shutdown();
       await fs.rm(dir, { recursive: true, force: true });

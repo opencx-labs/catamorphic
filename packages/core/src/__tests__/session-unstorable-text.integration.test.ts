@@ -22,8 +22,14 @@ import { ExecutionAllocationsService } from "../services/execution-allocations-s
 import { ExecutionEnvironmentsService } from "../services/execution-environments-service.js";
 import { ProjectEnvironmentsService } from "../services/project-environments-service.js";
 import { ProjectsService } from "../services/projects-service.js";
-import { SessionActionsService } from "../services/session-actions-service.js";
+import { SessionOperationsService } from "../services/session-operations.js";
 import { testEnvironmentProvider } from "./test-environment.js";
+
+/** What the operations need beside the sessions: no watchers, own chats. */
+const OPERATION_DEPS = {
+  watchers: () => undefined,
+  chatOwner: async (input: { caller: Identity }) => input.caller,
+};
 
 /*
  * A chat takes its next turn whatever text its earlier ones carried (#232).
@@ -319,7 +325,7 @@ describe.each(databases)("text Postgres cannot store, on %s", (name, open) => {
       key: "pr-7",
       workflowName: "reviewOnOpen",
     });
-    const actions = new SessionActionsService(db, sessions, () => undefined);
+    const actions = new SessionOperationsService(db, sessions, OPERATION_DEPS);
     const author = {
       kind: "workflow" as const,
       runId: randomUUID(),
@@ -329,7 +335,7 @@ describe.each(databases)("text Postgres cannot store, on %s", (name, open) => {
       actions.execute({
         identity,
         projectId: project.id,
-        operation: "complete",
+        operation: "session_complete",
         args: {
           key: "pr-7",
           content: `Reviewed ${HALF_EMOJI}\u0000`,

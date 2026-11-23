@@ -20,7 +20,7 @@ import {
   type RunnerFrame,
   SESSION_ID_ENV,
 } from "@catamorphic/agent-protocol/runner";
-import { ToolGate } from "@catamorphic/sandbox";
+import { SIGN_IN_SPECS, signInHarness, ToolGate } from "@catamorphic/sandbox";
 import { askUser } from "./ask-user.js";
 
 /** A frame before the runner numbers it. */
@@ -290,6 +290,12 @@ export class AttemptRunner {
    * present so the harness's shells load it too (the session's secrets,
    * which a harness that filters names like `*_KEY` would otherwise
    * drop). The attempt's own variables win.
+   *
+   * On a member's own sign-in (ADR 0342) the files add no variable that
+   * names another credential or endpoint to the harness's own process: a
+   * project secret or an Environment variable would otherwise send the
+   * chat to another account. The harness's shells still load the files,
+   * so the project's own programs keep such a key.
    */
   private withEnvFiles(attempt: AttemptStart): AttemptStart {
     const read = this.options.envFile;
@@ -300,11 +306,22 @@ export class AttemptRunner {
     });
     const last = found.at(-1);
     if (!last) return attempt;
+    const signIn =
+      attempt.modelAccess.kind === "sign_in"
+        ? signInHarness(attempt.harness)
+        : undefined;
+    const withheld = new Set(
+      signIn ? (SIGN_IN_SPECS[signIn].otherCredentials ?? []) : [],
+    );
     return {
       ...attempt,
       env: {
         ...Object.fromEntries(
-          found.flatMap((entry) => Object.entries(entry.variables)),
+          found.flatMap((entry) =>
+            Object.entries(entry.variables).filter(
+              ([name]) => !withheld.has(name),
+            ),
+          ),
         ),
         BASH_ENV: last.file,
         ...attempt.env,

@@ -30,10 +30,16 @@ import { ExecutionEnvironmentsService } from "../services/execution-environments
 import { ProjectEnvironmentsService } from "../services/project-environments-service.js";
 import { ProjectsService } from "../services/projects-service.js";
 import {
-  type SessionActionOperation,
-  SessionActionsService,
-} from "../services/session-actions-service.js";
+  type SessionOperationName,
+  SessionOperationsService,
+} from "../services/session-operations.js";
 import { testEnvironmentProvider } from "./test-environment.js";
+
+/** What the operations need beside the sessions: no watchers, own chats. */
+const OPERATION_DEPS = {
+  watchers: () => undefined,
+  chatOwner: async (input: { caller: Identity }) => input.caller,
+};
 
 /*
  * A workflow's boundary retries every action it took, the chat it closed
@@ -131,7 +137,7 @@ describe.each(databases)("retried session actions, on %s", (name, open) => {
   let tmpDir: string | undefined;
   let projects: ProjectsService;
   let sessions: AgentSessionsService;
-  let actions: SessionActionsService;
+  let actions: SessionOperationsService;
   let environments: ExecutionEnvironmentsService;
 
   beforeAll(async () => {
@@ -172,7 +178,7 @@ describe.each(databases)("retried session actions, on %s", (name, open) => {
         restore: () => Promise.resolve("restored"),
       },
     });
-    actions = new SessionActionsService(db, sessions, () => undefined);
+    actions = new SessionOperationsService(db, sessions, OPERATION_DEPS);
   });
 
   afterAll(async () => {
@@ -204,17 +210,17 @@ describe.each(databases)("retried session actions, on %s", (name, open) => {
         JSON.stringify(node).includes('"session_actions"') &&
         JSON.stringify(node).includes('"lease_owner"'),
     );
-    const gatedActions = new SessionActionsService(
+    const gatedActions = new SessionOperationsService(
       db.withPlugin(held.plugin),
       sessions,
-      () => undefined,
+      OPERATION_DEPS,
     );
-    const create = vi.spyOn(sessions, "create");
+    const fork = vi.spyOn(sessions, "fork");
     const abort = new AbortController();
     const pending = gatedActions.execute({
       identity,
       projectId,
-      operation: "create",
+      operation: "session_fork",
       args: { sessionId, idempotencyKey: "canceled-claim" },
       author: runs[0]![1](),
       signal: abort.signal,
@@ -225,14 +231,14 @@ describe.each(databases)("retried session actions, on %s", (name, open) => {
       abort.abort(new Error("claim canceled"));
       held.release();
       await rejected;
-      expect(create).not.toHaveBeenCalled();
+      expect(fork).not.toHaveBeenCalled();
     } finally {
       held.release();
-      create.mockRestore();
+      fork.mockRestore();
     }
   });
 
-  it.each(["create", "fork", "spawn"] as const)(
+  it.each(["session_fork", "session_spawn"] as const)(
     "does not persist %s after cancellation during Environment preparation",
     async (operation) => {
       const { projectId, sessionId } = await keyedChat(`Canceled ${operation}`);
@@ -272,7 +278,7 @@ describe.each(databases)("retried session actions, on %s", (name, open) => {
           sessionId,
           idempotencyKey: `canceled-${operation}`,
           // A shared child admits nothing (ADR 0322): one of its own does.
-          ...(operation === "spawn"
+          ...(operation === "session_spawn"
             ? { task: "must never start", workspace: "own" }
             : {}),
         },
@@ -313,11 +319,11 @@ describe.each(databases)("retried session actions, on %s", (name, open) => {
     },
   );
 
-  it.each(["complete", "reopen"] as const)(
-    "does not %s a session canceled while waiting on its final lock",
+  it.each(["session_complete", "session_reopen"] as const)(
+    "does not run %s on a session canceled while waiting on its final lock",
     async (operation) => {
       const { projectId, sessionId } = await keyedChat(`Canceled ${operation}`);
-      const previous = operation === "complete" ? "open" : "completed";
+      const previous = operation === "session_complete" ? "open" : "completed";
       await db
         .updateTable("agent_sessions")
         .set({ work_status: previous })
@@ -329,10 +335,10 @@ describe.each(databases)("retried session actions, on %s", (name, open) => {
           JSON.stringify(node).includes('"agent_sessions"') &&
           JSON.stringify(node).toLowerCase().includes("forupdate"),
       );
-      const gatedActions = new SessionActionsService(
+      const gatedActions = new SessionOperationsService(
         db.withPlugin(held.plugin),
         sessions,
-        () => undefined,
+        OPERATION_DEPS,
       );
       const abort = new AbortController();
       const pending = gatedActions.execute({
@@ -342,7 +348,9 @@ describe.each(databases)("retried session actions, on %s", (name, open) => {
         args: {
           sessionId,
           idempotencyKey: `canceled-${operation}`,
-          ...(operation === "complete" ? { content: "Must not complete" } : {}),
+          ...(operation === "session_complete"
+            ? { content: "Must not complete" }
+            : {}),
         },
         author: runs[0]![1](),
         signal: abort.signal,
@@ -373,19 +381,19 @@ describe.each(databases)("retried session actions, on %s", (name, open) => {
     async (_run, sender) => {
       const author = sender();
       const { projectId, sessionId } = await keyedChat("Retried after close");
-      const act = (operation: SessionActionOperation, args: unknown) =>
+      const act = (operation: SessionOperationName, args: unknown) =>
         actions.execute({ identity, projectId, operation, args, author });
       const complete = () =>
-        act("complete", {
+        act("session_complete", {
           key: "pr-7",
           content: "Reviewed",
           idempotencyKey: "done-7",
         });
       const close = () =>
-        act("close", { key: "pr-7", idempotencyKey: "merged-7" });
+        act("session_close", { key: "pr-7", idempotencyKey: "merged-7" });
       const completed = await complete();
       expect(completed).toEqual({ sessionId });
-      expect(await close()).toEqual({ sessionId, closed: true });
+      expect(await close()).toMatchObject({ sessionId, closed: true });
       expect(
         await sessions.keyedChatId({
           projectId,
@@ -395,17 +403,24 @@ describe.each(databases)("retried session actions, on %s", (name, open) => {
       ).toBeUndefined();
       // The boundary runs again: the key names no open chat now.
       expect(await complete()).toEqual(completed);
-      expect(await close()).toEqual({ sessionId, closed: true });
+      expect(await close()).toMatchObject({
+        sessionId,
+        closed: true,
+        state: "closed",
+      });
       // A new key, though, has nothing recorded to answer with.
       await expect(
-        act("complete", {
+        act("session_complete", {
           key: "pr-7",
           content: "Reviewed",
           idempotencyKey: "done-8",
         }),
       ).rejects.toThrow("No open chat has the key pr-7");
       expect(
-        await act("close", { key: "pr-7", idempotencyKey: "merged-8" }),
+        await act("session_close", {
+          key: "pr-7",
+          idempotencyKey: "merged-8",
+        }),
       ).toEqual({ sessionId: null, closed: false });
     },
   );
@@ -419,11 +434,11 @@ describe.each(databases)("retried session actions, on %s", (name, open) => {
         actions.execute({
           identity,
           projectId,
-          operation: "close",
+          operation: "session_close",
           args: { key: "pr-7", idempotencyKey: "merged-7" },
           author,
         });
-      expect(await close(first)).toEqual({ sessionId, closed: true });
+      expect(await close(first)).toMatchObject({ sessionId, closed: true });
       // The same enablement fires again with the same step: a new run, so
       // a new action, not the first run's answer.
       const next = { ...first, runId: randomUUID() };
@@ -440,24 +455,24 @@ describe.each(databases)("retried session actions, on %s", (name, open) => {
         actions.execute({
           identity,
           projectId,
-          operation: "close",
+          operation: "session_close",
           args: { key: "pr-7", idempotencyKey: "merged-7" },
           author,
         });
-      expect(await close()).toEqual({ sessionId, closed: true });
+      expect(await close()).toMatchObject({ sessionId, closed: true });
       // As if the close stopped after the chat closed, before its record.
       await db
         .updateTable("session_actions")
         .set({ status: "failed", result: null })
         .where("project_id", "=", projectId)
-        .where("operation", "=", "close")
+        .where("operation", "=", "session_close")
         .execute();
-      expect(await close()).toEqual({ sessionId, closed: true });
+      expect(await close()).toMatchObject({ sessionId, closed: true });
       const recorded = await db
         .selectFrom("session_actions")
         .select(["status", "result", "actor"])
         .where("project_id", "=", projectId)
-        .where("operation", "=", "close")
+        .where("operation", "=", "session_close")
         .execute();
       // One action, recorded with the sender as it acted.
       expect(recorded).toEqual([

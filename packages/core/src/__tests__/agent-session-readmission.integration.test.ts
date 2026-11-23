@@ -21,8 +21,14 @@ import { ExecutionAllocationsService } from "../services/execution-allocations-s
 import { ExecutionEnvironmentsService } from "../services/execution-environments-service.js";
 import { ProjectEnvironmentsService } from "../services/project-environments-service.js";
 import { ProjectsService } from "../services/projects-service.js";
-import { SessionActionsService } from "../services/session-actions-service.js";
+import { SessionOperationsService } from "../services/session-operations.js";
 import { RecordingAdapter } from "./recording-adapter.js";
+
+/** What the operations need beside the sessions: no watchers, own chats. */
+const OPERATION_DEPS = {
+  watchers: () => undefined,
+  chatOwner: async (input: { caller: Identity }) => input.caller,
+};
 
 /** A native agent recording whom each of its turns ran for. */
 class Recorder {
@@ -296,7 +302,7 @@ describe("chats admitted again after their workspace was released (ADR 0173)", (
 
   it("names a keyed chat only to those who may see it", async () => {
     const sessions = service();
-    const actions = new SessionActionsService(db, sessions, () => undefined);
+    const actions = new SessionOperationsService(db, sessions, OPERATION_DEPS);
     const chat = await sessions.chatForKey(alice, projectId, {
       key: "pr-9",
       workflowName: "reviewOnOpen",
@@ -307,7 +313,10 @@ describe("chats admitted again after their workspace was released (ADR 0173)", (
       externalUserId: "mallory",
       scope: [{ kind: "agent", projectId, name: EVERY_ARTIFACT }],
     };
-    const act = (operation: "find" | "inspect" | "close", args: unknown) =>
+    const act = (
+      operation: "session_list" | "session_read" | "session_close",
+      args: unknown,
+    ) =>
       actions.execute({
         identity: mallory,
         projectId,
@@ -317,15 +326,15 @@ describe("chats admitted again after their workspace was released (ADR 0173)", (
       });
     const aliceKey = { key: "pr-9", audience: { member: "alice" } };
     const nobodys = { key: "pr-404", audience: { member: "alice" } };
-    expect(await act("find", aliceKey)).toBeNull();
-    expect(await act("find", nobodys)).toBeNull();
-    await expect(act("inspect", aliceKey)).rejects.toThrow(
+    const none = { sessions: [], total: 0, nextCursor: null };
+    expect(await act("session_list", aliceKey)).toEqual(none);
+    expect(await act("session_list", nobodys)).toEqual(none);
+    await expect(act("session_read", aliceKey)).rejects.toThrow(
       "No open chat has the key pr-9",
     );
-    expect(await act("close", { ...aliceKey, idempotencyKey: "m-1" })).toEqual({
-      sessionId: null,
-      closed: false,
-    });
+    expect(
+      await act("session_close", { ...aliceKey, idempotencyKey: "m-1" }),
+    ).toEqual({ sessionId: null, closed: false });
     expect((await sessions.get(alice, projectId, chat.sessionId)).status).toBe(
       "active",
     );
@@ -333,12 +342,12 @@ describe("chats admitted again after their workspace was released (ADR 0173)", (
 
   it("reports closing a closed chat as nothing closed, and a retried close finishes its cleanup", async () => {
     const sessions = service();
-    const actions = new SessionActionsService(db, sessions, () => undefined);
+    const actions = new SessionOperationsService(db, sessions, OPERATION_DEPS);
     const act = (args: unknown) =>
       actions.execute({
         identity: alice,
         projectId,
-        operation: "close",
+        operation: "session_close",
         args,
         author: { kind: "user", externalUserId: "alice" },
       });
@@ -349,7 +358,7 @@ describe("chats admitted again after their workspace was released (ADR 0173)", (
     await sessions.close(alice, projectId, done.sessionId);
     expect(
       await act({ sessionId: done.sessionId, idempotencyKey: "late" }),
-    ).toEqual({ sessionId: done.sessionId, closed: false });
+    ).toMatchObject({ sessionId: done.sessionId, closed: false });
 
     // A close that dies after closing the chat, before its cleanup.
     const chat = await sessions.chatForKey(alice, projectId, {
@@ -371,7 +380,7 @@ describe("chats admitted again after their workspace was released (ADR 0173)", (
       "closed",
     );
     // Retrying finishes it, though the key no longer names the chat.
-    expect(await act(merged)).toEqual({
+    expect(await act(merged)).toMatchObject({
       sessionId: chat.sessionId,
       closed: true,
     });

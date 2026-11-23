@@ -3,6 +3,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { mcp } from "@better-auth/mcp";
 import { verifyOAuthQueryParams } from "@better-auth/oauth-provider";
+import { TOKEN_SCOPES } from "@catamorphic/core";
 import { betterAuth } from "better-auth";
 import { bearer, genericOAuth, username } from "better-auth/plugins";
 import { z } from "zod";
@@ -22,6 +23,11 @@ import type {
 
 /** Provider sign-in starts per client address (Better Auth's window is seconds). */
 const PROVIDER_SIGN_IN_LIMIT = { window: 10, max: 30 };
+
+/** The OpenID scopes a client signs in with. */
+const SIGN_IN_SCOPES = ["openid", "profile", "email", "offline_access"];
+/** Work's scopes: what a client may do as its person (ADR 0347). */
+const WORK_SCOPES = Object.keys(TOKEN_SCOPES);
 
 export function createWorkAuth(options: {
   database: WorkAuthDatabase;
@@ -104,6 +110,10 @@ export function createWorkAuth(options: {
         resource: `${options.baseURL}/api`,
         // Work checks and revokes opaque grants on every request (ADR 0161).
         disableJwtPlugin: true,
+        // What a client may be granted (ADR 0347): OpenID's own scopes
+        // for signing in, and Work's, which narrow what the client does as
+        // its person. The protected-resource metadata lists Work's.
+        scopes: [...SIGN_IN_SCOPES, ...WORK_SCOPES],
         allowDynamicClientRegistration: true,
         allowUnauthenticatedClientRegistration: true,
         clientRegistrationDefaultApplicationType: "infer",
@@ -181,6 +191,14 @@ export function createWorkAuth(options: {
         email.toLowerCase(),
       );
       return found ? workAuthUser(found.user) : null;
+    },
+    listUsers: async () => {
+      const context = await auth.$context;
+      const rows = await context.adapter.findMany({ model: "user" });
+      return rows.flatMap((row) => {
+        const user = ListedUser.safeParse(row);
+        return user.success ? [workAuthUser(user.data)] : [];
+      });
     },
     resolveAccessToken: async ({ authorization }) => {
       const bearerToken = /^Bearer ([^\s]+)$/i.exec(authorization)?.[1];
@@ -452,6 +470,15 @@ export function loadWorkAuthSecret(options: {
     return existing;
   }
 }
+
+/** A user row as the adapter lists it. */
+const ListedUser = z.object({
+  id: z.string(),
+  email: z.string(),
+  emailVerified: z.boolean(),
+  name: z.string(),
+  username: z.string().nullish(),
+});
 
 function workAuthUser(user: {
   id: string;

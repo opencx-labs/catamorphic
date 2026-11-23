@@ -13,6 +13,8 @@ import {
 import { type Kysely, type RawBuilder, type SqlBool, sql } from "kysely";
 import { cacheMounts } from "./cache-mounts.js";
 import type { ExecutionAllocation } from "./execution-allocations-service.js";
+import { retireAllocationWork } from "./node-recovery-service.js";
+import { RemoteSandboxUnknownError } from "./remote-operations.js";
 import { sandboxProjectDirectory } from "./sandbox-git.js";
 import { sandboxEnvFiles } from "./sandbox-secrets.js";
 import {
@@ -199,10 +201,35 @@ export function allocationSandboxProvider(args: {
         : {}),
       ...(sandboxId ? { sandboxId } : {}),
     });
+  /**
+   * The machine says it holds no such sandbox (ADR 0348): it was replaced,
+   * or its disk was. Nothing ran. The Allocation is retired here, wherever
+   * the operation came from, so the chat is admitted again and rebuilt
+   * from its last save rather than failing every message from now on.
+   */
+  const healing = async <T>(action: () => Promise<T>): Promise<T> => {
+    try {
+      return await action();
+    } catch (error) {
+      if (error instanceof RemoteSandboxUnknownError)
+        await retireAllocationWork({
+          db,
+          allocationId: allocation.id,
+          reason: "sandbox-unknown",
+        }).catch((retireError: unknown) =>
+          console.warn(
+            `[catamorphic] Workspace ${allocation.id} lost its sandbox, and retiring it failed`,
+            retireError,
+          ),
+        );
+      throw error;
+    }
+  };
   const create = async (opts: CreateSandboxOpts) => {
     const row = await requireActive();
     if (row.sandbox_provider_id) {
-      await provider.startSandbox(row.sandbox_provider_id);
+      const sandboxId = row.sandbox_provider_id;
+      await healing(() => provider.startSandbox(sandboxId));
       return {
         id: row.sandbox_provider_id,
         providerId: row.sandbox_provider_id,
@@ -264,7 +291,7 @@ export function allocationSandboxProvider(args: {
   };
   const guard = async <T>(id: string, action: () => Promise<T>): Promise<T> => {
     await requireActive(id);
-    return action();
+    return healing(action);
   };
   const runtime = provider.deploymentRuntime;
   const processes = provider.processes;
@@ -659,6 +686,34 @@ export async function cleanupWorkerAllocations(args: {
           failures.push(error);
         }
       }
+      // Workspaces retired while the machine was away (ADR 0348): one that
+      // came back with its disk still holds their sandboxes.
+      const retired = await args.db
+        .selectFrom("execution_allocations")
+        .select(["id", "sandbox_provider_id"])
+        .where("worker_node_id", "=", node.id)
+        .where("status", "=", "released")
+        .where("release_reason", "=", "node_lost")
+        .where("capacity_released_at", "is not", null)
+        .where("sandbox_provider_id", "is not", null)
+        .limit(100)
+        .execute();
+      for (const row of retired) {
+        try {
+          if (
+            row.sandbox_provider_id &&
+            (await removeRetiredSandbox({
+              db: args.db,
+              allocationId: row.id,
+              sandboxId: row.sandbox_provider_id,
+              provider: args.provider,
+            }))
+          )
+            cleaned++;
+        } catch (error) {
+          failures.push(error);
+        }
+      }
       // Holds end with their sandboxes (migration 051's trigger); any whose
       // Allocation is gone some other way are let go here.
       await sweepVolumeHolds({ db: args.db, node: node.id }).catch(
@@ -758,6 +813,55 @@ async function retireAllocation(args: {
         .execute();
     },
   });
+  return true;
+}
+
+/**
+ * Remove the sandbox of an Allocation retired with its machine (ADR 0348),
+ * from a machine that is back with its disk. Its capacity was freed when it
+ * was retired; this only clears what the machine still holds. Claimed like
+ * any workspace maintenance, so two hosts never do it at once, and the
+ * Allocation forgets the sandbox once it is gone: a machine that never had
+ * it (a replacement under the same name) answers a destroy as done.
+ */
+async function removeRetiredSandbox(args: {
+  db: Kysely<DB>;
+  allocationId: string;
+  sandboxId: string;
+  provider: SandboxProvider;
+}): Promise<boolean> {
+  const token = randomUUID();
+  const claimed = await args.db
+    .updateTable("execution_allocations")
+    .set({
+      maintenance_claim: token,
+      maintenance_claimed_until: sql`now() + make_interval(mins => ${MAINTENANCE_MINUTES})`,
+    })
+    .where("id", "=", args.allocationId)
+    .where("status", "=", "released")
+    .where("sandbox_provider_id", "=", args.sandboxId)
+    .where((eb) =>
+      eb.or([
+        eb("maintenance_claimed_until", "is", null),
+        eb("maintenance_claimed_until", "<", sql<Date>`now()`),
+      ]),
+    )
+    .returning("id")
+    .executeTakeFirst();
+  if (!claimed) return false;
+  // Destroying is idempotent: a sandbox already gone counts. A failure
+  // leaves the claim to lapse, and a later pass tries again.
+  await args.provider.destroySandbox(args.sandboxId);
+  await args.db
+    .updateTable("execution_allocations")
+    .set({
+      sandbox_provider_id: null,
+      maintenance_claim: null,
+      maintenance_claimed_until: null,
+    })
+    .where("id", "=", args.allocationId)
+    .where("maintenance_claim", "=", token)
+    .execute();
   return true;
 }
 

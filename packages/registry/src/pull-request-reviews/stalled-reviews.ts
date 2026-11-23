@@ -2,7 +2,7 @@ import {
   type BoundaryContext,
   type Carried,
   defineWorkflow,
-  type SessionSnapshot,
+  type SessionState,
   type SessionTurnAttempt,
   type TriggerPayload,
   trigger,
@@ -71,17 +71,17 @@ function pullRequestOf(key: string): number {
 }
 
 /** The reviewer's project chat in `review` that reviewPullRequests started. */
-function ours(chat: SessionSnapshot): boolean {
+function ours(chat: SessionState): boolean {
   return (
     chat.owner === "project" &&
-    chat.agentId === `project:${chat.projectId}:reviewer` &&
+    chat.agent === `project:${chat.projectId}:reviewer` &&
     chat.placement?.environment === "review" &&
     chat.keyWorkflows.includes("reviewPullRequests")
   );
 }
 
 /** Whether the chat's turn is still the attempt that stalled, still silent. */
-function stillStalled(chat: SessionSnapshot, stall: Stall): boolean {
+function stillStalled(chat: SessionState, stall: Stall): boolean {
   const turn = chat.turn;
   return (
     turn?.id === stall.turnId &&
@@ -154,7 +154,7 @@ export const restartStalledReviews = defineWorkflow(({ defineBoundary }) => ({
                 : "stop",
           attempts: [],
         };
-        return host["catamorphic.sessions"].inspect(
+        return host["catamorphic.sessions"].read(
           { sessionId: stall.sessionId },
           { state: stall },
         );
@@ -162,10 +162,7 @@ export const restartStalledReviews = defineWorkflow(({ defineBoundary }) => ({
     }),
     /** @displayname Read the attempts' own output */
     defineBoundary({
-      run: ({
-        input,
-        host,
-      }: BoundaryContext<Carried<SessionSnapshot, Stall>>) => {
+      run: ({ input, host }: BoundaryContext<Carried<SessionState, Stall>>) => {
         // Only this repository's review chat, and only the attempt that
         // stalled while it is still silent: one that moved on, or was
         // restarted already, is left alone.
@@ -176,8 +173,12 @@ export const restartStalledReviews = defineWorkflow(({ defineBoundary }) => ({
         if (stall.act === "nothing") return { result: null, state: stall };
         // What Work recorded of each attempt, masked: nothing the pull
         // request's code can write.
-        return host["catamorphic.sessions"].attempts(
-          { sessionId: stall.sessionId, turnId: stall.turnId },
+        return host["catamorphic.sessions"].read(
+          {
+            sessionId: stall.sessionId,
+            turnId: stall.turnId,
+            include: ["attempts"],
+          },
           { state: stall },
         );
       },
@@ -188,7 +189,7 @@ export const restartStalledReviews = defineWorkflow(({ defineBoundary }) => ({
         input,
         documents,
       }: BoundaryContext<
-        Carried<{ attempts: SessionTurnAttempt[] } | null, Stall>
+        Carried<{ attempts?: SessionTurnAttempt[] } | null, Stall>
       >) => {
         const stall: Stall = {
           ...input.state,
@@ -227,7 +228,7 @@ export const restartStalledReviews = defineWorkflow(({ defineBoundary }) => ({
         const stall = input.state;
         if (stall.act === "nothing") return { result: null, state: stall };
         // Act only on what the chat is now.
-        return host["catamorphic.sessions"].inspect(
+        return host["catamorphic.sessions"].read(
           { sessionId: stall.sessionId },
           { state: stall },
         );
@@ -238,7 +239,7 @@ export const restartStalledReviews = defineWorkflow(({ defineBoundary }) => ({
       run: ({
         input,
         host,
-      }: BoundaryContext<Carried<SessionSnapshot | null, Stall>>) => {
+      }: BoundaryContext<Carried<SessionState | null, Stall>>) => {
         const stall: Stall =
           input.result && stillStalled(input.result, input.state)
             ? input.state

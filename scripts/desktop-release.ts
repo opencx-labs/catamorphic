@@ -72,7 +72,7 @@ export function renderHomebrewCask(input: {
   auto_updates true
   conflicts_with cask: "${conflictingToken}"
   depends_on arch: :arm64
-  depends_on macos: :monterey
+  depends_on macos: :ventura
 
   app "Work.app"
 

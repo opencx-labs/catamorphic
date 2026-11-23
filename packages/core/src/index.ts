@@ -14,18 +14,22 @@ export {
   type AgentRefToolPolicy,
   type AppRef,
   type ArtifactRef,
+  assertTokenScope,
   authorFor,
   type ConnectionUseRef,
   type ControlPlanePermission,
   confineIdentity,
+  DEFAULT_TOKEN_SCOPES,
   type DocumentRef,
   documentRefCovers,
   EVERY_ARTIFACT,
   type ExecutionEnvironmentRef,
   type ExternalUserId,
   effectiveProjectPermissions,
+  FULL_TOKEN_SCOPE,
   hasControlPlanePermission,
   hasProjectPermission,
+  hasTokenScope,
   type Identity,
   identityCovers,
   identityMayUseConnection,
@@ -50,8 +54,13 @@ export {
   sameArtifact,
   scopeCovers,
   type TenantId,
+  TOKEN_SCOPES,
+  type TokenScope,
+  TokenScopeRequiredError,
+  tokenScopesOf,
   type WorkflowDocumentDeclaration,
   type WorkflowRef,
+  withTokenScopes,
   workflowDocumentRefs,
 } from "./identity.js";
 export {
@@ -479,6 +488,10 @@ export {
   LOST_NODE_GRACE_MS,
   type NodeRecoveryResult,
   NodeRecoveryService,
+  type NodeRetirement,
+  type NodeRetireReason,
+  retireAllocationWork,
+  retireNodeWork,
 } from "./services/node-recovery-service.js";
 export {
   gitignoreLiteral,
@@ -599,6 +612,14 @@ export {
   parseProjectDeploy,
 } from "./services/published-revisions-service.js";
 export {
+  NothingToProposeError,
+  type OpenedPullRequest,
+  type OpenPullRequestInput,
+  type PullRequestCheckout,
+  PullRequestsService,
+  PullRequestUnavailableError,
+} from "./services/pull-requests-service.js";
+export {
   type BlockedRateReservation,
   type GrantedRateReservation,
   type RateBucketKey,
@@ -631,12 +652,15 @@ export {
   RemoteOperationResultSchema,
   RemoteOperationSchema,
   RemoteReceiptRefusedError,
+  RemoteSandboxUnknownError,
   registerExecutorKey,
+  SANDBOX_UNKNOWN_ERROR,
   type SealedRemoteOperation,
   SealedRemoteOperationSchema,
   sealRemoteOperation,
 } from "./services/remote-operations.js";
 export {
+  defaultBranchOf,
   type RemoteSyncOutcome,
   RemoteSyncService,
   ServerDraftError,
@@ -742,7 +766,6 @@ export {
   sandboxSecretsFile,
   sandboxSecretsPrelude,
 } from "./services/sandbox-secrets.js";
-export { parseSnapshot } from "./services/sandbox-sync.js";
 export { SchedulesService } from "./services/schedules-service.js";
 export { SECRETS_CAPABILITY } from "./services/secrets-capability.js";
 export {
@@ -759,12 +782,6 @@ export {
   SecretValueInvalidError,
   secretFingerprint,
 } from "./services/secrets-service.js";
-export {
-  SESSION_ACTION_SCHEMAS,
-  type SessionActionOperation,
-  SessionActionsService,
-  SessionKeyNotFoundError,
-} from "./services/session-actions-service.js";
 export type {
   SessionArtifact,
   SessionArtifactAddress,
@@ -789,6 +806,25 @@ export {
   type SessionMirrorInput,
 } from "./services/session-mirror.js";
 export {
+  isSessionOperationName,
+  parseWaitCursor,
+  SESSION_OPERATION_ERROR_CODES,
+  SESSION_OPERATION_NAMES,
+  SESSION_OPERATIONS,
+  SESSION_WAIT_DEFAULT_SECONDS,
+  SESSION_WAIT_MAX_SECONDS,
+  SessionKeyNotFoundError,
+  type SessionOperationAnnotations,
+  type SessionOperationCall,
+  type SessionOperationDefinition,
+  SessionOperationError,
+  type SessionOperationErrorCode,
+  type SessionOperationName,
+  SessionOperationsService,
+  sessionOperationError,
+  sessionOperationHostName,
+} from "./services/session-operations.js";
+export {
   PREVIEW_REQUEST_MAX_BYTES,
   type PreviewRequest,
   type PreviewResponse,
@@ -796,6 +832,15 @@ export {
   type SessionPreviewErrorReason,
   SessionPreviewsService,
 } from "./services/session-previews-service.js";
+export {
+  SESSION_STATE_OUTPUT_SCHEMA,
+  SESSION_STATES,
+  type SessionState,
+  type SessionStateName,
+  type SessionStateRequest,
+  SessionStateSchema,
+  sessionStateOutputSchema,
+} from "./services/session-state.js";
 export {
   type SessionSyncIntent,
   SessionSyncLeaseError,
@@ -810,6 +855,12 @@ export {
   SessionTerminalSecretsError,
   SessionTerminalsService,
 } from "./services/session-terminals-service.js";
+export {
+  SESSION_WAIT_TTL_MS,
+  type SessionWait,
+  SessionWaitsService,
+  type WatchedSession,
+} from "./services/session-waits-service.js";
 export {
   type SessionWorkspaceHandle,
   SessionWorkspaceUnavailableError,
@@ -826,6 +877,14 @@ export {
   SessionWorkspaces,
   workspaceMoveNote,
 } from "./services/session-workspaces.js";
+export {
+  type ChatPullRequest,
+  PULL_REQUEST_TOOL_NAME,
+  type PullRequestRequest,
+  pullRequestCapability,
+  pullRequestNote,
+  pullRequestTool,
+} from "./services/sessions/pull-request-tool.js";
 export {
   STREAM_MAX_PENDING_BYTES,
   STREAM_MAX_PENDING_EVENTS,

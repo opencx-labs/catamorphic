@@ -1,3 +1,4 @@
+import { SESSION_OPERATION_NAMES } from "@catamorphic/core";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { projectToolCapabilities } from "../project-capabilities.js";
 import { createTestApp } from "./test-app.js";
@@ -342,18 +343,21 @@ describe("project workflow-tools MCP endpoint", () => {
     expect(error?.message).toContain("lookupWeather");
   });
 
-  it("answers unknown tools with a tool error", async () => {
+  it("answers unknown tools with an invalid-params error, as the protocol names them", async () => {
     const app = createTestApp({ core: fakeCore() as never });
     apps.push(app);
-    const { result } = await rpc(app, "tools/call", {
+    const { error } = await rpc(app, "tools/call", {
       name: "nope",
       arguments: {},
     });
-    expect(result?.isError).toBe(true);
+    expect(error).toMatchObject({
+      code: -32602,
+      message: "Unknown tool: nope",
+    });
   });
 });
 
-describe("project MCP surface (ADR 0055): documents, skills, ask_agent", () => {
+describe("project MCP surface (ADR 0055): documents, skills, chats", () => {
   const _admin = {
     "x-catamorphic-tenant-id": "tenant-1",
     "x-external-user-id": "admin",
@@ -438,11 +442,15 @@ describe("project MCP surface (ADR 0055): documents, skills, ask_agent", () => {
           content: "# Briefs",
         }),
       },
-      agentSessions: {
-        create: record("sessions.create", { id: "session-1" }),
-        sendMessage: record("sessions.sendMessage", {
-          reply: { kind: "assistant_message", text: "Here is your brief." },
+      // The session operations are core's registry (ADR 0346): the
+      // surface lists and runs whatever it holds.
+      sessionOperations: {
+        execute: record("sessionOperations.execute", {
+          sessionId: "session-1",
+          state: "working",
         }),
+      },
+      agentSessions: {
         setMetadata: record("sessions.setMetadata", {
           pull_requests: [{ url: "https://github.com/acme/web/pull/3" }],
         }),
@@ -475,10 +483,18 @@ describe("project MCP surface (ADR 0055): documents, skills, ask_agent", () => {
       "publish_document",
       "revoke_publication",
       "list_publications",
-      "ask_agent",
-      "send_agent_message",
+      ...SESSION_OPERATION_NAMES,
       ...PROGRAM_TOOLS,
     ]);
+    // Every chat tool is listed as the registry defines it.
+    expect(tools.find((t) => t.name === "session_wait")).toMatchObject({
+      title: "Wait for a chat",
+      annotations: { readOnlyHint: true, idempotentHint: true },
+      outputSchema: { type: "object" },
+    });
+    expect(
+      tools.find((t) => t.name === "session_close")?.annotations,
+    ).toMatchObject({ destructiveHint: true });
     expect(tools.find((t) => t.name === "documents_read")?.annotations).toEqual(
       { readOnlyHint: true },
     );
@@ -559,22 +575,36 @@ describe("project MCP surface (ADR 0055): documents, skills, ask_agent", () => {
       content: "# Briefs",
     });
 
-    const ask = await rpc(app, "tools/call", {
-      name: "ask_agent",
-      arguments: { agent: "csm-assistant", message: "brief acme" },
+    const start = {
+      agent: "csm-assistant",
+      message: "brief acme",
+      idempotencyKey: "brief-1",
+    };
+    const started = await rpc(app, "tools/call", {
+      name: "session_start",
+      arguments: start,
     });
-    expect(ask.result?.structuredContent).toEqual({
+    expect(started.result?.structuredContent).toEqual({
       sessionId: "session-1",
-      reply: "Here is your brief.",
+      state: "working",
     });
-    expect(calls.at(-2)).toMatchObject({
-      op: "sessions.create",
-      args: expect.arrayContaining([
-        expect.objectContaining({
-          agentId: `project:${PROJECT_ID}:csm-assistant`,
-          source: "mcp",
-        }),
-      ]),
+    // The result links the chat's resource for clients that follow links.
+    expect(started.result?.content).toContainEqual(
+      expect.objectContaining({
+        type: "resource_link",
+        uri: "work://sessions/session-1",
+      }),
+    );
+    // An outside client acts as the member's assistant, on this project.
+    expect(calls.at(-1)).toMatchObject({
+      op: "sessionOperations.execute",
+      args: {
+        operation: "session_start",
+        projectId: PROJECT_ID,
+        args: start,
+        identity: { externalUserId: "user-1" },
+        author: { kind: "assistant", externalUserId: "user-1" },
+      },
     });
   });
 
@@ -600,7 +630,7 @@ describe("project MCP surface (ADR 0055): documents, skills, ask_agent", () => {
     // A connection with no session has nothing to set.
     const listed = await rpc(app, "tools/list");
     const names = (listed.result?.tools ?? []) as Array<{ name: string }>;
-    expect(names.map((tool) => tool.name)).toContain("send_agent_message");
+    expect(names.map((tool) => tool.name)).toContain("session_send");
     expect(names.map((tool) => tool.name)).not.toContain(
       "set_session_metadata",
     );
@@ -719,9 +749,11 @@ describe("project MCP surface (ADR 0055): documents, skills, ask_agent", () => {
       expect.arrayContaining([
         "create_watcher",
         "list_watchers",
-        "stop_watcher",
+        "session_stop_watcher",
       ]),
     );
+    // One way to stop a watcher: the session operation.
+    expect(names).not.toContain("stop_watcher");
     expect(names).not.toContain("create_github_watcher");
     const create = listedTools.find((tool) => tool.name === "create_watcher");
     expect(create?.inputSchema?.properties?.eventSource?.enum).toEqual([

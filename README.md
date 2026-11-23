@@ -120,9 +120,9 @@ those sandboxes on the organization's model keys, held by the gateway. New model
 calls require the turn's exact attempt and live lease; Git and HTTP
 background access keep their normal grant lifetime. The gateway
 can pin the providers an aggregator routes to; work that needs a machine can
-wait for one, and machine rules can create machines on demand and remove
-them when idle, on Hetzner Cloud or on any cloud through two workflows of a
-project (an EC2 recipe ships as a pack). Machines manage their disk too:
+wait for one. The host's machine plan can create, stop, resume, and
+destroy machines on its own infrastructure. Copyable recipes cover EC2,
+Hetzner Cloud, project workflows and worker installation. Machines manage their disk too:
 each keeps a floor of free space below which it takes no new workspace,
 reserves what an Environment's `storageMb` asks, removes the images and
 leftovers Work no longer uses, names a full disk in the failures it causes,
@@ -228,7 +228,9 @@ changed files ends in a **checkpoint commit**, its sha stamped on the chat
 message, so every reply's diff is addressable forever. Work never updates
 the default branch of a repository it did not create, or any branch there
 it did not make: sync fetches and fast-forwards, and local work reaches a
-shared repository as a `work/` branch plus a **pull request**. A repository
+shared repository as a `work/` branch plus a **pull request**, opened from
+the chat's own commits by one tool on the desktop and on a Work server,
+where every chat works on a branch of its own. A repository
 Work created itself syncs automatically (fetch, fast-forward, merge, push),
 and a conflicting divergence lands on a **rescue branch** instead of a stuck
 state. A code host acts through an ordinary connection: the person's own
@@ -254,8 +256,10 @@ per-profile agent rosters work across harnesses. A chat can change agents across
 harnesses while keeping its history, with a bounded handoff of missing context.
 MCP goes both directions:
 agents consume MCP connectors (registry search, plugin marketplaces,
-elicitation via `@catamorphic/mcp`), and a project's workflows are served
-*as* MCP tools to any MCP client. In the desktop, agents also drive the
+elicitation via `@catamorphic/mcp`), and a server is an MCP endpoint itself:
+a person's own agent (Claude Code, Codex, any MCP client) starts a coding
+agent on it, keeps working, waits for it, answers its questions and reads
+its result, and a project's workflows are served *as* MCP tools. In the desktop, agents also drive the
 workspace itself: browser tabs (real input, uploads, downloads, and a page's
 console and network for web development), terminals, `open_surface`,
 `point_at`. Local harnesses get the person's login-shell PATH, so they reach
@@ -501,7 +505,6 @@ Supporting packages (consumed through the surface above, importable directly for
 | `@catamorphic/local-process` | Sandboxless execution as plain subprocesses with an explicit env. Trusted single-tenant hosts only (ADR 0047). |
 | `@catamorphic/cloudflare` | Cloudflare backend plugin: `CloudflareSandboxProvider` (execution via Bridge Worker) + `ArtifactsRemoteBackend` (Cloudflare-native code storage when available). |
 | `@catamorphic/s3` | S3-compatible git origin backend for Cloudflare R2, AWS S3, MinIO, and similar stores. |
-| `@catamorphic/hetzner` | Hetzner Cloud client and machine provisioner behind the Work server's `hetzner-cloud` machine classes (ADR 0205). |
 | `@catamorphic/ai-sdk` | Built-in harness adapter: Vercel AI SDK tool loop on any API model, running in the host and driving the session's sandbox through its tools. |
 | `@catamorphic/claude-code` | Harness adapter backed by the Claude Code (Claude Agent SDK) CLI, with per-turn MCP servers, portable native state and full settings-source fidelity. |
 | `@catamorphic/codex` | Harness adapter backed by the pinned OpenAI Codex app-server protocol. |
@@ -681,7 +684,8 @@ Workflows subscribe to trigger kinds in code (`triggers:
 `defineTriggerKind` (typed payloads and configs via zod, generated
 `work-triggers.d.ts` per project) and fire them sync or async; a kind
 whose payload varies per workflow uses typed holes, and kinds declared via
-`mcpToolKinds` are served as MCP tools from `POST /projects/:id/mcp`.
+`mcpToolKinds` are served as MCP tools from `POST /projects/:id/mcp`, beside
+the chat tools `POST /mcp` serves for every project.
 Projects define their own kinds on top of the host's in `.work/triggers/`
 (`defineTrigger({ name, from: trigger("webhook", { ... }), where })`), and
 every binding may add a `where` filter the host checks before a run starts,

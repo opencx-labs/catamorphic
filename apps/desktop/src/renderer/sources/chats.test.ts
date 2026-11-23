@@ -116,6 +116,7 @@ function view(projectId = "paged") {
       tabGroups: [],
       unreadSessionIds: new Set(["c2"]),
       agentName: () => "Claude",
+      agentsKey: "",
       agentDeleted: () => false,
       closeTab: () => {},
       pinTab: () => {},

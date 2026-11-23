@@ -69,7 +69,7 @@ import type { InstalledClaudeCodeFinder } from "../installed-claude-code.js";
 import { bestFreeModelId, fetchOpenRouterModels } from "../openrouter.js";
 import type { ProfileConfigManager } from "../profile-config.js";
 import type { ProfilesStore } from "../profiles.js";
-import { projectDefaultAgentSlug } from "../project-manifest.js";
+import { projectDefaultAgentId } from "../project-manifest.js";
 import {
   agentShellEnvFile,
   codexShellEnvironment,
@@ -744,15 +744,12 @@ export class DesktopAgentRegistry implements CodingAgentRegistry {
    * resolves into 0050's fail-fast consent pointer — visible, not silent.
    */
   defaultAgentId(projectId?: string): string | undefined {
-    if (projectId) {
-      const store = this.deps.profileConfig.forProject(projectId).agents;
-      const override = store.projectDefault(projectId);
-      if (override) return override;
-      const rootPath = this.deps.projectRootPath?.(projectId);
-      const slug = rootPath ? projectDefaultAgentSlug(rootPath) : undefined;
-      if (slug) return projectAgentId(projectId, slug);
-      return store.defaultAgentId();
-    }
+    if (projectId)
+      return projectDefaultAgentId({
+        agents: this.deps.profileConfig.forProject(projectId).agents,
+        projectId,
+        rootPath: this.deps.projectRootPath?.(projectId),
+      });
     return this.deps.profileConfig.forDefaultProfile().agents.defaultAgentId();
   }
 

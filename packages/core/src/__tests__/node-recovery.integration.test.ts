@@ -1131,3 +1131,149 @@ it.skipIf(!db)(
     ).toBe("canceled");
   },
 );
+
+/** An agent's Allocation on a node, as a chat's workspace holds it. */
+async function placeChat(nodeId: string): Promise<string> {
+  if (!core) throw new Error("Database required");
+  const allocation = await core.executionAllocations.create({
+    identity,
+    projectId,
+    environmentName: "default",
+    workloadKind: "agent",
+    rootWorkloadId: randomUUID(),
+    workerNodeId: nodeId,
+    policy: {
+      binding: descriptor(nodeId),
+      requirements: { workload: "agent" },
+    },
+  });
+  return allocation.id;
+}
+
+it.skipIf(!db)(
+  "retires everything a machine held, once, however many replicas ask (ADR 0348)",
+  async () => {
+    if (!core || !db || !nodes) return;
+    await quietOthers();
+    // An enrolled worker's node: it is never deleted, and its id is reused.
+    const lease = await register();
+    await db
+      .updateTable("worker_nodes")
+      .set({ disposable: false })
+      .where("id", "=", lease.id)
+      .execute();
+    const chats = [await placeChat(lease.id), await placeChat(lease.id)];
+    // One workspace was given back idle and its sandbox not yet destroyed.
+    const idle = await placeChat(lease.id);
+    await core.executionAllocations.release({
+      identity,
+      allocationId: idle,
+      reason: "idle",
+    });
+    const usage = async () =>
+      (await nodes?.list({ tenantId: identity.tenantId, authorityId }))?.find(
+        (node) => node.id === lease.id,
+      )?.usage.workspaces;
+    expect(await usage()).toBe(3);
+
+    await lapse(lease.id, 600);
+    // Node recovery leaves a machine that is not disposable alone.
+    expect(
+      (
+        await core.nodeRecovery.recoverLostNodes({
+          authorityId,
+          nodeIds: [lease.id],
+        })
+      ).nodes,
+    ).toBe(0);
+    const passes = await Promise.all(
+      Array.from({ length: 4 }, () =>
+        core?.nodeRecovery.retireNodeWork({ nodeId: lease.id, reason: "lost" }),
+      ),
+    );
+    expect(passes.reduce((sum, pass) => sum + (pass?.released ?? 0), 0)).toBe(
+      2,
+    );
+    expect(passes.reduce((sum, pass) => sum + (pass?.freed ?? 0), 0)).toBe(1);
+    expect(
+      await db
+        .selectFrom("execution_allocations")
+        .select(["status", "release_reason"])
+        .select(sql<boolean>`capacity_released_at IS NOT NULL`.as("freed"))
+        .where("id", "in", [...chats, idle])
+        .execute(),
+    ).toEqual(
+      Array.from({ length: 3 }, () => ({
+        status: "released",
+        release_reason: "node_lost",
+        freed: true,
+      })),
+    );
+    expect(await usage()).toBe(0);
+    // The node stays, for the machine enrolled under its name next.
+    expect(
+      await db
+        .selectFrom("worker_nodes")
+        .select("id")
+        .where("id", "=", lease.id)
+        .executeTakeFirst(),
+    ).toEqual({ id: lease.id });
+    expect(
+      await core.nodeRecovery.retireNodeWork({
+        nodeId: lease.id,
+        reason: "replaced",
+      }),
+    ).toEqual({ released: 0, freed: 0, evictedFills: 0, remaining: 0 });
+  },
+);
+
+it.skipIf(!db)(
+  "retires one Allocation whose sandbox is gone, and leaves a live run to node recovery (ADR 0348)",
+  async () => {
+    if (!core || !db) return;
+    await quietOthers();
+    const lease = await register();
+    const chat = await placeChat(lease.id);
+    const other = await placeChat(lease.id);
+    expect(
+      await core.nodeRecovery.retireAllocationWork({
+        allocationId: chat,
+        reason: "sandbox-unknown",
+      }),
+    ).toBe(true);
+    // Once: it is no longer active.
+    expect(
+      await core.nodeRecovery.retireAllocationWork({
+        allocationId: chat,
+        reason: "sandbox-unknown",
+      }),
+    ).toBe(false);
+    expect(
+      await db
+        .selectFrom("execution_allocations")
+        .select(["id", "status", "release_reason"])
+        .where("id", "in", [chat, other])
+        .orderBy("created_at")
+        .execute(),
+    ).toEqual([
+      { id: chat, status: "released", release_reason: "node_lost" },
+      { id: other, status: "active", release_reason: null },
+    ]);
+    // A workflow run still going is moved by node recovery, never dropped.
+    const work = await placeWork({ nodeId: lease.id });
+    const retired = await core.nodeRecovery.retireNodeWork({
+      nodeId: lease.id,
+      reason: "lost",
+    });
+    expect(retired).toMatchObject({ released: 2, remaining: 1 });
+    expect(
+      (
+        await db
+          .selectFrom("execution_allocations")
+          .select("status")
+          .where("id", "=", work.allocationId)
+          .executeTakeFirstOrThrow()
+      ).status,
+    ).toBe("active");
+  },
+);

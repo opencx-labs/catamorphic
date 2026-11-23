@@ -71,7 +71,13 @@ async function createChat(title: string, text: string) {
   const row = `aside [data-session-id="${id}"] [data-tree-primary]`;
   await app.waitFor(`!!document.querySelector(${JSON.stringify(row)})`);
   await app.eval(`document.querySelector(${JSON.stringify(row)}).click()`);
-  await app.waitFor(`!!document.querySelector(${JSON.stringify(front)})`);
+  // The chat in front must be this one. A chat opened before it stays in
+  // front until this one loads, matches the same selector and holds the
+  // same fixture's lines: what follows would watch the wrong chat.
+  await app.waitFor(
+    `document.querySelector(${JSON.stringify(front)})?.textContent.includes(${JSON.stringify(text)})`,
+    { label: "the new chat in front" },
+  );
   return id;
 }
 
@@ -277,11 +283,22 @@ it("returns a large retained chat from a browser tab without a history load or e
     if(!row)throw new Error('No retained chat tab');
     const kept=window.__retained;
     window.__returnFrames=[];
+    window.__returnSampled=false;
     const began=performance.now();
+    let shownAt,shownFrames=0;
+    // The half second an entrance would play in starts when the chat
+    // shows, not at the click: the chat comes forward when the app gets
+    // to it, and a clock started at the click ran out on a busy runner
+    // with fewer than three frames of the chat shown, or none. Frames
+    // are recorded from the click on, and kept with the diagnostics.
     const sample=()=>{
+      const now=performance.now();
       const d=kept.dock,style=getComputedStyle(d),rect=kept.input.getBoundingClientRect();
-      window.__returnFrames.push({shown:style.visibility==='visible',opacity:Number(style.opacity),transform:style.transform,y:rect.y,height:rect.height,scroll:kept.log.firstElementChild.scrollTop});
-      if(performance.now()-began<500)requestAnimationFrame(sample);
+      const shown=style.visibility==='visible';
+      if(shown){shownAt??=now;shownFrames++;}
+      window.__returnFrames.push({at:Math.round(now-began),shown,opacity:Number(style.opacity),transform:style.transform,y:rect.y,height:rect.height,scroll:kept.log.firstElementChild.scrollTop});
+      if(shownAt!==undefined&&now-shownAt>=500&&shownFrames>2)window.__returnSampled=true;
+      else if(now-began<10000)requestAnimationFrame(sample);
     };
     requestAnimationFrame(sample);
     row.click();
@@ -296,23 +313,36 @@ it("returns a large retained chat from a browser tab without a history load or e
     opacity: "1",
     animations: [],
   });
-  const frames = await app.waitFor<
-    Array<{
-      shown: boolean;
-      opacity: number;
-      transform: string;
-      y: number;
-      height: number;
-      scroll: number;
-    }>
-  >(
-    `window.__returnFrames?.length>3 && window.__returnFrames.filter(f=>f.shown).length>2 && window.__returnFrames`,
-  );
+  const frames = await app
+    .waitFor<
+      Array<{
+        at: number;
+        shown: boolean;
+        opacity: number;
+        transform: string;
+        y: number;
+        height: number;
+        scroll: number;
+      }>
+    >(`window.__returnSampled && window.__returnFrames`, {
+      label: "half a second of frames with the retained chat shown",
+    })
+    .catch(async (error: unknown) => {
+      // No frames at all (a window that is not painting), frames that never
+      // showed the chat, and too few of them shown fail differently.
+      const sampled = await app.eval<string>(
+        `(()=>{const f=window.__returnFrames??[],s=f.filter(x=>x.shown);return JSON.stringify({frames:f.length,shown:s.length,firstShownAt:s[0]?.at??null,lastAt:f.at(-1)?.at??null,visibility:document.visibilityState,focused:document.hasFocus()})})()`,
+      );
+      throw new Error(
+        `${error instanceof Error ? error.message : String(error)}; sampled: ${sampled}`,
+      );
+    });
   fs.writeFileSync(
     path.join(artifacts, "retained-chat-return-frames.json"),
     JSON.stringify(frames, null, 2),
   );
   const shown = frames.filter((frame) => frame.shown);
+  expect(shown.length).toBeGreaterThan(2);
   expect(shown.every((frame) => frame.opacity === 1)).toBe(true);
   expect(
     Math.max(...shown.map((frame) => frame.y)) -

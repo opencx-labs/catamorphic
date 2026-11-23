@@ -1,22 +1,23 @@
-import {
-  CodeHostNotConnectedError,
-  ConnectionUnavailableError,
-} from "@catamorphic/core";
-import { GithubApiError, GithubAuthError } from "@catamorphic/github";
+import { isNamedError } from "./engine/channel.js";
 
 /**
  * Whether a code-host call failed because the person's connection cannot
  * reach the repository: signed out or expired, not authorized for it, or the
  * repository invisible to it (GitHub answers 404 when the App is not
- * installed on the repository's owner).
+ * installed on the repository's owner). The call is answered by the engine
+ * (ADR 0341), so its error arrives as its name and plain fields.
  */
 export function codeHostAccessDenied(error: unknown): boolean {
-  if (error instanceof GithubApiError)
-    return [401, 403, 404].includes(error.status);
+  if (isNamedError(error, "GithubApiError"))
+    return (
+      "status" in error &&
+      typeof error.status === "number" &&
+      [401, 403, 404].includes(error.status)
+    );
   return (
-    error instanceof GithubAuthError ||
-    error instanceof ConnectionUnavailableError ||
-    error instanceof CodeHostNotConnectedError
+    isNamedError(error, "GithubAuthError") ||
+    isNamedError(error, "ConnectionUnavailableError") ||
+    isNamedError(error, "CodeHostNotConnectedError")
   );
 }
 

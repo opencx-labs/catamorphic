@@ -5,13 +5,15 @@
 # own daemon with a `runsc` runtime. The checkout is copied in without
 # node_modules and installed there, since Linux needs its own.
 #
-#   packages/container/scripts/test-in-docker.sh [--suite container|review]
+#   packages/container/scripts/test-in-docker.sh [--suite container|review|save]
 #     [--runtime runsc|runc] [--keep | --machine NAME] [vitest args]
 #
 # --suite container (the default) runs this package's tests; --suite review
 # runs the review recipe end to end (packages/work-server
 # src/review.container.test.ts) on a Work server with a disposable Postgres
-# in the machine, under gVisor. --keep leaves the machine running and prints
+# in the machine, under gVisor; --suite save saves a container's workspace
+# and restores it (packages/core
+# src/__tests__/workspace-save.container.test.ts). --keep leaves the machine running and prints
 # how to reuse it; --machine NAME reuses one kept that way (its images and
 # installed packages stay, and files the checkout no longer has, a renamed
 # migration's old name included, are removed from its copy). Without either
@@ -52,7 +54,13 @@ case "$suite" in
     test_env=(-e "DATABASE_URL=postgresql://catamorphic:catamorphic@127.0.0.1:5432/catamorphic" -e "WORK_TEST_REVIEW_CACHE=/root/.cache/work-review")
     [ ${#args[@]} -gt 0 ] || args=(--pool=forks src/review.container.test.ts)
     ;;
-  *) echo "Unknown suite $suite: use container or review" >&2; exit 2 ;;
+  save)
+    workspace=@catamorphic/core
+    directory=packages/core
+    test_env=()
+    [ ${#args[@]} -gt 0 ] || args=(src/__tests__/workspace-save.container.test.ts)
+    ;;
+  *) echo "Unknown suite $suite: use container, review or save" >&2; exit 2 ;;
 esac
 
 image=work-container-test-machine

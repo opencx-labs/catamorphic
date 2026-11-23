@@ -37,6 +37,7 @@ import { caretCanMove } from "../lib/caret-line.js";
 import { normalizeCommandQuery } from "../lib/command-score.js";
 import { readComposerPaste } from "../lib/composer-paste.js";
 import { desktopApi, projectAgentAsInfo } from "../lib/desktop-api.js";
+import { keepFocusFromFrames } from "../lib/frame-focus.js";
 import { formatBinding, useKeybindings } from "../lib/keybindings.js";
 import { useListMotion } from "../lib/list-motion.js";
 import { pointerMoved } from "../lib/pointer-moved.js";
@@ -555,6 +556,22 @@ function CommandPaletteContent({
       window.removeEventListener("pointerdown", cancel, true);
     };
   }, [open, active, variant, focusInput, focusRequest]);
+
+  // The overlay holds the keys while it is open. A page in the tab beneath,
+  // focused a moment before Cmd+P, can finish that focus after the overlay
+  // focused its input: the palette then stood open while typing went to
+  // the page. It takes focus back, as a dialog does (lib/frame-focus.ts).
+  useEffect(() => {
+    if (variant !== "overlay" || !open || !active) return;
+    return keepFocusFromFrames({
+      surface: () =>
+        (agentInputRef.current?.element() ?? inputRef.current)?.closest(
+          "[data-palette]",
+        ) ?? null,
+      holdsKeys: () => !hasOpenModal(),
+      take: focusInput,
+    });
+  }, [variant, open, active, focusInput]);
 
   // Commands run from anywhere open the overlay already inside their mode.
   useEffect(() => {

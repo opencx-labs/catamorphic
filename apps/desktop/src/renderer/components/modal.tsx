@@ -7,6 +7,7 @@ import {
 } from "react";
 import { createPortal } from "react-dom";
 import { canFocusFormControl } from "../lib/form-focus.js";
+import { keepFocusFromFrames } from "../lib/frame-focus.js";
 import { themeStyle, useTheme } from "../lib/theme.js";
 
 export function Modal({
@@ -84,30 +85,13 @@ export function Modal({
       )
         .filter((element) => !element.closest("[inert]"))
         .at(-1) === panelRef.current;
-    // A page beneath can take focus after the dialog did: a browser tab
-    // focused a moment before a request opened this dialog finishes its
-    // own focus later, in another process. Keys belong to the dialog, so
-    // it takes focus back from any frame outside it, once that frame's
-    // focus has finished moving: focus taken back during the move is
-    // overridden by it, and keys would still go to the page.
-    let reclaim: ReturnType<typeof setTimeout> | undefined;
-    const reclaimFromFrame = () => {
-      clearTimeout(reclaim);
-      reclaim = setTimeout(() => {
-        const panel = panelRef.current;
-        const active = document.activeElement;
-        if (
-          panel &&
-          active &&
-          (active.tagName === "IFRAME" || active.tagName === "WEBVIEW") &&
-          !panel.contains(active) &&
-          topmost()
-        )
-          panel.focus({ preventScroll: true });
-      });
-    };
-    window.addEventListener("blur", reclaimFromFrame);
-    document.addEventListener("focusin", reclaimFromFrame);
+    // A page beneath can take focus after the dialog did; keys belong to
+    // the topmost dialog, which takes focus back (lib/frame-focus.ts).
+    const stopKeeping = keepFocusFromFrames({
+      surface: () => panelRef.current,
+      holdsKeys: topmost,
+      take: () => panelRef.current?.focus({ preventScroll: true }),
+    });
     const onKeyDown = (event: KeyboardEvent) => {
       if (!topmost()) return;
       // The app-styled select owns Escape/Tab while its top-layer picker is
@@ -155,9 +139,7 @@ export function Modal({
     };
     window.addEventListener("keydown", onKeyDown, { capture: true });
     return () => {
-      clearTimeout(reclaim);
-      window.removeEventListener("blur", reclaimFromFrame);
-      document.removeEventListener("focusin", reclaimFromFrame);
+      stopKeeping();
       window.removeEventListener("keydown", onKeyDown, { capture: true });
       const activeElement = document.activeElement;
       const focusStayedInModal =

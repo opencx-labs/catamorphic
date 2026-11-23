@@ -1380,6 +1380,22 @@ async function* fakeScript(turn: FakeTurn): AsyncGenerator<FakeStep> {
       message: "Docs pages: Which pages should I keep?",
       delivery_mode: "steer",
     });
+    // The question is a turn of its own in the assistant's chat, and this
+    // session's end another. Ending before the first is answered, both can
+    // be read into one turn, which answers the later: wait for the answer.
+    for (let tries = 0; tries < 300 && !turn.interrupted(); tries++) {
+      const transcript = await turn.tool("read_project_session", {
+        session_id: assistantChat,
+      });
+      if (
+        JSON.stringify(transcript).includes(
+          "The docs session wants to know which pages to keep.",
+        )
+      )
+        break;
+      await turn.pause(100);
+    }
+    if (turn.interrupted()) return;
     yield { type: "text", content: "I asked which pages to keep." };
     return;
   }
@@ -1660,7 +1676,7 @@ async function* fakeScript(turn: FakeTurn): AsyncGenerator<FakeStep> {
     ) {
       const result = await turn.capability(
         scenario === "notify"
-          ? "project.send_agent_message"
+          ? "project.session_send"
           : `project.session_${scenario}`,
         {
           sessionId,
@@ -1670,7 +1686,6 @@ async function* fakeScript(turn: FakeTurn): AsyncGenerator<FakeStep> {
             : {}),
           ...(scenario === "notify"
             ? {
-                toSessionId: sessionId,
                 message: "This result needs your attention.",
                 mode: "message_only",
                 attention: "required",

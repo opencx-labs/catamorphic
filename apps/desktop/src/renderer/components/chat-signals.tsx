@@ -6,7 +6,7 @@ import {
   Pencil,
   SquareTerminal,
 } from "lucide-react";
-import type { ReactNode } from "react";
+import { type ReactNode, useEffect, useRef, useState } from "react";
 import type { ChatWaiting } from "../../shared/chat.js";
 import type { SidebarActivity } from "../../shared/sidebar.js";
 
@@ -110,6 +110,36 @@ export const combineSignals = (list: ChatSignals[]): ChatSignals => ({
 });
 
 /**
+ * Marks are drawn from the first time one shows, and stay from then on so
+ * each arrival and departure animates. Until then they are not in the
+ * document: most icons (a page's tab, a file's) never show one, and a
+ * strip of a hundred tabs held some thirty hidden elements for each. One
+ * that first shows after the icon was drawn starts from the hidden pose
+ * (`starting:`), as the hidden element it replaces did; one drawn showing
+ * appears as it is.
+ */
+function useMarks(showing: boolean): { drawn: boolean; arrives: string } {
+  const drawn = useRef<"with-icon" | "later" | null>(
+    showing ? "with-icon" : null,
+  );
+  if (showing && !drawn.current) drawn.current = "later";
+  // The starting pose is for the frame the marks are added in. Kept on, it
+  // would replay each time something hidden around the icon (a sidebar's
+  // panel) is shown again.
+  const [arrived, setArrived] = useState(false);
+  const arriving = drawn.current === "later" && !arrived;
+  useEffect(() => {
+    if (!arriving) return;
+    const frame = requestAnimationFrame(() => setArrived(true));
+    return () => cancelAnimationFrame(frame);
+  }, [arriving]);
+  return {
+    drawn: drawn.current !== null,
+    arrives: arriving ? "starting:scale-0 starting:opacity-0" : "",
+  };
+}
+
+/**
  * Base icon with what the chat is doing on its lower-right corner: the
  * working spinner, or the glyph of what it waits on. The icon stays, so a
  * busy chat, tab or chip still shows which one it is; the mark cuts its
@@ -130,8 +160,11 @@ export function SignalGlyph({
 }) {
   const mark = activity;
   const busy = mark === "working";
+  const marks = useMarks(mark !== null);
   const visibility = (kind: SidebarActivity) =>
-    mark === kind ? "scale-100 opacity-100" : "scale-0 opacity-0";
+    mark === kind
+      ? `scale-100 opacity-100 ${marks.arrives}`
+      : "scale-0 opacity-0";
   const transition =
     "col-start-1 row-start-1 transition-[opacity,scale] duration-200 ease-standard";
   return (
@@ -142,26 +175,28 @@ export function SignalGlyph({
       >
         {children}
       </span>
-      <span
-        className="absolute -bottom-1 -right-1 grid size-3 place-items-center"
-        data-activity={mark ?? undefined}
-        aria-hidden="true"
-      >
-        <LoaderCircle
-          strokeWidth={3}
-          className={`${transition} ${visibility("working")} size-2 text-accent ${busy ? "animate-spin" : ""}`}
-        />
-        {WAITING_ORDER.map((kind) => {
-          const Icon = WAITING_ICONS[kind];
-          return (
-            <Icon
-              key={kind}
-              strokeWidth={2.5}
-              className={`${transition} ${visibility(kind)} size-2.5 text-fg-muted`}
-            />
-          );
-        })}
-      </span>
+      {marks.drawn && (
+        <span
+          className="absolute -bottom-1 -right-1 grid size-3 place-items-center"
+          data-activity={mark ?? undefined}
+          aria-hidden="true"
+        >
+          <LoaderCircle
+            strokeWidth={3}
+            className={`${transition} ${visibility("working")} size-2 text-accent ${busy ? "animate-spin" : ""}`}
+          />
+          {WAITING_ORDER.map((kind) => {
+            const Icon = WAITING_ICONS[kind];
+            return (
+              <Icon
+                key={kind}
+                strokeWidth={2.5}
+                className={`${transition} ${visibility(kind)} size-2.5 text-fg-muted`}
+              />
+            );
+          })}
+        </span>
+      )}
     </span>
   );
 }
@@ -195,10 +230,14 @@ export function SignalBadge({
         : signals.draft
           ? "draft"
           : null;
+  const marks = useMarks(active !== null);
   const visibility = (kind: string) =>
-    active === kind ? "scale-100 opacity-100" : "scale-0 opacity-0";
+    active === kind
+      ? `scale-100 opacity-100 ${marks.arrives}`
+      : "scale-0 opacity-0";
   const transition =
     "col-start-1 row-start-1 transition-[opacity,scale] duration-200 ease-standard";
+  if (!marks.drawn) return null;
   return (
     <span className="grid place-items-center">
       {/* Agent question waiting: the most urgent signal — it pulses

@@ -36,6 +36,8 @@ export interface AppConfig {
   publicApiBase?: string;
   /** See `CatamorphicPluginOptions.projectMcp`. */
   projectMcp?: CatamorphicPluginOptions["projectMcp"];
+  /** See `CatamorphicPluginOptions.mcp`. */
+  mcp?: CatamorphicPluginOptions["mcp"];
 }
 
 /**
@@ -107,6 +109,7 @@ export function createApp(config: AppConfig) {
     identity: config.identity,
     ...(config.features ? { features: config.features } : {}),
     ...(config.projectMcp ? { projectMcp: config.projectMcp } : {}),
+    ...(config.mcp ? { mcp: config.mcp } : {}),
     ...(config.publicApiBase ? { publicApiBase: config.publicApiBase } : {}),
     prefix: "/api",
   });

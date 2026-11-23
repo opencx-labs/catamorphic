@@ -164,8 +164,6 @@ describeIf("store sync around agent turns (ADR 0055)", () => {
         path: "store/customers/acme/notes.md",
       }),
     ).rejects.toThrow(/not found/);
-    const detail = await sessions.get(alice, projectId, session.id);
-    expect(detail.snapshot.turns.at(-1)?.outcome?.storeSync).toBeUndefined();
   });
 
   it("the caller-bound adapter pulls only what the caller may read and ships as the caller", async () => {

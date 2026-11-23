@@ -1,7 +1,6 @@
 import { randomUUID } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
-import { ProjectNotFoundError } from "@catamorphic/core";
 import { emitLog } from "@catamorphic/otel";
 import {
   loadTelemetryEnvironmentFile,
@@ -43,7 +42,6 @@ import { createCodeApprovals } from "./code-approvals.js";
 import { toPublicConnection } from "./connections-store.js";
 import { ConnectorsService } from "./connectors.js";
 import { credentialEncryptionAvailableAsync } from "./credential-encryption.js";
-import { customizationHost } from "./customization-host.js";
 import {
   externalBrowserUrl,
   registerDefaultBrowser,
@@ -62,6 +60,9 @@ import {
 import { dockClicks } from "./dock-clicks.js";
 import { registerDockIcon } from "./dock-icon.js";
 import { shouldUseE2ePlainTextEncryption } from "./e2e-safe-storage.js";
+import { isNamedError } from "./engine/channel.js";
+import { type Engine, engineInfo } from "./engine/client.js";
+import { startEngine } from "./engine/start.js";
 import { GuestDocuments } from "./guest-documents.js";
 import { IncognitoSessionsStore } from "./incognito-sessions.js";
 import { registerIpcHandlers, type ServerState } from "./ipc.js";
@@ -73,8 +74,8 @@ import { prepareVersionBackup } from "./pre-migration-backup.js";
 import { assertProductionLaunchArguments } from "./production-launch.js";
 import { ProfileConfigManager } from "./profile-config.js";
 import { ProfilesStore } from "./profiles.js";
+import { remoteTerminalRequest } from "./remote-api.js";
 import { registerResourceSupport } from "./resource-monitor.js";
-import type { EmbeddedServer } from "./server/boot.js";
 import { DESKTOP_TENANT_ID, DESKTOP_USER_ID } from "./server/identity.js";
 import { DESKTOP_API_TOKEN_HEADER } from "./server/local-api-guard.js";
 import { resolveDataPaths } from "./server/paths.js";
@@ -210,6 +211,9 @@ const e2eDataDir = process.env.CATAMORPHIC_E2E_DATA_DIR;
 // alert, which holds the main thread: the app could not quit, and the run
 // ended killed with the error unknown (workspaces on macOS CI).
 if (e2eDataDir) {
+  // Whoever started the work is more than ten frames up from where a
+  // statement fails, and the default cuts the report off below it.
+  Error.stackTraceLimit = 50;
   const report = (kind: string, error: unknown) =>
     console.error(
       `[desktop] Main process ${kind}:`,
@@ -221,6 +225,10 @@ if (e2eDataDir) {
   process.on("unhandledRejection", (reason) =>
     report("unhandled rejection", reason),
   );
+  // Whether Work is the active application decides which of its windows
+  // can hold the keys on macOS; printed among each window's own events.
+  app.on("did-become-active", () => console.info("[desktop] App active"));
+  app.on("did-resign-active", () => console.info("[desktop] App inactive"));
 }
 if (isolatedDataDir) {
   app.setPath("userData", isolatedDataDir);
@@ -379,8 +387,8 @@ const profileConfig = new ProfileConfigManager(paths, profilesStore, () =>
   nativeTheme.shouldUseDarkColors ? "dark" : "light",
 );
 
-let server: EmbeddedServer | null = null;
-let serverStarting: Promise<EmbeddedServer> | undefined;
+let server: Engine | null = null;
+let serverStarting: Promise<Engine> | undefined;
 let backgroundControl:
   | Awaited<ReturnType<typeof serveBackgroundRuntime>>
   | undefined;
@@ -396,6 +404,23 @@ const state: ServerState = {
     }
   },
 };
+
+/**
+ * The database's thread ended while Work ran. Nothing can be read or saved
+ * from here on, so Work says so and closes rather than failing each request
+ * while it looks alive.
+ */
+function databaseLost(error: Error): void {
+  if (shuttingDown) return;
+  // Running without windows, there is nobody to tell: the next launch
+  // opens the database again.
+  if (!backgroundMode)
+    dialog.showErrorBox(
+      "Work has to close",
+      `Its database stopped unexpectedly. Open Work again to continue.\n\n${error.message}`,
+    );
+  app.quit();
+}
 
 async function openDesktopNotification(input: DesktopNotificationDestination) {
   const destination = desktopNotificationDestination(input);
@@ -681,6 +706,18 @@ function createWindow(
         state: saved,
       });
   desktopWorkspaces?.track(window, dock, workspaceState);
+  // Under test, the order windows are shown and take the keys in is
+  // printed for the harness (with the app's own activation, above): a
+  // wait for one window to come forward that times out can then say
+  // which window showed or took the keys after it.
+  if (e2eDataDir && !dock) {
+    const say = (event: string) => () =>
+      console.info(`[desktop] Window ${workspaceState.id} ${event}`);
+    window.on("show", say("show"));
+    window.on("hide", say("hide"));
+    window.on("focus", say("focus"));
+    window.on("blur", say("blur"));
+  }
   const query: Record<string, string> = dock
     ? { surface: "dock", clicks: dockClicks() }
     : {
@@ -882,25 +919,23 @@ app.whenReady().then(async () => {
     };
     try {
       await loginPathAdopted;
-      serverStarting = import("./server/boot.js").then(
-        ({ startEmbeddedServer }) =>
-          startEmbeddedServer(
-            paths,
-            profilesStore,
-            profileConfig,
-            approvalsFor,
-            undefined,
-            connectors,
-            undefined,
-            new IncognitoSessionsStore(
-              path.join(paths.root, "..", "incognito-sessions.json"),
-            ),
-            [desktopProfileMcpProvider],
-            undefined,
-            { openNotification: openDesktopNotification, launchNotificationId },
-          ),
-      );
+      serverStarting = startEngine({
+        paths,
+        profiles: profilesStore,
+        profileConfig,
+        approvalsFor,
+        connectors,
+        incognitoSessions: new IncognitoSessionsStore(
+          path.join(paths.root, "..", "incognito-sessions.json"),
+        ),
+        connectionProviders: [desktopProfileMcpProvider],
+        host: {
+          openNotification: openDesktopNotification,
+          launchNotificationId,
+        },
+      });
       server = await serverStarting;
+      server.onDatabaseLost(databaseLost);
       if (!(await server.hasBackgroundWork())) {
         app.quit();
         return;
@@ -912,7 +947,7 @@ app.whenReady().then(async () => {
           pid: process.pid,
           windows: BrowserWindow.getAllWindows().length,
           running: (await server?.hasBackgroundWork()) ?? false,
-          processes: server?.customizationProcesses.inspect() ?? [],
+          processes: (await server?.customizationProcesses.inspect()) ?? [],
         }),
         shutdown: () => app.quit(),
       });
@@ -1188,7 +1223,10 @@ app.whenReady().then(async () => {
       approvalsRecovered: (input) =>
         server?.customizationProcesses.recoverProfile(input) ??
         Promise.resolve(),
-      hostCall: customizationHost(() => server),
+      hostCall: async (call) => {
+        if (!server) throw new Error("Work's project runtime is unavailable.");
+        return server.customizationHost(call);
+      },
       targetFor: (projectId) => desktopWorkspaces?.target(projectId),
       sourceStopped: (owner) => {
         return (
@@ -1250,15 +1288,14 @@ app.whenReady().then(async () => {
         windows.profileFor(sender),
       profileFor: (sender) => windows.profileFor(sender),
     },
+    (input) => remoteTerminalRequest({ profiles: profileConfig, ...input }),
   );
   registerResourceSupport({
     stopOwned: async (ancestors) => {
       const manager = server?.customizationProcesses;
-      const service = manager
-        ?.inspect()
-        .find(
-          (entry) => entry.pid !== undefined && ancestors.includes(entry.pid),
-        );
+      const service = (await manager?.inspect())?.find(
+        (entry) => entry.pid !== undefined && ancestors.includes(entry.pid),
+      );
       if (!manager || !service) return false;
       await manager.stopByProcessId({ processId: service.processId });
       return true;
@@ -1283,7 +1320,7 @@ app.whenReady().then(async () => {
         );
         return true;
       } catch (error) {
-        if (error instanceof ProjectNotFoundError) return false;
+        if (isNamedError(error, "ProjectNotFoundError")) return false;
         throw error;
       }
     },
@@ -1363,32 +1400,49 @@ app.whenReady().then(async () => {
     await loginPathAdopted;
     // Let the shell start loading before evaluating boot. Track the import
     // and initialization together so an early Quit waits for both.
-    serverStarting = import("./server/boot.js").then(
-      ({ startEmbeddedServer }) =>
-        startEmbeddedServer(
-          paths,
-          profilesStore,
-          profileConfig,
-          approvalsFor,
-          agentBridge?.bridge,
-          connectors,
-          mcpApps,
-          incognitoSessions,
-          [desktopProfileMcpProvider],
-          (ownerId) => {
-            const contents = webContents.fromId(ownerId);
-            return contents && isRegisteredShellContents(contents)
-              ? windows.profileFor(contents)
-              : undefined;
-          },
-          { openNotification: openDesktopNotification, launchNotificationId },
-        ),
-    );
+    serverStarting = startEngine({
+      paths,
+      profiles: profilesStore,
+      profileConfig,
+      approvalsFor,
+      ...(agentBridge ? { workspaceBridge: agentBridge.bridge } : {}),
+      connectors,
+      mcpApps,
+      incognitoSessions,
+      connectionProviders: [desktopProfileMcpProvider],
+      ownerProfile: (ownerId) => {
+        const contents = webContents.fromId(ownerId);
+        return contents && isRegisteredShellContents(contents)
+          ? windows.profileFor(contents)
+          : undefined;
+      },
+      host: {
+        openNotification: openDesktopNotification,
+        launchNotificationId,
+        // The assistant sees the window the person is in (ADR 0265).
+        personProject: (profileId) =>
+          desktopWorkspaces?.personProject(profileId) ?? null,
+        // Voice starts on demand; until it does, nobody is talking.
+        voice: {
+          talking: (sessionId) =>
+            voiceSupport?.control.talking(sessionId) ?? false,
+          sight: (sessionId) => voiceSupport?.control.sight(sessionId) ?? null,
+          stopListening: (sessionId) =>
+            voiceSupport?.control.stopListening(sessionId) ?? false,
+        },
+        customization: (projectId, input) =>
+          browserSupport
+            ? browserSupport.customization(projectId, input)
+            : Promise.reject(
+                new Error("Work's customization runtime is not ready."),
+              ),
+      },
+    });
     server = await serverStarting;
-    if (browserSupport)
-      server.agentRegistry.workspaceToolkit?.setCustomization(
-        browserSupport.customization,
-      );
+    server.onDatabaseLost(databaseLost);
+    server.onGitChanged((projectId) =>
+      state.broadcast("catamorphic:git-changed", { projectId }),
+    );
     try {
       const pending = takePendingNotification(app.getPath("userData"));
       if (pending) await openDesktopNotification(pending);
@@ -1400,10 +1454,6 @@ app.whenReady().then(async () => {
     // profiles' sessions) carry this run's token to the embedded API, which
     // refuses web pages without it.
     allowDesktopWindowsApi({ url: server.url, token: server.apiToken });
-    // The assistant sees the window the person is in (ADR 0265).
-    server.agentRegistry.setPersonPlace(
-      (profileId) => desktopWorkspaces?.personProject(profileId) ?? null,
-    );
     const telemetrySettings = cachedProjectTelemetrySettings();
     telemetry.configureProjects({
       resolve: (projectId) =>
@@ -1417,10 +1467,7 @@ app.whenReady().then(async () => {
           "Project telemetry configuration is invalid; export for that project is disabled.",
         ),
     });
-    state.broadcast("catamorphic:server-changed", {
-      url: server.url,
-      hasCodingAgent: server.hasCodingAgent,
-    });
+    state.broadcast("catamorphic:server-changed", await engineInfo(server));
     server.personalEnvironment.subscribe((change) =>
       state.broadcast("catamorphic:personal-environment-changed", change),
     );
@@ -1534,7 +1581,7 @@ registerDesktopShutdown({
               name: "agent turns",
               dispose: () =>
                 desktopUpdater?.restarting()
-                  ? server?.catamorphic.handBackTurns()
+                  ? server?.handBackTurns()
                   : undefined,
             },
             {

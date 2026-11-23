@@ -1,7 +1,7 @@
 import { createHmac, randomBytes, timingSafeEqual } from "node:crypto";
 import type { CatamorphicCore, Identity } from "@catamorphic/core";
 import {
-  McpRequestError,
+  McpError,
   serveForwardedTools,
   toolError,
 } from "@catamorphic/fastify-plugin/mcp";
@@ -144,7 +144,7 @@ export function registerConnectorMcpRoute(
           current.connectionId,
         ) !== connectionIdentity
       )
-        throw new McpRequestError(-32_000, "The chat connector changed");
+        throw new McpError(-32_000, "The chat connector changed");
       return { ...current, connectionIdentity };
     };
     const tools = async (): Promise<McpToolInfo[]> => {
@@ -167,14 +167,14 @@ export function registerConnectorMcpRoute(
         );
       } catch (error) {
         console.warn(`[desktop] Connector ${server} is unavailable`, error);
-        throw new McpRequestError(-32_000, `${server} is unavailable`);
+        throw new McpError(-32_000, `${server} is unavailable`);
       }
     };
     const abort = new AbortController();
     reply.raw.on("close", () => abort.abort());
     return serveForwardedTools({
+      request,
       reply,
-      body: request.body,
       serverName: server,
       listTools: tools,
       callTool: (call) =>
@@ -193,8 +193,7 @@ export function registerConnectorMcpRoute(
             const tool = (await tools()).find(
               (candidate) => candidate.name === call.name,
             );
-            if (!tool)
-              throw new McpRequestError(-32602, `Unknown tool: ${call.name}`);
+            if (!tool) throw new McpError(-32602, `Unknown tool: ${call.name}`);
             const before = await live();
             assertConnectorTool({
               context: before,
@@ -267,13 +266,13 @@ export function registerConnectorMcpRoute(
               // generically; anything else (a timeout, an invalid result)
               // is the call's failed result.
               const sent = mcpServerError(error);
-              if (sent) throw new McpRequestError(sent.code, sent.message);
+              if (sent) throw new McpError(sent.code, sent.message);
               if (mcpConnectionLost(error)) {
                 console.warn(
                   `[desktop] Connector ${server} call failed`,
                   error,
                 );
-                throw new McpRequestError(-32_000, `${server} is unavailable`);
+                throw new McpError(-32_000, `${server} is unavailable`);
               }
               return toolError(
                 error instanceof Error

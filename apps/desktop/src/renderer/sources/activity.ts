@@ -164,6 +164,8 @@ export function sessionSource(deps: WorkSourceDeps): SectionSource {
   const source: SectionSource = {
     title: "This session",
     empty: "No pull requests yet.",
+    // The chat, and what its agent set on it.
+    listsFrom: ({ session }) => session,
     capabilities: () => capabilitiesOf(source),
     load: async ({ parentId, session }) => {
       if (parentId || !session) return { items: [] };

@@ -3,19 +3,19 @@
   "name": "machines-ec2",
   "type": "registry:item",
   "title": "Machines on EC2",
-  "description": "A Work server's machines on Amazon EC2 as project code: create and destroy workflows for a workflow machine class, launching with an idempotency token from the enrollment and terminating until the instance is gone.",
+  "description": "Create, stop, start and destroy worker machines on Amazon EC2 from your Work server.",
   "files": [
     {
-      "path": ".work/workflows/src/machines-ec2.ts",
+      "path": "machines-ec2.ts",
       "type": "registry:file",
-      "target": ".work/workflows/src/machines-ec2.ts"
+      "target": "machines/machines-ec2.ts"
     },
     {
-      "path": ".work/skills/machines-ec2/SKILL.md",
+      "path": "SKILL.md",
       "type": "registry:file",
-      "target": ".work/skills/machines-ec2/SKILL.md"
+      "target": "machines/machines-ec2.md"
     }
   ],
-  "docs": "Install into a project only the Work server's administrators reach: its create runs carry one-time enrollment codes. The Work server guide's \"Machines on demand\" covers the server side.\n\n1. Copy the files to their targets, and add the manifest's `@aws-sdk/client-ec2` dependency to `.work/workflows/package.json`.\n2. Create the IAM policy in the installed `.work/skills/machines-ec2/SKILL.md` for the class's tag, and set `AWS_ACCESS_KEY_ID` and `AWS_SECRET_ACCESS_KEY` as project secrets.\n3. Check the project (`program_check`), deploy, and turn `createMachine` and `destroyMachine` on for the project.\n4. Add a `workflow` class naming this project, `createMachine`, `destroyMachine` and the EC2 options to the server's `WORK_MACHINES_CONFIG`, restart the server, and write a machine rule for it, as the installed skill says (\"Set up the class and a rule\").",
-  "dependencies": ["@aws-sdk/client-ec2@3.1171.0"]
+  "dependencies": ["@aws-sdk/client-ec2@3.1171.0", "@catamorphic/work-server"],
+  "docs": "Copy the files into your Work server host. Add the dependencies to its package manifest and follow the included guide."
 }

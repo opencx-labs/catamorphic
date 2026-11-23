@@ -67,7 +67,7 @@ Events are normalized Project Events. input.payload.session is the snapshot at
 the transition; input.payload.detail contains the message/turn/visibility change.
 input.payload.actor identifies the initiator. message-received means inbound context;
 message-sent means a settled assistant segment, never a token update. A workflow can use ordinary if
-statements over those values. Read current state with the inspect host transition
+statements over those values. Read current state with the read host transition
 when a decision needs fresh state; optionally pass expectedStateRevision with
 the subsequent mutation. Event state and current state may legitimately differ. A remote mirror may lag
 its authority host; expectedStateRevision is checked where the mutation is applied.
@@ -79,10 +79,13 @@ and session_reopen for new work. Observe session.work-changed with
 
 ## Host calls and authoring shape
 
-context.host["catamorphic.sessions"] provides typed inspect, list, history,
-results, usage, deliver, create, fork, spawn, archive, unarchive, interrupt,
-restart, attempts, complete, reopen, exec, stopWatcher, stop, and setMetadata
-operations. Every
+context.host["catamorphic.sessions"] provides the session operations every
+surface shares, typed: start, send, wait, read, answer, list, interrupt,
+close, fork, spawn, archive, unarchive, restart, complete, reopen,
+stopWatcher and setMetadata, beside deliver, exec and stop. Each answers
+with the chat's state (state is working, needs_input, idle, failed or
+closed). read takes include to add the transcript, every result, usage, a
+turn's attempts, or metadata. Every
 host call is a boundary transition: RETURN it. Consume its result as the next
 boundary's input
 (pass { state } as a second argument to keep data across it; the next boundary
@@ -165,7 +168,7 @@ This monitor intentionally remains enabled for later children. For one child,
 create a temporary watcher and filter its exact sessionId in trigger config. If
 predicates can reject an event, branch the stop boundary too: a quiet return from
 one boundary does not skip the next boundary. Stop only after a matching action. The stop operation belongs to temporary activations.
-Use inspect in a preceding boundary if current state must supersede the event
+Use read in a preceding boundary if current state must supersede the event
 snapshot. deliver with message_only and attention: "required" requests user attention without running a model
 (the agent reads it with its next turn);
 use deliver with queue when the parent agent should continue automatically.
@@ -341,11 +344,11 @@ export const prepareReview = defineWorkflow(({ defineBoundary }) => ({
 
 ### Turns that stop making progress
 
-inspect (and find) answer queued, the ids of the chat's turns waiting to run,
+read (and list) answer queued, the ids of the chat's turns waiting to run,
 oldest first, and turn: the turn working now, or null, with its
 attempt { id, ordinal, reason, startedAt }, attempts and restarts so far,
 progressAt (when its attempt last made progress: anything from its harness but
-a log line, or a model call), stalledAt, stallMinutes, and activity { tools,
+a log line, or a model call), stalledAt, stallMinutes, and running { tools,
 commands }: the tool calls and commands it reported still running, each with
 since. An agent definition's "stall": { "minutes": 20 } (1 to 1440; absent,
 never) makes Work record a running turn silent that long once, as
@@ -370,19 +373,19 @@ nothing to do, never an error. A restart answers { restarted: true, turnId,
 attemptId, attempt, attempts, restarts }; key it by the stalled attempt so a
 retry restarts once, and bound it with restarts. interrupt takes turnId too:
 it stops that turn only, and answers { interrupted: false } when it no longer
-works. attempts({ sessionId | key, turnId }) reads a turn's attempts: status,
+works. read({ sessionId | key, turnId, include: ["attempts"] }) reads a turn's attempts: status,
 error, progressAt, and diagnostics { runner, harness }, the last 16 000
 characters of the runner's and the harness's own output, masked, in whole
 lines, kept for attempts that did not complete. Keep those as the evidence,
 not exec output: code the chat runs can forge what a command prints, and
 commands may run apart from the agent, seeing neither its processes nor its
-logs. Inspect again before acting. To keep the evidence in the project
+logs. Read the chat again before acting. To keep the evidence in the project
 store, declare its folder in documents, such as
 [{ path: "store/stalls/", access: "write" }]: a workflow, a watcher's
 included, reaches no store path it does not declare, whoever runs it. The pull-request-reviews pack's
-restartStalledReviews is a complete recipe: inspect, attempts, a store
-document under its declared folder, inspect, then restart, or interrupt past
-its bound.
+restartStalledReviews is a complete recipe: read, read with
+include: ["attempts"], a store document under its declared folder, read
+again, then restart, or interrupt past its bound.
 
 \`\`\`typescript
 import {
@@ -557,14 +560,16 @@ sandboxes need it.
 
 ## Session actions and delivery
 
-- inspect/list/history are authorized reads. history is bounded; increase its
-  limit only when needed. Read a child as an ordinary session. history also
-  returns the chat's key, and through: "<messageId>" ends it at that message,
-  so a workflow on session.turn-changed reads exactly the reply the event's
-  detail.resultMessageId names, even after later turns.
-- results reads the typed values an agent submitted with submit_result
-  (ADR 0323), newest first: { sessionId | key, name?, family?, turnId?,
-  afterInput?, limit?, order? } (order: "oldest" reads the first submitted
+- read and list are authorized reads. read answers with the chat's state;
+  include: ["transcript"] adds its messages as transcript. It is bounded;
+  increase limit only when needed. Read a child as an ordinary session. The
+  state carries the chat's key, and through: "<messageId>" ends the
+  transcript at that message, so a workflow on session.turn-changed reads
+  exactly the reply the event's detail.resultMessageId names, even after
+  later turns.
+- read with include: ["results"] reads the typed values an agent submitted
+  with submit_result (ADR 0323), newest first: { sessionId | key, name?,
+  family?, turnId?, afterInput?, limit?, order? } (order: "oldest" reads the first submitted
   first). An agent submits only results its committed definition declares
   (\`"results": { "<name>": <JSON Schema> }\` in .work/agents/<slug>.json),
   and only a value its schema accepts is recorded, so read results, never
@@ -584,7 +589,7 @@ sandboxes need it.
   rejected ones included, so one read of a turn's results holds them all.
   Compute final checks (votes, coverage) in code over results, not in an
   agent.
-- usage is an authorized read of a chat's model calls through the gateway:
+- read with include: ["usage"] is an authorized read of a chat's model calls through the gateway:
   tokens per model, the summed cost providers reported (costUsd, US dollars,
   null when none did), unpricedCalls (so the cost is a lower bound when
   above zero), unmeteredCalls (calls whose usage could not be read, so the
@@ -623,7 +628,7 @@ sandboxes need it.
   only they can; the agent waits for the Environment's approvals.waitMinutes
   (30 by default), then continues without it. Without approvers such an
   action is refused at once.
-- workspace on deliver (and create) starts a chat's checkout at a ref of the
+- workspace on deliver (ref on start and send) starts a chat's checkout at a ref of the
   project's linked remote: a branch, tag, commit, or full ref such as
   refs/pull/42/head. The host fetches it with the remote's own credentials; the
   sandbox never holds them. Delivered again to an open chat it moves the
@@ -646,8 +651,9 @@ sandboxes need it.
   gives it one of its own started at the chat's base, for children that
   write in parallel. Each result the child reaches later, woken by its own
   background command or a message, reaches the chat too. Fresh context
-  is the default. fork explicitly copies transcript history; create makes an
-  independent conversation. Do not simulate children as untracked shell agents.
+  is the default. fork explicitly copies transcript history; start makes an
+  independent conversation and gives it its first message. Do not simulate
+  children as untracked shell agents.
 - attention: "required" on deliver alerts the user to that exact message. It is
   independent of mode and defaults to none. Use message_only for a reminder to
   the user; use queue for work the agent should perform. Do not run a model
@@ -658,8 +664,8 @@ sandboxes need it.
   preserving readable history. Follow archive preview and confirmStop requirements for stopping live work. Tab closure is
   unrelated. stop stops only the calling temporary activation and retains runs.
 
-inspect and find return the chat's metadata: named JSON values agents, people
-and workflows set (ADR 0226). setMetadata({ sessionId | key, set }) applies a
+read with include: ["metadata"] returns the chat's metadata: named JSON
+values agents, people and workflows set (ADR 0226). setMetadata({ sessionId | key, set }) applies a
 merge patch: each key in set takes its value whole, null removes it, and keys
 not named stay. Keys are lowercase words joined by _, - or . (at most 32 keys,
 16 KB a value, 64 KB in all). Prefix the keys a workflow owns with its purpose
@@ -685,7 +691,7 @@ host. Session-owned watchers still run on their owner's host and Environment.
 Remote delivery may remain queued while a desktop is offline. It does not
 move session authority. A remote mutation returns delivery: "queued" and a messageId,
 not the completed action result or a newly created child. Branch on that receipt
-before using a create/fork/spawn result; inspect or watch for the resulting event.
+before using a fork/spawn result; read the chat or watch for the resulting event.
 Inspect the returned receipt and retained run rather than
 claiming the user or model received a queued message already.
 

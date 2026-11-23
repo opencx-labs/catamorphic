@@ -26,12 +26,16 @@ import {
   NoCompatibleEnvironmentError,
   ProjectNotFoundError,
   parseChatKey,
+  SESSION_OPERATIONS,
   SessionInputNotFoundError,
   SessionMirrorBehindError,
   SessionMirrorDivergedError,
+  type SessionOperationErrorCode,
+  sessionOperationError,
+  TokenScopeRequiredError,
   UnsupportedAgentTopologyError,
 } from "@catamorphic/core";
-import type { FastifyInstance } from "fastify";
+import type { FastifyInstance, FastifyReply } from "fastify";
 import type { ZodTypeProvider } from "fastify-type-provider-zod";
 import { z } from "zod";
 import type { RouteContext } from "../app.js";
@@ -84,18 +88,58 @@ import {
   SessionMirrorQuerySchema,
   SessionMissedEventsQuerySchema,
   SessionMissedEventsSchema,
+  SessionOperationErrorSchema,
   SessionResultsQuerySchema,
   SessionResultsSchema,
   SessionStreamMessageSchema,
   SkillSchema,
+  StartSessionSchema,
   TurnAttemptsSchema,
   TurnIdParamsSchema,
   UpdateAgentSessionActivitySchema,
   UpdateAgentSessionMetadataSchema,
   UpdateAgentSessionSchema,
-  WaitForAgentSubsessionsSchema,
 } from "../schemas.js";
 import { SessionEventStream } from "../session-event-stream.js";
+
+/** The HTTP status each operation error answers with. */
+const SESSION_OPERATION_STATUS = {
+  not_found: 404,
+  not_authorized: 403,
+  invalid_input: 400,
+  agent_unknown: 400,
+  environment_unavailable: 409,
+  environment_full: 409,
+  authentication_required: 428,
+  session_closed: 409,
+  session_elsewhere: 409,
+  request_not_pending: 409,
+  idempotency_conflict: 409,
+  internal: 500,
+} as const satisfies Record<SessionOperationErrorCode, number>;
+
+const SessionOperationErrorResponses = {
+  400: SessionOperationErrorSchema,
+  403: SessionOperationErrorSchema,
+  404: SessionOperationErrorSchema,
+  409: SessionOperationErrorSchema,
+  428: SessionOperationErrorSchema,
+  500: SessionOperationErrorSchema,
+  503: SessionOperationErrorSchema,
+};
+
+/** A session operation's failure as its route answers it (ADR 0346). */
+function sendSessionOperationError(reply: FastifyReply, error: unknown) {
+  // A grant that lacks a scope is answered as on every route: a step-up.
+  if (error instanceof TokenScopeRequiredError) throw error;
+  const refused = sessionOperationError(error);
+  return reply.status(SESSION_OPERATION_STATUS[refused.code]).send({
+    error: refused.message,
+    code: refused.code,
+    retryable: refused.retryable,
+    ...(refused.sessionId ? { sessionId: refused.sessionId } : {}),
+  });
+}
 
 export function registerAgentRoutes(app: FastifyInstance, ctx: RouteContext) {
   const typed = app.withTypeProvider<ZodTypeProvider>();
@@ -103,6 +147,7 @@ export function registerAgentRoutes(app: FastifyInstance, ctx: RouteContext) {
   typed.route({
     method: "POST",
     url: "/projects/:projectId/agent/sessions",
+    config: { tokenScope: "sessions:run" },
     schema: {
       params: ProjectIdParamsSchema,
       body: CreateAgentSessionSchema,
@@ -207,6 +252,7 @@ export function registerAgentRoutes(app: FastifyInstance, ctx: RouteContext) {
   typed.route({
     method: "PATCH",
     url: "/projects/:projectId/agent/sessions/:sessionId",
+    config: { tokenScope: "sessions:run" },
     schema: {
       params: AgentSessionIdParamsSchema,
       body: UpdateAgentSessionSchema,
@@ -316,6 +362,92 @@ export function registerAgentRoutes(app: FastifyInstance, ctx: RouteContext) {
           return reply.status(404).send({ error: "Project not found" });
         }
         throw err;
+      }
+    },
+  });
+
+  // Start a chat with its first message (ADR 0346): the same operation
+  // the MCP endpoints, in-product agents and workflows run. It answers at
+  // once with the chat's state; the turn runs in the background.
+  typed.route({
+    method: "POST",
+    url: "/projects/:projectId/agent/sessions/start",
+    config: { tokenScope: "sessions:run" },
+    schema: {
+      params: ProjectIdParamsSchema,
+      body: StartSessionSchema,
+      response: {
+        200: SESSION_OPERATIONS.session_start.output,
+        ...SessionOperationErrorResponses,
+      },
+    },
+    handler: async (request, reply) => {
+      const operations = ctx.core?.sessionOperations;
+      if (!operations)
+        return reply.status(503).send({
+          error: "Coding agent not configured",
+          code: "internal" as const,
+          retryable: true,
+        });
+      const identity = resolveIdentity(request);
+      try {
+        return reply.send(
+          SESSION_OPERATIONS.session_start.output.parse(
+            await operations.execute({
+              identity,
+              projectId: request.params.projectId,
+              operation: "session_start",
+              args: request.body,
+              // A person's client sends their own words (ADR 0217).
+              author: { kind: "user", externalUserId: identity.externalUserId },
+            }),
+          ),
+        );
+      } catch (error) {
+        return sendSessionOperationError(reply, error);
+      }
+    },
+  });
+
+  // Hold until one of the chats needs its caller, at most 50 seconds (ADR
+  // 0347): `changed: false` when nothing happened, to be asked again.
+  typed.route({
+    method: "POST",
+    url: "/projects/:projectId/agent/sessions/wait",
+    config: { tokenScope: "work:read" },
+    schema: {
+      params: ProjectIdParamsSchema,
+      body: SESSION_OPERATIONS.session_wait.input,
+      response: {
+        200: SESSION_OPERATIONS.session_wait.output,
+        ...SessionOperationErrorResponses,
+      },
+    },
+    handler: async (request, reply) => {
+      const operations = ctx.core?.sessionOperations;
+      if (!operations)
+        return reply.status(503).send({
+          error: "Coding agent not configured",
+          code: "internal" as const,
+          retryable: true,
+        });
+      const identity = resolveIdentity(request);
+      try {
+        return reply.send(
+          SESSION_OPERATIONS.session_wait.output.parse(
+            await operations.execute({
+              identity,
+              projectId: request.params.projectId,
+              operation: "session_wait",
+              args: request.body,
+              author: { kind: "user", externalUserId: identity.externalUserId },
+              // A caller that went away has stopped waiting.
+              signal: hungUp(reply),
+            }),
+          ),
+        );
+      } catch (error) {
+        return sendSessionOperationError(reply, error);
       }
     },
   });
@@ -483,6 +615,7 @@ export function registerAgentRoutes(app: FastifyInstance, ctx: RouteContext) {
   typed.route({
     method: "POST",
     url: "/projects/:projectId/agent/sessions/:sessionId/turns/:turnId/restart",
+    config: { tokenScope: "sessions:run" },
     schema: {
       params: TurnIdParamsSchema,
       body: RestartTurnSchema,
@@ -495,7 +628,7 @@ export function registerAgentRoutes(app: FastifyInstance, ctx: RouteContext) {
       },
     },
     handler: async (request, reply) => {
-      const actions = ctx.core?.sessionActions;
+      const actions = ctx.core?.sessionOperations;
       if (!actions)
         return reply.status(503).send({ error: "Coding agent not configured" });
       const identity = resolveIdentity(request);
@@ -503,7 +636,7 @@ export function registerAgentRoutes(app: FastifyInstance, ctx: RouteContext) {
         const result = await actions.execute({
           identity,
           projectId: request.params.projectId,
-          operation: "restart",
+          operation: "session_restart",
           args: {
             sessionId: request.params.sessionId,
             turnId: request.params.turnId,
@@ -657,6 +790,7 @@ export function registerAgentRoutes(app: FastifyInstance, ctx: RouteContext) {
   typed.route({
     method: "POST",
     url: "/projects/:projectId/agent/sessions/:sessionId/commands",
+    config: { tokenScope: "sessions:run" },
     // Base64 media rides in a send's attachments; the rest of the API keeps
     // Fastify's default cap.
     bodyLimit: 96 * 1024 * 1024,
@@ -715,6 +849,7 @@ export function registerAgentRoutes(app: FastifyInstance, ctx: RouteContext) {
   typed.route({
     method: "POST",
     url: "/projects/:projectId/agent/sessions/:sessionId/resume",
+    config: { tokenScope: "sessions:run" },
     schema: {
       params: AgentSessionIdParamsSchema,
       body: ResumeAgentSessionSchema,
@@ -911,6 +1046,7 @@ export function registerAgentRoutes(app: FastifyInstance, ctx: RouteContext) {
   typed.route({
     method: "POST",
     url: "/projects/:projectId/agent/sessions/:sessionId/attention/acknowledge",
+    config: { tokenScope: "sessions:run" },
     schema: {
       params: AgentSessionIdParamsSchema,
       body: z
@@ -1030,6 +1166,7 @@ export function registerAgentRoutes(app: FastifyInstance, ctx: RouteContext) {
   typed.route({
     method: "POST",
     url: "/projects/:projectId/agent/sessions/:sessionId/subsessions",
+    config: { tokenScope: "sessions:run" },
     schema: {
       params: AgentSessionIdParamsSchema,
       body: CreateAgentSubsessionSchema,
@@ -1117,46 +1254,8 @@ export function registerAgentRoutes(app: FastifyInstance, ctx: RouteContext) {
 
   typed.route({
     method: "POST",
-    url: "/projects/:projectId/agent/sessions/:sessionId/subsessions/wait",
-    schema: {
-      params: AgentSessionIdParamsSchema,
-      body: WaitForAgentSubsessionsSchema,
-      response: {
-        200: AgentSubsessionSchema.array(),
-        404: ErrorSchema,
-        503: ErrorSchema,
-      },
-    },
-    handler: async (request, reply) => {
-      const agentSessions = ctx.core?.agentSessions;
-      if (!agentSessions) {
-        return reply.status(503).send({ error: "Coding agent not configured" });
-      }
-      try {
-        return reply.send(
-          await agentSessions.waitForSubsessions(
-            resolveIdentity(request),
-            request.params.projectId,
-            request.params.sessionId,
-            // A caller that went away has stopped waiting.
-            { ...request.body, stopWaiting: hungUp(reply) },
-          ),
-        );
-      } catch (error) {
-        if (
-          error instanceof ProjectNotFoundError ||
-          error instanceof AgentSessionNotFoundError
-        ) {
-          return reply.status(404).send({ error: "Session not found" });
-        }
-        throw error;
-      }
-    },
-  });
-
-  typed.route({
-    method: "POST",
     url: "/projects/:projectId/agent/sessions/:sessionId/subsessions/:childSessionId/interrupt",
+    config: { tokenScope: "sessions:run" },
     schema: {
       params: AgentSubsessionIdParamsSchema,
       response: {
@@ -1197,6 +1296,7 @@ export function registerAgentRoutes(app: FastifyInstance, ctx: RouteContext) {
   typed.route({
     method: "POST",
     url: "/projects/:projectId/agent/sessions/:sessionId/attention",
+    config: { tokenScope: "sessions:run" },
     schema: {
       params: AgentSessionIdParamsSchema,
       response: {
@@ -1233,6 +1333,7 @@ export function registerAgentRoutes(app: FastifyInstance, ctx: RouteContext) {
   typed.route({
     method: "PATCH",
     url: "/projects/:projectId/agent/sessions/:sessionId/activity",
+    config: { tokenScope: "sessions:run" },
     schema: {
       params: AgentSessionIdParamsSchema,
       body: UpdateAgentSessionActivitySchema,
@@ -1276,6 +1377,7 @@ export function registerAgentRoutes(app: FastifyInstance, ctx: RouteContext) {
   typed.route({
     method: "PATCH",
     url: "/projects/:projectId/agent/sessions/:sessionId/title",
+    config: { tokenScope: "sessions:run" },
     schema: {
       params: AgentSessionIdParamsSchema,
       body: RenameAgentSessionSchema,
@@ -1319,6 +1421,7 @@ export function registerAgentRoutes(app: FastifyInstance, ctx: RouteContext) {
   typed.route({
     method: "PATCH",
     url: "/projects/:projectId/agent/sessions/:sessionId/metadata",
+    config: { tokenScope: "sessions:run" },
     schema: {
       params: AgentSessionIdParamsSchema,
       body: UpdateAgentSessionMetadataSchema,
@@ -1367,6 +1470,7 @@ export function registerAgentRoutes(app: FastifyInstance, ctx: RouteContext) {
   typed.route({
     method: "POST",
     url: "/projects/:projectId/agent/sessions/:sessionId/fork",
+    config: { tokenScope: "sessions:run" },
     schema: {
       params: AgentSessionIdParamsSchema,
       body: ForkAgentSessionSchema,
@@ -1404,6 +1508,7 @@ export function registerAgentRoutes(app: FastifyInstance, ctx: RouteContext) {
   typed.route({
     method: "DELETE",
     url: "/projects/:projectId/agent/sessions/:sessionId",
+    config: { tokenScope: "sessions:run" },
     schema: {
       params: AgentSessionIdParamsSchema,
       response: { 200: AgentSessionSchema, 404: ErrorSchema, 503: ErrorSchema },
@@ -1483,6 +1588,7 @@ export function registerAgentRoutes(app: FastifyInstance, ctx: RouteContext) {
   typed.route({
     method: "DELETE",
     url: "/projects/:projectId/agent/chats/:key",
+    config: { tokenScope: "sessions:run" },
     schema: {
       params: KeyedChatParamsSchema,
       querystring: KeyedChatQuerySchema,
@@ -1562,6 +1668,7 @@ export function registerAgentRoutes(app: FastifyInstance, ctx: RouteContext) {
   typed.route({
     method: "POST",
     url: "/projects/:projectId/agent/sessions/:sessionId/archive",
+    config: { tokenScope: "sessions:run" },
     schema: {
       params: AgentSessionIdParamsSchema,
       body: ArchiveAgentSessionSchema,
@@ -1608,6 +1715,7 @@ export function registerAgentRoutes(app: FastifyInstance, ctx: RouteContext) {
   typed.route({
     method: "POST",
     url: "/projects/:projectId/agent/sessions/:sessionId/unarchive",
+    config: { tokenScope: "sessions:run" },
     schema: {
       params: AgentSessionIdParamsSchema,
       response: {

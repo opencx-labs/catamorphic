@@ -837,31 +837,34 @@ describe.skipIf(!enabled)("container sandboxes (ADR 0204)", () => {
     5 * MINUTES,
   );
 
-  it(
-    "mounts members' own sign-ins from the machine and refuses missing ones",
-    async () => {
-      const signInRoot = path.join(root, "sign-ins");
+  it.each(["codex", "claude-code"] as const)(
+    "mounts a member's own %s sign-in from the machine and refuses missing ones",
+    async (harness) => {
+      const signInRoot = path.join(root, `sign-ins-${harness}`);
       const home = machineSignInHome({
         root: signInRoot,
-        harness: "codex",
+        harness,
         member: "member-1",
       });
-      fs.mkdirSync(home, { recursive: true });
-      fs.writeFileSync(path.join(home, "token.json"), "{}");
+      // As a login leaves it: the member's alone on the machine.
+      fs.mkdirSync(home, { recursive: true, mode: 0o700 });
+      fs.writeFileSync(path.join(home, "token.json"), "{}", { mode: 0o600 });
       const sandboxProvider = provider({ setupCommand: "", signInRoot });
       await expect(
         sandboxProvider.createSandbox({
-          signIns: [{ harness: "codex", member: "member-2" }],
+          signIns: [{ harness, member: "member-2" }],
         }),
-      ).rejects.toThrow("This machine has no codex sign-in for member-2");
+      ).rejects.toThrow(`This machine has no ${harness} sign-in for member-2`);
       const id = await created(sandboxProvider, {
-        signIns: [{ harness: "codex", member: "member-1" }],
+        signIns: [{ harness, member: "member-1" }],
       });
+      // The harness reads its sign-in and writes there, as its own token
+      // refresh does; only that harness's home is mounted.
       const read = await sandboxProvider.executeCommand(
         id,
-        "cat /workspace/.work-sign-in/codex/token.json && echo refreshed > /workspace/.work-sign-in/codex/refresh",
+        `cat /workspace/.work-sign-in/${harness}/token.json && echo refreshed > /workspace/.work-sign-in/${harness}/refresh && ls /workspace/.work-sign-in`,
       );
-      expect(read.result).toBe("{}");
+      expect(read.result).toBe(`{}${harness}\n`);
       expect(fs.readFileSync(path.join(home, "refresh"), "utf8")).toBe(
         "refreshed\n",
       );

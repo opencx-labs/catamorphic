@@ -171,16 +171,23 @@ it("moves session checkpoints between machine caches without publishing or mixin
     const main = await a.create(TENANT, PROJECT, {
       initialFiles: { "notes.md": "original" },
     });
+    const base = await main.resolveRef("HEAD");
     await main.dispose();
+    await a.setSessionBase({ ...args, commit: base });
     const first = await a.openSession(args);
     await first.writeFile("notes.md", "first turn");
     await first.dispose();
-    await a.checkpointSession({ ...args, message: "First turn", author });
+    await a.checkpointSession({ ...args, base, message: "First turn", author });
     const next = await b.openSession(args);
     expect(await next.readFile("notes.md")).toBe("first turn");
     await next.writeFile("notes.md", "second turn");
     await next.dispose();
-    await b.checkpointSession({ ...args, message: "Second turn", author });
+    await b.checkpointSession({
+      ...args,
+      base,
+      message: "Second turn",
+      author,
+    });
     const returned = await a.openSession({ ...args, refresh: true });
     expect(await returned.readFile("notes.md")).toBe("second turn");
     await returned.dispose();

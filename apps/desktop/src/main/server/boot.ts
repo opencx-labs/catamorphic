@@ -37,10 +37,8 @@ import {
   githubCodeHost,
 } from "@catamorphic/server-sdk";
 import { createPushTransport } from "@catamorphic/server-sdk/web-push";
-import { PGlite } from "@electric-sql/pglite";
-import { pgcrypto } from "@electric-sql/pglite/contrib/pgcrypto";
 import cors from "@fastify/cors";
-import { BrowserWindow, app as electronApp } from "electron";
+import { app as electronApp } from "electron";
 import Fastify, { type FastifyInstance } from "fastify";
 import { Kysely, PGliteDialect, sql, WithSchemaPlugin } from "kysely";
 import { rosterAgentId } from "../../shared/voice.js";
@@ -69,7 +67,6 @@ import {
   ExternalSessionImporter,
   externalSessionHomes,
 } from "../external-sessions.js";
-import { mcpAppViewUrl } from "../guest-documents.js";
 import {
   findImageBuilderCommand,
   imageBuilderEnvironment,
@@ -83,11 +80,10 @@ import { desktopPersonalEnvironment } from "../personal-environment-host.js";
 import type { PersonalEnvironmentSync } from "../personal-environment-sync.js";
 import type { ProfileConfigManager } from "../profile-config.js";
 import type { ProfilesStore } from "../profiles.js";
-import { forwardRemoteApi, remoteTerminalRequest } from "../remote-api.js";
+import { forwardRemoteApi } from "../remote-api.js";
 import { RemoteClientRunners } from "../remote-client-runner.js";
 import { RemoteSessionMirror } from "../remote-mirror.js";
 import { RemotePreviewOrigins } from "../remote-previews.js";
-import type { RemoteTerminalRequest } from "../remote-terminal.js";
 import {
   changesChatLists,
   startSessionChangeHints,
@@ -100,12 +96,14 @@ import {
 } from "../workflow-mcp-connections.js";
 import { DesktopAgentRegistry } from "./agent-registry.js";
 import { type AssistantAccess, assistantTools } from "./assistant-tools.js";
+import { openChatPullRequest } from "./chat-pull-request.js";
 import {
   connectorMcpPath,
   connectorMcpTokens,
   registerConnectorMcpRoute,
 } from "./connector-mcp.js";
 import { validateDatabaseFiles } from "./database-files.js";
+import { openDatabaseThread } from "./database-thread.js";
 import { desktopCapabilitySource } from "./desktop-capabilities.js";
 import { DESKTOP_SETTINGS_SKILL } from "./desktop-settings-skill.js";
 import { E2eLocalSandboxProvider } from "./e2e-fakes.js";
@@ -137,6 +135,7 @@ import {
 } from "./workspace-context-agent.js";
 import { DESKTOP_WORKSPACE_SKILL } from "./workspace-skill.js";
 import { WorkspaceStateStore } from "./workspace-state.js";
+import type { VoiceControl } from "./workspace-tools.js";
 
 /**
  * How often the embedded server's idle pollers look for work no write in
@@ -153,7 +152,6 @@ export interface EmbeddedServer {
    */
   apiToken: string;
   mcpAppViews?: McpAppViews;
-  mcpAppViewUrl: typeof mcpAppViewUrl;
   clientRunners: RemoteClientRunners;
   catamorphic: Catamorphic;
   customizationProcesses: CustomizationProcesses;
@@ -208,14 +206,6 @@ export interface EmbeddedServer {
     projectId: string,
     sessionId: string,
   ) => Promise<{ ok: true; serverUrl: string; remoteProjectId: string }>;
-  /**
-   * Requests to a remote chat's terminals on its project's server, as the
-   * member (ADR 0209); undefined when the project has no server.
-   */
-  remoteTerminalRequest: (input: {
-    projectId: string;
-    sessionId: string;
-  }) => RemoteTerminalRequest | undefined;
   /** A remote chat's preview on its own loopback origin (ADR 0209). */
   openRemotePreview: (input: {
     projectId: string;
@@ -225,6 +215,30 @@ export interface EmbeddedServer {
   /** An agent's "Sync chats from" switch may have changed (ADR 0233). */
   refreshExternalSessions: () => void;
   shutdown: () => Promise<void>;
+}
+
+/**
+ * What the server asks of whoever shows the app: all of it is here, so the
+ * engine's channel has one list to carry (ADR 0341).
+ */
+export interface EmbeddedServerHost {
+  openNotification?: (
+    destination: DesktopNotificationDestination,
+  ) => Promise<void>;
+  launchNotificationId?: string;
+  /** The database's thread ended while the server ran: nothing works. */
+  databaseLost?: (error: Error) => void;
+  /** A project's files moved under its windows. */
+  gitChanged?: (projectId: string) => void;
+  /** Where the person is (ADR 0265): the project in front of their window. */
+  personProject?: (profileId: string) => string | null;
+  /** Voice on this desktop (ADR 0216). */
+  voice?: VoiceControl;
+  /** The agent's customization tool, answered by the source runtime. */
+  customization?: (
+    projectId: string,
+    input: Record<string, unknown>,
+  ) => Promise<unknown>;
 }
 
 export async function startEmbeddedServer(
@@ -238,18 +252,20 @@ export async function startEmbeddedServer(
   incognitoSessions?: IncognitoSessionsStore,
   connectionProviders?: readonly ConnectionProvider[],
   ownerProfile: (ownerId: number) => string | undefined = () => undefined,
-  host: {
-    openNotification?: (
-      destination: DesktopNotificationDestination,
-    ) => Promise<void>;
-    launchNotificationId?: string;
-  } = {},
+  host: EmbeddedServerHost = {},
 ): Promise<EmbeddedServer> {
   validateDatabaseFiles(paths.db);
   fs.mkdirSync(paths.db, { recursive: true });
   const hostId = loadOrCreateHostId(path.join(paths.root, "host-id"));
 
-  const pglite = new PGlite(paths.db, { extensions: { pgcrypto } });
+  // The database runs on a thread of its own: a statement never holds up
+  // the thread that routes every window's input.
+  const pglite = openDatabaseThread(paths.db, {
+    onLost: (error) => {
+      console.error("[desktop] the database thread stopped:", error);
+      host.databaseLost?.(error);
+    },
+  });
   const db = new Kysely<DB>({
     dialect: new PGliteDialect({ pglite }),
     plugins: [new WithSchemaPlugin(DEFAULT_SCHEMA)],
@@ -544,6 +560,11 @@ export async function startEmbeddedServer(
       }),
     logsDir: electronApp.getPath("logs"),
   });
+  if (host.voice) agentRegistry.setVoice(host.voice);
+  // The assistant sees the window the person is in (ADR 0265).
+  if (host.personProject) agentRegistry.setPersonPlace(host.personProject);
+  if (host.customization)
+    agentRegistry.workspaceToolkit?.setCustomization(host.customization);
   // A chat that failed on its agent's sign-in runs again once the sign-in
   // works, however it came back (ADR 0228).
   const signInRecovery = new SignInRecovery({
@@ -756,7 +777,7 @@ export async function startEmbeddedServer(
       release: async (input) => {
         try {
           await sessionCheckouts.putAway(input);
-          broadcastGitChanged(input.projectId);
+          host.gitChanged?.(input.projectId);
         } finally {
           await removeAgentState({
             agentStateDir: paths.agentStateDir,
@@ -772,9 +793,6 @@ export async function startEmbeddedServer(
     documentBlobStore: new FsBundleStore(
       path.join(paths.root, "document-blobs"),
     ),
-    // Local projects: the folder IS the store; remote projects sync their
-    // store/ explicitly (Ship). No per-turn pull/ship into the local store.
-    storeSyncAroundTurns: false,
     triggerKinds: DESKTOP_TRIGGER_KINDS,
     mcpToolKinds: DESKTOP_MCP_TOOL_KINDS,
     agentCapabilities: {
@@ -847,7 +865,7 @@ export async function startEmbeddedServer(
       // The turn checkpoint just moved git state; a sidebar waiting on
       // its 15s poll would show stale rows (and stale rows diff against
       // a HEAD that already contains them — two identical panes).
-      broadcastGitChanged(event.projectId);
+      host.gitChanged?.(event.projectId);
     },
   });
   const triggers = new DesktopTriggers(catamorphic);
@@ -1481,29 +1499,17 @@ export async function startEmbeddedServer(
         ),
       );
     },
-    createPullRequest: async (projectId, sessionId, input) => {
-      const checkout = await sessionCheckouts.describe({
+    // The chat's checkout, then core's one function (ADR 0345): push its
+    // branch as the chat's own, open the pull request, record it.
+    createPullRequest: (projectId, sessionId, input) =>
+      openChatPullRequest({
+        pullRequests: catamorphic.core.pullRequests,
+        checkouts: sessionCheckouts,
+        identity: desktopIdentity,
         projectId,
         sessionId,
-      });
-      if (checkout.kind === "primary") {
-        return catamorphic.core.remoteSync.createPullRequest(
-          desktopIdentity,
-          projectId,
-          input,
-        );
-      }
-      const prepared = await sessionCheckouts.preparePullRequest({
-        projectId,
-        sessionId,
-        message: input.title,
-      });
-      return catamorphic.core.remoteSync.createPullRequestFromRef(
-        desktopIdentity,
-        projectId,
-        { ...input, localRef: prepared.branch },
-      );
-    },
+        ...input,
+      }),
   });
 
   // Host-tier skills: framework defaults plus desktop configuration guidance,
@@ -1969,7 +1975,15 @@ export async function startEmbeddedServer(
           { name: "warm harnesses", dispose: () => agentRegistry.dispose() },
           // The host owns Kysely. Always attempt its WAL flush last and report
           // a failure instead of silently treating an unsafe shutdown as clean.
-          { name: "database", dispose: () => db.destroy() },
+          // Work the quit caught between two statements sends the next one
+          // first: Kysely refuses it from the moment it is destroyed.
+          {
+            name: "database",
+            dispose: async () => {
+              await pglite.quiet();
+              await db.destroy();
+            },
+          },
         ],
       });
     })();
@@ -1988,7 +2002,6 @@ export async function startEmbeddedServer(
     url,
     apiToken,
     mcpAppViews,
-    mcpAppViewUrl,
     clientRunners,
     catamorphic,
     customizationProcesses,
@@ -2016,8 +2029,6 @@ export async function startEmbeddedServer(
       sessionMirror.eligibility(projectId, sessionId),
     moveSessionToServer: (projectId, sessionId) =>
       sessionMirror.moveToServer(projectId, sessionId),
-    remoteTerminalRequest: ({ projectId, sessionId }) =>
-      remoteTerminalRequest({ profiles: profileConfig, projectId, sessionId }),
     openRemotePreview: (address) => remotePreviews.open(address),
     refreshExternalSessions: () => externalSessions.refresh(),
     shutdown,
@@ -2035,12 +2046,4 @@ function loadOrCreateHostId(file: string): string {
   fs.mkdirSync(path.dirname(file), { recursive: true });
   fs.writeFileSync(file, `${hostId}\n`, { mode: 0o600 });
   return hostId;
-}
-
-/** Tell every window a project's files moved under it. */
-function broadcastGitChanged(projectId: string): void {
-  for (const window of BrowserWindow.getAllWindows()) {
-    if (window.isDestroyed()) continue;
-    window.webContents.send("catamorphic:git-changed", { projectId });
-  }
 }

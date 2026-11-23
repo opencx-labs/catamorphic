@@ -48,18 +48,16 @@ import type { ServerState } from "../ipc.js";
 import { popupNativeMenu } from "../native-menu.js";
 import type { ProfileConfigManager } from "../profile-config.js";
 import type { ProfilesStore } from "../profiles.js";
+import { projectDefaultAgentId } from "../project-manifest.js";
 import { DESKTOP_TENANT_ID, DESKTOP_USER_ID } from "../server/identity.js";
+import type { VoiceControl } from "../server/workspace-tools.js";
 import { shellDocumentUrl } from "../shell-document.js";
 import {
   isRegisteredShellContents,
   registerShellContents,
   shellIpcMain,
 } from "../shell-ipc.js";
-import {
-  unheardReplies,
-  VoiceConversation,
-  voiceChatOf,
-} from "./conversation.js";
+import { unheardReplies, VoiceConversation } from "./conversation.js";
 import { VoiceModelStore } from "./models.js";
 import {
   type Sight,
@@ -277,7 +275,7 @@ export function registerVoiceSupport(deps: {
   activeProject: (window: BrowserWindow) => string | null;
   /** Opens the assistant's stored conversation through the workspace owner. */
   openChat: (input: { sender: WebContents; session: VoiceSessionRef }) => void;
-}): { dispose: () => Promise<void> } {
+}): { control: VoiceControl; dispose: () => Promise<void> } {
   const { state, profileConfig, profiles, windows, incognito } = deps;
   const shellProfileFor = (contents: WebContents) => {
     if (!isRegisteredShellContents(contents)) return undefined;
@@ -518,7 +516,7 @@ export function registerVoiceSupport(deps: {
               voice.ending ||
               voice.awaitingWords !== null ||
               voice.catchingUp !== null ||
-              voice.early.length > 0
+              saidEarly(voice)
             ? "thinking"
             : "off";
     voice.live = {
@@ -538,6 +536,18 @@ export function registerVoiceSupport(deps: {
   /** Voice talks with its chat, or dictates: it is ready. */
   const connected = (voice: ActiveVoice) =>
     voice.conversation !== null || voice.dictating !== null;
+
+  /**
+   * Something said while voice reached its chat still has to go to it: a
+   * message, or dictated words that are final. The words seen so far are
+   * only a preview of a hold, and a hold let go at once ends in none.
+   */
+  const saidEarly = (voice: ActiveVoice) =>
+    voice.early.some(
+      (event) =>
+        event.type === "utterance" ||
+        (event.type === "dictation" && event.final && event.text !== ""),
+    );
 
   const broadcastTranscript = (voice: ActiveVoice, words: VoiceTranscript) => {
     for (const window of BrowserWindow.getAllWindows())
@@ -791,11 +801,11 @@ export function registerVoiceSupport(deps: {
     }
   };
 
-  const agentSessions = () => {
-    const service = state.current?.catamorphic.core.agentSessions;
-    if (!service) throw new Error("Work is still starting.");
-    return service;
+  const engine = () => {
+    if (!state.current) throw new Error("Work is still starting.");
+    return state.current;
   };
+  const agentSessions = () => engine().catamorphic.core.agentSessions;
 
   /** Whether the person is talking with this chat by voice now. */
   const talking = (sessionId: string) =>
@@ -844,8 +854,13 @@ export function registerVoiceSupport(deps: {
       profileConfig.forProfile(profileId).agents.getMetadata(chosen)
     )
       return { agentId: chosen, builtIn: false };
-    const projectDefault =
-      state.current?.agentRegistry.defaultAgentId(projectId);
+    const projectDefault = state.current
+      ? projectDefaultAgentId({
+          agents: profileConfig.forProject(projectId).agents,
+          projectId,
+          rootPath: state.current.projectRoots.getSync(projectId),
+        })
+      : undefined;
     const base =
       projectDefault && !parseProjectAgentId(projectDefault)
         ? projectDefault
@@ -902,16 +917,15 @@ export function registerVoiceSupport(deps: {
       profiles.get(profileId)?.projectIds.includes(stored.projectId) &&
       !linked(profileId, stored.projectId)
     ) {
-      const existing = await agentSessions()
-        .get(identity, stored.projectId, stored.sessionId)
+      const existing = await engine()
+        .chats.get(stored.projectId, stored.sessionId)
         .catch(() => null);
       if (existing?.status === "active" && existing.agentId === agentId)
         return stored;
     }
-    const session = await agentSessions().create(identity, home, {
+    const session = await engine().chats.create(home, {
       agentId,
       title: "Assistant",
-      source: "desktop",
     });
     // It stays on this computer and out of other chats' reach, as an
     // incognito chat does, should its project ever join a server.
@@ -937,11 +951,7 @@ export function registerVoiceSupport(deps: {
       request.kind === "assistant"
         ? await assistantChat(profileId, request.projectId)
         : { projectId: request.projectId, sessionId: request.sessionId };
-    const { agentId } = await agentSessions().get(
-      identity,
-      ref.projectId,
-      ref.sessionId,
-    );
+    const { agentId } = await engine().chats.get(ref.projectId, ref.sessionId);
     // The built-in assistant speaks in the default voice; any other agent
     // in its own, when it has one.
     const assistant = agentId ? parseAssistantAgentId(agentId) : null;
@@ -966,8 +976,6 @@ export function registerVoiceSupport(deps: {
     resolved: { ref: VoiceSessionRef; voiceOf: string | null } | null,
   ) => {
     const profileId = voice.profileId;
-    // Here the server is up: its agents hear of voice and can end it.
-    state.current?.agentRegistry.setVoice({ talking, sight, stopListening });
     send(voice, { type: "dictation", enabled: resolved === null });
     if (!resolved) {
       voice.dictating = { stretches: new Map(), typedInApp: 0 };
@@ -984,11 +992,9 @@ export function registerVoiceSupport(deps: {
     const sessions = agentSessions();
     voice.conversation = new VoiceConversation(ref, {
       sessions: {
+        // Reduced where the chat's snapshot lives: only this crosses.
         get: async (target) =>
-          voiceChatOf(
-            (await sessions.get(identity, target.projectId, target.sessionId))
-              .snapshot,
-          ),
+          (await engine().chats.voice(target.projectId, target.sessionId)).chat,
         send: async (target, { text, dispatch }) => {
           const receipt = await sessions.command(
             identity,
@@ -1127,6 +1133,12 @@ export function registerVoiceSupport(deps: {
           }
           return;
         }
+        // Words kept while voice reached its chat are older than these.
+        // Said once the chat has caught the person up, they would replace
+        // what was heard since: the preview would end on its first words.
+        voice.early = voice.early.filter(
+          (prior) => prior.type !== "transcript",
+        );
         if (event.final) {
           if (voice.preview?.workerSegment === event.segment)
             clearTranscript(voice);
@@ -1204,6 +1216,8 @@ export function registerVoiceSupport(deps: {
           !voice.busy &&
           !voice.ending &&
           voice.speaking.size === 0 &&
+          // What was said before this hold still waits for its chat.
+          !saidEarly(voice) &&
           press?.profileId !== voice.profileId
         ) {
           void stop();
@@ -1616,7 +1630,8 @@ export function registerVoiceSupport(deps: {
         !voice.ending &&
         voice.speaking.size === 0 &&
         voice.awaitingWords === null &&
-        voice.early.length === 0
+        // The click's own first words may already wait as a preview.
+        !saidEarly(voice)
       )
         void stop();
       else update(voice);
@@ -1693,11 +1708,12 @@ export function registerVoiceSupport(deps: {
         continue;
       const stored = prefs(profileId).load();
       const ref = stored.assistantSession;
-      const detail = ref
-        ? await state.current?.catamorphic.core.agentSessions
-            ?.get(identity, ref.projectId, ref.sessionId)
+      const read = ref
+        ? await state.current?.chats
+            .voice(ref.projectId, ref.sessionId)
             .catch(() => null)
         : null;
+      const detail = read?.session;
       // A chat of an assistant since replaced has no news for this one.
       const assistant =
         ref && detail?.status === "active"
@@ -1707,10 +1723,8 @@ export function registerVoiceSupport(deps: {
         detail?.status === "active" &&
         !!assistant &&
         detail.agentId === assistantAgentId(assistant) &&
-        unheardReplies(
-          voiceChatOf(detail.snapshot).messages,
-          stored.assistantHeardThrough,
-        ).length > 0;
+        unheardReplies(read?.chat.messages ?? [], stored.assistantHeardThrough)
+          .length > 0;
       if (unheard === news.has(profileId)) continue;
       if (unheard) news.add(profileId);
       else news.delete(profileId);
@@ -1771,7 +1785,7 @@ export function registerVoiceSupport(deps: {
       !profiles.get(profileId)?.projectIds.includes(session.projectId)
     )
       return;
-    await agentSessions().get(identity, session.projectId, session.sessionId);
+    await engine().chats.get(session.projectId, session.sessionId);
     deps.openChat({ sender: event.sender, session });
   });
   // Resolve at once: the status events say when it plays and ends.
@@ -2203,6 +2217,8 @@ export function registerVoiceSupport(deps: {
   });
 
   return {
+    /** What the server's agents ask of voice (ADR 0216). */
+    control: { talking, sight, stopListening },
     dispose: async () => {
       disposed = true;
       if (preparedAudio && !preparedAudio.isDestroyed())
