@@ -52,8 +52,9 @@ Never commit certificates, keys, passwords, or encoded credentials.
 Run the `Desktop release` workflow manually from the intended commit on `main`. A
 manual dispatch verifies Homebrew tap write access, builds, signs, notarizes,
 and verifies the app, then retains the DMG, ZIP, blockmaps, update metadata,
-and checksum file as workflow artifacts. It does not create a GitHub release
-or change the Homebrew tap.
+and checksum file as workflow artifacts. It generates and validates the cask in
+the runner's checkout of the tap. It does not create a GitHub release or push
+changes to the Homebrew tap.
 
 The disposable signing runner blocks UDP port 443 so Apple's ticket lookup uses
 HTTPS over TCP. This works around the hosted-runner
