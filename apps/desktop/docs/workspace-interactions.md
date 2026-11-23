@@ -225,6 +225,13 @@ with tabs pinned Close all tabs reads Close unpinned tabs and leaves them;
 Close tab in its menu closes one. A tab under a chat leaves it to be pinned,
 unless an agent holds it there. A New Tab cannot be pinned.
 
+A chip-only browser page, shell view or clean editor closes with the chat
+that held it. A dirty editor returns as an ordinary tab with its buffer.
+A page that asks to stay comes forward for its usual Leave site? prompt
+before the close can finish. A restored workspace drops chips whose chat is
+gone. The screen-sharing picker lists browser tabs and the requesting page
+when it is held only by a chip.
+
 ## Chat presentation and visibility
 
 Wait, watch, background, and notification disclosures align their chevrons with

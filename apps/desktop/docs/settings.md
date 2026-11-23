@@ -195,6 +195,12 @@ apply only while it is on. Dimensions accept 0 through 48px. Together with
 `sidebarDividers` (default false) they support profile, shared project and
 personal overrides, appear in settings search and apply live in every tab layout.
 
+`tabOverflow` controls the horizontal tab strip. **When tabs fill the bar**
+defaults to **Scroll**. **Shrink to fit** narrows unpinned tabs together once
+the strip is full. A tab shows its icon and keeps its name in its hover card
+when its title no longer fits. The strip scrolls when the icons fill it.
+This setting accepts profile, shared project and personal overrides.
+
 ## Theme picker
 
 Tutorial, Settings > Appearance > Choose theme, and the Choose theme palette

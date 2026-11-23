@@ -240,6 +240,15 @@ describe("a chat's chip-only surfaces", () => {
       page("chip", { chatLocalId: "c", background: true }),
       page("kept", { chatLocalId: "other", background: true }),
     ],
+    terminals: [
+      {
+        localId: "shell",
+        title: "Shell",
+        ptySessionId: "pty",
+        chatLocalId: "c",
+        background: true,
+      },
+    ],
     editors: [
       {
         localId: "clean",
@@ -265,6 +274,8 @@ describe("a chat's chip-only surfaces", () => {
       "tab",
       "kept",
     ]);
+    expect(closed.browsers[0]?.chatLocalId).toBeUndefined();
+    expect(closed.terminals).toEqual([]);
     // Unsaved edits come back as a tab of their own.
     expect(closed.editors).toEqual([
       { localId: "dirty", filePath: "b.md", dirty: true },
@@ -274,15 +285,21 @@ describe("a chat's chip-only surfaces", () => {
 
   it("are dropped from a snapshot whose chat is gone", () => {
     const restored = hydrateWorkspace(
-      serializeWorkspace({
-        ...ws,
-        chats: ws.chats.filter((chat) => chat.localId !== "c"),
-      }),
+      serializeWorkspace(
+        {
+          ...ws,
+          chats: ws.chats.filter((chat) => chat.localId !== "c"),
+        },
+        { moving: true },
+      ),
+      { moved: true },
     );
     expect(restored?.browsers.map((browser) => browser.localId)).toEqual([
       "tab",
       "kept",
     ]);
+    expect(restored?.terminals).toEqual([]);
+    expect(restored?.editors).toEqual([]);
   });
 });
 

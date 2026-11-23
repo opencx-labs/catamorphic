@@ -3216,9 +3216,34 @@ export function App({
     }
     return false;
   };
+  // Include chip-only pages when the last surface that holds them closes.
+  // A page briefly brought forward for its Leave site? still goes with its chat.
+  const browserCloses = (
+    ws: Workspace,
+    keys: readonly string[],
+    force: boolean | undefined,
+    chipOwners: ReadonlyMap<string, string>,
+  ) => {
+    const withChat = tabsLeavingWithChat(ws, keys);
+    return ws.browsers.filter((browser) => {
+      const key = browserTabKey(browser.localId);
+      if (
+        (browser.background || chipOwners.get(key) === browser.chatLocalId) &&
+        browser.chatLocalId &&
+        keys.includes(chatTabKey(browser.chatLocalId))
+      )
+        return true;
+      return (
+        keys.includes(key) &&
+        (withChat.has(key) || !browser.chatLocalId || force)
+      );
+    });
+  };
+
   const closeTabImmediately = (
     key: string,
     opts?: { force?: boolean; discardDraft?: boolean; scope?: TabCloseScope },
+    chipOwners: ReadonlyMap<string, string> = new Map(),
   ): boolean => {
     if (
       requestDiscardEdits({
@@ -3229,7 +3254,6 @@ export function App({
     )
       return false;
     const keys = closingTabKeys(workspaceRef.current, key, opts?.scope);
-    const withChat = tabsLeavingWithChat(workspaceRef.current, keys);
     if (
       keys.some(
         (closing) =>
@@ -3239,17 +3263,16 @@ export function App({
       activeProfileId
     )
       setupDismissedRef.current.add(activeProfileId);
-    for (const browser of workspaceRef.current.browsers) {
-      if (
-        keys.includes(browserTabKey(browser.localId)) &&
-        (withChat.has(browserTabKey(browser.localId)) ||
-          !browser.chatLocalId ||
-          opts?.force)
-      ) {
-        browserNavigatorsRef.current.delete(browser.localId);
-        browserHistoryNavigatorsRef.current.delete(browser.localId);
-        browserGuestIdsRef.current.delete(browser.localId);
-      }
+    const closing = browserCloses(
+      workspaceRef.current,
+      keys,
+      opts?.force,
+      chipOwners,
+    );
+    for (const browser of closing) {
+      browserNavigatorsRef.current.delete(browser.localId);
+      browserHistoryNavigatorsRef.current.delete(browser.localId);
+      browserGuestIdsRef.current.delete(browser.localId);
     }
     for (const chat of workspaceRef.current.chats) {
       if (!keys.includes(chatTabKey(chat.localId))) continue;
@@ -3258,9 +3281,31 @@ export function App({
       chatSkillsRef.current.delete(chat.localId);
       composerFocusesRef.current.delete(chat.localId);
     }
-    updateWorkspace((ws) =>
-      transitionWorkspace(ws, { type: "close", key, ...opts }),
-    );
+    updateWorkspace((ws) => {
+      // Return any approval-only tab to its chip so it follows the chat
+      // through the same transition as pages that never came forward.
+      const updated =
+        chipOwners.size > 0
+          ? {
+              ...ws,
+              activeTabKey: chipOwners.has(ws.activeTabKey ?? "")
+                ? (ws.recentTabKeys
+                    .filter((key) => !chipOwners.has(key))
+                    .at(-1) ?? key)
+                : ws.activeTabKey,
+              browsers: ws.browsers.map((browser) =>
+                !browser.background &&
+                browser.chatLocalId &&
+                chipOwners.get(browserTabKey(browser.localId)) ===
+                  browser.chatLocalId &&
+                keys.includes(chatTabKey(browser.chatLocalId))
+                  ? { ...browser, background: true }
+                  : browser,
+              ),
+            }
+          : ws;
+      return transitionWorkspace(updated, { type: "close", key, ...opts });
+    });
     return true;
   };
 
@@ -3281,9 +3326,30 @@ export function App({
     // it with "Leave site?" (ADR 0227). A chat's attached page only goes
     // back to its chip, still loaded, so nothing is asked then.
     const keys = closingTabKeys(workspaceRef.current, key, close.scope);
-    const withChat = tabsLeavingWithChat(workspaceRef.current, keys);
+    const browsers = browserCloses(
+      workspaceRef.current,
+      keys,
+      close.force,
+      new Map(),
+    );
+    // The existing beforeunload reveal materializes a chip as a tab. Keep it
+    // in this close's plan if it still belongs to the chat being closed.
+    const chipOwners = new Map(
+      browsers.flatMap((browser) =>
+        browser.background &&
+        browser.chatLocalId &&
+        !keys.includes(browserTabKey(browser.localId))
+          ? [[browserTabKey(browser.localId), browser.chatLocalId] as const]
+          : [],
+      ),
+    );
+    const pendingKeys = new Set([
+      ...keys,
+      ...browsers.map((browser) => browserTabKey(browser.localId)),
+    ]);
     if (keys.includes("agent-setup:theme")) setThemeCustomization(null);
-    if (keys.some((key) => pendingTabCloses.current.has(key))) return;
+    if ([...pendingKeys].some((key) => pendingTabCloses.current.has(key)))
+      return;
     if (
       requestDiscardEdits({
         key,
@@ -3300,26 +3366,20 @@ export function App({
       : [];
     // Drafts have been checked before saving or granting native page approval.
     const pages = !final
-      ? workspaceRef.current.browsers.flatMap((browser) => {
-          const page =
-            keys.includes(browserTabKey(browser.localId)) &&
-            (withChat.has(browserTabKey(browser.localId)) ||
-              !browser.chatLocalId ||
-              close.force)
-              ? browserCommandsRef.current.get(browser.localId)
-              : undefined;
+      ? browsers.flatMap((browser) => {
+          const page = browserCommandsRef.current.get(browser.localId);
           return page ? [page] : [];
         })
       : [];
     if (pages.length > 0 || saves.length > 0) {
-      for (const key of keys) pendingTabCloses.current.add(key);
+      for (const key of pendingKeys) pendingTabCloses.current.add(key);
       const release = () =>
         Promise.all(pages.map((page) => page.cancelClose()));
       void (async () => {
         let accepted = false;
         let retry = false;
         try {
-          const preserve = keys.length > 1;
+          const preserve = pendingKeys.size > 1;
           for (const page of pages)
             if (!(await page.mayClose({ preserve }))) return;
           if (
@@ -3336,23 +3396,33 @@ export function App({
             workspaceRef.current,
             key,
             close.scope,
+          ).filter((key) => !chipOwners.has(key));
+          const currentBrowsers = browserCloses(
+            workspaceRef.current,
+            current,
+            close.force,
+            chipOwners,
           );
           if (
             current.length !== keys.length ||
-            current.some((value, index) => value !== keys[index])
+            current.some((value, index) => value !== keys[index]) ||
+            currentBrowsers.length !== browsers.length ||
+            currentBrowsers.some(
+              (browser, index) => browser.localId !== browsers[index]?.localId,
+            )
           ) {
             retry = true;
             return;
           }
           if (keys.includes(workspaceRef.current.floatingKey ?? "")) {
             floatingMotion.dismiss(() => {
-              if (!closeTabImmediately(key, close)) void release();
+              if (!closeTabImmediately(key, close, chipOwners)) void release();
             });
             accepted = true;
-          } else accepted = closeTabImmediately(key, close);
+          } else accepted = closeTabImmediately(key, close, chipOwners);
         } finally {
           if (!accepted) await release();
-          for (const key of keys) pendingTabCloses.current.delete(key);
+          for (const key of pendingKeys) pendingTabCloses.current.delete(key);
           if (retry) closeTab(key, close);
         }
       })().catch((cause: unknown) =>

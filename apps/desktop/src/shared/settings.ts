@@ -129,7 +129,7 @@ export const SETTINGS = {
   tabOverflow: {
     label: "When tabs fill the bar",
     description:
-      "Shrink every tab to fit, as Chrome does, or keep their size and scroll the bar.",
+      "Shrink unpinned tabs to fit the top bar, or keep their width and scroll.",
     scopes: projectScopes,
     valid: oneOf("scroll", "shrink"),
     options: { scroll: "Scroll", shrink: "Shrink to fit" },

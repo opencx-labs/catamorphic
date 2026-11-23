@@ -1796,28 +1796,59 @@ kbd {
   mask-image: linear-gradient(to left, var(--tab-title-end) 12px, #000 28px);
   transition: --tab-title-end 150ms var(--ease-standard);
 }
-/* Shrink to fit (the "When tabs fill the bar" setting): a tab narrowed
-   past its title's room is its icon, as Chrome's narrowest tabs are, and
-   its hover card names it. The title is hidden in place, so the tab's
-   size does not change with it. Only the tab in front keeps its close
-   button, which takes the icon's place while pointed at. */
-.workspace-tab[data-tab-narrow] .workspace-tab-title {
+/* The tabs divide the available width until they reach their natural sizes.
+   Any room past those sizes belongs to the window's drag handles. */
+[data-tab-overflow="shrink"] .workspace-tab[data-tab-flexible] {
+  flex: 1000 1 0px;
+  min-inline-size: 36px;
+  max-inline-size: max-content;
+}
+/* The collapsed group's separate control keeps space beside the icon. */
+[data-tab-overflow="shrink"] [data-tab-flexible][data-tab-folded] {
+  min-inline-size: 72px;
+}
+[data-tab-overflow="shrink"] [data-tab-flexible] .workspace-tab-core {
+  flex: 1 1 auto;
+  min-inline-size: 34px;
+}
+[data-tab-overflow="shrink"] [data-tab-flexible] .workspace-tab-label {
+  flex: 1 1 auto;
+}
+[data-tab-overflow="shrink"] [data-tab-flexible] .workspace-tab-title {
+  min-inline-size: 0;
+}
+
+/* A narrow title stays in the layout. The centered icon is the tab's hit
+   target, and the focused tab's close button takes its place on reveal. */
+[data-tab-overflow="shrink"] [data-tab-narrow] .workspace-tab-title {
   visibility: hidden;
 }
-.workspace-tab[data-tab-narrow] .workspace-tab-label > span:first-child {
-  translate: var(--tab-narrow-shift, 0) 0;
+[data-tab-overflow="shrink"] [data-tab-narrow] .workspace-tab-icon {
+  inset-inline-start: calc(50% - 7px);
 }
-.workspace-tab[data-tab-narrow]:not([data-tab-active]) .workspace-tab-close {
+[data-tab-overflow="shrink"] [data-tab-narrow] .workspace-tab-close {
+  inset-inline: 0;
+  margin-inline: auto;
+  inline-size: 20px;
+}
+[data-tab-overflow="shrink"]
+  [data-tab-narrow]:not([data-tab-active])
+  .workspace-tab-close {
   display: none;
 }
-.workspace-tab[data-tab-narrow][data-tab-active] .workspace-tab-close {
-  inset-inline-start: calc(var(--tab-narrow-shift, 0px) + 7px);
-}
-.workspace-tab[data-tab-narrow][data-tab-active]:hover
-  .workspace-tab-label
-  > span:first-child {
+[data-tab-overflow="shrink"]:not([data-tab-dragging])
+  [data-tab-narrow][data-tab-active]:is(:hover, :has(:focus-visible))
+  .workspace-tab-icon {
   opacity: 0;
 }
+@media (hover: none) {
+  [data-tab-overflow="shrink"]:not([data-tab-dragging])
+    [data-tab-narrow][data-tab-active]
+    .workspace-tab-icon {
+    opacity: 0;
+  }
+}
+
 [data-tab-orientation="horizontal"]:not([data-tab-dragging])
   .workspace-tab:hover
   .workspace-tab-close,

@@ -1,5 +1,6 @@
 import http from "node:http";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { emptyUtilityWorkspace } from "../src/renderer/lib/workspace-state.js";
 import {
   type AppHandle,
   launchApp,
@@ -16,6 +17,7 @@ import {
  */
 let app: AppHandle;
 let origin: string;
+let projectId: string;
 const server = http.createServer((request, response) => {
   response.setHeader("Content-Type", "text/html");
   if (request.url?.startsWith("/a")) {
@@ -96,7 +98,7 @@ beforeAll(async () => {
     "!document.querySelector('[data-testid=project-submit]').disabled",
   );
   await run("$('[data-testid=project-submit]').click()");
-  const projectId = await waitForProjectWorkspace({ app, name: "Tabs" });
+  projectId = await waitForProjectWorkspace({ app, name: "Tabs" });
   await app.eval(`(async () => {
     const api = window.catamorphicDesktop;
     const scope = { profileId: await api.windowProfile(), projectId: ${JSON.stringify(projectId)} };
@@ -191,4 +193,92 @@ describe("a page already open in a tab", () => {
       "window.catamorphicDesktop.setPrefs({ switchToOpenTab: true })",
     );
   });
+});
+
+it("fits unpinned tabs to the room and keeps narrow tabs usable", async () => {
+  const stripSelector =
+    '[data-workspace-visible="true"] [data-tab-orientation="horizontal"]';
+  const strip = `document.querySelector(${JSON.stringify(stripSelector)})`;
+  const metrics = () =>
+    run<{
+      overflow: boolean;
+      pin: number;
+      widths: number[];
+      namedNarrowTabs: number;
+      inactiveCloses: number;
+    }>(`
+    const strip = ${strip};
+    const tabs = [...strip.querySelectorAll('[data-point-key^="browser:"]:not([aria-hidden])')];
+    const pin = tabs.shift();
+    const narrow = tabs.filter(tab => tab.hasAttribute('data-tab-narrow'));
+    return {
+      overflow: strip.scrollWidth > strip.clientWidth + 1,
+      pin: pin.getBoundingClientRect().width,
+      widths: tabs.map(tab => tab.getBoundingClientRect().width),
+      namedNarrowTabs: narrow.filter(tab => tab.querySelector('.workspace-tab-label').getAttribute('aria-label')?.startsWith('A long page title')).length,
+      inactiveCloses: narrow.filter(tab => !tab.hasAttribute('data-tab-active') && getComputedStyle(tab.querySelector('.workspace-tab-close')).display !== 'none').length,
+    };
+  `);
+  await app.eval(`(async () => {
+    const api = window.catamorphicDesktop;
+    const projectId = ${JSON.stringify(projectId)};
+    const snapshot = ${JSON.stringify(emptyUtilityWorkspace())};
+    const profileId = await api.windowProfile();
+    snapshot.browsers = Array.from({length: 13}, (_, index) => ({
+      localId: 'width-' + index, profileId, title: 'Page', label: 'A long page title ' + index,
+      initialUrl: ${JSON.stringify(`${origin}/a`)}, url: ${JSON.stringify(`${origin}/a`)}, faviconUrl: null,
+    }));
+    snapshot.activeTabKey = 'browser:width-1';
+    snapshot.pinnedTabKeys = ['browser:width-0'];
+    await api.workspaceStateSet(projectId, snapshot);
+    await api.setPrefs({tabOverflow:'scroll',tabAlignment:'start',tabPlacement:'top'});
+    await api.devWindow('setSize', 1280, 850);
+  })()`);
+  await app.reload();
+  await waitForProjectWorkspace({ app, name: "Tabs" });
+  await app.waitFor(
+    `(() => {
+    const tabs = [...(${strip}?.querySelectorAll('[data-point-key^="browser:"]') ?? [])];
+    return tabs.length === 13 && tabs.every(tab =>
+      tab.getAnimations().every(animation => animation.playState !== 'running' && !animation.pending)
+    );
+  })()`,
+    { label: "the tab strip finished its entrance animations" },
+  );
+  await expect.poll(async () => (await metrics()).overflow).toBe(true);
+  const initial = await metrics();
+
+  await app.eval("window.catamorphicDesktop.setPrefs({tabOverflow:'shrink'})");
+  await app.waitFor(`${strip}?.dataset.tabOverflow === 'shrink'`);
+  await expect.poll(async () => (await metrics()).overflow).toBe(false);
+  const fitted = await metrics();
+  expect(fitted.pin).toBeCloseTo(initial.pin, 0);
+  expect(Math.max(...fitted.widths) - Math.min(...fitted.widths)).toBeLessThan(
+    1,
+  );
+  expect(fitted.widths[0]).toBeLessThan(initial.widths[0] ?? 0);
+
+  await app.eval("window.catamorphicDesktop.devWindow('setSize',740,850)");
+  await expect.poll(async () => (await metrics()).namedNarrowTabs).toBe(12);
+  const narrow = await metrics();
+  expect(narrow.inactiveCloses).toBe(0);
+  expect(Math.min(...narrow.widths)).toBeGreaterThanOrEqual(36);
+  const active = `${strip}.querySelector('[data-tab-narrow][data-tab-active]')`;
+  const point = await app.eval<{ x: number; y: number }>(
+    `(()=>{const r=${active}.getBoundingClientRect();return {x:r.left+r.width/2,y:r.top+r.height/2};})()`,
+  );
+  await app.movePointer(point);
+  await app.waitFor(
+    `getComputedStyle(${active}.querySelector('.workspace-tab-close')).opacity === '1'`,
+    { label: "active icon-only tab shows its close button on hover" },
+  );
+
+  await app.eval("window.catamorphicDesktop.devWindow('setSize',580,850)");
+  await expect.poll(async () => (await metrics()).overflow).toBe(true);
+  await app.eval("window.catamorphicDesktop.setPrefs({tabOverflow:'scroll'})");
+  await app.waitFor(
+    `${strip}?.dataset.tabOverflow === 'scroll' && !${strip}.querySelector('[data-tab-narrow]')`,
+    { label: "scroll mode clears every icon-only state" },
+  );
+  expect(app.getRendererErrors()).toEqual([]);
 });
