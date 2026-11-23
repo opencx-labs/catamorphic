@@ -277,6 +277,46 @@ describe("closing folded tab groups", () => {
     expect(app.getRendererErrors()).toEqual([]);
   });
 
+  it("brings back a chip-only page to ask before closing it with its chat", async () => {
+    const projectId = await openGroup({
+      name: "Chip leave guard",
+      activePage: true,
+    });
+    await app.eval(
+      `document.querySelector('${group} [aria-label="Expand 1 grouped tabs"]').click()`,
+    );
+    await activatePage(page);
+    await app.eval(
+      `document.querySelector('${page}').executeJavaScript("addEventListener('beforeunload', event=>{event.preventDefault();event.returnValue='';}); true")`,
+    );
+    // Hide the workspace tab. The page is still alive through its chat's chip.
+    const tab = `${visible} [data-point-key="browser:page"]:not([aria-hidden])`;
+    await app.waitFor(`!!document.querySelector('${tab}')`);
+    await app.eval(
+      `document.querySelector('${tab} button[aria-label="Close Group page"]').click()`,
+    );
+    const saved = `${api}.workspaceStateGet(${JSON.stringify(projectId)})`;
+    await app.waitFor(
+      `${saved}.then(state=>state.browsers[0]?.background===true)`,
+    );
+    const dialog = `document.querySelector('[data-testid="page-dialog"]:not([inert])')`;
+    await app.eval(
+      `document.querySelector('${group} button[aria-label^="Close "]').click()`,
+    );
+    await app.waitFor(`${dialog}?.dataset.kind==='beforeunload'`, {
+      label: "hidden page revealed with its leave confirmation",
+    });
+    await app.eval(
+      `${dialog}.querySelector('[data-testid="page-dialog-accept"]').click()`,
+    );
+    await app.waitFor(
+      `${saved}.then(state=>state.chats.length===0 && state.browsers.length===0)`,
+      { label: "the chip and its chat are both closed" },
+    );
+    await app.waitFor(`!document.querySelector('${page}')`);
+    expect(app.getRendererErrors()).toEqual([]);
+  });
+
   it("keeps a dirty file until the group discard is explicitly confirmed", async () => {
     const name = "Group dirty editor";
     await openGroup({ name, editor: true, activePage: true });

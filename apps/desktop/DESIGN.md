@@ -886,6 +886,18 @@ the historical log explains how it arrived here.
 
 ## Design log
 
+### 2026-11-23: Chip-only pages close with their chat, and full tabs can shrink
+
+A tab can close back to its chip. Closing the chat then disposes its hidden
+views, so an old page cannot keep running or turn up in Choose what to share.
+A page that asks to stay gets the usual Leave site? prompt. Unsaved editor
+content remains open in its own tab.
+
+The horizontal strip can shrink tabs to fit. Tabs keep natural widths until
+the strip fills. Pinned tabs keep their width, and tabs too narrow for their
+titles show their icons. The front tab reveals its close button over its icon.
+The strip scrolls when the icons fill it.
+
 ### 2026-11-20: Claude Code signs in on your own machines too
 
 Remote environment's Sign-ins section no longer says Claude Code runs on

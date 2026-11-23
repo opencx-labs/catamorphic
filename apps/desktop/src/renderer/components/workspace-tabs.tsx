@@ -39,6 +39,7 @@ import {
   type ComponentType,
   type DragEvent,
   memo,
+  useCallback,
   useEffect,
   useMemo,
   useRef,
@@ -333,6 +334,7 @@ export const WorkspaceTabBar = memo(function WorkspaceTabBar(
  */
 interface StripActions {
   element(id: string, element: HTMLElement | null): void;
+  updateTitle(id: string): void;
   open(key: string, mode: OpenMode): void;
   close(key: string): void;
   toggleGroup(chatLocalId: string): void;
@@ -356,8 +358,22 @@ interface StripActions {
   ): ResourceActions | undefined;
 }
 
+/** Tabs with less than this much room for a clipped title become icon-only. */
+const NARROW_TITLE_PX = 20;
+
+function markNarrowTitle(title: Element) {
+  title
+    .closest(".workspace-tab")
+    ?.toggleAttribute(
+      "data-tab-narrow",
+      title.clientWidth < NARROW_TITLE_PX &&
+        title.scrollWidth > title.clientWidth,
+    );
+}
+
 function TabStrip({
   alignment = "start",
+  overflow = "scroll",
   tabs,
   activeKey,
   secondaryKey,
@@ -375,6 +391,7 @@ function TabStrip({
   tabActions,
 }: {
   alignment?: "start" | "center";
+  overflow?: "scroll" | "shrink";
   tabs: WorkspaceTab[];
   activeKey?: string;
   /** The unfocused pane of a split view — styled active but muted. */
@@ -428,6 +445,24 @@ function TabStrip({
   const [entered, setEntered] = useState<ReadonlySet<string>>(() => new Set());
   // The tabs as last drawn: a departing tab collapses from its real width.
   const tabElementsRef = useRef(new Map<string, HTMLElement>());
+  const narrowObserverRef = useRef<ResizeObserver | null>(null);
+  useEffect(() => {
+    if (overflow !== "shrink" || typeof ResizeObserver === "undefined") return;
+    const observer = new ResizeObserver((entries) => {
+      for (const { target } of entries) markNarrowTitle(target);
+    });
+    narrowObserverRef.current = observer;
+    for (const tab of tabElementsRef.current.values()) {
+      const title = tab.querySelector(".workspace-tab-title");
+      if (title) observer.observe(title);
+    }
+    return () => {
+      observer.disconnect();
+      narrowObserverRef.current = null;
+      for (const tab of tabElementsRef.current.values())
+        tab.removeAttribute("data-tab-narrow");
+    };
+  }, [overflow]);
   const prevTabsRef = useRef(tabs);
   if (prevTabsRef.current !== tabs) {
     const pinned = new Map(
@@ -565,8 +600,25 @@ function TabStrip({
   };
   const actions = useLatestHandlers<StripActions>({
     element(id, element) {
-      if (element) tabElementsRef.current.set(id, element);
-      else tabElementsRef.current.delete(id);
+      const observer = narrowObserverRef.current;
+      if (element) {
+        tabElementsRef.current.set(id, element);
+        const title = observer && element.querySelector(".workspace-tab-title");
+        if (title) observer.observe(title);
+      } else {
+        const title =
+          observer &&
+          tabElementsRef.current.get(id)?.querySelector(".workspace-tab-title");
+        if (title) observer.unobserve(title);
+        tabElementsRef.current.delete(id);
+      }
+    },
+    updateTitle(id) {
+      if (!narrowObserverRef.current) return;
+      const title = tabElementsRef.current
+        .get(id)
+        ?.querySelector(".workspace-tab-title");
+      if (title) markNarrowTitle(title);
     },
     open(key, mode) {
       disarmHoverCard();
@@ -694,6 +746,7 @@ function TabStrip({
       className="app-no-drag flex min-w-0 flex-1 items-center gap-1 self-stretch overflow-x-auto overflow-y-hidden"
       data-tab-orientation="horizontal"
       data-tab-alignment={alignment}
+      data-tab-overflow={overflow}
       // A dragged tab hides every close button until it lands.
       data-tab-dragging={dragKey ? "" : undefined}
       onDragOver={(event) => {
@@ -897,15 +950,27 @@ const TabRow = memo(function TabRow({
   const ghost = id !== key;
   const Icon = TAB_ICONS[tab.kind];
   const groupId = tab.groupId;
+  const title = tab.label ?? tab.name;
+  const setElement = useCallback(
+    (element: HTMLElement | null) => {
+      actions.element(id, element);
+      if (tab.pinned) element?.removeAttribute("data-tab-narrow");
+      // tab-out collapses from here (styles.css).
+      if (element && exiting && width !== undefined)
+        element.style.setProperty("--tab-width", `${width}px`);
+    },
+    [actions, id, exiting, width, tab.pinned],
+  );
+  // biome-ignore lint/correctness/useExhaustiveDependencies: a new title can overflow a box whose width stayed the same.
+  useEffect(() => {
+    actions.updateTitle(id);
+  }, [actions, id, title]);
   return (
     <>
       <div
-        ref={(element) => {
-          actions.element(id, element);
-          // tab-out collapses from here (styles.css).
-          if (element && exiting && width !== undefined)
-            element.style.setProperty("--tab-width", `${width}px`);
-        }}
+        ref={setElement}
+        data-tab-flexible={(!tab.pinned && !exiting) || undefined}
+        data-tab-folded={folded !== undefined || undefined}
         data-palette-target={highlighted || undefined}
         data-point-key={ghost ? undefined : key}
         // Anywhere on the tab (its close button over the label's end,
@@ -1002,7 +1067,7 @@ const TabRow = memo(function TabRow({
           label is the tab's press target, so it fills the tab inside
           its border: the tab's padding is the label's own, and a press
           anywhere on the tab opens it. */}
-        <span className="relative flex min-w-0 items-center self-stretch">
+        <span className="workspace-tab-core relative flex min-w-0 items-center self-stretch">
           <OpenResourceButton
             type="button"
             url={tab.kind === "browser" ? tab.bookmarkUrl : undefined}
@@ -1023,14 +1088,14 @@ const TabRow = memo(function TabRow({
             // A pinned tab is its icon: the hover card names it.
             className={`workspace-tab-label flex min-w-0 cursor-pointer items-center gap-1.5 self-stretch ${tab.pinned ? "px-2" : "px-2.5"}`}
             aria-current={active || undefined}
-            aria-label={tab.pinned ? (tab.label ?? tab.name) : undefined}
+            aria-label={title}
             data-tab-pinned={tab.pinned || undefined}
           >
             {/* Same signal vocabulary as the chat bubbles: a spinner
             on the icon's lower corner while working, or what it waits
             on (the icon still names the tab); unread/draft/question
             land as badges on its upper corner. */}
-            <span className="relative grid size-3.5 shrink-0 place-items-center">
+            <span className="workspace-tab-icon relative grid size-3.5 shrink-0 place-items-center">
               <SignalGlyph activity={tab.activity} className="size-3.5">
                 {tab.kind === "browser" ? (
                   <PageIcon
@@ -1091,7 +1156,7 @@ const TabRow = memo(function TabRow({
             </span>
             {!tab.pinned && (
               <AnimatedTitle
-                text={tab.label ?? tab.name}
+                text={title}
                 className="workspace-tab-title min-w-3 max-w-40"
               />
             )}
@@ -1101,7 +1166,7 @@ const TabRow = memo(function TabRow({
           {!tab.pinned && (
             <CloseButton
               hint={active}
-              label={`Close ${tab.label ?? tab.name}`}
+              label={`Close ${title}`}
               onClick={() => actions.close(key)}
             />
           )}
@@ -1114,7 +1179,7 @@ const TabRow = memo(function TabRow({
             <button
               type="button"
               onClick={() => actions.toggleGroup(key.slice("chat:".length))}
-              className={`flex h-5 cursor-pointer items-center gap-0.5 rounded px-1 text-[10px] transition-colors duration-150 hover:bg-bg-overlay hover:text-accent relative -ms-1 me-1 ${groupActive ? "text-accent/80" : "text-fg-faint"}`}
+              className={`flex h-5 shrink-0 cursor-pointer items-center gap-0.5 rounded px-1 text-[10px] transition-colors duration-150 hover:bg-bg-overlay hover:text-accent relative -ms-1 me-1 ${groupActive ? "text-accent/80" : "text-fg-faint"}`}
               aria-label={`Expand ${folded} grouped tabs`}
             >
               <ChevronsRight className="size-3" />

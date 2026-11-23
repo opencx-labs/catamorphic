@@ -391,7 +391,7 @@ export const hydrateWorkspace = (
   const pinnedTabKeys = Array.isArray(snapshot.pinnedTabKeys)
     ? snapshot.pinnedTabKeys
     : [];
-  const ws: Workspace = {
+  const restored: Workspace = {
     tabs: Array.isArray(snapshot.tabs)
       ? snapshot.tabs.filter(
           (tab) => tab.kind !== "agent-setup" && tab.kind !== "mcpapp",
@@ -434,6 +434,7 @@ export const hydrateWorkspace = (
       ? { activeChatId: snapshot.activeChatId }
       : {}),
   };
+  const ws = unpinClosed(releaseOrphanedSurfaces(restored));
   const anything =
     ws.tabs.length > 0 ||
     ws.chats.length > 0 ||
@@ -866,13 +867,47 @@ export function openChatInNewTab(
   };
 }
 
+/**
+ * A chip-only surface has no way back once its chat goes away. Release open
+ * tabs from that chat, and keep dirty editors open so their buffers survive.
+ */
+function releaseOrphanedSurfaces(ws: Workspace): Workspace {
+  const liveChats = new Set(ws.chats.map((chat) => chat.localId));
+  const orphaned = (entry: { background?: boolean; chatLocalId?: string }) =>
+    entry.chatLocalId
+      ? !liveChats.has(entry.chatLocalId)
+      : entry.background === true;
+  const release = <T extends { background?: boolean; chatLocalId?: string }>(
+    entries: T[],
+    keepHidden?: (entry: T) => boolean,
+  ): T[] =>
+    entries.some(orphaned)
+      ? entries.flatMap((entry) => {
+          if (!orphaned(entry)) return [entry];
+          if (entry.background && !keepHidden?.(entry)) return [];
+          return [{ ...entry, background: undefined, chatLocalId: undefined }];
+        })
+      : entries;
+
+  const browsers = release(ws.browsers);
+  const terminals = release(ws.terminals);
+  const editors = release(ws.editors, (editor) => editor.dirty);
+  return browsers === ws.browsers &&
+    terminals === ws.terminals &&
+    editors === ws.editors
+    ? ws
+    : { ...ws, browsers, terminals, editors };
+}
+
 /** All workspace mutations pass this boundary, including resource creation/close. */
 export function reconcileWorkspace(
   previous: Workspace,
   changed: Workspace,
 ): Workspace {
   if (previous === changed) return previous;
-  const updated = unpinClosed(closeLeftNewTabs(previous, changed));
+  const updated = unpinClosed(
+    releaseOrphanedSurfaces(closeLeftNewTabs(previous, changed)),
+  );
   const keys = orderedTabKeys(updated, { includeCollapsed: true });
   const floatingKey =
     updated.floatingKey &&

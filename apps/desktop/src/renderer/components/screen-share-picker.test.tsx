@@ -127,6 +127,33 @@ it("asks only the asking page's project, with that project's tabs", () => {
   ]);
 });
 
+it.each([
+  { guest: 11, rows: [expect.stringMatching(/Docs.*This tab/)] },
+  {
+    guest: 13,
+    rows: [
+      expect.stringContaining("Docs"),
+      expect.stringMatching(/Meet.*This tab/),
+    ],
+  },
+])(
+  "excludes other chip-only pages when guest $guest asks",
+  ({ guest, rows }) => {
+    mountProject({
+      visible: true,
+      tabs: [
+        page("tab", "Docs"),
+        { ...page("chip", "Hidden page"), chatLocalId: "c", background: true },
+        { ...page("meet", "Meet"), chatLocalId: "c", background: true },
+      ],
+      guests: { tab: 11, chip: 12, meet: 13 },
+    });
+
+    ask(guest);
+    expect(pickers()).toEqual([rows]);
+  },
+);
+
 it("gives a page no project holds to the project on screen", () => {
   mountProject({
     visible: false,
