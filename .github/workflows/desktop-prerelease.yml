@@ -243,9 +243,9 @@ jobs:
           else
             release_flags=(--verify-tag --generate-notes --title "Work ${VERSION} for macOS")
             if [[ "${RELEASE_KIND}" == "preview" ]]; then
-              release_flags+=(--prerelease --latest=false --notes "Apple silicon Preview release for macOS 12 or newer. Preview builds may contain regressions, so back up important projects before upgrading.")
+              release_flags+=(--prerelease --latest=false --notes "Apple silicon Preview release for macOS 13 or newer. Preview builds may contain regressions, so back up important projects before upgrading.")
             else
-              release_flags+=(--latest=true --notes "Apple silicon Stable release for macOS 12 or newer.")
+              release_flags+=(--latest=true --notes "Apple silicon Stable release for macOS 13 or newer.")
             fi
             gh release create "${TAG}" "${assets[@]}" "${release_flags[@]}"
           fi
