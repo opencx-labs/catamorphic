@@ -330,7 +330,7 @@ export function registerBrowserDialogs(host: BrowserDialogsHost): () => void {
   const inPage = (guest: WebContents, frame: Electron.WebFrameMain) =>
     !frame.isDestroyed() &&
     !frame.detached &&
-    liveFrames(guest.mainFrame.framesInSubtree).some(
+    liveFrames(guest.mainFrame?.framesInSubtree).some(
       (candidate) =>
         candidate.frameToken === frame.frameToken &&
         candidate.processId === frame.processId,

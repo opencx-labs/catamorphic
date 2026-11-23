@@ -31,9 +31,11 @@ export function frameById(
   contents: WebContents,
   frameId: number,
 ): Electron.WebFrameMain | null {
-  if (frameId === 0) return contents.mainFrame;
+  const mainFrame = contents.mainFrame;
+  if (!mainFrame || mainFrame.isDestroyed() || mainFrame.detached) return null;
+  if (frameId === 0) return mainFrame;
   return (
-    liveFrames(contents.mainFrame.framesInSubtree).find(
+    liveFrames(mainFrame.framesInSubtree).find(
       (frame) => frame.frameTreeNodeId === frameId,
     ) ?? null
   );

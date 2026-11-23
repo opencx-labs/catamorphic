@@ -60,7 +60,7 @@ class Page extends EventEmitter {
   url = "https://example.com/form";
   top = new Frame("https://example.com", null, 1);
   /** The frames of the page the tab shows now. */
-  frames: Frame[] = [this.top];
+  frames: (Frame | null)[] = [this.top];
   get mainFrame() {
     return {
       origin: this.top.origin,
@@ -211,6 +211,8 @@ describe("script dialogs", () => {
   });
 
   it("name an embedded frame of another site by its own origin", () => {
+    // Electron may leave a null entry between two live frames.
+    page.frames.push(null);
     ask(
       page,
       { kind: "alert", message: "From the frame" },

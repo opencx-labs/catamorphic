@@ -947,7 +947,7 @@ export function createApi(host: ExtensionsHost): Record<string, ApiHandler> {
     },
     getAllFrames: (caller, [details]) => {
       const record = host.tabOf(caller, bag(details).tabId);
-      return liveFrames(record.guest.mainFrame.framesInSubtree).map((frame) =>
+      return liveFrames(record.guest.mainFrame?.framesInSubtree).map((frame) =>
         frameDetails(record, frame),
       );
     },
