@@ -9,6 +9,7 @@ import {
   unloadIntentSchema,
 } from "../shared/page-dialogs.js";
 import type { ScriptDialogReply } from "../shared/script-dialogs.js";
+import { liveFrames } from "./live-frames.js";
 import { PageDialogs } from "./page-dialogs.js";
 import { shellIpcMain } from "./shell-ipc.js";
 
@@ -329,7 +330,7 @@ export function registerBrowserDialogs(host: BrowserDialogsHost): () => void {
   const inPage = (guest: WebContents, frame: Electron.WebFrameMain) =>
     !frame.isDestroyed() &&
     !frame.detached &&
-    guest.mainFrame.framesInSubtree.some(
+    liveFrames(guest.mainFrame?.framesInSubtree).some(
       (candidate) =>
         candidate.frameToken === frame.frameToken &&
         candidate.processId === frame.processId,

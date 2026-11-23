@@ -130,6 +130,7 @@ import { isLoopback } from "./egress-proxy.js";
 import { ExtensionsHost } from "./extensions/host.js";
 import { restoreGuestHistory } from "./history-restore.js";
 import type { WindowProfileRegistry } from "./index.js";
+import { liveFrames } from "./live-frames.js";
 import { LoginCapture, type LoginSubmission } from "./login-capture.js";
 import { moduleAccessSubject, readModuleAccess } from "./module-access.js";
 import { popupNativeMenu } from "./native-menu.js";
@@ -1024,7 +1025,7 @@ export function registerBrowserSupport(
     if (!context || !frame || frame.detached || frame.isDestroyed())
       return null;
     if (
-      !event.sender.mainFrame.framesInSubtree.some(
+      !liveFrames(event.sender.mainFrame?.framesInSubtree).some(
         (candidate) =>
           candidate.frameToken === frame.frameToken &&
           candidate.processId === frame.processId,
@@ -1107,8 +1108,11 @@ export function registerBrowserSupport(
   const reconcileLoginFrames = (guest: WebContents) => {
     const context = guestContext(guest);
     if (!context || guest.isLoading()) return;
-    const frames = guest.mainFrame.framesInSubtree.flatMap((frame) => {
-      if (frame.detached || frame.isDestroyed()) return [];
+    const frameTree = guest.mainFrame?.framesInSubtree;
+    // A missing entry leaves the submitting frame's fate unknown. A later
+    // form report or load completion will reconcile the tree again.
+    if (!frameTree || frameTree.some((frame) => frame == null)) return;
+    const frames = liveFrames(frameTree).flatMap((frame) => {
       const origin = httpOrigin(frame.url) && httpOrigin(frame.origin);
       return origin ? [{ frameId: frame.frameTreeNodeId, origin }] : [];
     });
@@ -1778,7 +1782,7 @@ export function registerBrowserSupport(
     contents.on(
       "did-frame-navigate",
       (_event, _url, _code, _status, _main, processId, routingId) => {
-        const frame = contents.mainFrame.framesInSubtree.find(
+        const frame = liveFrames(contents.mainFrame?.framesInSubtree).find(
           (candidate) =>
             candidate.processId === processId &&
             candidate.routingId === routingId,
@@ -2508,8 +2512,8 @@ export function registerBrowserSupport(
     const browsingSession = session.fromPartition(partitionFor(profileId));
     for (const guest of webContents.getAllWebContents()) {
       if (guest.isDestroyed() || guest.session !== browsingSession) continue;
-      for (const frame of guest.mainFrame.framesInSubtree) {
-        if (!frame.isDestroyed() && !frame.detached && frame.origin === origin)
+      for (const frame of liveFrames(guest.mainFrame?.framesInSubtree)) {
+        if (frame.origin === origin)
           frame.send("catamorphic:page-media-stop", kind);
       }
     }
