@@ -15,6 +15,7 @@ export function PopPanel({
   children,
   anchorRef,
   layoutRef,
+  ref,
   minWidth = 360,
   maxHeight,
   onExited,
@@ -30,13 +31,15 @@ export function PopPanel({
   anchorRef?: RefObject<HTMLElement | null>;
   /** Layout that can move the anchor without resizing it. */
   layoutRef?: RefObject<HTMLElement | null>;
+  ref?: RefObject<HTMLDivElement | null>;
   minWidth?: number;
   maxHeight?: number;
   /** The exit has played and the panel has left the page. */
   onExited?: () => void;
 }) {
   const [mounted, setMounted] = useState(open);
-  const panelRef = useRef<HTMLDivElement>(null);
+  const ownRef = useRef<HTMLDivElement>(null);
+  const panelRef = ref ?? ownRef;
   useLayoutEffect(() => {
     const panel = panelRef.current;
     const anchor = anchorRef?.current;
@@ -101,7 +104,7 @@ export function PopPanel({
       window.removeEventListener("resize", schedule);
       window.removeEventListener("scroll", schedule, true);
     };
-  }, [mounted, open, anchorRef, layoutRef, minWidth, maxHeight]);
+  }, [mounted, open, anchorRef, layoutRef, minWidth, maxHeight, panelRef]);
   const frozenRef = useRef<ReactNode>(children);
   if (open) frozenRef.current = children;
   useEffect(() => {
@@ -115,7 +118,13 @@ export function PopPanel({
       data-testid={testId}
       inert={!open}
       onAnimationEnd={(event) => {
-        if (event.animationName !== "pop-out" || open) return;
+        // Only its own exit: a portalled preview inside it bubbles its own.
+        if (
+          event.target !== event.currentTarget ||
+          event.animationName !== "pop-out" ||
+          open
+        )
+          return;
         setMounted(false);
         onExited?.();
       }}

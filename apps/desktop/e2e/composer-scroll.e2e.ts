@@ -81,6 +81,42 @@ function expectGlide(samples: number[]) {
   ).toBe(true);
 }
 
+it("keeps the same text width as a classic scrollbar appears and disappears", async () => {
+  const states = await app.eval<
+    { width: number; gutter: number; overflowing: boolean }[]
+  >(`(() => {
+    const root = ${editor};
+    const style = document.createElement('style');
+    // Use a classic gutter even on platforms that default to overlay scrollbars.
+    style.textContent = '[data-composer-input]::-webkit-scrollbar { width: 16px; }';
+    document.head.append(style);
+    try {
+      return ['A short draft', 'A long draft\\n'.repeat(45), 'A short draft'].map(text => {
+        root.textContent = text;
+        return {
+          width: root.clientWidth,
+          gutter: root.offsetWidth - root.clientWidth,
+          overflowing: root.scrollHeight > root.clientHeight
+        };
+      });
+    } finally {
+      root.textContent = '';
+      root.dispatchEvent(new InputEvent('input', {bubbles:true}));
+      style.remove();
+    }
+  })()`);
+  const gutter = states[1]?.gutter;
+  expect(gutter).toBeGreaterThan(0);
+  expect(states.map((state) => state.overflowing)).toEqual([
+    false,
+    true,
+    false,
+  ]);
+  expect(states.map((state) => state.gutter)).toEqual([gutter, gutter, gutter]);
+  expect(states[0]?.width).toBe(states[1]?.width);
+  expect(states[2]?.width).toBe(states[1]?.width);
+});
+
 it("smoothly reveals an offscreen caret when typing or using arrows in either direction", async () => {
   await prepare(true, false);
   await app.insertText("x");

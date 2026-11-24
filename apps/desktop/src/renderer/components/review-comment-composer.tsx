@@ -100,7 +100,7 @@ export function ReviewCommentComposer({
               void submit();
             }
           }}
-          className="block max-h-48 min-h-20 w-full resize-y rounded-t-lg bg-transparent p-3 text-sm outline-none placeholder:text-fg-faint disabled:opacity-60"
+          className="block max-h-48 min-h-20 w-full resize-y rounded-t-lg bg-transparent p-3 text-sm outline-none [scrollbar-gutter:stable] placeholder:text-fg-faint disabled:opacity-60"
         />
       )}
       {error && (

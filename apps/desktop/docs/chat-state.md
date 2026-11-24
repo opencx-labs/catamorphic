@@ -133,6 +133,11 @@ or an item that needs attention.
 
 ## Composer and resource integration
 
+Composer text keeps its wrapping width as the field grows and starts
+scrolling. Chat, Ask agent and question answers reserve the native scrollbar
+gutter when the platform uses classic scrollbars. The palette search field
+and pull request review comments use the same gutter.
+
 Every paste/drop/picker operation yields a visible attachment or actionable error.
 Files that cannot be passed as model media still reach the agent as paths. The
 host persists pathless clipboard bytes under the current project. Preserve text,
@@ -240,6 +245,13 @@ in the panel header. Answers render in history as the questions and what was
 picked or written, pills in place: from the resolved request, or a later
 answer message's `answer`. Agents close questions a reply settled with `close_questions`.
 
+An open question fits its chat. A long one scrolls only its options, between
+the panel's header and its Submit, within half the window. A floating chat is
+shorter than half a tall window, so the dock gives the question body what the
+timeline and the requests share there (`--cat-question-max-height`), and the
+requests shrink before the composer does. The header, Submit and composer
+always stay in the card.
+
 A response shows the moment it is sent, as a sent message does:
 `useAgentChat` reads its request as answered with it until the session's own
 request moves on, and a refused one asks again. The answer takes the
@@ -307,6 +319,12 @@ plural type: Terminals, Apps, Workflows, Files, Pages, Chats, Subagents or App
 views (ADR 0239). Show the count separately. Clicking the group discloses every member; each member retains its
 preview and normal open/remove actions. Never label a group with one member's
 name or silently hide members behind a count.
+
+A member's preview aligns to its row and clears the whole group, on the right
+when there is room and on the left otherwise. Narrow windows place the preview
+above or below the group with its own scrollable space. Side previews glide from
+the anchor's side. Stacked previews use the shared popover motion. Reduced
+motion uses a fade in place.
 
 Agent-created terminal chips use the command as their initial name so grouped
 terminals stay distinguishable. Response links to known workspace surfaces use

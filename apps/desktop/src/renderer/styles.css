@@ -849,6 +849,7 @@ kbd {
 .cat-composer {
   position: relative;
   scroll-behavior: smooth;
+  scrollbar-gutter: stable;
 }
 
 /* Dictation's words while they are still being said (voice): muted until
@@ -975,7 +976,7 @@ kbd {
 @keyframes pop-in {
   from {
     opacity: 0;
-    transform: translateY(4px) scale(0.98);
+    transform: translateY(var(--pop-offset-y, 4px)) scale(0.98);
   }
   to {
     opacity: 1;
@@ -994,7 +995,7 @@ kbd {
   }
   to {
     opacity: 0;
-    transform: translateY(4px) scale(0.98);
+    transform: translateY(var(--pop-offset-y, 4px)) scale(0.98);
   }
 }
 
@@ -1113,11 +1114,19 @@ kbd {
   }
 
   .animate-pop-in,
-  .animate-pop-out,
+  .animate-pop-out {
+    animation-duration: 100ms;
+  }
+
   .animate-inspector-in-left,
+  .animate-inspector-in-right {
+    animation-name: fade-in;
+    animation-duration: 100ms;
+  }
+
   .animate-inspector-out-left,
-  .animate-inspector-in-right,
   .animate-inspector-out-right {
+    animation-name: fade-out;
     animation-duration: 100ms;
   }
 
